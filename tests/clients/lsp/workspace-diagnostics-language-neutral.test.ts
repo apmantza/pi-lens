@@ -16,6 +16,7 @@ import {
 	WORKSPACE_DIAGNOSTICS_CACHE_VERSION,
 } from "../../../clients/lsp/workspace-diagnostics-cache.js";
 import { CacheManager } from "../../../clients/cache-manager.js";
+import { LANGUAGES } from "../../../clients/language-registry.js";
 
 const root = fs.mkdtempSync(path.join(process.cwd(), ".probe-lsp-language-"));
 const workspace = path.join(root, "workspace");
@@ -27,6 +28,18 @@ describe("language-neutral workspace resync (#2817)", () => {
 	const pythonDependency = path.join(workspace, "dependency.py");
 	const pythonImporter = path.join(workspace, "consumer.py");
 	const luaImporter = path.join(workspace, "consumer.lua");
+	const matrixLanguages = LANGUAGES.filter((entry) =>
+		entry.extensions.some((extension) => [".py", ".lua"].includes(extension)),
+	);
+	const factsLanguage = matrixLanguages.find((entry) =>
+		entry.extensions.includes(".py"),
+	);
+	const fallbackLanguage = matrixLanguages.find((entry) =>
+		entry.extensions.includes(".lua"),
+	);
+	if (!factsLanguage || !fallbackLanguage)
+		throw new Error("language registry lost the Python/Lua matrix entries");
+	const traceFile = path.join(root, "fake-lsp.trace");
 
 	beforeAll(async () => {
 		fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
@@ -41,11 +54,20 @@ describe("language-neutral workspace resync (#2817)", () => {
 			JSON.stringify({
 				lsp: {
 					servers: {
-						"fake-language-neutral": {
-							name: "fake language-neutral server",
-							extensions: [".py", ".lua"],
+						[`fake-${factsLanguage.id}`]: {
+							name: `fake ${factsLanguage.id} server`,
+							extensions: factsLanguage.extensions,
 							command: process.execPath,
 							args: [fakeServer],
+							env: { FAKE_LSP_TRACE_FILE: traceFile },
+							rootMarkers: [".pi-lens.json"],
+						},
+						[`fake-${fallbackLanguage.id}`]: {
+							name: `fake ${fallbackLanguage.id} server`,
+							extensions: fallbackLanguage.extensions,
+							command: process.execPath,
+							args: [fakeServer],
+							env: { FAKE_LSP_TRACE_FILE: traceFile },
 							rootMarkers: [".pi-lens.json"],
 						},
 					},
@@ -82,6 +104,8 @@ describe("language-neutral workspace resync (#2817)", () => {
 			cachedExports: [],
 		});
 		process.env.PI_LENS_HOME = path.join(root, ".pi-lens-home");
+		process.env.FAKE_LSP_TRACE_FILE = traceFile;
+		fs.writeFileSync(traceFile, "");
 		const { initLSPConfig } = await import("../../../clients/lsp/config.js");
 		await initLSPConfig(workspace);
 	});
@@ -90,9 +114,10 @@ describe("language-neutral workspace resync (#2817)", () => {
 		const { resetLSPService } = await import("../../../clients/lsp/index.js");
 		resetLSPService({ reason: "test" });
 		fs.rmSync(root, { recursive: true, force: true });
+		delete process.env.FAKE_LSP_TRACE_FILE;
 	});
 
-	it("resyncs a Python importer with facts and an uncovered Lua fallback via the real server", async () => {
+	it("resyncs registry-selected Python facts and Lua fallback via the real server", async () => {
 		const { getLSPService } = await import("../../../clients/lsp/index.js");
 		const service = getLSPService();
 		await service.touchFile(
@@ -129,14 +154,14 @@ describe("language-neutral workspace resync (#2817)", () => {
 						start: { line: 0, character: 0 },
 						end: { line: 0, character: 1 },
 					},
-					serverId: "fake-language-neutral",
+					serverId: `fake-${path.extname(filePath) === ".py" ? factsLanguage.id : fallbackLanguage.id}`,
 				},
 			],
 			count: 1,
 			mtimeMs: fs.statSync(filePath).mtimeMs,
 			// Force the Python dependency freshness check to run. Lua reaches
 			// the separate uncovered-facts fallback after the same cache hit.
-			scannedAt: 0,
+			scannedAt: Date.now(),
 			scopeKey,
 			depIndexAtScan: true,
 		});
@@ -147,7 +172,6 @@ describe("language-neutral workspace resync (#2817)", () => {
 				[cacheKeyFor(luaImporter)]: stale(luaImporter),
 			},
 		});
-		await service.resyncGitChangedFiles([pythonDependency, luaImporter]);
 		const { createLensDiagnosticsTool } =
 			await import("../../../tools/lens-diagnostics.js");
 		const result = await createLensDiagnosticsTool(
@@ -166,8 +190,39 @@ describe("language-neutral workspace resync (#2817)", () => {
 			{ cwd: workspace },
 		);
 		const text = String((result as any).content?.[0]?.text);
-		expect(text).toContain("fake-lsp");
-		expect(text).not.toContain("stale consumer.py");
 		expect(text).not.toContain("stale consumer.lua");
+		const dependencyUri = `file://${pythonDependency}`;
+		expect(fs.readFileSync(traceFile, "utf8")).toContain(
+			`textDocument/didChange ${dependencyUri}`,
+		);
+		fs.writeFileSync(traceFile, "");
+		expect(fs.readFileSync(traceFile, "utf8")).toBe("");
+		// The persisted snapshot is the real facts loader. Removing its Python
+		// importer edge must remove the dependency touch, not merely change labels.
+		saveProjectSnapshot(workspace, {
+			version: PROJECT_SNAPSHOT_VERSION,
+			projectRoot: workspace,
+			generatedAt: new Date().toISOString(),
+			seq: 2,
+			files: {
+				[cacheKeyFor(pythonDependency)]: {
+					path: pythonDependency,
+					mtimeMs: fs.statSync(pythonDependency).mtimeMs,
+					size: fs.statSync(pythonDependency).size,
+					imports: [],
+					lastSeq: 2,
+				},
+			},
+			symbols: {},
+			reverseDeps: {},
+			cachedExports: [],
+		});
+		await service.runWorkspaceDiagnostics(workspace, {
+			files: [pythonImporter],
+		});
+		expect(fs.readFileSync(traceFile, "utf8")).not.toContain(
+			`textDocument/didChange ${dependencyUri}`,
+		);
+		expect(`${factsLanguage.id},${fallbackLanguage.id}`).toBe("python,lua");
 	}, 30_000);
 });

@@ -964,13 +964,21 @@ describe("per-file dependency-index coverage in isEntryFresh (#1814)", () => {
 // second sweep's call count directly proves whether the cache short-circuited
 // the per-file touch loop.
 
-const getServersForFileWithConfig = vi.fn();
-const createLSPClient = vi.fn();
-vi.mock("../../../clients/lsp/config.js", () => ({
+const { getServersForFileWithConfig, createLSPClient } = vi.hoisted(() => ({
+	getServersForFileWithConfig: vi.fn(),
+	createLSPClient: vi.fn(),
+}));
+vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	getServersForFileWithConfig,
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
-vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
+vi.mock("../../../clients/lsp/client.js", async (importOriginal) => ({
+	...(await importOriginal()),
+	createLSPClient,
+}));
+
+import { LSPService } from "../../../clients/lsp/index.js";
 
 function makeTsServer(root: string, id = "typescript", extension = ".ts") {
 	return {
@@ -1233,7 +1241,6 @@ describe("runWorkspaceDiagnostics cache integration (#671)", () => {
 		getServersForFileWithConfig.mockReturnValue([tsServer]);
 		const { client, waitCalls } = makeFakeClient(tmpSweep);
 		createLSPClient.mockResolvedValue(client);
-		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const cacheContext = createWorkspaceDiagnosticsCacheContext(tmpSweep);
 		expect(
 			cacheContext.lookup(file, buildScopeKey("all", ["opengrep"])),

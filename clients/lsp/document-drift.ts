@@ -407,6 +407,7 @@ export class DocumentDriftTracker {
 		let failed = 0;
 		let unchanged = 0;
 		let deferred = 0;
+		const resyncedKeys = new Set<string>();
 		for (const key of queued) {
 			if (!this.pendingResync.has(key)) continue;
 			if (resynced >= DRIFT_RESYNC_BATCH) {
@@ -447,6 +448,7 @@ export class DocumentDriftTracker {
 			}
 			this.pendingResync.delete(key);
 			resynced += 1;
+			resyncedKeys.add(key);
 			deps.onDrift?.({
 				filePath: key,
 				driftAgeMs: 0,
@@ -456,6 +458,10 @@ export class DocumentDriftTracker {
 			});
 		}
 		for (const { key, record, mtimeMs } of drifted) {
+			// A Git recovery target and the ordinary stat backstop can identify the
+			// same file in one pass. One event gets one resync opportunity; otherwise
+			// folding Git recovery onto this scheduler double-counts the same write.
+			if (resyncedKeys.has(key)) continue;
 			const driftAgeMs = Math.max(0, now() - record.syncedAt);
 			if (resynced >= DRIFT_RESYNC_BATCH) {
 				// Paced, not dropped: the cursor already advanced past this file, but

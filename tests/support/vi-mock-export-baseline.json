@@ -6428,36 +6428,6 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/workspace-diagnostics-cache.test.ts:969:../../../clients/lsp/config.js": [
-    "isServerDisabled"
-  ],
-  "tests/clients/lsp/workspace-diagnostics-cache.test.ts:973:../../../clients/lsp/client.js": [
-    "CLIENT_CAPABILITIES",
-    "INITIALIZE_TIMEOUT_MS",
-    "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
-    "MAX_INCREMENTAL_TEXT_RETAINED_ENTRIES",
-    "applyDynamicCapabilities",
-    "bumpDiagnosticsVersion",
-    "clearDiagnosticsForPath",
-    "clientRequestWorkspaceDiagnostics",
-    "clientShutdown",
-    "clientWaitForDiagnostics",
-    "closeDocument",
-    "diagnosticsVersionForPath",
-    "getLspDocumentTextRetentionSnapshot",
-    "handleNotifyChange",
-    "handleNotifyExternalChange",
-    "handleNotifyOpen",
-    "killProcessTree",
-    "navRequest",
-    "normalizeClientWorkspaceEdit",
-    "pullDiagnosticSources",
-    "resolveConfigurationSection",
-    "runReadOnlyServerCommand",
-    "runServerCommand",
-    "setupIncomingHandlers",
-    "stripDiagnosticNoiseLines"
-  ],
   "tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:46:../../../clients/lsp/config.js": [
     "isServerDisabled"
   ],
