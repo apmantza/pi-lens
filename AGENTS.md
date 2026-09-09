@@ -1055,6 +1055,12 @@ The CI failure classifier normalizes CRLF and leading GitHub Actions
 before any anchored evidence needle runs. Keep transport normalization at this
 seam so Windows and Unix logs exercise identical classifier rules. (#2839)
 
+Model-facing tool output uses `renderToolText` and
+`renderToolResultContract` (`tools/render-compact.ts`) at both host-adapter
+seams. Keep result status, diagnostic severity, and usage lines there so pi
+registration and the MCP mirror cannot grow separate projections. The MCP
+server owns only transport and tool-specific execution. (#2800)
+
 The dispatch lsp-runner's `touchFile` call has its OWN 5-second cold-spawn
 wait floor (`RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs`,
 `clients/dispatch/runners/lsp.ts`), separate from installer verification —

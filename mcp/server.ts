@@ -23,6 +23,10 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	renderToolResultContract,
+	renderToolText as toolText,
+} from "../tools/render-compact.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
@@ -485,24 +489,6 @@ function sendResult(id: JsonRpcId, result: unknown): void {
 
 function sendError(id: JsonRpcId, code: number, message: string): void {
 	send({ jsonrpc: "2.0", id, error: { code, message } });
-}
-
-/**
- * A tool result: human-readable text first, full JSON appended for the agent.
- * `compact` omits indentation (#512) — for token-efficient tools like
- * module_report the ~30% saved on the wire is worth losing pretty-printing
- * for a payload the agent parses, not reads formatted.
- */
-function toolText(
-	summary: string,
-	structured?: unknown,
-	compact = false,
-): { content: { type: "text"; text: string }[] } {
-	const text =
-		structured === undefined
-			? summary
-			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
-	return { content: [{ type: "text" as const, text }] };
 }
 
 // --- Graph-staleness signal (#536) -------------------------------------------
@@ -1503,11 +1489,11 @@ async function callTool(
 			? ` (${result.ambiguous.count} matches — returned the ${result.kind}; pass \`kind\` to disambiguate: ${result.ambiguous.kinds.join(", ")})`
 			: "";
 		const header = `${result.kind} ${result.name}${ambiguityNote}${sigSuffix}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
-		return {
+		return renderToolResultContract({
 			content: [
 				{ type: "text" as const, text: `${header}\n\n${result.source ?? ""}` },
 			],
-		};
+		});
 	}
 
 	if (name === "pilens_read_enclosing") {
@@ -1564,11 +1550,11 @@ async function callTool(
 			? `${result.startLine}-${result.endLine} (partial of ${result.enclosingStartLine}-${result.enclosingEndLine})`
 			: `${result.startLine}-${result.endLine}`;
 		const header = `${result.kind} ${result.name}  ${path.relative(cwd, result.path)}:${range}`;
-		return {
+		return renderToolResultContract({
 			content: [
 				{ type: "text" as const, text: `${header}\n\n${result.source ?? ""}` },
 			],
-		};
+		});
 	}
 
 	if (name === "pilens_health") {
@@ -1701,8 +1687,8 @@ async function callTool(
 			new AbortController().signal,
 			undefined,
 			{ cwd },
-		)) as { content: { type: "text"; text: string }[] };
-		return { content: out.content };
+		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
+		return renderToolResultContract(out);
 	}
 
 	if (name === "pilens_latency") {
@@ -1768,8 +1754,8 @@ async function callTool(
 			new AbortController().signal,
 			undefined,
 			{ cwd },
-		)) as { content: { type: "text"; text: string }[] };
-		return { content: out.content };
+		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
+		return renderToolResultContract(out);
 	}
 
 	if (name === "pilens_lsp_navigation" || name === "pilens_lsp_diagnostics") {
@@ -1783,8 +1769,8 @@ async function callTool(
 			new AbortController().signal,
 			undefined,
 			{ cwd },
-		)) as { content: { type: "text"; text: string }[] };
-		return { content: out.content };
+		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
+		return renderToolResultContract(out);
 	}
 
 	return { ...toolText(`Unknown tool: ${name}`), isError: true };

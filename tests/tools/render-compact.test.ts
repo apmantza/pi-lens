@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
 	baseName,
 	fullTextOf,
+	renderToolResultContract,
+	renderToolText,
 	selectCompactText,
 } from "../../tools/render-compact.js";
 
@@ -60,5 +62,16 @@ describe("render-compact", () => {
 		expect(baseName("/a/b/foo.ts")).toBe("foo.ts");
 		expect(baseName("foo.ts")).toBe("foo.ts");
 		expect(baseName(undefined)).toBe("");
+	});
+
+	it("renders one stable result and usage contract", () => {
+		const result = renderToolText("result body", {
+			diagnostics: [{ severity: "warning" }],
+		});
+		const text = result.content[0]?.text ?? "";
+		expect(text).toContain("result ok");
+		expect(text).toContain("diag severity=warning");
+		expect(text).toMatch(/usage tokens=\d+ elapsed-ms=0/);
+		expect(renderToolResultContract(result)).toBe(result);
 	});
 });

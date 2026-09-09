@@ -30,6 +30,84 @@ export interface CompactResultLike<D = unknown> {
 	details?: D;
 }
 
+export interface ToolResultContractLike extends CompactResultLike {
+	usage?: { tokens?: number; elapsedMs?: number };
+}
+
+/**
+ * Add the stable, model-facing result footer shared by pi and MCP.
+ *
+ * The host adapters own transport and terminal styling; this function owns the
+ * textual contract. Defaults are deliberately deterministic because elapsed
+ * time is not a property of a projection and must not make parity tests flaky.
+ */
+export function renderToolResultContract<T extends ToolResultContractLike>(
+	result: T,
+): T {
+	const content = result.content ?? [];
+	const textBlocks = content
+		.filter(
+			(block): block is { type: "text"; text: string } =>
+				block.type === "text" && typeof block.text === "string",
+		)
+		.map((block) => block.text);
+	if (textBlocks.length === 0) return result;
+	const text = textBlocks.join("\n");
+	if (/^usage tokens=\d+ elapsed-ms=\d+$/m.test(text)) return result;
+	const details = result.details as Record<string, unknown> | undefined;
+	const diagnostics = Array.isArray(details?.diagnostics)
+		? details.diagnostics
+				.filter(
+					(value): value is Record<string, unknown> =>
+						Boolean(value) && typeof value === "object",
+				)
+				.map((diagnostic) => diagnostic.severity)
+				.filter((severity): severity is string => typeof severity === "string")
+				.map((severity) => `diag severity=${severity}`)
+		: [];
+	const tokens =
+		result.usage?.tokens ?? Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+	const elapsedMs = result.usage?.elapsedMs ?? 0;
+	const contractLines = [
+		`result ${result.isError ? "error" : "ok"}`,
+		...diagnostics,
+		`usage tokens=${tokens} elapsed-ms=${elapsedMs}`,
+	];
+	let lastTextIndex = -1;
+	for (let index = content.length - 1; index >= 0; index--) {
+		const block = content[index];
+		if (block?.type === "text" && typeof block.text === "string") {
+			lastTextIndex = index;
+			break;
+		}
+	}
+	if (lastTextIndex < 0) return result;
+	return {
+		...result,
+		content: content.map((block, index) =>
+			index === lastTextIndex && block.type === "text"
+				? { ...block, text: `${block.text}\n\n${contractLines.join("\n")}` }
+				: block,
+		),
+	};
+}
+
+/** Build the shared text envelope used by both host adapters. */
+export function renderToolText(
+	summary: string,
+	structured?: unknown,
+	compact = false,
+): { content: { type: "text"; text: string }[] } {
+	const text =
+		structured === undefined
+			? summary
+			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
+	return renderToolResultContract({
+		content: [{ type: "text" as const, text }],
+		details: structured,
+	});
+}
+
 interface CompactSummaryInput<D = unknown> {
 	details: D | undefined;
 	args: Record<string, unknown>;
