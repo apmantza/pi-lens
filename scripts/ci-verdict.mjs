@@ -283,6 +283,7 @@ export function computeVerdict(
 	checkRunsPayload,
 	requiredChecks = REQUIRED_CHECKS,
 	mergeable = null,
+	classification = null,
 ) {
 	const checkRuns = Array.isArray(checkRunsPayload?.check_runs)
 		? checkRunsPayload.check_runs
@@ -351,8 +352,11 @@ export function computeVerdict(
 	// oldest cancelled). A REQUIRED row's "cancelled" conclusion gets NO such
 	// grace -- it fails the literal-success test above like any other
 	// non-success conclusion, so it stays non-zero.
+	const infraRerunArmed =
+		classification === "infra-kill" || classification === "infra-net";
 	const failingGatingRows = rows.filter((row) => {
 		if (!row.gating || !row.present || row.status !== "completed") return false;
+		if (infraRerunArmed && row.name === "Unit tests") return false;
 		if (requiredNameSet.has(row.name)) return row.conclusion !== "success";
 		if (isUncertainConclusion(row.conclusion)) return false;
 		return isBlockingConclusion(row.conclusion);
@@ -381,6 +385,15 @@ export function computeVerdict(
 		reason = anyAbsent
 			? "one or more required checks are absent and the PR is merge-conflicted (mergeable=CONFLICTING): a merge-conflicted PR can't build its merge-ref, so the real gates are skipped, not failed -- AGENTS.md shape 11"
 			: "the PR is merge-conflicted (mergeable=CONFLICTING) even though the required checks show present -- that's stale evidence from before the head turned conflicting, not proof it can merge (round 3, F1)";
+	} else if (
+		infraRerunArmed &&
+		rows.some(
+			(row) => row.name === "Unit tests" && row.conclusion !== "success",
+		)
+	) {
+		exitCode = EXIT_PENDING;
+		reason =
+			"infra (rerun armed): Unit tests was classified as infrastructure and is awaiting its one permitted rerun";
 	} else if (failingGatingRows.length > 0) {
 		exitCode = EXIT_FAILURE;
 		reason = `gating check(s) completed with a non-success conclusion: ${failingGatingRows.map((row) => `${row.name} (${row.conclusion})`).join(", ")}`;
@@ -494,6 +507,7 @@ export async function pollVerdict({
 	waitSeconds,
 	mergeable = null,
 	requiredChecks = REQUIRED_CHECKS,
+	classification = null,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
 }) {
@@ -508,6 +522,7 @@ export async function pollVerdict({
 			await fetchPayload(remainingMs),
 			requiredChecks,
 			mergeable,
+			classification,
 		);
 		polls += 1;
 		if (verdict.exitCode !== EXIT_PENDING) break;
@@ -576,6 +591,29 @@ export function resolveHeadSha(
 		return { sha: parsed.headRefOid, mergeable: parsed.mergeable ?? null };
 	}
 	return { sha: String(target).trim(), mergeable: null };
+}
+
+export function resolveClassification(
+	target,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	if (!isPrNumber(target)) return null;
+	try {
+		const parsed = JSON.parse(
+			ghExec(["pr", "view", String(target), "--json", "labels"], { timeoutMs }),
+		);
+		const names = Array.isArray(parsed.labels)
+			? parsed.labels.map((label) => label?.name)
+			: [];
+		return names.includes("ci:infra")
+			? "infra-kill"
+			: names.includes("ci:real")
+				? "real"
+				: null;
+	} catch {
+		return null;
+	}
 }
 
 export function fetchCheckRunsPayload(
@@ -698,7 +736,13 @@ export async function run({
 			capSeconds > 0 ? capSeconds * 1000 : undefined,
 		);
 		const repository = resolveRepository(ghExec, initialTimeoutMs);
-		const { sha, mergeable } = resolveHeadSha(target, ghExec, initialTimeoutMs);
+		const { sha, mergeable, classification } = resolveHeadSha(
+			target,
+			ghExec,
+			initialTimeoutMs,
+		);
+		const ciClassification =
+			classification ?? resolveClassification(target, ghExec, initialTimeoutMs);
 		// #2609: read once, before polling starts (branch protection does not
 		// change between polls of the same head). `null` means unreadable --
 		// `requiredChecks` then falls back to the constant default, and every
@@ -725,6 +769,7 @@ export async function run({
 			waitSeconds,
 			mergeable,
 			requiredChecks,
+			classification: ciClassification,
 		});
 
 		stdout(

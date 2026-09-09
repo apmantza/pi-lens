@@ -77,6 +77,7 @@ jobs:
       pull-requests: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       RUN_ID: ${{ github.event.workflow_run.id }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -90,10 +91,19 @@ jobs:
       - name: Classify Unit-tests failure and rerun infra-kill once
         shell: bash
         run: |
-          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --infra-kill-only --skip-missing-job)
+          set -o pipefail
+          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --skip-missing-job)
           if [[ -n "$PR_NUMBER" ]]; then
             args+=(--pr "$PR_NUMBER")
           elif [[ "$RUN_EVENT" == "push" || "$RUN_EVENT" == "repository_dispatch" ]]; then
             args+=(--allow-missing-pr)
           fi
-          node scripts/classify-ci-failure.mjs "${args[@]}"
+          output="$(node scripts/classify-ci-failure.mjs "${args[@]}")"
+          printf '%s\n' "$output"
+          if [[ -n "$PR_NUMBER" ]]; then
+            if grep -q -- '-> infra-' <<<"$output"; then
+              gh pr edit "$PR_NUMBER" --add-label 'ci:infra' --remove-label 'ci:real'
+            else
+              gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
+            fi
+          fi

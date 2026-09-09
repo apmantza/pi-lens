@@ -321,6 +321,42 @@ describe("classifyFailureLog (#2103)", () => {
 		}
 	});
 
+	it("recognizes today's quoted CI infrastructure needles", () => {
+		const excerpts = [
+			["SARIF upload", "Error: Unable to upload SARIF file: HTTP 503"],
+			[
+				"CodeQL initialization",
+				"Initialize CodeQL: The request failed with HTTP 503",
+			],
+			[
+				"codeload 429",
+				"npm error request to https://codeload.github.com/acme/repo/tar.gz failed: 429 Too Many Requests",
+			],
+			[
+				"codeload 503",
+				"npm error request to https://codeload.github.com/acme/repo/tar.gz failed: 503 Service Unavailable",
+			],
+			[
+				"npm ci timeout",
+				"npm ci --no-audit\nnpm error code ETIMEDOUT\nnpm error network request timed out",
+			],
+		];
+		for (const [name, excerpt] of excerpts) {
+			expect(classifyFailureLog(excerpt).kind, name).toBe("infra-net");
+		}
+	});
+
+	it("keeps quoted Vitest and TypeScript failures real", () => {
+		const excerpts = [
+			"Test Files 1 failed | 42 passed",
+			"AssertionError: expected 1 to be 2",
+			"error TS2322: Type 'string' is not assignable to type 'number'",
+		];
+		for (const excerpt of excerpts) {
+			expect(classifyFailureLog(excerpt).kind, excerpt).toBe("real");
+		}
+	});
+
 	it("round 3: npm-only network shapes stay real for the CI classifier", () => {
 		const shapes = [
 			"ETIMEDOUT",

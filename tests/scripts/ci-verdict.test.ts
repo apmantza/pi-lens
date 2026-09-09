@@ -57,6 +57,20 @@ const BOTH_SUCCESS = {
 };
 
 describe("computeVerdict — the four exit codes (#2539 acceptance criterion)", () => {
+	it("reports an armed infrastructure rerun instead of a Unit-tests failure", () => {
+		const verdict = computeVerdict(
+			{
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+				],
+			},
+			["Unit tests"],
+			"MERGEABLE",
+			"infra-kill",
+		);
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain("infra (rerun armed)");
+	});
 	it("exits 0 when both required checks concluded success", () => {
 		const verdict = computeVerdict(BOTH_SUCCESS);
 		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
