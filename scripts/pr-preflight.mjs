@@ -2,39 +2,40 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { CI_JOB_NAMES } from "./lib/ci-checks.mjs";
 
 export const GATES = [
-	["build", ["npm", "run", "build"], "Lint & type-check"],
-	["lint", ["npm", "run", "lint"], "Lint & type-check"],
+	["build", ["npm", "run", "build"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
+	["lint", ["npm", "run", "lint"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
 	["fmt:check", ["npm", "run", "fmt:check"], "oxfmt format check (advisory)"],
 	["changelog:check", ["npm", "run", "changelog:check"], "Unit tests"],
 	[
 		"check-changelog-fragments",
 		[process.execPath, "scripts/check-changelog-fragments.mjs"],
-		"Validate changelog fragments",
+		CI_JOB_NAMES.CHANGELOG_FRAGMENT,
 	],
 	[
 		"check:lockfile",
 		["npm", "run", "check:lockfile"],
-		"Lockfile in sync with package.json",
+		CI_JOB_NAMES.LINT_AND_TYPECHECK,
 	],
-	["tests/config", ["tests/config/"], "Unit tests"],
+	["tests/config", ["tests/config/"], CI_JOB_NAMES.UNIT_TESTS],
 	[
 		"generation-guard",
 		["tests/clients/generation-guard-sweep.test.ts"],
-		"Unit tests",
+		CI_JOB_NAMES.UNIT_TESTS,
 	],
 	[
 		"flake-shape-ratchet",
 		["tests/clients/flake-shape-ratchet.test.ts"],
-		"Unit tests",
+		CI_JOB_NAMES.UNIT_TESTS,
 	],
 	[
 		"lsp-spawn-heavy-coverage",
 		["tests/config/lsp-spawn-heavy-coverage.test.ts"],
-		"Unit tests",
+		CI_JOB_NAMES.UNIT_TESTS,
 	],
-	["ci-verdict", ["tests/scripts/ci-verdict.test.ts"], "Unit tests"],
+	["ci-verdict", ["tests/scripts/ci-verdict.test.ts"], CI_JOB_NAMES.UNIT_TESTS],
 ];
 const TEST_GATE_NAMES = new Set([
 	"tests/config",
@@ -63,6 +64,19 @@ export function parseArgs(argv) {
 	return result;
 }
 
+function validateSelectors({ only, skip }, gates) {
+	const validNames = gates.map(({ name }) => name);
+	for (const [selector, value] of [
+		["--only", only],
+		["--skip", skip],
+	]) {
+		if (value && !validNames.includes(value))
+			throw new Error(
+				`${selector} ${value} is not a gate; valid gate names: ${validNames.join(", ")}`,
+			);
+	}
+}
+
 function firstRedLine(output) {
 	const lines = String(output ?? "")
 		.split(/\r?\n/)
@@ -79,16 +93,24 @@ function firstRedLine(output) {
 
 function runChild(command, cwd, env, spawn) {
 	const [file, ...args] = command;
-	const result = spawn(
-		file === "npm" && process.platform === "win32" ? "npm.cmd" : file,
-		args,
-		{
-			cwd,
-			env,
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-		},
-	);
+	let result;
+	try {
+		result = spawn(
+			file === "npm" && process.platform === "win32" ? "npm.cmd" : file,
+			args,
+			{
+				cwd,
+				env,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+	} catch (error) {
+		return {
+			code: 1,
+			firstRed: error instanceof Error ? error.message : String(error),
+		};
+	}
 	const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
 	return {
 		code: typeof result.status === "number" ? result.status : 1,
@@ -155,6 +177,10 @@ export function runPreflight({
 		name,
 		command: TEST_GATE_NAMES.has(name)
 			? [
+					process.execPath,
+					"scripts/with-test-lock.mjs",
+					"--shared",
+					"--",
 					"node_modules/.bin/vitest",
 					"run",
 					...command,
@@ -200,6 +226,7 @@ export function runPreflight({
 			},
 		);
 	}
+	validateSelectors({ only, skip }, gates);
 	const rows = gates
 		.filter(({ name }) => (!only || name === only) && name !== skip)
 		.map(({ name, command, job }) => ({

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CI_JOB_NAMES } from "../../scripts/lib/ci-checks.mjs";
 
 const spawnSync = vi.fn();
 vi.mock("node:child_process", () => ({ spawnSync }));
@@ -17,6 +18,15 @@ describe("pr preflight", () => {
 		expect(table).toContain("mirrored CI job");
 		expect(table).toContain("pass/fail");
 	});
+	it("pins preflight labels to the CI job vocabulary", async () => {
+		const { GATES } = await import("../../scripts/pr-preflight.mjs");
+		expect(
+			GATES.find(([name]) => name === "check-changelog-fragments")?.[2],
+		).toBe(CI_JOB_NAMES.CHANGELOG_FRAGMENT);
+		expect(GATES.find(([name]) => name === "check:lockfile")?.[2]).toBe(
+			CI_JOB_NAMES.LINT_AND_TYPECHECK,
+		);
+	});
 	it("parses only and skip selectors", () => {
 		expect(parseArgs(["--only", "lint"])).toEqual({
 			only: "lint",
@@ -26,6 +36,11 @@ describe("pr preflight", () => {
 			only: undefined,
 			skip: "lint",
 		});
+	});
+	it("rejects an unknown selector with the effective gate names", () => {
+		expect(() =>
+			runPreflight({ argv: ["--only", "does-not-exist"], env: {} }),
+		).toThrow(/--only does-not-exist.*valid gate names:.*build.*lint/);
 	});
 	it("rejects skipping hard gates with the maintainer decision", () => {
 		for (const gate of ["fmt:check", "build"]) {
@@ -49,6 +64,32 @@ describe("pr preflight", () => {
 		expect(exitCode).toBe(1);
 		expect(spawnSync).toHaveBeenCalledOnce();
 		expect(log.mock.calls[0][0]).toContain("gate exploded");
+		log.mockRestore();
+	});
+	it("records a spawn exception as a failed gate", () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const exitCode = runPreflight({
+			argv: ["--only", "lint"],
+			spawn: () => {
+				throw new Error("ENOENT injected");
+			},
+			env: {},
+		});
+		expect(exitCode).toBe(1);
+		expect(log.mock.calls[0][0]).toContain("ENOENT injected");
+		log.mockRestore();
+	});
+	it("runs Vitest gates through the shared test lock", () => {
+		spawnSync.mockReturnValue({ status: 0, stdout: "", stderr: "" });
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		runPreflight({
+			argv: ["--only", "tests/config"],
+			spawn: spawnSync,
+			env: {},
+		});
+		expect(spawnSync.mock.calls[0][1]).toEqual(
+			expect.arrayContaining(["scripts/with-test-lock.mjs", "--shared"]),
+		);
 		log.mockRestore();
 	});
 });
