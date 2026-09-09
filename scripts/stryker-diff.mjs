@@ -4,7 +4,8 @@ import {
 	capMutationFiles,
 	DEFAULT_MAX_FILES,
 	formatCapNotice,
-	isScriptMutationFile,
+	formatVitestCommand,
+	isSourceMutationFile,
 	mapRelatedTests,
 } from "./lib/stryker-diff.mjs";
 
@@ -29,7 +30,7 @@ function changedScriptFiles() {
 			.split("\n")
 			.map((file) => file.trim())
 			.filter(Boolean)
-			.filter(isScriptMutationFile);
+			.filter(isSourceMutationFile);
 	} catch (error) {
 		console.error(
 			`mutation diff: could not read ${base}...HEAD: ${error.message}`,
@@ -38,19 +39,9 @@ function changedScriptFiles() {
 	}
 }
 
-function shellQuote(value) {
-	return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function writeRunConfig(testFiles) {
+function writeRunConfig(testFiles, useSourceConfig) {
 	mkdirSync(".stryker", { recursive: true });
-	const command = [
-		"node_modules/.bin/vitest",
-		"run",
-		"--configLoader",
-		"runner",
-		...testFiles.map(shellQuote),
-	].join(" ");
+	const command = formatVitestCommand(testFiles, useSourceConfig);
 	const config = `import base from "../stryker.config.mjs";\nexport default { ...base, commandRunner: { ...base.commandRunner, command: ${JSON.stringify(command)} } };\n`;
 	const file = ".stryker/diff.config.mjs";
 	writeFileSync(file, config);
@@ -76,8 +67,14 @@ if (covered.length === 0) {
 	process.exit(0);
 }
 
-const configFile = writeRunConfig(tests);
+const useSourceConfig = covered.some((file) =>
+	/^(?:clients|tools|mcp)\//.test(file),
+);
+const configFile = writeRunConfig(tests, useSourceConfig);
 console.log(`mutation diff: mutating ${covered.join(", ")}`);
+console.log(
+	`mutation diff: selected ${covered.length} file(s); Stryker mutant count follows in its report`,
+);
 console.log(`mutation diff: running related tests ${tests.join(", ")}`);
 const result = spawnSync(
 	"node_modules/.bin/stryker",

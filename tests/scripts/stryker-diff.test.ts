@@ -4,9 +4,15 @@ import { resolve } from "node:path";
 import {
 	capMutationFiles,
 	formatCapNotice,
+	formatVitestCommand,
+	isSourceMutationFile,
 	isScriptMutationFile,
 	mapRelatedTests,
 } from "../../scripts/lib/stryker-diff.mjs";
+import {
+	STRYKER_ALIAS_EXCLUSIONS,
+	strykerSourceAlias,
+} from "../../vitest.stryker.config.js";
 
 const config = readFileSync(
 	resolve(import.meta.dirname, "../../stryker.config.mjs"),
@@ -62,6 +68,20 @@ describe("stryker diff selection", () => {
 		]);
 	});
 
+	it("maps a compiled client import to its TypeScript mutation target", () => {
+		// Recurrence: tests importing clients/x.js otherwise execute the stale
+		// sibling and leave mutants in clients/x.ts with no coverage.
+		const result = mapRelatedTests(["clients/file-utils.ts"], {
+			testFiles: ["tests/clients/file-utils.test.ts"],
+			readFile: () =>
+				'import { isTestFile } from "../../clients/file-utils.js"',
+		});
+
+		expect(result.related.get("clients/file-utils.ts")).toEqual(
+			new Set(["tests/clients/file-utils.test.ts"]),
+		);
+	});
+
 	it("reports changed scripts with no covering test instead of silently selecting none", () => {
 		// Recurrence: a changed mutation target without a related test must be a
 		// review finding, not an accidental green mutation run.
@@ -96,11 +116,15 @@ describe("stryker diff selection", () => {
 		expect(isScriptMutationFile("scripts/hooks/guard-bash.mjs")).toBe(true);
 		expect(isScriptMutationFile("scripts/example.test.mjs")).toBe(false);
 		expect(isScriptMutationFile("clients/runtime.ts")).toBe(false);
+		expect(isSourceMutationFile("clients/runtime.ts")).toBe(true);
+		expect(isSourceMutationFile("clients/runtime.d.ts")).toBe(false);
+		expect(isSourceMutationFile("tests/fixtures/client.ts")).toBe(false);
 		expect(config).toContain('testRunner: "command"');
 		expect(config).toContain(
 			'command: "node_modules/.bin/vitest run --configLoader runner"',
 		);
-		expect(config).toContain('"scripts/**/*.mjs", "!scripts/**/*.test.mjs"');
+		expect(config).toContain('"scripts/**/*.mjs"');
+		expect(config).toContain('"!scripts/**/*.test.mjs"');
 		expect(config).toContain('coverageAnalysis: "off"');
 		expect(config).not.toContain("vitest:");
 		// Spike 2026-09-09: TypeScript 7 lacks the API Stryker's sandbox tsconfig
@@ -109,6 +133,37 @@ describe("stryker diff selection", () => {
 		// Neither implies a per-mutant rebuild: the population is .mjs run directly.
 		expect(config).toContain('buildCommand: "npm run build"');
 		expect(config).toContain("inPlace: true");
-		expect(config).not.toContain("clients/");
+		expect(config).toContain("clients/**/*.ts");
+		expect(config).toContain("disableTypeChecks: true");
+	});
+
+	it("uses the source resolver only for client mutation commands", () => {
+		// Recurrence: the generated command must opt into the alias config when a
+		// selected source target is loaded through a compiled .js specifier.
+		expect(
+			formatVitestCommand(["tests/clients/file-utils.test.ts"], true),
+		).toBe(
+			"node_modules/.bin/vitest run --config vitest.stryker.config.ts --configLoader runner 'tests/clients/file-utils.test.ts'",
+		);
+	});
+
+	it("redirects existing compiled imports and preserves intentional consumers", () => {
+		const plugin = strykerSourceAlias();
+		const resolveId = plugin.resolveId as (
+			source: string,
+			importer: string,
+		) => string | undefined;
+		expect(
+			resolveId(
+				"../../clients/file-utils.js",
+				"tests/clients/file-utils.test.ts",
+			),
+		).toMatch(/clients\/file-utils\.ts$/);
+		for (const [testFile, reason] of Object.entries(STRYKER_ALIAS_EXCLUSIONS)) {
+			expect(reason).toMatch(/compiled|dist/);
+			expect(
+				resolveId("../../clients/file-utils.js", testFile),
+			).toBeUndefined();
+		}
 	});
 });

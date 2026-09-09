@@ -9,6 +9,11 @@ export declare function formatCapNotice(
 	skipped: string[],
 ): string;
 export declare const isScriptMutationFile: (file: string) => boolean;
+export declare const isSourceMutationFile: (file: string) => boolean;
+export declare function formatVitestCommand(
+	testFiles: string[],
+	useSourceConfig?: boolean,
+): string;
 export declare function mapRelatedTests(
 	changedFiles: string[],
 	options?: {

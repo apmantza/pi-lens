@@ -9,6 +9,24 @@ export const DEFAULT_MAX_FILES = 6;
 export const isScriptMutationFile = (file) =>
 	/^scripts\/.*\.mjs$/.test(file) && !file.endsWith(".test.mjs");
 
+export const isSourceMutationFile = (file) =>
+	isScriptMutationFile(file) ||
+	(/^(?:clients|tools|mcp)\/.*\.ts$/.test(file) &&
+		!file.endsWith(".d.ts") &&
+		!file.includes("/tests/") &&
+		!file.includes("/fixtures/"));
+
+export function formatVitestCommand(testFiles, useSourceConfig = false) {
+	return [
+		"node_modules/.bin/vitest",
+		"run",
+		...(useSourceConfig ? ["--config", "vitest.stryker.config.ts"] : []),
+		"--configLoader",
+		"runner",
+		...testFiles.map((file) => `'${file.replaceAll("'", "'\\''")}'`),
+	].join(" ");
+}
+
 function collectTestFiles(dir, out = []) {
 	if (!existsSync(dir)) return out;
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -34,7 +52,7 @@ function normalized(file) {
 	return path
 		.resolve(file)
 		.replace(/\\/g, "/")
-		.replace(/\.(?:mjs|js|cjs)$/, "");
+		.replace(/\.(?:mjs|js|cjs|ts)$/, "");
 }
 
 export function capMutationFiles(files, maxFiles = DEFAULT_MAX_FILES) {
@@ -66,7 +84,7 @@ export function mapRelatedTests(
 		readFile = (file) => readFileSync(file, "utf8"),
 	} = {},
 ) {
-	const scripts = changedFiles.filter(isScriptMutationFile);
+	const scripts = changedFiles.filter(isSourceMutationFile);
 	const related = new Map(scripts.map((file) => [file, new Set()]));
 	const testContents = testFiles.map((test) => {
 		try {

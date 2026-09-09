@@ -22,7 +22,21 @@ export default {
 	commandRunner: {
 		command: "node_modules/.bin/vitest run --configLoader runner",
 	},
-	mutate: ["scripts/**/*.mjs", "!scripts/**/*.test.mjs"],
+	// Stryker runs Vitest with the source-only resolver, so these TypeScript
+	// files are the executable mutation targets rather than stale JS siblings.
+	mutate: [
+		"scripts/**/*.mjs",
+		"!scripts/**/*.test.mjs",
+		"clients/**/*.ts",
+		"!clients/**/*.d.ts",
+		"!clients/**/tests/**",
+		"!clients/**/fixtures/**",
+		"tools/**/*.ts",
+		"!tools/**/*.d.ts",
+		"mcp/**/*.ts",
+		"!mcp/**/*.d.ts",
+	],
+	disableTypeChecks: true,
 	incremental: true,
 	incrementalFile: ".stryker/incremental.json",
 	coverageAnalysis: "off",
