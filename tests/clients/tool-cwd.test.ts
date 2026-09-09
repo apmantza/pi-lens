@@ -182,7 +182,7 @@ describe("resolveToolCwd (#2777)", () => {
 		}
 	});
 
-	it("uses the dispatch root for a built-in server with no marker", async () => {
+	it("uses the file directory for a built-in server with no marker", async () => {
 		const project = path.join(home, "repo");
 		const file = path.join(project, "nested", "src", "main.py");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -194,7 +194,7 @@ describe("resolveToolCwd (#2777)", () => {
 				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
 			}
 		).resolveServerRoot.bind(service);
-		expect(await resolveRoot(server, file)).toBe(project);
+		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
 	});
 
 	it("keeps a markerless server-computed root at the LSP seam", async () => {
@@ -237,8 +237,8 @@ describe("resolveToolCwd (#2777)", () => {
 			spawn: vi.fn(),
 		};
 
-		expect(await freshResolve(server, file, project)).toBe(project);
-		expect(await freshResolve(server, file, project)).toBe(project);
+		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
+		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
 		expect(
 			freshLedger
 				.getDegradationSummary()

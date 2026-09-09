@@ -132,7 +132,7 @@ export async function resolveLspServerCwd(
 		}
 		if (!rootMarkers?.length) return undefined;
 		return resolveToolCwd("lsp", server.id, filePath, {
-			cwd: sessionCwd,
+			cwd: path.dirname(path.resolve(filePath)),
 			rootMarkers,
 		});
 	}

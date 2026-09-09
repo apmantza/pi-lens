@@ -495,12 +495,12 @@ export function createCustomServer(
 		name: config.name,
 		custom: true,
 		extensions: config.extensions,
-		rootMarkers: config.rootMarkers,
+		...(config.rootMarkers ? { rootMarkers: config.rootMarkers } : {}),
 		root: config.rootMarkers
 			? async (file) =>
 					resolveToolCwd("lsp", id, file, {
 						cwd: process.cwd(),
-						rootMarkers: config.rootMarkers,
+						...(config.rootMarkers ? { rootMarkers: config.rootMarkers } : {}),
 					})
 			: async (file) => resolveToolCwd("lsp", id, file, { cwd: process.cwd() }),
 		async spawn(root) {
