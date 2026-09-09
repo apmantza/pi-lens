@@ -460,6 +460,7 @@ const LSP_FIXTURES = [
 		file: "packages/app/bad.ts",
 		serverHint: "typescript-language-server (nested rootMarkers)",
 		tools: ["typescript-language-server"],
+		rootMarkers: ["package.json"],
 		expectedCwd: "packages/app",
 		expectedReason: "marker:package.json",
 		expectedTool: "typescript-nested-root",
