@@ -31,3 +31,23 @@ Check that each regression test reaches the real seam and observes an independen
 effect. Remove or mutate the claimed guard and require the test to fail for the
 intended reason. Flag tests that restate the implementation, assert setup data,
 or swap a real in-process store, sink, coordinator, or registry for a fake.
+
+## Finding shape and disposition
+
+Every finding is written in four moves, in this order: the smallest concrete
+instance (the probe command and its output, or the failing scenario) with the
+expected value beside it; one plain-language sentence saying what is wrong;
+the cause and its cost in prose; the remedy, with options labelled A/B when
+more than one is defensible. Symbols and `file:line` anchor the prose and
+never replace it. Severity is earned by the instance: a CRITICAL or HIGH
+without a reproduced failure scenario is a MEDIUM at most.
+
+The verdict line comes first. After the findings, two fixed sections:
+"Could not verify" (what was blocked and why, never implied green) and
+"Named output" (the structural insight the probes could not close). A verify
+round ends with a disposition table for the previous round's findings —
+`fixed | not fixed | new defect | withdrawn` per finding id — so the
+orchestrator reads outcomes, not prose. Safe deltas (a body sentence, a
+comment, a literal, a doc line) are reported as such and never counted as
+actionable rounds. Borrowed shape: p3bot/library `tasks/review/pre-commit`
+(finding IDs, per-item template, remediation summary), 2026-09-09.
