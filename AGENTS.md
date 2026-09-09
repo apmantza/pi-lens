@@ -576,6 +576,14 @@ Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
 
+Model-facing tool configuration has one complete registry in
+`clients/tool-config.ts`. It includes every pi and MCP tool, drives schema,
+diagnostics, effective-config output, `pi-lens check`, and both registration
+surfaces, and records whether each entry is disableable. The activation loader
+and MCP session lifecycle tools are non-disableable; unknown and attempted
+non-disableable keys share `PILENS_CFG_0009`. A surface roster without a
+registry entry is a governance failure (#2800 R2).
+
 ### LSP: acquisition, touches, waits, and diagnostics
 
 Alternate language servers declare their preferred server through

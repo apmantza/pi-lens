@@ -26,6 +26,7 @@
 import {
 	type ConfigDiagnosticCode,
 	DEPRECATED_CONFIG_SURFACES,
+	withConfigDiagnosticCode,
 } from "./config-diagnostic-codes.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { errorClassName } from "./error-class.js";
@@ -512,7 +513,7 @@ export function warnIgnoredConfigOnce(options: WarnIgnoredConfigOptions): void {
 	logExtension({
 		subsystem,
 		level: "warn",
-		message,
+		message: withConfigDiagnosticCode(message, code),
 		metadata: { configPath: file, reason, code, ...(key ? { key } : {}) },
 	});
 

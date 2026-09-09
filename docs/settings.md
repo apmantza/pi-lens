@@ -85,6 +85,12 @@ advertised tool list never changes. The `pi_lens_activate_tools` loader stays
 registered and keeps its usual description; under this flag the tools it names
 are already active, so calling it is a no-op.
 
+The `tools.<name>.enabled` population covers every model-facing pi and MCP
+tool. The loader `pi_lens_activate_tools` and MCP lifecycle tools
+`pilens_session_start` and `pilens_turn_end` are required by their host
+protocols and cannot be disabled. Unknown or non-disableable names emit
+`PILENS_CFG_0009`.
+
 `--lens-guard` is **EXPERIMENTAL and strictly opt-in**. When enabled, actual
 `git commit`/`git push` commands are blocked only for current, structured
 blocking findings (including blocking test failures); advisory/no-action-required

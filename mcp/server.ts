@@ -80,7 +80,10 @@ import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { createLspDiagnosticsTool } from "../tools/lsp-diagnostics.js";
 import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
 import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
-import { resolveLensToolEnabled } from "../clients/tool-config.js";
+import {
+	resolveLensToolEnabled,
+	toolRegistryEntryForMcp,
+} from "../clients/tool-config.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -1002,13 +1005,13 @@ const TOOLS = canRebuildPiLens(REPO_ROOT)
 function enabledToolsForCwd(cwd: string) {
 	const global = loadPiLensGlobalConfig();
 	const project = loadPiLensProjectConfig(cwd);
-	return TOOLS.filter((tool) =>
-		resolveLensToolEnabled(
-			tool.name.replace(/^pilens_/, ""),
-			global,
-			project.raw,
-		),
-	);
+	return TOOLS.filter((tool) => {
+		const entry = toolRegistryEntryForMcp(tool.name);
+		return (
+			entry !== undefined &&
+			resolveLensToolEnabled(entry.name, global, project.raw)
+		);
+	});
 }
 
 function formatAnalyze(

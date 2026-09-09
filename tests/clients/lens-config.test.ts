@@ -188,7 +188,7 @@ describe("global pi-lens config", () => {
 			.some((arg) => typeof arg === "string" && arg.includes("$schema"));
 		expect(warnedForSchema).toBe(false);
 		expect(console.error).toHaveBeenCalledWith(
-			expect.stringContaining('unknown key "tools.unknown_tool.enabled"'),
+			expect.stringContaining("[PILENS_CFG_0009]"),
 		);
 
 		// Warn-once: repeated loads do not add further warnings for the same key.
