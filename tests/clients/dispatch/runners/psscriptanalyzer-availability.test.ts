@@ -35,12 +35,17 @@ vi.mock("../../../../clients/latency-logger.js", () => ({
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));
-vi.mock("../../../../clients/degradation-ledger.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/degradation-ledger.js")>()),
-	recordDegradation: recordDegradationSpy,
-	recordDegradationOnce: vi.fn(),
-	incrementDegradationCount: incrementDegradationCountSpy,
-}));
+vi.mock(
+	"../../../../clients/degradation-ledger.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/degradation-ledger.js")
+		>()),
+		recordDegradation: recordDegradationSpy,
+		recordDegradationOnce: vi.fn(),
+		incrementDegradationCount: incrementDegradationCountSpy,
+	}),
+);
 
 /**
  * Fresh module state per test. The memoized verdicts live at module scope, and

@@ -226,6 +226,16 @@ is the procedure and defers here on conflict; 2026-09-09).**
   resolution (throttled once per key per session), one bounded degradation
   record for the fallback. #2691 → #2756 were shape 40 twice in a week, each
   fixed at its own seam with no log line, until the maintainer asked (#2777).
+- *A direct push to master runs `npm run preflight` first.* Docs, config
+  and contract files land on master without a PR, but preflight's gates
+  (`fmt:check`, `tests/config/` — tracked-but-ignored files, changelog
+  fragments, workflow manifests, line-keyed admission baselines) are what
+  read them. Run preflight on the exact tree before the push; a red master
+  blocks every open PR's merge ref, and the advisory oxfmt lane reds on every
+  PR until master is formatted again.
+  Record: 2026-09-09, two master reds in one afternoon — a force-added
+  contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
+  baseline interaction (#2816) — each found by the next PR's CI.
 - *The human-decision class is named, not inferred.* Review tier follows
   the surface a diff touches; on top of that, a fixed class of changes is
   never merged on an agent's verdict alone and goes to the ledger as `needs

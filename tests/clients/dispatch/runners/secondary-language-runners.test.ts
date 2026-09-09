@@ -11,14 +11,19 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: (command: string) => ({
-		isAvailable: () => availabilityCheck(command),
-		isAvailableAsync: async () => availabilityCheck(command),
-		getCommand: () => command,
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailable: () => availabilityCheck(command),
+			isAvailableAsync: async () => availabilityCheck(command),
+			getCommand: () => command,
+		}),
 	}),
-}));
+);
 
 function mockRunnerHelpers(
 	isAvailable: (command: string) => boolean = () => true,

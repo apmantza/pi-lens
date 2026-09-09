@@ -10035,12 +10035,22 @@
     "resetLSPService",
     "runPerServerGroups"
   ],
-  "tests/clients/dispatch/runners/eslint.test.ts:35:../../../../clients/tool-policy.js": [
+  "tests/clients/dispatch/runners/psscriptanalyzer-availability.test.ts:38:../../../../clients/degradation-ledger.js": [
+    "DEGRADATION_ENTRIES_PER_KIND",
+    "DEGRADATION_MAX_DISTINCT_KINDS",
+    "LEDGER_FIELD_MAX",
+    "getDegradationLedgerGeneration",
+    "getDegradationSummary",
+    "renderDegradationLines",
+    "resetDegradationLedger",
+    "truncateForLedger"
+  ],
+  "tests/clients/dispatch/runners/eslint.test.ts:40:../../../../clients/tool-policy.js": [
     "getAutofixCapability",
     "getToolCommandSpec",
     "shouldAutoInstallTool"
   ],
-  "tests/clients/dispatch/runners/markdownlint-fixable.test.ts:26:../../../../clients/tool-policy.js": [
+  "tests/clients/dispatch/runners/markdownlint-fixable.test.ts:33:../../../../clients/tool-policy.js": [
     "AUTO_INSTALLABLE_DEFAULT_FORMATTERS",
     "FORMATTER_POLICY_BY_EXTENSION",
     "FORMATTER_POLICY_BY_FILENAME",
@@ -10112,17 +10122,7 @@
     "shouldAutoInstallTool",
     "stripGradleCommentsAndStrings"
   ],
-  "tests/clients/dispatch/runners/psscriptanalyzer-availability.test.ts:38:../../../../clients/degradation-ledger.js": [
-    "DEGRADATION_ENTRIES_PER_KIND",
-    "DEGRADATION_MAX_DISTINCT_KINDS",
-    "LEDGER_FIELD_MAX",
-    "getDegradationLedgerGeneration",
-    "getDegradationSummary",
-    "renderDegradationLines",
-    "resetDegradationLedger",
-    "truncateForLedger"
-  ],
-  "tests/clients/dispatch/runners/stylelint-fixable.test.ts:24:../../../../clients/tool-policy.js": [
+  "tests/clients/dispatch/runners/stylelint-fixable.test.ts:29:../../../../clients/tool-policy.js": [
     "AUTO_INSTALLABLE_DEFAULT_FORMATTERS",
     "FORMATTER_POLICY_BY_EXTENSION",
     "FORMATTER_POLICY_BY_FILENAME",
@@ -10195,11 +10195,11 @@
     "shouldAutoInstallTool",
     "stripGradleCommentsAndStrings"
   ],
-  "tests/clients/dispatch/runners/taplo.test.ts:33:../../../../clients/tool-policy.js": [
+  "tests/clients/dispatch/runners/taplo.test.ts:38:../../../../clients/tool-policy.js": [
     "getToolCommandSpec",
     "shouldAutoInstallTool"
   ],
-  "tests/clients/dispatch/trivy-config.test.ts:59:../../../clients/dispatch/runners/utils/runner-helpers.js": [
+  "tests/clients/dispatch/trivy-config.test.ts:61:../../../clients/dispatch/runners/utils/runner-helpers.js": [
     "AvailabilityCause",
     "AvailabilityDecision",
     "AvailabilityLatch",
@@ -10238,10 +10238,10 @@
     "sg",
     "startHostStallSampler"
   ],
-  "tests/clients/lsp/client-unavailable-dedupe.test.ts:24:../../../clients/lsp/config.js": [
+  "tests/clients/lsp/client-unavailable-dedupe.test.ts:26:../../../clients/lsp/config.js": [
     "isServerDisabled"
   ],
-  "tests/clients/lsp/client-unavailable-dedupe.test.ts:29:../../../clients/lsp/client.js": [
+  "tests/clients/lsp/client-unavailable-dedupe.test.ts:31:../../../clients/lsp/client.js": [
     "CLIENT_CAPABILITIES",
     "INITIALIZE_TIMEOUT_MS",
     "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
@@ -10268,10 +10268,10 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/typescript-idle-eviction.test.ts:12:../../../clients/lsp/config.js": [
+  "tests/clients/lsp/typescript-idle-eviction.test.ts:14:../../../clients/lsp/config.js": [
     "isServerDisabled"
   ],
-  "tests/clients/lsp/typescript-idle-eviction.test.ts:17:../../../clients/lsp/client.js": [
+  "tests/clients/lsp/typescript-idle-eviction.test.ts:19:../../../clients/lsp/client.js": [
     "CLIENT_CAPABILITIES",
     "INITIALIZE_TIMEOUT_MS",
     "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
