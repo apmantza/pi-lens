@@ -203,7 +203,11 @@ const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
 	gitExecSync: ["/git-fixture-env", "/git-fixture-env.js"],
 	spawnWedgedChild: ["/fault-injection", "/fault-injection.ts"],
 	safeSpawnAsync: ["/safe-spawn", "/safe-spawn.js"],
-	withRealPi: ["/real-pi-harness", "/real-pi-harness.js", "/real-pi-harness.ts"],
+	withRealPi: [
+		"/real-pi-harness",
+		"/real-pi-harness.js",
+		"/real-pi-harness.ts",
+	],
 	execFileSync: ["node:child_process", "child_process"],
 	execSync: ["node:child_process", "child_process"],
 };

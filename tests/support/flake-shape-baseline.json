@@ -44,6 +44,9 @@
 		"mcp/analyze-cli.test.ts": 1,
 		"mcp/build-graph-cli.test.ts": 1,
 		"packaging-pack-manifest.test.ts": 3,
+		"real-harness/negative.test.ts": 2,
+		"real-harness/scenario-1.test.ts": 1,
+		"real-harness/scenario-3.test.ts": 1,
 		"scripts/analyze-config-resolution-smell.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,
 		"scripts/astgrep-self-scan.test.ts": 2,
@@ -71,9 +74,7 @@
 		"scripts/with-memory-watch.test.ts": 1,
 		"support/fault-injection.test.ts": 3,
 		"support/git-config-guard.test.ts": 5,
-		"support/git-fixture-env.test.ts": 9,
-		"real-harness/scenario-1.test.ts": 1,
-		"real-harness/scenario-3.test.ts": 1
+		"support/git-fixture-env.test.ts": 9
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,
@@ -221,6 +222,7 @@
 		"support/fake-lsp-server.test.ts": 1,
 		"support/fault-injection.test.ts": 5,
 		"support/fault-injection.ts": 3,
+		"support/real-pi-harness.ts": 1,
 		"tools/lens-diagnostics.test.ts": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts": 1,
 		"tools/lsp-diagnostics-per-server-concurrency.test.ts": 1,
