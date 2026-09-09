@@ -3511,7 +3511,6 @@ export class LSPService {
 	async resyncGitChangedFiles(changedPaths: readonly string[]): Promise<void> {
 		if (this.checkDestroyed() || changedPaths.length === 0) return;
 		const targets = new Set<string>();
-		const activeServers = new Set<string>();
 		for (const changedPath of changedPaths) {
 			const resolved = path.resolve(changedPath);
 			for (const server of getServersForFileWithConfig(resolved)) {
@@ -3529,30 +3528,8 @@ export class LSPService {
 		const openTargets = [...targets].filter((filePath) =>
 			this.hasLiveClientHoldingDocument(filePath),
 		);
-		await Promise.all(
-			openTargets.map(async (filePath) => {
-				try {
-					if (!nodeFs.existsSync(filePath)) return;
-					const content = await fs.readFile(filePath, "utf8");
-					const excludeServerIds =
-						await this.serverIdsNotHoldingDocument(filePath);
-					for (const client of this.state.clients.values()) {
-						if (client.isAlive() && documentIsOpenOn(client, filePath)) {
-							activeServers.add(client.serverId);
-						}
-					}
-					await this.touchFile(filePath, content, {
-						diagnostics: "none",
-						source: "git_external_change",
-						clientScope: "all",
-						excludeServerIds,
-					});
-				} catch {
-					// A failed best-effort repair remains visible in the event row's
-					// enqueued count; the next governed touch or drift pass can retry.
-				}
-			}),
-		);
+		this.documentDrift.enqueueResync(openTargets);
+		const pass = await this.sweepDocumentDrift({ force: true });
 		logLatency({
 			type: "phase",
 			phase: "lsp_external_change_resync",
@@ -3560,8 +3537,8 @@ export class LSPService {
 			durationMs: 0,
 			metadata: {
 				changedCount: changedPaths.length,
-				enqueuedCount: openTargets.length,
-				servers: [...activeServers].sort(),
+				enqueued: openTargets.length,
+				deferred: pass?.deferred ?? this.documentDrift.pendingResyncCount,
 			},
 		});
 	}
@@ -8700,18 +8677,17 @@ export class LSPService {
 		]);
 		const touchScopedOpenDependencies = async (
 			filePath: string,
-		): Promise<void> => {
-			if (
-				options.files === undefined ||
-				!getLanguageId(filePath)?.startsWith("typescript")
-			)
-				return;
+		): Promise<boolean> => {
+			if (options.files === undefined) return true;
+			// Import coverage is language-neutral. Undefined means this file was
+			// not covered by the facts seam, so its cache entry is not eligible.
 			const imports = workspaceDiagnosticsCacheCtx.importsFor(filePath);
-			if (!imports) return;
+			if (!imports) return false;
 			const openImports = imports.filter((dependency) =>
 				this.hasLiveClientHoldingDocument(dependency),
 			);
-			if (openImports.length > SCOPED_DEPENDENCY_TOUCH_MAX) {
+			const capped = openImports.length > SCOPED_DEPENDENCY_TOUCH_MAX;
+			if (capped) {
 				recordDegradationOnce({
 					kind: "lsp_dependency_touch_capped",
 					subject: filePath,
@@ -8737,6 +8713,7 @@ export class LSPService {
 						});
 					}),
 			);
+			return !capped;
 		};
 		const cachedResults: LSPWorkspaceDiagnosticResult[] = [];
 		const filesToTouch: string[] = [];
@@ -8760,19 +8737,22 @@ export class LSPService {
 			// exists to detect) must NOT be replayed and reconciled as confirmed via
 			// mode=full. On a mismatch, fall through to a fresh touch.
 			if (cached && cached.binding.boundToCurrentDisk !== false) {
-				await touchScopedOpenDependencies(filePath);
-				cachedResults.push({
-					filePath,
-					diagnostics: cached.diagnostics,
-					count: cached.count,
-					// #1093: a cache hit replays an older observation — carry its
-					// scan time so mode=full's footer reconcile stamps `touchedAt`
-					// with when the truth was seen, not now().
-					observedAt: cached.scannedAt,
-					contentHash: cached.binding.contentHash,
-					boundToCurrentDisk: cached.binding.boundToCurrentDisk,
-					writeIndex: writeIndexByPath.get(normalizeMapKey(filePath)),
-				});
+				const dependenciesConfirmed =
+					await touchScopedOpenDependencies(filePath);
+				if (dependenciesConfirmed)
+					cachedResults.push({
+						filePath,
+						diagnostics: cached.diagnostics,
+						count: cached.count,
+						// #1093: a cache hit replays an older observation — carry its
+						// scan time so mode=full's footer reconcile stamps `touchedAt`
+						// with when the truth was seen, not now().
+						observedAt: cached.scannedAt,
+						contentHash: cached.binding.contentHash,
+						boundToCurrentDisk: cached.binding.boundToCurrentDisk,
+						writeIndex: writeIndexByPath.get(normalizeMapKey(filePath)),
+					});
+				else filesToTouch.push(filePath);
 			} else {
 				filesToTouch.push(filePath);
 			}

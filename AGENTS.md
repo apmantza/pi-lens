@@ -585,11 +585,15 @@ fully-covered workspace cache and footer replacement. Never reconstruct the gap
 from a touch-wide timeout: consume `touchFile`'s frozen coverage set. (#1549)
 
 Recovered Git tree changes use the already-known opaque mutation path set to
-re-sync each changed open document and its cached open importers through
-`touchFile`; they do not run a second Git diff. Scoped TypeScript full scans
-touch at most 32 cached open imports before serving a workspace-cache hit, and
-record `lsp_dependency_touch_capped` when that bound trips. (#2817, recurrence
-#1783)
+re-sync each changed open document and its cached open importers through the
+existing `DocumentDriftTracker` paced scheduler; they do not run a second Git
+diff or fan out a second scheduler. Each pass touches at most four targets and
+records deferred targets. Scoped full scans use the language-neutral import-facts
+seam and touch at most 32 cached
+open imports before serving a workspace-cache hit, and record
+`lsp_dependency_touch_capped` when that bound trips; a capped or uncovered
+requested file is freshly touched instead of being served from cache as
+confirmed. (#2817, recurrence #1783)
 
 Collected LSP diagnostics carry the registered delivering `serverId` alongside
 the server-authored protocol `source`. Primary-versus-auxiliary verdicts and
