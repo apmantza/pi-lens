@@ -502,6 +502,54 @@ describe("classifyFailureLog (#2103)", () => {
 		expect(classifyFailureLog(log).kind).toBe("infra-net");
 	});
 
+	// Vitest emits both spellings from one template: `${isHook ? "Hook" :
+	// "Test"} timed out in ${timeout}ms`. Keep the hook member in the same
+	// regression family so a hook starved by registry load gets the same retry.
+	it("#2839 (b2): a vitest hook timeout beside network evidence classifies infra-net", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			" FAIL default tests/a.test.ts > hook-backed test",
+			"Error: Hook timed out in 300ms.",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("infra-net");
+	});
+
+	// The demotion is positive evidence: every test-level FAIL block must have
+	// a timeout as its first error. A neighboring thrown failure stays real.
+	it("#2839 F2: a TypeError in a second FAIL block stays real", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			" FAIL default tests/a.test.ts > slow sweep",
+			"Error: Test timed out in 5000ms.",
+			" FAIL default tests/b.test.ts > parses payload",
+			"TypeError: Cannot read properties of undefined (reading 'map')",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	// Shape 43 recurrence: detector needles must not consume a test title or
+	// console echo as evidence. Only the FAIL block's error and npm-owned lines
+	// can arm this demotion.
+	it("#2839 F3: echoed timeout and network text stays real", () => {
+		const log = [
+			'console.log "npm error code ECONNRESET"',
+			" FAIL default tests/a.test.ts > mentions Test timed out in 5000ms",
+			"TypeError: Cannot read properties of undefined (reading 'map')",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	it("#2839 F3: a console echo of npm error stays out of network evidence", () => {
+		const log = [
+			'console.log "npm error code ECONNRESET"',
+			" FAIL default tests/a.test.ts > starved test",
+			"Error: Test timed out in 5000ms.",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
 	// (c) An AssertionError beside the same network evidence still wins as
 	// real -- the demotion must never eat a genuine assertion failure.
 	it("#2839 (c): an AssertionError beside registry ECONNRESET stays real", () => {
@@ -509,8 +557,21 @@ describe("classifyFailureLog (#2103)", () => {
 			"npm error code ECONNRESET",
 			"npm error code ECONNRESET",
 			"npm-retry: attempt 1 network error: ECONNRESET",
+			" FAIL default tests/a.test.ts > assertion beside timeout",
+			"Error: Test timed out in 5000ms.",
 			"AssertionError: expected 2 to be 1",
 			"",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	it("#2839 F4: a compiler diagnostic beside a timeout stays real", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			" FAIL default tests/a.test.ts > compiler-backed test",
+			"Error: Test timed out in 5000ms.",
+			"src/a.ts(12,34): error TS2322: Type string is not assignable",
 		].join("\n");
 		expect(classifyFailureLog(log).kind).toBe("real");
 	});
@@ -539,6 +600,18 @@ describe("classifyFailureLog (#2103)", () => {
 			"",
 		].join("\n");
 		expect(classifyFailureLog(log).kind).toBe("infra-net");
+	});
+
+	it("#2839 F5: kill evidence outranks timeout-plus-network demotion", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			" FAIL default tests/a.test.ts > starved test",
+			"Error: Test timed out in 5000ms.",
+			"KILLED by kernel OOM",
+			"##[error]Process completed with exit code 137.",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("infra-kill");
 	});
 
 	// The needle must stay scoped to the NETWORK reason: the wrapper prints
