@@ -1,5 +1,7 @@
 # Investigator contract
 
+Grep the `turnId` first when correlating rows across telemetry sinks.
+
 Root-cause runtime behavior from reproducible and durable evidence.
 
 Define the symptom as a question that evidence can answer. Name the time window,

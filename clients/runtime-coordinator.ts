@@ -23,6 +23,11 @@ import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
 import { deriveProviderFromModelId } from "./model-provider.js";
+import {
+	beginTurnContext,
+	resetTurnContext,
+	setTurnContextSession,
+} from "./turn-context.js";
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -101,6 +106,8 @@ export interface DeferredMutationRecord {
 	 * the same run.
 	 */
 	queuedTurnIndex: number;
+	/** The immutable sink identity of the turn that queued this record. */
+	queuedTurnId: string;
 	/**
 	 * The STABLE pi session id (`ctx.sessionManager.getSessionId()`) active
 	 * when this file was (most recently) queued/re-touched, or `undefined`
@@ -385,6 +392,7 @@ export class RuntimeCoordinator {
 		this._mutationReceipts = [];
 		this._droppedMutationReceipts = 0;
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+		resetTurnContext(this._telemetrySessionId);
 		this._hasStableSessionId = false;
 		this._telemetryModel = "unknown";
 		this._telemetryModelId = "";
@@ -519,6 +527,7 @@ export class RuntimeCoordinator {
 		// by resetForSession().
 		this._turnStartProjectSeq = this._projectSeq;
 		this._turnIndex += 1;
+		beginTurnContext(this._telemetrySessionId);
 		this._writeIndex = 0;
 		this._reportedThisTurn.clear();
 		this._writtenThisTurn.clear();
@@ -643,6 +652,7 @@ export class RuntimeCoordinator {
 	}): void {
 		if (identity.sessionId && identity.sessionId.trim()) {
 			this._telemetrySessionId = identity.sessionId.trim();
+			setTurnContextSession(this._telemetrySessionId);
 		}
 		const model = identity.model?.trim();
 		const provider = identity.provider?.trim();
@@ -683,6 +693,7 @@ export class RuntimeCoordinator {
 	setSessionLifecycle(args: { sessionId?: string; reason?: string }): void {
 		if (args.sessionId && args.sessionId.trim()) {
 			this._telemetrySessionId = args.sessionId.trim();
+			setTurnContextSession(this._telemetrySessionId);
 			this._hasStableSessionId = true;
 		}
 		this._lifecycleReason = args.reason;
@@ -1397,6 +1408,7 @@ export class RuntimeCoordinator {
 			existing.toolNames.add(toolName);
 			existing.kinds.add(kind);
 			existing.queuedTurnIndex = this._turnIndex;
+			existing.queuedTurnId = `${this._telemetrySessionId}:${this._turnIndex}`;
 			existing.ownerSessionId = ownerSessionId;
 			existing.originCwd = resolvedOriginCwd;
 			return addedKind;
@@ -1410,6 +1422,7 @@ export class RuntimeCoordinator {
 			toolNames: new Set([toolName]),
 			kinds: new Set([kind]),
 			queuedTurnIndex: this._turnIndex,
+			queuedTurnId: `${this._telemetrySessionId}:${this._turnIndex}`,
 			ownerSessionId,
 			originCwd: resolvedOriginCwd,
 		});
