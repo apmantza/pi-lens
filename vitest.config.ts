@@ -275,6 +275,10 @@ const timingSensitiveInclude = [
 // silently goes stale.
 const lspSpawnHeavyInclude = [
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts",
+	// #2776: the real fake-server wire is the only way to reproduce the
+	// custom-primary handler verdict after pull diagnostics are ignored and a
+	// server-authored diagnostic is pushed; keep that handshake in this lane.
+	"tests/tools/lsp-diagnostics-2776.test.ts",
 	// #2344: npm test leaves this real-child integration suite in the default
 	// project unless it is explicitly phased here. `test:integration` still
 	// selects the same file positionally, while `test:unit` excludes it below.
@@ -542,7 +546,7 @@ export default defineConfig({
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
 					execArgv: sharedExecArgv,
-					// Full serialization, not just a cap: four files, but the point
+					// Full serialization, not just a cap: five files, but the point
 					// is to guarantee zero overlap with the "default" project's
 					// fork storm (the actual contention source, see #1022/#2332
 					// above), not to bound intra-project concurrency.

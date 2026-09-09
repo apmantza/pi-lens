@@ -15,6 +15,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.js";
 
 const getServersForFileWithConfig = vi.fn();
@@ -30,6 +33,7 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 
 vi.mock("../../../clients/lsp/config.js", () => ({
 	getServersForFileWithConfig,
+	primaryServerId: vi.fn(() => "ts-primary"),
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -84,7 +88,9 @@ function makeAuxServer(id: string, ext = ".ts") {
 	};
 }
 
-function makeDiagnostic(message: string) {
+function makeDiagnostic(
+	message: string,
+): import("../../../clients/lsp/client.js").LSPDiagnostic {
 	return {
 		severity: 1 as const,
 		message,
@@ -310,6 +316,55 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		delete process.env.PI_LENS_AUX_GRACE_MS;
+	});
+
+	it("partitions real lens_diagnostics results by delivering server id (#2776)", async () => {
+		vi.useRealTimers();
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-provenance-"));
+		const file = path.join(root, "main.ts");
+		fs.writeFileSync(file, "const value = 1;\n");
+		try {
+			const { createLensDiagnosticsTool } =
+				await import("../../../tools/lens-diagnostics.js");
+			const primary = makePrimaryServer("ts-primary");
+			const auxiliary = makeAuxServer("auxiliary-profile");
+			getServersForFileWithConfig.mockReturnValue([primary, auxiliary]);
+			const primaryClient = makeClient(
+				0,
+				[{ ...makeDiagnostic("eslint primary"), source: "eslint" }],
+				{ serverId: "ts-primary" },
+			);
+			const auxiliaryClient = makeClient(
+				0,
+				[{ ...makeDiagnostic("auxiliary finding"), source: "auxiliary" }],
+				{ serverId: "auxiliary-profile" },
+			);
+			createLSPClient
+				.mockResolvedValueOnce(primaryClient)
+				.mockResolvedValueOnce(auxiliaryClient);
+
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+			const result = await createLensDiagnosticsTool(
+				{ readCache: vi.fn() } as never,
+				() => root,
+				() => service,
+			).execute(
+				"provenance-2776",
+				{ mode: "full", paths: [file], refreshRunners: "none" },
+				new AbortController().signal,
+				null,
+				{ cwd: root },
+			);
+			const details = result.details as {
+				lspPrimaryDiagnosticsCount?: number;
+				lspAuxiliaryDiagnosticsCount?: number;
+			};
+			expect(details.lspPrimaryDiagnosticsCount).toBe(1);
+			expect(details.lspAuxiliaryDiagnosticsCount).toBe(1);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("completes at primary+auxGrace, not at the aux deadline", async () => {

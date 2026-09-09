@@ -8,6 +8,7 @@ import { normalizeMapKey } from "../path-utils.js";
 import { loadReverseDependencyIndexFromSnapshot } from "../reverse-deps.js";
 import { freshnessFromMtime } from "../freshness.js";
 import { logLatency } from "../latency-logger.js";
+import { recordDegradationOnce } from "../degradation-ledger.js";
 import { compareOrdinal } from "../string-utils.js";
 import { workspaceDiagnosticsCacheSessionStart } from "./workspace-diagnostics-session.js";
 import type { LSPDiagnostic } from "./client.js";
@@ -266,9 +267,39 @@ export function loadWorkspaceDiagnosticsCache(
 	return readJsonCache<WorkspaceDiagnosticsCache>(cachePath(cwd), (parsed) => {
 		if (!parsed || typeof parsed !== "object") return undefined;
 		const cache = parsed as WorkspaceDiagnosticsCache;
-		if (cache.version !== WORKSPACE_DIAGNOSTICS_CACHE_VERSION) return undefined;
+		if (cache.version !== WORKSPACE_DIAGNOSTICS_CACHE_VERSION) {
+			if (cache.version === 1 || cache.version === 2) {
+				recordDegradationOnce({
+					kind: "lsp-workspace-cache-migration",
+					subject: path.resolve(cwd),
+					reason: `rejected v${cache.version} cache with ${
+						cache.entries && typeof cache.entries === "object"
+							? Object.keys(cache.entries).length
+							: 0
+					} entries during provenance migration`,
+				});
+			}
+			return undefined;
+		}
 		if (!cache.entries || typeof cache.entries !== "object") return undefined;
-		return cache;
+		const validEntries: Record<string, WorkspaceDiagnosticsCacheEntry> = {};
+		for (const [key, entry] of Object.entries(cache.entries)) {
+			if (!entry || typeof entry !== "object") continue;
+			if (
+				!Array.isArray(entry.diagnostics) ||
+				entry.diagnostics.some(
+					(diagnostic) =>
+						!diagnostic ||
+						typeof diagnostic !== "object" ||
+						typeof diagnostic.serverId !== "string" ||
+						diagnostic.serverId.length === 0,
+				)
+			) {
+				continue;
+			}
+			validEntries[key] = entry;
+		}
+		return { ...cache, entries: validEntries };
 	});
 }
 

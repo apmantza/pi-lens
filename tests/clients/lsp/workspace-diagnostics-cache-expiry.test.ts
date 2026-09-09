@@ -50,6 +50,7 @@ function blockingDiagnostic(): LSPDiagnostic {
 		severity: 1,
 		code: 2339,
 		source: "typescript",
+		serverId: "typescript",
 		message: "Property 'foo' does not exist on type 'Bar'.",
 	};
 }

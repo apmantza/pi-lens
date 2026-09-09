@@ -1,3 +1,9 @@
+// #2776: this regression must run against the real fake-server wire. The
+// handler verdict depends on a custom primary server pushing a diagnostic
+// after the pull request is ignored, so mocked clients cannot reproduce the
+// server-id provenance path. Admit this file to the serialized
+// lsp-spawn-heavy lane to keep its real initialize/diagnostics exchange out
+// of the default project's fork storm.
 /**
  * Regression coverage for #2776: a custom primary LSP's server-authored
  * diagnostic source must not make its finding render as auxiliary.
