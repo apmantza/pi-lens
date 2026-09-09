@@ -160,6 +160,29 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		expect(client.received).toEqual([ORIGINAL, BULK_EDITED]);
 	});
 
+	it("resynchronizes an open document from the recovered Git-change seam", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const openDocuments = new Set<string>();
+		const client = makeClient(openDocuments);
+		getServersForFileWithConfig.mockReturnValue([makeServer(dir)]);
+		createLSPClient.mockResolvedValue(client);
+		await service.touchFile(file, await fs.readFile(file, "utf-8"), {
+			diagnostics: "none",
+			clientScope: "primary",
+			source: "lsp_sync",
+		});
+		const originalStat = await fs.stat(file);
+		await fs.writeFile(file, SAME_LENGTH_EDIT, "utf-8");
+		await fs.utimes(file, originalStat.atime, originalStat.mtime);
+
+		await service.resyncGitChangedFiles([file]);
+
+		// This is the recurrence of #2817: the stat-key drift backstop cannot see
+		// a same-size, same-mtime Git checkout, but the Git seam has the path set.
+		expect(client.received).toEqual([ORIGINAL, SAME_LENGTH_EDIT]);
+	});
+
 	it("emits a bounded record naming the file and the drift age", async () => {
 		const { service } = await primeService();
 		const { getDegradationSummary, resetDegradationLedger } =

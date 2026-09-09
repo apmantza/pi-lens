@@ -245,6 +245,8 @@ export type DegradationKind =
 	| "lsp-notify-stall-cpu-busy"
 	/** A didChange content mirror was recorded behind a newer document version. */
 	| "lsp-document-send-order"
+	/** Scoped TypeScript cache repair hit its bounded dependency fan-out. */
+	| "lsp_dependency_touch_capped"
 	| "bus-stale"
 	| "query-predicates-invalid"
 	| "install-retry-exhausted"

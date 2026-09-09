@@ -584,6 +584,13 @@ result carries that lane in `unconfirmedServerIds` and stays ineligible for the
 fully-covered workspace cache and footer replacement. Never reconstruct the gap
 from a touch-wide timeout: consume `touchFile`'s frozen coverage set. (#1549)
 
+Recovered Git tree changes use the already-known opaque mutation path set to
+re-sync each changed open document and its cached open importers through
+`touchFile`; they do not run a second Git diff. Scoped TypeScript full scans
+touch at most 32 cached open imports before serving a workspace-cache hit, and
+record `lsp_dependency_touch_capped` when that bound trips. (#2817, recurrence
+#1783)
+
 Collected LSP diagnostics carry the registered delivering `serverId` alongside
 the server-authored protocol `source`. Primary-versus-auxiliary verdicts and
 counts partition by `serverId`; `source` remains display and auxiliary-profile

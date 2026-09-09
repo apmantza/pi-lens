@@ -65,7 +65,10 @@ import {
 import type { PiLensFlagSource } from "./lens-config.js";
 import type { EditToolDetails } from "@earendil-works/pi-coding-agent";
 import type { LSPShutdownOptions } from "./lsp/client.js";
-import { notifyExternalFileChange } from "./lsp/index.js";
+import {
+	notifyExternalFileChange,
+	resyncGitChangedFiles,
+} from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { type PipelineResult, runPipeline } from "./pipeline.js";
 import {
@@ -1298,6 +1301,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					filePath: opaquePaths.slice(0, 5).join(","),
 					durationMs: Date.now() - started,
 					result: `changed:${opaquePaths.length}`,
+				});
+				void resyncGitChangedFiles(opaquePaths).catch((err) => {
+					dbg(`git-change LSP resync failed: ${err}`);
 				});
 			}
 		}
