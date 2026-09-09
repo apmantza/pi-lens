@@ -33,4 +33,6 @@ Deliberately thin. The canonical engineering contract for this repo lives in
   pre-merge review.
 - `.claude/agents/pi-lens-investigator.md` — role playbook for log forensics
   and root-causing runtime behavior.
+- `docs/pi-lens-monitor.md` — role contract for the live-session readout
+  (observe only; the standing numbers a maintainer would otherwise read by hand).
 - `.claude/skills/merge-train/SKILL.md` — the review → verify → merge policy.

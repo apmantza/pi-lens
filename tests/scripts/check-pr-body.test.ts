@@ -5,6 +5,7 @@ import {
 	detectFlattenedBody,
 	lintPullRequestEvent,
 	lintPrBody,
+	lintLocalPrBody,
 	repairEscapedNewlineBody,
 	repairFlattenedBody,
 	resolveLivePrBody,
@@ -714,6 +715,32 @@ ${placeholder}`,
 			{ requireTestAssessment: true },
 		);
 		expect(result.valid).toBe(false);
+	});
+});
+
+describe("local lint parity", () => {
+	it("requires Test assessment when the local diff touches tests/", () => {
+		const result = lintLocalPrBody(
+			body,
+			process.cwd(),
+			() => "tests/scripts/example.test.ts\n",
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("Test assessment");
+	});
+	it("falls back to HEAD~1 when the upstream range is unavailable", () => {
+		const ranges: string[][] = [];
+		const result = lintLocalPrBody(body, process.cwd(), (args) => {
+			ranges.push(args);
+			if (args.includes("origin/master...HEAD"))
+				throw new Error("missing upstream");
+			return "tests/scripts/example.test.ts\n";
+		});
+		expect(result.valid).toBe(false);
+		expect(ranges).toEqual([
+			["diff", "--name-only", "origin/master...HEAD"],
+			["diff", "--name-only", "HEAD~1"],
+		]);
 	});
 });
 

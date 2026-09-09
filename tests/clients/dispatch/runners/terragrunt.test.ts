@@ -25,14 +25,20 @@ vi.mock("../../../../clients/tool-policy.js", () => ({
 // outlive resetModules, so which registration wins depended on test order.
 const toolState = vi.hoisted(() => ({ available: true }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: (command: string) => ({
-		isAvailableAsync: async () => toolState.available,
-		getCommand: () => (toolState.available ? command : null),
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailableAsync: async () => toolState.available,
+			getCommand: () => (toolState.available ? command : null),
+		}),
+		resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
+			toolState.available ? "terragrunt" : ensureTool(toolId),
 	}),
-	resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
-		toolState.available ? "terragrunt" : ensureTool(toolId),
-}));
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd, { kind: "terragrunt" });

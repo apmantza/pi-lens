@@ -18,6 +18,12 @@
 
 export const REQUIRED_CHECKS = ["Unit tests", "Lint & type-check"];
 
+export const CI_JOB_NAMES = Object.freeze({
+	CHANGELOG_FRAGMENT: "Changelog fragment (fast-fail)",
+	LINT_AND_TYPECHECK: "Lint & type-check",
+	UNIT_TESTS: "Unit tests",
+});
+
 // How this repository ACTUALLY marks a check advisory: the workflow job name
 // ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
 // open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,

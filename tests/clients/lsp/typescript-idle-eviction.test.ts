@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendAt } from "../interleaving-kit.js";
 const recordDegradation = vi.hoisted(() => vi.fn());
-vi.mock("../../../clients/degradation-ledger.js", () => ({
+vi.mock("../../../clients/degradation-ledger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../clients/degradation-ledger.js")
+	>()),
 	recordDegradation,
 }));
 

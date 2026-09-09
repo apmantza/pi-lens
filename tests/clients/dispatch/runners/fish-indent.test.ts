@@ -10,13 +10,19 @@ const safeSpawnAsync = vi.fn((..._args: unknown[]) =>
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => "fish_indent",
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => "fish_indent",
+		}),
 	}),
-}));
+);
 
 function createFishCtx(filePath: string, cwd: string) {
 	return {

@@ -77,6 +77,7 @@ import {
 } from "../latency-logger.js";
 import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import { normalizeFilePath } from "../path-utils.js";
+import { resolveToolCwd } from "../tool-cwd.js";
 import { logSessionStart } from "../sessionstart-logger.js";
 import { launchLSP } from "./launch.js";
 import {
@@ -86,7 +87,6 @@ import {
 	setSessionRootConfig,
 } from "./session-roots.js";
 import {
-	createRootDetector,
 	LSP_SERVERS,
 	resetLSPCaseSensitivityState,
 	type LSPServerInfo,
@@ -496,8 +496,12 @@ export function createCustomServer(
 		custom: true,
 		extensions: config.extensions,
 		root: config.rootMarkers
-			? createRootDetector(config.rootMarkers)
-			: async () => process.cwd(),
+			? async (file) =>
+					resolveToolCwd("lsp", id, file, {
+						cwd: process.cwd(),
+						rootMarkers: config.rootMarkers,
+					})
+			: async (file) => resolveToolCwd("lsp", id, file, { cwd: process.cwd() }),
 		async spawn(root) {
 			const proc = await launchLSP(config.command, config.args ?? ["--stdio"], {
 				cwd: root,

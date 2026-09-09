@@ -6,7 +6,6 @@
  * mutating files mid-dispatch after LSP sync has already happened.
  */
 
-import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
 import { mapWithConcurrency } from "../../dependency-checker.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -23,7 +22,10 @@ import type {
 	RunnerResult,
 } from "../types.js";
 
-import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
+import {
+	resolveRunnerCwd,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 
 interface BiomeDiagnostic {
@@ -257,7 +259,7 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 	priority: PRIORITY.FORMAT_AND_LINT_PRIMARY,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || path.dirname(ctx.filePath);
+		const cwd = resolveRunnerCwd(ctx, "biome");
 		const policy = getJstsLintPolicyForCwd(cwd);
 
 		// Defer to ESLint/oxlint if the project has explicitly configured one —

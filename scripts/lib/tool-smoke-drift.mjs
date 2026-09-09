@@ -21,9 +21,9 @@
 // a second time — it is a generic property of the platform (not an
 // install-smoke domain rule), and duplicating it would be exactly the
 // "hand-maintained list that mirrors a registry" AGENTS.md flags as a
-// defect. tool-smoke's three gating layer steps (Tool layer, LSP handshake
-// layer, Format layer — the only three WITHOUT `continue-on-error` in
-// tool-smoke.yml, so the only three whose `outcome` can actually turn the
+// defect. tool-smoke's four gating layer steps (Tool layer, LSP handshake
+// layer, LSP gate, Format layer — the only four WITHOUT `continue-on-error` in
+// tool-smoke.yml, so the only four whose `outcome` can actually turn the
 // job red) duck-type the exact same `{name, outcome}` shape those functions
 // already consume.
 // #2723 review F7: only decideAction (re-exported -- consumed directly by
@@ -67,7 +67,7 @@ export const TOOL_SMOKE_DRIFT_TITLE =
  */
 
 // scripts/smoke-tools.mjs's own `report()` prints this exact line for each
-// of the three layers this file tracks:
+// of the four layers this file tracks:
 //   `${pass} passed · ${fail} failed · ${setupFailed} setup-failed · ${skip} skipped (tool/config unavailable)`
 const SUMMARY_LINE_RE =
 	/(\d+) passed · (\d+) failed · (\d+) setup-failed · (\d+) skipped/;
@@ -187,7 +187,7 @@ export function nextConsecutiveRedCount(existingBody) {
  * even started" (checkout, seven best-effort setup actions — already
  * `continue-on-error` and so cannot flip this, `npm install`, or
  * `build:dist`) from a genuine GitHub Actions cancellation: both leave
- * Tool/LSP handshake/Format layer all "skipped", which `decideAction` reads
+ * Tool/LSP handshake/LSP gate/Format layer all "skipped", which `decideAction` reads
  * as "no-action" either way (see install-smoke-drift.mjs's own
  * cancelled-mid-run/before-start attacks — the identical shape). GitHub's
  * `job.status` context (passed through as JOB_STATUS) disambiguates: it

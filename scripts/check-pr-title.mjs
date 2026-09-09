@@ -104,8 +104,17 @@ async function lintPullRequestEvent() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-	lintPullRequestEvent().catch((error) => {
-		console.error(error instanceof Error ? error.message : error);
-		process.exitCode = 1;
-	});
+	const localTitle =
+		process.argv[2] === "--lint-local" && process.argv[3]
+			? readFileSync(process.argv[3], "utf8").split(/\r?\n/, 1)[0]
+			: null;
+	if (localTitle !== null) {
+		const result = lintPrTitle(localTitle);
+		for (const error of result.errors) console.error(error);
+		process.exitCode = result.valid ? 0 : 1;
+	} else
+		lintPullRequestEvent().catch((error) => {
+			console.error(error instanceof Error ? error.message : error);
+			process.exitCode = 1;
+		});
 }

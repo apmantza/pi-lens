@@ -9,6 +9,12 @@ flags in context, see [Usage](./usage.md).
 pi-lens ships with sensible defaults, so **zero configuration is needed** — it
 works out of the box. Everything below is optional tuning.
 
+Tool root resolution is recorded in the pi-lens extension log as one bounded
+line per session key: `cwd <kind> <tool> cwd=<path>
+reason=<dispatch-root|marker:<name>|git-root|file-dir-fallback|home-cap>`.
+Fallbacks also create one `tool-cwd-resolution` degradation record per tool and
+session, so repeated files do not create unbounded health or log rows.
+
 ## The three ways to configure pi-lens
 
 1. **Environment variables** (`PI_LENS_*`) — read at process start; set them in
