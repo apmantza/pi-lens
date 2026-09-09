@@ -931,13 +931,13 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_lsp_navigation",
 		description:
-			"Navigate source with language-server operations. Example: use `{operation: \"references\", path: \"src/app.ts\", line: 12}`.",
+			'Navigate source with language-server operations. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},
 	{
 		name: "pilens_lsp_diagnostics",
 		description:
-			"Query language-server diagnostics for files or directories. Example: use `{path: \"src/app.ts\"}` before a build.",
+			'Query language-server diagnostics for files or directories. Example: use `{path: "src/app.ts"}` before a build.',
 		inputSchema: schemaWithCwd(lspDiagnosticsTool.parameters),
 	},
 ];

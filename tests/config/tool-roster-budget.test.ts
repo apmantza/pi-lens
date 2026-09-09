@@ -70,10 +70,13 @@ function report(
 
 function measure(tools: ListedTool[]) {
 	const measured = Object.fromEntries(
-		tools.map((tool) => [tool.name, {
-			description: descriptionBytes(tool),
-			schema: schemaBytes(tool),
-		}]),
+		tools.map((tool) => [
+			tool.name,
+			{
+				description: descriptionBytes(tool),
+				schema: schemaBytes(tool),
+			},
+		]),
 	);
 	const descriptionTotal = Object.values(measured).reduce(
 		(sum, sizes) => sum + sizes.description,
@@ -107,10 +110,18 @@ describe("tool roster description budget", () => {
 	it("keeps the pi roster within its two-sided baseline", () => {
 		const { measured, descriptionTotal, schemaTotal } = measure(piTools);
 		const total = descriptionTotal + schemaTotal;
-		const detail = report("pi", descriptionTotal, schemaTotal, baseline.pi.budget, measured);
+		const detail = report(
+			"pi",
+			descriptionTotal,
+			schemaTotal,
+			baseline.pi.budget,
+			measured,
+		);
 		// 2026-09-10: budget is the measured after-trim total plus 10%.
 		expect(total, detail).toBeLessThanOrEqual(baseline.pi.budget);
-		expect(baseline.pi.budget).toBe(Math.ceil((descriptionTotal + schemaTotal) * 1.1));
+		expect(baseline.pi.budget).toBe(
+			Math.ceil((descriptionTotal + schemaTotal) * 1.1),
+		);
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
 		expect(measured, detail).toEqual(baseline.pi.tools);
@@ -119,10 +130,18 @@ describe("tool roster description budget", () => {
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {
 		const { measured, descriptionTotal, schemaTotal } = measure(mcpTools);
 		const total = descriptionTotal + schemaTotal;
-		const detail = report("mcp", descriptionTotal, schemaTotal, baseline.mcp.budget, measured);
+		const detail = report(
+			"mcp",
+			descriptionTotal,
+			schemaTotal,
+			baseline.mcp.budget,
+			measured,
+		);
 		// 2026-09-10: budget is the measured after-trim total plus 10%.
 		expect(total, detail).toBeLessThanOrEqual(baseline.mcp.budget);
-		expect(baseline.mcp.budget).toBe(Math.ceil((descriptionTotal + schemaTotal) * 1.1));
+		expect(baseline.mcp.budget).toBe(
+			Math.ceil((descriptionTotal + schemaTotal) * 1.1),
+		);
 		expect(descriptionTotal, detail).toBe(baseline.mcp.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.mcp.schemaTotal);
 		expect(measured, detail).toEqual(baseline.mcp.tools);
