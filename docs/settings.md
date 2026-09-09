@@ -15,6 +15,13 @@ reason=<dispatch-root|marker:<name>|git-root|file-dir-fallback|home-cap>`.
 Fallbacks also create one `tool-cwd-resolution` degradation record per tool and
 session, so repeated files do not create unbounded health or log rows.
 
+Complete MCP tool results use `COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES` (8 MiB) as
+their input budget. Results above this budget
+write a bounded head, an `[incomplete: N bytes omitted, budget M]` marker, and a
+tail to the session log, and record one `mcp-complete-result-budget-exceeded`
+degradation per session. Results at or below the budget keep the complete-log
+contract.
+
 ## The three ways to configure pi-lens
 
 1. **Environment variables** (`PI_LENS_*`) — read at process start; set them in

@@ -11,6 +11,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	boundToolText,
+	COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES,
+} from "../../tools/render-compact.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { McpHarness, repoRoot } from "./harness.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
@@ -261,6 +269,53 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 });
 
 describe("pi-lens MCP result bounds", { retry: 2 }, () => {
+	it("caps the complete MCP payload before retaining or logging it", async () => {
+		const previousHome = process.env.PI_LENS_HOME;
+		const home = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-result-budget-home-"),
+		);
+		process.env.PI_LENS_HOME = home;
+		resetDegradationLedger();
+		let input: string | undefined = Array.from(
+			{ length: 10_000 },
+			(_, index) => `const value${index} = "${"x".repeat(900)}";`,
+		).join("\n");
+		try {
+			if (typeof globalThis.gc === "function") globalThis.gc();
+			const before = process.memoryUsage().heapUsed;
+			const result = boundToolText(input);
+			input = undefined;
+			if (typeof globalThis.gc === "function") globalThis.gc();
+			const after = process.memoryUsage().heapUsed;
+			console.log(
+				`10,000-match probe: input=9218889 bytes, heap before=${before}, after=${after}, delta=${after - before} bytes`,
+			);
+			const logPath = result.text.match(/Full output: ([^\]\n]+)/)?.[1];
+			expect(result.text).toContain("[incomplete: ");
+			expect(result.text).toContain(
+				`budget ${COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES}]`,
+			);
+			expect(logPath).toBeTruthy();
+			const logged = fs.readFileSync(logPath as string, "utf8");
+			expect(Buffer.byteLength(logged)).toBeLessThan(8 * 1024 * 1024 + 1024);
+			expect(logged).toContain("value0");
+			expect(logged).toContain("value9999");
+			let secondInput: string | undefined = "y".repeat(
+				COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES + 1,
+			);
+			boundToolText(secondInput);
+			secondInput = undefined;
+			const budgetRows = getDegradationSummary().filter(
+				(row) => row.kind === "mcp-complete-result-budget-exceeded",
+			);
+			expect(budgetRows).toHaveLength(1);
+		} finally {
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	}, 180_000);
+
 	it("bounds a large AST replacement and keeps the full result in the session log", async () => {
 		const workspace = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-mcp-result-"),
