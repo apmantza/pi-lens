@@ -1,4 +1,5 @@
-### Fix LSP root seam server inputs
+---
+section: Fixed
+---
 
-Preserve a server-computed root at the shared LSP cwd seam and retain bounded
-resolution telemetry for fallback and server-root decisions.
+- **Preserve server-computed LSP roots at the shared cwd seam (refs #2777)** — retain server roots, keep marker-aware fallback behavior, and preserve bounded resolution telemetry.
