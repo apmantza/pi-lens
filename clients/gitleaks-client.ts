@@ -45,11 +45,12 @@
  * module doc for why blanket gitignore-respect is wrong for a secrets scanner
  * (an untracked `.env` with a real credential is exactly the case gitleaks
  * exists to catch, and `.env` is commonly gitignored). `classifyAndFilterFindings`
- * backstops the config with a TS-side re-classification: a finding under the
- * secrets-lane scratch tier is DEMOTED (not deleted) to `severity: "info"`,
- * `semantic: "none"`, `pathStatus: "scratch"` — visible for an audit read,
- * but it can never surface as a blocking "leaked secret" alarm. Every other
- * finding gets `pathStatus` from git's tracked/ignored view.
+ * backstops the config with a TS-side re-classification. Findings under the
+ * secrets-lane scratch tier, in gitignored files, or inside nested repositories
+ * are DEMOTED (not deleted) to `severity: "info"` / `semantic: "none"` by the
+ * project-diagnostics adapter. They remain visible for an explicit audit but
+ * can never surface as blocking "leaked secret" alarms or automatic turn
+ * context. Tracked and ordinary untracked files remain blocking.
  *
  * Refs: #130, #1562
  */
@@ -106,11 +107,20 @@ export interface GitleaksFinding {
 	 *     can never surface as a blocking "leaked secret" alarm, while still
 	 *     being present for an audit read.
 	 *   - "tracked": committed to git.
-	 *   - "ignored": untracked AND matched by `.gitignore`.
+	 *   - "ignored": untracked AND matched by `.gitignore`; retained for
+	 *     explicit audit only, never delivered as blocking turn context.
+	 *   - "nested-repository": belongs to a separate git repository below the
+	 *     analysis root (for example a submodule); that repository must assess
+	 *     the finding in its own git context.
 	 *   - "untracked": untracked and NOT gitignored — the operational case
 	 *     (e.g. a fresh `.env`) gitleaks exists to catch.
 	 */
-	pathStatus?: "scratch" | "tracked" | "ignored" | "untracked";
+	pathStatus?:
+		| "scratch"
+		| "tracked"
+		| "ignored"
+		| "nested-repository"
+		| "untracked";
 }
 
 export interface GitleaksResult {
@@ -458,7 +468,10 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
  *      assert the config we hand it, so this backstop guarantees the demotion
  *      even if the generated regex ever mismatches gitleaks's own path
  *      normalization.
- *   2. Every OTHER finding gets `pathStatus` set from git's tracked/ignored
+ *   2. A finding below a nested git boundary is labelled
+ *      `nested-repository`. Parent scans must not claim ownership of a
+ *      submodule's or nested repository's files.
+ *   3. Every OTHER finding gets `pathStatus` set from git's tracked/ignored
  *      view, so a future false-positive triage is a log read.
  *
  * `collectTrackedFiles`/`collectUntrackedIgnoredIds` degrade to `undefined`
@@ -466,6 +479,33 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
  * keep `pathStatus: undefined` rather than a guessed value (fail-open,
  * matching `git-tracked-ignore.ts`'s own contract). Exported for unit tests.
  */
+function isInsideNestedGitRepository(file: string, cwd: string): boolean {
+	const root = path.resolve(cwd);
+	const absoluteFile = path.isAbsolute(file)
+		? path.resolve(file)
+		: path.resolve(root, file);
+	const relative = path.relative(root, absoluteFile);
+	if (
+		relative === ".." ||
+		relative.startsWith(`..${path.sep}`) ||
+		path.isAbsolute(relative)
+	)
+		return false;
+
+	let directory = path.dirname(absoluteFile);
+	while (directory !== root) {
+		try {
+			if (fs.existsSync(path.join(directory, ".git"))) return true;
+		} catch {
+			return false;
+		}
+		const parent = path.dirname(directory);
+		if (parent === directory) return false;
+		directory = parent;
+	}
+	return false;
+}
+
 export async function classifyAndFilterFindings(
 	findings: GitleaksFinding[],
 	cwd: string,
@@ -483,10 +523,13 @@ export async function classifyAndFilterFindings(
 			classified.push({ ...finding, pathStatus: "scratch" });
 			continue;
 		}
-
 		const absPath = path.isAbsolute(finding.file)
 			? finding.file
 			: path.resolve(cwd, finding.file);
+		if (isInsideNestedGitRepository(absPath, cwd)) {
+			classified.push({ ...finding, pathStatus: "nested-repository" });
+			continue;
+		}
 
 		let pathStatus: GitleaksFinding["pathStatus"];
 		if (trackedIds?.has(normalizeEphemeralMapKey(absPath))) {

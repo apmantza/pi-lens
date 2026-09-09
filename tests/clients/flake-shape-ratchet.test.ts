@@ -275,6 +275,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the real host tool handler and read guard must cross the pi process boundary",
 	},
+	// #2807 review F1/F4: the local CLI's exact argv and a shallow checkout's
+	// missing diff are the subjects; an in-process call cannot prove either.
+	"real-process-spawn:scripts/check-pr-body.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the exact local CLI and shallow checkout are the subjects; an in-process call cannot prove either command boundary",
+	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
