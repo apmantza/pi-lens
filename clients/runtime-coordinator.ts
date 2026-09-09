@@ -23,11 +23,7 @@ import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
 import { deriveProviderFromModelId } from "./model-provider.js";
-import {
-	beginTurnContext,
-	resetTurnContext,
-	setTurnContextSession,
-} from "./turn-context.js";
+import { beginTurnContext, setTurnContextSession } from "./turn-context.js";
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -392,7 +388,6 @@ export class RuntimeCoordinator {
 		this._mutationReceipts = [];
 		this._droppedMutationReceipts = 0;
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
-		resetTurnContext(this._telemetrySessionId);
 		this._hasStableSessionId = false;
 		this._telemetryModel = "unknown";
 		this._telemetryModelId = "";
@@ -693,7 +688,6 @@ export class RuntimeCoordinator {
 	setSessionLifecycle(args: { sessionId?: string; reason?: string }): void {
 		if (args.sessionId && args.sessionId.trim()) {
 			this._telemetrySessionId = args.sessionId.trim();
-			resetTurnContext(this._telemetrySessionId);
 			this._hasStableSessionId = true;
 		}
 		this._lifecycleReason = args.reason;

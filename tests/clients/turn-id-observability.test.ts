@@ -276,14 +276,17 @@ describe("turn identity across observability sinks (#2815)", () => {
 				runWithTurnContext?: <T>(sessionId: string, fn: () => T) => T;
 			}
 		).runWithTurnContext;
+		const resetTurnContext = turnContext.resetTurnContext;
 		expect(runWithTurnContext).toBeTypeOf("function");
 		const runtime = new RuntimeCoordinator();
 		runtime.resetForSession();
+		resetTurnContext("reset-2815");
 		runtime.setSessionLifecycle({ sessionId: "reset-2815" });
 		runtime.beginTurn();
 		runtime.beginTurn();
 
 		runtime.resetForSession();
+		resetTurnContext("reset-2815");
 		runtime.setSessionLifecycle({ sessionId: "reset-2815" });
 		runtime.beginTurn();
 		expect(

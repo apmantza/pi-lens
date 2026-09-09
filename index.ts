@@ -175,6 +175,7 @@ import {
 	RuntimeCoordinator,
 } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
+import { resetTurnContext } from "./clients/turn-context.js";
 import { handleToolCall } from "./clients/runtime-tool-call.js";
 import {
 	isStaleExtensionCtxError,
@@ -2224,6 +2225,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						resetDispatchBaselines,
 						resetLSPService,
 					});
+					// #2815: turn ids belong to this primary session. Keep the reset
+					// directly in the gated session_start closure so a concurrent
+					// secondary cannot erase the primary's live turn context.
+					resetTurnContext(stableSessionId);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran

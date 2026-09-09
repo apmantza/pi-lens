@@ -158,6 +158,7 @@ describe("index.ts integration", () => {
 		"session_start handler passes working ensureTool closure into handleSessionStart",
 		async () => {
 			const ensureToolMock = vi.fn(async (name: string) => `/mock/${name}`);
+			const resetTurnContextMock = vi.fn();
 			const handleSessionStartMock = vi.fn(
 				async (deps: {
 					ensureTool: (name: string) => Promise<string | undefined>;
@@ -202,6 +203,10 @@ describe("index.ts integration", () => {
 			vi.doMock("../clients/runtime-session.js", () => ({
 				handleSessionStart: handleSessionStartMock,
 			}));
+			vi.doMock("../clients/turn-context.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/turn-context.js")>()),
+				resetTurnContext: resetTurnContextMock,
+			}));
 			vi.doMock("../clients/installer/index.js", () => ({
 				ensureTool: ensureToolMock,
 			}));
@@ -217,6 +222,7 @@ describe("index.ts integration", () => {
 
 			expect(handleSessionStartMock).toHaveBeenCalledTimes(1);
 			expect(ensureToolMock).toHaveBeenCalledWith("typescript-language-server");
+			expect(resetTurnContextMock).toHaveBeenCalledTimes(1);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
