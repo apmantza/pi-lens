@@ -296,7 +296,7 @@ verify brief asked for exactly that judgement).
   a full extra round.
 
 - **Run the pinned oxfmt on your diff before push.** Agent worktrees usually
-  lack the oxfmt binary, so CI's advisory format check is the first time your
+  lack the oxfmt binary, so CI's gating format check is the first time your
   files meet the formatter — and two fixers in one day shipped unformatted
   test files while calling the red check "a pre-existing environment gap."
   Before push: `npm install oxfmt --no-save` at the devDependency-pinned

@@ -246,6 +246,7 @@ describe("normalizeEphemeralMapKey (refs #191)", () => {
 	// Case folding is a no-op off Windows, so this declares itself skipped there
 	// rather than returning early from a body that would report as PASSED
 	// without asserting anything (#2089).
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"is case-insensitive on win32 semantics (matches this suite's Windows CI target)",
 		() => {

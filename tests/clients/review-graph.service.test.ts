@@ -346,6 +346,7 @@ describe("review graph service", () => {
 	// is declarative: an early return mid-body reported a PASS on every Linux
 	// CI run while asserting nothing (#2089). `it.skipIf` prints no reason, so
 	// the name carries it.
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"case-variant workspace clears invalidate the source-path memo, on win32 only (#2072 F5)",
 		async () => {

@@ -10,14 +10,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-export const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
+const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
 
 function readJson(file) {
 	return JSON.parse(readFileSync(file, "utf8"));
 }
 
-export function getPinnedNpmVersion(cwd = process.cwd()) {
+function getPinnedNpmVersion(cwd = process.cwd()) {
 	const value = readJson(join(cwd, "package.json")).packageManager;
 	const match =
 		typeof value === "string" && value.match(/^npm@(\d+\.\d+\.\d+)$/);
@@ -133,7 +134,10 @@ export function runLockfileCompleteness({
 	}
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		const result = runLockfileCompleteness();
 		if (!result.ok && !result.inconclusive) {

@@ -271,7 +271,7 @@ operator's private notes, so a different orchestrator can run the same train.
   close/reopen. Read exit codes without a pipe. The merge loop is
   `node scripts/ci-verdict.mjs <pr> --wait <seconds>; echo $?` — 0 merge, 3
   still pending (re-arm the wait), anything else read the table. Never
-  text-match the table for `failure`: advisory rows (PR body, oxfmt, Vale)
+  text-match the table for `failure`: advisory rows (PR body, Vale)
   print `failure` while the verdict is green, and on 2026-09-07 that stopped
   the #2692 loop on a green PR.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
@@ -428,3 +428,7 @@ Each row cost a lane at least once; the prose above carries the record.
 | `gh run rerun --failed` while the run is still in progress | GitHub refuses it; wait for the run to complete (poll `gh run view --json status`), then rerun, then re-read the verdict |
 | Reading a failed job's log before its run completes | Empty output; the log is withheld until the whole run finishes |
 | Treating a reviewer's prescription as the fix | It is a hypothesis: #2693 r2's blanked-slice remedy stayed green on `env: { PWD: cwd }`; the fixer's AST rule replaced it and the reviewer withdrew the prescription |
+| `git add -A` from a worktree without the probe-home exclude | 978 `.probe-home/npm-cache` blobs reached master in a direct push (2026-09-09, #2843); the user-level `commit-index-check` hook now denies it — keep the exclude anyway |
+| Ignoring a red advisory row on a PR that changes what the lane runs | #2833 merged with `Unit tests Windows (advisory)` red on its own head; master carried the red until #2842. Read that row like a gate when the diff touches the lane's script, step or executed files |
+| Restarting the plegma daemon under systemd with the default PATH | Backend detection is a PATH walk in the daemon process; 5 of 10 backends vanished and every Luna/GLM brief was rejected `Unknown model` (plegma#375). Set `Environment=PATH=…npm-global/bin…` in a drop-in and read `daemon.out`'s `backends:` line after ANY restart |
+| Polling `plegma_list` every turn | 68 calls, 194 KB of context in one session for no decision. Arm one background `plegma wait <handle>` per lane in the dispatch turn; `plegma_list` only at reconnect and to consume `done` handles |
