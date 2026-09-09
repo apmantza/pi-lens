@@ -152,7 +152,7 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
-Requires Node.js >=22.19.0 (matches the pi host's own floor — see `engines`
+Requires Node.js >=22.22.2 (above the pi host's own 22.19.0 floor: typescript-language-server 6 needs it — see `engines`
 in `package.json`).
 
 Letting a coding agent do it: paste this into its prompt.

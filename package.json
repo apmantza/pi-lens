@@ -83,7 +83,7 @@
 	"author": "Apostolos Mantzaris",
 	"license": "MIT",
 	"engines": {
-		"node": ">=22.19.0"
+		"node": ">=22.22.2"
 	},
 	"files": [
 		"dist/",

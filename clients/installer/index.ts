@@ -553,7 +553,7 @@ export const TOOLS: ToolDefinition[] = [
 		// must never require more than pi does — #2633) — an unpinned
 		// install here resolves latest and prints EBADENGINE on any pi
 		// host's supported Node. 5.3.0's own floor is engines.node >=20.
-		packageName: "typescript-language-server@5.3.0",
+		packageName: "typescript-language-server@6.0.0",
 		binaryName: "typescript-language-server",
 	},
 	{
