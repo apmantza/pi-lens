@@ -997,6 +997,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"complexity (advisory)",
 		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
 		"strictness (advisory)",
+		"host latest nightly (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
@@ -1100,6 +1101,32 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 				"complexity (advisory)",
 			]),
 		);
+	});
+});
+
+describe("isAdvisoryCheck — workflow advisory names stay in policy", () => {
+	it("classifies every advisory-named job across all workflows", () => {
+		const mismatches: string[] = [];
+		const discovered: string[] = [];
+		for (const entry of readdirSync(
+			resolve(import.meta.dirname, "../../.github/workflows"),
+		)) {
+			if (!/\.ya?ml$/i.test(entry)) continue;
+			const document = yaml.load(
+				readFileSync(
+					resolve(import.meta.dirname, "../../.github/workflows", entry),
+					"utf8",
+				),
+			) as { jobs?: Record<string, { name?: unknown }> };
+			for (const [key, job] of Object.entries(document.jobs ?? {})) {
+				const name = typeof job?.name === "string" ? job.name : key;
+				if (!name.toLowerCase().includes("advisory")) continue;
+				discovered.push(`${entry}:${key}=${name}`);
+				if (!isAdvisoryCheck(name)) mismatches.push(`${entry}:${key}=${name}`);
+			}
+		}
+		expect(discovered).not.toEqual([]);
+		expect(mismatches).toEqual([]);
 	});
 });
 
