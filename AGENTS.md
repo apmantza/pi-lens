@@ -256,6 +256,12 @@ is the procedure and defers here on conflict; 2026-09-09).**
   → #2816). Merge one, wait for master's own run, then update-branch and
   merge the next; after any such pair, run that file's test on master before
   arming the next chain.
+- *A PR that changes what an advisory lane runs is gated on that lane's row.*
+  The verdict ignores advisory rows by design, so a red `Unit tests Windows
+  (advisory)` on a PR whose diff touches the lane's own enumeration script,
+  its workflow step, or a `tests/config/` file the lane executes is read and
+  judged before merge like a gating check. Record: #2833 (2026-09-09) merged
+  with that row red on its head; master then carried the red until a hotfix.
 - *Reviews and verifies run on the merged tree.* A CONFLICTING PR is not
   reviewed until it carries master; a MERGEABLE one is probed after
   `git merge origin/master` in the reviewer's scratch checkout, so pins that
@@ -475,6 +481,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 42. **A rule keyed on one language.** A seam, cache admission, test matrix or tool contract written for `.ts`/tsserver when the behaviour belongs to every LSP-backed language in `clients/language-registry.ts`. #2823 r1 keyed the #2817 dependency re-sync on TypeScript; rust-analyzer, pyright and gopls hold a stale module graph after a git checkout exactly the same way. *Screen:* write the rule against the registry ("has import facts", "every live server holding the document"), name which entries have the facts and which fall to the honest fallback, and add one non-TypeScript row to the matrix; a language-specific branch is allowed only with the registry field that justifies it named in the code. *Detect:* grep new code for `\.tsx?\b`, `"typescript"`, `tsserver` outside `clients/lsp/config.ts`'s server entries and the TypeScript runner; a test file whose only fixtures are `.ts` for a rule that names "LSP" or "server". *e.g.* #2823 r1 (2026-09-09).
 
 43. **A source scanner that confuses shell prose with executable structure.** A comment-and-string blanker can erase real `${…}` code inside double quotes, scan quoted heredoc bodies, or match a builtin outside command position; a runner scan can also miss a matrix `include` row or an explicit step exclusion. *Screen:* define shell lexical states and runner reachability as a cross-product before writing needles; preserve expansions and recursively re-enter executable command substitutions inside double quotes, blank quoted heredocs, normalize continuations, match command-position builtins, follow matrix dimensions and `include` per job, and recognize only documented macOS exclusions. *Detect:* one fixture per state-space cell, red-first review probes for each boundary, and compile-valid mutations that remove expansion visibility, command-substitution re-entry, or include following (#2830 r1/r3, refs #2625/#2784).
+
+44. **Entry-module detection by string-comparing `import.meta.url` with a hand-built `file://${process.argv[1]}`.** On Windows `process.argv[1]` is `D:\a\...\script.mjs` while `import.meta.url` is `file:///D:/a/...`, so the two never match and the script's main block silently never runs — a CLI that prints nothing, exits 0, and lets a `mapfile` consumer see an empty enumeration. *Screen:* `import.meta.url === pathToFileURL(process.argv[1]).href` is the only portable gate; a path-prefix test that appends `/` to a `join()` result has the same shape (`join()` yields backslashes on win32) — append `sep`. *Detect:* `tests/config/script-entry-portability.test.ts` rejects the hand-built comparison across `scripts/`; the Windows advisory lane is the layer that sees the empty enumeration. *e.g.* master run 34400281631 (2026-09-09): `win32-gate-population.mjs --files` enumerated zero files on `windows-latest`; six scripts carried the gate (refs #2536).
 
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
