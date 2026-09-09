@@ -1181,7 +1181,7 @@ describe("runWorkspaceDiagnostics cache integration (#671)", () => {
 		);
 	});
 
-	it("freshly scans a cached TypeScript file absent from the importer snapshot (#2817 round 2 F3)", async () => {
+	it("freshly scans an admissible cached TypeScript file absent from importer facts (#2817 F3/F6)", async () => {
 		const file = path.join(tmpSweep, "uncovered.ts");
 		fs.writeFileSync(file, "export const uncovered = 1;\n");
 		const stat = fs.statSync(file);
@@ -1222,6 +1222,9 @@ describe("runWorkspaceDiagnostics cache integration (#671)", () => {
 					mtimeMs: stat.mtimeMs,
 					scannedAt: Date.now(),
 					scopeKey: buildScopeKey("all", ["opengrep"]),
+					// The cache entry is otherwise admissible. The missing
+					// `imports[file]` key is the uncovered-facts condition this
+					// guard prevents from being served as a confirmed hit.
 					depIndexAtScan: false,
 				},
 			},
@@ -1231,6 +1234,11 @@ describe("runWorkspaceDiagnostics cache integration (#671)", () => {
 		const { client, waitCalls } = makeFakeClient(tmpSweep);
 		createLSPClient.mockResolvedValue(client);
 		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const cacheContext = createWorkspaceDiagnosticsCacheContext(tmpSweep);
+		expect(
+			cacheContext.lookup(file, buildScopeKey("all", ["opengrep"])),
+		).toBeDefined();
+		expect(cacheContext.importsFor(file)).toBeUndefined();
 		const result = await new LSPService().runWorkspaceDiagnostics(tmpSweep, {
 			files: [file],
 		});
