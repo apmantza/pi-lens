@@ -46,7 +46,7 @@ const motivatingFlattenedBodies = [
 function createOriginMasterFixture() {
 	const directory = mkdtempSync(join(repositoryRoot, ".tmp-pr-body-origin-"));
 	gitExecSync(
-		`git init --quiet --initial-branch=main '${directory}' && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet --allow-empty -m fixture && git -C '${directory}' update-ref refs/remotes/origin/master HEAD`,
+		`git init --quiet --initial-branch=main '${directory}' && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet --allow-empty -m fixture-base && git -C '${directory}' update-ref refs/remotes/origin/master HEAD && printf 'fixture change\n' > '${directory}/fixture.md' && git -C '${directory}' add fixture.md && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet -m fixture-head`,
 	);
 	return directory;
 }
@@ -445,6 +445,19 @@ describe("flattened body CI entrypoint", () => {
 });
 
 describe("PR body lint (#1844)", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
+
 	it("requires a diff record literal for runtime changes", () => {
 		const runtimeDiff = [
 			"diff --git a/clients/example.ts b/clients/example.ts",
@@ -565,7 +578,7 @@ describe("PR body lint (#1844)", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-cli-"));
 		const bodyPath = join(directory, "PR_BODY.md");
 		const titlePath = join(directory, "COMMIT_MSG.txt");
-		const checker = resolve("scripts/check-pr-body.mjs");
+		const checker = resolve(repositoryRoot, "scripts/check-pr-body.mjs");
 		try {
 			writeFileSync(
 				bodyPath,
@@ -579,7 +592,7 @@ describe("PR body lint (#1844)", () => {
 				[checker, "--lint-local", bodyPath],
 				[checker, "--body", bodyPath, "--title", titlePath],
 			]) {
-				execFileSync(process.execPath, args, { cwd: repositoryRoot });
+				execFileSync(process.execPath, args, { cwd: fixtureCwd });
 			}
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
@@ -630,7 +643,10 @@ describe("PR body lint (#1844)", () => {
 	});
 
 	it("rejects the unfilled template", () => {
-		const template = readFileSync(".github/PULL_REQUEST_TEMPLATE.md", "utf8");
+		const template = readFileSync(
+			resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
+			"utf8",
+		);
 		expect(lintPrBody(template)).toMatchObject({ valid: false });
 	});
 
@@ -899,6 +915,19 @@ ${placeholder}`,
 });
 
 describe("local lint parity", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
+
 	it("acquires a non-empty origin/master...HEAD diff in a full checkout", () => {
 		const diff = localDiff();
 		expect(diff).toContain("diff --git a/");
