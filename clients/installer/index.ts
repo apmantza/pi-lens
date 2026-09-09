@@ -1706,6 +1706,7 @@ export function getInstallFailureReason(toolId: string): string | undefined {
  *
  *   * `succeeded`  — an install ran and reported success.
  *   * `failed`     — an install ran and did not succeed. The retry candidate.
+ *   * `unavailable` — the install cannot run on this platform. Nothing ran.
  *   * `declined`   — policy said no: kill switch, `allowInstall: false`, project
  *                    trust, an unknown tool id. Nothing ran.
  *   * `skipped`    — another process holds the install lock. Nothing ran.
@@ -1713,6 +1714,7 @@ export function getInstallFailureReason(toolId: string): string | undefined {
 export type InstallAttemptOutcome =
 	| "succeeded"
 	| "failed"
+	| "unavailable"
 	| "declined"
 	| "skipped";
 
@@ -5569,6 +5571,12 @@ export async function installTool(toolId: string): Promise<boolean> {
 
 			case "archive": {
 				if (!tool.archive) return false;
+				if (!resolveArchiveUrl(tool.archive)) {
+					const reason = `unsupported platform=${process.platform} arch=${process.arch}`;
+					noteInstallAttempt(tool.id, "unavailable", reason);
+					logSessionStart(`auto-install ${tool.id}: ${reason}`);
+					return false;
+				}
 				const archivePath = await installArchiveTool(tool);
 				return finishInstallAttempt(
 					tool.id,

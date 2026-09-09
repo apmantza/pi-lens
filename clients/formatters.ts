@@ -709,11 +709,11 @@ async function resolveManagedFormatterCommand(
 		cwd: string,
 	) => string | null | undefined | Promise<string | null | undefined>,
 	cwd?: string,
-): Promise<string[] | null> {
+): Promise<string[] | typeof FORMATTER_UNAVAILABLE> {
 	const local = findLocal && cwd ? await findLocal(toolId, cwd) : null;
 	const installed =
 		local ?? (await which(toolId)) ?? (await getToolPath(toolId));
-	return installed ? [installed, ...args, filePath] : null;
+	return installed ? [installed, ...args, filePath] : FORMATTER_UNAVAILABLE;
 }
 
 function managedFormatterResolver(
@@ -1554,17 +1554,15 @@ export const phpCsFixerFormatter: FormatterInfo = {
 		const binary =
 			(await findInVendorBin("php-cs-fixer", cwd)) ??
 			(await which("php-cs-fixer"));
-		const resolved =
-			binary ??
-			(
-				await resolveManagedFormatterCommand(
-					"php-cs-fixer",
-					filePath,
-					[],
-					findInVendorBin,
-					cwd,
-				)
-			)?.[0];
+		const managed = await resolveManagedFormatterCommand(
+			"php-cs-fixer",
+			filePath,
+			[],
+			findInVendorBin,
+			cwd,
+		);
+		if (managed === FORMATTER_UNAVAILABLE) return FORMATTER_UNAVAILABLE;
+		const resolved = binary ?? managed[0];
 		// #2413/#2472 review F4: both probes (vendor/bin, then PATH) have
 		// PROVEN the binary is absent — returning `null` here would fall back
 		// to the static `command` above, which is the SAME bare
