@@ -105,7 +105,7 @@ jobs:
   pr-title-lint:
     name: PR title
     needs: validate-merge-train-dispatch
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -151,7 +151,7 @@ jobs:
   pr-body-lint:
     name: PR body (advisory)
     needs: validate-merge-train-dispatch
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
