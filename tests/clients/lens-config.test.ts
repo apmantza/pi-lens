@@ -158,12 +158,17 @@ describe("global pi-lens config", () => {
 			JSON.stringify({
 				lps: { enabled: false }, // typo of lsp.enabled
 				lsp: { enabled: false }, // recognized flag key — must NOT warn
+				tools: {
+					ast_grep_search: { enabled: false },
+					unknown_tool: { enabled: false },
+				},
 				$schema: "https://example.com/schema.json", // allowed, must NOT warn
 			}),
 		);
 
 		expect(loadPiLensGlobalConfig(configPath)).toEqual({
 			lsp: { enabled: false },
+			tools: { ast_grep_search: { enabled: false } },
 		});
 		expect(console.error).toHaveBeenCalledWith(
 			expect.stringContaining('unknown key "lps"'),
@@ -182,6 +187,9 @@ describe("global pi-lens config", () => {
 			.flat()
 			.some((arg) => typeof arg === "string" && arg.includes("$schema"));
 		expect(warnedForSchema).toBe(false);
+		expect(console.error).toHaveBeenCalledWith(
+			expect.stringContaining('unknown key "tools.unknown_tool.enabled"'),
+		);
 
 		// Warn-once: repeated loads do not add further warnings for the same key.
 		const callsAfterFirst = (console.error as ReturnType<typeof vi.fn>).mock

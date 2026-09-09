@@ -43,7 +43,10 @@ function summarize(view: EffectiveConfigView): string {
 	);
 }
 
-export function createEffectiveConfigTool(getProjectRoot: () => string) {
+export function createEffectiveConfigTool(
+	getProjectRoot: () => string,
+	getNoTools?: () => string | undefined,
+) {
 	return {
 		name: "effective_config" as const,
 		label: "Effective Config",
@@ -80,6 +83,7 @@ export function createEffectiveConfigTool(getProjectRoot: () => string) {
 				cwd,
 				...(params.file === undefined ? {} : { file: params.file }),
 				redact: true,
+				noTools: getNoTools?.(),
 			});
 			const summary = summarize(view);
 			return {
