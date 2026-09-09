@@ -102,6 +102,23 @@ jobs:
             exit 1
           fi
 
+      # #2614: the syncer below DELETES labels with `prune: true`, and its
+      # deletions are otherwise silent — run 34042925533 logged "label:
+      # priority:p3 deleted from: apmantza/pi-lens" (then p1, p2) while the
+      # post-merge validation recorded success. Snapshot the live label set
+      # first so the validation step after the syncer can detect a deletion
+      # as before-vs-after drift: the deleted labels are absent from the
+      # manifest by definition, so a manifest-only diff cannot see them.
+      - name: Snapshot live labels before sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh label list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json name --jq '.[].name' \
+            | tr '[:upper:]' '[:lower:]' | sort \
+            > "$RUNNER_TEMP/labels-before.txt"
+
       # yamllint disable-line rule:line-length
       - uses: micnncim/action-label-syncer@3abd5ab72fda571e69fffd97bd4e0033dd5f495c # v1
         with:
@@ -111,3 +128,40 @@ jobs:
           # true: any live label absent from the manifest above is DELETED
           # on every run of this workflow (#2553).
           prune: true
+
+      # #2614: fail the sync when it deleted or lost any label. `deleted`
+      # is before-vs-after drift (the #2553 recurrence — pruned labels are
+      # manifest-absent, so this is the only observable they leave);
+      # `missing` is a manifest label the live set does not carry after the
+      # sync. Names are case-folded before comparison because GitHub label
+      # names are unique case-insensitively. Listing here fails closed: if
+      # the live set cannot be read, the step fails rather than reads as
+      # clean.
+      - name: Validate label sync results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh label list --repo "$GITHUB_REPOSITORY" --limit 1000 \
+            --json name --jq '.[].name' \
+            | tr '[:upper:]' '[:lower:]' | sort \
+            > "$RUNNER_TEMP/labels-after.txt"
+          sed -n "s/^[[:space:]]*-[[:space:]]*name:[[:space:]]*//p" \
+            .github/labels.yml \
+            | tr -d "\"'" | tr '[:upper:]' '[:lower:]' | sort \
+            > "$RUNNER_TEMP/manifest-labels.txt"
+          deleted="$(comm -23 "$RUNNER_TEMP/labels-before.txt" \
+            "$RUNNER_TEMP/labels-after.txt")"
+          missing="$(comm -23 "$RUNNER_TEMP/manifest-labels.txt" \
+            "$RUNNER_TEMP/labels-after.txt")"
+          names=""
+          if [[ -n "$deleted" ]]; then
+            names="deleted: $(printf '%s\n' "$deleted" | paste -sd, -)"
+          fi
+          if [[ -n "$missing" ]]; then
+            names="$names missing: $(printf '%s\n' "$missing" | paste -sd, -)"
+          fi
+          if [[ -n "$names" ]]; then
+            echo "::error::label sync deleted or missing labels: $names"
+            exit 1
+          fi
