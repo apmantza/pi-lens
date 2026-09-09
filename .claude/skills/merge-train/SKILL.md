@@ -148,6 +148,20 @@ operator's private notes, so a different orchestrator can run the same train.
   twice in one week; each was fixed at its own seam with no log line, and the
   maintainer had to ask for the seam (#2777). "Contracts move in the same
   session" covers the catalog row; this rule covers the code.
+- **An external bug's first round is the probe, not the fix (2026-09-09).**
+  For any bug reported from outside (or any bug whose symptom is a tool
+  verdict), the first delegation is an investigator or a fixer whose FIRST
+  deliverable is the reporter's symptom reproduced through the production
+  entry point (the tool handler / MCP tool, not a seam beneath it), red on
+  master, before any state-space table or edit. A fix brief that names a
+  suspected seam is a hypothesis and says so. The record: #2776 spent seven
+  fixer rounds on `clients/lsp/client.ts` (pull-vs-push classification) —
+  each internally consistent, each verified — before a premise probe through
+  `LSPService.touchFile` showed master already returned the pushed
+  diagnostic; one investigator round through `createLspDiagnosticsTool`
+  then found the real cause in `tools/lsp-diagnostics.ts` (primary/auxiliary
+  partition by `diagnostic.source`). AGENTS.md "premise first" already said
+  this; the train had been dispatching fixers on the orchestrator's guess.
 - **Every "should have been caught by" names a nightly or smoke row, and
   the row is filed the same day.** A detection retrospective that ends in
   prose is not a retrospective. #2776 (emmylua_ls declares pull diagnostics
