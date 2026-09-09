@@ -1705,16 +1705,6 @@ async function main(argv) {
 	// recheck + removal + margin <= timeout) is sized for ONE removal — so the
 	// effective cap is the smaller of the two.
 	const runCap = Math.min(policy.maxRemovals, options.max);
-	const removals = policy.removeWorktrees
-		? capRemovals([...ageRemovals, ...mergedRemovals], runCap)
-		: [];
-	const removalKeys = new Set(
-		removals.map((removal) => toComparablePath(removal.path)),
-	);
-	const deferred = [...ageRemovals, ...mergedRemovals].filter(
-		(removal) => !removalKeys.has(toComparablePath(removal.path)),
-	);
-
 	// --- unregistered `.claude/worktrees/agent-*` directories (#2538) ---
 	// Every non-scoped mode runs this pass: the SubagentStop hooks have a
 	// mandate over exactly one agent's tree, never over its siblings' leftovers.
@@ -1734,8 +1724,42 @@ async function main(argv) {
 						.filter(Boolean),
 				),
 			});
-	const unregisteredRemovals = unregisteredPlan.remove.slice(0, options.max);
-	const unregisteredDeferred = unregisteredPlan.remove.slice(options.max);
+	// #2631/#2538: one raw plan owns the operator's deletion budget. Keep the
+	// kind marker only while capping; partitioning afterward gives each
+	// execution path its own shape without creating a second budget.
+	const rawRegisteredRemovals = [...ageRemovals, ...mergedRemovals];
+	const rawCombinedRemovals = [
+		...rawRegisteredRemovals.map((removal) => ({
+			...removal,
+			kind: "registered",
+		})),
+		...unregisteredPlan.remove.map((entry) => ({
+			path: entry,
+			ageMs: 0,
+			kind: "unregistered",
+		})),
+	];
+	const cappedCombinedRemovals = policy.removeWorktrees
+		? capRemovals(rawCombinedRemovals, runCap)
+		: [];
+	const selectedRemovalKeys = new Set(
+		cappedCombinedRemovals.map((removal) => toComparablePath(removal.path)),
+	);
+	const deferredCombinedRemovals = rawCombinedRemovals.filter(
+		(removal) => !selectedRemovalKeys.has(toComparablePath(removal.path)),
+	);
+	const removals = cappedCombinedRemovals
+		.filter((removal) => removal.kind === "registered")
+		.map(({ kind: _kind, ...removal }) => removal);
+	const unregisteredRemovals = cappedCombinedRemovals
+		.filter((removal) => removal.kind === "unregistered")
+		.map((removal) => removal.path);
+	const deferred = deferredCombinedRemovals
+		.filter((removal) => removal.kind === "registered")
+		.map(({ kind: _kind, ...removal }) => removal);
+	const unregisteredDeferred = deferredCombinedRemovals
+		.filter((removal) => removal.kind === "unregistered")
+		.map((removal) => removal.path);
 
 	const wantProcessScan =
 		removals.length > 0 || (options.orphanSweep && policy.orphanSweep);
@@ -1843,6 +1867,14 @@ async function main(argv) {
 					: `keep    ${removal.path}  (removal is not permitted in this mode)`,
 			);
 		}
+		for (const unregisteredPath of unregisteredDeferred) {
+			say(
+				policy.removeWorktrees
+					? `defer   ${unregisteredPath}  (removal cap ${policy.maxRemovals} per ` +
+							`run; the next sweep takes it)`
+					: `keep    ${unregisteredPath}  (removal is not permitted in this mode)`,
+			);
+		}
 		for (const removal of removals) {
 			const procs = perTreeProcesses.get(removal.path) ?? [];
 			say(
@@ -1864,6 +1896,7 @@ async function main(argv) {
 	const removedBranchRefs = [];
 	/** Trees actually removed — 0 on a dry run, which the record also says. */
 	let removedCount = 0;
+	let unregisteredRemovedCount = 0;
 	/**
 	 * Paths the enrichment pass certified clean but that turned up dirty (or
 	 * unreadable) on the immediate pre-remove recheck (review round 3, F1) --
@@ -2005,6 +2038,27 @@ async function main(argv) {
 			);
 		}
 		if (removals.length > 0) git(["worktree", "prune"], REPO_ROOT, removeBound);
+		for (const unregisteredPath of unregisteredRemovals) {
+			let removed = false;
+			try {
+				fs.rmSync(unregisteredPath, { recursive: true, force: true });
+				removed = !fs.existsSync(unregisteredPath);
+			} catch {
+				/* the bounded candidate remains for the next sweep */
+			}
+			if (removed) {
+				removedCount++;
+				unregisteredRemovedCount++;
+			}
+			records.push(
+				formatUnregisteredDirRecord({
+					path: unregisteredPath,
+					removed,
+					error: removed ? null : "directory removal failed",
+					nowIso,
+				}),
+			);
+		}
 
 		for (const { row, reason } of orphans) {
 			const { killed, error } = await terminatePid(row.pid);
@@ -2047,6 +2101,15 @@ async function main(argv) {
 					path: removal.path,
 					branch: removal.branch,
 					ageMs: removal.ageMs,
+					dryRun: true,
+					nowIso,
+				}),
+			);
+		}
+		for (const unregisteredPath of unregisteredRemovals) {
+			records.push(
+				formatUnregisteredDirRecord({
+					path: unregisteredPath,
 					dryRun: true,
 					nowIso,
 				}),
@@ -2100,6 +2163,7 @@ async function main(argv) {
 			worktree: targetPath,
 			keptReason,
 			removed: removedCount,
+			unregisteredDirs: unregisteredRemovedCount,
 			orphans: orphans.length,
 			rows: table.length,
 			dryRun: options.dryRun,
