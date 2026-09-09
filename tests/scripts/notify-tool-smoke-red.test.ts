@@ -69,6 +69,8 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 			),
 			LSP_HANDSHAKE_OUTCOME: "failure",
 			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp-handshake.log", REPLAY_LOG),
+			LSP_GATE_OUTCOME: "skipped",
+			LSP_GATE_LOG: writeLog(dir, "lsp-gate.log", ""),
 			FORMAT_LAYER_OUTCOME: "skipped",
 			FORMAT_LAYER_LOG: writeLog(dir, "format-layer.log", ""),
 		});
@@ -80,7 +82,7 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 		expect(out).toContain("36 passed · 1 failed · 0 setup-failed · 12 skipped");
 	});
 
-	it("plans a close when all three gating layers succeeded", () => {
+	it("plans a close when all four gating layers succeeded", () => {
 		const dir = mkTempDir("pi-lens-tool-smoke-clean-");
 		const out = runDryRun({
 			TOOL_LAYER_OUTCOME: "success",
@@ -95,6 +97,12 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 				"lsp.log",
 				"38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
 			),
+			LSP_GATE_OUTCOME: "success",
+			LSP_GATE_LOG: writeLog(
+				dir,
+				"lsp-gate.log",
+				"38 passed · 0 failed · 0 setup-failed · 0 skipped\n",
+			),
 			FORMAT_LAYER_OUTCOME: "success",
 			FORMAT_LAYER_LOG: writeLog(
 				dir,
@@ -103,6 +111,34 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 			),
 		});
 		expect(out).toContain("action=close-if-open");
+	});
+
+	it("tracks a gate-only red with its outcome and log", () => {
+		const dir = mkTempDir("pi-lens-tool-smoke-gate-red-");
+		const out = runDryRun({
+			TOOL_LAYER_OUTCOME: "success",
+			TOOL_LAYER_LOG: writeLog(
+				dir,
+				"tool.log",
+				"1 passed · 0 failed · 0 setup-failed · 0 skipped\n",
+			),
+			LSP_HANDSHAKE_OUTCOME: "success",
+			LSP_HANDSHAKE_LOG: writeLog(
+				dir,
+				"lsp.log",
+				"1 passed · 0 failed · 0 setup-failed · 0 skipped\n",
+			),
+			LSP_GATE_OUTCOME: "failure",
+			LSP_GATE_LOG: writeLog(
+				dir,
+				"lsp-gate.log",
+				"✗  lua          lua-language-server          0     lens_diagnostics returned 0 diagnostic(s) but 0 primary findings\n1 passed · 1 failed · 0 setup-failed · 0 skipped\n",
+			),
+			FORMAT_LAYER_OUTCOME: "skipped",
+			FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", ""),
+		});
+		expect(out).toContain("Failing layer: **LSP diagnostics clean-gate**");
+		expect(out).toContain("lua-language-server");
 	});
 
 	// Acceptance #3, the green-path-only regression this file's own module
@@ -120,6 +156,8 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 			),
 			LSP_HANDSHAKE_OUTCOME: "skipped",
 			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", ""),
+			LSP_GATE_OUTCOME: "skipped",
+			LSP_GATE_LOG: writeLog(dir, "lsp-gate.log", ""),
 			FORMAT_LAYER_OUTCOME: "skipped",
 			FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", ""),
 		});
@@ -143,6 +181,8 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 			),
 			LSP_HANDSHAKE_OUTCOME: "cancelled",
 			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", ""),
+			LSP_GATE_OUTCOME: "skipped",
+			LSP_GATE_LOG: writeLog(dir, "lsp-gate.log", ""),
 			FORMAT_LAYER_OUTCOME: "skipped",
 			FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", ""),
 		});
@@ -156,6 +196,7 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 				...process.env,
 				TOOL_LAYER_OUTCOME: undefined as unknown as string,
 				LSP_HANDSHAKE_OUTCOME: undefined as unknown as string,
+				LSP_GATE_OUTCOME: undefined as unknown as string,
 				FORMAT_LAYER_OUTCOME: undefined as unknown as string,
 			},
 			encoding: "utf-8",
@@ -239,6 +280,8 @@ const RED_ENV = (dir: string) => ({
 	),
 	LSP_HANDSHAKE_OUTCOME: "failure",
 	LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", REPLAY_LOG),
+	LSP_GATE_OUTCOME: "skipped",
+	LSP_GATE_LOG: writeLog(dir, "lsp-gate.log", ""),
 	FORMAT_LAYER_OUTCOME: "skipped",
 	FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", ""),
 });
@@ -255,6 +298,12 @@ const GREEN_ENV = (dir: string) => ({
 		dir,
 		"lsp.log",
 		"38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+	),
+	LSP_GATE_OUTCOME: "success",
+	LSP_GATE_LOG: writeLog(
+		dir,
+		"lsp-gate.log",
+		"38 passed · 0 failed · 0 setup-failed · 0 skipped\n",
 	),
 	FORMAT_LAYER_OUTCOME: "success",
 	FORMAT_LAYER_LOG: writeLog(

@@ -13,6 +13,15 @@ export declare function lintPrBody(
 	valid: boolean;
 	errors: string[];
 };
+export declare function localTouchesTests(
+	cwd?: string,
+	git?: (args: string[], options?: Record<string, unknown>) => string,
+): boolean;
+export declare function lintLocalPrBody(
+	body: string,
+	cwd?: string,
+	git?: (args: string[], options?: Record<string, unknown>) => string,
+): { valid: boolean; errors: string[] };
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl: typeof fetch,
@@ -36,11 +45,3 @@ export declare function localDiff(
 		options: { cwd: string; encoding: "utf8" },
 	) => string,
 ): string;
-export declare function lintLocalPrBody(
-	body: string,
-	cwd?: string,
-	git?: (
-		args: readonly string[],
-		options: { cwd: string; encoding: "utf8" },
-	) => string,
-): { valid: boolean; errors: string[] };

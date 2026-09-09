@@ -11,12 +11,12 @@
  * actual pass/fail verdict and is wired to a FINAL `if: always()` step in
  * tool-smoke.yml, so it runs on every outcome.
  *
- * Reads the run's THREE gating layer outcomes from env (set by the
+ * Reads the run's FOUR gating layer outcomes from env (set by the
  * workflow step that invokes this script), plus each layer's captured log
  * text from the file paths the workflow's own `tee` steps wrote — never
  * re-derives success/failure or re-parses anything itself beyond those
- * inputs. The three layers are the only steps in tool-smoke.yml WITHOUT
- * `continue-on-error: true` (Tool layer, LSP handshake layer, Format
+ * inputs. The four layers are the only steps in tool-smoke.yml WITHOUT
+ * `continue-on-error: true` (Tool layer, LSP handshake layer, LSP gate, Format
  * layer) — the only ones whose outcome can actually turn the job red;
  * see scripts/lib/tool-smoke-drift.mjs's module doc for the shared
  * four-outcome classification this reuses from install-smoke-drift.mjs.
@@ -25,6 +25,7 @@
  * each *_LOG: a file path, which may not exist if that step never ran):
  *   TOOL_LAYER_OUTCOME / TOOL_LAYER_LOG
  *   LSP_HANDSHAKE_OUTCOME / LSP_HANDSHAKE_LOG
+ *   LSP_GATE_OUTCOME / LSP_GATE_LOG
  *   FORMAT_LAYER_OUTCOME / FORMAT_LAYER_LOG
  *   JOB_STATUS (GitHub's `job.status` context — #2723 review F3: the three
  *     tracked layers all read "skipped" both when a step BEFORE them failed
@@ -62,6 +63,7 @@ import {
 const LAYERS = /** @type {const} */ ([
 	["TOOL_LAYER_OUTCOME", "TOOL_LAYER_LOG", "Tool layer"],
 	["LSP_HANDSHAKE_OUTCOME", "LSP_HANDSHAKE_LOG", "LSP handshake layer"],
+	["LSP_GATE_OUTCOME", "LSP_GATE_LOG", "LSP diagnostics clean-gate"],
 	["FORMAT_LAYER_OUTCOME", "FORMAT_LAYER_LOG", "Format layer"],
 ]);
 

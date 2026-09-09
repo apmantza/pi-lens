@@ -1,0 +1,6 @@
+ci(pr-body): merge master, restore the git exec seam so the observability diff is actually acquired (refs #2543, #2784)
+
+Merge the preflight contract from master with the title-aware local checker.
+Restore the Git wrapper so both callers acquire origin/master...HEAD.
+
+Refs #2543, #2784.

@@ -10,6 +10,7 @@ import {
 	detectFlattenedBody,
 	lintPullRequestEvent,
 	lintLocalPrBody,
+	localDiff,
 	lintPrBody,
 	repairEscapedNewlineBody,
 	repairFlattenedBody,
@@ -544,7 +545,10 @@ describe("PR body lint (#1844)", () => {
 		const titlePath = join(directory, "COMMIT_MSG.txt");
 		const checker = resolve("scripts/check-pr-body.mjs");
 		try {
-			writeFileSync(bodyPath, body);
+			writeFileSync(
+				bodyPath,
+				`${body}\n\n### Test assessment\nThe targeted test covers the local CLI.`,
+			);
 			writeFileSync(
 				titlePath,
 				"ci(test): verify local body lint (refs #2807)\n",
@@ -869,6 +873,52 @@ ${placeholder}`,
 			{ requireTestAssessment: true },
 		);
 		expect(result.valid).toBe(false);
+	});
+});
+
+describe("local lint parity", () => {
+	it("acquires a non-empty origin/master...HEAD diff in a full checkout", () => {
+		const diff = localDiff();
+		expect(diff).toContain("diff --git a/");
+	});
+
+	it("rejects a runtime-shaped body that names no record", () => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() =>
+				'diff --git a/clients/example.ts b/clients/example.ts\n+throw new Error("boom");',
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("record literal");
+	});
+
+	it("requires Test assessment when the local diff touches tests/", () => {
+		const result = lintLocalPrBody(
+			body,
+			process.cwd(),
+			() => "tests/scripts/example.test.ts\n",
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("Test assessment");
+	});
+	it("falls back to HEAD~1 when the upstream range is unavailable", () => {
+		const ranges: string[][] = [];
+		const result = lintLocalPrBody(body, process.cwd(), (args) => {
+			ranges.push(args);
+			if (args.includes("origin/master...HEAD"))
+				throw new Error("missing upstream");
+			return "tests/scripts/example.test.ts\n";
+		});
+		expect(result.valid).toBe(false);
+		expect(ranges).toEqual([
+			["diff", "--unified=0", "--no-color", "origin/master...HEAD"],
+			["diff", "--name-only", "origin/master...HEAD"],
+			["diff", "--name-only", "HEAD~1"],
+		]);
 	});
 });
 

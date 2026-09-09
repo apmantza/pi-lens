@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 
 const TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
 const TEMPLATE_FILE = resolve(
@@ -647,24 +647,44 @@ export async function lintPullRequestEvent(
 	return { valid: false, repaired: false };
 }
 
-export function localDiff(cwd = process.cwd(), git = execFileSync) {
+export function localDiff(cwd = process.cwd(), git = gitExecFileSync) {
 	return git(["diff", "--unified=0", "--no-color", "origin/master...HEAD"], {
 		cwd,
 		encoding: "utf8",
 	});
 }
 
-export function lintLocalPrBody(body, cwd = process.cwd(), git = execFileSync) {
+export function localTouchesTests(cwd = process.cwd(), git = gitExecFileSync) {
+	let names;
+	try {
+		names = git(["diff", "--name-only", "origin/master...HEAD"], {
+			cwd,
+			encoding: "utf8",
+		});
+	} catch {
+		names = git(["diff", "--name-only", "HEAD~1"], {
+			cwd,
+			encoding: "utf8",
+		});
+	}
+	return names.split(/\r?\n/).some((name) => name.startsWith("tests/"));
+}
+
+export function lintLocalPrBody(
+	body,
+	cwd = process.cwd(),
+	git = gitExecFileSync,
+) {
 	let diff;
 	try {
 		diff = localDiff(cwd, git);
 	} catch {
 		// A local preflight must use the same range as CI. If the caller has no
-		// upstream ref, retain the structural lint rather than inventing scope.
+		// upstream ref, retain structural lint rather than inventing scope.
 		diff = "";
 	}
 	return lintPrBody(body, {
-		requireTestAssessment: /(?:^|\n)diff --git a\/tests\//.test(diff),
+		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
 	});
 }

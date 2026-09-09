@@ -27,7 +27,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	createAvailabilityChecker,
+	resolveRunnerCwd,
+} from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 
@@ -106,7 +109,7 @@ const spellcheckRunner: RunnerDefinition = {
 	skipTestFiles: false, // Check docs in test files too
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "spellcheck/typos");
 		// Skip if typos-cli is not installed
 		if (!(await typos.isAvailableAsync(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };

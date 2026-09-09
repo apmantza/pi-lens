@@ -44,7 +44,12 @@ without a reproduced failure scenario is a MEDIUM at most.
 
 The verdict line comes first. After the findings, two fixed sections:
 "Could not verify" (what was blocked and why, never implied green) and
-"Named output" (the structural insight the probes could not close). A verify
+"Named output" (the structural insight the probes could not close). A Named
+output entry may carry an advisory strength — Strong, Worth exploring, or
+Speculative — judged by the deletion test alone (would removing the shared
+module concentrate complexity back into callers, or merely relocate it); it is
+a triage aid for the orchestrator, never a severity, and never substitutes for
+a reproduced instance on a finding. A verify
 round ends with a disposition table for the previous round's findings —
 `fixed | not fixed | new defect | withdrawn` per finding id — so the
 orchestrator reads outcomes, not prose. Safe deltas (a body sentence, a

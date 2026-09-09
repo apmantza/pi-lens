@@ -29,6 +29,7 @@ or feed the expected answer in through setup. Keep the red-first failure tied to
 the defect, and mutate the guard or filter to prove the test can detect its loss.
 Mocks belong only at true process or host boundaries. When a test can use the
 real store, sink, coordinator, or registry, use it and assert the durable result.
+For a whole-module mock, prefer `vi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), override }))` so new exports pass through by default; annotate dynamic imports as `typeof import(spec)` when needed.
 
 Git authority is separate from the role. Commit, push, or open a PR only when
 the delegation explicitly grants that authority after worktree verification.

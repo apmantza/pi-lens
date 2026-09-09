@@ -82,6 +82,7 @@ import {
 	projectTrustDenialReason,
 } from "../../project-trust.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	killedForOutputCap,
 	truncatedByOutputCap,
@@ -1111,7 +1112,7 @@ const helmRenderRunner: RunnerDefinition = {
 	timeoutMs: RENDER_TIMEOUT_MS + TRIVY_TIMEOUT_MS + 10_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "helm-render");
 		const workspaceRoot = path.resolve(ctx.projectRoot ?? cwd);
 
 		// Gate 1 — consent, read from the project whose chart would run. Keying
