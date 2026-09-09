@@ -1676,7 +1676,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"runtime-agent-end.ts:347 is the consumer.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#cdc1de9a~0e4e5946": {
+	"index.ts#cdc1de9a~5033c974": {
 		family: "hook-await",
 		site: "session_start",
 		reason:

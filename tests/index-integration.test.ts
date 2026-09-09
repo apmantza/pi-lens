@@ -228,6 +228,53 @@ describe("index.ts integration", () => {
 	);
 
 	it(
+		"resets the primary turn counter before the session-start prehandler row (#2815 R7)",
+		async () => {
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			const previousHome = process.env.PI_LENS_HOME;
+			process.env.PI_LENS_TEST_MODE = "0";
+			process.env.PI_LENS_HOME = tmpDir;
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			vi.doUnmock("../clients/turn-context.js");
+			const turnContext = await import("../clients/turn-context.js");
+			turnContext.resetTurnContext("primary-prehandler");
+			turnContext.beginTurnContext("primary-prehandler");
+			turnContext.beginTurnContext("primary-prehandler");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+
+			try {
+				await handlers.session_start?.[0]?.(
+					{},
+					makeCtx({ cwd: tmpDir, sessionId: "primary-prehandler" }),
+				);
+			} finally {
+				if (previousTestMode === undefined)
+					delete process.env.PI_LENS_TEST_MODE;
+				else process.env.PI_LENS_TEST_MODE = previousTestMode;
+				if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+				else process.env.PI_LENS_HOME = previousHome;
+			}
+
+			await latency.flushLatencyLog();
+			const prehandlerRows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { phase?: string; turnId?: string })
+				.filter((row) => row.phase === "session_start_prehandler");
+			expect(prehandlerRows).toHaveLength(1);
+			expect(prehandlerRows[0]).toEqual(
+				expect.objectContaining({ turnId: "primary-prehandler:0" }),
+			);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"session_shutdown uses fast LSP reset so teardown does not wait on graceful shutdown",
 		async () => {
 			const resetLSPService = vi.fn();

@@ -2252,6 +2252,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reset beside the primary session-start reset block so a tightened
 					// sampling window cannot leak across sessions.
 					resetMemorySamplerCadence();
+					// #2815 R7: reset before the handler can publish its
+					// session_start_prehandler row. Keep this inside the primary gate so
+					// a concurrent secondary cannot erase the primary's live counter.
+					resetTurnContext(stableSessionId);
 					await handleSessionStart({
 						ctxCwd: ctx.cwd,
 						sessionStartFiredAt,
@@ -2280,10 +2284,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						resetDispatchBaselines,
 						resetLSPService,
 					});
-					// #2815: turn ids belong to this primary session. Keep the reset
-					// directly in the gated session_start closure so a concurrent
-					// secondary cannot erase the primary's live turn context.
-					resetTurnContext(stableSessionId);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran
