@@ -19,7 +19,8 @@ vi.mock("../../../../clients/tool-policy.js", () => ({
 	}),
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	createAvailabilityChecker: (command: string) => ({
 		isAvailable: () => true,
 		isAvailableAsync: async () => true,

@@ -102,7 +102,8 @@ vi.mock("../../../../clients/latency-logger.js", async (importActual) => ({
 	logLatency,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	resolveToolCommand: vi.fn(() => null),
 	resolveToolCommandWithInstallFallback: vi.fn(async (_cwd: string) => {
 		const installed = await ensureTool("oxlint");
