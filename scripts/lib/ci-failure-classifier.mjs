@@ -108,7 +108,8 @@ const INLINE_TEST_FAIL_MARKER = /^\s*×\s+(.+?)\s*\d*m?s?\s*$/m;
 // Keep these explicit: the classifier must not let a new infra needle outrank
 // a genuine assertion or compile failure.
 const TEST_FILES_FAILED = /\bTest Files\s+\d+\s+failed\b/i;
-const TYPESCRIPT_ERROR = /\berror TS\d+\s*:/;
+const TYPESCRIPT_ERROR =
+	/^\s*\S+\.tsx?\(\d+,\d+\): error TS\d+:|^\s*\S+\.tsx?:\d+:\d+ - error TS\d+:/m;
 // The run's own final tally line (real log, same run): " Tests  1 failed |
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.

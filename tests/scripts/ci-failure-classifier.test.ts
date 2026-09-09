@@ -70,6 +70,26 @@ describe("classifyFailureLog (#2103)", () => {
 		);
 	});
 
+	it("requires a compiler diagnostic line shape for TypeScript evidence", () => {
+		expect(
+			classifyFailureLog('echo "error TS2322: Type string is not assignable"'),
+		).not.toEqual(
+			expect.objectContaining({
+				detail: expect.stringContaining("error TS2322:"),
+			}),
+		);
+		expect(
+			classifyFailureLog(
+				"src/x.ts:12:3 - error TS2322: Type string is not assignable",
+			),
+		).toEqual(
+			expect.objectContaining({
+				kind: "real",
+				detail: expect.stringContaining("error TS2322:"),
+			}),
+		);
+	});
+
 	it("classifies the wrapper-as-victim OOM shape (no mem-watch verdict at all)", () => {
 		const result = classifyFailureLog(
 			fixture("infra-kill-wrapper-killed.real.log"),

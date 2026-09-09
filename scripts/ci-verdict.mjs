@@ -284,6 +284,7 @@ export function computeVerdict(
 	requiredChecks = REQUIRED_CHECKS,
 	mergeable = null,
 	classification = null,
+	rerunState = null,
 ) {
 	const checkRuns = Array.isArray(checkRunsPayload?.check_runs)
 		? checkRunsPayload.check_runs
@@ -354,9 +355,14 @@ export function computeVerdict(
 	// non-success conclusion, so it stays non-zero.
 	const infraRerunArmed =
 		classification === "infra-kill" || classification === "infra-net";
+	const infraRerunPending =
+		infraRerunArmed &&
+		rerunState?.originalFailed === true &&
+		rerunState?.latestAttempt?.run_attempt > 1 &&
+		rerunState.latestAttempt.status !== "completed";
 	const failingGatingRows = rows.filter((row) => {
 		if (!row.gating || !row.present || row.status !== "completed") return false;
-		if (infraRerunArmed && row.name === "Unit tests") return false;
+		if (infraRerunPending && row.name === "Unit tests") return false;
 		if (requiredNameSet.has(row.name)) return row.conclusion !== "success";
 		if (isUncertainConclusion(row.conclusion)) return false;
 		return isBlockingConclusion(row.conclusion);
@@ -385,12 +391,7 @@ export function computeVerdict(
 		reason = anyAbsent
 			? "one or more required checks are absent and the PR is merge-conflicted (mergeable=CONFLICTING): a merge-conflicted PR can't build its merge-ref, so the real gates are skipped, not failed -- AGENTS.md shape 11"
 			: "the PR is merge-conflicted (mergeable=CONFLICTING) even though the required checks show present -- that's stale evidence from before the head turned conflicting, not proof it can merge (round 3, F1)";
-	} else if (
-		infraRerunArmed &&
-		rows.some(
-			(row) => row.name === "Unit tests" && row.conclusion !== "success",
-		)
-	) {
+	} else if (infraRerunPending) {
 		exitCode = EXIT_PENDING;
 		reason =
 			"infra (rerun armed): Unit tests was classified as infrastructure and is awaiting its one permitted rerun";
@@ -508,6 +509,7 @@ export async function pollVerdict({
 	mergeable = null,
 	requiredChecks = REQUIRED_CHECKS,
 	classification = null,
+	rerunState = null,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
 }) {
@@ -518,11 +520,14 @@ export async function pollVerdict({
 	for (;;) {
 		const remainingMs =
 			capSeconds > 0 ? Math.max(0, deadline - now()) : undefined;
+		const currentRerunState =
+			typeof rerunState === "function" ? rerunState() : rerunState;
 		verdict = computeVerdict(
 			await fetchPayload(remainingMs),
 			requiredChecks,
 			mergeable,
 			classification,
+			currentRerunState,
 		);
 		polls += 1;
 		if (verdict.exitCode !== EXIT_PENDING) break;
@@ -628,6 +633,48 @@ export function fetchCheckRunsPayload(
 			{ timeoutMs },
 		),
 	);
+}
+
+/** Read Actions attempts through the existing ghExec seam. Check-runs do not
+ * expose run_attempt, so this read distinguishes a queued/running rerun from
+ * a terminal latest attempt. */
+export function fetchRerunState(
+	repository,
+	sha,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	try {
+		const payload = JSON.parse(
+			ghExec(
+				[
+					"api",
+					`repos/${repository}/actions/runs?head_sha=${sha}&per_page=100`,
+				],
+				{ timeoutMs },
+			),
+		);
+		const attempts = (
+			Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : []
+		)
+			.filter((run) => run?.name === "CI" && run?.head_sha === sha)
+			.filter((run) => Number(run?.run_attempt) > 0)
+			.sort((a, b) => Number(a.run_attempt) - Number(b.run_attempt));
+		const original = attempts.find((run) => Number(run.run_attempt) === 1);
+		const latest = attempts.at(-1);
+		return {
+			originalFailed: original?.conclusion === "failure",
+			latestAttempt: latest
+				? {
+						status: latest.status ?? null,
+						conclusion: latest.conclusion ?? null,
+						run_attempt: Number(latest.run_attempt),
+					}
+				: null,
+		};
+	} catch {
+		return null;
+	}
 }
 
 // The only branch this repository protects (ci.yml/lint.yml/etc. all trigger
@@ -743,6 +790,10 @@ export async function run({
 		);
 		const ciClassification =
 			classification ?? resolveClassification(target, ghExec, initialTimeoutMs);
+		const rerunState =
+			ciClassification && isPrNumber(target)
+				? () => fetchRerunState(repository, sha, ghExec, initialTimeoutMs)
+				: null;
 		// #2609: read once, before polling starts (branch protection does not
 		// change between polls of the same head). `null` means unreadable --
 		// `requiredChecks` then falls back to the constant default, and every
@@ -770,6 +821,7 @@ export async function run({
 			mergeable,
 			requiredChecks,
 			classification: ciClassification,
+			rerunState,
 		});
 
 		stdout(

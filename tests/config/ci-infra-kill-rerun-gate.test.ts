@@ -25,8 +25,11 @@ const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/ci-infra-kill-rerun.yml";
 
 type WorkflowStep = { run?: unknown };
+type WorkflowJob = { if?: unknown; steps?: unknown };
 type ClassifyJob = { if?: unknown; steps?: unknown };
-type Workflow = { jobs?: { classify?: ClassifyJob } };
+type Workflow = {
+	jobs?: { classify?: ClassifyJob; "finalize-rerun"?: WorkflowJob };
+};
 
 function loadWorkflow(): Workflow {
 	return yaml.load(
@@ -223,5 +226,15 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 		const stepRun = readClassifyStepRun();
 		expect(stepRun).toContain('"$RUN_EVENT" == "push"');
 		expect(stepRun).toContain('"$RUN_EVENT" == "repository_dispatch"');
+	});
+});
+
+describe("ci-infra-kill-rerun.yml terminal rerun path (#2806 F1)", () => {
+	it("loads a second-attempt terminal label swap for success and failure", () => {
+		const job = loadWorkflow().jobs?.["finalize-rerun"];
+		expect(job?.if).toEqual(expect.stringContaining("run_attempt == 2"));
+		const run = (job?.steps as WorkflowStep[]).find((step) => step.run)?.run;
+		expect(run).toContain("--remove-label 'ci:infra'");
+		expect(run).toContain("--add-label 'ci:real'");
 	});
 });
