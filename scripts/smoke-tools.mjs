@@ -78,7 +78,7 @@ export function matchDiagnosticMessages(pattern, diags) {
 }
 
 /**
- * Classify the lens_diagnostics clean-gate result (#2780/#2776). The gate
+ * Classify the lsp_diagnostics clean-gate result (#2780/#2776). The gate
  * deliberately counts the handler's primary bucket, not the raw diagnostic
  * total: a server-authored source must not make an auxiliary finding look like
  * proof that the configured primary answered.
@@ -94,7 +94,7 @@ export function classifyLspGateResult(result, fx, unavailable = false) {
 	if (!result) {
 		return {
 			state: "fail",
-			detail: "lens_diagnostics returned no result",
+			detail: "lsp_diagnostics returned no result",
 			diags: 0,
 		};
 	}
@@ -106,13 +106,13 @@ export function classifyLspGateResult(result, fx, unavailable = false) {
 	if (primary > 0) {
 		return {
 			state: "pass",
-			detail: `lens_diagnostics returned ${primary} primary finding${primary === 1 ? "" : "s"}`,
+			detail: `lsp_diagnostics returned ${primary} primary finding${primary === 1 ? "" : "s"}`,
 			diags,
 		};
 	}
 	return {
 		state: "fail",
-		detail: `lens_diagnostics returned ${diags} diagnostic(s) but 0 primary findings (auxiliary=${details.auxiliaryDiagnosticsCount ?? 0})`,
+		detail: `lsp_diagnostics returned ${diags} diagnostic(s) but 0 primary findings (auxiliary=${details.auxiliaryDiagnosticsCount ?? 0})`,
 		diags,
 	};
 }
@@ -1943,14 +1943,14 @@ async function runLspGate({ langs, install, verbose }) {
 				lang: fx.lang,
 				runner: fx.serverHint,
 				state: "fail",
-				detail: `lens_diagnostics error: ${err?.message ?? err}`,
+				detail: `lsp_diagnostics error: ${err?.message ?? err}`,
 				diags: 0,
 			});
 		} finally {
 			cleanup?.();
 		}
 	}
-	return report(rows, "LSP clean-gate (lens_diagnostics primary findings)");
+	return report(rows, "LSP clean-gate (lsp_diagnostics primary findings)");
 }
 
 /**

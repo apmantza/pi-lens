@@ -27,8 +27,10 @@ export interface LspFixture {
 	auxiliarySourceMatch?: string;
 	gitInit?: boolean;
 	clean?: boolean;
-	/** Require a primary finding from the real lens_diagnostics handler. */
+	/** Require a primary finding from the real lsp_diagnostics handler. */
 	lspGate?: boolean;
+	/** The source text the gated fixture must contain (its seeded error). */
+	lspGateMarker?: string;
 	lombokJar?: boolean;
 	expectNoMessageMatch?: string;
 	/** A diagnostic message that MUST arrive. The lane's default verdict passes
@@ -116,7 +118,7 @@ export function matchDiagnosticMessages(
 	pattern: string,
 	diags: readonly SmokeDiagnostic[] | undefined,
 ): SmokeDiagnostic[];
-/** Classify one real lens_diagnostics primary-finding gate result. */
+/** Classify one real lsp_diagnostics primary-finding gate result. */
 export function classifyLspGateResult(
 	result: unknown,
 	fixture: Pick<LspFixture, "serverHint">,

@@ -138,7 +138,7 @@ jobs:
           node scripts/smoke-tools.mjs --lsp --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-lsp-handshake.log"
 
       # Gating diagnostic layer (#2780, recurrence #2776): the handshake above
-      # proves initialize only. This row family drives the real lens_diagnostics
+      # proves initialize only. This row family drives the real lsp_diagnostics
       # handler against every installed primary fixture and requires a finding
       # in its PRIMARY bucket. A server-authored source cannot make an
       # auxiliary finding look like primary coverage.
