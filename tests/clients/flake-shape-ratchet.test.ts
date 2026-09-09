@@ -69,7 +69,7 @@ import {
 	scanRealProcessSpawn,
 	scanUngovernedWaitFor,
 } from "../support/flake-shape-scan.js";
-import { assertSortedKeys } from "../support/sweep-kit.js";
+import { assertSortedRegistry } from "../support/sweep-kit.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -455,20 +455,20 @@ function describeProblem(p: RatchetProblem): string {
 describe("flake-shape ratchet (#2547)", () => {
 	it("keeps every admission map sorted", () => {
 		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
-		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+		expect(() => assertSortedRegistry("fixture", ["b", "a"])).toThrow(
 			"entries must be sorted",
 		);
 		for (const detector of DETECTOR_NAMES) {
-			assertSortedKeys(
+			assertSortedRegistry(
 				`flake-shape-baseline:${detector}`,
 				Object.keys(FLAKE_SHAPE_BASELINE[detector]),
 			);
 		}
-		assertSortedKeys(
+		assertSortedRegistry(
 			"ADMITTED_AFTER_BASELINE",
 			Object.keys(ADMITTED_AFTER_BASELINE),
 		);
-		assertSortedKeys("wallClockBudgetInclude", wallClockBudgetInclude());
+		assertSortedRegistry("wallClockBudgetInclude", wallClockBudgetInclude());
 	});
 	it.each(DETECTOR_NAMES)(
 		"detector %s: no new files, no risen counts vs. the baseline",
