@@ -994,6 +994,8 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"taplo (advisory)",
 		"mutation (advisory)",
 		"complexity (advisory)",
+		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
+		"strictness (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`

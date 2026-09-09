@@ -783,7 +783,9 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			});
 			expect(firstResult?.diags).toEqual([attributedDiagnostic]);
 			expect((firstResult as any).inconclusive).not.toBe(true);
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([
+				attributedDiagnostic,
+			]);
 
 			// Second touch: content changed (so notify isn't skipped) and the
 			// diagnostics wait is forced to time out via maxDiagnosticsWaitMs: 0
@@ -815,7 +817,9 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			).toBe(true);
 			expect({ ...secondResult }.inconclusive).toBe(true);
 			// The prior confirmed non-empty record must survive untouched.
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([
+				attributedDiagnostic,
+			]);
 		});
 
 		it("a confirmed (non-timeout) empty result still clears lastKnownDiagnostics as before", async () => {
@@ -848,7 +852,9 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 				maxDiagnosticsWaitMs: 8000,
 				source: "dispatch-lsp-runner",
 			});
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([
+				attributedDiagnostic,
+			]);
 
 			// Second touch: content changed, generous budget (no timeout), and the
 			// server genuinely reports zero diagnostics this time — the existing
