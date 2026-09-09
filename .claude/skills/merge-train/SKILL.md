@@ -188,7 +188,7 @@ operator's private notes, so a different orchestrator can run the same train.
 
 - **Sandbox by test shape (2026-09-09).** A lane whose tests spawn children
   (LSP fake server, tool smoke, installer, formatter wire) is dispatched with
-  `sandbox: "danger-full-access"` from round 1. #2781 spent four rounds with a
+  the runner's full-access mode from round 1. #2781 spent four rounds with a
   fixer that could not run its own wire tests and reasoned about ordering
   instead of observing it; the first full-access round found the cause in
   one pass.
@@ -201,9 +201,9 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Follow-up rounds go to the same worker by send, not a fresh delegation,**
   while its handle is alive: it keeps the diff and the reasoning, and the
   brief shrinks to the findings. Release only when the lane moves to review.
-  A fresh worker on a resume loses uncommitted work (plegma#337).
+  A fresh worker on a resume loses uncommitted work.
 - **Fleet inventory at every settlement.** A one-shot watch misses anything
-  that settles while it is disarmed (plegma#339): after each settlement,
+  that settles while it is disarmed: after each settlement,
   list live workers and read every `done` handle not yet consumed. Two lanes
   sat finished for 90 minutes today.
 - **Keep a lane ledger.** One file, one row per lane: issue/PR, worker id,
