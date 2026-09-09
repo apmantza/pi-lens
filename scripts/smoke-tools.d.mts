@@ -5,12 +5,10 @@ export interface SmokeFixture {
 	dir: string;
 	file: string;
 	cwd?: string;
-	negativeCwd?: string;
 	targets?: string[];
 	tools?: string[];
 	expectDiagnostic?: boolean;
 	expectDiagnosticCount?: number;
-	expectDifferentNegativeDiagnosticCount?: boolean;
 	expectRule?: string;
 	/**
 	 * In the tier-1 parser lane (#1937): the tool installs as a pip/npm package
