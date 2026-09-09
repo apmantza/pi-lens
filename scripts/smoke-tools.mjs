@@ -35,6 +35,7 @@
  * Usage:
  *   node scripts/smoke-tools.mjs [lang ...] [--step2] [--tier1] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --lsp [lang ...] [--install] [--verbose]
+ *   node scripts/smoke-tools.mjs --lsp-gate [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --format [lang ...] [--install] [--verbose]
  *
  * Requires a built dist/ (run `npm run build:dist` first).
@@ -74,6 +75,46 @@ const LOMBOK_DOWNLOAD_URL = "https://projectlombok.org/downloads/lombok.jar";
 export function matchDiagnosticMessages(pattern, diags) {
 	const re = new RegExp(pattern, "i");
 	return (diags ?? []).filter((d) => re.test(d?.message ?? ""));
+}
+
+/**
+ * Classify the lsp_diagnostics clean-gate result (#2780/#2776). The gate
+ * deliberately counts the handler's primary bucket, not the raw diagnostic
+ * total: a server-authored source must not make an auxiliary finding look like
+ * proof that the configured primary answered.
+ */
+export function classifyLspGateResult(result, fx, unavailable = false) {
+	if (unavailable) {
+		return {
+			state: "skip",
+			detail: `${fx.serverHint} unavailable (tool not installed; pass --install)`,
+			diags: 0,
+		};
+	}
+	if (!result) {
+		return {
+			state: "fail",
+			detail: "lens_diagnostics returned no result",
+			diags: 0,
+		};
+	}
+	const details = result.details ?? {};
+	const diags = Number(
+		details.totalDiagnostics ?? details.diagnostics?.length ?? 0,
+	);
+	const primary = Number(details.primaryDiagnosticsCount ?? 0);
+	if (primary > 0) {
+		return {
+			state: "pass",
+			detail: `lens_diagnostics returned ${primary} primary finding${primary === 1 ? "" : "s"}`,
+			diags,
+		};
+	}
+	return {
+		state: "fail",
+		detail: `lens_diagnostics returned ${diags} diagnostic(s) but 0 primary findings (auxiliary=${details.auxiliaryDiagnosticsCount ?? 0})`,
+		diags,
+	};
 }
 
 /**
@@ -635,6 +676,27 @@ const LSP_FIXTURES = [
 		file: "main.lua",
 		serverHint: "lua-language-server",
 		tools: ["lua-language-server"],
+	},
+	{
+		lang: "lua-custom-provenance",
+		dir: "tests/fixtures/tool-smoke/lua",
+		file: "main.lua",
+		serverHint: "fake custom lua server",
+		tools: [],
+		lspGate: true,
+		disableServers: ["lua"],
+		customServer: {
+			id: "emmylua",
+			name: "probe custom emmylua",
+			extensions: [".lua"],
+			command: process.execPath,
+			args: [path.join(repoRoot, "tests/fixtures/fake-lsp-server.mjs")],
+			rootMarkers: [".git"],
+			env: {
+				FAKE_LSP_IGNORE_PULL: "1",
+				FAKE_LSP_PUSH_DIAGNOSTIC: "1",
+			},
+		},
 	},
 	{
 		lang: "cpp",
@@ -1289,6 +1351,7 @@ function parseArgs(argv) {
 	let verbose = false;
 	let install = false;
 	let lsp = false;
+	let lspGate = false;
 	let format = false;
 	let autofix = false;
 	let tier1 = false;
@@ -1298,6 +1361,7 @@ function parseArgs(argv) {
 		else if (arg === "--verbose" || arg === "-v") verbose = true;
 		else if (arg === "--install") install = true;
 		else if (arg === "--lsp") lsp = true;
+		else if (arg === "--lsp-gate") lspGate = true;
 		else if (arg === "--format") format = true;
 		else if (arg === "--tier1") tier1 = true;
 		else if (arg.startsWith("--min-pass="))
@@ -1311,6 +1375,7 @@ function parseArgs(argv) {
 		verbose,
 		install,
 		lsp,
+		lspGate,
 		format,
 		autofix,
 		tier1,
@@ -1726,6 +1791,147 @@ function report(rows, title) {
 		"Legend: ✓ ok  ✗ failure/setup-failed  ⚠ unavailable (not a failure)\n",
 	);
 	return counts.fail + counts["setup-failed"];
+}
+
+/**
+ * Gating LSP layer (#2780): run the real lsp_diagnostics handler against each
+ * installed primary fixture and require at least one primary finding. This is
+ * intentionally separate from the handshake layer, whose contract is only
+ * initialize-and-answer and therefore passed the #2776 provenance regression.
+ */
+async function runLspGate({ langs, install, verbose }) {
+	const lspToolEntry = path.join(
+		repoRoot,
+		"dist",
+		"tools",
+		"lsp-diagnostics.js",
+	);
+	const configEntry = path.join(
+		repoRoot,
+		"dist",
+		"clients",
+		"lsp",
+		"config.js",
+	);
+	if (!fs.existsSync(lspToolEntry) || !fs.existsSync(configEntry)) {
+		console.error(
+			`dist build missing: ${lspToolEntry}\nRun \`npm run build:dist\` first.`,
+		);
+		process.exit(2);
+	}
+	const { createLspDiagnosticsTool } = await import(
+		pathToFileURL(lspToolEntry).href
+	);
+	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
+	let ensureTool;
+	let getInstallAttempt;
+	let TOOLS_REGISTRY = [];
+	let pipCandidates = [];
+	if (install) {
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
+		let pipCommandCandidatesFn;
+		({
+			ensureTool,
+			TOOLS: TOOLS_REGISTRY,
+			getInstallAttempt,
+			pipCommandCandidates: pipCommandCandidatesFn,
+		} = await import(pathToFileURL(installerEntry).href));
+		pipCandidates = pipCommandCandidatesFn?.() ?? [];
+	}
+	const toolsById = new Map(TOOLS_REGISTRY.map((t) => [t.id, t]));
+	const toolchainPresence = {};
+	const selected = (
+		langs.length
+			? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
+			: LSP_FIXTURES
+	).filter(
+		(f) => f.lspGate !== false && !f.clean && !f.auxiliaryServerIds?.length,
+	);
+	if (selected.length === 0) {
+		console.error(`No LSP gate fixtures matched: ${langs.join(", ")}`);
+		process.exit(2);
+	}
+	const rows = [];
+	for (const fx of selected) {
+		const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
+			fx.tools ?? [],
+			ensureTool,
+			getInstallAttempt,
+			(toolId, resolved) =>
+				verbose &&
+				console.error(
+					`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
+				),
+		);
+		const unavailable =
+			(fx.tools ?? []).length > 0 &&
+			(fx.tools ?? []).every((t) => unavailableTools.has(t));
+		if (unavailable) {
+			const outcome = resolveUnavailabilityRow(
+				fx.tools ?? [],
+				unavailableTools,
+				attemptSnapshots,
+				{ toolsById, toolchainPresence, pipCandidates },
+				`${fx.serverHint} unavailable (tool not installed; pass --install)`,
+			);
+			rows.push({ lang: fx.lang, runner: fx.serverHint, ...outcome, diags: 0 });
+			continue;
+		}
+		let workspace;
+		let absFile;
+		let cleanup;
+		try {
+			({ workspace, absFile, cleanup } = await bootstrapFixtureWorkspace(fx, {
+				initLSPConfig,
+				repoRoot,
+				tmpPrefix: "pi-lens-smoke-gate-",
+			}));
+			if (fx.setup) {
+				const setupResult = runFixtureSetup(fx.setup, workspace, verbose);
+				if (!setupResult.ok) {
+					rows.push({
+						lang: fx.lang,
+						runner: fx.serverHint,
+						state: "setup-failed",
+						detail: setupResult.detail,
+						diags: 0,
+					});
+					continue;
+				}
+			}
+			const result = await createLspDiagnosticsTool().execute(
+				`smoke-lsp-gate-${fx.lang}`,
+				{
+					path: absFile,
+					waitMs: LSP_DIAGNOSTICS_WAIT_MS,
+					serverScope: "primary",
+				},
+				undefined,
+				null,
+				{ cwd: workspace },
+			);
+			const verdict = classifyLspGateResult(result, fx);
+			rows.push({ lang: fx.lang, runner: fx.serverHint, ...verdict });
+			if (verbose) console.error(`[${fx.lang}] ${verdict.detail}`);
+		} catch (err) {
+			rows.push({
+				lang: fx.lang,
+				runner: fx.serverHint,
+				state: "fail",
+				detail: `lens_diagnostics error: ${err?.message ?? err}`,
+				diags: 0,
+			});
+		} finally {
+			cleanup?.();
+		}
+	}
+	return report(rows, "LSP clean-gate (lens_diagnostics primary findings)");
 }
 
 /**
@@ -2365,6 +2571,7 @@ async function main() {
 		verbose,
 		install,
 		lsp,
+		lspGate,
 		format,
 		autofix,
 		tier1,
@@ -2380,6 +2587,10 @@ async function main() {
 		process.exit(
 			(await runLspHandshake({ langs, install, verbose })) > 0 ? 1 : 0,
 		);
+	}
+
+	if (lspGate) {
+		process.exit((await runLspGate({ langs, install, verbose })) > 0 ? 1 : 0);
 	}
 
 	if (format) {

@@ -27,6 +27,8 @@ export interface LspFixture {
 	auxiliarySourceMatch?: string;
 	gitInit?: boolean;
 	clean?: boolean;
+	/** Require a primary finding from the real lens_diagnostics handler. */
+	lspGate?: boolean;
 	lombokJar?: boolean;
 	expectNoMessageMatch?: string;
 	/** A diagnostic message that MUST arrive. The lane's default verdict passes
@@ -36,6 +38,16 @@ export interface LspFixture {
 	disableServers?: string[];
 	expectServerId?: string;
 	expectSourceMatch?: string;
+	/** Optional custom-server config written into the copied fixture workspace. */
+	customServer?: {
+		id: string;
+		name: string;
+		extensions: string[];
+		command: string;
+		args?: string[];
+		env?: Record<string, string>;
+		rootMarkers?: string[];
+	};
 	/** Optional pre-touch setup step, run in the COPIED temp workspace (#530) — a
 	 * string command (split on whitespace) or an argv array. Bounded by
 	 * FIXTURE_SETUP_TIMEOUT_MS; failure reports a distinct `setup-failed`
@@ -104,6 +116,12 @@ export function matchDiagnosticMessages(
 	pattern: string,
 	diags: readonly SmokeDiagnostic[] | undefined,
 ): SmokeDiagnostic[];
+/** Classify one real lens_diagnostics primary-finding gate result. */
+export function classifyLspGateResult(
+	result: unknown,
+	fixture: Pick<LspFixture, "serverHint">,
+	unavailable?: boolean,
+): { state: "pass" | "skip" | "fail"; detail: string; diags: number };
 /** One reported row from a smoke lane, as far as the pass floor is concerned. */
 export interface SmokeRow {
 	state: "pass" | "fail" | "skip" | "setup-failed";

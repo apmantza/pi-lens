@@ -64,6 +64,20 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
 		workspace = claimScratchDir(SCRATCH_DIR_ROOT, tmpPrefix);
 	}
 	fs.cpSync(path.join(repoRoot, fx.dir), workspace, { recursive: true });
+	if (fx.customServer) {
+		fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
+		fs.writeFileSync(
+			path.join(workspace, ".pi-lens", "lsp.json"),
+			JSON.stringify(
+				{
+					servers: { [fx.customServer.id]: fx.customServer },
+					disabledServers: fx.disableServers ?? [],
+				},
+				null,
+				2,
+			),
+		);
+	}
 
 	// #2369/#2655/#2658: every fixture registers its OWN workspace
 	// unconditionally — never only inside the `disableServers` branch below.
@@ -89,9 +103,16 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
 
 	if (resolvedDisable && resolvedDisable.length) {
 		fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
+		const configPath = path.join(workspace, ".pi-lens", "lsp.json");
+		let config = {};
+		try {
+			config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		} catch {
+			// No prior fixture config; the disable list below is still valid.
+		}
 		fs.writeFileSync(
-			path.join(workspace, ".pi-lens", "lsp.json"),
-			JSON.stringify({ disabledServers: resolvedDisable }, null, 2),
+			configPath,
+			JSON.stringify({ ...config, disabledServers: resolvedDisable }, null, 2),
 		);
 		// The disabled-server list must land in the CACHED config, so reload
 		// after writing it — the early call above exists only for session-root
