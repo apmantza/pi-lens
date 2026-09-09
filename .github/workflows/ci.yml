@@ -366,14 +366,18 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      PI_LENS_HOME: ${{ runner.temp }}/pi-lens-home
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
           persist-credentials: false
+      # actionlint: the `runner` context is not available in job-level `env`,
+      # so the probe home is pinned from a step (same value, exported for the
+      # rest of the job).
+      - name: Pin PI_LENS_HOME under the runner temp dir
+        shell: bash
+        run: echo "PI_LENS_HOME=$RUNNER_TEMP/pi-lens-home" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
