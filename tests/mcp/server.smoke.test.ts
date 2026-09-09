@@ -55,6 +55,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).toContain("pilens_session_start");
 		expect(names).toContain("pilens_turn_end");
 		expect(names).toContain("pilens_ast_grep_search");
+		expect(names).not.toContain("pilens_ast_grep_dump");
 		expect(names).toContain("pilens_ast_grep_replace");
 		expect(names).toContain("pilens_lsp_navigation");
 		expect(names).toContain("pilens_lsp_diagnostics");
@@ -96,6 +97,20 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			"hasDescendantKind",
 		);
 	}, 25_000);
+
+	it("redirects the retired AST dump name without advertising it", async () => {
+		const res = await harness.request(3, "tools/call", {
+			name: "pilens_ast_grep_dump",
+			arguments: { source: "foo()", lang: "typescript" },
+		});
+		const result = res.result as {
+			isError?: boolean;
+			content: { text: string }[];
+		};
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("pilens_ast_grep_search");
+		expect(result.content[0]?.text).toContain("dump=true");
+	});
 
 	it("does not advertise rebuild from an installed package", async () => {
 		const installedRoot = fs.mkdtempSync(

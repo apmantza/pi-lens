@@ -109,7 +109,6 @@ const EXPECTED_TOOLS = [
 	"ast_grep_search",
 	"ast_grep_replace",
 	"ast_grep_outline",
-	"ast_grep_dump",
 	"pi_lens_activate_tools",
 	"lens_diagnostics",
 	"lsp_diagnostics",
@@ -135,7 +134,6 @@ const LAZY_TOOLS = [
 	"ast_grep_search",
 	"ast_grep_replace",
 	"ast_grep_outline",
-	"ast_grep_dump",
 	"lsp_navigation",
 	"lens_diagnostic_mark",
 ];
@@ -510,7 +508,6 @@ describe("index.ts extension wiring", () => {
 					"ast_grep_search",
 					"ast_grep_replace",
 					"ast_grep_outline",
-					"ast_grep_dump",
 					"lsp_navigation",
 					"lens_diagnostic_mark",
 				];

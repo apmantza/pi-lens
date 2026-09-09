@@ -276,7 +276,7 @@ These categories are language-agnostic at the tool UX level even if implementati
 - Keep `items: "exports"` prominent in the docs; it is much more usable than `items: "all"` on configuration-heavy modules.
 - Include a clear `syntaxOnly: true` and “does not satisfy read guard” note in the main text, not only details.
 
-## `ast_grep_dump` / `ast_dump`
+## `ast_grep_search` dump mode
 
 ### What works well
 

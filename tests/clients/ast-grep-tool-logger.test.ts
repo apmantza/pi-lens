@@ -92,7 +92,7 @@ describe("astGrepRemediationHint", () => {
 
 	it("gives a generic single-node hint for 'other'", () => {
 		const hint = astGrepRemediationHint("other");
-		expect(hint).toMatch(/single valid AST node|ast_grep_dump|grep/i);
+		expect(hint).toMatch(/single valid AST node|dump=true|grep/i);
 	});
 
 	it("classify → hint composes: raw stderr 'other' yields the generic hint", () => {

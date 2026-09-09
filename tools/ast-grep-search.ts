@@ -168,14 +168,16 @@ function toMatchLocations(
 }
 
 function suggestedDump(lang: string): {
-	tool: "ast_grep_dump";
+	tool: "ast_grep_search";
+	mode: "dump";
 	lang: string;
 	note: string;
 } {
 	return {
-		tool: "ast_grep_dump",
+		tool: "ast_grep_search",
+		mode: "dump",
 		lang,
-		note: "Run ast_grep_dump on a small representative source snippet (not a whole file) to inspect AST node kinds before retrying ast_grep_search.",
+		note: "Run ast_grep_search with dump=true on a small representative source snippet (not a whole file) to inspect AST node kinds before retrying the search.",
 	};
 }
 
@@ -275,7 +277,34 @@ function getPatternHint(
 		}
 	}
 
-	return "Hint: No matches. Retry once with a smaller valid AST pattern scoped to the same paths (for example a call like `foo($$$ARGS)`, an import statement, or `function $NAME($$$ARGS) { $$$BODY }`). If you're actually looking for a name/usage rather than a structural pattern, prefer symbol_search (ranked identifier search) or module_report (file outline) over another AST retry; lsp_navigation findReferences finds exact call sites once you have a definition. If that also fails, use grep for text search, or ast_grep_dump on a small representative snippet to inspect node kinds.";
+	return "Hint: No matches. Retry once with a smaller valid AST pattern scoped to the same paths (for example a call like `foo($$$ARGS)`, an import statement, or `function $NAME($$$ARGS) { $$$BODY }`). If you're actually looking for a name/usage rather than a structural pattern, prefer symbol_search (ranked identifier search) or module_report (file outline) over another AST retry; lsp_navigation findReferences finds exact call sites once you have a definition. If that also fails, use grep for text search, or ast_grep_search with dump=true on a small representative snippet to inspect node kinds.";
+}
+
+/** One-session response for callers holding a pre-fold tool name. */
+export function astGrepDumpCompatibilityResult(
+	params: Record<string, unknown>,
+	surface: "pi" | "mcp",
+) {
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: `The ast_grep_dump tool was retired. Call ${surface === "mcp" ? "pilens_" : ""}ast_grep_search with dump=true and put the snippet in pattern instead.`,
+			},
+		],
+		isError: true,
+		details: {
+			compatibility: "ast_grep_dump -> ast_grep_search",
+			call: {
+				tool: surface === "mcp" ? "pilens_ast_grep_search" : "ast_grep_search",
+				arguments: {
+					dump: true,
+					pattern: params.source,
+					lang: params.lang,
+				},
+			},
+		},
+	};
 }
 
 export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
@@ -292,6 +321,8 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			valid?: boolean;
 			validateOnly?: boolean;
 			mode?: string;
+			dump?: boolean;
+			includeAnonymous?: boolean;
 			applied?: boolean;
 		}>(({ details, isError, text }) => {
 			if (details?.validateOnly) {
@@ -311,6 +342,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			return `ast_grep_search — ${count}${ofTotal} match${count === 1 && !ofTotal ? "" : "es"}${applied}`;
 		}),
 		parameters: Type.Object({
+			dump: Type.Optional(Type.Boolean()),
 			pattern: Type.Optional(
 				Type.String({
 					description:
@@ -341,7 +373,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			nodeKind: Type.Optional(
 				Type.String({
 					description:
-						"Expert grammar-specific escape hatch: find every node of this exact AST kind (for example `call_expression`) without writing a pattern. Node kinds are not universal across languages; use ast_grep_dump to discover them. Mutually exclusive with `pattern` and `rule`; can be combined with structural constraints.",
+						"Expert escape hatch: find every node of this AST kind (for example `call_expression`) without a pattern. Node kinds vary by language; use dump=true to discover them. Mutually exclusive with `pattern` and `rule`; combines with structural constraints.",
 				}),
 			),
 			insideKind: Type.Optional(
@@ -439,7 +471,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				follows,
 				precedes,
 				validateOnly,
+				dump,
 			} = params as {
+				dump?: boolean;
 				pattern?: string;
 				lang?: string;
 				paths?: string[];
@@ -466,6 +500,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			const lang = rawLang.replace(/^"|"$/g, "");
 			const searchPathsCount = paths?.length ?? 1;
 			const executionOptions = { signal: abortSignal, deadlineAt };
+			const dumpMode = dump === true;
 
 			function logOutcome(
 				outcome: AstGrepToolOutcome,
@@ -552,7 +587,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					};
 				}
 
-				if (!hasPattern && !hasRawRule && !hasNodeKind) {
+				if (!dumpMode && !hasPattern && !hasRawRule && !hasNodeKind) {
 					logOutcome("error", {
 						errorRaw: "pattern is required unless rule or nodeKind is provided",
 					});
@@ -608,6 +643,41 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					};
 				}
 				if (abortSignal?.aborted) return abortError();
+
+				if (dumpMode) {
+					if (!pattern.trim()) {
+						const errorRaw = "source is required when dump is true";
+						logOutcome("error", { errorRaw });
+						return {
+							content: [{ type: "text" as const, text: `Error: ${errorRaw}` }],
+							isError: true,
+							details: { mode: "dump", lang },
+						};
+					}
+					const result = await astGrepClient.dumpAst(pattern, lang);
+					if (result.error) {
+						logOutcome("error", { errorRaw: result.error });
+						return {
+							content: [
+								{ type: "text" as const, text: `Error: ${result.error}` },
+							],
+							isError: true,
+							details: { mode: "dump", lang },
+						};
+					}
+					const output = result.output ?? "";
+					logOutcome("success", { matchCount: lineCount(output) });
+					return {
+						content: [{ type: "text" as const, text: output }],
+						details: {
+							mode: "dump",
+							lang,
+							matchCount: lineCount(output),
+							totalMatches: lineCount(output),
+							truncated: false,
+						},
+					};
+				}
 
 				if (
 					!hasRawRule &&

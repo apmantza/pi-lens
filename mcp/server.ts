@@ -27,6 +27,7 @@ import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
 	getDegradationSummary,
+	recordDegradationOnce,
 	renderDegradationLines,
 } from "../clients/degradation-ledger.js";
 import {
@@ -74,7 +75,10 @@ import {
 	type WarmTurnEndResponse,
 } from "../clients/lens-engine.js";
 import { createAstGrepReplaceTool } from "../tools/ast-grep-replace.js";
-import { createAstGrepSearchTool } from "../tools/ast-grep-search.js";
+import {
+	astGrepDumpCompatibilityResult,
+	createAstGrepSearchTool,
+} from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { createLspDiagnosticsTool } from "../tools/lsp-diagnostics.js";
@@ -1082,6 +1086,14 @@ async function callTool(
 	name: string,
 	args: Record<string, unknown>,
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
+	if (name === "pilens_ast_grep_dump") {
+		recordDegradationOnce({
+			kind: "ast-grep-dump-compatibility",
+			subject: "ast_grep_dump",
+			reason: "retired tool name redirected to ast_grep_search dump mode",
+		});
+		return astGrepDumpCompatibilityResult(args, "mcp");
+	}
 	if (name === "pilens_analyze") {
 		const file = args.file;
 		if (typeof file !== "string" || file.length === 0) {

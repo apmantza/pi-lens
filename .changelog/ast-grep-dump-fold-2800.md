@@ -1,0 +1,1 @@
+- Fold AST inspection into `ast_grep_search` with `dump=true`; redirect the retired name through a bounded one-session compatibility response. Refs #2800.
