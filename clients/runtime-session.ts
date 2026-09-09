@@ -1873,14 +1873,14 @@ function scheduleDeferredToolProbesWithClients(
 /**
  * Session-start orientation prepended as a context message (gated by the
  * context-injection toggle). Deliberately lean: it names the high-value tools
- * and the one non-obvious behaviour (mode=all resurfaces stale blocking errors)
+ * and the distinction between cached reporting and active verification
  * — per-tool argument detail lives in each tool's own registered description, so
  * re-documenting it here would just pay the tokens twice every session.
  */
 export const SESSION_START_GUIDANCE: string[] = [
 	"📌 pi-lens active — automated checks run on every edit/write; blocking errors (including pre-existing) show inline and must be fixed.\n" +
 		"Key tools (see each tool's own description for args):\n" +
-		"• lens_diagnostics — session-wide diagnostic state; mode=all resurfaces stale blocking errors that dropped from turn context.\n" +
+		"• lens_diagnostics — mode=all is cache-only; verify changed files with mode=full and paths.\n" +
 		"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
 		"• lsp_diagnostics — probe LSP for errors in a file/folder/workspace.\n" +
 		"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace, ast_grep_dump.",

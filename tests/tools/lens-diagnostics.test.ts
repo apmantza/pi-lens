@@ -274,6 +274,22 @@ describe("lens_diagnostics schema", () => {
 			.properties;
 		expect(props.mode.enum).toContain("full");
 	});
+
+	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
+		// The completion hint used to claim cache-only mode=all verified files.
+		const tool = makeTool();
+		for (const text of [
+			tool.description,
+			tool.promptSnippet,
+			(tool.parameters.properties.mode as unknown as { description: string })
+				.description,
+		]) {
+			expect(text).toMatch(/(?:mode=)?all[^.\n;]*cache-only/);
+			expect(text).toMatch(/(?:mode=)?full[^.\n;]*paths/);
+		}
+		expect(tool.description).toContain("no cached diagnostics");
+		expect(tool.description).not.toContain("Use before declaring work done");
+	});
 });
 
 // ── delta mode ────────────────────────────────────────────────────────────────

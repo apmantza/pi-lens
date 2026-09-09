@@ -1313,6 +1313,9 @@ describe("context injection framing", () => {
 
 	it("SESSION_START_GUIDANCE advertises the read-substitute tools and only registered pi tools", () => {
 		const text = SESSION_START_GUIDANCE.join("\n");
+		// An empty cache is not evidence that changed files were checked.
+		expect(text).toMatch(/mode=all[^.\n]*cache-only/);
+		expect(text).toMatch(/mode=full[^.\n]*paths/);
 
 		// The #245 gap this guards: module_report + read_symbol were registered as
 		// pi tools but never surfaced in the session-start orientation, so the agent
