@@ -56,6 +56,7 @@ import {
 	pollToTerminal,
 	rowReportShows,
 	rowProbeRequest,
+	runToolSmokeInstallProbe,
 	scratchEnv,
 	renderCoverageLine,
 	renderReport,
@@ -174,6 +175,87 @@ describe("release-QA matrix and probe map are one list (#2606)", () => {
 		const { rows } = parseBaselineRows(baselineText());
 		const documented = rows.map((r) => r.id).sort();
 		expect(implementedRowIds()).toEqual(documented);
+	});
+});
+
+describe("release-QA tool-smoke install lane (#2663)", () => {
+	// The doc↔probe tie for #2663's row, pinned by name: the tool-smoke
+	// install lane (#2661's red-on-genuine-install-failure classification)
+	// joins the release gate, and a row present in only one of the two lists
+	// is either an undocumented probe or a documented row the runner silently
+	// skips. The generic tie above holds the whole list; this one names the
+	// new row so its removal reads as a named failure, not a count drift.
+	it("documents the tool-smoke-install row and implements its probe", () => {
+		const { rows } = parseBaselineRows(baselineText());
+		const documented = rows.find((r) => r.id === "tool-smoke-install");
+		expect(
+			documented,
+			"row tool-smoke-install is missing from the matrix",
+		).toBeDefined();
+		expect(implementedRowIds()).toContain("tool-smoke-install");
+	});
+
+	function stubSmoke(report: object, exitCode = 0) {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-qa-smoke-"));
+		const scripts = path.join(root, "scripts");
+		fs.mkdirSync(scripts);
+		fs.writeFileSync(
+			path.join(scripts, "smoke-tools.mjs"),
+			`process.stdout.write(${JSON.stringify(JSON.stringify(report))}); process.exit(${exitCode});\n`,
+		);
+		return root;
+	}
+
+	it("maps a red install row to exit 1 through the real smoke process boundary", () => {
+		const root = stubSmoke({
+			lane: "install-registry",
+			toolCount: 1,
+			installed: 0,
+			results: [{ toolId: "dead-tool", state: "fail", detail: "E404" }],
+		});
+		try {
+			const raw = runToolSmokeInstallProbe({
+				installedPkgDir: root,
+				projectDir: root,
+				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
+			});
+			const result = { id: "tool-smoke-install", ...classifyRowOutcome(raw) };
+			const verdict = shipVerdict([result]);
+			expect(verdictExitCode(verdict.verdict)).toBe(1);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("maps a network-unreachable install row to exit 3 through the real smoke process boundary", () => {
+		const root = stubSmoke({
+			lane: "install-registry",
+			toolCount: 1,
+			installed: 0,
+			results: [
+				{
+					toolId: "offline-tool",
+					state: "skip",
+					detail: "transient registry/network condition",
+					networkUnreachable: true,
+				},
+			],
+		});
+		try {
+			const raw = runToolSmokeInstallProbe({
+				installedPkgDir: root,
+				projectDir: root,
+				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
+			});
+			expect(raw.status).toBe("unreachable");
+			const result = { id: "tool-smoke-install", ...classifyRowOutcome(raw) };
+			const verdict = shipVerdict([result], {
+				inconclusiveReason: "registry-unreachable row(s) left UNMEASURED",
+			});
+			expect(verdictExitCode(verdict.verdict)).toBe(3);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

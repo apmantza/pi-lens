@@ -94,6 +94,14 @@ const EXPECTED_SKILL_REGISTRAR = "extension:index";
 const MIN_SHIPPED_SKILLS = 4;
 
 /**
+ * The baseline row that witnesses the installer registry (#2663): every
+ * npm/pip entry installs for real through the tool smoke's registry install
+ * lane, a genuine install failure is do-not-ship, and a registry-unreachable
+ * classification refuses the ship verdict instead of reading as green.
+ */
+export const TOOL_SMOKE_INSTALL_ROW_ID = "tool-smoke-install";
+
+/**
  * Short, schema-stable marker for the baseline's matrix table. Deliberately the
  * first two columns only: a marker naming a column that a later revision adds
  * or renames would stop finding the table and the runner would silently report
@@ -330,6 +338,19 @@ export function shipVerdict(results, options = {}) {
 			caveats: failed.map((r) => `${r.id}: ${r.detail}`),
 		};
 	}
+	// #2663: the tool-smoke install row is the release gate's ground truth for
+	// the installer registry. A registry-unreachable classification (the
+	// smoke's own transient-network branch) means that lane is UNMEASURED —
+	// its skips are not green — so the run refuses a ship verdict even where
+	// other rows passed. A genuine install failure outranks it (above): a real
+	// defect is a verdict, not an unmeasurable run.
+	if (options.inconclusiveReason) {
+		return {
+			verdict: "INCONCLUSIVE",
+			reason: options.inconclusiveReason,
+			caveats: [],
+		};
+	}
 	const caveats = list.filter(
 		(r) => r.outcome === OUTCOME.UNTESTED || r.outcome === OUTCOME.SKIPPED,
 	);
@@ -522,6 +543,157 @@ export function classifySelftestOutput(code, stdout) {
 		status: code === 0 && failLines.length === 0 ? "pass" : "fail",
 		detail: shows,
 		shows,
+	};
+}
+
+/**
+ * The tool-smoke install lane's report → the row's probe verdict (#2663).
+ *
+ *   - any genuine install failure (the smoke's red row, #2661) → `"fail"`:
+ *     the row FAILs and the run is do-not-ship (exit 1);
+ *   - no genuine failure but at least one registry-unreachable tool →
+ *     `"unreachable"` with `networkBlocked: true`: the lane is UNMEASURED, so
+ *     the run refuses a ship verdict (INCONCLUSIVE, exit 3) instead of
+ *     reading the skips as green;
+ *   - otherwise → `"pass"`: every entry resolved, with the legitimately
+ *     unavailable ones (toolchain absent, declined) named in the detail.
+ *
+ * The classification itself is never re-derived here — the row/skip verdict
+ * per tool is the smoke's `classifyInstallOutcome` (#2661), consumed through
+ * the lane's JSON; this function only maps that verdict onto the release
+ * gate's outcomes.
+ *
+ * A lane that produced no parseable report — crashed, missing dist build,
+ * timed out — is `"error"`: the check did not run, and a release gate whose
+ * check did not run is not a pass. `toolCount === 0` is the same refusal: a
+ * lane that enumerated no npm/pip entries witnessed nothing.
+ *
+ * @param {{ lane?: string, toolCount?: number, installed?: number, ok?: boolean, results?: Array<{ toolId: string, state: string, detail?: string, networkUnreachable?: boolean }> } | null} report
+ * @param {{ exitCode?: number, stderrTail?: string, timedOut?: boolean, stdout?: string }} [context]
+ */
+export function classifyToolSmokeInstallReport(report, context = {}) {
+	const stderrTail = String(context.stderrTail ?? "")
+		.trim()
+		.split(/\r?\n/)
+		.filter((l) => l.trim().length > 0)
+		.slice(-1)[0];
+	const witnessContent = report
+		? JSON.stringify(report)
+		: String(context.stdout ?? "");
+	if (!report) {
+		const why = context.timedOut
+			? "the install lane timed out"
+			: `the install lane produced no parseable result${
+					context.exitCode ? ` (exit ${context.exitCode})` : ""
+				}`;
+		return {
+			status: "error",
+			detail: `${why}${stderrTail ? `: ${stderrTail}` : ""}`,
+			shows: why,
+			networkBlocked: false,
+			witnessContent,
+		};
+	}
+	if (!Number.isInteger(report.toolCount) || report.toolCount <= 0) {
+		return {
+			status: "error",
+			detail: "the install lane enumerated no npm/pip registry entries",
+			shows: "install lane enumerated no npm/pip registry entries",
+			networkBlocked: false,
+			witnessContent,
+		};
+	}
+	const results = report.results ?? [];
+	const failures = results.filter((r) => r?.state === "fail");
+	if (failures.length > 0) {
+		const shows = `${failures.length} genuine install failure(s): ${failures
+			.map((f) => f.detail || f.toolId)
+			.join("; ")}`;
+		return {
+			status: "fail",
+			detail: shows,
+			shows,
+			networkBlocked: false,
+			witnessContent,
+		};
+	}
+	const network = results.filter((r) => r?.networkUnreachable);
+	if (network.length > 0) {
+		const shows =
+			`registry unreachable for ${network.length} npm/pip ` +
+			`${network.length === 1 ? "entry" : "entries"} ` +
+			`(${network.map((r) => r.toolId).join(", ")}); install ground truth unmeasured`;
+		return {
+			status: "unreachable",
+			detail: shows,
+			shows,
+			networkBlocked: true,
+			witnessContent,
+		};
+	}
+	const skips = results.filter((r) => r?.state === "skip");
+	const shows =
+		`${report.installed}/${report.toolCount} npm/pip registry entries resolved` +
+		(skips.length > 0
+			? `; ${skips.length} legitimately unavailable (${skips
+					.map((s) => s.toolId)
+					.join(", ")})`
+			: "");
+	return {
+		status: "pass",
+		detail: shows,
+		shows,
+		networkBlocked: false,
+		witnessContent,
+	};
+}
+
+/**
+ * Run the installed smoke boundary for the registry baseline row.
+ * @param {{ installedPkgDir: string, projectDir: string, env: NodeJS.ProcessEnv }} ctx
+ * @returns {{ status: string, detail: string, shows?: string, witness?: { ext: string, content: string } }}
+ */
+export function runToolSmokeInstallProbe(ctx) {
+	const script = path.join(ctx.installedPkgDir, "scripts", "smoke-tools.mjs");
+	if (!fs.existsSync(script)) {
+		return {
+			status: "fail",
+			detail: `smoke-tools.mjs is not in the installed package (${script})`,
+		};
+	}
+	let report = null;
+	let context = {};
+	try {
+		const stdout = execFileSync(
+			process.execPath,
+			[script, "--install", "--install-registry"],
+			{
+				cwd: ctx.projectDir,
+				encoding: "utf8",
+				env: ctx.env,
+				timeout: 900_000,
+				maxBuffer: 10 * 1024 * 1024,
+			},
+		);
+		try {
+			report = JSON.parse(stdout.trim());
+		} catch {
+			context = { stdout };
+		}
+	} catch (err) {
+		context = {
+			exitCode: err?.status,
+			stderrTail: err?.stderr,
+			timedOut: Boolean(err?.killed),
+			stdout: err?.stdout,
+		};
+	}
+	const classified = classifyToolSmokeInstallReport(report, context);
+	return {
+		status: classified.status,
+		detail: classified.detail,
+		shows: classified.shows,
+		witness: { ext: "json", content: classified.witnessContent },
 	};
 }
 
@@ -1492,6 +1664,19 @@ const ROW_PROBES = {
 			},
 		};
 	},
+
+	// The installer registry's ground truth (#2663): the smoke's install lane
+	// runs against the INSTALLED package's own dist (the script resolves its
+	// dist relative to its own location), so a registry entry that is dead in
+	// the shipped artifact is one red row here — the same red row shape the
+	// fixture lanes produce (#2661) — instead of a ⚠ skip folded into
+	// "toolchain absent". The classification is the lane's own
+	// `classifyToolSmokeInstallReport` mapping; a registry-unreachable verdict
+	// surfaces as status "unreachable" and `main()` turns it into the run's
+	// INCONCLUSIVE reason rather than letting the skips read as green.
+	[TOOL_SMOKE_INSTALL_ROW_ID]: async (ctx) => {
+		return runToolSmokeInstallProbe(ctx);
+	},
 };
 
 /** Row ids this runner can execute. Exported for the drift guard. */
@@ -1743,6 +1928,11 @@ async function main() {
 	};
 
 	const results = [];
+	// #2663: a registry-unreachable classification means the lane's skips are
+	// UNMEASURED, not green, so the run refuses a ship verdict. Carried beside
+	// `blocked`/`candidateFailure` for the same reason they are: the verdict is
+	// about the run, not any one row's outcome cell.
+	const unreachableRows = [];
 	for (const row of rows) {
 		const probe = ROW_PROBES[row.id];
 		let raw;
@@ -1764,6 +1954,7 @@ async function main() {
 			}
 		}
 		const probeOutcome = classifyRowOutcome(raw);
+		if (raw.status === "unreachable") unreachableRows.push(row.id);
 		let witnessPath = "";
 		if (raw.witness) {
 			const file = path.join(evidenceDir, `${row.id}.${raw.witness.ext}`);
@@ -1796,6 +1987,9 @@ async function main() {
 		blocked,
 		blockedReason,
 		candidateFailure,
+		inconclusiveReason: unreachableRows.length
+			? `registry-unreachable row(s) left UNMEASURED: ${unreachableRows.join(", ")}`
+			: "",
 	});
 	const report = renderReport({
 		rows,
