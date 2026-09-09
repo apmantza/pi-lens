@@ -283,22 +283,8 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 		name: "ast_grep_search" as const,
 		label: "AST Search",
 		description:
-			"Search code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, NOT text search.\n\n" +
-			"✅ GOOD patterns (complete AST shapes; $$$ accepts zero or more nodes):\n" +
-			"  - function $NAME($$$ARGS) { $$$BODY } (function declaration)\n" +
-			"  - fetchMetrics($$$ARGS)             (call with any arguments)\n" +
-			'  - import { $$$NAMES } from "module-name" (exact string-literal import)\n' +
-			"  - console.log($MSG)                 (method call)\n\n" +
-			"❌ BAD patterns (multiple nodes / raw text):\n" +
-			'  - it"test name"                     (missing parens - use it($TEST))\n' +
-			"  - console.log without args           (incomplete code)\n" +
-			"  - arbitrary text without code structure\n\n" +
-			'Metavariables match AST nodes, not text inside quoted string literals: `from "$PATH"` matches the literal text $PATH. Use an exact quoted string for a known import, or grep for wildcard text. ' +
-			"Use 'paths' to scope to specific files/folders. " +
-			"Use 'nodeKind' to find every node of a known AST kind, or 'ast_grep_dump' first when the kind is unknown. " +
-			"Avoid 'selector' unless you know the exact AST node kind; it narrows matching and does not extract fields. " +
-			'If this tool is inactive, call pi_lens_activate_tools with tools=["ast_grep_search"]; activation takes effect next turn. If zero matches, retry once with a simpler AST pattern, then use ast_grep_dump on a small representative snippet before falling back to grep.',
-		promptSnippet: "AST-aware structural code search",
+			"Search source by AST structure rather than text. Example: find calls with `console.log($MSG)`.",
+		promptSnippet: "Search source by AST structure",
 		renderResult: compactRenderResult<{
 			matchCount?: number;
 			totalMatches?: number;

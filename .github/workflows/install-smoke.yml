@@ -202,7 +202,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
@@ -214,7 +214,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pm == 'pnpm'
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.21.0
 
@@ -320,7 +320,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
@@ -332,7 +332,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pi_install == 'pnpm-global'
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.21.0
 
@@ -467,7 +467,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi

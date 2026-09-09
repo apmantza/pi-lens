@@ -2175,6 +2175,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/bootstrap.ts": 23,
 	"clients/cooperative-budget.ts": 3,
 	"clients/dead-code-client.ts": 4,
+	// `bounded()` itself awaits the raced work; this is the shared primitive's
+	// implementation await, not an additional hook-path await at the caller.
+	"clients/deadline-utils.ts": 1,
 	"clients/dispatch/integration.ts": 20,
 	"clients/dispatch/pending-runner-findings.ts": 2,
 	"clients/dispatch/runners/psscriptanalyzer.ts": 7,
@@ -2220,7 +2223,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/lsp-document-symbols.ts": 2,
 	"clients/lsp/cascade-tier.ts": 2,
 	"clients/lsp/config.ts": 3,
-	"clients/lsp/index.ts": 151,
+	// #2817 round 2 F5: Git recovery now awaits the existing drift scheduler
+	// and its per-server root resolution. This remains an intentionally
+	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
+	// service dependencies; the scheduler itself bounds each recovery pass.
+	"clients/lsp/index.ts": 158,
 	"clients/lsp/server.ts": 111,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
@@ -2327,6 +2334,11 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
+	"call:clients/runtime-turn.ts#2b57f8b9~67c7ff0d":
+		"`deps.signal` is the live `turn_end` ctx.signal in the pi host; it is " +
+		"optional only for the standalone MCP adapter and unit harnesses. The " +
+		"turn_end wall budget is always live, and timeout falls back to raw findings " +
+		"so security findings remain blockers.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */

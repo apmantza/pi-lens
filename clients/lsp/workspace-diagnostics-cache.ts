@@ -584,6 +584,8 @@ export interface WorkspaceDiagnosticsCacheLookup {
  * thrown away).
  */
 export interface WorkspaceDiagnosticsCacheContext {
+	/** Cached complete imports for a file, when the reverse-dependency index covers it. */
+	importsFor(filePath: string): string[] | undefined;
 	/** Fresh cached result for `filePath` under `scopeKey`, or `undefined`
 	 * when there's no entry, the entry's scope doesn't match, or it fails the
 	 * mtime/dependency freshness check. */
@@ -706,6 +708,9 @@ export function createWorkspaceDiagnosticsCacheContext(
 	};
 
 	return {
+		importsFor(filePath) {
+			return getImports(filePath);
+		},
 		lookup(filePath, scopeKey) {
 			// #1669 review N4: the epoch guarded `persist()` but not `lookup()` —
 			// an in-flight sweep kept REPLAYING disowned entries into its OWN

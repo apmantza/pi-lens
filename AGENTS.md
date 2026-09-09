@@ -178,7 +178,7 @@ Message-end stale attribution anchors the session id when a live ctx is handled,
 - **Map blast radius for every code PR.** Before and after editing, use `module_report` on each touched production module with `blastRadius: true`; inspect `callbacks[]`, closures, `usedBy`, entry points, and risk flags, then use `read_symbol`/`read_enclosing` for relevant bodies. The PR must state affected dependents, callbacks/entry points, and the verification plan—or explicitly record that the blast radius is empty/unavailable and why. Re-run this map after conflict resolution or architectural changes. If the change touches a hot path (per-spawn, per-file, per-render), MEASURE the cost delta and state the number. Silent per-call taxes ship otherwise: #1673 added 100 ms to every spawn across 118 call sites, #1687 multiplied a per-file budget, and #1701 cost 14x on the background scan. Every one was caught by a reviewer's measurement. None was stated by its author. `module_report` is a navigable structural/dependent view, not a complete function-level call graph; for call-graph work reuse `clients/call-graph.ts` or LSP incoming/outgoing-call navigation instead of inferring completeness from `usedBy` or `blastRadius`.
 - **Describe every test in the PR body.** The PR body (or a review-prompt appendix) carries a section naming each NEW test file/case and each EDIT of an existing test, with one line on what it pins and why it exists — a regression proof, a contract seam, an occupancy budget. A reviewer who cannot see what changed about the tests cannot review the change: silently swapping a real coordinator for a fake runtime inside an existing test is exactly the edit this section exists to expose.
 
-**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` checks structure only, so reviewers still judge the answers.
+**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` also checks runtime diff observability when its local range is available, so reviewers still judge the answers.
 
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
 
@@ -236,6 +236,38 @@ is the procedure and defers here on conflict; 2026-09-09).**
   Record: 2026-09-09, two master reds in one afternoon — a force-added
   contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
   baseline interaction (#2816) — each found by the next PR's CI.
+- *Merge chains and worker waits run as NOTIFYING background tasks.* A
+  detached `nohup … &` loop writes a file nobody reads until the orchestrator
+  polls; a task started in the harness's own background mode re-invokes the
+  orchestrator when it exits, red or green. Every `ci-verdict --wait` chain,
+  every long probe, and any wait on an external state runs that way, so a red
+  CI is a notification, not a discovery. Record: 2026-09-09, a red on #2807
+  sat unread for over an hour behind detached chains.
+- *The orchestrator's commit step checks the index, not only the diff.*
+  Before every commit from a worker tree: `git ls-files` contains none of
+  `PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`, `INVESTIGATION.md`,
+  `MONITOR.md`, `.probe-home/` or a harness scratch directory; a second
+  changelog fragment is folded, not committed. Record: #2807 (2026-09-09)
+  went red on CI because two handoff files were tracked under the `*.md`
+  ignore, and #2808's fold produced two bullets the validator rejected.
+- *Merges touching the same governance data file are serialised, and master
+  is re-verified after them.* Two green PRs that both edit a baseline,
+  admission map or lane list can compose into a red master (#2782 + #2787
+  → #2816). Merge one, wait for master's own run, then update-branch and
+  merge the next; after any such pair, run that file's test on master before
+  arming the next chain.
+- *Reviews and verifies run on the merged tree.* A CONFLICTING PR is not
+  reviewed until it carries master; a MERGEABLE one is probed after
+  `git merge origin/master` in the reviewer's scratch checkout, so pins that
+  landed on master since the branch forked are part of the verdict. Record:
+  #2808 passed its verify on the branch head while #2795's pinned sentences
+  were already on master; the miss surfaced only in the orchestrator's
+  merge (2026-09-09).
+- *A small-model lane budgets one nudge.* When a Tier B worker hits its turn
+  cap, send one continuation that names the remaining steps; a second cap
+  reassigns the lane to the strongest model with the tree as-is. Record: every
+  GLM lane on 2026-09-09 capped at least once; one detector round shipped two
+  HIGH gaps and was redone on Luna.
 - *The human-decision class is named, not inferred.* Review tier follows
   the surface a diff touches; on top of that, a fixed class of changes is
   never merged on an agent's verdict alone and goes to the ledger as `needs
@@ -442,6 +474,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 42. **A rule keyed on one language.** A seam, cache admission, test matrix or tool contract written for `.ts`/tsserver when the behaviour belongs to every LSP-backed language in `clients/language-registry.ts`. #2823 r1 keyed the #2817 dependency re-sync on TypeScript; rust-analyzer, pyright and gopls hold a stale module graph after a git checkout exactly the same way. *Screen:* write the rule against the registry ("has import facts", "every live server holding the document"), name which entries have the facts and which fall to the honest fallback, and add one non-TypeScript row to the matrix; a language-specific branch is allowed only with the registry field that justifies it named in the code. *Detect:* grep new code for `\.tsx?\b`, `"typescript"`, `tsserver` outside `clients/lsp/config.ts`'s server entries and the TypeScript runner; a test file whose only fixtures are `.ts` for a rule that names "LSP" or "server". *e.g.* #2823 r1 (2026-09-09).
 
+43. **A source scanner that confuses shell prose with executable structure.** A comment-and-string blanker can erase real `${…}` code inside double quotes, scan quoted heredoc bodies, or match a builtin outside command position; a runner scan can also miss a matrix `include` row or an explicit step exclusion. *Screen:* define shell lexical states and runner reachability as a cross-product before writing needles; preserve expansions and recursively re-enter executable command substitutions inside double quotes, blank quoted heredocs, normalize continuations, match command-position builtins, follow matrix dimensions and `include` per job, and recognize only documented macOS exclusions. *Detect:* one fixture per state-space cell, red-first review probes for each boundary, and compile-valid mutations that remove expansion visibility, command-substitution re-entry, or include following (#2830 r1/r3, refs #2625/#2784).
+
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
 into the replacement. The LSP service uses this rule in `lsp/index.ts` so a
@@ -607,6 +641,18 @@ primary answer remains deliverable when an auxiliary is silent or cut off; the
 result carries that lane in `unconfirmedServerIds` and stays ineligible for the
 fully-covered workspace cache and footer replacement. Never reconstruct the gap
 from a touch-wide timeout: consume `touchFile`'s frozen coverage set. (#1549)
+
+Recovered Git tree changes use the already-known opaque mutation path set to
+re-sync each changed open document and its cached open importers through the
+existing `DocumentDriftTracker` paced scheduler; they do not run a second Git
+diff or fan out a second scheduler. Each pass touches at most four targets and
+records deferred targets, and a target already resynced from the Git queue is
+not counted again when ordinary stat drift sees it in the same pass. Scoped full scans use the language-neutral import-facts
+seam and touch at most 32 cached
+open imports before serving a workspace-cache hit, and record
+`lsp_dependency_touch_capped` when that bound trips; a capped or uncovered
+requested file is freshly touched instead of being served from cache as
+confirmed. (#2817, recurrence #1783)
 
 Collected LSP diagnostics carry the registered delivering `serverId` alongside
 the server-authored protocol `source`. Primary-versus-auxiliary verdicts and
@@ -1439,6 +1485,13 @@ sentence-ending punctuation. `normalizePrBodyForChecking` returns the body and
 the normalization verdict together, so callers never reclassify a stale event
 payload after checking the live body. The workflow grants the advisory lint
 read-only pull-request access and never edits contributor text. (#2145)
+
+The PR body workflow's runtime observability rule uses `origin/master...HEAD`.
+Tests that exercise the live entrypoint run from a fixture with that ref because
+the Unit tests checkout is shallow. If the range cannot be computed in GitHub
+Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`; local runs
+outside CI retain structural-only fallback. Runtime markers exclude test files,
+`__tests__` directories, and TypeScript declaration files.
 
 Message-end attribution uses a bounded two-slot session anchor. A primary
 `session_start` rotates `lastStableSessionId` into `previousSessionId` because
@@ -3198,7 +3251,7 @@ pi installs git extensions with **`npm install --omit=dev`** (and omits peers). 
 - **Runtime imports must live in `dependencies`, never `devDependencies`.** A runtime import of a dev-only package fails to load at user sites (`Cannot find package …`). Example bug: `js-yaml` was dev-only but imported at runtime.
 - **The host SDK `@earendil-works/pi-coding-agent` must be imported TYPE-ONLY.** It is not present at runtime under `--omit=dev`, and pulling it in (as a runtime import or non-optional dep) drags a huge tree (`@mistralai/…`) with paths exceeding Windows `MAX_PATH`, which breaks `git clean -fdx` on `pi update`. Runtime helper needed from it → inline it (see `clients/tool-event.ts` for `isToolCallEventType`). It stays as an **optional peer + devDep** for types only.
 - **The type-only rule is now ENFORCED, not just documented (#1334 S6).** `tests/host-sdk-type-only.test.ts` scans every shipped source file and fails on any value import (static, dynamic, or `require`) of `@earendil-works/pi-coding-agent`, and asserts the package stays out of `dependencies`. This is what makes the SDK's runtime helpers off-limits: `isToolCallEventType` and the seven `is*ToolResult` discriminators are *runtime functions*, so they can only ever be **inlined** (`clients/tool-event.ts`), never imported. Their `details`/input **types** are a different story — those are type-only exports and SHOULD be adopted rather than re-declared ad hoc (`EditToolInput`, `EditToolDetails`). Before reaching for a host discriminator, read the S6 audit block at the top of `clients/tool-event.ts`: the seven cover strictly fewer tools than pi-lens intercepts (no `lsp_navigation`, no pi-lens-registered tools), and narrowing to the host's `ToolResultEvent` union would drop the `provider`/`model`/`sessionId` fields pi-lens's telemetry-identity path reads off the live event.
-- **`package-lock.json` IS committed and must stay in sync** with `package.json`. `npm run check:lockfile` (CI and the Husky pre-commit hook) fails on identity, package-descriptor metadata (`license`, normalized `bin`, `engines`, `os`, `cpu`, `libc`, `funding`, and bundled dependencies), dependency specs, and peer optionality. Regenerate with npm >=11.11: older npm omits `libc`, causing both glibc and musl optional binaries to install (npm/cli#9025). The production-install job pins npm 11.17.0 and fails when `npm install --omit=dev` changes any tracked source file. The changelog release preflight reuses the same validator before mutating release state. CI/release use `npm install` (not `npm ci`) so a desync self-heals instead of wiping `node_modules`.
+- **`package-lock.json` IS committed and must stay in sync** with `package.json`. `npm run check:lockfile` (CI and the Husky pre-commit hook) fails on identity, package-descriptor metadata (`license`, normalized `bin`, `engines`, `os`, `cpu`, `libc`, `funding`, and bundled dependencies), dependency specs, and peer optionality. Regenerate with the exact `packageManager` npm pin (`npm@11.18.0`): older npm omits `libc`, causing both glibc and musl optional binaries to install (npm/cli#9025), and a lockfile regenerated by a different npm major can silently omit optional platform bindings. `npm run check:lockfile -- --complete` copies the tree to a temporary directory, runs that pin through npx, and fails before merge when npm would rewrite the lock. The production-install job uses the same pin and fails when `npm install --omit=dev` changes any tracked source file. The changelog release preflight reuses the same validator before mutating release state. CI/release use `npm install` (not `npm ci`) so a desync self-heals instead of wiping `node_modules`.
 - The CI **install-test** (production tarball install + `tsx` load on 3 OSes) is the guard that catches misplaced runtime deps — keep it green.
 
 ## Release notes: per-entry files roll up into CHANGELOG.md
@@ -3658,9 +3711,11 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **A governance sweep** → `tests/support/sweep-kit.ts`: `listSourceFiles` with EXPLICIT directories and extensions (include `scripts/` and `.mjs` when the class lives there; never compiled `.js`); `assertNonEmptyScan` with a real floor per directory (calibrated just under the live count, like `tracked-control-bytes`); `stripSource` before any body/comment match so a string cannot launder a match; `callSites` for AST-bounded call arguments and the last top-level options object; a missing scan directory throws, never silently narrows. Body-matching sweeps: one shared helper is #2624; until then follow `escape-regexp-fold-sweep.test.ts`.
 - **Git fixtures** → `tests/support/git-fixture-env.ts` (`gitFixtureEnv`, `gitExecFileSync`); never `git` against the checkout.
 - **Any spawn from a test** (npm, pi, tar, a script) → a PINNED env: `HOME`, `PI_LENS_HOME`, `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG`, `npm_config_cache`, all inside the test's temp dir. The loader-cache warmer uses `PI_LENS_INSTALL_LOG` when present and otherwise writes under `PI_LENS_HOME`; pin both because each is an explicit lifecycle boundary. `npm pack` runs pi-lens's own prepack/prepare: pack from a `git archive HEAD` export, never the live checkout (#2634; #2619 review F1). The 2026-09-06 receipt: 42 records in the maintainer's real `install.log` from agent installs and one test.
+- **A real pi end-to-end session** → `tests/support/real-pi-harness.ts`: use `withRealPi({ fixture, script, home }, async (pi) => …)` with data directories under `tests/fixtures/real-harness/`; it drives the built extension through `pi --mode rpc`, uses the plain `.mjs` scripted provider fixture, and reads the child’s JSONL events and pi-lens sinks. Run one file with `npm run test:real-harness -- tests/real-harness/<scenario>.test.ts`; the serialized lane is excluded from the default project.
 - **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); the ratchet is two-sided, so a stale ceiling reds too.
 - **Markdown tables** → `scripts/lib/md-matrix.mjs` `parseTable`; **skills discovery** → `scripts/lib/skills-predicate.mjs` (pi-faithful; shared with install-selftest); **check-run payloads** → the fixtures in `tests/scripts/ci-verdict.test.ts`.
 - **Module mocks of `node:fs`** are file-scoped under the isolated forks pool and stay that way; prefer a real filesystem fixture — every 2026-09-06 review probe that broke a mocked case used the real fs.
+- **A real end-to-end host question** → `tests/support/real-pi-harness.ts` and its data directories under `tests/fixtures/real-harness/`; the harness is the named seam for any end-to-end question ("does a real pi, with this build, do X?"). Never hand-roll `spawn("pi", …)` in a test again — `rpc-load-check` and `release-qa` are its other two callers.
 
 ### Test-authoring screens (#1829)
 

@@ -377,11 +377,8 @@ export function createLspDiagnosticsTool(
 		name: "lsp_diagnostics" as const,
 		label: "LSP Diagnostics",
 		description:
-			"Get errors, warnings, and hints from language servers for a file or directory. " +
-			"Use BEFORE running builds to proactively check for issues. " +
-			"Works on directories by auto-detecting file extensions and scanning all matching files.",
-		promptSnippet:
-			"Get LSP diagnostics for a file or directory (use before builds)",
+			'Query language-server diagnostics for files or directories. Example: use `{path: "src/app.ts"}` before a build.',
+		promptSnippet: "Query language-server diagnostics",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;

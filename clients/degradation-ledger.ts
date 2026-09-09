@@ -420,6 +420,8 @@ export type DegradationKind =
 	 * check.
 	 */
 	| "lsp-workspace-cache-migration"
+	/** Scoped TypeScript cache repair hit its bounded dependency fan-out. */
+	| "lsp_dependency_touch_capped"
 	/**
 	 * A `GenerationHandle.guardedWrite` (`clients/generation-guard.ts`) dropped
 	 * a post-await write because the generation it captured is no longer

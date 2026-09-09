@@ -33,6 +33,7 @@
 		"test:integration": "node scripts/with-test-lock.mjs -- vitest run tests/index-integration.test.ts tests/clients/lsp/integration.test.ts",
 		"test:targeted": "node scripts/with-test-lock.mjs --shared -- vitest run",
 		"test:watch": "vitest",
+		"test:real-harness": "node scripts/with-test-lock.mjs --shared -- vitest run",
 		"mutation:diff": "node scripts/stryker-diff.mjs --base origin/master --max-files 6",
 		"hygiene": "node scripts/prune-agent-worktrees.mjs",
 		"check": "node scripts/check-extensions.mjs",
@@ -86,6 +87,7 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
+	"packageManager": "npm@11.18.0",
 	"files": [
 		"dist/",
 		"docs/",

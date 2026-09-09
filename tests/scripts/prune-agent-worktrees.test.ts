@@ -414,11 +414,15 @@ describe("worktreeActivityMs across a real `git status` (review round 3, F1)", (
 	const BACKDATE_MS = 3 * 60 * 60_000;
 
 	const git = (args: string[], cwd: string) =>
-		gitExecFileSync("git", args, {
-			cwd,
-			encoding: "utf8",
-			stdio: "pipe",
-		}) as string;
+		gitExecFileSync(
+			process.platform === "win32" ? "git.exe" : "/usr/bin/git",
+			args,
+			{
+				cwd,
+				encoding: "utf8",
+				stdio: "pipe",
+			},
+		) as string;
 
 	function adminDirOf(worktreePath: string): string {
 		const dotGit = path.join(worktreePath, ".git");
@@ -431,7 +435,10 @@ describe("worktreeActivityMs across a real `git status` (review round 3, F1)", (
 	}
 
 	beforeEach(() => {
-		fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-f1-"));
+		fs.mkdirSync(path.join(process.cwd(), ".probe-home"), { recursive: true });
+		fixtureRoot = fs.mkdtempSync(
+			path.join(process.cwd(), ".probe-home", "pi-lens-f1-"),
+		);
 		repo = path.join(fixtureRoot, "repo");
 		fs.mkdirSync(repo);
 		git(["init", "-q", "-b", "master"], repo);
@@ -565,12 +572,19 @@ describe("candidate enrichment order (review round 3, F1b)", () => {
 
 	it("reads worktree activity before anything that runs git in the tree", () => {
 		const activityAt = source.indexOf("worktreeActivityMs(row.path, nowMs)");
-		const dirtyAt = source.indexOf("isDirty(row.path,");
+		// #2631 renamed the enrichment-time status read: `isDirty(row.path, …)`
+		// became `statusSnapshot(row.path, …)` so the keep record can name the
+		// first porcelain entry it protected. `statusSnapshot` IS the call that
+		// runs `git status` inside the tree, so the invariant this pins is
+		// unchanged: activity is read BEFORE it.
+		const dirtyAt = source.indexOf("statusSnapshot(row.path,");
 		expect(
 			activityAt,
 			"worktreeActivityMs(row.path, …) call site",
 		).toBeGreaterThan(-1);
-		expect(dirtyAt, "isDirty(row.path, …) call site").toBeGreaterThan(-1);
+		expect(dirtyAt, "statusSnapshot(row.path, …) call site").toBeGreaterThan(
+			-1,
+		);
 		expect(activityAt).toBeLessThan(dirtyAt);
 	});
 });
@@ -584,14 +598,21 @@ describe("isDirty (review round 3, F2)", () => {
 	let repo = "";
 
 	const git = (args: string[], cwd: string) =>
-		gitExecFileSync("git", args, {
-			cwd,
-			encoding: "utf8",
-			stdio: "pipe",
-		}) as string;
+		gitExecFileSync(
+			process.platform === "win32" ? "git.exe" : "/usr/bin/git",
+			args,
+			{
+				cwd,
+				encoding: "utf8",
+				stdio: "pipe",
+			},
+		) as string;
 
 	beforeEach(() => {
-		root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-f2-"));
+		fs.mkdirSync(path.join(process.cwd(), ".probe-home"), { recursive: true });
+		root = fs.mkdtempSync(
+			path.join(process.cwd(), ".probe-home", "pi-lens-f2-"),
+		);
 		repo = path.join(root, "repo");
 		fs.mkdirSync(repo);
 		git(["init", "-q", "-b", "master"], repo);
@@ -633,6 +654,7 @@ describe("isDirty (review round 3, F2)", () => {
 		// way), covered here for the outcome that matters: never "clean".
 		const notARepo = path.join(root, "not-a-repo");
 		fs.mkdirSync(notARepo);
+		fs.writeFileSync(path.join(notARepo, ".git"), "gitdir: missing\n");
 		expect(isDirty(notARepo)).toBe("unreadable");
 	});
 });
@@ -916,13 +938,20 @@ describe("keptReasonFor (#2486 / PR #2493 review round 2, S2)", () => {
  */
 function createSubagentStopFixture(agentId: string) {
 	const git = (args: string[], cwd: string) =>
-		gitExecFileSync("git", args, {
-			cwd,
-			encoding: "utf8",
-			stdio: "pipe",
-		}) as string;
+		gitExecFileSync(
+			process.platform === "win32" ? "git.exe" : "/usr/bin/git",
+			args,
+			{
+				cwd,
+				encoding: "utf8",
+				stdio: "pipe",
+			},
+		) as string;
 
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2486-"));
+	fs.mkdirSync(path.join(process.cwd(), ".probe-home"), { recursive: true });
+	const root = fs.mkdtempSync(
+		path.join(process.cwd(), ".probe-home", "pi-lens-2486-"),
+	);
 	const repo = path.join(root, "main");
 	const ledgerDir = path.join(root, "ledger");
 	fs.mkdirSync(repo, { recursive: true });
@@ -1091,6 +1120,38 @@ function createSubagentStopFixture(agentId: string) {
 		return siblingPath;
 	}
 
+	function addCapCandidates(count: number) {
+		git(["worktree", "remove", "--force", "--force", worktree], repo);
+		const registered: string[] = [];
+		const unregistered: string[] = [];
+		for (let index = 0; index < count; index++) {
+			const registeredPath = path.join(
+				repo,
+				"merged-candidates",
+				`registered-${index}`,
+			);
+			fs.mkdirSync(path.dirname(registeredPath), { recursive: true });
+			git(
+				["worktree", "add", "-q", "-b", `pr-${9100 + index}`, registeredPath],
+				repo,
+			);
+			registered.push(registeredPath);
+			const unregisteredPath = path.join(
+				repo,
+				".claude",
+				"worktrees",
+				`agent-unregistered-${index}`,
+			);
+			fs.mkdirSync(unregisteredPath, { recursive: true });
+			fs.writeFileSync(
+				path.join(unregisteredPath, ".git"),
+				"gitdir: missing\n",
+			);
+			unregistered.push(unregisteredPath);
+		}
+		return { registered, unregistered };
+	}
+
 	/**
 	 * #2519 round 2, F1: a THIRD module-substitution hook alongside
 	 * `patchProcessScan`/`patchRecheck` -- this one appends synthetic rows to
@@ -1154,6 +1215,7 @@ function createSubagentStopFixture(agentId: string) {
 		patchProcessScanAppendRows,
 		addNodeModulesJunction,
 		addSiblingWorktree,
+		addCapCandidates,
 		cleanup,
 	};
 }
@@ -1253,6 +1315,102 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 
 	const eventsOf = (records: Record<string, unknown>[]) =>
 		records.map((record) => record.event);
+
+	it("leaves both candidate kinds untouched in dry-run and at --max 0", () => {
+		const candidates = fixture.addCapCandidates(5);
+		const before = [candidates.registered[0], candidates.unregistered[0]].map(
+			(entry) => ({ entry, stat: fs.statSync(entry) }),
+		);
+		const dryRun = JSON.parse(
+			runCli(["--max", "2", "--dry-run", "--no-orphan-sweep", "--json"], ""),
+		) as { remove: unknown[]; unregistered: { remove: unknown[] } };
+		expect(dryRun.remove).toHaveLength(2);
+		expect(dryRun.unregistered.remove).toHaveLength(0);
+		for (const { entry, stat } of before) {
+			const after = fs.statSync(entry);
+			expect(after.ino).toBe(stat.ino);
+			expect(after.mtimeMs).toBe(stat.mtimeMs);
+		}
+
+		const zero = JSON.parse(
+			runCli(["--max", "0", "--no-orphan-sweep", "--json"], ""),
+		) as {
+			remove: unknown[];
+			deferred: string[];
+			unregistered: { remove: unknown[]; deferred: string[] };
+		};
+		expect(zero.remove).toHaveLength(0);
+		expect(zero.deferred).toHaveLength(5);
+		expect(zero.unregistered.remove).toHaveLength(0);
+		expect(zero.unregistered.deferred).toHaveLength(5);
+		expect(candidates.registered.every((entry) => fs.existsSync(entry))).toBe(
+			true,
+		);
+		expect(candidates.unregistered.every((entry) => fs.existsSync(entry))).toBe(
+			true,
+		);
+	});
+
+	it(
+		"applies --max once across registered and unregistered removals",
+		{ timeout: 90_000 },
+		() => {
+			// #2631/#2538 recurrence: two destructive passes must not each spend
+			// the operator's one explicit deletion budget. Five candidates in each
+			// population with --max 2 must remove exactly two total, then defer the
+			// other eight from the same raw combined plan.
+			const candidates = fixture.addCapCandidates(5);
+			const out = runCli(["--max", "2", "--no-orphan-sweep", "--json"], "");
+			const plan = JSON.parse(out) as {
+				remove: { path: string }[];
+				deferred: string[];
+				unregistered: { remove: string[]; deferred: string[] };
+			};
+			expect(plan.remove).toHaveLength(2);
+			expect(plan.unregistered.remove).toHaveLength(0);
+			expect(plan.deferred).toHaveLength(3);
+			expect(plan.unregistered.deferred).toHaveLength(5);
+			expect(
+				candidates.registered.filter((entry) => fs.existsSync(entry)),
+			).toHaveLength(3);
+			expect(
+				candidates.unregistered.filter((entry) => fs.existsSync(entry)),
+			).toHaveLength(5);
+			const firstRecords = ledgerRecords();
+			expect(
+				firstRecords.filter(
+					(record) => record.event === "hygiene.worktree-removed",
+				),
+			).toHaveLength(2);
+			expect(
+				firstRecords.filter(
+					(record) => record.event === "hygiene.unregistered-dir",
+				),
+			).toHaveLength(0);
+			expect(
+				firstRecords.find((record) => record.event === "hygiene.run"),
+			).toMatchObject({
+				removed: 2,
+				unregisteredDirs: 0,
+			});
+
+			// The deferred candidates use the same raw plan on the next run. This
+			// also drives both execution paths and their distinct ledger records.
+			runCli(["--max", "10", "--no-orphan-sweep"], "");
+			const records = ledgerRecords();
+			expect(
+				records.filter((record) => record.event === "hygiene.worktree-removed"),
+			).toHaveLength(5);
+			expect(
+				records.filter((record) => record.event === "hygiene.unregistered-dir"),
+			).toHaveLength(5);
+			expect(records.at(-1)).toMatchObject({
+				event: "hygiene.run",
+				removed: 8,
+				unregisteredDirs: 5,
+			});
+		},
+	);
 
 	it(
 		"still removes the trees --only names, on the manual policy",
@@ -1544,7 +1702,7 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 							clearInterval(timer);
 							resolve();
 						});
-					}, 150);
+					}, 500);
 				});
 				await Promise.all([cliRun, hammer]);
 

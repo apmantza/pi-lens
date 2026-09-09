@@ -78,11 +78,13 @@ migrate-*.js
 !LICENSE
 !SECURITY.md
 !docs/pi-lens-subagent.md
+!docs/pi-lens-monitor.md
 !docs/pi-lens-fixer.md
 !docs/pi-lens-reviewer.md
 !docs/pi-lens-investigator.md
 !docs/pi-lens-warden.md
 !docs/pi-lens-monitor.md
+!docs/real-harness.md
 !docs/audit1.md
 !docs/agent-guide.md
 !docs/agent-tools.md
@@ -124,6 +126,7 @@ migrate-*.js
 # Local-only docs (not in git or npm)
 docs/plans/
 internal_docs/
+!docs/pi-lens-monitor.md
 
 # Auto-generated reports (CAPS)
 ANALYSIS_*.md

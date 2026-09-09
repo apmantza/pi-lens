@@ -56,7 +56,7 @@ import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import vitestConfig from "../../vitest.config.ts";
+import vitestConfig, { realHarnessInclude } from "../../vitest.config.ts";
 import {
 	admissionHeader,
 	countsByDetector,
@@ -69,6 +69,8 @@ import {
 	scanRealProcessSpawn,
 	scanUngovernedWaitFor,
 } from "../support/flake-shape-scan.js";
+import { testSourceFiles as allTestSourceFiles } from "../support/module-instance-scan.js";
+import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
@@ -121,6 +123,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"the hook remainder is the defect; fake timers isolate the delayed pre-snapshot work from scheduler contention",
+	},
+	"raw-timer-wait:support/fault-injection.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"fault injection must model real timer and child teardown timing; fake timers cannot reproduce the boundary",
+	},
+	"raw-timer-wait:support/real-pi-harness.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the harness timeout models real child-process progress and must remain bounded across teardown",
 	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
@@ -239,6 +251,33 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
 	},
+	"real-process-spawn:real-harness/child-exit.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real pi child death is the process-boundary failure that must reject a governed waiter promptly",
+	},
+	"real-process-spawn:real-harness/negative.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real pi must surface provider exhaustion and malformed tool arguments across the process boundary",
+	},
+	"real-process-spawn:real-harness/scenario-1.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pi RPC host and extension lifecycle cannot be certified by an in-process double",
+	},
+	"real-process-spawn:real-harness/scenario-3.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real host tool handler and read guard must cross the pi process boundary",
+	},
+	// #2807 review F1/F4: the local CLI's exact argv and a shallow checkout's
+	// missing diff are the subjects; an in-process call cannot prove either.
+	"real-process-spawn:scripts/check-pr-body.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the exact local CLI and shallow checkout are the subjects; an in-process double cannot prove either command boundary",
+	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -268,8 +307,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// about which rules each tier enables.
 	"real-process-spawn:scripts/lint-js.test.ts": {
 		detector: "real-process-spawn",
-		reason:
+			reason:
 			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
+	},
+	"real-process-spawn:scripts/lockfile-completeness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pinned npm child is required to reproduce lockfile optional-binding rewrites; a process double cannot validate npm behavior",
 	},
 	// 2026-09-07 (#2613 review S2/T3): --dry-run env-reading/report-building
 	// wiring is the subject; the real `gh` calls stay untested, same
@@ -380,6 +424,34 @@ function wallClockBudgetInclude(): string[] {
 		throw new Error('"wall-clock-budget" project has no include list');
 	}
 	return include.map(String);
+}
+
+/** Support helpers inherit the serialized lane from an importing test. */
+function supportHelperHasLaneProof(
+	relativePath: string,
+	included: ReadonlySet<string>,
+): boolean {
+	const target = path.join(repoRoot, "tests", relativePath);
+	const files = allTestSourceFiles().filter((file) =>
+		file.endsWith(".test.ts"),
+	);
+	const visited = new Set<string>();
+	const walk = (absolute: string): boolean => {
+		if (visited.has(absolute)) return false;
+		visited.add(absolute);
+		const relative = path
+			.relative(repoRoot, absolute)
+			.replaceAll(path.sep, "/");
+		if (absolute.endsWith(".test.ts") && included.has(relative)) return true;
+		return files.some(
+			(candidate) =>
+				localImportTargets(candidate).includes(absolute) && walk(candidate),
+		);
+	};
+	return files.some(
+		(candidate) =>
+			localImportTargets(candidate).includes(target) && walk(candidate),
+	);
 }
 
 interface RatchetProblem {
@@ -656,7 +728,7 @@ function validateAdmission(
 	key: string,
 	entry: { detector: DetectorName; reason: string },
 	source: string | undefined,
-	wallClockBudgetIncluded: ReadonlySet<string>,
+	serializedLaneIncluded: ReadonlySet<string>,
 	relativeTestsPath: string,
 ): string[] {
 	const problems: string[] = [];
@@ -675,9 +747,13 @@ function validateAdmission(
 	} else if (header.reason.length < 15) {
 		problems.push(`${key}: header reason too short to be real`);
 	}
-	if (!wallClockBudgetIncluded.has(`tests/${relativeTestsPath}`)) {
+	const laneProof =
+		serializedLaneIncluded.has(`tests/${relativeTestsPath}`) ||
+		(relativeTestsPath.startsWith("support/") &&
+			supportHelperHasLaneProof(relativeTestsPath, serializedLaneIncluded));
+	if (!laneProof) {
 		problems.push(
-			`${key}: not listed in vitest.config.ts wallClockBudgetInclude`,
+			`${key}: not listed in vitest.config.ts wallClockBudgetInclude or real-harness lane`,
 		);
 	}
 	if (entry.reason.trim().length < 15) {
@@ -688,15 +764,30 @@ function validateAdmission(
 
 describe("flake-shape ratchet — admission gate", () => {
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
-		const included = new Set(wallClockBudgetInclude());
+		const included = new Set([
+			...wallClockBudgetInclude(),
+			...realHarnessInclude,
+		]);
 		const problems: string[] = [];
 		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
 			const file = key.slice(entry.detector.length + 1);
+			if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
 			const absolute = path.join(repoRoot, "tests", file);
 			const source = fs.existsSync(absolute)
 				? fs.readFileSync(absolute, "utf8")
 				: undefined;
 			problems.push(...validateAdmission(key, entry, source, included, file));
+		}
+		for (const detector of DETECTOR_NAMES) {
+			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
+				if (!file.startsWith("support/") || file.endsWith(".test.ts")) continue;
+				const key = `${detector}:${file}`;
+				const entry = ADMITTED_AFTER_BASELINE[key];
+				if (!entry) {
+					problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
+					continue;
+				}
+			}
 		}
 		expect(problems).toEqual([]);
 	});

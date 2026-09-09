@@ -183,14 +183,18 @@ jobs:
       # Keep this version in sync with the pin in ci.yml
       # (production-install-build job).
       - name: Pin npm to a version with OIDC trusted-publishing support
-        run: npm install -g npm@11.18.0 --ignore-scripts
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" --version
 
       # Required: the `prepare` script builds dist/ (tsc), which needs
       # node_modules. `npm install` runs prepare here, and `npm publish` runs it
       # again before packing. Without the install the build — and the publish —
       # fails.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" install --no-audit --no-fund
 
       - name: Publish to npm
         run: npm publish

@@ -11,12 +11,19 @@ const CATALOG: ActivatableToolInfo[] = [
 ];
 
 describe("pi_lens_activate_tools", () => {
-	it("has the expected name and lists every catalog entry in its description", () => {
+	it("has the expected name and lists every catalog entry in the invalid-call result", async () => {
 		const tool = createActivateToolsTool({}, CATALOG);
 		expect(tool.name).toBe("pi_lens_activate_tools");
+		const result = await tool.execute(
+			"metadata-pin",
+			{ tools: [] },
+			new AbortController().signal,
+			null,
+		);
+		const text = result.content[0]?.text ?? "";
 		for (const { name, summary } of CATALOG) {
-			expect(tool.description).toContain(name);
-			expect(tool.description).toContain(summary);
+			expect(text).toContain(name);
+			expect(tool.description).not.toContain(summary);
 		}
 	});
 

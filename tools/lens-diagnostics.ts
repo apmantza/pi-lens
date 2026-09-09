@@ -253,30 +253,7 @@ export function createLensDiagnosticsTool(
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			"Query pi-lens's diagnostic state. mode=delta/all are cache-only and instant; " +
-			"mode=full actively scans LSP diagnostics, scoped by paths when supplied, and merges runner state.\n\n" +
-			"IMPORTANT: unlike lsp_diagnostics (LSP only), this tool covers ALL dispatch " +
-			"runners: LSP errors, tree-sitter structural rules, ast-grep security rules, " +
-			"biome/ruff/eslint lint findings, complexity violations, and more.\n\n" +
-			"mode=delta (default): all warnings for the current agent turn — fixable warnings " +
-			"(actionable-warnings cache) AND code quality/style/complexity issues " +
-			"(code-quality-warnings cache). Same scope as the turn-end advisory, current turn only.\n\n" +
-			"mode=all: blocking errors and warnings — with the actual messages (line, rule, " +
-			"text), not just counts — for every file the agent has " +
-			"EDITED this session (files that went through the dispatch pipeline). " +
-			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
-			"not an active verification. If changed files have no cached diagnostics or their findings " +
-			"are stale, use mode=full with paths for a targeted active scan. Check reported coverage; " +
-			"an empty cache is not proof of a clean file.\n\n" +
-			"mode=full: active LSP scan of paths, or the whole project when omitted. " +
-			"Includes supported unedited files, then merges/deduplicates " +
-			"that with mode=all cached runner state. Optional refreshRunners=cheap/all/cached " +
-			"folds in project-wide runner findings: the in-process scanners (tree-sitter + " +
-			"fact-rules + ast-grep) plus a FRESH run of the heavyweight analyzers — knip, " +
-			"jscpd (copy-paste), madge (circular deps), gitleaks (secrets), govulncheck/trivy " +
-			"(CVEs), dead-code — rather than a possibly-stale session_start cache; each " +
-			"analyzer de-dupes against a concurrent background run of itself, so this can't " +
-			"double-spawn. Bounded by the slowest analyzer (trivy's own ~180s ceiling).",
+			'Query pi-lens diagnostics across ALL dispatch runners (unlike lsp_diagnostics, which is LSP only). mode=delta/all are cache-only and instant; mode=full is an expensive active LSP scan of paths (or the whole project) merged with cached runner state. If changed files have no cached diagnostics or their findings are stale, use mode=full with paths for a targeted active scan; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
 		promptSnippet:
 			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
@@ -361,8 +338,8 @@ export function createLensDiagnosticsTool(
 					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = cache-only session diagnostics for edited/dispatched files (an empty cache is not proof of a clean file). " +
-						"full = active LSP scan scoped by paths (whole project if omitted), plus runner diagnostics.",
+						"all = cache-only session diagnostics for edited/dispatched files; an empty cache is not proof of a clean file. " +
+						"full = expensive active LSP scan of paths (or the whole project) plus cached runner diagnostics.",
 				}),
 			),
 			refreshRunners: Type.Optional(
@@ -897,9 +874,7 @@ function formatDeltaMode(
 		cwd,
 		policyMap,
 	);
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// #755: delta re-serves the actionable/quality caches verbatim, but those
 	// were filtered at DISPATCH time — before any lens_diagnostic_mark. Re-apply
 	// dispositions here so a mark converges immediately, not only on the next
@@ -1047,6 +1022,8 @@ function createCurrentIgnoreFilter(cwd: string): (filePath: string) => boolean {
 interface PathsScope {
 	/** True when the file (or a directory prefix of it) was requested. */
 	includeFile: (filePath: string) => boolean;
+	/** True only when the exact file was explicitly named by the caller. */
+	includeExplicitFile: (filePath: string) => boolean;
 	/** Absolute paths of requested entries that don't exist on disk. */
 	missing: string[];
 	/**
@@ -1122,6 +1099,8 @@ function resolvePathsScope(
 	const fileKeys = new Set(fileEntries.map((f) => normalizeFilePath(f)));
 	const dirPrefixes = dirEntries.map((d) => normalizeFilePath(d));
 
+	const includeExplicitFile = (filePath: string): boolean =>
+		fileKeys.has(normalizeFilePath(path.resolve(filePath)));
 	const includeFile = (filePath: string): boolean => {
 		const key = normalizeFilePath(path.resolve(filePath));
 		if (fileKeys.has(key)) return true;
@@ -1132,6 +1111,7 @@ function resolvePathsScope(
 
 	return {
 		includeFile,
+		includeExplicitFile,
 		missing,
 		existingEntries,
 		hasDirectoryEntries: dirEntries.length > 0,
@@ -1157,6 +1137,18 @@ function pathsScopeMissingNote(scope: PathsScope | undefined): string {
 			? ` (+${scope.missing.length - shown.length} more)`
 			: "";
 	return `\n\n⚠ Skipped ${scope.missing.length} path(s) not found on disk: ${shown.join(", ")}${more}`;
+}
+
+function createScopedFileFilter(
+	cwd: string,
+	pathsScope?: PathsScope,
+): (filePath: string) => boolean {
+	const ignoreFile = createCurrentIgnoreFilter(cwd);
+	return (filePath: string) => {
+		if (!pathsScope) return ignoreFile(filePath);
+		if (!pathsScope.includeFile(filePath)) return false;
+		return pathsScope.includeExplicitFile(filePath) || ignoreFile(filePath);
+	};
 }
 
 function filterProjectDiagnosticsSnapshot(
@@ -1789,9 +1781,7 @@ async function formatFullMode(
 		};
 	}
 	const { signal, pathsScope, nextWriteIndex } = options;
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// `paths` (#461): route the active scans at exactly the requested files
 	// instead of walking the whole project. Three cases:
 	// - files only → pass them as the explicit list (skips the walk). An EMPTY
@@ -2057,28 +2047,35 @@ async function formatFullMode(
 			projectScanObservedAt,
 		);
 	}
-	const result = formatAllMode(cwd, severity, summaries, {
-		mode: "full",
-		lspFilesChecked: rawLspResults.length,
-		partial: aborted,
-		projectDiagnostics:
-			projectSnapshot === undefined
-				? undefined
-				: {
-						tier: projectSnapshot.tier,
-						filesScanned: projectSnapshot.filesScanned,
-						diagnostics: projectSnapshot.diagnostics.length,
-						runners: projectSnapshot.runners,
-					},
-		projectDiagnosticsDelta:
-			projectDelta === undefined
-				? undefined
-				: {
-						diagnostics: projectDelta.diagnostics.length,
-						sources: projectDelta.sources,
-						turnIndex: projectDelta.turnIndex,
-					},
-	});
+	const result = formatAllMode(
+		cwd,
+		severity,
+		summaries,
+		{
+			mode: "full",
+			lspFilesChecked: rawLspResults.length,
+			partial: aborted,
+			projectDiagnostics:
+				projectSnapshot === undefined
+					? undefined
+					: {
+							tier: projectSnapshot.tier,
+							filesScanned: projectSnapshot.filesScanned,
+							diagnostics: projectSnapshot.diagnostics.length,
+							runners: projectSnapshot.runners,
+						},
+			projectDiagnosticsDelta:
+				projectDelta === undefined
+					? undefined
+					: {
+							diagnostics: projectDelta.diagnostics.length,
+							sources: projectDelta.sources,
+							turnIndex: projectDelta.turnIndex,
+						},
+		},
+		0,
+		pathsScope,
+	);
 	const missingNote = pathsScopeMissingNote(pathsScope);
 	// #630: mirrors `tools/lsp-diagnostics.ts`'s `unconfirmedReasonClause`/
 	// `tallyConfirmation` semantic guarantee (never silently render
@@ -2550,9 +2547,7 @@ function formatAllMode(
 	// to delta/all, which is why this is gated on detailOverrides.mode !== "full".
 	const isFullMode = (detailOverrides as { mode?: string }).mode === "full";
 
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// Cached summaries predate marks. Every cache-only surface re-applies
 	// dispositions through the shared applyCachedDispositions seam — strict
 	// false-positive anchors against current content when the file is

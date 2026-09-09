@@ -276,6 +276,7 @@ const lspSpawnHeavyInclude = [
 	"tests/clients/dispatch/runners/lsp-real-runner.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	"tests/clients/lsp/integration.test.ts",
+	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a
 	// server-authored diagnostic is pushed; keep that handshake in this lane.
@@ -298,6 +299,17 @@ const lspSpawnHeavyInclude = [
 	// kill — same process-death-timing budget and contention class as the
 	// watchdog test above.
 	"tests/tools/lsp-diagnostics-2776.test.ts",
+];
+
+// Real pi RPC sessions execute the built extension and a real host tool. Keep
+// this admission outside the default fork storm: each scenario has a 60 s
+// wall budget and one child process owns the fixture project.
+export const realHarnessInclude = [
+	"tests/real-harness/fixture-shape.test.ts",
+	"tests/real-harness/scenario-1.test.ts",
+	"tests/real-harness/scenario-3.test.ts",
+	"tests/real-harness/negative.test.ts",
+	"tests/real-harness/child-exit.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
@@ -369,6 +381,9 @@ const wallClockBudgetInclude = [
 	"tests/config/tracked-control-bytes.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
+	// #2807 review F1/F4: the checker must be exercised through its real local
+	// CLI and a real shallow clone, not an in-process substitute.
+	"tests/scripts/check-pr-body.test.ts",
 	// #2668 review F2: two real `node --import <fetch-stub>` child-process
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
@@ -392,6 +407,7 @@ const wallClockBudgetInclude = [
 	// --print-config for both npm scripts (real child process, flake-shape
 	// admission).
 	"tests/scripts/lint-js.test.ts",
+	"tests/scripts/lockfile-completeness.test.ts",
 	// #2613 review S2/T3: the drift-notifier CLI's --dry-run env-reading and
 	// report-building wiring is the subject; no in-process double is faithful.
 	"tests/scripts/notify-install-smoke-drift.test.ts",
@@ -454,6 +470,7 @@ export default defineConfig({
 					exclude: [
 						...sharedExclude,
 						...unitOnlyExclude,
+						...realHarnessInclude,
 						...grammarHeavyInclude,
 						...timingSensitiveInclude,
 						...lspSpawnHeavyInclude,
@@ -561,6 +578,19 @@ export default defineConfig({
 					// most of its declared ~15s budget twice over (initialize, then
 					// first-document diagnostics) before shutdown; give teardown the
 					// same headroom as the other heavy projects.
+					hookTimeout: 60_000,
+				},
+			},
+			{
+				test: {
+					name: "real-harness",
+					include: realHarnessInclude,
+					exclude: sharedExclude,
+					globalSetup: sharedGlobalSetup,
+					setupFiles: sharedSetupFiles,
+					execArgv: sharedExecArgv,
+					maxWorkers: 1,
+					sequence: { groupOrder: 5 },
 					hookTimeout: 60_000,
 				},
 			},

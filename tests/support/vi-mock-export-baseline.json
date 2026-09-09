@@ -12,6 +12,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/actionable-warnings-deferred-bounds.test.ts:106:../../clients/lsp/index.js": [
@@ -27,6 +28,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/actionable-warnings-history.test.ts:13:../../clients/lsp/index.js": [
@@ -42,6 +44,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/actionable-warnings-lsp-cache.test.ts:34:../../clients/lsp/index.js": [
@@ -57,6 +60,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/actionable-warnings.test.ts:50:../../clients/lsp/index.js": [
@@ -72,6 +76,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/agent-nudge.test.ts:14:../../clients/read-guard-logger.js": [
@@ -716,6 +721,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/cascade-logger.test.ts:19:../../clients/ndjson-logger.js": [
@@ -1577,6 +1583,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/ast-grep-napi-fallback-severity-floor.test.ts:58:../../../../clients/review-graph/service.js": [
@@ -1608,6 +1615,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/ast-grep-napi.test.ts:45:../../../../clients/tool-policy.js": [
@@ -2152,6 +2160,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/managed-release-availability.test.ts:35:../../../../clients/file-utils.js": [
@@ -2510,6 +2519,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/pyright-environment.test.ts:23:../../../../clients/dispatch/runners/utils/runner-helpers.js": [
@@ -2811,6 +2821,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/runner-status-semantics.test.ts:63:../../../../clients/warm-attach.js": [
@@ -4098,6 +4109,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/lens-config.test.ts:29:../../clients/extension-log.js": [
@@ -4129,6 +4141,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/lsp-mutation-normalize-once.test.ts:7:../../clients/path-utils.js": [
@@ -4539,6 +4552,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/lsp/late-auxiliary-findings.test.ts:34:../../../clients/latency-logger.js": [
@@ -5118,10 +5132,22 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/service-document-drift.test.ts:22:../../../clients/lsp/config.js": [
+  "tests/clients/lsp/service-document-drift.test.ts:24:../../../clients/lsp/config.js": [
+    "_peekConfigInFlightForTests",
+    "createCustomServer",
+    "explainServersForFile",
+    "getAllServers",
+    "getServersForFile",
+    "initLSPConfig",
     "isServerDisabled"
+    ,"loadLSPConfig",
+    "lspConfigOf",
+    "primaryServerId",
+    "registerLSPConfig",
+    "resetLSPConfigStateForTests",
+    "resetLSPConfigWarnCache"
   ],
-  "tests/clients/lsp/service-document-drift.test.ts:27:../../../clients/lsp/client.js": [
+  "tests/clients/lsp/service-document-drift.test.ts:30:../../../clients/lsp/client.js": [
     "CLIENT_CAPABILITIES",
     "INITIALIZE_TIMEOUT_MS",
     "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
@@ -6402,36 +6428,6 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/workspace-diagnostics-cache.test.ts:969:../../../clients/lsp/config.js": [
-    "isServerDisabled"
-  ],
-  "tests/clients/lsp/workspace-diagnostics-cache.test.ts:973:../../../clients/lsp/client.js": [
-    "CLIENT_CAPABILITIES",
-    "INITIALIZE_TIMEOUT_MS",
-    "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
-    "MAX_INCREMENTAL_TEXT_RETAINED_ENTRIES",
-    "applyDynamicCapabilities",
-    "bumpDiagnosticsVersion",
-    "clearDiagnosticsForPath",
-    "clientRequestWorkspaceDiagnostics",
-    "clientShutdown",
-    "clientWaitForDiagnostics",
-    "closeDocument",
-    "diagnosticsVersionForPath",
-    "getLspDocumentTextRetentionSnapshot",
-    "handleNotifyChange",
-    "handleNotifyExternalChange",
-    "handleNotifyOpen",
-    "killProcessTree",
-    "navRequest",
-    "normalizeClientWorkspaceEdit",
-    "pullDiagnosticSources",
-    "resolveConfigurationSection",
-    "runReadOnlyServerCommand",
-    "runServerCommand",
-    "setupIncomingHandlers",
-    "stripDiagnosticNoiseLines"
-  ],
   "tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts:46:../../../clients/lsp/config.js": [
     "isServerDisabled"
   ],
@@ -6873,6 +6869,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/mcp/analyze.test.ts:55:../../../clients/review-graph/service.js": [
@@ -6938,6 +6935,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/mcp/session-test-findings-retire.test.ts:66:../../../clients/lsp/index.js": [
@@ -6952,6 +6950,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/mcp/session.test.ts:54:../../../clients/lsp/index.js": [
@@ -6966,6 +6965,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/module-report-call-graph-identity-missing.test.ts:20:../../clients/review-graph/builder.js": [
@@ -7042,6 +7042,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/mutating-tool-classification.test.ts:35:../../clients/read-guard-logger.js": [
@@ -7066,6 +7067,7 @@
     "groupFilesByPrimaryServer",
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/observed-mutation-integration.test.ts:59:../../clients/bootstrap.js": [
@@ -7160,6 +7162,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/pi-host-contract.test.ts:58:../../clients/read-guard-logger.js": [
@@ -7269,6 +7272,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/pipeline-lsp-sync.test.ts:19:../../clients/latency-logger.js": [
@@ -7328,6 +7332,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/process-singletons.test.ts:38:../../clients/file-utils.js": [
@@ -7533,6 +7538,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/read-expansion-enrichment.test.ts:51:../../clients/read-guard-logger.js": [
@@ -7611,6 +7617,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/reverse-deps-cache.test.ts:62:../../clients/review-graph/builder.js": [
@@ -7885,6 +7892,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-dispatch-reset.test.ts:20:../../clients/safe-spawn.js": [
@@ -7969,6 +7977,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-quick-mode-observability.test.ts:21:../../clients/latency-logger.js": [
@@ -8009,6 +8018,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-quick-mode-observability.test.ts:36:../../clients/safe-spawn.js": [
@@ -8134,6 +8144,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-scan-cache.test.ts:33:../../clients/lsp/config.js": [
@@ -8153,6 +8164,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-scan-cache.test.ts:47:../../clients/latency-logger.js": [
@@ -8235,6 +8247,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-snapshot-gate.test.ts:40:../../clients/json-cache-read.js": [
@@ -8278,6 +8291,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warm-skip-notify.test.ts:27:../../clients/lsp/config.js": [
@@ -8297,6 +8311,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warm.test.ts:17:../../clients/lsp/config.js": [
@@ -8316,6 +8331,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warmup-oneshot.test.ts:34:../../clients/lsp/config.js": [
@@ -8335,6 +8351,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warmup-oneshot.test.ts:49:../../clients/latency-logger.js": [
@@ -8375,6 +8392,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warmup-prewarm.test.ts:54:../../clients/latency-logger.js": [
@@ -8415,6 +8433,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-session-warmup-supersession.test.ts:46:../../clients/latency-logger.js": [
@@ -8483,6 +8502,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-tool-call.test.ts:21:../../clients/lsp/index.js": [
@@ -8497,6 +8517,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-tool-result-debounce.test.ts:12:../../clients/pipeline.js": [
@@ -8551,6 +8572,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/runtime-turn-finding-freshness.test.ts:21:../../clients/latency-logger.js": [
@@ -8679,6 +8701,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/sg-runner.test.ts:22:../../clients/safe-spawn.js": [
@@ -8800,6 +8823,7 @@
     "hasAuxiliaryLspPublishedForRoot",
     "mergeInitializationOptions",
     "notifyExternalFileChange",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/shared-checkout-guard.test.ts:25:../../clients/latency-logger.js": [
@@ -9115,6 +9139,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/widget-dependency-drift-delivery-cap.test.ts:37:../../clients/latency-logger.js": [
@@ -9185,6 +9210,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/word-index-lifecycle.test.ts:51:../../clients/project-snapshot.js": [
@@ -9290,6 +9316,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/word-index-session-refresh.test.ts:61:../../clients/source-filter.js": [
@@ -9369,6 +9396,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/write-autofix-nudge-suppression.test.ts:36:../../clients/latency-logger.js": [
@@ -9743,6 +9771,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics-cache.test.ts:46:../../clients/widget-state.js": [
@@ -9762,6 +9791,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics-inferred-project.test.ts:29:../../clients/lsp/wait-policy/index.js": [
@@ -9860,6 +9890,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics-per-server-concurrency.test.ts:31:../../clients/lsp/config.js": [
@@ -9878,6 +9909,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics-per-server-concurrency.test.ts:53:../../clients/widget-state.js": [
@@ -9971,6 +10003,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics.test.ts:33:../../clients/lsp/index.js": [
@@ -9986,6 +10019,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-diagnostics.test.ts:43:../../clients/lsp/wait-policy/index.js": [
@@ -10018,6 +10052,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/tools/lsp-navigation.test.ts:17:../../clients/lsp/index.js": [
@@ -10033,6 +10068,7 @@
     "mergeInitializationOptions",
     "notifyExternalFileChange",
     "resetLSPService",
+    "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
   "tests/clients/dispatch/runners/psscriptanalyzer-availability.test.ts:38:../../../../clients/degradation-ledger.js": [
