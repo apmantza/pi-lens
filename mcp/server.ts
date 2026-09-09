@@ -834,7 +834,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_read_enclosing",
 		description:
-			"Return the smallest symbol or callback enclosing a line. Example: use pilens_read_enclosing after a diagnostic points to line 42.",
+			"Return the smallest symbol or callback enclosing a line. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_enclosing after a diagnostic points to line 42.",
 		inputSchema: {
 			type: "object",
 			properties: {

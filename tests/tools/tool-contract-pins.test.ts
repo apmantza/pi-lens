@@ -10,6 +10,8 @@ type ListedTool = {
 
 const READ_CONTRACT =
 	"An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage.";
+const AST_OUTLINE_CONTRACT =
+	"An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage.";
 const MARK_CONTRACT =
 	"Exact reported identity is required; suppress re-anchors against live diagnostics and writes an inline ignore comment, apply multiple suppressions bottom-up, and defer is session-only.";
 const CONFIG_REDACTION = "no environment values";
@@ -50,10 +52,14 @@ describe("model-facing tool contract pins (#2808)", () => {
 			for (const name of ["module_report", "read_symbol", "read_enclosing"]) {
 				const mcpName = `pilens_${name}`;
 				const actualName = tools === piTools ? name : mcpName;
-				if (name === "read_enclosing" && tools === mcpTools) continue;
 				expect(byName(tools, actualName)).toContain(READ_CONTRACT);
 			}
 		}
+	});
+
+	it("pins the AST outline read guard on the pi registration", () => {
+		// ast_grep_outline is registered by pi only; no MCP literal exposes it.
+		expect(byName(piTools, "ast_grep_outline")).toContain(AST_OUTLINE_CONTRACT);
 	});
 
 	it("pins diagnostic marking on pi", () => {

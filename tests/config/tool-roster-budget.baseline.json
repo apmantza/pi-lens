@@ -1,10 +1,10 @@
 {
   "pi": {
-    "descriptionTotal": 4044,
-    "total": 26129,
+    "descriptionTotal": 4183,
+    "total": 26268,
     "tools": {
       "ast_grep_dump": 656,
-      "ast_grep_outline": 1545,
+      "ast_grep_outline": 1684,
       "ast_grep_replace": 1930,
       "ast_grep_search": 4152,
       "effective_config": 736,
@@ -21,8 +21,8 @@
     }
   },
   "mcp": {
-    "descriptionTotal": 5794,
-    "total": 26688,
+    "descriptionTotal": 5947,
+    "total": 26841,
     "tools": {
       "pilens_analyze": 998,
       "pilens_ast_grep_replace": 2043,
@@ -36,7 +36,7 @@
       "pilens_module_report": 1811,
       "pilens_project_report": 828,
       "pilens_project_scan": 580,
-      "pilens_read_enclosing": 1049,
+      "pilens_read_enclosing": 1202,
       "pilens_read_symbol": 721,
       "pilens_rebuild": 364,
       "pilens_session_start": 475,

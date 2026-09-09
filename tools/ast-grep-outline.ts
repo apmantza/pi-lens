@@ -47,7 +47,7 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 		name: "ast_grep_outline" as const,
 		label: "AST-Grep Outline",
 		description:
-			"Return syntax-only symbols, imports, exports, and members with ast-grep. Example: outline `src/` before choosing a symbol to read.",
+			"Return syntax-only symbols, imports, exports, and members with ast-grep. An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage. Example: outline `src/` before choosing a symbol to read.",
 		promptSnippet: "Inspect syntax without index or LSP",
 		renderResult: compactRenderResult<{
 			files?: number;
