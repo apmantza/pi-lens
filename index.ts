@@ -262,6 +262,8 @@ import {
 	logCacheUsage,
 	observeCacheContext,
 	observeCachePrefix,
+	resetCacheFindingIdentitiesSession,
+	recordTurnEndAdvisoryBytes,
 } from "./clients/cache-observability.js";
 import {
 	buildStartupTimingRecords,
@@ -2050,6 +2052,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// accepted cost on the other side (a torn-down secondary's own
 					// bracket goes stale until the next full session start).
 					resetCurrentPhaseForSession();
+					resetCacheFindingIdentitiesSession(stableSessionId, ownedSessionRole);
 					// #2526 review round 2, F1: the once-per-session phase claims
 					// (`config_resolved`) and the session record identity they are
 					// stamped with are re-armed HERE, not inside handleSessionStart.
@@ -3192,6 +3195,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						display: true,
 						details,
 					});
+					recordTurnEndAdvisoryBytes(
+						runtime.telemetrySessionId,
+						Buffer.byteLength(line, "utf8"),
+					);
 				} catch (sendErr) {
 					if (isStaleExtensionCtxError(sendErr)) {
 						dbg(
