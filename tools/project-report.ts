@@ -25,9 +25,8 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 		name: "project_report" as const,
 		label: "Project Report",
 		description:
-			"Project-level orientation from the review graph — 'orient me in this project' before drilling into any one file. First step of a wider discovery funnel: project_report orients, module_report explains a file, read_symbol reads a body. Six capped, ranked sections: a trust header (graph freshness, file coverage, edge-resolution-quality mix), hubs (top fan-in files — the repo's contract surface), entry points (near-zero fan-in / high fan-out files — activation/CLI/mains), a directory-level subsystem map (import cycles + layering violations, e.g. a forbidden clients/ -> tools/ edge), risk hotspots (fan-in × max per-symbol cyclomatic complexity), and suspected dead weight (zero-importer files, shipped with a low-confidence disclaimer — dynamic imports/runtime registration/test-only reachability all produce false positives). Every file line carries a `suggestedNext` module_report call. No per-symbol detail and no prose summary — structural facts only. Read-only over the cached graph: returns `available: false` with a retry hint on a cold cache and kicks off a background build (never blocks this call).\n" +
-			'`view: "compact"` returns a line-oriented text rendering instead of JSON (cheapest option); default view returns JSON. Pass `focus` to re-rank every section toward a task hint (does not expand scope).',
-		promptSnippet: "Project-level orientation from the review graph",
+			"Orient in a project from its review graph, with ranked hubs and entry points. Example: use project_report before module_report when the target file is unknown.",
+		promptSnippet: "Orient in a project before choosing a file",
 		renderResult: compactRenderResult<{
 			available?: boolean;
 			hint?: string;

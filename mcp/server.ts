@@ -700,17 +700,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_symbol_search",
 		description:
-			"Ranked identifier search over the persisted word index (BM25 + priors " +
-			"that demote tests/vendor and doc files). Answers 'which files are most " +
-			"relevant to <query>' by identifier — first step of the discovery funnel: " +
-			"symbol_search finds candidate files, pilens_module_report explains one, " +
-			"pilens_read_symbol reads a body. Complements grep (raw substrings) and " +
-			"LSP (exact symbols). Each hit's `startLine`/`endLine` mark its best-matching " +
-			"line (offset=startLine, limit=endLine-startLine+1 for a one-line peek) — " +
-			"use pilens_module_report on `file` for the real outline. Returns " +
-			"`available: false` with a retry hint if the index isn't built yet for this " +
-			"workspace (pilens_session_start builds it, or it self-builds in the background " +
-			"on first query).",
+			"Find relevant files by ranked identifier search. Example: search `authenticate user` before pilens_module_report.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -742,23 +732,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_module_report",
 		description:
-			"Structured, navigable overview of a source module — a token-efficient " +
-			"substitute for reading the whole file. Returns each symbol's " +
-			"name/kind/signature/line-range (plus a first-line `doc` summary when a " +
-			"doc comment is attached), plus who-uses-this, risk flags, and ranked " +
-			"recommendedReads. To read a symbol's body: call pilens_read_symbol (or " +
-			"read) with offset=startLine, limit=endLine-startLine+1 on THIS report's " +
-			"`file` — those aren't repeated per symbol. Prefer this before a full " +
-			"read; then use pilens_read_symbol for the exact body. Single mode: " +
-			"tree-sitter outline + review-graph who-uses-this + inline executable " +
-			"extraction; degrades to outline-only when no cached graph is available " +
-			"(this path never calls LSP). `semantic.source` reports whether graph " +
-			"data was used. Pass `blastRadius: true` for the cross-file blast radius " +
-			"(transitive dependents as ranked file reads, read-only over the cached " +
-			"graph). Pass `callGraph: true` for bounded derived callers/callees; a " +
-			"cold or stale call-graph cache is reported explicitly, never as zero calls. " +
-			'`view: "compact"` returns a line-oriented text rendering ' +
-			"(cheapest option) instead of JSON. An outline shows shape, not bodies.",
+			"Return a navigable source-module outline with references and read handles. Example: use pilens_module_report on `src/app.ts` before pilens_read_symbol.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -809,24 +783,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_project_report",
 		description:
-			"Project-level orientation from the review graph — 'orient me in this " +
-			"project' before drilling into any one file. First step of a wider " +
-			"discovery funnel: pilens_project_report orients, pilens_module_report " +
-			"explains a file, pilens_read_symbol reads a body. Six capped, ranked " +
-			"sections: a trust header (graph freshness, file coverage, " +
-			"edge-resolution-quality mix), hubs (top fan-in files — the repo's " +
-			"contract surface), entry points (near-zero fan-in / high fan-out files " +
-			"— activation/CLI/mains), a directory-level subsystem map (import " +
-			"cycles + layering violations, e.g. a forbidden clients/ -> tools/ " +
-			"edge), risk hotspots (fan-in × max per-symbol cyclomatic complexity), " +
-			"and suspected dead weight (zero-importer files, shipped with a " +
-			"low-confidence disclaimer). Every file line carries a `suggestedNext` " +
-			"module_report call. No per-symbol detail and no prose summary — " +
-			"structural facts only. Read-only over the cached graph: returns " +
-			"`available: false` with a retry hint on a cold cache and kicks off a " +
-			'background build (never blocks this call). `view: "compact"` returns ' +
-			"a line-oriented text rendering instead of JSON. Pass `focus` to " +
-			"re-rank every section toward a task hint.",
+			"Orient in a project from its review graph. Example: use pilens_project_report before choosing a file.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -853,15 +810,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_read_symbol",
 		description:
-			"Return the verbatim source of a single named symbol " +
-			"(function/class/method/interface/type) in a file — a targeted, cheap " +
-			"alternative to reading the whole file. Pair with pilens_module_report: it " +
-			"finds the symbol, this shows its body. Includes an attached doc comment " +
-			"when one exists. Accepts a dotted `Class.method` name to resolve a " +
-			"member, falling back to a plain lookup when the qualifier doesn't " +
-			"resolve. A miss embeds the ~3 nearest symbol names in the file. When " +
-			"multiple same-file symbols share a name, the first is returned with an " +
-			"ambiguity note; pass `kind` to pick a specific one.",
+			"Return one symbol's verbatim source. Example: use pilens_read_symbol after pilens_module_report identifies `parseConfig`.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -884,12 +833,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_read_enclosing",
 		description:
-			"Return the verbatim source for the smallest useful symbol/callback " +
-			"enclosing a line in a file. Use after pilens_ast_grep_search, " +
-			"pilens_diagnostics, or pilens_lsp_navigation locations when you need " +
-			"exact body text without reading the whole file. Uses tree-sitter only — " +
-			"no LSP or graph build. MCP has no read-guard, so unlike the pi tool this " +
-			"does not record edit-coverage.",
+			"Return the smallest symbol or callback enclosing a line. Example: use pilens_read_enclosing after a diagnostic points to line 42.",
 		inputSchema: {
 			type: "object",
 			properties: {

@@ -48,9 +48,8 @@ export function createEffectiveConfigTool(getProjectRoot: () => string) {
 		name: "effective_config" as const,
 		label: "Effective Config",
 		description:
-			"The resolved pi-lens configuration with the provenance of every decision — which file and tier each setting came from, and the trust decision that applied. Pass `file` to also get, for that path, its language, every LSP server with the reason it was selected or denied (including which tier's config denied it, which a nearer file cannot lift), and the lint/format runners that would dispatch. Answers 'why is X running/selected' without reading logs. Redacted by construction: it reports sources, never values — no env values, no command arguments beyond the binary, and config paths are home-relative.",
-		promptSnippet:
-			"Resolved config + provenance — why a server or tool is selected",
+			"Explain resolved configuration and provenance. Example: pass `file` to see why its LSP server is selected.",
+		promptSnippet: "Explain resolved configuration",
 		renderResult: compactRenderResult<{ summary?: string }>(
 			({ details, isError }) =>
 				isError
