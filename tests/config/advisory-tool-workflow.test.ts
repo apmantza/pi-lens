@@ -14,6 +14,7 @@ const workflow = yaml.load(
 		string,
 		{
 			name?: string;
+			if?: string;
 			"continue-on-error"?: boolean;
 			steps?: Array<Record<string, unknown>>;
 		}
@@ -99,5 +100,47 @@ describe("#2706 advisory tooling workflow contracts", () => {
 				);
 			}
 		}
+	});
+});
+
+describe("#2714 dependabot skips the human PR-policy checks", () => {
+	// Recurrence: Dependabot PRs can never carry an issue ref in the title or
+	// the PR-body template, so `PR title` and `PR body (advisory)` went red on
+	// every bump and the merge train ignored them by hand. The skip must stay
+	// on exactly the three policy jobs (pr-title-lint, pr-body-lint in
+	// lint.yml plus the close-keyword job in close-keywords.yml); no other job
+	// may inherit it, or a bump would skip a check that still applies to it.
+	const dependabotSkip =
+		"github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'";
+
+	it("skips pr-title-lint and pr-body-lint for dependabot and no other lint.yml job", () => {
+		const policyJobs = ["pr-title-lint", "pr-body-lint"];
+		for (const key of policyJobs) {
+			expect(workflow.jobs[key]?.if, `${key} must skip dependabot`).toBe(
+				dependabotSkip,
+			);
+		}
+		const others = Object.keys(workflow.jobs).filter(
+			(key) => !policyJobs.includes(key),
+		);
+		for (const key of others) {
+			expect(
+				workflow.jobs[key]?.if ?? "",
+				`${key} must not skip dependabot`,
+			).not.toContain("dependabot");
+		}
+	});
+
+	it("skips the close-keyword job for dependabot", () => {
+		const closeKeywords = yaml.load(
+			readFileSync(
+				resolve(ROOT, ".github/workflows/close-keywords.yml"),
+				"utf8",
+			),
+		) as { jobs: Record<string, { if?: string }> };
+		expect(
+			closeKeywords.jobs.lint?.if,
+			"close-keyword must skip dependabot",
+		).toBe(dependabotSkip);
 	});
 });

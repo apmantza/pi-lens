@@ -36,6 +36,15 @@ export declare function computeVerdict(
 		| undefined,
 	requiredChecks?: string[],
 	mergeable?: string | null,
+	classification?: string | null,
+	rerunState?: {
+		originalFailed: boolean;
+		latestAttempt: {
+			status: string | null;
+			conclusion: string | null;
+			run_attempt: number;
+		} | null;
+	} | null,
 ): Verdict;
 
 export declare function formatVerdictTable(rows: VerdictRow[]): string;
@@ -57,6 +66,25 @@ export declare function pollVerdict(args: {
 	waitSeconds: number | null;
 	mergeable?: string | null;
 	requiredChecks?: string[];
+	classification?: string | null;
+	rerunState?:
+		| {
+				originalFailed: boolean;
+				latestAttempt: {
+					status: string | null;
+					conclusion: string | null;
+					run_attempt: number;
+				} | null;
+		  }
+		| (() => {
+				originalFailed: boolean;
+				latestAttempt: {
+					status: string | null;
+					conclusion: string | null;
+					run_attempt: number;
+				} | null;
+		  })
+		| null;
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
 }): Promise<{ verdict: Verdict; polls: number }>;
@@ -77,12 +105,32 @@ export declare function resolveHeadSha(
 	timeoutMs?: number,
 ): { sha: string; mergeable: string | null };
 
+export declare function resolveClassification(
+	target: string,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): string | null;
+
 export declare function fetchCheckRunsPayload(
 	repository: string,
 	sha: string,
 	ghExec?: GhExec,
 	timeoutMs?: number,
 ): { total_count?: number; check_runs?: unknown[] };
+
+export declare function fetchRerunState(
+	repository: string,
+	sha: string,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): {
+	originalFailed: boolean;
+	latestAttempt: {
+		status: string | null;
+		conclusion: string | null;
+		run_attempt: number;
+	} | null;
+} | null;
 
 export declare const PROTECTED_BRANCH: string;
 

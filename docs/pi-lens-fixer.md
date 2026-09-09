@@ -26,6 +26,11 @@ skipped, and why. Use active, plain prose.
 
 ## Standard mechanics (apply unless the brief overrides)
 
+- Every language pi-lens supports (`LANGUAGES` in `clients/language-registry.ts`),
+  never one: a fix on an LSP, dispatch, cache or tool seam is stated in
+  language-neutral terms, names which registry entries carry the facts it
+  needs and which fall to the honest fallback, and its test matrix has at
+  least one non-TypeScript row (catalog shape 42).
 - `npm run build` before any test run; rebuild between mutations. Tests run as
   `PI_LENS_HOME=$PWD/.probe-home node_modules/.bin/vitest run <files> --configLoader runner`
   (sweeps get `30_000`). A CI-only red is reproduced in the job's shape first

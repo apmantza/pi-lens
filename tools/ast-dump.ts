@@ -11,8 +11,8 @@ function createAstDumpToolWithName(
 		name,
 		label: "AST-Grep Dump",
 		description:
-			"Dump the tree-sitter AST for a source snippet using ast-grep CLI. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too.",
-		promptSnippet: "Inspect AST node kinds before writing ast-grep patterns",
+			"Inspect AST nodes for a source snippet. Example: dump a representative snippet when an AST search returns no matches.",
+		promptSnippet: "Inspect AST nodes for a search pattern",
 		renderResult: compactRenderResult<{ lang?: string }>(
 			({ details, args, isError, lineCount, text }) => {
 				const lang =

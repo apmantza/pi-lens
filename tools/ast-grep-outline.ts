@@ -47,20 +47,8 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 		name: "ast_grep_outline" as const,
 		label: "AST-Grep Outline",
 		description:
-			"Syntax-only code structure (symbols, imports, exports, and members) via " +
-			"`ast-grep outline`. Fast, local, no index/LSP/cross-file semantics — useful " +
-			"for languages or structures where pi-lens's own extractor is weak, or for a " +
-			"raw second opinion.\n\n" +
-			"Prefer module_report for pi-lens-aware navigation (who-uses-this, " +
-			"complexity/fanout, recommendedReads, blast radius, callback handles). Use " +
-			"ast_grep_outline when you want the syntax tree's own view of a file or a " +
-			"whole directory.\n\n" +
-			"Returns JSON: per file, `items[]` with name/symbolType/signature/range, " +
-			"`isExported`/`isImport`, nested `members[]` (with `isPublic`), and ready " +
-			"`read` args on every entry. NOTE: structure only — an outline is NOT a read " +
-			"of a symbol's body (use read_symbol/read_enclosing for that).",
-		promptSnippet:
-			"Syntax-only code outline via ast-grep (no index/LSP); module_report is the richer default",
+			"Return syntax-only symbols, imports, exports, and members with ast-grep. An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage. Example: outline `src/` before choosing a symbol to read.",
+		promptSnippet: "Inspect syntax without index or LSP",
 		renderResult: compactRenderResult<{
 			files?: number;
 			items?: number;
