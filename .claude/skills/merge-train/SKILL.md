@@ -354,6 +354,12 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Refill order** when the quota gate is open: p1 first, then the queued
   follow-ups in ledger order, then the program work (#2421 → #2416 → #2383/#195).
 
+## Disposition tables
+
+Verify reports and fixer handoffs end with a per-finding disposition table
+(defined in AGENTS.md "Orchestrator rules" and `docs/pi-lens-reviewer.md`);
+read the worst cell to route the round.
+
 ## Honesty rules
 
 - A finding is real when a probe proves it; a fix is real when the same probe

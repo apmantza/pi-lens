@@ -365,6 +365,9 @@ const wallClockBudgetInclude = [
 	// `**` chain), so a fake clock measures nothing.
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
 	"tests/config/gitignore-tracked-shadow.test.ts",
+	// #2697: the strictness ratchet spawns two real tsc processes and waits for
+	// their wall-clock completion; keep its 120s budget in the quiet phase.
+	"tests/config/strictness-ratchet.test.ts",
 	"tests/config/tracked-control-bytes.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",

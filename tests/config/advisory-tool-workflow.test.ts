@@ -25,6 +25,7 @@ const mutationWorkflow = yaml.load(
 
 const tools = [
 	["complexity", "complexity (advisory)"],
+	["strictness", "strictness (advisory)"],
 	["jscpd", "jscpd (advisory)"],
 	["yamllint", "yamllint (advisory)"],
 	["typos", "typos (advisory)"],
