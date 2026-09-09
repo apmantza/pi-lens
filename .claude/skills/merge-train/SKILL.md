@@ -307,6 +307,10 @@ operator's private notes, so a different orchestrator can run the same train.
   detector's boundary map). Each entry becomes, before merge, one of: an
   issue, a ledger note with a reason, or a line in the PR body. Silence is not
   a disposition.
+  When a Named output becomes an issue the orchestrator declines or defers,
+  the ledger note names a DURABLE reason (a measured cost, a dependency, a
+  design decision with its date), never "not now"; otherwise the same
+  candidate is re-harvested at the next regroup rather than silently dropped.
 - **Debt pass at the regroup (2026-09-07).** Before prioritising the next
   cycle, run the repo's own dead-code and duplication tools over the files
   changed since the last release tag (`git diff --name-only v<last>..origin/master`;
@@ -319,6 +323,16 @@ operator's private notes, so a different orchestrator can run the same train.
   the standing rule, so the borrowed skill's "test duplication is often
   intentional" exclusion is not borrowed. (Shape from aromanarguello/roman-skills
   `techdebt`.)
+  Within that changed-file list, weight candidates by commit frequency since
+  the last tag (`git log --since=<last-tag-date> --name-only --pretty=format: |
+  sort | uniq -c | sort -rn`) so the pass follows the real hot spots rather
+  than every touched file equally. A FULL-repo debt pass (not the diff-scoped
+  one) carries a coverage contract: one ledger row per subsystem (id, files,
+  status) and the pass is not closed until every row is filled or skipped with
+  a reason. A debt-pass subsystem worker reports at most TWO materially useful
+  simplifications, each with the deletion test answered; this cap is for
+  debt-pass dispatch only and never applies to PR review, where every finding
+  from CRITICAL to NITPICK is reported.
 - **Session retrospective before the regroup.** One ledger block: what the
   maintainer had to bring in from outside, why the process did not surface it,
   and where the lesson was routed (contract, playbook, skill, issue). The
