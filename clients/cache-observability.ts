@@ -1651,7 +1651,9 @@ export function resetCacheFindingIdentitiesSession(
 	sessionId?: string,
 	sessionRole?: "primary" | "concurrent-secondary",
 ): void {
-	const state = attributionBySession.get(attributionKey(sessionId, sessionRole));
+	const state = attributionBySession.get(
+		attributionKey(sessionId, sessionRole),
+	);
 	if (!state) return;
 	state.findingIdentities.clear();
 	state.findingIdentityCapRecorded = false;

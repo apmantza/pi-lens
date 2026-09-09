@@ -1660,7 +1660,10 @@ describe("cache-observability — per-source injection attribution (#1071)", () 
 				turnIndex,
 				injectionEnabled: true,
 				injectionSlices: [
-					{ source: "turn-findings", messages: [{ role: "user", content: finding }] },
+					{
+						source: "turn-findings",
+						messages: [{ role: "user", content: finding }],
+					},
 				],
 			});
 
@@ -1670,7 +1673,9 @@ describe("cache-observability — per-source injection attribution (#1071)", () 
 		observe(2);
 		logCacheUsage(assistantMessage(), undefined, { sessionId: "reset" });
 
-		const rows = latencyEntries.filter((entry) => entry.phase === "cache_usage");
+		const rows = latencyEntries.filter(
+			(entry) => entry.phase === "cache_usage",
+		);
 		expect(rows[0]?.metadata?.injectedFindingsRepeated).toBe(0);
 		expect(rows[1]?.metadata?.injectedFindingsRepeated).toBe(0);
 		expect(rows[1]?.metadata?.injectedBytes).toEqual({
