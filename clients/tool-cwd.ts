@@ -6,6 +6,7 @@ import {
 	isRealGitMarker,
 	isAtOrAboveHomeDir,
 	isUnderDir,
+	isWindowsPath,
 	nameMatchesMarkerGlob,
 	normalizeEphemeralMapKey,
 } from "./path-utils.js";
@@ -248,7 +249,8 @@ export function resolveToolCwd(
 	const homeDir = ctx.homeDir ?? os.homedir();
 	const insideDispatch = isUnderDir(absoluteFile, dispatchRoot);
 	if (ctx.serverRoot) {
-		const serverRoot = path.resolve(ctx.serverRoot);
+		const rootPath = isWindowsPath(ctx.serverRoot) ? path.win32 : path;
+		const serverRoot = rootPath.resolve(ctx.serverRoot);
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, serverRoot, "server-root");
 		return serverRoot;

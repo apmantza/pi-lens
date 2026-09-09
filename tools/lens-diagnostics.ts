@@ -36,7 +36,6 @@ import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
-import { resolveToolCwd } from "../clients/tool-cwd.js";
 import {
 	isAtOrAboveHomeDir,
 	normalizeEphemeralMapKey,
@@ -47,6 +46,7 @@ import {
 	getServersForFileWithConfig,
 	primaryServerId,
 } from "../clients/lsp/config.js";
+import { resolveLspServerCwd } from "../clients/lsp/server.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { LSPWorkspaceUnconfirmedReason } from "../clients/lsp/index.js";
 import { getFullScanWallClockMs } from "../clients/lsp/workspace-sweep-hold.js";
@@ -2051,7 +2051,7 @@ async function formatFullMode(
 			projectScanObservedAt,
 		);
 	}
-	const result = formatAllMode(
+	const result = await formatAllMode(
 		cwd,
 		severity,
 		summaries,
@@ -2512,36 +2512,30 @@ async function formatFullMode(
 }
 
 // @delivery-surface: lens-diagnostics:mode-all
-function projectResolvedCwd(
+async function projectResolvedCwd(
 	summary: FileDiagnosticSummary,
 	cwd: string,
-): FileDiagnosticSummary {
+): Promise<FileDiagnosticSummary> {
 	const serverId = primaryServerId(summary.filePath);
 	const server = serverId
 		? getServersForFileWithConfig(summary.filePath).find(
 				(entry) => entry.id === serverId,
 			)
 		: undefined;
-	const resolvedCwd = resolveToolCwd(
-		"lsp",
-		serverId ?? "unknown",
-		summary.filePath,
-		{
-			cwd,
-			rootMarkers: server?.rootMarkers ?? server?.root.rootMarkers,
-		},
-	);
+	const resolvedCwd = server
+		? await resolveLspServerCwd(server, summary.filePath, cwd)
+		: undefined;
 	return {
 		...summary,
-		resolvedCwd,
+		...(resolvedCwd === undefined ? {} : { resolvedCwd }),
 		diagnostics: (summary.diagnostics ?? []).map((diagnostic) => ({
 			...diagnostic,
-			resolvedCwd,
+			...(resolvedCwd === undefined ? {} : { resolvedCwd }),
 		})),
 	};
 }
 
-function formatAllMode(
+async function formatAllMode(
 	cwd: string,
 	severity: string,
 	summaries: FileDiagnosticSummary[] = getFileDiagnosticSummaries(),
@@ -2549,8 +2543,10 @@ function formatAllMode(
 	staleDropped = 0,
 	pathsScope?: PathsScope,
 	dependencyDemoted = 0,
-): { content: [{ type: "text"; text: string }]; details: object } {
-	summaries = summaries.map((summary) => projectResolvedCwd(summary, cwd));
+): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
+	summaries = await Promise.all(
+		summaries.map((summary) => projectResolvedCwd(summary, cwd)),
+	);
 	// #2275 review F2: the widget footer stops DRAWING a dependency-drift
 	// demotion once it hits `DEPENDENCY_DRIFT_MAX_DELIVERIES` unconfirmed
 	// deliveries, but the record stays here (dropping it would make an

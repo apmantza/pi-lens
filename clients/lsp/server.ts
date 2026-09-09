@@ -62,6 +62,7 @@ import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
 import { findLocalTyposConfig } from "../typos-config.js";
 import { resolvePackagePath } from "../package-root.js";
 import { resolveToolCwd } from "../tool-cwd.js";
+import { recordDegradationOnce } from "../degradation-ledger.js";
 import {
 	hasCargoWorkspaceTable,
 	readCargoWorkspaceExclude,
@@ -105,14 +106,30 @@ export async function resolveLspServerCwd(
 	server: Pick<LSPServerInfo, "id" | "root" | "rootMarkers">,
 	filePath: string,
 	sessionCwd: string,
+	onRootFailure?: (reason: string) => void,
 ): Promise<string | undefined> {
 	const rootMarkers = server.rootMarkers ?? server.root.rootMarkers;
-	const serverRoot = await server.root(filePath);
+	let serverRoot: string | undefined;
+	let rootFailed = false;
+	try {
+		serverRoot = await server.root(filePath);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		rootFailed = true;
+		onRootFailure?.(reason);
+	}
 	const isFileDirFallback =
 		serverRoot !== undefined &&
 		rootMarkers?.length &&
 		path.resolve(serverRoot) === path.resolve(path.dirname(filePath));
 	if (!serverRoot || isFileDirFallback) {
+		if (!serverRoot) {
+			recordDegradationOnce({
+				kind: "tool-cwd-resolution",
+				subject: server.id,
+				reason: `lsp:server-root-${rootFailed ? "failed" : "fallback"}:${filePath}`,
+			});
+		}
 		if (!rootMarkers?.length) return undefined;
 		return resolveToolCwd("lsp", server.id, filePath, {
 			cwd: sessionCwd,
@@ -1555,6 +1572,7 @@ export function NearestRoot(
 				for (const pattern of includePatterns) {
 					if (
 						(await markerExists(currentDir, pattern)) &&
+						(pattern !== ".git" || currentDir !== os.tmpdir()) &&
 						!(await isExcludedLspRoot(currentDir))
 					) {
 						return enforceLspRootCeiling(currentDir, process.cwd(), file);

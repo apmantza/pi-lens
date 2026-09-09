@@ -94,6 +94,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"registry relation assertions without a blindable source walk",
 	"tests/clients/lsp/server-policy.test.ts":
 		"server policy behavior cases, not the LSP fixture population sweep",
+	"tests/tools/lens-diagnostics.test.ts":
+		"diagnostic projection behavior cases, not a production population sweep",
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts":
 		"rule precedence fixtures, not a production population sweep",
 	"tests/clients/atomic-write.test.ts":

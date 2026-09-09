@@ -2269,7 +2269,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"tools/ast-grep-search.ts": 5,
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
-	"tools/lens-diagnostics.ts": 10,
+	// #2846: one server-root await is required to project the authoritative
+	// server cwd; the hook helper remains bounded by the tool call lifecycle.
+	"tools/lens-diagnostics.ts": 13,
 	// #2598 lowered both by one: `collectDiagnosticsForFile` and
 	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
 	// arm — the fallback for "a service shape without touchFile", which the

@@ -317,6 +317,34 @@ describe("lens_diagnostics mode=delta", () => {
 		expect(row?.diagnostics[0]).not.toHaveProperty("resolvedCwd");
 	});
 
+	it("uses the server-owned cwd for the rendered row", async () => {
+		// #2846: the renderer must not independently rediscover a marker root.
+		const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
+		const server = LSP_SERVERS.find((entry) => entry.id === "typescript");
+		if (!server) throw new Error("typescript server missing from registry");
+		const originalRoot = server.root;
+		server.root = async () => "/proj/server-owned-root";
+		mockSummaries.push({
+			filePath: "/proj/src/a.ts",
+			blocking: 1,
+			errors: 1,
+			warnings: 0,
+			advisories: 0,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", semantic: "blocking", message: "boom", line: 3 },
+			],
+		});
+		try {
+			const result = await run(makeTool(), { mode: "all" });
+			expect(String(result.content[0].text)).toContain(
+				"cwd=/proj/server-owned-root",
+			);
+		} finally {
+			server.root = originalRoot;
+		}
+	});
+
 	it("returns clean message when caches are empty", async () => {
 		const result = await run(makeTool());
 		expect(String(result.content[0].text)).toContain("No");

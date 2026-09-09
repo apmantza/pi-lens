@@ -213,6 +213,39 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(await resolveLspServerCwd(server, file, project)).toBe(computedRoot);
 	});
 
+	it("coalesces throwing and undefined server roots into one bounded fallback", async () => {
+		// #2846: a root failure must not abort selection or emit one row per touch.
+		vi.resetModules();
+		const { resolveLspServerCwd: freshResolve } =
+			await import("../../clients/lsp/server.js");
+		const freshLedger = await import("../../clients/degradation-ledger.js");
+		freshLedger.resetDegradationLedger();
+		const project = path.join(home, "repo");
+		const file = path.join(project, "src", "main.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		let calls = 0;
+		const server: LSPServerInfo = {
+			id: "failing-root-test-server",
+			name: "Failing root test server",
+			extensions: [".ts"],
+			root: async () => {
+				calls++;
+				if (calls === 1) throw new Error("root probe failed");
+				return undefined;
+			},
+			rootMarkers: ["missing.marker"],
+			spawn: vi.fn(),
+		};
+
+		expect(await freshResolve(server, file, project)).toBe(project);
+		expect(await freshResolve(server, file, project)).toBe(project);
+		expect(
+			freshLedger
+				.getDegradationSummary()
+				.filter((entry) => entry.kind === "tool-cwd-resolution"),
+		).toHaveLength(1);
+	});
+
 	it("matches glob root markers against files in the directory", () => {
 		const project = path.join(home, "repo");
 		const nested = path.join(project, "packages", "app");
