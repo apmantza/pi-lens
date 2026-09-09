@@ -983,6 +983,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	const EXTERNAL_ADVISORY_NAMES = ["CodeQL", "SonarCloud Code Analysis"];
 
 	const EXPECTED_ADVISORY = new Set([
+		"Unit tests Windows (advisory)",
 		"PR body (advisory)",
 		"oxfmt format check (advisory)",
 		"Vale prose lint (advisory)",

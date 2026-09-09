@@ -52,6 +52,11 @@ pinned jscpd, yamllint, typos, and taplo checks. Their job names are explicit
 entries in `scripts/lib/ci-checks.mjs`, so a failing advisory remains visible
 without blocking the merge train.
 
+The `unit-tests-windows (advisory)` job in `.github/workflows/ci.yml` runs the
+dynamically enumerated Windows path/platform test population and all
+`tests/config/` tests on `windows-latest`. It remains advisory until it is
+green on master for seven consecutive nightly or pull-request runs.
+
 Layout: see "Key source layout". Version and release history live in
 `CHANGELOG.md`; do not duplicate them here.
 

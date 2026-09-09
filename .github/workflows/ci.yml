@@ -356,6 +356,64 @@ jobs:
           free -m
           exit 0
 
+  # Windows coverage starts as advisory because the repository has no prior Windows Vitest signal.
+  # Promote this job to gating once it has been green on master for 7 consecutive nightly/PR runs.
+  unit-tests-windows:
+    name: Unit tests Windows (advisory)
+    needs: validate-merge-train-dispatch
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PI_LENS_HOME: ${{ runner.temp }}/pi-lens-home
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      # Keep this population derived from the source tree. A new Windows path
+      # or platform-gated test joins the lane without a hand-maintained list.
+      - name: Enumerate Windows Vitest subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t WIN32_FILES < <(
+            git grep -l -E 'path\.win32|skipIf|runIf' -- 'tests/**/*.test.ts' |
+              while IFS= read -r file; do
+                if git grep -qi 'win32' -- "$file"; then
+                  printf '%s\n' "$file"
+                fi
+              done | sort -u
+          )
+          mapfile -t CONFIG_FILES < <(find tests/config -type f -name '*.test.ts' -print | sort)
+          FILES=("${WIN32_FILES[@]}" "${CONFIG_FILES[@]}")
+          if [[ -f tests/clients/tool-cwd.test.ts ]]; then
+            FILES+=(tests/clients/tool-cwd.test.ts)
+          fi
+          printf '%s\n' "${FILES[@]}" | sort -u | tee "$RUNNER_TEMP/windows-vitest-files.txt"
+          printf 'Windows Vitest subset: %s files\n' "$(sort -u "$RUNNER_TEMP/windows-vitest-files.txt" | wc -l)"
+
+      - name: Run Windows Vitest subset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < "$RUNNER_TEMP/windows-vitest-files.txt"
+          node_modules/.bin/vitest run "${FILES[@]}" --configLoader runner
+
   # Simulates pi's real install path: a `git:` install runs `npm install
   # --omit=dev`, which triggers `prepare` → `build:dist` FROM SOURCE with the
   # dev-only @types/node ABSENT. That's the path that broke with TS2688 (#193)
