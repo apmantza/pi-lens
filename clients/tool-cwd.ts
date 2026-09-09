@@ -12,6 +12,10 @@ import {
 	getDegradationLedgerGeneration,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
+import {
+	createGenerationMap,
+	createGenerationSource,
+} from "./generation-guard.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
@@ -113,9 +117,10 @@ const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	prettier: [".prettierignore", "package.json"],
 };
 
-const logged = new Set<string>();
-let loggedGeneration = -1;
+const toolCwdGeneration = createGenerationSource("tool-cwd");
+const logged = createGenerationMap("tool-cwd-resolution-log");
 const markerWalks = new Map<string, { root: string | null; marker?: string }>();
+const markerWalkGenerations = createGenerationMap("tool-cwd-marker-walks");
 let markerWalkCount = 0;
 
 /** Test probe for the per-generation walk memo; not part of runtime behavior. */
@@ -123,24 +128,30 @@ export function _getToolCwdMarkerWalkCount(): number {
 	return markerWalkCount;
 }
 
+function syncGeneration(): void {
+	if (toolCwdGeneration.current() === getDegradationLedgerGeneration()) return;
+	markerWalks.clear();
+	markerWalkGenerations.clear();
+	logged.clear();
+	while (toolCwdGeneration.current() < getDegradationLedgerGeneration()) {
+		toolCwdGeneration.bump();
+	}
+}
+
 function findMarkerRoot(
 	startDir: string,
 	markers: readonly string[],
 	homeDir: string,
 ): { root: string | null; marker?: string } {
-	const generation = getDegradationLedgerGeneration();
-	if (generation !== loggedGeneration) {
-		markerWalks.clear();
-		logged.clear();
-		loggedGeneration = generation;
-	}
+	syncGeneration();
 	const key = `${path.resolve(startDir)}\0${markers.join("\0")}\0${path.resolve(homeDir)}`;
 	const cached = markerWalks.get(key);
-	if (cached) {
+	if (cached && markerWalkGenerations.current(key) !== 0) {
 		if (!cached.marker || !cached.root) return cached;
 		// #2777: a marker can disappear during a session; do not reuse a stale root.
 		if (existsSync(path.join(cached.root, cached.marker))) return cached;
 		markerWalks.delete(key);
+		markerWalkGenerations.forget(key);
 	}
 	markerWalkCount++;
 	let current = path.resolve(startDir);
@@ -171,6 +182,7 @@ function findMarkerRoot(
 			if (found) {
 				result = { root: current, marker };
 				markerWalks.set(key, result);
+				markerWalkGenerations.bump(key);
 				return result;
 			}
 		}
@@ -179,6 +191,7 @@ function findMarkerRoot(
 		current = parentDir;
 	}
 	markerWalks.set(key, result);
+	markerWalkGenerations.bump(key);
 	return result;
 }
 
@@ -199,14 +212,10 @@ function emitResolution(
 	cwd: string,
 	reason: string,
 ): void {
-	const generation = getDegradationLedgerGeneration();
-	if (generation !== loggedGeneration) {
-		logged.clear();
-		loggedGeneration = generation;
-	}
+	syncGeneration();
 	const key = `${kind}\0${tool}\0${cwd}\0${reason}`;
-	if (logged.has(key)) return;
-	logged.add(key);
+	if (logged.current(key) !== 0) return;
+	logged.bump(key);
 	logExtension({
 		subsystem: "tool-cwd",
 		level: "debug",
