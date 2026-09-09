@@ -256,6 +256,12 @@ import {
 	supportsDeferredTools,
 } from "./clients/tool-set-policy.js";
 import {
+	endSituationalToolTelemetry,
+	observeSituationalToolActivation,
+	observeSituationalToolCall,
+	startSituationalToolTelemetrySession,
+} from "./clients/situational-tool-telemetry.js";
+import {
 	type CacheContextInjectionSlice,
 	clearCachePrefixSession,
 	emitCacheUsageSummaryAtSessionEnd,
@@ -1782,6 +1788,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		filteredLazyCatalog,
 		{
 			onActivated: (names) => {
+				observeSituationalToolActivation(names);
 				for (const name of names) rememberedLazyTools.add(name);
 			},
 			onRejected: (name) => {
@@ -2065,6 +2072,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
+					startSituationalToolTelemetrySession();
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2426,6 +2434,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		observeSituationalToolCall((event as { toolName?: string }).toolName ?? "");
 		return handleToolCall({
 			event: event as unknown as Parameters<typeof handleToolCall>[0]["event"],
 			ctx: ctx as unknown as Parameters<typeof handleToolCall>[0]["ctx"],
@@ -3389,6 +3398,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			);
 			return;
 		}
+		endSituationalToolTelemetry();
 
 		// #1654: no drain runs here — see the module comment above
 		// `runDeferredMutationDrain` (review round 1, F2/F3/F4/F5) for why a

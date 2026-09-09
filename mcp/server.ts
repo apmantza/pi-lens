@@ -84,6 +84,10 @@ import {
 	resolveLensToolEnabled,
 	toolRegistryEntryForMcp,
 } from "../clients/tool-config.js";
+import {
+	endSituationalToolTelemetry,
+	observeSituationalToolCall,
+} from "../clients/situational-tool-telemetry.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -958,6 +962,15 @@ const ALL_TOOLS = [
 		},
 	},
 	{
+		name: "pilens_session_end",
+		description:
+			"End the MCP session and write its bounded situational-tool telemetry line.",
+		inputSchema: {
+			type: "object",
+			properties: {},
+		},
+	},
+	{
 		name: "pilens_ast_grep_search",
 		description:
 			"Structural (AST) code search via ast-grep — match by code structure, not " +
@@ -1741,6 +1754,11 @@ async function callTool(
 		return toolText(lines.filter(Boolean).join("\n"), outcome);
 	}
 
+	if (name === "pilens_session_end") {
+		endSituationalToolTelemetry();
+		return toolText("Session ended.");
+	}
+
 	if (name === "pilens_turn_end") {
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		await ensureReady(cwd);
@@ -1922,6 +1940,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				sendResult(id ?? null, toolText(`Unknown or disabled tool: ${name}`));
 				return;
 			}
+			observeSituationalToolCall(name);
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`
 			// (PI_LENS_MCP_AUTO_SESSION=1) but never completed successfully — never
 			// attempted, still in flight, or threw — nudge it here too. Cheap no-op
