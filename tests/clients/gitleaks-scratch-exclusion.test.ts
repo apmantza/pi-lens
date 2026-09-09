@@ -272,7 +272,7 @@ describe("gitleaksFindingToProjectDiagnostic — pathStatus observability (#1562
 
 	it.each(["ignored", "nested-repository"] as const)(
 		"demotes a pathStatus:'%s' finding to info/none",
-		(pathStatus) => {
+		(pathStatus: NonNullable<GitleaksFinding["pathStatus"]>) => {
 			const diag = gitleaksFindingToProjectDiagnostic(
 				"/repo",
 				finding({ file: ".env", pathStatus }),
@@ -285,7 +285,7 @@ describe("gitleaksFindingToProjectDiagnostic — pathStatus observability (#1562
 
 	it.each(["tracked", "untracked", undefined] as const)(
 		"keeps a pathStatus:'%s' finding blocking (error/blocking)",
-		(pathStatus) => {
+		(pathStatus: GitleaksFinding["pathStatus"]) => {
 			const diag = gitleaksFindingToProjectDiagnostic(
 				"/repo",
 				finding({ file: ".env", pathStatus }),

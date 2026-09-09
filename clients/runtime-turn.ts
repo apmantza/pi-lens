@@ -142,6 +142,8 @@ import {
 } from "./demoted-finding-render.js";
 import { STALE_LINE_MARKER } from "./stale-marker.js";
 import { getActiveSessionId } from "./session-lifecycle.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 
 import {
 	drainRenderedDependencyDriftFilePaths,
@@ -451,6 +453,8 @@ interface TurnEndDeps {
 	}) => void;
 	/** Stable session identity from the event ctx that fired this turn_end. */
 	sessionId?: string;
+	/** Abort signal from the event ctx that fired this turn_end. */
+	signal?: AbortSignal;
 }
 
 /**
@@ -1873,10 +1877,25 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// source of truth for whether a finding belongs in a blocking delivery lane;
 	// filter here before freshness handling so demoted findings cannot leak into
 	// either the blocker or stale-secret turn context.
-	const classifiedGitleaksFindings = await classifyAndFilterFindings(
-		gitleaksData?.findings ?? [],
-		cwd,
+	const boundedClassification = await bounded(
+		classifyAndFilterFindings(gitleaksData?.findings ?? [], cwd),
+		{
+			ms: HOOK_WALL_BUDGET_MS.turn_end,
+			signal: deps.signal,
+			hook: "turn_end",
+			label: "classifyAndFilterFindings",
+		},
 	);
+	const classifiedGitleaksFindings =
+		boundedClassification ?? gitleaksData?.findings ?? [];
+	if (boundedClassification === undefined) {
+		recordDegradationOnce({
+			kind: "gitleaks_classification_timeout",
+			subject: cwd,
+			reason:
+				"gitleaks classification exceeded the turn_end budget; retained raw findings to fail open",
+		});
+	}
 	const blockingGitleaksFindings = classifiedGitleaksFindings.filter(
 		(finding) =>
 			gitleaksFindingToProjectDiagnostic(cwd, finding).semantic === "blocking",
