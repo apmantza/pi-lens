@@ -16,9 +16,9 @@ import {
 
 // flake-shape: raw-timer-wait — the bounded timeout waits for real child progress
 
-export type JsonObject = Record<string, unknown>;
-export type HarnessEvent = JsonObject & { event?: string; type?: string };
-export class RealPiChildExitError extends Error {
+type JsonObject = Record<string, unknown>;
+type HarnessEvent = JsonObject & { event?: string; type?: string };
+class RealPiChildExitError extends Error {
 	readonly code: number | null;
 	readonly signal: NodeJS.Signals | null;
 
@@ -54,7 +54,7 @@ export type RealPi = {
 		degradations(): ReadonlyArray<JsonObject>;
 	};
 };
-export type RpcMessage = HarnessEvent;
+type RpcMessage = HarnessEvent;
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",

@@ -82,6 +82,7 @@ describe("ReadGuard path-key normalization (zero_read false-block regression)", 
 
 	// Path casing folds only on Windows, so this declares itself skipped
 	// elsewhere rather than returning early and reporting a PASS (#2089).
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"folds Windows path casing so cased read forms match lower-cased edits",
 		() => {

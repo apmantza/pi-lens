@@ -633,7 +633,7 @@ describe("merge-train warden GraphQL fetch + REST apply (#1844)", () => {
 										nodes: [
 											checkRun("Unit tests", "SUCCESS"),
 											checkRun("Lint & type-check", "SUCCESS"),
-											checkRun("oxfmt format check (advisory)", "FAILURE"),
+											checkRun("Vale prose lint (advisory)", "FAILURE"),
 										],
 									},
 								},
@@ -2873,7 +2873,7 @@ describe("merge-lane gate (#2185)", () => {
 	// Verify round 2, V1: `!isAdvisoryCheck(c.name) &&` in the `superseded`
 	// hold filter was vacuous -- deleting it left the suite green, because no
 	// prior fixture ever put an ADVISORY-named check into a lone cancelled
-	// state. Under `cancel-in-progress`, an advisory job (`oxfmt format check
+	// state. Under `cancel-in-progress`, an advisory job (`Vale prose lint
 	// (advisory)`, SonarCloud, CodeQL, `greeting`, ...) is cancelled and
 	// re-triggered exactly like any other job -- without this clause, the hold
 	// would park the train PERMANENTLY on an advisory check's transient
@@ -2889,7 +2889,7 @@ describe("merge-lane gate (#2185)", () => {
 				checkRuns: [
 					...greenChecks(),
 					{
-						name: "oxfmt format check (advisory)",
+						name: "Vale prose lint (advisory)",
 						status: "COMPLETED",
 						conclusion: "CANCELLED",
 						startedAt: "2026-09-06T17:21:06Z",
@@ -2909,7 +2909,6 @@ describe("merge-lane gate (#2185)", () => {
 	// pre-fix gate refused to merge its own change.
 	it("reads the (advisory) name suffix, not just the two vendor names", () => {
 		for (const name of [
-			"oxfmt format check (advisory)",
 			"PR body (advisory)",
 			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",

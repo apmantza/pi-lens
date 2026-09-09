@@ -198,15 +198,12 @@ jobs:
         run: node scripts/check-pr-body.mjs
 
   oxfmt:
-    name: oxfmt format check (advisory)
+    name: oxfmt format check
     needs: validate-merge-train-dispatch
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Advisory to start, same posture as the vale job below: not in
-    # required-checks branch protection, so a finding never blocks a merge on
-    # its own. No continue-on-error -- a real finding must show as a red
-    # advisory check a reviewer can see, not a silently-green one.
+    # Gating: preflight runs the same fmt:check locally before a PR is pushed.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -271,7 +268,7 @@ jobs:
     permissions:
       contents: read
     # Advisory: not in required-checks branch protection, so a finding never
-    # blocks a merge on its own -- same posture as oxfmt/vale/osv-scan below.
+    # blocks a merge on its own -- same posture as vale/osv-scan below.
     # No continue-on-error, for the same reason those give (#2698 review
     # round 2, F4): a job-level continue-on-error does NOT turn THIS CHECK
     # green in the PR checks list when its own steps fail (verified live on
@@ -500,7 +497,7 @@ jobs:
     # of `lint:js` (gating) because most of it has un-triaged findings on
     # master today (see the PR body's per-rule table). Advisory via the
     # `(advisory)` NAME SUFFIX (`ci-checks.mjs`'s `isAdvisoryCheck`), the
-    # SAME convention `oxfmt format check (advisory)` and `Vale prose lint
+    # SAME convention `Vale prose lint
     # (advisory)` already use above -- NOT `continue-on-error` (#2700 review
     # round 3: the round-1 check-runs payload proved that flag buys no
     # check-level tolerance beyond what the suffix already gives, and this

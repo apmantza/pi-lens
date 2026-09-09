@@ -11,13 +11,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-export const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
+const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
 
 function readJson(file) {
 	return JSON.parse(readFileSync(file, "utf8"));
 }
 
-export function getPinnedNpmVersion(cwd = process.cwd()) {
+function getPinnedNpmVersion(cwd = process.cwd()) {
 	const value = readJson(join(cwd, "package.json")).packageManager;
 	const match =
 		typeof value === "string" && value.match(/^npm@(\d+\.\d+\.\d+)$/);
