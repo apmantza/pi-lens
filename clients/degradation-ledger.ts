@@ -63,6 +63,8 @@ export type DegradationKind =
 	 * structural cap that no amount of time changes (#2449 review round 3).
 	 */
 	| "analyzer-bootstrap-unavailable"
+	/** A retired AST dump call was redirected to ast_grep_search dump mode. */
+	| "ast-grep-dump-compatibility"
 	| "ast-grep-napi-html-js-grammar-missing"
 	| "ast-grep-napi-html-script-budget"
 	| "ast-grep-napi-html-script-parse-failed"

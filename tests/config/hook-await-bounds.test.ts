@@ -2261,10 +2261,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/widget-state.ts": 3,
 	"clients/word-index.ts": 24,
 	"clients/zizmor-config.ts": 2,
-	"tools/ast-dump.ts": 2,
 	"tools/ast-grep-outline.ts": 2,
 	"tools/ast-grep-replace.ts": 3,
-	"tools/ast-grep-search.ts": 5,
+	// #2800: dump mode adds one awaited AstGrepClient.dumpAst call to the
+	// existing search handler; it shares the handler's availability/abort path.
+	"tools/ast-grep-search.ts": 6,
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
 	"tools/lens-diagnostics.ts": 10,

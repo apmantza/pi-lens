@@ -209,7 +209,6 @@ import {
 } from "./clients/quiet-window.js";
 import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { initI18n, t } from "./i18n.js";
-import { createAstGrepDumpTool } from "./tools/ast-dump.js";
 import {
 	createActivateToolsTool,
 	type ActivatableToolInfo,
@@ -1710,7 +1709,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
 		createAstGrepOutlineTool(astGrepClient),
-		createAstGrepDumpTool(astGrepClient),
 		createLspNavigationTool((name, cwd) => getLensFlag(name, cwd), {
 			runtime,
 			cacheManager,
@@ -1740,11 +1738,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			name: "ast_grep_outline",
 			summary:
 				"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
-		},
-		{
-			name: "ast_grep_dump",
-			summary:
-				"Dump the tree-sitter AST for a source snippet to discover node kinds/field names.",
 		},
 		{
 			name: "lsp_navigation",
