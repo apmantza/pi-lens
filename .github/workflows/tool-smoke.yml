@@ -244,8 +244,8 @@ jobs:
       # independent notifier scoped to the job's actual pass/fail verdict,
       # placed last and gated on `if: always()` so it runs on every outcome,
       # mirroring install-smoke.yml's `Notify install drift` step. Reads the
-      # three gating layers' outcomes + captured logs (the only three steps
-      # above without `continue-on-error`, so the only three whose outcome
+      # four gating layers' outcomes + captured logs (the only four steps
+      # above without `continue-on-error`, so the only four whose outcome
       # can turn the job red) — see scripts/lib/tool-smoke-drift.mjs's module
       # doc. GITHUB_TOKEN is inherited from this job's own env (`issues:
       # write` already granted at job level, #529/#594). Best-effort:
@@ -260,6 +260,8 @@ jobs:
           TOOL_LAYER_LOG: ${{ runner.temp }}/tool-smoke-tool-layer.log
           LSP_HANDSHAKE_OUTCOME: ${{ steps.lsp_handshake.outcome }}
           LSP_HANDSHAKE_LOG: ${{ runner.temp }}/tool-smoke-lsp-handshake.log
+          LSP_GATE_OUTCOME: ${{ steps.lsp_gate.outcome }}
+          LSP_GATE_LOG: ${{ runner.temp }}/tool-smoke-lsp-gate.log
           FORMAT_LAYER_OUTCOME: ${{ steps.format_layer.outcome }}
           FORMAT_LAYER_LOG: ${{ runner.temp }}/tool-smoke-format-layer.log
           # #2723 review F3: a job failure BEFORE the three tracked layers

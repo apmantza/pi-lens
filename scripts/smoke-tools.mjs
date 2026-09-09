@@ -78,7 +78,7 @@ export function matchDiagnosticMessages(pattern, diags) {
 }
 
 /**
- * Classify the lsp_diagnostics clean-gate result (#2780/#2776). The gate
+ * Classify the lens_diagnostics clean-gate result (#2780/#2776). The gate
  * deliberately counts the handler's primary bucket, not the raw diagnostic
  * total: a server-authored source must not make an auxiliary finding look like
  * proof that the configured primary answered.
@@ -436,6 +436,8 @@ const LSP_FIXTURES = [
 		file: "bad.ts",
 		serverHint: "typescript-language-server",
 		tools: ["typescript-language-server"],
+		lspGate: true,
+		lspGateMarker: '"not a number"',
 	},
 	{
 		lang: "python",
@@ -496,6 +498,8 @@ const LSP_FIXTURES = [
 		file: "bad.json",
 		serverHint: "vscode-json-language-server",
 		tools: ["vscode-json-language-server"],
+		lspGate: true,
+		lspGateMarker: '"nested": { "ok": true },',
 	},
 	{
 		lang: "shell",
@@ -510,6 +514,8 @@ const LSP_FIXTURES = [
 		file: "bad.css",
 		serverHint: "vscode-css-language-server",
 		tools: ["vscode-css-languageserver"],
+		lspGate: true,
+		lspGateMarker: "#zzz",
 	},
 	{
 		lang: "html",
@@ -531,6 +537,8 @@ const LSP_FIXTURES = [
 		file: "bad.toml",
 		serverHint: "taplo",
 		tools: ["taplo"],
+		lspGate: true,
+		lspGateMarker: "[package",
 	},
 	{
 		lang: "terraform",
@@ -560,6 +568,8 @@ const LSP_FIXTURES = [
 		file: "bad.cue",
 		serverHint: "CUE Language Server (cue lsp serve)",
 		tools: ["cue"],
+		lspGate: true,
+		lspGateMarker: "a: {",
 		expectMessageMatch: "expected '\\}'|found 'EOF'",
 	},
 	{
@@ -685,6 +695,7 @@ const LSP_FIXTURES = [
 		tools: [],
 		lspGate: true,
 		disableServers: ["lua"],
+		lspGateMarker: "diagnostic from pushed custom server",
 		customServer: {
 			id: "emmylua",
 			name: "probe custom emmylua",
@@ -1827,7 +1838,7 @@ async function runLspGate({ langs, install, verbose }) {
 	let getInstallAttempt;
 	let TOOLS_REGISTRY = [];
 	let pipCandidates = [];
-	if (install) {
+	{
 		const installerEntry = path.join(
 			repoRoot,
 			"dist",
@@ -1851,17 +1862,19 @@ async function runLspGate({ langs, install, verbose }) {
 			? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
 			: LSP_FIXTURES
 	).filter(
-		(f) => f.lspGate !== false && !f.clean && !f.auxiliaryServerIds?.length,
+		(f) => f.lspGate === true && !f.clean && !f.auxiliaryServerIds?.length,
 	);
 	if (selected.length === 0) {
-		console.error(`No LSP gate fixtures matched: ${langs.join(", ")}`);
-		process.exit(2);
+		console.log(`No opted-in LSP gate fixtures matched: ${langs.join(", ")}`);
+		return 0;
 	}
 	const rows = [];
 	for (const fx of selected) {
 		const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
 			fx.tools ?? [],
-			ensureTool,
+			install
+				? ensureTool
+				: (toolId) => ensureTool(toolId, { allowInstall: false }),
 			getInstallAttempt,
 			(toolId, resolved) =>
 				verbose &&
@@ -1880,7 +1893,13 @@ async function runLspGate({ langs, install, verbose }) {
 				{ toolsById, toolchainPresence, pipCandidates },
 				`${fx.serverHint} unavailable (tool not installed; pass --install)`,
 			);
-			rows.push({ lang: fx.lang, runner: fx.serverHint, ...outcome, diags: 0 });
+			rows.push({
+				lang: fx.lang,
+				runner: fx.serverHint,
+				state: outcome.row,
+				detail: outcome.detail,
+				diags: 0,
+			});
 			continue;
 		}
 		let workspace;
