@@ -120,7 +120,8 @@ const OVERALL_TESTS_FAILED = /\bTests\s+(\d+)\s+failed\b/;
 // A timeout is demotion-eligible only when each FAIL block's first error line
 // is one of these shapes and the job also has network evidence.
 const TEST_TIMEOUT_LINE = /\b(?:Test|Hook) timed out in \d+ms\b/;
-const TEST_TIMEOUT_ERROR_LINE = /^\s*Error:\s*(?:Test|Hook) timed out in \d+ms\./;
+const TEST_TIMEOUT_ERROR_LINE =
+	/^\s*Error:\s*(?:Test|Hook) timed out in \d+ms\./;
 const ERROR_LINE = /^\s*(?:Error|[A-Za-z]+Error):[^\r\n]*$/;
 
 // The wrapper's own verdict when it survives long enough to observe the
@@ -365,7 +366,9 @@ function isTimeoutOnlyFailure(log) {
 		const start = match.index + match[0].length;
 		const end = testFailures[index + 1]?.index ?? log.length;
 		const block = log.slice(start, end);
-		const firstError = block.split(/\r?\n/).find((line) => ERROR_LINE.test(line));
+		const firstError = block
+			.split(/\r?\n/)
+			.find((line) => ERROR_LINE.test(line));
 		return firstError !== undefined && TEST_TIMEOUT_ERROR_LINE.test(firstError);
 	});
 }
