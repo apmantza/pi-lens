@@ -16,7 +16,10 @@ and every member of any enumerable population. Record both sweeps.
 
 State the blast radius, including callers, durable shapes, strict parsers, and
 tool surfaces. Add bounded observability for every new failure path. Include the
-required changelog fragment for a code change. Report verification honestly.
+required changelog fragment for a code change: ONE file under `.changelog/`;
+never edit `CHANGELOG.md` itself (it is generated at release; two fixers
+hand-edited it on 2026-09-09 and the orchestrator had to revert both).
+Report verification honestly.
 Write active, direct prose with short sentences and consistent terms.
 
 ## Tautological tests considered harmful

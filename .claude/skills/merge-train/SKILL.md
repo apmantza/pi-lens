@@ -5,6 +5,10 @@ description: Run the pi-lens review → verify → merge policy over one or more
 
 # Merge train
 
+> Source of truth for every rule below is `AGENTS.md` ("Role contracts for
+> delegated work" → "Orchestrator rules", plus the defect catalog). This file
+> is the procedure and the record; on any conflict AGENTS.md wins.
+
 The policy that landed the 2026-08-17 arc (11 PRs, every one adversarially
 reviewed, zero unreviewed merges). Apply it to each PR in the queue.
 
@@ -136,6 +140,72 @@ operator's private notes, so a different orchestrator can run the same train.
   list, and cite the number in the next brief — before the next dispatch. "To
   err twice is not the mark of a wise man." (2026-09-03: shapes 28–36 came out
   of one day's reviews this way.)
+- **Second instance of a catalogued shape opens the consolidation lane, not a
+  third instance fix (2026-09-09).** The trigger is the shape recurring at all,
+  not only twice in one session: when a review, an issue or a dogfood finding
+  is the second member of a shape already in AGENTS.md's catalog, the
+  orchestrator files the consolidation lane BEFORE the second instance merges,
+  with three fixed deliverables: one seam every consumer calls, one log line
+  per resolution (which value was chosen and why, throttled once per key per
+  session), and one bounded degradation record for the fallback path. The
+  record: #2691 (yamllint cwd) and #2756 (Prettier ignore cwd) were shape 40
+  twice in one week; each was fixed at its own seam with no log line, and the
+  maintainer had to ask for the seam (#2777). "Contracts move in the same
+  session" covers the catalog row; this rule covers the code.
+- **An external bug's first round is the probe, not the fix (2026-09-09).**
+  For any bug reported from outside (or any bug whose symptom is a tool
+  verdict), the first delegation is an investigator or a fixer whose FIRST
+  deliverable is the reporter's symptom reproduced through the production
+  entry point (the tool handler / MCP tool, not a seam beneath it), red on
+  master, before any state-space table or edit. A fix brief that names a
+  suspected seam is a hypothesis and says so. The record: #2776 spent seven
+  fixer rounds on `clients/lsp/client.ts` (pull-vs-push classification) —
+  each internally consistent, each verified — before a premise probe through
+  `LSPService.touchFile` showed master already returned the pushed
+  diagnostic; one investigator round through `createLspDiagnosticsTool`
+  then found the real cause in `tools/lsp-diagnostics.ts` (primary/auxiliary
+  partition by `diagnostic.source`). AGENTS.md "premise first" already said
+  this; the train had been dispatching fixers on the orchestrator's guess.
+- **Every "should have been caught by" names a nightly or smoke row, and
+  the row is filed the same day.** A detection retrospective that ends in
+  prose is not a retrospective. #2776 (emmylua_ls declares pull diagnostics
+  but only pushes → false "confirmed clean") was reachable by a
+  declared-vs-observed channel probe the capability matrix never ran, and by
+  the custom-`lsp.servers` population the matrix never covers.
+- **Brief pre-flight by touched surface (2026-09-09).** Before dispatching a
+  fixer, read what the fix WILL touch and put the matching dependents into the
+  brief's required test set. Every row below cost at least one extra round
+  today because the fixer ran only "targeted files":
+
+  | Fix touches | Brief must name |
+  |---|---|
+  | a new export on a module that has `vi.mock` doubles | every test file that mocks that module (`grep -rl 'vi.mock(".*<module>' tests`), run them all — #2782 r1: 30 reds in 6 files |
+  | a field on a durable or shared record (cache entry, diagnostic, ledger row) | old-record parse proof, cache schema version, and every test that deep-equals or snapshots the record — #2783 r1/r3 |
+  | a test that spawns a real child (LSP fake server, tool smoke, installer) | the lane admission (header + `vitest.config.ts` project + coverage baseline) and `tests/config/` — #2783 r5 |
+  | a new fixture under `tests/fixtures/` | the fixture-contract sweeps for that directory (style-preserving, population guards) — #2782 r2 |
+  | a changelog fragment | exactly one top-level entry, never `CHANGELOG.md` — #2775 r4, two hand-edits today |
+  | a raw poll in a test | the flake-shape ratchet; the fix is the governed wait, never a header admission — #2781 r1 |
+
+- **Sandbox by test shape (2026-09-09).** A lane whose tests spawn children
+  (LSP fake server, tool smoke, installer, formatter wire) is dispatched with
+  the runner's full-access mode from round 1. #2781 spent four rounds with a
+  fixer that could not run its own wire tests and reasoned about ordering
+  instead of observing it; the first full-access round found the cause in
+  one pass.
+- **A CI-only red is reproduced in the job's shape before any fix.** Replicate
+  the job env (the `npm test` PATH prefix with `node_modules/.bin`, a pinned
+  `HOME`, no `PI_LENS_HOME`) and trace the leg that differs; a fix that only
+  passes under `node_modules/.bin/vitest run` is a guess. #2775 carried one
+  CI-only red through three rounds until round 5 traced it to the npm PATH
+  prefix resolving the dev-dependency `oxfmt` past the mocked `which`.
+- **Follow-up rounds go to the same worker by send, not a fresh delegation,**
+  while its handle is alive: it keeps the diff and the reasoning, and the
+  brief shrinks to the findings. Release only when the lane moves to review.
+  A fresh worker on a resume loses uncommitted work.
+- **Fleet inventory at every settlement.** A one-shot watch misses anything
+  that settles while it is disarmed: after each settlement,
+  list live workers and read every `done` handle not yet consumed. Two lanes
+  sat finished for 90 minutes today.
 - **Keep a lane ledger.** One file, one row per lane: issue/PR, worker id,
   round, state, head SHA, merge-order note, and for bug lanes
   `caught by / should have been caught by`; a header line with the quota

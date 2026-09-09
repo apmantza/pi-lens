@@ -305,6 +305,8 @@ export type DegradationKind =
 	 * (older host, unexpected shape) never reaches this kind.
 	 */
 	| "cache-usage-attribution-stale"
+	/** A workspace diagnostics cache was rejected during the v3 provenance migration (#2776). */
+	| "lsp-workspace-cache-migration"
 	/**
 	 * A tool-event path did not resolve to an existing file, and pi's own
 	 * unicode/spacing variant ladder did not find it either (#1655 item 5).

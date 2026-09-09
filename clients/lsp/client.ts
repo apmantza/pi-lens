@@ -114,6 +114,8 @@ export interface LSPDiagnostic {
 	};
 	code?: string | number;
 	source?: string;
+	/** Registered server that delivered this diagnostic. Not LSP protocol data. */
+	serverId?: string;
 }
 
 export interface LSPPullFailure {

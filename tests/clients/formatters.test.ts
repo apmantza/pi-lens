@@ -21,8 +21,11 @@ import {
 	SKIP_FORMATTING,
 	biomeFormatter,
 	blackFormatter,
+	cmakeFormatFormatter,
+	cljfmtFormatter,
 	clearFormatterRuntimeState,
 	getFormattersForFile,
+	googleJavaFormatFormatter,
 	invalidateFormatterCacheForPath,
 	oxfmtFormatter,
 	phpCsFixerFormatter,
@@ -34,6 +37,7 @@ import {
 	standardrbFormatter,
 	shfmtFormatter,
 	ALL_FORMATTERS,
+	styluaFormatter,
 } from "../../clients/formatters.js";
 import { FORMATTER_MARKERS } from "../../clients/tool-cwd.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -181,6 +185,73 @@ describe("resolveCommand — node_modules/.bin", () => {
 			SKIP_FORMATTING,
 		);
 	});
+});
+
+describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
+	it.each([
+		["black", blackFormatter, "main.py"],
+		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
+		["stylua", styluaFormatter, "main.lua"],
+		["google-java-format", googleJavaFormatFormatter, "Main.java"],
+		["cljfmt", cljfmtFormatter, "main.clj"],
+		["oxfmt", oxfmtFormatter, "main.ts"],
+		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
+	] as const)(
+		"uses PATH %s before a managed copy",
+		async (toolId, formatter, fileName) => {
+			const pathDir = path.join(tmpDir, "path-bin");
+			const pathBinary = path.join(pathDir, isWin ? `${toolId}.cmd` : toolId);
+			const managedBinary = path.join(
+				tmpDir,
+				"managed-bin",
+				isWin ? `${toolId}.exe` : toolId,
+			);
+			makeFakeExe(pathBinary);
+			makeFakeExe(managedBinary);
+			const originalPath = process.env.PATH;
+			process.env.PATH = `${pathDir}${path.delimiter}${originalPath ?? ""}`;
+			const installer = await import("../../clients/installer/index.js");
+			const managedSpy = vi
+				.spyOn(installer, "getToolPath")
+				.mockResolvedValue(managedBinary);
+			try {
+				const command = await formatter.resolveCommand!(
+					fileIn(tmpDir, fileName),
+					tmpDir,
+				);
+				expect(command?.[0]).toBe(pathBinary);
+				expect(managedSpy).not.toHaveBeenCalledWith(toolId);
+			} finally {
+				managedSpy.mockRestore();
+				process.env.PATH = originalPath;
+			}
+		},
+	);
+});
+
+describe("managed formatter absence is typed (#2767)", () => {
+	it.each([
+		["black", blackFormatter, "main.py"],
+		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
+		["stylua", styluaFormatter, "main.lua"],
+		["cljfmt", cljfmtFormatter, "main.clj"],
+		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
+		["google-java-format", googleJavaFormatFormatter, "Main.java"],
+		["oxfmt", oxfmtFormatter, "main.ts"],
+	] as const)(
+		"returns formatter-unavailable for %s when every candidate is absent",
+		async (_toolId, formatter, fileName) => {
+			// #2767: a resolver that proved every candidate absent must not return
+			// null, because the generic fallback would spawn the missing bare command.
+			await withIsolatedPath(async () => {
+				const command = await formatter.resolveCommand!(
+					fileIn(tmpDir, fileName),
+					tmpDir,
+				);
+				expect(command).toBe("formatter-unavailable");
+			});
+		},
+	);
 });
 
 describe("formatter child cwd", () => {
@@ -412,12 +483,12 @@ describe("resolveCommand — .venv", () => {
 		expect(cmd![1]).toBe(filePath);
 	});
 
-	it("black: returns null when no venv", async () => {
+	it("black: returns formatter-unavailable when no candidate resolves", async () => {
 		const cmd = await blackFormatter.resolveCommand!(
 			fileIn(tmpDir, "main.py"),
 			tmpDir,
 		);
-		expect(cmd).toBeNull();
+		expect(cmd).toBe("formatter-unavailable");
 	});
 });
 

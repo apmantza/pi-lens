@@ -142,6 +142,18 @@ export function classifyFormatRow(target, fx) {
  */
 const FIXTURES = [
 	{
+		lang: "yaml-cwd",
+		dir: "tests/fixtures/tool-smoke/yaml-cwd",
+		file: "repo/bad.yaml",
+		cwd: "repo",
+		// #2691 recurrence: yamllint reads .yamllint from the process cwd.
+		targets: ["yamllint"],
+		tools: ["yamllint"],
+		tier1: true,
+		expectDiagnostic: true,
+		expectRule: "key-ordering",
+	},
+	{
 		lang: "typescript",
 		dir: "tests/fixtures/tool-smoke/typescript",
 		file: "bad.ts",
@@ -1052,7 +1064,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/python-black",
 		file: "messy.py",
 		formatter: "black",
-		tools: [],
+		tools: ["black"],
 	},
 	{
 		lang: "ruby-standard",
@@ -1066,7 +1078,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/cmake",
 		file: "messy.cmake",
 		formatter: "cmake-format",
-		tools: [],
+		tools: ["cmake-format"],
 	},
 	{
 		// oxfmt (the JS Oxidation Compiler formatter) is selected over biome via a
@@ -1076,7 +1088,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/js-oxfmt",
 		file: "messy.js",
 		formatter: "oxfmt",
-		tools: [],
+		tools: ["oxfmt"],
 	},
 	// Standalone-binary formatters (no language runtime needed) — each fixture
 	// ships the config its detect() requires (stylua.toml / .cljfmt.edn /
@@ -1086,7 +1098,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/lua",
 		file: "messy.lua",
 		formatter: "stylua",
-		tools: [],
+		tools: ["stylua"],
 	},
 	{
 		lang: "haskell",
@@ -1100,21 +1112,21 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/clojure",
 		file: "messy.clj",
 		formatter: "cljfmt",
-		tools: [],
+		tools: ["cljfmt"],
 	},
 	{
 		lang: "php",
 		dir: "tests/fixtures/format-smoke/php",
 		file: "messy.php",
 		formatter: "php-cs-fixer",
-		tools: [],
+		tools: ["php-cs-fixer"],
 	},
 	{
 		lang: "java-gjf",
 		dir: "tests/fixtures/format-smoke/java-gjf",
 		file: "Messy.java",
 		formatter: "google-java-format",
-		tools: [],
+		tools: ["google-java-format"],
 	},
 	{
 		lang: "cpp",
@@ -1671,7 +1683,7 @@ export async function ensureFixtureTools(
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
-function classify(outcome) {
+export function classify(outcome) {
 	if (!outcome) {
 		return {
 			state: "skip",
@@ -1701,6 +1713,11 @@ function classify(outcome) {
 		detail: `${status}${failureKind ? ` (${failureKind})` : ""}`,
 		diags,
 	};
+}
+
+/** Resolve the dispatch directory declared by a smoke row. */
+export function fixtureDispatchCwd(fixture, workspace) {
+	return path.resolve(workspace, fixture.cwd ?? ".");
 }
 
 // `setup-failed` (#530) is a distinct terminal state from `fail`: it means the
@@ -2144,18 +2161,20 @@ async function runLspHandshake({ langs, install, verbose }) {
  * sqlfluff fix, biome, dart …), so this also covers the safe-autofix path.
  * Returns the failure count.
  */
-async function runFormatSmoke({ langs, install, verbose }) {
+export async function runFormatSmoke({ langs, install, verbose, deps }) {
 	const fmtEntry = path.join(repoRoot, "dist", "clients", "format-service.js");
-	if (!fs.existsSync(fmtEntry)) {
+	if (!deps && !fs.existsSync(fmtEntry)) {
 		console.error(
 			`dist build missing: ${fmtEntry}\nRun \`npm run build:dist\` first.`,
 		);
 		process.exit(2);
 	}
-	const { getFormatService } = await import(pathToFileURL(fmtEntry).href);
-	const formatService = getFormatService();
+	const formatService = deps?.getFormatService
+		? deps.getFormatService()
+		: (await import(pathToFileURL(fmtEntry).href)).getFormatService();
 
 	let ensureTool;
+	let getInstallAttempt;
 	if (install) {
 		const installerEntry = path.join(
 			repoRoot,
@@ -2164,7 +2183,13 @@ async function runFormatSmoke({ langs, install, verbose }) {
 			"installer",
 			"index.js",
 		);
-		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
+		if (deps) {
+			({ ensureTool, getInstallAttempt } = deps);
+		} else {
+			({ ensureTool, getInstallAttempt } = await import(
+				pathToFileURL(installerEntry).href
+			));
+		}
 	}
 
 	const selected = langs.length
@@ -2177,16 +2202,19 @@ async function runFormatSmoke({ langs, install, verbose }) {
 
 	const rows = [];
 	for (const fx of selected) {
-		if (install && ensureTool) {
-			for (const toolId of fx.tools ?? []) {
-				const resolved = await ensureTool(toolId);
+		await ensureFixtureTools(
+			install ? (fx.tools ?? []) : [],
+			ensureTool,
+			getInstallAttempt,
+			(toolId, resolved) => {
+				deps?.onEnsure?.(toolId, resolved);
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
 					);
 				}
-			}
-		}
+			},
+		);
 		const workspace = copyDirToTemp(fx.dir);
 		const absFile = path.join(workspace, fx.file);
 		const push = (state, detail) =>
@@ -2444,8 +2472,21 @@ async function main() {
 		}
 		const workspace = copyDirToTemp(fixture.dir);
 		const absFile = path.join(workspace, fixture.file);
+		const previousProcessCwd = process.cwd();
 		try {
-			const { runners } = await dispatchLintDetailed(absFile, workspace, pi, {
+			const dispatchCwd = fixtureDispatchCwd(fixture, workspace);
+			if (fixture.lang === "yaml-cwd") {
+				// #2691 recurrence: the host cwd is a decoy. The runner must use
+				// the dispatch cwd when yamllint discovers its configuration.
+				const decoy = path.join(workspace, "host-cwd-decoy");
+				fs.mkdirSync(decoy);
+				fs.writeFileSync(
+					path.join(decoy, ".yamllint"),
+					"rules:\n  key-ordering: disable\n",
+				);
+				process.chdir(decoy);
+			}
+			const { runners } = await dispatchLintDetailed(absFile, dispatchCwd, pi, {
 				blockingOnly: false,
 			});
 			if (verbose) {
@@ -2477,6 +2518,25 @@ async function main() {
 					verdict.detail =
 						"ran clean but produced no diagnostic on known defect";
 				}
+				if (
+					step2 &&
+					verdict.state === "pass" &&
+					fixture.expectRule &&
+					!outcome?.result.diagnostics.some(
+						(diagnostic) => diagnostic.rule === fixture.expectRule,
+					)
+				) {
+					verdict.state = "fail";
+					verdict.detail = `did not produce expected ${fixture.expectRule} diagnostic`;
+				}
+				if (
+					verdict.state === "pass" &&
+					fixture.expectDiagnosticCount !== undefined &&
+					verdict.diags !== fixture.expectDiagnosticCount
+				) {
+					verdict.state = "fail";
+					verdict.detail = `expected exactly ${fixture.expectDiagnosticCount} diagnostic(s), got ${verdict.diags}`;
+				}
 				rows.push({ lang: fixture.lang, runner: target, ...verdict });
 			}
 		} catch (err) {
@@ -2490,6 +2550,7 @@ async function main() {
 				});
 			}
 		} finally {
+			process.chdir(previousProcessCwd);
 			safeRm(workspace);
 		}
 	}

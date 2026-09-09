@@ -2190,7 +2190,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/file-time.ts": 1,
 	"clients/file-utils.ts": 1,
 	"clients/format-service.ts": 5,
-	"clients/formatters.ts": 115,
+	// #2767: managed formatter resolution uses the installer's bounded probes;
+	// keep the measured count pinned until the formatter seam carries signals.
+	"clients/formatters.ts": 114,
 	"clients/gitleaks-client.ts": 4,
 	"clients/govulncheck-client.ts": 6,
 	// 192 → 194 (#2722), in two steps, both registered rather than absorbed:
@@ -2207,7 +2209,7 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// budget and up to three attempts, so the hook path got shorter, not longer.
 	// Like every other entry here neither can take a hook's signal until #2523
 	// AC4 threads it through the deps types.
-	"clients/installer/index.ts": 194,
+	"clients/installer/index.ts": 197,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,

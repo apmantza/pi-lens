@@ -92,6 +92,7 @@ import {
 	widgetDiagnosticUri,
 } from "../clients/widget-state.js";
 import { logLatency } from "../clients/latency-logger.js";
+import { logExtension } from "../clients/extension-log.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js";
 import { detectFileRole } from "../clients/file-role.js";
@@ -1505,7 +1506,7 @@ function tallyLspPrimaryVsAuxiliary(results: WorkspaceLspDiagnosticResult[]): {
 	for (const result of results) {
 		const primaryId = primaryServerId(result.filePath);
 		for (const diagnostic of result.diagnostics ?? []) {
-			if (diagnostic.source === primaryId) primary += 1;
+			if (diagnostic.serverId === primaryId) primary += 1;
 			else auxiliary += 1;
 		}
 	}
@@ -2140,6 +2141,31 @@ async function formatFullMode(
 	// so a page of ast-grep/opengrep/marksman noise never buries whether the
 	// real language server itself found anything in this sweep.
 	const lspPrimaryVsAuxiliary = tallyLspPrimaryVsAuxiliary(confirmedLspResults);
+	logExtension({
+		subsystem: "lsp-diagnostics",
+		message: "lens_diagnostics verdict",
+		metadata: {
+			server: [
+				...new Set(
+					confirmedLspResults.map(
+						(result) => primaryServerId(result.filePath) ?? "unknown",
+					),
+				),
+			].join(","),
+			primary: lspPrimaryVsAuxiliary.primary,
+			auxiliary: lspPrimaryVsAuxiliary.auxiliary,
+			total: lspPrimaryVsAuxiliary.primary + lspPrimaryVsAuxiliary.auxiliary,
+			sources: [
+				...new Set(
+					confirmedLspResults.flatMap((result) =>
+						(result.diagnostics ?? []).map(
+							(diagnostic) => diagnostic.source ?? "unknown",
+						),
+					),
+				),
+			].slice(0, 5),
+		},
+	});
 	const lspPrimaryVsAuxiliaryNote =
 		lspPrimaryVsAuxiliary.primary + lspPrimaryVsAuxiliary.auxiliary > 0
 			? `\n\nLSP sweep findings: ${lspPrimaryVsAuxiliary.primary} primary (language server), ` +

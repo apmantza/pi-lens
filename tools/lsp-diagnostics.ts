@@ -117,6 +117,7 @@ type FileDiag = {
 	severity: number;
 	message: string;
 	source?: string;
+	serverId?: string;
 	code?: string | number;
 };
 
@@ -749,7 +750,7 @@ async function collectDiagnosticsForFile(
 				const scopedDiagnostics =
 					serverScope === "primary"
 						? attached.response.diagnostics.filter(
-								(item) => item.source === primaryServerId(absPath),
+								(item) => item.serverId === primaryServerId(absPath),
 							)
 						: attached.response.diagnostics;
 				const filtered = applyAuxiliarySuppressions(
@@ -861,6 +862,7 @@ function diagnosticsToFileDiags(
 		severity: d.severity,
 		message: d.message,
 		source: d.source,
+		serverId: d.serverId,
 		code: d.code,
 	}));
 }
@@ -1460,8 +1462,8 @@ async function runFileDiagnostics(
 	}
 
 	const primaryId = primaryServerId(absPath);
-	const primaryDiags = limited.filter((d) => d.source === primaryId);
-	const auxiliaryDiags = limited.filter((d) => d.source !== primaryId);
+	const primaryDiags = limited.filter((d) => d.serverId === primaryId);
+	const auxiliaryDiags = limited.filter((d) => d.serverId !== primaryId);
 
 	// Primary confirmation is always its own line, independent of how many
 	// auxiliary findings exist — a wall of ast-grep/opengrep noise must never
@@ -1804,10 +1806,10 @@ async function collectBatchDiagnostics(
 		results.map((r) => [r.file, r.primaryServerId] as const),
 	);
 	const primaryDisplay = display.filter(
-		(d) => d.source === primaryIdByFile.get(d.file),
+		(d) => d.serverId === primaryIdByFile.get(d.file),
 	);
 	const auxiliaryDisplay = display.filter(
-		(d) => d.source !== primaryIdByFile.get(d.file),
+		(d) => d.serverId !== primaryIdByFile.get(d.file),
 	);
 	return {
 		results,
@@ -1950,10 +1952,10 @@ async function runBatchFileDiagnostics(
 				outcome: result.outcome,
 				reason: result.inconclusiveReason ?? result.error ?? result.unavailable,
 				primaryDiagnosticsCount: result.diagnostics.filter(
-					(diagnostic) => diagnostic.source === result.primaryServerId,
+					(diagnostic) => diagnostic.serverId === result.primaryServerId,
 				).length,
 				auxiliaryDiagnosticsCount: result.diagnostics.filter(
-					(diagnostic) => diagnostic.source !== result.primaryServerId,
+					(diagnostic) => diagnostic.serverId !== result.primaryServerId,
 				).length,
 			})),
 			outcomeCounts,

@@ -45,6 +45,7 @@ import {
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
+import { getToolPath } from "./installer/index.js";
 import {
 	findPSScriptAnalyzerConfigPath,
 	getAutoInstallToolIdForFormatter,
@@ -695,6 +696,48 @@ async function resolveManagedSmartDefaultCommand(
 	return [installed, ...args, filePath];
 }
 
+/** Resolve an explicitly selected formatter from the shared managed-tool seam. */
+async function resolveManagedFormatterCommand(
+	toolId: string,
+	filePath: string,
+	args: string[],
+	findLocal?: (
+		binary: string,
+		cwd: string,
+	) => string | null | undefined | Promise<string | null | undefined>,
+	cwd?: string,
+): Promise<string[] | typeof FORMATTER_UNAVAILABLE> {
+	const local = findLocal && cwd ? await findLocal(toolId, cwd) : null;
+	const installed =
+		local ?? (await which(toolId)) ?? (await getToolPath(toolId));
+	return installed ? [installed, ...args, filePath] : FORMATTER_UNAVAILABLE;
+}
+
+function managedFormatterResolver(
+	toolId: string,
+	args: string[],
+	findLocal?: (
+		binary: string,
+		cwd: string,
+	) => string | null | undefined | Promise<string | null | undefined>,
+): NonNullable<FormatterInfo["resolveCommand"]> {
+	return (filePath, cwd) =>
+		resolveManagedFormatterCommand(toolId, filePath, args, findLocal, cwd);
+}
+
+function managedToolDetect(
+	toolId: string,
+	configDetect?: (cwd: string) => boolean | Promise<boolean>,
+	nativeDetect?: (cwd: string) => boolean | Promise<boolean>,
+): NonNullable<FormatterInfo["detect"]> {
+	return async (cwd) => {
+		const available =
+			(nativeDetect && (await nativeDetect(cwd))) ||
+			Boolean(await getToolPath(toolId));
+		return available && (configDetect ? await configDetect(cwd) : true);
+	};
+}
+
 /**
  * One entry per formatter that can be selected via explicit project config
  * (the `formatterPolicy` "explicit-config" branch of `getFormattersForFile`).
@@ -1048,11 +1091,15 @@ export const oxfmtFormatter: FormatterInfo = {
 		if (local) return [local, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
 		const found = await which("oxfmt");
 		if (found) return [found, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
-		// #2413: neither node_modules/.bin nor PATH has oxfmt, and `detect()` is
-		// config-only (it never probes the binary), so selection can reach here
-		// with nothing installed. The static command is bare `oxfmt` — spawning it
-		// only reproduces the reported `spawn oxfmt ENOENT`. Prove it unavailable.
-		return FORMATTER_UNAVAILABLE;
+		return (
+			(await resolveManagedFormatterCommand(
+				"oxfmt",
+				filePath,
+				[OXFMT_NO_ERROR_ON_UNMATCHED],
+				findInNodeModules,
+				cwd,
+			)) ?? FORMATTER_UNAVAILABLE
+		);
 	},
 	// Single source of truth: OXFMT_SUPPORTED_EXTENSIONS in tool-policy.ts.
 	// Do not hand-maintain a second copy of this list (#1134 — previously two
@@ -1099,9 +1146,7 @@ export const ruffFormatter: FormatterInfo = {
 		if (hasRuffConfig(cwd)) return true;
 		// No-config fallback: if Ruff is already available, allow formatter usage.
 		// This keeps Python default behavior consistent with startup defaults.
-		const { getToolPath } = await import("./installer/index.js");
-		const installed = await getToolPath("ruff");
-		return Boolean(installed);
+		return Boolean(await getToolPath("ruff"));
 	},
 };
 
@@ -1109,11 +1154,7 @@ export const blackFormatter: FormatterInfo = {
 	name: "black",
 	command: ["black", "$FILE"],
 	extensions: [".py", ".pyi"],
-	async resolveCommand(filePath, cwd) {
-		const venv = await findInVenv("black", cwd);
-		if (venv) return [venv, filePath];
-		return null;
-	},
+	resolveCommand: managedFormatterResolver("black", [], findInVenv),
 	async detect(cwd: string) {
 		return hasBlackConfig(cwd);
 	},
@@ -1211,11 +1252,11 @@ export const shfmtFormatter: FormatterInfo = {
 			...styleArgs,
 		]);
 	},
-	async detect(_cwd: string) {
-		if ((await which("shfmt")) !== null) return true;
-		const { getToolPath } = await import("./installer/index.js");
-		return Boolean(await getToolPath("shfmt"));
-	},
+	detect: managedToolDetect(
+		"shfmt",
+		undefined,
+		async () => (await which("shfmt")) !== null,
+	),
 };
 
 export const nixfmtFormatter: FormatterInfo = {
@@ -1280,11 +1321,11 @@ export const ktlintFormatter: FormatterInfo = {
 		if (inPath) return [inPath, "-F", filePath];
 		return resolveManagedSmartDefaultCommand("ktlint", filePath, ["-F"]);
 	},
-	async detect(_cwd: string) {
-		if ((await which("ktlint")) !== null) return true;
-		const { getToolPath } = await import("./installer/index.js");
-		return Boolean(await getToolPath("ktlint"));
-	},
+	detect: managedToolDetect(
+		"ktlint",
+		undefined,
+		async () => (await which("ktlint")) !== null,
+	),
 };
 
 export const ktfmtFormatter: FormatterInfo = {
@@ -1419,34 +1460,37 @@ export const phpCsFixerFormatter: FormatterInfo = {
 		const binary =
 			(await findInVendorBin("php-cs-fixer", cwd)) ??
 			(await which("php-cs-fixer"));
+		const managed = await resolveManagedFormatterCommand(
+			"php-cs-fixer",
+			filePath,
+			[],
+			findInVendorBin,
+			cwd,
+		);
+		if (managed === FORMATTER_UNAVAILABLE) return FORMATTER_UNAVAILABLE;
+		const resolved = binary ?? managed[0];
 		// #2413/#2472 review F4: both probes (vendor/bin, then PATH) have
 		// PROVEN the binary is absent — returning `null` here would fall back
 		// to the static `command` above, which is the SAME bare
 		// `php-cs-fixer` this just failed to find, spawning it only to
 		// re-observe the ENOENT already known. Report the proven-missing
 		// state instead so `formatFile` skips the wasted spawn.
-		if (!binary) return FORMATTER_UNAVAILABLE;
+		if (!resolved) return FORMATTER_UNAVAILABLE;
 		return configPath
-			? [binary, "fix", "--config", configPath, filePath]
-			: [binary, "fix", filePath];
+			? [resolved, "fix", "--config", configPath, filePath]
+			: [resolved, "fix", filePath];
 	},
-	async detect(cwd: string) {
-		const vendorBin = await findInVendorBin("php-cs-fixer", cwd);
-		const globalBin = await which("php-cs-fixer");
-		if (!vendorBin && !globalBin) return false;
-		// Only run if project has explicit config. This is a presence-only
-		// climb from the project `cwd` (not necessarily the formatted file's
-		// own directory) via this file's own `findUp` — deliberately NOT
-		// merged with `resolvePhpCsFixerConfig` above (#2472 AC4): that
-		// resolver climbs from the FILE's directory and needs the exact
-		// winning path for `--config`, while this only needs a yes/no answer
-		// from whatever `cwd` the caller passed. `rustfmtFormatter.detect`
-		// keeps the same non-merged shape against `resolveCargoPackageEdition`
-		// for the identical reason.
-		const configs = [".php-cs-fixer.php", ".php-cs-fixer.dist.php"];
-		const found = await findUp(configs, cwd);
-		return found.length > 0;
-	},
+	detect: managedToolDetect(
+		"php-cs-fixer",
+		async (cwd) =>
+			(await findUp([".php-cs-fixer.php", ".php-cs-fixer.dist.php"], cwd))
+				.length > 0,
+		async (cwd) =>
+			Boolean(
+				(await findInVendorBin("php-cs-fixer", cwd)) ||
+				(await which("php-cs-fixer")),
+			),
+	),
 };
 
 export const csharpierFormatter: FormatterInfo = {
@@ -1510,22 +1554,14 @@ export const styluaFormatter: FormatterInfo = {
 	name: "stylua",
 	command: ["stylua", "$FILE"],
 	extensions: [".lua"],
-	async resolveCommand(filePath, cwd) {
-		// Project binary first (#1731, discipline B): stylua has no pi-lens
-		// managed install, so before this the ONLY resolution was a bare
-		// `stylua` PATH lookup — a project-local install via npm
-		// `@johnnymorganz/stylua` (`node_modules/.bin/stylua`) was invisible.
-		const local = findLocalBinUpwards("stylua", cwd);
-		return local ? [local, filePath] : null;
-	},
-	async detect(cwd: string) {
-		const local = findLocalBinUpwards("stylua", cwd);
-		if (!local && (await which("stylua")) === null) return false;
-		// Prefer explicit config but also run if binary is present in a Lua project
-		const configs = ["stylua.toml", ".stylua.toml"];
-		const found = await findUp(configs, cwd);
-		return found.length > 0;
-	},
+	resolveCommand: managedFormatterResolver("stylua", [], findLocalBinUpwards),
+	detect: managedToolDetect(
+		"stylua",
+		async (cwd) =>
+			(await findUp(["stylua.toml", ".stylua.toml"], cwd)).length > 0,
+		async (cwd) =>
+			Boolean(findLocalBinUpwards("stylua", cwd) || (await which("stylua"))),
+	),
 };
 
 export const ormoluFormatter: FormatterInfo = {
@@ -1546,41 +1582,47 @@ export const taploFormatter: FormatterInfo = {
 		if (inPath) return [inPath, "fmt", filePath];
 		return resolveManagedSmartDefaultCommand("taplo", filePath, ["fmt"]);
 	},
-	async detect(_cwd: string) {
-		if ((await which("taplo")) !== null) return true;
-		const { getToolPath } = await import("./installer/index.js");
-		return Boolean(await getToolPath("taplo"));
-	},
+	detect: managedToolDetect(
+		"taplo",
+		undefined,
+		async () => (await which("taplo")) !== null,
+	),
 };
 
 export const googleJavaFormatFormatter: FormatterInfo = {
 	name: "google-java-format",
 	command: ["google-java-format", "--replace", "$FILE"],
 	extensions: [".java"],
-	async detect(cwd: string) {
-		if ((await which("google-java-format")) === null) return false;
-		return hasGoogleJavaFormatConfig(cwd);
-	},
+	resolveCommand: managedFormatterResolver("google-java-format", ["--replace"]),
+	detect: managedToolDetect(
+		"google-java-format",
+		hasGoogleJavaFormatConfig,
+		async () => (await which("google-java-format")) !== null,
+	),
 };
 
 export const cljfmtFormatter: FormatterInfo = {
 	name: "cljfmt",
 	command: ["cljfmt", "fix", "$FILE"],
 	extensions: [".clj", ".cljc", ".cljs"],
-	async detect(cwd: string) {
-		if ((await which("cljfmt")) === null) return false;
-		return hasCljfmtConfig(cwd);
-	},
+	resolveCommand: managedFormatterResolver("cljfmt", ["fix"]),
+	detect: managedToolDetect(
+		"cljfmt",
+		hasCljfmtConfig,
+		async () => (await which("cljfmt")) !== null,
+	),
 };
 
 export const cmakeFormatFormatter: FormatterInfo = {
 	name: "cmake-format",
 	command: ["cmake-format", "-i", "$FILE"],
 	extensions: [".cmake"],
-	async detect(cwd: string) {
-		if ((await which("cmake-format")) === null) return false;
-		return hasCmakeFormatConfig(cwd);
-	},
+	resolveCommand: managedFormatterResolver("cmake-format", ["-i"]),
+	detect: managedToolDetect(
+		"cmake-format",
+		hasCmakeFormatConfig,
+		async () => (await which("cmake-format")) !== null,
+	),
 };
 
 export const cueFormatter: FormatterInfo = {

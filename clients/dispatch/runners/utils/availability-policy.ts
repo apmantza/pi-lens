@@ -97,7 +97,7 @@ export interface ProbeEvidence {
 	 * same empty result as one that tried and failed, and writing `failed` for
 	 * both fabricates an attempt that never happened.
 	 */
-	install?: "succeeded" | "failed" | "not-attempted";
+	install?: "succeeded" | "failed" | "unavailable" | "not-attempted";
 	/**
 	 * Bounded (200 char) reason the installer gave, verbatim.
 	 *
@@ -225,7 +225,7 @@ export function describeProbeEvidence(
 
 /** The installer's own record of what its last attempt did. */
 export interface InstallAttemptFact {
-	outcome: "succeeded" | "failed" | "declined" | "skipped";
+	outcome: "succeeded" | "failed" | "unavailable" | "declined" | "skipped";
 	reason?: string;
 }
 
@@ -265,6 +265,11 @@ export function describeInstallAttempt(
 			return { install: "succeeded", ...(reason && { installReason: reason }) };
 		case "failed":
 			return { install: "failed", ...(reason && { installReason: reason }) };
+		case "unavailable":
+			return {
+				install: "unavailable",
+				...(reason && { installReason: reason }),
+			};
 		default:
 			return {
 				install: "not-attempted",

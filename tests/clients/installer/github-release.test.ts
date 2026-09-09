@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	GITHUB_TOOLS,
 	GitHubToolId,
+	resolveGitHubAssetLauncher,
 } from "../../../clients/installer/index.js";
 
 // Ensure the real installer module is used, not any mock registered by other test files
@@ -12,6 +13,20 @@ const SUPPORTED_PLATFORMS = ["linux", "darwin", "win32"] as const;
 const COMMON_ARCHES = ["x64", "arm64"] as const;
 
 describe("GitHub release asset selection", () => {
+	it.each([
+		["php-cs-fixer", "linux", "x64", "php-cs-fixer.phar", "php"],
+		["php-cs-fixer", "win32", "x64", "php-cs-fixer.phar", "php"],
+		["cljfmt", "darwin", "arm64", "standalone.jar", "java"],
+		["cljfmt", "linux", "arm64", "standalone.jar", "java"],
+		["cljfmt", "linux", "x64", "linux-amd64-static.tar.gz", undefined],
+	] as const)(
+		"maps %s %s/%s asset %s to launcher %s",
+		(toolId, platform, _arch, asset, launcher) => {
+			expect(resolveGitHubAssetLauncher(toolId, platform, asset)).toBe(
+				launcher,
+			);
+		},
+	);
 	it("every github tool has an asset for all supported platform/arch combos", async () => {
 		const { resolveGitHubAsset } =
 			await import("../../../clients/installer/index.js");

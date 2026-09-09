@@ -175,6 +175,7 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
 		const diagnostic = makeDiagnostic("collected error");
+		const attributedDiagnostic = { ...diagnostic, serverId: "python" };
 		const client = {
 			isAlive: () => true,
 			shutdown: async () => {},
@@ -211,13 +212,14 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			true,
 		);
 		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 25);
-		expect(result?.diags).toEqual([diagnostic]);
+		expect(result?.diags).toEqual([attributedDiagnostic]);
 	});
 
 	it("skips notify.open on the second touch with identical content but still waits for diagnostics (#116)", async () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
 		const diagnostic = makeDiagnostic("collected error");
+		const attributedDiagnostic = { ...diagnostic, serverId: "python" };
 		const client = {
 			isAlive: () => true,
 			shutdown: async () => {},
@@ -266,7 +268,7 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 
 		expect(client.notify.open).toHaveBeenCalledTimes(1);
 		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 25);
-		expect(result?.diags).toEqual([diagnostic]);
+		expect(result?.diags).toEqual([attributedDiagnostic]);
 	});
 
 	it("sends notify.open again when the second touch has different content", async () => {
@@ -752,6 +754,7 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			const { LSPService } = await import("../../../clients/lsp/index.js");
 			const service = new LSPService();
 			const diagnostic = makeDiagnostic("real error");
+			const attributedDiagnostic = { ...diagnostic, serverId: "python" };
 			// First client call: confirms one real diagnostic (fast, no timeout).
 			let diagnosticsToReturn = [diagnostic];
 			const client = {
@@ -778,9 +781,9 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 				maxDiagnosticsWaitMs: 8000,
 				source: "dispatch-lsp-runner",
 			});
-			expect(firstResult?.diags).toEqual([diagnostic]);
+			expect(firstResult?.diags).toEqual([attributedDiagnostic]);
 			expect((firstResult as any).inconclusive).not.toBe(true);
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([diagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
 
 			// Second touch: content changed (so notify isn't skipped) and the
 			// diagnostics wait is forced to time out via maxDiagnosticsWaitMs: 0
@@ -812,13 +815,14 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			).toBe(true);
 			expect({ ...secondResult }.inconclusive).toBe(true);
 			// The prior confirmed non-empty record must survive untouched.
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([diagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
 		});
 
 		it("a confirmed (non-timeout) empty result still clears lastKnownDiagnostics as before", async () => {
 			const { LSPService } = await import("../../../clients/lsp/index.js");
 			const service = new LSPService();
 			const diagnostic = makeDiagnostic("real error");
+			const attributedDiagnostic = { ...diagnostic, serverId: "python" };
 			let diagnosticsToReturn = [diagnostic];
 			const client = {
 				isAlive: () => true,
@@ -844,7 +848,7 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 				maxDiagnosticsWaitMs: 8000,
 				source: "dispatch-lsp-runner",
 			});
-			expect(service.getLastKnownDiagnostics(FILE)).toEqual([diagnostic]);
+			expect(service.getLastKnownDiagnostics(FILE)).toEqual([attributedDiagnostic]);
 
 			// Second touch: content changed, generous budget (no timeout), and the
 			// server genuinely reports zero diagnostics this time — the existing

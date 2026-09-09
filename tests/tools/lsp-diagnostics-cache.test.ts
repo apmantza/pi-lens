@@ -213,6 +213,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({ diags: [diag] });
 
@@ -245,6 +246,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({
 			diags: [diag],
@@ -285,6 +287,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 						end: { line: 0, character: 1 },
 					},
 					source: "typescript",
+					serverId: "typescript",
 				},
 			],
 			confirmation: "partial",
@@ -330,6 +333,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 						end: { line: 0, character: 1 },
 					},
 					source: "typescript",
+					serverId: "typescript",
 				},
 			],
 			confirmation: "partial",
@@ -362,6 +366,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({ diags: [diag] });
 
