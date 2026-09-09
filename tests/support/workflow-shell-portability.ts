@@ -134,7 +134,7 @@ function needlePattern(needle: string): RegExp {
 	if (needle === "${var,,}") return /\$\{[A-Za-z_][\w]*,,?[^}]*\}/;
 	if (needle === "${var^^}") return /\$\{[A-Za-z_][\w]*\^\^?[^}]*\}/;
 	if (needle === "declare -A")
-		return /(?:^|[;\n]|&&|\|\|?|\|)\s*declare\s+-A\b/;
+		return /(?:^|[;\n]|&&|\|\|?|\||\$\()\s*declare\s+-A\b/;
 	if (needle === "mapfile" || needle === "readarray")
 		return new RegExp(`(?:^|[;\\n]|&&|\\|\\|?|\\||\\$\\()\\s*${needle}\\b`);
 	if (needle === "|&") return /\|&/;
@@ -189,6 +189,8 @@ function lexShell(source: string): string {
 				chars[index] = " ";
 			} else if (char === "$" && chars[index + 1] === "{")
 				index = preserveExpansion(chars, index);
+			else if (char === "$" && chars[index + 1] === "(")
+				index = preserveCommandSubstitution(chars, index);
 			else chars[index] = " ";
 			continue;
 		}
@@ -207,6 +209,54 @@ function lexShell(source: string): string {
 		}
 	}
 	return chars.join("").replace(/\\\r?\n[ \t]*/g, "");
+}
+
+function preserveCommandSubstitution(chars: string[], start: number): number {
+	let quote: "'" | '"' | undefined;
+	let comment = false;
+	let depth = 1;
+	let end = start + 1;
+	for (; end < chars.length; end++) {
+		const char = chars[end];
+		const next = chars[end + 1];
+		if (comment) {
+			if (char === "\n") comment = false;
+			continue;
+		}
+		if (quote === "'") {
+			if (char === "'") quote = undefined;
+			continue;
+		}
+		if (quote === '"') {
+			if (char === "$" && next === "(") {
+				depth++;
+				end++;
+			} else if (char === "\\") end++;
+			else if (char === '"') quote = undefined;
+			continue;
+		}
+		if (char === "\\") {
+			end++;
+			continue;
+		}
+		if (char === "#" && (end === 0 || /[\s;]/.test(chars[end - 1]))) {
+			comment = true;
+			continue;
+		}
+		if (char === "'") quote = char;
+		else if (char === '"') quote = char;
+		else if (char === "$" && next === "(") {
+			depth++;
+			end++;
+		} else if (char === ")" && --depth === 0) {
+			const body = chars.slice(start + 2, end).join("");
+			const lexed = lexShell(body);
+			for (let offset = 0; offset < lexed.length; offset++)
+				chars[start + 2 + offset] = lexed[offset];
+			return end;
+		}
+	}
+	return chars.length - 1;
 }
 
 function preserveExpansion(chars: string[], start: number): number {

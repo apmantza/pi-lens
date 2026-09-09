@@ -149,6 +149,22 @@ jobs:
 			["${var,,}", "${var^^}"],
 		],
 		[
+			"command substitution inside double quotes",
+			`echo "\$(mapfile -t x < f)"`,
+			["mapfile"],
+		],
+		[
+			"nested command substitution inside double quotes",
+			`echo "\$(printf '%s' \"\$(declare -A x)\")"`,
+			["declare -A"],
+		],
+		[
+			"ordinary command substitution inside double quotes",
+			`echo "\$(echo hi)"`,
+			[],
+		],
+		["command substitution inside single quotes", `echo '\$(mapfile)'`, []],
+		[
 			"a mapfile command after a continuation",
 			"map\\\nfile -t values",
 			["mapfile"],
@@ -180,6 +196,39 @@ jobs:
 				(finding) => finding.needle,
 			),
 		).toEqual(needles);
+	});
+
+	it("keeps reachability scoped to the job's own runner and matrix", () => {
+		const source = `
+jobs:
+  macos-matrix:
+    strategy:
+      matrix:
+        os: [macos-latest]
+    runs-on: \${{ matrix.os }}
+    steps:
+      - name: reachable macOS
+        run: mapfile -t values
+  fixed-ubuntu:
+    strategy:
+      matrix:
+        os: [macos-latest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: unreachable Ubuntu
+        run: mapfile -t values
+`;
+		expect(
+			findBash4PortabilityFindings(loadWorkflow(source), "fixture.yml").map(
+				({ job, step, needle }) => ({ job, step, needle }),
+			),
+		).toEqual([
+			{
+				job: "macos-matrix",
+				step: "reachable macOS",
+				needle: "mapfile",
+			},
+		]);
 	});
 
 	it("follows a macOS runner introduced by matrix include", () => {
