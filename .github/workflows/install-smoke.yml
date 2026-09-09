@@ -782,7 +782,7 @@ jobs:
   # also CLOSES the tracker once a run installs cleanly again -- the
   # acceptance criterion this lane's first round missed.
   host-latest-smoke:
-    name: host latest (nightly, advisory)
+    name: host latest nightly (advisory)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
