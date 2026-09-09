@@ -15,15 +15,21 @@ vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: (command: string) => ({
-		isAvailableAsync: async () => true,
-		getCommand: () => command,
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailableAsync: async () => true,
+			getCommand: () => command,
+		}),
+		resolveToolCommandWithInstallFallback: vi.fn(
+			async (_cwd: string, toolId: string) => toolId,
+		),
 	}),
-	resolveToolCommandWithInstallFallback: vi.fn(
-		async (_cwd: string, toolId: string) => toolId,
-	),
-}));
+);
 
 function createCtx(
 	kind: "terraform" | "kotlin",

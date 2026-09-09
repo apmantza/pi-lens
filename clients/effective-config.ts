@@ -68,6 +68,7 @@ import {
 // apart on a Windows-shaped path (AGENTS.md defect shape 2).
 import { isSameOrWithin } from "./lsp/server.js";
 import { homeRelativePath } from "./path-utils.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import { compareOrdinal } from "./string-utils.js";
 
 export interface EffectiveConfigOptions {
@@ -133,6 +134,7 @@ interface EffectiveToolDecision {
 	readonly id: string;
 	readonly selected: boolean;
 	readonly reason: ToolSelectionReason;
+	readonly resolvedCwd: string;
 }
 
 /** The per-file half: language, servers, tools. */
@@ -458,6 +460,7 @@ export async function effectiveConfig(
 							absolute,
 							resolved,
 							homeDir,
+							cwd,
 							// The gates read the LSP slice of that SAME resolution, through
 							// the same `registerLSPConfig` conversion `initLSPConfig` uses —
 							// no session-root registration, no per-root config-store write
@@ -492,6 +495,7 @@ async function fileView(
 	absolute: string,
 	resolved: Resolved<Record<string, unknown>>,
 	homeDir: string,
+	workspaceCwd: string,
 	lspConfig: RegisteredLSPConfig,
 ): Promise<EffectiveFileView> {
 	const language: LanguageEntry | undefined = resolveLanguage(absolute);
@@ -582,6 +586,13 @@ async function fileView(
 		id,
 		selected: available.has(id),
 		reason: toolReason(available.has(id), kind),
+		resolvedCwd: homeRelativePath(
+			resolveToolCwd("runner", id, absolute, {
+				cwd: workspaceCwd,
+				suppressTelemetry: true,
+			}),
+			homeDir,
+		),
 	}));
 
 	return {

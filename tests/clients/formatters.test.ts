@@ -36,8 +36,10 @@ import {
 	ruffFormatter,
 	standardrbFormatter,
 	shfmtFormatter,
+	ALL_FORMATTERS,
 	styluaFormatter,
 } from "../../clients/formatters.js";
+import { FORMATTER_MARKERS } from "../../clients/tool-cwd.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { _getSpotlessGradleReadCountForTests } from "../../clients/tool-policy.js";
 
@@ -253,6 +255,47 @@ describe("managed formatter absence is typed (#2767)", () => {
 });
 
 describe("formatter child cwd", () => {
+	it("keeps a marker row for every registered formatter marker", () => {
+		const registered = new Set(
+			ALL_FORMATTERS.map((formatter) => formatter.name),
+		);
+		const expected = [
+			"biome",
+			"prettier",
+			"oxfmt",
+			"ruff",
+			"black",
+			"sqlfluff",
+			"rustfmt",
+			"rubocop",
+			"standardrb",
+			"clang-format",
+			"php-cs-fixer",
+			"stylua",
+			"ocamlformat",
+			"google-java-format",
+			"cljfmt",
+			"cmake-format",
+			"psscriptanalyzer-format",
+			"csharpier",
+			"ormolu",
+			"taplo",
+			"terraform",
+			"swiftformat",
+			"fantomas",
+			"mix",
+			"shfmt",
+			"ktlint",
+			"ktfmt",
+		];
+		const missing = expected.filter((name) => !(name in FORMATTER_MARKERS));
+		const unknown = Object.keys(FORMATTER_MARKERS).filter(
+			(name) => !registered.has(name),
+		);
+		// A missing row silently changes that formatter to the generic fallback.
+		expect(missing).toEqual([]);
+		expect(unknown).toEqual([]);
+	});
 	it("uses the nearest project marker, not the file directory", () => {
 		const nestedDir = path.join(tmpDir, "src", "deep");
 		fs.mkdirSync(nestedDir, { recursive: true });

@@ -19,15 +19,21 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 }));
 
 const lspPrimaryCoversFile = vi.fn((..._args: unknown[]) => false);
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => "taplo",
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => "taplo",
+		}),
+		resolveToolCommandWithInstallFallback: async () => "taplo",
+		lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
 	}),
-	resolveToolCommandWithInstallFallback: async () => "taplo",
-	lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
-}));
+);
 
 vi.mock("../../../../clients/tool-policy.js", () => ({
 	getLinterPolicyForCwd: () => null,

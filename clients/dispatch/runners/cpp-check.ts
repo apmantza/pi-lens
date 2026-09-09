@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -217,7 +218,7 @@ const cppCheckRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "cpp-check");
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const compiler = await resolveCompiler(absPath, cwd);
 		if (!compiler) {

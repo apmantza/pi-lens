@@ -19,13 +19,19 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: (command: string) => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => command,
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => command,
+		}),
 	}),
-}));
+);
 
 async function runJavac(filePath: string, cwd: string) {
 	const runner = (await import("../../../../clients/dispatch/runners/javac.js"))

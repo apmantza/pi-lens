@@ -9,6 +9,28 @@ const fixture = {
 };
 
 describe("classifyFormatRow (#2767)", () => {
+	it("keeps the nested-ignore smoke row visible as a preservation case (#2777)", async () => {
+		const { FORMAT_FIXTURES } = await import("../../scripts/smoke-tools.mjs");
+		const row = FORMAT_FIXTURES.find(
+			(fixture) => fixture.lang === "prettier-nested-ignore",
+		);
+		expect(row).toMatchObject({
+			formatter: "prettier",
+			expect: "preserve",
+			file: "packages/app/ignored.ts",
+		});
+	});
+
+	it("registers the nested-rootMarkers LSP smoke row (#2777)", async () => {
+		const { LSP_FIXTURES } = await import("../../scripts/smoke-tools.mjs");
+		const row = LSP_FIXTURES.find(
+			(fixture) => fixture.lang === "typescript-nested-root-markers",
+		);
+		expect(row).toMatchObject({
+			rootMarkers: ["package.json"],
+			file: "packages/app/bad.ts",
+		});
+	});
 	it("skips a typed unavailable result even when success is true", () => {
 		// Regression: formatFile's typed unavailable outcome must not become a
 		// false formatting failure when the executable is absent on nightly.

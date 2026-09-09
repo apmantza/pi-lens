@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
 import { safeSpawnAsync, type SpawnResult } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -353,7 +354,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "psscriptanalyzer");
 		const absPath = path.resolve(cwd, ctx.filePath);
 
 		// Write script to temp file so we avoid cmd.exe quoting entirely

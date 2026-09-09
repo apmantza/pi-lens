@@ -51,16 +51,25 @@ vi.mock("../../../clients/trivy-client.js", () => ({
 	resolveSeverityFloor,
 }));
 
-vi.mock("../../../clients/degradation-ledger.js", () => ({
+vi.mock("../../../clients/degradation-ledger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../clients/degradation-ledger.js")
+	>()),
 	incrementDegradationCount,
 }));
 
-vi.mock("../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailableAsync: async () => true,
-		getCommand: () => "trivy",
+vi.mock(
+	"../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailableAsync: async () => true,
+			getCommand: () => "trivy",
+		}),
 	}),
-}));
+);
 
 function createCtx(
 	kind: "terraform" | "yaml" | "json",

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-# Tool-smoke fixture for #209 — rubocop flags the useless assignment.
+# Tool-smoke fixture for #209/#2780 — ruby-lsp flags the unterminated string.
 def greet
-  x = 'unused'
+  x = 'unterminated
   puts 'hello'
 end
