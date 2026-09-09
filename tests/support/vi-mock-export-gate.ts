@@ -49,32 +49,32 @@ function objectReturns(factory: SgNode): SgNode | undefined {
 function isSameModulePassThrough(
 	object: SgNode,
 	factory: SgNode,
-	specifier: string,
+	_specifier: string,
 ): boolean {
-	const actualBindings = new Set<string>();
-	for (const declaration of factory.findAll({
-		rule: { kind: "variable_declarator" },
-	})) {
-		const name = declaration.field("name");
-		const value = declaration.field("value");
-		if (
-			name?.kind() === "identifier" &&
-			value &&
-			/\bimport(?:Actual|Original)\b/.test(value.text()) &&
-			value.text().includes(specifier)
-		) {
-			actualBindings.add(name.text());
-		}
-	}
+	const parameters = factory.field("parameters");
+	const actualBindings = new Set(
+		(parameters?.findAll({ rule: { kind: "identifier" } }) ?? [])
+			.map((parameter) => parameter.text())
+			.filter((name) => /^(?:importActual|importOriginal)$/.test(name)),
+	);
+	if (actualBindings.size === 0) return false;
 	return object.children().some((child) => {
 		if (child.kind() !== "spread_element") return false;
-		const text = child.text();
-		return (
-			(/\bimport(?:Actual|Original)\b/.test(text) &&
-				text.includes(specifier)) ||
-			actualBindings.has(text.slice(3).trim())
-		);
+		return child.findAll({ rule: { kind: "call_expression" } }).some((call) => {
+			const callee = call.field("function");
+			const args = call.field("arguments")?.namedChildren() ?? [];
+			return (
+				callee?.kind() === "identifier" &&
+				actualBindings.has(callee.text()) &&
+				args.length === 0 &&
+				/\bawait\s+/.test(child.text())
+			);
+		});
 	});
+}
+
+function isSkippedSpecifier(specifier: string): boolean {
+	return specifier.startsWith("node:") || /(?:\.mjs|\.d\.mts)$/.test(specifier);
 }
 
 function propertyNames(object: SgNode): Set<string> {
@@ -157,10 +157,11 @@ function importedValues(root: SgNode, specifier: string): Set<string> {
 		for (const child of clause?.namedChildren() ?? []) {
 			if (child.kind() === "named_imports") {
 				for (const item of child.namedChildren()) {
-					if (item.kind() !== "import_specifier" || /^type\b/.test(item.text()))
+					if (item.kind() === "import_specifier" && !/^type\b/.test(item.text())) {
+						const imported = item.field("name");
+						if (imported) names.add(imported.text());
 						continue;
-					const imported = item.field("name");
-					if (imported) names.add(imported.text());
+					}
 				}
 			} else if (child.kind() === "namespace_import") {
 				const local = child.namedChildren()[0]?.text();
@@ -233,6 +234,7 @@ export function findViMockExportGaps(
 		const factory = args[1];
 		if (
 			!specifier ||
+			isSkippedSpecifier(specifier) ||
 			!factory ||
 			(factory.kind() !== "arrow_function" &&
 				factory.kind() !== "function_expression")

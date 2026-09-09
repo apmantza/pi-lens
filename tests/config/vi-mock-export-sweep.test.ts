@@ -45,6 +45,73 @@ function key(finding: ViMockExportFinding): string {
 }
 
 describe("#2281 whole-module vi.mock export ratchet", () => {
+	it("flags an export used by a production importer", () => {
+		// Regression #2782: importer-use mode must not miss an indirect named import.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(importerFile, 'import { b } from "./module.js"; export { b };\n');
+			const source = 'import "./importer.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a no-argument importOriginal pass-through spread", () => {
+		// Regression #2784: the correct Vitest pass-through idiom has no import argument.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(importerFile, 'import { b } from "./module.js"; export { b };\n');
+			const source = 'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores export names mentioned only in comments and strings", () => {
+		// Guard against prose laundering a source scan into a false importer use.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			const source = '// import { b } from "./module.js";\nconst text = "b";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips node and non-TypeScript mock specifiers", () => {
+		// Guard against scanning .mjs and node: mocks as TypeScript production modules.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleDir = path.join(root, ".probe-vi-m.mjs");
+			const testFile = path.join(root, "case.test.ts");
+			fs.mkdirSync(moduleDir);
+			fs.writeFileSync(path.join(moduleDir, "index.ts"), "export const b = 1;\n");
+			const source = 'vi.mock("./.probe-vi-m.mjs", () => ({ a: 1 }));\nvi.mock("node:fs", () => ({ a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source, "all")).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("reports every omitted production export with a file:line and specifier", () => {
 		const findings = scan();
 		const live = new Map(findings.map((finding) => [key(finding), finding]));

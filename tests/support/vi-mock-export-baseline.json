@@ -1,31 +1,433 @@
 {
-  "tests/clients/availability-classification-evidence.test.ts:39:../../clients/installer/index.js": ["getLastEnsureResolutionSource", "getToolInstallStrategy"],
-  "tests/clients/availability-latching-clients.test.ts:35:../../clients/installer/index.js": ["getInstallAttempt", "getLastEnsureResolutionSource", "getToolInstallStrategy"],
-  "tests/clients/dispatch/javac-dispatch-integration.test.ts:26:../../../clients/dispatch/runners/utils/runner-helpers.js": ["getDispatchAvailabilityGeneration", "recordAvailabilityProbeOverrun"],
-  "tests/clients/dispatch/trivy-config.test.ts:54:../../../clients/degradation-ledger.js": ["recordDegradationOnce"],
-  "tests/clients/dispatch/trivy-config.test.ts:58:../../../clients/dispatch/runners/utils/runner-helpers.js": ["getDispatchAvailabilityGeneration", "recordAvailabilityProbeOverrun", "resolveAvailableOrInstall"],
-  "tests/clients/installer/markdownlint-verify-2045.test.ts:10:../../../clients/safe-spawn.js": ["resetSafeSpawnWindowsCommandCache"],
-  "tests/clients/instance-reaper-backstop.test.ts:117:../../clients/instance-registry.js": ["pruneDeadInstances"],
-  "tests/clients/instance-reaper-unref.test.ts:65:../../clients/instance-registry.js": ["pruneDeadInstances"],
-  "tests/clients/knip-client.test.ts:15:../../clients/safe-spawn.js": ["resetSafeSpawnWindowsCommandCache"],
-  "tests/clients/lsp/lua-tree-binary.test.ts:30:../../../clients/installer/index.js": ["findManagedToolBinary", "getInstallAttempt"],
-  "tests/clients/lsp/managed-bin-fastpath.test.ts:44:../../../clients/installer/index.js": ["getToolPath"],
-  "tests/clients/lsp/resolve-and-launch-fallback.test.ts:17:../../../clients/installer/index.js": ["getInstallAttempt", "getToolPath"],
-  "tests/clients/lsp/runtime-install-discovery.test.ts:21:../../../clients/installer/index.js": ["getInstallAttempt", "getToolPath"],
-  "tests/clients/lsp/typescript-native-lsp.test.ts:13:../../../clients/installer/index.js": ["getInstallAttempt", "getToolPath"],
-  "tests/clients/mcp/analyze.test.ts:55:../../../clients/review-graph/service.js": ["computeImpactCascade", "computeTransitiveImpact", "formatImpactCascade"],
-  "tests/clients/mcp/session-context-eviction.test.ts:15:../../../clients/bootstrap.js": ["residentBootstrapAccess"],
-  "tests/clients/observed-mutation-integration.test.ts:59:../../clients/bootstrap.js": ["requestBootstrapClients"],
-  "tests/clients/pipeline-eslint-autofix.test.ts:10:../../clients/safe-spawn.js": ["getAmbientAbortSignal"],
-  "tests/clients/pipeline-eslint-availability-latch.test.ts:22:../../clients/safe-spawn.js": ["getAmbientAbortSignal"],
-  "tests/clients/runtime-session-warm.test.ts:17:../../clients/lsp/config.js": ["getServersForFileWithConfig"],
-  "tests/clients/runtime-tool-result.test.ts:53:../../clients/lsp/index.js": ["getLSPService"],
-  "tests/clients/write-autofix-attachment-message.test.ts:36:../../clients/lsp/index.js": ["notifyExternalFileChange"],
-  "tests/config/module-instance-binding.test.ts:47:../../clients/installer/index.js": ["getInstallAttempt", "getLastEnsureResolutionSource", "getToolInstallStrategy"],
-  "tests/tools/lens-diagnostics-mode-all-freshness.test.ts:31:../../clients/project-diagnostics/fresh-fetch.js": ["ANALYZER_IDS"],
-  "tests/tools/lsp-diagnostics-cache.test.ts:46:../../clients/widget-state.js": ["isBlocking"],
-  "tests/tools/lsp-diagnostics-inferred-project.test.ts:35:../../clients/widget-state.js": ["isBlocking"],
-  "tests/tools/lsp-diagnostics-per-server-concurrency.test.ts:53:../../clients/widget-state.js": ["isBlocking"],
-  "tests/tools/lsp-diagnostics.test.ts:49:../../clients/widget-state.js": ["isBlocking"],
-  "tests/tools/lsp-navigation-workspace-attribution.test.ts:8:../../clients/latency-logger.js": ["phaseFinished", "phaseStarted"]
+  "tests/clients/availability-classification-evidence.test.ts:39:../../clients/installer/index.js": [
+    "getLastEnsureResolutionSource",
+    "getToolInstallStrategy"
+  ],
+  "tests/clients/availability-latching-clients.test.ts:35:../../clients/installer/index.js": [
+    "getInstallAttempt",
+    "getLastEnsureResolutionSource",
+    "getToolInstallStrategy"
+  ],
+  "tests/clients/config-core/normalize-internal-catch.test.ts:26:../../../clients/config-core/schema.js": [
+    "additionalPropertyPolicy",
+    "isKnownSchemaType",
+    "isPlainObject",
+    "isSchemaNode",
+    "itemsSchema",
+    "propertySchema"
+  ],
+  "tests/clients/dispatch/dispatch-generated-skip.test.ts:49:../../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/dispatch/dispatcher-baseline-path-guard.test.ts:49:../../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/dispatch/integration.test.ts:25:../../../clients/dispatch/dispatcher.js": [
+    "RunnerRegistry",
+    "clearCoverageNoticeState",
+    "clearLatencyReports",
+    "formatLatencyReport",
+    "getLatencyReports"
+  ],
+  "tests/clients/dispatch/integration.test.ts:37:../../../clients/dispatch/fact-runner.js": [
+    "registerProvider"
+  ],
+  "tests/clients/dispatch/javac-dispatch-integration.test.ts:26:../../../clients/dispatch/runners/utils/runner-helpers.js": [
+    "getDispatchAvailabilityGeneration",
+    "recordAvailabilityProbeOverrun"
+  ],
+  "tests/clients/dispatch/runners/helm-lint.test.ts:20:../../../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/dispatch/runners/helm-render.test.ts:31:../../../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/dispatch/runners/nested-links-rules.test.ts:24:../../../../clients/review-graph/service.js": [
+    "buildOrUpdateGraph",
+    "computeImpactCascade",
+    "computeTransitiveImpact",
+    "formatImpactCascade"
+  ],
+  "tests/clients/dispatch/runners/oxlint.test.ts:86:../../../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/dispatch/runners/runner-helpers-generation-ledger.test.ts:28:../../../../clients/installer/index.js": [
+    "ensureTool",
+    "findManagedToolBinary",
+    "getInstallAttempt",
+    "getLastEnsureResolutionSource",
+    "getToolInstallStrategy",
+    "isSpawnableCommand",
+    "resetPathWalkMemo"
+  ],
+  "tests/clients/dispatch/runners/runner-helpers.test.ts:90:../../../../clients/package-manager.js": [
+    "VENDOR_BIN_DIRS",
+    "VENV_BIN_DIRS",
+    "findLocalBinAt",
+    "findLocalBinUpwards",
+    "findLocalBinsUpwards"
+  ],
+  "tests/clients/dispatch/runners/tree-sitter-dispatch-behavior.test.ts:31:../../../../clients/review-graph/service.js": [
+    "buildOrUpdateGraph",
+    "computeImpactCascade"
+  ],
+  "tests/clients/dispatch/runners/tree-sitter-python-rule-regressions.test.ts:12:../../../../clients/review-graph/service.js": [
+    "buildOrUpdateGraph",
+    "computeImpactCascade"
+  ],
+  "tests/clients/dispatch/runners/tree-sitter-rule-cache-warm.test.ts:18:../../../../clients/review-graph/service.js": [
+    "buildOrUpdateGraph",
+    "computeImpactCascade"
+  ],
+  "tests/clients/dispatch/runners/tree-sitter-skip-test-files.test.ts:13:../../../../clients/review-graph/service.js": [
+    "buildOrUpdateGraph",
+    "computeImpactCascade"
+  ],
+  "tests/clients/dispatch/trivy-config.test.ts:54:../../../clients/degradation-ledger.js": [
+    "recordDegradationOnce"
+  ],
+  "tests/clients/dispatch/trivy-config.test.ts:58:../../../clients/dispatch/runners/utils/runner-helpers.js": [
+    "getDispatchAvailabilityGeneration",
+    "recordAvailabilityProbeOverrun",
+    "resolveAvailableOrInstall"
+  ],
+  "tests/clients/event-loop-hold.test.ts:27:../../clients/latency-logger.js": [
+    "claimPhaseOncePerSession",
+    "releaseOncePerSessionPhase"
+  ],
+  "tests/clients/installer/markdownlint-verify-2045.test.ts:10:../../../clients/safe-spawn.js": [
+    "resetSafeSpawnWindowsCommandCache"
+  ],
+  "tests/clients/instance-reaper-backstop.test.ts:117:../../clients/instance-registry.js": [
+    "pruneDeadInstances"
+  ],
+  "tests/clients/instance-reaper-unref.test.ts:65:../../clients/instance-registry.js": [
+    "pruneDeadInstances"
+  ],
+  "tests/clients/knip-client.test.ts:15:../../clients/safe-spawn.js": [
+    "resetSafeSpawnWindowsCommandCache"
+  ],
+  "tests/clients/lsp/concurrent-auxiliary-spawn.test.ts:20:../../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/lsp/lua-tree-binary.test.ts:30:../../../clients/installer/index.js": [
+    "findManagedToolBinary",
+    "getInstallAttempt"
+  ],
+  "tests/clients/lsp/managed-bin-fastpath.test.ts:40:../../../clients/safe-spawn.js": [
+    "hasSpawnFailureKind",
+    "isCommandAvailableAsync"
+  ],
+  "tests/clients/lsp/managed-bin-fastpath.test.ts:44:../../../clients/installer/index.js": [
+    "getToolPath"
+  ],
+  "tests/clients/lsp/resolve-and-launch-fallback.test.ts:17:../../../clients/installer/index.js": [
+    "getInstallAttempt",
+    "getToolPath"
+  ],
+  "tests/clients/lsp/runtime-install-discovery.test.ts:21:../../../clients/installer/index.js": [
+    "getInstallAttempt",
+    "getToolPath"
+  ],
+  "tests/clients/lsp/typescript-native-lsp.test.ts:13:../../../clients/installer/index.js": [
+    "getInstallAttempt",
+    "getToolPath"
+  ],
+  "tests/clients/lsp/workspace-sweep-hold.test.ts:33:../../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/mcp/analyze.test.ts:19:../../../clients/dispatch/dispatcher.js": [
+    "RunnerRegistry",
+    "clearCoverageNoticeState",
+    "clearLatencyReports",
+    "createDispatchContext",
+    "formatLatencyReport"
+  ],
+  "tests/clients/mcp/analyze.test.ts:31:../../../clients/dispatch/fact-runner.js": [
+    "registerProvider"
+  ],
+  "tests/clients/mcp/analyze.test.ts:55:../../../clients/review-graph/service.js": [
+    "computeImpactCascade",
+    "computeTransitiveImpact",
+    "formatImpactCascade"
+  ],
+  "tests/clients/mcp/review-rebuild.test.ts:16:../../../clients/package-manager.js": [
+    "pmBinary",
+    "runScriptArgs"
+  ],
+  "tests/clients/mcp/session-context-eviction.test.ts:15:../../../clients/bootstrap.js": [
+    "residentBootstrapAccess"
+  ],
+  "tests/clients/module-report-call-graph-identity-missing.test.ts:20:../../clients/review-graph/builder.js": [
+    "buildOrUpdateGraph",
+    "clearReviewGraphWorkspaceCache"
+  ],
+  "tests/clients/mutating-tool-classification.test.ts:25:../../clients/pipeline.js": [
+    "resyncLspFile",
+    "runAutofix",
+    "runFormatPhase"
+  ],
+  "tests/clients/mutating-tool-classification.test.ts:35:../../clients/read-guard-logger.js": [
+    "boundedEditIndexes",
+    "boundedIndexesForCount",
+    "createReadGuardEditBatchSummary",
+    "getReadGuardCorrelationId"
+  ],
+  "tests/clients/observed-mutation-integration.test.ts:59:../../clients/bootstrap.js": [
+    "requestBootstrapClients"
+  ],
+  "tests/clients/opaque-mutation-git-status.test.ts:10:../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/opaque-mutation-scan.test.ts:30:../../clients/opaque-mutation-scan.js": [
+    "OPAQUE_SCAN_MAX_FILES",
+    "OpaqueBaselineStore",
+    "captureFileStats",
+    "diffFileStats",
+    "getOpaqueBaselineStore",
+    "isGitWorktree"
+  ],
+  "tests/clients/package-manager.test.ts:18:../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/pi-host-contract.test.ts:58:../../clients/read-guard-logger.js": [
+    "boundedIndexesForCount",
+    "createReadGuardEditBatchSummary",
+    "getReadGuardCorrelationId"
+  ],
+  "tests/clients/pipeline-autofix-config.test.ts:11:../../clients/dispatch/runners/utils/runner-helpers.js": [
+    "classifyProbeFailure",
+    "createAvailabilityChecker",
+    "createAvailabilityLatch",
+    "describeProbeEvidence",
+    "logAvailabilityDecision",
+    "resolveAvailableOrInstall",
+    "resolveCommandArgsWithInstallFallback",
+    "resolveToolCommand",
+    "startHostStallSampler"
+  ],
+  "tests/clients/pipeline-autofix-config.test.ts:27:../../clients/file-utils.js": [
+    "getProjectIgnoreMatcher",
+    "isExcludedDirName"
+  ],
+  "tests/clients/pipeline-eslint-autofix.test.ts:10:../../clients/safe-spawn.js": [
+    "getAmbientAbortSignal"
+  ],
+  "tests/clients/pipeline-eslint-availability-latch.test.ts:22:../../clients/safe-spawn.js": [
+    "getAmbientAbortSignal"
+  ],
+  "tests/clients/pipeline-lsp-sync.test.ts:19:../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/project-diagnostics/scanner-ast-grep-kind.test.ts:16:../../../clients/dispatch/runners/ast-grep-napi.js": [
+    "canHandle",
+    "getLang",
+    "loadSg"
+  ],
+  "tests/clients/project-diagnostics/scanner-cache-stats-scope.test.ts:31:../../../clients/tree-sitter-logger.js": [
+    "logTreeSitter"
+  ],
+  "tests/clients/project-diagnostics/scanner-consumerless-skip.test.ts:50:../../../clients/tree-sitter-logger.js": [
+    "logTreeSitter"
+  ],
+  "tests/clients/project-diagnostics/scanner-wasm-abort.test.ts:13:../../../clients/tree-sitter-shared.js": [
+    "EXT_TO_LANG"
+  ],
+  "tests/clients/read-expansion-enrichment.test.ts:15:../../clients/read-expansion.js": [
+    "EXPANSION_BUDGET_MS",
+    "EXPANSION_LIMIT_LINES"
+  ],
+  "tests/clients/read-expansion-enrichment.test.ts:51:../../clients/read-guard-logger.js": [
+    "boundedIndexesForCount",
+    "createReadGuardEditBatchSummary",
+    "getReadGuardCorrelationId"
+  ],
+  "tests/clients/read-guard-tool-lines.test.ts:25:../../clients/read-guard-logger.js": [
+    "boundedEditIndexes",
+    "createReadGuardEditBatchSummary",
+    "formatBoundedEditIndexes"
+  ],
+  "tests/clients/review-graph-persist.test.ts:31:../../clients/review-graph-logger.js": [
+    "makeReviewGraphBuildMetadata"
+  ],
+  "tests/clients/review-graph/lsp-symbol-fallback.test.ts:19:../../../clients/lsp-document-symbols.js": [
+    "containerNameChain",
+    "lspSymbolKindName"
+  ],
+  "tests/clients/review-graph/lsp-symbol-fallback.test.ts:26:../../../clients/review-graph-logger.js": [
+    "makeReviewGraphBuildMetadata"
+  ],
+  "tests/clients/runtime-agent-end.test.ts:33:../../clients/actionable-warnings.js": [
+    "checkActionableWarningsReportFresh"
+  ],
+  "tests/clients/runtime-agent-end.test.ts:50:../../clients/pipeline.js": [
+    "resyncLspFile",
+    "runAutofix",
+    "runFormatPhase"
+  ],
+  "tests/clients/runtime-session-retro-hydrate-warmup-race.test.ts:49:../../clients/project-changes.js": [
+    "appendProjectChange",
+    "readLatestProjectSequence"
+  ],
+  "tests/clients/runtime-session-retro-hydrate-warmup-race.test.ts:65:../../clients/project-snapshot.js": [
+    "PROJECT_SNAPSHOT_VERSION",
+    "getProjectSnapshotLegacyPath",
+    "getProjectSnapshotPath",
+    "hydrateRuntimeFromProjectSnapshot",
+    "hydrateRuntimeFromProjectSnapshotIfIdle",
+    "isProjectSnapshotFresh",
+    "isProjectSnapshotMetaStale",
+    "loadProjectSnapshot",
+    "readProjectSnapshotMeta",
+    "saveProjectSnapshot",
+    "saveRuntimeProjectSnapshot"
+  ],
+  "tests/clients/runtime-session-scan-cache.test.ts:53:../../clients/startup-scan.js": [
+    "_resetStartupScanVerdictTtlForTests",
+    "findNearestProjectRoot",
+    "getStartupScanMaxEntries",
+    "isStartupScanVerdictFresh"
+  ],
+  "tests/clients/runtime-session-sequence-read-budget.test.ts:57:../../clients/project-changes.js": [
+    "appendProjectChange",
+    "readLatestProjectSequence"
+  ],
+  "tests/clients/runtime-session-warm.test.ts:17:../../clients/lsp/config.js": [
+    "getServersForFileWithConfig"
+  ],
+  "tests/clients/runtime-tool-result.test.ts:53:../../clients/lsp/index.js": [
+    "getLSPService"
+  ],
+  "tests/clients/sg-runner.test.ts:22:../../clients/safe-spawn.js": [
+    "SpawnFailureError"
+  ],
+  "tests/clients/test-runner-pytest-summary.test.ts:37:../../clients/safe-spawn.js": [
+    "safeSpawn"
+  ],
+  "tests/clients/test-runner-python-environment.test.ts:31:../../clients/safe-spawn.js": [
+    "safeSpawn"
+  ],
+  "tests/clients/tool-definition.test.ts:7:../../clients/latency-logger.js": [
+    "claimPhaseOncePerSession",
+    "releaseOncePerSessionPhase"
+  ],
+  "tests/clients/word-index-lifecycle.test.ts:51:../../clients/project-snapshot.js": [
+    "PROJECT_SNAPSHOT_VERSION",
+    "getProjectSnapshotLegacyPath",
+    "getProjectSnapshotPath",
+    "hydrateRuntimeFromProjectSnapshot",
+    "hydrateRuntimeFromProjectSnapshotIfIdle",
+    "isProjectSnapshotFresh",
+    "isProjectSnapshotMetaStale",
+    "loadProjectSnapshot",
+    "loadProjectSnapshotExportsAndRules",
+    "readProjectSnapshotMeta",
+    "saveProjectSnapshot",
+    "waitForProjectSnapshotPersistsForTests"
+  ],
+  "tests/clients/word-index-superseded-during-rebuild.test.ts:19:../../clients/cooperative-budget.js": [
+    "createDeadline",
+    "forEachCooperatively"
+  ],
+  "tests/clients/write-autofix-attachment-message.test.ts:28:../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/clients/write-autofix-attachment-message.test.ts:36:../../clients/lsp/index.js": [
+    "notifyExternalFileChange"
+  ],
+  "tests/config/module-instance-binding.test.ts:47:../../clients/installer/index.js": [
+    "getInstallAttempt",
+    "getLastEnsureResolutionSource",
+    "getToolInstallStrategy"
+  ],
+  "tests/index-loop-block-wiring.test.ts:44:../clients/latency-logger.js": [
+    "getCurrentPhase",
+    "phaseStarted"
+  ],
+  "tests/index-mode-awareness.test.ts:14:../clients/extension-log.js": [
+    "closeModuleLoadConsoleWindow",
+    "installConsoleGuard",
+    "runInConsoleCaptureWindow",
+    "withConsoleCaptureWindows"
+  ],
+  "tests/index-mutation-latency-marker.test.ts:9:../clients/latency-logger.js": [
+    "getLastLoggedPhase",
+    "getPhaseForWindow",
+    "getRecentLoggedPhases",
+    "resetCurrentPhaseForSession",
+    "resetOncePerSessionPhases"
+  ],
+  "tests/index-vanished-instance-wiring.test.ts:89:../clients/instance-reaper.js": [
+    "scheduleUntrackedOrphanSweep"
+  ],
+  "tests/tools/lens-diagnostics-inferred-project.test.ts:31:../../clients/project-diagnostics/fresh-fetch.js": [
+    "ANALYZER_IDS"
+  ],
+  "tests/tools/lens-diagnostics-inferred-project.test.ts:66:../../clients/widget-state.js": [
+    "classifyDiagnosticTier",
+    "widgetDiagnosticUri"
+  ],
+  "tests/tools/lens-diagnostics-mode-all-freshness.test.ts:31:../../clients/project-diagnostics/fresh-fetch.js": [
+    "ANALYZER_IDS"
+  ],
+  "tests/tools/lens-diagnostics-rule-policy.test.ts:31:../../clients/project-diagnostics/fresh-fetch.js": [
+    "ANALYZER_IDS"
+  ],
+  "tests/tools/lens-diagnostics-rule-policy.test.ts:74:../../clients/widget-state.js": [
+    "classifyDiagnosticTier",
+    "widgetDiagnosticUri"
+  ],
+  "tests/tools/lens-diagnostics.test.ts:107:../../clients/diagnostic-line-freshness.js": [
+    "PAST_EOF_STALE_MARKER",
+    "demotePastEofDiagnostics"
+  ],
+  "tests/tools/lens-diagnostics.test.ts:40:../../clients/project-diagnostics/fresh-fetch.js": [
+    "ANALYZER_IDS"
+  ],
+  "tests/tools/lens-diagnostics.test.ts:88:../../clients/widget-state.js": [
+    "classifyDiagnosticTier",
+    "getFileDiagnostics",
+    "widgetDiagnosticUri"
+  ],
+  "tests/tools/lsp-diagnostics-cache.test.ts:33:../../clients/lsp/index.js": [
+    "groupFilesByPrimaryServer",
+    "runPerServerGroups"
+  ],
+  "tests/tools/lsp-diagnostics-cache.test.ts:46:../../clients/widget-state.js": [
+    "isBlocking"
+  ],
+  "tests/tools/lsp-diagnostics-inferred-project.test.ts:22:../../clients/lsp/index.js": [
+    "groupFilesByPrimaryServer",
+    "runPerServerGroups"
+  ],
+  "tests/tools/lsp-diagnostics-inferred-project.test.ts:35:../../clients/widget-state.js": [
+    "isBlocking"
+  ],
+  "tests/tools/lsp-diagnostics-per-server-concurrency.test.ts:43:../../clients/lsp/index.js": [
+    "groupFilesByPrimaryServer",
+    "runPerServerGroups"
+  ],
+  "tests/tools/lsp-diagnostics-per-server-concurrency.test.ts:53:../../clients/widget-state.js": [
+    "isBlocking"
+  ],
+  "tests/tools/lsp-diagnostics.test.ts:33:../../clients/lsp/index.js": [
+    "groupFilesByPrimaryServer",
+    "runPerServerGroups"
+  ],
+  "tests/tools/lsp-diagnostics.test.ts:49:../../clients/widget-state.js": [
+    "isBlocking"
+  ],
+  "tests/tools/lsp-navigation-workspace-attribution.test.ts:8:../../clients/latency-logger.js": [
+    "phaseFinished",
+    "phaseStarted"
+  ],
+  "tests/tools/lsp-navigation-workspace-attribution.test.ts:9:../../clients/lsp/index.js": [
+    "LSPService"
+  ]
 }
