@@ -14,6 +14,7 @@ import {
 	logCacheUsage,
 	observeCacheContext,
 	observeCachePrefix,
+	resetCacheFindingIdentitiesSession,
 	resetCachePrefixObservation,
 } from "../../clients/cache-observability.js";
 
@@ -1648,6 +1649,37 @@ describe("cache-observability — per-source injection attribution (#1071)", () 
 				other: 0,
 			},
 			injectedFindingsRepeated: 0,
+		});
+	});
+
+	it("resets repeated-finding identities at a session_start boundary", () => {
+		const finding = "src/reset.ts:7 rule=E1";
+		const observe = (turnIndex: number) =>
+			observeCacheContext({
+				sessionId: "reset",
+				turnIndex,
+				injectionEnabled: true,
+				injectionSlices: [
+					{ source: "turn-findings", messages: [{ role: "user", content: finding }] },
+				],
+			});
+
+		observe(1);
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "reset" });
+		resetCacheFindingIdentitiesSession("reset", "primary");
+		observe(2);
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "reset" });
+
+		const rows = latencyEntries.filter((entry) => entry.phase === "cache_usage");
+		expect(rows[0]?.metadata?.injectedFindingsRepeated).toBe(0);
+		expect(rows[1]?.metadata?.injectedFindingsRepeated).toBe(0);
+		expect(rows[1]?.metadata?.injectedBytes).toEqual({
+			sessionGuidance: 0,
+			turnFindings: Buffer.byteLength(finding),
+			testFindings: 0,
+			agentNudge: 0,
+			turnEndAdvisory: 0,
+			other: 0,
 		});
 	});
 });

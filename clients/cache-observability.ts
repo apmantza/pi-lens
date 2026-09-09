@@ -1647,6 +1647,16 @@ export function resetCachePrefixObservation(): void {
 	attributionBySession.clear();
 }
 
+export function resetCacheFindingIdentitiesSession(
+	sessionId?: string,
+	sessionRole?: "primary" | "concurrent-secondary",
+): void {
+	const state = attributionBySession.get(attributionKey(sessionId, sessionRole));
+	if (!state) return;
+	state.findingIdentities.clear();
+	state.findingIdentityCapRecorded = false;
+}
+
 export function _attributionBySessionHasForTests(key: string): boolean {
 	return attributionBySession.has(key);
 }
