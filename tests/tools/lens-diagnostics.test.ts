@@ -242,6 +242,22 @@ describe("lens_diagnostics compact render header", () => {
 // ── schema ────────────────────────────────────────────────────────────────────
 
 describe("lens_diagnostics schema", () => {
+	it("describes all as cache-only reporting and full with paths as active verification", () => {
+		const tool = makeTool();
+		const modeDescription = String(
+			(tool.parameters.properties.mode as { description?: unknown })
+				.description,
+		);
+		expect(tool.promptSnippet).toContain(
+			"mode=all reports cached diagnostics only",
+		);
+		expect(tool.promptSnippet).toContain("mode=full with paths");
+		expect(tool.promptSnippet).not.toContain(
+			"use lens_diagnostics mode=all to verify",
+		);
+		expect(modeDescription).toContain("all = cache-only diagnostics");
+		expect(modeDescription).toContain("add paths for a targeted active check");
+	});
 	it("exposes mode and severity parameters", () => {
 		const tool = makeTool();
 		const props = (tool.parameters as { properties: Record<string, unknown> })

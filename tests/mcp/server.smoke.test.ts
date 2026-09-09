@@ -75,7 +75,19 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		// between the two if the mirror ever stopped being a direct passthrough.
 		const diagnosticsTool = tools.find(
 			(t) => t.name === "pilens_diagnostics",
-		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;
+		) as
+			| {
+					description?: string;
+					inputSchema: { properties?: Record<string, unknown> };
+			  }
+			| undefined;
+		expect(diagnosticsTool?.description).toContain(
+			"mode=delta/all are cache-only",
+		);
+		expect(diagnosticsTool?.description).toContain("mode=full with paths");
+		expect(diagnosticsTool?.description).not.toContain(
+			"use mode=all to verify",
+		);
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",

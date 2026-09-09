@@ -1337,6 +1337,13 @@ describe("context injection framing", () => {
 		// Stay lean: the orientation is a nudge, not re-documentation of every arg.
 		expect(text.length).toBeLessThan(750);
 	});
+
+	it("SESSION_START_GUIDANCE distinguishes cached reporting from active verification (#2792)", () => {
+		const text = SESSION_START_GUIDANCE.join("\n");
+		expect(text).toContain("mode=all reports cached diagnostics only");
+		expect(text).toContain("mode=full with paths for an active check");
+		expect(text).not.toContain("use mode=all to verify");
+	});
 });
 
 // ── Unresolved inline blocker re-surfacing ────────────────────────────────────

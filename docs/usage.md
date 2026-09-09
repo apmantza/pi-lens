@@ -50,8 +50,9 @@ for the consumer-facing version of this routing.
 
 pi-lens exposes these high-value tools to agents:
 
-- `lens_diagnostics` — cached diagnostic state; use `mode=all` before declaring
-  work complete, and `mode=full` for an expensive project-wide LSP scan.
+- `lens_diagnostics` — `mode=all` reports cached diagnostics only; it does not
+  verify current files. For changed files with absent or stale cache, use
+  `mode=full` with `paths` for an active targeted check.
 - `lsp_navigation` / `lsp_diagnostics` — IDE-style navigation and diagnostics.
 - `ast_grep_search` / `ast_grep_replace` — AST-aware structural search/replace.
 - `module_report` / `read_symbol` — navigable outline and targeted symbol-body
@@ -182,8 +183,8 @@ turn-end is skipped, not faked: one line on stderr and nothing on stdout.
 
 - Run `npm run build` before tests after editing TypeScript; tests import
   generated `.js` artifacts.
-- Use `lens_diagnostics mode=all` to surface stale blockers from the current
-  session.
+- Use `lens_diagnostics mode=all` to report cached blockers from the current
+  session. For an active check, use `mode=full` with `paths`.
 - Check `~/.pi-lens/sessionstart.log`, `~/.pi-lens/latency.log`, and
   `~/.pi-lens/cascade.log` for lifecycle/performance/debug traces.
 - For live tool validation, use `node scripts/smoke-tools.mjs` with the relevant

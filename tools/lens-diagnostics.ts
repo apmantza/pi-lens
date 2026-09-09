@@ -254,7 +254,8 @@ export function createLensDiagnosticsTool(
 		label: "Project Diagnostics",
 		description:
 			"Query pi-lens's diagnostic state. mode=delta/all are cache-only and instant; " +
-			"mode=full is an expensive active project-wide LSP scan merged with cached runner state.\n\n" +
+			"mode=full is an active LSP scan merged with cached runner state. Use mode=full " +
+			"with paths for a targeted active check; it need not scan the whole project.\n\n" +
 			"IMPORTANT: unlike lsp_diagnostics (LSP only), this tool covers ALL dispatch " +
 			"runners: LSP errors, tree-sitter structural rules, ast-grep security rules, " +
 			"biome/ruff/eslint lint findings, complexity violations, and more.\n\n" +
@@ -264,11 +265,14 @@ export function createLensDiagnosticsTool(
 			"mode=all: blocking errors and warnings — with the actual messages (line, rule, " +
 			"text), not just counts — for every file the agent has " +
 			"EDITED this session (files that went through the dispatch pipeline). " +
-			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
-			"not a full project scan. Use before declaring work done; stale blocking " +
-			"errors from earlier turns are visible even if they dropped from turn-end context.\n\n" +
-			"mode=full: EXPENSIVE active scan. Runs project-wide LSP diagnostics for " +
-			"all supported files (including unedited files), then merges/deduplicates " +
+			"NOTE: this is cache-only reporting, not verification of the files' current state. " +
+			"Unedited files with pre-existing errors do NOT appear here, and an empty cache " +
+			"is not proof of clean. Stale blocking errors from earlier turns are visible even " +
+			"if they dropped from turn-end context. For changed files with absent or stale " +
+			"cache, use mode=full with paths to actively check those files.\n\n" +
+			"mode=full: active scan. Without paths, runs project-wide LSP diagnostics for " +
+			"all supported files (including unedited files); with paths, actively scans " +
+			"exactly those files. Then merges/deduplicates " +
 			"that with mode=all cached runner state. Optional refreshRunners=cheap/all/cached " +
 			"folds in project-wide runner findings: the in-process scanners (tree-sitter + " +
 			"fact-rules + ast-grep) plus a FRESH run of the heavyweight analyzers — knip, " +
@@ -277,7 +281,9 @@ export function createLensDiagnosticsTool(
 			"analyzer de-dupes against a concurrent background run of itself, so this can't " +
 			"double-spawn. Bounded by the slowest analyzer (trivy's own ~180s ceiling).",
 		promptSnippet:
-			"Use lens_diagnostics mode=all to verify no blocking errors remain; use mode=full for expensive project-wide checks",
+			"mode=all reports cached diagnostics only; it does not verify current files. " +
+			"For changed files with absent or stale cache, use mode=full with paths for " +
+			"an active targeted check.",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;
@@ -360,8 +366,9 @@ export function createLensDiagnosticsTool(
 					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = session diagnostics for edited/dispatched files. " +
-						"full = expensive active project-wide LSP scan plus cached runner diagnostics.",
+						"all = cache-only diagnostics for edited/dispatched files; it does not " +
+						"verify current files. full = active LSP scan plus cached runner " +
+						"diagnostics; add paths for a targeted active check.",
 				}),
 			),
 			refreshRunners: Type.Optional(
