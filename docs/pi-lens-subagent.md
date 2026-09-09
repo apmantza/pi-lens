@@ -44,8 +44,8 @@ names findings by id, the handoff answers each id with one of
 `fixed | not fixed | withdrawn (why)` before any prose.
 
 A sandboxed worker may find the shared `.git` and the linked `node_modules`
-read-only and the network absent (the codex `workspace-write` sandbox does
-this; see plegma#311). Run Vitest as
+read-only and the network absent (a write-confined sandbox does this; the
+runner's own notes say which mode lifts it). Run Vitest as
 `node_modules/.bin/vitest run <files> --configLoader runner`, and if the
 tree-sitter grammar prefetch hangs offline, verify through direct probes of the
 built code and say so; the orchestrator re-runs the files outside the sandbox.
