@@ -8,6 +8,7 @@
  */
 
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { getAutofixCapability, hasEslintConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -120,7 +121,7 @@ const eslintRunner: RunnerDefinition = {
 	priority: PRIORITY.LINT_SECONDARY,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "eslint");
 		const userHasConfig = hasEslintConfig(cwd);
 
 		// Only run if project has an ESLint config.

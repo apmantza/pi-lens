@@ -35,7 +35,8 @@ vi.mock("../../../../clients/latency-logger.js", () => ({
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));
-vi.mock("../../../../clients/degradation-ledger.js", () => ({
+vi.mock("../../../../clients/degradation-ledger.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/degradation-ledger.js")>()),
 	recordDegradation: recordDegradationSpy,
 	recordDegradationOnce: vi.fn(),
 	incrementDegradationCount: incrementDegradationCountSpy,

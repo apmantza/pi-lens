@@ -23,7 +23,8 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	>()),
 	safeSpawnAsync,
 }));
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	createAvailabilityChecker: () => ({ getOutcome: () => "success" }),
 	resolveAvailableOrInstall,
 }));

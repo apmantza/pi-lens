@@ -15,7 +15,8 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 // The eslint runner resolves its binary and probes availability through
 // runner-helpers; both are environment, not behavior under test (#448). The
 // probe stub answers available so every case reaches the spawn seam.
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	resolveToolCommand: vi.fn(() => "eslint"),
 	createCwdCachedProbe: vi.fn(() => {
 		const probe = async () => true;

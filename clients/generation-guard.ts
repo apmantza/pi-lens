@@ -161,6 +161,13 @@ export interface GenerationMap {
 	 * primitive carries it now rather than growing an API under merge pressure.
 	 */
 	forget(key: string): void;
+	/**
+	 * Drop every key, invalidating all outstanding handles.
+	 *
+	 * Use this when the owning seam has a whole-store reset boundary rather
+	 * than a per-key invalidation.
+	 */
+	clear(): void;
 	/** Number of keys currently retained, for tests and bound assertions. */
 	size(): number;
 }
@@ -316,6 +323,10 @@ export function createGenerationMap(
 		forget(key: string): void {
 			invalidations += 1;
 			stamps.delete(normalize(key));
+		},
+		clear(): void {
+			invalidations += 1;
+			stamps.clear();
 		},
 		size(): number {
 			return stamps.size;
