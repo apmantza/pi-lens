@@ -229,9 +229,11 @@ operator's private notes, so a different orchestrator can run the same train.
   2026-09-07).** The PR-title issue-ref gate is a policy check this train
   applies to human PRs; a bump title can never carry a ref. Merge order: one
   at a time (each merge dirties the rest; dependabot rebases them itself);
-  gate on Lint, Unit tests and every non-advisory check on the exact head,
-  ignoring only "PR title"/"PR body"; hold anything red on a real check with a
-  comment naming the check (2026-09-07: tsls 6 needs a Node-floor bump, biome
+  gate on Lint, Unit tests and every non-advisory check on the exact head;
+  lint.yml and close-keywords.yml themselves skip "PR title", "PR body
+  (advisory)" and "Close-keyword syntax" for dependabot (2026-09-09, refs
+  #2714), so nothing needs hand-ignoring; hold anything red on a real check
+  with a comment naming the check (2026-09-07: tsls 6 needs a Node-floor bump, biome
   fails the install test, vitest 5 fails four gates; a bump whose install
   script is pinned by `allowScripts` needs the pin moved in a maintainer
   commit on the bump branch). A major bump with peers (vitest + coverage-v8)
