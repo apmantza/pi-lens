@@ -51,6 +51,10 @@ const reviewedExceptions = new Map<string, string>([
 		"tests/clients/flake-shape-ratchet.test.ts -> vitest.config.ts",
 		"reads the live config source, not the stale compiled vitest.config.js",
 	],
+	[
+		"tests/config/real-harness-lane.test.ts -> vitest.config.ts",
+		"reads the live config source, not the stale compiled vitest.config.js",
+	],
 ]);
 
 describe("test imports bind the compiled module instance (#1565)", () => {

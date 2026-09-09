@@ -7,7 +7,7 @@ import { CI_JOB_NAMES } from "./lib/ci-checks.mjs";
 export const GATES = [
 	["build", ["npm", "run", "build"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
 	["lint", ["npm", "run", "lint"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
-	["fmt:check", ["npm", "run", "fmt:check"], "oxfmt format check (advisory)"],
+	["fmt:check", ["npm", "run", "fmt:check"], "oxfmt format check"],
 	["changelog:check", ["npm", "run", "changelog:check"], "Unit tests"],
 	[
 		"check-changelog-fragments",
@@ -17,6 +17,11 @@ export const GATES = [
 	[
 		"check:lockfile",
 		["npm", "run", "check:lockfile"],
+		CI_JOB_NAMES.LINT_AND_TYPECHECK,
+	],
+	[
+		"lockfile:complete",
+		["npm", "run", "check:lockfile", "--", "--complete"],
 		CI_JOB_NAMES.LINT_AND_TYPECHECK,
 	],
 	["tests/config", ["tests/config/"], CI_JOB_NAMES.UNIT_TESTS],
@@ -147,8 +152,8 @@ export function formatSummary(rows) {
 	const values = rows.map((row) => [
 		row.gate,
 		row.job,
-		row.code === 0 ? "pass" : "FAIL",
-		row.code === 0 ? "" : row.firstRed,
+		row.code === 0 ? "pass" : row.code === 3 ? "inconclusive" : "FAIL",
+		row.code === 0 || row.code === 3 ? "" : row.firstRed,
 	]);
 	const widths = headers.map((header, index) =>
 		Math.max(header.length, ...values.map((row) => row[index].length)),
@@ -235,7 +240,7 @@ export function runPreflight({
 			...runChild(command, cwd, localEnv, spawn),
 		}));
 	console.log(formatSummary(rows));
-	return rows.some((row) => row.code !== 0) ? 1 : 0;
+	return rows.some((row) => row.code !== 0 && row.code !== 3) ? 1 : 0;
 }
 
 if (

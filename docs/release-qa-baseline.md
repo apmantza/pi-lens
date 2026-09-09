@@ -17,7 +17,9 @@ first six runs — which pinned the pi-lens home but passed no environment to
 `npm` at all — put 41 records into the maintainer's real
 `~/.pi-lens/install.log` (#2619 review F1). The pack runs in a
 `git archive HEAD` export, never the live checkout, because `npm pack` fires our
-own `prepack` (rewrites `package.json` + `package-lock.json`) and `prepare`
+own `prepack` (rewrites `package.json` + `package-lock.json`) and `prepare`.
+When regenerating the lockfile, use the exact npm version in `package.json`'s
+`packageManager` field (`npm@11.18.0`), matching the production-install CI job.
 (rebuilds `dist/`, downloads grammars, reinstalls git hooks).
 
 Why it exists: #2587. The four shipped skills were suspected of never

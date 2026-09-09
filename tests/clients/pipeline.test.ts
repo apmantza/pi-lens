@@ -1067,6 +1067,7 @@ describe("Pipeline", () => {
 		// Windows (#2089): CI's Unit tests job runs on ubuntu-latest, where
 		// case-folding is a no-op, and an early return there would report a PASS
 		// on a body that asserted nothing.
+		// lane: windows-vitest
 		it.skipIf(process.platform !== "win32")(
 			"still captures lines when the blocker's path differs from ctx.filePath only by drive-letter case (win32)",
 			async () => {

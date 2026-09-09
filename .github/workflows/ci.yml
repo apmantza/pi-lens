@@ -169,6 +169,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Lockfile complete under the CI npm pin
+        run: npm run check:lockfile -- --complete
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
@@ -419,19 +422,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t WIN32_FILES < <(
-            git grep -l -E 'path\.win32|skipIf|runIf' -- ':(glob)tests/**/*.test.ts' |
-              while IFS= read -r file; do
-                if git grep -qi 'win32' -- "$file"; then
-                  printf '%s\n' "$file"
-                fi
-              done | sort -u
-          )
-          mapfile -t CONFIG_FILES < <(find tests/config -type f -name '*.test.ts' -print | sort)
-          FILES=("${WIN32_FILES[@]}" "${CONFIG_FILES[@]}")
-          if [[ -f tests/clients/tool-cwd.test.ts ]]; then
-            FILES+=(tests/clients/tool-cwd.test.ts)
-          fi
+          mapfile -t FILES < <(node scripts/lib/win32-gate-population.mjs --files)
           [[ ${#FILES[@]} -eq 0 ]] && { echo "::error::enumeration empty"; exit 1; }
           printf '%s\n' "${FILES[@]}" | sort -u | tee "$RUNNER_TEMP/windows-vitest-files.txt"
           printf 'Windows Vitest subset: %s files\n' "$(sort -u "$RUNNER_TEMP/windows-vitest-files.txt" | wc -l)"
@@ -452,6 +443,7 @@ jobs:
         shell: bash
         run: |
           outcome="${{ steps.windows-vitest.outcome }}"
+          node scripts/lib/win32-gate-population.mjs --summary --executed-file-list "$RUNNER_TEMP/windows-vitest-files.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Windows Vitest subset step outcome: $outcome" >> "$GITHUB_STEP_SUMMARY"
           echo "windows_vitest=$outcome" >> "$GITHUB_STEP_SUMMARY"
 
@@ -504,8 +496,8 @@ jobs:
       # Keep this version in sync with the pin in release.yml (publish-npm job).
       - name: Pin npm with libc-aware lockfile metadata
         run: |
-          npm install --ignore-scripts --global npm@11.18.0
-          test "$(npm --version)" = "11.18.0"
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          test "$(npx -y "npm@${npm_pin}" --version)" = "${npm_pin}"
 
       # #437: typescript is a devDependency (#402), so --omit=dev omits it. pi builds
       # the GitHub install from source under --omit=dev, so `build:dist` must resolve
@@ -523,7 +515,9 @@ jobs:
           fi
 
       - name: Install without devDeps (--omit=dev)
-        run: npm install --omit=dev --no-audit --no-fund
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" install --omit=dev --no-audit --no-fund
 
       - name: Build dist from source under --omit=dev (the prepare path)
         run: npm run build:dist
@@ -581,7 +575,8 @@ jobs:
           rm -rf "$RUNNER_TEMP/gh-install"
           git clone --quiet . "$RUNNER_TEMP/gh-install"
           cd "$RUNNER_TEMP/gh-install"
-          npm install --omit=dev --no-audit --no-fund
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" install --omit=dev --no-audit --no-fund
           if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
             echo "ERROR: npm install --omit=dev changed tracked source files"
             git status --short --untracked-files=no

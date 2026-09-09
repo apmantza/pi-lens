@@ -84,6 +84,7 @@ migrate-*.js
 !docs/pi-lens-investigator.md
 !docs/pi-lens-warden.md
 !docs/pi-lens-monitor.md
+!docs/real-harness.md
 !docs/audit1.md
 !docs/agent-guide.md
 !docs/agent-tools.md
