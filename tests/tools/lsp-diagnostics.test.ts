@@ -2049,6 +2049,7 @@ describe("lsp_diagnostics tool", () => {
 									end: { line: 0, character: 1 },
 								},
 								source: "typescript",
+								serverId: "typescript",
 							},
 							{
 								severity: 2,
@@ -2058,6 +2059,7 @@ describe("lsp_diagnostics tool", () => {
 									end: { line: 1, character: 1 },
 								},
 								source: "ast-grep",
+								serverId: "ast-grep",
 							},
 						];
 					}
@@ -2303,6 +2305,7 @@ describe("lsp_diagnostics tool", () => {
 									end: { line: 0, character: 1 },
 								},
 								source: "typescript",
+								serverId: "typescript",
 							},
 						];
 					}
@@ -2316,6 +2319,7 @@ describe("lsp_diagnostics tool", () => {
 									end: { line: 0, character: 1 },
 								},
 								source: "ast-grep",
+								serverId: "ast-grep",
 							},
 						];
 					}
