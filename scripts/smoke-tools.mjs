@@ -1387,6 +1387,7 @@ function parseArgs(argv) {
 	let autofix = false;
 	let tier1 = false;
 	let minPass = null;
+	let installRegistry = false;
 	for (const arg of argv) {
 		if (arg === "--step2") step2 = true;
 		else if (arg === "--verbose" || arg === "-v") verbose = true;
@@ -1395,6 +1396,7 @@ function parseArgs(argv) {
 		else if (arg === "--lsp-gate") lspGate = true;
 		else if (arg === "--format") format = true;
 		else if (arg === "--tier1") tier1 = true;
+		else if (arg === "--install-registry") installRegistry = true;
 		else if (arg.startsWith("--min-pass="))
 			minPass = Number.parseInt(arg.slice("--min-pass=".length), 10);
 		else if (arg === "--autofix") autofix = true;
@@ -1411,6 +1413,7 @@ function parseArgs(argv) {
 		autofix,
 		tier1,
 		minPass,
+		installRegistry,
 	};
 }
 
@@ -1650,6 +1653,7 @@ export function classifyInstallOutcome(toolId, deps) {
 	if (attempt?.outcome !== "failed") {
 		return {
 			row: "skip",
+			networkUnreachable: false,
 			detail: `${toolId} unavailable (${attempt?.outcome ?? "no install attempt"}${attempt?.reason ? `: ${firstLine(attempt.reason)}` : ""})`,
 		};
 	}
@@ -1657,6 +1661,7 @@ export function classifyInstallOutcome(toolId, deps) {
 	if (TRANSIENT_NETWORK_PATTERN.test(reason)) {
 		return {
 			row: "skip",
+			networkUnreachable: true,
 			detail: `${toolId} unavailable (transient registry/network condition: ${firstLine(reason)})`,
 		};
 	}
@@ -1670,11 +1675,13 @@ export function classifyInstallOutcome(toolId, deps) {
 	if (!genuine) {
 		return {
 			row: "skip",
+			networkUnreachable: false,
 			detail: `${toolId} unavailable (no ${strategy ?? "known"} toolchain on this runner)`,
 		};
 	}
 	return {
 		row: "fail",
+		networkUnreachable: false,
 		detail: `ensureTool(${toolId}) failed (${strategy} toolchain present): ${firstLine(reason)}`,
 	};
 }
@@ -1756,6 +1763,123 @@ export async function ensureFixtureTools(
 		}
 	}
 	return { unavailableTools, attemptSnapshots };
+}
+
+/**
+ * Registry install lane (--install-registry, #2663): install every TOOLS
+ * entry whose installStrategy is npm or pip — the two strategies whose
+ * toolchain this harness itself guarantees (#2661: npm runs under Node, so it
+ * is always "present"; pip is probed through the installer's own
+ * `pipCommandCandidates` ladder) — and classify each unavailability with the
+ * SAME `classifyInstallOutcome` the fixture lanes use, so a dead registry
+ * entry (the #2638 `vscode-css-languageserver` shape) is one red row here
+ * instead of a ⚠ skip folded into "toolchain absent".
+ *
+ * The fixture lanes only exercise the registry entries their fixtures name;
+ * this lane sweeps the whole npm/pip registry, which is what the release gate
+ * (`scripts/release-qa.mjs`'s `tool-smoke-install` row) consumes.
+ *
+ * Output contract: ONE JSON document on stdout, human progress on stderr.
+ * Exit code (decided by the caller in main()): 0 when no genuine install
+ * failure, 1 otherwise. A network-unreachable classification is a SKIP here —
+ * the smoke's own semantics (#2661 F2: a runner with no network is a runner
+ * condition, not an installer defect) — and carries `networkUnreachable: true`
+ * so the release-qa consumer can refuse a ship verdict on an unmeasured lane
+ * instead of reading the skips as green.
+ *
+ * `deps` injects the installer surface for tests (the seam `runFormatSmoke`
+ * uses); production resolves it from dist/clients/installer. `toolchainPresence`
+ * is injectable for the same reason — the production value starts empty and
+ * caches probe results per strategy.
+ */
+export async function runInstallRegistrySmoke({ verbose, deps } = {}) {
+	let ensureTool;
+	let TOOLS = [];
+	let getInstallAttempt;
+	let pipCommandCandidatesFn;
+	let toolchainPresence = {};
+	if (deps) {
+		({
+			ensureTool,
+			TOOLS,
+			getInstallAttempt,
+			pipCommandCandidates: pipCommandCandidatesFn,
+			toolchainPresence,
+		} = deps);
+	} else {
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
+		if (!fs.existsSync(installerEntry)) {
+			console.error(
+				`dist build missing: ${installerEntry}\nRun \`npm run build:dist\` first.`,
+			);
+			process.exit(2);
+		}
+		({
+			ensureTool,
+			TOOLS,
+			getInstallAttempt,
+			pipCommandCandidates: pipCommandCandidatesFn,
+		} = await import(pathToFileURL(installerEntry).href));
+	}
+	const toolsById = new Map(TOOLS.map((t) => [t.id, t]));
+	const pipCandidates = pipCommandCandidatesFn?.() ?? [];
+	const targets = TOOLS.filter(
+		(t) => t.installStrategy === "npm" || t.installStrategy === "pip",
+	);
+	const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
+		targets.map((t) => t.id),
+		ensureTool,
+		getInstallAttempt,
+		(toolId, resolved) => {
+			if (verbose) {
+				console.error(`ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`);
+			}
+		},
+	);
+	const results = [];
+	for (const tool of targets) {
+		if (!unavailableTools.has(tool.id)) {
+			results.push({
+				toolId: tool.id,
+				installStrategy: tool.installStrategy,
+				state: "pass",
+				detail: "resolved",
+				networkUnreachable: false,
+			});
+			continue;
+		}
+		const outcome = classifyInstallOutcome(tool.id, {
+			toolsById,
+			toolchainPresence,
+			pipCandidates,
+			getInstallAttempt: (toolId) => attemptSnapshots.get(toolId),
+		});
+		results.push({
+			toolId: tool.id,
+			installStrategy: tool.installStrategy,
+			state: outcome.row,
+			detail: outcome.detail,
+			networkUnreachable: outcome.networkUnreachable,
+		});
+	}
+	const genuineFailures = results.filter((r) => r.state === "fail");
+	return {
+		lane: "install-registry",
+		toolCount: results.length,
+		installed: results.filter((r) => r.state === "pass").length,
+		genuineFailures: genuineFailures.map((r) => r.toolId),
+		networkUnreachable: results
+			.filter((r) => r.networkUnreachable)
+			.map((r) => r.toolId),
+		ok: genuineFailures.length === 0,
+		results,
+	};
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
@@ -2615,12 +2739,19 @@ async function main() {
 		autofix,
 		tier1,
 		minPass,
+		installRegistry,
 	} = parseArgs(process.argv.slice(2));
 
 	// Clean leftovers from prior runs (their file locks are released now).
 	const swept = sweepLeftovers();
 	if (verbose && swept > 0)
 		console.error(`swept ${swept} leftover temp workspace(s)`);
+
+	if (installRegistry) {
+		const result = await runInstallRegistrySmoke({ verbose });
+		console.log(JSON.stringify(result));
+		process.exit(result.ok ? 0 : 1);
+	}
 
 	if (lsp) {
 		process.exit(

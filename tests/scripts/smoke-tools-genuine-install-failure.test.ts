@@ -35,6 +35,7 @@ import {
 	classifyInstallOutcome,
 	ensureFixtureTools,
 	pipCandidateUsable,
+	runInstallRegistrySmoke,
 	resolveUnavailabilityRow,
 } from "../../scripts/smoke-tools.mjs";
 
@@ -217,6 +218,32 @@ describe("classifyInstallOutcome (#2638/#2661) — outcome × toolchain table", 
 		expect(result.row).toBe("fail");
 		expect(result.detail).not.toContain("second line never shown");
 		expect(result.detail.length).toBeLessThan(300);
+	});
+
+	it("preserves the network-unreachable classification for release consumers", () => {
+		const result = classifyInstallOutcome(
+			"vscode-css-languageserver",
+			deps(() => ({
+				outcome: "failed",
+				reason: "npm error ENOTFOUND registry.npmjs.org",
+			})),
+		);
+		expect(result.networkUnreachable).toBe(true);
+	});
+
+	it("carries the classifier tag into the registry report", async () => {
+		const report = await runInstallRegistrySmoke({
+			deps: {
+				TOOLS: [{ id: "vscode-css-languageserver", installStrategy: "npm" }],
+				ensureTool: async () => undefined,
+				getInstallAttempt: () => ({
+					outcome: "failed",
+					reason: "npm error ENOTFOUND registry.npmjs.org",
+				}),
+				pipCommandCandidates: () => [],
+			},
+		});
+		expect(report.results[0].networkUnreachable).toBe(true);
 	});
 });
 
