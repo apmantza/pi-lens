@@ -91,6 +91,14 @@ tool. The loader `pi_lens_activate_tools` and MCP lifecycle tools
 protocols and cannot be disabled. Unknown or non-disableable names emit
 `PILENS_CFG_0009`.
 
+Valid names for `tools.<name>.enabled` include `ast_grep_search`,
+`ast_grep_replace`, `ast_grep_outline`, `ast_grep_dump`, `lsp_navigation`,
+`lsp_diagnostics`, `lens_diagnostics`, `lens_diagnostic_mark`, `symbol_search`,
+`module_report`, `project_report`, `read_symbol`, `read_enclosing`,
+`effective_config`, `analyze`, `health`, `latency`, `project_scan`, and
+`rebuild`. The activation loader and MCP lifecycle tools `session_start` and
+`turn_end` cannot be disabled.
+
 `--lens-guard` is **EXPERIMENTAL and strictly opt-in**. When enabled, actual
 `git commit`/`git push` commands are blocked only for current, structured
 blocking findings (including blocking test failures); advisory/no-action-required

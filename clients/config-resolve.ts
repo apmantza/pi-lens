@@ -1030,8 +1030,8 @@ export function ignoredRecordCollector(
 } {
 	const noted: MigrationRecord[] = [];
 	const note: NoteIgnored = (reason, code = "PILENS_CFG_0001") => {
-		noted.push({
-			code,
+		let notedRecord = {
+			code: "PILENS_CFG_0001" as ConfigDiagnosticCode,
 			file: configPath,
 			key: "",
 			subject: migrationSubject(configPath, ""),
@@ -1042,7 +1042,9 @@ export function ignoredRecordCollector(
 							sourceText: reason.sourceText,
 						}),
 			tier,
-		});
+		};
+		if (code !== "PILENS_CFG_0001") notedRecord.code = code;
+		noted.push(notedRecord);
 	};
 	return {
 		note,
