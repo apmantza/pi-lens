@@ -63,6 +63,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Lang, parse } from "@ast-grep/napi";
 
 import {
 	createCallSiteScanner,
@@ -72,6 +73,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "./sweep-kit.js";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -97,7 +99,7 @@ function testSourceFiles(dir = TESTS_ROOT): string[] {
  */
 function supportHelperFiles(): string[] {
 	return listSourceFiles(path.join(TESTS_ROOT, "support"), {
-		extensions: [".ts"],
+		extensions: [".ts", ".mts"],
 		skipDeclarations: true,
 	}).filter((absolute) => !absolute.endsWith(".test.ts"));
 }
@@ -332,6 +334,66 @@ const RAW_TIMER_CALL = /\b(setTimeout|setInterval)\s*\(/;
 const USE_FAKE_TIMERS = /\bvi\.useFakeTimers\s*\(/;
 const USE_REAL_TIMERS = /\bvi\.useRealTimers\s*\(/;
 
+const TIMER_IMPORT_MODULES = new Set([
+	"node:timers/promises",
+	"timers/promises",
+]);
+
+/** Resolve timer aliases from the parsed binding declarations. */
+function timerBindings(source: string): {
+	local: Set<string>;
+	namespaces: Set<string>;
+} {
+	const local = new Set(["setTimeout", "setInterval"]);
+	const namespaces = new Set<string>();
+	const root = parse(Lang.TypeScript, source).root();
+	const visit = (node: SgNode): void => {
+		if (node.kind() === "import_statement") {
+			const module = node
+				.field("source")
+				?.text()
+				.replace(/^['"]|['"]$/g, "");
+			if (module && TIMER_IMPORT_MODULES.has(module)) {
+				for (const child of node.children()) {
+					if (child.kind() !== "import_clause") continue;
+					for (const specifier of child.children()) {
+						if (specifier.kind() === "identifier")
+							namespaces.add(specifier.text());
+						if (specifier.kind() !== "named_imports") continue;
+						for (const item of specifier.children()) {
+							if (item.kind() !== "import_specifier") continue;
+							const imported =
+								item.field("name")?.text() ?? item.children()[0]?.text();
+							const identifiers = item
+								.children()
+								.filter((child) => child.kind() === "identifier");
+							const alias = identifiers[identifiers.length - 1]?.text();
+							if (
+								(imported === "setTimeout" || imported === "setInterval") &&
+								alias
+							)
+								local.add(alias);
+						}
+					}
+				}
+			}
+		}
+		if (node.kind() === "variable_declarator") {
+			const name = node.field("name");
+			const value = node.field("value");
+			if (
+				name?.kind() === "identifier" &&
+				value?.kind() === "identifier" &&
+				local.has(value.text())
+			)
+				local.add(name.text());
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	return { local, namespaces };
+}
+
 /**
  * A declared `delay`/`sleep`-named binding — `export function delayInside(...)`,
  * `const delay = ...` (prefix-anchored, so `delayInside`/`delayMs` count: the
@@ -379,6 +441,7 @@ export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
 	const lines = stripped.split("\n");
 	const stateAtLine = fakeTimersStateAtLine(lines);
 	const supportHelper = isSupportHelperFile(file);
+	const bindings = timerBindings(source);
 
 	const hits: FlakeHit[] = [];
 	lines.forEach((lineText, idx) => {
@@ -401,6 +464,34 @@ export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
 			});
 		}
 	});
+	const root = parse(Lang.TypeScript, source).root();
+	const visit = (node: SgNode): void => {
+		if (node.kind() === "call_expression") {
+			const fn = node.field("function");
+			const isLocal =
+				fn?.kind() === "identifier" &&
+				bindings.local.has(fn.text()) &&
+				!new Set(["setTimeout", "setInterval"]).has(fn.text());
+			const isNamespace =
+				fn?.kind() === "member_expression" &&
+				bindings.namespaces.has(fn.field("object")?.text() ?? "") &&
+				["setTimeout", "setInterval"].includes(
+					fn.field("property")?.text() ?? "",
+				);
+			const line = node.range().start.line;
+			if ((isLocal || isNamespace) && !stateAtLine[line]) {
+				if (!hits.some((hit) => hit.line === line))
+					hits.push({
+						line: line + 1,
+						text: lines[line]?.trim() ?? "",
+						reason: "aliased raw timer call outside vi.useFakeTimers()",
+					});
+			}
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	hits.sort((a, b) => a.line - b.line);
 	return hits;
 }
 

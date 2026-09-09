@@ -73,6 +73,8 @@ import {
 	scanRealProcessSpawn,
 	scanUngovernedWaitFor,
 } from "../support/flake-shape-scan.js";
+import { testSourceFiles as allTestSourceFiles } from "../support/module-instance-scan.js";
+import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedKeys } from "../support/sweep-kit.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
@@ -125,6 +127,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"the hook remainder is the defect; fake timers isolate the delayed pre-snapshot work from scheduler contention",
+	},
+	"raw-timer-wait:support/fault-injection.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"fault injection must model real timer and child teardown timing; fake timers cannot reproduce the boundary",
 	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
@@ -384,6 +391,34 @@ function wallClockBudgetInclude(): string[] {
 		throw new Error('"wall-clock-budget" project has no include list');
 	}
 	return include.map(String);
+}
+
+/** Support helpers inherit the serialized lane from an importing test. */
+function supportHelperHasLaneProof(
+	relativePath: string,
+	included: ReadonlySet<string>,
+): boolean {
+	const target = path.join(repoRoot, "tests", relativePath);
+	const files = allTestSourceFiles().filter((file) =>
+		file.endsWith(".test.ts"),
+	);
+	const visited = new Set<string>();
+	const walk = (absolute: string): boolean => {
+		if (visited.has(absolute)) return false;
+		visited.add(absolute);
+		const relative = path
+			.relative(repoRoot, absolute)
+			.replaceAll(path.sep, "/");
+		if (absolute.endsWith(".test.ts") && included.has(relative)) return true;
+		return files.some(
+			(candidate) =>
+				localImportTargets(candidate).includes(absolute) && walk(candidate),
+		);
+	};
+	return files.some(
+		(candidate) =>
+			localImportTargets(candidate).includes(target) && walk(candidate),
+	);
 }
 
 interface RatchetProblem {
@@ -679,7 +714,11 @@ function validateAdmission(
 	} else if (header.reason.length < 15) {
 		problems.push(`${key}: header reason too short to be real`);
 	}
-	if (!wallClockBudgetIncluded.has(`tests/${relativeTestsPath}`)) {
+	const laneProof =
+		wallClockBudgetIncluded.has(`tests/${relativeTestsPath}`) ||
+		(relativeTestsPath.startsWith("support/") &&
+			supportHelperHasLaneProof(relativeTestsPath, wallClockBudgetIncluded));
+	if (!laneProof) {
 		problems.push(
 			`${key}: not listed in vitest.config.ts wallClockBudgetInclude`,
 		);
@@ -696,11 +735,28 @@ describe("flake-shape ratchet — admission gate", () => {
 		const problems: string[] = [];
 		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
 			const file = key.slice(entry.detector.length + 1);
+			if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
 			const absolute = path.join(repoRoot, "tests", file);
 			const source = fs.existsSync(absolute)
 				? fs.readFileSync(absolute, "utf8")
 				: undefined;
 			problems.push(...validateAdmission(key, entry, source, included, file));
+		}
+		for (const detector of DETECTOR_NAMES) {
+			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
+				if (!file.startsWith("support/") || file.endsWith(".test.ts")) continue;
+				const key = `${detector}:${file}`;
+				const entry = ADMITTED_AFTER_BASELINE[key];
+				if (!entry) {
+					problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
+					continue;
+				}
+				const source = fs.readFileSync(
+					path.join(repoRoot, "tests", file),
+					"utf8",
+				);
+				problems.push(...validateAdmission(key, entry, source, included, file));
+			}
 		}
 		expect(problems).toEqual([]);
 	});
@@ -1071,6 +1127,27 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		expect(problems.map(describeProblem)).toEqual([
 			expect.stringContaining(`NEW flagged file ${file}`),
 		]);
+	});
+
+	it.each([
+		[
+			"local alias",
+			"export function pause(ms: number) { const t = setTimeout; t(() => {}, ms); }",
+		],
+		[
+			"named timers/promises import",
+			'import { setTimeout as timer } from "node:timers/promises"; export function pause(ms: number) { return timer(ms); }',
+		],
+		[
+			"namespace timers/promises import",
+			'import * as timers from "timers/promises"; export function pause(ms: number) { return timers.setTimeout(ms); }',
+		],
+	])("flags a %s timer alias", (_name, source) => {
+		// #2563 recurrence: a pause/tick helper must not hide a real timer
+		// behind a binding that evades both the delay-name and raw-call passes.
+		expect(
+			scanRawTimerWait("support/_fixture-aliased-timer.ts", source),
+		).toHaveLength(1);
 	});
 
 	it("(#2563) the delay/sleep definition shape is support-scoped: a non-support file is not flagged for it", () => {

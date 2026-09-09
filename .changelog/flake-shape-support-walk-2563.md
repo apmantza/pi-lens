@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Flake-shape ratchet walks tests/support helpers (refs #2563, #2784)** — the contention ratchet now also scans every non-test helper under `tests/support/` with the time detectors, so a raw-timer wait or `vi.waitFor` hidden inside a shared primitive is counted instead of reaching every importing test file uncounted; a `delay`/`sleep` helper definition in a support file is flagged too, which catches a timer aliased away from the raw-call shape.
+- **Flake-shape ratchet governs support-helper waits (refs #2563, #2784)** — the contention ratchet scans `.ts` and `.mts` support helpers, resolves aliased timers, and requires every support baseline row to carry a detector-specific reason, header, and serialized-lane proof through its importing tests.
