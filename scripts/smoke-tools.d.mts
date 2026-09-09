@@ -10,6 +10,8 @@ export interface SmokeFixture {
 	expectDiagnostic?: boolean;
 	expectDiagnosticCount?: number;
 	expectRule?: string;
+	expectedCwd?: string;
+	expectedReason?: string;
 	/**
 	 * In the tier-1 parser lane (#1937): the tool installs as a pip/npm package
 	 * or a single GitHub-release binary, with no language toolchain step.
@@ -21,6 +23,9 @@ export interface LspFixture {
 	dir: string;
 	file: string;
 	serverHint: string;
+	expectedCwd?: string;
+	expectedReason?: string;
+	expectedTool?: string;
 	tools?: string[];
 	/** Auxiliary (diagnostic-only) servers attached alongside the primary. */
 	auxiliaryServerIds?: string[];

@@ -106,6 +106,7 @@ import {
 	walkUpDirs,
 } from "./path-utils.js";
 import { findPiLensConfigMarkerInDir } from "./workspace-topology.js";
+import { readToolConfig } from "./tool-config.js";
 
 /**
  * Project config basenames, in DESCENDING precedence (first match wins), for
@@ -163,6 +164,7 @@ const REVIEW_GRAPH_MAX_FILES_MIN = 100;
 const REVIEW_GRAPH_MAX_FILES_MAX = 20_000;
 
 export interface PiLensProjectConfig {
+	tools?: Record<string, { enabled?: boolean }>;
 	startup?: {
 		mode?: "quick" | "full" | "minimal";
 		scans?: { enabled?: boolean };
@@ -820,6 +822,7 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 	for (const spec of PROJECT_SCOPED_LENS_FLAGS) {
 		assignFlagConfigSection(obj, mutations, spec.configKey, note);
 	}
+	const toolConfig = readToolConfig(obj, note);
 
 	const rules: Record<string, PiLensProjectRuleConfig> = {};
 	if (obj.rules && typeof obj.rules === "object" && !Array.isArray(obj.rules)) {
@@ -1029,6 +1032,7 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 
 	return {
 		config: {
+			...(toolConfig === undefined ? {} : { tools: toolConfig }),
 			...(startup === undefined ? {} : { startup }),
 			ignore,
 			rules,

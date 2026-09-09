@@ -93,7 +93,7 @@ vi.mock("../clients/runtime-session.js", () => ({
 // Flags are DERIVED from the registry rather than restated (#166): the old
 // hand-written list had already drifted (it was missing `lens-turn-summary`),
 // which is the same drift class the registry exists to make impossible.
-const EXPECTED_FLAGS = LENS_FLAGS.map((spec) => spec.name);
+const EXPECTED_FLAGS = [...LENS_FLAGS.map((spec) => spec.name), "no-tool"];
 const EXPECTED_COMMANDS = [
 	"lens-toggle",
 	"lens-context-toggle",
@@ -465,6 +465,42 @@ describe("index.ts extension wiring", () => {
 					default: spec.default,
 				});
 			}
+			expect(pi.flags.get("no-tool")).toEqual({
+				description: "Disable a lens tool for this session (repeatable).",
+				type: "string",
+			});
+		});
+
+		it("does not register a tool disabled by project config through the real path", () => {
+			const tempDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-tool-config-"),
+			);
+			const configPath = path.join(tempDir, "config.json");
+			fs.writeFileSync(
+				configPath,
+				JSON.stringify({
+					tools: { ast_grep_replace: { enabled: false } },
+				}),
+			);
+			const prior = process.env.PI_LENS_CONFIG_PATH;
+			process.env.PI_LENS_CONFIG_PATH = configPath;
+			try {
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				expect(pi.getTool("ast_grep_replace")).toBeUndefined();
+				expect(pi.getTool("pi_lens_activate_tools")).toBeDefined();
+			} finally {
+				if (prior === undefined) delete process.env.PI_LENS_CONFIG_PATH;
+				else process.env.PI_LENS_CONFIG_PATH = prior;
+				removeTempDirSync(tempDir);
+			}
+		});
+
+		it("does not register a tool disabled by --no-tool through the real path", () => {
+			const pi = createPiMock({ "no-tool": "ast_grep_replace" });
+			extension(pi.asExtensionAPI());
+			expect(pi.getTool("ast_grep_replace")).toBeUndefined();
+			expect(pi.getTool("ast_grep_search")).toBeDefined();
 		});
 
 		// #771: symbol_search's ergonomics additions (paths/lang filters) must
