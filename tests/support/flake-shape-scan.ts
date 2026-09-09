@@ -338,6 +338,7 @@ const TIMER_IMPORT_MODULES = new Set([
 	"node:timers/promises",
 	"timers/promises",
 ]);
+const TIMER_GLOBALS = new Set(["globalThis", "window", "self"]);
 
 /** Resolve timer aliases from the parsed binding declarations. */
 function timerBindings(source: string): {
@@ -381,6 +382,29 @@ function timerBindings(source: string): {
 		if (node.kind() === "variable_declarator") {
 			const name = node.field("name");
 			const value = node.field("value");
+			if (
+				name?.kind() === "object_pattern" &&
+				value?.kind() === "identifier" &&
+				TIMER_GLOBALS.has(value.text())
+			) {
+				for (const property of name.children()) {
+					if (property.kind() === "pair_pattern") {
+						const imported = property.children()[0]?.text();
+						const alias = property.field("value")?.text();
+						if (
+							(imported === "setTimeout" || imported === "setInterval") &&
+							alias
+						)
+							local.add(alias);
+					}
+					if (
+						property.kind() === "shorthand_property_identifier_pattern" &&
+						(property.text() === "setTimeout" ||
+							property.text() === "setInterval")
+					)
+						local.add(property.text());
+				}
+			}
 			if (
 				name?.kind() === "identifier" &&
 				value?.kind() === "identifier" &&

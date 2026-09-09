@@ -1135,6 +1135,14 @@ describe("flake-shape scan — raw-timer-wait", () => {
 			"export function pause(ms: number) { const t = setTimeout; t(() => {}, ms); }",
 		],
 		[
+			"destructured globalThis alias",
+			"const { setTimeout: t } = globalThis; export function pause(ms: number) { t(() => {}, ms); }",
+		],
+		[
+			"destructured globalThis shorthand",
+			"const { setTimeout } = globalThis; export function pause(ms: number) { setTimeout(() => {}, ms); }",
+		],
+		[
 			"named timers/promises import",
 			'import { setTimeout as timer } from "node:timers/promises"; export function pause(ms: number) { return timer(ms); }',
 		],
@@ -1148,6 +1156,14 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		expect(
 			scanRawTimerWait("support/_fixture-aliased-timer.ts", source),
 		).toHaveLength(1);
+	});
+
+	it("does not treat a destructured non-timer object as a timer alias", () => {
+		const source =
+			"const { setTimeout: t } = unrelated; export function pause(ms: number) { t(() => {}, ms); }";
+		expect(
+			scanRawTimerWait("support/_fixture-aliased-timer.ts", source),
+		).toEqual([]);
 	});
 
 	it("(#2563) the delay/sleep definition shape is support-scoped: a non-support file is not flagged for it", () => {
