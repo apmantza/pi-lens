@@ -297,7 +297,22 @@ Post-merge close verification found issue(s) that were not closed: ${details}. G
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 	(async () => {
-		if (process.argv[2] === "--lint-pr") await lintPullRequest();
+		if (process.argv[2] === "--lint-local") {
+			const title = readFileSync(process.argv[3], "utf8").split(/\r?\n/, 1)[0];
+			const body = readFileSync(process.argv[4], "utf8");
+			const result = lintCloseKeywords(body);
+			const placement = lintCloseKeywordPlacement(title, body);
+			if (!result.valid) console.error(INVALID_CLOSE_KEYWORD_MESSAGE);
+			if (!placement.valid)
+				console.error(
+					closeKeywordPlacementMessage(placement.missingBodyIssues),
+				);
+			if (!result.valid || !placement.valid) process.exitCode = 1;
+			else
+				console.log(
+					`Close-keyword syntax OK (${result.issues.length} issues referenced).`,
+				);
+		} else if (process.argv[2] === "--lint-pr") await lintPullRequest();
 		else if (process.argv[2] === "--verify-merged")
 			await verifyMergedPullRequest();
 		else

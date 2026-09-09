@@ -1,4 +1,5 @@
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { getLinterPolicyForCwd, hasSqlfluffConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -142,7 +143,7 @@ const sqlfluffRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "sqlfluff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("sqlfluff")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };

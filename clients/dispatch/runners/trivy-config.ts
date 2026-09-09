@@ -41,6 +41,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	isTrivyEnabled,
 	resolveSeverityFloor,
@@ -166,7 +167,7 @@ const trivyConfigRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "trivy-config");
 
 		// Single opt-in switch — trivy is opt-in across all modes.
 		if (!isTrivyEnabled(cwd)) {

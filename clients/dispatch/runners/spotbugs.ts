@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BoundedLruCache } from "../../bounded-cache.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { findCompiledClassesDir } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -215,7 +216,7 @@ const spotbugsRunner: RunnerDefinition = {
 	priority: PRIORITY.DEEP_LANGUAGE_ANALYSIS,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "spotbugs");
 
 		const classesDir = findCompiledClassesDir(cwd);
 		if (!classesDir) {

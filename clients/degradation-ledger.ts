@@ -67,6 +67,8 @@ export type DegradationKind =
 	| "mode-suppression"
 	| "ts-idle-eviction"
 	| "spawn-failure"
+	/** A runner, formatter, or LSP cwd/root used a bounded fallback (#2777). */
+	| "tool-cwd-resolution"
 	/** A managed-tool verification probe exceeded its retained output bound. */
 	| "installer-verification-output-truncated"
 	/**

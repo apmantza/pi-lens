@@ -38,6 +38,7 @@
 		"check": "node scripts/check-extensions.mjs",
 		"selftest:install": "node scripts/install-selftest.mjs",
 		"check:lockfile": "node scripts/check-lockfile-sync.mjs",
+		"preflight": "node scripts/pr-preflight.mjs",
 		"knip": "node scripts/run-knip.mjs",
 		"check:grammars": "node scripts/check-grammar-provenance.mjs",
 		"check:grammar-load": "node scripts/check-grammar-load.mjs",

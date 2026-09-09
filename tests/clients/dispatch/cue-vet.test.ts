@@ -286,7 +286,8 @@ vi.mock("node:fs", async () => {
 	return { ...actual, readFileSync };
 });
 
-vi.mock("../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	createAvailabilityChecker: () => ({
 		isAvailableAsync: async () => true,
 		getCommand: () => "cue",

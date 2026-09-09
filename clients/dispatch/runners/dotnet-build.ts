@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -143,7 +144,7 @@ const dotnetBuildRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "dotnet-build");
 		if (!(await dotnet.isAvailableAsync(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

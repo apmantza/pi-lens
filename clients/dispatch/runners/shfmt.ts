@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -42,7 +43,7 @@ const shfmtRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "shfmt");
 
 		let cmd: string | null = null;
 		if (await shfmt.isAvailableAsync(cwd)) {

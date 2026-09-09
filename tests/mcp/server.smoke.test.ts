@@ -75,8 +75,19 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		// between the two if the mirror ever stopped being a direct passthrough.
 		const diagnosticsTool = tools.find(
 			(t) => t.name === "pilens_diagnostics",
-		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;
+		) as
+			| {
+					description: string;
+					inputSchema: { properties?: Record<string, unknown> };
+			  }
+			| undefined;
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
+		// MCP must not keep the old whole-project-only verification advice.
+		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
+		expect(diagnosticsTool?.description).toContain("no cached diagnostics");
+		expect(diagnosticsTool?.description).toContain(
+			"unlike pilens_lsp_diagnostics",
+		);
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
 		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;

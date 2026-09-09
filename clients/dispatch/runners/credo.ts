@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -86,7 +87,7 @@ const credoRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "credo");
 
 		if (!hasMixExs(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
