@@ -92,6 +92,10 @@ import {
 } from "./session-roots.js";
 import { getProcessSingleton } from "../process-singletons.js";
 import { getLanguageId } from "./language.js";
+import {
+	getReverseDepsFromIndex,
+	loadReverseDependencyIndexFromSnapshot,
+} from "../reverse-deps.js";
 import type { LSPServerInfo } from "./server.js";
 import {
 	LSP_SERVERS,
@@ -335,6 +339,7 @@ const TOUCH_DEBOUNCE_MS = Math.max(
 	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
 		1500,
 );
+const SCOPED_DEPENDENCY_TOUCH_MAX = 32;
 // #1621: the rename-propagation notifies (`didClose` ahead of the rename,
 // `workspace/didRenameFiles` after) share the exit-notify defect #1620 fixed —
 // a notify write on a pipe that is not draining neither resolves nor rejects,
@@ -3496,6 +3501,46 @@ export class LSPService {
 				existing.notify.watchedFileChange(filePath, type);
 			}
 		}
+	}
+
+	/**
+	 * Re-sync the open views affected by one recovered Git tree change. The
+	 * recovery seam already owns the changed-path set, so this deliberately
+	 * reads only the cached reverse-import index and never runs another diff.
+	 */
+	async resyncGitChangedFiles(changedPaths: readonly string[]): Promise<void> {
+		if (this.checkDestroyed() || changedPaths.length === 0) return;
+		const targets = new Set<string>();
+		for (const changedPath of changedPaths) {
+			const resolved = path.resolve(changedPath);
+			for (const server of getServersForFileWithConfig(resolved)) {
+				const root = await this.resolveServerRoot(server, resolved);
+				if (!root) continue;
+				const index = loadReverseDependencyIndexFromSnapshot({ cwd: root });
+				for (const importer of index
+					? getReverseDepsFromIndex(index, resolved)
+					: []) {
+					targets.add(importer);
+				}
+			}
+			targets.add(resolved);
+		}
+		const openTargets = [...targets].filter((filePath) =>
+			this.hasLiveClientHoldingDocument(filePath),
+		);
+		this.documentDrift.enqueueResync(openTargets);
+		const pass = await this.sweepDocumentDrift({ force: true });
+		logLatency({
+			type: "phase",
+			phase: "lsp_external_change_resync",
+			filePath: changedPaths[0] ?? "",
+			durationMs: 0,
+			metadata: {
+				changedCount: changedPaths.length,
+				enqueued: openTargets.length,
+				deferred: pass?.deferred ?? this.documentDrift.pendingResyncCount,
+			},
+		});
 	}
 
 	/**
@@ -8630,6 +8675,46 @@ export class LSPService {
 		const workspaceSweepScopeKey = buildScopeKey("all", [
 			...WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
 		]);
+		const touchScopedOpenDependencies = async (
+			filePath: string,
+		): Promise<boolean> => {
+			if (options.files === undefined) return true;
+			// Import coverage is language-neutral. Undefined means this file was
+			// not covered by the facts seam, so its cache entry is not eligible.
+			const imports = workspaceDiagnosticsCacheCtx.importsFor(filePath);
+			if (!imports) return false;
+			const openImports = imports.filter((dependency) =>
+				this.hasLiveClientHoldingDocument(dependency),
+			);
+			const capped = openImports.length > SCOPED_DEPENDENCY_TOUCH_MAX;
+			if (capped) {
+				recordDegradationOnce({
+					kind: "lsp_dependency_touch_capped",
+					subject: filePath,
+					reason: `scoped full scan limited open import touches to ${SCOPED_DEPENDENCY_TOUCH_MAX}`,
+				});
+			}
+			await Promise.all(
+				openImports
+					.slice(0, SCOPED_DEPENDENCY_TOUCH_MAX)
+					.map(async (dependency) => {
+						let content: string;
+						try {
+							content = await fs.readFile(dependency, "utf8");
+						} catch {
+							return;
+						}
+						await this.touchFile(dependency, content, {
+							diagnostics: "none",
+							source: "lens_diagnostics_full_dependency",
+							clientScope: "all",
+							excludeServerIds:
+								await this.serverIdsNotHoldingDocument(dependency),
+						});
+					}),
+			);
+			return !capped;
+		};
 		const cachedResults: LSPWorkspaceDiagnosticResult[] = [];
 		const filesToTouch: string[] = [];
 		const writeIndexByPath = new Map<string, number | undefined>();
@@ -8652,18 +8737,22 @@ export class LSPService {
 			// exists to detect) must NOT be replayed and reconciled as confirmed via
 			// mode=full. On a mismatch, fall through to a fresh touch.
 			if (cached && cached.binding.boundToCurrentDisk !== false) {
-				cachedResults.push({
-					filePath,
-					diagnostics: cached.diagnostics,
-					count: cached.count,
-					// #1093: a cache hit replays an older observation — carry its
-					// scan time so mode=full's footer reconcile stamps `touchedAt`
-					// with when the truth was seen, not now().
-					observedAt: cached.scannedAt,
-					contentHash: cached.binding.contentHash,
-					boundToCurrentDisk: cached.binding.boundToCurrentDisk,
-					writeIndex: writeIndexByPath.get(normalizeMapKey(filePath)),
-				});
+				const dependenciesConfirmed =
+					await touchScopedOpenDependencies(filePath);
+				if (dependenciesConfirmed)
+					cachedResults.push({
+						filePath,
+						diagnostics: cached.diagnostics,
+						count: cached.count,
+						// #1093: a cache hit replays an older observation — carry its
+						// scan time so mode=full's footer reconcile stamps `touchedAt`
+						// with when the truth was seen, not now().
+						observedAt: cached.scannedAt,
+						contentHash: cached.binding.contentHash,
+						boundToCurrentDisk: cached.binding.boundToCurrentDisk,
+						writeIndex: writeIndexByPath.get(normalizeMapKey(filePath)),
+					});
+				else filesToTouch.push(filePath);
 			} else {
 				filesToTouch.push(filePath);
 			}
@@ -9981,6 +10070,12 @@ export async function notifyExternalFileChange(
 	type: number,
 ): Promise<void> {
 	return getLSPService().notifyExternalFileChange(filePath, type);
+}
+
+export async function resyncGitChangedFiles(
+	changedPaths: readonly string[],
+): Promise<void> {
+	return getLSPService().resyncGitChangedFiles(changedPaths);
 }
 
 export function resetLSPService(options: LSPShutdownOptions = {}): void {

@@ -19,6 +19,11 @@ export const GATES = [
 		["npm", "run", "check:lockfile"],
 		CI_JOB_NAMES.LINT_AND_TYPECHECK,
 	],
+	[
+		"lockfile:complete",
+		["npm", "run", "check:lockfile", "--", "--complete"],
+		CI_JOB_NAMES.LINT_AND_TYPECHECK,
+	],
 	["tests/config", ["tests/config/"], CI_JOB_NAMES.UNIT_TESTS],
 	[
 		"generation-guard",
@@ -147,8 +152,8 @@ export function formatSummary(rows) {
 	const values = rows.map((row) => [
 		row.gate,
 		row.job,
-		row.code === 0 ? "pass" : "FAIL",
-		row.code === 0 ? "" : row.firstRed,
+		row.code === 0 ? "pass" : row.code === 3 ? "inconclusive" : "FAIL",
+		row.code === 0 || row.code === 3 ? "" : row.firstRed,
 	]);
 	const widths = headers.map((header, index) =>
 		Math.max(header.length, ...values.map((row) => row[index].length)),
@@ -235,7 +240,7 @@ export function runPreflight({
 			...runChild(command, cwd, localEnv, spawn),
 		}));
 	console.log(formatSummary(rows));
-	return rows.some((row) => row.code !== 0) ? 1 : 0;
+	return rows.some((row) => row.code !== 0 && row.code !== 3) ? 1 : 0;
 }
 
 if (

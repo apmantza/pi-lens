@@ -26,6 +26,13 @@ describe("pr preflight", () => {
 		expect(GATES.find(([name]) => name === "check:lockfile")?.[2]).toBe(
 			CI_JOB_NAMES.LINT_AND_TYPECHECK,
 		);
+		expect(GATES.find(([name]) => name === "lockfile:complete")?.[1]).toEqual([
+			"npm",
+			"run",
+			"check:lockfile",
+			"--",
+			"--complete",
+		]);
 	});
 	it("parses only and skip selectors", () => {
 		expect(parseArgs(["--only", "lint"])).toEqual({
@@ -64,6 +71,22 @@ describe("pr preflight", () => {
 		expect(exitCode).toBe(1);
 		expect(spawnSync).toHaveBeenCalledOnce();
 		expect(log.mock.calls[0][0]).toContain("gate exploded");
+		log.mockRestore();
+	});
+	it("reports an inconclusive child without failing preflight", () => {
+		spawnSync.mockReturnValue({
+			status: 3,
+			stdout: "",
+			stderr: "lockfile:complete: inconclusive: npm pin unavailable\n",
+		});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const exitCode = runPreflight({
+			argv: ["--only", "lockfile:complete"],
+			spawn: spawnSync,
+			env: {},
+		});
+		expect(exitCode).toBe(0);
+		expect(log.mock.calls[0][0]).toContain("inconclusive");
 		log.mockRestore();
 	});
 	it("records a spawn exception as a failed gate", () => {

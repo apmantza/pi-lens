@@ -201,6 +201,8 @@ export interface DriftSweepDeps {
 export class DocumentDriftTracker {
 	/** Insertion-ordered; the sweep cursor walks it round-robin. */
 	private readonly synced = new Map<string, SyncedDocumentRecord>();
+	/** Git/external recovery targets waiting for the same paced resync budget. */
+	private readonly pendingResync = new Set<string>();
 	private lastSweepAt = 0;
 	private cursor = 0;
 	/**
@@ -220,6 +222,17 @@ export class DocumentDriftTracker {
 
 	peek(filePath: string): SyncedDocumentRecord | undefined {
 		return this.synced.get(normalizeMapKey(filePath));
+	}
+
+	/** Queue known-open targets for the next ordinary paced drift pass. */
+	enqueueResync(filePaths: readonly string[]): void {
+		for (const filePath of filePaths) {
+			this.pendingResync.add(normalizeMapKey(filePath));
+		}
+	}
+
+	get pendingResyncCount(): number {
+		return this.pendingResync.size;
 	}
 
 	/**
@@ -254,6 +267,7 @@ export class DocumentDriftTracker {
 	/** Drop every record. Used on shutdown/session reset, where the server's view dies with it. */
 	clear(): void {
 		this.synced.clear();
+		this.pendingResync.clear();
 		this.cursor = 0;
 		this.lastSweepAt = 0;
 		this.flight.clear();
@@ -380,12 +394,74 @@ export class DocumentDriftTracker {
 				mtimeMs: entry.stat.mtimeMs,
 			});
 		}
+		const queued = [...this.pendingResync];
+		for (const key of queued) {
+			if (deps.holdsDocument && !deps.holdsDocument(key)) {
+				this.pendingResync.delete(key);
+				unheld += 1;
+				continue;
+			}
+		}
 
 		let resynced = 0;
 		let failed = 0;
 		let unchanged = 0;
 		let deferred = 0;
+		const resyncedKeys = new Set<string>();
+		for (const key of queued) {
+			if (!this.pendingResync.has(key)) continue;
+			if (resynced >= DRIFT_RESYNC_BATCH) {
+				deferred += 1;
+				deps.onDrift?.({
+					filePath: key,
+					driftAgeMs: 0,
+					disposition: "deferred",
+					syncedSize: this.synced.get(key)?.size ?? 0,
+					diskSize: -1,
+				});
+				continue;
+			}
+			let content: string;
+			try {
+				content = await read(key);
+			} catch {
+				this.pendingResync.delete(key);
+				vanished += 1;
+				continue;
+			}
+			let landed = false;
+			try {
+				landed = await deps.resync(key, content, 0);
+			} catch {
+				landed = false;
+			}
+			if (!landed) {
+				failed += 1;
+				deps.onDrift?.({
+					filePath: key,
+					driftAgeMs: 0,
+					disposition: "failed",
+					syncedSize: this.synced.get(key)?.size ?? 0,
+					diskSize: Buffer.byteLength(content, "utf8"),
+				});
+				continue;
+			}
+			this.pendingResync.delete(key);
+			resynced += 1;
+			resyncedKeys.add(key);
+			deps.onDrift?.({
+				filePath: key,
+				driftAgeMs: 0,
+				disposition: "resynced",
+				syncedSize: this.synced.get(key)?.size ?? 0,
+				diskSize: Buffer.byteLength(content, "utf8"),
+			});
+		}
 		for (const { key, record, mtimeMs } of drifted) {
+			// A Git recovery target and the ordinary stat backstop can identify the
+			// same file in one pass. One event gets one resync opportunity; otherwise
+			// folding Git recovery onto this scheduler double-counts the same write.
+			if (resyncedKeys.has(key)) continue;
 			const driftAgeMs = Math.max(0, now() - record.syncedAt);
 			if (resynced >= DRIFT_RESYNC_BATCH) {
 				// Paced, not dropped: the cursor already advanced past this file, but

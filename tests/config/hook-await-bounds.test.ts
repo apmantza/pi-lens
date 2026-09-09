@@ -2223,7 +2223,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/lsp-document-symbols.ts": 2,
 	"clients/lsp/cascade-tier.ts": 2,
 	"clients/lsp/config.ts": 3,
-	"clients/lsp/index.ts": 151,
+	// #2817 round 2 F5: Git recovery now awaits the existing drift scheduler
+	// and its per-server root resolution. This remains an intentionally
+	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
+	// service dependencies; the scheduler itself bounds each recovery pass.
+	"clients/lsp/index.ts": 158,
 	"clients/lsp/server.ts": 111,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,

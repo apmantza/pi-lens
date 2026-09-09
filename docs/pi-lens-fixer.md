@@ -26,6 +26,8 @@ skipped, and why. Use active, plain prose.
 
 ## Standard mechanics (apply unless the brief overrides)
 
+A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle adds or updates a real-harness scenario when the defect is only observable through the host; the scenario is the red-first proof where a unit seam cannot show it.
+
 - Every language pi-lens supports (`LANGUAGES` in `clients/language-registry.ts`),
   never one: a fix on an LSP, dispatch, cache or tool seam is stated in
   language-neutral terms, names which registry entries carry the facts it
@@ -35,6 +37,8 @@ skipped, and why. Use active, plain prose.
   `PI_LENS_HOME=$PWD/.probe-home node_modules/.bin/vitest run <files> --configLoader runner`
   (sweeps get `30_000`). A CI-only red is reproduced in the job's shape first
   (`npm test` PATH prefix, pinned `HOME`, no `PI_LENS_HOME`).
+- When a task regenerates `package-lock.json`, use the exact npm version in
+  `package.json`'s `packageManager` field, which is also the CI production-install pin.
 - Required test set = the named files + every test that mocks (`vi.mock`) or
   deep-equals a module or record you touched + `tests/config/` when you add a
   real-spawn test or a fixture + the flake-shape ratchet when you touch waits.
