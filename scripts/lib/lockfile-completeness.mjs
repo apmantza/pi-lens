@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
 
@@ -133,7 +134,10 @@ export function runLockfileCompleteness({
 	}
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		const result = runLockfileCompleteness();
 		if (!result.ok && !result.inconclusive) {

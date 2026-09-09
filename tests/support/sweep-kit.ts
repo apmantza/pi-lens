@@ -1270,7 +1270,10 @@ export function assertNonEmptyScan(
 }
 
 /** Enforce lexical order so parallel admission additions stay local. */
-export function assertSortedKeys(label: string, keys: readonly string[]): void {
+export function assertSortedRegistry(
+	label: string,
+	keys: readonly string[],
+): void {
 	const duplicate = keys.find((key, index) => keys.indexOf(key) !== index);
 	if (duplicate !== undefined) {
 		throw new Error(

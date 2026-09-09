@@ -41,8 +41,8 @@ const sharedExclude = [
 // `test:integration` names these same two files positionally in package.json
 // (a positional filter DOES survive) — keep the two lists in step.
 const integrationInclude = [
-	"tests/index-integration.test.ts",
 	"tests/clients/lsp/integration.test.ts",
+	"tests/index-integration.test.ts",
 ];
 const unitOnlyExclude =
 	process.env.npm_lifecycle_event === "test:unit" ? integrationInclude : [];
@@ -128,21 +128,21 @@ const sharedExecArgv = [`--max-old-space-size=${testBudget.heapMb}`];
 // of the suite (which keeps its existing `maxWorkers: "50%"` in the
 // "default" project below).
 const grammarHeavyInclude = [
+	"tests/clients/module-report-call-graph.test.ts",
+	"tests/clients/project-diagnostics/scanner.test.ts",
+	"tests/clients/review-graph/extract-symbols.test.ts",
+	"tests/clients/review-graph/rebuild-cost.test.ts",
 	"tests/clients/review-graph/shared-extraction-ir.test.ts",
 	"tests/clients/review-graph/tsconfig-paths.test.ts",
-	"tests/clients/review-graph/extract-symbols.test.ts",
-	"tests/clients/project-diagnostics/scanner.test.ts",
 	// #1089: these two co-load most of the grammar set (incl. the heavy
 	// swift/cpp/kotlin/csharp four) for the call-graph fixture matrices —
 	// the exact #255/#902 contention shape this project exists to bound.
 	"tests/clients/tree-sitter-call-graph.test.ts",
-	"tests/clients/module-report-call-graph.test.ts",
 	// #2074: builds several synthetic TypeScript projects end-to-end through the
 	// review-graph extractor. Measured peak RSS 1,417 MB — the same class as its
 	// review-graph siblings above (1,394-1,396 MB) — and the CI unit job was
 	// killed at exit 137 the first time this file ran as a default-project
 	// co-resident.
-	"tests/clients/review-graph/rebuild-cost.test.ts",
 ];
 
 // Tier 2 fix (#902): event-loop *occupancy* guards (measureMaxSyncBlockMs —
@@ -169,11 +169,11 @@ const grammarHeavyInclude = [
 const timingSensitiveInclude = [
 	// Real node child-process barrier race for #2173; process scheduling makes
 	// this unsuitable for the default fork storm.
-	"tests/clients/instance-registry-race.test.ts",
+	"tests/clients/cascade-graph-occupancy.test.ts",
+	"tests/clients/cooperative-budget.test.ts",
 	"tests/clients/instance-registry-lock.test.ts",
-	"tests/clients/review-graph-retention.test.ts",
-	"tests/clients/source-walk-occupancy.test.ts",
-	"tests/clients/source-filter-async.test.ts",
+	"tests/clients/instance-registry-race.test.ts",
+	"tests/clients/loop-block-stall-discrimination.test.ts",
 	// Workspace-edit planning also uses the independent occupancy sampler; keep
 	// its measurement window out of the default fork storm while the guard still
 	// catches a genuinely non-yielding planner. #1081 additionally showed the
@@ -183,13 +183,12 @@ const timingSensitiveInclude = [
 	// realpathSync.native calls (clients/path-utils.ts normalizeFilePath) whose
 	// SYSTEM time is charged to this process and does inflate under load. Both
 	// numbers therefore need this project's quiet measurement window.
-	"tests/clients/lsp/edits.test.ts",
 	// Same measureMaxSyncBlockMs sampler + same contention-starvation flake
 	// (observed 2026-07-31: cold buildOrUpdateGraph blew the 300ms budget at
 	// ~82s under a full-suite fork storm, exhausting its retry:2). Its
 	// existing retry isn't enough on its own; phasing it here removes the
 	// sibling-fork noise the sampler was actually measuring.
-	"tests/clients/cascade-graph-occupancy.test.ts",
+	"tests/clients/lsp/edits.test.ts",
 	// 2026-08-12 (#1230): the remaining measureMaxSyncBlockMs users. The list
 	// above had drifted — these files run the SAME independent setImmediate
 	// sampler under the SAME default-project fork storm, so they carry the same
@@ -210,22 +209,21 @@ const timingSensitiveInclude = [
 	//     test-only suspension window while admitting its replacement. Two #1318
 	//     CI flakes under the default fork storm showed that deterministic
 	//     admission alone (#1329) does not make that window contention-proof.
-	"tests/tools/lens-diagnostics-occupancy.test.ts",
-	"tests/clients/lsp/workspace-diagnostics-occupancy.test.ts",
 	"tests/clients/lsp/ruby-drive-dirs.test.ts",
+	"tests/clients/lsp/workspace-diagnostics-occupancy.test.ts",
 	"tests/clients/performance-report-occupancy.test.ts",
 	"tests/clients/pipeline-snapshot-occupancy.test.ts",
+	"tests/clients/review-graph-retention.test.ts",
+	"tests/clients/review-graph-superseded-persist.test.ts",
+	"tests/clients/source-filter-async.test.ts",
+	"tests/clients/source-walk-occupancy.test.ts",
+	"tests/clients/source-walker-io-occupancy.test.ts",
 	"tests/clients/word-index-async-build.test.ts",
 	"tests/clients/word-index-cooperative-occupancy.test.ts",
-	"tests/clients/word-index-persist-occupancy.test.ts",
-	//   - cooperative-budget: #1215 acceptance screens — sampler-based
-	//     occupancy at 800-item scale plus the abort-latency bound.
-	"tests/clients/cooperative-budget.test.ts",
-	"tests/clients/review-graph-superseded-persist.test.ts",
 	// #1137: the shared walk engine's directory-read occupancy screen. Same
 	// sampler, and its fail-then-pass pair injects a busy-wait stall, so it
 	// must not compete with a fork storm for CPU turns.
-	"tests/clients/source-walker-io-occupancy.test.ts",
+	"tests/clients/word-index-persist-occupancy.test.ts",
 	// #1980: blocks the real event loop twice (a parked-thread futex wait, then
 	// a busy spin of the same length) and asserts the two classify differently
 	// on the CPU axis, reading process.cpuUsage through getEventLoopStats.
@@ -243,7 +241,7 @@ const timingSensitiveInclude = [
 	// this file in it (19 files, 118 tests, ~49s). If a sampler-based sibling
 	// starts flaking here, this file is the first suspect and the cap is the
 	// first lever.
-	"tests/clients/loop-block-stall-discrimination.test.ts",
+	"tests/tools/lens-diagnostics-occupancy.test.ts",
 ];
 
 // #1022 fix: the "workspace LSP winner" case in this file spawns a REAL
@@ -274,33 +272,33 @@ const timingSensitiveInclude = [
 // outside this list without a documented exemption — or a member here
 // silently goes stale.
 const lspSpawnHeavyInclude = [
-	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts",
+	"tests/clients/dispatch/runners/lsp-real-runner.test.ts",
+	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
+	"tests/clients/lsp/integration.test.ts",
+	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a
 	// server-authored diagnostic is pushed; keep that handshake in this lane.
-	"tests/tools/lsp-diagnostics-2776.test.ts",
 	// #2344: npm test leaves this real-child integration suite in the default
 	// project unless it is explicitly phased here. `test:integration` still
 	// selects the same file positionally, while `test:unit` excludes it below.
-	"tests/clients/lsp/integration.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts",
+	"tests/support/fake-lsp-server.test.ts",
 	// #873/#448: the dispatch LSP runner against a real stdio JSON-RPC server
 	// — a real child spawn through the production LSPService plus a
 	// `.pi-lens/lsp.json` custom server, waiting on real first-document
 	// diagnostics. Same #1022/#2332 contention class as its lane siblings.
-	"tests/clients/dispatch/runners/lsp-real-runner.test.ts",
 	// #2436: spawns a real fake-lsp-server.mjs child (through a parent shim
 	// process) and asserts it self-terminates within a 2s ceiling after the
 	// shim is SIGKILLed — a process-death-timing budget across two nested
 	// spawns, same #1022/#2332 contention class as its lane siblings.
-	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	// #2436 review round 2: pins spawnFakeLspServer's onTestFinished backstop
 	// by spawning a real fixture child via the shared helper and asserting,
 	// in a later test, that it died within a 2s ceiling with no explicit
 	// kill — same process-death-timing budget and contention class as the
 	// watchdog test above.
-	"tests/support/fake-lsp-server.test.ts",
+	"tests/tools/lsp-diagnostics-2776.test.ts",
 ];
 
 // Real pi RPC sessions execute the built extension and a real host tool. Keep

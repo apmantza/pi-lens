@@ -37,7 +37,7 @@ export { LEDGER_FIELD_MAX, truncateForLedger };
 
 export type DegradationKind =
 	/** A configured analyzer was deliberately skipped for this session. */
-	| "startup-analyzer-disabled"
+	| "actionable-warnings-deferred-superseded"
 	/**
 	 * #2430: a tool mutated a tracked file but matched no built-in name and no
 	 * mutation shape adapter, so pi-lens could only find the change by diffing
@@ -45,14 +45,14 @@ export type DegradationKind =
 	 * tool, so a session report names every gap in the classification registry
 	 * instead of leaving the observational net's work invisible.
 	 */
-	| "unclassified-mutating-tool"
+	| "actionable-warnings-inband-superseded"
 	/**
 	 * #2430: an observational capture — the pre-snapshot, the post-diff, or the
 	 * `agent_settled` sweep — hit its per-turn wall-clock budget, timed out, or
 	 * was aborted. The net then has NO opinion about that call, which must be
 	 * visible rather than read as "nothing changed" (catalog shape 10).
 	 */
-	| "observed-mutation-budget"
+	| "analyzer-bootstrap-latched"
 	/**
 	 * #2430: an armed observation's universe was TRUNCATED — the tool named a
 	 * directory with more entries than {@link
@@ -62,15 +62,15 @@ export type DegradationKind =
 	 * budget was exceeded, and a reader tuning a timeout would be chasing a
 	 * structural cap that no amount of time changes (#2449 review round 3).
 	 */
-	| "observed-mutation-dir-cap"
-	| "trust-refusal"
-	| "mode-suppression"
-	| "ts-idle-eviction"
-	| "spawn-failure"
+	| "analyzer-bootstrap-unavailable"
+	| "ast-grep-napi-html-js-grammar-missing"
+	| "ast-grep-napi-html-script-budget"
+	| "ast-grep-napi-html-script-parse-failed"
+	| "ast-grep-napi-html-script-scan-failed"
 	/** A runner, formatter, or LSP cwd/root used a bounded fallback (#2777). */
-	| "tool-cwd-resolution"
+	| "ast-grep-napi-language-unavailable"
 	/** A managed-tool verification probe exceeded its retained output bound. */
-	| "installer-verification-output-truncated"
+	| "ast-grep-napi-unavailable"
 	/**
 	 * #2722: a managed-tool verification probe returned a NON-VERDICT — the
 	 * #208 transport-required matcher was armed, never matched, and the kept
@@ -81,9 +81,9 @@ export type DegradationKind =
 	 * this row is looking for an install kept without proof, not for a noisy
 	 * one. The installer keeps such an installation rather than deleting it.
 	 */
-	| "installer-verification-inconclusive"
+	| "ast-grep-rules-dir-missing"
 	/** A git ls-files collection was truncated before parsing completed (#2075). */
-	| "git-tracked-ignore-truncated"
+	| "aux-runner-findings-lost"
 	/**
 	 * #2523: an `await` on a hook path exceeded its per-hook wall BUDGET, so
 	 * `bounded()` (`clients/deadline-utils.ts`) abandoned it and the hook
@@ -100,7 +100,7 @@ export type DegradationKind =
 	 * the reader's signal exactly as `clients/bootstrap.ts` documents at its
 	 * `unavailableReason !== "aborted"` guard (#2530 review F1).
 	 */
-	| "hook-await-exceeded"
+	| "availability-probe-overrun"
 	/**
 	 * #2523: a bounded hook await was abandoned because the SESSION is tearing
 	 * down, not because it was slow. A tally, not a call to action — teardown
@@ -109,11 +109,11 @@ export type DegradationKind =
 	 * degradation gets. Subject is `<hook>:<label>`, same as above, so the two
 	 * causes stay separable in `pilens_health`.
 	 */
-	| "hook-await-abandoned"
-	| "formatter-skip"
-	| "grammar-blocked"
-	| "lsp-breaker"
-	| "lsp-diagnostics-unsupported"
+	| "biome-explain-unavailable"
+	| "bus-stale"
+	| "cache-usage-attribution-stale"
+	| "cascade-budget-override-disarmed"
+	| "cascade-tier3-backlog-evicted"
 	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an
@@ -121,14 +121,14 @@ export type DegradationKind =
 	 * total and only the FIRST skip per (server, file) also writes an
 	 * `lsp_client_skipped_broken` latency.log record.
 	 */
-	| "lsp-client-skipped-broken"
+	| "config-deprecated"
 	/**
 	 * A per-file touch skipped a language server because its direct spawn
 	 * command is temporarily marked unavailable (#1743). Same shape and same
 	 * bounding as `lsp-client-skipped-broken`, but keyed on the command, since
 	 * that is what the availability latch is about.
 	 */
-	| "lsp-client-skipped-unavailable-command"
+	| "config-ignored"
 	/**
 	 * #2518: the session-root registry hit its cap and dropped a root this
 	 * process was serving, together with that root's loaded LSP config — so the
@@ -142,7 +142,7 @@ export type DegradationKind =
 	 * roots this process has had to drop is exactly what an operator tunes the
 	 * cap against. The reason names the first root dropped.
 	 */
-	| "lsp-session-root-evicted"
+	| "config-notice-suppressed"
 	/**
 	 * A warm-only client lookup (`getWarmClientForFile`) found no live client
 	 * for a file that HAS a language server with a resolvable root (#1934).
@@ -152,8 +152,8 @@ export type DegradationKind =
 	 * one — but the COUNT is the pool-miss signal that `lsp_client_selected`
 	 * cannot carry, since the warm-only callers never reach selection.
 	 */
-	| "lsp-warm-client-missing"
-	| "lsp-capability-skip"
+	| "demoted-finding-retired"
+	| "dispatch-non-absolute-baseline-path"
 	/**
 	 * A server-initiated `workspace/applyEdit` fell back to the mutation
 	 * bridge (`clients/lsp-mutation.ts`, #2450) because its `LspMutationContext`
@@ -164,15 +164,15 @@ export type DegradationKind =
 	 * (read-guard stamp, turn-state entry, change-log receipt) is lost.
 	 * Subject is the soliciting tool name.
 	 */
-	| "lsp-mutation-bridge-unmounted"
+	| "extension-ctx-stale"
 	/**
 	 * #2007: a worktree-mutating git command was declined because a live peer
 	 * session shares this dirty checkout. The subject is the checkout root, so
 	 * the ledger says WHICH shared directory is contended.
 	 */
-	| "shared-checkout-wip"
+	| "fact-store-capacity-eviction"
 	/** #2007: `git status` could not answer for that same decision. */
-	| "shared-checkout-probe"
+	| "fact-store-pinned-over-budget"
 	/**
 	 * The blind review-graph read (`getCachedReviewGraph`) either DROPPED a
 	 * persisted snapshot because its git stamp names a different worktree, or
@@ -183,7 +183,7 @@ export type DegradationKind =
 	 * every call, so only the FIRST occurrence per (verdict, cwd) also writes a
 	 * record; the count here is the exact total.
 	 */
-	| "review-graph-snapshot-read"
+	| "formatter-failure"
 	/**
 	 * #2477 round 2: `recordEntitySnapshotDiff` (`clients/review-graph/service.ts`)
 	 * received a non-absolute `filePath`. Every production writer
@@ -194,7 +194,7 @@ export type DegradationKind =
 	 * skipped rather than computed under a key the builder's reader could
 	 * never reach. Subject is the raw (unnormalized) `filePath` received.
 	 */
-	| "review-graph-non-absolute-entity-path"
+	| "formatter-skip"
 	/**
 	 * #2489 round 2: `dispatchForFile`'s (`clients/dispatch/dispatcher.ts`)
 	 * delta-baseline key is `session.baseline.<ctx.filePath>`. Every production
@@ -208,7 +208,7 @@ export type DegradationKind =
 	 * dispatch rather than keyed under a value the constructor would never
 	 * produce. Subject is the raw `ctx.filePath` received.
 	 */
-	| "dispatch-non-absolute-baseline-path"
+	| "formatter-unavailable"
 	/**
 	 * The project-snapshot persist seam detected durable meta/body evidence
 	 * failing the #2008 integrity gate — the meta's recorded gz size no longer
@@ -217,17 +217,17 @@ export type DegradationKind =
 	 * save republishes the body. Subject is the snapshot body path; the count
 	 * is the exact number of detections this session.
 	 */
-	| "snapshot-integrity"
+	| "generation-guard-stale-write"
 	/**
 	 * Failed-first test state was retired only after ENOENT/ENOTDIR evidence,
 	 * retained when the filesystem probe was indeterminate, or evicted at the
 	 * state cap (#2044). Subject is outcome + runner + bounded path, so repeated
 	 * checks stay attributable.
 	 */
-	| "test-runner-failed-target-state"
+	| "git-tracked-ignore-truncated"
 	/** Automatic test-result delivery could not reach the host entry surface. */
-	| "test-runner-delivery"
-	| "formatter-failure"
+	| "global-dir-probe-redirect"
+	| "grammar-blocked"
 	/**
 	 * A selected formatter's executable was proven absent (#2413): its
 	 * `resolveCommand` probed every install location and PATH and found nothing,
@@ -236,21 +236,19 @@ export type DegradationKind =
 	 * unavailability is never counted, requeued, or surfaced as a code error.
 	 * Subject is `<formatter>:<basename>`.
 	 */
-	| "formatter-unavailable"
-	| "wasm-abort"
-	| "lsp-diagnostics-timeout"
-	| "lsp-scanner-coverage-gap"
-	| "lsp-notify-inflight-stall"
-	/** A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
-	| "lsp-notify-stall-cpu-busy"
-	/** A didChange content mirror was recorded behind a newer document version. */
-	| "lsp-document-send-order"
-	/** Scoped TypeScript cache repair hit its bounded dependency fan-out. */
-	| "lsp_dependency_touch_capped"
-	| "bus-stale"
-	| "query-predicates-invalid"
+	| "hook-await-abandoned"
+	| "hook-await-exceeded"
 	| "install-retry-exhausted"
-	| "ast-grep-napi-unavailable"
+	| "installer-verification-inconclusive"
+	| "installer-verification-output-truncated"
+	/** A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
+	| "instance-registry-corrupt"
+	/** A didChange content mirror was recorded behind a newer document version. */
+	| "log-sink-rotate-failed"
+	| "log-sink-rotated"
+	| "log-sink-write-failure"
+	| "lsp-breaker"
+	| "lsp-capability-skip"
 	/**
 	 * The napi fallback ADMITTED a file — its extension is in the in-process
 	 * language matrix (`clients/dispatch/runners/ast-grep-napi.ts`) — and the
@@ -265,9 +263,9 @@ export type DegradationKind =
 	 * language rather than the file, because the gap is per-language: recorded
 	 * once, not once per file.
 	 */
-	| "ast-grep-napi-language-unavailable"
+	| "lsp-client-skipped-broken"
 	/** An availability probe exceeded its advertised wall-clock budget (#2131). */
-	| "availability-probe-overrun"
+	| "lsp-client-skipped-unavailable-command"
 	/**
 	 * `loadWebTreeSitter()` (clients/deps/web-tree-sitter.js) rejected during
 	 * MODULE EVALUATION, not resolution (#1592). Node's ESM loader permanently
@@ -276,16 +274,16 @@ export type DegradationKind =
 	 * re-attempting the load — a same-process retry is dead. TreeSitterClient
 	 * latches this permanently instead of retrying on every parse call.
 	 */
-	| "web-tree-sitter-load-failed"
-	| "instance-registry-corrupt"
-	| "cascade-budget-override-disarmed"
-	| "lsp-pull-unconfirmed"
+	| "lsp-diagnostics-timeout"
+	| "lsp-diagnostics-unsupported"
+	| "lsp-document-send-order"
+	| "lsp-liveness-probe-unsupported"
 	/**
 	 * A pi-lens `tool_call` handler threw. pi's `emitToolCall` has no
 	 * per-handler catch, so an escaped throw blocks the user's tool call —
 	 * this kind means the total guard absorbed one (#1655 item 1).
 	 */
-	| "tool-call-handler-throw"
+	| "lsp-mutation-bridge-unmounted"
 	/**
 	 * A session event reached a pi-lens handler on a ctx the SDK had already
 	 * invalidated by a session replacement or reload, so the handler was
@@ -293,7 +291,7 @@ export type DegradationKind =
 	 * which handler is being skipped after the detailed records stop.
 	 * `clients/session-event-guard.ts` is the only writer.
 	 */
-	| "extension-ctx-stale"
+	| "lsp-nav-late-answer"
 	/**
 	 * A `message_end` event reached its handler on a ctx the SDK had already
 	 * invalidated, so the `cache_usage` row wrote with an UNATTRIBUTED stable
@@ -306,16 +304,16 @@ export type DegradationKind =
 	 * a CONFIRMED stale probe; a live ctx that merely lacks a session id
 	 * (older host, unexpected shape) never reaches this kind.
 	 */
-	| "cache-usage-attribution-stale"
+	| "lsp-nav-request-timeout"
 	/** A workspace diagnostics cache was rejected during the v3 provenance migration (#2776). */
-	| "lsp-workspace-cache-migration"
+	| "lsp-notify-inflight-stall"
 	/**
 	 * A tool-event path did not resolve to an existing file, and pi's own
 	 * unicode/spacing variant ladder did not find it either (#1655 item 5).
 	 * The issue names this `path_variant_unresolved`; the ledger's kind
 	 * vocabulary is kebab-case, so it is spelled that way here.
 	 */
-	| "path-variant-unresolved"
+	| "lsp-notify-stall-cpu-busy"
 	/**
 	 * A deferred-format record's origin (the cwd/worktree it was queued
 	 * under) does not match the flush attempting to claim it as an orphan,
@@ -323,7 +321,7 @@ export type DegradationKind =
 	 * until a flush from its actual origin claims it (#1642 F3, #1678
 	 * item 1).
 	 */
-	| "path-attribution-orphan-unresolved"
+	| "lsp-pull-diagnostic-timeout"
 	/**
 	 * A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
 	 * `withTimeout` abandoned the request, and the request later settled anyway
@@ -337,7 +335,7 @@ export type DegradationKind =
 	 * the version already installed — this kind means pi-lens cannot prove that
 	 * version is the newest the tool's declared range permits.
 	 */
-	| "managed-tool-refresh"
+	| "lsp-pull-late-rejection"
 	/**
 	 * `navRequest`'s (`clients/lsp/client.ts`) per-request `withTimeout`
 	 * abandoned a hover/definition/references/etc. request (#1716). Every
@@ -346,7 +344,7 @@ export type DegradationKind =
 	 * latency.log record — navRequest is the highest-volume LSP call site, so
 	 * a stuck server storming timeouts must not storm log writes too.
 	 */
-	| "lsp-nav-request-timeout"
+	| "lsp-pull-skipped-budget-exhausted"
 	/**
 	 * The abandoned request behind an `lsp-nav-request-timeout` settled anyway
 	 * after the caller gave up (#1716) — the nav-request sibling of
@@ -354,7 +352,7 @@ export type DegradationKind =
 	 * to poison), but the count still tells a dogfood session whether a
 	 * "hung" server is truly hung or just answering late.
 	 */
-	| "lsp-nav-late-answer"
+	| "lsp-pull-unconfirmed"
 	/**
 	 * The abandoned request behind an `lsp-pull-late-answer` timeout REJECTED
 	 * instead of answering (#1774) — e.g. a permanent server error such as
@@ -367,7 +365,7 @@ export type DegradationKind =
 	 * needs. The rejection handler still swallows the error; this only
 	 * observes it.
 	 */
-	| "lsp-pull-late-rejection"
+	| "lsp-scanner-coverage-gap"
 	/**
 	 * A `textDocument/diagnostic` or `workspace/diagnostic` pull's per-request
 	 * `withTimeout` abandoned a GENUINELY dispatched request (#1771). Every
@@ -378,7 +376,7 @@ export type DegradationKind =
 	 * degradation, and an abandoned pull is one. Subject carries server and
 	 * file so a storming server is visible in aggregate, not just per-event.
 	 */
-	| "lsp-pull-diagnostic-timeout"
+	| "lsp-server-unexpected-close"
 	/**
 	 * A `textDocument/diagnostic` or `workspace/diagnostic` pull was SKIPPED
 	 * outright because the caller's budget was already exhausted (#1773,
@@ -389,7 +387,7 @@ export type DegradationKind =
 	 * sweep whose own upstream deadline math is too tight). Subject carries
 	 * server and file for the same reason every other pull kind does.
 	 */
-	| "lsp-pull-skipped-budget-exhausted"
+	| "lsp-session-root-evicted"
 	/**
 	 * A language-server child process CLOSED without pi-lens having asked it to
 	 * (#1969). `clientShutdown()` sets `state.shutdownRequested`, so evictions
@@ -408,7 +406,7 @@ export type DegradationKind =
 	 * only after the child's stdio streams have drained, so "stderr was empty"
 	 * is a fact about the server rather than a race with the pipe.
 	 */
-	| "lsp-server-unexpected-close"
+	| "lsp-warm-client-missing"
 	/**
 	 * A liveness probe (`clientPingLiveness`, `clients/lsp/client.ts`) found no
 	 * request method the server advertises that it could safely probe with, so
@@ -421,7 +419,9 @@ export type DegradationKind =
 	 * `serverId`, so the ledger names which servers are trusted on the weaker
 	 * check.
 	 */
-	| "lsp-liveness-probe-unsupported"
+	| "lsp-workspace-cache-migration"
+	/** Scoped TypeScript cache repair hit its bounded dependency fan-out. */
+	| "lsp_dependency_touch_capped"
 	/**
 	 * A `GenerationHandle.guardedWrite` (`clients/generation-guard.ts`) dropped
 	 * a post-await write because the generation it captured is no longer
@@ -433,7 +433,7 @@ export type DegradationKind =
 	 * this guard reached review vacuous. Subject carries the source name and
 	 * the identity of the dropped write.
 	 */
-	| "generation-guard-stale-write"
+	| "managed-tool-refresh"
 	/**
 	 * A shell-out linter/analyzer runner (knip, vulture, jscpd, trivy-config, …)
 	 * produced no usable output — empty stdout, unparseable stdout (e.g. a
@@ -445,7 +445,7 @@ export type DegradationKind =
 	 * the binary and exit status so a stuck/corrupted runner is diagnosable
 	 * from the ledger alone.
 	 */
-	| "runner-empty-result"
+	| "mode-suppression"
 	/**
 	 * A shell-out runner's tool DID produce output, exited nonzero, and the
 	 * runner's parser extracted ZERO diagnostics from it (#1948). The adjacent
@@ -457,15 +457,15 @@ export type DegradationKind =
 	 * length, and the first output line, so the ledger alone answers "is this
 	 * file clean, or did the parser fail to read it?".
 	 */
-	| "runner-parsed-nothing"
+	| "observed-mutation-budget"
 	/** A runner exceeded the observed inline budget and moved to collect-later. */
-	| "runner-collect-later"
+	| "observed-mutation-dir-cap"
 	/** A pending runner entry was evicted at the bounded handoff cap (#2122). */
-	| "runner-findings-evicted"
+	| "orphan-backstop-age-unknown"
 	/** A completed runner answer was stale and dropped instead of being replayed. */
-	| "runner-findings-stale"
+	| "orphan-backstop-kill-unverified"
 	/** A process-table resource sample failed or timed out; it is unknown. */
-	| "resource-sampler-query-failed"
+	| "orphan-backstop-scan-failed"
 	/**
 	 * The registry-independent orphan backstop could not enumerate the OS
 	 * process table (spawn error or scan timeout). Its empty result therefore
@@ -473,14 +473,14 @@ export type DegradationKind =
 	 * clean-vs-errored discrimination `runner-empty-result` makes for
 	 * shell-out runners.
 	 */
-	| "orphan-backstop-scan-failed"
+	| "orphan-backstop-scanner-escalated"
 	/**
 	 * A backstop kill was attempted and the process was still alive
 	 * afterwards. Subject carries `<binary>#<pid>` so a permanently unkillable
 	 * process is identifiable, instead of counting as a successful reap and
 	 * paying the full sweep again every session (#1857 items 1 and 3).
 	 */
-	| "orphan-backstop-kill-unverified"
+	| "orphan-reap-kill-unverified"
 	/**
 	 * A backstop candidate passed every other eligibility test, but the OS
 	 * snapshot reported no usable process creation time. The spawn-grace guard
@@ -488,20 +488,20 @@ export type DegradationKind =
 	 * process was spared (#1857 item 4). Without this record the guard would
 	 * be indistinguishable from finding nothing.
 	 */
-	| "orphan-backstop-age-unknown"
+	| "path-attribution-orphan-unresolved"
 	/**
 	 * Same as `orphan-backstop-kill-unverified`, for the registry-driven
 	 * reaper path, which spelled the identical attempt-counted-as-kill defect
 	 * (#1857 class sweep).
 	 */
-	| "orphan-reap-kill-unverified"
+	| "path-variant-unresolved"
 	/**
 	 * The orphan backstop's OWN process-table scanner blew the scan timeout and
 	 * had to be tree-killed (#1864 review F3). Reason carries the kill verdict,
 	 * so a scanner that survived its own sweep's escalation — an orphan sweep
 	 * leaking an orphan — is visible rather than silent.
 	 */
-	| "orphan-backstop-scanner-escalated"
+	| "query-predicates-invalid"
 	/**
 	 * #2524: the resource sampler's OWN process-table scanner (heartbeat CPU/RSS
 	 * sampling, `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS` 2000ms — a much tighter and
@@ -522,7 +522,7 @@ export type DegradationKind =
 	 * doesn't warrant the same attention as the backstop's rare, single-sweep
 	 * escalation.
 	 */
-	| "resource-sampler-scanner-escalated"
+	| "read-guard-edits-cap-trim"
 	/**
 	 * `session_start`'s bounded change-log sequence read (#1162) blew its
 	 * budget and a project snapshot existed on disk, but the freshness gate
@@ -533,7 +533,7 @@ export type DegradationKind =
 	 * the project root so a project that repeatedly starves this read is
 	 * visible in aggregate, not just per-session.
 	 */
-	| "snapshot-sequence-read-timeout"
+	| "read-guard-file-evicted"
 	/**
 	 * `biome-check.ts`'s `resolveBiomeFixKinds` (#1810) couldn't get a real
 	 * fix-tier verdict for a rule from `biome explain <rule>` — either the
@@ -546,7 +546,7 @@ export type DegradationKind =
 	 * carries the rule name so a specific stuck rule (vs. a whole-binary
 	 * mismatch) is diagnosable from the ledger alone.
 	 */
-	| "biome-explain-unavailable"
+	| "read-guard-record-cap-trim"
 	/**
 	 * The tier-3 cascade's outstanding-touch registry
 	 * (`clients/lsp/cascade-tier.ts`) reached its cap before a quiet-window
@@ -555,7 +555,7 @@ export type DegradationKind =
 	 * pi's `agent_settled` window and dogfood logs show gaps up to 52 minutes;
 	 * this kind means a session out-touched that cadence.
 	 */
-	| "cascade-tier3-backlog-evicted"
+	| "resource-sampler-query-failed"
 	/**
 	 * `read-guard.ts`'s per-file record cap (`READ_GUARD_MAX_RECORDS_PER_FILE`)
 	 * trimmed a file's read history (#1913). A hot file trimmed on every push
@@ -564,7 +564,7 @@ export type DegradationKind =
 	 * power-of-two milestones after it — the ledger's own dedupe, not a
 	 * hand-rolled per-file Set (#1913 review F1).
 	 */
-	| "read-guard-record-cap-trim"
+	| "resource-sampler-scanner-escalated"
 	/**
 	 * `read-guard.ts`'s whole-file evictor (`evictFile`) dropped a file's
 	 * tracked read/edit state (#1918, the #1913 class sibling). Fires from
@@ -573,7 +573,7 @@ export type DegradationKind =
 	 * `read_file_evicted` read-guard.log line says which. Rising edge gates
 	 * that log line per file per session, same as `read-guard-record-cap-trim`.
 	 */
-	| "read-guard-file-evicted"
+	| "review-graph-non-absolute-entity-path"
 	/**
 	 * `read-guard.ts`'s per-file edits-cap splice (`READ_GUARD_MAX_EDITS_PER_FILE`)
 	 * trimmed a file's edit history (#1918). The in-repo doc comment on that
@@ -582,7 +582,7 @@ export type DegradationKind =
 	 * matching `edits_cap_trimmed` read-guard.log line, same shape as
 	 * `read-guard-record-cap-trim`.
 	 */
-	| "read-guard-edits-cap-trim"
+	| "review-graph-snapshot-read"
 	/**
 	 * A demoted finding was RETIRED from a delivery store instead of being
 	 * re-served (#1944). Raised when the cited file shrank past the
@@ -593,7 +593,7 @@ export type DegradationKind =
 	 * many findings, and the count is the number the observability question
 	 * actually asks.
 	 */
-	| "demoted-finding-retired"
+	| "runner-collect-later"
 	/**
 	 * `ndjson-logger.ts`'s shared file-sink lost a write even after its one
 	 * reopen-and-retry (#1970) — the pi-analyze #15 shape, catching the
@@ -611,7 +611,7 @@ export type DegradationKind =
 	 * the recursion this design avoids — see `ndjson-logger.ts`'s
 	 * `writeFailures` doc comment.
 	 */
-	| "log-sink-write-failure"
+	| "runner-empty-result"
 	/**
 	 * `ndjson-logger.ts` rotated a shared file-sink at its configured
 	 * `maxBytes` bound mid-session (#2505) — the write path itself caught the
@@ -625,7 +625,7 @@ export type DegradationKind =
 	 * `recordDegradation`/`recordDegradationOnce` directly from there would
 	 * close a cycle — see `NdjsonWriterState.rotationCount`'s doc comment.
 	 */
-	| "log-sink-rotated"
+	| "runner-findings-evicted"
 	/**
 	 * A rotation that `ndjson-logger.ts` attempted and could NOT complete
 	 * (#2505 review F2) — an unwritable backup path, or the Windows sharing
@@ -635,7 +635,7 @@ export type DegradationKind =
 	 * Its sibling above is informational; this one renders as a warning.
 	 * Same read-time pull, same cycle reason.
 	 */
-	| "log-sink-rotate-failed"
+	| "runner-findings-stale"
 	/**
 	 * A word-index posting named a file id the file table could not resolve to
 	 * a path, so the posting was dropped from a search result or a decoded hit
@@ -649,9 +649,9 @@ export type DegradationKind =
 	 * is the orphaned id, so aggregation still answers WHICH id leaked after
 	 * the per-kind entry bound is reached.
 	 */
-	| "word-index-orphan-file-id"
+	| "runner-parsed-nothing"
 	/** Incremental word-index churn required an arena re-compaction. */
-	| "word-index-arena-recompact"
+	| "shared-checkout-probe"
 	/**
 	 * The dispatch `FactStore` (`clients/dispatch/fact-store.ts`) evicted a
 	 * least-recently-used file fact because the record count passed its cap
@@ -665,7 +665,7 @@ export type DegradationKind =
 	 * byte-axis eviction on the SAME store each get their own once-per-session
 	 * record instead of one collapsing into the other.
 	 */
-	| "fact-store-capacity-eviction"
+	| "shared-checkout-wip"
 	/**
 	 * The dispatch `FactStore`'s pinned content bytes alone exceed the
 	 * 64 MiB retained-content budget (#2247 review F2). A pin exempts an
@@ -678,7 +678,7 @@ export type DegradationKind =
 	 * is invisible: the store just silently stops honoring its budget.
 	 * Recorded once per session, subject is the store label.
 	 */
-	| "fact-store-pinned-over-budget"
+	| "skills-dir-missing"
 	/**
 	 * Gate B (`clients/dispatch/runners/ast-grep-napi.ts`) skipped the napi
 	 * fallback because the ast-grep LSP client has published for this file
@@ -693,7 +693,7 @@ export type DegradationKind =
 	 * the ledger still answers which server's earlier finding never resurfaced
 	 * after the count-bound stops naming files.
 	 */
-	| "aux-runner-findings-lost"
+	| "snapshot-integrity"
 	/**
 	 * The napi HTML embedded-`<script>` evaluation (#2347) hit its evaluation
 	 * budget (body-count and/or cumulative body-bytes cap) and dropped the
@@ -703,7 +703,7 @@ export type DegradationKind =
 	 * reason, and the recorded counts (`scriptElementCount`, `bodiesEvaluated`,
 	 * `truncatedBodies`) make the truncation reconstructable.
 	 */
-	| "ast-grep-napi-html-script-budget"
+	| "snapshot-sequence-read-timeout"
 	/**
 	 * A `<script>` body of an HTML file the napi runner was evaluating (#2347)
 	 * refused to parse as JavaScript, so that body contributed no embedded
@@ -712,21 +712,21 @@ export type DegradationKind =
 	 * that file to "no embedded coverage" like an unparseable `.js` file and is
 	 * recorded as such, never as a clean empty result.
 	 */
-	| "ast-grep-napi-html-script-parse-failed"
+	| "spawn-failure"
 	/**
 	 * The loaded addon exposed no `js` grammar while an HTML file's embedded
 	 * `language: JavaScript` evaluation asked for one (#2347). The embedded
 	 * coverage degrades to nothing for the whole file, silently prior to this
 	 * kind. Once per file per session; subject is the file path.
 	 */
-	| "ast-grep-napi-html-js-grammar-missing"
+	| "startup-analyzer-disabled"
 	/**
 	 * The `script_element` scan of an HTML root threw while napi prepared the
 	 * embedded-`<script>` evaluation (#2347). The embedded coverage degrades to
 	 * nothing for the file, silently prior to this kind. Once per file per
 	 * session; subject is the file path.
 	 */
-	| "ast-grep-napi-html-script-scan-failed"
+	| "test-runner-delivery"
 	/**
 	 * A demand for the analyzer bootstrap clients (`clients/bootstrap.ts`)
 	 * could not be served, so the caller PROCEEDED WITHOUT them (#2467). The
@@ -745,7 +745,7 @@ export type DegradationKind =
 	 * whole point — without this kind, an analyzer silently not running and an
 	 * analyzer finding nothing read identically (AGENTS.md shape 10).
 	 */
-	| "analyzer-bootstrap-unavailable"
+	| "test-runner-failed-target-state"
 	/**
 	 * The analyzer bootstrap stopped rebuilding after
 	 * `BOOTSTRAP_FAILURE_STRIKE_LIMIT` consecutive failed loads (#2467 review).
@@ -755,7 +755,7 @@ export type DegradationKind =
 	 * `unavailableReason: "latched"`, so the ledger still answers both "how
 	 * often did a consumer degrade" and "why did it stop even trying".
 	 */
-	| "analyzer-bootstrap-latched"
+	| "tool-call-handler-throw"
 	/**
 	 * A config file the user wrote — or one key inside it — was rejected and
 	 * IGNORED, so pi-lens ran on defaults instead of on what the user asked for
@@ -771,7 +771,7 @@ export type DegradationKind =
 	 * observability question, the fact of the ignore is. This is the only kind
 	 * that carries a `code` (`PILENS_CFG_0001`) into the durable row.
 	 */
-	| "config-ignored"
+	| "tool-cwd-resolution"
 	/**
 	 * A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the
@@ -783,7 +783,7 @@ export type DegradationKind =
 	 * one row per `(file, key)` per session, carrying `PILENS_CFG_0002`
 	 * (deprecated key) or `PILENS_CFG_0003` (deprecated file location).
 	 */
-	| "config-deprecated"
+	| "tree-sitter-queries-dir-missing"
 	/**
 	 * A config file's NOTICE LIST was truncated by the per-resolution bound, and
 	 * this row carries how many notices were summarised away (#2426 review round
@@ -798,7 +798,7 @@ export type DegradationKind =
 	 * unanswerable, since the ledger could no longer tell a rejection from a
 	 * long list. One row per file per session.
 	 */
-	| "config-notice-suppressed"
+	| "trust-refusal"
 	/**
 	 * `getGlobalPiLensLogDir()` (`clients/probe-home-state.ts`, #2506) redirected
 	 * the LOG/ledger root away from the real `~/.pi-lens` because `PI_LENS_HOME`
@@ -832,7 +832,7 @@ export type DegradationKind =
 	 * every cycle is the resolver's whole correctness argument. See
 	 * `probe-home-state.ts`'s doc comment.
 	 */
-	| "global-dir-probe-redirect"
+	| "ts-idle-eviction"
 	/**
 	 * #2504 review round 8 (S1): a carried-forward deferred file entry was
 	 * dropped from an IN-BAND `turn_end` publish (`clients/actionable-warnings.ts`)
@@ -843,7 +843,7 @@ export type DegradationKind =
 	 * file again), so the loss self-heals and does not warrant a `⚠` in a
 	 * dogfood summary. See `INFORMATIONAL_DEGRADATION_KINDS` below.
 	 */
-	| "actionable-warnings-inband-superseded"
+	| "unclassified-mutating-tool"
 	/**
 	 * #2504 review round 7 (F5): the DEFERRED sibling of
 	 * `actionable-warnings-inband-superseded` — a file changed while the
@@ -852,7 +852,7 @@ export type DegradationKind =
 	 * Same informational treatment: the next deferral or in-band analysis
 	 * re-observes the file.
 	 */
-	| "actionable-warnings-deferred-superseded"
+	| "wasm-abort"
 	/**
 	 * #2626: `resources_discover` (#205) resolved `<packageRoot>/skills` to a
 	 * directory that is absent, unreadable, or holds no `SKILL.md` — pi then
@@ -862,7 +862,7 @@ export type DegradationKind =
 	 * nearest `package.json` is the cache's own). Subject is the resolved
 	 * `skills/` path; see `clients/skills-resolver.ts`.
 	 */
-	| "skills-dir-missing"
+	| "web-tree-sitter-load-failed"
 	/**
 	 * #2636 (the #2626 class sweep's ast-grep leg): `AstGrepClient`'s
 	 * `ruleDir` fell back to `resolvePackagePath(import.meta.url, "rules")`
@@ -873,7 +873,7 @@ export type DegradationKind =
 	 * bundled `rules/` path; see `clients/bundled-resource-health.ts` and
 	 * `clients/ast-grep-rule-manager.ts`'s `checkAstGrepRulesHealth`.
 	 */
-	| "ast-grep-rules-dir-missing"
+	| "word-index-arena-recompact"
 	/**
 	 * #2636: the bundled `rules/tree-sitter-queries` root — read identically
 	 * by `clients/cache/rule-cache.ts` (`BUNDLED_RULES_ROOT`, to classify a
@@ -887,7 +887,7 @@ export type DegradationKind =
 	 * `tree-sitter-shared.ts`) resolves zero files from a HEALTHY root and
 	 * must never be confused with the root itself being gone.
 	 */
-	| "tree-sitter-queries-dir-missing";
+	| "word-index-orphan-file-id";
 
 export interface DegradationRecord {
 	kind: unknown;
