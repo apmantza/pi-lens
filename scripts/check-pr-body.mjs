@@ -498,12 +498,17 @@ export async function lintPullRequestEvent(
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-	lintPullRequestEvent()
-		.then((result) => {
-			if (!result.valid) process.exitCode = 1;
-		})
-		.catch((error) => {
-			console.error(error instanceof Error ? error.message : error);
-			process.exitCode = 1;
-		});
+	if (process.argv[2] === "--lint-local") {
+		const result = lintPrBody(readFileSync(process.argv[3], "utf8"));
+		for (const error of result.errors) console.error(error);
+		process.exitCode = result.valid ? 0 : 1;
+	} else
+		lintPullRequestEvent()
+			.then((result) => {
+				if (!result.valid) process.exitCode = 1;
+			})
+			.catch((error) => {
+				console.error(error instanceof Error ? error.message : error);
+				process.exitCode = 1;
+			});
 }
