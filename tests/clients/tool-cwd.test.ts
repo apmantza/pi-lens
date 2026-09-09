@@ -40,6 +40,57 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
+	it("uses the complete formatter marker population", () => {
+		const project = path.join(home, "repo");
+		const file = path.join(project, "src", "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(project, "Cargo.toml"), "[package]\n");
+		expect(
+			toolCwd.resolveToolCwd("formatter", "rustfmt", file, { cwd: project }),
+		).toBe(project);
+	});
+
+	it("uses the dispatch root for a markerless custom LSP", () => {
+		const project = path.join(home, "repo");
+		const file = path.join(project, "packages", "app", "src", "main.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		expect(
+			toolCwd.resolveToolCwd("lsp", "custom", file, { cwd: project }),
+		).toBe(project);
+	});
+
+	it("matches glob root markers against files in the directory", () => {
+		const project = path.join(home, "repo");
+		const nested = path.join(project, "packages", "app");
+		const file = path.join(nested, "src", "main.cs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(nested, "app.csproj"), "<Project />\n");
+		expect(
+			toolCwd.resolveToolCwd("lsp", "custom", file, {
+				cwd: project,
+				rootMarkers: ["*.csproj"],
+			}),
+		).toBe(nested);
+	});
+
+	it("memoizes marker walks for repeated files in one ledger generation", () => {
+		const project = path.join(home, "repo");
+		const nested = path.join(project, "packages", "app");
+		fs.mkdirSync(path.join(nested, "src"), { recursive: true });
+		fs.writeFileSync(path.join(project, "Cargo.toml"), "[package]\n");
+		const before = toolCwd._getToolCwdMarkerWalkCount();
+		for (let i = 0; i < 20; i++) {
+			toolCwd.resolveToolCwd(
+				"formatter",
+				"rustfmt",
+				path.join(nested, "src", `file-${i}.rs`),
+				{ cwd: project },
+			);
+		}
+		const walks = toolCwd._getToolCwdMarkerWalkCount() - before;
+		expect(walks).toBe(1);
+	});
+
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {
 		const project = path.join(home, "repo");
 		const foreign = path.join(home, "tmp", "outside.ts");
