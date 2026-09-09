@@ -21,7 +21,7 @@ describe("GitHub release asset selection", () => {
 		["cljfmt", "linux", "x64", "linux-amd64-static.tar.gz", undefined],
 	] as const)(
 		"maps %s %s/%s asset %s to launcher %s",
-		(toolId, platform, asset, launcher) => {
+		(toolId, platform, _arch, asset, launcher) => {
 			expect(resolveGitHubAssetLauncher(toolId, platform, asset)).toBe(
 				launcher,
 			);
