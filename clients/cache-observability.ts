@@ -66,6 +66,14 @@ type CacheContextInjectionSource =
 	| "turn-findings"
 	| "test-findings"
 	| "agent-nudge";
+type InjectedByteSource =
+	| "sessionGuidance"
+	| "turnFindings"
+	| "testFindings"
+	| "agentNudge"
+	| "turnEndAdvisory"
+	| "other";
+export type InjectedBytes = Record<InjectedByteSource, number>;
 export type CacheContextPlacement =
 	| "prepend"
 	| "insert-before-final"
@@ -250,6 +258,11 @@ interface SessionAttributionState {
 	newTranscriptCharsSinceLastUsage: number;
 	/** Either accumulator hit a bound, so the estimate is a floor, not a total. */
 	attributionCharsCapped: boolean;
+	injectedBytes: InjectedBytes;
+	injectedFindingsRepeated: number;
+	readonly findingIdentities: Set<string>;
+	findingIdentityCapRecorded: boolean;
+	turnEndAdvisoryBytes: number;
 	/** Transcript length at the previous `context` observation. */
 	lastObservedMessageCount?: number;
 	/** Full-identity SHA-256 evidence from the previous usage record. */
@@ -312,8 +325,50 @@ function newAttributionState(): SessionAttributionState {
 		injectedCharsSinceLastUsage: 0,
 		newTranscriptCharsSinceLastUsage: 0,
 		attributionCharsCapped: false,
+		injectedBytes: emptyInjectedBytes(),
+		injectedFindingsRepeated: 0,
+		findingIdentities: new Set(),
+		findingIdentityCapRecorded: false,
+		turnEndAdvisoryBytes: 0,
 		summary: newCacheUsageSummary(),
 	};
+}
+
+const MAX_FINDING_IDENTITIES = 2_000;
+
+function emptyInjectedBytes(): InjectedBytes {
+	return {
+		sessionGuidance: 0,
+		turnFindings: 0,
+		testFindings: 0,
+		agentNudge: 0,
+		turnEndAdvisory: 0,
+		other: 0,
+	};
+}
+
+function sourceKey(source: CacheContextInjectionSource): InjectedByteSource {
+	return {
+		"session-guidance": "sessionGuidance",
+		"turn-findings": "turnFindings",
+		"test-findings": "testFindings",
+		"agent-nudge": "agentNudge",
+	}[source] as InjectedByteSource;
+}
+
+/** Best-effort, language-neutral identity extraction from rendered findings. */
+function findingIdentities(text: string): string[] {
+	const out: string[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const location = line.match(/(?:^|\s)([^\s:]+):(\d+)(?::\d+)?/);
+		if (!location) continue;
+		const rule =
+			line.match(/(?:rule|code)\s*[:=]\s*([\w./-]+)/i)?.[1] ??
+			line.match(/\(([\w./-]+)\)\s*$/)?.[1] ??
+			line.match(/:\d+(?::\d+)?\s+([\w./-]+)/)?.[1];
+		if (rule) out.push(`${location[1]}:${location[2]}:${rule}`);
+	}
+	return out;
 }
 
 /**
@@ -1002,6 +1057,38 @@ export function observeCacheContext(args: {
 				countsCapped: sliceSize.capped,
 			};
 		});
+		const state = attributionFor(
+			attributionKey(args.sessionId, args.sessionRole),
+		);
+		for (const slice of injectionSlices) {
+			const key = sourceKey(slice.source);
+			const bytes = measureInjectedMessages(slice.messages).bytes;
+			state.injectedBytes[key] += bytes;
+			for (const message of slice.messages) {
+				for (const identity of findingIdentities(
+					typeof message.content === "string" ? message.content : "",
+				)) {
+					if (state.findingIdentities.has(identity)) {
+						state.injectedFindingsRepeated += 1;
+						continue;
+					}
+					if (state.findingIdentities.size >= MAX_FINDING_IDENTITIES) {
+						if (!state.findingIdentityCapRecorded) {
+							state.findingIdentityCapRecorded = true;
+							logLatency({
+								type: "phase",
+								filePath: "<pi-lens>",
+								phase: "injected_finding_identity_cap",
+								durationMs: 0,
+								metadata: { cap: MAX_FINDING_IDENTITIES },
+							});
+						}
+						continue;
+					}
+					state.findingIdentities.add(identity);
+				}
+			}
+		}
 		const messageCountCapped =
 			existingMessages.length > MAX_REPORTED_MESSAGES ||
 			resultMessages.length > MAX_REPORTED_MESSAGES;
@@ -1009,9 +1096,6 @@ export function observeCacheContext(args: {
 			attributionKey(args.sessionId, args.sessionRole),
 			existingMessages,
 			sizes,
-		);
-		const state = attributionFor(
-			attributionKey(args.sessionId, args.sessionRole),
 		);
 		state.sequenceHashTruncatedSinceLastUsage ||=
 			beforeSequence.truncated ||
@@ -1047,6 +1131,12 @@ export function observeCacheContext(args: {
 					injectedMessages.length > MAX_REPORTED_MESSAGES,
 				injectedChars: sizes.chars,
 				injectedBytes: sizes.bytes,
+				injectedBytesBySource: Object.fromEntries(
+					sourceBreakdown.map((entry) => [
+						sourceKey(entry.source),
+						entry.bytes,
+					]),
+				),
 				injectedEstimatedTokens: estimateTokens(sizes.chars),
 				injectedTokenBasis: "chars-per-token-4-estimate-not-provider-measured",
 				injectedCountsCapped: sizes.capped,
@@ -1228,6 +1318,12 @@ export function logCacheUsage(
 		const newTranscriptCharsSinceLastTurn =
 			state.newTranscriptCharsSinceLastUsage;
 		const attributionCharsCapped = state.attributionCharsCapped;
+		const injectedBytes = {
+			...state.injectedBytes,
+			turnEndAdvisory:
+				state.turnEndAdvisoryBytes + state.injectedBytes.turnEndAdvisory,
+		};
+		const injectedFindingsRepeated = state.injectedFindingsRepeated;
 		// This record is the turn boundary: reset the per-turn accumulators and
 		// re-arm the prefix-break flag so the next verdict describes the NEXT gap.
 		state.lastUsageAtMs = nowMs;
@@ -1245,6 +1341,9 @@ export function logCacheUsage(
 		state.injectedCharsSinceLastUsage = 0;
 		state.newTranscriptCharsSinceLastUsage = 0;
 		state.attributionCharsCapped = false;
+		state.injectedBytes = emptyInjectedBytes();
+		state.injectedFindingsRepeated = 0;
+		state.turnEndAdvisoryBytes = 0;
 		// Clear the request stamp too: the next turn measures from ITS request, and
 		// a turn whose `context` call pi-lens never saw must fall back rather than
 		// reuse this one.
@@ -1286,6 +1385,8 @@ export function logCacheUsage(
 				injectedCharsSinceLastTurn,
 				newTranscriptCharsSinceLastTurn,
 				attributionCharsCapped,
+				injectedBytes,
+				injectedFindingsRepeated,
 				...(context
 					? {
 							// MessageEndEvent has no request/context id in the host API. These
@@ -1490,6 +1591,19 @@ export function clearCachePrefixSession(
 	attributionBySession.delete(key);
 }
 
+/** Record the exact quiet-window summary content handed to pi.sendMessage. */
+export function recordTurnEndAdvisoryBytes(
+	sessionId: string | undefined,
+	bytes: number,
+	sessionRole: "primary" | "concurrent-secondary" = "primary",
+): void {
+	const state = attributionFor(attributionKey(sessionId, sessionRole));
+	state.turnEndAdvisoryBytes = Math.min(
+		MAX_INJECTED_BYTES,
+		state.turnEndAdvisoryBytes + Math.max(0, bytes),
+	);
+}
+
 /**
  * Emit one bounded session summary and retire its attribution state. The
  * summary contains fixed-key counters only; it never serializes transcript or
@@ -1531,6 +1645,18 @@ export function emitCacheUsageSummaryAtSessionEnd(
 export function resetCachePrefixObservation(): void {
 	prefixHashBySession.clear();
 	attributionBySession.clear();
+}
+
+export function resetCacheFindingIdentitiesSession(
+	sessionId?: string,
+	sessionRole?: "primary" | "concurrent-secondary",
+): void {
+	const state = attributionBySession.get(
+		attributionKey(sessionId, sessionRole),
+	);
+	if (!state) return;
+	state.findingIdentities.clear();
+	state.findingIdentityCapRecorded = false;
 }
 
 export function _attributionBySessionHasForTests(key: string): boolean {

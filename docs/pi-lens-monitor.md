@@ -45,7 +45,11 @@ inherits. This contract adds the standing readout.
 8. **Delta**: for each of the above, the change since the previous readout,
    one line each, only where the number moved by more than 20% or a new
    kind appeared.
-9. **Findings**: at most five, each with the number that proves it, the seam
+9. **Injected context**: report injected bytes per source per turn
+   (`sessionGuidance`, `turnFindings`, `testFindings`, `agentNudge`,
+   `turnEndAdvisory`, `other`) at p50/p95, plus the repeated-findings ratio
+   (`injectedFindingsRepeated` divided by injected finding observations).
+10. **Findings**: at most five, each with the number that proves it, the seam
    (file:line when found), and one of: `already filed #N` (search open issues
    first: `gh issue list --search "<phase or kind>"`), `new`, or
    `expected` (with the rule that makes it expected). A finding without a
