@@ -495,6 +495,7 @@ export function createCustomServer(
 		name: config.name,
 		custom: true,
 		extensions: config.extensions,
+		rootMarkers: config.rootMarkers,
 		root: config.rootMarkers
 			? async (file) =>
 					resolveToolCwd("lsp", id, file, {

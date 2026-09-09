@@ -54,6 +54,8 @@ function fileMapKey(filePath: string): string {
 
 export interface WidgetDiagnostic {
 	severity: string;
+	/** LSP tool cwd projected for lens_diagnostics reporting. */
+	resolvedCwd?: string;
 	semantic?: string;
 	message: string;
 	line?: number;
@@ -1370,6 +1372,8 @@ export function scheduleStaleReconcile(): void {
 /** Summary of current diagnostic counts across all files in the widget. */
 export interface FileDiagnosticSummary {
 	filePath: string;
+	/** Projected by lens_diagnostics from the shared LSP tool-cwd seam. */
+	resolvedCwd?: string;
 	blocking: number;
 	errors: number;
 	warnings: number;

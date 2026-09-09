@@ -297,6 +297,26 @@ describe("lens_diagnostics schema", () => {
 // ── delta mode ────────────────────────────────────────────────────────────────
 
 describe("lens_diagnostics mode=delta", () => {
+	it("projects the resolved LSP cwd onto every diagnostic row (#2777)", async () => {
+		mockSummaries.push({
+			filePath: "/proj/src/a.ts",
+			blocking: 1,
+			errors: 1,
+			warnings: 0,
+			advisories: 0,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", semantic: "blocking", message: "boom", line: 3 },
+			],
+		});
+
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("cwd=/proj");
+		const row = mockSummaries[0];
+		expect(row?.diagnostics[0]).not.toHaveProperty("resolvedCwd");
+	});
+
 	it("returns clean message when caches are empty", async () => {
 		const result = await run(makeTool());
 		expect(String(result.content[0].text)).toContain("No");

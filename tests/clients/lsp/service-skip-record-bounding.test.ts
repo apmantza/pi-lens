@@ -40,7 +40,11 @@ vi.mock("../../../clients/lsp/client.js", () => ({
 vi.mock("../../../clients/lsp/server.js", async (importActual) => {
 	const actual =
 		await importActual<typeof import("../../../clients/lsp/server.js")>();
-	return { ...actual, isDirectLspCommandTemporarilyUnavailable };
+	return {
+		...actual,
+		isDirectLspCommandTemporarilyUnavailable,
+		resolveLspServerCwd: actual.resolveLspServerCwd,
+	};
 });
 
 const latencyCalls: Array<Record<string, unknown>> = [];

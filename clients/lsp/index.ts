@@ -104,6 +104,7 @@ import {
 	isDirectLspCommandTemporarilyUnavailable,
 	resetClassicTsRepairGuard,
 	resetLspLaunchAvailabilityGeneration,
+	resolveLspServerCwd,
 } from "./server.js";
 import {
 	classifyCascadeWaitTier,
@@ -1531,7 +1532,11 @@ export class LSPService {
 		server: LSPServerInfo,
 		filePath: string,
 	): Promise<string | undefined> {
-		const candidate = await server.root(filePath);
+		const candidate = resolveLspServerCwd(
+			server,
+			filePath,
+			this.sessionCwd ?? process.cwd(),
+		);
 		if (!candidate) return undefined;
 		// #2052: a file outside EVERY initialized session cwd gets no client at
 		// all. The ceiling below is unchanged (`process.cwd()`, as before this

@@ -36,13 +36,17 @@ import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
+import { resolveToolCwd } from "../clients/tool-cwd.js";
 import {
 	isAtOrAboveHomeDir,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
 } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
-import { primaryServerId } from "../clients/lsp/config.js";
+import {
+	getServersForFileWithConfig,
+	primaryServerId,
+} from "../clients/lsp/config.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { LSPWorkspaceUnconfirmedReason } from "../clients/lsp/index.js";
 import { getFullScanWallClockMs } from "../clients/lsp/workspace-sweep-hold.js";
@@ -2508,6 +2512,30 @@ async function formatFullMode(
 }
 
 // @delivery-surface: lens-diagnostics:mode-all
+function projectResolvedCwd(
+	summary: FileDiagnosticSummary,
+	cwd: string,
+): FileDiagnosticSummary {
+	const serverId = primaryServerId(summary.filePath);
+	const server = serverId
+		? getServersForFileWithConfig(summary.filePath).find(
+				(entry) => entry.id === serverId,
+			)
+		: undefined;
+	const resolvedCwd = resolveToolCwd("lsp", serverId ?? "unknown", summary.filePath, {
+		cwd,
+		rootMarkers: server?.rootMarkers ?? server?.root.rootMarkers,
+	});
+	return {
+		...summary,
+		resolvedCwd,
+		diagnostics: (summary.diagnostics ?? []).map((diagnostic) => ({
+			...diagnostic,
+			resolvedCwd,
+		})),
+	};
+}
+
 function formatAllMode(
 	cwd: string,
 	severity: string,
@@ -2517,6 +2545,7 @@ function formatAllMode(
 	pathsScope?: PathsScope,
 	dependencyDemoted = 0,
 ): { content: [{ type: "text"; text: string }]; details: object } {
+	summaries = summaries.map((summary) => projectResolvedCwd(summary, cwd));
 	// #2275 review F2: the widget footer stops DRAWING a dependency-drift
 	// demotion once it hits `DEPENDENCY_DRIFT_MAX_DELIVERIES` unconfirmed
 	// deliveries, but the record stays here (dropping it would make an
@@ -2659,7 +2688,7 @@ function formatAllMode(
 		if (staleCount > 0) {
 			parts.push(`${staleCount} stale — re-run to confirm`);
 		}
-		lines.push(`${rel}  ${parts.join("  ")}`);
+		lines.push(`${rel}  ${parts.join("  ")}  cwd=${s.resolvedCwd}`);
 
 		// List the actual diagnostics (not just counts) so the agent can act on
 		// them without re-running anything — same "L<line>: <message>" shape as the

@@ -5804,7 +5804,7 @@
     "tryGemInstall",
     "tryGoInstallGopls"
   ],
-  "tests/clients/lsp/service-skip-record-bounding.test.ts:47:../../../clients/latency-logger.js": [
+  "tests/clients/lsp/service-skip-record-bounding.test.ts:51:../../../clients/latency-logger.js": [
     "RECENT_PHASE_CAP",
     "_closedBracketsStorageLengthForTest",
     "_recentPhasesStorageLengthForTest",

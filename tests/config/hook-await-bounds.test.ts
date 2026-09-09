@@ -2227,7 +2227,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// and its per-server root resolution. This remains an intentionally
 	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
 	// service dependencies; the scheduler itself bounds each recovery pass.
-	"clients/lsp/index.ts": 158,
+	// #2777: root resolution is synchronous at the LSP chokepoint, removing
+	// the old unbounded server.root await from this helper's measured slice.
+	"clients/lsp/index.ts": 157,
 	"clients/lsp/server.ts": 111,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
