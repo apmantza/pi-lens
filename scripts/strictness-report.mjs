@@ -6,7 +6,8 @@ export const REPORT_ROOTS = ["clients", "tools", "mcp", "scripts", "tests"];
 function reportDirectory(file) {
 	const normalized = file.split(sep).join("/");
 	const root = REPORT_ROOTS.find(
-		(candidate) => normalized === candidate || normalized.startsWith(`${candidate}/`),
+		(candidate) =>
+			normalized === candidate || normalized.startsWith(`${candidate}/`),
 	);
 	if (!root) return "other";
 	const parts = normalized.split("/");
@@ -30,12 +31,19 @@ export function parseDiagnostics(output, repoRoot) {
 	return Object.fromEntries([...counts].sort(([a], [b]) => a.localeCompare(b)));
 }
 
-export function runCheck(config, repoRoot = resolve(import.meta.dirname, "..")) {
+export function runCheck(
+	config,
+	repoRoot = resolve(import.meta.dirname, ".."),
+) {
 	const tsc = resolve(repoRoot, "node_modules/typescript/bin/tsc");
-	const result = spawnSync(process.execPath, [tsc, "-p", config, "--noEmit", "--pretty", "false"], {
-		cwd: repoRoot,
-		encoding: "utf8",
-	});
+	const result = spawnSync(
+		process.execPath,
+		[tsc, "-p", config, "--noEmit", "--pretty", "false"],
+		{
+			cwd: repoRoot,
+			encoding: "utf8",
+		},
+	);
 	const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 	return {
 		config,
@@ -46,10 +54,15 @@ export function runCheck(config, repoRoot = resolve(import.meta.dirname, "..")) 
 }
 
 function table(summary) {
-	const directories = new Set(summary.flatMap(({ counts }) => Object.keys(counts)));
-	const rows = [...directories].sort().map((directory) =>
-		`| ${directory} | ${summary[0].counts[directory] ?? 0} | ${summary[1].counts[directory] ?? 0} |`,
+	const directories = new Set(
+		summary.flatMap(({ counts }) => Object.keys(counts)),
 	);
+	const rows = [...directories]
+		.sort()
+		.map(
+			(directory) =>
+				`| ${directory} | ${summary[0].counts[directory] ?? 0} | ${summary[1].counts[directory] ?? 0} |`,
+		);
 	return [
 		"| Directory | noUncheckedIndexedAccess | exactOptionalPropertyTypes |",
 		"|---|---:|---:|",
@@ -74,10 +87,10 @@ export function formatReport(summary) {
 
 export function main(argv = process.argv.slice(2)) {
 	const repoRoot = resolve(import.meta.dirname, "..");
-	const configs = argv.length > 0 ? argv : [
-		"tsconfig.strict-indexed.json",
-		"tsconfig.strict-optional.json",
-	];
+	const configs =
+		argv.length > 0
+			? argv
+			: ["tsconfig.strict-indexed.json", "tsconfig.strict-optional.json"];
 	const summary = configs.map((config) => runCheck(config, repoRoot));
 	process.stdout.write(formatReport(summary));
 	process.stdout.write(`\n${JSON.stringify(summary)}\n`);

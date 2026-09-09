@@ -8,7 +8,10 @@ import {
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const baseline = JSON.parse(
-	readFileSync(resolve(import.meta.dirname, "strictness-baseline.json"), "utf8"),
+	readFileSync(
+		resolve(import.meta.dirname, "strictness-baseline.json"),
+		"utf8",
+	),
 ) as Record<string, Record<string, number>>;
 const productionRoots = ["clients", "tools", "mcp", "scripts"];
 
@@ -25,7 +28,10 @@ function productionCounts(result: StrictnessResult) {
 function compare(result: StrictnessResult, expected: Record<string, number>) {
 	const actual = productionCounts(result);
 	const problems: string[] = [];
-	for (const directory of new Set([...Object.keys(actual), ...Object.keys(expected)])) {
+	for (const directory of new Set([
+		...Object.keys(actual),
+		...Object.keys(expected),
+	])) {
 		const before = expected[directory] ?? 0;
 		const after = actual[directory] ?? 0;
 		if (after > before)
@@ -39,19 +45,15 @@ function compare(result: StrictnessResult, expected: Record<string, number>) {
 }
 
 describe("TypeScript strictness spike ratchets", () => {
-	it(
-		"pins both scratch configurations without permitting drift",
-		() => {
-			const results = [
-				runCheck("tsconfig.strict-indexed.json", ROOT),
-				runCheck("tsconfig.strict-optional.json", ROOT),
-			];
-			for (const result of results) {
-				expect(result.exitCode).toBe(1);
-				expect(result.total).toBeGreaterThan(0);
-				expect(compare(result, baseline[result.config])).toEqual([]);
-			}
-		},
-		120_000,
-	);
+	it("pins both scratch configurations without permitting drift", () => {
+		const results = [
+			runCheck("tsconfig.strict-indexed.json", ROOT),
+			runCheck("tsconfig.strict-optional.json", ROOT),
+		];
+		for (const result of results) {
+			expect(result.exitCode).toBe(1);
+			expect(result.total).toBeGreaterThan(0);
+			expect(compare(result, baseline[result.config])).toEqual([]);
+		}
+	}, 120_000);
 });
