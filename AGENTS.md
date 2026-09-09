@@ -207,6 +207,48 @@ worktree (2026-09-08: seven PRs landed this way through plegma codex workers). F
 if the worker cannot verify a distinct registered worktree, it runs no Git
 commands, and the orchestrator owns commits, pushes, and PR operations.
 
+**Orchestrator rules (source of truth; `.claude/skills/merge-train/SKILL.md`
+is the procedure and defers here on conflict; 2026-09-09).**
+
+- *Second instance of a catalogued shape opens the consolidation lane.* When a
+  review, issue or dogfood finding is the second member of a shape in the
+  catalog below, file the consolidation lane before the second instance
+  merges: one seam every consumer calls, one log line per distinct
+  resolution (throttled once per key per session), one bounded degradation
+  record for the fallback. #2691 → #2756 were shape 40 twice in a week, each
+  fixed at its own seam with no log line, until the maintainer asked (#2777).
+- *An external bug's first round is the production-path probe.* The first
+  delegation reproduces the reporter's symptom through the tool handler (the
+  MCP tool / `lens_*` entry), red on master, before any seam is named; a
+  brief that names a seam is a hypothesis and says so. #2776: seven fixer
+  rounds on `clients/lsp/client.ts` before one investigator round through
+  `createLspDiagnosticsTool` found the cause in `tools/lsp-diagnostics.ts`.
+- *Every "should have been caught by" files its nightly or smoke row the same
+  day*, with the bug as its named recurrence (#2776 → #2780).
+- *Brief pre-flight by touched surface.* Read what the fix will touch and put
+  the dependents into the required test set: a new export on a mocked module
+  → every `vi.mock` of it (#2782 r1: 30 reds in 6 files); a field on a durable
+  or shared record → old-record parse, cache schema version, every deep-equal
+  or snapshot consumer (#2783); a real-spawn test → lane admission + `tests/
+  config/` (#2783 r5); a new fixture → that directory's contract sweeps
+  (#2782 r2); a fragment → exactly one top-level entry, never `CHANGELOG.md`
+  (#2775 r4); a raw poll → the flake-shape ratchet, fixed by the governed
+  wait (#2781 r1).
+- *Sandbox by test shape.* A lane whose tests spawn children (LSP fake server,
+  tool smoke, installer, formatter wire) runs without the write sandbox from
+  round 1 (`sandbox: "danger-full-access"` on plegma). #2781 spent four rounds
+  with a fixer that could not run its own wire tests.
+- *A CI-only red is reproduced in the job's shape before any fix*: the
+  `npm test` PATH prefix (`node_modules/.bin`), a pinned `HOME`, no
+  `PI_LENS_HOME`. #2775 carried one such red through three local-green rounds.
+- *Follow-up rounds go to the same worker while it is alive* (plegma
+  `plegma_send`); a fresh worker on a resume loses uncommitted work. After
+  every settlement, list live workers and consume every finished handle — a
+  one-shot watch misses what settles while it is disarmed.
+- *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
+  daemon copies under `~/.plegma/contracts/` are synced from them and the
+  repository wins on drift. `CLAUDE.md` and the skills are pointers.
+
 Do not manufacture busywork to occupy idle workers — an idle slot is cheaper
 than fake work. Delegate when a real producer, consumer, probe, or diagnosis
 is unresolved; never to keep an agent, worker pool, or task list looking busy.

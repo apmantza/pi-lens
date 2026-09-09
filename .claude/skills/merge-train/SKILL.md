@@ -5,6 +5,10 @@ description: Run the pi-lens review → verify → merge policy over one or more
 
 # Merge train
 
+> Source of truth for every rule below is `AGENTS.md` ("Role contracts for
+> delegated work" → "Orchestrator rules", plus the defect catalog). This file
+> is the procedure and the record; on any conflict AGENTS.md wins.
+
 The policy that landed the 2026-08-17 arc (11 PRs, every one adversarially
 reviewed, zero unreviewed merges). Apply it to each PR in the queue.
 
