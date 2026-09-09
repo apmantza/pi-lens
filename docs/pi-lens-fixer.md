@@ -26,6 +26,8 @@ skipped, and why. Use active, plain prose.
 
 ## Standard mechanics (apply unless the brief overrides)
 
+A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle adds or updates a real-harness scenario when the defect is only observable through the host; the scenario is the red-first proof where a unit seam cannot show it.
+
 - `npm run build` before any test run; rebuild between mutations. Tests run as
   `PI_LENS_HOME=$PWD/.probe-home node_modules/.bin/vitest run <files> --configLoader runner`
   (sweeps get `30_000`). A CI-only red is reproduced in the job's shape first

@@ -122,6 +122,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the hook remainder is the defect; fake timers isolate the delayed pre-snapshot work from scheduler contention",
 	},
+	"real-process-spawn:real-harness/scenario-1.test.ts": {
+		detector: "real-process-spawn",
+		reason: "the real pi RPC host and extension lifecycle cannot be certified by an in-process double",
+	},
+	"real-process-spawn:real-harness/scenario-3.test.ts": {
+		detector: "real-process-spawn",
+		reason: "the real host tool handler and read guard must cross the pi process boundary",
+	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -656,7 +664,7 @@ function validateAdmission(
 	key: string,
 	entry: { detector: DetectorName; reason: string },
 	source: string | undefined,
-	wallClockBudgetIncluded: ReadonlySet<string>,
+	serializedLaneIncluded: ReadonlySet<string>,
 	relativeTestsPath: string,
 ): string[] {
 	const problems: string[] = [];
@@ -675,9 +683,9 @@ function validateAdmission(
 	} else if (header.reason.length < 15) {
 		problems.push(`${key}: header reason too short to be real`);
 	}
-	if (!wallClockBudgetIncluded.has(`tests/${relativeTestsPath}`)) {
+	if (!serializedLaneIncluded.has(`tests/${relativeTestsPath}`)) {
 		problems.push(
-			`${key}: not listed in vitest.config.ts wallClockBudgetInclude`,
+			`${key}: not listed in vitest.config.ts wallClockBudgetInclude or real-harness lane`,
 		);
 	}
 	if (entry.reason.trim().length < 15) {
@@ -688,7 +696,7 @@ function validateAdmission(
 
 describe("flake-shape ratchet — admission gate", () => {
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
-		const included = new Set(wallClockBudgetInclude());
+		const included = new Set([...wallClockBudgetInclude(), "tests/real-harness/scenario-1.test.ts", "tests/real-harness/scenario-3.test.ts"]);
 		const problems: string[] = [];
 		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
 			const file = key.slice(entry.detector.length + 1);

@@ -1,5 +1,7 @@
 # Reviewer contract
 
+Reviewers run the relevant scenario as a probe and may add a throwaway scenario directory to reproduce a finding through the real host; quote the RPC event or tool result.
+
 Adversarially verify a change before merge and report proven findings.
 
 Assume the implementation's claims are incomplete. Read the issue, full diff,

@@ -302,6 +302,14 @@ const lspSpawnHeavyInclude = [
 	"tests/support/fake-lsp-server.test.ts",
 ];
 
+// Real pi RPC sessions execute the built extension and a real host tool. Keep
+// this admission outside the default fork storm: each scenario has a 60 s
+// wall budget and one child process owns the fixture project.
+const realHarnessInclude = [
+	"tests/real-harness/scenario-1.test.ts",
+	"tests/real-harness/scenario-3.test.ts",
+];
+
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
 // deltas around awaited work, or a self-reported span whose window contains
 // deschedulable real work). Unlike the timing-sensitive list above, these do
@@ -453,9 +461,10 @@ export default defineConfig({
 			{
 				test: {
 					name: "default",
-					exclude: [
+						exclude: [
 						...sharedExclude,
 						...unitOnlyExclude,
+						...realHarnessInclude,
 						...grammarHeavyInclude,
 						...timingSensitiveInclude,
 						...lspSpawnHeavyInclude,
@@ -563,6 +572,19 @@ export default defineConfig({
 					// most of its declared ~15s budget twice over (initialize, then
 					// first-document diagnostics) before shutdown; give teardown the
 					// same headroom as the other heavy projects.
+					hookTimeout: 60_000,
+				},
+			},
+			{
+				test: {
+					name: "real-harness",
+					include: realHarnessInclude,
+					exclude: sharedExclude,
+					globalSetup: sharedGlobalSetup,
+					setupFiles: sharedSetupFiles,
+					execArgv: sharedExecArgv,
+					maxWorkers: 1,
+					sequence: { groupOrder: 5 },
 					hookTimeout: 60_000,
 				},
 			},

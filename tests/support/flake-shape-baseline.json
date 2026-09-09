@@ -71,7 +71,9 @@
 		"scripts/with-memory-watch.test.ts": 1,
 		"support/fault-injection.test.ts": 3,
 		"support/git-config-guard.test.ts": 5,
-		"support/git-fixture-env.test.ts": 9
+		"support/git-fixture-env.test.ts": 9,
+		"real-harness/scenario-1.test.ts": 1,
+		"real-harness/scenario-3.test.ts": 1
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,

@@ -1,0 +1,1 @@
+[[{"type":"toolCall","name":"edit","arguments":{"path":"guarded.ts","oldText":"export const value = 1;","newText":"export const value = 2;"}}],[{"type":"toolCall","name":"read_symbol","arguments":{"path":"guarded.ts","symbol":"value"}}],[{"type":"toolCall","name":"edit","arguments":{"path":"guarded.ts","oldText":"export const value = 1;","newText":"export const value = 2;"}}]]
