@@ -85,6 +85,15 @@ describe("cache-observability — response-side usage (#1018)", () => {
 					injectedCharsSinceLastTurn: 0,
 					newTranscriptCharsSinceLastTurn: 0,
 					attributionCharsCapped: false,
+					injectedBytes: {
+						sessionGuidance: 0,
+						turnFindings: 0,
+						testFindings: 0,
+						agentNudge: 0,
+						turnEndAdvisory: 0,
+						other: 0,
+					},
+					injectedFindingsRepeated: 0,
 				},
 			},
 		]);
@@ -1572,5 +1581,73 @@ describe("cache-observability — per-source injection attribution (#1071)", () 
 		expect(JSON.stringify(latencyEntries[0].metadata)).not.toContain(
 			"SECRET_FINDING_TEXT",
 		);
+	});
+
+	it("carries UTF-8 bytes and repeated findings onto the existing turn row", () => {
+		const finding = "src/例.ts:7 no-unused-vars";
+		const sources = [
+			["session-guidance", "src/guidance.ts:1 guidance-rule"],
+			["turn-findings", finding],
+			["test-findings", "tests/a.py:2 rule=E501"],
+			["agent-nudge", "src/nudge.go:3 nudge-rule"],
+		] as const;
+		for (const [source, content] of sources) {
+			observeCacheContext({
+				sessionId: "bytes",
+				turnIndex: 1,
+				injectionEnabled: true,
+				injectionSlices: [{ source, messages: [{ role: "user", content }] }],
+			});
+		}
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "bytes" });
+		const first = latencyEntries.find((entry) => entry.phase === "cache_usage");
+		expect(first?.metadata?.injectedBytes).toEqual({
+			sessionGuidance: Buffer.byteLength("src/guidance.ts:1 guidance-rule"),
+			turnFindings: Buffer.byteLength(finding),
+			testFindings: Buffer.byteLength("tests/a.py:2 rule=E501"),
+			agentNudge: Buffer.byteLength("src/nudge.go:3 nudge-rule"),
+			turnEndAdvisory: 0,
+			other: 0,
+		});
+		expect(first?.metadata?.injectedFindingsRepeated).toBe(0);
+
+		observeCacheContext({
+			sessionId: "bytes",
+			turnIndex: 2,
+			injectionEnabled: true,
+			injectionSlices: [
+				{
+					source: "turn-findings",
+					messages: [{ role: "user", content: finding }],
+				},
+			],
+		});
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "bytes" });
+		const second = latencyEntries.filter(
+			(entry) => entry.phase === "cache_usage",
+		)[1];
+		expect(second?.metadata?.injectedFindingsRepeated).toBe(1);
+	});
+
+	it("writes zero source bytes when context injection is disabled", () => {
+		observeCacheContext({
+			sessionId: "disabled",
+			turnIndex: 1,
+			injectionEnabled: false,
+		});
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "disabled" });
+		expect(
+			latencyEntries.find((entry) => entry.phase === "cache_usage")?.metadata,
+		).toMatchObject({
+			injectedBytes: {
+				sessionGuidance: 0,
+				turnFindings: 0,
+				testFindings: 0,
+				agentNudge: 0,
+				turnEndAdvisory: 0,
+				other: 0,
+			},
+			injectedFindingsRepeated: 0,
+		});
 	});
 });

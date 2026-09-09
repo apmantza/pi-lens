@@ -257,6 +257,7 @@ import {
 	logCacheUsage,
 	observeCacheContext,
 	observeCachePrefix,
+	recordTurnEndAdvisoryBytes,
 } from "./clients/cache-observability.js";
 import {
 	buildStartupTimingRecords,
@@ -3137,6 +3138,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						display: true,
 						details,
 					});
+					recordTurnEndAdvisoryBytes(
+						runtime.telemetrySessionId,
+						Buffer.byteLength(line, "utf8"),
+					);
 				} catch (sendErr) {
 					if (isStaleExtensionCtxError(sendErr)) {
 						dbg(
