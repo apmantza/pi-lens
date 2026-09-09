@@ -5,6 +5,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # typescript-language-server 6 declares engines.node >=22.22.2; pi-lens
+      # never requires more Node than the pi host (22.19.0, #2633). Lift when
+      # pi's own floor reaches 22.22.2 (maintainer decision 2026-09-09, #2714).
+      - dependency-name: typescript-language-server
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
