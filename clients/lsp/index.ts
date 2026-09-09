@@ -1532,7 +1532,7 @@ export class LSPService {
 		server: LSPServerInfo,
 		filePath: string,
 	): Promise<string | undefined> {
-		const candidate = resolveLspServerCwd(
+		const candidate = await resolveLspServerCwd(
 			server,
 			filePath,
 			this.sessionCwd ?? process.cwd(),

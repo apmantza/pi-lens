@@ -101,14 +101,33 @@ function withRootMarkers(
 }
 
 /** Resolve a server identity cwd through the shared tool-cwd seam. */
-export function resolveLspServerCwd(
+export async function resolveLspServerCwd(
 	server: Pick<LSPServerInfo, "id" | "root" | "rootMarkers">,
 	filePath: string,
 	sessionCwd: string,
-): string {
+): Promise<string | undefined> {
+	const rootMarkers = server.rootMarkers ?? server.root.rootMarkers;
+	const serverRoot = await server.root(filePath);
+	const isFileDirFallback =
+		serverRoot !== undefined &&
+		rootMarkers?.length &&
+		path.resolve(serverRoot) === path.resolve(path.dirname(filePath));
+	if (!serverRoot || isFileDirFallback) {
+		if (!rootMarkers?.length) return undefined;
+		return resolveToolCwd("lsp", server.id, filePath, {
+			cwd: sessionCwd,
+			rootMarkers,
+		});
+	}
+	const boundedServerRoot = enforceLspRootCeiling(
+		serverRoot,
+		sessionCwd,
+		filePath,
+	);
 	return resolveToolCwd("lsp", server.id, filePath, {
 		cwd: sessionCwd,
-		rootMarkers: server.rootMarkers ?? server.root.rootMarkers,
+		rootMarkers,
+		serverRoot: boundedServerRoot,
 	});
 }
 

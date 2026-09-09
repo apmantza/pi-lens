@@ -143,12 +143,43 @@ describe("resolveToolCwd (#2777)", () => {
 				fs.writeFileSync(markerPath, "");
 			}
 			const before = await server.root(file);
-			const after = resolveLspServerCwd(server, file, project);
+			const after = await resolveLspServerCwd(server, file, project);
 			table.push(`${language.id}: ${before} === ${after}`);
 			expect(after, table.at(-1)).toBe(before);
 		}
 		console.log(table.join("\n"));
 		fs.rmSync(project, { recursive: true, force: true });
+	});
+
+	it("routes built-in language marker tables through the same seam", () => {
+		const project = path.join(home, "repo");
+		const python = path.join(project, "packages", "py", "src", "main.py");
+		const typescript = path.join(project, "packages", "ts", "src", "main.ts");
+		const ruby = path.join(project, "packages", "rb", "src", "main.rb");
+		fs.mkdirSync(path.dirname(python), { recursive: true });
+		fs.mkdirSync(path.dirname(typescript), { recursive: true });
+		fs.mkdirSync(path.dirname(ruby), { recursive: true });
+		fs.writeFileSync(path.join(project, "pyproject.toml"), "[tool.pyright]\n");
+		fs.writeFileSync(path.join(project, "package.json"), "{}\n");
+		fs.writeFileSync(
+			path.join(project, "Gemfile"),
+			'source "https://rubygems.org"\n',
+		);
+
+		for (const [id, file, expected] of [
+			["python", python, project],
+			["typescript", typescript, project],
+			["ruby", ruby, project],
+		] as const) {
+			const server = LSP_SERVERS.find((entry) => entry.id === id);
+			expect(server?.root.rootMarkers).toBeDefined();
+			expect(
+				toolCwd.resolveToolCwd("lsp", id, file, {
+					cwd: project,
+					rootMarkers: server?.root.rootMarkers,
+				}),
+			).toBe(expected);
+		}
 	});
 
 	it("uses the dispatch root for a built-in server with no marker", async () => {
@@ -164,6 +195,22 @@ describe("resolveToolCwd (#2777)", () => {
 			}
 		).resolveServerRoot.bind(service);
 		expect(await resolveRoot(server, file)).toBe(project);
+	});
+
+	it("keeps a markerless server-computed root at the LSP seam", async () => {
+		const project = path.join(home, "repo");
+		const file = path.join(project, "packages", "app", "src", "main.ts");
+		const computedRoot = path.join(project, "server-owned-root");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const server: LSPServerInfo = {
+			id: "markerless-test-server",
+			name: "Markerless test server",
+			extensions: [".ts"],
+			root: async () => computedRoot,
+			spawn: vi.fn(),
+		};
+
+		expect(await resolveLspServerCwd(server, file, project)).toBe(computedRoot);
 	});
 
 	it("matches glob root markers against files in the directory", () => {

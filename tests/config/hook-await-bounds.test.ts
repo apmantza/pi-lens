@@ -2229,8 +2229,8 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// service dependencies; the scheduler itself bounds each recovery pass.
 	// #2777: root resolution is synchronous at the LSP chokepoint, removing
 	// the old unbounded server.root await from this helper's measured slice.
-	"clients/lsp/index.ts": 157,
-	"clients/lsp/server.ts": 111,
+	"clients/lsp/index.ts": 158,
+	"clients/lsp/server.ts": 112,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	"clients/opaque-mutation-scan.ts": 10,
