@@ -282,6 +282,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
 	},
+	"real-process-spawn:scripts/lockfile-completeness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pinned npm child is required to reproduce lockfile optional-binding rewrites; a process double cannot validate npm behavior",
+	},
 	// 2026-09-07 (#2613 review S2/T3): --dry-run env-reading/report-building
 	// wiring is the subject; the real `gh` calls stay untested, same
 	// documented exception as the sibling scripts/notify-clean-signal-drift.mjs.

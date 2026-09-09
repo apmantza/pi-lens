@@ -8,6 +8,7 @@ export declare function runLockfileCompleteness(options?: {
 }): {
 	ok: boolean;
 	pin: string;
+	inconclusive?: boolean;
 	reason?: string;
 	output?: string;
 };

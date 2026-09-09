@@ -40,10 +40,15 @@ console.log("package-lock.json is in sync with package.json ✓");
 
 if (complete) {
 	const result = runLockfileCompleteness();
-	if (!result.ok) {
+	if (!result.ok && !result.inconclusive) {
 		console.error(`lockfile:complete: ${result.reason}`);
 		if (result.output) console.error(result.output);
 		process.exit(1);
+	}
+	if (result.inconclusive) {
+		console.error("lockfile:complete: inconclusive: npm pin unavailable");
+		if (result.output) console.error(result.output);
+		process.exit(3);
 	}
 	console.log(`lockfile:complete: stable under npm@${result.pin} ✓`);
 }

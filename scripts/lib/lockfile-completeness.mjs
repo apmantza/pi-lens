@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	globSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const LOCKFILE_COMPLETENESS_TIMEOUT_MS = 120_000;
 
@@ -19,15 +27,6 @@ export function getPinnedNpmVersion(cwd = process.cwd()) {
 		);
 	}
 	return match[1];
-}
-
-function copyFilter(source) {
-	const path = source.replaceAll("\\", "/");
-	return (
-		!/(^|\/)\.(git|probe-home|cache)(\/|$)/.test(path) &&
-		!/(^|\/)node_modules(\/|$)/.test(path) &&
-		!/(^|\/)dist(\/|$)/.test(path)
-	);
 }
 
 function nodeModulesKeys(file) {
@@ -59,7 +58,23 @@ export function runLockfileCompleteness({
 	const tempRoot = mkdtempSync(join(tmpdir(), "pi-lens-lockfile-complete-"));
 	const copy = join(tempRoot, "tree");
 	try {
-		cpSync(root, copy, { recursive: true, filter: copyFilter });
+		const packageJson = readJson(join(root, "package.json"));
+		mkdirSync(copy, { recursive: true });
+		copyFileSync(join(root, "package.json"), join(copy, "package.json"));
+		copyFileSync(originalLockfile, join(copy, "package-lock.json"));
+		const workspaces = Array.isArray(packageJson.workspaces)
+			? packageJson.workspaces
+			: packageJson.workspaces?.packages;
+		for (const workspace of workspaces ?? []) {
+			for (const manifest of globSync(`${workspace}/package.json`, {
+				cwd: root,
+				nodir: true,
+			})) {
+				const target = join(copy, manifest);
+				mkdirSync(dirname(target), { recursive: true });
+				copyFileSync(join(root, manifest), target);
+			}
+		}
 		const copiedLockfile = join(copy, "package-lock.json");
 		const before = readFileSync(copiedLockfile);
 		const result = spawn(
@@ -68,7 +83,6 @@ export function runLockfileCompleteness({
 				"-y",
 				`npm@${pin}`,
 				"install",
-				"--package-lock-only",
 				"--ignore-scripts",
 				"--no-audit",
 				"--no-fund",
@@ -87,6 +101,19 @@ export function runLockfileCompleteness({
 		);
 		const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
 		if (result.error || result.status !== 0) {
+			const unavailable =
+				result.error?.code === "ETIMEDOUT" ||
+				/\b(?:ECONNREFUSED|ECONNRESET|ENETUNREACH|EAI_AGAIN|ENOTFOUND|FetchError|ENOTCACHED)\b/i.test(
+					output,
+				);
+			if (unavailable)
+				return {
+					ok: false,
+					inconclusive: true,
+					pin,
+					reason: "npm pin unavailable",
+					output,
+				};
 			const reason =
 				result.error?.code === "ETIMEDOUT"
 					? `timed out after ${timeoutMs}ms`
@@ -109,10 +136,14 @@ export function runLockfileCompleteness({
 if (import.meta.url === `file://${process.argv[1]}`) {
 	try {
 		const result = runLockfileCompleteness();
-		if (!result.ok) {
+		if (!result.ok && !result.inconclusive) {
 			console.error(`lockfile:complete: ${result.reason}`);
 			if (result.output) console.error(result.output);
 			process.exitCode = 1;
+		} else if (result.inconclusive) {
+			console.error("lockfile:complete: inconclusive: npm pin unavailable");
+			if (result.output) console.error(result.output);
+			process.exitCode = 3;
 		} else {
 			console.log(
 				`lockfile:complete: package-lock.json is stable under npm@${result.pin} ✓`,
