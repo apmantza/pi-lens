@@ -20,6 +20,7 @@ export interface ComplexityFileResult {
 
 export declare const COMPLEXITY_FUNCTION_THRESHOLD: number;
 export declare const COMPLEXITY_FILE_SIZE_THRESHOLD: number;
+export declare function requireAnalyzedFiles(results: unknown[]): void;
 export declare function shapeComplexityReport(
 	results: ComplexityFileResult[],
 	options?: {

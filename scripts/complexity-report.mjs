@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 export const COMPLEXITY_FUNCTION_THRESHOLD = 15;
 export const COMPLEXITY_FILE_SIZE_THRESHOLD = 1000;
 
+export function requireAnalyzedFiles(results) {
+	if (results.length === 0)
+		throw new Error("complexity analysis produced zero analyzed files");
+}
+
 export function shapeComplexityReport(results, options = {}) {
 	const topN = options.topN ?? 20;
 	const files = results
@@ -109,6 +114,7 @@ async function main() {
 				lineCount: (await readFile(file, "utf8")).split(/\r?\n/).length - 1,
 			});
 	}
+	requireAnalyzedFiles(results);
 	const report = shapeComplexityReport(results, {
 		topN: Number(process.env.COMPLEXITY_TOP_N) || 20,
 	});
@@ -135,6 +141,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 				),
 			)
 			.catch(() => {});
-		process.exitCode = 0;
+		process.exitCode = 1;
 	});
 }

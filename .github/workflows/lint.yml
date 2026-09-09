@@ -627,6 +627,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Download core tree-sitter grammars
+        run: node scripts/download-grammars.js --core --dest grammars
       - run: npm run build
       - name: Generate complexity report
         run: node scripts/complexity-report.mjs | tee complexity-report.txt

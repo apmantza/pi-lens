@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shapeComplexityReport } from "../../scripts/complexity-report.mjs";
+import {
+	requireAnalyzedFiles,
+	shapeComplexityReport,
+} from "../../scripts/complexity-report.mjs";
 
 describe("complexity report shaper", () => {
 	it("orders metrics and identifies file/function split candidates", () => {
@@ -63,5 +66,36 @@ describe("complexity report shaper", () => {
 		);
 		expect(report).toContain("- **Function:** `hard` at `clients/small.ts:4`");
 		expect(report).not.toContain("Function: `wide`");
+	});
+
+	it("treats a function at the dispatch threshold as a split candidate", () => {
+		const report = shapeComplexityReport([
+			{
+				filePath: "clients/boundary.ts",
+				linesOfCode: 20,
+				maxCyclomaticComplexity: 15,
+				cognitiveComplexity: 1,
+				functionCount: 1,
+				functions: [
+					{
+						name: "boundary",
+						line: 1,
+						length: 4,
+						cyclomatic: 15,
+						cognitive: 1,
+						nestingDepth: 1,
+					},
+				],
+			},
+		]);
+		expect(report).toContain(
+			"- **Function:** `boundary` at `clients/boundary.ts:1` (cyclomatic 15)",
+		);
+	});
+
+	it("rejects a report with zero analyzed files", () => {
+		expect(() => requireAnalyzedFiles([])).toThrow(
+			"complexity analysis produced zero analyzed files",
+		);
 	});
 });

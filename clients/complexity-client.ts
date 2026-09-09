@@ -14,6 +14,7 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { calcCyclomaticComplexity } from "./dispatch/facts/function-facts.js";
 import {
 	firstChildOfType,
 	withTreeSitterRoot,
@@ -264,6 +265,7 @@ function isLogicalOp(node: TsNode, nodes: LangNodes): boolean {
 
 /** Cyclomatic contribution of a subtree: decision points + logical operators. */
 function subtreeCyclomatic(root: TsNode, nodes: LangNodes): number {
+	if (nodes === JSTS) return calcCyclomaticComplexity(root);
 	let cc = 0;
 	walk(root, (n) => {
 		if (nodes.decision.has(n.type)) cc++;
