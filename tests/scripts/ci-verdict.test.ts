@@ -1020,7 +1020,6 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	const EXPECTED_ADVISORY = new Set([
 		"Unit tests Windows (advisory)",
 		"PR body (advisory)",
-		"oxfmt format check (advisory)",
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
 		"knip (advisory)",
@@ -1087,6 +1086,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"Install test (windows-latest)",
 			"Install test (macos-latest)",
 			"Production install build (--omit=dev, from source)",
+			"oxfmt format check",
 		]) {
 			expect(isAdvisoryCheck(name)).toBe(false);
 		}
@@ -1097,7 +1097,6 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			...EXTERNAL_ADVISORY_NAMES,
 			"greeting",
 			"PR body (advisory)",
-			"oxfmt format check (advisory)",
 			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",
 			"oxlint (advisory)",
@@ -1113,7 +1112,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 
 	// #2700 review round 3: the repo's settled convention for a NEW advisory
 	// job is the `(advisory)` name suffix with no continue-on-error (what
-	// `oxfmt format check (advisory)`/`Vale prose lint (advisory)` above and
+	// `Vale prose lint (advisory)` above and
 	// osv-scan.yml already do) -- not a hand-maintained ADVISORY_CHECKS
 	// entry like `greeting`'s (that shape exists only because `greeting`'s
 	// real GitHub Actions job name, from greetings.yml's job KEY, carries no
