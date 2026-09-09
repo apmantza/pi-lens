@@ -4,7 +4,10 @@
  * Three deflake PRs in two days (#2531 alone fixed three shared-slot races)
  * and nothing counted the contention surface, so the set only grew. This
  * module owns the four detectors the ratchet (`tests/clients/flake-shape-
- * ratchet.test.ts`) runs over `tests/**\/*.test.ts`:
+ * ratchet.test.ts`) runs over `tests/**\/*.test.ts` and — since #2563 — over
+ * every non-test helper under `tests/support/**\/*.ts` (the time detectors
+ * only; the spawn detector stays test-file-only, see
+ * {@link SUPPORT_POPULATION_DETECTORS}):
  *
  * 1. {@link scanRealProcessSpawn} — a real child process: a `child_process`
  *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, a support
@@ -18,7 +21,9 @@
  * 3. {@link scanRawTimerWait} — a raw `setTimeout`/`setInterval` wait outside
  *    a `vi.useFakeTimers()` scope, and outside `interleaving-kit.ts` itself
  *    (the sanctioned primitive these three detectors exist to route callers
- *    toward instead).
+ *    toward instead); in a `tests/support/` helper it also flags any
+ *    `delay`/`sleep` helper DEFINITION (#2563 — the shared-primitive reuse
+ *    vector that hides a raw wait from every `.test.ts` call site).
  * 4. {@link scanUngovernedWaitFor} — a `vi.waitFor(` call outside a
  *    `vi.useFakeTimers()` scope — the #1767 shape
  *    (`tests/clients/runtime-session.test.ts`'s own recorded flake, real
@@ -81,6 +86,31 @@ function testSourceFiles(dir = TESTS_ROOT): string[] {
 		extensions: [".ts"],
 		skipDeclarations: true,
 	}).filter((absolute) => absolute.endsWith(".test.ts"));
+}
+
+/**
+ * Every non-test `*.ts` helper under `tests/support/` (#2563) — the shared
+ * primitives every `.test.ts` file imports. A raw-timer wait hidden inside
+ * one of these reaches every importing test file while sitting outside the
+ * `.test.ts` glob the ratchet originally walked, so the support population
+ * joins the scan.
+ */
+function supportHelperFiles(): string[] {
+	return listSourceFiles(path.join(TESTS_ROOT, "support"), {
+		extensions: [".ts"],
+		skipDeclarations: true,
+	}).filter((absolute) => !absolute.endsWith(".test.ts"));
+}
+
+/**
+ * #2563: the support-population gate for {@link scanRawTimerWait}'s
+ * delay/sleep-definition shape — a non-test helper under `tests/support/`.
+ * `file` is the `tests/`-relative posix key {@link countsByDetector} scans
+ * under. In a `.test.ts` file the shape is redundant: the timer call itself
+ * (hidden or not) already lands under the test-file detectors.
+ */
+function isSupportHelperFile(file: string): boolean {
+	return file.startsWith("support/") && !file.endsWith(".test.ts");
 }
 
 /** `tests/`-relative posix path for an absolute source path. */
@@ -303,6 +333,20 @@ const USE_FAKE_TIMERS = /\bvi\.useFakeTimers\s*\(/;
 const USE_REAL_TIMERS = /\bvi\.useRealTimers\s*\(/;
 
 /**
+ * A declared `delay`/`sleep`-named binding — `export function delayInside(...)`,
+ * `const delay = ...` (prefix-anchored, so `delayInside`/`delayMs` count: the
+ * name is the vector, not the exact spelling). This is the shape #2563 exists
+ * for: a shared wait primitive defined in `tests/support/` is the reuse path
+ * that lets a raw-timer wait reach every importing test file, and its
+ * definition stays visible even when the timer behind it is hidden — an
+ * aliased `import { setTimeout as sleep }`, a re-export — where
+ * {@link RAW_TIMER_CALL} sees nothing. Applied only to the support
+ * population (see {@link isSupportHelperFile}).
+ */
+const DELAY_SLEEP_HELPER_DEFINITION =
+	/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)((?:delay|sleep)\w*)\b/;
+
+/**
  * Per-line "are fake timers active here" state, tracked in FILE-ORDER (see
  * the module doc's known-limits note): `vi.useFakeTimers()` turns tracking
  * on, the next `vi.useRealTimers()` turns it off, and every line in between
@@ -320,28 +364,42 @@ function fakeTimersStateAtLine(lines: readonly string[]): boolean[] {
 }
 
 /**
- * A raw `setTimeout`/`setInterval` wait outside a `vi.useFakeTimers()` scope.
+ * A raw `setTimeout`/`setInterval` wait outside a `vi.useFakeTimers()` scope,
+ * plus — in a non-test helper under `tests/support/` (#2563) — any
+ * `delay`/`sleep` helper definition ({@link DELAY_SLEEP_HELPER_DEFINITION}).
  *
  * `interleaving-kit.ts` itself is exempt by name (#2547's sanctioned
- * primitive; it is not a `.test.ts` file so the ratchet's own glob never
- * reaches it, but the exemption is stated here too so a caller that scans it
- * directly — this module's own self-test — gets the same answer).
+ * primitive; it lives in `tests/clients/`, outside both populations, but the
+ * exemption is stated here too so a caller that scans it directly — this
+ * module's own self-test — gets the same answer).
  */
 export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
 	if (path.posix.basename(file) === "interleaving-kit.ts") return [];
 	const stripped = stripSource(source, { strings: "blank" });
 	const lines = stripped.split("\n");
 	const stateAtLine = fakeTimersStateAtLine(lines);
+	const supportHelper = isSupportHelperFile(file);
 
 	const hits: FlakeHit[] = [];
 	lines.forEach((lineText, idx) => {
 		const m = RAW_TIMER_CALL.exec(lineText);
-		if (!m || stateAtLine[idx]) return;
-		hits.push({
-			line: idx + 1,
-			text: lineText.trim(),
-			reason: `raw ${m[1]}( outside vi.useFakeTimers()`,
-		});
+		if (m && !stateAtLine[idx]) {
+			hits.push({
+				line: idx + 1,
+				text: lineText.trim(),
+				reason: `raw ${m[1]}( outside vi.useFakeTimers()`,
+			});
+		}
+		// A delay/sleep definition is the vector regardless of this file's own
+		// fake-timer state: the helper is CALLED from other files whose timer
+		// scope is not this file's.
+		if (supportHelper && DELAY_SLEEP_HELPER_DEFINITION.test(lineText)) {
+			hits.push({
+				line: idx + 1,
+				text: lineText.trim(),
+				reason: "delay/sleep helper definition in tests/support (#2563)",
+			});
+		}
 	});
 	return hits;
 }
@@ -391,25 +449,54 @@ export const DETECTORS: Record<
 	"ungoverned-wait-for": scanUngovernedWaitFor,
 };
 
+/**
+ * Detectors run over the #2563 support population (non-test
+ * `tests/support/**\/*.ts` helpers): the time shapes only. The spawn detector
+ * (1) stays test-file-only on purpose — `tests/support/` helpers ARE the
+ * sanctioned route to real child processes (`git-fixture-env.ts`,
+ * `fake-child.ts`, `spawn-shapes.ts` all import `node:child_process` by
+ * design), so scanning them would demand admission headers for the fixture
+ * boundary itself; what #2563 governs is TIME primitives defined for reuse.
+ */
+const SUPPORT_POPULATION_DETECTORS: readonly DetectorName[] = [
+	"elapsed-time-assertion",
+	"raw-timer-wait",
+	"ungoverned-wait-for",
+];
+
 let countsCache: Record<DetectorName, Record<string, number>> | undefined;
 
-/** file → hit count, for every `tests/**\/*.test.ts` file the detector flags. */
+/**
+ * file → hit count, for every `tests/**\/*.test.ts` file and every non-test
+ * `tests/support/**\/*.ts` helper (#2563) the detector flags.
+ */
 export function countsByDetector(
 	detector: DetectorName,
 ): Record<string, number> {
 	if (countsCache === undefined) {
-		countsCache = Object.fromEntries(
+		const counts = Object.fromEntries(
 			DETECTOR_NAMES.map((name) => [name, {}]),
 		) as Record<DetectorName, Record<string, number>>;
-		for (const absolute of testSourceFiles()) {
+		const scanFile = (
+			absolute: string,
+			detectors: readonly DetectorName[],
+		): void => {
 			const file = testsRelative(absolute);
-			if (SCAN_INFRASTRUCTURE.has(file)) continue;
+			if (SCAN_INFRASTRUCTURE.has(file)) return;
 			const source = fs.readFileSync(absolute, "utf8");
-			for (const name of DETECTOR_NAMES) {
+			for (const name of detectors) {
 				const hits = DETECTORS[name](file, source);
-				if (hits.length > 0) countsCache[name][file] = hits.length;
+				if (hits.length > 0) counts[name][file] = hits.length;
 			}
+		};
+		for (const absolute of testSourceFiles()) {
+			scanFile(absolute, DETECTOR_NAMES);
 		}
+		// #2563: the support population — non-test helpers under tests/support/.
+		for (const absolute of supportHelperFiles()) {
+			scanFile(absolute, SUPPORT_POPULATION_DETECTORS);
+		}
+		countsCache = counts;
 	}
 	return countsCache[detector];
 }
