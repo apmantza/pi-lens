@@ -8,7 +8,7 @@ export declare function normalizePrBodyForChecking(
 ): { body: string; normalized: boolean };
 export declare function lintPrBody(
 	body?: string,
-	options?: { requireTestAssessment?: boolean },
+	options?: { requireTestAssessment?: boolean; diff?: string },
 ): {
 	valid: boolean;
 	errors: string[];
@@ -38,3 +38,10 @@ export declare function lintPullRequestEvent(
 	fetchImpl?: typeof fetch,
 	event?: { pull_request?: { number: number; body?: string | null } },
 ): Promise<{ valid: boolean; repaired: boolean }>;
+export declare function localDiff(
+	cwd?: string,
+	git?: (
+		args: readonly string[],
+		options: { cwd: string; encoding: "utf8" },
+	) => string,
+): string;
