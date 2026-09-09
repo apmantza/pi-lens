@@ -16,6 +16,7 @@
  * These fail on pre-fix code: the raw `logLatency` wrote one record per call,
  * so the repeat-suppression assertions see 3 records instead of 1.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -60,12 +61,15 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => {
 });
 
 function fakeServer(id: string, availabilityKey?: string) {
+	const root = Object.assign(async () => FIXTURE_ROOT, {
+		rootMarkers: [".fake-root"],
+	});
 	return {
 		id,
 		name: id,
 		extensions: [".fake"],
 		availabilityKey,
-		root: async () => FIXTURE_ROOT,
+		root,
 		spawn: vi.fn(),
 	};
 }
@@ -92,6 +96,8 @@ describe("LSP per-file skip records are bounded (#1743)", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		latencyCalls.length = 0;
+		fs.mkdirSync(FIXTURE_ROOT, { recursive: true });
+		fs.writeFileSync(path.join(FIXTURE_ROOT, ".fake-root"), "");
 		isDirectLspCommandTemporarilyUnavailable.mockReturnValue(false);
 		getServersForFileWithConfig.mockReset();
 	});

@@ -2522,10 +2522,15 @@ function projectResolvedCwd(
 				(entry) => entry.id === serverId,
 			)
 		: undefined;
-	const resolvedCwd = resolveToolCwd("lsp", serverId ?? "unknown", summary.filePath, {
-		cwd,
-		rootMarkers: server?.rootMarkers ?? server?.root.rootMarkers,
-	});
+	const resolvedCwd = resolveToolCwd(
+		"lsp",
+		serverId ?? "unknown",
+		summary.filePath,
+		{
+			cwd,
+			rootMarkers: server?.rootMarkers ?? server?.root.rootMarkers,
+		},
+	);
 	return {
 		...summary,
 		resolvedCwd,

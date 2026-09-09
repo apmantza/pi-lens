@@ -5699,10 +5699,10 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/service-skip-record-bounding.test.ts:31:../../../clients/lsp/config.js": [
+  "tests/clients/lsp/service-skip-record-bounding.test.ts:32:../../../clients/lsp/config.js": [
     "isServerDisabled"
   ],
-  "tests/clients/lsp/service-skip-record-bounding.test.ts:36:../../../clients/lsp/client.js": [
+  "tests/clients/lsp/service-skip-record-bounding.test.ts:37:../../../clients/lsp/client.js": [
     "CLIENT_CAPABILITIES",
     "INITIALIZE_TIMEOUT_MS",
     "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
@@ -5729,7 +5729,7 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/clients/lsp/service-skip-record-bounding.test.ts:40:../../../clients/lsp/server.js": [
+  "tests/clients/lsp/service-skip-record-bounding.test.ts:41:../../../clients/lsp/server.js": [
     "AstGrepServer",
     "BashServer",
     "CMakeServer",
@@ -5804,7 +5804,7 @@
     "tryGemInstall",
     "tryGoInstallGopls"
   ],
-  "tests/clients/lsp/service-skip-record-bounding.test.ts:51:../../../clients/latency-logger.js": [
+  "tests/clients/lsp/service-skip-record-bounding.test.ts:52:../../../clients/latency-logger.js": [
     "RECENT_PHASE_CAP",
     "_closedBracketsStorageLengthForTest",
     "_recentPhasesStorageLengthForTest",

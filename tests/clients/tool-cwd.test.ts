@@ -2,7 +2,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LSP_SERVERS } from "../../clients/lsp/server.js";
+import { LANGUAGES } from "../../clients/language-registry.js";
+import {
+	LSP_SERVERS,
+	resolveLspServerCwd,
+	type LSPServerInfo,
+} from "../../clients/lsp/server.js";
 import { LSPService } from "../../clients/lsp/index.js";
 
 let home: string;
@@ -104,32 +109,46 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(project);
 	});
 
-	it("routes built-in language marker tables through the same seam", () => {
-		const project = path.join(home, "repo");
-		const python = path.join(project, "packages", "py", "src", "main.py");
-		const typescript = path.join(project, "packages", "ts", "src", "main.ts");
-		const ruby = path.join(project, "packages", "rb", "src", "main.rb");
-		fs.mkdirSync(path.dirname(python), { recursive: true });
-		fs.mkdirSync(path.dirname(typescript), { recursive: true });
-		fs.mkdirSync(path.dirname(ruby), { recursive: true });
-		fs.writeFileSync(path.join(project, "pyproject.toml"), "[tool.pyright]\n");
-		fs.writeFileSync(path.join(project, "package.json"), "{}\n");
-		fs.writeFileSync(path.join(project, "Gemfile"), "source \"https://rubygems.org\"\n");
+	it("preserves every registry language root through the shared seam", async () => {
+		const project = path.join(process.cwd(), ".probe-language-roots");
+		fs.rmSync(project, { recursive: true, force: true });
+		// #2846 H1: a workspace-priority wrapper must retain its marker metadata;
+		// otherwise Go silently falls back from a nested go.mod to the dispatch cwd.
+		const goServer = LSP_SERVERS.find((entry) => entry.id === "go");
+		expect(goServer?.root.rootMarkers).toEqual(
+			expect.arrayContaining(["go.mod"]),
+		);
+		const languageServers = LANGUAGES.map((language) => {
+			const serverId = language.lspId ?? language.id;
+			const server = LSP_SERVERS.find((entry) => entry.id === serverId);
+			return { language, server };
+		}).filter(
+			(
+				entry,
+			): entry is {
+				language: (typeof LANGUAGES)[number];
+				server: LSPServerInfo;
+			} => Boolean(entry.server?.root.rootMarkers?.length),
+		);
+		const table: string[] = [];
 
-		for (const [id, file, expected] of [
-			["python", python, project],
-			["typescript", typescript, project],
-			["ruby", ruby, project],
-		] as const) {
-			const server = LSP_SERVERS.find((entry) => entry.id === id);
-			expect(server?.root.rootMarkers).toBeDefined();
-			expect(
-				toolCwd.resolveToolCwd("lsp", id, file, {
-					cwd: project,
-					rootMarkers: server?.root.rootMarkers,
-				}),
-			).toBe(expected);
+		for (const { language, server } of languageServers) {
+			const nested = path.join(project, "packages", language.id);
+			const file = path.join(nested, "src", `main${language.extensions[0]}`);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			for (const marker of server.root.rootMarkers ?? []) {
+				const markerName = marker.replaceAll("*", "project");
+				const markerPath = path.join(nested, markerName);
+				fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+				fs.writeFileSync(markerPath, "");
+			}
+			const before = await server.root(file);
+			const after = resolveLspServerCwd(server, file, project);
+			table.push(`${language.id}: ${before} === ${after}`);
+			expect(after, table.at(-1)).toBe(before);
 		}
+		console.log(table.join("\n"));
+		fs.rmSync(project, { recursive: true, force: true });
 	});
 
 	it("uses the dispatch root for a built-in server with no marker", async () => {
@@ -141,7 +160,7 @@ describe("resolveToolCwd (#2777)", () => {
 		const service = new LSPService(undefined, project);
 		const resolveRoot = (
 			service as unknown as {
-				resolveServerRoot(server: typeof server, file: string): Promise<string>;
+				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
 			}
 		).resolveServerRoot.bind(service);
 		expect(await resolveRoot(server, file)).toBe(project);

@@ -1400,8 +1400,11 @@ export function WorkspacePriorityRoot(
 	markerGroups: string[][],
 	excludePatterns?: string[],
 ): RootFunction {
-	return async (file: string) =>
-		PriorityRoot(markerGroups, excludePatterns, process.cwd())(file);
+	return withRootMarkers(
+		async (file: string) =>
+			PriorityRoot(markerGroups, excludePatterns, process.cwd())(file),
+		markerGroups.flat(),
+	);
 }
 
 function isPermissionFsError(err: unknown): boolean {
@@ -2160,27 +2163,27 @@ async function hasAgentLevelProjectMarker(
 
 const TypeScriptRoot: RootFunction = withRootMarkers(
 	DenoExcludeRoot(async (file) => {
-	const extensionRootKey = piAgentExtensionsRootKey(file);
-	if (extensionRootKey) {
-		// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
-		// LSP root.
-		const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
-		if (bounded) return bounded;
-		// No marker inside the extension boundary. If pi itself has a
-		// package.json at ~/.pi/agent/ (the #123 setup), the previous code
-		// returned undefined and the LSP silently failed to start. Fall
-		// back to a per-file scope so the LSP at least runs.
-		if (await hasAgentLevelProjectMarker(extensionRootKey)) {
-			return FileDirRoot(file);
+		const extensionRootKey = piAgentExtensionsRootKey(file);
+		if (extensionRootKey) {
+			// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
+			// LSP root.
+			const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
+			if (bounded) return bounded;
+			// No marker inside the extension boundary. If pi itself has a
+			// package.json at ~/.pi/agent/ (the #123 setup), the previous code
+			// returned undefined and the LSP silently failed to start. Fall
+			// back to a per-file scope so the LSP at least runs.
+			if (await hasAgentLevelProjectMarker(extensionRootKey)) {
+				return FileDirRoot(file);
+			}
+			// Truly loose extension file with no project context anywhere
+			// relevant — preserve the existing skip behavior (LSP shouldn't
+			// analyze a lone .ts file with no package.json above or below).
+			return undefined;
 		}
-		// Truly loose extension file with no project context anywhere
-		// relevant — preserve the existing skip behavior (LSP shouldn't
-		// analyze a lone .ts file with no package.json above or below).
-		return undefined;
-	}
-	const projectRoot = await findTypeScriptProjectRoot(file);
-	if (projectRoot) return projectRoot;
-	return FileDirRoot(file);
+		const projectRoot = await findTypeScriptProjectRoot(file);
+		if (projectRoot) return projectRoot;
+		return FileDirRoot(file);
 	}),
 	[...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS],
 );
