@@ -57,6 +57,41 @@ const BOTH_SUCCESS = {
 };
 
 describe("computeVerdict — the four exit codes (#2539 acceptance criterion)", () => {
+	it("reports an armed infrastructure rerun only while its later attempt runs", () => {
+		const verdict = computeVerdict(
+			{
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+				],
+			},
+			["Unit tests"],
+			"MERGEABLE",
+			"infra-kill",
+			{
+				originalFailed: true,
+				latestAttempt: { status: "queued", conclusion: null, run_attempt: 2 },
+			},
+		);
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain("infra (rerun armed)");
+	});
+	it("reports a concluded rerun failure even when ci:infra remains", () => {
+		const verdict = computeVerdict(
+			{ check_runs: [checkRun({ name: "Unit tests", conclusion: "failure" })] },
+			["Unit tests"],
+			"MERGEABLE",
+			"infra-net",
+			{
+				originalFailed: true,
+				latestAttempt: {
+					status: "completed",
+					conclusion: "failure",
+					run_attempt: 2,
+				},
+			},
+		);
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+	});
 	it("exits 0 when both required checks concluded success", () => {
 		const verdict = computeVerdict(BOTH_SUCCESS);
 		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
@@ -997,6 +1032,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"complexity (advisory)",
 		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
 		"strictness (advisory)",
+		"host latest nightly (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
@@ -1100,6 +1136,32 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 				"complexity (advisory)",
 			]),
 		);
+	});
+});
+
+describe("isAdvisoryCheck — workflow advisory names stay in policy", () => {
+	it("classifies every advisory-named job across all workflows", () => {
+		const mismatches: string[] = [];
+		const discovered: string[] = [];
+		for (const entry of readdirSync(
+			resolve(import.meta.dirname, "../../.github/workflows"),
+		)) {
+			if (!/\.ya?ml$/i.test(entry)) continue;
+			const document = yaml.load(
+				readFileSync(
+					resolve(import.meta.dirname, "../../.github/workflows", entry),
+					"utf8",
+				),
+			) as { jobs?: Record<string, { name?: unknown }> };
+			for (const [key, job] of Object.entries(document.jobs ?? {})) {
+				const name = typeof job?.name === "string" ? job.name : key;
+				if (!name.toLowerCase().includes("advisory")) continue;
+				discovered.push(`${entry}:${key}=${name}`);
+				if (!isAdvisoryCheck(name)) mismatches.push(`${entry}:${key}=${name}`);
+			}
+		}
+		expect(discovered).not.toEqual([]);
+		expect(mismatches).toEqual([]);
 	});
 });
 

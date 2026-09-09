@@ -13,10 +13,15 @@ const safeSpawn = vi.fn();
 const getSgCommand = vi.fn();
 
 vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
-vi.mock("../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	getSgCommand,
-}));
+vi.mock(
+	"../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		getSgCommand,
+	}),
+);
 
 describe("validateRule honors ast-grep's status-1-with-matches contract (#1087)", () => {
 	beforeEach(() => {

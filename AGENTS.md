@@ -155,7 +155,7 @@ Message-end stale attribution anchors the session id when a live ctx is handled,
 **One more review question (#2000 routine): do these tests exercise REAL binaries/state, or mocks?** For every touched test, check whether the code under test runs against the real implementation (real `RuntimeCoordinator`, real logger writing bytes a reader can parse) or against a hand-rolled double. Mocks are legitimate ONLY at true process boundaries (external binaries via `safeSpawnAsync` mocks, host SDK seams); when a seam has real in-process state, the test must flow through it and assert against the real store/sink — swapping a fake runtime into an existing test to keep it green is a regression the reviewer must flag, not approve. See also "Real-runner rule/dispatch tests" (#448).
 
 - **Review findings carry a materiality bar.** A finding is rejected — by the reviewer before reporting, and by the orchestrator on receipt — when its only justification is stylistic consistency, hypothetical extensibility, or minor line-count reduction; prefer boring local code when it is already clear. Never report what a REQUIRED CI check already fails on (lint/`tsc`, the governance sweeps inside Unit tests) — a finding the gate would have rejected anyway is noise; advisory and non-required lanes (SonarCloud, oxfmt, the ast-grep self-scan's untagged rules) are NOT covered by this clause, and the reviewer's standing probes still run in full. Report spec-compliance findings (the issue's acceptance criteria) and standards-compliance findings (this file's conventions) under separate headings so neither buries the other. And when a review reveals that a whole seam could be dramatically simpler — a restructuring that preserves behavior while shrinking the implementation — that insight is a NAMED OUTPUT: file it as an evidence-first issue with the simpler shape sketched; it is never applied inside the fix round (blast-radius discipline governs the PR; the consolidation-verdict rule governs the family).
-- **Judging a red Unit-tests run under the exit-137 wave (#2042/#2103).** Read the log before any rerun. The infra shape: `Killed node scripts/with-memory-watch.mjs` or a bare 137 with ZERO `FAIL`/`AssertionError` lines, and often no `[mem-watch] done.` verdict line at all (the OOM killer can take the wrapper itself — the record has a structural gap there). The real shape: assertion lines plus `[mem-watch] done. exitCode=1`. Infra → rerun once and record the judgment; the same TEST failing twice across attempts is a signal, not a flake. A flake claim needs the controlled comparison (isolated run on the composed tree, and master under the same load) — a real regression masquerades as a flake (#1407). `scripts/classify-ci-failure.mjs` (#2103) mechanizes this read. `.github/workflows/ci-infra-kill-rerun.yml` invokes it only for a completed first-attempt CI failure, requests the exact failed `Unit tests` job, and reruns failed jobs only for `infra-kill`. On a PR run, the workflow-run attempt gate AND the sticky per-SHA PR comment marker both bound the rerun. On a push or `repository_dispatch` run (#2668: master reaches CI through both, since a bot merge's `GITHUB_TOKEN` suppresses the ordinary `push` event) there is no PR to carry that marker, so only the attempt gate bounds it — a manual re-run of the classify workflow itself against the same completed CI run would rerun CI a second time. Acquisition or classification errors produce a PR comment when the event identifies a PR.
+- **Judging a red Unit-tests run under the exit-137 wave (#2042/#2103).** Read the log before any rerun. The infra shape: `Killed node scripts/with-memory-watch.mjs` or a bare 137 with ZERO `FAIL`/`AssertionError` lines, and often no `[mem-watch] done.` verdict line at all (the OOM killer can take the wrapper itself — the record has a structural gap there). The real shape: assertion lines plus `[mem-watch] done. exitCode=1`. Infra → rerun once and record the judgment; the same TEST failing twice across attempts is a signal, not a flake. A flake claim needs the controlled comparison (isolated run on the composed tree, and master under the same load) — a real regression masquerades as a flake (#1407). `scripts/classify-ci-failure.mjs` (#2103) mechanizes this read, including CodeQL/SARIF, codeload 429/503, and npm CI timeout outages. `.github/workflows/ci-infra-kill-rerun.yml` invokes it only for a completed first-attempt CI failure, requests the exact failed `Unit tests` job, labels the PR, and reruns failed jobs once for either infra class. On a PR run, the workflow-run attempt gate AND the sticky per-SHA PR comment marker both bound the rerun. On a push or `repository_dispatch` run (#2668: master reaches CI through both, since a bot merge's `GITHUB_TOKEN` suppresses the ordinary `push` event) there is no PR to carry that marker, so only the attempt gate bounds the rerun — a manual re-run of the classify workflow itself against the same completed CI run would rerun CI a second time. Acquisition or classification errors produce a PR comment when the event identifies a PR. `scripts/ci-verdict.mjs` reads the manifest-managed `ci:infra` label and reports `infra (rerun armed)` as pending until the replacement check concludes.
 - **Re-verify after review fixes land — the push is not the proof.** Addressing review findings is complete only when the NEW head has been re-verified: re-run every suite the reviewer ran (plus lint and the ast-grep self-scan lane, which `tsc`/`fmt:check` do not cover), confirm required checks actually ran and passed on the fix SHA (`node scripts/ci-verdict.mjs <pr-number|sha>` — a forced push invalidates prior green), and post a per-finding disposition (fixed-in-<sha> / deferred-to-<issue>) on the PR. Substantive P1/P2 fixes get a scoped follow-up review round on the delta before merge; P3 dispositions may be recorded without a re-review. A fix commit that exists only locally — or whose verification predates it — counts as unverified.
 - **Prose contract for every user-facing artifact** (PR bodies, issue bodies, review comments, commit bodies, docs). Frame: lead with the outcome. Strip every word that does no work. Clarity beats brevity. Write like a person. Mechanics, from Google developer-documentation style and Simplified Technical English:
   - Active voice, present tense.
@@ -226,6 +226,41 @@ is the procedure and defers here on conflict; 2026-09-09).**
   resolution (throttled once per key per session), one bounded degradation
   record for the fallback. #2691 → #2756 were shape 40 twice in a week, each
   fixed at its own seam with no log line, until the maintainer asked (#2777).
+- *A direct push to master runs `npm run preflight` first.* Docs, config
+  and contract files land on master without a PR, but preflight's gates
+  (`fmt:check`, `tests/config/` — tracked-but-ignored files, changelog
+  fragments, workflow manifests, line-keyed admission baselines) are what
+  read them. Run preflight on the exact tree before the push; a red master
+  blocks every open PR's merge ref, and the advisory oxfmt lane reds on every
+  PR until master is formatted again.
+  Record: 2026-09-09, two master reds in one afternoon — a force-added
+  contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
+  baseline interaction (#2816) — each found by the next PR's CI.
+- *The orchestrator's commit step checks the index, not only the diff.*
+  Before every commit from a worker tree: `git ls-files` contains none of
+  `PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`, `INVESTIGATION.md`,
+  `MONITOR.md`, `.probe-home/` or a harness scratch directory; a second
+  changelog fragment is folded, not committed. Record: #2807 (2026-09-09)
+  went red on CI because two handoff files were tracked under the `*.md`
+  ignore, and #2808's fold produced two bullets the validator rejected.
+- *Merges touching the same governance data file are serialised, and master
+  is re-verified after them.* Two green PRs that both edit a baseline,
+  admission map or lane list can compose into a red master (#2782 + #2787
+  → #2816). Merge one, wait for master's own run, then update-branch and
+  merge the next; after any such pair, run that file's test on master before
+  arming the next chain.
+- *Reviews and verifies run on the merged tree.* A CONFLICTING PR is not
+  reviewed until it carries master; a MERGEABLE one is probed after
+  `git merge origin/master` in the reviewer's scratch checkout, so pins that
+  landed on master since the branch forked are part of the verdict. Record:
+  #2808 passed its verify on the branch head while #2795's pinned sentences
+  were already on master; the miss surfaced only in the orchestrator's
+  merge (2026-09-09).
+- *A small-model lane budgets one nudge.* When a Tier B worker hits its turn
+  cap, send one continuation that names the remaining steps; a second cap
+  reassigns the lane to the strongest model with the tree as-is. Record: every
+  GLM lane on 2026-09-09 capped at least once; one detector round shipped two
+  HIGH gaps and was redone on Luna.
 - *The human-decision class is named, not inferred.* Review tier follows
   the surface a diff touches; on top of that, a fixed class of changes is
   never merged on an agent's verdict alone and goes to the ledger as `needs
@@ -430,6 +465,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 41. **A fixed bound on a hot path that is reached at p50.** Every timeout, debounce, batch size or grace budget is a hypothesis about the seam it bounds, and a bound reached at p50 means the wait has become the work: a design defect, not a tuning knob. The pi-free session of 2026-09-09 (#2810) paid the full 1500 ms auxiliary grace on every one of 342 edits because one auxiliary server publishes exactly at its budget; per-edit dispatch was 85% that wait, on the model's own turn. *Screen:* every bound on a hot path carries a record of how often it is reached (the `lsp_aux_wait_outcome`-style outcome row, bounded, one per dispatch), and the design prefers an adaptive trigger over the constant: act immediately when the seam is quiet, coalesce under pressure, and demote a party that exhausts its budget N times in a row (with the once-only record of the demotion). Withdrawn on the same day: a "trailing debounce" hypothesis (#2809 H1) that the code did not contain (`TOUCH_DEBOUNCE_MS` is a suppression window) — read the seam before naming the bound. *Detect:* a `*_MS`/`*_BATCH`/`*_BUDGET` constant consumed by an awaited path with no latency record of its hit rate; a latency row whose p50 equals its budget. *e.g.* #2810 (aux grace), #2809 (drift resync batch, deferred-format span) (2026-09-09).
 
+42. **A rule keyed on one language.** A seam, cache admission, test matrix or tool contract written for `.ts`/tsserver when the behaviour belongs to every LSP-backed language in `clients/language-registry.ts`. #2823 r1 keyed the #2817 dependency re-sync on TypeScript; rust-analyzer, pyright and gopls hold a stale module graph after a git checkout exactly the same way. *Screen:* write the rule against the registry ("has import facts", "every live server holding the document"), name which entries have the facts and which fall to the honest fallback, and add one non-TypeScript row to the matrix; a language-specific branch is allowed only with the registry field that justifies it named in the code. *Detect:* grep new code for `\.tsx?\b`, `"typescript"`, `tsserver` outside `clients/lsp/config.ts`'s server entries and the TypeScript runner; a test file whose only fixtures are `.ts` for a rule that names "LSP" or "server". *e.g.* #2823 r1 (2026-09-09).
+
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
 into the replacement. The LSP service uses this rule in `lsp/index.ts` so a
@@ -475,6 +512,18 @@ These are named, well-scoped sweeps a maintainer can ask for by name; each is di
 Each routine's output is a PR (or a tracked issue for discovery routines), reviewed under the same two-tier adversarial-review + red-first discipline as any change. Deletions are irreversible-adjacent — treat them with the confirm-before-destructive-action rule.
 
 ## Standing invariants
+
+pi-lens caters for every language it supports, never for one. The set is
+`LANGUAGES` in `clients/language-registry.ts` (the registry is the source of
+truth; every LSP server, runner, formatter and fact extractor hangs off it).
+Any fix, seam, cache rule, test matrix or tool contract that keys on a single
+language (`.ts`, `typescript`, a tsserver quirk) is wrong by default: state the
+rule in language-neutral terms ("a file that has import facts", "every live
+server holding the document"), name which registry entries have the facts the
+rule needs and which fall to the honest fallback, and put at least one
+non-TypeScript row in the test matrix. Record: #2823 r1 (2026-09-09) shipped the
+#2817 dependency re-sync keyed on TypeScript while every server's module graph
+goes stale the same way.
 
 Harness scratch directories use `scripts/lib/scratch-dir.mjs`: `claimScratchDir`
 records `owner.pid`, and `sweepScratchDirs` removes only dead owners or
@@ -3645,7 +3694,7 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **A governance sweep** → `tests/support/sweep-kit.ts`: `listSourceFiles` with EXPLICIT directories and extensions (include `scripts/` and `.mjs` when the class lives there; never compiled `.js`); `assertNonEmptyScan` with a real floor per directory (calibrated just under the live count, like `tracked-control-bytes`); `stripSource` before any body/comment match so a string cannot launder a match; `callSites` for AST-bounded call arguments and the last top-level options object; a missing scan directory throws, never silently narrows. Body-matching sweeps: one shared helper is #2624; until then follow `escape-regexp-fold-sweep.test.ts`.
 - **Git fixtures** → `tests/support/git-fixture-env.ts` (`gitFixtureEnv`, `gitExecFileSync`); never `git` against the checkout.
 - **Any spawn from a test** (npm, pi, tar, a script) → a PINNED env: `HOME`, `PI_LENS_HOME`, `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG`, `npm_config_cache`, all inside the test's temp dir. The loader-cache warmer uses `PI_LENS_INSTALL_LOG` when present and otherwise writes under `PI_LENS_HOME`; pin both because each is an explicit lifecycle boundary. `npm pack` runs pi-lens's own prepack/prepare: pack from a `git archive HEAD` export, never the live checkout (#2634; #2619 review F1). The 2026-09-06 receipt: 42 records in the maintainer's real `install.log` from agent installs and one test.
-- **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); the ratchet is two-sided, so a stale ceiling reds too.
+- **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); support-helper rows additionally inherit lane proof through an importing test; the ratchet is two-sided, so a stale ceiling reds too.
 - **Markdown tables** → `scripts/lib/md-matrix.mjs` `parseTable`; **skills discovery** → `scripts/lib/skills-predicate.mjs` (pi-faithful; shared with install-selftest); **check-run payloads** → the fixtures in `tests/scripts/ci-verdict.test.ts`.
 - **Module mocks of `node:fs`** are file-scoped under the isolated forks pool and stay that way; prefer a real filesystem fixture — every 2026-09-06 review probe that broke a mocked case used the real fs.
 

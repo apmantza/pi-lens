@@ -20,10 +20,15 @@ vi.mock("node:fs", async () => {
 	};
 });
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	resolveToolCommandWithInstallFallback,
-}));
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		resolveToolCommandWithInstallFallback,
+	}),
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd);

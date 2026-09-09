@@ -16,6 +16,7 @@ permissions:
 jobs:
   lint:
     name: Close-keyword syntax
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read

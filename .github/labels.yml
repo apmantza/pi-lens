@@ -97,6 +97,12 @@
 - name: red-ci
   color: e11d21
   description: Merge-train warden - a required check is failing on the current head
+- name: ci:infra
+  color: fbca04
+  description: CI failure classified as infrastructure and rerun armed
+- name: ci:real
+  color: e11d21
+  description: CI failure classified as a real assertion or build failure
 - name: train:approved
   color: 0e8a16
   description: Maintainer review verdict - the merge train may land this PR once its current head concludes green

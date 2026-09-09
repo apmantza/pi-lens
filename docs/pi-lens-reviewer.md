@@ -32,6 +32,14 @@ effect. Remove or mutate the claimed guard and require the test to fail for the
 intended reason. Flag tests that restate the implementation, assert setup data,
 or swap a real in-process store, sink, coordinator, or registry for a fake.
 
+## Language coverage is a standing attack
+
+For any diff on an LSP, dispatch, cache, runner or tool seam, ask whether the
+rule holds for every entry in `clients/language-registry.ts` or only for the
+language the fixer tested. A rule keyed on `.ts`/tsserver where rust-analyzer,
+pyright or gopls behave the same is a finding (catalog shape 42); probe it
+with one non-TypeScript fixture through the same seam and quote the result.
+
 ## Finding shape and disposition
 
 Every finding is written in four moves, in this order: the smallest concrete

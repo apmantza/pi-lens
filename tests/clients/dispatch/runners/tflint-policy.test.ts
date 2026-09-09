@@ -14,13 +14,18 @@ vi.mock("../../../../clients/tool-policy.js", () => ({
 	getLinterPolicyForCwd,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: (command: string) => ({
-		isAvailableAsync: async () => true,
-		getCommand: () => command,
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailableAsync: async () => true,
+			getCommand: () => command,
+		}),
 	}),
-}));
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd, { kind: "terraform" });

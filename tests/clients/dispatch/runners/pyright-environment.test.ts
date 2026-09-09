@@ -20,11 +20,16 @@ vi.mock("../../../../clients/lsp/index.js", () => ({
 	getLSPService: () => makeLspServiceDouble({ getClientForFile }),
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: () => ({ isAvailableAsync, getCommand }),
-	resolveAvailableOrInstall,
-}));
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({ isAvailableAsync, getCommand }),
+		resolveAvailableOrInstall,
+	}),
+);
 
 const originalVenv = process.env.VIRTUAL_ENV;
 const originalConda = process.env.CONDA_PREFIX;
