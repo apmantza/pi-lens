@@ -1,4 +1,5 @@
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { logRunnerAdvisoryOnce } from "../../tool-cwd.js";
 import { getLinterPolicyForCwd, hasYamllintConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -58,7 +59,12 @@ const yamllintRunner: RunnerDefinition = {
 		}
 		const hasConfig = hasYamllintConfig(cwd);
 		if (!hasConfig) {
-			ctx.log("yamllint: no config detected, running with default rules");
+			logRunnerAdvisoryOnce(
+				ctx,
+				"yamllint",
+				cwd,
+				"yamllint: no config detected, running with default rules",
+			);
 		}
 
 		let cmd: string | null = null;

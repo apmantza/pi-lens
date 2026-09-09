@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	hasStylelintConfig,
@@ -159,7 +159,12 @@ const stylelintRunner: RunnerDefinition = {
 		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
 		const hasConfig = hasStylelintConfig(fileDir) || hasStylelintConfig(cwd);
 		if (!hasConfig) {
-			ctx.log("stylelint: no config detected, running with default rules");
+			logRunnerAdvisoryOnce(
+				ctx,
+				"stylelint",
+				cwd,
+				"stylelint: no config detected, running with default rules",
+			);
 		}
 
 		let cmd: string | null = null;
