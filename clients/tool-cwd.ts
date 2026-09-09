@@ -7,6 +7,7 @@ import {
 	isAtOrAboveHomeDir,
 	isUnderDir,
 	nameMatchesMarkerGlob,
+	normalizeEphemeralMapKey,
 } from "./path-utils.js";
 import {
 	getDegradationLedgerGeneration,
@@ -123,6 +124,11 @@ const markerWalks = new Map<string, { root: string | null; marker?: string }>();
 const markerWalkGenerations = createGenerationMap("tool-cwd-marker-walks");
 let markerWalkCount = 0;
 
+/** Pure key seam for ephemeral tool-cwd memo and log identity. */
+export function _toolCwdEphemeralKey(parts: readonly string[]): string {
+	return parts.map(normalizeEphemeralMapKey).join("\0");
+}
+
 /** Test probe for the per-generation walk memo; not part of runtime behavior. */
 export function _getToolCwdMarkerWalkCount(): number {
 	return markerWalkCount;
@@ -144,7 +150,11 @@ function findMarkerRoot(
 	homeDir: string,
 ): { root: string | null; marker?: string } {
 	syncGeneration();
-	const key = `${path.resolve(startDir)}\0${markers.join("\0")}\0${path.resolve(homeDir)}`;
+	const key = _toolCwdEphemeralKey([
+		path.resolve(startDir),
+		...markers,
+		path.resolve(homeDir),
+	]);
 	const cached = markerWalks.get(key);
 	if (cached && markerWalkGenerations.current(key) !== 0) {
 		if (!cached.marker || !cached.root) return cached;
@@ -213,7 +223,7 @@ function emitResolution(
 	reason: string,
 ): void {
 	syncGeneration();
-	const key = `${kind}\0${tool}\0${cwd}\0${reason}`;
+	const key = _toolCwdEphemeralKey([kind, tool, cwd, reason]);
 	if (logged.current(key) !== 0) return;
 	logged.bump(key);
 	logExtension({

@@ -7,6 +7,7 @@ let home: string;
 let toolCwd: typeof import("../../clients/tool-cwd.js");
 let ledger: typeof import("../../clients/degradation-ledger.js");
 let log: typeof import("../../clients/extension-log.js");
+let pathUtils: typeof import("../../clients/path-utils.js");
 
 beforeEach(async () => {
 	home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-tool-cwd-"));
@@ -14,6 +15,7 @@ beforeEach(async () => {
 	process.env.PI_LENS_TEST_MODE = "0";
 	vi.resetModules();
 	toolCwd = await import("../../clients/tool-cwd.js");
+	pathUtils = await import("../../clients/path-utils.js");
 	ledger = await import("../../clients/degradation-ledger.js");
 	log = await import("../../clients/extension-log.js");
 	ledger.resetDegradationLedger();
@@ -25,6 +27,41 @@ afterEach(() => {
 });
 
 describe("resolveToolCwd (#2777)", () => {
+	it("folds Win32 case and separator variants into one ephemeral key", () => {
+		// #2782 win-shape review: divergent Win32 spellings must not duplicate
+		// the marker-walk memo or once-per-session resolution log record.
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", {
+			configurable: true,
+			value: "win32",
+		});
+		try {
+			const fileKey = toolCwd._toolCwdEphemeralKey([
+				path.win32.resolve("C:\\proj\\src\\a.ts"),
+			]);
+			const equivalentFileKey = toolCwd._toolCwdEphemeralKey([
+				path.win32.resolve("c:/proj/src/a.ts"),
+			]);
+			const rootKey = toolCwd._toolCwdEphemeralKey([
+				path.win32.resolve("c:\\proj"),
+			]);
+			const equivalentRootKey = toolCwd._toolCwdEphemeralKey([
+				path.win32.resolve("C:/proj"),
+			]);
+
+			expect(fileKey).toBe(equivalentFileKey);
+			expect(rootKey).toBe(equivalentRootKey);
+			expect(fileKey).toBe(
+				pathUtils.normalizeEphemeralMapKey("C:\\proj\\src\\a.ts"),
+			);
+		} finally {
+			Object.defineProperty(process, "platform", {
+				configurable: true,
+				value: originalPlatform,
+			});
+		}
+	});
+
 	it("selects a nearer marker through the real synchronous seam", () => {
 		const project = path.join(home, "repo");
 		const nested = path.join(project, "packages", "app");
