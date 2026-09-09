@@ -77,12 +77,27 @@ column is the effective behavior when nothing is set.
 | `--lens-actionable-warning-all` | `actionableWarnings.deltaOnly` (`false`) | global | `deltaOnly` **on** (report this turn only) |
 | `--lens-compact-tool-line` | `ui.compactToolLine` | global | **off** (two-row tool rendering) |
 | `--no-lazy-tools` | `tools.lazy` | global | lazy tools **on** (six situational tools start inactive) |
+| `--no-tool=<name>` | `tools.<name>.enabled` | project | every lens tool **on** |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | global | **off** (madge runs at session start, not per turn) |
 
 `--no-lazy-tools` keeps every pi-lens tool active for the whole session, so the
 advertised tool list never changes. The `pi_lens_activate_tools` loader stays
 registered and keeps its usual description; under this flag the tools it names
 are already active, so calling it is a no-op.
+
+The `tools.<name>.enabled` population covers every model-facing pi and MCP
+tool. The loader `pi_lens_activate_tools` and MCP lifecycle tools
+`pilens_session_start` and `pilens_turn_end` are required by their host
+protocols and cannot be disabled. Unknown or non-disableable names emit
+`PILENS_CFG_0009`.
+
+Valid names for `tools.<name>.enabled` include `ast_grep_search`,
+`ast_grep_replace`, `ast_grep_outline`, `ast_grep_dump`, `lsp_navigation`,
+`lsp_diagnostics`, `lens_diagnostics`, `lens_diagnostic_mark`, `symbol_search`,
+`module_report`, `project_report`, `read_symbol`, `read_enclosing`,
+`effective_config`, `analyze`, `health`, `latency`, `project_scan`, and
+`rebuild`. The activation loader and MCP lifecycle tools `session_start` and
+`turn_end` cannot be disabled.
 
 `--lens-guard` is **EXPERIMENTAL and strictly opt-in**. When enabled, actual
 `git commit`/`git push` commands are blocked only for current, structured

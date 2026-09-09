@@ -97,6 +97,26 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		);
 	}, 25_000);
 
+	it("omits a config-disabled tool from the real MCP tools/list path", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-tools-"));
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify({ tools: { ast_grep_replace: { enabled: false } } }),
+		);
+		const isolated = new McpHarness({ cwd });
+		try {
+			const res = await isolated.request(3, "tools/list");
+			const names = (res.result as { tools: { name: string }[] }).tools.map(
+				(tool) => tool.name,
+			);
+			expect(names).not.toContain("pilens_ast_grep_replace");
+			expect(names).toContain("pilens_ast_grep_search");
+		} finally {
+			isolated.dispose();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 25_000);
+
 	it("does not advertise rebuild from an installed package", async () => {
 		const installedRoot = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-installed-"),

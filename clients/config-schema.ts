@@ -58,6 +58,7 @@ import {
 	PROJECT_FOREIGN_CONFIG_NAMESPACES,
 	PROJECT_NON_FLAG_CONFIG_SECTIONS,
 } from "./lens-flag-registry.js";
+import { LENS_TOOL_NAMES } from "./tool-config.js";
 
 /** The JSON Schema dialect the published artifact declares. */
 const CONFIG_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
@@ -179,6 +180,24 @@ function buildConfigSchema(): ConfigSchemaNode {
 	]) {
 		properties[key] = opaque("stable");
 	}
+	properties.tools = {
+		type: "object",
+		additionalProperties: true,
+		properties: Object.fromEntries(
+			LENS_TOOL_NAMES.map((name) => [
+				name,
+				{
+					type: "object",
+					additionalProperties: true,
+					properties: {
+						enabled: { type: "boolean", [STABILITY_TIER_KEY]: "experimental" },
+					},
+					[STABILITY_TIER_KEY]: "experimental",
+				},
+			]),
+		),
+		[STABILITY_TIER_KEY]: "stable",
+	};
 
 	// Namespaces owned by another tool that ride in the same file (`trivy`,
 	// `helm`). Reserved so they survive validation, `experimental` because their

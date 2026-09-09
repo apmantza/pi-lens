@@ -36,6 +36,7 @@ import {
 	findNestedProjectMutationValue,
 	type PiLensProjectConfig,
 } from "./project-lens-config.js";
+import { readToolConfig } from "./tool-config.js";
 
 /**
  * The canonical global location, looked up rather than constructed, so a change
@@ -62,6 +63,7 @@ interface PiLensToggleConfig {
 }
 
 export interface PiLensGlobalConfig {
+	tools?: Record<string, { enabled?: boolean }>;
 	startup?: {
 		mode?: "quick" | "full" | "minimal";
 		scans?: { enabled?: boolean };
@@ -265,6 +267,8 @@ export function loadPiLensGlobalConfig(
 		const raw = resolved.value;
 		const warnInvalid = note;
 		const config: Record<string, unknown> = {};
+		const toolConfig = readToolConfig(raw, warnInvalid);
+		if (toolConfig) config.tools = toolConfig;
 
 		for (const spec of LENS_FLAGS) {
 			if (spec.readGlobal) continue;
