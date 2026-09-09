@@ -1050,6 +1050,11 @@ every installer-owned probe seam, including local discovery, npm install, and
 periodic refresh. The refresh candidate projection carries that policy instead
 of reintroducing a shared literal. (#2176, #2194)
 
+The CI failure classifier normalizes CRLF and leading GitHub Actions
+`##[error]`/`##[warning]` annotations once, after ANSI and timestamp stripping,
+before any anchored evidence needle runs. Keep transport normalization at this
+seam so Windows and Unix logs exercise identical classifier rules. (#2839)
+
 The dispatch lsp-runner's `touchFile` call has its OWN 5-second cold-spawn
 wait floor (`RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs`,
 `clients/dispatch/runners/lsp.ts`), separate from installer verification —
