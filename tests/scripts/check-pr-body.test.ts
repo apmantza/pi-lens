@@ -1,11 +1,20 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it, afterEach, vi } from "vitest";
+// flake-shape: real-process-spawn — the exact local CLI and shallow checkout are the subject; an in-process call cannot prove either command boundary.
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
+import {
+	gitExecFileSync,
+	gitExecSync,
+} from "../../scripts/lib/git-fixture-env.mjs";
 import {
 	detectEscapedNewlineBody,
 	detectFlattenedBody,
 	lintPullRequestEvent,
-	lintPrBody,
 	lintLocalPrBody,
+	localDiff,
+	lintPrBody,
 	repairEscapedNewlineBody,
 	repairFlattenedBody,
 	resolveLivePrBody,
@@ -13,6 +22,17 @@ import {
 } from "../../scripts/check-pr-body.mjs";
 
 const body = `Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nWhole-tree grep completed.\n\n## Observability\nThe advisory check run is the record.`;
+const repositoryRoot = process.cwd();
+
+function fetchForEvent(bodyText: string, files: unknown) {
+	return vi.fn().mockImplementation(async (url: string | URL | Request) => {
+		if (String(url).includes("/files")) {
+			if (files instanceof Error) throw files;
+			return new Response(JSON.stringify(files), { status: 200 });
+		}
+		return new Response(JSON.stringify({ body: bodyText }), { status: 200 });
+	});
+}
 const flattenedBody =
 	"## Summary Await the first lifecycle run's asynchronous word-index snapshot promotion before reseeding the current-format snapshot for the fallback run. ## Tests - Native master flake justification for the count barrier: 2/10 forced runs reproduced the promotion race. - Fixed lifecycle test: 5/5 tests passed. ### Test assessment - tests/clients/word-index-lifecycle.test.ts uniquely pins the ordering guard. ## Blast radius This change is test-only. ## Class sweep The async-persist lifecycle race is fully covered. ## Observability The test observes existing project snapshot records.";
 const multiRoundFlattenedBody =
@@ -22,6 +42,14 @@ const motivatingFlattenedBodies = [
 	"## Summary Fixes #2104 by making the stale-open-issues detector prove exhaustion for the open-issue population. If the safety bound is reached while a full page remains, the detector throws instead of interpreting a partial population. ## Tests - tests/scripts/stale-open-issues.test.ts adds a page-aware regression. - F1 mutation red after dropping the exhaustive flag. - Green targeted run: 20 tests passed. ### Test assessment - stale-open-issues.test.ts uniquely pins exhaustive pagination and truncation disclosure. ## Blast radius The scheduled stale-open-issues detector and its pagination helper. ## Class sweep Bounded API reads classify truncation before interpreting results. ## Observability Successful comments include the scanned population; a bound hit fails the workflow.",
 	flattenedBody,
 ].map((candidate) => candidate.replaceAll("\\n", " "));
+
+function createOriginMasterFixture() {
+	const directory = mkdtempSync(join(repositoryRoot, ".tmp-pr-body-origin-"));
+	gitExecSync(
+		`git init --quiet --initial-branch=main '${directory}' && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet --allow-empty -m fixture-base && git -C '${directory}' update-ref refs/remotes/origin/master HEAD && printf 'fixture change\n' > '${directory}/fixture.md' && git -C '${directory}' add fixture.md && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet -m fixture-head`,
+	);
+	return directory;
+}
 
 describe("flattened PR body repair", () => {
 	it("detects the clearly flattened real-world shape and repairs it", () => {
@@ -276,7 +304,18 @@ describe("escaped-newline PR body repair", () => {
 });
 
 describe("flattened body CI entrypoint", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
 	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
 
 	function stubApi() {
 		vi.stubEnv("GITHUB_TOKEN", "t");
@@ -406,6 +445,160 @@ describe("flattened body CI entrypoint", () => {
 });
 
 describe("PR body lint (#1844)", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
+
+	it("requires a diff record literal for runtime changes", () => {
+		const runtimeDiff = [
+			"diff --git a/clients/example.ts b/clients/example.ts",
+			"@@ -1,0 +2,3 @@",
+			'+recordDegradationOnce({ kind: "runtime-example" });',
+		].join("\n");
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"A runtime record is present.",
+			),
+			process.cwd(),
+			() => runtimeDiff,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("runtime-example");
+	});
+
+	it("rejects a no-failure claim when the runtime diff adds a catch", () => {
+		const runtimeDiff = [
+			"diff --git a/clients/example.ts b/clients/example.ts",
+			"@@ -1,0 +2,3 @@",
+			"+try { run(); } catch (error) { report(error); }",
+		].join("\n");
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() => runtimeDiff,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("failure path");
+	});
+
+	it("does not apply the runtime rule to a docs-only diff", () => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"Documentation explains the change.",
+			),
+			process.cwd(),
+			() => "diff --git a/docs/example.md b/docs/example.md\n+docs",
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([
+		["test file", "tools/example.test.ts"],
+		["__tests__ file", "tools/__tests__/example.ts"],
+		["declaration file", "tools/example.d.ts"],
+		["declaration module", "tools/example.d.mts"],
+	])("ignores runtime markers in a %s", (_name, file) => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() =>
+				`diff --git a/${file} b/${file}\n+try { run(); } catch (error) { report(error); }`,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([
+		["comment", '// recordDegradationOnce({ kind: "comment-record" });'],
+		[
+			"template literal",
+			'const text = `recordDegradationOnce({ kind: "template-record" });`;',
+		],
+	])("rejects an apparent record call in a %s", (_name, line) => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"The apparent discriminator is named: comment-record template-record.",
+			),
+			process.cwd(),
+			() => `diff --git a/clients/example.ts b/clients/example.ts\n+${line}`,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("record literal");
+	});
+
+	it("rejects a missing diff in CI from a real shallow clone", async () => {
+		const repository = process.cwd();
+		const shallow = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-shallow-"));
+		const previousCwd = process.cwd();
+		const previousActions = process.env.GITHUB_ACTIONS;
+		try {
+			vi.stubEnv("GITHUB_TOKEN", "test-token");
+			vi.stubEnv("GITHUB_API_URL", "https://api.example");
+			vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+			gitExecFileSync(
+				["clone", "--depth", "1", `file://${repository}`, shallow],
+				{
+					stdio: "ignore",
+				},
+			);
+			process.chdir(shallow);
+			process.env.GITHUB_ACTIONS = "true";
+			await expect(
+				lintPullRequestEvent(fetchForEvent(body, []), {
+					pull_request: { number: 2807, body },
+				}),
+			).rejects.toThrow(/^diff unavailable:/);
+		} finally {
+			process.chdir(previousCwd);
+			if (previousActions === undefined) delete process.env.GITHUB_ACTIONS;
+			else process.env.GITHUB_ACTIONS = previousActions;
+			vi.unstubAllEnvs();
+			rmSync(shallow, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts the exact preflight --lint-local command and the title form", () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-cli-"));
+		const bodyPath = join(directory, "PR_BODY.md");
+		const titlePath = join(directory, "COMMIT_MSG.txt");
+		const checker = resolve(repositoryRoot, "scripts/check-pr-body.mjs");
+		try {
+			writeFileSync(
+				bodyPath,
+				`${body}\n\n### Test assessment\nThe targeted test covers the local CLI.`,
+			);
+			writeFileSync(
+				titlePath,
+				"ci(test): verify local body lint (refs #2807)\n",
+			);
+			for (const args of [
+				[checker, "--lint-local", bodyPath],
+				[checker, "--body", bodyPath, "--title", titlePath],
+			]) {
+				execFileSync(process.execPath, args, { cwd: fixtureCwd });
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("accepts the required sections", () => {
 		expect(lintPrBody(body)).toEqual({ valid: true, errors: [] });
 	});
@@ -450,7 +643,10 @@ describe("PR body lint (#1844)", () => {
 	});
 
 	it("rejects the unfilled template", () => {
-		const template = readFileSync(".github/PULL_REQUEST_TEMPLATE.md", "utf8");
+		const template = readFileSync(
+			resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
+			"utf8",
+		);
 		expect(lintPrBody(template)).toMatchObject({ valid: false });
 	});
 
@@ -719,6 +915,38 @@ ${placeholder}`,
 });
 
 describe("local lint parity", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
+
+	it("acquires a non-empty origin/master...HEAD diff in a full checkout", () => {
+		const diff = localDiff();
+		expect(diff).toContain("diff --git a/");
+	});
+
+	it("rejects a runtime-shaped body that names no record", () => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() =>
+				'diff --git a/clients/example.ts b/clients/example.ts\n+throw new Error("boom");',
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("record literal");
+	});
+
 	it("requires Test assessment when the local diff touches tests/", () => {
 		const result = lintLocalPrBody(
 			body,
@@ -738,6 +966,7 @@ describe("local lint parity", () => {
 		});
 		expect(result.valid).toBe(false);
 		expect(ranges).toEqual([
+			["diff", "--unified=0", "--no-color", "origin/master...HEAD"],
 			["diff", "--name-only", "origin/master...HEAD"],
 			["diff", "--name-only", "HEAD~1"],
 		]);
@@ -873,7 +1102,19 @@ describe("the event entrypoint consumes the tri-state (#2124 F2)", () => {
 ### Test assessment
 foo.test.ts uniquely pins the retry ladder.`;
 
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+
 	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
 
 	function stubApi() {
 		vi.stubEnv("GITHUB_TOKEN", "t");

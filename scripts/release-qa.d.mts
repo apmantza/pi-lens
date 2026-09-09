@@ -66,6 +66,7 @@ export interface RunnerOptions {
 
 export const BASELINE_TABLE_MARKER: string;
 export const BASELINE_COLUMNS: readonly string[];
+export const TOOL_SMOKE_INSTALL_ROW_ID: string;
 export const OUTCOME: {
 	readonly PASS: "PASS";
 	readonly FAIL: "FAIL";
@@ -77,6 +78,16 @@ export function parseBaselineRows(text: string): ParsedBaseline;
 export function classifyRowOutcome(probe: ProbeReport | null | undefined): {
 	outcome: string;
 	detail: string;
+};
+export function classifyToolSmokeInstallReport(
+	report: Record<string, unknown> | null,
+	context?: Record<string, unknown>,
+): {
+	status: string;
+	detail: string;
+	shows: string;
+	networkBlocked: boolean;
+	witnessContent: string;
 };
 export function formatOutcome(result: {
 	outcome: string;
@@ -93,8 +104,19 @@ export function shipVerdict(
 		blocked?: boolean;
 		blockedReason?: string;
 		candidateFailure?: string;
+		inconclusiveReason?: string;
 	},
 ): Verdict;
+export function runToolSmokeInstallProbe(ctx: {
+	installedPkgDir: string;
+	projectDir: string;
+	env: NodeJS.ProcessEnv;
+}): {
+	status: string;
+	detail: string;
+	shows?: string;
+	witness?: { ext: string; content: string };
+};
 /**
  * The refusal message for a dirty checkout, or null when it is clean. A
  * `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be

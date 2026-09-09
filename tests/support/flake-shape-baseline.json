@@ -49,6 +49,7 @@
 		"scripts/astgrep-self-scan.test.ts": 2,
 		"scripts/changelog.test.ts": 3,
 		"scripts/check-lockfile-sync.test.ts": 2,
+		"scripts/check-pr-body.test.ts": 4,
 		"scripts/classify-ci-failure-cli.test.ts": 2,
 		"scripts/download-grammars.test.ts": 2,
 		"scripts/git-fixture-env.test.ts": 5,

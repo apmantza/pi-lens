@@ -180,6 +180,7 @@ export type ClassifyOutcomeRestDeps = Omit<
 export interface InstallOutcomeRow {
 	row: "fail" | "skip";
 	detail: string;
+	networkUnreachable: boolean;
 }
 /**
  * Classify why `toolId` never resolved via `ensureTool`, using the
@@ -235,6 +236,27 @@ export function ensureFixtureTools(
 ): Promise<{
 	unavailableTools: Set<string>;
 	attemptSnapshots: Map<string, SmokeInstallAttempt | undefined>;
+}>;
+export function runInstallRegistrySmoke(options?: {
+	verbose?: boolean;
+	deps?: {
+		TOOLS: Array<{ id: string; installStrategy: string }>;
+		ensureTool: (toolId: string) => Promise<string | undefined>;
+		getInstallAttempt: (toolId: string) => SmokeInstallAttempt | undefined;
+		pipCommandCandidates?: () => string[];
+	};
+}): Promise<{
+	lane: string;
+	toolCount: number;
+	installed: number;
+	ok: boolean;
+	results: Array<{
+		toolId: string;
+		installStrategy: string;
+		state: string;
+		detail: string;
+		networkUnreachable: boolean;
+	}>;
 }>;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];

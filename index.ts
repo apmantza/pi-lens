@@ -2948,6 +2948,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				depChecker,
 				testRunnerClient,
 				sessionId: getStableSessionId(ctx),
+				signal: ctx.signal,
 				onTestRunnerComplete: (delivery) =>
 					stageTestRunnerDelivery({
 						...delivery,
