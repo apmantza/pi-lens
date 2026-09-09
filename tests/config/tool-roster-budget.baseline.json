@@ -1,7 +1,7 @@
 {
   "pi": {
-    "budget": 25948,
-    "descriptionTotal": 3788,
+    "budget": 28223,
+    "descriptionTotal": 3497,
     "schemaTotal": 22160,
     "tools": {
       "ast_grep_dump": { "description": 117, "schema": 501 },
@@ -10,7 +10,7 @@
       "ast_grep_search": { "description": 94, "schema": 4028 },
       "effective_config": { "description": 308, "schema": 398 },
       "lens_diagnostic_mark": { "description": 303, "schema": 1018 },
-      "lens_diagnostics": { "description": 481, "schema": 3459 },
+      "lens_diagnostics": { "description": 190, "schema": 3459 },
       "lsp_diagnostics": { "description": 111, "schema": 1477 },
       "lsp_navigation": { "description": 170, "schema": 3458 },
       "module_report": { "description": 505, "schema": 1295 },
@@ -22,28 +22,28 @@
     }
   },
   "mcp": {
-    "budget": 27167,
-    "descriptionTotal": 6198,
+    "budget": 26619,
+    "descriptionTotal": 3230,
     "schemaTotal": 20969,
     "tools": {
-      "pilens_analyze": { "description": 277, "schema": 721 },
-      "pilens_ast_grep_replace": { "description": 181, "schema": 1862 },
-      "pilens_ast_grep_search": { "description": 413, "schema": 4117 },
-      "pilens_diagnostics": { "description": 488, "schema": 3548 },
-      "pilens_effective_config": { "description": 765, "schema": 422 },
-      "pilens_health": { "description": 322, "schema": 33 },
-      "pilens_latency": { "description": 143, "schema": 190 },
-      "pilens_lsp_diagnostics": { "description": 143, "schema": 1566 },
-      "pilens_lsp_navigation": { "description": 349, "schema": 3547 },
+      "pilens_analyze": { "description": 98, "schema": 721 },
+      "pilens_ast_grep_replace": { "description": 106, "schema": 1862 },
+      "pilens_ast_grep_search": { "description": 92, "schema": 4117 },
+      "pilens_diagnostics": { "description": 190, "schema": 3548 },
+      "pilens_effective_config": { "description": 295, "schema": 422 },
+      "pilens_health": { "description": 86, "schema": 33 },
+      "pilens_latency": { "description": 68, "schema": 190 },
+      "pilens_lsp_diagnostics": { "description": 111, "schema": 1566 },
+      "pilens_lsp_navigation": { "description": 120, "schema": 3547 },
       "pilens_module_report": { "description": 509, "schema": 1302 },
       "pilens_project_report": { "description": 306, "schema": 522 },
-      "pilens_project_scan": { "description": 179, "schema": 401 },
+      "pilens_project_scan": { "description": 101, "schema": 401 },
       "pilens_read_enclosing": { "description": 282, "schema": 920 },
       "pilens_read_symbol": { "description": 274, "schema": 447 },
-      "pilens_rebuild": { "description": 331, "schema": 33 },
-      "pilens_session_start": { "description": 419, "schema": 56 },
+      "pilens_rebuild": { "description": 102, "schema": 33 },
+      "pilens_session_start": { "description": 81, "schema": 56 },
       "pilens_symbol_search": { "description": 318, "schema": 1081 },
-      "pilens_turn_end": { "description": 499, "schema": 201 }
+      "pilens_turn_end": { "description": 91, "schema": 201 }
     }
   }
 }

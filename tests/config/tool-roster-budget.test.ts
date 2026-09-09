@@ -108,6 +108,8 @@ describe("tool roster description budget", () => {
 		const { measured, descriptionTotal, schemaTotal } = measure(piTools);
 		const total = descriptionTotal + schemaTotal;
 		const detail = report("pi", descriptionTotal, schemaTotal, baseline.pi.budget, measured);
+		// 2026-09-10: budget is the measured after-trim total plus 10%.
+		expect(baseline.pi.budget).toBe(Math.ceil((descriptionTotal + schemaTotal) * 1.1));
 		expect(total, detail).toBeLessThanOrEqual(baseline.pi.budget);
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
@@ -118,6 +120,8 @@ describe("tool roster description budget", () => {
 		const { measured, descriptionTotal, schemaTotal } = measure(mcpTools);
 		const total = descriptionTotal + schemaTotal;
 		const detail = report("mcp", descriptionTotal, schemaTotal, baseline.mcp.budget, measured);
+		// 2026-09-10: budget is the measured after-trim total plus 10%.
+		expect(baseline.mcp.budget).toBe(Math.ceil((descriptionTotal + schemaTotal) * 1.1));
 		expect(total, detail).toBeLessThanOrEqual(baseline.mcp.budget);
 		expect(descriptionTotal, detail).toBe(baseline.mcp.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.mcp.schemaTotal);

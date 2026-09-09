@@ -20,6 +20,10 @@ Feature-detected: on hosts without that API, the six situational tools fall back
 to being statically active, exactly as before (`tools/activate-tools.ts`, wired
 in `index.ts`).
 
+Tool descriptions contain the contract sentence and one example. Operational
+guidance, including cache state, scan scope, safety details, and lifecycle
+results, belongs in the returned result so it is paid only when the tool runs.
+
 ## Per-edit
 
 - **`lens_diagnostics`** — Cached diagnostic state for the current session.
