@@ -20,15 +20,20 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 }));
 
 const lspPrimaryCoversFile = vi.fn((..._args: unknown[]) => false);
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: () => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => "shellcheck",
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => "shellcheck",
+		}),
+		lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
 	}),
-	lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
-}));
+);
 
 function createShellCtx(filePath: string, cwd: string) {
 	return {

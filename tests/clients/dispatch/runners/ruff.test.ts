@@ -18,14 +18,19 @@ vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: vi.fn(() => ({
-		isAvailableAsync: vi.fn(async () => false),
-		getCommand: vi.fn(() => null),
-	})),
-	resolveAvailableOrInstall,
-}));
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: vi.fn(() => ({
+			isAvailableAsync: vi.fn(async () => false),
+			getCommand: vi.fn(() => null),
+		})),
+		resolveAvailableOrInstall,
+	}),
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd, { kind: "python" });

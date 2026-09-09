@@ -45,20 +45,27 @@ vi.mock("../../../../clients/tool-policy.js", () => ({
 	}),
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
-	createAvailabilityChecker: (command: string) => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => command,
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: (command: string) => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => command,
+		}),
+		resolveToolCommandWithInstallFallback: async (
+			_cwd: string,
+			toolId: string,
+		) => toolId,
+		findLocalBinUpwards: () => null,
+		lspPrimaryCoversFile: () => false,
+		resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
+			toolId,
 	}),
-	resolveToolCommandWithInstallFallback: async (_cwd: string, toolId: string) =>
-		toolId,
-	findLocalBinUpwards: () => null,
-	lspPrimaryCoversFile: () => false,
-	resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>
-		toolId,
-}));
+);
 
 function createCtx(kind: string, filePath: string, cwd: string) {
 	return {
