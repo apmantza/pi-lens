@@ -498,6 +498,11 @@ result carries that lane in `unconfirmedServerIds` and stays ineligible for the
 fully-covered workspace cache and footer replacement. Never reconstruct the gap
 from a touch-wide timeout: consume `touchFile`'s frozen coverage set. (#1549)
 
+Collected LSP diagnostics carry the registered delivering `serverId` alongside
+the server-authored protocol `source`. Primary-versus-auxiliary verdicts and
+counts partition by `serverId`; `source` remains display and auxiliary-profile
+metadata only. (#2776)
+
 MCP `ensureReady` treats its cwd memo as a fast path, not authoritative root
 state. It must consult `shouldInitializeSessionRoot` so the session-root cap can
 evict and later re-register a root used by a real MCP tool call. The shared

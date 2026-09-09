@@ -34,10 +34,15 @@ import {
 	saveProjectSnapshot,
 } from "../../../clients/project-snapshot.js";
 import { removeTempDirSync } from "../test-utils.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 
 let tmp: string;
 
 beforeEach(() => {
+	resetDegradationLedger();
 	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-cache-"));
 	// Legacy per-project data dir marker so the cache file writes INSIDE tmp
 	// (cleaned up by afterEach) instead of the real global ~/.pi-lens dir.
@@ -96,6 +101,16 @@ describe("loadWorkspaceDiagnosticsCache / saveWorkspaceDiagnosticsCache (#671)",
 		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
 	});
 
+	it("fails open on a v2 cache so provenance-less diagnostics are re-collected (#2776)", () => {
+		saveWorkspaceDiagnosticsCache(tmp, {
+			version: WORKSPACE_DIAGNOSTICS_CACHE_VERSION - 1,
+			entries: { "/a.ts": makeEntry() },
+		});
+		// Old records still parse safely, but the strict cache consumer refuses
+		// to serve them because their diagnostics have no serverId provenance.
+		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
+	});
+
 	it("fails open when entries is missing/malformed", () => {
 		const cacheFile = path.join(
 			tmp,
@@ -109,6 +124,59 @@ describe("loadWorkspaceDiagnosticsCache / saveWorkspaceDiagnosticsCache (#671)",
 			JSON.stringify({ version: WORKSPACE_DIAGNOSTICS_CACHE_VERSION }),
 		);
 		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
+	});
+
+	it("rejects only a v3 entry whose diagnostic lacks serverId (#2776)", () => {
+		saveWorkspaceDiagnosticsCache(tmp, {
+			version: WORKSPACE_DIAGNOSTICS_CACHE_VERSION,
+			entries: {
+				bad: makeEntry({
+					diagnostics: [
+						{
+							severity: 1,
+							message: "missing provenance",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+				}),
+				good: makeEntry({
+					diagnostics: [
+						{
+							severity: 1,
+							message: "kept",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+							serverId: "typescript",
+						},
+					],
+				}),
+			},
+		});
+
+		expect(loadWorkspaceDiagnosticsCache(tmp)?.entries).toEqual(
+			expect.objectContaining({ good: expect.anything() }),
+		);
+		expect(loadWorkspaceDiagnosticsCache(tmp)?.entries.bad).toBeUndefined();
+	});
+
+	it("records one bounded migration degradation with the old version and entry count (#2776)", () => {
+		saveWorkspaceDiagnosticsCache(tmp, {
+			version: 2,
+			entries: { a: makeEntry(), b: makeEntry() },
+		});
+		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
+		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
+		const group = getDegradationSummary().find(
+			(entry) => entry.kind === "lsp-workspace-cache-migration",
+		);
+		expect(group?.count).toBe(1);
+		expect(group?.latestReasons[0]?.reason).toContain("v2");
+		expect(group?.latestReasons[0]?.reason).toContain("2 entries");
 	});
 });
 
@@ -345,6 +413,7 @@ describe("WorkspaceDiagnosticsCacheContext (#671)", () => {
 					start: { line: 0, character: 0 },
 					end: { line: 0, character: 1 },
 				},
+				serverId: "typescript",
 			},
 		];
 
@@ -1049,6 +1118,51 @@ describe("runWorkspaceDiagnostics cache integration (#671)", () => {
 		// The mismatched entry was NOT served — a.ts (the only file) fell through to
 		// a fresh touch. A served cache hit would have produced zero wait calls.
 		expect(waitCalls.length).toBeGreaterThan(0);
+	});
+
+	it("re-collects a provenance-less v2 entry instead of replaying it (#2776)", async () => {
+		const file = path.join(tmpSweep, "a.ts");
+		fs.writeFileSync(file, "const z = 1;\n");
+		const stat = fs.statSync(file);
+		saveWorkspaceDiagnosticsCache(tmpSweep, {
+			version: WORKSPACE_DIAGNOSTICS_CACHE_VERSION - 1,
+			entries: {
+				[cacheKeyFor(file)]: {
+					diagnostics: [
+						{
+							severity: 1,
+							message: "old primary finding",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+					count: 1,
+					mtimeMs: stat.mtimeMs,
+					scannedAt: Date.now(),
+					scopeKey: buildScopeKey("all", ["opengrep"]),
+				},
+			},
+		});
+
+		const tsServer = makeTsServer(tmpSweep);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+		const { client, waitCalls } = makeFakeClient(tmpSweep);
+		createLSPClient.mockResolvedValue(client);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		await service.runWorkspaceDiagnostics(tmpSweep);
+
+		expect(waitCalls.length).toBeGreaterThan(0);
+		const callsAfterMigration = waitCalls.length;
+		expect(loadWorkspaceDiagnosticsCache(tmpSweep)?.version).toBe(
+			WORKSPACE_DIAGNOSTICS_CACHE_VERSION,
+		);
+		await service.runWorkspaceDiagnostics(tmpSweep);
+		expect(waitCalls.length).toBe(callsAfterMigration);
 	});
 });
 

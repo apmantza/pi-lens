@@ -1236,12 +1236,14 @@ describe("lens_diagnostics mode=full", () => {
 								start: { line: 1, character: 0 },
 								end: { line: 1, character: 5 },
 							},
-							source: "typescript",
+							serverId: "typescript",
+							source: "eslint",
 							code: 2322,
 						},
 						{
 							severity: 2,
 							message: "ast-grep rule hit",
+							serverId: "ast-grep",
 							range: {
 								start: { line: 2, character: 0 },
 								end: { line: 2, character: 5 },

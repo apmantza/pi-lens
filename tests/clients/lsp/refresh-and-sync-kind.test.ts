@@ -1297,7 +1297,7 @@ describe("workspace/diagnostic/refresh reaches an unregistered cwd's on-disk cac
 				version: WORKSPACE_DIAGNOSTICS_CACHE_VERSION,
 				entries: {
 					[normalizeMapKey(filePath)]: {
-						diagnostics: [{ message: "stale" } as any],
+						diagnostics: [{ message: "stale", serverId: "typescript" } as any],
 						count: 1,
 						mtimeMs: 1,
 						scannedAt: Date.now(),

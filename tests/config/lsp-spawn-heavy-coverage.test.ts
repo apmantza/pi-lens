@@ -211,7 +211,7 @@ describe("lsp-spawn-heavy Vitest project coverage", () => {
 			// excluded); half rounded up is 429, documented floor 430.
 			scannedCount: files.length,
 			minScanned: 430,
-			// Calibration: 19 spawning-test candidates on 2026-08-30 (4 phased,
+			// Calibration: 20 spawning-test candidates on 2026-09-09 (5 phased,
 			// 15 exempted); half rounded up is 10.
 			minFlagged: 10,
 			remediation:

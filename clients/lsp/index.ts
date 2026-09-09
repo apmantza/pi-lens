@@ -660,6 +660,13 @@ function mergeLspDiagnostics(
 	return merged;
 }
 
+function attributeDiagnostics(
+	serverId: string,
+	diagnostics: import("./client.js").LSPDiagnostic[],
+): import("./client.js").LSPDiagnostic[] {
+	return diagnostics.map((diagnostic) => ({ ...diagnostic, serverId }));
+}
+
 export type LSPDiagnosticsMode = "none" | "document" | "full";
 export type LSPTouchClientScope = "primary" | "all" | "with-auxiliary";
 
@@ -4717,7 +4724,9 @@ export class LSPService {
 						const binding = entry.client.getDiagnosticBinding?.(filePath);
 						if (!bindingMatchesTouchContent(binding)) return [];
 						const diags = entry.client.getDiagnostics(filePath);
-						return diags.length > 0 ? [{ diags, binding }] : [];
+						return diags.length > 0
+							? [{ serverId: entry.info.id, diags, binding }]
+							: [];
 					})
 				: [];
 			// #1493: auxiliaries whose STORED publication already covers exactly the
@@ -6286,7 +6295,12 @@ export class LSPService {
 			// diagnostics from the client cache as always.
 			let collected = options.collectDiagnostics
 				? tsserverSyncConfirmed !== undefined
-					? mergeLspDiagnostics(tsserverSyncConfirmed)
+					? mergeLspDiagnostics(
+							attributeDiagnostics(
+								spawned[0]?.info.id ?? "unknown",
+								tsserverSyncConfirmed,
+							),
+						)
 					: mergeLspDiagnostics([
 							// #1459: a DEFERRED server's cache still holds the PREVIOUS
 							// content's findings — the resync that would have cleared it never
@@ -6299,9 +6313,14 @@ export class LSPService {
 							...spawned.flatMap((entry) =>
 								droppedAuxiliaryServerIds.has(entry.info.id)
 									? []
-									: entry.client.getDiagnostics(filePath),
+									: attributeDiagnostics(
+											entry.info.id,
+											entry.client.getDiagnostics(filePath),
+										),
 							),
-							...carriedAuxiliary.flatMap((entry) => entry.diags),
+							...carriedAuxiliary.flatMap((entry) =>
+								attributeDiagnostics(entry.serverId, entry.diags),
+							),
 						])
 				: undefined;
 			// #1095 (P3-b): whether `collected` came from a tsserver sync confirm
@@ -6347,7 +6366,14 @@ export class LSPService {
 						retractPrimaryTimeoutAttribution(); // #1549
 						syncConfirmed = true;
 						collected =
-							syncResult.length > 0 ? mergeLspDiagnostics(syncResult) : [];
+							syncResult.length > 0
+								? mergeLspDiagnostics(
+										attributeDiagnostics(
+											spawned[0]?.info.id ?? "unknown",
+											syncResult,
+										),
+									)
+								: [];
 						logLatency({
 							type: "phase",
 							phase: "lsp_tsserver_sync_confirm",
@@ -7156,7 +7182,7 @@ export class LSPService {
 				].join(":");
 				if (seen.has(key)) continue;
 				seen.add(key);
-				merged.push(diagnostic);
+				merged.push({ ...diagnostic, serverId: entry.serverId });
 			}
 		}
 
@@ -9525,15 +9551,16 @@ export class LSPService {
 			);
 			const clientDiags = client.getAllDiagnostics();
 			for (const [filePath, entry] of clientDiags) {
+				const attributed = attributeDiagnostics(client.serverId, entry.diags);
 				const existing = all.get(filePath);
 				if (existing) {
 					existing.diags = mergeLspDiagnostics([
 						...existing.diags,
-						...entry.diags,
+						...attributed,
 					]);
 					existing.ts = Math.max(existing.ts, entry.ts);
 				} else {
-					all.set(filePath, { diags: [...entry.diags], ts: entry.ts });
+					all.set(filePath, { diags: attributed, ts: entry.ts });
 				}
 				const list = bindingsByPath.get(filePath) ?? [];
 				list.push(entry.binding);
