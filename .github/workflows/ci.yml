@@ -586,7 +586,8 @@ jobs:
           rm -rf "$RUNNER_TEMP/gh-install"
           git clone --quiet . "$RUNNER_TEMP/gh-install"
           cd "$RUNNER_TEMP/gh-install"
-          npm install --omit=dev --no-audit --no-fund
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" install --omit=dev --no-audit --no-fund
           if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
             echo "ERROR: npm install --omit=dev changed tracked source files"
             git status --short --untracked-files=no
