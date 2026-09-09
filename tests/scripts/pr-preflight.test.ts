@@ -33,6 +33,13 @@ describe("pr preflight", () => {
 			"--",
 			"--complete",
 		]);
+		expect(GATES.find(([name]) => name === "knip")?.[1]).toEqual([
+			process.execPath,
+			"scripts/run-knip.mjs",
+		]);
+		expect(GATES.find(([name]) => name === "knip")?.[2]).toBe(
+			CI_JOB_NAMES.KNIP,
+		);
 	});
 	it("parses only and skip selectors", () => {
 		expect(parseArgs(["--only", "lint"])).toEqual({
