@@ -36,13 +36,8 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		name: "module_report" as const,
 		label: "Module Report",
 		description:
-			"Structured, navigable overview of a source module — a token-efficient substitute for reading the whole file. Returns each symbol's name/kind/signature/line-range (plus a first-line `doc` summary when a doc comment is attached), important inline callbacks/closures/lambdas with stable handles, plus who-uses-this, risk flags, and ranked recommendedReads. To read a symbol's body: call read/read_symbol with offset=startLine, limit=endLine-startLine+1 on THIS report's `path` — those aren't repeated per symbol. Prefer this before a full read; then use read_symbol (or read) for the exact body you need.\n" +
-			"Single mode: language-uniform tree-sitter outline + review-graph who-uses-this + inline executable extraction; degrades to outline-only when no cached graph is available. `semantic.source` reports whether graph data was used.\n" +
-			'Pass `blastRadius: true` to also get the cross-file blast radius — the transitive dependents of this module aggregated to ranked file `read` args ("if you change this, verify these files"). Read-only over the cached graph; omitted on a cold cache. Supersedes the standalone impact query.\n' +
-			"Pass `callGraph: true` to include bounded derived callers/callees from the cached FunctionCallGraph; unavailable cache state is explicit and never reported as zero calls.\n" +
-			'`view: "compact"` returns a line-oriented text rendering (one line per symbol/callback, cheapest option) instead of JSON — same data, roughly a quarter of the token cost; use it for a quick skim. Default view returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol\'s body for editing; use read_symbol for that.',
-		promptSnippet:
-			"Navigable file outline — a cheap substitute for reading a whole file",
+			"Return a navigable source-module outline with symbols, references, and read handles. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use module_report on `src/app.ts` before read_symbol.",
+		promptSnippet: "Outline a source module before reading a body",
 		renderResult: compactRenderResult<{
 			available?: boolean;
 			staleness?: string;
@@ -66,7 +61,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		}),
 		parameters: Type.Object({
 			path: Type.String({
-				description: "Absolute or workspace-relative path to the source file.",
+				description: "Source file, e.g. `src/app.ts`.",
 			}),
 			maxRefsPerSymbol: Type.Optional(
 				Type.Number({
@@ -236,7 +231,7 @@ export function createReadSymbolTool(
 		name: "read_symbol" as const,
 		label: "Read Symbol",
 		description:
-			"Return the verbatim source of a single named symbol or module_report callback handle in a file — a targeted, cheap alternative to reading the whole file. Pair with module_report: module_report finds the symbol/callback handle, read_symbol shows its body. Unlike an outline, this delivers the actual lines, so it counts as having read that symbol for the read-before-edit guard. The returned body includes an attached doc comment when one exists. Accepts a dotted `Class.method` name to resolve a member directly, falling back to a plain top-level lookup when the qualifier doesn't resolve. A miss embeds the ~3 nearest symbol names in the file so a typo self-corrects without a second call. When multiple same-file symbols share a name (overloads, a type and a value sharing a name), the first is returned with an `ambiguous` note; pass `kind` to pick a specific one.",
+			"Return one symbol's verbatim source. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use read_symbol after module_report identifies `parseConfig`.",
 		promptSnippet: "Read one symbol's body instead of the whole file",
 		renderResult: compactRenderResult<{
 			found?: boolean;
@@ -366,7 +361,7 @@ export function createReadEnclosingTool(
 		name: "read_enclosing" as const,
 		label: "Read Enclosing",
 		description:
-			"Return the verbatim source for the smallest useful symbol/callback enclosing a line in a file. Use after ast_grep_search, diagnostics, or LSP locations when you need exact body text without reading the whole file. Uses tree-sitter only — no LSP or graph build — and records read-guard coverage for the returned range.",
+			"Return the smallest symbol or callback enclosing a line. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use read_enclosing after a diagnostic points to line 42.",
 		promptSnippet: "Read the enclosing symbol or callback body for a line",
 		renderResult: compactRenderResult<{
 			found?: boolean;

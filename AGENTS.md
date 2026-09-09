@@ -236,6 +236,31 @@ is the procedure and defers here on conflict; 2026-09-09).**
   Record: 2026-09-09, two master reds in one afternoon — a force-added
   contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
   baseline interaction (#2816) — each found by the next PR's CI.
+- *The orchestrator's commit step checks the index, not only the diff.*
+  Before every commit from a worker tree: `git ls-files` contains none of
+  `PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`, `INVESTIGATION.md`,
+  `MONITOR.md`, `.probe-home/` or a harness scratch directory; a second
+  changelog fragment is folded, not committed. Record: #2807 (2026-09-09)
+  went red on CI because two handoff files were tracked under the `*.md`
+  ignore, and #2808's fold produced two bullets the validator rejected.
+- *Merges touching the same governance data file are serialised, and master
+  is re-verified after them.* Two green PRs that both edit a baseline,
+  admission map or lane list can compose into a red master (#2782 + #2787
+  → #2816). Merge one, wait for master's own run, then update-branch and
+  merge the next; after any such pair, run that file's test on master before
+  arming the next chain.
+- *Reviews and verifies run on the merged tree.* A CONFLICTING PR is not
+  reviewed until it carries master; a MERGEABLE one is probed after
+  `git merge origin/master` in the reviewer's scratch checkout, so pins that
+  landed on master since the branch forked are part of the verdict. Record:
+  #2808 passed its verify on the branch head while #2795's pinned sentences
+  were already on master; the miss surfaced only in the orchestrator's
+  merge (2026-09-09).
+- *A small-model lane budgets one nudge.* When a Tier B worker hits its turn
+  cap, send one continuation that names the remaining steps; a second cap
+  reassigns the lane to the strongest model with the tree as-is. Record: every
+  GLM lane on 2026-09-09 capped at least once; one detector round shipped two
+  HIGH gaps and was redone on Luna.
 - *The human-decision class is named, not inferred.* Review tier follows
   the surface a diff touches; on top of that, a fixed class of changes is
   never merged on an agent's verdict alone and goes to the ledger as `needs
@@ -3658,7 +3683,7 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **A governance sweep** → `tests/support/sweep-kit.ts`: `listSourceFiles` with EXPLICIT directories and extensions (include `scripts/` and `.mjs` when the class lives there; never compiled `.js`); `assertNonEmptyScan` with a real floor per directory (calibrated just under the live count, like `tracked-control-bytes`); `stripSource` before any body/comment match so a string cannot launder a match; `callSites` for AST-bounded call arguments and the last top-level options object; a missing scan directory throws, never silently narrows. Body-matching sweeps: one shared helper is #2624; until then follow `escape-regexp-fold-sweep.test.ts`.
 - **Git fixtures** → `tests/support/git-fixture-env.ts` (`gitFixtureEnv`, `gitExecFileSync`); never `git` against the checkout.
 - **Any spawn from a test** (npm, pi, tar, a script) → a PINNED env: `HOME`, `PI_LENS_HOME`, `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG`, `npm_config_cache`, all inside the test's temp dir. The loader-cache warmer uses `PI_LENS_INSTALL_LOG` when present and otherwise writes under `PI_LENS_HOME`; pin both because each is an explicit lifecycle boundary. `npm pack` runs pi-lens's own prepack/prepare: pack from a `git archive HEAD` export, never the live checkout (#2634; #2619 review F1). The 2026-09-06 receipt: 42 records in the maintainer's real `install.log` from agent installs and one test.
-- **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); the ratchet is two-sided, so a stale ceiling reds too.
+- **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); support-helper rows additionally inherit lane proof through an importing test; the ratchet is two-sided, so a stale ceiling reds too.
 - **Markdown tables** → `scripts/lib/md-matrix.mjs` `parseTable`; **skills discovery** → `scripts/lib/skills-predicate.mjs` (pi-faithful; shared with install-selftest); **check-run payloads** → the fixtures in `tests/scripts/ci-verdict.test.ts`.
 - **Module mocks of `node:fs`** are file-scoped under the isolated forks pool and stay that way; prefer a real filesystem fixture — every 2026-09-06 review probe that broke a mocked case used the real fs.
 

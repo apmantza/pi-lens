@@ -57,22 +57,18 @@ export function createActivateToolsTool(
 ) {
 	const lazyNames = lazyTools.map((t) => t.name);
 	const lazyNameSet = new Set(lazyNames);
-	const catalog = lazyTools.map((t) => `${t.name} — ${t.summary}`).join("\n");
 
 	return {
 		name: "pi_lens_activate_tools" as const,
 		label: "Activate pi-lens Tools",
 		description:
-			"Activate one or more situational pi-lens tools that stay registered but inactive by default, so the default tool list stays lean. " +
-			"Call this ONCE with the tools you need before using them — they become callable starting the NEXT turn. " +
-			`Available:\n${catalog}`,
-		promptSnippet:
-			"Activate situational ast-grep / lsp_navigation tools before using them",
+			'Activate registered situational tools for the next turn. Example: `{tools: ["lsp_navigation"]}`.',
+		promptSnippet: "Activate a situational tool",
 		parameters: Type.Object({
 			tools: Type.Array(Type.String({ enum: lazyNames }), {
 				minItems: 1,
 				description:
-					"Names of situational tools to activate (see this tool's description for the catalog).",
+					"Names of situational tools to activate, e.g. `lsp_navigation`.",
 			}),
 		}),
 		async execute(

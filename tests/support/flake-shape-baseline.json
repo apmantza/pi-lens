@@ -218,6 +218,7 @@
 		"scripts/with-memory-watch.test.ts": 1,
 		"support/fake-lsp-server.test.ts": 1,
 		"support/fault-injection.test.ts": 5,
+		"support/fault-injection.ts": 3,
 		"tools/lens-diagnostics.test.ts": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts": 1,
 		"tools/lsp-diagnostics-per-server-concurrency.test.ts": 1,

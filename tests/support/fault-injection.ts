@@ -290,3 +290,4 @@ export async function spawnWedgedChild(): Promise<WedgedChild> {
 		},
 	};
 }
+// flake-shape: raw-timer-wait — fault injection must model real timer and child teardown timing; fake timers cannot reproduce the boundary
