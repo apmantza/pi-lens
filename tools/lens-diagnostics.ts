@@ -253,30 +253,7 @@ export function createLensDiagnosticsTool(
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			"Query pi-lens's diagnostic state. mode=delta/all are cache-only and instant; " +
-			"mode=full actively scans LSP diagnostics, scoped by paths when supplied, and merges runner state.\n\n" +
-			"IMPORTANT: unlike lsp_diagnostics (LSP only), this tool covers ALL dispatch " +
-			"runners: LSP errors, tree-sitter structural rules, ast-grep security rules, " +
-			"biome/ruff/eslint lint findings, complexity violations, and more.\n\n" +
-			"mode=delta (default): all warnings for the current agent turn — fixable warnings " +
-			"(actionable-warnings cache) AND code quality/style/complexity issues " +
-			"(code-quality-warnings cache). Same scope as the turn-end advisory, current turn only.\n\n" +
-			"mode=all: blocking errors and warnings — with the actual messages (line, rule, " +
-			"text), not just counts — for every file the agent has " +
-			"EDITED this session (files that went through the dispatch pipeline). " +
-			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
-			"not an active verification. If changed files have no cached diagnostics or their findings " +
-			"are stale, use mode=full with paths for a targeted active scan. Check reported coverage; " +
-			"an empty cache is not proof of a clean file.\n\n" +
-			"mode=full: active LSP scan of paths, or the whole project when omitted. " +
-			"Includes supported unedited files, then merges/deduplicates " +
-			"that with mode=all cached runner state. Optional refreshRunners=cheap/all/cached " +
-			"folds in project-wide runner findings: the in-process scanners (tree-sitter + " +
-			"fact-rules + ast-grep) plus a FRESH run of the heavyweight analyzers — knip, " +
-			"jscpd (copy-paste), madge (circular deps), gitleaks (secrets), govulncheck/trivy " +
-			"(CVEs), dead-code — rather than a possibly-stale session_start cache; each " +
-			"analyzer de-dupes against a concurrent background run of itself, so this can't " +
-			"double-spawn. Bounded by the slowest analyzer (trivy's own ~180s ceiling).",
+			'Query pi-lens diagnostics across ALL dispatch runners (unlike lsp_diagnostics, which is LSP only). mode=delta/all are cache-only and instant; mode=full is an expensive active LSP scan of paths (or the whole project) merged with cached runner state. If changed files have no cached diagnostics or their findings are stale, use mode=full with paths for a targeted active scan; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
 		promptSnippet:
 			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
@@ -361,8 +338,8 @@ export function createLensDiagnosticsTool(
 					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = cache-only session diagnostics for edited/dispatched files (an empty cache is not proof of a clean file). " +
-						"full = active LSP scan scoped by paths (whole project if omitted), plus runner diagnostics.",
+						"all = cache-only session diagnostics for edited/dispatched files; an empty cache is not proof of a clean file. " +
+						"full = expensive active LSP scan of paths (or the whole project) plus cached runner diagnostics.",
 				}),
 			),
 			refreshRunners: Type.Optional(
