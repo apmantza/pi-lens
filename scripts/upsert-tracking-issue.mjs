@@ -52,7 +52,10 @@ function main(argv = process.argv.slice(2), ghRunner = gh) {
 	return action;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	try {
 		main();
 	} catch (error) {

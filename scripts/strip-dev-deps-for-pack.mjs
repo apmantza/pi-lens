@@ -76,7 +76,8 @@ const mode = process.argv[2];
 if (mode === "--strip") strip();
 else if (mode === "--restore") restore();
 else if (
-	process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href ||
+	(process.argv[1] &&
+		import.meta.url === pathToFileURL(process.argv[1]).href) ||
 	process.argv[1]?.endsWith("strip-dev-deps-for-pack.mjs")
 ) {
 	console.error("usage: strip-dev-deps-for-pack.mjs --strip | --restore");
