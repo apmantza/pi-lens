@@ -142,6 +142,18 @@ export function classifyFormatRow(target, fx) {
  */
 const FIXTURES = [
 	{
+		lang: "yaml-cwd",
+		dir: "tests/fixtures/tool-smoke/yaml-cwd",
+		file: "repo/bad.yaml",
+		cwd: "repo",
+		// #2691 recurrence: yamllint reads .yamllint from the process cwd.
+		targets: ["yamllint"],
+		tools: ["yamllint"],
+		tier1: true,
+		expectDiagnostic: true,
+		expectRule: "key-ordering",
+	},
+	{
 		lang: "typescript",
 		dir: "tests/fixtures/tool-smoke/typescript",
 		file: "bad.ts",
@@ -1651,7 +1663,7 @@ export async function ensureFixtureTools(
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
-function classify(outcome) {
+export function classify(outcome) {
 	if (!outcome) {
 		return {
 			state: "skip",
@@ -1681,6 +1693,11 @@ function classify(outcome) {
 		detail: `${status}${failureKind ? ` (${failureKind})` : ""}`,
 		diags,
 	};
+}
+
+/** Resolve the dispatch directory declared by a smoke row. */
+export function fixtureDispatchCwd(fixture, workspace) {
+	return path.resolve(workspace, fixture.cwd ?? ".");
 }
 
 // `setup-failed` (#530) is a distinct terminal state from `fail`: it means the
@@ -2424,8 +2441,21 @@ async function main() {
 		}
 		const workspace = copyDirToTemp(fixture.dir);
 		const absFile = path.join(workspace, fixture.file);
+		const previousProcessCwd = process.cwd();
 		try {
-			const { runners } = await dispatchLintDetailed(absFile, workspace, pi, {
+			const dispatchCwd = fixtureDispatchCwd(fixture, workspace);
+			if (fixture.lang === "yaml-cwd") {
+				// #2691 recurrence: the host cwd is a decoy. The runner must use
+				// the dispatch cwd when yamllint discovers its configuration.
+				const decoy = path.join(workspace, "host-cwd-decoy");
+				fs.mkdirSync(decoy);
+				fs.writeFileSync(
+					path.join(decoy, ".yamllint"),
+					"rules:\n  key-ordering: disable\n",
+				);
+				process.chdir(decoy);
+			}
+			const { runners } = await dispatchLintDetailed(absFile, dispatchCwd, pi, {
 				blockingOnly: false,
 			});
 			if (verbose) {
@@ -2457,6 +2487,25 @@ async function main() {
 					verdict.detail =
 						"ran clean but produced no diagnostic on known defect";
 				}
+				if (
+					step2 &&
+					verdict.state === "pass" &&
+					fixture.expectRule &&
+					!outcome?.result.diagnostics.some(
+						(diagnostic) => diagnostic.rule === fixture.expectRule,
+					)
+				) {
+					verdict.state = "fail";
+					verdict.detail = `did not produce expected ${fixture.expectRule} diagnostic`;
+				}
+				if (
+					verdict.state === "pass" &&
+					fixture.expectDiagnosticCount !== undefined &&
+					verdict.diags !== fixture.expectDiagnosticCount
+				) {
+					verdict.state = "fail";
+					verdict.detail = `expected exactly ${fixture.expectDiagnosticCount} diagnostic(s), got ${verdict.diags}`;
+				}
 				rows.push({ lang: fixture.lang, runner: target, ...verdict });
 			}
 		} catch (err) {
@@ -2470,6 +2519,7 @@ async function main() {
 				});
 			}
 		} finally {
+			process.chdir(previousProcessCwd);
 			safeRm(workspace);
 		}
 	}
