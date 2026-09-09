@@ -578,6 +578,14 @@ Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
 
+Model-facing tool configuration has one complete registry in
+`clients/tool-config.ts`. It includes every pi and MCP tool, drives schema,
+diagnostics, effective-config output, `pi-lens check`, and both registration
+surfaces, and records whether each entry is disableable. The activation loader
+and MCP session lifecycle tools are non-disableable; unknown and attempted
+non-disableable keys share `PILENS_CFG_0009`. A surface roster without a
+registry entry is a governance failure (#2800 R2).
+
 ### LSP: acquisition, touches, waits, and diagnostics
 
 Alternate language servers declare their preferred server through
@@ -1043,6 +1051,11 @@ Managed verification uses the registry's optional `verificationTimeoutMs` at
 every installer-owned probe seam, including local discovery, npm install, and
 periodic refresh. The refresh candidate projection carries that policy instead
 of reintroducing a shared literal. (#2176, #2194)
+
+The CI failure classifier normalizes CRLF and leading GitHub Actions
+`##[error]`/`##[warning]` annotations once, after ANSI and timestamp stripping,
+before any anchored evidence needle runs. Keep transport normalization at this
+seam so Windows and Unix logs exercise identical classifier rules. (#2839)
 
 The dispatch lsp-runner's `touchFile` call has its OWN 5-second cold-spawn
 wait floor (`RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs`,
@@ -2867,6 +2880,8 @@ Holds: `filePath`, language-root `cwd`, `kind` (`FileKind` — `jsts`, `python`,
 **`FileKind`** — union type (`"jsts"` | `"python"` | `"go"` | `"rust"` | …) detected from the file path. Controls which runners are eligible for a given dispatch. Runners declare `appliesTo: FileKind[]`; an empty array means "all kinds".
 
 ## Project intelligence and snapshots
+
+- **Per-tool availability has one resolver (#2800).** `clients/tool-config.ts` owns `tools.<name>.enabled` precedence and the tool-name catalog. Both `index.ts` registration and `mcp/server.ts` `tools/list` use it, and the loader `pi_lens_activate_tools` remains outside the catalog. Keep the default true, let project config override global config, and let session-scoped `--no-tool=<name>` disable without re-enabling. Unknown names report through the existing config diagnostic path; the session-start summary is one bounded line.
 
 - **`clients/lens-flag-registry.ts` is THE source of truth for every runtime toggle (#166) — add a flag there, nowhere else.** One `LensFlagSpec` per toggle (`name`, `description`, `configKey`, `negated`, `default`, `scope`, optional `env`/`readGlobal`) drives ALL FOUR consumers that used to keep their own list: `index.ts`'s `registerFlag` loop, `lens-config.ts`'s config parsing AND `resolvePiLensFlagWithSource` precedence chain, `project-lens-config.ts`'s nested closest-wins walk, and `tests/index-wiring.test.ts`'s registration contract. The module imports NOTHING, which is what lets both config loaders share `assignFlagConfigSection`/`readFlagConfigValue` without the import cycle that `config-enabled-shape.ts` was extracted to dodge (now deleted — the registry replaced it). How to apply: a new toggle is one array entry plus docs; do NOT add a `registerFlag` call, an if/else branch in the resolver, or a hand-parsed key in a loader. The invariant this enforces is that CLI and `config.json` coverage cannot diverge — the gap #166 reported was seven flags registered on the CLI that the resolver's if/else chain never matched, so `config.json` could never set them, and the wiring test that existed to catch exactly that had itself drifted (it was missing `lens-turn-summary`). `configKey` is a dotted path to a **boolean**, always in POSITIVE polarity (`lsp.enabled`, not `noLsp`); `negated: true` is how a `no-*` flag reads it. `scope: "project"` opts a flag into the `.pi-lens.json` tiers; `"global"` flags resolve env → cli → global → default. NON-boolean config keys (`dispatch.runnerTimeoutFloorMs`, `widget.visible`, `format.mode`, `actionableWarnings.autoFix.maxFixes`) are not flags and stay hand-parsed in `loadPiLensGlobalConfig` with a `getGlobal*` accessor beside the others — but they carry the same obligation: a key documented in `globalconfig.md` that no loader reads is the exact bug #166 fixed twice over (`maxFixes` was documented from #792 and silently unread until #166 wired it into `runtime-agent-end.ts`). When adding a documented key, grep for its reader before closing out.
 - **Project mutation controls are independent from diagnostics (#789/#792).** `.pi-lens.json` `format.enabled`, `autofix.enabled`, and `actionableWarnings.autoFix.enabled` (the three `scope: "project"` registry entries) resolve per edited file with closest-wins, per-flag inheritance from the file directory through the project root; explicit disabling CLI flags win, then the nearest defining project config, then global defaults. The shared upward walk is HOME-guarded and per-directory lookups are mtime-cached. Disabling any mutation path MUST NOT skip LSP synchronization, dispatch lint, actionable-warning reporting, or diagnostic publication.
