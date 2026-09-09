@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import type {
 	Diagnostic,
@@ -163,7 +164,7 @@ const dartAnalyzeRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "dart-analyze");
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const dartAvailable = await dart.isAvailableAsync(cwd);
 		const flutterAvailable =

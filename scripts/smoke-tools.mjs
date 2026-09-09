@@ -385,6 +385,15 @@ const LSP_FIXTURES = [
 		tools: ["typescript-language-server"],
 	},
 	{
+		// #2777: the nested package marker must become the LSP root for this file.
+		lang: "typescript-nested-root-markers",
+		dir: "tests/fixtures/tool-smoke/typescript-nested-root-markers",
+		file: "packages/app/bad.ts",
+		serverHint: "typescript-language-server (nested rootMarkers)",
+		rootMarkers: ["package.json"],
+		tools: ["typescript-language-server"],
+	},
+	{
 		lang: "python",
 		dir: "tests/fixtures/tool-smoke/python",
 		file: "bad.py",
@@ -886,6 +895,17 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/html",
 		file: "messy.html",
 		formatter: "prettier",
+		tools: ["prettier"],
+	},
+	{
+		// #2777: the nested ignore is discovered from the formatter child cwd.
+		// The harness classifies the intentional no-change result as a visible
+		// preservation pass when the nested ignore is honored.
+		lang: "prettier-nested-ignore",
+		dir: "tests/fixtures/format-smoke/prettier-nested-ignore",
+		file: "packages/app/ignored.ts",
+		formatter: "prettier",
+		expect: "preserve",
 		tools: ["prettier"],
 	},
 	{

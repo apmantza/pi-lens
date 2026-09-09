@@ -16,11 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
-import {
-	findNearestMarkerRoot,
-	isRealGitMarker,
-	normalizeMapKey,
-} from "./path-utils.js";
+import { normalizeMapKey } from "./path-utils.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -855,90 +852,6 @@ async function indentationArgs(
 	];
 }
 
-const FORMATTER_MARKERS_BY_NAME: ReadonlyMap<string, readonly string[]> =
-	new Map([
-		["biome", ["biome.json", "biome.jsonc", "package.json"]],
-		[
-			"prettier",
-			[
-				".prettierrc",
-				".prettierrc.json",
-				".prettierrc.yaml",
-				".prettierrc.yml",
-				".prettierrc.js",
-				".prettierrc.cjs",
-				".prettierrc.mjs",
-				"prettier.config.js",
-				"prettier.config.cjs",
-				"prettier.config.mjs",
-				".prettierignore",
-				"package.json",
-			],
-		],
-		[
-			"oxfmt",
-			["oxfmt.toml", ".oxfmtrc.json", "vite-plus.json", "package.json"],
-		],
-		["ruff", ["pyproject.toml", "ruff.toml", ".ruff.toml"]],
-		["black", ["pyproject.toml", "black.toml", ".black"]],
-		["sqlfluff", [".sqlfluff", "pyproject.toml", "setup.cfg"]],
-		["rustfmt", ["rustfmt.toml", ".rustfmt.toml", "Cargo.toml"]],
-		["rubocop", [".rubocop.yml", ".rubocop.yaml"]],
-		["standardrb", [".standard.yml", ".standard.yaml"]],
-		["clang-format", [".clang-format", "_clang-format"]],
-		["php-cs-fixer", [".php-cs-fixer.php", ".php-cs-fixer.dist.php"]],
-		["stylua", ["stylua.toml", ".stylua.toml"]],
-		["ocamlformat", [".ocamlformat"]],
-		["google-java-format", [".google-java-format", ".editorconfig"]],
-		["cljfmt", [".cljfmt.edn", "cljfmt.edn", ".cljfmt"]],
-		[
-			"cmake-format",
-			[
-				".cmake-format",
-				".cmake-format.yaml",
-				".cmake-format.yml",
-				".cmake-format.json",
-				".cmake-format.py",
-				"cmake-format.yaml",
-				"cmake-format.yml",
-				".editorconfig",
-			],
-		],
-		[
-			"psscriptanalyzer-format",
-			["PSScriptAnalyzerSettings.psd1", "ScriptAnalyzerSettings.psd1"],
-		],
-		[
-			"csharpier",
-			[
-				".csharpierrc",
-				".csharpierrc.json",
-				".csharpierrc.yaml",
-				".csharpierrc.yml",
-			],
-		],
-		["ormolu", [".ormolu"]],
-		["taplo", ["taplo.toml", ".taplo.toml"]],
-		["terraform", [".terraform.lock.hcl"]],
-		["swiftformat", [".swiftformat"]],
-		["fantomas", [".fantomasignore", ".editorconfig"]],
-		["mix", [".formatter.exs"]],
-		["shfmt", [".editorconfig"]],
-		["ktlint", [".editorconfig"]],
-		[
-			"ktfmt",
-			[
-				".editorconfig",
-				".ktfmt",
-				".ktfmt.kts",
-				"build.gradle",
-				"build.gradle.kts",
-				"settings.gradle",
-				"settings.gradle.kts",
-			],
-		],
-	]);
-
 /**
  * Resolve the cwd for the formatter child, capped at the user's home
  * directory. Files outside a project retain the historical file-directory
@@ -949,20 +862,13 @@ export function resolveFormatterCwd(
 	formatterName?: string,
 	homeDir: string = os.homedir(),
 ): string {
-	const fileDir = path.dirname(path.resolve(absolutePath));
-	const effectiveHome = homeDir || undefined;
-	const markers = formatterName
-		? [...(FORMATTER_MARKERS_BY_NAME.get(formatterName) ?? []), ".gitignore"]
-		: [".gitignore"];
-	const root = findNearestMarkerRoot(fileDir, markers, {
-		homeDir: effectiveHome,
+	return resolveToolCwd("formatter", formatterName ?? "unknown", absolutePath, {
+		// Formatter discovery historically walks above the file directory. The
+		// filesystem root is the neutral dispatch boundary; the seam's `$HOME`
+		// ceiling prevents it from escaping the user's workspace.
+		cwd: path.parse(path.resolve(absolutePath)).root,
+		homeDir,
 	});
-	if (root) return root;
-	const gitRoot = findNearestMarkerRoot(fileDir, [".git"], {
-		homeDir: effectiveHome,
-		markerPredicate: isRealGitMarker,
-	});
-	return gitRoot ?? fileDir;
 }
 
 /**

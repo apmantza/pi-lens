@@ -227,6 +227,24 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 		).toHaveLength(0);
 	});
 
+	it("every dispatch cwd binding comes from the shared tool-cwd seam (#2777)", () => {
+		const bypasses: string[] = [];
+		for (const file of files) {
+			const source = fs.readFileSync(file, "utf8");
+			if (
+				/ctx\.cwd\s*\|\|\s*(?:process\.cwd\(\)|path\.dirname\(ctx\.filePath\))/.test(
+					source,
+				)
+			) {
+				bypasses.push(path.relative(RUNNERS_DIR, file));
+			}
+		}
+		expect(
+			bypasses,
+			"a direct ctx.cwd fallback bypasses resolveRunnerCwd and regresses #2777",
+		).toEqual([]);
+	});
+
 	it("no runner reaches safeSpawn* under an alias or through call/apply", () => {
 		// R3-F2. These spellings are not sites, so they cannot move
 		// EXPECTED_SITES and nothing else in this file would notice them. Zero
