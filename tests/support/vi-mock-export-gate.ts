@@ -22,6 +22,11 @@ export interface ViMockExportFinding {
 
 export type ViMockExportMode = "imported" | "all";
 
+export interface ViMockExportOptions {
+	/** Maximum number of production-importer hops after the test file. */
+	importerDepth?: number;
+}
+
 function unquote(text: string): string | undefined {
 	if (!/^['"`]/.test(text)) return undefined;
 	try {
@@ -109,6 +114,17 @@ function resolveProduction(
 	return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
+function isProductionModule(file: string): boolean {
+	const relative = path.relative(process.cwd(), file).replaceAll(path.sep, "/");
+	// Synthetic detector fixtures live outside the checkout and are allowed to
+	// model production modules without pretending their paths are repository roots.
+	return relative.startsWith("../")
+		? true
+		: relative.startsWith(".probe-vi-mock-")
+			? true
+			: /^(?:clients|tools|mcp|scripts)(?:\/|$)/.test(relative);
+}
+
 function exportedValues(source: string): Set<string> {
 	const root = parse(Lang.TypeScript, source).root();
 	const names = new Set<string>();
@@ -157,64 +173,147 @@ function importedValues(root: SgNode, specifier: string): Set<string> {
 		for (const child of clause?.namedChildren() ?? []) {
 			if (child.kind() === "named_imports") {
 				for (const item of child.namedChildren()) {
-					if (item.kind() === "import_specifier" && !/^type\b/.test(item.text())) {
+					if (
+						item.kind() === "import_specifier" &&
+						!/^type\b/.test(item.text())
+					) {
 						const imported = item.field("name");
 						if (imported) names.add(imported.text());
 						continue;
 					}
 				}
 			} else if (child.kind() === "namespace_import") {
-				const local = child.namedChildren()[0]?.text();
-				if (!local) continue;
-				for (const member of root.findAll({
-					rule: { kind: "member_expression" },
-				})) {
-					if (member.field("object")?.text() !== local) continue;
-					const property = member.field("property");
-					if (property) names.add(property.text());
-				}
+				// A namespace object exposes every export. The caller expands this
+				// marker against the mocked module's actual exports.
+				names.add("*");
 			} else if (child.kind() === "identifier") {
 				names.add("default");
 			}
 		}
 	}
+	for (const importNode of root.findAll({ rule: { kind: "import" } })) {
+		const call = importNode.parent();
+		if (call?.kind() !== "call_expression") continue;
+		const argument = call.field("arguments")?.namedChildren()[0];
+		if (!argument || unquote(argument.text()) !== specifier) continue;
+		const declarator = call.parent()?.parent();
+		const binding =
+			declarator?.kind() === "variable_declarator"
+				? declarator.field("name")
+				: undefined;
+		if (binding?.kind() === "object_pattern") {
+			for (const property of binding.namedChildren()) {
+				if (property.kind() === "shorthand_property_identifier_pattern")
+					names.add(property.text());
+				else if (property.kind() === "pair") {
+					const key = property.field("key");
+					if (key) names.add(unquote(key.text()) ?? key.text());
+				}
+			}
+		} else {
+			names.add("*");
+		}
+	}
 	return names;
+}
+
+interface ModuleImport {
+	specifier: string;
+	values: Set<string>;
+	resolved: string | undefined;
+}
+
+const moduleImportCache = new Map<string, ModuleImport[]>();
+
+function moduleImports(file: string, source?: string): ModuleImport[] {
+	const cached = moduleImportCache.get(file);
+	if (cached) return cached;
+	const root = parse(
+		Lang.TypeScript,
+		source ?? fs.readFileSync(file, "utf8"),
+	).root();
+	const imports: ModuleImport[] = [];
+	for (const statement of root.findAll({
+		rule: { kind: "import_statement" },
+	})) {
+		if (/^\s*import\s+type\b/.test(statement.text())) continue;
+		const sourceNode = statement
+			.namedChildren()
+			.find((child) => child.kind() === "string");
+		if (!sourceNode) continue;
+		const specifier = unquote(sourceNode.text());
+		if (!specifier || !specifier.startsWith(".")) continue;
+		const resolved = resolveProduction(file, specifier);
+		imports.push({
+			specifier,
+			values: importedValues(root, specifier),
+			resolved: resolved && isProductionModule(resolved) ? resolved : undefined,
+		});
+	}
+	for (const importNode of root.findAll({ rule: { kind: "import" } })) {
+		const call = importNode.parent();
+		if (call?.kind() !== "call_expression") continue;
+		const argument = call.field("arguments")?.namedChildren()[0];
+		const specifier = argument ? unquote(argument.text()) : undefined;
+		if (!specifier || !specifier.startsWith(".")) continue;
+		const resolved = resolveProduction(file, specifier);
+		imports.push({
+			specifier,
+			values: importedValues(root, specifier),
+			resolved: resolved && isProductionModule(resolved) ? resolved : undefined,
+		});
+	}
+	moduleImportCache.set(file, imports);
+	return imports;
 }
 
 function requiredValues(
 	file: string,
 	source: string,
 	specifier: string,
+	options: ViMockExportOptions = {},
 ): Set<string> {
-	const root = parse(Lang.TypeScript, source).root();
-	const names = importedValues(root, specifier);
 	const target = resolveProduction(file, specifier);
-	if (!target) return names;
-	for (const statement of root.findAll({
-		rule: { kind: "import_statement" },
-	})) {
-		if (/^\s*import\s+type\b/.test(statement.text())) continue;
-		const moduleText = statement
-			.namedChildren()
-			.find((child) => child.kind() === "string");
-		const importer = moduleText
-			? resolveProduction(file, unquote(moduleText.text()) ?? "")
-			: undefined;
-		if (!importer) continue;
-		const importerRoot = parse(
-			Lang.TypeScript,
-			fs.readFileSync(importer, "utf8"),
-		).root();
-		const relative = path
-			.relative(path.dirname(importer), target)
-			.replaceAll(path.sep, "/")
-			.replace(/\.ts$/, ".js");
-		const importerSpecifier = relative.startsWith(".")
-			? relative
-			: `./${relative}`;
-		for (const name of importedValues(importerRoot, importerSpecifier))
-			names.add(name);
+	const testImports = moduleImports(file, source);
+	const testRoot = parse(Lang.TypeScript, source).root();
+	const mockedSpecifiers = new Set<string>();
+	for (const call of testRoot.findAll({ rule: { kind: "call_expression" } })) {
+		const callee = call.field("function");
+		if (callee?.kind() !== "member_expression" || callee.text() !== "vi.mock")
+			continue;
+		const mocked = call.field("arguments")?.namedChildren()[0];
+		const mockedSpecifier = mocked ? unquote(mocked.text()) : undefined;
+		if (mockedSpecifier) mockedSpecifiers.add(mockedSpecifier);
 	}
+	const names = new Set<string>();
+	const add = (values: Set<string>) => {
+		for (const name of values) names.add(name);
+	};
+	for (const imported of testImports) {
+		if (imported.resolved === target) add(imported.values);
+	}
+	if (!target) return names;
+
+	const maxDepth = options.importerDepth ?? Number.POSITIVE_INFINITY;
+	const queue = testImports
+		.filter(
+			(imported) =>
+				imported.resolved && !mockedSpecifiers.has(imported.specifier),
+		)
+		.map((imported) => ({ file: imported.resolved as string, depth: 1 }));
+	const visited = new Set<string>();
+	while (queue.length > 0) {
+		const current = queue.shift();
+		if (!current || visited.has(current.file) || current.depth > maxDepth)
+			continue;
+		visited.add(current.file);
+		for (const imported of moduleImports(current.file)) {
+			if (imported.resolved === target) add(imported.values);
+			if (imported.resolved && current.depth < maxDepth)
+				queue.push({ file: imported.resolved, depth: current.depth + 1 });
+		}
+	}
+	if (names.has("*")) return exportedValues(fs.readFileSync(target, "utf8"));
 	return names;
 }
 
@@ -222,6 +321,7 @@ export function findViMockExportGaps(
 	file: string,
 	source: string,
 	mode: ViMockExportMode = "imported",
+	options: ViMockExportOptions = {},
 ): ViMockExportFinding[] {
 	const root = parse(Lang.TypeScript, source).root();
 	const findings: ViMockExportFinding[] = [];
@@ -248,7 +348,7 @@ export function findViMockExportGaps(
 		const required =
 			mode === "all"
 				? exportedValues(fs.readFileSync(productionFile, "utf8"))
-				: requiredValues(file, source, specifier);
+				: requiredValues(file, source, specifier, options);
 		if (required.size === 0) continue;
 		const missing = [...required]
 			.filter((name) => !propertyNames(object).has(name))

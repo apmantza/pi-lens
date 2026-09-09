@@ -2,9 +2,8 @@
  * #2281 / #2784 wave 2: whole-module `vi.mock` factories must not drop
  * production exports. Recurrences: #2272 and #2782.
  *
- * The sweep uses importer-use reachability over the test's direct production
- * imports and one production-importer hop. The measured all-export fallback
- * would flag 509 sites, while the selected rule flags 29 actionable sites.
+ * The sweep uses transitive importer-use reachability over the test's
+ * non-mocked production imports. The master admission contains 607 findings.
  */
 
 import * as fs from "node:fs";
@@ -53,12 +52,46 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const importerFile = path.join(root, "importer.ts");
 			const testFile = path.join(root, "case.test.ts");
 			fs.writeFileSync(moduleFile, "export const b = 1;\n");
-			fs.writeFileSync(importerFile, 'import { b } from "./module.js"; export { b };\n');
-			const source = 'import "./importer.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toMatchObject([
 				{ missing: ["b"] },
 			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("follows more than one production-importer hop", () => {
+		// Regression #2782: the recurrence is test -> A -> B -> mocked module.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const x = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "b.ts"),
+				'import { x } from "./module.js"; export const b = x;\n',
+			);
+			fs.writeFileSync(
+				path.join(root, "a.ts"),
+				'import { b } from "./b.js"; export const a = b;\n',
+			);
+			const source =
+				'import { a } from "./a.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["x"] },
+			]);
+			expect(
+				findViMockExportGaps(testFile, source, "imported", {
+					importerDepth: 1,
+				}),
+			).toEqual([]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -72,8 +105,12 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const importerFile = path.join(root, "importer.ts");
 			const testFile = path.join(root, "case.test.ts");
 			fs.writeFileSync(moduleFile, "export const b = 1;\n");
-			fs.writeFileSync(importerFile, 'import { b } from "./module.js"; export { b };\n');
-			const source = 'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), a: 1 }));\n';
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), a: 1 }));\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toEqual([]);
 		} finally {
@@ -88,7 +125,8 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const moduleFile = path.join(root, "module.ts");
 			const testFile = path.join(root, "case.test.ts");
 			fs.writeFileSync(moduleFile, "export const b = 1;\n");
-			const source = '// import { b } from "./module.js";\nconst text = "b";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const source =
+				'// import { b } from "./module.js";\nconst text = "b";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toEqual([]);
 		} finally {
@@ -103,8 +141,12 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const moduleDir = path.join(root, ".probe-vi-m.mjs");
 			const testFile = path.join(root, "case.test.ts");
 			fs.mkdirSync(moduleDir);
-			fs.writeFileSync(path.join(moduleDir, "index.ts"), "export const b = 1;\n");
-			const source = 'vi.mock("./.probe-vi-m.mjs", () => ({ a: 1 }));\nvi.mock("node:fs", () => ({ a: 1 }));\n';
+			fs.writeFileSync(
+				path.join(moduleDir, "index.ts"),
+				"export const b = 1;\n",
+			);
+			const source =
+				'vi.mock("./.probe-vi-m.mjs", () => ({ a: 1 }));\nvi.mock("node:fs", () => ({ a: 1 }));\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source, "all")).toEqual([]);
 		} finally {
