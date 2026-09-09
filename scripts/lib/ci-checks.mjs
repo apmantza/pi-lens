@@ -46,6 +46,7 @@ export const ADVISORY_CHECKS = new Set([
 	"typos (advisory)",
 	"taplo (advisory)",
 	"mutation (advisory)",
+	"complexity (advisory)",
 	// .github/workflows/greetings.yml's `greeting` job (the job KEY -- no
 	// `name:` override), posted by `actions/first-interaction` on
 	// `pull_request_target: types: [opened]` only. A cosmetic

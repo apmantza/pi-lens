@@ -993,6 +993,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"typos (advisory)",
 		"taplo (advisory)",
 		"mutation (advisory)",
+		"complexity (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
@@ -1093,6 +1094,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 				"typos (advisory)",
 				"taplo (advisory)",
 				"mutation (advisory)",
+				"complexity (advisory)",
 			]),
 		);
 	});

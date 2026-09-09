@@ -221,7 +221,7 @@ function isCallPassThrough(
 	return { pass: true, target: (expr.children ?? [])[0]?.text };
 }
 
-function calcCyclomaticComplexity(body: TsNode): number {
+export function calcCyclomaticComplexity(body: TsNode): number {
 	let cc = 1;
 	walk(body, (node) => {
 		if (COMPLEXITY_TYPES.has(node.type)) {
