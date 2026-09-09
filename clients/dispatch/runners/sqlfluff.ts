@@ -1,5 +1,5 @@
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import { getLinterPolicyForCwd, hasSqlfluffConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -150,7 +150,12 @@ const sqlfluffRunner: RunnerDefinition = {
 		}
 		const hasConfig = hasSqlfluffConfig(cwd);
 		if (!hasConfig) {
-			ctx.log("sqlfluff: no config detected, using ANSI dialect defaults");
+			logRunnerAdvisoryOnce(
+				ctx,
+				"sqlfluff",
+				cwd,
+				"sqlfluff: no config detected, using ANSI dialect defaults",
+			);
 		}
 
 		let cmd: string | null = null;
