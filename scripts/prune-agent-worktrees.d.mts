@@ -2,6 +2,7 @@
 // from .ts tests). Only the pure, exported seams are declared — the CLI body
 // is not importable surface.
 
+export const DEFAULT_MAX_REMOVALS: number;
 export const DEFAULT_HOOK_BUDGET_MS: number;
 export const DEFAULT_MANUAL_BUDGET_MS: number;
 export const HOOK_TIMEOUT_MS: Readonly<Record<string, number>>;
