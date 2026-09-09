@@ -1,0 +1,4 @@
+2026-09-09T22:33:01.0000000Z ##[error]npm error code ECONNRESET
+2026-09-09T22:33:01.0010000Z ##[warning]npm-retry: attempt 1 network error: ECONNRESET
+2026-09-09T22:33:01.0020000Z ##[error] FAIL default tests/a.test.ts > starved test
+2026-09-09T22:33:01.0030000Z ##[error]Error: Test timed out in 5000ms.

@@ -44,6 +44,11 @@
 //     `Error: Test timed out in 5000ms.` + the summary block). One real
 //     capture, two regions of it, nothing else omitted. Pre-#2839 this
 //     classified real and no rerun was armed.
+//   - infra-net-windows-crlf-prefix.real.log: runner-shaped evidence with
+//     CRLF and leading annotations, based on the real Windows job
+//     102669734529 from run 34412416504 (`gh run view --log`). The successful
+//     job supplied the timestamp, annotation, and vitest line shapes; the
+//     timeout/network combination is the #2839 fixture case.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -515,6 +520,13 @@ describe("classifyFailureLog (#2103)", () => {
 		expect(classifyFailureLog(log).kind).toBe("infra-net");
 	});
 
+	it("#2839: Windows CRLF and GitHub error annotations normalize once", () => {
+		expect(
+			classifyFailureLog(fixture("infra-net-windows-crlf-prefix.real.log"))
+				.kind,
+		).toBe("infra-net");
+	});
+
 	// The demotion is positive evidence: every test-level FAIL block must have
 	// a timeout as its first error. A neighboring thrown failure stays real.
 	it("#2839 F2: a TypeError in a second FAIL block stays real", () => {
@@ -525,6 +537,19 @@ describe("classifyFailureLog (#2103)", () => {
 			"Error: Test timed out in 5000ms.",
 			" FAIL default tests/b.test.ts > parses payload",
 			"TypeError: Cannot read properties of undefined (reading 'map')",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	// Mutation proof for the FAIL-block count guard: the file-level FAIL has no
+	// FAIL_LINE match, so dropping the count comparison would demote the timeout.
+	it("#2839 F2: an unparsed file-level FAIL keeps the run real", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			" FAIL default tests/collection.test.ts",
+			"Error: Cannot find module './missing'",
+			" FAIL default tests/a.test.ts > slow sweep",
+			"Error: Test timed out in 5000ms.",
 		].join("\n");
 		expect(classifyFailureLog(log).kind).toBe("real");
 	});
@@ -546,6 +571,18 @@ describe("classifyFailureLog (#2103)", () => {
 			'console.log "npm error code ECONNRESET"',
 			" FAIL default tests/a.test.ts > starved test",
 			"Error: Test timed out in 5000ms.",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	// Mutation proof for the first-error predicate: a later echoed timeout must
+	// not replace a block whose first error is a TypeError.
+	it("#2839 F3: a later timeout echo does not replace the first real error", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			" FAIL default tests/a.test.ts > broken parser",
+			"TypeError: Cannot read properties of undefined (reading 'map')",
+			"console.log Test timed out in 5000ms",
 		].join("\n");
 		expect(classifyFailureLog(log).kind).toBe("real");
 	});

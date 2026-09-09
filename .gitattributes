@@ -8,3 +8,4 @@
 # line-ending conversion entirely so the committed bytes are what every
 # checkout gets, cross-platform.
 tests/fixtures/cargo-workspace-modules/adv-e-crlf/** -text
+tests/fixtures/ci-failure-logs/infra-net-windows-crlf-prefix.real.log -text

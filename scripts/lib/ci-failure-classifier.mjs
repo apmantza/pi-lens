@@ -42,6 +42,17 @@ function stripLineTimestamps(text) {
 	return text.replace(LINE_TIMESTAMP_PREFIX, "");
 }
 
+/**
+ * Normalizes transport details that GitHub's Windows log surface can add to
+ * runner lines. Keep this at the one preprocessing seam so every anchored
+ * needle sees the same line starts.
+ */
+function normalizeLogLines(text) {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(/^\s*##\[(?:error|warning)\]\s?/gm, "");
+}
+
 // #2096 shape (review round 1, F5): bound the read BEFORE interpretation. A
 // classifier that scans an unbounded log is itself a resource-exhaustion
 // risk, and the signal this classifier looks for -- a FAIL block, a
@@ -431,7 +442,7 @@ export function classifyFailureLog(rawLog) {
 	// result (see the truncation test).
 	const bounded =
 		original.length > MAX_LOG_BYTES ? original.slice(-MAX_LOG_BYTES) : original;
-	const log = stripLineTimestamps(stripAnsi(bounded));
+	const log = normalizeLogLines(stripLineTimestamps(stripAnsi(bounded)));
 
 	// #2839's one demotion, checked BEFORE the real-signal branch: a vitest
 	// timeout in every FAIL block beside network evidence is infra, not real.
