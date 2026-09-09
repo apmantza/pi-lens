@@ -398,6 +398,8 @@ export interface LSPClientInfo {
 	getTrackedDiagnosticPaths(): string[];
 	/** Capability snapshot for workspace diagnostics support */
 	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
+	/** Effective diagnostics channel observed during this client session. */
+	getObservedDiagnosticsChannel(): "push" | undefined;
 	/**
 	 * Issue one project-wide `workspace/diagnostic` pull. Resolves per-file
 	 * reports, or `undefined` when unsupported/dead/timed-out/malformed.
@@ -920,6 +922,8 @@ export interface LSPClientState {
 	readonly pushDiagnostics: Map<string, LSPDiagnostic[]>;
 	readonly pushDiagnosticTimestamps: Map<string, number>;
 	readonly documentPullDiagnostics: Map<string, LSPDiagnostic[]>;
+	/** Document version observed when the latest pull answer for a path landed. */
+	documentPullDiagnosticVersions?: Map<string, number>;
 	readonly documentPullDiagnosticTimestamps: Map<string, number>;
 	/** Most recent operational pull failures, capped to avoid unbounded telemetry. */
 	readonly pullFailureHistory: LSPPullFailure[];
@@ -1067,6 +1071,8 @@ export interface LSPClientState {
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
 	/** Effective diagnostics channel observed during this client session. */
 	observedDiagnosticsChannel?: "push";
+	/** Pull was attempted and proved unavailable for this client session. */
+	pullDiagnosticsUnavailable?: boolean;
 	/** Mutable: upgraded by applyDynamicCapabilities after registerCapability events */
 	operationSupport: LSPOperationSupport;
 	/** #1971: parsed `FileOperationRegistrationOptions` filters from initialize —
@@ -1529,11 +1535,36 @@ function getMergedDiagnosticsForPath(
 	const legacy = state as unknown as {
 		diagnostics?: Map<string, LSPDiagnostic[]>;
 	};
-	return mergeDiagnosticLists(
+	const push =
 		state.pushDiagnostics?.get(normalizedPath) ??
-			legacy.diagnostics?.get(normalizedPath),
-		state.documentPullDiagnostics?.get(normalizedPath),
-	);
+		legacy.diagnostics?.get(normalizedPath);
+	const pull = state.documentPullDiagnostics?.get(normalizedPath);
+	const pullVersion = state.documentPullDiagnosticVersions?.get(normalizedPath);
+	const pushVersion = state.diagnosticDocVersions?.get(normalizedPath);
+	// An answered pull is authoritative for its requested document version. A
+	// later, versioned push is newer evidence; an equal or unversioned push
+	// cannot be ordered and therefore yields to the answer.
+	if (
+		state.workspaceDiagnosticsSupport.mode === "pull" &&
+		state.observedDiagnosticsChannel === "push" &&
+		pull !== undefined &&
+		(pullVersion === undefined ||
+			pushVersion === undefined ||
+			pushVersion <= pullVersion)
+	) {
+		return pull;
+	}
+	if (
+		state.workspaceDiagnosticsSupport.mode === "pull" &&
+		state.observedDiagnosticsChannel === "push" &&
+		pull !== undefined &&
+		pushVersion !== undefined &&
+		pullVersion !== undefined &&
+		pushVersion > pullVersion
+	) {
+		return push ?? [];
+	}
+	return mergeDiagnosticLists(push, pull);
 }
 
 /**
@@ -1759,6 +1790,27 @@ export function diagnosticsVersionForPath(
 	return state.diagnosticsVersionsByPath?.get(normalizedPath) ?? 0;
 }
 
+/** Mark a declared pull provider unavailable only after a negative protocol
+ * outcome. A push observation alone is telemetry: both-channel servers
+ * legitimately publish and answer pulls (#2776 R2). */
+export function markPullDiagnosticsUnavailable(state: LSPClientState): void {
+	if (state.pullDiagnosticsUnavailable) return;
+	state.pullDiagnosticsUnavailable = true;
+	if (state.workspaceDiagnosticsSupport.mode !== "pull") return;
+	state.workspaceDiagnosticsSupport = {
+		...state.workspaceDiagnosticsSupport,
+		mode: "push-only",
+	};
+	if (state.observedDiagnosticsChannel === "push") {
+		recordDegradationOnce({
+			kind: "lsp-capability-skip",
+			subject: `${state.serverId}:diagnostics-channel`,
+			reason:
+				"declared=pull observed=push; pull proven unavailable, using published diagnostics for this session",
+		});
+	}
+}
+
 /** Exported for tests: the quiet-window timer cancel on clear/resync is the
  * headline #1412 safety property (a stale versionless publication must never
  * land after the document content changed). */
@@ -1780,6 +1832,7 @@ export function clearDiagnosticsForPath(
 	state.pendingDiagnostics?.delete(normalizedPath);
 	state.pushDiagnosticTimestamps?.delete(normalizedPath);
 	state.documentPullDiagnostics?.delete(normalizedPath);
+	state.documentPullDiagnosticVersions?.delete(normalizedPath);
 	state.documentPullDiagnosticTimestamps?.delete(normalizedPath);
 	state.diagnosticDocVersions?.delete(normalizedPath);
 	// #1095: a cleared path must never serve a stale content binding alongside a
@@ -2176,7 +2229,7 @@ export function applyDynamicCapabilities(state: LSPClientState): void {
 	if (hasDynamicPull) {
 		state.workspaceDiagnosticsSupport = {
 			advertised: true,
-			mode: state.observedDiagnosticsChannel === "push" ? "push-only" : "pull",
+			mode: state.pullDiagnosticsUnavailable ? "push-only" : "pull",
 			// #1667: workspace-pull support is what the REGISTRATION declares. The
 			// spec registers workspace pull as `registerOptions.workspaceDiagnostics`
 			// on a `textDocument/diagnostic` registration - `workspace/diagnostic` is
@@ -2270,23 +2323,9 @@ export function setupIncomingHandlers(
 			// that is no longer open on this client.
 			if (state.closedDocuments?.has(normalizedPath)) return;
 			onDiagnosticsPublished?.(state.serverId);
-			if (state.workspaceDiagnosticsSupport.mode === "pull") {
-				// A declaration is only a promise of pull support. If this live
-				// session publishes first, its effective channel is push; keeping the
-				// declared pull mode would wait for an answer that never arrives and
-				// could turn an empty pull timeout into a clean result (#2776).
-				recordDegradationOnce({
-					kind: "lsp-capability-skip",
-					subject: `${state.serverId}:diagnostics-channel`,
-					reason:
-						"declared=pull observed=push; using published diagnostics for this session",
-				});
-				state.observedDiagnosticsChannel = "push";
-				state.workspaceDiagnosticsSupport = {
-					...state.workspaceDiagnosticsSupport,
-					mode: "push-only",
-				};
-			}
+			// Push observation is telemetry only. A pull declaration remains
+			// effective until a pull response proves it unavailable (#2776 R2).
+			state.observedDiagnosticsChannel = "push";
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
 			if (PUB_DEBUG) {
@@ -3142,6 +3181,10 @@ async function pullDiagnosticSource(
 			state.diagnosticBindings.set(normalizedPath, { contentHash: sentHash });
 			primaryCount = primaryItems.length;
 		}
+		state.documentPullDiagnosticVersions?.set(
+			normalizedPath,
+			state.documentVersions.get(normalizedPath) ?? 0,
+		);
 		let totalCount = primaryCount;
 		if (report.resultId !== undefined) {
 			state.pullResultIds.set(sourceKey, report.resultId);
@@ -3720,6 +3763,31 @@ export async function clientWaitForDiagnostics(
 		return currentVersion !== undefined && cachedVersion < currentVersion;
 	};
 
+	const waitForPushReconciliation = async (): Promise<void> => {
+		if (getMergedDiagnosticsForPath(state, normalizedPath).length > 0) return;
+		const strategy = getStrategy(state.serverId, state.launchVariant);
+		const waitMs = Math.min(
+			timeoutMs,
+			Math.max(PULL_DIAGNOSTICS_RETRY_INTERVAL_MS, strategy.debounceMs + 25),
+		);
+		await new Promise<void>((resolve) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const onDiagnostics = (file: string) => {
+				if (normalizeMapKey(file) !== normalizedPath) return;
+				if (getMergedDiagnosticsForPath(state, normalizedPath).length === 0)
+					return;
+				if (timer) clearTimeout(timer);
+				state.diagnosticEmitter.removeListener("diagnostics", onDiagnostics);
+				resolve();
+			};
+			state.diagnosticEmitter.on("diagnostics", onDiagnostics);
+			timer = setTimeout(() => {
+				state.diagnosticEmitter.removeListener("diagnostics", onDiagnostics);
+				resolve();
+			}, waitMs);
+		});
+	};
+
 	if (state.workspaceDiagnosticsSupport.mode === "pull") {
 		// Pull is authoritative. An AFFIRMATIVE outcome — diagnostics `found`, or
 		// an authoritative empty `clean` report — ends the wait. An `unavailable`
@@ -3748,6 +3816,9 @@ export async function clientWaitForDiagnostics(
 			return;
 		}
 		let sawClean = outcome.status === "clean";
+		if (outcome.status === "unavailable") {
+			markPullDiagnosticsUnavailable(state);
+		}
 
 		const strategy = getStrategy(state.serverId, state.launchVariant);
 		const retryBudgetMs =
@@ -3772,19 +3843,39 @@ export async function clientWaitForDiagnostics(
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
 			);
 			if (outcome.status === "clean") sawClean = true;
+			if (outcome.status === "unavailable") {
+				markPullDiagnosticsUnavailable(state);
+			}
 		}
 		if (options.pullOnly) {
 			if (outcome.status === "found" || sawClean) {
+				if (
+					sawClean &&
+					outcome.status !== "found" &&
+					state.observedDiagnosticsChannel === "push"
+				) {
+					await waitForPushReconciliation();
+				}
 				logTypeScriptPullSettle(
 					state,
 					normalizedPath,
 					Date.now() - pullSettleStartedAt,
 					pullSettleSource,
 				);
+				return;
 			}
-			return;
+			// Once pull is proven unavailable, fall through to the push wait even
+			// for a caller that entered with the pull-capable snapshot. The mode
+			// transition above is the evidence that this session is push-only.
 		}
 		if (outcome.status === "found" || sawClean) {
+			if (
+				sawClean &&
+				outcome.status !== "found" &&
+				state.observedDiagnosticsChannel === "push"
+			) {
+				await waitForPushReconciliation();
+			}
 			logTypeScriptPullSettle(
 				state,
 				normalizedPath,
@@ -5316,6 +5407,7 @@ export async function createLSPClient(options: {
 		pushDiagnostics: new Map(),
 		pushDiagnosticTimestamps: new Map(),
 		documentPullDiagnostics: new Map(),
+		documentPullDiagnosticVersions: new Map(),
 		documentPullDiagnosticTimestamps: new Map(),
 		pullFailureHistory: [],
 		pendingDiagnostics: new Map(),
@@ -5656,6 +5748,10 @@ export async function createLSPClient(options: {
 
 		getWorkspaceDiagnosticsSupport() {
 			return state.workspaceDiagnosticsSupport;
+		},
+
+		getObservedDiagnosticsChannel() {
+			return state.observedDiagnosticsChannel;
 		},
 
 		requestWorkspaceDiagnostics(budgetMs: number) {

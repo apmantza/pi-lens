@@ -5468,7 +5468,8 @@ export class LSPService {
 							pressureSnapshots.find(
 								(snapshot) => snapshot.serverId === entry.client.serverId,
 							),
-						) === "pull-capable";
+						) === "pull-capable" &&
+						entry.client.getObservedDiagnosticsChannel?.() !== "push";
 					// #1639: `ensureWarmForSweep`'s readiness probe (`source:
 					// "lsp_sweep_warmup"`, `collectDiagnostics: false`) runs a real pull
 					// round trip on this same file, then the sweep's real touch follows

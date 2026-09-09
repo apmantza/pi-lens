@@ -1547,10 +1547,67 @@ describe("declared pull versus observed push diagnostics (#2776)", () => {
 				"pi-lens-pull-declaring-push-only.ts",
 			);
 			await client.notify.open(filePath, "const x = 1;\n", "typescript");
-			await vi.waitFor(() => {
-				expect(client.getDiagnostics(filePath)).toHaveLength(1);
-			});
+			await client.waitForDiagnostics(filePath, 500);
+			expect(client.getDiagnostics(filePath)).toHaveLength(1);
 			expect(client.getWorkspaceDiagnosticsSupport().mode).toBe("push-only");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+
+	it("keeps pulling when a server both pushes and answers pulls", async () => {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FAKE_LSP_PULL_DECLARED_BOTH_CHANNEL: "1",
+				FAKE_LSP_ECHO_REQUEST_METHODS: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-both-channel",
+			process: proc,
+			root: process.cwd(),
+		});
+		try {
+			const filePath = path.join(
+				os.tmpdir(),
+				"pi-lens-pull-declaring-both-channel.ts",
+			);
+			await client.notify.open(filePath, "const x = 1;\n", "typescript");
+			await client.waitForDiagnostics(filePath, 500);
+			// The push is version 1 while the answered pull covered version 0, so
+			// the newer push is authoritative for this file.
+			expect(client.getDiagnostics(filePath)).toHaveLength(1);
+			expect(client.getWorkspaceDiagnosticsSupport().mode).toBe("pull");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+
+	it("lets a diagnostic push supersede an empty pull", async () => {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FAKE_LSP_PULL_EMPTY_THEN_PUSH: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-empty-then-push",
+			process: proc,
+			root: process.cwd(),
+		});
+		try {
+			const filePath = path.join(
+				os.tmpdir(),
+				"pi-lens-empty-pull-then-push.ts",
+			);
+			await client.notify.open(filePath, "const x = 1;\n", "typescript");
+			await client.waitForDiagnostics(filePath, 500);
+			expect(client.getDiagnostics(filePath)).toHaveLength(1);
 		} finally {
 			await client.shutdown().catch(() => {});
 			await stopLSP(proc).catch(() => {});

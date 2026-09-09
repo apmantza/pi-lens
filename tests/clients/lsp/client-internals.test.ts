@@ -45,6 +45,7 @@ import {
 	clientWaitForDiagnostics,
 	closeDocument,
 	diagnosticsVersionForPath,
+	markPullDiagnosticsUnavailable,
 	normalizeClientWorkspaceEdit,
 	handleNotifyChange,
 	handleNotifyExternalChange,
@@ -1547,7 +1548,7 @@ describe("publishDiagnostics handler — superseded push guard (cache-poisoning 
 		expect(state.pushDiagnostics.get(TEST_KEY)).toEqual([]);
 	});
 
-	it("demotes a pull declaration after the first observed push", async () => {
+	it("keeps a pull declaration after the first observed push", async () => {
 		const { state, emitPublishDiagnostics } = createCapturingState({
 			workspaceDiagnosticsSupport: {
 				advertised: true,
@@ -1557,15 +1558,42 @@ describe("publishDiagnostics handler — superseded push guard (cache-poisoning 
 			},
 		});
 
+		const published = new Promise<void>((resolve) => {
+			state.diagnosticEmitter.once("diagnostics", resolve);
+		});
 		emitPublishDiagnostics({
 			uri: pathToFileURL(TEST_FILE).href,
-			diagnostics: [diagnostic("push-only result")],
+			diagnostics: [
+				{
+					severity: 1,
+					message: "push",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			],
 		});
+		await published;
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
+		expect(state.observedDiagnosticsChannel).toBe("push");
+		expect(state.pushDiagnostics.get(TEST_KEY)).toHaveLength(1);
+	});
 
-		await vi.waitFor(() => {
-			expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
-			expect(state.pushDiagnostics.get(TEST_KEY)).toHaveLength(1);
+	it("demotes only after a declared pull is proven unavailable", async () => {
+		const { state } = createCapturingState({
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				workspaceDiagnostics: false,
+				diagnosticProviderKind: "object",
+			},
 		});
+		state.observedDiagnosticsChannel = "push";
+		markPullDiagnosticsUnavailable(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
+		expect(state.pullDiagnosticsUnavailable).toBe(true);
 	});
 
 	it("keeps classic TypeScript's first publication authoritative", () => {
@@ -2079,6 +2107,53 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 		expect(Date.now() - start).toBeLessThan(80);
 	});
 
+	it("reconciles a diagnostic push that follows an empty pull", async () => {
+		const state = pullState();
+		let publishHandler:
+			| ((params: {
+					uri: string;
+					diagnostics?: LSPDiagnostic[];
+					version?: number;
+			  }) => void)
+			| undefined;
+		vi.mocked(state.connection.onNotification).mockImplementation(
+			(method: string, callback: (params: unknown) => void) => {
+				if (method === "textDocument/publishDiagnostics") {
+					publishHandler = callback as typeof publishHandler;
+				}
+			},
+		);
+		setupIncomingHandlers(state, undefined);
+		state.observedDiagnosticsChannel = "push";
+		let resolvePull!: (value: { kind: string; items: never[] }) => void;
+		state.connection.sendRequest = vi.fn(
+			() =>
+				new Promise((resolve) => {
+					resolvePull = resolve as typeof resolvePull;
+				}),
+		);
+		const wait = clientWaitForDiagnostics(state, TEST_FILE, 500);
+		await Promise.resolve();
+		publishHandler?.({
+			uri: pathToFileURL(TEST_FILE).href,
+			diagnostics: [
+				{
+					severity: 1,
+					message: "late push",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			],
+		});
+		resolvePull({ kind: "full", items: [] });
+
+		await wait;
+		expect(state.pushDiagnostics.get(TEST_KEY)).toHaveLength(1);
+		expect(state.pushDiagnostics.get(TEST_KEY)?.[0]?.message).toBe("late push");
+	});
+
 	it("resolves immediately when the pull returns diagnostics (found)", async () => {
 		const state = pullState();
 		state.connection.sendRequest = vi.fn().mockResolvedValue({
@@ -2111,6 +2186,7 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 		const start = Date.now();
 		await clientWaitForDiagnostics(state, TEST_FILE, 120);
 		expect(Date.now() - start).toBeGreaterThanOrEqual(100);
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
 	});
 
 	it("bounds a hung pull request instead of hanging forever", async () => {
@@ -2872,7 +2948,7 @@ describe("applyDynamicCapabilities", () => {
 
 		applyDynamicCapabilities(state);
 
-		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
 	});
 
 	it("upgrades to pull mode when workspace/diagnostic is registered", () => {

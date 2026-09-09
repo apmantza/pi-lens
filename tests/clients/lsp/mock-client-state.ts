@@ -65,6 +65,7 @@ export function createMockState(
 		pushDiagnostics: new Map(),
 		pushDiagnosticTimestamps: new Map(),
 		documentPullDiagnostics: new Map(),
+		documentPullDiagnosticVersions: new Map(),
 		documentPullDiagnosticTimestamps: new Map(),
 		pullFailureHistory: [],
 		pendingDiagnostics: new Map(),

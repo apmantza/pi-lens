@@ -485,19 +485,28 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
-		if (process.env.FAKE_LSP_PULL_DECLARED_PUSH_ONLY === "1") {
+		if (
+			process.env.FAKE_LSP_PULL_DECLARED_PUSH_ONLY === "1" ||
+			process.env.FAKE_LSP_PULL_DECLARED_BOTH_CHANNEL === "1"
+		) {
 			send({
 				jsonrpc: "2.0",
 				method: "textDocument/publishDiagnostics",
 				params: {
 					uri: data.params?.textDocument?.uri,
-					version: data.params?.textDocument?.version,
+					version:
+						process.env.FAKE_LSP_PULL_DECLARED_BOTH_CHANNEL === "1"
+							? 1
+							: data.params?.textDocument?.version,
 					diagnostics: [
 						{
 							severity: 1,
 							code: "FAKE-PUSH-ONLY",
 							source: "fake-lsp",
-							message: "push-only diagnostic",
+							message:
+								process.env.FAKE_LSP_PULL_DECLARED_BOTH_CHANNEL === "1"
+									? "both-channel push"
+									: "push-only diagnostic",
 							range: {
 								start: { line: 0, character: 0 },
 								end: { line: 0, character: 1 },
@@ -692,7 +701,9 @@ function handle(raw) {
 			id: data.id,
 			result: {
 				kind: "full",
-				items: text.includes("fake-lsp-clean")
+				items:
+					text.includes("fake-lsp-clean") ||
+					process.env.FAKE_LSP_PULL_EMPTY_THEN_PUSH === "1"
 					? []
 					: [
 					{
@@ -709,6 +720,29 @@ function handle(raw) {
 					],
 			},
 		});
+		if (process.env.FAKE_LSP_PULL_EMPTY_THEN_PUSH === "1") {
+			setTimeout(() => {
+				send({
+					jsonrpc: "2.0",
+					method: "textDocument/publishDiagnostics",
+					params: {
+						uri: data.params?.textDocument?.uri,
+						version: 1,
+						diagnostics: [
+							{
+								severity: 1,
+								code: "FAKE-LATE-PUSH",
+								message: "late push diagnostic",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 1 },
+								},
+							},
+						],
+					},
+				});
+			}, 20);
+		}
 		return;
 	}
 
