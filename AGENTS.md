@@ -236,6 +236,13 @@ is the procedure and defers here on conflict; 2026-09-09).**
   Record: 2026-09-09, two master reds in one afternoon — a force-added
   contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
   baseline interaction (#2816) — each found by the next PR's CI.
+- *Merge chains and worker waits run as NOTIFYING background tasks.* A
+  detached `nohup … &` loop writes a file nobody reads until the orchestrator
+  polls; a task started in the harness's own background mode re-invokes the
+  orchestrator when it exits, red or green. Every `ci-verdict --wait` chain,
+  every long probe, and any wait on an external state runs that way, so a red
+  CI is a notification, not a discovery. Record: 2026-09-09, a red on #2807
+  sat unread for over an hour behind detached chains.
 - *The orchestrator's commit step checks the index, not only the diff.*
   Before every commit from a worker tree: `git ls-files` contains none of
   `PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`, `INVESTIGATION.md`,
