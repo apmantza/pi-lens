@@ -86,6 +86,7 @@
 	"engines": {
 		"node": ">=22.19.0"
 	},
+	"packageManager": "npm@11.18.0",
 	"files": [
 		"dist/",
 		"docs/",

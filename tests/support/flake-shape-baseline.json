@@ -56,6 +56,7 @@
 		"scripts/guard-bash-hook.test.ts": 8,
 		"scripts/knip-sibling-purge.test.ts": 1,
 		"scripts/lint-js.test.ts": 5,
+		"scripts/lockfile-completeness.test.ts": 1,
 		"scripts/notify-install-smoke-drift.test.ts": 5,
 		"scripts/notify-tool-smoke-red.test.ts": 5,
 		"scripts/npm-retry.test.ts": 3,

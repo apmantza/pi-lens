@@ -35,6 +35,8 @@ skipped, and why. Use active, plain prose.
   `PI_LENS_HOME=$PWD/.probe-home node_modules/.bin/vitest run <files> --configLoader runner`
   (sweeps get `30_000`). A CI-only red is reproduced in the job's shape first
   (`npm test` PATH prefix, pinned `HOME`, no `PI_LENS_HOME`).
+- When a task regenerates `package-lock.json`, use the exact npm version in
+  `package.json`'s `packageManager` field, which is also the CI production-install pin.
 - Required test set = the named files + every test that mocks (`vi.mock`) or
   deep-equals a module or record you touched + `tests/config/` when you add a
   real-spawn test or a fixture + the flake-shape ratchet when you touch waits.

@@ -397,6 +397,7 @@ const wallClockBudgetInclude = [
 	// --print-config for both npm scripts (real child process, flake-shape
 	// admission).
 	"tests/scripts/lint-js.test.ts",
+	"tests/scripts/lockfile-completeness.test.ts",
 	// #2613 review S2/T3: the drift-notifier CLI's --dry-run env-reading and
 	// report-building wiring is the subject; no in-process double is faithful.
 	"tests/scripts/notify-install-smoke-drift.test.ts",

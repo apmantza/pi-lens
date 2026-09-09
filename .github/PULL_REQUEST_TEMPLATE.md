@@ -41,7 +41,7 @@ merge-commit subject.
 - [ ] PR title carries the conventional prefix and the issue ref
 - [ ] `npm run lint` passes
 - [ ] `npm run build:dist` succeeds if I changed code under `clients/`, `commands/`, `tools/`, or `index.ts`
-- [ ] `package-lock.json` is in sync with `package.json` (run `npm install` after dep changes)
+- [ ] `package-lock.json` is in sync with `package.json` (regenerate with the exact npm pin in `package.json`'s `packageManager` field)
 - [ ] `AGENTS.md` is updated if this PR changes behavior, commands, conventions, or invariants documented there
 - [ ] `.changelog/<branch-or-slug>-<short-desc>.md` has one valid entry **in this PR** for any user-facing change (Added/Changed/Deprecated/Removed/Fixed/Security) — see [.changelog/README.md](../.changelog/README.md); internal-only test/refactor PRs may skip it
 - [ ] Commit subject includes the issue number: `(closes #NNN)` or `(refs #NNN)`
