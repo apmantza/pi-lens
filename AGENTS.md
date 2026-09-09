@@ -233,7 +233,11 @@ is the procedure and defers here on conflict; 2026-09-09).**
   config/` (#2783 r5); a new fixture → that directory's contract sweeps
   (#2782 r2); a fragment → exactly one top-level entry, never `CHANGELOG.md`
   (#2775 r4); a raw poll → the flake-shape ratchet, fixed by the governed
-  wait (#2781 r1).
+  wait (#2781 r1); any path, cwd, root or containment logic → a
+  `path.win32` shape probe in the brief (drive-letter case, mixed
+  separators from the host, `USERPROFILE`, UNC) because no CI lane runs
+  vitest on Windows (#2536) and "green on Linux" is not "green on the
+  maintainer's box" — #2782 went five rounds before that axis was attacked.
 - *Sandbox by test shape.* A lane whose tests spawn children (LSP fake server,
   tool smoke, installer, formatter wire) runs without the write sandbox from
   round 1 (the runner's full-access mode). #2781 spent four rounds
@@ -246,6 +250,22 @@ is the procedure and defers here on conflict; 2026-09-09).**
   uncommitted work. After
   every settlement, list live workers and consume every finished handle — a
   one-shot watch misses what settles while it is disarmed.
+- *Worker-model roles are assigned on evidence, not anecdote.* Which
+  external model reviews, verifies, fixes or investigates is decided by an
+  internal, blind, budgeted eval over fixed cases from merged PRs whose
+  reviews found proven defects (the answer key), with tokens and wall-clock
+  recorded per model; a cheaper model takes a role only when its found-defect
+  rate is within 0.1 of the anchor's and its false-finding rate is not
+  higher. That harness is orchestration tooling for our own development,
+  never a product surface: no changelog, no release gate, no user docs.
+- *Rounds are routed by disposition, not by prose.* A verify report ends with
+  a per-finding disposition (`fixed | not fixed | new defect | withdrawn`)
+  and a fixer handoff answers each finding id the same way; the orchestrator
+  routes on the worst cell (a `new defect` opens the state-space rail; all
+  `fixed` merges on green; a `withdrawn` needs the reason). Severity is
+  earned by a reproduced instance: a HIGH with no failure scenario is a
+  MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
+  line) never count as an actionable round.
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a
