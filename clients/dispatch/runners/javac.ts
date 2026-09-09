@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { hasJavaBuildDescriptor } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -54,7 +55,7 @@ const javacRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "javac");
 		const absPath = path.resolve(cwd, ctx.filePath);
 
 		// Inside a Maven/Gradle project a classpath-less single-file compile

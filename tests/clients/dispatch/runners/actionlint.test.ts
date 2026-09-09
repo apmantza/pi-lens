@@ -7,7 +7,8 @@ const safeSpawnAsync = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")>()),
 	createAvailabilityChecker: (command: string) => ({
 		isAvailable: () => true,
 		isAvailableAsync: async () => true,

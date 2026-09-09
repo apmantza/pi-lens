@@ -640,11 +640,10 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_diagnostics",
-		description:
-			"Query pi-lens's diagnostic state across ALL runners (not just LSP). " +
-			"mode=delta/all are cache-only and instant (delta is the current turn; all " +
-			"covers every dispatched file this session), mode=full is an expensive " +
-			"project-wide active scan.",
+		description: lensDiagnosticsTool.description.replaceAll(
+			"lsp_diagnostics",
+			"pilens_lsp_diagnostics",
+		),
 		inputSchema: schemaWithCwd(lensDiagnosticsTool.parameters),
 	},
 	{

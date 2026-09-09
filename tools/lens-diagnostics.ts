@@ -253,8 +253,9 @@ export function createLensDiagnosticsTool(
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			'Query pi-lens diagnostics across runners. mode=delta/all are cache-only and instant; mode=full is an expensive active project-wide LSP scan merged with cached runner state. Example: use `{mode: "all"}` before declaring edits complete.',
-		promptSnippet: "Check cached diagnostics or request a full scan",
+			'Query pi-lens diagnostics across ALL dispatch runners (unlike lsp_diagnostics, which is LSP only). mode=delta/all are cache-only and instant; mode=full is an expensive active LSP scan of paths (or the whole project) merged with cached runner state. If changed files have no cached diagnostics or their findings are stale, use mode=full with paths for a targeted active scan; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
+		promptSnippet:
+			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;
@@ -337,8 +338,8 @@ export function createLensDiagnosticsTool(
 					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = session diagnostics for edited/dispatched files. " +
-						"full = expensive active project-wide LSP scan plus cached runner diagnostics.",
+						"all = cache-only session diagnostics for edited/dispatched files; an empty cache is not proof of a clean file. " +
+						"full = expensive active LSP scan of paths (or the whole project) plus cached runner diagnostics.",
 				}),
 			),
 			refreshRunners: Type.Optional(

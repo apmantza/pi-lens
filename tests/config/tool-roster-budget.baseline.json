@@ -1,7 +1,7 @@
 {
   "pi": {
-    "descriptionTotal": 4183,
-    "total": 26268,
+    "descriptionTotal": 4558,
+    "total": 26718,
     "tools": {
       "ast_grep_dump": 656,
       "ast_grep_outline": 1684,
@@ -9,7 +9,7 @@
       "ast_grep_search": 4152,
       "effective_config": 736,
       "lens_diagnostic_mark": 1434,
-      "lens_diagnostics": 3665,
+      "lens_diagnostics": 4115,
       "lsp_diagnostics": 1621,
       "lsp_navigation": 3672,
       "module_report": 1845,
@@ -21,13 +21,13 @@
     }
   },
   "mcp": {
-    "descriptionTotal": 5947,
-    "total": 26841,
+    "descriptionTotal": 6198,
+    "total": 27167,
     "tools": {
       "pilens_analyze": 998,
       "pilens_ast_grep_replace": 2043,
       "pilens_ast_grep_search": 4530,
-      "pilens_diagnostics": 3710,
+      "pilens_diagnostics": 4036,
       "pilens_effective_config": 1187,
       "pilens_health": 355,
       "pilens_latency": 333,
