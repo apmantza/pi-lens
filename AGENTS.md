@@ -1426,11 +1426,12 @@ the normalization verdict together, so callers never reclassify a stale event
 payload after checking the live body. The workflow grants the advisory lint
 read-only pull-request access and never edits contributor text. (#2145)
 
-The PR body workflow checks out full history so `origin/master...HEAD` is
-available to the runtime observability rule. If that range cannot be computed
-in GitHub Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`;
-local runs outside CI retain structural-only fallback. Runtime markers exclude
-test files, `__tests__` directories, and TypeScript declaration files.
+The PR body workflow's runtime observability rule uses `origin/master...HEAD`.
+Tests that exercise the live entrypoint run from a fixture with that ref because
+the Unit tests checkout is shallow. If the range cannot be computed in GitHub
+Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`; local runs
+outside CI retain structural-only fallback. Runtime markers exclude test files,
+`__tests__` directories, and TypeScript declaration files.
 
 Message-end attribution uses a bounded two-slot session anchor. A primary
 `session_start` rotates `lastStableSessionId` into `previousSessionId` because

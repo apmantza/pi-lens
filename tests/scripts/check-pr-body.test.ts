@@ -3,8 +3,11 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, afterEach, vi } from "vitest";
-import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
+import {
+	gitExecFileSync,
+	gitExecSync,
+} from "../../scripts/lib/git-fixture-env.mjs";
 import {
 	detectEscapedNewlineBody,
 	detectFlattenedBody,
@@ -39,6 +42,14 @@ const motivatingFlattenedBodies = [
 	"## Summary Fixes #2104 by making the stale-open-issues detector prove exhaustion for the open-issue population. If the safety bound is reached while a full page remains, the detector throws instead of interpreting a partial population. ## Tests - tests/scripts/stale-open-issues.test.ts adds a page-aware regression. - F1 mutation red after dropping the exhaustive flag. - Green targeted run: 20 tests passed. ### Test assessment - stale-open-issues.test.ts uniquely pins exhaustive pagination and truncation disclosure. ## Blast radius The scheduled stale-open-issues detector and its pagination helper. ## Class sweep Bounded API reads classify truncation before interpreting results. ## Observability Successful comments include the scanned population; a bound hit fails the workflow.",
 	flattenedBody,
 ].map((candidate) => candidate.replaceAll("\\n", " "));
+
+function createOriginMasterFixture() {
+	const directory = mkdtempSync(join(repositoryRoot, ".tmp-pr-body-origin-"));
+	gitExecSync(
+		`git init --quiet --initial-branch=main '${directory}' && git -C '${directory}' -c user.name=pi-lens-test -c user.email=pi-lens-test@example.com commit --quiet --allow-empty -m fixture && git -C '${directory}' update-ref refs/remotes/origin/master HEAD`,
+	);
+	return directory;
+}
 
 describe("flattened PR body repair", () => {
 	it("detects the clearly flattened real-world shape and repairs it", () => {
@@ -293,7 +304,18 @@ describe("escaped-newline PR body repair", () => {
 });
 
 describe("flattened body CI entrypoint", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
 	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
 
 	function stubApi() {
 		vi.stubEnv("GITHUB_TOKEN", "t");
@@ -1051,7 +1073,19 @@ describe("the event entrypoint consumes the tri-state (#2124 F2)", () => {
 ### Test assessment
 foo.test.ts uniquely pins the retry ladder.`;
 
+	let previousCwd: string;
+	let fixtureCwd: string;
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+	});
+
 	afterEach(() => vi.unstubAllEnvs());
+	afterEach(() => {
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
 
 	function stubApi() {
 		vi.stubEnv("GITHUB_TOKEN", "t");
