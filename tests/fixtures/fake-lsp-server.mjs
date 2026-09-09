@@ -501,6 +501,17 @@ function handle(raw) {
 				},
 			});
 		}
+		if (process.env.FAKE_LSP_PULL_BOTH_CHANNELS === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					version: data.params?.textDocument?.version,
+					diagnostics: [{ severity: 1, message: "push", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }],
+				},
+			});
+		}
 		// Gated on the wedge profile so every existing test keeps the incumbent
 		// silent-on-open behaviour it was written against.
 		if (HAS_BACKLOG_WEDGE) {
@@ -702,6 +713,16 @@ function handle(raw) {
 					],
 			},
 		});
+		if (process.env.FAKE_LSP_PULL_LATE_PUSH === "1") {
+			setTimeout(() => send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					diagnostics: [{ severity: 1, message: "late push", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }],
+				},
+			}), 40);
+		}
 		return;
 	}
 

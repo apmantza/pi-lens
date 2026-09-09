@@ -31,7 +31,6 @@ import {
 	assertInstallAllowed,
 	projectTrustDenialReason,
 } from "../project-trust.js";
-import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
 import { bounded, withDeadline, withTimeout } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
@@ -5386,14 +5385,6 @@ export class LSPService {
 
 				// Per-server wait promises (each already bounded by its own
 				// perServerTimeout — unchanged from before R8).
-				let pressureSnapshots: LSPCapabilitySnapshot[] = [];
-				if (shouldPreferPullOnlyDiagnostics()) {
-					try {
-						pressureSnapshots = await this.getCapabilitySnapshots(filePath);
-					} catch {
-						// Fail-open: missing capability state keeps today's push fallback.
-					}
-				}
 				const configuredAuxCeilingMs = readEnvAuxGraceMs();
 				const perServerDeclaredTimeouts = spawned.map((entry) =>
 					timeoutFor(entry.client.serverId),
@@ -5472,12 +5463,7 @@ export class LSPService {
 					// budget lapsed with nothing published).
 					const baseline = diagnosticBaselines.get(entry.client);
 					const pullOnly =
-						classifyServerWaitTier(
-							entry.client.serverId,
-							pressureSnapshots.find(
-								(snapshot) => snapshot.serverId === entry.client.serverId,
-							),
-						) === "pull-capable";
+						entry.client.getWorkspaceDiagnosticsSupport().mode === "pull";
 					// #1639: `ensureWarmForSweep`'s readiness probe (`source:
 					// "lsp_sweep_warmup"`, `collectDiagnostics: false`) runs a real pull
 					// round trip on this same file, then the sweep's real touch follows

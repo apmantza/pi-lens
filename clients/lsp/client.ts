@@ -400,6 +400,8 @@ export interface LSPClientInfo {
 	getTrackedDiagnosticPaths(): string[];
 	/** Capability snapshot for workspace diagnostics support */
 	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
+	/** Whether this session has observed publishDiagnostics from the server. */
+	getObservedDiagnosticsChannel(): "push" | undefined;
 	/**
 	 * Issue one project-wide `workspace/diagnostic` pull. Resolves per-file
 	 * reports, or `undefined` when unsupported/dead/timed-out/malformed.
@@ -923,6 +925,8 @@ export interface LSPClientState {
 	readonly pushDiagnosticTimestamps: Map<string, number>;
 	readonly documentPullDiagnostics: Map<string, LSPDiagnostic[]>;
 	readonly documentPullDiagnosticTimestamps: Map<string, number>;
+	observedDiagnosticsChannel?: "push";
+	pullDiagnosticsUnavailable?: boolean;
 	/** Most recent operational pull failures, capped to avoid unbounded telemetry. */
 	readonly pullFailureHistory: LSPPullFailure[];
 	readonly pendingDiagnostics: Map<string, ReturnType<typeof setTimeout>>;
@@ -1529,11 +1533,17 @@ function getMergedDiagnosticsForPath(
 	const legacy = state as unknown as {
 		diagnostics?: Map<string, LSPDiagnostic[]>;
 	};
-	return mergeDiagnosticLists(
+	const push =
 		state.pushDiagnostics?.get(normalizedPath) ??
-			legacy.diagnostics?.get(normalizedPath),
-		state.documentPullDiagnostics?.get(normalizedPath),
-	);
+		legacy.diagnostics?.get(normalizedPath);
+	const pull = state.documentPullDiagnostics?.get(normalizedPath);
+	if (state.workspaceDiagnosticsSupport.mode === "pull" && push && pull) {
+		const pushAt = state.pushDiagnosticTimestamps.get(normalizedPath) ?? 0;
+		const pullAt =
+			state.documentPullDiagnosticTimestamps.get(normalizedPath) ?? 0;
+		return pushAt > pullAt ? push : pull;
+	}
+	return mergeDiagnosticLists(push, pull);
 }
 
 /**
@@ -2269,6 +2279,7 @@ export function setupIncomingHandlers(
 			// Do not resurrect diagnostics or their content binding for a document
 			// that is no longer open on this client.
 			if (state.closedDocuments?.has(normalizedPath)) return;
+			state.observedDiagnosticsChannel = "push";
 			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
@@ -2847,7 +2858,8 @@ function setupConnectionLifecycle(
 type PullDiagnosticsOutcome =
 	| { status: "found"; count: number }
 	| { status: "clean" }
-	| { status: "unavailable" };
+	| { status: "unavailable" }
+	| { status: "skipped" };
 
 /**
  * One diagnostic SOURCE's outcome. `primaryCount` is the part of `count` that
@@ -2858,12 +2870,30 @@ type PullDiagnosticsOutcome =
 type PullSourceOutcome =
 	| { status: "found"; count: number; primaryCount: number }
 	| { status: "clean" }
-	| { status: "unavailable" };
+	| { status: "unavailable" }
+	| { status: "skipped" };
+
+function markPullDiagnosticsUnavailable(state: LSPClientState): void {
+	if (state.pullDiagnosticsUnavailable) return;
+	state.pullDiagnosticsUnavailable = true;
+	if (state.workspaceDiagnosticsSupport.mode !== "pull") return;
+	state.workspaceDiagnosticsSupport = {
+		...state.workspaceDiagnosticsSupport,
+		mode: "push-only",
+	};
+	recordDegradationOnce({
+		kind: "lsp_pull_demoted",
+		subject: state.serverId,
+		reason: "attempted pull proved unavailable",
+		metadata: { serverId: state.serverId },
+	});
+}
 
 /** Margin between each source's own request timeout and the race's backstop
  *  deadline, so the natural "all sources settled" path wins over the backstop
  *  and the race never reports `unavailable` for sources that did answer. */
 const PULL_RACE_BACKSTOP_MARGIN_MS = 25;
+const PULL_DIAGNOSTICS_RECONCILIATION_MS = 25;
 
 /**
  * #1667: pull EVERY registered diagnostic source for a file, in parallel, and
@@ -2958,6 +2988,9 @@ function aggregatePullOutcomes(
 	if (outcomes.some((o) => o.status === "unavailable")) {
 		return { status: "unavailable" };
 	}
+	if (outcomes.some((o) => o.status === "skipped")) {
+		return { status: "skipped" };
+	}
 	return outcomes.some((o) => o.status === "clean")
 		? { status: "clean" }
 		: { status: "unavailable" };
@@ -2997,7 +3030,7 @@ async function pullDiagnosticSource(
 				reason: `pull skipped on ${state.serverId}: budget already exhausted (${budgetMs}ms remaining)`,
 			},
 		);
-		return { status: "unavailable" };
+		return { status: "skipped" };
 	}
 	const uri = pathToFileURL(filePath).href;
 	// #1104: echo the last resultId we hold for this document so a server that
@@ -3009,7 +3042,7 @@ async function pullDiagnosticSource(
 	// server to compare against a basis it never handed out.
 	const sourceKey = pullSourceKey(normalizedPath, identifier);
 	if (state.abandonedPullRequests?.has(sourceKey)) {
-		return { status: "unavailable" };
+		return { status: "skipped" };
 	}
 	const previousResultId = state.pullResultIds.get(sourceKey);
 	// #1667: the generation this pull was computed against. A resync landing
@@ -3090,7 +3123,7 @@ async function pullDiagnosticSource(
 			pullGenerationFor(state, normalizedPath) !== generation ||
 			!isNewestPullRequest(state, sourceKey, requestSequence)
 		) {
-			return { status: "unavailable" };
+			return { status: "skipped" };
 		}
 		let primaryCount: number;
 		if (report.kind === "unchanged") {
@@ -3702,6 +3735,30 @@ export async function clientWaitForDiagnostics(
 		const currentVersion = state.documentVersions?.get(normalizedPath);
 		return currentVersion !== undefined && cachedVersion < currentVersion;
 	};
+	const reconcileLaterPush = async (pullAnsweredAt: number): Promise<void> => {
+		if (
+			(state.pushDiagnosticTimestamps.get(normalizedPath) ?? 0) > pullAnsweredAt
+		)
+			return;
+		await new Promise<void>((resolve) => {
+			const onDiagnostics = (file: string) => {
+				if (normalizeMapKey(file) !== normalizedPath) return;
+				if (
+					(state.pushDiagnosticTimestamps.get(normalizedPath) ?? 0) <=
+					pullAnsweredAt
+				)
+					return;
+				clearTimeout(timer);
+				state.diagnosticEmitter.off("diagnostics", onDiagnostics);
+				resolve();
+			};
+			const timer = setTimeout(() => {
+				state.diagnosticEmitter.off("diagnostics", onDiagnostics);
+				resolve();
+			}, PULL_DIAGNOSTICS_RECONCILIATION_MS);
+			state.diagnosticEmitter.on("diagnostics", onDiagnostics);
+		});
+	};
 
 	if (state.workspaceDiagnosticsSupport.mode === "pull") {
 		// Pull is authoritative. An AFFIRMATIVE outcome — diagnostics `found`, or
@@ -3721,6 +3778,7 @@ export async function clientWaitForDiagnostics(
 			filePath,
 			timeoutMs,
 		);
+		if (outcome.status === "unavailable") markPullDiagnosticsUnavailable(state);
 		if (outcome.status === "found") {
 			logTypeScriptPullSettle(
 				state,
@@ -3731,6 +3789,8 @@ export async function clientWaitForDiagnostics(
 			return;
 		}
 		let sawClean = outcome.status === "clean";
+		const pullAnsweredAt =
+			state.documentPullDiagnosticTimestamps.get(normalizedPath) ?? 0;
 
 		const strategy = getStrategy(state.serverId, state.launchVariant);
 		const retryBudgetMs =
@@ -3754,10 +3814,13 @@ export async function clientWaitForDiagnostics(
 				filePath,
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
 			);
+			if (outcome.status === "unavailable")
+				markPullDiagnosticsUnavailable(state);
 			if (outcome.status === "clean") sawClean = true;
 		}
 		if (options.pullOnly) {
 			if (outcome.status === "found" || sawClean) {
+				if (sawClean) await reconcileLaterPush(pullAnsweredAt);
 				logTypeScriptPullSettle(
 					state,
 					normalizedPath,
@@ -3768,6 +3831,7 @@ export async function clientWaitForDiagnostics(
 			return;
 		}
 		if (outcome.status === "found" || sawClean) {
+			if (sawClean) await reconcileLaterPush(pullAnsweredAt);
 			logTypeScriptPullSettle(
 				state,
 				normalizedPath,
@@ -5300,6 +5364,8 @@ export async function createLSPClient(options: {
 		pushDiagnosticTimestamps: new Map(),
 		documentPullDiagnostics: new Map(),
 		documentPullDiagnosticTimestamps: new Map(),
+		observedDiagnosticsChannel: undefined,
+		pullDiagnosticsUnavailable: false,
 		pullFailureHistory: [],
 		pendingDiagnostics: new Map(),
 		diagnosticPublicationCounts: new Map(),
@@ -5639,6 +5705,10 @@ export async function createLSPClient(options: {
 
 		getWorkspaceDiagnosticsSupport() {
 			return state.workspaceDiagnosticsSupport;
+		},
+
+		getObservedDiagnosticsChannel() {
+			return state.observedDiagnosticsChannel;
 		},
 
 		requestWorkspaceDiagnostics(budgetMs: number) {

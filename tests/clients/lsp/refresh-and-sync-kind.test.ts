@@ -35,7 +35,7 @@ import type { PositionEncoding } from "../../../clients/lsp/position-encoding.js
 // fix (openDocumentUris/projectIdentityProbedFiles) and a `syncKind` default,
 // both folded into the shared file directly by this round's rebase.
 import { createMockState } from "./mock-client-state.js";
-import { suspendAt } from "../interleaving-kit.js";
+import { suspendAt, waitFor } from "../interleaving-kit.js";
 
 const TEST_FILE = "/project/app.ts";
 const TEST_KEY = normalizeMapKey(TEST_FILE);
@@ -1520,6 +1520,76 @@ describe("negotiateSyncKind through the real createLSPClient init path (#1669 re
 			const [change] = received[0].contentChanges;
 			expect(change.range).toBeUndefined();
 			expect(change.text).toBe("const x = 1;\nconst y = 2;\n");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+});
+
+describe("pull diagnostics channel state (#2776)", () => {
+	async function realClient(env: Record<string, string>) {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: { ...process.env, ...env },
+		});
+		const client = await createLSPClient({
+			serverId: "fake-pull-state",
+			process: proc,
+			root: process.cwd(),
+		});
+		return { proc, client };
+	}
+
+	it("keeps both-channel pulling after an observed push", async () => {
+		const { proc, client } = await realClient({
+			FAKE_LSP_PULL_BOTH_CHANNELS: "1",
+			FAKE_LSP_ECHO_REQUEST_METHODS: "1",
+		});
+		try {
+			const methods: string[] = [];
+			client.connection.onNotification(
+				"$/test/requestReceived",
+				(p: { method: string }) => {
+					methods.push(p.method);
+				},
+			);
+			const file = path.join(os.tmpdir(), "pi-lens-both-channel.ts");
+			await client.notify.open(file, "fake-lsp-clean\n", "typescript");
+			await client.waitForDiagnostics(file, 500);
+			await waitFor(
+				() => methods,
+				(items) => items.includes("textDocument/diagnostic"),
+			);
+			expect(client.getWorkspaceDiagnosticsSupport().mode).toBe("pull");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+
+	it("lets a late push supersede an empty pull before the real client returns", async () => {
+		const { proc, client } = await realClient({ FAKE_LSP_PULL_LATE_PUSH: "1" });
+		try {
+			const file = path.join(os.tmpdir(), "pi-lens-late-push.ts");
+			await client.notify.open(file, "fake-lsp-clean\n", "typescript");
+			await client.waitForDiagnostics(file, 500);
+			expect(client.getDiagnostics(file).map((d) => d.message)).toContain(
+				"late push",
+			);
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+
+	it("does not demote a healthy pull declaration for a budget-skipped pull", async () => {
+		const { proc, client } = await realClient({});
+		try {
+			const file = path.join(os.tmpdir(), "pi-lens-skipped-pull.ts");
+			await client.notify.open(file, "const x = 1;\n", "typescript");
+			await client.waitForDiagnostics(file, 1);
+			expect(client.getWorkspaceDiagnosticsSupport().mode).toBe("pull");
 		} finally {
 			await client.shutdown().catch(() => {});
 			await stopLSP(proc).catch(() => {});
