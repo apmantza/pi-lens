@@ -451,6 +451,33 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "prettier",
 	},
 	{
+		id: "black",
+		name: "Black",
+		checkCommand: "black",
+		checkArgs: ["--version"],
+		installStrategy: "pip",
+		packageName: "black",
+		binaryName: "black",
+	},
+	{
+		id: "cmake-format",
+		name: "cmake-format",
+		checkCommand: "cmake-format",
+		checkArgs: ["--version"],
+		installStrategy: "pip",
+		packageName: "cmakelang",
+		binaryName: "cmake-format",
+	},
+	{
+		id: "oxfmt",
+		name: "oxfmt",
+		checkCommand: "oxfmt",
+		checkArgs: ["--version"],
+		installStrategy: "npm",
+		packageName: "oxfmt",
+		binaryName: "oxfmt",
+	},
+	{
 		id: "ruff",
 		name: "Ruff",
 		checkCommand: "ruff",
@@ -874,6 +901,70 @@ export const TOOLS: ToolDefinition[] = [
 				return undefined;
 			},
 			// bare binary, no archive
+		},
+	},
+	{
+		id: "stylua",
+		name: "StyLua",
+		checkCommand: "stylua",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "stylua",
+		github: {
+			repo: "JohnnyMorganz/StyLua",
+			assetMatch: archAssetMatch({
+				linux: { x64: "linux-x86_64.zip", arm64: "linux-aarch64.zip" },
+				darwin: { x64: "macos-x86_64.zip", arm64: "macos-aarch64.zip" },
+				win32: { x64: "windows-x86_64.zip" },
+			}),
+			binaryInArchive: "stylua",
+		},
+	},
+	{
+		id: "php-cs-fixer",
+		name: "PHP CS Fixer",
+		checkCommand: "php-cs-fixer",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "php-cs-fixer",
+		github: {
+			repo: "PHP-CS-Fixer/PHP-CS-Fixer",
+			assetMatch: () => "php-cs-fixer.phar",
+		},
+	},
+	{
+		id: "google-java-format",
+		name: "google-java-format",
+		checkCommand: "google-java-format",
+		checkArgs: ["--version"],
+		installStrategy: "maven",
+		binaryName: "google-java-format",
+		maven: {
+			groupId: "com.google.googlejavaformat",
+			artifactId: "google-java-format",
+			version: "1.27.0",
+			classifier: "all-deps",
+		},
+	},
+	{
+		id: "cljfmt",
+		name: "cljfmt",
+		checkCommand: "cljfmt",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "cljfmt",
+		github: {
+			repo: "weavejester/cljfmt",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "standalone.jar"
+						: "linux-amd64-static.tar.gz";
+				if (platform === "darwin") return "standalone.jar";
+				if (platform === "win32") return "win-amd64.zip";
+				return undefined;
+			},
+			binaryInArchive: "cljfmt",
 		},
 	},
 	{

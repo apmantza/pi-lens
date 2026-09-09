@@ -264,7 +264,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/go",
 		file: "bad.go",
 		targets: ["go-vet"],
-		tools: [],
+		tools: ["black"],
 		expectDiagnostic: true,
 	},
 	{
@@ -272,7 +272,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/powershell",
 		file: "bad.ps1",
 		targets: ["psscriptanalyzer"],
-		tools: [],
+		tools: ["cmake-format"],
 		expectDiagnostic: true,
 	},
 	{
@@ -280,7 +280,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/rust",
 		file: "src/main.rs",
 		targets: ["rust-clippy"],
-		tools: [],
+		tools: ["oxfmt"],
 		expectDiagnostic: true,
 	},
 	{
@@ -288,7 +288,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/csharp",
 		file: "Program.cs",
 		targets: ["dotnet-build"],
-		tools: [],
+		tools: ["stylua"],
 		expectDiagnostic: true,
 	},
 	{
@@ -296,7 +296,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/zig",
 		file: "bad.zig",
 		targets: ["zig-check"],
-		tools: [],
+		tools: ["cljfmt"],
 		expectDiagnostic: true,
 	},
 	{
@@ -304,7 +304,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/java",
 		file: "Bad.java",
 		targets: ["javac"],
-		tools: [],
+		tools: ["php-cs-fixer"],
 		expectDiagnostic: true,
 	},
 	{
@@ -312,7 +312,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/dart",
 		file: "bad.dart",
 		targets: ["dart-analyze"],
-		tools: [],
+		tools: ["google-java-format"],
 		expectDiagnostic: true,
 	},
 	{
@@ -1032,7 +1032,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/python-black",
 		file: "messy.py",
 		formatter: "black",
-		tools: [],
+		tools: ["black"],
 	},
 	{
 		lang: "ruby-standard",
@@ -1046,7 +1046,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/cmake",
 		file: "messy.cmake",
 		formatter: "cmake-format",
-		tools: [],
+		tools: ["cmake-format"],
 	},
 	{
 		// oxfmt (the JS Oxidation Compiler formatter) is selected over biome via a
@@ -1056,7 +1056,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/js-oxfmt",
 		file: "messy.js",
 		formatter: "oxfmt",
-		tools: [],
+		tools: ["oxfmt"],
 	},
 	// Standalone-binary formatters (no language runtime needed) — each fixture
 	// ships the config its detect() requires (stylua.toml / .cljfmt.edn /
@@ -1066,7 +1066,7 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/lua",
 		file: "messy.lua",
 		formatter: "stylua",
-		tools: [],
+		tools: ["stylua"],
 	},
 	{
 		lang: "haskell",
@@ -1080,21 +1080,21 @@ const FORMAT_FIXTURES = [
 		dir: "tests/fixtures/format-smoke/clojure",
 		file: "messy.clj",
 		formatter: "cljfmt",
-		tools: [],
+		tools: ["cljfmt"],
 	},
 	{
 		lang: "php",
 		dir: "tests/fixtures/format-smoke/php",
 		file: "messy.php",
 		formatter: "php-cs-fixer",
-		tools: [],
+		tools: ["php-cs-fixer"],
 	},
 	{
 		lang: "java-gjf",
 		dir: "tests/fixtures/format-smoke/java-gjf",
 		file: "Messy.java",
 		formatter: "google-java-format",
-		tools: [],
+		tools: ["google-java-format"],
 	},
 	{
 		lang: "cpp",
@@ -2136,6 +2136,7 @@ async function runFormatSmoke({ langs, install, verbose }) {
 	const formatService = getFormatService();
 
 	let ensureTool;
+	let getInstallAttempt;
 	if (install) {
 		const installerEntry = path.join(
 			repoRoot,
@@ -2144,7 +2145,9 @@ async function runFormatSmoke({ langs, install, verbose }) {
 			"installer",
 			"index.js",
 		);
-		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
+		({ ensureTool, getInstallAttempt } = await import(
+			pathToFileURL(installerEntry).href
+		));
 	}
 
 	const selected = langs.length
@@ -2157,16 +2160,18 @@ async function runFormatSmoke({ langs, install, verbose }) {
 
 	const rows = [];
 	for (const fx of selected) {
-		if (install && ensureTool) {
-			for (const toolId of fx.tools ?? []) {
-				const resolved = await ensureTool(toolId);
+		await ensureFixtureTools(
+			install ? (fx.tools ?? []) : [],
+			ensureTool,
+			getInstallAttempt,
+			(toolId, resolved) => {
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
 					);
 				}
-			}
-		}
+			},
+		);
 		const workspace = copyDirToTemp(fx.dir);
 		const absFile = path.join(workspace, fx.file);
 		const push = (state, detail) =>

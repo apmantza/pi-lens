@@ -698,6 +698,17 @@ async function resolveManagedSmartDefaultCommand(
 	return [installed, ...args, filePath];
 }
 
+/** Resolve an explicitly selected formatter from the shared managed-tool seam. */
+async function resolveManagedFormatterCommand(
+	toolId: string,
+	filePath: string,
+	args: string[],
+): Promise<string[] | null> {
+	const { getToolPath } = await import("./installer/index.js");
+	const installed = await getToolPath(toolId);
+	return installed ? [installed, ...args, filePath] : null;
+}
+
 /**
  * One entry per formatter that can be selected via explicit project config
  * (the `formatterPolicy` "explicit-config" branch of `getFormattersForFile`).
@@ -1142,11 +1153,11 @@ export const oxfmtFormatter: FormatterInfo = {
 		if (local) return [local, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
 		const found = await which("oxfmt");
 		if (found) return [found, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
-		// #2413: neither node_modules/.bin nor PATH has oxfmt, and `detect()` is
-		// config-only (it never probes the binary), so selection can reach here
-		// with nothing installed. The static command is bare `oxfmt` — spawning it
-		// only reproduces the reported `spawn oxfmt ENOENT`. Prove it unavailable.
-		return FORMATTER_UNAVAILABLE;
+		return (
+			(await resolveManagedFormatterCommand("oxfmt", filePath, [
+				OXFMT_NO_ERROR_ON_UNMATCHED,
+			])) ?? FORMATTER_UNAVAILABLE
+		);
 	},
 	// Single source of truth: OXFMT_SUPPORTED_EXTENSIONS in tool-policy.ts.
 	// Do not hand-maintain a second copy of this list (#1134 — previously two
@@ -1206,7 +1217,7 @@ export const blackFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const venv = await findInVenv("black", cwd);
 		if (venv) return [venv, filePath];
-		return null;
+		return resolveManagedFormatterCommand("black", filePath, []);
 	},
 	async detect(cwd: string) {
 		return hasBlackConfig(cwd);
@@ -1513,21 +1524,27 @@ export const phpCsFixerFormatter: FormatterInfo = {
 		const binary =
 			(await findInVendorBin("php-cs-fixer", cwd)) ??
 			(await which("php-cs-fixer"));
+		const resolved =
+			binary ??
+			(await resolveManagedFormatterCommand("php-cs-fixer", filePath, []))?.[0];
 		// #2413/#2472 review F4: both probes (vendor/bin, then PATH) have
 		// PROVEN the binary is absent — returning `null` here would fall back
 		// to the static `command` above, which is the SAME bare
 		// `php-cs-fixer` this just failed to find, spawning it only to
 		// re-observe the ENOENT already known. Report the proven-missing
 		// state instead so `formatFile` skips the wasted spawn.
-		if (!binary) return FORMATTER_UNAVAILABLE;
+		if (!resolved) return FORMATTER_UNAVAILABLE;
 		return configPath
-			? [binary, "fix", "--config", configPath, filePath]
-			: [binary, "fix", filePath];
+			? [resolved, "fix", "--config", configPath, filePath]
+			: [resolved, "fix", filePath];
 	},
 	async detect(cwd: string) {
 		const vendorBin = await findInVendorBin("php-cs-fixer", cwd);
 		const globalBin = await which("php-cs-fixer");
-		if (!vendorBin && !globalBin) return false;
+		if (!vendorBin && !globalBin) {
+			const { getToolPath } = await import("./installer/index.js");
+			if (!(await getToolPath("php-cs-fixer"))) return false;
+		}
 		// Only run if project has explicit config. This is a presence-only
 		// climb from the project `cwd` (not necessarily the formatted file's
 		// own directory) via this file's own `findUp` — deliberately NOT
@@ -1610,11 +1627,16 @@ export const styluaFormatter: FormatterInfo = {
 		// `stylua` PATH lookup — a project-local install via npm
 		// `@johnnymorganz/stylua` (`node_modules/.bin/stylua`) was invisible.
 		const local = findLocalBinUpwards("stylua", cwd);
-		return local ? [local, filePath] : null;
+		return local
+			? [local, filePath]
+			: await resolveManagedFormatterCommand("stylua", filePath, []);
 	},
 	async detect(cwd: string) {
 		const local = findLocalBinUpwards("stylua", cwd);
-		if (!local && (await which("stylua")) === null) return false;
+		if (!local && (await which("stylua")) === null) {
+			const { getToolPath } = await import("./installer/index.js");
+			if (!(await getToolPath("stylua"))) return false;
+		}
 		// Prefer explicit config but also run if binary is present in a Lua project
 		const configs = ["stylua.toml", ".stylua.toml"];
 		const found = await findUp(configs, cwd);
@@ -1651,8 +1673,16 @@ export const googleJavaFormatFormatter: FormatterInfo = {
 	name: "google-java-format",
 	command: ["google-java-format", "--replace", "$FILE"],
 	extensions: [".java"],
+	async resolveCommand(filePath, _cwd) {
+		return resolveManagedFormatterCommand("google-java-format", filePath, [
+			"--replace",
+		]);
+	},
 	async detect(cwd: string) {
-		if ((await which("google-java-format")) === null) return false;
+		if ((await which("google-java-format")) === null) {
+			const { getToolPath } = await import("./installer/index.js");
+			if (!(await getToolPath("google-java-format"))) return false;
+		}
 		return hasGoogleJavaFormatConfig(cwd);
 	},
 };
@@ -1661,8 +1691,14 @@ export const cljfmtFormatter: FormatterInfo = {
 	name: "cljfmt",
 	command: ["cljfmt", "fix", "$FILE"],
 	extensions: [".clj", ".cljc", ".cljs"],
+	async resolveCommand(filePath, _cwd) {
+		return resolveManagedFormatterCommand("cljfmt", filePath, ["fix"]);
+	},
 	async detect(cwd: string) {
-		if ((await which("cljfmt")) === null) return false;
+		if ((await which("cljfmt")) === null) {
+			const { getToolPath } = await import("./installer/index.js");
+			if (!(await getToolPath("cljfmt"))) return false;
+		}
 		return hasCljfmtConfig(cwd);
 	},
 };
@@ -1671,8 +1707,14 @@ export const cmakeFormatFormatter: FormatterInfo = {
 	name: "cmake-format",
 	command: ["cmake-format", "-i", "$FILE"],
 	extensions: [".cmake"],
+	async resolveCommand(filePath, _cwd) {
+		return resolveManagedFormatterCommand("cmake-format", filePath, ["-i"]);
+	},
 	async detect(cwd: string) {
-		if ((await which("cmake-format")) === null) return false;
+		if ((await which("cmake-format")) === null) {
+			const { getToolPath } = await import("./installer/index.js");
+			if (!(await getToolPath("cmake-format"))) return false;
+		}
 		return hasCmakeFormatConfig(cwd);
 	},
 };

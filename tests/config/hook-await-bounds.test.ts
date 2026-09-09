@@ -2190,7 +2190,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/file-time.ts": 1,
 	"clients/file-utils.ts": 1,
 	"clients/format-service.ts": 5,
-	"clients/formatters.ts": 115,
+	// #2767: managed formatter resolution adds 15 installer-path awaits. These
+	// use the installer's bounded probes and cannot receive hook signals until
+	// the existing formatter dependency seam is signal-aware.
+	"clients/formatters.ts": 130,
 	"clients/gitleaks-client.ts": 4,
 	"clients/govulncheck-client.ts": 6,
 	// 192 → 194 (#2722), in two steps, both registered rather than absorbed:
