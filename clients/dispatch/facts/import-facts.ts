@@ -9,6 +9,11 @@ import {
 	walk,
 } from "./tree-sitter-facts.js";
 
+/** Whether the import-facts provider applies to a source path. */
+export function importFactsApplyTo(filePath: string): boolean {
+	return isJstsFactFile(filePath);
+}
+
 export interface ImportEntry {
 	/** Module specifier, e.g. "node:fs", "./utils.js", "react" */
 	source: string;
@@ -101,7 +106,7 @@ export const importFactProvider: FactProvider = {
 	provides: ["file.imports", "file.reexports", "file.importFactsCoverage"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return isJstsFactFile(ctx.filePath);
+		return importFactsApplyTo(ctx.filePath);
 	},
 	async run(ctx, store) {
 		const content = store.getFileFact<string>(ctx.filePath, "file.content");
