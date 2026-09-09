@@ -1722,7 +1722,7 @@ async function callTool(
 			args,
 			new AbortController().signal,
 			undefined,
-			{ cwd },
+			{ cwd, resultMaxItems: Number.POSITIVE_INFINITY },
 		)) as { content: { type: "text"; text: string }[] };
 		return {
 			content: out.content.map((content) =>

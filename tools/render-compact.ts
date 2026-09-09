@@ -51,21 +51,25 @@ export function boundToolText(text: string): BoundedToolText {
 
 	const marker = (omitted: number) =>
 		`\n\n[${omitted} characters omitted. Full output: ${fullOutputPath}]\n\n`;
-	let head = Math.floor(text.length / 2);
-	let tail = text.length - head;
-	let output = `${text.slice(0, head)}${marker(0)}${text.slice(text.length - tail)}`;
-	while (
-		Buffer.byteLength(output, "utf8") > MAX_RESULT_BYTES &&
-		(head > 0 || tail > 0)
-	) {
-		if (head >= tail) head--;
-		else tail--;
-		output = `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
+	const render = (kept: number): string => {
+		const head = Math.floor(kept / 2);
+		const tail = kept - head;
+		return `${text.slice(0, head)}${marker(text.length - kept)}${text.slice(text.length - tail)}`;
+	};
+	// Find the largest retained slice without repeatedly rebuilding a large
+	// string. Complete MCP tool renderings can be hundreds of kilobytes.
+	let low = 0;
+	let high = text.length;
+	while (low < high) {
+		const kept = Math.ceil((low + high) / 2);
+		if (Buffer.byteLength(render(kept), "utf8") <= MAX_RESULT_BYTES) low = kept;
+		else high = kept - 1;
 	}
+	const output = render(low);
 	return {
-		text: output.replace(marker(0), marker(text.length - head - tail)),
+		text: output,
 		truncated: true,
-		omittedCharacters: text.length - head - tail,
+		omittedCharacters: text.length - low,
 		fullOutputPath,
 	};
 }

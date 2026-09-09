@@ -121,7 +121,7 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			params: Record<string, unknown>,
 			_signal: AbortSignal,
 			_onUpdate: unknown,
-			ctx: { cwd?: string },
+			ctx: { cwd?: string; resultMaxItems?: number },
 		) {
 			const startedAt = Date.now();
 			const {
@@ -154,6 +154,9 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			);
 			const pathsCount = paths?.length ?? 1;
 			const applyFlag = apply ?? false;
+			// MCP passes Infinity so the shared result seam receives the complete
+			// tool rendering. Pi keeps the historical 50-item content contract.
+			const resultMaxItems = ctx.resultMaxItems ?? 50;
 
 			function logOutcome(
 				outcome: AstGrepToolOutcome,
@@ -273,6 +276,7 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 					ruleResult.matches,
 					!applyFlag,
 					true,
+					resultMaxItems,
 				);
 				logOutcome(ruleResult.matches.length === 0 ? "no_matches" : "success", {
 					matchCount: ruleResult.matches.length,
@@ -325,6 +329,7 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 				result.matches,
 				isDryRun,
 				true, // showModeIndicator
+				resultMaxItems,
 			);
 
 			logOutcome(result.matches.length === 0 ? "no_matches" : "success", {

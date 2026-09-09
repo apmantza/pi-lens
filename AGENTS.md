@@ -683,6 +683,12 @@ case-insensitive containment, because macOS filesystems can ignore case. It trea
 case-variant path as insensitive only when both spellings reach the same directory, and
 the root memo resets at session boundaries. (#2052)
 
+MCP AST replacement calls request the complete tool rendering before entering
+`boundToolText`; that seam writes the complete payload to its bounded session
+log and returns the 40 KiB model-facing view. Pi callers retain the historical
+50-match tool-content cap. Keep the preview cap at the seam boundary so a tool
+preview cannot masquerade as the complete durable result. (#2799, #2800)
+
 Bounded LSP warm touches preserve the spawn coordinator's lifecycle evidence:
 an empty ready-client set reports `spawn_in_flight_budget_elapsed` while a
 matching primary single-flight spawn remains pending, and
