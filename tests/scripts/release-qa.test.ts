@@ -195,7 +195,7 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 		expect(implementedRowIds()).toContain("tool-smoke-install");
 	});
 
-	function stubSmoke(report: object, exitCode = 0) {
+	function stubSmoke(report: Record<string, unknown>, exitCode = 0) {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-qa-smoke-"));
 		const scripts = path.join(root, "scripts");
 		fs.mkdirSync(scripts);
