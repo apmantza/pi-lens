@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const workflow = yaml.load(
@@ -34,6 +35,13 @@ const tools = [
 ] as const;
 
 describe("#2706 advisory tooling workflow contracts", () => {
+	it("keeps oxfmt as a gating, named job", () => {
+		const job = workflow.jobs.oxfmt;
+		expect(job?.name).toBe("oxfmt format check");
+		expect(job?.["continue-on-error"]).not.toBe(true);
+		expect(isAdvisoryCheck("oxfmt format check")).toBe(false);
+	});
+
 	it("keeps the mutation lane advisory and named", () => {
 		const job = mutationWorkflow.jobs.mutation;
 		expect(job?.name).toBe("mutation (advisory)");

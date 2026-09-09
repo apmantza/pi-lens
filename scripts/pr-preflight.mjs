@@ -7,7 +7,7 @@ import { CI_JOB_NAMES } from "./lib/ci-checks.mjs";
 export const GATES = [
 	["build", ["npm", "run", "build"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
 	["lint", ["npm", "run", "lint"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
-	["fmt:check", ["npm", "run", "fmt:check"], "oxfmt format check (advisory)"],
+	["fmt:check", ["npm", "run", "fmt:check"], "oxfmt format check"],
 	["changelog:check", ["npm", "run", "changelog:check"], "Unit tests"],
 	[
 		"check-changelog-fragments",

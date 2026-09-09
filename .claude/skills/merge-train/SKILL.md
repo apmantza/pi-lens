@@ -271,7 +271,7 @@ operator's private notes, so a different orchestrator can run the same train.
   close/reopen. Read exit codes without a pipe. The merge loop is
   `node scripts/ci-verdict.mjs <pr> --wait <seconds>; echo $?` — 0 merge, 3
   still pending (re-arm the wait), anything else read the table. Never
-  text-match the table for `failure`: advisory rows (PR body, oxfmt, Vale)
+  text-match the table for `failure`: advisory rows (PR body, Vale)
   print `failure` while the verdict is green, and on 2026-09-07 that stopped
   the #2692 loop on a green PR.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
