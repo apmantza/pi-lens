@@ -180,6 +180,7 @@ import {
 	RuntimeCoordinator,
 } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
+import { resetTurnContext } from "./clients/turn-context.js";
 import { handleToolCall } from "./clients/runtime-tool-call.js";
 import {
 	isStaleExtensionCtxError,
@@ -2251,6 +2252,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reset beside the primary session-start reset block so a tightened
 					// sampling window cannot leak across sessions.
 					resetMemorySamplerCadence();
+					// #2815 R7: reset before the handler can publish its
+					// session_start_prehandler row. Keep this inside the primary gate so
+					// a concurrent secondary cannot erase the primary's live counter.
+					resetTurnContext(stableSessionId);
 					await handleSessionStart({
 						ctxCwd: ctx.cwd,
 						sessionStartFiredAt,

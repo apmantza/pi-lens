@@ -1,5 +1,6 @@
 # Investigator contract
 
+Grep the `turnId` first when correlating rows across telemetry sinks.
 Premise-first reproductions of dogfood reports go through the harness with a fixture built from the reporter's shape, before any seam is named.
 
 Root-cause runtime behavior from reproducible and durable evidence.

@@ -835,6 +835,8 @@ export type DegradationKind =
 	 * `probe-home-state.ts`'s doc comment.
 	 */
 	| "ts-idle-eviction"
+	/** The host context could not provide a stable session identity (#2815). */
+	| "turn-context-identity-fallback"
 	/**
 	 * #2504 review round 8 (S1): a carried-forward deferred file entry was
 	 * dropped from an IN-BAND `turn_end` publish (`clients/actionable-warnings.ts`)
