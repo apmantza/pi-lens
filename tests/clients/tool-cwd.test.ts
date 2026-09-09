@@ -91,6 +91,34 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(walks).toBe(1);
 	});
 
+	it("re-walks when a memoized marker is deleted in the same session", () => {
+		const project = path.join(home, "repo");
+		const nested = path.join(project, "src");
+		const file = path.join(nested, "main.rs");
+		fs.mkdirSync(nested, { recursive: true });
+		const marker = path.join(project, "Cargo.toml");
+		fs.writeFileSync(marker, "[package]\n");
+
+		expect(
+			toolCwd.resolveToolCwd("formatter", "rustfmt", file, {
+				cwd: project,
+			}),
+		).toBe(project);
+		const walksAfterFirstResolution = toolCwd._getToolCwdMarkerWalkCount();
+		fs.unlinkSync(marker);
+
+		// #2777: deleting a marker must not leave the session stuck on its old root.
+		expect(
+			toolCwd.resolveToolCwd("formatter", "rustfmt", file, {
+				cwd: project,
+			}),
+		).toBe(nested);
+		expect(toolCwd._getToolCwdMarkerWalkCount()).toBe(
+			// One marker walk plus the uncached .git fallback walk.
+			walksAfterFirstResolution + 2,
+		);
+	});
+
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {
 		const project = path.join(home, "repo");
 		const foreign = path.join(home, "tmp", "outside.ts");

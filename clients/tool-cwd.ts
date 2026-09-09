@@ -136,7 +136,12 @@ function findMarkerRoot(
 	}
 	const key = `${path.resolve(startDir)}\0${markers.join("\0")}\0${path.resolve(homeDir)}`;
 	const cached = markerWalks.get(key);
-	if (cached) return cached;
+	if (cached) {
+		if (!cached.marker || !cached.root) return cached;
+		// #2777: a marker can disappear during a session; do not reuse a stale root.
+		if (existsSync(path.join(cached.root, cached.marker))) return cached;
+		markerWalks.delete(key);
+	}
 	markerWalkCount++;
 	let current = path.resolve(startDir);
 	let result: { root: string | null; marker?: string } = { root: null };
