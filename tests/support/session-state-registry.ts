@@ -1265,7 +1265,7 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	// a test can re-register a fresh subscriber set. ---
 	"bus-publish.ts": "bus publisher registration",
 	"cache-observability.ts":
-		"cache-prefix observation and per-session miss-attribution/summary state; both maps are role-separated when session identity is absent, bounded by the same LRU cap, summarized then cleared on each role-specific shutdown",
+		"cache-prefix observation and per-session miss-attribution/summary state; both maps are role-separated when session identity is absent, bounded by the same LRU cap, summarized then cleared on each role-specific shutdown; repeated-finding identities re-arm on the owned session_start through index.ts",
 	// #2418: the warn-once latch that used to live in lens-config.ts and
 	// project-lens-config.ts moved here when the three loaders' duplicated warn
 	// bodies were collapsed into one seam. Same lifetime as before — it is tied
