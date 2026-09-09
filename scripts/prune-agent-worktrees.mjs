@@ -2,24 +2,38 @@
 /**
  * scripts/prune-agent-worktrees.mjs (#2435)
  *
- * Agent worktree + orphan-process hygiene. Two independent sweeps:
+ * Agent worktree + orphan-process hygiene. Three independent sweeps:
  *
- *  1. WORKTREES. Every `.claude/worktrees/agent-*` git worktree that is
+ *  1. AGENT WORKTREES. Every `.claude/worktrees/agent-*` git worktree that is
  *     clean, whose HEAD is contained in an `origin/*` ref, and that is old
  *     enough (or explicitly named by `--only`) is removed, together with the
  *     agent-session branch it left behind. 15 such trees accumulated on one
  *     box in a single day (#2435), each with its own build output.
- *  2. ORPHAN FIXTURES. Any `tests/fixtures/*` / `tests/support/*` helper
+ *  2. MERGED-BRANCH TREES (#2631). Any OTHER registered worktree — any path,
+ *     the 2026-09-06 recurrence stood under `~/Desktop/pi-lens-wt-*` — whose
+ *     branch tip is an ancestor of `origin/master` AND whose checkout is
+ *     clean (no tracked changes, no untracked files) is removed and its
+ *     merged local branch deleted. An untracked file is a deliverable, never
+ *     disposable: on 2026-09-09 a 22 KB report left untracked in a worktree
+ *     was destroyed by a sweep that treated its checkout as removable, so an
+ *     empty `git status --porcelain` is the only clean that qualifies, and
+ *     the keep record names the first porcelain entry it protected.
+ *  3. UNREGISTERED DIRECTORIES (#2538). `.claude/worktrees/agent-*` entries
+ *     present on disk but absent from `git worktree list` are removed only
+ *     when they hold nothing but git's own `.git` gitlink — with no index and
+ *     no known branch, every other file is treated as an untracked deliverable.
+ *  4. ORPHAN FIXTURES. Any `tests/fixtures/*` / `tests/support/*` helper
  *     process whose parent has exited is killed — the class that left
  *     `fake-lsp-server.mjs` running for an hour after its fixer finished and
  *     made one worktree unremovable. The fixture's own missing teardown is
  *     #2436; this is the machine-level net under it, not the fix.
  *
- * ALL the decision logic lives in scripts/lib/worktree-hygiene.mjs and is
- * pure (tables in, verdicts out). This file owns only the I/O: `git`
- * invocations, the platform process listing, `process.kill`, and the ledger
- * write. Anything that could destroy work is therefore unit-testable
- * WITHOUT this file running.
+ *  2 and 3 are capped per run with `--max` (default 10); what the cap skips
+ *  is printed. All the decision logic lives in scripts/lib/worktree-hygiene.mjs
+ *  and is pure (tables in, verdicts out). This file owns only the I/O: `git`
+ *  invocations, the platform process listing, `process.kill`, and the ledger
+ *  write. Anything that could destroy work is therefore unit-testable
+ *  WITHOUT this file running.
  *
  * Safety rails (see the library header for the full contract):
  *   - never a dirty tree; never an unpushed tree — no flag overrides either;
@@ -116,9 +130,11 @@ import {
 	RUN_SKIP_REASONS,
 	capRemovals,
 	collectAncestorPids,
+	enclosingAgentWorktree,
 	formatKillRecord,
 	formatRunRecord,
 	formatScanRecord,
+	formatUnregisteredDirRecord,
 	formatWorktreeRecord,
 	isAgentBranchCandidate,
 	isAgentWorktreePath,
@@ -128,11 +144,13 @@ import {
 	parseReflogLastEntryMs,
 	parseWorktreeList,
 	planBranchDeletions,
+	planMergedWorktreeRemovals,
 	planOrphanSweep,
 	planWorktreePrune,
 	pruneLogLines,
 	selectProcessesUnderPath,
 	toComparablePath,
+	unregisteredAgentDirVerdict,
 	worktreeActivityFromSignals,
 } from "./lib/worktree-hygiene.mjs";
 import { snapshotProcesses } from "./lib/process-scan.mjs";
@@ -149,6 +167,15 @@ const isWindows = process.platform === "win32";
 export const DEFAULT_HOOK_BUDGET_MS = 2_000;
 /** Wall-clock budget for a manual (non-hook) invocation. */
 export const DEFAULT_MANUAL_BUDGET_MS = 60_000;
+/**
+ * Per-run removal cap for the merged-branch sweep (#2631) and the
+ * unregistered-directory pass (#2538), overridable with `--max`. What the cap
+ * skips is printed as deferred, so a bigger backlog drains one run at a time
+ * instead of a single sweep destroying an unbounded number of trees. In hook
+ * modes the effective cap is the smaller of this and the policy's own
+ * `maxRemovals` — the hook-timeout arithmetic is sized for one removal.
+ */
+export const DEFAULT_MAX_REMOVALS = 10;
 /**
  * The hook timeouts registered in `.claude/settings.json`, in ms. Mirrored
  * rather than read at runtime (one small file read on every sweep, plus a
@@ -244,6 +271,11 @@ const USAGE = `Usage: node scripts/prune-agent-worktrees.mjs [options]
   --dry-run             Print the plan and exit without removing or killing.
   --min-age <duration>  Minimum worktree age to be eligible (default 30m).
                         Accepts 500, 500ms, 90s, 30m, 2h.
+  --max <n>             Per-run removal cap for the merged-branch sweep
+                        (#2631) and the unregistered-directory pass (#2538),
+                        default 10. What the cap skips is printed as deferred.
+                        In hook modes the effective cap is the smaller of
+                        this and the policy's own cap (SessionStart: 1).
   --budget-ms <dur>     Wall-clock budget for the whole sweep (default: sized
                         to the hook timeout in --hook mode, 60s otherwise).
                         Trees not reached are reported "not-evaluated" and
@@ -286,12 +318,13 @@ Always exits 0.`;
 
 /**
  * @param {string[]} argv
- * @returns {{ dryRun: boolean, minAgeMs: number, only: string[]|null, hook: string|null, orphanSweep: boolean, json: boolean, quiet: boolean, help: boolean, errors: string[] }}
+ * @returns {{ dryRun: boolean, minAgeMs: number, max: number, only: string[]|null, hook: string|null, orphanSweep: boolean, json: boolean, quiet: boolean, help: boolean, errors: string[] }}
  */
 export function parseArgs(argv) {
 	const options = {
 		dryRun: false,
 		minAgeMs: DEFAULT_MIN_AGE_MS,
+		max: DEFAULT_MAX_REMOVALS,
 		budgetMs: null,
 		scanTimeoutMs: null,
 		only: null,
@@ -319,6 +352,18 @@ export function parseArgs(argv) {
 					options.errors.push(`invalid --min-age value: ${String(raw)}`);
 				} else {
 					options.minAgeMs = parsed;
+				}
+				break;
+			}
+			case "--max": {
+				const raw = argv[++i];
+				// Digits only: `--max 0` means ZERO removals (a plan-only run),
+				// and an unreadable value is an error rather than a silent
+				// fallback that would disable the cap on a destructive step.
+				if (raw === undefined || !/^\d+$/.test(String(raw))) {
+					options.errors.push(`invalid --max value: ${String(raw)}`);
+				} else {
+					options.max = Number(raw);
 				}
 				break;
 			}
@@ -907,6 +952,58 @@ function isContainedInOrigin(
 }
 
 /**
+ * True iff `sha` is an ancestor of `origin/master` — the STRICT merged
+ * criterion of the merged-branch sweep (#2631). A tree merged only into a
+ * side branch is NOT merged for this purpose: the sweep deletes the local
+ * branch after removal, and only `origin/master` containment makes that
+ * unconditional. Unreadable git output or a missing `origin/master` => false
+ * => "unmerged" => kept. Fails safe.
+ *
+ * @param {string|null} sha
+ * @param {string} repoRoot
+ * @param {number} [timeoutMs]
+ * @returns {boolean}
+ */
+function isAncestorOfOriginMaster(
+	sha,
+	repoRoot,
+	timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
+) {
+	if (!sha) return false;
+	// `--is-ancestor` communicates through its exit code; git() returns "" on
+	// exit 0 and null on any non-zero exit.
+	return (
+		git(
+			["merge-base", "--is-ancestor", sha, "origin/master"],
+			repoRoot,
+			timeoutMs,
+		) !== null
+	);
+}
+
+/**
+ * `git status --porcelain`, tri-state, plus the FIRST porcelain entry so a
+ * keep record can NAME what it protected (#2631). Porcelain reports untracked
+ * files too, so "clean" already excludes untracked deliverables — an empty
+ * porcelain output is the only clean any removal in this script may act on
+ * (on 2026-09-09 a 22 KB untracked report was destroyed by a sweep that read
+ * its checkout as removable).
+ *
+ * @param {string} worktreePath
+ * @param {number} [timeoutMs]
+ * @returns {{ state: "clean"|"dirty"|"unreadable", firstEntry: string|null }}
+ */
+function statusSnapshot(worktreePath, timeoutMs = DEFAULT_GIT_TIMEOUT_MS) {
+	const out = git(["status", "--porcelain"], worktreePath, timeoutMs);
+	if (out === null) return { state: "unreadable", firstEntry: null };
+	const firstLine = out.split(/\r?\n/).find((line) => line.trim() !== "");
+	return {
+		state: out.trim() !== "" ? "dirty" : "clean",
+		firstEntry: firstLine ? firstLine.trim().slice(0, 120) : null,
+	};
+}
+
+/**
  * `git status --porcelain`, tri-state. `"unreadable"` (the call timed out,
  * the process never spawned, or the worktree could not answer at all) is
  * kept APART from a genuine `"dirty"` porcelain output — both still refuse
@@ -920,9 +1017,7 @@ function isContainedInOrigin(
  * @returns {"clean"|"dirty"|"unreadable"}
  */
 export function isDirty(worktreePath, timeoutMs = DEFAULT_GIT_TIMEOUT_MS) {
-	const out = git(["status", "--porcelain"], worktreePath, timeoutMs);
-	if (out === null) return "unreadable";
-	return out.trim() !== "" ? "dirty" : "clean";
+	return statusSnapshot(worktreePath, timeoutMs).state;
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,6 +1232,63 @@ function unlinkTopLevelLinks(worktreePath) {
 	return unlinked;
 }
 
+/**
+ * Enumerate `.claude/worktrees/agent-*` directories that are present on disk
+ * but absent from `git worktree list` (#2538) — the leftovers whose metadata
+ * `git worktree prune` already dropped, which the registration-based sweeps
+ * never see. A directory becomes a removal candidate only when
+ * `unregisteredAgentDirVerdict` proves it holds nothing but git's own `.git`
+ * gitlink; any other entry is treated as an untracked deliverable (see the
+ * 2026-09-09 22 KB report note on that verdict) and the directory is KEPT,
+ * named. Unreadable is keep, never remove.
+ *
+ * @param {{ base: string, registeredKeys: Set<string>, selfKeys: Set<string> }} input
+ * @returns {{ remove: string[], keep: { path: string, reason: string, detail: string|null }[] }}
+ */
+function collectUnregisteredAgentDirs({ base, registeredKeys, selfKeys }) {
+	const plan = { remove: [], keep: [] };
+	let entries;
+	try {
+		entries = fs.readdirSync(base, { withFileTypes: true });
+	} catch {
+		return plan;
+	}
+	for (const entry of entries) {
+		// Directories only, and never a symlink: a symlink named `agent-*`
+		// pointing out of the tree must not be followed or removed.
+		if (!entry.isDirectory()) continue;
+		// The naming convention `worktreePathFromHookPayload` documents:
+		// Claude Code names a managed agent worktree `agent-<agentId>`.
+		if (!/^agent-/.test(entry.name)) continue;
+		const full = path.join(base, entry.name);
+		const key = toComparablePath(full);
+		if (registeredKeys.has(key)) continue;
+		if (selfKeys.has(key)) {
+			plan.keep.push({
+				path: full,
+				reason: "self",
+				detail: "this sweep is running inside it",
+			});
+			continue;
+		}
+		let names = null;
+		try {
+			names = fs.readdirSync(full);
+		} catch {
+			names = null;
+		}
+		const verdict = unregisteredAgentDirVerdict(names);
+		if (verdict.removable) plan.remove.push(full);
+		else
+			plan.keep.push({
+				path: full,
+				reason: "has-untracked-content",
+				detail: verdict.reason,
+			});
+	}
+	return plan;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -1288,14 +1440,18 @@ async function main(argv) {
 	 */
 	let agentTree = null;
 
+	// Where `.claude/worktrees/` actually lives: the MAIN checkout's root. The
+	// SubagentStop payload derivation needs it, and so does the unregistered-
+	// directory pass (#2538), which every non-scoped mode runs.
+	const worktreesBase =
+		mainCheckoutRoot(
+			Math.min(
+				DEFAULT_GIT_TIMEOUT_MS,
+				Math.max(MIN_GIT_TIMEOUT_MS, budgetLeft()),
+			),
+		) ?? REPO_ROOT;
+
 	if (policy.scopedToAgentTree) {
-		const worktreesBase =
-			mainCheckoutRoot(
-				Math.min(
-					DEFAULT_GIT_TIMEOUT_MS,
-					Math.max(MIN_GIT_TIMEOUT_MS, budgetLeft()),
-				),
-			) ?? REPO_ROOT;
 		const derived = worktreePathFromHookPayload(payload, worktreesBase);
 		// Deliberately does NOT fall back to the ordinary sweep: this hook has
 		// a mandate over exactly one agent's tree, and with no usable agent_id
@@ -1387,6 +1543,16 @@ async function main(argv) {
 	const listed = parseWorktreeList(porcelain);
 	const nowMs = Date.now();
 
+	// The MAIN checkout (always `git worktree list`'s first row) is never a
+	// candidate of either sweep; neither is the checkout this script runs from.
+	const primaryKeys = new Set(
+		[listed[0]?.path, REPO_ROOT].filter(Boolean).map(toComparablePath),
+	);
+	// #2631: the merged-branch sweep runs wherever removals run, EXCEPT the
+	// SubagentStop hooks, whose mandate is exactly the one tree their payload
+	// derived — touching sibling trees there would break the scoping contract.
+	const mergedPassRuns = policy.removeWorktrees && !policy.scopedToAgentTree;
+
 	// Trees named by --only are inspected FIRST, so a narrowed manual run never
 	// loses its budget to unrelated siblings (orderBySelection, tested).
 	const ordered = orderBySelection(listed, only);
@@ -1404,7 +1570,12 @@ async function main(argv) {
 	let evaluated = 0;
 	let skippedForBudget = 0;
 	const candidates = ordered.map((row) => {
-		if (!isAgentWorktreePath(row.path)) {
+		const isPrimary = primaryKeys.has(toComparablePath(row.path));
+		const isAgentTree = isAgentWorktreePath(row.path);
+		// The age rail evaluates agent trees; the merged pass (#2631) evaluates
+		// every OTHER non-primary tree. An unevaluated tree is never removable
+		// by either sweep, so skipping one for budget is safe for both.
+		if (isPrimary || (!isAgentTree && !mergedPassRuns)) {
 			return { ...row, dirty: false, pushed: false, mtimeMs: nowMs };
 		}
 		// `evaluated === 0` guarantees at least one tree is always inspected,
@@ -1437,7 +1608,17 @@ async function main(argv) {
 		// that removes nothing shipped. Reading first means no future signal
 		// added to the gatherer can quietly re-open the hole.
 		const mtimeMs = worktreeActivityMs(row.path, nowMs);
-		const dirtyState = isDirty(row.path, enrichBudget());
+		const status = statusSnapshot(row.path, enrichBudget());
+		// #2631: STRICT origin/master ancestry for the merged pass — a tree
+		// merged only into a side branch is not merged for a sweep that
+		// deletes the local branch after removal.
+		const mergedIntoMaster = mergedPassRuns
+			? isAncestorOfOriginMaster(row.head, REPO_ROOT, enrichBudget())
+			: false;
+		let pushed = mergedIntoMaster;
+		if (isAgentTree && !pushed) {
+			pushed = isContainedInOrigin(row.head, REPO_ROOT, enrichBudget());
+		}
 		return {
 			path: row.path,
 			head: row.head,
@@ -1445,13 +1626,20 @@ async function main(argv) {
 			locked: row.locked,
 			lockPid: parseLockPid(row.lockedReason),
 			mtimeMs,
-			dirty: dirtyState !== "clean",
+			dirty: status.state !== "clean",
 			// Threaded through to `planWorktreePrune`'s dirty rail so the
 			// ledger's `keptReason` can say `status-unreadable` instead of
 			// `dirty` when the real story is a budget too tight to ask
 			// (review round 3, F2) -- both still refuse removal.
-			dirtyUnreadable: dirtyState === "unreadable",
-			pushed: isContainedInOrigin(row.head, REPO_ROOT, enrichBudget()),
+			dirtyUnreadable: status.state === "unreadable",
+			pushed,
+			// Merged-pass facts (#2631). Porcelain reports untracked files, so
+			// `clean` covers BOTH halves of "no tracked changes, no untracked
+			// files", and `statusDetail` names what a keep protects.
+			clean: status.state === "clean",
+			statusUnreadable: status.state === "unreadable",
+			mergedIntoMaster,
+			statusDetail: status.firstEntry,
 		};
 	});
 
@@ -1468,17 +1656,86 @@ async function main(argv) {
 		isPidAlive,
 	});
 
+	// #2631: the merged-branch sweep plans over every non-primary tree the
+	// enrichment evaluated — agent-shaped and not. The age rail below and the
+	// merged rail overlap on agent trees; the combined removal list is deduped
+	// by path right after the capping.
+	const mergedPlan = mergedPassRuns
+		? planMergedWorktreeRemovals({
+				candidates: candidates.filter(
+					(candidate) =>
+						!primaryKeys.has(toComparablePath(candidate.path)) &&
+						!candidate.bare,
+				),
+				nowMs,
+				selfPath: [SCRIPT_DIR, process.cwd()],
+				isPidAlive,
+				selectedKeys,
+			})
+		: { remove: [], keep: [] };
+
 	// At most one removal per SessionStart run: `git worktree remove` is
 	// bounded at REMOVE_TIMEOUT_MS and a SIGKILLed removal leaves a
 	// half-removed tree, so the hook's timeout has to cover the removal it
-	// starts (review S8). A manual run is uncapped.
-	const removals = policy.removeWorktrees
-		? capRemovals(plan.remove, policy.maxRemovals)
-		: [];
-	const removalKeys = new Set(removals.map((removal) => removal.path));
-	const deferred = plan.remove.filter(
-		(removal) => !removalKeys.has(removal.path),
+	// starts (review S8). A manual run takes the `--max` cap instead.
+	//
+	// The RAW age-plan removals are the `deferred` source AND the merged
+	// pass's dedupe base. Capping happens ONCE, on `removals` below: deriving
+	// `deferred` from an already-capped list would drop everything past the
+	// cap, and for a non-removing policy (--keep-agent-tree) drop plan.remove
+	// entirely, which reads keptReason as null ("removed") instead of
+	// "removal-not-permitted".
+	const ageRemovals = plan.remove;
+	const ageRemovalKeys = new Set(
+		ageRemovals.map((removal) => toComparablePath(removal.path)),
 	);
+	// #2631: the merged pass's own removals, deduped against the age rail's —
+	// a tree both plans selected is removed once.
+	const mergedRemovals =
+		mergedPassRuns && policy.removeWorktrees
+			? mergedPlan.remove
+					.filter(
+						(removal) => !ageRemovalKeys.has(toComparablePath(removal.path)),
+					)
+					.map((removal) => ({ ...removal, fromMerged: true }))
+			: [];
+	// #2538/#2631: `--max` (default 10) bounds every removal ONE run performs,
+	// age rail and merged pass combined, and what it skips is printed. Hook
+	// modes keep their policy cap — the hook-timeout arithmetic (budget +
+	// recheck + removal + margin <= timeout) is sized for ONE removal — so the
+	// effective cap is the smaller of the two.
+	const runCap = Math.min(policy.maxRemovals, options.max);
+	const removals = policy.removeWorktrees
+		? capRemovals([...ageRemovals, ...mergedRemovals], runCap)
+		: [];
+	const removalKeys = new Set(
+		removals.map((removal) => toComparablePath(removal.path)),
+	);
+	const deferred = [...ageRemovals, ...mergedRemovals].filter(
+		(removal) => !removalKeys.has(toComparablePath(removal.path)),
+	);
+
+	// --- unregistered `.claude/worktrees/agent-*` directories (#2538) ---
+	// Every non-scoped mode runs this pass: the SubagentStop hooks have a
+	// mandate over exactly one agent's tree, never over its siblings' leftovers.
+	const unregisteredPlan = policy.scopedToAgentTree
+		? { remove: [], keep: [] }
+		: collectUnregisteredAgentDirs({
+				base: path.join(worktreesBase, ".claude", "worktrees"),
+				registeredKeys: new Set(
+					listed.map((row) => toComparablePath(row.path)),
+				),
+				selfKeys: new Set(
+					[SCRIPT_DIR, process.cwd()]
+						.map(
+							(entry) =>
+								enclosingAgentWorktree(entry) ?? toComparablePath(entry),
+						)
+						.filter(Boolean),
+				),
+			});
+	const unregisteredRemovals = unregisteredPlan.remove.slice(0, options.max);
+	const unregisteredDeferred = unregisteredPlan.remove.slice(options.max);
 
 	const wantProcessScan =
 		removals.length > 0 || (options.orphanSweep && policy.orphanSweep);
@@ -1553,6 +1810,12 @@ async function main(argv) {
 					})),
 					deferred: deferred.map((removal) => removal.path),
 					keep: plan.keep,
+					mergedKeep: mergedPlan.keep,
+					unregistered: {
+						remove: unregisteredRemovals,
+						deferred: unregisteredDeferred,
+						keep: unregisteredPlan.keep,
+					},
 					orphans: orphans.map(({ row, reason }) => ({
 						pid: row.pid,
 						ppid: row.ppid,

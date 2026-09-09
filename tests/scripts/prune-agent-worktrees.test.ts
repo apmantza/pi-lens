@@ -565,12 +565,19 @@ describe("candidate enrichment order (review round 3, F1b)", () => {
 
 	it("reads worktree activity before anything that runs git in the tree", () => {
 		const activityAt = source.indexOf("worktreeActivityMs(row.path, nowMs)");
-		const dirtyAt = source.indexOf("isDirty(row.path,");
+		// #2631 renamed the enrichment-time status read: `isDirty(row.path, …)`
+		// became `statusSnapshot(row.path, …)` so the keep record can name the
+		// first porcelain entry it protected. `statusSnapshot` IS the call that
+		// runs `git status` inside the tree, so the invariant this pins is
+		// unchanged: activity is read BEFORE it.
+		const dirtyAt = source.indexOf("statusSnapshot(row.path,");
 		expect(
 			activityAt,
 			"worktreeActivityMs(row.path, …) call site",
 		).toBeGreaterThan(-1);
-		expect(dirtyAt, "isDirty(row.path, …) call site").toBeGreaterThan(-1);
+		expect(dirtyAt, "statusSnapshot(row.path, …) call site").toBeGreaterThan(
+			-1,
+		);
 		expect(activityAt).toBeLessThan(dirtyAt);
 	});
 });
