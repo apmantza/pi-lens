@@ -61,6 +61,7 @@ describe("turn identity across observability sinks (#2815)", () => {
 			ledger,
 			review,
 			readGuard,
+			turnContext,
 		] = await Promise.all([
 			import("../../clients/runtime-coordinator.js"),
 			import("../../clients/latency-logger.js"),
@@ -68,36 +69,40 @@ describe("turn identity across observability sinks (#2815)", () => {
 			import("../../clients/degradation-ledger.js"),
 			import("../../clients/review-graph-logger.js"),
 			import("../../clients/read-guard-logger.js"),
+			import("../../clients/turn-context.js"),
 		]);
 		const runtime = new RuntimeCoordinator();
 		runtime.resetForSession();
 		runtime.setSessionLifecycle({ sessionId: "session-2815" });
 		runtime.beginTurn();
 
-		latency.logLatency({
-			type: "phase",
-			phase: "scripted_turn",
-			filePath: "<test>",
-			durationMs: 0,
-		});
-		extension.logExtension({ subsystem: "test", message: "turn one" });
-		ledger.recordDegradationOnce({
-			kind: "trust-refusal",
-			subject: "turn-2815",
-			reason: "test",
-		});
-		review.logReviewGraph({ cwd: home, phase: "build_started" });
-		readGuard.logReadGuardEvent({
-			event: "edit_blocked",
-			filePath: path.join(home, "file.ts"),
+		turnContext.runWithTurnContext("session-2815", () => {
+			latency.logLatency({
+				type: "phase",
+				phase: "scripted_turn",
+				filePath: "<test>",
+				durationMs: 0,
+			});
+			extension.logExtension({ subsystem: "test", message: "turn one" });
+			ledger.recordDegradationOnce({
+				kind: "trust-refusal",
+				subject: "turn-2815",
+				reason: "test",
+			});
+			review.logReviewGraph({ cwd: home, phase: "build_started" });
+			readGuard.logReadGuardEvent({
+				event: "edit_blocked",
+				filePath: path.join(home, "file.ts"),
+			});
 		});
 		runtime.beginTurn();
-		latency.logLatency({
-			type: "phase",
-			phase: "scripted_turn_two",
-			filePath: "<test>",
-			durationMs: 0,
-		});
+		turnContext.runWithTurnContext("session-2815", () =>
+			latency.logLatency({
+				type: "phase",
+				phase: "scripted_turn_two",
+				filePath: "<test>",
+				durationMs: 0,
+			}));
 
 		await Promise.all([
 			latency.flushLatencyLog(),
@@ -183,6 +188,62 @@ describe("turn identity across observability sinks (#2815)", () => {
 				.filter((row) => row.phase === "secondary-2815_turn")
 				.every((row) => String(row.turnId).startsWith("secondary-2815:")),
 		).toBe(true);
+	});
+
+	it("keeps context-free and detached writers at turn:0 (#2815 F3)", async () => {
+		const [{ RuntimeCoordinator }, latency, guard, turnContext] =
+			await Promise.all([
+				import("../../clients/runtime-coordinator.js"),
+				import("../../clients/latency-logger.js"),
+				import("../../clients/session-event-guard.js"),
+				import("../../clients/turn-context.js"),
+			]);
+		const primary = new RuntimeCoordinator();
+		const secondary = new RuntimeCoordinator();
+		primary.resetForSession();
+		primary.setSessionLifecycle({ sessionId: "primary-probe" });
+		secondary.resetForSession();
+		secondary.setSessionLifecycle({ sessionId: "secondary-probe" });
+		const write = guard.wrapSessionEventHandler(
+			"turn_start",
+			async (
+				_event: unknown,
+				ctx: { sessionManager: { getSessionId: () => string } },
+			) => {
+				const runtime =
+					ctx.sessionManager.getSessionId() === "primary-probe"
+						? primary
+						: secondary;
+				const turnId = runtime.beginTurn();
+				await Promise.resolve();
+				latency.logLatency({
+					type: "phase",
+					phase: `${ctx.sessionManager.getSessionId()}_turn`,
+					filePath: "<test>",
+					durationMs: 0,
+					turnId,
+				});
+			},
+		);
+		await Promise.all([
+			write({}, { sessionManager: { getSessionId: () => "primary-probe" } }),
+			write({}, { sessionManager: { getSessionId: () => "secondary-probe" } }),
+		]);
+
+		// This is a detached batch: it starts after both host-event scopes ended.
+		const outsideTurn = turnContext.getTurnId();
+		latency.logLatency({
+			type: "phase",
+			phase: "outside_detached",
+			filePath: "<test>",
+			durationMs: 0,
+		});
+		await latency.flushLatencyLog();
+		const latencyRows = rows(path.join(home, "latency.log"));
+		expect(outsideTurn).toBe("turn:0");
+		expect(
+			latencyRows.find((row) => row.phase === "outside_detached")?.turnId,
+		).toBe("turn:0");
 	});
 
 	it("restarts the per-session counter at one after session_start", async () => {

@@ -575,9 +575,11 @@ once-only through the real context seam (#2366, #2733).
 Turn identifiers are session-owned: `clients/turn-context.ts` keeps one counter
 per stable session id, and `clients/session-event-guard.ts` binds each host
 event to the id read from that event's context before asynchronous work begins.
-Sinks therefore read the writer's session id rather than a process-wide latest
-session. `setSessionLifecycle` resets only the starting session's counter, so
-primary, secondary, resume, and fork starts each begin at turn one (#2815).
+Context-bound sinks read the writer's session id, while a detached sink uses its
+explicit queued id or the context-free `turn:0` fallback; it never reads a
+process-wide latest session. `setSessionLifecycle` resets only the starting
+session's counter, so primary, secondary, resume, and fork starts each begin at
+turn one (#2815).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
