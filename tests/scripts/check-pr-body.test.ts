@@ -4,6 +4,7 @@ import {
 	detectEscapedNewlineBody,
 	detectFlattenedBody,
 	lintPullRequestEvent,
+	lintLocalPrBody,
 	lintPrBody,
 	repairEscapedNewlineBody,
 	repairFlattenedBody,
@@ -405,6 +406,54 @@ describe("flattened body CI entrypoint", () => {
 });
 
 describe("PR body lint (#1844)", () => {
+	it("requires a diff record literal for runtime changes", () => {
+		const runtimeDiff = [
+			"diff --git a/clients/example.ts b/clients/example.ts",
+			"@@ -1,0 +2,3 @@",
+			'+recordDegradationOnce({ kind: "runtime-example" });',
+		].join("\n");
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"A runtime record is present.",
+			),
+			process.cwd(),
+			() => runtimeDiff,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("runtime-example");
+	});
+
+	it("rejects a no-failure claim when the runtime diff adds a catch", () => {
+		const runtimeDiff = [
+			"diff --git a/clients/example.ts b/clients/example.ts",
+			"@@ -1,0 +2,3 @@",
+			"+try { run(); } catch (error) { report(error); }",
+		].join("\n");
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() => runtimeDiff,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("failure path");
+	});
+
+	it("does not apply the runtime rule to a docs-only diff", () => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"Documentation explains the change.",
+			),
+			process.cwd(),
+			() => "diff --git a/docs/example.md b/docs/example.md\n+docs",
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
 	it("accepts the required sections", () => {
 		expect(lintPrBody(body)).toEqual({ valid: true, errors: [] });
 	});
