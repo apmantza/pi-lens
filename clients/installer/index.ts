@@ -5555,6 +5555,12 @@ export async function installTool(toolId: string): Promise<boolean> {
 
 			case "github": {
 				if (!tool.github) return false;
+				if (!tool.github.assetMatch(process.platform, process.arch)) {
+					const reason = `unsupported platform=${process.platform} arch=${process.arch}`;
+					noteInstallAttempt(tool.id, "unavailable", reason);
+					logSessionStart(`auto-install ${tool.id}: ${reason}`);
+					return false;
+				}
 				const ghPath = await installGitHubTool(tool);
 				return finishInstallAttempt(tool.id, ghPath !== undefined, startedAt);
 			}
