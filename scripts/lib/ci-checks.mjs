@@ -27,8 +27,8 @@ export const CI_JOB_NAMES = Object.freeze({
 
 // How this repository ACTUALLY marks a check advisory: the workflow job name
 // ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,
-// `Vale prose lint (advisory)`, `OSV scan (advisory)`. Originally lived only
+// open PR -- `PR body (advisory)`, `Vale prose lint (advisory)`,
+// `OSV scan (advisory)`. Originally lived only
 // in merge-train-lane.mjs; moved here in #2609 so ci-verdict.mjs (a second
 // consumer of the exact same policy) imports the ONE list instead of
 // hand-rolling its own -- AGENTS.md shape 38's own warning ("the cheapest

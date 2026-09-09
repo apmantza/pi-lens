@@ -294,6 +294,7 @@ describe("warm turn-end IPC route (real spawn)", { retry: 2 }, () => {
 	// would silently no-op. Gated to win32: POSIX is case-sensitive, so a
 	// case-swapped string names a genuinely different (nonexistent) path there,
 	// and asserting acceptance would be meaningless / actively wrong.
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"accepts a turn-end request whose cwd differs from the workspace root only in case",
 		async () => {

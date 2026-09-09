@@ -126,6 +126,7 @@ describe("lsp launch", () => {
 		expect(typeof probeHomeState.getProbeHomeResolution).toBe("function");
 	});
 
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"treats delayed shell-backed startup failure as launch failure",
 		async () => {
@@ -164,6 +165,7 @@ describe("lsp launch", () => {
 		},
 	);
 
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"resolves bare commands through where before spawning",
 		async () => {
@@ -250,6 +252,7 @@ describe("lsp launch", () => {
 		});
 	});
 
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"rejects immediately for an invalid .cmd shim without spawning",
 		async () => {
@@ -277,6 +280,7 @@ describe("lsp launch", () => {
 		},
 	);
 
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"bypasses .ps1 to .cmd sibling on Windows",
 		async () => {
@@ -308,6 +312,7 @@ describe("lsp launch", () => {
 		},
 	);
 
+	// lane: windows-vitest
 	it.runIf(process.platform === "win32")(
 		"bypasses .ps1 to direct node execution when .cmd sibling is missing",
 		async () => {

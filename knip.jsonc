@@ -43,6 +43,9 @@
 		// reached by any import from index.ts.
 		"scripts/*.ts",
 		"scripts/*.mjs",
+		// The Windows CI job invokes this population source directly, and the
+		// governance test imports it as the same executable seam.
+		"scripts/lib/win32-gate-population.mjs",
 		// scripts/lib/merge-train-dispatch-validation.mjs — the one
 		// scripts/lib/*.mjs a workflow `run:` step invokes directly — is
 		// NOT listed here despite that: it's already reached through
