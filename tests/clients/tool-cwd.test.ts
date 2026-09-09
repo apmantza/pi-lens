@@ -51,6 +51,12 @@ describe("resolveToolCwd (#2777)", () => {
 
 			expect(fileKey).toBe(equivalentFileKey);
 			expect(rootKey).toBe(equivalentRootKey);
+			// Verify r7 (#2782): the normalizer keeps a trailing separator, so the
+			// equivalence holds only because every seam key is path.resolve()d first;
+			// pin that reachability rather than the helper.
+			expect(
+				toolCwd._toolCwdEphemeralKey([path.win32.resolve("C:/PROJ/")]),
+			).toBe(rootKey);
 			expect(fileKey).toBe(
 				pathUtils.normalizeEphemeralMapKey("C:\\proj\\src\\a.ts"),
 			);
