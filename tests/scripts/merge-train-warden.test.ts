@@ -648,6 +648,53 @@ describe("merge-train warden GraphQL fetch + REST apply (#1844)", () => {
 		expect(decideActions(prs[0])).toEqual([]);
 	});
 
+	// MEDIUM-1: a discovered CANCELLED check is unresolved evidence, not a
+	// failure and not a settled pass. Keep the GraphQL normalization and the
+	// red-ci action decision in one fixture so removing the uncertainty guard
+	// cannot silently make the warden label or clear the PR.
+	it("keeps a discovered CANCELLED check unresolved without changing red-ci", async () => {
+		const page = graphqlPage([
+			prNode({
+				mergeStateStatus: "CLEAN",
+				labels: { nodes: [{ name: RED_CI_LABEL }] },
+				commits: {
+					nodes: [
+						{
+							commit: {
+								oid: "deadbeef",
+								statusCheckRollup: {
+									contexts: {
+										nodes: [
+											checkRun("Unit tests", "SUCCESS"),
+											checkRun("Lint & type-check", "SUCCESS"),
+											checkRun("discovered cancellation", "CANCELLED"),
+										],
+									},
+								},
+							},
+						},
+					],
+				},
+			}),
+		]);
+		const { fetcher } = fakeGithub({ "POST /graphql": page });
+		const { prs } = await fetchOpenPullRequests(fetcher, "acme", "repo");
+		const normalized = prs[0];
+
+		expect(normalized.unresolvedRequiredChecks).toContain(
+			"discovered cancellation",
+		);
+		expect(normalized.failingRequiredChecks).toEqual([]);
+		expect(decideActions(normalized)).not.toContainEqual({
+			type: "add-label",
+			label: RED_CI_LABEL,
+		});
+		expect(decideActions(normalized)).not.toContainEqual({
+			type: "remove-label",
+			label: RED_CI_LABEL,
+		});
+	});
+
 	it("marks a required check missing from the rollup as unresolved, not passing", async () => {
 		const page = graphqlPage([
 			prNode({
