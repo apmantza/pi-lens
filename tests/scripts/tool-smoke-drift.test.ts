@@ -231,10 +231,11 @@ describe("decideAction reused from install-smoke-drift.mjs, applied to tool-smok
 		expect(decideAction({ steps: layers })).toBe("file-or-refresh");
 	});
 
-	it("closes when all three gating layers succeeded", () => {
+	it("closes when all four gating layers succeeded", () => {
 		const layers = [
 			{ name: "Tool layer", outcome: "success" },
 			{ name: "LSP handshake layer", outcome: "success" },
+			{ name: "LSP diagnostics clean-gate", outcome: "success" },
 			{ name: "Format layer", outcome: "success" },
 		];
 		expect(decideAction({ steps: layers })).toBe("close-if-open");
@@ -326,6 +327,7 @@ describe("decideToolSmokeAction (#2723 review F3)", () => {
 	const allSkipped = [
 		{ name: "Tool layer", outcome: "skipped" },
 		{ name: "LSP handshake layer", outcome: "skipped" },
+		{ name: "LSP diagnostics clean-gate", outcome: "skipped" },
 		{ name: "Format layer", outcome: "skipped" },
 	];
 
