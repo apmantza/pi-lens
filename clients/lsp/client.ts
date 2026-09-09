@@ -1065,6 +1065,8 @@ export interface LSPClientState {
 	projectIdentityProbedFiles?: Set<string>;
 	/** Mutable: updated by applyDynamicCapabilities after registerCapability events */
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
+	/** Effective diagnostics channel observed during this client session. */
+	observedDiagnosticsChannel?: "push";
 	/** Mutable: upgraded by applyDynamicCapabilities after registerCapability events */
 	operationSupport: LSPOperationSupport;
 	/** #1971: parsed `FileOperationRegistrationOptions` filters from initialize —
@@ -2174,7 +2176,7 @@ export function applyDynamicCapabilities(state: LSPClientState): void {
 	if (hasDynamicPull) {
 		state.workspaceDiagnosticsSupport = {
 			advertised: true,
-			mode: "pull",
+			mode: state.observedDiagnosticsChannel === "push" ? "push-only" : "pull",
 			// #1667: workspace-pull support is what the REGISTRATION declares. The
 			// spec registers workspace pull as `registerOptions.workspaceDiagnostics`
 			// on a `textDocument/diagnostic` registration - `workspace/diagnostic` is
@@ -2268,6 +2270,23 @@ export function setupIncomingHandlers(
 			// that is no longer open on this client.
 			if (state.closedDocuments?.has(normalizedPath)) return;
 			onDiagnosticsPublished?.(state.serverId);
+			if (state.workspaceDiagnosticsSupport.mode === "pull") {
+				// A declaration is only a promise of pull support. If this live
+				// session publishes first, its effective channel is push; keeping the
+				// declared pull mode would wait for an answer that never arrives and
+				// could turn an empty pull timeout into a clean result (#2776).
+				recordDegradationOnce({
+					kind: "lsp-capability-skip",
+					subject: `${state.serverId}:diagnostics-channel`,
+					reason:
+						"declared=pull observed=push; using published diagnostics for this session",
+				});
+				state.observedDiagnosticsChannel = "push";
+				state.workspaceDiagnosticsSupport = {
+					...state.workspaceDiagnosticsSupport,
+					mode: "push-only",
+				};
+			}
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
 			if (PUB_DEBUG) {

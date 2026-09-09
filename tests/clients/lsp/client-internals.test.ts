@@ -1486,11 +1486,11 @@ describe("publishDiagnostics handler — superseded push guard (cache-poisoning 
 		version?: number;
 	};
 
-	function createCapturingState(): {
+	function createCapturingState(overrides: Partial<LSPClientState> = {}): {
 		state: LSPClientState;
 		emitPublishDiagnostics: (params: PublishDiagnosticsParams) => void;
 	} {
-		const state = createMockState({ serverId: "test-server" });
+		const state = createMockState({ serverId: "test-server", ...overrides });
 		let handler: ((params: PublishDiagnosticsParams) => void) | undefined;
 		(
 			state.connection.onNotification as unknown as ReturnType<typeof vi.fn>
@@ -1545,6 +1545,27 @@ describe("publishDiagnostics handler — superseded push guard (cache-poisoning 
 
 		await wait;
 		expect(state.pushDiagnostics.get(TEST_KEY)).toEqual([]);
+	});
+
+	it("demotes a pull declaration after the first observed push", async () => {
+		const { state, emitPublishDiagnostics } = createCapturingState({
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				workspaceDiagnostics: false,
+				diagnosticProviderKind: "object",
+			},
+		});
+
+		emitPublishDiagnostics({
+			uri: pathToFileURL(TEST_FILE).href,
+			diagnostics: [diagnostic("push-only result")],
+		});
+
+		await vi.waitFor(() => {
+			expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
+			expect(state.pushDiagnostics.get(TEST_KEY)).toHaveLength(1);
+		});
 	});
 
 	it("keeps classic TypeScript's first publication authoritative", () => {
@@ -2841,6 +2862,17 @@ describe("applyDynamicCapabilities", () => {
 		expect(state.workspaceDiagnosticsSupport.diagnosticProviderKind).toBe(
 			"dynamic",
 		);
+	});
+
+	it("keeps observed push mode when a pull registration arrives later", () => {
+		const state = createMockState({ observedDiagnosticsChannel: "push" });
+		state.dynamicRegistrations.set("diag-1", {
+			method: "textDocument/diagnostic",
+		});
+
+		applyDynamicCapabilities(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
 	});
 
 	it("upgrades to pull mode when workspace/diagnostic is registered", () => {

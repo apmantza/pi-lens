@@ -485,6 +485,29 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
+		if (process.env.FAKE_LSP_PULL_DECLARED_PUSH_ONLY === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					version: data.params?.textDocument?.version,
+					diagnostics: [
+						{
+							severity: 1,
+							code: "FAKE-PUSH-ONLY",
+							source: "fake-lsp",
+							message: "push-only diagnostic",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+				},
+			});
+			return;
+		}
 		// Gated on the wedge profile so every existing test keeps the incumbent
 		// silent-on-open behaviour it was written against.
 		if (HAS_BACKLOG_WEDGE) {
@@ -662,6 +685,7 @@ function handle(raw) {
 
 	// Pull diagnostics
 	if (data.method === "textDocument/diagnostic") {
+		if (process.env.FAKE_LSP_PULL_DECLARED_PUSH_ONLY === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
 		send({
 			jsonrpc: "2.0",

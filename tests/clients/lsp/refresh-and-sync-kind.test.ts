@@ -1527,6 +1527,37 @@ describe("negotiateSyncKind through the real createLSPClient init path (#1669 re
 	}, 15_000);
 });
 
+describe("declared pull versus observed push diagnostics (#2776)", () => {
+	it("keeps push diagnostics when the server declares pull but never answers pull", async () => {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FAKE_LSP_PULL_DECLARED_PUSH_ONLY: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-pull-declaring-push-only",
+			process: proc,
+			root: process.cwd(),
+		});
+		try {
+			const filePath = path.join(
+				os.tmpdir(),
+				"pi-lens-pull-declaring-push-only.ts",
+			);
+			await client.notify.open(filePath, "const x = 1;\n", "typescript");
+			await vi.waitFor(() => {
+				expect(client.getDiagnostics(filePath)).toHaveLength(1);
+			});
+			expect(client.getWorkspaceDiagnosticsSupport().mode).toBe("push-only");
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+});
+
 describe("#2065 fix round 1 F1: a crashed client deregisters from activeLspClients", () => {
 	it("stops counting a client's retained text once its process is killed, without a graceful shutdown() call", async () => {
 		const before = getLspDocumentTextRetentionSnapshot();
