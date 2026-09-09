@@ -136,6 +136,24 @@ operator's private notes, so a different orchestrator can run the same train.
   list, and cite the number in the next brief — before the next dispatch. "To
   err twice is not the mark of a wise man." (2026-09-03: shapes 28–36 came out
   of one day's reviews this way.)
+- **Second instance of a catalogued shape opens the consolidation lane, not a
+  third instance fix (2026-09-09).** The trigger is the shape recurring at all,
+  not only twice in one session: when a review, an issue or a dogfood finding
+  is the second member of a shape already in AGENTS.md's catalog, the
+  orchestrator files the consolidation lane BEFORE the second instance merges,
+  with three fixed deliverables: one seam every consumer calls, one log line
+  per resolution (which value was chosen and why, throttled once per key per
+  session), and one bounded degradation record for the fallback path. The
+  record: #2691 (yamllint cwd) and #2756 (Prettier ignore cwd) were shape 40
+  twice in one week; each was fixed at its own seam with no log line, and the
+  maintainer had to ask for the seam (#2777). "Contracts move in the same
+  session" covers the catalog row; this rule covers the code.
+- **Every "should have been caught by" names a nightly or smoke row, and
+  the row is filed the same day.** A detection retrospective that ends in
+  prose is not a retrospective. #2776 (emmylua_ls declares pull diagnostics
+  but only pushes → false "confirmed clean") was reachable by a
+  declared-vs-observed channel probe the capability matrix never ran, and by
+  the custom-`lsp.servers` population the matrix never covers.
 - **Keep a lane ledger.** One file, one row per lane: issue/PR, worker id,
   round, state, head SHA, merge-order note, and for bug lanes
   `caught by / should have been caught by`; a header line with the quota
