@@ -246,6 +246,14 @@ is the procedure and defers here on conflict; 2026-09-09).**
   uncommitted work. After
   every settlement, list live workers and consume every finished handle — a
   one-shot watch misses what settles while it is disarmed.
+- *Worker-model roles are assigned on evidence, not anecdote.* Which
+  external model reviews, verifies, fixes or investigates is decided by an
+  internal, blind, budgeted eval over fixed cases from merged PRs whose
+  reviews found proven defects (the answer key), with tokens and wall-clock
+  recorded per model; a cheaper model takes a role only when its found-defect
+  rate is within 0.1 of the anchor's and its false-finding rate is not
+  higher. That harness is orchestration tooling for our own development,
+  never a product surface: no changelog, no release gate, no user docs.
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a

@@ -155,6 +155,14 @@ pi install git:github.com/apmantza/pi-lens
 Requires Node.js >=22.19.0 (matches the pi host's own floor — see `engines`
 in `package.json`).
 
+Letting a coding agent do it: paste this into its prompt.
+
+```text
+Install pi-lens (npm:pi-lens) into pi, then read AGENTS.md in
+https://github.com/apmantza/pi-lens for how the extension works and how it
+expects to be operated.
+```
+
 > **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
 > `postinstall`) now require explicit approval — if `npm install` warns about
 > unreviewed install scripts, review and allow them with
