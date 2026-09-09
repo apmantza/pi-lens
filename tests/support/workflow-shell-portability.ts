@@ -19,7 +19,12 @@ export type Workflow = {
 		{
 			"runs-on"?: unknown;
 			strategy?: { matrix?: Record<string, unknown> };
-			steps?: Array<{ name?: unknown; run?: unknown; shell?: unknown }>;
+			steps?: Array<{
+				name?: unknown;
+				run?: unknown;
+				shell?: unknown;
+				if?: unknown;
+			}>;
 		}
 	>;
 };
@@ -34,22 +39,27 @@ export type WorkflowFinding = {
 export function findBash4PortabilityFindings(
 	workflow: Workflow,
 	workflowName: string,
+	callerInputs: Record<string, unknown> = {},
 ): WorkflowFinding[] {
 	const findings: WorkflowFinding[] = [];
 	for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
-		if (!canRunOnMacOS(workflow, job)) continue;
+		if (!canRunOnMacOS(workflow, job, callerInputs)) continue;
 		for (const step of job.steps ?? []) {
-			if (typeof step.run !== "string" || !isBashStep(step)) continue;
-			const code = blankShellProse(step.run);
+			if (
+				typeof step.run !== "string" ||
+				!isBashStep(step) ||
+				excludesMacOS(step.if)
+			)
+				continue;
+			const code = lexShell(step.run);
 			for (const needle of BASH4_NEEDLES) {
-				if (needlePattern(needle.name).test(code)) {
+				if (needlePattern(needle.name).test(code))
 					findings.push({
 						workflow: workflowName,
 						job: jobName,
 						step: typeof step.name === "string" ? step.name : "(unnamed)",
 						needle: needle.name,
 					});
-				}
 			}
 		}
 	}
@@ -63,23 +73,33 @@ function isMacOS(value: unknown): boolean {
 function containsMacOS(value: unknown): boolean {
 	if (isMacOS(value)) return true;
 	if (Array.isArray(value)) return value.some(containsMacOS);
-	if (value && typeof value === "object") {
+	if (value && typeof value === "object")
 		return Object.values(value).some(containsMacOS);
-	}
 	return false;
 }
 
 function canRunOnMacOS(
 	workflow: Workflow,
 	job: NonNullable<Workflow["jobs"]>[string],
+	callerInputs: Record<string, unknown>,
 ): boolean {
 	const runsOn = job["runs-on"];
 	if (isMacOS(runsOn)) return true;
 	if (typeof runsOn !== "string") return false;
 	const matrixName = runsOn.match(/\bmatrix\.([A-Za-z_][\w-]*)\b/)?.[1];
-	if (matrixName && containsMacOS(job.strategy?.matrix?.[matrixName])) {
+	const matrix = job.strategy?.matrix;
+	if (matrixName && containsMacOS(matrix?.[matrixName])) return true;
+	if (
+		matrixName &&
+		Array.isArray(matrix?.include) &&
+		(matrix.include as unknown[]).some(
+			(entry) =>
+				entry &&
+				typeof entry === "object" &&
+				containsMacOS((entry as Record<string, unknown>)[matrixName]),
+		)
+	)
 		return true;
-	}
 	const inputNames = [...runsOn.matchAll(/\binputs\.([A-Za-z_][\w-]*)\b/g)].map(
 		(match) => match[1],
 	);
@@ -87,6 +107,7 @@ function canRunOnMacOS(
 	return inputNames.some((name) => {
 		const input = inputs[name];
 		return (
+			containsMacOS(callerInputs[name]) ||
 			containsMacOS(input) ||
 			(input !== undefined &&
 				input.default === undefined &&
@@ -95,53 +116,104 @@ function canRunOnMacOS(
 	});
 }
 
+function excludesMacOS(value: unknown): boolean {
+	return (
+		typeof value === "string" &&
+		/^(?:runner\.os\s*!=\s*['"]macOS['"]|matrix\.os\s*!=\s*['"]macos-latest['"])$/.test(
+			value.trim(),
+		)
+	);
+}
+
 function isBashStep(step: { shell?: unknown }): boolean {
 	if (step.shell === undefined) return true;
 	return typeof step.shell === "string" && /^bash(?:\s|$)/.test(step.shell);
 }
 
 function needlePattern(needle: string): RegExp {
-	if (needle === "${var,,}") return /\$\{[A-Za-z_][\w]*,,[^}]*\}/;
-	if (needle === "${var^^}") return /\$\{[A-Za-z_][\w]*\^\^[^}]*\}/;
-	if (needle === "declare -A") return /\bdeclare\s+-A\b/;
+	if (needle === "${var,,}") return /\$\{[A-Za-z_][\w]*,,?[^}]*\}/;
+	if (needle === "${var^^}") return /\$\{[A-Za-z_][\w]*\^\^?[^}]*\}/;
+	if (needle === "declare -A")
+		return /(?:^|[;\n]|&&|\|\|?|\|)\s*declare\s+-A\b/;
+	if (needle === "mapfile" || needle === "readarray")
+		return new RegExp(`(?:^|[;\\n]|&&|\\|\\|?|\\||\\$\\()\\s*${needle}\\b`);
 	if (needle === "|&") return /\|&/;
 	if (needle === ";;&") return /;;&/;
 	return new RegExp(`\\b${needle}\\b`);
 }
 
-/** Blanks shell comments and quoted prose while preserving line positions. */
-function blankShellProse(source: string): string {
+/** Lex executable shell text. Single-quoted prose and quoted heredocs are opaque. */
+function lexShell(source: string): string {
 	const chars = source.split("");
 	let quote: "'" | '"' | undefined;
 	let comment = false;
+	let quotedHeredoc: string | undefined;
+	let heredocPending: string | undefined;
+	let lineStart = true;
 	for (let index = 0; index < chars.length; index++) {
 		const char = chars[index];
-		if (comment) {
-			if (char === "\n") comment = false;
-			else chars[index] = " ";
+		if (quotedHeredoc !== undefined) {
+			const line = chars
+				.slice(index)
+				.join("")
+				.match(/^([^\n]*)(?:\n|$)/)?.[1];
+			if (lineStart && line?.replace(/^\t+/, "") === quotedHeredoc)
+				quotedHeredoc = undefined;
+			else if (char !== "\n") chars[index] = " ";
+			lineStart = char === "\n";
 			continue;
 		}
-		if (quote) {
-			if (char === "\\" && quote === '"') {
-				if (index + 1 < chars.length && chars[index + 1] !== "\n")
-					chars[++index] = " ";
-				chars[index - 1] = " ";
-			} else if (char === quote) {
+		if (char === "\n") {
+			comment = false;
+			quote = undefined;
+			lineStart = true;
+			if (heredocPending !== undefined) {
+				quotedHeredoc = heredocPending;
+				heredocPending = undefined;
+			}
+			continue;
+		}
+		lineStart = false;
+		if (comment) {
+			chars[index] = " ";
+			continue;
+		}
+		if (quote === "'") {
+			chars[index] = " ";
+			if (char === "'") quote = undefined;
+			continue;
+		}
+		if (quote === '"') {
+			if (char === '"') {
 				quote = undefined;
 				chars[index] = " ";
-			} else if (char !== "\n") chars[index] = " ";
-			continue;
-		}
-		if (char === "'" || char === '"') {
-			quote = char;
-			chars[index] = " ";
+			} else if (char === "$" && chars[index + 1] === "{")
+				index = preserveExpansion(chars, index);
+			else chars[index] = " ";
 			continue;
 		}
 		if (char === "#" && (index === 0 || /[\s;]/.test(chars[index - 1]))) {
 			comment = true;
 			chars[index] = " ";
+		} else if (char === "'" || char === '"') {
+			quote = char;
+			chars[index] = " ";
+		} else if (char === "<" && chars[index + 1] === "<") {
+			const match = source
+				.slice(index + 2)
+				.match(/^[-\t ]*(?:(['"])([^'"\s]+)\1|\\([^\s]+)|([^\s]+))/);
+			if (match && (match[1] || match[3]))
+				heredocPending = match[2] ?? match[3];
 		}
 	}
-	return stripSource(chars.join(""));
+	return chars.join("").replace(/\\\r?\n[ \t]*/g, "");
 }
-import { stripSource } from "./sweep-kit.js";
+
+function preserveExpansion(chars: string[], start: number): number {
+	let depth = 0;
+	for (let index = start; index < chars.length; index++) {
+		if (chars[index] === "{") depth++;
+		if (chars[index] === "}" && --depth === 0) return index;
+	}
+	return chars.length - 1;
+}

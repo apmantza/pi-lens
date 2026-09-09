@@ -142,6 +142,118 @@ jobs:
 		]);
 	});
 
+	it.each([
+		[
+			"double-quoted parameter expansions",
+			`echo "\${VALUE,,} \${VALUE^^}"`,
+			["${var,,}", "${var^^}"],
+		],
+		[
+			"a mapfile command after a continuation",
+			"map\\\nfile -t values",
+			["mapfile"],
+		],
+		["readarray with an option", "readarray -t values", ["readarray"]],
+		[
+			"single-character parameter operators",
+			"echo \${VALUE,} \${VALUE^}",
+			["${var,,}", "${var^^}"],
+		],
+		["a quoted heredoc body", "cat <<'EOF'\nmapfile -t values\nEOF", []],
+		[
+			"an unquoted heredoc substitution",
+			"cat <<EOF\n\$(mapfile -t values)\nEOF",
+			["mapfile"],
+		],
+	] as const)("flags $0", (_name, run, needles) => {
+		const source = `
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: case
+        run: |
+          ${run.replace(/\n/g, "\n          ")}
+`;
+		expect(
+			findBash4PortabilityFindings(loadWorkflow(source), "fixture.yml").map(
+				(finding) => finding.needle,
+			),
+		).toEqual(needles);
+	});
+
+	it("follows a macOS runner introduced by matrix include", () => {
+		const source = `
+jobs:
+  included:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+    runs-on: \${{ matrix.os }}
+    steps:
+      - name: included macOS
+        run: mapfile -t values
+`;
+		expect(
+			findBash4PortabilityFindings(loadWorkflow(source), "fixture.yml"),
+		).toEqual([
+			{
+				workflow: "fixture.yml",
+				job: "included",
+				step: "included macOS",
+				needle: "mapfile",
+			},
+		]);
+	});
+
+	it("follows a macOS value supplied by a reusable-workflow caller", () => {
+		const source = `
+on:
+  workflow_call:
+    inputs:
+      runner:
+        type: string
+        default: ubuntu-latest
+jobs:
+  reusable:
+    runs-on: \${{ inputs.runner }}
+    steps:
+      - name: caller-selected macOS
+        run: mapfile -t values
+`;
+		expect(
+			findBash4PortabilityFindings(loadWorkflow(source), "fixture.yml", {
+				runner: "macos-latest",
+			}),
+		).toEqual([
+			{
+				workflow: "fixture.yml",
+				job: "reusable",
+				step: "caller-selected macOS",
+				needle: "mapfile",
+			},
+		]);
+	});
+
+	it.each(["runner.os != 'macOS'", "matrix.os != 'macos-latest'"] as const)(
+		"does not flag a step excluded by if: %s",
+		(condition) => {
+			const source = `
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: excluded
+        if: ${condition}
+        run: mapfile -t values
+`;
+			expect(
+				findBash4PortabilityFindings(loadWorkflow(source), "fixture.yml"),
+			).toEqual([]);
+		},
+	);
+
 	it("stops flagging the fixture when matrix expansion is neutered", () => {
 		const mutated = MATRIX_FIXTURE.replace(
 			"runs-on: \${{ matrix.os }}",

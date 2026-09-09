@@ -202,7 +202,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
@@ -320,7 +320,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
@@ -467,7 +467,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
@@ -630,7 +630,7 @@ jobs:
             exit 1
           fi
           checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+          if [[ "$(printf '%s' "$PAYLOAD_SHA" | tr '[:upper:]' '[:lower:]')" != "$checked_sha" ]]; then
             echo "::error::checkout does not match the repository_dispatch SHA"
             exit 1
           fi
