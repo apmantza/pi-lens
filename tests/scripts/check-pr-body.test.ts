@@ -1,5 +1,10 @@
-import { readFileSync } from "node:fs";
+// flake-shape: real-process-spawn — the exact local CLI and shallow checkout are the subject; an in-process call cannot prove either command boundary.
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it, afterEach, vi } from "vitest";
+import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import {
 	detectEscapedNewlineBody,
 	detectFlattenedBody,
@@ -13,6 +18,17 @@ import {
 } from "../../scripts/check-pr-body.mjs";
 
 const body = `Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nWhole-tree grep completed.\n\n## Observability\nThe advisory check run is the record.`;
+const repositoryRoot = process.cwd();
+
+function fetchForEvent(bodyText: string, files: unknown) {
+	return vi.fn().mockImplementation(async (url: string | URL | Request) => {
+		if (String(url).includes("/files")) {
+			if (files instanceof Error) throw files;
+			return new Response(JSON.stringify(files), { status: 200 });
+		}
+		return new Response(JSON.stringify({ body: bodyText }), { status: 200 });
+	});
+}
 const flattenedBody =
 	"## Summary Await the first lifecycle run's asynchronous word-index snapshot promotion before reseeding the current-format snapshot for the fallback run. ## Tests - Native master flake justification for the count barrier: 2/10 forced runs reproduced the promotion race. - Fixed lifecycle test: 5/5 tests passed. ### Test assessment - tests/clients/word-index-lifecycle.test.ts uniquely pins the ordering guard. ## Blast radius This change is test-only. ## Class sweep The async-persist lifecycle race is fully covered. ## Observability The test observes existing project snapshot records.";
 const multiRoundFlattenedBody =
@@ -452,6 +468,96 @@ describe("PR body lint (#1844)", () => {
 			() => "diff --git a/docs/example.md b/docs/example.md\n+docs",
 		);
 		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([
+		["test file", "tools/example.test.ts"],
+		["__tests__ file", "tools/__tests__/example.ts"],
+		["declaration file", "tools/example.d.ts"],
+		["declaration module", "tools/example.d.mts"],
+	])("ignores runtime markers in a %s", (_name, file) => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"No new failure path; no record added.",
+			),
+			process.cwd(),
+			() =>
+				`diff --git a/${file} b/${file}\n+try { run(); } catch (error) { report(error); }`,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([
+		["comment", '// recordDegradationOnce({ kind: "comment-record" });'],
+		[
+			"template literal",
+			'const text = `recordDegradationOnce({ kind: "template-record" });`;',
+		],
+	])("rejects an apparent record call in a %s", (_name, line) => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"The apparent discriminator is named: comment-record template-record.",
+			),
+			process.cwd(),
+			() => `diff --git a/clients/example.ts b/clients/example.ts\n+${line}`,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("record literal");
+	});
+
+	it("rejects a missing diff in CI from a real shallow clone", async () => {
+		const repository = process.cwd();
+		const shallow = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-shallow-"));
+		const previousCwd = process.cwd();
+		const previousActions = process.env.GITHUB_ACTIONS;
+		try {
+			vi.stubEnv("GITHUB_TOKEN", "test-token");
+			vi.stubEnv("GITHUB_API_URL", "https://api.example");
+			vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+			gitExecFileSync(
+				["clone", "--depth", "1", `file://${repository}`, shallow],
+				{
+					stdio: "ignore",
+				},
+			);
+			process.chdir(shallow);
+			process.env.GITHUB_ACTIONS = "true";
+			await expect(
+				lintPullRequestEvent(fetchForEvent(body, []), {
+					pull_request: { number: 2807, body },
+				}),
+			).rejects.toThrow(/^diff unavailable:/);
+		} finally {
+			process.chdir(previousCwd);
+			if (previousActions === undefined) delete process.env.GITHUB_ACTIONS;
+			else process.env.GITHUB_ACTIONS = previousActions;
+			vi.unstubAllEnvs();
+			rmSync(shallow, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts the exact preflight --lint-local command and the title form", () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-cli-"));
+		const bodyPath = join(directory, "PR_BODY.md");
+		const titlePath = join(directory, "COMMIT_MSG.txt");
+		const checker = resolve("scripts/check-pr-body.mjs");
+		try {
+			writeFileSync(bodyPath, body);
+			writeFileSync(
+				titlePath,
+				"ci(test): verify local body lint (refs #2807)\n",
+			);
+			for (const args of [
+				[checker, "--lint-local", bodyPath],
+				[checker, "--body", bodyPath, "--title", titlePath],
+			]) {
+				execFileSync(process.execPath, args, { cwd: repositoryRoot });
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts the required sections", () => {

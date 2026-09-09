@@ -169,6 +169,15 @@ function blankCommentsAndStrings(source) {
 	return result;
 }
 
+function isRuntimeObservabilityPath(name) {
+	return (
+		/^(?:clients|tools|mcp)\//.test(name) &&
+		!/(?:^|\/)__tests__(?:\/|$)/.test(name) &&
+		!/\.test\.[^/]+$/.test(name) &&
+		!/\.d\.(?:ts|mts)$/.test(name)
+	);
+}
+
 function runtimeObservabilityFromDiff(diff = "") {
 	const records = new Set();
 	let runtime = false;
@@ -177,9 +186,7 @@ function runtimeObservabilityFromDiff(diff = "") {
 	for (const line of String(diff).split(/\r?\n/)) {
 		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
 		if (header) {
-			currentRuntime = [header[1], header[2]].some((name) =>
-				/^(?:clients|tools|mcp)\//.test(name),
-			);
+			currentRuntime = [header[1], header[2]].some(isRuntimeObservabilityPath);
 			runtime ||= currentRuntime;
 			continue;
 		}
@@ -623,9 +630,13 @@ export async function lintPullRequestEvent(
 	let diff = "";
 	try {
 		diff = localDiff();
-	} catch {
-		// GitHub's event checkout may not carry the upstream ref. The remote
-		// body check remains structural when the local comparison is unavailable.
+	} catch (error) {
+		if (process.env.GITHUB_ACTIONS) {
+			const reason = error instanceof Error ? error.message : String(error);
+			throw new Error(`diff unavailable: ${reason}`);
+		}
+		// Local callers may not have an upstream ref. Preserve structural lint
+		// outside CI rather than inventing a runtime scope.
 	}
 	const result = lintPrBody(body, { requireTestAssessment, diff });
 	if (result.valid) {
@@ -659,6 +670,9 @@ export function lintLocalPrBody(body, cwd = process.cwd(), git = execFileSync) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	// Local contract: --lint-local <body-file> remains the preflight form from
+	// #2796. The equivalent --body <body-file> --title <title-file> form keeps
+	// title validation in check-pr-title.mjs while accepting preflight's inputs.
 	const bodyIndex = process.argv.indexOf("--body");
 	const titleIndex = process.argv.indexOf("--title");
 	if (bodyIndex !== -1) {
