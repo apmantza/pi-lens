@@ -1,0 +1,3 @@
+b: 1
+a: 2 
+# This comment is deliberately longer than yamllint's default line-length limit today.

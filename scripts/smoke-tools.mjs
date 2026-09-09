@@ -144,12 +144,16 @@ const FIXTURES = [
 	{
 		lang: "yaml-cwd",
 		dir: "tests/fixtures/tool-smoke/yaml-cwd",
-		file: "repo/sub/bad.yaml",
+		file: "repo/bad.yaml",
 		cwd: "repo/sub",
+		// #2691 recurrence: yamllint reads .yamllint from the process cwd.
+		negativeCwd: "repo",
 		targets: ["yamllint"],
 		tools: ["yamllint"],
 		tier1: true,
 		expectDiagnostic: true,
+		expectDiagnosticCount: 1,
+		expectDifferentNegativeDiagnosticCount: true,
 		expectRule: "key-ordering",
 	},
 	{
@@ -2445,6 +2449,16 @@ async function main() {
 			const { runners } = await dispatchLintDetailed(absFile, dispatchCwd, pi, {
 				blockingOnly: false,
 			});
+			const negativeRunners = fixture.negativeCwd
+				? (
+						await dispatchLintDetailed(
+							absFile,
+							path.resolve(workspace, fixture.negativeCwd),
+							pi,
+							{ blockingOnly: false },
+						)
+					).runners
+				: undefined;
 			if (verbose) {
 				const desc = runners
 					.map((r) => {
@@ -2459,6 +2473,14 @@ async function main() {
 				console.error(
 					`[${fixture.lang}] executed runners: ${desc || "(none)"}`,
 				);
+				if (fixture.negativeCwd) {
+					const negative = negativeRunners?.find(
+						(runner) => runner.runnerId === fixture.targets[0],
+					);
+					console.error(
+						`[${fixture.lang}] negative cwd ${fixture.negativeCwd}: ${negative?.result.status ?? "missing"} (${negative?.result.diagnostics.length ?? 0} diagnostics)`,
+					);
+				}
 			}
 			for (const target of fixture.targets) {
 				const outcome = runners.find((r) => r.runnerId === target);
@@ -2484,6 +2506,31 @@ async function main() {
 				) {
 					verdict.state = "fail";
 					verdict.detail = `did not produce expected ${fixture.expectRule} diagnostic`;
+				}
+				if (
+					verdict.state === "pass" &&
+					fixture.expectDiagnosticCount !== undefined &&
+					verdict.diags !== fixture.expectDiagnosticCount
+				) {
+					verdict.state = "fail";
+					verdict.detail = `expected exactly ${fixture.expectDiagnosticCount} diagnostic(s), got ${verdict.diags}`;
+				}
+				if (
+					verdict.state === "pass" &&
+					fixture.expectDifferentNegativeDiagnosticCount &&
+					negativeRunners
+				) {
+					// #2691 recurrence: equal counts mean a wrong spawn cwd escaped detection.
+					const negative = negativeRunners.find(
+						(runner) => runner.runnerId === target,
+					);
+					if (!negative || negative.result.status === "skipped") {
+						verdict.state = "fail";
+						verdict.detail = "negative cwd variant did not run the target tool";
+					} else if (negative.result.diagnostics.length === verdict.diags) {
+						verdict.state = "fail";
+						verdict.detail = `negative cwd variant produced the same ${verdict.diags} diagnostic(s)`;
+					}
 				}
 				rows.push({ lang: fixture.lang, runner: target, ...verdict });
 			}

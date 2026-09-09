@@ -33,6 +33,8 @@ describe("tool-smoke cwd-sensitive rows (#2697)", () => {
 		expect(process.cwd()).not.toBe(cwd);
 		expect(ctx.cwd).toBe(cwd);
 		expect(ctx.filePath).toBe(filePath);
+		expect(fixture.expectDiagnosticCount).toBe(1);
+		expect(fixture.expectDifferentNegativeDiagnosticCount).toBe(true);
 	});
 
 	it("renders a missing tool through the shared visible skip classifier", () => {
