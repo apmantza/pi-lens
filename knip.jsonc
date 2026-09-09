@@ -55,7 +55,16 @@
 		// work: via a scripts/*.mjs entry's own import, or a test's.
 		// Doesn't exist yet (#2697 item 1 adds it); the glob costs nothing
 		// today and needs no follow-up edit once hook scripts land there.
-		"scripts/hooks/**/*.mjs"
+		"scripts/hooks/**/*.mjs",
+		// Vitest lanes whose test files are otherwise excluded from the project
+		// graph: real harness, Windows/config coverage, and wall-clock budgets.
+		// These entries keep support exports reachable when a lane is the only
+		// consumer, so a lane can never hide dead code from knip.
+		"tests/real-harness/*.test.ts",
+		"tests/config/*.test.ts",
+		"tests/clients/*.test.ts",
+		"tests/clients/**/*.test.ts",
+		"tests/scripts/*.test.ts"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
 		// already reached without help — tools/*.ts via index.ts's and
 		// mcp/server.ts's own imports, tests/support/vitest-setup.ts via
@@ -93,6 +102,9 @@
 		"clients/module-report-lsp.ts",
 		"scripts/lib/ts-sibling-loader.mjs"
 	],
+	// These support modules export test-facing types and an error class for
+	// local construction and annotation; Knip cannot credit same-file use.
+	"ignoreExportsUsedInFile": true,
 	// Each package.json binary these devDependencies provide is spawned by
 	// path/PATH lookup in tests or dev tooling, never `import`ed — and none
 	// of knip's plugins for these tools activates the way this repo uses

@@ -4,6 +4,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import {
+	realHarnessInclude,
+	wallClockBudgetInclude,
+} from "../../vitest.config.js";
+import { getWin32LaneFiles } from "../../scripts/lib/win32-gate-population.mjs";
 import { auditRegistry } from "../support/sweep-kit.js";
 
 /**
@@ -122,15 +127,40 @@ function readKnipEntries(): string[] {
 }
 
 /**
- * Scripts a workflow/hook invokes directly that are deliberately NOT in
- * knip.jsonc's `entry` list because knip's own "redundant entry pattern"
- * configuration hint proved they are already reached another way.
+ * Reproduce the Windows workflow's dynamic population so a new platform test
+ * cannot become invisible to knip when it joins that lane (#2837).
+ */
+function windowsVitestFiles(): string[] {
+	return getWin32LaneFiles(repoRoot);
+}
+
+/**
+ * Scripts or lane files deliberately not in knip.jsonc's `entry` list because
+ * Knip's own "redundant entry pattern" hint proves they are already reached.
  */
 const ALREADY_REACHED: Readonly<Record<string, string>> = {
 	"scripts/lib/merge-train-dispatch-validation.mjs":
 		"already reached through tests/scripts/merge-train-warden.test.ts's " +
 		"import — knip's own 'redundant entry pattern' hint caught this " +
 		"when it was added as an explicit entry",
+};
+
+const LANE_ALREADY_REACHED: Readonly<Record<string, string>> = {
+	"tests/mcp/turn-end-route.smoke.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
+	"tests/packaging-pack-manifest.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
+	"tests/support/fault-injection.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
+	"tests/support/git-config-guard.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
+	"tests/support/git-fixture-env.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
 };
 
 describe("knip entry coverage (#2698)", () => {
@@ -170,5 +200,38 @@ describe("knip entry coverage (#2698)", () => {
 			importerSource.includes(needle),
 			`${importer} no longer imports scripts/lib/${needle}.mjs — remove its ALREADY_REACHED exemption and add it to knip.jsonc's entry list instead`,
 		).toBe(true);
+	});
+
+	it("covers every test file admitted by the Vitest and Windows lanes (#2837)", () => {
+		const expected = new Set([
+			...realHarnessInclude,
+			...wallClockBudgetInclude,
+			...windowsVitestFiles(),
+		]);
+		const entries = readKnipEntries();
+		const patterns = entries.map((pattern) => globToRegExp(pattern));
+		const covered = [...expected].filter((file) =>
+			patterns.some((pattern) => pattern.test(file)),
+		);
+		const audit = auditRegistry({
+			sweepName: "knip Vitest lane entry coverage",
+			flagged: expected,
+			registered: covered,
+			exemptions: LANE_ALREADY_REACHED,
+			scannedCount: expected.size,
+			minScanned: 1,
+			remediation:
+				"add the lane member to knip.jsonc's entry list, or document why " +
+				"Knip already reaches it through the Vitest config graph",
+		});
+		const missing = [...expected].filter(
+			(file) =>
+				!patterns.some((pattern) => pattern.test(file)) &&
+				!LANE_ALREADY_REACHED[file],
+		);
+		expect(
+			audit.problems.concat(missing),
+			"every real-harness, Windows, and wall-clock Vitest member must be a knip entry",
+		).toEqual([]);
 	});
 });
