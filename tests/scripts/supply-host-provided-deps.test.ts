@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { HOST_PROVIDED_RUNTIME_PACKAGES } from "../../scripts/lib/host-provided-deps.mjs";
 
 // #2586 review F1: `.github/workflows/ci.yml` reads `--install-args`'s
-// stdout with `mapfile -t HOST_PKGS < <(node "$SUPPLY" --install-args)`,
+// stdout with a newline-only loop reading `node "$SUPPLY" --install-args`,
 // which splits ONLY on newlines. `peerDependencies["@earendil-works/pi-tui"]`
 // is an OR-form semver range ("^0.84.1 || ^0.85.0", #2586) that itself
 // contains a space — the old space-joined `--install-args` output let a
@@ -45,9 +45,9 @@ describe("supply-host-provided-deps.mjs --install-args (#2586 review F1)", () =>
 		expect(HOST_PROVIDED_RUNTIME_PACKAGES.length).toBeGreaterThan(0);
 	});
 
-	it("splits into exactly one token per runtime package when read the way the workflow reads it (mapfile: newline-delimited)", () => {
+	it("splits into exactly one token per runtime package with newline-delimited workflow input", () => {
 		const output = runInstallArgs();
-		// Mirrors `mapfile -t`: split on newlines only, drop the trailing empty
+		// Mirrors the workflow loop: split on newlines only, drop the trailing empty
 		// entry a final newline would otherwise introduce.
 		const tokens = output.split("\n").filter((line) => line.length > 0);
 		expect(
