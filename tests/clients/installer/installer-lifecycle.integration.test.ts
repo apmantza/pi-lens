@@ -240,6 +240,7 @@ describe("installer process lifecycle (#945)", () => {
 	// 30s installTool budget). 15s still catches a true hang.
 	const REAL_PROCESS_TIMEOUT_MS = 15_000;
 
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"kills a fake npm's complete Windows process tree on timeout",
 		async () => {
