@@ -66,6 +66,20 @@
 
 import { emitBounded } from "./bounded-telemetry.js";
 import { probeCtxActive } from "./session-lifecycle.js";
+import { runWithTurnContext } from "./turn-context.js";
+
+function stableSessionId(ctx: unknown): string | undefined {
+	try {
+		return (
+			ctx as
+				| { sessionManager?: { getSessionId?: () => string } }
+				| null
+				| undefined
+		)?.sessionManager?.getSessionId?.();
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * The pi SDK invalidates a captured `pi`/command ctx after a session
@@ -166,7 +180,9 @@ function guardSessionEvent<E, C, R>(
 			// below.
 			return skip(event, "pre-dispatch") as unknown as R;
 		try {
-			const result = handler(event, ctx);
+			const result = runWithTurnContext(stableSessionId(ctx), () =>
+				handler(event, ctx),
+			);
 			if (isThenable(result)) {
 				// Recover the rejection in place. The host awaits the same promise
 				// it would have awaited anyway; it just resolves instead.

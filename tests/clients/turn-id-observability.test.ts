@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "vitest";
 
 function rows(filePath: string): Record<string, unknown>[] {
 	if (!fs.existsSync(filePath)) return [];
@@ -19,10 +27,21 @@ describe("turn identity across observability sinks (#2815)", () => {
 		testMode: process.env.PI_LENS_TEST_MODE,
 	};
 
-	beforeEach(() => {
+	beforeAll(() => {
 		home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-turn-id-"));
+	});
+
+	beforeEach(() => {
 		process.env.PI_LENS_HOME = home;
 		process.env.PI_LENS_TEST_MODE = "0";
+		for (const file of [
+			"latency.log",
+			"extension.log",
+			"review-graph.log",
+			"read-guard.log",
+		]) {
+			fs.rmSync(path.join(home, file), { force: true });
+		}
 	});
 
 	afterEach(() => {
@@ -30,8 +49,9 @@ describe("turn identity across observability sinks (#2815)", () => {
 		else process.env.PI_LENS_HOME = previous.home;
 		if (previous.testMode === undefined) delete process.env.PI_LENS_TEST_MODE;
 		else process.env.PI_LENS_TEST_MODE = previous.testMode;
-		fs.rmSync(home, { recursive: true, force: true });
 	});
+
+	afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
 
 	it("stamps every real sink line with the turn that emitted it", async () => {
 		const [
@@ -104,5 +124,89 @@ describe("turn identity across observability sinks (#2815)", () => {
 		expect(latencyRows.every((row) => typeof row.turnId === "string")).toBe(
 			true,
 		);
+	});
+
+	it("keeps interleaved secondary sessions on their own turnId prefixes (#473)", async () => {
+		const [{ RuntimeCoordinator }, latency, guard] = await Promise.all([
+			import("../../clients/runtime-coordinator.js"),
+			import("../../clients/latency-logger.js"),
+			import("../../clients/session-event-guard.js"),
+		]);
+
+		const primary = new RuntimeCoordinator();
+		const secondary = new RuntimeCoordinator();
+		primary.resetForSession();
+		primary.setSessionLifecycle({ sessionId: "primary-2815" });
+		secondary.resetForSession();
+		secondary.setSessionLifecycle({ sessionId: "secondary-2815" });
+
+		const write = guard.wrapSessionEventHandler(
+			"turn_start",
+			async (
+				_event: unknown,
+				ctx: { sessionManager: { getSessionId: () => string } },
+			) => {
+				const runtime =
+					ctx.sessionManager.getSessionId() === "primary-2815"
+						? primary
+						: secondary;
+				runtime.beginTurn();
+				await Promise.resolve();
+				latency.logLatency({
+					type: "phase",
+					phase: `${ctx.sessionManager.getSessionId()}_turn`,
+					filePath: "<test>",
+					durationMs: 0,
+				});
+			},
+		);
+		const primaryCtx = {
+			sessionManager: { getSessionId: () => "primary-2815" },
+		};
+		const secondaryCtx = {
+			sessionManager: { getSessionId: () => "secondary-2815" },
+		};
+
+		await Promise.all([write({}, primaryCtx), write({}, secondaryCtx)]);
+		await latency.flushLatencyLog();
+		const latencyRows = rows(path.join(home, "latency.log"));
+		expect(latencyRows.map((row) => row.phase)).toEqual(
+			expect.arrayContaining(["primary-2815_turn", "secondary-2815_turn"]),
+		);
+		expect(
+			latencyRows
+				.filter((row) => row.phase === "primary-2815_turn")
+				.every((row) => String(row.turnId).startsWith("primary-2815:")),
+		).toBe(true);
+		expect(
+			latencyRows
+				.filter((row) => row.phase === "secondary-2815_turn")
+				.every((row) => String(row.turnId).startsWith("secondary-2815:")),
+		).toBe(true);
+	});
+
+	it("restarts the per-session counter at one after session_start", async () => {
+		const [{ RuntimeCoordinator }, turnContext] = await Promise.all([
+			import("../../clients/runtime-coordinator.js"),
+			import("../../clients/turn-context.js"),
+		]);
+		const runWithTurnContext = (
+			turnContext as typeof turnContext & {
+				runWithTurnContext?: <T>(sessionId: string, fn: () => T) => T;
+			}
+		).runWithTurnContext;
+		expect(runWithTurnContext).toBeTypeOf("function");
+		const runtime = new RuntimeCoordinator();
+		runtime.resetForSession();
+		runtime.setSessionLifecycle({ sessionId: "reset-2815" });
+		runtime.beginTurn();
+		runtime.beginTurn();
+
+		runtime.resetForSession();
+		runtime.setSessionLifecycle({ sessionId: "reset-2815" });
+		runtime.beginTurn();
+		expect(
+			runWithTurnContext?.("reset-2815", () => turnContext.getTurnId()),
+		).toBe("reset-2815:1");
 	});
 });

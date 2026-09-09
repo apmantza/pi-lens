@@ -693,7 +693,7 @@ export class RuntimeCoordinator {
 	setSessionLifecycle(args: { sessionId?: string; reason?: string }): void {
 		if (args.sessionId && args.sessionId.trim()) {
 			this._telemetrySessionId = args.sessionId.trim();
-			setTurnContextSession(this._telemetrySessionId);
+			resetTurnContext(this._telemetrySessionId);
 			this._hasStableSessionId = true;
 		}
 		this._lifecycleReason = args.reason;
