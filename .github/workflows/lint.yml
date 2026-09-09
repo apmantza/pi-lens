@@ -609,6 +609,37 @@ jobs:
       - name: Detect duplicated code
         run: node_modules/.bin/jscpd --config .jscpd.json clients scripts tools mcp index.ts
 
+  complexity:
+    name: complexity (advisory)
+    needs: validate-merge-train-dispatch
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Generate complexity report
+        run: node scripts/complexity-report.mjs | tee complexity-report.txt
+      - name: Publish complexity report
+        if: always()
+        run: cat complexity-report.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: complexity-report
+          path: reports/complexity/complexity.md
+          if-no-files-found: ignore
+
   yamllint:
     name: yamllint (advisory)
     needs: validate-merge-train-dispatch

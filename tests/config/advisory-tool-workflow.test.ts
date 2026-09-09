@@ -24,6 +24,7 @@ const mutationWorkflow = yaml.load(
 ) as { jobs: Record<string, { name?: string; "continue-on-error"?: boolean }> };
 
 const tools = [
+	["complexity", "complexity (advisory)"],
 	["jscpd", "jscpd (advisory)"],
 	["yamllint", "yamllint (advisory)"],
 	["typos", "typos (advisory)"],
@@ -55,6 +56,23 @@ describe("#2706 advisory tooling workflow contracts", () => {
 		const job = workflow.jobs[key];
 		expect(job?.name).toBe(name);
 		expect(job?.["continue-on-error"]).toBe(true);
+	});
+
+	it("keeps complexity wired to the report, summary, and pinned upload", () => {
+		const raw = readFileSync(
+			resolve(ROOT, ".github/workflows/lint.yml"),
+			"utf8",
+		);
+		const start = raw.indexOf("  complexity:");
+		const next = raw.slice(start + 1).search(/^  [A-Za-z0-9_-]+:/m);
+		const block = raw.slice(start, next === -1 ? undefined : start + 1 + next);
+		expect(block).toContain("npm run build");
+		expect(block).toContain("node scripts/complexity-report.mjs");
+		expect(block).toContain('>> \"$GITHUB_STEP_SUMMARY\"');
+		expect(block).toContain("path: reports/complexity/complexity.md");
+		expect(block).toMatch(
+			/actions\/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+/,
+		);
 	});
 
 	it("pins every action in the four jobs to a full SHA with a release comment", () => {

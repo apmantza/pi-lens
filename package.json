@@ -50,6 +50,7 @@
 		"bench:cascade-budget": "node scripts/bench-cascade-budget.mjs",
 		"bench:word-index-replacement": "node scripts/bench-word-index-replacement.mjs",
 		"logs:smells": "node scripts/analyze-pi-lens-logs.mjs",
+		"complexity": "node scripts/complexity-report.mjs",
 		"changelog:check": "node scripts/rollup-changelog.mjs --check",
 		"changelog:release": "node scripts/changelog-release.mjs",
 		"changelog:extract": "node scripts/changelog-extract.mjs",

@@ -45,6 +45,8 @@ export interface FileComplexity {
 	aiCommentPatterns: number;
 	singleUseFunctions: number;
 	tryCatchCount: number;
+	/** Per-function metrics used by advisory reports and model diagnostics. */
+	functions: FunctionMetrics[];
 }
 
 export interface FunctionMetrics {
@@ -568,6 +570,7 @@ export class ComplexityClient {
 			aiCommentPatterns: countAICommentPatterns(content),
 			singleUseFunctions: countSingleUseFunctions(functions),
 			tryCatchCount: countTryCatch(root, nodes),
+			functions,
 		};
 	}
 
