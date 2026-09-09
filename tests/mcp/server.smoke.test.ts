@@ -98,18 +98,57 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		);
 	}, 25_000);
 
-	it("redirects the retired AST dump name without advertising it", async () => {
-		const res = await harness.request(3, "tools/call", {
-			name: "pilens_ast_grep_dump",
-			arguments: { source: "foo()", lang: "typescript" },
-		});
-		const result = res.result as {
+	it("redirects the retired AST dump name once per session without advertising it", async () => {
+		// Regression pin for #2850 HIGH-1: the retired literal must reach the
+		// compatibility branch before the enabled-tool roster gate.
+		const call = () =>
+			harness.request(3, "tools/call", {
+				name: "pilens_ast_grep_dump",
+				arguments: { source: "foo()", lang: "typescript" },
+			});
+		const first = (await call()).result as {
 			isError?: boolean;
 			content: { text: string }[];
 		};
-		expect(result.isError).toBe(true);
-		expect(result.content[0]?.text).toContain("pilens_ast_grep_search");
-		expect(result.content[0]?.text).toContain("dump=true");
+		expect(first.isError).toBe(true);
+		expect(first.content[0]?.text).toContain("pilens_ast_grep_search");
+		expect(first.content[0]?.text).toContain("dump=true");
+		const second = (
+			await harness.request(4, "tools/call", {
+				name: "pilens_ast_grep_dump",
+				arguments: { source: "foo()", lang: "typescript" },
+			})
+		).result as typeof first;
+		expect(second.isError).toBe(true);
+
+		const health = async (id: number) => {
+			const response = await harness.request(id, "tools/call", {
+				name: "pilens_health",
+			});
+			const text = (response.result as { content: { text: string }[] })
+				.content[0]?.text;
+			if (typeof text !== "string") throw new Error("missing health text");
+			const json = text.match(/```json\n([\s\S]*?)\n```/)?.[1];
+			if (!json) throw new Error("missing health JSON");
+			return JSON.parse(json) as {
+				degradations: { kind: string; count: number }[];
+			};
+		};
+		const firstSession = await health(5);
+		expect(
+			firstSession.degradations.find(
+				(group) => group.kind === "ast-grep-dump-compatibility",
+			)?.count,
+		).toBe(1);
+
+		await harness.request(6, "tools/call", { name: "pilens_session_start" });
+		await call();
+		const secondSession = await health(7);
+		expect(
+			secondSession.degradations.find(
+				(group) => group.kind === "ast-grep-dump-compatibility",
+			)?.count,
+		).toBe(1);
 	});
 
 	it("omits a config-disabled tool from the real MCP tools/list path", async () => {

@@ -1926,6 +1926,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				return;
 			}
 			if (
+				name !== "pilens_ast_grep_dump" &&
 				name !== "pilens_rebuild" &&
 				!enabledToolsForCwd(
 					typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD,

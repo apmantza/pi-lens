@@ -1,1 +1,5 @@
-- Fold AST inspection into `ast_grep_search` with `dump=true`; redirect the retired name through a bounded one-session compatibility response. Refs #2800.
+---
+section: Changed
+---
+
+- **`ast_grep_dump` folded into `ast_grep_search` (refs #2800)** — AST inspection is `ast_grep_search` with `dump=true`, with the same result contract; the retired name answers for one session through a bounded compatibility response on both surfaces (one `ast-grep-dump-compatibility` record per session) and is absent from the tool registry and every tool listing.
