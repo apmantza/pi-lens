@@ -326,7 +326,7 @@ export const realHarnessInclude = [
 // phase later: fully serial, dead last, so each budget window gets a quiet
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
-const wallClockBudgetInclude = [
+export const wallClockBudgetInclude = [
 	"tests/clients/biome-config-decorator-metadata.test.ts",
 	"tests/clients/build-identity.test.ts",
 	"tests/clients/cascade-turn-merge.test.ts",

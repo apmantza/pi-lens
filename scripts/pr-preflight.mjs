@@ -41,6 +41,7 @@ export const GATES = [
 		CI_JOB_NAMES.UNIT_TESTS,
 	],
 	["ci-verdict", ["tests/scripts/ci-verdict.test.ts"], CI_JOB_NAMES.UNIT_TESTS],
+	["knip", [process.execPath, "scripts/run-knip.mjs"], CI_JOB_NAMES.KNIP],
 ];
 const TEST_GATE_NAMES = new Set([
 	"tests/config",

@@ -21,6 +21,7 @@ export const REQUIRED_CHECKS = ["Unit tests", "Lint & type-check"];
 export const CI_JOB_NAMES = Object.freeze({
 	CHANGELOG_FRAGMENT: "Changelog fragment (fast-fail)",
 	LINT_AND_TYPECHECK: "Lint & type-check",
+	KNIP: "knip (advisory)",
 	UNIT_TESTS: "Unit tests",
 });
 
