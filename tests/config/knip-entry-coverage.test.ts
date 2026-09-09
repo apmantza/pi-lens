@@ -8,6 +8,7 @@ import {
 	realHarnessInclude,
 	wallClockBudgetInclude,
 } from "../../vitest.config.js";
+import { getWin32LaneFiles } from "../../scripts/lib/win32-gate-population.mjs";
 import { auditRegistry } from "../support/sweep-kit.js";
 
 /**
@@ -125,33 +126,12 @@ function readKnipEntries(): string[] {
 	return config.entry ?? [];
 }
 
-function testFiles(dir: string): string[] {
-	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const path = resolve(dir, entry.name);
-		if (entry.isDirectory()) return testFiles(path);
-		return entry.name.endsWith(".test.ts")
-			? [path.replace(`${repoRoot}/`, "")]
-			: [];
-	});
-}
-
 /**
  * Reproduce the Windows workflow's dynamic population so a new platform test
  * cannot become invisible to knip when it joins that lane (#2837).
  */
 function windowsVitestFiles(): string[] {
-	const workflow = readFileSync(
-		resolve(repoRoot, ".github/workflows/ci.yml"),
-		"utf8",
-	);
-	expect(workflow).toContain("git grep -l -E 'path\\.win32|skipIf|runIf'");
-	const files = testFiles(resolve(repoRoot, "tests"));
-	return files.filter((file) => {
-		if (file.startsWith("tests/config/")) return true;
-		if (file === "tests/clients/tool-cwd.test.ts") return true;
-		const source = readFileSync(resolve(repoRoot, file), "utf8");
-		return /path\.win32|skipIf|runIf/.test(source) && /win32/i.test(source);
-	});
+	return getWin32LaneFiles(repoRoot);
 }
 
 /**
