@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
-import { logExtension } from "./extension-log.js";
+import { type ExtensionLogLevel, logExtension } from "./extension-log.js";
 import {
 	isRealGitMarker,
 	isAtOrAboveHomeDir,
@@ -231,6 +231,29 @@ function emitResolution(
 		level: "debug",
 		message: `cwd ${kind} ${tool} cwd=${cwd} reason=${reason}`,
 	});
+}
+
+/**
+ * Emit a constant runner advisory once per (tool, resolved root) per session
+ * (#2811): the yamllint/stylelint/sqlfluff "no config detected" lines and
+ * markdownlint's spawn-timeout cooldown notice logged once PER FILE at error
+ * level — 17 lines in one session for one tool. The throttle shares the
+ * resolution-log map and its ledger-generation reset, so `session_start`
+ * re-arms it like every once-latch in this module. The message rides
+ * `ctx.log` at debug level so the dispatch seam stays the one sink for
+ * runner lines, with its own filePath/kind metadata.
+ */
+export function logRunnerAdvisoryOnce(
+	ctx: { log(message: string, level?: ExtensionLogLevel): void },
+	tool: string,
+	root: string,
+	message: string,
+): void {
+	syncGeneration();
+	const key = _toolCwdEphemeralKey(["runner-advisory", tool, root]);
+	if (logged.current(key) !== 0) return;
+	logged.bump(key);
+	ctx.log(message, "debug");
 }
 
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
