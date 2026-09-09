@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           gh label list --repo "$GITHUB_REPOSITORY" --limit 1000 \
             --json name --jq '.[].name' \
-            | tr '[:upper:]' '[:lower:]' | sort \
+            | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort \
             > "$RUNNER_TEMP/labels-before.txt"
 
       # yamllint disable-line rule:line-length
@@ -136,7 +136,10 @@ jobs:
       # sync. Names are case-folded before comparison because GitHub label
       # names are unique case-insensitively. Listing here fails closed: if
       # the live set cannot be read, the step fails rather than reads as
-      # clean.
+      # clean. `LC_ALL=C` pins the sorts and comm to the same byte order:
+      # under a non-C locale sort collates while comm compares bytes, so a
+      # non-ASCII label name leaves the files unsorted for comm and the
+      # named-labels report is lost (exit 1, no ::error:: line).
       - name: Validate label sync results
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,22 +147,22 @@ jobs:
           set -euo pipefail
           gh label list --repo "$GITHUB_REPOSITORY" --limit 1000 \
             --json name --jq '.[].name' \
-            | tr '[:upper:]' '[:lower:]' | sort \
+            | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort \
             > "$RUNNER_TEMP/labels-after.txt"
           sed -n "s/^[[:space:]]*-[[:space:]]*name:[[:space:]]*//p" \
             .github/labels.yml \
-            | tr -d "\"'" | tr '[:upper:]' '[:lower:]' | sort \
+            | tr -d "\"'" | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort \
             > "$RUNNER_TEMP/manifest-labels.txt"
-          deleted="$(comm -23 "$RUNNER_TEMP/labels-before.txt" \
+          deleted="$(LC_ALL=C comm -23 "$RUNNER_TEMP/labels-before.txt" \
             "$RUNNER_TEMP/labels-after.txt")"
-          missing="$(comm -23 "$RUNNER_TEMP/manifest-labels.txt" \
+          missing="$(LC_ALL=C comm -23 "$RUNNER_TEMP/manifest-labels.txt" \
             "$RUNNER_TEMP/labels-after.txt")"
           names=""
           if [[ -n "$deleted" ]]; then
             names="deleted: $(printf '%s\n' "$deleted" | paste -sd, -)"
           fi
           if [[ -n "$missing" ]]; then
-            names="$names missing: $(printf '%s\n' "$missing" | paste -sd, -)"
+            names="${names:+$names }missing: $(printf '%s\n' "$missing" | paste -sd, -)"
           fi
           if [[ -n "$names" ]]; then
             echo "::error::label sync deleted or missing labels: $names"

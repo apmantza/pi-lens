@@ -71,5 +71,15 @@ describe("label sync post-merge validation (#2614)", () => {
 		// job — the exact "silent deletion recorded as success" defect.
 		expect(steps[snapshotIndex]?.["continue-on-error"]).toBeUndefined();
 		expect(steps[validationIndex]?.["continue-on-error"]).toBeUndefined();
+
+		// Two one-token neuterings survive the pins above (review r1 on
+		// #2788): `exit 1` -> `true` defangs the step's only failure path —
+		// the #2553 silent shape again — and comparing labels-after.txt
+		// against itself turns the before-vs-after diff into a decorative
+		// no-op. Pin the needles the validation depends on.
+		expect(steps[validationIndex]?.run).toContain("labels-before.txt");
+		expect(steps[validationIndex]?.run).toContain("exit 1");
+		expect(steps[snapshotIndex]?.run).toContain("set -euo pipefail");
+		expect(steps[validationIndex]?.run).toContain("set -euo pipefail");
 	});
 });
