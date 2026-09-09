@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import {
+	findWin32Gates,
+	getWin32GateFiles,
+	getWin32LaneFiles,
+} from "../../scripts/lib/win32-gate-population.mjs";
+import {
 	assertNonEmptyScan,
 	listSourceFiles,
 	relativePosix,
@@ -38,6 +43,26 @@ function isWindowsOnlyGate(match: string, rawSpan: string): boolean {
 		(match.includes("skipIf") && match.includes("!==")) ||
 		(match.includes("runIf") && match.includes("==="))
 	);
+}
+
+function detectedWin32GateFiles(): string[] {
+	const files = listSourceFiles(TESTS_ROOT, {
+		extensions: [".ts"],
+		exclude: (file) => file.includes("/fixtures/"),
+	});
+	const detected = new Set<string>();
+	for (const absolute of files) {
+		const raw = readFileSync(absolute, "utf8");
+		const stripped = stripSource(raw);
+		for (const match of stripped.matchAll(windowsGatePattern())) {
+			const offset = match.index ?? 0;
+			if (
+				isWindowsOnlyGate(match[0], raw.slice(offset, offset + match[0].length))
+			)
+				detected.add(relativePosix(ROOT, absolute));
+		}
+	}
+	return [...detected].sort();
 }
 
 describe("win32 gate lane governance (#2536)", () => {
@@ -89,11 +114,17 @@ describe("win32 gate lane governance (#2536)", () => {
 
 		// Recurrence: #2536's gates can be documented yet omitted from the only
 		// Windows job, leaving the platform-specific assertions unexecuted.
-		expect(enumerationRun).toContain("git grep -l -E");
-		expect(enumerationRun).toContain("skipIf");
-		expect(enumerationRun).toContain("runIf");
-		expect(enumerationRun).toContain("git grep -qi 'win32'");
-		expect(enumerationRun).toContain("find tests/config -type f");
+		expect(enumerationRun).toContain(
+			"node scripts/lib/win32-gate-population.mjs --files",
+		);
+		expect(enumerationRun).not.toMatch(/git grep/);
+		const detectedFiles = detectedWin32GateFiles();
+		const population = getWin32LaneFiles(ROOT);
+		expect(findWin32Gates(ROOT).length).toBeGreaterThan(0);
+		expect(getWin32GateFiles(ROOT)).toEqual(
+			expect.arrayContaining(detectedFiles),
+		);
+		expect(population).toEqual(expect.arrayContaining(detectedFiles));
 		expect(runnerRun).toContain('vitest run "${FILES[@]}"');
 		expect(runner?.shell).toBe("bash");
 	});
