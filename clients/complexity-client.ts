@@ -265,7 +265,8 @@ function isLogicalOp(node: TsNode, nodes: LangNodes): boolean {
 
 /** Cyclomatic contribution of a subtree: decision points + logical operators. */
 function subtreeCyclomatic(root: TsNode, nodes: LangNodes): number {
-	if (nodes === JSTS) return calcCyclomaticComplexity(root);
+	// Dispatch uses 1-based McCabe; this client exposes 0-based contributions (#2697).
+	if (nodes === JSTS) return calcCyclomaticComplexity(root) - 1;
 	let cc = 0;
 	walk(root, (n) => {
 		if (nodes.decision.has(n.type)) cc++;
