@@ -787,6 +787,11 @@ describe("flake-shape ratchet — admission gate", () => {
 					problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
 					continue;
 				}
+				const source = fs.readFileSync(
+					path.join(repoRoot, "tests", file),
+					"utf8",
+				);
+				problems.push(...validateAdmission(key, entry, source, included, file));
 			}
 		}
 		expect(problems).toEqual([]);
@@ -1094,6 +1099,119 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		const source =
 			"export function realWait(ms) {\n\treturn new Promise((r) => setTimeout(r, ms));\n}\n";
 		expect(scanRawTimerWait("interleaving-kit.ts", source)).toEqual([]);
+	});
+
+	it("(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population", () => {
+		// Mutation-sensitive population proof: dropping the support walk from
+		// countsByDetector makes this red. fault-injection.ts is the one
+		// existing helper the extended scan flags (its sanctioned delayInside
+		// timer + teardown failsafe are baselined, not admitted).
+		expect(countsByDetector("raw-timer-wait")).toHaveProperty(
+			"support/fault-injection.ts",
+		);
+	});
+
+	it("(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary", () => {
+		// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
+		// node:child_process by design — they are the fixture boundary the
+		// test-side detector routes callers toward, not a flake shape.
+		expect(
+			countsByDetector("real-process-spawn")["support/git-fixture-env.ts"],
+		).toBeUndefined();
+		expect(
+			countsByDetector("real-process-spawn")["support/fake-child.ts"],
+		).toBeUndefined();
+	});
+
+	it("ATTACK (#2563): a raw timer inside a tests/support helper is a NEW flagged file", () => {
+		// The acceptance-criterion scenario for the new population: a helper
+		// file the baseline has never seen, containing exactly the shape
+		// detector 3 exists to catch.
+		const fixtureSource = [
+			"export function tick(ms: number): void {",
+			"\tsetTimeout(() => {}, ms);",
+			"}",
+		].join("\n");
+		const file = "support/_fixture-raw-timer.ts";
+		const hits = scanRawTimerWait(file, fixtureSource);
+		expect(hits).toHaveLength(1);
+		const problems = auditAgainstBaseline("raw-timer-wait", {
+			[file]: hits.length,
+		});
+		expect(problems.map(describeProblem)).toEqual([
+			expect.stringContaining(`NEW flagged file ${file}`),
+		]);
+	});
+
+	it("ATTACK (#2563): a delay clone DEFINED in a tests/support helper is flagged even when its timer is hidden", () => {
+		// The evasion the issue names: the clone's timer text is never
+		// `setTimeout(` (aliased import), so only the definition shape sees
+		// it — the raw-timer call regex alone would pass the clone silently.
+		const fixtureSource = [
+			'import { setTimeout as sleep } from "node:timers";',
+			"",
+			"export const delay = (ms: number) =>",
+			"\tnew Promise<void>((resolve) => sleep(resolve, ms));",
+		].join("\n");
+		const file = "support/_fixture-hidden-timer-delay.ts";
+		const hits = scanRawTimerWait(file, fixtureSource);
+		expect(hits).toHaveLength(1);
+		expect(hits[0].reason).toContain("delay/sleep helper definition");
+		const problems = auditAgainstBaseline("raw-timer-wait", {
+			[file]: hits.length,
+		});
+		expect(problems.map(describeProblem)).toEqual([
+			expect.stringContaining(`NEW flagged file ${file}`),
+		]);
+	});
+
+	it.each([
+		[
+			"local alias",
+			"export function pause(ms: number) { const t = setTimeout; t(() => {}, ms); }",
+		],
+		[
+			"destructured globalThis alias",
+			"const { setTimeout: t } = globalThis; export function pause(ms: number) { t(() => {}, ms); }",
+		],
+		[
+			"destructured globalThis shorthand",
+			"const { setTimeout } = globalThis; export function pause(ms: number) { setTimeout(() => {}, ms); }",
+		],
+		[
+			"named timers/promises import",
+			'import { setTimeout as timer } from "node:timers/promises"; export function pause(ms: number) { return timer(ms); }',
+		],
+		[
+			"namespace timers/promises import",
+			'import * as timers from "timers/promises"; export function pause(ms: number) { return timers.setTimeout(ms); }',
+		],
+	])("flags a %s timer alias", (_name, source) => {
+		// #2563 recurrence: a pause/tick helper must not hide a real timer
+		// behind a binding that evades both the delay-name and raw-call passes.
+		expect(
+			scanRawTimerWait("support/_fixture-aliased-timer.ts", source),
+		).toHaveLength(1);
+	});
+
+	it("does not treat a destructured non-timer object as a timer alias", () => {
+		const source =
+			"const { setTimeout: t } = unrelated; export function pause(ms: number) { t(() => {}, ms); }";
+		expect(
+			scanRawTimerWait("support/_fixture-aliased-timer.ts", source),
+		).toEqual([]);
+	});
+
+	it("(#2563) the delay/sleep definition shape is support-scoped: a non-support file is not flagged for it", () => {
+		// In a .test.ts file the shape is redundant (the timer call itself is
+		// already governed), so the definition check must not widen the
+		// population there.
+		const fixtureSource =
+			"export const delay = (ms: number) =>\n" +
+			"\tnew Promise<void>((resolve) => sleep(resolve, ms));\n";
+		expect(
+			scanRawTimerWait("clients/uses-delay.test.ts", fixtureSource),
+		).toEqual([]);
 	});
 });
 
