@@ -66,7 +66,7 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 			"actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
 		]);
 		const raw = readFileSync(WORKFLOW_PATH, "utf8");
-		expect(raw).toContain("PI_LENS_HOME: ${{ runner.temp }}/pi-lens-home");
+		expect(raw).toContain('PI_LENS_HOME=$RUNNER_TEMP/pi-lens-home" >> "$GITHUB_ENV"');
 		expect(raw).toContain("npm ci --no-audit --no-fund");
 		expect(raw).toContain("npm run build");
 	});
