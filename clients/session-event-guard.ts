@@ -65,6 +65,7 @@
  */
 
 import { emitBounded } from "./bounded-telemetry.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { probeCtxActive } from "./session-lifecycle.js";
 import { runWithTurnContext } from "./turn-context.js";
 
@@ -77,6 +78,12 @@ function stableSessionId(ctx: unknown): string | undefined {
 				| undefined
 		)?.sessionManager?.getSessionId?.();
 	} catch {
+		recordDegradationOnce({
+			kind: "turn-context-identity-fallback",
+			subject: "session-event-guard",
+			reason:
+				"stable session identity resolution failed; using detached turn context",
+		});
 		return undefined;
 	}
 }

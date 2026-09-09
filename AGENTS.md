@@ -579,7 +579,9 @@ Context-bound sinks read the writer's session id, while a detached sink uses its
 explicit queued id or the context-free `turn:0` fallback; it never reads a
 process-wide latest session. `setSessionLifecycle` resets only the starting
 session's counter, so primary, secondary, resume, and fork starts each begin at
-turn one (#2815).
+turn one (#2815). If the host cannot resolve a stable session id, the guard
+records one bounded `turn-context-identity-fallback` degradation per session
+before using the detached fallback (#2815).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their

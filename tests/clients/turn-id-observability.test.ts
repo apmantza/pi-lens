@@ -102,7 +102,8 @@ describe("turn identity across observability sinks (#2815)", () => {
 				phase: "scripted_turn_two",
 				filePath: "<test>",
 				durationMs: 0,
-			}));
+			}),
+		);
 
 		await Promise.all([
 			latency.flushLatencyLog(),
@@ -214,7 +215,8 @@ describe("turn identity across observability sinks (#2815)", () => {
 					ctx.sessionManager.getSessionId() === "primary-probe"
 						? primary
 						: secondary;
-				const turnId = runtime.beginTurn();
+				runtime.beginTurn();
+				const turnId = turnContext.getTurnId();
 				await Promise.resolve();
 				latency.logLatency({
 					type: "phase",
@@ -244,6 +246,24 @@ describe("turn identity across observability sinks (#2815)", () => {
 		expect(
 			latencyRows.find((row) => row.phase === "outside_detached")?.turnId,
 		).toBe("turn:0");
+	});
+
+	it("preserves an explicit queued turnId without an active context (#2815 F5)", async () => {
+		const { logLatency, flushLatencyLog } =
+			await import("../../clients/latency-logger.js");
+		logLatency({
+			type: "phase",
+			phase: "explicit_queued_turn",
+			filePath: "<test>",
+			durationMs: 0,
+			turnId: "owner-session:7",
+		});
+		await flushLatencyLog();
+
+		const latencyRows = rows(path.join(home, "latency.log"));
+		expect(
+			latencyRows.find((row) => row.phase === "explicit_queued_turn")?.turnId,
+		).toBe("owner-session:7");
 	});
 
 	it("restarts the per-session counter at one after session_start", async () => {

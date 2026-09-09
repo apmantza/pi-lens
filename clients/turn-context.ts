@@ -38,7 +38,6 @@ export function resetTurnContext(sessionId?: string): void {
 
 /** Ensure a stable host session has a counter without changing detached identity. */
 export function setTurnContextSession(sessionId?: string): void {
-	const current = state();
 	const stableSessionId = sessionId?.trim();
 	if (stableSessionId !== undefined && stableSessionId !== "")
 		sessionState(stableSessionId);
@@ -46,7 +45,6 @@ export function setTurnContextSession(sessionId?: string): void {
 
 /** Mint the one id shared by every row emitted during this turn. */
 export function beginTurnContext(sessionId: string): string {
-	const current = state();
 	const session = sessionState(sessionId);
 	session.turnIndex += 1;
 	session.turnId = `${sessionId}:${session.turnIndex}`;
