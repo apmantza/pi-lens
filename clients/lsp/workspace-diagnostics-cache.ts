@@ -36,12 +36,17 @@ import {
  * `LSPWorkspaceDiagnosticResult.timedOut` in `./index.ts`) into
  * `WorkspaceDiagnosticsCacheEntry`.
  */
+// v3 (#2776): cached diagnostics must carry per-diagnostic `serverId`
+// provenance before replay, because primary/auxiliary partitioning is
+// server-owned rather than source-owned. v2 entries predate that contract and
+// are rejected so the owning server can re-collect them instead of silently
+// demoting old primary findings to auxiliary.
 // v2 (#1095): entries may carry an optional `contentHash` fingerprint of the
 // file bytes the cached diagnostics were computed against, so a `lookup` can
 // surface a content `binding` (boundToCurrentDisk) beyond the mtime proxy.
 // Legacy v1 entries are rejected by the version guard and re-scanned — a
 // deliberately clean break so no entry lacking the field is ever served.
-export const WORKSPACE_DIAGNOSTICS_CACHE_VERSION = 2;
+export const WORKSPACE_DIAGNOSTICS_CACHE_VERSION = 3;
 const CACHE_FILE = "lsp-workspace-diagnostics.json";
 
 export interface WorkspaceDiagnosticsCacheEntry {

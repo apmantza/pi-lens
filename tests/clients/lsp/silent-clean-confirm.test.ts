@@ -288,6 +288,7 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 			},
 			source: "typos",
 		};
+		const attributedFinding = { ...finding, serverId: "typos" };
 		createLSPClient.mockImplementation(async (opts: { serverId: string }) => {
 			if (opts.serverId === "typos") {
 				return makePublishingClient("typos", tmp, filePath, [finding]);
@@ -307,7 +308,7 @@ describe("touchFile capability-aware AGGREGATE wait (#814)", () => {
 
 		expect((result as { inconclusive?: boolean }).inconclusive).toBeUndefined();
 		expect(result?.confirmation).toBe("confirmed");
-		expect(result?.diags).toEqual([finding]);
+		expect(result?.diags).toEqual([attributedFinding]);
 	});
 
 	it("#1277: scope-all — the still-outstanding silent server is WEDGED (fails the liveness ping), so the touch stays INCONCLUSIVE even though the publishing sibling answered", async () => {
