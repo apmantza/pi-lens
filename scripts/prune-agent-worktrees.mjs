@@ -1259,7 +1259,7 @@ function collectUnregisteredAgentDirs({ base, registeredKeys, selfKeys }) {
 		if (!entry.isDirectory()) continue;
 		// The naming convention `worktreePathFromHookPayload` documents:
 		// Claude Code names a managed agent worktree `agent-<agentId>`.
-		if (!/^agent-/.test(entry.name)) continue;
+		if (!entry.name.startsWith("agent-")) continue;
 		const full = path.join(base, entry.name);
 		const key = toComparablePath(full);
 		if (registeredKeys.has(key)) continue;
