@@ -258,6 +258,14 @@ is the procedure and defers here on conflict; 2026-09-09).**
   rate is within 0.1 of the anchor's and its false-finding rate is not
   higher. That harness is orchestration tooling for our own development,
   never a product surface: no changelog, no release gate, no user docs.
+- *Rounds are routed by disposition, not by prose.* A verify report ends with
+  a per-finding disposition (`fixed | not fixed | new defect | withdrawn`)
+  and a fixer handoff answers each finding id the same way; the orchestrator
+  routes on the worst cell (a `new defect` opens the state-space rail; all
+  `fixed` merges on green; a `withdrawn` needs the reason). Severity is
+  earned by a reproduced instance: a HIGH with no failure scenario is a
+  MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
+  line) never count as an actionable round.
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a
