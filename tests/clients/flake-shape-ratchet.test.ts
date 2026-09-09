@@ -307,7 +307,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// about which rules each tier enables.
 	"real-process-spawn:scripts/lint-js.test.ts": {
 		detector: "real-process-spawn",
-			reason:
+		reason:
 			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
 	},
 	"real-process-spawn:scripts/lockfile-completeness.test.ts": {
