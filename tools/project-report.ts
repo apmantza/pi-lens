@@ -25,7 +25,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 		name: "project_report" as const,
 		label: "Project Report",
 		description:
-			"Orient in a project from its review graph, with ranked hubs and entry points. Example: use project_report before module_report when the target file is unknown.",
+			"Orient in a project from its review graph, with ranked hubs and entry points. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use project_report before module_report when the target file is unknown.",
 		promptSnippet: "Orient in a project before choosing a file",
 		renderResult: compactRenderResult<{
 			available?: boolean;

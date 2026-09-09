@@ -48,7 +48,7 @@ export function createEffectiveConfigTool(getProjectRoot: () => string) {
 		name: "effective_config" as const,
 		label: "Effective Config",
 		description:
-			"Explain resolved configuration and provenance. Example: pass `file` to see why its LSP server is selected.",
+			"Explain resolved configuration and provenance. Response is redacted by construction: it contains no environment values, no command arguments beyond the binary, and home-relative paths; a tier-denied LSP decision cannot be lifted by a nearer config. Example: pass `file` to see why its LSP server is selected.",
 		promptSnippet: "Explain resolved configuration",
 		renderResult: compactRenderResult<{ summary?: string }>(
 			({ details, isError }) =>

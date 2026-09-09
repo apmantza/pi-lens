@@ -221,7 +221,7 @@ export function createLensDiagnosticMarkTool(
 		name: "lens_diagnostic_mark" as const,
 		label: "Mark Diagnostic",
 		description:
-			"Record a disposition for a diagnostic. Example: mark a false positive with its reported file, line, rule, and message.",
+			"Record a disposition for a diagnostic. Exact reported identity is required; suppress re-anchors against live diagnostics and writes an inline ignore comment, apply multiple suppressions bottom-up, and defer is session-only. Example: mark a false positive with its reported file, line, rule, and message.",
 		promptSnippet:
 			"Use lens_diagnostic_mark to dismiss a false-positive, suppress a won't-fix, defer, or flag a finding to fix later",
 		parameters: Type.Object({

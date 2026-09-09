@@ -642,8 +642,9 @@ const ALL_TOOLS = [
 		name: "pilens_diagnostics",
 		description:
 			"Query pi-lens's diagnostic state across ALL runners (not just LSP). " +
-			"mode=delta (current turn, instant), mode=all (every dispatched file this " +
-			"session), mode=full (expensive project-wide active scan).",
+			"mode=delta/all are cache-only and instant (delta is the current turn; all " +
+			"covers every dispatched file this session), mode=full is an expensive " +
+			"project-wide active scan.",
 		inputSchema: schemaWithCwd(lensDiagnosticsTool.parameters),
 	},
 	{
@@ -700,7 +701,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_symbol_search",
 		description:
-			"Find relevant files by ranked identifier search. Example: search `authenticate user` before pilens_module_report.",
+			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before pilens_module_report.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -732,7 +733,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_module_report",
 		description:
-			"Return a navigable source-module outline with references and read handles. Example: use pilens_module_report on `src/app.ts` before pilens_read_symbol.",
+			"Return a navigable source-module outline with references and read handles. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_module_report on `src/app.ts` before pilens_read_symbol.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -783,7 +784,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_project_report",
 		description:
-			"Orient in a project from its review graph. Example: use pilens_project_report before choosing a file.",
+			"Orient in a project from its review graph. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_project_report before choosing a file.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -810,7 +811,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_read_symbol",
 		description:
-			"Return one symbol's verbatim source. Example: use pilens_read_symbol after pilens_module_report identifies `parseConfig`.",
+			"Return one symbol's verbatim source. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_symbol after pilens_module_report identifies `parseConfig`.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -896,7 +897,8 @@ const ALL_TOOLS = [
 			"runners that would dispatch. This is the answer to 'why is X running / " +
 			"why is X not running' without reading logs. Redacted by construction: " +
 			"it reports sources, never values — no environment values, no command " +
-			"arguments beyond the binary itself, and config paths are home-relative.",
+			"arguments beyond the binary itself, and config paths are home-relative. " +
+			"A tier-denied LSP decision cannot be lifted by a nearer config.",
 		inputSchema: {
 			type: "object",
 			properties: {

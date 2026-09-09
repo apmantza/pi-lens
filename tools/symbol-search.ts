@@ -33,7 +33,7 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 		name: "symbol_search" as const,
 		label: "Symbol Search",
 		description:
-			"Find relevant files by ranked identifier search. Example: search `authenticate user` before module_report.",
+			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report.",
 		promptSnippet: "Find files by identifier",
 		renderResult: compactRenderResult<{
 			available?: boolean;

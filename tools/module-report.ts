@@ -36,7 +36,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		name: "module_report" as const,
 		label: "Module Report",
 		description:
-			"Return a navigable source-module outline with symbols, references, and read handles. Example: use module_report on `src/app.ts` before read_symbol.",
+			"Return a navigable source-module outline with symbols, references, and read handles. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use module_report on `src/app.ts` before read_symbol.",
 		promptSnippet: "Outline a source module before reading a body",
 		renderResult: compactRenderResult<{
 			available?: boolean;
@@ -231,7 +231,7 @@ export function createReadSymbolTool(
 		name: "read_symbol" as const,
 		label: "Read Symbol",
 		description:
-			"Return one symbol's verbatim source. Example: use read_symbol after module_report identifies `parseConfig`.",
+			"Return one symbol's verbatim source. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use read_symbol after module_report identifies `parseConfig`.",
 		promptSnippet: "Read one symbol's body instead of the whole file",
 		renderResult: compactRenderResult<{
 			found?: boolean;
@@ -361,7 +361,7 @@ export function createReadEnclosingTool(
 		name: "read_enclosing" as const,
 		label: "Read Enclosing",
 		description:
-			"Return the smallest symbol or callback enclosing a line. Example: use read_enclosing after a diagnostic points to line 42.",
+			"Return the smallest symbol or callback enclosing a line. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use read_enclosing after a diagnostic points to line 42.",
 		promptSnippet: "Read the enclosing symbol or callback body for a line",
 		renderResult: compactRenderResult<{
 			found?: boolean;
