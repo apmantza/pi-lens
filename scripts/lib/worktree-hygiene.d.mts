@@ -86,6 +86,47 @@ export function planWorktreePrune(options: {
 	isPidAlive?: (pid: number) => boolean;
 }): PrunePlan;
 
+export interface MergedWorktreeCandidate {
+	path: string;
+	branch?: string | null;
+	bare?: boolean;
+	/** `git status --porcelain` answered and was EMPTY (no changes, no untracked files). */
+	clean?: boolean;
+	statusUnreadable?: boolean;
+	/** HEAD is an ancestor of `origin/master` (strict; side branches do not count). */
+	mergedIntoMaster?: boolean;
+	/** First porcelain entry, bounded — names the change a keep protects. */
+	statusDetail?: string | null;
+	mtimeMs: number;
+	locked?: boolean;
+	lockPid?: number | null;
+	unevaluated?: boolean;
+}
+
+/**
+ * Merged-branch sweep (#2631): which NON-PRIMARY trees (excluding the main
+ * checkout is the caller's job) may be removed — any path whose branch is an
+ * ancestor of `origin/master` and whose checkout is clean, untracked files
+ * included in "clean" via porcelain.
+ */
+export function planMergedWorktreeRemovals(options: {
+	candidates: MergedWorktreeCandidate[];
+	nowMs: number;
+	selfPath?: string | string[] | null;
+	isPidAlive?: (pid: number) => boolean;
+	selectedKeys?: Set<string> | null;
+}): PrunePlan;
+
+/**
+ * Verdict for an unregistered `.claude/worktrees/agent-*` directory (#2538):
+ * removable only when it holds nothing but git's own `.git` gitlink — every
+ * other entry is treated as an untracked deliverable. Null input means the
+ * directory could not be read.
+ */
+export function unregisteredAgentDirVerdict(
+	entryNames: string[] | null | undefined,
+): { removable: boolean; reason: string };
+
 export function orderBySelection<T extends { path: string }>(
 	rows: T[],
 	only: string[] | null,
@@ -185,6 +226,16 @@ export function formatWorktreeRecord(input: {
 	ageMs: number;
 	dryRun?: boolean;
 	removed?: boolean;
+	/** #2631: the merged-branch sweep selected this tree. */
+	merged?: boolean;
+	error?: string | null;
+	nowIso?: string;
+}): string;
+
+export function formatUnregisteredDirRecord(input: {
+	path: string;
+	dryRun?: boolean;
+	removed?: boolean;
 	error?: string | null;
 	nowIso?: string;
 }): string;
@@ -220,6 +271,8 @@ export function formatRunRecord(input: {
 	/** Why the run's single scoped tree is still on disk; null if removed. */
 	keptReason?: string | null;
 	removed?: number;
+	/** #2538: unregistered agent-* directories this run removed. */
+	unregisteredDirs?: number;
 	orphans?: number;
 	rows?: number;
 	dryRun?: boolean;

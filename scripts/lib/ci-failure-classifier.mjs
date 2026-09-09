@@ -103,6 +103,13 @@ const INLINE_SUITE_FAIL =
 // 127ms" -- a fallback when the suite-level line above got lost to log
 // truncation but an individual test's "×" line survived.
 const INLINE_TEST_FAIL_MARKER = /^\s*×\s+(.+?)\s*\d*m?s?\s*$/m;
+// Vitest's compact summary and TypeScript's compiler diagnostic are real
+// failure evidence even when an infrastructure-looking line appears later.
+// Keep these explicit: the classifier must not let a new infra needle outrank
+// a genuine assertion or compile failure.
+const TEST_FILES_FAILED = /\bTest Files\s+\d+\s+failed\b/i;
+const TYPESCRIPT_ERROR =
+	/^\s*\S+\.tsx?\(\d+,\d+\): error TS\d+:|^\s*\S+\.tsx?:\d+:\d+ - error TS\d+:/m;
 // The run's own final tally line (real log, same run): " Tests  1 failed |
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.
@@ -149,9 +156,11 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 // composes it with npm-only shapes below because the two consumers have
 // opposite false-positive costs.
 export const NET_PATTERN =
-	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED/i;
+	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED|\bcodeload\.github\.com\b.{0,120}\b(?:429|503)\b/i;
 const ERROR_PREFIXED_LINE =
 	/^(?:.*\bnpm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
+const CI_INFRA_LINE =
+	/^(?:.*(?:Unable to upload SARIF file|SARIF upload).*(?:\b(?:429|5\d\d)\b|failed).*$|.*Initialize CodeQL.*(?:\b(?:429|5\d\d)\b|failed).*$|.*codeload\.github\.com.*\b(?:429|503)\b.*|.*npm ci[\s\S]{0,200}\bETIMEDOUT\b.*)$/gim;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification
@@ -255,6 +264,13 @@ function findRealFailureSignal(log) {
 	if (assertionMatch) {
 		return { detail: `unknown file > ${assertionMatch[1].trim()}` };
 	}
+	if (TEST_FILES_FAILED.test(log)) {
+		return { detail: log.match(TEST_FILES_FAILED)?.[0] ?? "Test Files failed" };
+	}
+	const typescriptMatch = TYPESCRIPT_ERROR.exec(log);
+	if (typescriptMatch) {
+		return { detail: typescriptMatch[0] };
+	}
 	const inlineSuite = INLINE_SUITE_FAIL.exec(log);
 	if (inlineSuite) {
 		return {
@@ -324,7 +340,12 @@ export function classifyFailureLog(rawLog) {
 		return { kind: "infra-kill", detail };
 	}
 
-	if (KILLED_LINE.test(log) && EXIT_137_SHAPED.test(log)) {
+	if (
+		EXIT_137_SHAPED.test(log) &&
+		(KILLED_LINE.test(log) ||
+			/exit code 137|exitCode=137/i.test(log) ||
+			/signal=SIGKILL/i.test(log))
+	) {
 		const samples = log.match(MEM_WATCH_SAMPLE);
 		const lastSample = samples?.[samples.length - 1]?.trim();
 		// #2230's re-home comment on #2103, point 2: when nothing survived to
@@ -350,6 +371,12 @@ export function classifyFailureLog(rawLog) {
 				detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
 			};
 		}
+	}
+	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
+		return {
+			kind: "infra-net",
+			detail: `infrastructure error: ${infraLine[0].trim()}`,
+		};
 	}
 
 	// Spec default (#2103 proposal step 1): "otherwise real". A failing job

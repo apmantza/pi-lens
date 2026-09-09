@@ -22,6 +22,10 @@ that reproduction is a hypothesis and is labelled as one. Write the report
 to a file at the worktree root AND, when the delegation grants issue
 access, post it on the tracking issue: a file left in a worktree is not a
 durable deliverable until it is posted or committed.
+When the symptom involves a language server, runner or formatter, say which
+registry entries (`clients/language-registry.ts`) the diagnosis covers and
+whether the reporter's language is special or merely the one observed; the
+fix lane inherits that scope (catalog shape 42).
 
 Deliver a proven diagnosis and a concrete next step. If the task expands to an
 implementation, stop and return it to the orchestrator for a fixer delegation.
