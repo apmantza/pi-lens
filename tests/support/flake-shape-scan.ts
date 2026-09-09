@@ -195,7 +195,7 @@ const VITEST_IN_ARGV = /\bvitest\b/i;
 // list beside the support-module census: matching the CALL in a test catches
 // a helper that hides `node:child_process` behind another module boundary.
 const SUPPORT_SPAWN_HELPER_CALL =
-	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync)\s*\(/g;
+	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync|withRealPi)\s*\(/g;
 const MOCK_CALL = /\bvi\.(?:mock|doMock|hoisted)\s*\(\s*["']([^"']+)["']/g;
 const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
 	gitFixtureSpawnAsync: ["/git-fixture-env", "/git-fixture-env.js"],
@@ -203,6 +203,11 @@ const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
 	gitExecSync: ["/git-fixture-env", "/git-fixture-env.js"],
 	spawnWedgedChild: ["/fault-injection", "/fault-injection.ts"],
 	safeSpawnAsync: ["/safe-spawn", "/safe-spawn.js"],
+	withRealPi: [
+		"/real-pi-harness",
+		"/real-pi-harness.js",
+		"/real-pi-harness.ts",
+	],
 	execFileSync: ["node:child_process", "child_process"],
 	execSync: ["node:child_process", "child_process"],
 };

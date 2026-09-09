@@ -60,7 +60,7 @@ import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import vitestConfig from "../../vitest.config.ts";
+import vitestConfig, { realHarnessInclude } from "../../vitest.config.ts";
 import {
 	admissionHeader,
 	countsByDetector,
@@ -132,6 +132,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"fault injection must model real timer and child teardown timing; fake timers cannot reproduce the boundary",
+	},
+	"raw-timer-wait:support/real-pi-harness.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the harness timeout models real child-process progress and must remain bounded across teardown",
 	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
@@ -249,6 +254,26 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
+	},
+	"real-process-spawn:real-harness/child-exit.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real pi child death is the process-boundary failure that must reject a governed waiter promptly",
+	},
+	"real-process-spawn:real-harness/negative.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real pi must surface provider exhaustion and malformed tool arguments across the process boundary",
+	},
+	"real-process-spawn:real-harness/scenario-1.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pi RPC host and extension lifecycle cannot be certified by an in-process double",
+	},
+	"real-process-spawn:real-harness/scenario-3.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real host tool handler and read guard must cross the pi process boundary",
 	},
 	// #2807 review F1/F4: the local CLI's exact argv and a shallow checkout's
 	// missing diff are the subjects; an in-process call cannot prove either.
@@ -707,7 +732,7 @@ function validateAdmission(
 	key: string,
 	entry: { detector: DetectorName; reason: string },
 	source: string | undefined,
-	wallClockBudgetIncluded: ReadonlySet<string>,
+	serializedLaneIncluded: ReadonlySet<string>,
 	relativeTestsPath: string,
 ): string[] {
 	const problems: string[] = [];
@@ -727,12 +752,12 @@ function validateAdmission(
 		problems.push(`${key}: header reason too short to be real`);
 	}
 	const laneProof =
-		wallClockBudgetIncluded.has(`tests/${relativeTestsPath}`) ||
+		serializedLaneIncluded.has(`tests/${relativeTestsPath}`) ||
 		(relativeTestsPath.startsWith("support/") &&
-			supportHelperHasLaneProof(relativeTestsPath, wallClockBudgetIncluded));
+			supportHelperHasLaneProof(relativeTestsPath, serializedLaneIncluded));
 	if (!laneProof) {
 		problems.push(
-			`${key}: not listed in vitest.config.ts wallClockBudgetInclude`,
+			`${key}: not listed in vitest.config.ts wallClockBudgetInclude or real-harness lane`,
 		);
 	}
 	if (entry.reason.trim().length < 15) {
@@ -743,7 +768,10 @@ function validateAdmission(
 
 describe("flake-shape ratchet — admission gate", () => {
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
-		const included = new Set(wallClockBudgetInclude());
+		const included = new Set([
+			...wallClockBudgetInclude(),
+			...realHarnessInclude,
+		]);
 		const problems: string[] = [];
 		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
 			const file = key.slice(entry.detector.length + 1);

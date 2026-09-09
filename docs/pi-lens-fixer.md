@@ -26,6 +26,8 @@ skipped, and why. Use active, plain prose.
 
 ## Standard mechanics (apply unless the brief overrides)
 
+A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle adds or updates a real-harness scenario when the defect is only observable through the host; the scenario is the red-first proof where a unit seam cannot show it.
+
 - Every language pi-lens supports (`LANGUAGES` in `clients/language-registry.ts`),
   never one: a fix on an LSP, dispatch, cache or tool seam is stated in
   language-neutral terms, names which registry entries carry the facts it
