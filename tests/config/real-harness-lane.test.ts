@@ -16,6 +16,7 @@ describe("real harness lane admission", () => {
 		const expected = [
 			"tests/real-harness/fixture-shape.test.ts",
 			"tests/real-harness/negative.test.ts",
+			"tests/real-harness/child-exit.test.ts",
 			"tests/real-harness/scenario-1.test.ts",
 			"tests/real-harness/scenario-3.test.ts",
 		];

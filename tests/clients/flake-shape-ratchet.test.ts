@@ -255,6 +255,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
 	},
+	"real-process-spawn:real-harness/child-exit.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real pi child death is the process-boundary failure that must reject a governed waiter promptly",
+	},
 	"real-process-spawn:real-harness/negative.test.ts": {
 		detector: "real-process-spawn",
 		reason:

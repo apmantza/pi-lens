@@ -18,6 +18,19 @@ import {
 
 export type JsonObject = Record<string, unknown>;
 export type HarnessEvent = JsonObject & { event?: string; type?: string };
+export class RealPiChildExitError extends Error {
+	readonly code: number | null;
+	readonly signal: NodeJS.Signals | null;
+
+	constructor(code: number | null, signal: NodeJS.Signals | null) {
+		super(
+			`real pi child exited (code ${code ?? "null"}, signal ${signal ?? "none"})`,
+		);
+		this.name = "RealPiChildExitError";
+		this.code = code;
+		this.signal = signal;
+	}
+}
 export type Script = Array<
 	Array<
 		| { type: "text"; text: string }
@@ -33,6 +46,7 @@ export type RealPi = {
 	toolResults(): ReadonlyArray<HarnessEvent>;
 	awaitAssistantTurn(): Promise<HarnessEvent>;
 	awaitToolResult(name: string): Promise<HarnessEvent>;
+	killChildForTest(): void;
 	providerObservations(): ReadonlyArray<JsonObject>;
 	lens: {
 		latencyRows(): ReadonlyArray<JsonObject>;
@@ -133,7 +147,33 @@ function startRealPi(
 		},
 	);
 	const events: RpcMessage[] = [];
-	const waiters = new Map<string, Array<(message: RpcMessage) => void>>();
+	const waiters = new Map<
+		string,
+		Array<{
+			timer: NodeJS.Timeout;
+			predicate: (message: RpcMessage) => boolean;
+			resolve: (message: RpcMessage) => void;
+			reject: (error: Error) => void;
+		}>
+	>();
+	let childFailure: RealPiChildExitError | undefined;
+	const rejectPending = (error: RealPiChildExitError) => {
+		childFailure = error;
+		for (const pending of waiters.values()) {
+			for (const waiter of pending) {
+				clearTimeout(waiter.timer);
+				waiter.reject(error);
+			}
+		}
+		waiters.clear();
+	};
+	child.once("error", (error) => {
+		if (!childFailure) rejectPending(new RealPiChildExitError(null, null));
+		else void error;
+	});
+	child.once("exit", (code, signal) => {
+		if (!childFailure) rejectPending(new RealPiChildExitError(code, signal));
+	});
 	let buffer = "";
 	child.stdout.on("data", (chunk) => {
 		buffer += chunk.toString();
@@ -146,9 +186,18 @@ function startRealPi(
 			try {
 				const message = JSON.parse(line) as RpcMessage;
 				events.push(message);
-				for (const key of [message.id, message.event, message.type])
-					for (const resolve of waiters.get(String(key)) ?? [])
-						resolve(message);
+				for (const key of [message.id, message.event, message.type]) {
+					const pending = waiters.get(String(key));
+					if (!pending) continue;
+					const remaining = pending.filter((waiter) => {
+						if (!waiter.predicate(message)) return true;
+						clearTimeout(waiter.timer);
+						waiter.resolve(message);
+						return false;
+					});
+					if (remaining.length) waiters.set(String(key), remaining);
+					else waiters.delete(String(key));
+				}
 			} catch {
 				/* protocol owns stdout */
 			}
@@ -159,15 +208,19 @@ function startRealPi(
 		predicate: (message: RpcMessage) => boolean = () => true,
 	) =>
 		new Promise<RpcMessage>((resolve, reject) => {
+			if (childFailure) {
+				reject(childFailure);
+				return;
+			}
 			const timer = setTimeout(() => {
 				waiters.delete(key);
 				reject(new Error(`timed out waiting for ${key}`));
 			}, 60_000);
-			const waiter = (message: RpcMessage) => {
-				if (predicate(message)) {
-					clearTimeout(timer);
-					resolve(message);
-				} else waiters.set(key, [...(waiters.get(key) ?? []), waiter]);
+			const waiter = {
+				timer,
+				predicate,
+				resolve,
+				reject,
 			};
 			waiters.set(key, [...(waiters.get(key) ?? []), waiter]);
 		});
@@ -184,6 +237,7 @@ function startRealPi(
 		events,
 		request,
 		waitFor,
+		killChildForTest: () => child.kill("SIGKILL"),
 		providerObservations: () =>
 			readFileSync(providerLog, "utf8")
 				.trim()
@@ -264,6 +318,7 @@ export async function withRealPi<T>(
 				cursor = harness.events.indexOf(event) + 1;
 				return event;
 			},
+			killChildForTest: harness.killChildForTest,
 			toolResults: () =>
 				harness.events.filter(
 					(event) =>
