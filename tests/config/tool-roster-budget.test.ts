@@ -78,15 +78,19 @@ function measure(tools: ListedTool[]) {
 			},
 		]),
 	);
-	const descriptionTotal = Object.values(measured).reduce(
-		(sum, sizes) => sum + sizes.description,
+	const descriptionTotal = tools.reduce(
+		(sum, tool) => sum + descriptionBytes(tool),
 		0,
 	);
-	const schemaTotal = Object.values(measured).reduce(
-		(sum, sizes) => sum + sizes.schema,
-		0,
-	);
+	const schemaTotal = tools.reduce((sum, tool) => sum + schemaBytes(tool), 0);
 	return { measured, descriptionTotal, schemaTotal };
+}
+
+function expectUniqueNames(tools: ListedTool[]): void {
+	const names = tools.map((tool) => tool.name);
+	expect(new Set(names).size, `duplicate tool names: ${names.join(", ")}`).toBe(
+		names.length,
+	);
 }
 
 describe("tool roster description budget", () => {
@@ -108,6 +112,7 @@ describe("tool roster description budget", () => {
 	afterAll(() => mcp?.dispose());
 
 	it("keeps the pi roster within its two-sided baseline", () => {
+		expectUniqueNames(piTools);
 		const { measured, descriptionTotal, schemaTotal } = measure(piTools);
 		const total = descriptionTotal + schemaTotal;
 		const detail = report(
@@ -128,6 +133,7 @@ describe("tool roster description budget", () => {
 	});
 
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {
+		expectUniqueNames(mcpTools);
 		const { measured, descriptionTotal, schemaTotal } = measure(mcpTools);
 		const total = descriptionTotal + schemaTotal;
 		const detail = report(

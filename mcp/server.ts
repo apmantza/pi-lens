@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { boundToolText } from "../tools/render-compact.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
@@ -492,11 +493,13 @@ function toolText(
 	structured?: unknown,
 	compact = false,
 ): { content: { type: "text"; text: string }[] } {
-	const text =
+	const rawText =
 		structured === undefined
 			? summary
 			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
-	return { content: [{ type: "text" as const, text }] };
+	return {
+		content: [{ type: "text" as const, text: boundToolText(rawText).text }],
+	};
 }
 
 // --- Graph-staleness signal (#536) -------------------------------------------
@@ -1703,7 +1706,13 @@ async function callTool(
 			undefined,
 			{ cwd },
 		)) as { content: { type: "text"; text: string }[] };
-		return { content: out.content };
+		return {
+			content: out.content.map((content) =>
+				content.type === "text"
+					? { ...content, text: boundToolText(content.text).text }
+					: content,
+			),
+		};
 	}
 
 	if (name === "pilens_lsp_navigation" || name === "pilens_lsp_diagnostics") {

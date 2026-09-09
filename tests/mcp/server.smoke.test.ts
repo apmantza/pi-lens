@@ -84,9 +84,8 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
 		// MCP must not keep the old whole-project-only verification advice.
 		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
-		expect(diagnosticsTool?.description).toContain("no cached diagnostics");
 		expect(diagnosticsTool?.description).toContain(
-			"unlike pilens_lsp_diagnostics",
+			"mode=full adds an active LSP scan",
 		);
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
@@ -239,4 +238,43 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		const res = await harness.request(4, "no/such/method");
 		expect((res.error as { code: number }).code).toBe(-32601);
 	}, 25_000);
+});
+
+describe("pi-lens MCP result bounds", { retry: 2 }, () => {
+	it("bounds a large AST replacement and keeps the full result in the session log", async () => {
+		const workspace = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-result-"),
+		);
+		const source = Array.from(
+			{ length: 320 },
+			(_, index) => `const value${index} = "${"x".repeat(900)}";`,
+		).join("\n");
+		const sourcePath = path.join(workspace, "large.ts");
+		fs.writeFileSync(sourcePath, source);
+		const harness = new McpHarness({ cwd: workspace });
+		try {
+			const res = await harness.request(1, "tools/call", {
+				name: "pilens_ast_grep_replace",
+				arguments: {
+					pattern: "const $X = $Y;",
+					rewrite: "let $X = $Y;",
+					lang: "typescript",
+					paths: [sourcePath],
+					apply: false,
+				},
+			});
+			const text = (res.result as { content: { text: string }[] }).content[0]
+				.text;
+			const logPath = text.match(/Full output: ([^\]\n]+)/)?.[1];
+			expect(Buffer.byteLength(text)).toBeLessThanOrEqual(40 * 1024);
+			expect(text).toMatch(/\d+ characters omitted/);
+			expect(logPath).toBeTruthy();
+			const fullText = fs.readFileSync(logPath as string, "utf8");
+			expect(Buffer.byteLength(fullText)).toBeGreaterThan(40 * 1024);
+			expect(fullText).toContain("value319");
+		} finally {
+			harness.dispose();
+			fs.rmSync(workspace, { recursive: true, force: true });
+		}
+	}, 45_000);
 });

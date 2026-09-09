@@ -21,6 +21,54 @@
 
 import { Text } from "../clients/deps/pi-tui.js";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { getGlobalPiLensLogDir } from "../clients/probe-home-state.js";
+
+const MAX_RESULT_BYTES = 40 * 1024;
+
+export interface BoundedToolText {
+	text: string;
+	truncated: boolean;
+	omittedCharacters: number;
+	fullOutputPath?: string;
+}
+
+/** Bound model-facing result text while retaining both the useful head and tail. */
+export function boundToolText(text: string): BoundedToolText {
+	const totalBytes = Buffer.byteLength(text, "utf8");
+	if (totalBytes <= MAX_RESULT_BYTES) {
+		return { text, truncated: false, omittedCharacters: 0 };
+	}
+
+	const fullOutputPath = path.join(
+		getGlobalPiLensLogDir(),
+		`tool-result-${Date.now()}-${randomUUID()}.log`,
+	);
+	fs.mkdirSync(path.dirname(fullOutputPath), { recursive: true });
+	fs.writeFileSync(fullOutputPath, text, "utf8");
+
+	const marker = (omitted: number) =>
+		`\n\n[${omitted} characters omitted. Full output: ${fullOutputPath}]\n\n`;
+	let head = Math.floor(text.length / 2);
+	let tail = text.length - head;
+	let output = `${text.slice(0, head)}${marker(0)}${text.slice(text.length - tail)}`;
+	while (
+		Buffer.byteLength(output, "utf8") > MAX_RESULT_BYTES &&
+		(head > 0 || tail > 0)
+	) {
+		if (head >= tail) head--;
+		else tail--;
+		output = `${text.slice(0, head)}${marker(text.length - head - tail)}${text.slice(text.length - tail)}`;
+	}
+	return {
+		text: output.replace(marker(0), marker(text.length - head - tail)),
+		truncated: true,
+		omittedCharacters: text.length - head - tail,
+		fullOutputPath,
+	};
+}
 
 /** Minimal shape of the tool result handed to renderResult — kept structural so
  * this helper does not depend on the exact AgentToolResult generic. */

@@ -1023,6 +1023,12 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+Model-facing tool results use the single `boundToolText` seam in
+`tools/render-compact.ts`: oversized text keeps its head and tail, reports the
+omitted character count, and writes the complete payload under the session log
+directory. MCP adapters must call this seam rather than copying its policy
+(#2799, #2800).
+
 `FactStore` bounds file facts on two axes: 1,024 LRU records and 64 MiB of
 retained UTF-8 `file.content` bytes. It maintains the byte total at each
 mutation; never replace that total with a hot-path map scan. Pinned dispatch
