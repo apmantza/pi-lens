@@ -77,6 +77,7 @@ jobs:
       pull-requests: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       RUN_ID: ${{ github.event.workflow_run.id }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -90,10 +91,55 @@ jobs:
       - name: Classify Unit-tests failure and rerun infra-kill once
         shell: bash
         run: |
-          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --infra-kill-only --skip-missing-job)
+          set -o pipefail
+          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --skip-missing-job)
           if [[ -n "$PR_NUMBER" ]]; then
             args+=(--pr "$PR_NUMBER")
           elif [[ "$RUN_EVENT" == "push" || "$RUN_EVENT" == "repository_dispatch" ]]; then
             args+=(--allow-missing-pr)
           fi
-          node scripts/classify-ci-failure.mjs "${args[@]}"
+          output="$(node scripts/classify-ci-failure.mjs "${args[@]}")"
+          printf '%s\n' "$output"
+          if [[ -n "$PR_NUMBER" ]]; then
+            if grep -q -- '-> infra-' <<<"$output"; then
+              gh pr edit "$PR_NUMBER" --add-label 'ci:infra' --remove-label 'ci:real'
+            else
+              gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
+            fi
+          fi
+
+  finalize-rerun:
+    name: Finalize CI rerun classification
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (
+        github.event.workflow_run.event == 'pull_request' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master') ||
+        (github.event.workflow_run.event == 'repository_dispatch' && github.event.workflow_run.head_branch == 'master')
+      ) &&
+      github.event.workflow_run.run_attempt == 2 &&
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      RUN_EVENT: ${{ github.event.workflow_run.event }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Swap terminal rerun labels
+        shell: bash
+        run: |
+          if [[ -z "$PR_NUMBER" ]]; then
+            {
+              echo "## Terminal rerun classification"
+              echo "No associated PR for event=$RUN_EVENT sha=$HEAD_SHA; terminal conclusion=${{ github.event.workflow_run.conclusion }}."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
+            gh pr edit "$PR_NUMBER" --remove-label 'ci:infra'
+          else
+            gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
+          fi
