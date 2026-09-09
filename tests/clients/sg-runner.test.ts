@@ -30,17 +30,23 @@ vi.mock("../../clients/installer/index.js", () => ({
 	// tell an attempt that failed from one that never ran.
 	getInstallAttempt: vi.fn(() => undefined),
 }));
-vi.mock("../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	getSgCommand,
-	resolveManagedToolClient: vi.fn(async ({ acceptInstalled }) => {
-		const installed = await ensureTool("ast-grep");
-		if (!installed) return { outcome: "missing" };
-		const value = await acceptInstalled(installed);
-		return value === null
-			? { outcome: "non-installable" }
-			: { outcome: "success", value };
+vi.mock(
+	"../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		getSgCommand,
+		resolveManagedToolClient: vi.fn(async ({ acceptInstalled }) => {
+			const installed = await ensureTool("ast-grep");
+			if (!installed) return { outcome: "missing" };
+			const value = await acceptInstalled(installed);
+			return value === null
+				? { outcome: "non-installable" }
+				: { outcome: "success", value };
+		}),
 	}),
-}));
+);
 
 describe("SgRunner", () => {
 	beforeEach(() => {

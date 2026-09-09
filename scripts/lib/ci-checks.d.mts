@@ -1,4 +1,9 @@
 export declare const REQUIRED_CHECKS: string[];
+export declare const CI_JOB_NAMES: Readonly<{
+	CHANGELOG_FRAGMENT: string;
+	LINT_AND_TYPECHECK: string;
+	UNIT_TESTS: string;
+}>;
 export declare const ADVISORY_CHECKS: Set<string>;
 export declare function isAdvisoryCheck(name: string): boolean;
 export declare function isBlockingConclusion(

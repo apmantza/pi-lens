@@ -36,19 +36,12 @@ skipped, and why. Use active, plain prose.
 - Never `vi.waitFor` with real timers; never a `// flake-shape` admission for
   a test you wrote; never `git stash`; never edit `CHANGELOG.md` (one fragment
   under `.changelog/`, exactly one top-level entry).
-- Before handoff, run every mechanical PR gate the CI runs and paste the
-  summary in PR_BODY.md — a handoff without it is incomplete. Until
-  `npm run preflight` lands, that set is: `npm run build`, `npm run lint`,
-  `npm run fmt:check`, `npm run changelog:check`, `npm run check:lockfile`,
-  `tests/config/` (every admission, registry and workflow pin), the
-  governance sweeps (`tests/clients/generation-guard-sweep.test.ts`,
-  `tests/clients/flake-shape-ratchet.test.ts`,
-  `tests/config/lsp-spawn-heavy-coverage.test.ts`,
-  `tests/scripts/ci-verdict.test.ts`), and `scripts/check-pr-title.mjs`,
-  `scripts/check-close-keywords.mjs`, `scripts/check-pr-body.mjs` on
-  COMMIT_MSG.txt and PR_BODY.md. Eleven CI reds on 2026-09-09 were these
-  gates, not defects.
+- Before handoff, run `npm run preflight` last and paste its table in
+  `PR_BODY.md` — a handoff without it is incomplete.
 - No Git authority unless granted: leave changes uncommitted; hand off
   `PR_BODY.md` (template headings, every red and mutation quoted in ≤5 lines)
+  plus two optional one-liners the reviewer reads first: `Operating rule:`
+  (the one sentence the change enforces) and `Kept:` (what was deliberately
+  not changed, so a reviewer does not re-litigate it);
   and `COMMIT_MSG.txt` at the worktree root. Final message: verdict line, files
   changed, test totals, what could not be verified.

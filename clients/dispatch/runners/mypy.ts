@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { hasMypyConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -80,7 +81,7 @@ const mypyRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "mypy");
 
 		// Only run if mypy config exists — avoids false positives in untyped projects
 		if (!hasMypyConfig(cwd)) {

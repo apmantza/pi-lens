@@ -53,6 +53,7 @@ import {
 } from "../../../tool-policy.js";
 import type { DispatchContext } from "../../types.js";
 import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
+import { resolveToolCwd } from "../../../tool-cwd.js";
 import { createAvailabilityProbeFlight } from "../../../availability-probe-flight.js";
 import {
 	type AvailabilityCause,
@@ -2184,3 +2185,8 @@ export const sg = {
 	isAvailableAsync: isSgAvailableAsync,
 	getCommand: getSgCommand,
 };
+
+/** Shared cwd seam for runner probes and analysis children (#2777). */
+export function resolveRunnerCwd(ctx: DispatchContext, tool: string): string {
+	return resolveToolCwd("runner", tool, ctx.filePath, ctx);
+}

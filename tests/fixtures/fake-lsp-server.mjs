@@ -485,6 +485,22 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
+		if (process.env.FAKE_LSP_PUSH_DIAGNOSTIC === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					diagnostics: [{
+						severity: 1,
+						source: "fake-push",
+						code: "P2780",
+						message: "diagnostic from pushed custom server",
+						range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+					}],
+				},
+			});
+		}
 		// Gated on the wedge profile so every existing test keeps the incumbent
 		// silent-on-open behaviour it was written against.
 		if (HAS_BACKLOG_WEDGE) {
@@ -662,6 +678,7 @@ function handle(raw) {
 
 	// Pull diagnostics
 	if (data.method === "textDocument/diagnostic") {
+		if (process.env.FAKE_LSP_IGNORE_PULL === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
 		send({
 			jsonrpc: "2.0",

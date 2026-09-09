@@ -91,8 +91,9 @@
  * gate says "config exists" while the carriage says "not found", silently
  * dropping the `--config` argv this module exists to carry.
  */
+import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { findLocalToolConfig } from "./path-utils.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 
 /**
  * In `computeConfigFiles()`'s own precedence order — `.php-cs-fixer.php`
@@ -111,6 +112,12 @@ const PHP_CS_FIXER_CONFIG_NAMES = [
  * agreeing with this tool's own (unceilinged) detection gates.
  */
 export function resolvePhpCsFixerConfig(filePath: string): string | undefined {
-	const startDir = path.dirname(path.resolve(filePath));
-	return findLocalToolConfig(startDir, PHP_CS_FIXER_CONFIG_NAMES);
+	const absolute = path.resolve(filePath);
+	const startDir = resolveToolCwd("formatter", "php-cs-fixer", absolute, {
+		cwd: path.parse(absolute).root,
+		allowHomeMarker: true,
+	});
+	return PHP_CS_FIXER_CONFIG_NAMES.map((name) =>
+		path.join(startDir, name),
+	).find(existsSync);
 }

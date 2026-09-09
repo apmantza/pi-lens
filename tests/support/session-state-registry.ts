@@ -1481,7 +1481,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// this file's existing registry entries already cover its real caches.
 	// #2756 round 3: the live container scan includes the module-level
 	// formatterSignatureFlights cache added with the project-root cwd resolver.
-	"formatters.ts": 10,
+	// #2777 folded the formatter marker map into tool-cwd.ts, removing one
+	// import-time container from this module.
+	"formatters.ts": 9,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"generated-artifacts.ts": 3,

@@ -286,13 +286,19 @@ vi.mock("node:fs", async () => {
 	return { ...actual, readFileSync };
 });
 
-vi.mock("../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailableAsync: async () => true,
-		getCommand: () => "cue",
+vi.mock(
+	"../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailableAsync: async () => true,
+			getCommand: () => "cue",
+		}),
+		resolveAvailableOrInstall: async () => "cue",
 	}),
-	resolveAvailableOrInstall: async () => "cue",
-}));
+);
 
 const cueCwd = path.join(os.tmpdir(), "pi-lens-cue-vet-test");
 const cueFile = path.join(cueCwd, "bad.cue");
