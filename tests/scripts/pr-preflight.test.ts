@@ -26,6 +26,13 @@ describe("pr preflight", () => {
 		expect(GATES.find(([name]) => name === "check:lockfile")?.[2]).toBe(
 			CI_JOB_NAMES.LINT_AND_TYPECHECK,
 		);
+		expect(GATES.find(([name]) => name === "lockfile:complete")?.[1]).toEqual([
+			"npm",
+			"run",
+			"check:lockfile",
+			"--",
+			"--complete",
+		]);
 	});
 	it("parses only and skip selectors", () => {
 		expect(parseArgs(["--only", "lint"])).toEqual({

@@ -19,6 +19,11 @@ export const GATES = [
 		["npm", "run", "check:lockfile"],
 		CI_JOB_NAMES.LINT_AND_TYPECHECK,
 	],
+	[
+		"lockfile:complete",
+		["npm", "run", "check:lockfile", "--", "--complete"],
+		CI_JOB_NAMES.LINT_AND_TYPECHECK,
+	],
 	["tests/config", ["tests/config/"], CI_JOB_NAMES.UNIT_TESTS],
 	[
 		"generation-guard",
