@@ -357,13 +357,15 @@ jobs:
           exit 0
 
   # Windows coverage starts as advisory because the repository has no prior Windows Vitest signal.
-  # Promote this job to gating once it has been green on master for 7 consecutive nightly/PR runs.
+  # Promote this job to gating once the Run Windows Vitest subset step outcome has been success
+  # on 7 consecutive master/PR runs.
   unit-tests-windows:
     name: Unit tests Windows (advisory)
     needs: validate-merge-train-dispatch
     runs-on: windows-latest
-    continue-on-error: true
-    timeout-minutes: 15
+    outputs:
+      windows_vitest: ${{ steps.windows-vitest.outcome }}
+    timeout-minutes: 25
     permissions:
       contents: read
 
@@ -372,6 +374,28 @@ jobs:
         with:
           ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
           persist-credentials: false
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
+
       # actionlint: the `runner` context is not available in job-level `env`,
       # so the probe home is pinned from a step (same value, exported for the
       # rest of the job).
@@ -396,7 +420,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t WIN32_FILES < <(
-            git grep -l -E 'path\.win32|skipIf|runIf' -- 'tests/**/*.test.ts' |
+            git grep -l -E 'path\.win32|skipIf|runIf' -- ':(glob)tests/**/*.test.ts' |
               while IFS= read -r file; do
                 if git grep -qi 'win32' -- "$file"; then
                   printf '%s\n' "$file"
@@ -408,15 +432,28 @@ jobs:
           if [[ -f tests/clients/tool-cwd.test.ts ]]; then
             FILES+=(tests/clients/tool-cwd.test.ts)
           fi
+          [[ ${#FILES[@]} -eq 0 ]] && { echo "::error::enumeration empty"; exit 1; }
           printf '%s\n' "${FILES[@]}" | sort -u | tee "$RUNNER_TEMP/windows-vitest-files.txt"
           printf 'Windows Vitest subset: %s files\n' "$(sort -u "$RUNNER_TEMP/windows-vitest-files.txt" | wc -l)"
 
       - name: Run Windows Vitest subset
+        id: windows-vitest
+        continue-on-error: true
         shell: bash
+        env:
+          PI_LENS_TEST_TIMEOUT_SCALE: '3'
         run: |
           set -euo pipefail
           mapfile -t FILES < "$RUNNER_TEMP/windows-vitest-files.txt"
           node_modules/.bin/vitest run "${FILES[@]}" --configLoader runner
+
+      - name: Record Windows Vitest outcome
+        if: always()
+        shell: bash
+        run: |
+          outcome="${{ steps.windows-vitest.outcome }}"
+          echo "Windows Vitest subset step outcome: $outcome" >> "$GITHUB_STEP_SUMMARY"
+          echo "windows_vitest=$outcome" >> "$GITHUB_STEP_SUMMARY"
 
   # Simulates pi's real install path: a `git:` install runs `npm install
   # --omit=dev`, which triggers `prepare` → `build:dist` FROM SOURCE with the
