@@ -196,6 +196,9 @@ contract before it starts:
 - Use `docs/pi-lens-fixer.md` to implement an issue or requested change.
 - Use `docs/pi-lens-reviewer.md` to adversarially verify a finished change.
 - Use `docs/pi-lens-investigator.md` to root-cause behavior without editing.
+- Use `docs/pi-lens-monitor.md` to read a LIVE session's logs into the fixed
+  readout (phase table, bounds reached at p50, degradations, backlogs, deltas);
+  it observes only and files nothing on its own.
 - Use `docs/pi-lens-warden.md` to audit PR state and route the next handoff.
 
 This routing applies to native subagents, external worker runners, and any
