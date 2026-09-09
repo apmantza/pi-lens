@@ -315,6 +315,9 @@ const lspSpawnHeavyInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 const wallClockBudgetInclude = [
+	// #2697: the strictness ratchet spawns two real tsc processes and waits for
+	// their wall-clock completion; keep its 120s budget in the quiet phase.
+	"tests/config/strictness-ratchet.test.ts",
 	"tests/clients/biome-config-decorator-metadata.test.ts",
 	"tests/clients/build-identity.test.ts",
 	"tests/clients/cascade-turn-merge.test.ts",
