@@ -85,7 +85,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		// MCP must not keep the old whole-project-only verification advice.
 		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
 		expect(diagnosticsTool?.description).toContain(
-			"mode=full adds an active LSP scan",
+			"mode=full is an active LSP scan of paths",
 		);
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
