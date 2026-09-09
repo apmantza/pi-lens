@@ -8,6 +8,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { upsertTrackingIssue } from "./lib/drift-issue.mjs";
 
 function valueAfter(argv, flag) {
@@ -51,7 +52,7 @@ function main(argv = process.argv.slice(2), ghRunner = gh) {
 	return action;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		main();
 	} catch (error) {

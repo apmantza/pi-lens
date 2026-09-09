@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const COMPLEXITY_FUNCTION_THRESHOLD = 15;
 export const COMPLEXITY_FILE_SIZE_THRESHOLD = 1000;
@@ -124,7 +125,7 @@ async function main() {
 	process.stdout.write(report);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 	main().catch((error) => {
 		console.error(`complexity advisory unavailable: ${error.message}`);
 		const output = resolve(

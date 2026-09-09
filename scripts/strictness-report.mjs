@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve, relative, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const REPORT_ROOTS = ["clients", "tools", "mcp", "scripts", "tests"];
 
@@ -96,7 +97,7 @@ export function main(argv = process.argv.slice(2)) {
 	process.stdout.write(`\n${JSON.stringify(summary)}\n`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		main();
 	} catch (error) {

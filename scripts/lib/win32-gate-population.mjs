@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const TESTS_ROOT = "tests";
 const TEST_FILE = /\.test\.ts$/;
@@ -75,7 +76,7 @@ export function findWin32Gates(cwd = process.cwd()) {
 	const root = resolve(cwd);
 	const gates = [];
 	for (const absolute of sourceFiles(root)) {
-		if (absolute.includes(`${join(root, TESTS_ROOT, "fixtures")}/`)) continue;
+		if (absolute.startsWith(join(root, TESTS_ROOT, "fixtures") + sep)) continue;
 		const raw = readFileSync(absolute, "utf8");
 		for (const match of blankSource(raw).matchAll(GATE_PATTERN)) {
 			const offset = match.index ?? 0;
@@ -134,4 +135,4 @@ function main() {
 	} else if (args.includes("--files")) console.log(files.join("\n"));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
