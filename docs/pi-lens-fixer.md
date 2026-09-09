@@ -47,6 +47,14 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   under `.changelog/`, exactly one top-level entry).
 - Before handoff, run `npm run preflight` last and paste its table in
   `PR_BODY.md` — a handoff without it is incomplete.
+- `PR_BODY.md` passes `node scripts/check-pr-body.mjs --lint-local PR_BODY.md`
+  before handoff. The gate requires the headings `## Summary`, `## Tests`,
+  `## Blast radius`, `## Class sweep`, `## Observability`, and
+  `## Test assessment` whenever the diff touches `tests/`; Observability
+  names a record literal that appears in the runtime diff, and may say
+  exactly "No new failure path; no record added." only when the diff adds no
+  failure path (no new catch, fallback or degradation branch). Record: on
+  2026-09-10 most open PRs failed the PR-body check on one of these two rules.
 - No Git authority unless granted: leave changes uncommitted; hand off
   `PR_BODY.md` (template headings, every red and mutation quoted in ≤5 lines)
   plus two optional one-liners the reviewer reads first: `Operating rule:`
