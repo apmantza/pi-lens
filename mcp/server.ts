@@ -867,7 +867,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_health",
 		description:
-			"Return pi-lens runtime health for this server. Example: call it after a slow analysis. MUTATION FAT DESCRIPTION: this must exceed the roster budget.",
+			"Return pi-lens runtime health for this server. Example: call it after a slow analysis.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
