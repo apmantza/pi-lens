@@ -66,6 +66,13 @@ export interface FormatResult {
 	error?: string;
 	outcome: "formatted" | "unchanged" | "skipped" | "unavailable" | "failed";
 }
+/** Run the production Format smoke layer, optionally with injected seams. */
+export function runFormatSmoke(options: {
+	langs: string[];
+	install: boolean;
+	verbose: boolean;
+	deps?: unknown;
+}): Promise<number>;
 export interface FormatRowVerdict {
 	status: "pass" | "skip" | "fail";
 	detail: string;

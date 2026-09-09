@@ -105,6 +105,7 @@ import type { ToolDefinition } from "../../../clients/installer/index.js";
 import {
 	checkProbeCache,
 	getRefreshableManagedNpmTools,
+	getInstallAttempt,
 	getToolPath,
 	installTool,
 	resetProbeCacheStateForTesting,
@@ -947,6 +948,45 @@ describe("the session counter records attempts (review F3)", () => {
 		await runManagedToolRefresh(NOW);
 
 		expect(managedToolRefreshesThisSession()).toBe(0);
+	});
+});
+
+describe("unsupported platform install outcomes", () => {
+	function withUnsupportedPlatform<T>(fn: () => Promise<T>): Promise<T> {
+		const originalPlatform = process.platform;
+		const originalArch = process.arch;
+		Object.defineProperty(process, "platform", { value: "freebsd" });
+		Object.defineProperty(process, "arch", { value: "x64" });
+		return fn().finally(() => {
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+			Object.defineProperty(process, "arch", { value: originalArch });
+		});
+	}
+
+	it("records GitHub tools without a matching asset as unavailable", async () => {
+		// Regression: an unsupported GitHub platform must not become a retryable
+		// failed download after installGitHubTool returns undefined.
+		await withUnsupportedPlatform(async () => {
+			await expect(installTool("stylua")).resolves.toBe(false);
+		});
+
+		expect(getInstallAttempt("stylua")).toMatchObject({
+			outcome: "unavailable",
+			reason: "unsupported platform=freebsd arch=x64",
+		});
+	});
+
+	it("records archive tools without a matching URL as unavailable", async () => {
+		// Mutation proof: this catches a disabled unsupported-reason branch even
+		// though installArchiveTool itself also returns undefined.
+		await withUnsupportedPlatform(async () => {
+			await expect(installTool("clangd")).resolves.toBe(false);
+		});
+
+		expect(getInstallAttempt("clangd")).toMatchObject({
+			outcome: "unavailable",
+			reason: "unsupported platform=freebsd arch=x64",
+		});
 	});
 });
 
