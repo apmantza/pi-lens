@@ -42,6 +42,17 @@ function stripLineTimestamps(text) {
 	return text.replace(LINE_TIMESTAMP_PREFIX, "");
 }
 
+/**
+ * Normalizes transport details that GitHub's Windows log surface can add to
+ * runner lines. Keep this at the one preprocessing seam so every anchored
+ * needle sees the same line starts.
+ */
+function normalizeLogLines(text) {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(/^\s*##\[(?:error|warning)\]\s?/gm, "");
+}
+
 // #2096 shape (review round 1, F5): bound the read BEFORE interpretation. A
 // classifier that scans an unbounded log is itself a resource-exhaustion
 // risk, and the signal this classifier looks for -- a FAIL block, a
@@ -63,7 +74,7 @@ const MAX_LOG_BYTES = 2 * 1024 * 1024;
 // > word-index lifecycle — full mode (#348) > reuses a fresh persisted
 // snapshot without rebuilding". The project label ("default") sits between
 // FAIL and the file path.
-const FAIL_LINE = /FAIL\s+\S+\s+(\S+\.test\.tsx?)\s*>\s*(.+)/;
+const FAIL_LINE = /^\s*FAIL\s+\S+\s+(\S+\.test\.tsx?)\s*>\s*(.+)$/gm;
 // A file-level FAIL with no "> testname" -- a collection/import error never
 // reaches a single test, so vitest has no test name to print (review round
 // 1, F2/P2). Deliberately looser than FAIL_LINE: only used when FAIL_LINE
@@ -114,6 +125,15 @@ const TYPESCRIPT_ERROR =
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.
 const OVERALL_TESTS_FAILED = /\bTests\s+(\d+)\s+failed\b/;
+// #2839: vitest's timeout failure text (real log, run 34389495533 attempt 1,
+// job 102594125043, PR #2834): "Error: Test timed out in 5000ms." Vitest's
+// runner uses the same template for hooks: "Error: Hook timed out in 300ms."
+// A timeout is demotion-eligible only when each FAIL block's first error line
+// is one of these shapes and the job also has network evidence.
+const TEST_TIMEOUT_LINE = /\b(?:Test|Hook) timed out in \d+ms\b/;
+const TEST_TIMEOUT_ERROR_LINE =
+	/^\s*Error:\s*(?:Test|Hook) timed out in \d+ms\./;
+const ERROR_LINE = /^\s*(?:Error|[A-Za-z]+Error):[^\r\n]*$/;
 
 // The wrapper's own verdict when it survives long enough to observe the
 // kill (clients/scripts/lib/memory-watch.mjs:formatVerdict, quoted
@@ -136,7 +156,7 @@ const EXIT_137_SHAPED = /exit code 137|exitCode=137|signal=SIGKILL/;
 // deleting that conjunct is the exact vacuous-guard shape the review
 // caught (no fixture exercised a bare "Killed" without 137/SIGKILL
 // evidence -- see the "bare Killed, no exit evidence" test).
-const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
+const KILLED_LINE = /\b(?:Killed|KILLED)(?:\s|$)/m;
 
 // UNVERIFIED (AGENTS.md shape 16): no real captured pi-lens Unit-tests log
 // with a DNS/network failure was found in the accessible run history for
@@ -158,9 +178,16 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 export const NET_PATTERN =
 	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED|\bcodeload\.github\.com\b.{0,120}\b(?:429|503)\b/i;
 const ERROR_PREFIXED_LINE =
-	/^(?:.*\bnpm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
+	/^(?:\s*npm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
 const CI_INFRA_LINE =
 	/^(?:.*(?:Unable to upload SARIF file|SARIF upload).*(?:\b(?:429|5\d\d)\b|failed).*$|.*Initialize CodeQL.*(?:\b(?:429|5\d\d)\b|failed).*$|.*codeload\.github\.com.*\b(?:429|503)\b.*|.*npm ci[\s\S]{0,200}\bETIMEDOUT\b.*)$/gim;
+// #2839: the npm-retry wrapper's own retry witness. scripts/npm-retry.mjs
+// prints `npm-retry: attempt ${attempt + 1} ${reason}` for EVERY failed
+// attempt, so the needle is scoped to the network reason -- the same log
+// legitimately carries `npm-retry: attempt 1 exited 1 (ERESOLVE)` lines for
+// deterministic dependency conflicts, and those are not registry evidence.
+// Line-start anchored like the other log-shaped patterns above.
+const NPM_RETRY_ATTEMPT_LINE = /^\s*npm-retry: attempt \d+ network error\b/m;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification
@@ -299,11 +326,100 @@ function findRealFailureSignal(log) {
 }
 
 /**
+ * Find network-unreachable evidence in the (already ANSI-stripped,
+ * timestamp-stripped) log: a scoped npm/registry error line carrying a shared
+ * NET_PATTERN token, a CI-infrastructure outage line (SARIF/CodeQL/codeload
+ * 429/503, `npm ci` ETIMEDOUT), or the npm-retry wrapper's own
+ * `npm-retry: attempt N network error` witness. One bounded scan drives BOTH
+ * the #2839 timeout demotion and the plain infra-net fallback, so the two
+ * paths can never disagree about what counts as network evidence.
+ *
+ * @param {string} log
+ * @returns {{ family: "npm-net" | "ci-infra", text: string } | null}
+ */
+function findNetworkUnreachableEvidence(log) {
+	let inspectedErrorLines = 0;
+	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
+		if (++inspectedErrorLines > 1_000) break;
+		const netMatch = NET_PATTERN.exec(errorLine[0]);
+		if (netMatch) {
+			return { family: "npm-net", text: netMatch[0].trim() };
+		}
+	}
+	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
+		return { family: "ci-infra", text: infraLine[0].trim() };
+	}
+	const retryMatch = NPM_RETRY_ATTEMPT_LINE.exec(log);
+	if (retryMatch) {
+		return { family: "npm-net", text: retryMatch[0].trim() };
+	}
+	return null;
+}
+
+/**
+ * #2839: is this log's real-failure evidence ONLY a vitest test timeout?
+ * A timeout is the one real-failure shape a registry-starved runner
+ * fabricates on otherwise-healthy code. Demotion therefore requires every
+ * FAIL test block's first error line to be a timeout; unrelated prose and a
+ * neighboring thrown failure cannot arm it.
+ *
+ * @param {string} log
+ * @returns {boolean}
+ */
+function isTimeoutOnlyFailure(log) {
+	const failLines = [...log.matchAll(/^\s*FAIL\b[^\r\n]*$/gm)];
+	const testFailures = [...log.matchAll(FAIL_LINE)];
+	if (failLines.length === 0 || testFailures.length !== failLines.length) {
+		return false;
+	}
+	if (ASSERTION_LINE.test(log) || TYPESCRIPT_ERROR.test(log)) return false;
+	return testFailures.every((match, index) => {
+		const start = match.index + match[0].length;
+		const end = testFailures[index + 1]?.index ?? log.length;
+		const block = log.slice(start, end);
+		const firstError = block
+			.split(/\r?\n/)
+			.find((line) => ERROR_LINE.test(line));
+		return firstError !== undefined && TEST_TIMEOUT_ERROR_LINE.test(firstError);
+	});
+}
+
+function findKillClassification(log) {
+	const killedVerdict = MEM_WATCH_KILLED.exec(log);
+	if (killedVerdict) {
+		const evidence = describeKernelKillEvidence(log);
+		const detail = `no failing assertion; ${killedVerdict[0].trim()}${evidence ? `; ${evidence}` : ""}`;
+		return { kind: "infra-kill", detail };
+	}
+	if (
+		EXIT_137_SHAPED.test(log) &&
+		(KILLED_LINE.test(log) ||
+			/exit code 137|exitCode=137/i.test(log) ||
+			/signal=SIGKILL/i.test(log))
+	) {
+		const samples = log.match(MEM_WATCH_SAMPLE);
+		const lastSample = samples?.[samples.length - 1]?.trim();
+		const evidence = describeKernelKillEvidence(log);
+		const baseDetail = lastSample
+			? `no failing assertion; last sample before the kill: ${lastSample}`
+			: "no failing assertion; no [mem-watch] verdict line -- the run ended before any verdict was printed";
+		const detail = `${baseDetail}${evidence ? `; ${evidence}` : ""}`;
+		return { kind: "infra-kill", detail };
+	}
+	return null;
+}
+
+/**
  * Classify one failed job's log. A real failure -- ANY of the shapes
- * findRealFailureSignal recognizes -- always wins over infra-shaped noise
- * elsewhere in the same log (acceptance criterion: "real failures are never
- * labeled infra"), so that check runs FIRST, unconditionally, before any
- * OOM/network pattern is even considered.
+ * findRealFailureSignal recognizes -- wins over infra-shaped noise elsewhere
+ * in the same log (acceptance criterion: "real failures are never labeled
+ * infra"), so that check runs before any OOM/network pattern is considered.
+ * #2839's one exception runs BEFORE it: a failure whose ONLY evidence is a
+ * test timeout (`Test timed out in Nms`, no AssertionError, no compiler
+ * diagnostic) demotes to infra-net when the log also carries
+ * network-unreachable evidence, because a registry-starved runner times tests
+ * out on otherwise-healthy code; an AssertionError or an `error TS` line
+ * beside the same network noise still wins as real.
  *
  * @param {string} rawLog
  * @returns {Classification}
@@ -326,56 +442,46 @@ export function classifyFailureLog(rawLog) {
 	// result (see the truncation test).
 	const bounded =
 		original.length > MAX_LOG_BYTES ? original.slice(-MAX_LOG_BYTES) : original;
-	const log = stripLineTimestamps(stripAnsi(bounded));
+	const log = normalizeLogLines(stripLineTimestamps(stripAnsi(bounded)));
+
+	// #2839's one demotion, checked BEFORE the real-signal branch: a vitest
+	// timeout in every FAIL block beside network evidence is infra, not real.
+	// Kill evidence wins this inference above; a real signal beside a kill
+	// still wins below when the log is not timeout-only.
+	const timeoutOnly = isTimeoutOnlyFailure(log);
+	const killClassification = findKillClassification(log);
+	// Kill evidence is stronger than the network+timeout inference, but a
+	// genuine assertion/compiler failure beside a kill remains real below.
+	if (timeoutOnly && killClassification) return killClassification;
+
+	if (timeoutOnly) {
+		const netEvidence = findNetworkUnreachableEvidence(log);
+		if (netEvidence) {
+			return {
+				kind: "infra-net",
+				detail: `no failing assertion; test timeout beside network-unreachable evidence: ${TEST_TIMEOUT_LINE.exec(log)[0]}; network: ${netEvidence.text}`,
+			};
+		}
+	}
 
 	const realSignal = findRealFailureSignal(log);
 	if (realSignal) {
 		return { kind: "real", detail: realSignal.detail };
 	}
 
-	const killedVerdict = MEM_WATCH_KILLED.exec(log);
-	if (killedVerdict) {
-		const evidence = describeKernelKillEvidence(log);
-		const detail = `no failing assertion; ${killedVerdict[0].trim()}${evidence ? `; ${evidence}` : ""}`;
-		return { kind: "infra-kill", detail };
-	}
+	if (killClassification) return killClassification;
 
-	if (
-		EXIT_137_SHAPED.test(log) &&
-		(KILLED_LINE.test(log) ||
-			/exit code 137|exitCode=137/i.test(log) ||
-			/signal=SIGKILL/i.test(log))
-	) {
-		const samples = log.match(MEM_WATCH_SAMPLE);
-		const lastSample = samples?.[samples.length - 1]?.trim();
-		// #2230's re-home comment on #2103, point 2: when nothing survived to
-		// print a verdict, naming "the OOM killer" asserts a cause this branch
-		// never measured -- a pre-#2042 log (no wrapper ever ran) and a wrapper
-		// killed mid-sample both land here with identical evidence: none. State
-		// only what was observed.
-		const evidence = describeKernelKillEvidence(log);
-		const baseDetail = lastSample
-			? `no failing assertion; last sample before the kill: ${lastSample}`
-			: "no failing assertion; no [mem-watch] verdict line -- the run ended before any verdict was printed";
-		const detail = `${baseDetail}${evidence ? `; ${evidence}` : ""}`;
-		return { kind: "infra-kill", detail };
-	}
-
-	let inspectedErrorLines = 0;
-	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
-		if (++inspectedErrorLines > 1_000) break;
-		const netMatch = NET_PATTERN.exec(errorLine[0]);
-		if (netMatch) {
+	const networkEvidence = findNetworkUnreachableEvidence(log);
+	if (networkEvidence) {
+		if (networkEvidence.family === "ci-infra") {
 			return {
 				kind: "infra-net",
-				detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
+				detail: `infrastructure error: ${networkEvidence.text}`,
 			};
 		}
-	}
-	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
 		return {
 			kind: "infra-net",
-			detail: `infrastructure error: ${infraLine[0].trim()}`,
+			detail: `no failing assertion; network error: ${networkEvidence.text}`,
 		};
 	}
 

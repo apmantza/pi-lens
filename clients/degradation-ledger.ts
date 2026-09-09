@@ -772,6 +772,8 @@ export type DegradationKind =
 	 * that carries a `code` (`PILENS_CFG_0001`) into the durable row.
 	 */
 	| "tool-cwd-resolution"
+	/** A loader request named a configured-disabled tool. */
+	| "tool-disabled"
 	/**
 	 * A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the

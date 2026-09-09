@@ -101,6 +101,11 @@ import {
 	resolvePiLensFlagWithSource,
 } from "./clients/lens-config.js";
 import { LENS_FLAGS } from "./clients/lens-flag-registry.js";
+import {
+	LENS_TOOL_NAMES,
+	resolveLensToolEnabled,
+} from "./clients/tool-config.js";
+import { recordDegradationOnce } from "./clients/degradation-ledger.js";
 import { wrapToolsForCompactLine } from "./clients/tool-render.js";
 import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEventsGetter } from "./clients/lens-events.js";
@@ -864,6 +869,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 			default: spec.default,
 		});
 	}
+	pi.registerFlag("no-tool", {
+		description: "Disable a lens tool for this session (repeatable).",
+		type: "string",
+	});
 
 	const globalConfig = loadPiLensGlobalConfig();
 	function getLensFlag(
@@ -899,6 +908,24 @@ function activateExtension(hostPi: ExtensionAPI) {
 			runtime.projectRoot,
 		).source;
 	}
+	const noToolFlag = (): string | undefined => {
+		const value = pi.getFlag("no-tool");
+		const cliValues = process.argv
+			.filter((arg) => arg.startsWith("--no-tool="))
+			.map((arg) => arg.slice("--no-tool=".length));
+		if (typeof value === "string") cliValues.unshift(value);
+		return cliValues.length > 0 ? cliValues.join(",") : undefined;
+	};
+	const isToolEnabled = (name: string): boolean =>
+		resolveLensToolEnabled(
+			name,
+			globalConfig,
+			loadPiLensProjectConfig(runtime.projectRoot).raw,
+			noToolFlag(),
+		);
+	const disabledToolNames = LENS_TOOL_NAMES.filter(
+		(name) => !isToolEnabled(name),
+	);
 
 	let lensEnabled = !getLensFlag("no-lens");
 
@@ -1646,7 +1673,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			},
 		),
 		createSymbolSearchTool(() => runtime.projectRoot),
-		createEffectiveConfigTool(() => runtime.projectRoot),
+		createEffectiveConfigTool(() => runtime.projectRoot, noToolFlag),
 		createProjectReportTool(() => runtime.projectRoot),
 		createModuleReportTool(() => runtime.projectRoot),
 		createReadSymbolTool(
@@ -1730,6 +1757,17 @@ function activateExtension(hostPi: ExtensionAPI) {
 				"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
 		},
 	];
+	const enabledLazyTools = new Set(
+		LAZY_TOOL_CATALOG.filter((tool) => isToolEnabled(tool.name)).map(
+			(tool) => tool.name,
+		),
+	);
+	const filteredLazyTools = lazyTools.filter((tool) =>
+		enabledLazyTools.has((tool as { name: string }).name),
+	);
+	const filteredLazyCatalog = LAZY_TOOL_CATALOG.filter((tool) =>
+		enabledLazyTools.has(tool.name),
+	);
 	// #1453: the lazy tools the model activated in THIS logical conversation.
 	// Extension closure state outlives a session rebuild (the runner keeps the
 	// activated extension; it does not re-run this factory), which is exactly
@@ -1742,10 +1780,21 @@ function activateExtension(hostPi: ExtensionAPI) {
 			getActiveTools?: () => string[];
 			setActiveTools?: (names: string[]) => void;
 		},
-		LAZY_TOOL_CATALOG,
+		filteredLazyCatalog,
 		{
 			onActivated: (names) => {
 				for (const name of names) rememberedLazyTools.add(name);
+			},
+			onRejected: (name) => {
+				if (
+					LENS_TOOL_NAMES.includes(name as (typeof LENS_TOOL_NAMES)[number])
+				) {
+					recordDegradationOnce({
+						kind: "tool-disabled",
+						subject: name,
+						reason: `disabled by tools.${name}.enabled`,
+					});
+				}
 			},
 			deferredToolSupport: (ctx) => {
 				try {
@@ -1772,8 +1821,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const toolsToRegister = [
 		...alwaysActiveTools,
 		activateToolsTool,
-		...lazyTools,
-	];
+		...filteredLazyTools,
+	].filter(
+		(tool) =>
+			tool.name === "pi_lens_activate_tools" || isToolEnabled(tool.name),
+	);
 	for (const tool of compactToolLineEnabled
 		? wrapToolsForCompactLine(toolsToRegister as any)
 		: toolsToRegister) {
@@ -1873,6 +1925,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					const buildIdentity = getBuildIdentity(import.meta.url);
 					if (buildIdentity) dbg(formatBuildIdentity(buildIdentity));
 					const sessionReason = (event as { reason?: string }).reason;
+					dbg(
+						`session_start: disabled tools = ${disabledToolNames.join(",") || "none"}`,
+					);
 
 					// #1334 S5: adopt the HOST's project-trust decision before anything
 					// below can auto-install a tool or spawn an LSP server. pi-lens is a

@@ -989,6 +989,7 @@ export type NoteIgnored = (
 	reason:
 		| string
 		| { readonly parseError: unknown; readonly sourceText?: string },
+	code?: ConfigDiagnosticCode,
 ) => void;
 
 /**
@@ -1028,9 +1029,9 @@ export function ignoredRecordCollector(
 	records: () => readonly MigrationRecord[];
 } {
 	const noted: MigrationRecord[] = [];
-	const note: NoteIgnored = (reason) => {
-		noted.push({
-			code: "PILENS_CFG_0001",
+	const note: NoteIgnored = (reason, code = "PILENS_CFG_0001") => {
+		let notedRecord = {
+			code: "PILENS_CFG_0001" as ConfigDiagnosticCode,
 			file: configPath,
 			key: "",
 			subject: migrationSubject(configPath, ""),
@@ -1041,7 +1042,9 @@ export function ignoredRecordCollector(
 							sourceText: reason.sourceText,
 						}),
 			tier,
-		});
+		};
+		if (code !== "PILENS_CFG_0001") notedRecord.code = code;
+		noted.push(notedRecord);
 	};
 	return {
 		note,

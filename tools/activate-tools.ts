@@ -33,6 +33,7 @@ export type ActiveToolsHost = {
 };
 
 export interface ActivateToolsOptions {
+	onRejected?: (name: string) => void;
 	deferredToolSupport?: (ctx: unknown) => boolean;
 	/**
 	 * Called with every lazy tool name the model asked for, so the extension
@@ -83,6 +84,12 @@ export function createActivateToolsTool(
 						(t): t is string => typeof t === "string" && lazyNameSet.has(t),
 					)
 				: [];
+			if (Array.isArray(params.tools)) {
+				for (const name of params.tools) {
+					if (typeof name === "string" && !lazyNameSet.has(name))
+						options.onRejected?.(name);
+				}
+			}
 
 			if (requested.length === 0) {
 				return {
