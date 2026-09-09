@@ -89,6 +89,7 @@ describe("elixir-check output parser (parseElixirOutput)", () => {
 
 	// There is no drive letter to lowercase off Windows, so this declares itself
 	// skipped there instead of returning early and reporting a PASS (#2089).
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"matches paths case-insensitively on win32 (lowercase drive letter)",
 		() => {

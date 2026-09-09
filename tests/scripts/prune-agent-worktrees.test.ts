@@ -1436,6 +1436,7 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 		},
 	);
 
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"reaps under the registered argv when the listing itself fails (#2486's own reason)",
 		{ timeout: 90_000 },
@@ -2033,6 +2034,7 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 		},
 	);
 
+	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"scopes the orphan sweep to the stopped agent's own tree, never a sibling's (#2501)",
 		{ timeout: 90_000 },

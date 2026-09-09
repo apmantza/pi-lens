@@ -422,19 +422,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t WIN32_FILES < <(
-            git grep -l -E 'path\.win32|skipIf|runIf' -- ':(glob)tests/**/*.test.ts' |
-              while IFS= read -r file; do
-                if git grep -qi 'win32' -- "$file"; then
-                  printf '%s\n' "$file"
-                fi
-              done | sort -u
-          )
-          mapfile -t CONFIG_FILES < <(find tests/config -type f -name '*.test.ts' -print | sort)
-          FILES=("${WIN32_FILES[@]}" "${CONFIG_FILES[@]}")
-          if [[ -f tests/clients/tool-cwd.test.ts ]]; then
-            FILES+=(tests/clients/tool-cwd.test.ts)
-          fi
+          mapfile -t FILES < <(node scripts/lib/win32-gate-population.mjs --files)
           [[ ${#FILES[@]} -eq 0 ]] && { echo "::error::enumeration empty"; exit 1; }
           printf '%s\n' "${FILES[@]}" | sort -u | tee "$RUNNER_TEMP/windows-vitest-files.txt"
           printf 'Windows Vitest subset: %s files\n' "$(sort -u "$RUNNER_TEMP/windows-vitest-files.txt" | wc -l)"
@@ -455,6 +443,7 @@ jobs:
         shell: bash
         run: |
           outcome="${{ steps.windows-vitest.outcome }}"
+          node scripts/lib/win32-gate-population.mjs --summary --executed-file-list "$RUNNER_TEMP/windows-vitest-files.txt" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Windows Vitest subset step outcome: $outcome" >> "$GITHUB_STEP_SUMMARY"
           echo "windows_vitest=$outcome" >> "$GITHUB_STEP_SUMMARY"
 

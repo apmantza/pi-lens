@@ -61,14 +61,12 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 		// Recurrence: #2536's Windows-only tests were present but had no CI
 		// consumer; deleting either population source would silently recreate it.
 		expect(enumeration?.shell).toBe("bash");
-		expect(enumeration?.run).toContain("git grep -l");
-		expect(enumeration?.run).toContain(":(glob)tests/**/*.test.ts");
+		expect(enumeration?.run).toContain(
+			"node scripts/lib/win32-gate-population.mjs --files",
+		);
+		expect(enumeration?.run).not.toMatch(/git grep/);
 		expect(enumeration?.run).toContain("${#FILES[@]} -eq 0");
-		expect(enumeration?.run).toContain("path\\.win32");
-		expect(enumeration?.run).toContain("skipIf");
-		expect(enumeration?.run).toContain("runIf");
-		expect(enumeration?.run).toContain("tests/config");
-		expect(enumeration?.run).toContain("tool-cwd.test.ts");
+		expect(raw).toContain("win32-gate-population.mjs --summary");
 		expect(runner?.run).toContain("--configLoader runner");
 		expect(runner?.id).toBe("windows-vitest");
 		expect(runner?.["continue-on-error"]).toBe(true);
