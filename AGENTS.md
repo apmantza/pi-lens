@@ -178,7 +178,7 @@ Message-end stale attribution anchors the session id when a live ctx is handled,
 - **Map blast radius for every code PR.** Before and after editing, use `module_report` on each touched production module with `blastRadius: true`; inspect `callbacks[]`, closures, `usedBy`, entry points, and risk flags, then use `read_symbol`/`read_enclosing` for relevant bodies. The PR must state affected dependents, callbacks/entry points, and the verification plan—or explicitly record that the blast radius is empty/unavailable and why. Re-run this map after conflict resolution or architectural changes. If the change touches a hot path (per-spawn, per-file, per-render), MEASURE the cost delta and state the number. Silent per-call taxes ship otherwise: #1673 added 100 ms to every spawn across 118 call sites, #1687 multiplied a per-file budget, and #1701 cost 14x on the background scan. Every one was caught by a reviewer's measurement. None was stated by its author. `module_report` is a navigable structural/dependent view, not a complete function-level call graph; for call-graph work reuse `clients/call-graph.ts` or LSP incoming/outgoing-call navigation instead of inferring completeness from `usedBy` or `blastRadius`.
 - **Describe every test in the PR body.** The PR body (or a review-prompt appendix) carries a section naming each NEW test file/case and each EDIT of an existing test, with one line on what it pins and why it exists — a regression proof, a contract seam, an occupancy budget. A reviewer who cannot see what changed about the tests cannot review the change: silently swapping a real coordinator for a fake runtime inside an existing test is exactly the edit this section exists to expose.
 
-**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` checks structure only, so reviewers still judge the answers.
+**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` also checks runtime diff observability when its local range is available, so reviewers still judge the answers.
 
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
 
@@ -236,6 +236,13 @@ is the procedure and defers here on conflict; 2026-09-09).**
   Record: 2026-09-09, two master reds in one afternoon — a force-added
   contract under the `*.md` ignore (#2250's sweep) and a parallel-merge
   baseline interaction (#2816) — each found by the next PR's CI.
+- *Merge chains and worker waits run as NOTIFYING background tasks.* A
+  detached `nohup … &` loop writes a file nobody reads until the orchestrator
+  polls; a task started in the harness's own background mode re-invokes the
+  orchestrator when it exits, red or green. Every `ci-verdict --wait` chain,
+  every long probe, and any wait on an external state runs that way, so a red
+  CI is a notification, not a discovery. Record: 2026-09-09, a red on #2807
+  sat unread for over an hour behind detached chains.
 - *The orchestrator's commit step checks the index, not only the diff.*
   Before every commit from a worker tree: `git ls-files` contains none of
   `PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`, `INVESTIGATION.md`,
@@ -1466,6 +1473,13 @@ sentence-ending punctuation. `normalizePrBodyForChecking` returns the body and
 the normalization verdict together, so callers never reclassify a stale event
 payload after checking the live body. The workflow grants the advisory lint
 read-only pull-request access and never edits contributor text. (#2145)
+
+The PR body workflow's runtime observability rule uses `origin/master...HEAD`.
+Tests that exercise the live entrypoint run from a fixture with that ref because
+the Unit tests checkout is shallow. If the range cannot be computed in GitHub
+Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`; local runs
+outside CI retain structural-only fallback. Runtime markers exclude test files,
+`__tests__` directories, and TypeScript declaration files.
 
 Message-end attribution uses a bounded two-slot session anchor. A primary
 `session_start` rotates `lastStableSessionId` into `previousSessionId` because
