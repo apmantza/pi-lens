@@ -286,6 +286,8 @@ describe("lens_diagnostics schema", () => {
 		]) {
 			expect(text).toMatch(/(?:mode=)?all[^.\n;]*cache-only/);
 			expect(text).toMatch(/(?:mode=)?full[^.\n;]*paths/);
+			// #2795 review: every surface says an empty cache is not proof of clean.
+			expect(text).toMatch(/empty cache[^.\n;]*(not proof|≠ clean)/i);
 		}
 		expect(tool.description).toContain("no cached diagnostics");
 		expect(tool.description).not.toContain("Use before declaring work done");

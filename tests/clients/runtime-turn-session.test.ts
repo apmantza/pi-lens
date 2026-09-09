@@ -1316,6 +1316,8 @@ describe("context injection framing", () => {
 		// An empty cache is not evidence that changed files were checked.
 		expect(text).toMatch(/mode=all[^.\n]*cache-only/);
 		expect(text).toMatch(/mode=full[^.\n]*paths/);
+		// #2795 review: the orientation also says an empty cache is not clean.
+		expect(text).toMatch(/empty cache ≠ clean/);
 
 		// The #245 gap this guards: module_report + read_symbol were registered as
 		// pi tools but never surfaced in the session-start orientation, so the agent

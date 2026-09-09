@@ -278,7 +278,7 @@ export function createLensDiagnosticsTool(
 			"analyzer de-dupes against a concurrent background run of itself, so this can't " +
 			"double-spawn. Bounded by the slowest analyzer (trivy's own ~180s ceiling).",
 		promptSnippet:
-			"lens_diagnostics mode=all is cache-only; verify changed files with mode=full and paths when cached findings are absent or stale",
+			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;
@@ -361,7 +361,7 @@ export function createLensDiagnosticsTool(
 					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = cache-only session diagnostics for edited/dispatched files. " +
+						"all = cache-only session diagnostics for edited/dispatched files (an empty cache is not proof of a clean file). " +
 						"full = active LSP scan scoped by paths (whole project if omitted), plus runner diagnostics.",
 				}),
 			),
