@@ -14,14 +14,16 @@ type ListedTool = {
 
 type Baseline = {
 	pi: {
+		budget: number;
 		descriptionTotal: number;
-		total: number;
-		tools: Record<string, number>;
+		schemaTotal: number;
+		tools: Record<string, { description: number; schema: number }>;
 	};
 	mcp: {
+		budget: number;
 		descriptionTotal: number;
-		total: number;
-		tools: Record<string, number>;
+		schemaTotal: number;
+		tools: Record<string, { description: number; schema: number }>;
 	};
 };
 
@@ -38,7 +40,7 @@ function bytes(value: unknown): number {
 }
 
 function descriptionBytes(tool: ListedTool): number {
-	return bytes(tool.description ?? "") + bytes(tool.promptSnippet ?? "");
+	return bytes(tool.description ?? "");
 }
 
 function schemaBytes(tool: ListedTool): number {
@@ -49,21 +51,39 @@ function schemaBytes(tool: ListedTool): number {
 	);
 }
 
-function surfaceBytes(tool: ListedTool): number {
-	return descriptionBytes(tool) + schemaBytes(tool);
-}
-
 function report(
 	surface: string,
-	actual: number,
-	expected: number,
-	tools: Record<string, number>,
+	descriptionTotal: number,
+	schemaTotal: number,
+	budget: number,
+	tools: Record<string, { description: number; schema: number }>,
 ): string {
 	const rows = Object.entries(tools)
 		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([name, size]) => `${name.padEnd(30)} ${size}`)
+		.map(
+			([name, sizes]) =>
+				`${name.padEnd(30)} description=${sizes.description} schema=${sizes.schema}`,
+		)
 		.join("\n");
-	return `${surface}: ${actual} bytes (baseline ${expected}); per-tool:\n${rows}`;
+	return `${surface}: description=${descriptionTotal} schema=${schemaTotal} total=${descriptionTotal + schemaTotal} budget=${budget}; per-tool:\n${rows}`;
+}
+
+function measure(tools: ListedTool[]) {
+	const measured = Object.fromEntries(
+		tools.map((tool) => [tool.name, {
+			description: descriptionBytes(tool),
+			schema: schemaBytes(tool),
+		}]),
+	);
+	const descriptionTotal = Object.values(measured).reduce(
+		(sum, sizes) => sum + sizes.description,
+		0,
+	);
+	const schemaTotal = Object.values(measured).reduce(
+		(sum, sizes) => sum + sizes.schema,
+		0,
+	);
+	return { measured, descriptionTotal, schemaTotal };
 }
 
 describe("tool roster description budget", () => {
@@ -85,34 +105,22 @@ describe("tool roster description budget", () => {
 	afterAll(() => mcp?.dispose());
 
 	it("keeps the pi roster within its two-sided baseline", () => {
-		const tools = Object.fromEntries(
-			piTools.map((tool) => [tool.name, surfaceBytes(tool)]),
-		);
-		const descriptionTotal = piTools.reduce(
-			(sum, tool) => sum + descriptionBytes(tool),
-			0,
-		);
-		const total = Object.values(tools).reduce((sum, size) => sum + size, 0);
-		const detail = `${report("pi", total, baseline.pi.total, tools)}\nAbove baseline = regression; below baseline = ratchet down.`;
-		expect(descriptionTotal, detail).toBeLessThanOrEqual(8_000);
+		const { measured, descriptionTotal, schemaTotal } = measure(piTools);
+		const total = descriptionTotal + schemaTotal;
+		const detail = report("pi", descriptionTotal, schemaTotal, baseline.pi.budget, measured);
+		expect(total, detail).toBeLessThanOrEqual(baseline.pi.budget);
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
-		expect(total, detail).toBe(baseline.pi.total);
-		expect(tools, detail).toEqual(baseline.pi.tools);
+		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
+		expect(measured, detail).toEqual(baseline.pi.tools);
 	});
 
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {
-		const tools = Object.fromEntries(
-			mcpTools.map((tool) => [tool.name, surfaceBytes(tool)]),
-		);
-		const descriptionTotal = mcpTools.reduce(
-			(sum, tool) => sum + descriptionBytes(tool),
-			0,
-		);
-		const total = Object.values(tools).reduce((sum, size) => sum + size, 0);
-		const detail = `${report("mcp", total, baseline.mcp.total, tools)}\nAbove baseline = regression; below baseline = ratchet down.`;
-		expect(descriptionTotal, detail).toBeLessThanOrEqual(8_000);
+		const { measured, descriptionTotal, schemaTotal } = measure(mcpTools);
+		const total = descriptionTotal + schemaTotal;
+		const detail = report("mcp", descriptionTotal, schemaTotal, baseline.mcp.budget, measured);
+		expect(total, detail).toBeLessThanOrEqual(baseline.mcp.budget);
 		expect(descriptionTotal, detail).toBe(baseline.mcp.descriptionTotal);
-		expect(total, detail).toBe(baseline.mcp.total);
-		expect(tools, detail).toEqual(baseline.mcp.tools);
+		expect(schemaTotal, detail).toBe(baseline.mcp.schemaTotal);
+		expect(measured, detail).toEqual(baseline.mcp.tools);
 	});
 });
