@@ -2745,6 +2745,34 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 	);
 
 	it(
+		"session_start resets repeated-finding identities for the owned role (#2841)",
+		async () => {
+			const resetCacheFindingIdentitiesSession = vi.fn();
+			vi.doMock("../clients/cache-observability.js", async (importActual) => ({
+				...(await importActual<
+					typeof import("../clients/cache-observability.js")
+				>()),
+				resetCacheFindingIdentitiesSession,
+			}));
+
+			const { default: registerExtension } = await import("../index.js");
+			const primary = createMockPi();
+			registerExtension(primary.pi as any);
+			await primary.trigger(
+				"session_start",
+				{},
+				makeCtx({ cwd: tmpDir, sessionId: "reset-cache" }),
+			);
+
+			expect(resetCacheFindingIdentitiesSession).toHaveBeenCalledWith(
+				"reset-cache",
+				"primary",
+			);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"a missing-id secondary keeps its activation-owned role through context, usage, and shutdown (#1996 review)",
 		async () => {
 			const observeCacheContext = vi.fn();
