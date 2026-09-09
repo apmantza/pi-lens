@@ -78,6 +78,7 @@ interface WorkflowRunContext {
 	headBranch: string;
 	conclusion: string;
 	runAttempt: number;
+	pullRequestNumber: string;
 }
 
 // Textual substitution of every dotted context path this expression reads,
@@ -94,6 +95,10 @@ const CONTEXT_PATHS: Array<[string, (ctx: WorkflowRunContext) => unknown]> = [
 	["github.event.workflow_run.head_branch", (ctx) => ctx.headBranch],
 	["github.event.workflow_run.conclusion", (ctx) => ctx.conclusion],
 	["github.event.workflow_run.run_attempt", (ctx) => ctx.runAttempt],
+	[
+		"github.event.workflow_run.pull_requests[0].number",
+		(ctx) => ctx.pullRequestNumber,
+	],
 ];
 
 function substitute(expr: string, ctx: WorkflowRunContext): string {
@@ -136,6 +141,7 @@ function ctx(overrides: Partial<WorkflowRunContext>): WorkflowRunContext {
 		headBranch: "feature-x",
 		conclusion: "failure",
 		runAttempt: 1,
+		pullRequestNumber: "123",
 		...overrides,
 	};
 }
@@ -229,12 +235,125 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 	});
 });
 
-describe("ci-infra-kill-rerun.yml terminal rerun path (#2806 F1)", () => {
-	it("loads a second-attempt terminal label swap for success and failure", () => {
-		const job = loadWorkflow().jobs?.["finalize-rerun"];
-		expect(job?.if).toEqual(expect.stringContaining("run_attempt == 2"));
+describe("ci-infra-kill-rerun.yml terminal rerun path (#2806 F3)", () => {
+	const job = loadWorkflow().jobs?.["finalize-rerun"];
+	const ifExpr = job?.if;
+	if (typeof ifExpr !== "string") {
+		throw new Error(`${WORKFLOW_PATH}: jobs.finalize-rerun.if is not a string`);
+	}
+
+	const terminalRows: Array<[string, WorkflowRunContext, boolean]> = [
+		[
+			"pull_request success attempt 2",
+			ctx({ conclusion: "success", runAttempt: 2 }),
+			true,
+		],
+		[
+			"pull_request failure attempt 2",
+			ctx({ conclusion: "failure", runAttempt: 2 }),
+			true,
+		],
+		[
+			"pull_request success attempt 3",
+			ctx({ conclusion: "success", runAttempt: 3 }),
+			false,
+		],
+		[
+			"pull_request failure attempt 3",
+			ctx({ conclusion: "failure", runAttempt: 3 }),
+			false,
+		],
+		[
+			"push success attempt 2",
+			ctx({
+				event: "push",
+				headBranch: "master",
+				conclusion: "success",
+				runAttempt: 2,
+			}),
+			true,
+		],
+		[
+			"push failure attempt 2",
+			ctx({
+				event: "push",
+				headBranch: "master",
+				conclusion: "failure",
+				runAttempt: 2,
+			}),
+			true,
+		],
+		[
+			"push success attempt 3",
+			ctx({
+				event: "push",
+				headBranch: "master",
+				conclusion: "success",
+				runAttempt: 3,
+			}),
+			false,
+		],
+		[
+			"push failure attempt 3",
+			ctx({
+				event: "push",
+				headBranch: "master",
+				conclusion: "failure",
+				runAttempt: 3,
+			}),
+			false,
+		],
+		[
+			"repository_dispatch success attempt 2",
+			ctx({
+				event: "repository_dispatch",
+				headBranch: "master",
+				conclusion: "success",
+				runAttempt: 2,
+			}),
+			true,
+		],
+		[
+			"repository_dispatch failure attempt 2",
+			ctx({
+				event: "repository_dispatch",
+				headBranch: "master",
+				conclusion: "failure",
+				runAttempt: 2,
+			}),
+			true,
+		],
+		[
+			"repository_dispatch success attempt 3",
+			ctx({
+				event: "repository_dispatch",
+				headBranch: "master",
+				conclusion: "success",
+				runAttempt: 3,
+			}),
+			false,
+		],
+		[
+			"repository_dispatch failure attempt 3",
+			ctx({
+				event: "repository_dispatch",
+				headBranch: "master",
+				conclusion: "failure",
+				runAttempt: 3,
+			}),
+			false,
+		],
+	];
+
+	it.each(terminalRows)("%s => fires %s", (_label, context, expected) => {
+		expect(evaluateIf(ifExpr, context)).toBe(expected);
+	});
+
+	it("loads the terminal label swap and no-PR summary path", () => {
 		const run = (job?.steps as WorkflowStep[]).find((step) => step.run)?.run;
 		expect(run).toContain("--remove-label 'ci:infra'");
 		expect(run).toContain("--add-label 'ci:real'");
+		expect(run).toContain("GITHUB_STEP_SUMMARY");
+		expect(run).toContain("exit 0");
 	});
 });
