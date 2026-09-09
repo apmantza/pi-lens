@@ -11,6 +11,7 @@
  * The dispatcher must handle these semantics consistently.
  */
 
+import type { ExtensionLogLevel } from "../extension-log.js";
 import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
@@ -233,7 +234,8 @@ export interface DispatchContext {
 	readonly telemetryProvider?: string;
 
 	hasTool(command: string): Promise<boolean>;
-	log(message: string): void;
+	/** Log an advisory to the dispatch sink; `level` defaults to `error`. */
+	log(message: string, level?: ExtensionLogLevel): void;
 }
 
 // --- Tool Plan ---
