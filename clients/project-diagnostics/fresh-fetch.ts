@@ -322,18 +322,18 @@ export async function fetchFreshProjectDiagnostics(
 		elapsedMs: number,
 		analysedRoot: boolean,
 		coverageRunnerId = id,
-		analysis?: { analyzedFiles?: string[]; analysisComplete?: boolean },
+		analysis?: { analyzedFiles?: string[] },
 	): void {
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
-			authoritativeCoverage.push({
-				runnerId: coverageRunnerId,
-				root: analysisRoot,
-				...(analysis?.analyzedFiles !== undefined
-					? { files: analysis.analyzedFiles }
-					: {}),
-				complete: analysis?.analysisComplete !== false,
-			});
+			if (analysis?.analyzedFiles !== undefined) {
+				authoritativeCoverage.push({
+					runnerId: coverageRunnerId,
+					root: analysisRoot,
+					files: analysis.analyzedFiles,
+					complete: true,
+				});
+			}
 		}
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
 		const kept = applyDispositionsMultiFile(

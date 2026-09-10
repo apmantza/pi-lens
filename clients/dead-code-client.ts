@@ -33,8 +33,6 @@ import {
 	spawnFailedWithNoOutput,
 } from "./dispatch/runners/utils/spawn-outcome.js";
 import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
-import { getProjectIgnoreMatcher } from "./file-utils.js";
-import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
 // --- Types ---
 
@@ -126,30 +124,6 @@ const VULTURE_IGNORE_DECORATORS = [
 // vulture line: `path/to/file.py:12: unused function 'foo' (60% confidence)`
 const VULTURE_LINE =
 	/^(.*?):(\d+): unused (\w[\w ]*?) '([^']+)' \((\d+)% confidence\)\s*$/;
-
-function pythonAnalyzedFiles(root: string): string[] {
-	const files: string[] = [];
-	const ignoreMatcher = getProjectIgnoreMatcher(root);
-	walkTreeStackSync(root, (entry, fullPath) => {
-		if (entry.isDirectory()) {
-			return shouldRecurseIntoDir(entry, fullPath, {
-				ignoreMatcher,
-				followSymlinks: false,
-			})
-				? "recurse"
-				: "skip";
-		}
-		if (
-			entry.isFile() &&
-			/\.pyi?$/.test(entry.name) &&
-			!ignoreMatcher.isIgnored(fullPath, false)
-		) {
-			files.push(path.resolve(fullPath));
-		}
-		return "skip";
-	});
-	return files;
-}
 
 /**
  * Parse vulture's text output into normalized issues. Pure (no spawn/fs) so the
@@ -502,8 +476,6 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		// nonzero exit with no findings on stdout is never clean now,
 		// regardless of whether stderr said anything.
 		const output = result.stdout || "";
-		const partial =
-			result.failure === "timeout" || result.outputTruncated === true;
 		if (!output.trim()) {
 			const stderr = (result.stderr || "").trim();
 			// Same discriminator every dispatch/runners linter uses
@@ -539,8 +511,6 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 				...emptyResult(this.language),
 				success: true,
 				analyzed: true,
-				analyzedFiles: pythonAnalyzedFiles(root),
-				...(partial ? { analysisComplete: false } : {}),
 				summary: "No dead code found",
 				durationMs,
 			};
@@ -548,8 +518,6 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		return {
 			...this.parseOutput(output, root),
 			durationMs,
-			analyzedFiles: pythonAnalyzedFiles(root),
-			...(partial ? { analysisComplete: false } : {}),
 		};
 	}
 

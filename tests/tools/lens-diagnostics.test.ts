@@ -1407,6 +1407,57 @@ describe("lens_diagnostics mode=full", () => {
 		expect(phases).not.toContain("runner_authoritative_widget_retire");
 	});
 
+	it("logs runner coverage retirement evidence once per runner per session", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/src/clean.py",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "retained",
+							line: 1,
+							rule: "opengrep:x",
+							tool: "opengrep",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["opengrep"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "opengrep",
+					root: "/proj",
+					files: ["/proj/src/clean.py"],
+					complete: true,
+				},
+			],
+		});
+		_setRecentPhasesForTest([]);
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		expect(getRecentLoggedPhases().map((entry) => entry.phase)).toContain(
+			"runner_coverage_retired",
+		);
+		_setRecentPhasesForTest([]);
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		expect(getRecentLoggedPhases().map((entry) => entry.phase)).not.toContain(
+			"runner_coverage_retired",
+		);
+	});
+
 	it("retires only findings covered by a complete runner root", async () => {
 		mockSummaries.push(
 			sum(

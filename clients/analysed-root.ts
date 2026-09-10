@@ -28,6 +28,4 @@ export interface AnalysedRootSignal {
 	analyzed?: boolean;
 	/** Files the scan's include/ignore policy actually admitted. */
 	analyzedFiles?: string[];
-	/** False when the process stopped after producing only a partial result. */
-	analysisComplete?: boolean;
 }

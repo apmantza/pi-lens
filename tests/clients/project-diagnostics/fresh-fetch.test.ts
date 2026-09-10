@@ -1061,7 +1061,6 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 				unusedDeps: [],
 				unlistedDeps: [],
 				analyzed: true,
-				analyzedFiles: [path.resolve(tmp, "z.py")],
 			}),
 		};
 		const clients = makeClients();
@@ -1084,12 +1083,44 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect.anything(),
 		);
 		expect(result.runners).toContain("dead-code");
-		expect(result.authoritativeCoverage).toContainEqual({
-			runnerId: "dead-code-python",
-			root: path.resolve(tmp),
-			files: [path.resolve(tmp, "z.py")],
-			complete: true,
-		});
+		expect(result.authoritativeCoverage).not.toContainEqual(
+			expect.objectContaining({
+				runnerId: "dead-code-python",
+				files: expect.anything(),
+			}),
+		);
+	});
+
+	it("does not cache a dead-code result that did not analyse the root (#2887)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const deadCodeClient = {
+			id: "python",
+			language: "Python",
+			detect: vi.fn().mockReturnValue(true),
+			analyze: vi.fn().mockResolvedValue({
+				success: true,
+				analyzed: false,
+				language: "Python",
+				summary: "not applicable",
+				unusedExports: [],
+				unusedFiles: [],
+				unusedDeps: [],
+				unlistedDeps: [],
+			}),
+		};
+		(clients as unknown as { deadCodeClients: unknown[] }).deadCodeClients = [
+			deadCodeClient,
+		];
+
+		await fetchFreshProjectDiagnostics(cacheManager, tmp, clients);
+
+		expect(cacheManager.writeCache).not.toHaveBeenCalledWith(
+			"dead-code-python",
+			expect.anything(),
+			expect.anything(),
+			expect.anything(),
+		);
 	});
 
 	it("runs all analyzers in parallel, not serially", async () => {

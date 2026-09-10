@@ -427,17 +427,11 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 			const rawFindings = parseGitleaksReport(
 				fs.readFileSync(reportPath, "utf-8"),
 			);
-			const analyzedFiles = [
-				...new Set(
-					rawFindings.map((finding) => path.resolve(cwd, finding.file)),
-				),
-			];
 			const findings = await classifyAndFilterFindings(rawFindings, cwd);
 			// #2154: the one gitleaks site that parsed a scan of this root.
 			return {
 				success: true,
 				analyzed: true,
-				...(analyzedFiles.length > 0 ? { analyzedFiles } : {}),
 				findings,
 				scannedAt,
 			};

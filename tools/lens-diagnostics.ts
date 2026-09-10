@@ -99,7 +99,10 @@ import {
 	type WidgetDiagnostic,
 	widgetDiagnosticUri,
 } from "../clients/widget-state.js";
-import { logLatency } from "../clients/latency-logger.js";
+import {
+	claimPhaseOncePerSession,
+	logLatency,
+} from "../clients/latency-logger.js";
 import { logExtension } from "../clients/extension-log.js";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
@@ -1541,12 +1544,18 @@ export function runnerRetirementDecision(
 	if (coverage.length === 0) {
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
 	}
-	const resolvedFilePath = path.resolve(filePath);
-	const realFilePath = resolvedFilePath;
+	const realpathOrResolved = (candidate: string): string => {
+		try {
+			return fsSync.realpathSync(candidate);
+		} catch {
+			return path.resolve(candidate);
+		}
+	};
+	const realFilePath = realpathOrResolved(filePath);
 	let incomplete = false;
 	let incompleteRoot: string | undefined;
 	for (const entry of coverage) {
-		const root = path.resolve(entry.root);
+		const root = realpathOrResolved(entry.root);
 		const relative = path.relative(root, realFilePath);
 		const underRoot =
 			relative === "" ||
@@ -1558,7 +1567,7 @@ export function runnerRetirementDecision(
 			continue;
 		}
 		if (!entry.files) return "retire";
-		if (entry.files.some((file) => path.resolve(file) === realFilePath)) {
+		if (entry.files.some((file) => realpathOrResolved(file) === realFilePath)) {
 			return "retire";
 		}
 		// A complete file set proves that this file was not analysed. Keep the
@@ -2368,7 +2377,7 @@ async function formatFullMode(
 	// LSP sibling above — a retirement nobody can see is how a regression
 	// deletes findings silently. Bounded by construction: at most one row per
 	// mode=full call, and only when rows were actually retired.
-	const retiredRunnerIds = new Set<string>();
+	const retiredRunnerCounts = new Map<string, number>();
 	const runnerRetiredRows = getFileDiagnosticSummaries()
 		.filter((summary) => includeFile(summary.filePath))
 		.reduce(
@@ -2382,7 +2391,13 @@ async function formatFullMode(
 							authoritativeRunnerIds,
 							authoritativeRunnerCoverage,
 						) === "retire";
-					if (retired) retiredRunnerIds.add(runnerIdOf(diagnostic));
+					if (retired) {
+						const runnerId = runnerIdOf(diagnostic);
+						retiredRunnerCounts.set(
+							runnerId,
+							(retiredRunnerCounts.get(runnerId) ?? 0) + 1,
+						);
+					}
 					return retired;
 				}).length,
 			0,
@@ -2395,13 +2410,28 @@ async function formatFullMode(
 			durationMs: 0,
 			metadata: {
 				rows: runnerRetiredRows,
-				runners: [...retiredRunnerIds].join(","),
+				runners: [...retiredRunnerCounts.keys()].join(","),
 				coverage: authoritativeRunnerCoverage.map((entry) => ({
 					runnerId: entry.runnerId,
 					root: entry.root,
 					files: entry.files?.length ?? 0,
 					complete: entry.complete,
 				})),
+			},
+		});
+	}
+	for (const entry of authoritativeRunnerCoverage) {
+		if (!claimPhaseOncePerSession("runner_coverage_retired", entry.runnerId)) {
+			continue;
+		}
+		logLatency({
+			type: "phase",
+			phase: "runner_coverage_retired",
+			filePath: "",
+			durationMs: 0,
+			metadata: {
+				runnerId: entry.runnerId,
+				count: retiredRunnerCounts.get(entry.runnerId) ?? 0,
 			},
 		});
 	}

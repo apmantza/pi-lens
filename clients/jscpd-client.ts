@@ -360,14 +360,6 @@ export class JscpdClient {
 			// the same one.)
 			const reportPath = path.join(outDir, "jscpd-report.json");
 			if (!fs.existsSync(reportPath)) {
-				if (result.failure === "timeout") {
-					return {
-						...EMPTY_RESULT,
-						success: true,
-						analyzed: true,
-						analysisComplete: false,
-					};
-				}
 				if (result.status !== 0) {
 					// #1816: one shared wording, one truncation, signal named.
 					// `reportMissing` is the artifact-tool arm of the same
@@ -391,7 +383,7 @@ export class JscpdClient {
 				return { ...EMPTY_RESULT, success: true };
 			}
 
-			return this.parseReport(reportPath, cwd);
+			return this.parseReport(reportPath);
 		} catch (err: any) {
 			this.log(`Scan error: ${err.message}`);
 			return { ...EMPTY_RESULT };
@@ -425,7 +417,7 @@ export class JscpdClient {
 
 	// --- Internal ---
 
-	private parseReport(reportPath: string, root: string): JscpdResult {
+	private parseReport(reportPath: string): JscpdResult {
 		try {
 			const data = JSON.parse(fs.readFileSync(reportPath, "utf-8"));
 			// Stats live in statistics.total, not statistics.clones
@@ -438,18 +430,6 @@ export class JscpdClient {
 				(totalLines > 0 ? (duplicatedLines / totalLines) * 100 : 0);
 
 			const rawClones: any[] = data.duplicates ?? [];
-			const analyzedFiles = [
-				...new Set(
-					rawClones
-						.flatMap((clone: any) => [
-							clone.firstFile?.name,
-							clone.secondFile?.name,
-						])
-						.filter(
-							(file: unknown): file is string => typeof file === "string",
-						),
-				),
-			].map((file) => path.resolve(root, file));
 			const clones: DuplicateClone[] = rawClones.map((c: any) => ({
 				fileA: c.firstFile?.name ?? "",
 				startA: c.firstFile?.start ?? 0,
@@ -463,7 +443,6 @@ export class JscpdClient {
 			return {
 				success: true,
 				analyzed: true,
-				...(analyzedFiles.length > 0 ? { analyzedFiles } : {}),
 				clones,
 				duplicatedLines,
 				totalLines,

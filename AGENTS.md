@@ -1470,14 +1470,16 @@ Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` fre
 
 Project-runner retirement authority is recorded as `ProjectRunnerCoverage` on
 `FreshProjectDiagnosticsResult`, keyed by the runner id, analyzed root, and
-complete file set. Each runner client populates `analyzedFiles` from its parsed
-report or the file set it scanned; `fresh-fetch.ts` transports that evidence and
-does not walk the project or re-create runner ignore policies. `runnerRetirementDecision`
-in `tools/lens-diagnostics.ts` uses that coverage for both filtering and
+complete file set. Only clients whose parsed report explicitly supplies a
+scanned-path set populate `analyzedFiles`; today these are opengrep's
+`paths.scanned` and madge's graph keys. Other clients emit no file evidence, so
+`fresh-fetch.ts` transports the signal without walking the project or
+re-creating runner policies. `runnerRetirementDecision` in
+`tools/lens-diagnostics.ts` uses that coverage for filtering and
 `runner_authoritative_widget_retire`;
 the `analyzed` id list remains a conservative fallback only when coverage is
-absent. An incomplete entry keeps findings under its root with a bounded record,
-and a language-specific dead-code client uses its own runner id so a shared
+absent. Coverage entries are complete because no partial producer exists. A
+language-specific dead-code client still uses its own runner id so a shared
 `dead-code` aggregate cannot retire another language's findings (#2887).
 
 The project-snapshot authoritative-write cache stamps both `mtimeMs` and size

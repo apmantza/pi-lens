@@ -340,20 +340,6 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 			}
 
 			const raw = fs.readFileSync(reportPath, "utf-8");
-			let analyzedFiles: string[] | undefined;
-			try {
-				const results = (
-					JSON.parse(raw) as { Results?: Array<{ Target?: unknown }> }
-				).Results;
-				if (Array.isArray(results))
-					analyzedFiles = results.flatMap((result) =>
-						typeof result.Target === "string"
-							? [path.resolve(cwd, result.Target)]
-							: [],
-					);
-			} catch {
-				/* parser handles malformed reports */
-			}
 			const findings = parseTrivyReport(raw);
 			const secrets = parseTrivySecrets(raw);
 			const licenses = parseTrivyLicenses(raw);
@@ -361,7 +347,6 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 			return {
 				success: true,
 				analyzed: true,
-				...(analyzedFiles ? { analyzedFiles } : {}),
 				findings,
 				secrets,
 				licenses,
