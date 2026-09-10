@@ -1095,6 +1095,42 @@ async function run(ctx) {
 		expected: ["hasCwd=true resolved=false"],
 	},
 	{
+		owner: "switch_case",
+		what: "a binding from an earlier case IS visible in a later one — JS scopes case declarations to the whole switch body",
+		source: `${SEAM}
+async function run(ctx) {
+	switch (ctx.k) {
+		case 1:
+			const cwd = ${GOOD};
+			void cwd;
+		case 2:
+			await safeSpawnAsync("b", [], { cwd });
+	}
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "statement_block",
+		what: "a spawn ABOVE the good declaration does not read it (temporal dead zone)",
+		source: `${SEAM}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+	const cwd = ${GOOD};
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "statement_block",
+		what: "two `var` declarations of one name in one scope prove nothing",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) { var cwd = ctx.cwd; } else { var cwd = ${GOOD}; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=false resolved=false"],
+	},
+	{
 		owner: "program",
 		what: "a module-level binding reaches into every function below it",
 		source: `${SEAM}

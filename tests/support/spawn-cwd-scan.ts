@@ -709,18 +709,23 @@ function resolveLocalInitializer(
 		alreadySeen = node, node = node.parent()
 	) {
 		const candidates = visibleDeclaratorsIn(node, alreadySeen, name, useIndex);
-		// Innermost scope wins; within one scope, the nearest declaration that
-		// precedes the use does.
-		candidates.sort((a, b) => {
-			const scopeA = scopeOfDeclarator(a)?.range().start.index ?? 0;
-			const scopeB = scopeOfDeclarator(b)?.range().start.index ?? 0;
-			if (scopeA !== scopeB) return scopeB - scopeA;
-			const beforeA = a.range().start.index < useIndex ? 0 : 1;
-			const beforeB = b.range().start.index < useIndex ? 0 : 1;
-			if (beforeA !== beforeB) return beforeA - beforeB;
-			return b.range().start.index - a.range().start.index;
-		});
-		const decl = candidates[0];
+		// Innermost scope wins.
+		candidates.sort(
+			(a, b) =>
+				(scopeOfDeclarator(b)?.range().start.index ?? 0) -
+				(scopeOfDeclarator(a)?.range().start.index ?? 0),
+		);
+		const innermost = scopeOfDeclarator(candidates[0] ?? node)?.range().start
+			.index;
+		const winners = candidates.filter(
+			(decl) => scopeOfDeclarator(decl)?.range().start.index === innermost,
+		);
+		// Two declarations of one name in ONE scope is `var` redeclaration —
+		// `if (a) { var cwd = ctx.cwd } else { var cwd = resolveToolCwd(…) }`.
+		// Either can be the value at the spawn, so neither is proof: fail closed
+		// rather than crediting the one that happens to sit last.
+		if (winners.length > 1) return { init: undefined };
+		const decl = winners[0];
 		if (decl) {
 			const target = decl.field("name");
 			// A destructuring pattern binds the name but does not say what it
