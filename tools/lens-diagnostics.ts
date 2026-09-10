@@ -326,15 +326,13 @@ export function createLensDiagnosticsTool(
 				const files = details.filesChecked ?? details.filesScanned ?? 0;
 				const noun = count === 1 ? "diagnostic" : "diagnostics";
 				const filePath =
-					typeof args?.path === "string"
-						? args.path
-						: typeof details?.filePath === "string"
-							? details.filePath
-							: Array.isArray(args?.paths) &&
-								  args.paths.length === 1 &&
-								  typeof args.paths[0] === "string"
-								? args.paths[0]
-								: undefined;
+					typeof details?.filePath === "string"
+						? details.filePath
+						: Array.isArray(args?.paths) &&
+							  args.paths.length === 1 &&
+							  typeof args.paths[0] === "string"
+							? args.paths[0]
+							: undefined;
 				const singleFile =
 					(details?.mode === "file" || files === 1) &&
 					typeof filePath === "string"
@@ -507,7 +505,8 @@ export function createLensDiagnosticsTool(
 			severity: Type.Optional(
 				Type.String({
 					enum: [...LSP_SEVERITY_FILTERS],
-					description: "Filter by severity (default: all).",
+					description:
+						"Filter by severity threshold (default: all): error shows errors; warning includes errors and warnings; information includes errors, warnings, and information; hint and all show every known tier.",
 				}),
 			),
 			paths: Type.Optional(
@@ -1121,17 +1120,32 @@ function formatDeltaMode(
 			matchesRecordSeverity(warning.severity, severity),
 		);
 	const filteredActionableFiles = actionableFiles
-		.map((file) => ({ ...file, warnings: matchingWarnings(file.warnings) }))
+		.map((file) => ({
+			...file,
+			warnings: matchingWarnings(
+				file.warnings.map((warning) => ({
+					...warning,
+					severity: warning.severity ?? "warning",
+				})),
+			),
+		}))
 		.filter((file) => file.warnings.length > 0);
 	const filteredQualityFiles = qualityFiles
-		.map((file) => ({ ...file, warnings: matchingWarnings(file.warnings) }))
+		.map((file) => ({
+			...file,
+			warnings: matchingWarnings(
+				file.warnings.map((warning) => ({
+					...warning,
+					severity: warning.severity ?? "info",
+				})),
+			),
+		}))
 		.filter((file) => file.warnings.length > 0);
 
 	const lines: string[] = [];
 
-	// Fixable warnings from actionable-warnings are the warning tier; quality
-	// cache entries are information-tier findings. Keep the session path's
-	// severity vocabulary exact instead of treating unknown tiers as matches.
+	// Fixable warnings from actionable-warnings and quality cache entries retain
+	// their own severity tier. Apply the same threshold semantics as the LSP path.
 	if (filteredActionableFiles.length > 0) {
 		for (const file of filteredActionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
@@ -1422,8 +1436,7 @@ function isErrorLike(d: WidgetDiagnostic): boolean {
 }
 
 function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
-	if (severity === "error") return isErrorLike(d);
-	return matchesRecordSeverity(d.severity, severity);
+	return matchesRecordSeverity(isErrorLike(d) ? "error" : d.severity, severity);
 }
 
 function matchesRecordSeverity(
@@ -1432,15 +1445,26 @@ function matchesRecordSeverity(
 ): boolean {
 	if (requested === "all") return true;
 	if (requested === "error") return recordSeverity === "error";
-	if (requested === "warning") return recordSeverity === "warning";
+	if (requested === "warning")
+		return recordSeverity === "error" || recordSeverity === "warning";
 	if (requested === "information")
 		return (
+			recordSeverity === "error" ||
+			recordSeverity === "warning" ||
 			recordSeverity === "info" ||
 			recordSeverity === "note" ||
 			recordSeverity === "help"
 		);
-	if (requested === "hint") return recordSeverity === "hint";
-	return false;
+	if (requested === "hint")
+		return (
+			recordSeverity === "error" ||
+			recordSeverity === "warning" ||
+			recordSeverity === "info" ||
+			recordSeverity === "note" ||
+			recordSeverity === "help" ||
+			recordSeverity === "hint"
+		);
+	return true;
 }
 
 /** Most-important first: blocking → error → warning/other, then by line. */

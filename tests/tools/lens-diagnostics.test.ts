@@ -190,6 +190,40 @@ describe("lens_diagnostics compact filename", () => {
 			removeTempDirSync(cwd);
 		}
 	});
+
+	it("uses the diagnosed file when path and paths are both supplied", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-both-paths-"));
+		const diagnosed = path.join(cwd, "diagnosed.ts");
+		const unrelated = path.join(cwd, "unrelated.ts");
+		fs.writeFileSync(diagnosed, "const diagnosed = 1;\n");
+		fs.writeFileSync(unrelated, "const unrelated = 1;\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const tool = makeTool({}, service);
+			const result = await run(
+				tool,
+				{ source: "lsp", path: unrelated, paths: [diagnosed] },
+				cwd,
+			);
+			const rendered = (
+				tool.renderResult?.(result, { expanded: false }, {} as Theme, {
+					args: { source: "lsp", path: unrelated, paths: [diagnosed] },
+				}) as any
+			)
+				.render(200)
+				.join("\n");
+			expect(rendered).toContain(
+				"lens_diagnostics diagnosed.ts — 0 diagnostics",
+			);
+			expect(rendered).not.toContain("unrelated.ts");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
 });
 
 function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
@@ -208,6 +242,89 @@ function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 }
 
 describe("lens_diagnostics source and scope routing", () => {
+	it("applies the same severity threshold to session and LSP sources", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-severity-threshold-"),
+		);
+		const file = path.join(cwd, "threshold.ts");
+		fs.writeFileSync(file, "const threshold = 1;\n");
+		const tiers = [
+			["error", "SESSION-ERROR", 1],
+			["warning", "SESSION-WARNING", 2],
+			["info", "SESSION-INFO", 3],
+			["hint", "SESSION-HINT", 4],
+		] as const;
+		mockSummaries.push(
+			sum(
+				file,
+				{ blocking: 1, errors: 1, warnings: 1, advisories: 2 },
+				{
+					diagnostics: tiers.map(([severity, message]) => ({
+						severity,
+						semantic: severity === "error" ? "blocking" : undefined,
+						message,
+						line: 1,
+					})),
+				},
+			),
+		);
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () =>
+				tiers.map(([_, message, severity]) => ({
+					severity,
+					message: message.replace("SESSION", "LSP"),
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				})),
+			),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			for (const [severity, expected] of [
+				["error", ["ERROR"]],
+				["warning", ["ERROR", "WARNING"]],
+				["information", ["ERROR", "WARNING", "INFO"]],
+				["hint", ["ERROR", "WARNING", "INFO", "HINT"]],
+			] as const) {
+				const sessionText = String(
+					(await run(makeTool(), { mode: "all", severity }, cwd)).content[0]
+						.text,
+				);
+				const lspText = String(
+					(
+						await run(
+							makeTool({}, service),
+							{ source: "lsp", scope: "paths", paths: [file], severity },
+							cwd,
+						)
+					).content[0].text,
+				);
+				const expectedTiers: readonly string[] = expected;
+				expect(
+					expected
+						.map((tier) => `SESSION-${tier}`)
+						.every((message) => sessionText.includes(message)),
+				).toBe(true);
+				expect(
+					expected
+						.map((tier) => `LSP-${tier}`)
+						.every((message) => lspText.includes(message)),
+				).toBe(true);
+				for (const tier of ["ERROR", "WARNING", "INFO", "HINT"])
+					if (!expectedTiers.includes(tier)) {
+						expect(sessionText).not.toContain(`SESSION-${tier}`);
+						expect(lspText).not.toContain(`LSP-${tier}`);
+					}
+			}
+		} finally {
+			mockSummaries.length = 0;
+			removeTempDirSync(cwd);
+		}
+	});
+
 	it("routes source=lsp through the real probe implementation", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
 		const file = path.join(cwd, "bad.ts");
@@ -706,31 +823,43 @@ describe("lens_diagnostics mode=delta", () => {
 		expect(text).toContain("No error");
 	});
 
-	it.each(["hint", "information"])(
-		"severity=%s excludes the cached warning in delta mode",
-		async (severity) => {
-			const result = await run(
-				makeTool({
-					"actionable-warnings": {
-						files: [
-							{
-								filePath: "/proj/src/foo.ts",
-								warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
-							},
-						],
-						summary: { warnings: 1 },
-					},
-				}),
-				{ mode: "delta", severity },
-			);
-			expect(String(result.content[0].text)).toContain(`No ${severity} issues`);
-		},
-	);
+	it("severity=error excludes the cached warning in delta mode", async () => {
+		const result = await run(
+			makeTool({
+				"actionable-warnings": {
+					files: [
+						{
+							filePath: "/proj/src/foo.ts",
+							warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
+						},
+					],
+					summary: { warnings: 1 },
+				},
+			}),
+			{ mode: "delta", severity: "error" },
+		);
+		expect(String(result.content[0].text)).toContain("No error issues");
+	});
 
 	it.each([
 		["warning", ["ACTIONABLE-WARNING", "QUALITY-WARNING-TIER"]],
-		["information", ["QUALITY-INFORMATION-TIER"]],
-		["hint", ["QUALITY-HINT-TIER"]],
+		[
+			"information",
+			[
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+			],
+		],
+		[
+			"hint",
+			[
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+				"QUALITY-HINT-TIER",
+			],
+		],
 	])(
 		"filters delta cache records individually for severity=%s",
 		async (severity, expected) => {
@@ -3362,9 +3491,22 @@ describe("lens_diagnostics mode=all", () => {
 
 	it.each([
 		["error", ["error-tier"]],
-		["warning", ["warning-tier"]],
-		["information", ["info-tier", "note-tier", "help-tier"]],
-		["hint", ["hint-tier"]],
+		["warning", ["error-tier", "warning-tier"]],
+		[
+			"information",
+			["error-tier", "warning-tier", "info-tier", "note-tier", "help-tier"],
+		],
+		[
+			"hint",
+			[
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			],
+		],
 		[
 			"all",
 			[
@@ -3377,7 +3519,7 @@ describe("lens_diagnostics mode=all", () => {
 			],
 		],
 	])(
-		"mode=all filters records at the requested severity tier: %s",
+		"mode=all applies the requested severity threshold: %s",
 		async (severity, expected) => {
 			mockSummaries.length = 0;
 			const diagnostics = [
@@ -3396,7 +3538,7 @@ describe("lens_diagnostics mode=all", () => {
 			mockSummaries.push(
 				sum(
 					"/proj/mixed.ts",
-					{ blocking: 1, errors: 1, warnings: 1, advisories: 4 },
+					{ blocking: 1, errors: 1, warnings: 1, advisories: 2 },
 					{ diagnostics },
 				),
 			);

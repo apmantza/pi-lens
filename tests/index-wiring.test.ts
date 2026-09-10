@@ -10,6 +10,9 @@ const activationToolFactoryOverride = vi.hoisted(() => ({
 const symbolSearchExecution = vi.hoisted(() => ({
 	mode: "normal" as "normal" | "reject" | "throw",
 }));
+const deliveryObservations = vi.hoisted(() => ({
+	rows: [] as Array<{ bytes: number; truncated: boolean }>,
+}));
 
 vi.mock("../tools/activate-tools.js", async (importOriginal) => {
 	const actual =
@@ -48,6 +51,19 @@ vi.mock("../tools/symbol-search.js", async (importOriginal) => {
 					return tool.execute(...executeArgs);
 				},
 			};
+		},
+	};
+});
+
+vi.mock("../clients/cache-observability.js", async (importOriginal) => {
+	const actual =
+		(await importOriginal()) as typeof import("../clients/cache-observability.js");
+	return {
+		...(await importOriginal()),
+		...actual,
+		recordToolResultDelivery: (args: { bytes: number; truncated: boolean }) => {
+			deliveryObservations.rows.push(args);
+			actual.recordToolResultDelivery(args);
 		},
 	};
 });
@@ -178,6 +194,7 @@ describe("index.ts extension wiring", () => {
 		"returns a top-level bounded error result when symbol_search %s",
 		async (mode) => {
 			symbolSearchExecution.mode = mode as "reject" | "throw";
+			deliveryObservations.rows.length = 0;
 			try {
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
@@ -195,6 +212,12 @@ describe("index.ts extension wiring", () => {
 				expect(text).toContain("result error");
 				expect(text.match(/^result error$/gm) ?? []).toHaveLength(1);
 				expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(40 * 1024);
+				const footerBytes = Number(
+					text.match(/bytes=(\d+)/)?.[1] ?? Number.NaN,
+				);
+				expect(deliveryObservations.rows).toEqual([
+					expect.objectContaining({ bytes: footerBytes, truncated: false }),
+				]);
 			} finally {
 				symbolSearchExecution.mode = "normal";
 			}

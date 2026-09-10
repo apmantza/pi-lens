@@ -339,6 +339,58 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(typeof result.content[0].text).toBe("string");
 	}, 25_000);
 
+	it("keeps diagnostics visible for an out-of-enum severity through MCP", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-severity-"));
+		fs.writeFileSync(
+			path.join(cwd, "smelly.ts"),
+			[
+				"export function f(x) {",
+				"\tif (x) { if (x.a) { if (x.b) { if (x.c) { return 1; } } } }",
+				'\tconsole.log("debug");',
+				"}",
+				"",
+			].join("\n"),
+		);
+		const isolated = new McpHarness({ cwd });
+		try {
+			await isolated.request(40, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "severity-test", version: "0" },
+			});
+			const analyzed = await isolated.request(41, "tools/call", {
+				name: "pilens_analyze",
+				arguments: {
+					file: path.join(cwd, "smelly.ts"),
+					mode: "warm",
+					flags: { "no-lsp": true },
+				},
+			});
+			expect((analyzed.result as { isError?: boolean }).isError).toBeFalsy();
+			const analyzedText = (analyzed.result as { content: { text: string }[] })
+				.content[0].text;
+			expect(analyzedText).toMatch(/deep-nesting|console-statement/);
+			const response = await isolated.request(42, "tools/call", {
+				name: "pilens_diagnostics",
+				arguments: {
+					mode: "full",
+					refreshRunners: "cheap",
+					severity: "critical",
+				},
+			});
+			const result = response.result as {
+				isError?: boolean;
+				content: { text: string }[];
+			};
+			expect(result.isError).toBeFalsy();
+			expect(result.content[0].text).not.toContain("No files diagnosed");
+			expect(result.content[0].text).toMatch(/deep-nesting|console-statement/);
+		} finally {
+			isolated.dispose();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 60_000);
+
 	it("answers tools/call pilens_analyze (warm) with a real dispatch result", async () => {
 		// no-lsp keeps it fast (skips the cold LSP spawn) while still running the
 		// real tree-sitter/ast-grep/oxlint pipeline on a clean repo file.

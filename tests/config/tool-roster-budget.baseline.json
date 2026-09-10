@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 26672,
+		"budget": 26848,
 		"descriptionTotal": 3337,
-		"schemaTotal": 20910,
+		"schemaTotal": 21070,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 269,
@@ -24,9 +24,9 @@
 				"description": 303,
 				"schema": 1018
 			},
-			"lens_diagnostics": {
-				"description": 258,
-				"schema": 4237
+		"lens_diagnostics": {
+			"description": 258,
+			"schema": 4397
 			},
 			"lsp_navigation": {
 				"description": 170,
@@ -59,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 25852,
+		"budget": 26028,
 		"descriptionTotal": 3321,
-		"schemaTotal": 20180,
+		"schemaTotal": 20340,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -77,7 +77,7 @@
 			},
 			"pilens_diagnostics": {
 				"description": 258,
-				"schema": 4326
+				"schema": 4486
 			},
 			"pilens_effective_config": {
 				"description": 295,
