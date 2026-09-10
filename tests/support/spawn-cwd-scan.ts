@@ -184,8 +184,10 @@ function isFunctionNode(node: SgNode): boolean {
 }
 
 /** Named children with comments dropped — a comment is a named node in this
- * grammar, so it would otherwise be counted as an argument or a property. */
-function namedParts(node: SgNode | null | undefined): SgNode[] {
+ * grammar, so it would otherwise be counted as an argument or a property.
+ * Shared with `tests/support/vi-mock-export-gate.ts`, which imports this
+ * rather than keeping its own comment filter (net-count rule). */
+export function namedParts(node: SgNode | null | undefined): SgNode[] {
 	if (!node) return [];
 	return node.namedChildren().filter((child) => child.kind() !== "comment");
 }
@@ -787,8 +789,9 @@ interface BindingIndex {
 }
 
 /** `(cwd) = …` — the grammar keeps the parentheses, so unwrap before reading
- * what the target binds. */
-function unwrapParens(node: SgNode): SgNode {
+ * what the target binds. Shared with `tests/support/vi-mock-export-gate.ts`,
+ * which imports this rather than keeping its own paren loop (net-count rule). */
+export function unwrapParens(node: SgNode): SgNode {
 	let current = node;
 	while (String(current.kind()) === "parenthesized_expression") {
 		const inner = namedParts(current)[0];

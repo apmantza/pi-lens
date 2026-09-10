@@ -11,6 +11,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Lang, parse } from "@ast-grep/napi";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
+import { bareIdentifier } from "./lsp-double-gate.js";
+import { namedParts, unwrapParens } from "./spawn-cwd-scan.js";
 
 export interface ViMockExportFinding {
 	file: string;
@@ -39,9 +41,7 @@ function unquote(text: string): string | undefined {
 
 function objectReturns(factory: SgNode): SgNode | undefined {
 	let body = factory.field("body");
-	while (body?.kind() === "parenthesized_expression") {
-		body = body.namedChildren()[0];
-	}
+	if (body) body = unwrapParens(body);
 	if (body?.kind() === "object") return body;
 	if (body?.kind() !== "statement_block") return undefined;
 	const returned = factory.findAll({ rule: { kind: "return_statement" } });
@@ -52,25 +52,26 @@ function objectReturns(factory: SgNode): SgNode | undefined {
 	return undefined;
 }
 
-function unwrapParens(node: SgNode): SgNode {
-	let current = node;
-	while (current?.kind() === "parenthesized_expression") {
-		const inner = current.namedChildren()[0];
-		if (!inner) break;
-		current = inner;
-	}
-	return current;
-}
-
-function unwrapAsSatisfies(node: SgNode): SgNode {
+/**
+ * Strip `as`/`satisfies` casts and non-null assertions down to the awaited
+ * call, reusing the shared `unwrapParens` (parens) and `namedParts`
+ * (comment-filtered first child) seams instead of a local loop. A comment is
+ * a named child in this grammar, so `await // why\n f()` would otherwise
+ * resolve its operand to the comment. `bareIdentifier` (imported) answers
+ * the leaf "which binding" question; this answers the structural one, which
+ * a text-only helper cannot carry because the zero-argument and await
+ * requirements live on the nodes it returns.
+ */
+function unwrapExpression(node: SgNode): SgNode {
 	let current = unwrapParens(node);
 	while (
 		current?.kind() === "as_expression" ||
-		current?.kind() === "satisfies_expression"
+		current?.kind() === "satisfies_expression" ||
+		current?.kind() === "non_null_expression"
 	) {
-		const value = current.namedChildren()[0];
-		if (!value) break;
-		current = unwrapParens(value);
+		const inner = namedParts(current)[0];
+		if (!inner) break;
+		current = unwrapParens(inner);
 	}
 	return current;
 }
@@ -81,12 +82,25 @@ function unwrapAsSatisfies(node: SgNode): SgNode {
  * comparisons (`await_expression(await importOriginal)` beside a `typeof`
  * unary, with `as`/`satisfies` folded into the same binary chain as bare
  * identifiers), so no `call_expression` exists for it. The structural proof
- * is the left spine of those binaries ending at the awaited binding, with at
- * least one real `<` operator on the way down. A bare
+ * has two halves: the left spine of those binaries ends at the awaited
+ * binding with at least one real `<` operator on the way down (a bare
  * `...(await importOriginal)` written literally spreads the factory function
- * itself, so the `<` level is required, not optional.
+ * itself, so the `<` level is required, not optional), AND the trailing call
+ * parentheses prove themselves through the grammar's own error recovery —
+ * the `>()` the parser cannot place lands in an `ERROR` node wrapping an
+ * empty `formal_parameters`. A value argument (`…>("./other.js")`) parses
+ * cleanly with no `ERROR`, and a missing call (`…<typeof …>` with no `()`)
+ * recovers as a bare `>` with no parameters, so both reject exactly like
+ * the no-argument form rejects `importOriginal("./other.js")`. The proof is
+ * read off `proofScope` — the spread element or the enclosing declaration —
+ * never off the unwrapped spine, which drops the `ERROR` sibling when it
+ * descends to the binary.
  */
-function isMisparsedGenericAwait(node: SgNode, bindings: Set<string>): boolean {
+function isMisparsedGenericAwait(
+	node: SgNode,
+	bindings: Set<string>,
+	proofScope: SgNode,
+): boolean {
 	let current = node;
 	let sawComparison = false;
 	while (current.kind() === "binary_expression") {
@@ -96,43 +110,54 @@ function isMisparsedGenericAwait(node: SgNode, bindings: Set<string>): boolean {
 				.some((child) => !child.isNamed() && child.text() === "<")
 		)
 			sawComparison = true;
-		const left = current.namedChildren()[0];
+		const left = namedParts(current)[0];
 		if (!left) return false;
 		current = unwrapParens(left);
 	}
 	if (!sawComparison || current.kind() !== "await_expression") return false;
-	const operand = unwrapAsSatisfies(current.namedChildren()[0]);
-	return (
-		!!operand && operand.kind() === "identifier" && bindings.has(operand.text())
-	);
+	const awaitedOperand = namedParts(current)[0];
+	if (!awaitedOperand) return false;
+	const operand = unwrapExpression(awaitedOperand);
+	if (!operand || operand.kind() !== "identifier" || !bindings.has(operand.text()))
+		return false;
+	return proofScope
+		.findAll({ rule: { kind: "ERROR" } })
+		.some((error) =>
+			error
+				.findAll({ rule: { kind: "formal_parameters" } })
+				.some((parameters) => namedParts(parameters).length === 0),
+		);
 }
 
-function isAwaitedBinding(node: SgNode, bindings: Set<string>): boolean {
-	const unwrapped = unwrapAsSatisfies(node);
+function isAwaitedBinding(
+	node: SgNode,
+	bindings: Set<string>,
+	proofScope: SgNode = node,
+): boolean {
+	const unwrapped = unwrapExpression(node);
 	if (unwrapped.kind() === "await_expression") {
-		const operand = unwrapAsSatisfies(unwrapped.namedChildren()[0]);
-		if (!operand) return false;
-		return (
-			operand.kind() === "call_expression" &&
-			operand.field("function")?.kind() === "identifier" &&
-			bindings.has(operand.field("function")?.text() ?? "") &&
-			(operand.field("arguments")?.namedChildren() ?? []).length === 0
-		);
+		const operandNode = namedParts(unwrapped)[0];
+		if (!operandNode) return false;
+		const operand = unwrapExpression(operandNode);
+		if (operand.kind() !== "call_expression") return false;
+		const fn = operand.field("function");
+		if (!fn || !bindings.has(bareIdentifier(fn) ?? "")) return false;
+		return namedParts(operand.field("arguments")).length === 0;
 	}
 	if (unwrapped.kind() === "call_expression") {
 		// `await f<T>()`: the grammar nests the await inside the callee.
 		const callee = unwrapped.field("function");
 		if (callee?.kind() !== "await_expression") return false;
-		const inner = unwrapParens(callee.namedChildren()[0]);
+		const awaitedOperand = namedParts(callee)[0];
+		if (!awaitedOperand) return false;
+		const inner = unwrapParens(awaitedOperand);
 		return (
-			!!inner &&
-			inner.kind() === "identifier" &&
-			bindings.has(inner.text()) &&
-			(unwrapped.field("arguments")?.namedChildren() ?? []).length === 0
+			bindings.has(bareIdentifier(inner) ?? "") &&
+			namedParts(unwrapped.field("arguments")).length === 0
 		);
 	}
 	if (unwrapped.kind() === "binary_expression") {
-		return isMisparsedGenericAwait(unwrapped, bindings);
+		return isMisparsedGenericAwait(unwrapped, bindings, proofScope);
 	}
 	return false;
 }
@@ -151,25 +176,37 @@ function isSameModulePassThrough(
 	if (actualBindings.size === 0) return false;
 	// Two-statement factories bind the awaited module first:
 	// `const actual = await importOriginal<T>(); return { ...actual };`
+	// Only the factory body's OWN top-level declarations qualify: a binding
+	// with the same name inside a nested helper must not launder an
+	// unrelated same-named spread in the returned object.
 	const awaitedAliases = new Set<string>();
-	for (const declarator of factory.findAll({
-		rule: { kind: "variable_declarator" },
-	})) {
-		const name = declarator.field("name");
-		const value = declarator.field("value");
-		if (
-			name?.kind() === "identifier" &&
-			value &&
-			isAwaitedBinding(value, actualBindings)
-		)
-			awaitedAliases.add(name.text());
+	const body = factory.field("body");
+	if (body?.kind() === "statement_block") {
+		for (const statement of namedParts(body)) {
+			if (
+				statement.kind() !== "lexical_declaration" &&
+				statement.kind() !== "variable_declaration"
+			)
+				continue;
+			for (const declarator of namedParts(statement)) {
+				if (declarator.kind() !== "variable_declarator") continue;
+				const name = declarator.field("name");
+				const value = declarator.field("value");
+				if (
+					name?.kind() === "identifier" &&
+					value &&
+					isAwaitedBinding(value, actualBindings, statement)
+				)
+					awaitedAliases.add(name.text());
+			}
+		}
 	}
 	return object.children().some((child) => {
 		if (child.kind() !== "spread_element") return false;
-		const content = child.namedChildren()[0];
+		const content = namedParts(child)[0];
 		if (!content) return false;
-		if (isAwaitedBinding(content, actualBindings)) return true;
-		const target = unwrapAsSatisfies(content);
+		if (isAwaitedBinding(content, actualBindings, child)) return true;
+		const target = unwrapExpression(content);
 		return target.kind() === "identifier" && awaitedAliases.has(target.text());
 	});
 }
