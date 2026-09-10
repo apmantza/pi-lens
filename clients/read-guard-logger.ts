@@ -3,6 +3,7 @@ import { isTestMode } from "./env-utils.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
+import { getTurnId } from "./turn-context.js";
 
 const READ_GUARD_LOG_DIR = getGlobalPiLensLogDir();
 const READ_GUARD_LOG_FILE = path.join(READ_GUARD_LOG_DIR, "read-guard.log");
@@ -221,6 +222,7 @@ export function createReadGuardEditBatchSummary(args: {
 export interface ReadGuardLogEntry {
 	event: string;
 	sessionId?: string;
+	turnId?: string;
 	/** Bounded host/tool-call correlation token, persisted inside metadata. */
 	correlationId?: string;
 	filePath: string;
@@ -372,6 +374,7 @@ export function logReadGuardEvent(entry: ReadGuardLogEntry): void {
 	writer.log({
 		ts: new Date().toISOString(),
 		...logEntry,
+		turnId: getTurnId(),
 		filePath: normalizeFilePath(logEntry.filePath),
 		metadata,
 	});

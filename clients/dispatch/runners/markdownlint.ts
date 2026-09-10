@@ -1,5 +1,5 @@
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs,
@@ -137,7 +137,10 @@ const markdownlintRunner: RunnerDefinition = {
 		// its budget in another lane (availability verify, autofix --fix). Skip
 		// without spawning — "not checked", never re-reported as clean.
 		if (isInSpawnTimeoutCooldown(cmd)) {
-			ctx.log(
+			logRunnerAdvisoryOnce(
+				ctx,
+				"markdownlint",
+				cwd,
 				`markdownlint: ${cmd} is cooling down after a spawn timeout — skipping (one bounded failure budget per edit)`,
 			);
 			return { status: "skipped", diagnostics: [], semantic: "none" };

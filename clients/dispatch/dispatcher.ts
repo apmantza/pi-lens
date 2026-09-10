@@ -14,7 +14,7 @@
  * - BaselineStore: Track pre-existing issues for delta mode
  */
 
-import { logExtension } from "../extension-log.js";
+import { logExtension, type ExtensionLogLevel } from "../extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { FileKind } from "../file-kinds.js";
@@ -372,11 +372,13 @@ export function createDispatchContext(
 			return checkToolAvailability(command, facts);
 		},
 
-		log(message: string): void {
+		log(message: string, level?: ExtensionLogLevel): void {
 			// #1333: pi owns the terminal — a runner advisory must never be a raw
 			// write. Every DispatchContext.log line lands in extension.log instead.
 			logExtension({
 				subsystem: "dispatch",
+				// exactOptionalPropertyTypes: an omitted level must stay omitted.
+				...(level !== undefined && { level }),
 				message,
 				metadata: { filePath: normalizedFilePath, kind },
 			});

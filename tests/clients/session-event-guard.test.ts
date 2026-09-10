@@ -31,6 +31,12 @@ function staleGroup() {
 	);
 }
 
+function identityFallbackGroup() {
+	return getDegradationSummary().find(
+		(group) => group.kind === "turn-context-identity-fallback",
+	);
+}
+
 describe("wrapSessionEventHandler (#1925)", () => {
 	beforeEach(() => {
 		resetDegradationLedger();
@@ -147,6 +153,26 @@ describe("wrapSessionEventHandler (#1925)", () => {
 
 		expect(() => guarded({} as never, makeStaleCtx() as never)).not.toThrow();
 		expect(staleGroup()?.count).toBe(1);
+	});
+
+	it("records a stable identity resolution fallback once", () => {
+		const guarded = wrapSessionEventHandler("turn_start", vi.fn());
+		const ctx = {
+			isIdle: () => true,
+			get sessionManager(): never {
+				throw new Error("session manager unavailable");
+			},
+		};
+
+		guarded({} as never, ctx as never);
+		guarded({} as never, ctx as never);
+
+		expect(identityFallbackGroup()).toEqual(
+			expect.objectContaining({
+				kind: "turn-context-identity-fallback",
+				count: 1,
+			}),
+		);
 	});
 });
 

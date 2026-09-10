@@ -158,6 +158,7 @@ describe("index.ts integration", () => {
 		"session_start handler passes working ensureTool closure into handleSessionStart",
 		async () => {
 			const ensureToolMock = vi.fn(async (name: string) => `/mock/${name}`);
+			const resetTurnContextMock = vi.fn();
 			const handleSessionStartMock = vi.fn(
 				async (deps: {
 					ensureTool: (name: string) => Promise<string | undefined>;
@@ -202,6 +203,10 @@ describe("index.ts integration", () => {
 			vi.doMock("../clients/runtime-session.js", () => ({
 				handleSessionStart: handleSessionStartMock,
 			}));
+			vi.doMock("../clients/turn-context.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/turn-context.js")>()),
+				resetTurnContext: resetTurnContextMock,
+			}));
 			vi.doMock("../clients/installer/index.js", () => ({
 				ensureTool: ensureToolMock,
 			}));
@@ -217,6 +222,54 @@ describe("index.ts integration", () => {
 
 			expect(handleSessionStartMock).toHaveBeenCalledTimes(1);
 			expect(ensureToolMock).toHaveBeenCalledWith("typescript-language-server");
+			expect(resetTurnContextMock).toHaveBeenCalledTimes(1);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"resets the primary turn counter before the session-start prehandler row (#2815 R7)",
+		async () => {
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			const previousHome = process.env.PI_LENS_HOME;
+			process.env.PI_LENS_TEST_MODE = "0";
+			process.env.PI_LENS_HOME = tmpDir;
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			vi.doUnmock("../clients/turn-context.js");
+			const turnContext = await import("../clients/turn-context.js");
+			turnContext.resetTurnContext("primary-prehandler");
+			turnContext.beginTurnContext("primary-prehandler");
+			turnContext.beginTurnContext("primary-prehandler");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+
+			try {
+				await handlers.session_start?.[0]?.(
+					{},
+					makeCtx({ cwd: tmpDir, sessionId: "primary-prehandler" }),
+				);
+			} finally {
+				if (previousTestMode === undefined)
+					delete process.env.PI_LENS_TEST_MODE;
+				else process.env.PI_LENS_TEST_MODE = previousTestMode;
+				if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+				else process.env.PI_LENS_HOME = previousHome;
+			}
+
+			await latency.flushLatencyLog();
+			const prehandlerRows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { phase?: string; turnId?: string })
+				.filter((row) => row.phase === "session_start_prehandler");
+			expect(prehandlerRows).toHaveLength(1);
+			expect(prehandlerRows[0]).toEqual(
+				expect.objectContaining({ turnId: "primary-prehandler:0" }),
+			);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

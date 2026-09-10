@@ -1883,7 +1883,7 @@ export const SESSION_START_GUIDANCE: string[] = [
 		"• lens_diagnostics — mode=all is cache-only (empty cache ≠ clean); verify changed files with mode=full and paths.\n" +
 		"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
 		"• lsp_diagnostics — probe LSP for errors in a file/folder/workspace.\n" +
-		"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace, ast_grep_dump.",
+		"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace. Use ast_grep_search with dump=true to inspect AST nodes.",
 ];
 
 export async function handleSessionStart(

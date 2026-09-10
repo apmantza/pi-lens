@@ -143,6 +143,7 @@ export async function handleAgentEnd({
 			ctxCwd ?? runtime.projectRoot,
 		);
 	const records = [...claimed, ...staleClaimed];
+	const scheduledTurnId = records[0]?.queuedTurnId;
 	const requeuedKinds = new Set<"autofix" | "format">();
 	// S2d (gap 4, #1432 review): the aggregate `agent_end_deferred_mutation_drain`
 	// row only carried a coalesced `requeuedKinds` set with no reason, per-call
@@ -174,6 +175,7 @@ export async function handleAgentEnd({
 			toolName: "agent_end",
 			filePath: ctxCwd ?? runtime.projectRoot,
 			phase: "agent_end_deferred_mutation_requeue",
+			turnId: pending[0]?.queuedTurnId,
 			durationMs: 0,
 			metadata: {
 				reason,
@@ -294,6 +296,7 @@ export async function handleAgentEnd({
 			toolName: "agent_end",
 			filePath: ctxCwd ?? runtime.projectRoot,
 			phase: "agent_end_deferred_format_stale_claim",
+			turnId: scheduledTurnId,
 			durationMs: 0,
 			metadata: {
 				fileCount: staleClaimed.length,
@@ -470,6 +473,7 @@ export async function handleAgentEnd({
 		toolName: "agent_end",
 		filePath: ctxCwd ?? runtime.projectRoot,
 		phase: "agent_end_deferred_format_start",
+		turnId: scheduledTurnId,
 		durationMs: 0,
 		metadata: {
 			fileCount: records.length,
@@ -708,6 +712,7 @@ export async function handleAgentEnd({
 				toolName: "agent_end",
 				filePath,
 				phase: "deferred_format_file",
+				turnId: record.queuedTurnId,
 				durationMs: Date.now() - fileStart,
 				metadata: {
 					changed: result.formatChanged,
@@ -893,6 +898,7 @@ export async function handleAgentEnd({
 					toolName: "agent_end",
 					filePath: ctxCwd ?? runtime.projectRoot,
 					phase: "actionable_warnings_autofix",
+					turnId: scheduledTurnId,
 					durationMs: Date.now() - fixStart,
 					metadata: {
 						considered: fixSummary.considered,
@@ -920,6 +926,7 @@ export async function handleAgentEnd({
 		toolName: "agent_end",
 		filePath: ctxCwd ?? runtime.projectRoot,
 		phase: "agent_end_deferred_mutation_drain",
+		turnId: scheduledTurnId,
 		durationMs: Date.now() - startedAt,
 		metadata: {
 			autofixRecords: autofixRecords.length,
@@ -936,6 +943,7 @@ export async function handleAgentEnd({
 		filePath: ctxCwd ?? runtime.projectRoot,
 		durationMs: Date.now() - startedAt,
 		result: "deferred_format_complete",
+		turnId: scheduledTurnId,
 		metadata: {
 			queued: summary.queued,
 			formatted: summary.formatted,
@@ -950,6 +958,7 @@ export async function handleAgentEnd({
 		toolName: "agent_end",
 		filePath: ctxCwd ?? runtime.projectRoot,
 		phase: "agent_end_deferred_format_done",
+		turnId: scheduledTurnId,
 		durationMs: Date.now() - startedAt,
 		metadata: {
 			formatted: summary.formatted,
