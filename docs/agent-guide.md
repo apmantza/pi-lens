@@ -278,8 +278,7 @@ Registered as pi agent tools. Verified names:
 
 | Tool | What it does | Use it to… |
 |---|---|---|
-| `lens_diagnostics` | Query pi-lens diagnostic state. `mode=delta` (default, this turn) / `mode=all` (cache-wide) / `mode=full` (fresh whole-project scan). Optional `paths` scope. | Check what pi-lens found; confirm clean before "done" (use `mode=full`). |
-| `lens_diagnostics` | Session-cache, LSP-probe, or analyzer diagnostics with per-file `clean`/`unavailable`/`unconfirmed` outcomes. | Use `source=lsp` with `scope=paths` for targeted checks. |
+| `lens_diagnostics` | Session-cache, LSP-probe, or analyzer diagnostics with `source` and `scope` selectors. | Use `source=lsp` with `scope=paths` for targeted checks; an empty cache is not proof of clean. |
 | `lsp_navigation` | LSP navigation (definition/references/etc.). | Trace symbols semantically. |
 | `symbol_search` | Ranked identifier search over the warm word index (BM25 + priors). | Entry point of the discovery funnel. |
 | `module_report` | Navigable outline + signatures + decorators + imports + callbacks for a file; optional `blastRadius`. | Understand a module without reading the whole body. |

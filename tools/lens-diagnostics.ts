@@ -42,6 +42,7 @@ import {
 	normalizeFilePath,
 } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
+import { retireInlineBlockerAndResyncGuard } from "../clients/git-guard.js";
 import {
 	primaryServerId,
 	resolveLspCwdForFile,
@@ -252,10 +253,32 @@ export function createLensDiagnosticsTool(
 	getRuntime?: () =>
 		| import("../clients/runtime-coordinator.js").RuntimeCoordinator
 		| undefined,
+	isLensGuardEnabled: () => boolean = () => true,
 ) {
 	const lspProbe = createLspDiagnosticsTool(
 		nextWriteIndex,
-		undefined,
+		(info) => {
+			const runtime = getRuntime?.();
+			if (!runtime) return;
+			const retired = retireInlineBlockerAndResyncGuard({
+				runtime,
+				cacheManager,
+				cwd: info.cwd,
+				filePath: info.filePath,
+				...(info.writeIndex === undefined
+					? {}
+					: { writeIndex: info.writeIndex }),
+				coveredSources: info.coveredSources,
+				lensGuardEnabled: isLensGuardEnabled(),
+			});
+			if (retired) {
+				logExtension({
+					subsystem: "git-guard",
+					level: "debug",
+					message: `inline_blocker: retired for ${info.filePath}`,
+				});
+			}
+		},
 		getLspService,
 	);
 	return {
@@ -275,13 +298,52 @@ export function createLensDiagnosticsTool(
 			projectDiagnostics?: number;
 			filesWithIssues?: number;
 			filesChecked?: number;
+			filesScanned?: number;
 			totalBlocking?: number;
 			totalErrors?: number;
 			totalWarnings?: number;
 			totalAdvisories?: number;
 			coldRunners?: string[];
 			failedAnalyzers?: { id: string; summary: string }[];
+			source?: string;
+			totalDiagnostics?: number;
+			cleanFiles?: number;
+			unconfirmedFiles?: number;
+			navigationOnlyFiles?: number;
+			timedOutFiles?: number;
+			outcomeCounts?: Record<string, number>;
+			incompleteFiles?: number;
+			unconfirmed?: boolean;
+			timedOut?: boolean;
 		}>(({ details, args, isError, text }) => {
+			if (details?.source === "lsp") {
+				const count = details.totalDiagnostics ?? 0;
+				const files = details.filesChecked ?? details.filesScanned ?? 0;
+				const noun = count === 1 ? "diagnostic" : "diagnostics";
+				const scope = files > 1 ? ` across ${files} files` : "";
+				if (isError)
+					return `lens_diagnostics lsp — ${text.split("\n")[0] ?? "error"}`;
+				if ((details.navigationOnlyFiles ?? 0) > 0)
+					return `lens_diagnostics${scope} — ${count} ${noun} · ${details.cleanFiles ?? 0} clean · ${details.navigationOnlyFiles} navigation-only`;
+				if ((details.unconfirmedFiles ?? 0) > 0)
+					return `lens_diagnostics${scope} — ${count} ${noun} · ${details.cleanFiles ?? 0} clean · ${details.unconfirmedFiles} unconfirmed${details.timedOutFiles ? ` (${details.timedOutFiles} timed out)` : ""}`;
+				const outcomeCounts = details.outcomeCounts;
+				const notConfirmed = outcomeCounts
+					? (outcomeCounts.inconclusive ?? 0) +
+						(outcomeCounts.unavailable ?? 0) +
+						(outcomeCounts.unsupported ?? 0) +
+						(outcomeCounts.failed ?? 0)
+					: 0;
+				if (notConfirmed > 0)
+					return `lens_diagnostics${scope} — ${count} ${noun} · ${notConfirmed} checks not confirmed`;
+				if ((details.incompleteFiles ?? 0) > 0)
+					return `lens_diagnostics${scope} — incomplete (${details.incompleteFiles} files not confirmed)`;
+				if (count === 0 && details.unconfirmed)
+					return details.timedOut
+						? `lens_diagnostics${scope} — timed out (result may be incomplete)`
+						: `lens_diagnostics${scope} — unconfirmed (server cannot confirm clean)`;
+				return `lens_diagnostics${scope} — ${count} ${noun}`;
+			}
 			// Streaming progress partials render the live bar (see scanningSummaryLine)
 			// instead of the details-driven summary, which would show "0 diagnostics"
 			// mid-scan.
@@ -363,6 +425,27 @@ export function createLensDiagnosticsTool(
 						"delta = current turn's fixable warnings (default). " +
 						"all = cache-only session diagnostics for edited/dispatched files; an empty cache is not proof of a clean file. " +
 						"full = expensive active LSP scan of paths (or the whole project) plus cached runner diagnostics.",
+				}),
+			),
+			path: Type.Optional(
+				Type.String({
+					description: "One file or directory for source=lsp checks.",
+				}),
+			),
+			concurrency: Type.Optional(
+				Type.Number({
+					description: "Source=lsp batch concurrency (maximum 16).",
+				}),
+			),
+			waitMs: Type.Optional(
+				Type.Number({
+					description: "Source=lsp per-file wait budget in milliseconds.",
+				}),
+			),
+			serverScope: Type.Optional(
+				Type.String({
+					enum: ["primary", "all"],
+					description: "Source=lsp server coverage: primary or all.",
 				}),
 			),
 			refreshRunners: Type.Optional(
@@ -448,8 +531,11 @@ export function createLensDiagnosticsTool(
 				const lspParams = { ...params };
 				delete lspParams.source;
 				delete lspParams.scope;
-				if (scope === "paths" && !lspParams.paths && params.paths)
-					lspParams.paths = params.paths;
+				if (scope === "workspace") {
+					delete lspParams.path;
+					delete lspParams.paths;
+					lspParams.path = cwd;
+				}
 				const result = (await lspProbe.execute(
 					_toolCallId,
 					lspParams,
@@ -472,16 +558,18 @@ export function createLensDiagnosticsTool(
 				};
 			}
 			if (requestedSource !== undefined) {
+				const effectiveMode =
+					legacyMode ??
+					(scope === "workspace" ? "all" : scope === "paths" ? "all" : "delta");
 				params = {
 					...params,
 					mode:
-						source === "analyzers"
-							? "full"
-							: scope === "workspace"
-								? "all"
-								: "delta",
+						source === "analyzers" && effectiveMode === "delta"
+							? "delta"
+							: effectiveMode,
 				};
-				if (source === "analyzers") params.refreshRunners ??= "all";
+				if (source === "analyzers" && effectiveMode !== "delta")
+					params.refreshRunners ??= "all";
 			}
 			const repaintLspStatus = captureLspStatusRepaint?.(ctx);
 			const mode = (params.mode as string | undefined) ?? "delta";

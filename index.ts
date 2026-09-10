@@ -1637,7 +1637,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// owns the same tool name, registerTool throws and would abort extension load.
 	// Catch the collision silently so both extensions can coexist.
 	//
-	// Always-active tools (6): stay on for every turn — cheap, broadly useful,
+	// Always-active tools (5): stay on for every turn — cheap, broadly useful,
 	// or (in the loader's case) required to bootstrap dynamic activation below.
 	const alwaysActiveTools = [
 		createLensDiagnosticsTool(
@@ -1655,6 +1655,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			() => runtime.nextWriteIndex(),
 			captureLspStatusRepaint,
 			() => runtime,
+			() => Boolean(getLensFlag("lens-guard")),
 		),
 		createSymbolSearchTool(() => runtime.projectRoot),
 		createEffectiveConfigTool(() => runtime.projectRoot, noToolFlag),

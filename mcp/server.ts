@@ -1893,13 +1893,14 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				sendError(id ?? null, -32602, "tools/call requires a string 'name'");
 				return;
 			}
+			const enabledName =
+				name === "pilens_lsp_diagnostics" ? "pilens_diagnostics" : name;
 			if (
 				name !== "pilens_ast_grep_dump" &&
-				name !== "pilens_lsp_diagnostics" &&
 				name !== "pilens_rebuild" &&
 				!enabledToolsForCwd(
 					typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD,
-				).some((tool) => tool.name === name)
+				).some((tool) => tool.name === enabledName)
 			) {
 				sendResult(
 					id ?? null,

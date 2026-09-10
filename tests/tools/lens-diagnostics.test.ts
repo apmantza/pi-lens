@@ -214,6 +214,40 @@ describe("lens_diagnostics source and scope routing", () => {
 			removeTempDirSync(cwd);
 		}
 	});
+
+	it("source=lsp workspace scans the workspace without explicit paths", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-fold-workspace-"),
+		);
+		fs.writeFileSync(path.join(cwd, "one.ts"), "const one = 1;\n");
+		const service = {
+			runWorkspaceDiagnostics: vi.fn(async () => []),
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const result = (await run(
+				makeTool({}, service),
+				{ source: "lsp", scope: "workspace" },
+				cwd,
+			)) as any;
+			expect(result.isError).toBe(false);
+			expect(service.getDiagnostics).toHaveBeenCalled();
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("does not launch analyzer runners for source=analyzers scope=delta", async () => {
+		const result = await run(
+			makeTool(),
+			{ source: "analyzers", scope: "delta" },
+			"/proj",
+		);
+		expect(result).toBeDefined();
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).not.toHaveBeenCalled();
+	});
 });
 
 // ── compact render header ────────────────────────────────────────────────────
@@ -272,6 +306,58 @@ describe("lens_diagnostics compact render header", () => {
 		});
 		expect(line).not.toContain("clean");
 		expect(line).toContain("3 errors");
+	});
+});
+
+describe("lens_diagnostics source=lsp compact render", () => {
+	const identityTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+
+	function render(details: Record<string, unknown>) {
+		const component = makeTool().renderResult?.(
+			{ content: [{ type: "text", text: "" }], details, isError: false },
+			{ expanded: false },
+			identityTheme,
+			{ args: { source: "lsp", scope: "paths" }, lastComponent: undefined },
+		);
+		return (component?.render(200) ?? []).join("\n");
+	}
+
+	it("preserves severity-1 findings", () => {
+		const line = render({
+			source: "lsp",
+			totalDiagnostics: 2,
+			filesChecked: 1,
+		});
+		expect(line).toContain("2 diagnostics");
+		expect(line).not.toContain("clean");
+	});
+
+	it("preserves unconfirmed and timed-out files", () => {
+		const line = render({
+			source: "lsp",
+			totalDiagnostics: 0,
+			filesChecked: 1,
+			unconfirmedFiles: 1,
+			timedOutFiles: 1,
+		});
+		expect(line).toContain("unconfirmed");
+		expect(line).toContain("timed out");
+	});
+
+	it("preserves navigation-only and unavailable outcomes", () => {
+		expect(
+			render({ source: "lsp", filesChecked: 1, navigationOnlyFiles: 1 }),
+		).toContain("navigation-only");
+		expect(
+			render({
+				source: "lsp",
+				filesChecked: 1,
+				outcomeCounts: { unavailable: 1 },
+			}),
+		).toContain("not confirmed");
 	});
 });
 

@@ -7,8 +7,9 @@ share) — current exception: `ast_grep_outline`
 (pi-lens-internal for now). `read_enclosing` gained MCP parity
 (`pilens_read_enclosing`) as of #536, closing #522 item 1.
 
-**Dynamic tooling.** Six tools stay always-active: `lens_diagnostics`,
-`lens_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
+
+**Dynamic tooling.** Five tools stay always-active: `lens_diagnostics`,
+	`module_report`, `read_symbol`, `read_enclosing`,
 `symbol_search`. Five situational tools — `ast_grep_search`, `ast_grep_replace`,
 `ast_grep_outline`, `lsp_navigation`, `lens_diagnostic_mark` —
 are registered but
@@ -26,7 +27,7 @@ results, belongs in the returned result so it is paid only when the tool runs.
 
 ## Per-edit
 
-- **`lens_diagnostics`** — Cached diagnostic state for the current session.
+- **`lens_diagnostics`** — Cached, LSP, or analyzer diagnostic state for the current session.
   Modes: `delta` (current turn), `all` (resurfaces stale blockers dropped from
   turn context), `full` (project-wide scan).
 - **`lens_diagnostic_mark`** — Triage a diagnostic: `false-positive` /
@@ -34,8 +35,6 @@ results, belongs in the returned result so it is paid only when the tool runs.
   (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
   Content-anchored so marks survive edits; every mark is logged and published
   on the bus. See [dispositions.md](dispositions.md).
-- **`lens_diagnostics`** — Session-cache, LSP-probe, or analyzer diagnostics via the
-  active language server.
 - **`lsp_navigation`** — IDE-style navigation: `definition`, `references`,
   `implementation`, `typeDefinition`, `declaration`, `rename`, `rename_file`,
   `hover`, `documentSymbol`, `workspaceSymbol`, `signatureHelp`,
