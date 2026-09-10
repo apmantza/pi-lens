@@ -1068,6 +1068,35 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+The runner-spawn-cwd sweep (`tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts`)
+scans every spawn-bearing TypeScript file under `clients/`, `tools/`, `mcp/`,
+and `index.ts`. Its AST needle requires each supplied cwd value to resolve to
+the imported `clients/tool-cwd.ts` seam or its documented re-exports, resolving
+the binding by the scope the tree-sitter grammar gives it rather than by a list
+of scope-opening node kinds. A rebinding of the resolved local before the
+spawn — in any of its five spellings, `({ cwd } = ctx)` included — leaves the
+value unproven. A rebinding anywhere after the declaration in the binding
+scope, including loop-carried writes after the spawn and hoisted function
+writes, also leaves it unproven. A same-file function whose body is a single `return <seam call>;` statement (or the equivalent concise arrow expression) is
+exactly one `return <seam call>;` counts as the seam. Method promotion is
+receiver-scoped
+(`this.<name>`), while module functions promote only their module-level name.
+Genuine global probes and
+deliberate non-seam derivations are admitted per site by
+`rel#symbolPath:hash(callText)~hash(cwdExpression and every local it reads)` —
+so editing the admitted cwd VALUE, or the local it is computed from, retires
+the row — and every row carries a reason true of that site; sites whose honest
+reason is "this should move onto the seam" live in a ratcheted
+`MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
+Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
+conforming spawn moves the population pins; adding a non-conforming one costs a
+reasoned row, never a pin bump. Stated bounds: an ALIASED
+`node:child_process` import is not a site (#2888), and the scan does not follow
+a path computation into the seam. The `beforeAll` carries an explicit 30 s
+timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
+contention and the `default` vitest project's hook budget is 10 s
+(#2872, refs #2777).
+
 Model-facing tool results use the single `boundToolText` seam in
 `tools/render-compact.ts`: oversized text keeps its head and tail, reports the
 omitted character count, and writes the complete payload under the session log

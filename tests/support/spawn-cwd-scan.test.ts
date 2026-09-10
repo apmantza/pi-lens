@@ -25,7 +25,12 @@
  * P6 the wrapper's parameter list only · P7 absent.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
+import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
 import { scanSpawnCwd } from "./spawn-cwd-scan.js";
 
 /** What the sweep itself asks of a scan, in a form a fixture can assert. */
@@ -35,6 +40,15 @@ async function analyze(source: string): Promise<{
 	redundantExemptions: string[];
 	sites: string[];
 }> {
+	// Inline fixtures use the real seam-shaped import so the scanner never
+	// falls back to a resolver name. Keep the deliberate local-function and
+	// foreign-import probes untouched.
+	if (
+		!/^\s*import\b/m.test(source) &&
+		!/^\s*function\s+resolve(?:Tool|Runner|Formatter)Cwd\b/m.test(source)
+	) {
+		source = `${source}\nimport { resolveToolCwd } from "./tool-cwd.js";`;
+	}
 	const scan = await scanSpawnCwd("fixture.ts", source);
 	return {
 		flagged: scan.sites
@@ -72,6 +86,112 @@ function at(source: string, snippet: string, callee: string): string {
 // ── K1 · direct spawn ───────────────────────────────────────────────────────
 
 describe("K1 — a direct safeSpawn* call", () => {
+	it("resolves the innermost dominating block binding", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				await safeSpawnAsync("good", [], { cwd });
+				{ const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			true,
+			false,
+		]);
+	});
+
+	it("keeps the later resolver binding when the block appears first", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				{ const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
+	it("rejects a resolver binding after reassignment", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				let cwd = resolveToolCwd("runner", "tool", file, ctx);
+				cwd = ctx.cwd;
+				await safeSpawnAsync("bad", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
+	it("rejects a file-local resolver with the seam name", async () => {
+		const source = `function resolveToolCwd() { return ctx.cwd; }
+			async function run() { await safeSpawnAsync("bad", [], { cwd: resolveToolCwd() }); }`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
+	it("rejects a same-named resolver imported from a foreign module", async () => {
+		const source = `import { resolveToolCwd } from "./my-helpers.js";
+			import { safeSpawnAsync } from "../../safe-spawn.js";
+			async function run(ctx) {
+				await safeSpawnAsync("bad", [], { cwd: resolveToolCwd(ctx) });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
+	it("does not let a closed sibling block launder a function binding", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				if (ctx.fast) { const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
+	it("does not let a for-body binding poison the outer site", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx, files) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				for (const f of files) { const cwd = f.dir; await safeSpawnAsync("bad", [], { cwd }); }
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
+	it("requires resolver origin, including a local binding and object spread", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			const dir = resolveToolCwd("runner", "tool", file, ctx);
+			const options = { cwd: dir, timeout: 1000 };
+			await safeSpawn("tool", [], { ...options });
+		`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites).toHaveLength(1);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(true);
+	});
+
+	it("rejects ctx.cwd, process.cwd(), and a shorthand parameter as origins", async () => {
+		const sources = [
+			`async function run(ctx) { await safeSpawn("tool", [], { cwd: ctx.cwd }); }`,
+			`async function run() { await safeSpawn("tool", [], { cwd: process.cwd() }); }`,
+			`async function run(cwd) { await safeSpawn("tool", [], { cwd }); }`,
+		];
+		for (const source of sources) {
+			const scan = await scanSpawnCwd("fixture.ts", source);
+			expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+		}
+	});
 	it("f-direct-key · P1: a `cwd` key in the options object passes", async () => {
 		const { flagged } = await analyze(`
 			async function run(ctx) {
@@ -794,5 +914,770 @@ describe("the wrapper rule itself", () => {
 			`${at(source, 'return safeSpawnAsync("helm"', "safeSpawnAsync")}:direct`,
 			`${at(source, "lintChart(chartRoot, ctx.cwd);", "lintChart")}:wrapper`,
 		]);
+	});
+});
+
+// ── S — lexical scope, enumerated from the grammar ──────────────────────────
+
+/**
+ * ## Why this table is generated and not written
+ *
+ * Three rounds of this detector resolved a `cwd` identifier against a
+ * hand-written list of scope-opening node kinds — "the enclosing function"
+ * (r1), then "a function or a `statement_block`" (r2, r3). Each round closed
+ * the launderer the review had shown it and shipped with the next one open:
+ * the verify at `6f09c4cc5` moved yamllint's real spawn onto `ctx.cwd`, put
+ * the good binding in a dead `switch` case, and the sweep stayed green. Adding
+ * `switch_body` to the list would be the fourth spelling of one mistake
+ * (AGENTS.md defect shape 34).
+ *
+ * So the list comes from the grammar. `@ast-grep/napi` ships the tree-sitter
+ * `node-types` table for every language it bundles —
+ * `node_modules/@ast-grep/napi/lang/TypeScript.d.ts`, whose first line reads
+ * "Auto-generated from tree-sitter TypeScript v0.23.2". Every node type whose
+ * fields or children can hold a `lexical_declaration` / `variable_declaration`
+ * (directly, or through the `declaration` / `statement` supertypes) is a node
+ * that can OWN a declaration, and therefore a scope boundary the resolver has
+ * to get right. {@link declarationOwnerKindsFromGrammar} recomputes that set
+ * on every run; {@link SCOPE_CASES} must carry a fixture for each member, and
+ * the first test below fails if the two ever diverge — a grammar bump that
+ * adds a scope-owning node type reds HERE, with the kind named, instead of
+ * quietly opening the hole round 4 was sent to close.
+ *
+ * Recurrence this guards: PR #2877 review v3 F1 — a declarator inside a closed
+ * `switch` case or a `for` head laundered the binding a later spawn actually
+ * used.
+ */
+const GRAMMAR_NODE_TYPES_PATH = path.join(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"../../node_modules/@ast-grep/napi/lang/TypeScript.d.ts",
+);
+
+interface GrammarSlot {
+	types?: { type: string; named: boolean }[];
+}
+interface GrammarNodeType {
+	subtypes?: { type: string; named: boolean }[];
+	fields?: Record<string, GrammarSlot>;
+	children?: GrammarSlot;
+}
+
+/** Every node type the TypeScript grammar lets own a declaration statement. */
+function declarationOwnerKindsFromGrammar(): string[] {
+	const raw = fs.readFileSync(GRAMMAR_NODE_TYPES_PATH, "utf8");
+	const types = JSON.parse(
+		raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1),
+	) as Record<string, GrammarNodeType>;
+	// Close over supertypes: a slot that accepts `statement` accepts a
+	// `lexical_declaration`, and the grammar spells that indirection out.
+	const declarationTypes = new Set([
+		"lexical_declaration",
+		"variable_declaration",
+	]);
+	for (let grew = true; grew;) {
+		grew = false;
+		for (const [kind, node] of Object.entries(types)) {
+			if (declarationTypes.has(kind)) continue;
+			if ((node.subtypes ?? []).some((sub) => declarationTypes.has(sub.type))) {
+				declarationTypes.add(kind);
+				grew = true;
+			}
+		}
+	}
+	const owners: string[] = [];
+	for (const [kind, node] of Object.entries(types)) {
+		if (node.subtypes) continue; // a supertype alias, never a real node
+		const slots = [node.children, ...Object.values(node.fields ?? {})];
+		const ownsDeclaration = slots.some((slot) =>
+			(slot?.types ?? []).some((type) => declarationTypes.has(type.type)),
+		);
+		if (ownsDeclaration) owners.push(kind);
+	}
+	return owners.sort();
+}
+
+/** The node kinds that actually own a declaration in this fixture, read off
+ * the parse — so a row cannot claim to exercise `switch_case` while its
+ * source produces a plain block. */
+async function declarationOwnerKindsIn(source: string): Promise<string[]> {
+	const napi = await loadAstGrepNapi();
+	const root = napi.parse(napi.Lang.TypeScript, source).root();
+	const kinds = new Set<string>();
+	const visit = (node: SgNode): void => {
+		const kind = String(node.kind());
+		if (kind === "lexical_declaration" || kind === "variable_declaration") {
+			kinds.add(String(node.parent()?.kind() ?? "program"));
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	return [...kinds];
+}
+
+async function verdicts(source: string): Promise<string[]> {
+	const scan = await scanSpawnCwd("fixture.ts", source);
+	return scan.sites.map(
+		(site) => `hasCwd=${site.hasCwd} resolved=${site.resolvedFromToolCwd}`,
+	);
+}
+
+const SEAM = `import { resolveToolCwd } from "./tool-cwd.js";`;
+const GOOD = `resolveToolCwd("runner", "tool", file, ctx)`;
+
+interface ScopeCase {
+	/** The grammar node type that owns the shadow/hoisted declaration. */
+	owner: string;
+	what: string;
+	source: string;
+	/** One entry per site, in source order. */
+	expected: string[];
+}
+
+/**
+ * Two shapes, one per declaration form, because `const`/`let` and `var` are
+ * scoped differently and only one of them can be laundered:
+ *
+ * - **lexical owners** (`const`/`let`) take the LAUNDERER shape: the outer
+ *   binding is the #2691 defect (`ctx.cwd`), the good binding sits inside the
+ *   owner, and the spawn reads the outer one after the owner has closed. A
+ *   resolver that treats the owner as transparent reports `resolved=true` and
+ *   the sweep goes green on the defect — that is the bug this round fixes, so
+ *   every one of these rows reds on the pre-fix scanner.
+ * - **`var` owners** (`if (c) var cwd = …`, and the other bare-body
+ *   statements: a `const` there is a syntax error) take the HOISTED shape:
+ *   `var` is function-scoped, so the binding IS visible at the later spawn and
+ *   the honest verdict is `true`. The discriminating direction for these rows
+ *   is exactly that: a resolver that scoped the `var` to its owner node would
+ *   report `false` and false-red a legitimate seam use.
+ */
+const SCOPE_CASES: ScopeCase[] = [
+	{
+		owner: "statement_block",
+		what: "a closed sibling block cannot launder the binding the spawn reads",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	{ const cwd = ${GOOD}; void cwd; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "for_statement",
+		what: "a `for` head's binding dies with the loop",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	for (let cwd = ${GOOD}; false; ) { void cwd; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "switch_case",
+		what: "a dead `case`'s binding does not reach the spawn below the switch",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	switch (ctx.k) { case 1: const cwd = ${GOOD}; break; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "switch_default",
+		what: "same for `default:`",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	switch (ctx.k) { default: const cwd = ${GOOD}; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "switch_case",
+		what: "a binding from an earlier case IS visible in a later one — JS scopes case declarations to the whole switch body",
+		source: `${SEAM}
+async function run(ctx) {
+	switch (ctx.k) {
+		case 1:
+			const cwd = ${GOOD};
+			void cwd;
+		case 2:
+			await safeSpawnAsync("b", [], { cwd });
+	}
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "statement_block",
+		what: "a spawn ABOVE the good declaration does not read it (temporal dead zone)",
+		source: `${SEAM}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+	const cwd = ${GOOD};
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "statement_block",
+		what: "two `var` declarations of one name in one scope prove nothing",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) { var cwd = ctx.cwd; } else { var cwd = ${GOOD}; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=false resolved=false"],
+	},
+	{
+		owner: "program",
+		what: "a module-level binding reaches into every function below it",
+		source: `${SEAM}
+const cwd = ${GOOD};
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "export_statement",
+		what: "`export` wraps a declaration without scoping it",
+		source: `${SEAM}
+export const cwd = ${GOOD};
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "ambient_declaration",
+		what: "`declare const` has no initializer, so it supplies no usable cwd",
+		source: `${SEAM}
+declare const cwd: string;
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=false resolved=false"],
+	},
+	{
+		owner: "if_statement",
+		what: "a hoisted `var` in a bare consequence is visible after it",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "else_clause",
+		what: "same for a bare `else`",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) { void 0; } else var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "while_statement",
+		what: "same for a bare `while` body",
+		source: `${SEAM}
+async function run(ctx) {
+	while (ctx.fast) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "do_statement",
+		what: "same for a bare `do` body",
+		source: `${SEAM}
+async function run(ctx) {
+	do var cwd = ${GOOD}; while (false);
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "for_in_statement",
+		what: "same for a bare `for…of` body",
+		source: `${SEAM}
+async function run(ctx, files) {
+	for (const f of files) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "labeled_statement",
+		what: "same under a label",
+		source: `${SEAM}
+async function run(ctx) {
+	outer: var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "with_statement",
+		what: "same inside `with` (illegal in a module, still in the grammar)",
+		source: `${SEAM}
+function run(ctx) {
+	with (ctx) var cwd = ${GOOD};
+	return safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+];
+
+describe("S — every scope node type the grammar can produce", () => {
+	it("has a fixture for every declaration owner in the grammar's node types", () => {
+		const fromGrammar = declarationOwnerKindsFromGrammar();
+		expect(
+			fromGrammar.length,
+			`no declaration owners parsed out of ${GRAMMAR_NODE_TYPES_PATH} — the ` +
+				"generated node-type table moved or changed shape; fix this reader " +
+				"before trusting anything below it",
+		).toBeGreaterThan(5);
+		expect(
+			[...new Set(SCOPE_CASES.map((row) => row.owner))].sort(),
+			"every node type that can own a declaration is a scope boundary the " +
+				"resolver has to get right; give the new one a launderer fixture " +
+				"(lexical) or a hoisted fixture (`var`-only body) in SCOPE_CASES",
+		).toEqual(fromGrammar);
+	});
+
+	for (const row of SCOPE_CASES) {
+		it(`S-${row.owner}: ${row.what}`, async () => {
+			expect(
+				await declarationOwnerKindsIn(row.source),
+				`this fixture must really produce a declaration owned by ${row.owner}`,
+			).toContain(row.owner);
+			expect(await verdicts(row.source)).toEqual(row.expected);
+		});
+	}
+});
+
+/**
+ * The other half of "which binding does this name refer to": constructs that
+ * bind a name with no declaration statement, so the grammar's
+ * declaration-owner table above cannot enumerate them. Each one SHADOWS an
+ * outer binding, and the value it holds is not readable from the binding site
+ * — so the origin rule must report "not proven", never inherit the outer
+ * binding's proof. The fail-safe direction is built in: an unresolvable name
+ * yields no initializer, and no initializer means no resolver origin.
+ *
+ * Recurrence: the same v3-F1 laundering, one construct over. `run(ctx)` opens
+ * with `const cwd = resolveRunnerCwd(…)` in 44 runners, so ANY shadow inside
+ * `run` inherits a proof it never earned.
+ */
+const SHADOW_CASES: ScopeCase[] = [
+	{
+		owner: "arrow parameter",
+		what: "a callback parameter named cwd does not inherit the outer proof",
+		source: `${SEAM}
+async function run(ctx, withDir) {
+	const cwd = ${GOOD};
+	await withDir(ctx.cwd, async (cwd) => { await safeSpawnAsync("b", [], { cwd }); });
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "catch parameter",
+		what: "a catch binding shadows the outer one",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	try { void cwd; } catch (cwd) { await safeSpawnAsync("b", [], { cwd }); }
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "for…of head",
+		what: "a loop binding shadows the outer one inside the body",
+		source: `${SEAM}
+async function run(ctx, dirs) {
+	const cwd = ${GOOD};
+	for (const cwd of dirs) { await safeSpawnAsync("b", [], { cwd }); }
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "destructuring pattern",
+		what: "`const { cwd } = ctx` shadows the outer one with an unreadable value",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	{ const { cwd } = ctx; await safeSpawnAsync("b", [], { cwd }); }
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "nested function (no shadow)",
+		what: "a closure that captures the outer binding keeps its proof",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	const inner = async () => { await safeSpawnAsync("b", [], { cwd }); };
+	await inner();
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "inner block (no shadow)",
+		what: "a block that declares nothing keeps the enclosing proof",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	if (ctx.fast) { await safeSpawnAsync("b", [], { cwd }); }
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+];
+
+describe("S — bindings with no declaration statement", () => {
+	for (const row of SHADOW_CASES) {
+		it(`S-shadow-${row.owner}: ${row.what}`, async () => {
+			expect(await verdicts(row.source)).toEqual(row.expected);
+		});
+	}
+});
+
+/**
+ * `cwdLines` and `callLines` are what the live-tree sweep hashes into an
+ * admission key, so their contract is asserted here rather than only through
+ * the sweep. The recurrence: round 3's key hashed the `safeSpawnAsync(` line
+ * alone, so an admitted site's cwd could be swapped for `ctx.cwd` with the row
+ * still matching (v3-F2), and two spawns in one class method shared a key
+ * (v3-F3).
+ */
+describe("the lines an admission key is derived from", () => {
+	const lineOf = (source: string, needle: string): number =>
+		source.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+	it("covers the cwd property and the declaration of every local it hops through", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const dir = ${GOOD};
+	await safeSpawnAsync("t", [], {
+		cwd: dir,
+		timeout: 1000,
+	});
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].cwdLines).toEqual([
+			lineOf(source, "const dir ="),
+			lineOf(source, "cwd: dir"),
+		]);
+	});
+
+	it("reaches through a spread options local to the cwd inside it", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const options = { cwd: ctx.cwd, timeout: 1000 };
+	await safeSpawnAsync("t", [], { ...options });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].cwdLines).toEqual([lineOf(source, "const options =")]);
+	});
+
+	it("spans the whole call, so two spawns differ by what they run", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	await safeSpawnAsync(
+		"t",
+		["--version"],
+		{ cwd },
+	);
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].callLines).toEqual([4, 5, 6, 7, 8]);
+	});
+
+	it("names the enclosing class and method, not the file's first declaration", async () => {
+		const source = `${SEAM}
+class Runner {
+	async probe(ctx) {
+		await safeSpawnAsync("t", ["--version"], { timeout: 1000 });
+	}
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].symbol).toBe("Runner.probe");
+		expect(scan.sites[0].cwdLines).toEqual([]);
+	});
+});
+
+/**
+ * ## R — rebinding, in every shape the grammar allows
+ *
+ * Round 4 asked "was this binding reassigned before the use?" with
+ * `left.text() === name`, which is one spelling of five: `({ cwd } = ctx)`,
+ * `({ dir: cwd } = ctx)`, `[cwd] = […]`, `(cwd) = ctx.cwd` and
+ * `for (cwd of dirs)` all rebind the name, and the round-4 verify shipped the
+ * literal #2691 defect into the real `yamllint.ts` through the first of them
+ * with the sweep green. AGENTS.md defect shape 34 — a guard that enumerates
+ * surface spellings — on the one axis round 4 did not rewrite.
+ *
+ * The rule is now structural: a rebinding is any assignment whose LEFT TARGET
+ * BINDS the name (the pattern is walked, parentheses unwrapped), plus a
+ * `for…of`/`for…in` head that assigns without declaring. Every row below must
+ * come back unproven: the seam value is gone by the time the spawn runs.
+ */
+const REBINDING_CASES: { id: string; what: string; rebind: string }[] = [
+	{ id: "R1", what: "plain assignment", rebind: "cwd = ctx.cwd;" },
+	{ id: "R2", what: "object destructuring", rebind: "({ cwd } = ctx);" },
+	{ id: "R3", what: "array destructuring", rebind: "[cwd] = [ctx.cwd];" },
+	{
+		id: "R4",
+		what: "`for…of` head without a declaration",
+		rebind: "for (cwd of dirs) { void cwd; }",
+	},
+	{
+		id: "R5",
+		what: "renamed object destructuring",
+		rebind: "({ dir: cwd } = ctx);",
+	},
+	{ id: "R6", what: "compound assignment", rebind: 'cwd += "/nested";' },
+	{
+		id: "R7",
+		what: "assignment inside a closure",
+		rebind: "(() => { cwd = ctx.cwd; })();",
+	},
+	{
+		id: "R8",
+		what: "assignment inside a block",
+		rebind: "if (ctx.fast) { cwd = ctx.cwd; }",
+	},
+	{ id: "R9", what: "parenthesised target", rebind: "(cwd) = ctx.cwd;" },
+	{
+		id: "R10",
+		what: "assignment inside a switch case",
+		rebind: "switch (ctx.k) { case 1: cwd = ctx.cwd; }",
+	},
+];
+
+describe("R — a rebinding before the use, whatever shape it takes", () => {
+	for (const row of REBINDING_CASES) {
+		it(`${row.id}: ${row.what} leaves the binding unproven`, async () => {
+			const source = `${SEAM}
+async function run(ctx, dirs) {
+	let cwd = ${GOOD};
+	${row.rebind}
+	await safeSpawnAsync("b", [], { cwd });
+}`;
+			expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+		});
+	}
+
+	it("a write to a PROPERTY is not a rebinding", async () => {
+		// `o.cwd = …` changes an object, not the local the spawn reads.
+		const source = `${SEAM}
+async function run(ctx, o) {
+	const cwd = ${GOOD};
+	o.cwd = ctx.cwd;
+	await safeSpawnAsync("b", [], { cwd });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+	});
+
+	it("a straight-line rebinding AFTER the use leaves the binding unproven", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	let cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+	({ cwd } = ctx);
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+	});
+
+	it("R11: a retry-loop rebinding leaves the binding unproven", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+		let cwd = ${GOOD};
+		for (;;) {
+			await safeSpawnAsync("b", [], { cwd });
+			cwd = ctx.cwd;
+		}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+	});
+
+	it("rejects a hoisted function rebinding declared below the spawn", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+		let cwd = ${GOOD};
+		await safeSpawnAsync("b", [], { cwd });
+		bump();
+		function bump() { cwd = ctx.cwd; }
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+	});
+});
+
+describe("a same-file function that returns the seam is a seam resolver", () => {
+	it("follows a private method whose body returns resolveToolCwd (#2879)", async () => {
+		// `clients/test-runner-client.ts` migrated onto the seam through
+		// `private resolveSpawnCwd(…) { return resolveToolCwd(…) }`. Matching the
+		// two known wrapper names by hand — round 4's rule — called that
+		// conforming site non-seam on the merge result (round-5 v4-F2).
+		const source = `${SEAM}
+class Client {
+	private resolveSpawnCwd(runner, file, root) {
+		return resolveToolCwd("runner", runner, file, { cwd: root });
+	}
+	async run(ctx) {
+		const spawnCwd = this.resolveSpawnCwd("vitest", ctx.filePath, ctx.cwd);
+		await safeSpawnAsync("b", [], { cwd: spawnCwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+	});
+
+	it("does not follow a method that merely CALLS the seam", async () => {
+		// Logging the resolver's answer is not returning it.
+		const source = `${SEAM}
+class Client {
+	private resolveSpawnCwd(runner, file, root) {
+		void resolveToolCwd("runner", runner, file, { cwd: root });
+		return ctx.cwd;
+	}
+	async run(ctx) {
+		const spawnCwd = this.resolveSpawnCwd("vitest", ctx.filePath, ctx.cwd);
+		await safeSpawnAsync("b", [], { cwd: spawnCwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("follows a plain function and an arrow with a concise body", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx) {
+	return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+const resolveThere = (ctx) =>
+	resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+async function run(ctx) {
+	await safeSpawnAsync("a", [], { cwd: resolveHere(ctx) });
+	await safeSpawnAsync("b", [], { cwd: resolveThere(ctx) });
+}`;
+		expect(await verdicts(source)).toEqual([
+			"hasCwd=true resolved=true",
+			"hasCwd=true resolved=true",
+		]);
+	});
+
+	it("rejects a mixed-return resolver with an early host return", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (!ready) return process.cwd();
+		return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("rejects a promoted resolver with a bare return", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (!ready) return;
+		return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("rejects a promoted resolver with implicit fall-through", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (ready) return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("does not credit a same-named module function for a method resolver", async () => {
+		const source = `${SEAM}
+class Client {
+		resolveSpawnCwd(ctx) {
+			return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+		}
+}
+function resolveSpawnCwd(ctx) { return ctx.cwd; }
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveSpawnCwd(ctx) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+});
+
+describe("round-5 scope and key residues", () => {
+	it("N1: a class static block is a `var` boundary the owner table cannot name", async () => {
+		// The static block's body is a plain `statement_block`, so the grammar's
+		// declaration-owner table says "statement_block" and nothing marks the
+		// block as a `var` scope. Round 4 credited the binding to the whole class
+		// (round-5 v4-N1).
+		const source = `${SEAM}
+class Runner {
+	static { var cwd = ${GOOD}; void cwd; }
+	async run(ctx) {
+		await safeSpawnAsync("b", [], { cwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("F4: the key covers a local the cwd expression only READS", async () => {
+		// `cwd: cargoToml.replace(…)` — round 4's key stopped at the call, so the
+		// local could be repointed at `ctx.cwd` with the admission intact
+		// (round-5 v4-F4).
+		const source = `${SEAM}
+async function run(ctx) {
+	const cargoToml = findCargoToml(ctx.filePath);
+	await safeSpawnAsync("t", [], { cwd: cargoToml.replace("Cargo.toml", "") });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		const lineOfText = (needle: string): number =>
+			source.split("\n").findIndex((line) => line.includes(needle)) + 1;
+		expect(scan.sites[0].cwdLines).toEqual([
+			lineOfText("const cargoToml"),
+			lineOfText("cwd: cargoToml.replace"),
+		]);
+	});
+});
+
+describe("node:child_process is a site only when the file imports it", () => {
+	it("a method named `spawn` on some object is not a child spawn", async () => {
+		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
+		// an LSP server definition's own method. Matching `spawn` by simple name
+		// made that a phantom site the moment the population filter and the
+		// scanner's name list were reconciled (round-5 v4-N3).
+		const source = `${SEAM}
+async function run(ctx, server) {
+	await server.spawn(ctx.cwd, { allowInstall: true });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites).toEqual([]);
+	});
+
+	it("an unaliased `node:child_process` import makes it one", async () => {
+		const source = `import { spawn } from "node:child_process";
+${SEAM}
+async function run(ctx) {
+	spawn("tool", [], { cwd: ctx.cwd });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });
