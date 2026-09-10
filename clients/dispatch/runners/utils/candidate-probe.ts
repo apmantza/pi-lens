@@ -12,7 +12,7 @@
  */
 
 import * as fs from "node:fs";
-import { probeToolAsync } from "../../../safe-spawn.js";
+import { probeToolAsync } from "../../../tool-probe.js";
 import {
 	type AvailabilityCause,
 	type ProbeEvidence,

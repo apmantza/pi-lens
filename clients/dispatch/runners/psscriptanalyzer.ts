@@ -2,11 +2,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
-import {
-	probeToolAsync,
-	safeSpawnAsync,
-	type SpawnResult,
-} from "../../safe-spawn.js";
+import { safeSpawnAsync, type SpawnResult } from "../../safe-spawn.js";
+import { probeToolAsync } from "../../tool-probe.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type {
 	Diagnostic,

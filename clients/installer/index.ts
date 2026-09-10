@@ -77,10 +77,10 @@ import {
 	resolveNodePackageManager,
 } from "../package-manager.js";
 import {
-	probeToolAsync,
 	resetSafeSpawnWindowsCommandCache,
 	safeSpawnAsync,
 } from "../safe-spawn.js";
+import { probeToolAsync } from "../tool-probe.js";
 import { logSessionStart } from "../sessionstart-logger.js";
 
 // Global installation directory for pi-lens tools

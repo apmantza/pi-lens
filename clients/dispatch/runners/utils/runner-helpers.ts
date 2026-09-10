@@ -45,7 +45,8 @@ import {
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
-import { probeToolAsync, safeSpawnAsync } from "../../../safe-spawn.js";
+import { safeSpawnAsync } from "../../../safe-spawn.js";
+import { probeToolAsync } from "../../../tool-probe.js";
 import { compareOrdinal } from "../../../string-utils.js";
 import {
 	getToolCommandSpec,

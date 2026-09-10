@@ -15,11 +15,8 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import {
-	probeToolAsync,
-	safeSpawnAsync,
-	type SpawnResult,
-} from "./safe-spawn.js";
+import { safeSpawnAsync, type SpawnResult } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
 import { createSingleFlight } from "./single-flight.js";
 import {

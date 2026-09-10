@@ -71,11 +71,8 @@ import { BoundedLruCache } from "./bounded-cache.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { WordIndex } from "./word-index.js";
-import {
-	getAmbientAbortSignal,
-	probeToolAsync,
-	safeSpawnAsync,
-} from "./safe-spawn.js";
+import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { bounded } from "./deadline-utils.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";

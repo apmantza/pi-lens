@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { probeToolAsync, safeSpawnAsync } from "../../safe-spawn.js";
+import { safeSpawnAsync } from "../../safe-spawn.js";
+import { probeToolAsync } from "../../tool-probe.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {

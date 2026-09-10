@@ -133,7 +133,7 @@ const POPULATION_FILES = [
  * #2894 moved 20 direct sites (136 -> 117) and 3 wrapper sites off this scan
  * by folding every `--version`/presence probe onto `safe-spawn.ts`'s
  * `probeToolAsync`, which is not a spawn NAME the scan recognises, so a file
- * whose only child was a probe leaves the population entirely (76 -> 73:
+ * whose only child was a probe leaves the population entirely (76 -> 73 before `tool-probe.ts` itself joins it:
  * `dispatch/dispatcher.ts`, `dispatch/runners/utils/candidate-probe.ts`,
  * `security-scan-client.ts`). That is reach TRADED, not lost: the population
  * filter reads each file's CONTENT, so the moment any of those three writes a
@@ -141,7 +141,7 @@ const POPULATION_FILES = [
  * one cwd decision they used to make 24 times over is now made once, inside
  * `probeToolAsync`, where this file admits it by name.
  */
-const EXPECTED_FILES = 73;
+const EXPECTED_FILES = 74;
 const EXPECTED_DIRECT_SITES = 117;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
@@ -303,10 +303,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries",
 	],
 	[
-		"clients/safe-spawn.ts#probeToolAsync:c29ed877~c29ed877",
-		"THE probe seam (#2894): `probeToolAsync` spawns a tool's own presence/version invocation and strips any `cwd` its caller passed, because the answer to \"does this binary exist and what does it call itself\" does not depend on a directory. The 24 sites that used to decide that one at a time now call it",
-	],
-	[
 		"clients/safe-spawn.ts#safeSpawnAsync.killTree:77f62fd4",
 		"`taskkill /F /T /PID <pid>` — kills a process tree by pid on Windows; it touches no file",
 	],
@@ -361,6 +357,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/test-runner-client.ts#TestRunnerClient.detectRunner:4411bf71",
 		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
+	],
+	[
+		"clients/tool-probe.ts#probeToolAsync:c29ed877~c29ed877",
+		"THE probe seam (#2894): `probeToolAsync` spawns a tool's own presence/version invocation and STRIPS whatever `cwd` reached it, because \"does this binary exist, and what does it call itself\" has the same answer from every directory. The 24 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class",
 	],
 	[
 		"clients/zizmor-config.ts#deriveGhCliToken:6acc7c4b",
@@ -739,7 +739,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
-	// The scan is ~2.8–3.7 s over the 73-file population, measured idle and at
+	// The scan is ~2.8–3.7 s over the 74-file population, measured idle and at
 	// `--maxWorkers=1` beside `tests/config`. CI observed ~7 s for this file,
 	// so 30 s gives roughly 4x margin against the file wall and remains the
 	// ceiling this repo treats as a hook budget — an

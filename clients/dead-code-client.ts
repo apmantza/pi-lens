@@ -20,7 +20,8 @@ import * as path from "node:path";
 import { findLocalBinsAt, VENV_BIN_DIRS } from "./package-manager.js";
 import { findNearestMarkerRoot } from "./path-utils.js";
 import { getScratchTreeFnmatchPatterns } from "./scratch-tree-policy.js";
-import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import {
 	type ProbeEvidence,
 	classifyProbeFailure,

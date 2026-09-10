@@ -14,7 +14,8 @@ import * as path from "node:path";
 import { isFileKind } from "./file-kinds.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
 import {

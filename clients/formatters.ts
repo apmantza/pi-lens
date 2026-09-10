@@ -42,7 +42,8 @@ import {
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "./package-manager.js";
-import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
 import { getToolPath } from "./installer/index.js";

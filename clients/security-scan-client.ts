@@ -15,7 +15,7 @@
 
 import * as path from "node:path";
 import { createSubsystemLogger } from "./extension-log.js";
-import { probeToolAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import {
 	type AvailabilityCause,
 	type AvailabilityOutcome,

@@ -25,7 +25,8 @@ import {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
-import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import {
 	createGenerationSource,

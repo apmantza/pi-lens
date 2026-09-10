@@ -41,7 +41,7 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
-import { probeToolAsync } from "../safe-spawn.js";
+import { probeToolAsync } from "../tool-probe.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import {
 	classifyProbeFailure,
