@@ -346,6 +346,23 @@ is the procedure and defers here on conflict; 2026-09-09).**
   earned by a reproduced instance: a HIGH with no failure scenario is a
   MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
   line) never count as an actionable round.
+- **Measured, not asserted (2026-09-10).** Any statement in a PR body or a
+  review about the host (pi's event order, whether the extension factory
+  re-runs on a reason), the CI environment, or "this test is red on master
+  too" carries the transcript that measured it in the SAME environment (a
+  probe extension against real pi in rpc mode; the same file run on
+  origin/master in the same tree). A sentence without one is a claim and the
+  verify round treats it as false: #2866 rounds 2–3 and #2878 round 5 were
+  built on unmeasured host claims the verify overturned, and four workers
+  reported a sandbox-only red as "pre-existing on master". Rule fixes (a
+  scanner's scope rule, a lifecycle rule, a classification) are derived and
+  enumerated from their source of truth — the grammar's node table, pi's
+  pinned types measured live, the real return sites — never from the list of
+  cases a reviewer named; the list is the acceptance set, not the rule
+  (#2877 took seven rounds closing one named launderer per round until round
+  4 generated the scope table from the grammar). This binds the orchestrator's
+  briefs too: a brief that states a code fact from a reviewer's summary
+  without reading the sites is the same shape (#2896 round 1).
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a
