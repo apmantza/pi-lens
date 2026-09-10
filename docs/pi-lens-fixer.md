@@ -51,6 +51,25 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   before accepting the round; a table whose ids do not exist is a fabricated
   claim and fails the round (2026-09-10: #2877 r3 and #2868 r3 each shipped a
   48- to 72-cell table with zero real ids).
+- A claim about the HOST or the ENVIRONMENT is a transcript, not a sentence.
+  "pi does not re-run the factory on resume", "this failure is pre-existing on
+  master", "the harness cannot fire that event" — each carries the command and
+  output that measured it in the same environment (a probe extension against
+  real pi in rpc mode; the same test file run on origin/master in the same
+  tree). 2026-09-10: three rounds on #2866 and #2878 were built on unmeasured
+  host claims the verify overturned, and "pre-existing analyze-cli red" was
+  reported by four workers whose sandbox differed from CI and master.
+- When a fix is a RULE (a scanner's scope rule, a lifecycle rule, a
+  classification), derive it from the source of truth and enumerate from
+  there — the tree-sitter grammar table, pi's pinned event types measured
+  live, the client's real return sites — never from a hand-written list of
+  the cases the reviewer named. Seven rounds on #2877 each closed the named
+  launderer and left the next scope kind open until round 4 generated the
+  scope table from the grammar.
+- A change to a release-QA row (`docs/release-qa-baseline.md` +
+  `scripts/release-qa.mjs`) runs `node scripts/release-qa.mjs` end to end
+  once on the pushed head and quotes the verdict line in the body; the
+  row↔probe tie test cannot see a row that never passes (#2893).
 - Before handoff, run `npm run preflight` last and paste its table in
   `PR_BODY.md` — a handoff without it is incomplete.
 - One set of template headings per PR. A fix round APPENDS `## Round N` and
