@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 
@@ -236,12 +236,78 @@ function observabilitySectionContent(body, lines, headings) {
 	return lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n");
 }
 
-function lintRuntimeObservability(body, lines, headings, diff) {
+function recordLiteralsFromRuntimeSource(source) {
+	const records = new Set();
+	const blanked = blankCommentsAndStrings(source);
+	const calls = [
+		["recordDegradationOnce", ["kind"]],
+		["incrementDegradationCount", ["kind"]],
+		["logExtension", ["subsystem", "message"]],
+		["logLatency", ["phase", "event", "eventName", "name"]],
+		["emitBounded", ["kind", "event", "eventName"]],
+	];
+	for (const [name, fields] of calls) {
+		const callPattern = new RegExp(`${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`, "g");
+		for (const match of blanked.matchAll(callPattern)) {
+			const original = source.slice(match.index, match.index + match[0].length);
+			for (const field of fields) {
+				const value = new RegExp(`${field}\\s*:\\s*["']([^"']+)["']`).exec(
+					original,
+				)?.[1];
+				if (value) records.add(value);
+			}
+		}
+	}
+	return records;
+}
+
+function runtimePathsFromDiff(diff = "") {
+	const paths = new Set();
+	for (const line of String(diff).split(/\r?\n/)) {
+		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+		if (!header) continue;
+		for (const path of header.slice(1))
+			if (isRuntimeObservabilityPath(path)) paths.add(path);
+	}
+	return paths;
+}
+
+function lintRuntimeObservability(
+	body,
+	lines,
+	headings,
+	diff,
+	cwd = process.cwd(),
+) {
 	const observation = runtimeObservabilityFromDiff(diff);
 	if (!observation.runtime) return [];
 	const content = observabilitySectionContent(body, lines, headings);
-	if ([...observation.records].some((record) => content.includes(record)))
-		return [];
+	const touchedRecords = new Set(observation.records);
+	for (const path of runtimePathsFromDiff(diff)) {
+		try {
+			for (const record of recordLiteralsFromRuntimeSource(
+				readFileSync(resolve(cwd, path), "utf8"),
+			))
+				touchedRecords.add(record);
+		} catch {
+			// A synthetic diff or a deleted path cannot prove a record exists.
+		}
+	}
+	if ([...touchedRecords].some((record) => content.includes(record))) return [];
+	const existingRecord =
+		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
+	if (existingRecord) {
+		const [, kind, file] = existingRecord;
+		try {
+			const source = readFileSync(
+				isAbsolute(file) ? file : resolve(cwd, file),
+				"utf8",
+			);
+			if (recordLiteralsFromRuntimeSource(source).has(kind)) return [];
+		} catch {
+			// Fall through to the existing strict error.
+		}
+	}
 	if (
 		!observation.failurePath &&
 		content.includes("No new failure path; no record added.")
@@ -491,7 +557,13 @@ export function lintPrBody(body = "", options = {}) {
 	}
 	if (options.diff)
 		errors.push(
-			...lintRuntimeObservability(body, lines, headings, options.diff),
+			...lintRuntimeObservability(
+				body,
+				lines,
+				headings,
+				options.diff,
+				options.cwd,
+			),
 		);
 	return { valid: errors.length === 0, errors };
 }
@@ -686,6 +758,7 @@ export function lintLocalPrBody(
 	return lintPrBody(body, {
 		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
+		cwd,
 	});
 }
 

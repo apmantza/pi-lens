@@ -120,9 +120,15 @@ describe("classifyFailureLog (#2103)", () => {
 	it("classifies the #2848 exit-137 log as infra despite incidental output needles", () => {
 		const result = classifyFailureLog(fixture("infra-kill-2848.real.log"));
 		expect(result.kind).toBe("infra-kill");
-		expect(result.detail).toContain("tests/index-integration.test.ts (1406 MB)");
-		expect(result.detail).toContain("tests/clients/flake-shape-ratchet.test.ts (1300 MB)");
-		expect(result.detail).toContain("tests/clients/availability-policy-coverage.test.ts (753 MB)");
+		expect(result.detail).toContain(
+			"tests/index-integration.test.ts (1406 MB)",
+		);
+		expect(result.detail).toContain(
+			"tests/clients/flake-shape-ratchet.test.ts (1300 MB)",
+		);
+		expect(result.detail).toContain(
+			"tests/clients/availability-policy-coverage.test.ts (753 MB)",
+		);
 	});
 
 	it("classifies the pre-#2042 bare-Killed OOM shape (no wrapper existed yet)", () => {

@@ -1,6 +1,12 @@
 // flake-shape: real-process-spawn — the exact local CLI and shallow checkout are the subject; an in-process call cannot prove either command boundary.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
@@ -474,6 +480,61 @@ describe("PR body lint (#1844)", () => {
 		);
 		expect(result.valid).toBe(false);
 		expect(result.errors.join(" ")).toContain("runtime-example");
+	});
+
+	it("accepts an existing record named with its source location", () => {
+		const source = join(process.cwd(), "clients", "existing-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(
+			source,
+			'recordDegradationOnce({ kind: "tool-cwd-resolution" });\n',
+		);
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `tool-cwd-resolution` at `clients/existing-record.ts:42`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(true);
+	});
+
+	it("accepts a record literal from a runtime file touched by the diff", () => {
+		const source = join(process.cwd(), "clients", "touched-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(
+			source,
+			'recordDegradationOnce({ kind: "touched-record" });\n',
+		);
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"The touched-record is the record.",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/touched-record.ts b/clients/touched-record.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(true);
+	});
+
+	it("rejects an existing-record claim when the named file has no matching literal", () => {
+		const source = join(process.cwd(), "clients", "missing-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(source, "export const value = 1;\n");
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `tool-cwd-resolution` at `clients/missing-record.ts:42`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("record literal");
 	});
 
 	it("rejects a no-failure claim when the runtime diff adds a catch", () => {
