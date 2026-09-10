@@ -1798,6 +1798,27 @@ function activateExtension(hostPi: ExtensionAPI) {
 			>;
 			const execute = normalized.execute;
 			if (typeof execute === "function") {
+				const recordDelivery = (
+					delivery: {
+						deliveredBytes: number;
+						truncated: boolean;
+					},
+					args: unknown[],
+				) => {
+					if (!lensEnabled) return;
+					try {
+						const ctx = args[4];
+						const sessionId = getStableSessionId(ctx);
+						recordToolResultDelivery({
+							sessionId,
+							sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
+							bytes: delivery.deliveredBytes,
+							truncated: delivery.truncated,
+						});
+					} catch {
+						// Observability must never break tool delivery.
+					}
+				};
 				normalized.execute = (...args: unknown[]) =>
 					Promise.resolve(execute(...args)).then(
 						(result) => {
@@ -1809,20 +1830,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							// the fifth execute argument, so attribution mirrors the
 							// message_end handler: stable session id plus this activation's
 							// owned role.
-							if (lensEnabled) {
-								try {
-									const ctx = args[4];
-									const sessionId = getStableSessionId(ctx);
-									recordToolResultDelivery({
-										sessionId,
-										sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
-										bytes: delivery.deliveredBytes,
-										truncated: delivery.truncated,
-									});
-								} catch {
-									// Observability must never break tool delivery.
-								}
-							}
+							recordDelivery(delivery, args);
 							return delivery.result;
 						},
 						(err) => {
@@ -1831,20 +1839,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 								...renderToolText(text),
 								isError: true,
 							});
-							if (lensEnabled) {
-								try {
-									const ctx = args[4];
-									const sessionId = getStableSessionId(ctx);
-									recordToolResultDelivery({
-										sessionId,
-										sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
-										bytes: delivery.deliveredBytes,
-										truncated: delivery.truncated,
-									});
-								} catch {
-									// Observability must never break tool delivery.
-								}
-							}
+							recordDelivery(delivery, args);
 							return delivery.result;
 						},
 					);

@@ -326,7 +326,15 @@ export function createLensDiagnosticsTool(
 				const files = details.filesChecked ?? details.filesScanned ?? 0;
 				const noun = count === 1 ? "diagnostic" : "diagnostics";
 				const filePath =
-					typeof args?.path === "string" ? args.path : details?.filePath;
+					typeof args?.path === "string"
+						? args.path
+						: typeof details?.filePath === "string"
+							? details.filePath
+							: Array.isArray(args?.paths) &&
+								  args.paths.length === 1 &&
+								  typeof args.paths[0] === "string"
+								? args.paths[0]
+								: undefined;
 				const singleFile =
 					(details?.mode === "file" || files === 1) &&
 					typeof filePath === "string"
@@ -1108,14 +1116,24 @@ function formatDeltaMode(
 		cwd,
 		quality?.generatedAt,
 	);
+	const matchingWarnings = <W extends { severity?: string }>(warnings: W[]) =>
+		warnings.filter((warning) =>
+			matchesRecordSeverity(warning.severity, severity),
+		);
+	const filteredActionableFiles = actionableFiles
+		.map((file) => ({ ...file, warnings: matchingWarnings(file.warnings) }))
+		.filter((file) => file.warnings.length > 0);
+	const filteredQualityFiles = qualityFiles
+		.map((file) => ({ ...file, warnings: matchingWarnings(file.warnings) }))
+		.filter((file) => file.warnings.length > 0);
 
 	const lines: string[] = [];
 
 	// Fixable warnings from actionable-warnings are the warning tier; quality
 	// cache entries are information-tier findings. Keep the session path's
 	// severity vocabulary exact instead of treating unknown tiers as matches.
-	if (severity === "all" || severity === "warning") {
-		for (const file of actionableFiles) {
+	if (filteredActionableFiles.length > 0) {
+		for (const file of filteredActionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			lines.push(`${rel}`);
 			for (const w of file.warnings) {
@@ -1126,8 +1144,8 @@ function formatDeltaMode(
 	}
 
 	// Quality issues
-	if (severity === "all" || severity === "information") {
-		for (const file of qualityFiles) {
+	if (filteredQualityFiles.length > 0) {
+		for (const file of filteredQualityFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			if (!lines.includes(rel)) lines.push(rel);
 			for (const w of file.warnings) {
@@ -1145,10 +1163,8 @@ function formatDeltaMode(
 		includeFile,
 	);
 
-	const selectedActionableFiles =
-		severity === "all" || severity === "warning" ? actionableFiles : [];
-	const selectedQualityFiles =
-		severity === "all" || severity === "information" ? qualityFiles : [];
+	const selectedActionableFiles = filteredActionableFiles;
+	const selectedQualityFiles = filteredQualityFiles;
 	const aw = selectedActionableFiles.reduce(
 		(count, file) => count + file.warnings.length,
 		0,
@@ -1407,10 +1423,24 @@ function isErrorLike(d: WidgetDiagnostic): boolean {
 
 function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
 	if (severity === "error") return isErrorLike(d);
-	if (severity === "warning") return d.severity === "warning";
-	if (severity === "information") return d.severity === "info";
-	if (severity === "hint") return d.severity === "hint";
-	return true;
+	return matchesRecordSeverity(d.severity, severity);
+}
+
+function matchesRecordSeverity(
+	recordSeverity: string | undefined,
+	requested: string,
+): boolean {
+	if (requested === "all") return true;
+	if (requested === "error") return recordSeverity === "error";
+	if (requested === "warning") return recordSeverity === "warning";
+	if (requested === "information")
+		return (
+			recordSeverity === "info" ||
+			recordSeverity === "note" ||
+			recordSeverity === "help"
+		);
+	if (requested === "hint") return recordSeverity === "hint";
+	return false;
 }
 
 /** Most-important first: blocking → error → warning/other, then by line. */

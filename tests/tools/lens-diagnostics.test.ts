@@ -166,43 +166,29 @@ function run(
 }
 
 describe("lens_diagnostics compact filename", () => {
-	it("names file mode from args.path and one-file batch from its path", () => {
-		const tool = makeTool() as any;
-		const render = (input: any) =>
-			(
-				tool.renderResult(
-					input,
-					{ expanded: false },
-					{},
-					{ args: input.args },
-				) as any
-			).text;
-		expect(
-			render({
-				details: {
-					source: "lsp",
-					mode: "file",
-					totalDiagnostics: 0,
-					filePath: "/tmp/project",
-				},
-				args: { path: "/tmp/project/src/app.ts" },
-				isError: false,
-				text: "No diagnostics found.",
-			}),
-		).toContain("lens_diagnostics app.ts — 0 diagnostics");
-		expect(
-			render({
-				details: {
-					source: "lsp",
-					mode: "batch",
-					filesChecked: 1,
-					totalDiagnostics: 0,
-				},
-				args: { path: "/tmp/project/src/app.ts" },
-				isError: false,
-				text: "No diagnostics found.",
-			}),
-		).toContain("lens_diagnostics app.ts — 0 diagnostics");
+	it("names a real one-file paths request", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-one-file-"));
+		const file = path.join(cwd, "app.ts");
+		fs.writeFileSync(file, "const app = 1;\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const tool = makeTool({}, service);
+			const result = await run(tool, { source: "lsp", paths: [file] }, cwd);
+			const rendered = (
+				tool.renderResult?.(result, { expanded: false }, {} as Theme, {
+					args: { source: "lsp", paths: [file] },
+				}) as any
+			)
+				.render(200)
+				.join("\n");
+			expect(rendered).toContain("lens_diagnostics app.ts — 0 diagnostics");
+		} finally {
+			removeTempDirSync(cwd);
+		}
 	});
 });
 
@@ -340,11 +326,15 @@ describe("lens_diagnostics source and scope routing", () => {
 				{ source: "lsp", scope: "paths", paths: [fileA] },
 				cwd,
 			);
-			await run(
+			const omittedResult = await run(
 				makeTool({}, makeService("omitted")),
 				{ source: "lsp", paths: [fileB] },
 				cwd,
 			);
+			expect(omittedResult.details).toMatchObject({
+				source: "lsp",
+				scope: "paths",
+			});
 			expect(touchedByScope.get("omitted")).toEqual([fileB]);
 			expect(touchedByScope.get("paths")).toEqual([fileA]);
 		} finally {
@@ -734,6 +724,71 @@ describe("lens_diagnostics mode=delta", () => {
 				{ mode: "delta", severity },
 			);
 			expect(String(result.content[0].text)).toContain(`No ${severity} issues`);
+		},
+	);
+
+	it.each([
+		["warning", ["ACTIONABLE-WARNING", "QUALITY-WARNING-TIER"]],
+		["information", ["QUALITY-INFORMATION-TIER"]],
+		["hint", ["QUALITY-HINT-TIER"]],
+	])(
+		"filters delta cache records individually for severity=%s",
+		async (severity, expected) => {
+			const tool = makeTool({
+				"actionable-warnings": {
+					files: [
+						{
+							filePath: "/proj/a.ts",
+							warnings: [
+								{
+									severity: "warning",
+									line: 1,
+									message: "ACTIONABLE-WARNING",
+									tool: "runner",
+								},
+							],
+						},
+					],
+				},
+				"code-quality-warnings": {
+					files: [
+						{
+							filePath: "/proj/a.ts",
+							warnings: [
+								{
+									severity: "warning",
+									line: 2,
+									message: "QUALITY-WARNING-TIER",
+									tool: "quality",
+								},
+								{
+									severity: "info",
+									line: 3,
+									message: "QUALITY-INFORMATION-TIER",
+									tool: "quality",
+								},
+								{
+									severity: "hint",
+									line: 4,
+									message: "QUALITY-HINT-TIER",
+									tool: "quality",
+								},
+							],
+						},
+					],
+				},
+			});
+			const text = String(
+				(await run(tool, { mode: "delta", severity })).content[0].text,
+			);
+			for (const message of [
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+				"QUALITY-HINT-TIER",
+			])
+				if (expected.includes(message)) expect(text).toContain(message);
+				else expect(text).not.toContain(message);
 		},
 	);
 
@@ -3304,6 +3359,62 @@ describe("lens_diagnostics mode=all", () => {
 		expect(text).toContain("BOOM error here");
 		expect(text).not.toContain("minor warning here");
 	});
+
+	it.each([
+		["error", ["error-tier"]],
+		["warning", ["warning-tier"]],
+		["information", ["info-tier", "note-tier", "help-tier"]],
+		["hint", ["hint-tier"]],
+		[
+			"all",
+			[
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			],
+		],
+	])(
+		"mode=all filters records at the requested severity tier: %s",
+		async (severity, expected) => {
+			mockSummaries.length = 0;
+			const diagnostics = [
+				"error",
+				"warning",
+				"info",
+				"note",
+				"help",
+				"hint",
+			].map((tier) => ({
+				severity: tier,
+				semantic: tier === "error" ? "blocking" : undefined,
+				message: `${tier}-tier`,
+				line: 1,
+			}));
+			mockSummaries.push(
+				sum(
+					"/proj/mixed.ts",
+					{ blocking: 1, errors: 1, warnings: 1, advisories: 4 },
+					{ diagnostics },
+				),
+			);
+			const text = String(
+				(await run(makeTool(), { mode: "all", severity })).content[0].text,
+			);
+			for (const message of expected) expect(text).toContain(message);
+			for (const message of [
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			])
+				if (!expected.includes(message)) expect(text).not.toContain(message);
+		},
+	);
 });
 
 // ── paths scope restrictor (#461) ───────────────────────────────────────────────

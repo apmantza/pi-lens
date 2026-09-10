@@ -116,11 +116,11 @@ describe("render-compact", () => {
 		});
 
 		it("does not mistake a payload result line for the anchored footer", () => {
-			const payload = `quoted transcript\n\nresult ok\n${"x".repeat(38_000)}`;
+			const payload = `quoted transcript\n\nresult ok\nusage tokens=1 elapsed-ms=2 bytes=3 truncated=false\n${"x".repeat(38_000)}`;
 			const result = finalizeToolResult(renderToolText(payload));
 			const text = result.content[0].text;
 			expect(text).toContain(payload);
-			expect(text).toMatch(/result ok\nusage tokens=/);
+			expect((text.match(/^result ok$/gm) ?? []).length).toBe(2);
 			expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(38_016);
 		});
 
