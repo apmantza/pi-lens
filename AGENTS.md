@@ -1172,11 +1172,15 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. Stated bounds: an ALIASED
-`node:child_process` import is not a site (#2888), and the scan does not follow
-a path computation into the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
-contention and the `default` vitest project's hook budget is 10 s
+reasoned row, never a pin bump. The scan does not follow a path computation into
+the seam. Stated bound (#2888): a `node:child_process` call is a site only when
+the file binds one of the seven `NODE_SPAWN_NAMES` (`tests/support/spawn-cwd-scan.ts`)
+from `child_process`; other spellings (`promisify(exec)`, a re-exported
+wrapper) are not sites, and the population's fail-safe assertion (exactly one
+non-seam site) is what surfaces a new one. The bound is stated in both places. The `beforeAll` carries an explicit 30 s
+timeout because a local measurement on 2026-09-10 records 3.808 s idle and
+3.932 s under `--maxWorkers=1` over the 81-file population. The `default`
+Vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
