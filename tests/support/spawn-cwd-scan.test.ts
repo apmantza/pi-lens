@@ -18,7 +18,7 @@
  * Rows: K1 direct · K2 destructured `{ cwd }` param · K3 options param
  * destructured in the body · K4 positional cwd param · K5 arrow/const form ·
  * K6 method form · K7 `createCwdCachedProbe` closure · K8 `...rest` spread ·
- * K9 opaque options identifier · K10 `// cwd-exempt:` tag.
+ * K9 opaque options identifier.
  *
  * Columns: P1 options KEY · P2 comment inside the options · P3 string value
  * inside the options · P4 another argument · P5 a non-`cwd` key's value ·
@@ -37,7 +37,6 @@ import { scanSpawnCwd } from "./spawn-cwd-scan.js";
 async function analyze(source: string): Promise<{
 	flagged: string[];
 	wrappers: string[];
-	redundantExemptions: string[];
 	sites: string[];
 }> {
 	// Inline fixtures use the real seam-shaped import so the scanner never
@@ -52,12 +51,9 @@ async function analyze(source: string): Promise<{
 	const scan = await scanSpawnCwd("fixture.ts", source);
 	return {
 		flagged: scan.sites
-			.filter((site) => !site.hasCwd && !site.exemptReason)
+			.filter((site) => !site.hasCwd)
 			.map((site) => `${site.line}:${site.callee}`),
 		wrappers: scan.wrappers.map((w) => `${w.name}:${w.mode}@${w.paramIndex}`),
-		redundantExemptions: scan.sites
-			.filter((site) => site.exemptReason && site.hasCwd)
-			.map((site) => `${site.line}:${site.callee}`),
 		sites: scan.sites.map((site) => `${site.line}:${site.callee}:${site.kind}`),
 	};
 }
@@ -768,74 +764,6 @@ describe("K8/K9 — an options object the scan cannot prove", () => {
 		expect(flagged).toEqual([
 			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
 		]);
-	});
-});
-
-// ── K10 · the exemption tag ─────────────────────────────────────────────────
-
-describe("K10 — `// cwd-exempt:` tags", () => {
-	it("f-exempt-absent: a tagged cwd-less site is exempt, not flagged", async () => {
-		const { flagged } = await analyze(`
-			async function probe() {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`);
-		expect(flagged).toEqual([]);
-	});
-
-	it("f-exempt-comment: the tag must be the line DIRECTLY above the call", async () => {
-		const source = `
-			async function probe() {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				// (an explanatory line that displaces the tag)
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`;
-		const { flagged } = await analyze(source);
-		expect(flagged).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("f-exempt-redundant: a tag above a site that DOES pass cwd is reported as redundant", async () => {
-		const source = `
-			async function probe(cwd) {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				await safeSpawnAsync("cl", [], { timeout: 5000, cwd });
-			}
-		`;
-		const { flagged, redundantExemptions } = await analyze(source);
-		expect(flagged).toEqual([]);
-		expect(redundantExemptions).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("f-exempt-thin-reason: a tag with no real reason exempts nothing", async () => {
-		// The admission has to cost something (defect shape 38): a bare tag is a
-		// one-line data edit that would otherwise buy a permanent pass.
-		const source = `
-			async function probe() {
-				// cwd-exempt: no
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`;
-		const { flagged } = await analyze(source);
-		expect(flagged).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("exempts a WRAPPER call site by the tag above the wrapper call, not the spawn", async () => {
-		// psscriptanalyzer.ts's two `-Command` presence probes: the spawn lives
-		// inside `spawnPs` and always names cwd, so the tag has to bind to the
-		// caller's line or the exemption would be unexpressible.
-		const { flagged } = await analyze(`${K3_WRAPPER}
-			// cwd-exempt: global interpreter-presence probe, not tied to any project
-			spawnPs(cmd, ["-Command", "exit 0"], { timeoutMs: 1000 });
-		`);
-		expect(flagged).toEqual([]);
 	});
 });
 
