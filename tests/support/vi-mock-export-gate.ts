@@ -52,6 +52,91 @@ function objectReturns(factory: SgNode): SgNode | undefined {
 	return undefined;
 }
 
+function unwrapParens(node: SgNode): SgNode {
+	let current = node;
+	while (current?.kind() === "parenthesized_expression") {
+		const inner = current.namedChildren()[0];
+		if (!inner) break;
+		current = inner;
+	}
+	return current;
+}
+
+function unwrapAsSatisfies(node: SgNode): SgNode {
+	let current = unwrapParens(node);
+	while (
+		current?.kind() === "as_expression" ||
+		current?.kind() === "satisfies_expression"
+	) {
+		const value = current.namedChildren()[0];
+		if (!value) break;
+		current = unwrapParens(value);
+	}
+	return current;
+}
+
+/**
+ * The tree-sitter TypeScript grammar misparses
+ * `await importOriginal<typeof import("…")>()` as `<`/`>` binary
+ * comparisons (`await_expression(await importOriginal)` beside a `typeof`
+ * unary, with `as`/`satisfies` folded into the same binary chain as bare
+ * identifiers), so no `call_expression` exists for it. The structural proof
+ * is the left spine of those binaries ending at the awaited binding, with at
+ * least one real `<` operator on the way down. A bare
+ * `...(await importOriginal)` written literally spreads the factory function
+ * itself, so the `<` level is required, not optional.
+ */
+function isMisparsedGenericAwait(node: SgNode, bindings: Set<string>): boolean {
+	let current = node;
+	let sawComparison = false;
+	while (current.kind() === "binary_expression") {
+		if (
+			current
+				.children()
+				.some((child) => !child.isNamed() && child.text() === "<")
+		)
+			sawComparison = true;
+		const left = current.namedChildren()[0];
+		if (!left) return false;
+		current = unwrapParens(left);
+	}
+	if (!sawComparison || current.kind() !== "await_expression") return false;
+	const operand = unwrapAsSatisfies(current.namedChildren()[0]);
+	return (
+		!!operand && operand.kind() === "identifier" && bindings.has(operand.text())
+	);
+}
+
+function isAwaitedBinding(node: SgNode, bindings: Set<string>): boolean {
+	const unwrapped = unwrapAsSatisfies(node);
+	if (unwrapped.kind() === "await_expression") {
+		const operand = unwrapAsSatisfies(unwrapped.namedChildren()[0]);
+		if (!operand) return false;
+		return (
+			operand.kind() === "call_expression" &&
+			operand.field("function")?.kind() === "identifier" &&
+			bindings.has(operand.field("function")?.text() ?? "") &&
+			(operand.field("arguments")?.namedChildren() ?? []).length === 0
+		);
+	}
+	if (unwrapped.kind() === "call_expression") {
+		// `await f<T>()`: the grammar nests the await inside the callee.
+		const callee = unwrapped.field("function");
+		if (callee?.kind() !== "await_expression") return false;
+		const inner = unwrapParens(callee.namedChildren()[0]);
+		return (
+			!!inner &&
+			inner.kind() === "identifier" &&
+			bindings.has(inner.text()) &&
+			(unwrapped.field("arguments")?.namedChildren() ?? []).length === 0
+		);
+	}
+	if (unwrapped.kind() === "binary_expression") {
+		return isMisparsedGenericAwait(unwrapped, bindings);
+	}
+	return false;
+}
+
 function isSameModulePassThrough(
 	object: SgNode,
 	factory: SgNode,
@@ -64,18 +149,28 @@ function isSameModulePassThrough(
 			.filter((name) => /^(?:importActual|importOriginal)$/.test(name)),
 	);
 	if (actualBindings.size === 0) return false;
+	// Two-statement factories bind the awaited module first:
+	// `const actual = await importOriginal<T>(); return { ...actual };`
+	const awaitedAliases = new Set<string>();
+	for (const declarator of factory.findAll({
+		rule: { kind: "variable_declarator" },
+	})) {
+		const name = declarator.field("name");
+		const value = declarator.field("value");
+		if (
+			name?.kind() === "identifier" &&
+			value &&
+			isAwaitedBinding(value, actualBindings)
+		)
+			awaitedAliases.add(name.text());
+	}
 	return object.children().some((child) => {
 		if (child.kind() !== "spread_element") return false;
-		return child.findAll({ rule: { kind: "call_expression" } }).some((call) => {
-			const callee = call.field("function");
-			const args = call.field("arguments")?.namedChildren() ?? [];
-			return (
-				callee?.kind() === "identifier" &&
-				actualBindings.has(callee.text()) &&
-				args.length === 0 &&
-				/\bawait\s+/.test(child.text())
-			);
-		});
+		const content = child.namedChildren()[0];
+		if (!content) return false;
+		if (isAwaitedBinding(content, actualBindings)) return true;
+		const target = unwrapAsSatisfies(content);
+		return target.kind() === "identifier" && awaitedAliases.has(target.text());
 	});
 }
 

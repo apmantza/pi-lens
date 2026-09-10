@@ -160,6 +160,140 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		}
 	});
 
+	it("accepts an explicit-type-argument importOriginal pass-through spread", () => {
+		// Regression #2881: `await importOriginal<typeof import("…")>()` is a
+		// complete pass-through identical to the no-argument form, but the
+		// tree-sitter grammar misparses it as a `<` binary comparison, so the
+		// sweep read it as dropping every export.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./module.js")>()), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a simple-type-argument importOriginal pass-through spread", () => {
+		// Class sweep #2881: `await importOriginal<T>()` nests the await
+		// inside the call callee, so the old identifier-callee check missed it.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\ntype T = typeof import("./module.js");\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<T>()), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts an as-cast importOriginal pass-through spread", () => {
+		// Class sweep #2881: `...(await importOriginal<T>() as any)` wraps
+		// the awaited call in an as_expression the old check never unwrapped.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./module.js")>() as any), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a satisfies importOriginal pass-through spread", () => {
+		// Class sweep #2881: the satisfies_expression twin of the as-cast.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./module.js")>() satisfies Record<string, unknown>), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a parenthesised importOriginal pass-through spread", () => {
+		// Class sweep #2881: `...((await importOriginal<T>()))` nests the
+		// awaited call two parenthesised layers deep inside the spread.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...((await importOriginal<typeof import("./module.js")>())), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a two-statement importOriginal binding spread", () => {
+		// Class sweep #2881: the dominant live idiom binds the awaited
+		// module first (`const actual = await importOriginal<T>()`) and
+		// spreads the alias in the returned object.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal<typeof import("./module.js")>(); return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("ignores export names mentioned only in comments and strings", () => {
 		// Guard against prose laundering a source scan into a false importer use.
 		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
