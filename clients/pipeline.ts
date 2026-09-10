@@ -1244,6 +1244,7 @@ export async function runFormatPhase(
 	getFormatService: () => FormatService,
 	dbg: PipelineContext["dbg"],
 	signal?: AbortSignal,
+	budgetMs = HOOK_WALL_BUDGET_MS.tool_result_edit,
 ): Promise<FormatPhaseResult> {
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1256,7 +1257,7 @@ export async function runFormatPhase(
 		formatService.recordRead(filePath);
 		const result = await formatService.formatFile(filePath, {
 			signal,
-			budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+			budgetMs,
 		});
 		// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
 		// `formattersUsed` (which drives change bookkeeping / turn summaries) and

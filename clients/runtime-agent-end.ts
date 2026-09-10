@@ -17,6 +17,8 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { admitBounded, emitBounded } from "./bounded-telemetry.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import {
 	newLspMutationCorrelationId,
 	type LspMutationContext,
@@ -119,6 +121,7 @@ function recordProjectChange(args: {
 }
 
 export async function handleAgentEnd({
+	signal,
 	ctxCwd,
 	getFlag,
 	getFlagSource,
@@ -339,7 +342,7 @@ export async function handleAgentEnd({
 
 	// Mutation ordering is intentional: lint --write may disturb wrapping, so
 	// autofix reaches the final edited state first and formatting stabilizes it.
-	const ambientSignal = getAmbientAbortSignal();
+	const ambientSignal = signal ?? getAmbientAbortSignal();
 	const executedAutofixScopes = new Set<string>();
 	const autofixRecords = records.filter((candidate) =>
 		candidate.kinds.has("autofix"),
@@ -529,7 +532,7 @@ export async function handleAgentEnd({
 			record: (typeof formatRecords)[number];
 			filePath: string;
 			fileStart: number;
-			result?: Awaited<ReturnType<typeof runFormatPhase>>;
+			result: Awaited<ReturnType<typeof runFormatPhase>> | undefined;
 			error?: string;
 			missing?: boolean;
 		};
@@ -546,7 +549,13 @@ export async function handleAgentEnd({
 				const filePath = path.resolve(record.filePath);
 				started.add(index);
 				if (!nodeFs.existsSync(filePath)) {
-					work[index] = { record, filePath, fileStart, missing: true };
+					work[index] = {
+						record,
+						filePath,
+						fileStart,
+						result: undefined,
+						missing: true,
+					};
 					continue;
 				}
 				try {
@@ -554,13 +563,28 @@ export async function handleAgentEnd({
 						record,
 						filePath,
 						fileStart,
-						result: await runFormatPhase(filePath, getFormatService, dbg),
+						result: await bounded(
+							runFormatPhase(
+								filePath,
+								getFormatService,
+								dbg,
+								ambientSignal,
+								30_000,
+							),
+							{
+								ms: HOOK_WALL_BUDGET_MS.agent_settled,
+								signal: ambientSignal,
+								hook: "agent_settled",
+								label: "deferred-format",
+							},
+						),
 					};
 				} catch (err) {
 					work[index] = {
 						record,
 						filePath,
 						fileStart,
+						result: undefined,
 						error: err instanceof Error ? err.message : String(err),
 					};
 				}

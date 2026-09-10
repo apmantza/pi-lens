@@ -16,7 +16,7 @@
 		"tools": 4
 	},
 	"tsconfig.strict-optional.json": {
-		"clients": 359,
+		"clients": 358,
 		"clients/config-core": 1,
 		"clients/dispatch": 18,
 		"clients/dispatch/facts": 1,

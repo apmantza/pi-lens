@@ -1,5 +1,7 @@
 import "./clients/console-guard-install.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
+import { bounded } from "./clients/deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./clients/hook-budgets.js";
 import {
 	closeModuleLoadConsoleWindow,
 	installConsoleGuard,
@@ -2275,35 +2277,42 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// session_start_prehandler row. Keep this inside the primary gate so
 					// a concurrent secondary cannot erase the primary's live counter.
 					resetTurnContext(stableSessionId);
-					await handleSessionStart({
-						signal: ctx.signal,
-						ctxCwd: ctx.cwd,
-						sessionStartFiredAt,
-						sessionStartMonotonicAt,
-						extensionLoadedAt: PI_LENS_LOADED_AT_MS,
-						emitHostReadyDelay,
-						sessionReason,
-						handlerEnteredAt,
-						globalConfig,
-						projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
-						// #2129: this call site is only reached for "primary"/
-						// "sequential-replacement" — a declined start returned above.
-						sessionStartClassification: sessionStartDecision.classification,
-						sessionStartSameRoot: sessionStartDecision.sameRoot,
-						getFlag: (name: string) => getLensFlag(name),
-						notify: (msg, level) => notifyUi(ctx, msg, level),
-						dbg,
-						log,
-						runtime,
-						cacheManager,
-						astGrepClient,
-						bootstrap: sessionBootstrapAccess,
-						ensureTool: async (name: string) =>
-							(await import("./clients/installer/index.js")).ensureTool(name),
-						cleanStaleTsBuildInfo,
-						resetDispatchBaselines,
-						resetLSPService,
-					});
+					await bounded(
+						handleSessionStart({
+							ctxCwd: ctx.cwd,
+							sessionStartFiredAt,
+							sessionStartMonotonicAt,
+							extensionLoadedAt: PI_LENS_LOADED_AT_MS,
+							emitHostReadyDelay,
+							sessionReason,
+							handlerEnteredAt,
+							globalConfig,
+							projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
+							// #2129: this call site is only reached for "primary"/
+							// "sequential-replacement" — a declined start returned above.
+							sessionStartClassification: sessionStartDecision.classification,
+							sessionStartSameRoot: sessionStartDecision.sameRoot,
+							getFlag: (name: string) => getLensFlag(name),
+							notify: (msg, level) => notifyUi(ctx, msg, level),
+							dbg,
+							log,
+							runtime,
+							cacheManager,
+							astGrepClient,
+							bootstrap: sessionBootstrapAccess,
+							ensureTool: async (name: string) =>
+								(await import("./clients/installer/index.js")).ensureTool(name),
+							cleanStaleTsBuildInfo,
+							resetDispatchBaselines,
+							resetLSPService,
+						}),
+						{
+							ms: HOOK_WALL_BUDGET_MS.session_start,
+							signal: ctx.signal,
+							hook: "session_start",
+							label: "handleSessionStart",
+						},
+					);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran
@@ -2527,14 +2536,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 				},
 			});
 		}
-		// Read/Grep/Glob/Bash results have no mutation pipeline to update. Do
-		// not bootstrap the analyzer graph for them: the read-only hook has a
-		// 500ms total budget, and its remainder has no edit delivery to perform.
-		if (!rtMutation) return;
+		// Read/search results still need the complete handler for read registration,
+		// bash recovery, and observed third-party mutations. Use only resident
+		// clients on that path; the handler requests them lazily if mutation work
+		// actually reaches the pipeline.
 		try {
-			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
-				await loadBootstrapClients();
-			return await handleToolResult({
+			const resident = rtMutation
+				? await bounded(loadBootstrapClients(), {
+						ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+						signal: ctx.signal,
+						hook: "tool_result_edit",
+						label: "tool-result-bootstrap",
+					})
+				: peekBootstrapClients();
+			return handleToolResult({
 				signal: ctx.signal,
 				event: event as any,
 				getFlag: (name: string, filePath?: string) =>
@@ -2544,15 +2559,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 				dbg,
 				runtime,
 				cacheManager,
-				biomeClient,
-				ruffClient,
-				metricsClient,
+				biomeClient: resident!.biomeClient!,
+				ruffClient: resident!.ruffClient!,
+				metricsClient: resident!.metricsClient!,
 				resetLSPService,
 				readGuard: runtime.readGuard,
 				agentBehaviorRecord: (toolName, filePath) =>
-					agentBehaviorClient.recordToolCall(toolName, filePath),
+					resident?.agentBehaviorClient.recordToolCall(toolName, filePath) ??
+					[],
 				formatBehaviorWarnings: (warnings) =>
-					agentBehaviorClient.formatWarnings(warnings as any),
+					resident?.agentBehaviorClient.formatWarnings(warnings as any) ?? "",
 				// #791: tags any deferred-format record queued from this tool_result
 				// with the STABLE session id of the ctx that produced it, so a
 				// later agent_end can tell its own queued work apart from a

@@ -216,13 +216,13 @@ function guardSessionEvent<E, C, R>(
 					typeof options.budgetKey === "function"
 						? options.budgetKey(event, ctx)
 						: (options.budgetKey ?? defaultBudgetKey(eventName));
-				if (budget === undefined) return recovered as unknown as R;
+				if (budget === undefined) return recovered as R;
 				let signal: AbortSignal | undefined;
 				try {
 					signal = (ctx as { signal?: AbortSignal } | undefined)?.signal;
 				} catch (err) {
 					if (isStaleExtensionCtxError(err))
-						return Promise.resolve(skip(event, "mid-handler")) as unknown as R;
+						return Promise.resolve(skip(event, "mid-handler")) as R;
 					throw err;
 				}
 				return bounded(recovered, {
@@ -233,14 +233,14 @@ function guardSessionEvent<E, C, R>(
 					signal: budget === "agent_settled" ? undefined : signal,
 					hook: budget,
 					label: "registered-handler",
-				}) as unknown as R;
+				}) as R;
 			}
 			return result;
 		} catch (err) {
 			if (isStaleExtensionCtxError(err))
 				// SAFETY: a synchronous handler's `R` is already its settled form,
 				// so `Awaited<R>` and `R` coincide here — see the note above.
-				return skip(event, "mid-handler") as unknown as R;
+				return skip(event, "mid-handler") as R;
 			throw err;
 		}
 	};

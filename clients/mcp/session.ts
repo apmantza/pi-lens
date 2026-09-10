@@ -113,6 +113,10 @@ export interface SessionStartOutcome {
 	aliveLspClients: number;
 }
 
+const degradedSessionStart: SessionStartOutcome = {
+	aliveLspClients: 0,
+};
+
 /**
  * Run pi-lens's real session_start. Much of the work (scans, baseline, LSP warm)
  * runs in the background, so the immediate return carries the synchronous
@@ -124,35 +128,42 @@ async function runSessionStartImpl(cwd: string): Promise<SessionStartOutcome> {
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 
-	await handleSessionStart({
-		signal: undefined,
-		ctxCwd: cwd,
-		// The MCP server has no TUI keystroke latency to protect, so the
-		// first-call-quick heuristic must not apply. Force "full" mode so
-		// the dominant-language LSP pre-warm, scans, and error-debt baseline
-		// all run on the first (and only) session_start of the process.
-		// An explicit PI_LENS_STARTUP_MODE env var still wins (handled in
-		// handleSessionStart — the override is only checked when the env var
-		// is unset).
-		startupModeOverride: "full",
-		getFlag: host.getFlag,
-		notify: noop,
-		dbg: noop,
-		log: noop,
-		runtime: ctx.runtime,
-		cacheManager: ctx.cacheManager,
-		astGrepClient: ctx.astGrepClient,
-		// The MCP server has already loaded the analyzer graph (an MCP call has
-		// nothing to defer to), so it hands the handler the same one-shape seam
-		// every other caller uses rather than a second, field-by-field shape.
-		bootstrap: residentBootstrapAccess(ctx.clients),
-		ensureTool: async (name: string) =>
-			(await import("../installer/index.js")).ensureTool(name),
-		cleanStaleTsBuildInfo: () => [],
-		resetDispatchBaselines: (cwdArg?: string) =>
-			resetDispatchBaselines(cwdArg ?? cwd),
-		resetLSPService,
-	});
+	await bounded(
+		handleSessionStart({
+			ctxCwd: cwd,
+			// The MCP server has no TUI keystroke latency to protect, so the
+			// first-call-quick heuristic must not apply. Force "full" mode so
+			// the dominant-language LSP pre-warm, scans, and error-debt baseline
+			// all run on the first (and only) session_start of the process.
+			// An explicit PI_LENS_STARTUP_MODE env var still wins (handled in
+			// handleSessionStart — the override is only checked when the env var
+			// is unset).
+			startupModeOverride: "full",
+			getFlag: host.getFlag,
+			notify: noop,
+			dbg: noop,
+			log: noop,
+			runtime: ctx.runtime,
+			cacheManager: ctx.cacheManager,
+			astGrepClient: ctx.astGrepClient,
+			// The MCP server has already loaded the analyzer graph (an MCP call has
+			// nothing to defer to), so it hands the handler the same one-shape seam
+			// every other caller uses rather than a second, field-by-field shape.
+			bootstrap: residentBootstrapAccess(ctx.clients),
+			ensureTool: async (name: string) =>
+				(await import("../installer/index.js")).ensureTool(name),
+			cleanStaleTsBuildInfo: () => [],
+			resetDispatchBaselines: (cwdArg?: string) =>
+				resetDispatchBaselines(cwdArg ?? cwd),
+			resetLSPService,
+		}),
+		{
+			ms: HOOK_WALL_BUDGET_MS.session_start,
+			signal: undefined,
+			hook: "session_start",
+			label: "handleSessionStart",
+		},
+	);
 
 	const baseline = ctx.runtime.errorDebtBaseline;
 	return {
@@ -170,7 +181,7 @@ export function runSessionStart(cwd: string): Promise<SessionStartOutcome> {
 		signal: undefined,
 		hook: "session_start",
 		label: "mcp-session-start",
-	}) as Promise<SessionStartOutcome>;
+	}).then((outcome) => outcome ?? degradedSessionStart);
 }
 
 export interface TurnEndOutcome {
@@ -189,6 +200,11 @@ interface TurnEndTransaction {
 	outcome: TurnEndOutcome;
 	commit: () => void;
 }
+
+const degradedTurnEnd: TurnEndTransaction = {
+	outcome: { filesRegistered: 0 },
+	commit: () => {},
+};
 
 interface PendingTurnEndDelivery {
 	cwd: string;
@@ -376,7 +392,7 @@ function runTurnEndNow(
 		signal: undefined,
 		hook: "turn_end",
 		label: "mcp-turn-end",
-	}) as Promise<TurnEndTransaction>;
+	}).then((transaction) => transaction ?? degradedTurnEnd);
 }
 
 /**

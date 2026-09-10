@@ -136,8 +136,6 @@ import type { PiLensProjectConfig } from "./project-lens-config.js";
 export type SessionStartRootTelemetry = boolean | "unknown";
 
 interface SessionStartDeps {
-	/** Abort signal owned by the session_start hook. */
-	signal: AbortSignal | undefined;
 	ctxCwd?: string;
 	/** Host hook timestamp, so total includes work before this handler is entered. */
 	sessionStartFiredAt?: number;

@@ -147,7 +147,7 @@ export class FormatService {
 				name: formatters[i].name,
 				success: r.success,
 				changed: r.changed,
-				error: r.error,
+				...(r.error === undefined ? {} : { error: r.error }),
 				outcome: r.outcome,
 			})),
 			anyChanged,
@@ -195,7 +195,11 @@ export class FormatService {
 					},
 				);
 				if (result) results.push(result);
-				else {
+				else if (signal?.aborted) {
+					// Caller cancellation is intentional. Do not turn Escape into a
+					// formatter failure or requeue record.
+					break;
+				} else {
 					results.push({
 						success: false,
 						changed: false,

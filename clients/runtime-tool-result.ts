@@ -85,6 +85,9 @@ import { syncGitGuardRecord } from "./git-guard.js";
 import { scheduleWordIndexPersist } from "./word-index.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { getActiveSessionId } from "./session-lifecycle.js";
+import { requestBootstrapClients } from "./bootstrap.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 
 const AUTHORITATIVE_CONTENT_MAX_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 
@@ -232,6 +235,27 @@ interface ToolResultDeps {
 	 * — a direct write, bounded by the per-file cap alone.
 	 */
 	_attachmentBudget?: { remaining: number };
+}
+
+async function ensureToolResultClients(deps: ToolResultDeps): Promise<boolean> {
+	if (deps.biomeClient && deps.ruffClient && deps.metricsClient) return true;
+	const request = {
+		reason: "tool-result-analysis",
+		hook: "tool_result_edit" as const,
+		timeoutMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+		...(deps.signal === undefined ? {} : { signal: deps.signal }),
+	};
+	const clients = await bounded(requestBootstrapClients(request), {
+		ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+		signal: deps.signal,
+		hook: "tool_result_edit",
+		label: "tool-result-bootstrap-demand",
+	});
+	if (!clients) return false;
+	deps.biomeClient = clients.biomeClient;
+	deps.ruffClient = clients.ruffClient;
+	deps.metricsClient = clients.metricsClient;
+	return true;
 }
 
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
@@ -851,9 +875,9 @@ async function dispatchPipelineAnalysis(args: {
 			},
 		},
 		{
-			biomeClient,
-			ruffClient,
-			metricsClient,
+			biomeClient: biomeClient!,
+			ruffClient: ruffClient!,
+			metricsClient: metricsClient!,
 			getFormatService,
 			fixedThisTurn: runtime.fixedThisTurn,
 		},
@@ -1637,6 +1661,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					pathsEqual(candidate, filePath),
 				)
 			) {
+				if (
+					!(await bounded(ensureToolResultClients(deps), {
+						ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+						signal: deps.signal ?? undefined,
+						hook: "tool_result_edit",
+						label: "observed-tool-result-analysis",
+					}))
+				)
+					return;
 				const observedReadGuardCorrelationId = getReadGuardCorrelationId(event);
 				// #2464 review round 3 (F1): the SAME two pre-conditions the
 				// classified site consults, through the same shared claim. Round 2
@@ -2034,25 +2067,43 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// (defined above `handleToolResult`), shared with the observed-mutation
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
-	const dispatchOutcome = await dispatchPipelineAnalysis({
-		deps,
-		runtime,
-		filePath,
-		dispatchCwd,
-		turnStateCwd,
-		autofixMode,
-		modifiedRanges,
-		writeIndex,
-		initialStateHash,
-		readGuardCorrelationId,
-		requestedEditIndexes,
-		requestedEditTotal,
-		isPartialApplyResult,
-		participantIds,
-		participantTotal,
-		toolResultStart,
-		nativeAppliedPairs,
-	});
+	if (
+		!(await bounded(ensureToolResultClients(deps), {
+			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+			signal: deps.signal,
+			hook: "tool_result_edit",
+			label: "classified-tool-result-analysis",
+		}))
+	)
+		return;
+	const dispatchOutcome = await bounded(
+		dispatchPipelineAnalysis({
+			deps,
+			runtime,
+			filePath,
+			dispatchCwd,
+			turnStateCwd,
+			autofixMode,
+			modifiedRanges,
+			writeIndex,
+			initialStateHash,
+			readGuardCorrelationId,
+			requestedEditIndexes,
+			requestedEditTotal,
+			isPartialApplyResult,
+			participantIds,
+			participantTotal,
+			toolResultStart,
+			nativeAppliedPairs,
+		}),
+		{
+			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+			signal: deps.signal || undefined,
+			hook: "tool_result_edit",
+			label: "pipeline-analysis",
+		},
+	);
+	if (!dispatchOutcome) return;
 	if (dispatchOutcome.crashed) {
 		return dispatchOutcome.response;
 	}
