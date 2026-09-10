@@ -3543,6 +3543,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	let lateAuxCoverageGapDropCount = 0;
 	const lateAuxStuckPairs: Array<{ filePath: string; serverId: string }> = [];
 	if (drainedPairs.length > 0) {
+		const lateObserverDeadline = Date.now() + HOOK_WALL_BUDGET_MS.turn_end;
 		const byFile = new Map<string, typeof drainedPairs>();
 		for (const pair of drainedPairs) {
 			const list = byFile.get(pair.filePath);
@@ -3662,6 +3663,26 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						}
 						continue;
 					}
+					// A demoted auxiliary still answers through this late path. Feed the
+					// publication-minus-mark interval into the re-promotion streak. This is
+					// delivery latency observed by the drain, not the scanner's total scan
+					// latency. Cache priming is
+					// below the freshness gate so a changed file cannot resurrect stale data.
+					if (typeof service.observeLateAuxiliaryAnswer === "function") {
+						await bounded(
+							service.observeLateAuxiliaryAnswer(
+								lateAuxPath,
+								pair.serverId,
+								cachedEntry.publishedAt - pair.markedAtMs,
+							),
+							{
+								ms: Math.max(1, lateObserverDeadline - Date.now()),
+								signal: deps.signal /* late observer */,
+								hook: "turn_end",
+								label: "observeLateAuxiliaryAnswer",
+							},
+						);
+					}
 					if (rawDiags.length === 0) {
 						lateAuxCleanConfirmed += 1;
 						continue;
@@ -3713,6 +3734,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						}
 						continue;
 					}
+					// #2810 round 4: this drain does NOT write the hash-bound
+					// last-known record. The prime it used to call could only fire when
+					// a record already existed at the pair's hash — which requires a
+					// FULLY covered touch of those exact bytes, the one case where the
+					// scanner's findings are already in the record — so it was a no-op
+					// in the demoted steady state it was added for, and a #570/#1470
+					// hazard everywhere else (an auxiliary-only array replacing the
+					// merged one). Late findings reach the agent as the gated advisory
+					// below; the turn-end hash-guarded fast path stays cold for a file
+					// whose touch was partial, which is exactly what #1470 requires.
 					const lines = gate.live.map(
 						(f) =>
 							`  ${displayLateAuxPath}:${f.line}:${f.column} [${f.rule}] ${f.message}`,

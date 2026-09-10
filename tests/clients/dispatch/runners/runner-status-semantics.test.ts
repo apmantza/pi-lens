@@ -26,6 +26,7 @@ const diagsResult = (
 		// the named servers.
 		confirmation?: "confirmed" | "partial";
 		unconfirmedServerIds?: string[];
+		deferredServerIds?: string[];
 	} = {},
 ) => ({ diags, ...extra });
 const readFileContent = vi.fn(() => "const x = 1;\n");
@@ -442,6 +443,120 @@ describe("runner status/semantic edge cases", () => {
 			);
 			expect(result.output).toContain("Type error");
 			expect(result.output).toContain("coverage: opengrep silent");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("names deferred and silent scanners separately in one coverage notice (#2810)", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-mixed-coverage-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos", "zizmor"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			const result = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(result.output).toContain("coverage: typos deferred");
+			expect(result.output).toContain("coverage: zizmor silent");
+			expect(result.output).not.toContain("zizmor deferred");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("reports a late-delivery scanner as deferred and an unpromised one as skipped (#2810)", async () => {
+		// #2810 round-4 F1, runner half of the chain: the two coverage classes
+		// must not collapse into one status. A scanner the touch marked
+		// collect-later is `deferred` (its findings arrive at turn end); one the
+		// touch has no delivery path for stays `skipped` (#1470's honest gap).
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-late-status-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			expect(
+				(await runner.run(ctx(filePath, env.tmpDir) as never)).status,
+			).toBe("deferred");
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+				}),
+			);
+			expect(
+				(await runner.run(ctx(filePath, env.tmpDir) as never)).status,
+			).toBe("skipped");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("re-notices the same scanner when it moves from silent to late-delivery pending (#2810)", async () => {
+		// #2810 round-4 F1, second axis: the once-per-session dedupe key was built
+		// from the UNCONFIRMED set alone, so the first message a scanner produced
+		// was the only one the session ever showed. A scanner first reported
+		// silent and later marked collect-later kept the "not a clean result"
+		// wording forever (and vice versa).
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-notice-partition-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+				}),
+			);
+			const first = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(first.output).toContain("coverage: typos silent");
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			const second = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(second.output).toContain("coverage: typos deferred");
 		} finally {
 			env.cleanup();
 		}

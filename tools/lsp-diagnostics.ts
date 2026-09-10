@@ -1381,7 +1381,7 @@ async function runFileDiagnostics(
 	// as "the security scanners found nothing".
 	const coverageLine =
 		unconfirmedServerIds.length > 0
-			? `Auxiliary coverage INCOMPLETE — ${[...unconfirmedServerIds].join(", ")} did not answer within the wait budget, so ${unconfirmedServerIds.length === 1 ? "its findings are" : "their findings are"} NOT included here. This is not a clean bill of health for ${unconfirmedServerIds.length === 1 ? "that scanner" : "those scanners"}; re-check after the next edit, or use waitMs to wait longer.`
+			? `Auxiliary coverage INCOMPLETE — ${[...unconfirmedServerIds].join(", ")} did not answer within the wait budget, so ${unconfirmedServerIds.length === 1 ? "its findings are" : "their findings are"} NOT included here. This is not a clean bill of health for ${unconfirmedServerIds.length === 1 ? "that scanner" : "those scanners"}; re-check after the next edit. waitMs can extend an ordinary wait, but it cannot override a session-demoted scanner.`
 			: undefined;
 
 	let text: string;

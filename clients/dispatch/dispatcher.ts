@@ -560,6 +560,7 @@ export interface RunnerLatency {
 	status:
 		| "succeeded"
 		| "failed"
+		| "deferred"
 		| "skipped"
 		| "when_skipped"
 		| "test_file_skipped"
@@ -568,6 +569,7 @@ export interface RunnerLatency {
 	semantic: string;
 	skipReason?: RunnerSkipReason;
 	unconfirmedServerIds?: readonly string[];
+	deferredServerIds?: readonly string[];
 }
 
 export interface DispatchLatencyReport {
@@ -604,30 +606,59 @@ function buildCoverageNotice(
 		...new Set(relevant.flatMap((r) => r.unconfirmedServerIds ?? [])),
 	];
 	if (unconfirmedServerIds.length > 0) {
-		// The marker describes this exact silent-scanner set. A scanner can
-		// recover while another goes dark on the same file, so the set belongs
-		// in the session dedupe identity rather than only kind and path.
+		const deferredIds = new Set(
+			relevant.flatMap((r) => r.deferredServerIds ?? []),
+		);
+		const markerFor = (ids: readonly string[]) => {
+			const shown = ids.slice(0, 4);
+			const remainder = ids.length - shown.length;
+			return `${shown.join(", ")}${remainder > 0 ? ` +${remainder}` : ""}`;
+		};
+		const deferredServerIds = unconfirmedServerIds.filter((id) =>
+			deferredIds.has(id),
+		);
+		const silentServerIds = unconfirmedServerIds.filter(
+			(id) => !deferredIds.has(id),
+		);
+		// The marker describes this exact scanner set. A scanner can recover
+		// while another goes dark on the same file, so the set belongs in the
+		// session dedupe identity rather than only kind and path.
 		// #2016: these are SCANNER IDS, not filesystem paths. `normalizeMapKey`
 		// would realpath each one; on Windows that fails, falls through to
 		// `resolveNonExisting`, and resolves the id against the CURRENT process
 		// cwd, so the dedupe key differed by platform and by cwd (the #2219
 		// non-path-sentinel class). The cheap syntactic fold is what this
-		// session-scoped dedupe key actually needs.
-		const silentScannerSet = [...new Set(unconfirmedServerIds)]
-			.map(normalizeEphemeralMapKey)
-			// Code-unit comparator: the sorted set is a dedupe KEY, so ordering
-			// must be deterministic across locales — localeCompare is not.
-			.sort((a, b) => Number(a > b) - Number(a < b))
-			.join(",");
-		const onceKey = `${ctx.kind}:${ctx.filePath}:${silentScannerSet}`;
+		// session-scoped dedupe key actually needs. Code-unit comparator: the
+		// sorted set is a KEY, so ordering must be deterministic across locales
+		// — localeCompare is not.
+		const dedupeSet = (ids: readonly string[]) =>
+			[...new Set(ids)]
+				.map(normalizeEphemeralMapKey)
+				.sort((a, b) => Number(a > b) - Number(a < b))
+				.join(",");
+		// #2810 round 4: the PARTITION is part of the identity, not just the
+		// scanner set. The same scanner can be silent on one edit and marked for
+		// late delivery on the next; keying on the unconfirmed set alone showed
+		// the session whichever message came first and suppressed the other, so a
+		// scanner that recovered a delivery path (or lost one) kept the stale
+		// wording for the rest of the session.
+		const onceKey = `${ctx.kind}:${ctx.filePath}:${dedupeSet(silentServerIds)}|${dedupeSet(deferredServerIds)}`;
 		if (coverageNoticeSeen.has(onceKey)) return undefined;
 		coverageNoticeSeen.add(onceKey);
-		const shown = unconfirmedServerIds.slice(0, 4);
-		const remainder = unconfirmedServerIds.length - shown.length;
-		const marker = `${shown.join(", ")}${remainder > 0 ? ` +${remainder}` : ""}`;
+		const coverageParts: string[] = [];
+		if (deferredServerIds.length > 0) {
+			coverageParts.push(
+				`coverage: ${markerFor(deferredServerIds)} deferred — diagnostics are incomplete; findings arrive at turn end if the scan lands.`,
+			);
+		}
+		if (silentServerIds.length > 0) {
+			coverageParts.push(
+				`coverage: ${markerFor(silentServerIds)} silent — diagnostics are incomplete (not a clean result).`,
+			);
+		}
 		return {
 			id: `coverage-partial:${ctx.kind}:${path.basename(ctx.filePath)}`,
-			message: `coverage: ${marker} silent — diagnostics are incomplete (not a clean result).`,
+			message: coverageParts.join("\n"),
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -1058,6 +1089,9 @@ async function runGroup(
 			}),
 			...(result.unconfirmedServerIds !== undefined && {
 				unconfirmedServerIds: result.unconfirmedServerIds,
+			}),
+			...(result.deferredServerIds !== undefined && {
+				deferredServerIds: result.deferredServerIds,
 			}),
 		});
 		logLatency({

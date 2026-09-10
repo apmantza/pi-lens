@@ -161,6 +161,7 @@ const lspRunner: RunnerDefinition = {
 		// so this is tracked separately: the only claim it invalidates is "0
 		// diagnostics means clean".
 		let unconfirmedServerIds: readonly string[] = [];
+		let deferredServerIds: readonly string[] = [];
 		let usedWarmAttach = false;
 		let failureReason = "";
 		const content = readFileContent(ctx.filePath);
@@ -223,6 +224,7 @@ const lspRunner: RunnerDefinition = {
 				lspDiags = touched.diags;
 				diagnosticsInconclusive = touched.inconclusive === true;
 				unconfirmedServerIds = touchCoverageGap(touched);
+				deferredServerIds = touched.deferredServerIds ?? [];
 			}
 		} catch (err) {
 			serverFailed = true;
@@ -285,6 +287,15 @@ const lspRunner: RunnerDefinition = {
 		}
 
 		if (lspDiags.length === 0) {
+			if (deferredServerIds.length > 0) {
+				return {
+					status: "deferred",
+					diagnostics: [],
+					semantic: "none",
+					unconfirmedServerIds: [...unconfirmedServerIds],
+					deferredServerIds: [...deferredServerIds],
+				};
+			}
 			if (unconfirmedServerIds.length > 0) {
 				// #1470/#1493: an auxiliary never reported — cut off by the aux grace
 				// timer, or silent with nothing published for this content — so this
@@ -422,7 +433,11 @@ const lspRunner: RunnerDefinition = {
 				: "none";
 
 		return {
-			status: hasErrors ? "failed" : "succeeded",
+			status: hasErrors
+				? "failed"
+				: deferredServerIds.length > 0
+					? "deferred"
+					: "succeeded",
 			// "failed" here means the file has blocking type errors — the check ran
 			// fine. Tag it so the smell analyzer doesn't read it as a runner crash.
 			failureKind: hasErrors ? "blocking_diagnostics" : undefined,
@@ -430,6 +445,9 @@ const lspRunner: RunnerDefinition = {
 			semantic: resultSemantic,
 			...(unconfirmedServerIds.length > 0 && {
 				unconfirmedServerIds: [...unconfirmedServerIds],
+			}),
+			...(deferredServerIds.length > 0 && {
+				deferredServerIds: [...deferredServerIds],
 			}),
 		};
 	},

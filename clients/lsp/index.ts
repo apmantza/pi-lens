@@ -115,6 +115,10 @@ import {
 export type { LSPCapabilitySnapshot } from "./wait-policy/index.js";
 
 const WORKSPACE_ATTRIBUTION_CLIENT_CAP = 16;
+const AUX_WAIT_DEMOTION_THRESHOLD = 5;
+const AUX_WAIT_DEMOTION_RATIO = 0.9;
+const AUX_WAIT_REPROMOTION_THRESHOLD = 5;
+const AUX_WAIT_REPROMOTION_RATIO = 0.5;
 
 /**
  * Request-local attribution for no-filePath workspace queries. The fixed site
@@ -1281,6 +1285,11 @@ export class LSPService {
 		string,
 		Promise<"answered" | "silent" | "errored">
 	>();
+	/** Session-scoped adaptive demotion for budget-hitting auxiliaries. */
+	private readonly auxWaitPressureStreak = new Map<string, number>();
+	private readonly auxWaitFastAnswerStreak = new Map<string, number>();
+	private readonly demotedAuxiliaryServerIds = new Set<string>();
+	private readonly demotedAuxiliaryBudgets = new Map<string, number>();
 	/**
 	 * #1934 review F1: what the last COMPLETED `spawnClient` call for a
 	 * (server, root) key decided, written by that call at every point it
@@ -1521,6 +1530,65 @@ export class LSPService {
 			diagnosticsPublished: new Set(),
 			diagnosticsUnsupported: new Set(),
 		};
+	}
+
+	private isAuxiliaryWaitDemoted(serverId: string, root: string): boolean {
+		return this.demotedAuxiliaryServerIds.has(
+			`${serverId}:${normalizeMapKey(root ?? "")}`,
+		);
+	}
+
+	private noteAuxiliaryWait(
+		key: string,
+		budgetMs: number,
+		elapsedMs: number,
+	): void {
+		if (this.demotedAuxiliaryServerIds.has(key)) return;
+		if (elapsedMs < AUX_WAIT_DEMOTION_RATIO * budgetMs) {
+			this.auxWaitPressureStreak.delete(key);
+			return;
+		}
+		const streak = (this.auxWaitPressureStreak.get(key) ?? 0) + 1;
+		if (streak >= AUX_WAIT_DEMOTION_THRESHOLD) {
+			this.demotedAuxiliaryServerIds.add(key);
+			this.demotedAuxiliaryBudgets.set(key, budgetMs);
+			this.auxWaitPressureStreak.delete(key);
+			this.auxWaitFastAnswerStreak.delete(key);
+			recordDegradationOnce({
+				kind: "aux_wait_demoted",
+				subject: key,
+				reason:
+					"auxiliary reached at least 90% of its declared wait budget for five consecutive dispatches",
+			});
+			return;
+		}
+		this.auxWaitPressureStreak.set(key, streak);
+	}
+
+	private noteAuxiliaryLateAnswer(key: string, elapsedMs: number): void {
+		if (!this.demotedAuxiliaryServerIds.has(key)) return;
+		const budgetMs = this.demotedAuxiliaryBudgets.get(key);
+		if (
+			budgetMs === undefined ||
+			elapsedMs >= AUX_WAIT_REPROMOTION_RATIO * budgetMs
+		) {
+			this.auxWaitFastAnswerStreak.delete(key);
+			return;
+		}
+		const streak = (this.auxWaitFastAnswerStreak.get(key) ?? 0) + 1;
+		if (streak < AUX_WAIT_REPROMOTION_THRESHOLD) {
+			this.auxWaitFastAnswerStreak.set(key, streak);
+			return;
+		}
+		this.demotedAuxiliaryServerIds.delete(key);
+		this.demotedAuxiliaryBudgets.delete(key);
+		this.auxWaitFastAnswerStreak.delete(key);
+		recordDegradationOnce({
+			kind: "aux_wait_repromoted",
+			subject: key,
+			reason:
+				"auxiliary produced five consecutive late answers below half its declared wait budget",
+		});
 	}
 
 	/**
@@ -3486,6 +3554,24 @@ export class LSPService {
 		return out;
 	}
 
+	/** Record a fast answer observed by the turn-end late-results path. */
+	async observeLateAuxiliaryAnswer(
+		filePath: string,
+		serverId: string,
+		elapsedMs: number,
+	): Promise<void> {
+		for (const server of getServersForFileWithConfig(filePath)) {
+			if (server.id !== serverId) continue;
+			const root = await this.resolveServerRoot(server, filePath);
+			if (root === undefined) return;
+			this.noteAuxiliaryLateAnswer(
+				`${serverId}:${normalizeMapKey(root)}`,
+				elapsedMs,
+			);
+			return;
+		}
+	}
+
 	/**
 	 * #1668: deliver a `workspace/didChangeWatchedFiles` event for a disk
 	 * change the client did not author through open-document sync — a bash
@@ -5148,6 +5234,15 @@ export class LSPService {
 			// confirmation; `auxCutOffServerIds` stays cut_off-only so the R8 latency
 			// field keeps its original meaning.
 			let auxUnconfirmedServerIds: string[] | undefined;
+			// #2810: the auxiliaries this touch handed to the collect-later store —
+			// exactly the servers whose findings a turn-end drain can still deliver.
+			// Written by the ONE producer that marks them, from the same array it
+			// marks, so the promise the agent is shown cannot drift from the store.
+			// Round 3 derived the promise from the #1459 resync deferrals instead —
+			// the one set `pending-aux-coverage.ts` never marks — so the notice
+			// promised delivery that could not happen, while the demoted server,
+			// which IS marked, was reported as an unexplained silence on every edit.
+			let lateDeliveryServerIds: string[] | undefined;
 			// #707: tsserver sync clean-confirm state. `tsserverSyncEligible` is the
 			// full gate (evaluated once, before the wait); `tsserverSyncConfirmed`
 			// holds the sync commands' answer when the racing confirm won the wait
@@ -5507,6 +5602,16 @@ export class LSPService {
 				});
 				const perServerWaits = spawned.map((entry, entryIndex) => {
 					if (
+						hasTouchAuxiliaries &&
+						entry.info.role === "auxiliary" &&
+						this.isAuxiliaryWaitDemoted(
+							entry.info.id,
+							entry.client.root ?? filePath,
+						)
+					) {
+						return Promise.resolve(undefined);
+					}
+					if (
 						this.state.diagnosticsUnsupported.has(entry.info.id) ||
 						diagnosticsUnsupportedServerIds.includes(entry.info.id)
 					) {
@@ -5669,6 +5774,11 @@ export class LSPService {
 												client: spawned[i].client,
 												baseline: diagnosticBaselines.get(spawned[i].client),
 												budgetMs: perServerRaceBudgets[i],
+												demoted: this.isAuxiliaryWaitDemoted(
+													spawned[i].info.id,
+													spawned[i].client.root ?? filePath,
+												),
+												root: spawned[i].client.root ?? filePath,
 											}
 										: null,
 								)
@@ -5678,9 +5788,11 @@ export class LSPService {
 									): x is {
 										promise: Promise<void | undefined>;
 										serverId: string;
+										root: string;
 										client: (typeof spawned)[number]["client"];
 										baseline: number | undefined;
 										budgetMs: number;
+										demoted: boolean;
 									} => x !== null,
 								);
 							// After all primaries settle, use the same per-auxiliary budget
@@ -5699,6 +5811,25 @@ export class LSPService {
 								const outcomes = await Promise.all(
 									auxWaits.map(async (aux) => {
 										const { budgetMs } = aux;
+										if (aux.demoted) {
+											const publishedEvidence =
+												Number.isFinite(aux.baseline) &&
+												readPathVersion(aux.client) !== undefined &&
+												(readPathVersion(aux.client) as number) >
+													(aux.baseline as number);
+											return {
+												serverId: aux.serverId,
+												outcome: deferredResyncServerIds.has(aux.serverId)
+													? ("deferred" as const)
+													: ("demoted" as const),
+												publishedThisContent:
+													auxCoversThisContent(aux.serverId) ||
+													publishedEvidence,
+												budgetMs,
+												elapsedMs: 0,
+												elapsedSinceNotifyMs: 0,
+											};
+										}
 										let timer: ReturnType<typeof setTimeout> | undefined;
 										const timeout = new Promise<false>((resolve) => {
 											timer = setTimeout(() => resolve(false), budgetMs);
@@ -5754,6 +5885,14 @@ export class LSPService {
 												: publishedEvidence
 													? ("answered" as const)
 													: ("silent" as const);
+										const elapsedMs = Date.now() - auxWaitStartedAt;
+										if (outcome !== "deferred") {
+											this.noteAuxiliaryWait(
+												`${aux.serverId}:${normalizeMapKey(aux.root)}`,
+												budgetMs,
+												elapsedMs,
+											);
+										}
 										return {
 											serverId: aux.serverId,
 											outcome,
@@ -5765,7 +5904,7 @@ export class LSPService {
 											// below cannot disagree about the same scanner.
 											publishedThisContent: auxCoversThisContent(aux.serverId),
 											budgetMs,
-											elapsedMs: Date.now() - auxWaitStartedAt,
+											elapsedMs,
 											// #1458 S3: elapsed measured from BEFORE the primary wait
 											// (waitStartedAt), not just from auxWaitStartedAt — this is
 											// what lets a latency row validate the ~1.3s warm-scanner
@@ -5799,7 +5938,9 @@ export class LSPService {
 									.filter(
 										(o) =>
 											!o.publishedThisContent &&
-											(o.outcome === "cut_off" || o.outcome === "silent") &&
+											(o.outcome === "cut_off" ||
+												o.outcome === "silent" ||
+												o.outcome === "demoted") &&
 											// #2324 R2-A/R3-A: ast-grep's napi fallback is a
 											// SECOND producer of coverage for this exact pair,
 											// dispatched CONCURRENTLY with this whole touch
@@ -5822,7 +5963,12 @@ export class LSPService {
 									)
 									.map((o) => o.serverId);
 								if (collectLaterServerIds.length > 0) {
-									markPendingAuxiliaryCoverage(filePath, collectLaterServerIds);
+									lateDeliveryServerIds = collectLaterServerIds;
+									markPendingAuxiliaryCoverage(
+										filePath,
+										collectLaterServerIds,
+										Date.now(),
+									);
 								}
 								logLatency({
 									type: "phase",
@@ -6791,9 +6937,11 @@ export class LSPService {
 				}
 				result.inconclusiveReason = verdict.inconclusiveReason;
 			} else if (collected !== undefined && primaryDiagnosticsUnsupported) {
-				// A navigation-only primary has no diagnostic confirmation to report.
-				// Auxiliary coverage cannot turn that capability boundary into a clean
-				// or partial diagnostic verdict.
+				// A navigation-only primary has no diagnostic confirmation to report,
+				// but an uncovered auxiliary still needs to be named for delivery.
+				if (unconfirmedServerIds.length > 0) {
+					result.unconfirmedServerIds = [...unconfirmedServerIds];
+				}
 			} else if (collected !== undefined && coverageGap) {
 				// #1470/#1493: narrowed, not collapsed. Reached for EITHER no-answer
 				// shape — a cut-off auxiliary or a silent one with nothing published for
@@ -6857,6 +7005,19 @@ export class LSPService {
 			// fully delivered. Nothing to record here: a skipped server keeps its original
 			// entry (and timestamp) so its window still expires naturally instead of being
 			// extended by every reuse.
+			// #2810: the half of the coverage gap that has a delivery path. Derived
+			// from `unconfirmedServerIds` so the two can never disagree about the
+			// same scanner, and intersected with the marked set so "findings will
+			// arrive through the late path" is said only where a pending pair
+			// exists. Everything else in the gap — a #1459 deferral, a breaker
+			// skip, an ast-grep already covered by its napi fallback — keeps the
+			// honest "silent, diagnostics are incomplete" half.
+			const lateDeliveryPending = unconfirmedServerIds.filter((serverId) =>
+				(lateDeliveryServerIds ?? []).includes(serverId),
+			);
+			if (lateDeliveryPending.length > 0) {
+				result.deferredServerIds = lateDeliveryPending;
+			}
 
 			logLatency({
 				type: "phase",
@@ -6929,6 +7090,14 @@ export class LSPService {
 					...(brokenSkippedServerIds.length > 0 && { brokenSkippedServerIds }),
 					...(uncoveredDeferredServerIds.length > 0 && {
 						deferredResyncServerIds: uncoveredDeferredServerIds,
+					}),
+					// #2810: the scanners this touch promised late delivery for, so a
+					// field query can join the promise to the pending pair that has to
+					// honour it — and tell it apart from `deferredResyncServerIds`
+					// above, which is the door that opened BEFORE any wait and has no
+					// delivery path at all.
+					...(lateDeliveryPending.length > 0 && {
+						lateDeliveryServerIds: lateDeliveryPending,
 					}),
 					// #1549: auxiliaries whose own deadline lapsed — the wait produced no
 					// publication, or the notify write never landed. Distinct from the fields

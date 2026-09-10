@@ -71,9 +71,12 @@ function formatReport(result: McpAnalyzeResult, cwd: string): string {
 	if (result.diagnostics.length > 30) {
 		lines.push(`  … ${result.diagnostics.length - 30} more`);
 	}
-	if (result.lsp && result.lsp.status === "skipped") {
+	if (
+		result.lsp &&
+		(result.lsp.status === "skipped" || result.lsp.status === "deferred")
+	) {
 		lines.push(
-			"  (LSP type-check skipped — run pilens_analyze on the warm MCP server for type errors)",
+			"  (LSP diagnostics were skipped or deferred — run pilens_analyze on the warm MCP server for type errors)",
 		);
 	}
 	return lines.join("\n");

@@ -341,6 +341,25 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 		});
 	}, 20_000);
 
+	it("describes deferred LSP diagnostics as deferred in the warm analyze report", async () => {
+		const file = path.join(turnDir, "deferred.ts");
+		fs.writeFileSync(file, "export const value = 1;\n");
+		stub = await startTurnEndStub(turnDir, {
+			filePath: file,
+			counts: { blockers: 0, warnings: 0, advisories: 0 },
+			diagnostics: [],
+			lsp: { status: "deferred", diagnosticCount: 0, durationMs: 1 },
+		});
+		const { stdout, code } = await runBin([
+			`--file=${file}`,
+			`--cwd=${turnDir}`,
+		]);
+
+		expect(code).toBe(0);
+		expect(stdout).toContain("LSP diagnostics were skipped or deferred");
+		expect(stdout).not.toContain("LSP type-check skipped");
+	}, 20_000);
+
 	it("stays silent when the warm pass found nothing", async () => {
 		stub = await startTurnEndStub(turnDir, {
 			route: "turn-end",

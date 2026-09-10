@@ -2229,12 +2229,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// and its per-server root resolution. This remains an intentionally
 	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
 	// service dependencies; the scheduler itself bounds each recovery pass.
-	// #2777: root resolution now honors a server-computed root, so the seam is
-	// async. clients/lsp/index.ts stays at 158 (resolveServerRoot swapped one
-	// await for another); clients/lsp/server.ts went 111 -> 112 for the new
+	// #2878: the late auxiliary re-promotion observer resolves the server root,
+	// adding one real async seam. clients/lsp/index.ts goes 158 -> 159; the
+	// new await belongs to the late-runner identity lookup. clients/lsp/server.ts
+	// went 111 -> 112 for the new
 	// `await server.root` inside resolveLspServerCwd. Neither number is the
 	// old bare probe being removed.
-	"clients/lsp/index.ts": 158,
+	"clients/lsp/index.ts": 159,
 	"clients/lsp/server.ts": 112,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
@@ -2349,6 +2350,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"optional only for the standalone MCP adapter and unit harnesses. The " +
 		"turn_end wall budget is always live, and timeout falls back to raw findings " +
 		"so security findings remain blockers.",
+	"call:clients/runtime-turn.ts#e953bca9~404f0b0f":
+		"The late auxiliary re-promotion observer receives the live `turn_end` " +
+		"ctx.signal from `deps.signal` when pi supplies one, but that signal is " +
+		"optional on the MCP adapter and unit harness. One shared turn-end deadline " +
+		"bounds the entire drained-pair loop, so missing abort provenance cannot " +
+		"multiply the wall budget by the 50-pair cap.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */
