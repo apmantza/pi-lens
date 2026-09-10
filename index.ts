@@ -1741,6 +1741,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// the complete session_start mutation pass so every downstream reset observes
 	// the same (reason, session file) identity. A different file remains a real
 	// replacement and must run the normal primary path.
+	// The key is cleared per factory instance because pi re-runs the factory on
+	// every replacement; if that ever changes, clear the key in session_shutdown.
 	let lastSessionStartIdentity: string | undefined;
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
@@ -1939,6 +1941,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 					sessionStartKey === undefined
 						? undefined
 						: `${sessionStartReason ?? ""}\u0000${sessionStartKey}`;
+				// With neither a stable session ID nor a session file, fail open: the
+				// event cannot be safely identified for duplicate suppression.
 				const liveToolPlan = (() => {
 					if (
 						getLensFlag("no-lazy-tools") === true ||

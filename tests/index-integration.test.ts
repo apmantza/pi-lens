@@ -428,6 +428,52 @@ describe("index.ts integration", () => {
 	);
 
 	it(
+		"session_start fails open when neither session id nor file is available",
+		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+			const ctx = makeCtx({
+				cwd: tmpDir,
+				sessionId: undefined,
+				sessionFile: undefined,
+				mode: "rpc",
+			});
+
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { phase?: string });
+			expect(
+				rows.filter((row) => row.phase === "session_start_runtime_reset"),
+			).toHaveLength(2);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(0);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"real pi session observes two situational calls before one shutdown row",
 		async () => {
 			const logExtension = vi.fn();
