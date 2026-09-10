@@ -14,7 +14,10 @@ import {
 	recordDegradation,
 	renderDegradationLines,
 } from "./clients/degradation-ledger.js";
-import { toolRegistryEntryForPi } from "./clients/tool-config.js";
+import {
+	TOOL_REGISTRY,
+	toolRegistryEntryForPi,
+} from "./clients/tool-config.js";
 import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
@@ -1730,33 +1733,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 			}),
 		),
 	];
-	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
-		{
-			name: "ast_grep_search",
-			summary:
-				"AST-aware structural code search across ~40 languages (ast-grep patterns).",
-		},
-		{
-			name: "ast_grep_replace",
-			summary:
-				"AST-aware structural code rewrite/refactor (ast-grep patterns).",
-		},
-		{
-			name: "ast_grep_outline",
-			summary:
-				"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
-		},
-		{
-			name: "lsp_navigation",
-			summary:
-				"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
-		},
-		{
-			name: "lens_diagnostic_mark",
-			summary:
-				"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
-		},
-	];
+	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = TOOL_REGISTRY.filter(
+		(
+			entry,
+		): entry is Extract<
+			(typeof TOOL_REGISTRY)[number],
+			{ situational: true }
+		> => "situational" in entry && entry.situational === true,
+	).map(({ name, summary }) => ({ name, summary }));
 	const enabledLazyTools = new Set(
 		LAZY_TOOL_CATALOG.filter((tool) => isToolEnabled(tool.name)).map(
 			(tool) => tool.name,
@@ -1837,7 +1821,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		}
 	}
 
-	// Dynamic tooling (#pi 0.80.x+): deactivate the 6 situational tools so they
+	// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools so they
 	// start inactive and the model must call `pi_lens_activate_tools` to bring
 	// them in (next-turn visibility, per the docs' loader pattern). This used
 	// to run synchronously right here, immediately after registration — but
@@ -2134,6 +2118,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							);
 							if (plan.changed) {
 								piWithActiveTools.setActiveTools(plan.desired);
+								observeSituationalToolActivation([...rememberedLazyTools]);
 								recordToolSetMutation({
 									addedCount: plan.addedCount,
 									removedCount: plan.removedCount,

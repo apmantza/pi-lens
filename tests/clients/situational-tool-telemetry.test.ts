@@ -9,6 +9,7 @@ import {
 	observeSituationalToolActivation,
 	observeSituationalToolCall,
 	resetSituationalToolTelemetry,
+	startSituationalToolTelemetrySession,
 } from "../../clients/situational-tool-telemetry.js";
 
 describe("situational dead-weight telemetry", () => {
@@ -51,5 +52,13 @@ describe("situational dead-weight telemetry", () => {
 			message: "situational tool dead weight",
 			metadata: { tools: [] },
 		});
+	});
+
+	it("keeps the opener-owned latch armed for repeated emits", () => {
+		startSituationalToolTelemetrySession();
+		emitSituationalDeadWeight();
+		emitSituationalDeadWeight();
+
+		expect(logExtension).toHaveBeenCalledTimes(1);
 	});
 });

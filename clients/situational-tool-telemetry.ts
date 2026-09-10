@@ -17,6 +17,7 @@ const activated = new Set<SituationalToolName>();
 const called = new Set<SituationalToolName>();
 let sessionStarted = false;
 let emitted = false;
+let preserveObservationsOnReset = false;
 
 function observe(set: Set<SituationalToolName>, name: string): void {
 	if (situationalToolSet.has(name as SituationalToolName)) {
@@ -35,15 +36,27 @@ export function observeSituationalToolCall(name: SituationalToolName): void {
 }
 
 export function resetSituationalToolTelemetry(): void {
+	if (preserveObservationsOnReset) return;
 	activated.clear();
 	called.clear();
-	emitted = false;
+	// The session opener owns the once-only latch. Session-start resets run after
+	// the opener and must not make a live session emit twice.
+	if (!sessionStarted) emitted = false;
 }
 
 /** Begin a fresh session, preserving one row for an abruptly replaced one. */
-export function startSituationalToolTelemetrySession(): void {
-	if (sessionStarted) emitSituationalDeadWeight();
+export function startSituationalToolTelemetrySession(idempotent = false): void {
+	if (sessionStarted && idempotent) return;
+	if (sessionStarted) {
+		preserveObservationsOnReset = false;
+		emitSituationalDeadWeight();
+		resetSituationalToolTelemetry();
+		emitted = false;
+		return;
+	}
+	preserveObservationsOnReset = idempotent;
 	resetSituationalToolTelemetry();
+	emitted = false;
 	sessionStarted = true;
 }
 
@@ -51,6 +64,7 @@ export function startSituationalToolTelemetrySession(): void {
 export function endSituationalToolTelemetry(): void {
 	if (!sessionStarted) return;
 	emitSituationalDeadWeight();
+	preserveObservationsOnReset = false;
 	resetSituationalToolTelemetry();
 	sessionStarted = false;
 }

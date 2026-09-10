@@ -42,7 +42,7 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `startup.mode` | `full` | `quick`, `full`, or `minimal`; `PI_LENS_STARTUP_MODE` wins |
 | `startup.scans.enabled` | `true` | `true` or `false` |
 
-By default pi-lens registers six situational tools (the `ast_grep_*` family,
+By default pi-lens registers five situational tools (the `ast_grep_*` family,
 `lsp_navigation`, `lens_diagnostic_mark`) inactive and exposes a small loader,
 `pi_lens_activate_tools`, that the model calls to activate the ones it needs.
 `--no-lazy-tools` turns that off: every pi-lens tool is active from the first

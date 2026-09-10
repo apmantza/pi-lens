@@ -92,6 +92,7 @@ import {
 import {
 	endSituationalToolTelemetry,
 	observeSituationalToolCall,
+	startSituationalToolTelemetrySession,
 } from "../clients/situational-tool-telemetry.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
@@ -1875,6 +1876,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 
 	switch (method) {
 		case "initialize": {
+			startSituationalToolTelemetrySession(true);
 			const requested = params?.protocolVersion;
 			sendResult(id ?? null, {
 				protocolVersion:
@@ -1916,6 +1918,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			}
 			const entry = toolRegistryEntryForMcp(name);
 			if (entry && "situational" in entry && entry.situational) {
+				startSituationalToolTelemetrySession(true);
 				observeSituationalToolCall(entry.name);
 			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`
@@ -1980,7 +1983,10 @@ process.stdin.on("data", (chunk: string) => {
 		newlineIndex = buffer.indexOf("\n");
 	}
 });
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+	endSituationalToolTelemetry();
+	process.exit(0);
+});
 
 startIpcServer();
 console.error(`[pi-lens-mcp] ready (cwd=${DEFAULT_CWD})`);

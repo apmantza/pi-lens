@@ -83,7 +83,7 @@ column is the effective behavior when nothing is set.
 | `--lens-actionable-warning-autofix` | `actionableWarnings.autoFix.enabled` | project | **off** |
 | `--lens-actionable-warning-all` | `actionableWarnings.deltaOnly` (`false`) | global | `deltaOnly` **on** (report this turn only) |
 | `--lens-compact-tool-line` | `ui.compactToolLine` | global | **off** (two-row tool rendering) |
-| `--no-lazy-tools` | `tools.lazy` | global | lazy tools **on** (six situational tools start inactive) |
+| `--no-lazy-tools` | `tools.lazy` | global | lazy tools **on** (five situational tools start inactive) |
 | `--no-tool=<name>` | `tools.<name>.enabled` | project | every lens tool **on** |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | global | **off** (madge runs at session start, not per turn) |
 

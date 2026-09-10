@@ -130,6 +130,13 @@ export class McpHarness {
 		);
 	}
 
+	closeInput(): Promise<void> {
+		return new Promise((resolve) => {
+			this.child.once("exit", () => resolve());
+			this.child.stdin.end();
+		});
+	}
+
 	dispose(): void {
 		this.child.stdin.end();
 		this.child.kill();

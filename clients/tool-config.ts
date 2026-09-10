@@ -9,6 +9,8 @@ export const TOOL_REGISTRY = [
 		piName: "ast_grep_search",
 		mcpName: "pilens_ast_grep_search",
 		situational: true,
+		summary:
+			"AST-aware structural code search across ~40 languages (ast-grep patterns).",
 		disableable: true,
 	},
 	{
@@ -16,6 +18,7 @@ export const TOOL_REGISTRY = [
 		piName: "ast_grep_replace",
 		mcpName: "pilens_ast_grep_replace",
 		situational: true,
+		summary: "AST-aware structural code rewrite/refactor (ast-grep patterns).",
 		disableable: true,
 	},
 	{
@@ -23,6 +26,8 @@ export const TOOL_REGISTRY = [
 		piName: "ast_grep_outline",
 		mcpName: undefined,
 		situational: true,
+		summary:
+			"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
 		disableable: true,
 	},
 	{
@@ -30,6 +35,8 @@ export const TOOL_REGISTRY = [
 		piName: "lsp_navigation",
 		mcpName: "pilens_lsp_navigation",
 		situational: true,
+		summary:
+			"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
 		disableable: true,
 	},
 	{
@@ -49,6 +56,8 @@ export const TOOL_REGISTRY = [
 		piName: "lens_diagnostic_mark",
 		mcpName: undefined,
 		situational: true,
+		summary:
+			"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
 		disableable: true,
 	},
 	{
