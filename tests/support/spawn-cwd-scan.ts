@@ -75,6 +75,8 @@ export interface SpawnCwdSite {
 	kind: "direct" | "wrapper";
 	/** Whether this site supplies a cwd (see the two rules in the header). */
 	hasCwd: boolean;
+	/** Whether the cwd value is proven to originate at resolveToolCwd. */
+	resolvedFromToolCwd: boolean;
 	/**
 	 * Text after `// cwd-exempt:` on the line DIRECTLY above the call, when
 	 * that text is a real reason (see {@link MIN_EXEMPT_REASON_LENGTH}). A tag
@@ -102,7 +104,13 @@ export interface SpawnCwdScan {
 	wrappers: SpawnCwdWrapper[];
 }
 
-const SPAWN_NAMES = new Set(["safeSpawnAsync", "safeSpawnSync"]);
+const SPAWN_NAMES = new Set([
+	"safeSpawnAsync",
+	"safeSpawnSync",
+	"safeSpawn",
+	"spawnSupervised",
+	"execa",
+]);
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
 const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
@@ -218,6 +226,20 @@ function cwdPropertyOf(obj: SgNode): SgNode | undefined {
 		if (kind === "pair" && unquote(prop.field("key")?.text() ?? "") === "cwd") {
 			return prop;
 		}
+		if (kind === "spread_element") {
+			const spread = namedParts(prop)[0];
+			if (spread?.kind() === "object") {
+				const nested = cwdPropertyOf(spread);
+				if (nested) return nested;
+			}
+			if (spread?.kind() === "identifier") {
+				const local = resolveLocalInitializer(spread, spread.text());
+				if (local?.init?.kind() === "object") {
+					const nested = cwdPropertyOf(local.init);
+					if (nested) return nested;
+				}
+			}
+		}
 	}
 	return undefined;
 }
@@ -276,6 +298,43 @@ function carriesUsableCwd(value: SgNode): boolean {
 		}
 	}
 	return carriesUsableCwdLiteral(value);
+}
+
+/** Whether an expression is the resolver result, including one local/object hop. */
+function isResolveToolCwdCall(node: SgNode): boolean {
+	if (node.kind() !== "call_expression") return false;
+	return new Set([
+		"resolveToolCwd",
+		"resolveRunnerCwd",
+		"resolveFormatterCwd",
+	]).has((node.field("function")?.text() ?? "").replace(/\s+/g, ""));
+}
+
+function resolvesFromToolCwd(node: SgNode, seen = new Set<string>()): boolean {
+	if (isResolveToolCwdCall(node)) return true;
+	if (
+		node.kind() === "identifier" ||
+		node.kind() === "shorthand_property_identifier"
+	) {
+		if (seen.has(node.text())) return false;
+		seen.add(node.text());
+		const local = resolveLocalInitializer(node, node.text());
+		return local?.init ? resolvesFromToolCwd(local.init, seen) : false;
+	}
+	if (node.kind() !== "object") return false;
+	for (const prop of namedParts(node)) {
+		if (String(prop.kind()) === "spread_element") {
+			const value = namedParts(prop)[0];
+			if (value && resolvesFromToolCwd(value, seen)) return true;
+			continue;
+		}
+		if (
+			cwdPropertyOf(node) === prop &&
+			resolvesFromToolCwd(cwdValueOf(prop), seen)
+		)
+			return true;
+	}
+	return false;
 }
 
 /** Whether an object literal supplies a usable `cwd`: the property is present
@@ -608,7 +667,13 @@ export async function scanSpawnCwd(
 	// direct spawn sites are identified by the same seam as sibling sweeps.
 	const callSiteScanner = createCallSiteScanner(source);
 	const directSiteKeys = new Set(
-		["safeSpawnAsync", "safeSpawnSync"].flatMap((name) =>
+		[
+			"safeSpawnAsync",
+			"safeSpawnSync",
+			"safeSpawn",
+			"spawnSupervised",
+			"execa",
+		].flatMap((name) =>
 			callSiteScanner
 				.find(new RegExp(`^${name}$`))
 				.map((site) => `${site.line}:${name}`),
@@ -652,6 +717,8 @@ export async function scanSpawnCwd(
 			kind: "direct",
 			// R3-F1: the KEY is not the answer; the value has to supply one.
 			hasCwd: cwdProp !== undefined && carriesUsableCwd(cwdValueOf(cwdProp)),
+			resolvedFromToolCwd:
+				cwdProp !== undefined && resolvesFromToolCwd(cwdValueOf(cwdProp)),
 			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
@@ -691,6 +758,18 @@ export async function scanSpawnCwd(
 					wrapper.mode === "options"
 						? argumentSuppliesCwd(call, wrapper.paramIndex)
 						: argumentIsCwdBearing(call, wrapper.paramIndex),
+				resolvedFromToolCwd:
+					wrapper.mode === "options"
+						? (() => {
+								const arg = argumentsOf(call)[wrapper.paramIndex];
+								const prop =
+									arg?.kind() === "object" ? cwdPropertyOf(arg) : undefined;
+								return prop ? resolvesFromToolCwd(cwdValueOf(prop)) : false;
+							})()
+						: (() => {
+								const arg = argumentsOf(call)[wrapper.paramIndex];
+								return arg ? resolvesFromToolCwd(arg) : false;
+							})(),
 				exemptReason: exemptAbove(line),
 			});
 		}

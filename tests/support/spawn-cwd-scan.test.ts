@@ -72,6 +72,28 @@ function at(source: string, snippet: string, callee: string): string {
 // ── K1 · direct spawn ───────────────────────────────────────────────────────
 
 describe("K1 — a direct safeSpawn* call", () => {
+	it("requires resolver origin, including a local binding and object spread", async () => {
+		const source = `
+			const dir = resolveToolCwd("runner", "tool", file, ctx);
+			const options = { cwd: dir, timeout: 1000 };
+			await safeSpawn("tool", [], { ...options });
+		`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites).toHaveLength(1);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(true);
+	});
+
+	it("rejects ctx.cwd, process.cwd(), and a shorthand parameter as origins", async () => {
+		const sources = [
+			`async function run(ctx) { await safeSpawn("tool", [], { cwd: ctx.cwd }); }`,
+			`async function run() { await safeSpawn("tool", [], { cwd: process.cwd() }); }`,
+			`async function run(cwd) { await safeSpawn("tool", [], { cwd }); }`,
+		];
+		for (const source of sources) {
+			const scan = await scanSpawnCwd("fixture.ts", source);
+			expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+		}
+	});
 	it("f-direct-key · P1: a `cwd` key in the options object passes", async () => {
 		const { flagged } = await analyze(`
 			async function run(ctx) {

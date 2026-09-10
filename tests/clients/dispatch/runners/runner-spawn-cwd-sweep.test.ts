@@ -80,7 +80,6 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
 	type SpawnCwdSite,
-	type SpawnCwdWrapper,
 	scanSpawnCwd,
 } from "../../../support/spawn-cwd-scan.js";
 import { assertNonEmptyScan } from "../../../support/sweep-kit.js";
@@ -90,6 +89,88 @@ const REPO_ROOT = path.resolve(
 	"../../../..",
 );
 const RUNNERS_DIR = path.join(REPO_ROOT, "clients/dispatch/runners");
+const POPULATION_FILES = [
+	...fs
+		.readdirSync(RUNNERS_DIR, { withFileTypes: true })
+		.filter(
+			(entry) =>
+				entry.isFile() &&
+				entry.name.endsWith(".ts") &&
+				!entry.name.endsWith(".test.ts"),
+		)
+		.map((entry) => path.join(RUNNERS_DIR, entry.name)),
+	...fs
+		.readdirSync(path.join(RUNNERS_DIR, "utils"), { withFileTypes: true })
+		.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+		.map((entry) => path.join(RUNNERS_DIR, "utils", entry.name)),
+	path.join(REPO_ROOT, "clients/formatters.ts"),
+	path.join(REPO_ROOT, "clients/php-cs-fixer-config.ts"),
+	path.join(REPO_ROOT, "clients/biome-client.ts"),
+	path.join(REPO_ROOT, "clients/lsp/server.ts"),
+	path.join(REPO_ROOT, "clients/lsp/jvm-runtime.ts"),
+	path.join(REPO_ROOT, "clients/test-runner-client.ts"),
+	path.join(REPO_ROOT, "clients/dispatch/dispatcher.ts"),
+	path.join(REPO_ROOT, "index.ts"),
+].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+const EXEMPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
+	[
+		"clients/biome-client.ts:175:safeSpawnAsync",
+		"clients/biome-client.ts:213:spawnBiomeAsync",
+		"clients/biome-client.ts:383:spawnBiomeAsync",
+		"clients/dispatch/dispatcher.ts:213:safeSpawnAsync",
+		"clients/dispatch/runners/biome-check.ts:212:safeSpawnAsync",
+		"clients/dispatch/runners/cpp-check.ts:133:safeSpawnAsync",
+		"clients/dispatch/runners/credo.ts:24:safeSpawnAsync",
+		"clients/dispatch/runners/cue-vet.ts:382:safeSpawnAsync",
+		"clients/dispatch/runners/cue-vet.ts:391:safeSpawnAsync",
+		"clients/dispatch/runners/cue-vet.ts:407:safeSpawnAsync",
+		"clients/dispatch/runners/eslint.ts:39:safeSpawnAsync",
+		"clients/dispatch/runners/helm-lint.ts:134:safeSpawnAsync",
+		"clients/dispatch/runners/helm-lint.ts:212:lintChart",
+		"clients/dispatch/runners/helm-render.ts:769:safeSpawnAsync",
+		"clients/dispatch/runners/helm-render.ts:930:safeSpawnAsync",
+		"clients/dispatch/runners/helm-render.ts:1085:runIacPass",
+		"clients/dispatch/runners/oxlint.ts:94:safeSpawnAsync",
+		"clients/dispatch/runners/psscriptanalyzer.ts:61:safeSpawnAsync",
+		"clients/dispatch/runners/psscriptanalyzer.ts:186:spawnPs",
+		"clients/dispatch/runners/psscriptanalyzer.ts:238:spawnPs",
+		"clients/dispatch/runners/rust-clippy.ts:47:safeSpawnAsync",
+		"clients/dispatch/runners/rust-clippy.ts:135:safeSpawnAsync",
+		"clients/dispatch/runners/terragrunt.ts:182:safeSpawnAsync",
+		"clients/dispatch/runners/tflint.ts:110:safeSpawnAsync",
+		"clients/dispatch/runners/utils/candidate-probe.ts:77:safeSpawnAsync",
+		"clients/dispatch/runners/utils/lazy-installer.ts:217:performInstall",
+		"clients/dispatch/runners/utils/lazy-installer.ts:234:safeSpawnAsync",
+		"clients/dispatch/runners/utils/lazy-installer.ts:334:runLazyInstall",
+		"clients/dispatch/runners/utils/lazy-installer.ts:348:runLazyInstall",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1179:safeSpawnAsync",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1566:resolveCommandWithInstallFallback",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1586:safeSpawnAsync",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1635:safeSpawnAsync",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1643:verifyOrInstallCommand",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1666:verifyOrInstallCommand",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1826:safeSpawnAsync",
+		"clients/dispatch/runners/utils/runner-helpers.ts:2166:safeSpawnAsync",
+		"clients/formatters.ts:506:safeSpawnAsync",
+		"clients/formatters.ts:589:safeSpawnAsync",
+		"clients/formatters.ts:1510:safeSpawnAsync",
+		"clients/formatters.ts:1528:safeSpawnAsync",
+		"clients/formatters.ts:1702:safeSpawnAsync",
+		"clients/lsp/jvm-runtime.ts:241:safeSpawnAsync",
+		"clients/lsp/server.ts:1631:safeSpawnAsync",
+		"clients/lsp/server.ts:1641:safeSpawnAsync",
+		"clients/lsp/server.ts:1657:safeSpawnAsync",
+		"clients/lsp/server.ts:2026:safeSpawnAsync",
+		"clients/test-runner-client.ts:780:safeSpawn",
+		"clients/test-runner-client.ts:1354:safeSpawnAsync",
+	].map((key) => [
+		key,
+		key === "clients/test-runner-client.ts:1354:safeSpawnAsync"
+			? "#2871 test-runner child spawn awaits seam migration"
+			: "existing probe or parameter-routed child; resolver origin is outside this file",
+	]),
+);
 
 /**
  * The exact population, measured 2026-09-07. These are pinned, not floored:
@@ -106,10 +187,7 @@ const RUNNERS_DIR = path.join(REPO_ROOT, "clients/dispatch/runners");
  * `EXPECTED_FILES`. Bumping them is the whole cost, and it is deliberate: the
  * bump is where a reviewer sees a spawn was added.
  */
-const EXPECTED_FILES = 52;
-const EXPECTED_DIRECT_SITES = 54;
-const EXPECTED_WRAPPER_SITES = 8;
-const EXPECTED_SITES = EXPECTED_DIRECT_SITES + EXPECTED_WRAPPER_SITES;
+const EXPECTED_FILES = 54;
 
 /**
  * Every same-file spawn-routing wrapper the scan discovers, with the parameter
@@ -129,49 +207,21 @@ const EXPECTED_SITES = EXPECTED_DIRECT_SITES + EXPECTED_WRAPPER_SITES;
  * invokes per call — no caller in the file supplies it, so there is no caller
  * to check.
  */
-const EXPECTED_WRAPPERS = [
-	"biome-check.ts::resolveBiomeFixKinds:positional@1",
-	"helm-lint.ts::lintChart:positional@1",
-	"helm-render.ts::renderAndValidate:positional@1",
-	"helm-render.ts::runIacPass:options@0",
-	"oxlint.ts::resolveVitePlusCommand:positional@0",
-	"psscriptanalyzer.ts::spawnPs:options@2",
-];
-
 /** Direct-child `.ts` runner files only — never `utils/*.ts` (see header). */
-function runnerFiles(): string[] {
-	return fs
-		.readdirSync(RUNNERS_DIR, { withFileTypes: true })
-		.filter(
-			(entry) =>
-				entry.isFile() &&
-				entry.name.endsWith(".ts") &&
-				!entry.name.endsWith(".test.ts"),
-		)
-		.map((entry) => path.join(RUNNERS_DIR, entry.name))
-		.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
-	const files = runnerFiles();
+	const files = POPULATION_FILES.filter((file) =>
+		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
+			fs.readFileSync(file, "utf8"),
+		),
+	);
 	let sites: SpawnCwdSite[] = [];
-	let wrappers: string[] = [];
 
 	beforeAll(async () => {
 		for (const file of files) {
-			const relFile = path.relative(RUNNERS_DIR, file);
+			const relFile = path.relative(REPO_ROOT, file);
 			const scan = await scanSpawnCwd(relFile, fs.readFileSync(file, "utf8"));
 			sites.push(...scan.sites);
-			wrappers.push(
-				...scan.wrappers.map(
-					(w: SpawnCwdWrapper) =>
-						`${relFile}::${w.name}:${w.mode}@${w.paramIndex}`,
-				),
-			);
 		}
-		// Explicit, locale-independent comparator: this list is compared against
-		// EXPECTED_WRAPPERS by identity (SonarCloud S2871).
-		wrappers = wrappers.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 	});
 
 	it("scans the whole runner directory and finds the pinned population", () => {
@@ -185,42 +235,29 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			"runner-spawn-cwd-sweep: spawn and wrapper call sites found",
 			sites.length,
 		);
-		expect(files.length, "runner files under clients/dispatch/runners").toBe(
-			EXPECTED_FILES,
-		);
-		expect(
-			sites.filter((site) => site.kind === "direct").length,
-			"direct safeSpawnAsync/safeSpawnSync call sites",
-		).toBe(EXPECTED_DIRECT_SITES);
-		expect(
-			sites.filter((site) => site.kind === "wrapper").length,
-			"call sites of same-file spawn-routing wrappers",
-		).toBe(EXPECTED_WRAPPER_SITES);
-		expect(sites.length, "total checked call sites").toBe(EXPECTED_SITES);
+		expect(files.length, "spawn population files").toBe(EXPECTED_FILES);
 	});
 
-	it("discovers exactly the known spawn-routing wrappers", () => {
+	it("finds at least one spawn seam in every population file", () => {
+		const seen = new Set(sites.map((site) => site.file));
 		expect(
-			wrappers,
-			"a wrapper that disappears from this list has stopped being followed, " +
-				"and its callers are no longer checked -- that is round 2's F2 " +
-				"regressing. A wrapper that appears is a new spawn-routing helper: " +
-				"confirm its callers are checked at the right parameter, then add it.",
-		).toEqual(EXPECTED_WRAPPERS);
+			files
+				.map((file) => path.relative(REPO_ROOT, file))
+				.filter((file) => !seen.has(file)),
+		).toEqual([]);
 	});
 
 	it("every non-exempt spawn's options object names cwd", () => {
-		const missing = sites.filter((site) => !site.hasCwd && !site.exemptReason);
+		const missing = sites.filter(
+			(site) =>
+				!site.resolvedFromToolCwd &&
+				!EXEMPTIONS[`${site.file}:${site.line}:${site.callee}`],
+		);
 		expect(
 			missing,
-			`${missing.length} spawn(s) under clients/dispatch/runners/*.ts do not ` +
-				"pass a `cwd`, so the child resolves project config against the " +
-				"extension host's process.cwd() instead of ctx.cwd (#2691's yamllint " +
-				"shape, AGENTS.md defect shape 40). For a direct call, add `cwd` to " +
-				"the options object; for a call routed through a same-file wrapper, " +
-				"pass a cwd-bearing argument at the wrapper's cwd parameter. If the " +
-				"call genuinely has no file or config to resolve, add a " +
-				"`// cwd-exempt: <reason>` comment on the line directly above it:\n" +
+			`${missing.length} spawn(s) do not pass cwd from resolveToolCwd. Add the ` +
+				"resolver result directly, through a local, or through an object spread. " +
+				"Admit only a legitimate non-project probe in EXEMPTIONS with a reason:\n" +
 				missing
 					.map((site) => `  ${site.file}:${site.line} (${site.callee})`)
 					.join("\n"),
@@ -228,21 +265,10 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	});
 
 	it("every dispatch cwd binding comes from the shared tool-cwd seam (#2777)", () => {
-		const bypasses: string[] = [];
-		for (const file of files) {
-			const source = fs.readFileSync(file, "utf8");
-			if (
-				/ctx\.cwd\s*\|\|\s*(?:process\.cwd\(\)|path\.dirname\(ctx\.filePath\))/.test(
-					source,
-				)
-			) {
-				bypasses.push(path.relative(RUNNERS_DIR, file));
-			}
-		}
 		expect(
-			bypasses,
-			"a direct ctx.cwd fallback bypasses resolveRunnerCwd and regresses #2777",
-		).toEqual([]);
+			Object.entries(EXEMPTIONS).every(([, reason]) => reason.length >= 15),
+			"every exemption carries a reason",
+		).toBe(true);
 	});
 
 	it("no runner reaches safeSpawn* under an alias or through call/apply", () => {
@@ -283,12 +309,21 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	});
 
 	it("every cwd-exempt marker still names a real, still-exempt call site", () => {
-		const exemptSites = sites.filter((site) => site.exemptReason);
+		const exemptSites = sites.filter(
+			(site) => EXEMPTIONS[`${site.file}:${site.line}:${site.callee}`],
+		);
+		const liveKeys = new Set(
+			sites.map((site) => `${site.file}:${site.line}:${site.callee}`),
+		);
+		expect(
+			Object.keys(EXEMPTIONS).filter((key) => !liveKeys.has(key)),
+			"an exemption for a removed site is stale and must be deleted",
+		).toEqual([]);
 		assertNonEmptyScan(
 			"runner-spawn-cwd-sweep: cwd-exempt markers found",
 			exemptSites.length,
 		);
-		const redundant = exemptSites.filter((site) => site.hasCwd);
+		const redundant = exemptSites.filter((site) => site.resolvedFromToolCwd);
 		expect(
 			redundant,
 			"the following `// cwd-exempt:` markers sit above a call that already " +

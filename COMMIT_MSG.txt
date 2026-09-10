@@ -1,0 +1,5 @@
+test(config): enforce spawn cwd resolver origin
+
+Extend the existing spawn-cwd sweep across runner, formatter, LSP, and
+test-runner child spawns, and resolve cwd bindings through the shared seam.
+Keep legacy probes visible through exact reasoned exemptions.
