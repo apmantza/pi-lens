@@ -355,9 +355,11 @@ describe("index.ts integration", () => {
 				undefined,
 				ctx,
 			);
-			mock.simulateSessionRebuild();
-			await handlers.session_start?.[0]?.({ reason }, ctx);
-			await handlers.session_shutdown?.[0]?.({}, ctx);
+			await mock.simulateSessionShutdownAndRebuild(
+				reason as "reload" | "resume" | "fork",
+				ctx,
+			);
+			await handlers.session_shutdown?.[0]?.({ reason: "quit" }, ctx);
 
 			const rows = logExtension.mock.calls
 				.map(
@@ -365,13 +367,22 @@ describe("index.ts integration", () => {
 						row as { message?: string; metadata?: { tools?: string[] } },
 				)
 				.filter((row) => row.message === "situational tool dead weight");
-			expect(rows).toHaveLength(1);
+			expect(rows).toHaveLength(reason === "reload" ? 2 : 1);
 			expect(rows[0]?.metadata?.tools).toEqual([
 				"ast_grep_replace",
 				"ast_grep_outline",
 				"lsp_navigation",
 				"lens_diagnostic_mark",
 			]);
+			if (reason === "reload") {
+				expect(rows[1]?.metadata?.tools).toEqual([
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lsp_navigation",
+					"lens_diagnostic_mark",
+				]);
+			}
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -543,9 +554,9 @@ describe("index.ts integration", () => {
 	);
 
 	// #2858 acceptance criterion 1: the `/new` replacement cell, through the real
-	// dispatch rather than the module-level unit test — the host rebuilds the
-	// session and fires `reason: "new"` without a shutdown in between, so the
-	// replaced conversation's row must come out of the OPENER.
+	// dispatch rather than the module-level unit test — the host emits
+	// `session_shutdown{reason: "new"}` before the replacement's session_start,
+	// so the replaced conversation's row must come from the shutdown handler.
 	it(
 		"a real pi /new start emits the replaced conversation's row before opening a fresh set",
 		async () => {
@@ -574,8 +585,7 @@ describe("index.ts integration", () => {
 				{ toolName: "ast_grep_search", input: { pattern: "const $A = $B" } },
 				ctx,
 			);
-			mock.simulateSessionRebuild();
-			await handlers.session_start?.[0]?.({ reason: "new" }, ctx);
+			await mock.simulateSessionShutdownAndRebuild("new", ctx);
 
 			const rowsAt = () =>
 				logExtension.mock.calls
@@ -592,7 +602,7 @@ describe("index.ts integration", () => {
 				"lens_diagnostic_mark",
 			]);
 
-			await handlers.session_shutdown?.[0]?.({}, ctx);
+			await handlers.session_shutdown?.[0]?.({ reason: "quit" }, ctx);
 			expect(rowsAt()).toHaveLength(2);
 			expect(rowsAt()[1]?.metadata?.tools).toEqual([
 				"ast_grep_search",

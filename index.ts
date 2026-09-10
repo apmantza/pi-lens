@@ -3339,7 +3339,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// --- Session shutdown: release all handles so subagent processes exit cleanly ---
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
-	(pi as any).on("session_shutdown", (_event: unknown, ctx: unknown) => {
+	(pi as any).on("session_shutdown", (event: unknown, ctx: unknown) => {
 		// #473: a concurrently-live in-process subagent session shutting down
 		// (its sibling primary — the real parent — still active) must NOT run
 		// the shared-infra teardown below: no LSP fleet shutdown, no idle-timer
@@ -3413,7 +3413,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 			);
 			return;
 		}
-		endSituationalToolTelemetry();
+		const shutdownReason = (event as { reason?: string } | undefined)?.reason;
+		if (shutdownReason !== "resume" && shutdownReason !== "fork") {
+			endSituationalToolTelemetry();
+		}
 
 		// #1654: no drain runs here — see the module comment above
 		// `runDeferredMutationDrain` (review round 1, F2/F3/F4/F5) for why a

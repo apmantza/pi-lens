@@ -640,13 +640,10 @@ describe("index.ts extension wiring", () => {
 
 					// The host re-activates EVERYTHING before the rebuilt session
 					// announces itself.
-					pi.simulateSessionRebuild();
-					for (const tool of EXPECTED_TOOLS) {
-						expect(pi.activeTools.has(tool), tool).toBe(true);
-					}
-
-					await pi.emit("session_start", { reason }, ctx);
-
+					await pi.simulateSessionShutdownAndRebuild(
+						reason as "fork" | "reload" | "resume",
+						ctx,
+					);
 					// Character-for-character the parent's set: the advertised tool
 					// list still matches the cached prompt prefix AND the model's
 					// activation survived.
@@ -686,8 +683,7 @@ describe("index.ts extension wiring", () => {
 				);
 				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
 
-				pi.simulateSessionRebuild();
-				await pi.emit("session_start", { reason: "new" }, ctx);
+				await pi.simulateSessionShutdownAndRebuild("new", ctx);
 
 				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
 				expect(pi.activeTools.has("lens_diagnostics")).toBe(true);
@@ -718,7 +714,7 @@ describe("index.ts extension wiring", () => {
 				);
 				// A subagent binds in-process; the host hands it an all-active
 				// runtime just like any other session construction.
-				pi.simulateSessionRebuild();
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
 
 				await pi.emit(
 					"session_start",
@@ -757,7 +753,7 @@ describe("index.ts extension wiring", () => {
 
 				// Still all-active after a rebuild: under the opt-out pi-lens never
 				// touches the set, on any reason.
-				pi.simulateSessionRebuild();
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
 				await pi.emit("session_start", { reason: "fork" }, ctx);
 
 				for (const tool of EXPECTED_TOOLS) {

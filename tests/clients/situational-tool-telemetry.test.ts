@@ -69,6 +69,7 @@ describe("situational dead-weight telemetry", () => {
 		observeSituationalToolActivation(["ast_grep_search"]);
 		observeSituationalToolCall("ast_grep_search");
 		startSituationalToolTelemetrySession("pi", false);
+		expect(logExtension).not.toHaveBeenCalled();
 		endSituationalToolTelemetry();
 
 		expect(logExtension).toHaveBeenCalledWith(
@@ -107,5 +108,27 @@ describe("situational dead-weight telemetry", () => {
 				],
 			},
 		});
+	});
+
+	it("session_shutdown quit emits and clears the pi dead-weight row", () => {
+		startSituationalToolTelemetrySession("pi", true);
+		observeSituationalToolCall("ast_grep_search");
+		endSituationalToolTelemetry();
+		endSituationalToolTelemetry();
+
+		expect(logExtension).toHaveBeenCalledTimes(1);
+		expect(logExtension.mock.calls[0]?.[0]).toEqual(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			}),
+		);
 	});
 });

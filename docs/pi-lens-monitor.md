@@ -38,9 +38,10 @@ inherits. This contract adds the standing readout.
    shape 10 with the emit site if it can be found by grep.
    Also report `Situational dead weight` from the `tools` extension-log row,
    including its bounded `metadata.tools` list; `[]` means every situational
-   tool was activated or called in the conversation. Reload, resume, and fork
-   preserve pi observations. A fresh `/new` replacement emits the prior row
-   once and starts a new set. A process restart (`pi --continue`) recovers
+   tool was activated or called in the conversation. Resume and fork preserve
+   pi observations. Reload re-runs the extension factory, so it emits the
+   prior runtime row once and starts a new set. A fresh `/new` replacement
+   emits the prior row once and starts a new set. A process restart (`pi --continue`) recovers
    nothing — the restore deactivates every situational tool — so the first row
    after one legitimately lists all five, and shrinks only as the model
    re-activates and uses them. MCP remains connection-scoped and owns the

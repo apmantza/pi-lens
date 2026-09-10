@@ -59,9 +59,10 @@ export function resetSituationalToolTelemetry(): void {
 /**
  * Open the telemetry session for one host.
  *
- * Pi keeps one observation set for the conversation. Reload, resume, and fork
- * preserve it. A fresh `/new` start emits the prior row once and opens an
- * empty set. A process restart opens an empty set and recovers nothing:
+ * Pi keeps one observation set for the conversation across resume and fork.
+ * Reload re-runs the extension factory, so it emits the runtime's prior row
+ * once and opens an empty set. A fresh `/new` start emits the prior row once
+ * and opens an empty set. A process restart opens an empty set and recovers nothing:
  * pi-lens's own activation memory (`rememberedLazyTools` in `index.ts`) is
  * empty in a new process, so the restore deactivates every situational tool,
  * and the host's restored active set is evidence of REGISTRATION, not of

@@ -137,11 +137,15 @@ export interface PiMock {
 	 * true })`, and fork / newSession / switchSession / importFromJsonl / reload
 	 * each construct a FRESH session that way before the event is emitted. The
 	 * active tool set is never persisted per session, so every registered tool
-	 * is active again by the time pi-lens's handler runs — while the extension's
-	 * own closure state survives (the runner does not re-run the factory).
-	 * Call this before emitting a fork/reload/resume `session_start`.
+	 * is active again by the time pi-lens's handler runs. The mock preserves the
+	 * extension closure for resume, fork, and new; real pi reload additionally
+	 * clears its extension cache and re-runs factories.
+	 * Call this to reproduce pi's `session_shutdown` then `session_start` order.
 	 */
-	simulateSessionRebuild(): void;
+	simulateSessionShutdownAndRebuild(
+		reason: "reload" | "resume" | "fork" | "new" | "quit",
+		ctx?: unknown,
+	): Promise<void>;
 	/** Run every handler registered for `event`; return the last defined result. */
 	emit(event: string, payload?: unknown, ctx?: unknown): Promise<unknown>;
 	/** Invoke a registered command's handler. */
@@ -255,8 +259,22 @@ export function createPiMock(
 		getCommand(name) {
 			return commands.get(name);
 		},
-		simulateSessionRebuild() {
+		async simulateSessionShutdownAndRebuild(reason, ctx) {
+			if (reason === "quit") {
+				await mock.emit(
+					"session_shutdown",
+					{ type: "session_shutdown", reason },
+					ctx,
+				);
+				return;
+			}
+			await mock.emit(
+				"session_shutdown",
+				{ type: "session_shutdown", reason },
+				ctx,
+			);
 			for (const name of tools.keys()) activeTools.add(name);
+			await mock.emit("session_start", { type: "session_start", reason }, ctx);
 		},
 		async emit(event, payload, ctx) {
 			let result: unknown;
