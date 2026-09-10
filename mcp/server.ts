@@ -28,6 +28,7 @@ import {
 	renderToolResultContract,
 	boundToolResultText,
 	renderToolText as toolText,
+	stripResultDetails,
 } from "../tools/render-compact.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
@@ -1880,10 +1881,12 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			) {
 				sendResult(
 					id ?? null,
-					finalizeToolResult({
-						...toolText(`Unknown or disabled tool: ${name}`),
-						isError: true,
-					}),
+					stripResultDetails(
+						finalizeToolResult({
+							...toolText(`Unknown or disabled tool: ${name}`),
+							isError: true,
+						}),
+					),
 				);
 				return;
 			}
@@ -1908,18 +1911,22 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				) {
 					result = withStaleWarning(result);
 				}
-				sendResult(id ?? null, boundToolResultText(result));
+				// The gate consumed `details` for the footer's diag lines above;
+				// strip it so the wire carries only the bounded text (#2852 N1).
+				sendResult(id ?? null, boundToolResultText(stripResultDetails(result)));
 			} catch (err) {
 				// Surface as a tool error (isError), not a transport error, so the
 				// agent sees the message instead of a dead request.
 				sendResult(
 					id ?? null,
-					finalizeToolResult({
-						...toolText(
-							`pi-lens tool '${name}' failed: ${(err as Error).message}`,
-						),
-						isError: true,
-					}),
+					stripResultDetails(
+						finalizeToolResult({
+							...toolText(
+								`pi-lens tool '${name}' failed: ${(err as Error).message}`,
+							),
+							isError: true,
+						}),
+					),
 				);
 			}
 			return;

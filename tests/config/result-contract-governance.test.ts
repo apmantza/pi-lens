@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
+import { MAX_RESULT_BYTES } from "../../tools/render-compact.js";
 import { McpHarness } from "../mcp/harness.js";
 import { createPiMock } from "../support/pi-mock.js";
 
@@ -47,6 +48,19 @@ describe("result contract across registered tool surfaces", () => {
 			path.join(cwd, "fixture.ts"),
 			"export const fixture = 1;\nfunction enclosing() { return fixture; }\n",
 		);
+		// Oversized fixture (refs #2852 N3): one huge symbol whose read_symbol
+		// body exceeds MAX_RESULT_BYTES, so the pi surface's only byte bound —
+		// the one inside finalizeToolResult — has to engage.
+		const bigLines = [
+			"// Oversized fixture: the symbol body below must exceed MAX_RESULT_BYTES.",
+			"export function bigSymbol(): string[] {",
+			"\tconst acc: string[] = [];",
+		];
+		for (let i = 0; i < 1500; i++) {
+			bigLines.push(`\tacc.push("line-${i}-${"x".repeat(80)}");`);
+		}
+		bigLines.push("\treturn acc;", "}");
+		fs.writeFileSync(path.join(cwd, "big.ts"), `${bigLines.join("\n")}\n`);
 		process.chdir(cwd);
 		pi = createPiMock();
 		const { default: extension } = await import("../../index.js");
@@ -199,6 +213,54 @@ describe("result contract across registered tool surfaces", () => {
 			expect(text, `${entry.name}: pi rendering`).toMatch(
 				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
 			);
+			expect(
+				text?.includes("result error"),
+				`${entry.name}: pi verdict matches isError`,
+			).toBe(result?.isError === true);
 		}
+		// An erroring pi-only call exercises that verdict⟺isError pin in the
+		// failing direction: every registry fixture above succeeds, so a
+		// hard-coded `result ok` footer would pass the loop unchecked.
+		const markTool = pi.getTool("lens_diagnostic_mark") as {
+			execute?: (...args: unknown[]) => Promise<ToolResult>;
+		};
+		const badMark = await markTool.execute?.(
+			"governance",
+			{
+				filePath: "bad.ts",
+				line: 4,
+				message: "a real fixture disposition",
+				disposition: "not-a-disposition",
+			},
+			new AbortController().signal,
+			undefined,
+			{ cwd },
+		);
+		expect(badMark?.isError, "invalid disposition errors").toBe(true);
+		expect(badMark?.content?.[0]?.text ?? "").toContain("result error");
+	});
+
+	it("bounds an oversized pi result through the real index.ts wrapper", async () => {
+		// N3 (refs #2852): the byte bound inside finalizeToolResult is the pi
+		// surface's only bound. Drive the real index.ts registration wrapper
+		// (createPiMock + extension factory above) with a >MAX_RESULT_BYTES
+		// read_symbol body and assert the delivered text is bounded — dropping
+		// boundToolResultText from finalizeToolResult reds here.
+		const piTool = pi.getTool("read_symbol") as {
+			execute?: (...args: unknown[]) => Promise<ToolResult>;
+		};
+		expect(piTool?.execute).toBeTypeOf("function");
+		const result = await piTool.execute?.(
+			"governance",
+			{ path: path.join(cwd, "big.ts"), symbol: "bigSymbol" },
+			new AbortController().signal,
+			undefined,
+			{ cwd },
+		);
+		const text = result?.content?.[0]?.text ?? "";
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+			MAX_RESULT_BYTES,
+		);
+		expect(text).toContain("characters omitted");
 	});
 });

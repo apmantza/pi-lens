@@ -75,8 +75,14 @@ describe("render-compact", () => {
 		expect(text).toContain("result ok");
 		expect(text).toContain("diag severity=warning");
 		expect(text).toMatch(/usage tokens=\d+ elapsed-ms=0/);
-		expect(renderToolResultContract(result).content[0]?.text).toContain(
-			"result ok",
-		);
+		// Exactly one footer: re-finalizing an already-final result must not
+		// append a second contract block (refs #2852 N4). `toContain` passed on
+		// double-stamped text, so count the verdict lines instead.
+		const footerCount = (source: string) =>
+			(source.match(/^result (?:ok|error)$/gm) ?? []).length;
+		expect(footerCount(text)).toBe(1);
+		expect(
+			footerCount(renderToolResultContract(result).content[0]?.text ?? ""),
+		).toBe(1);
 	});
 });
