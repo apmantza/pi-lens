@@ -1827,10 +1827,25 @@ function activateExtension(hostPi: ExtensionAPI) {
 						},
 						(err) => {
 							const text = err instanceof Error ? err.message : String(err);
-							return finalizeToolResultWithDelivery({
+							const delivery = finalizeToolResultWithDelivery({
 								...renderToolText(text),
 								isError: true,
 							});
+							if (lensEnabled) {
+								try {
+									const ctx = args[4];
+									const sessionId = getStableSessionId(ctx);
+									recordToolResultDelivery({
+										sessionId,
+										sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
+										bytes: delivery.deliveredBytes,
+										truncated: delivery.truncated,
+									});
+								} catch {
+									// Observability must never break tool delivery.
+								}
+							}
+							return delivery.result;
 						},
 					);
 			}

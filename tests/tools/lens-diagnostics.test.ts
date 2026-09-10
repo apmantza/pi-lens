@@ -165,6 +165,47 @@ function run(
 	return tool.execute("1", params, new AbortController().signal, null, { cwd });
 }
 
+describe("lens_diagnostics compact filename", () => {
+	it("names file mode from args.path and one-file batch from its path", () => {
+		const tool = makeTool() as any;
+		const render = (input: any) =>
+			(
+				tool.renderResult(
+					input,
+					{ expanded: false },
+					{},
+					{ args: input.args },
+				) as any
+			).text;
+		expect(
+			render({
+				details: {
+					source: "lsp",
+					mode: "file",
+					totalDiagnostics: 0,
+					filePath: "/tmp/project",
+				},
+				args: { path: "/tmp/project/src/app.ts" },
+				isError: false,
+				text: "No diagnostics found.",
+			}),
+		).toContain("lens_diagnostics app.ts — 0 diagnostics");
+		expect(
+			render({
+				details: {
+					source: "lsp",
+					mode: "batch",
+					filesChecked: 1,
+					totalDiagnostics: 0,
+				},
+				args: { path: "/tmp/project/src/app.ts" },
+				isError: false,
+				text: "No diagnostics found.",
+			}),
+		).toContain("lens_diagnostics app.ts — 0 diagnostics");
+	});
+});
+
 function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-ignore-"));
 	fs.writeFileSync(
@@ -674,6 +715,27 @@ describe("lens_diagnostics mode=delta", () => {
 		// No actionable warnings (they're warnings, not errors)
 		expect(text).toContain("No error");
 	});
+
+	it.each(["hint", "information"])(
+		"severity=%s excludes the cached warning in delta mode",
+		async (severity) => {
+			const result = await run(
+				makeTool({
+					"actionable-warnings": {
+						files: [
+							{
+								filePath: "/proj/src/foo.ts",
+								warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
+							},
+						],
+						summary: { warnings: 1 },
+					},
+				}),
+				{ mode: "delta", severity },
+			);
+			expect(String(result.content[0].text)).toContain(`No ${severity} issues`);
+		},
+	);
 
 	it("formats project diagnostics delta records", async () => {
 		// #1634 review round R3: appendProjectDiagnosticsDeltaLines now

@@ -85,7 +85,9 @@ export function formatControlByteScan(result: ControlByteScanResult): string {
 
 describe("tracked source files contain no literal control bytes (#2571)", () => {
 	it("scans a non-empty tracked TypeScript, JavaScript, and Markdown population", () => {
-		const files = trackedSourceFiles();
+		const files = trackedSourceFiles().filter((file) =>
+			fs.existsSync(path.join(REPO_ROOT, file)),
+		);
 		// Calibration: 1,514 TypeScript, 99 MJS, and 64 Markdown files are
 		// tracked on this tree OUTSIDE `.changelog/`. Each floor is below half
 		// its live population. The Markdown floor deliberately ignores the

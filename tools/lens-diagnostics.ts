@@ -325,9 +325,12 @@ export function createLensDiagnosticsTool(
 				const count = details.totalDiagnostics ?? 0;
 				const files = details.filesChecked ?? details.filesScanned ?? 0;
 				const noun = count === 1 ? "diagnostic" : "diagnostics";
+				const filePath =
+					typeof args?.path === "string" ? args.path : details?.filePath;
 				const singleFile =
-					files === 1 && typeof details?.filePath === "string"
-						? ` ${path.basename(details.filePath)}`
+					(details?.mode === "file" || files === 1) &&
+					typeof filePath === "string"
+						? ` ${path.basename(filePath)}`
 						: "";
 				const scope = files > 1 ? ` across ${files} files` : singleFile;
 				if (isError)
@@ -1108,8 +1111,10 @@ function formatDeltaMode(
 
 	const lines: string[] = [];
 
-	// Fixable warnings from actionable-warnings
-	if (severity !== "error") {
+	// Fixable warnings from actionable-warnings are the warning tier; quality
+	// cache entries are information-tier findings. Keep the session path's
+	// severity vocabulary exact instead of treating unknown tiers as matches.
+	if (severity === "all" || severity === "warning") {
 		for (const file of actionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			lines.push(`${rel}`);
@@ -1121,7 +1126,7 @@ function formatDeltaMode(
 	}
 
 	// Quality issues
-	if (severity !== "error") {
+	if (severity === "all" || severity === "information") {
 		for (const file of qualityFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			if (!lines.includes(rel)) lines.push(rel);
@@ -1140,11 +1145,15 @@ function formatDeltaMode(
 		includeFile,
 	);
 
-	const aw = actionableFiles.reduce(
+	const selectedActionableFiles =
+		severity === "all" || severity === "warning" ? actionableFiles : [];
+	const selectedQualityFiles =
+		severity === "all" || severity === "information" ? qualityFiles : [];
+	const aw = selectedActionableFiles.reduce(
 		(count, file) => count + file.warnings.length,
 		0,
 	);
-	const cq = qualityFiles.reduce(
+	const cq = selectedQualityFiles.reduce(
 		(count, file) => count + file.warnings.length,
 		0,
 	);
@@ -1398,7 +1407,9 @@ function isErrorLike(d: WidgetDiagnostic): boolean {
 
 function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
 	if (severity === "error") return isErrorLike(d);
-	if (severity === "warning") return !isErrorLike(d);
+	if (severity === "warning") return d.severity === "warning";
+	if (severity === "information") return d.severity === "info";
+	if (severity === "hint") return d.severity === "hint";
 	return true;
 }
 

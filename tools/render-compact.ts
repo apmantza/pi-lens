@@ -49,6 +49,10 @@ export const RESULT_FOOTER_RESERVE_BYTES = Buffer.byteLength(
 	`\n\nresult error\n${"x".repeat(FOOTER_DIAG_SECTION_MAX_BYTES)}\nusage tokens=${"9".repeat(FOOTER_MAX_DIGITS)} elapsed-ms=${"9".repeat(FOOTER_MAX_DIGITS)} bytes=${"9".repeat(FOOTER_MAX_DIGITS)} truncated=false`,
 	"utf8",
 );
+// The literal reserve intentionally leaves about 1 KiB below MAX_RESULT_BYTES
+// for footer growth. Keep this conservative slack: deriving the bound by
+// iterating over a changing footer caused both overflows and repeated log writes
+// (round 2 F2/F7, refs #2862 and #2864).
 
 /** The payload byte budget the footer is stamped into: the delivered result
  * budget minus the reserved footer maximum (#2800 item 7). */
@@ -284,27 +288,9 @@ export function boundResultPayload<T extends CompactResultLike>(
 		return { result, deliveredBytes: 0, truncated: false };
 	}
 	const joined = fullTextOf(result);
-	// The footer depends on this result's actual error, diagnostics, usage, and
-	// delivered byte count. Iterate to the fixed point so ordinary results do not
-	// reserve the widest possible footer, while the final bound remains sound.
-	let payloadBudget = RESULT_PAYLOAD_BUDGET_BYTES;
-	let bound = boundToolText(joined, payloadBudget);
-	for (let i = 0; i < 3; i++) {
-		const probe = renderToolResultContract(
-			{ ...result, content: [{ type: "text" as const, text: bound.text }] },
-			{
-				bytes: Buffer.byteLength(bound.text, "utf8"),
-				truncated: bound.truncated,
-			},
-		);
-		const footerStart = fullTextOf(probe).indexOf("\n\nresult ");
-		const footerBytes = Buffer.byteLength(
-			fullTextOf(probe).slice(footerStart),
-			"utf8",
-		);
-		payloadBudget = MAX_RESULT_BYTES - footerBytes;
-		bound = boundToolText(joined, payloadBudget);
-	}
+	// Reserve the widest footer once. This keeps the MAX_RESULT_BYTES invariant
+	// independent of payload contents and gives boundToolText one log write.
+	const bound = boundToolText(joined, RESULT_PAYLOAD_BUDGET_BYTES);
 	const firstText = result.content.findIndex(
 		(block) => block.type === "text" && typeof block.text === "string",
 	);
