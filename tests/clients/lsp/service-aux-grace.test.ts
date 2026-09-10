@@ -482,6 +482,108 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		expect(messages).toContain("aux finding");
 	});
 
+	it("demotes an auxiliary after five budget-hitting waits and preserves late delivery", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
+			await import("../../../clients/lsp/pending-aux-coverage.js");
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../../clients/degradation-ledger.js");
+		resetDegradationLedger();
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(1470, [makeDiagnostic("late typos")], {
+			serverId: "typos",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(FILE, `budget-hit-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1500);
+			await touch;
+		}
+
+		const sixth = service.touchFile(FILE, "demoted", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1500);
+		const result = await sixth;
+		const rows = logLatency.mock.calls
+			.map(([entry]) => entry)
+			.filter((entry) => entry.phase === "lsp_aux_wait_outcome");
+		const demoted = rows
+			.at(-1)
+			?.metadata?.outcomes?.find(
+				(entry: { serverId: string }) => entry.serverId === "typos",
+			);
+		expect(demoted).toEqual(
+			expect.objectContaining({ outcome: "demoted", elapsedMs: 0 }),
+		);
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(5);
+		expect(drainPendingAuxiliaryCoverage()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ filePath: FILE, serverId: "typos" }),
+			]),
+		);
+		expect(rows.at(-1)?.durationMs).toBeLessThan(1500);
+		expect(result?.diags.map((diagnostic) => diagnostic.message)).toContain(
+			"primary",
+		);
+		const summary = getDegradationSummary().find(
+			(group) => group.kind === "aux_wait_demoted",
+		);
+		expect(summary?.count).toBe(1);
+		expect(summary?.latestReasons[0]?.subject).toBe("typos");
+		clearPendingAuxiliaryCoverage(FILE, "typos");
+		resetDegradationLedger();
+	});
+
+	it("keeps an auxiliary that answers at half budget awaited", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(750, [makeDiagnostic("fast typos")], {
+			serverId: "typos",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(FILE, `fast-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(750);
+			await touch;
+		}
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(5);
+	});
+
 	it("gives an auxiliary its declared budget up to the global ceiling", async () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();

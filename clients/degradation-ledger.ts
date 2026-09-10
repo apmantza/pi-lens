@@ -86,6 +86,7 @@ export type DegradationKind =
 	| "ast-grep-rules-dir-missing"
 	/** A git ls-files collection was truncated before parsing completed (#2075). */
 	| "aux-runner-findings-lost"
+	| "aux_wait_demoted"
 	/**
 	 * #2523: an `await` on a hook path exceeded its per-hook wall BUDGET, so
 	 * `bounded()` (`clients/deadline-utils.ts`) abandoned it and the hook

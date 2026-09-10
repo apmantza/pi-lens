@@ -308,7 +308,12 @@ export function touchCompletedConfirmationPolicy(
  *     scanner that HAD the content and published nothing, which is the whole
  *     subject of #1493 — recording a deferral there would corrupt it.
  */
-type AuxiliaryWaitOutcome = "answered" | "silent" | "cut_off" | "deferred";
+type AuxiliaryWaitOutcome =
+	| "answered"
+	| "silent"
+	| "cut_off"
+	| "deferred"
+	| "demoted";
 
 /** One auxiliary's contribution to a touch, as {@link auxiliaryCoverageGap} reads it. */
 export interface AuxiliaryWaitEvidence {

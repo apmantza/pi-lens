@@ -115,6 +115,8 @@ import {
 export type { LSPCapabilitySnapshot } from "./wait-policy/index.js";
 
 const WORKSPACE_ATTRIBUTION_CLIENT_CAP = 16;
+const AUX_WAIT_DEMOTION_THRESHOLD = 5;
+const AUX_WAIT_DEMOTION_RATIO = 0.9;
 
 /**
  * Request-local attribution for no-filePath workspace queries. The fixed site
@@ -1281,6 +1283,9 @@ export class LSPService {
 		string,
 		Promise<"answered" | "silent" | "errored">
 	>();
+	/** Session-scoped adaptive demotion for budget-hitting auxiliaries. */
+	private readonly auxWaitPressureStreak = new Map<string, number>();
+	private readonly demotedAuxiliaryServerIds = new Set<string>();
 	/**
 	 * #1934 review F1: what the last COMPLETED `spawnClient` call for a
 	 * (server, root) key decided, written by that call at every point it
@@ -1521,6 +1526,35 @@ export class LSPService {
 			diagnosticsPublished: new Set(),
 			diagnosticsUnsupported: new Set(),
 		};
+	}
+
+	private isAuxiliaryWaitDemoted(serverId: string): boolean {
+		return this.demotedAuxiliaryServerIds.has(serverId);
+	}
+
+	private noteAuxiliaryWait(
+		serverId: string,
+		budgetMs: number,
+		elapsedMs: number,
+	): void {
+		if (this.demotedAuxiliaryServerIds.has(serverId)) return;
+		if (elapsedMs < AUX_WAIT_DEMOTION_RATIO * budgetMs) {
+			this.auxWaitPressureStreak.delete(serverId);
+			return;
+		}
+		const streak = (this.auxWaitPressureStreak.get(serverId) ?? 0) + 1;
+		if (streak >= AUX_WAIT_DEMOTION_THRESHOLD) {
+			this.demotedAuxiliaryServerIds.add(serverId);
+			this.auxWaitPressureStreak.delete(serverId);
+			recordDegradationOnce({
+				kind: "aux_wait_demoted",
+				subject: serverId,
+				reason:
+					"auxiliary reached at least 90% of its declared wait budget for five consecutive dispatches",
+			});
+			return;
+		}
+		this.auxWaitPressureStreak.set(serverId, streak);
 	}
 
 	/**
@@ -5507,6 +5541,13 @@ export class LSPService {
 				});
 				const perServerWaits = spawned.map((entry, entryIndex) => {
 					if (
+						hasTouchAuxiliaries &&
+						entry.info.role === "auxiliary" &&
+						this.isAuxiliaryWaitDemoted(entry.info.id)
+					) {
+						return Promise.resolve(undefined);
+					}
+					if (
 						this.state.diagnosticsUnsupported.has(entry.info.id) ||
 						diagnosticsUnsupportedServerIds.includes(entry.info.id)
 					) {
@@ -5669,6 +5710,9 @@ export class LSPService {
 												client: spawned[i].client,
 												baseline: diagnosticBaselines.get(spawned[i].client),
 												budgetMs: perServerRaceBudgets[i],
+												demoted: this.isAuxiliaryWaitDemoted(
+													spawned[i].info.id,
+												),
 											}
 										: null,
 								)
@@ -5681,6 +5725,7 @@ export class LSPService {
 										client: (typeof spawned)[number]["client"];
 										baseline: number | undefined;
 										budgetMs: number;
+										demoted: boolean;
 									} => x !== null,
 								);
 							// After all primaries settle, use the same per-auxiliary budget
@@ -5699,6 +5744,16 @@ export class LSPService {
 								const outcomes = await Promise.all(
 									auxWaits.map(async (aux) => {
 										const { budgetMs } = aux;
+										if (aux.demoted) {
+											return {
+												serverId: aux.serverId,
+												outcome: "demoted" as const,
+												publishedThisContent: false,
+												budgetMs,
+												elapsedMs: 0,
+												elapsedSinceNotifyMs: 0,
+											};
+										}
 										let timer: ReturnType<typeof setTimeout> | undefined;
 										const timeout = new Promise<false>((resolve) => {
 											timer = setTimeout(() => resolve(false), budgetMs);
@@ -5754,6 +5809,8 @@ export class LSPService {
 												: publishedEvidence
 													? ("answered" as const)
 													: ("silent" as const);
+										const elapsedMs = Date.now() - auxWaitStartedAt;
+										this.noteAuxiliaryWait(aux.serverId, budgetMs, elapsedMs);
 										return {
 											serverId: aux.serverId,
 											outcome,
@@ -5765,7 +5822,7 @@ export class LSPService {
 											// below cannot disagree about the same scanner.
 											publishedThisContent: auxCoversThisContent(aux.serverId),
 											budgetMs,
-											elapsedMs: Date.now() - auxWaitStartedAt,
+											elapsedMs,
 											// #1458 S3: elapsed measured from BEFORE the primary wait
 											// (waitStartedAt), not just from auxWaitStartedAt — this is
 											// what lets a latency row validate the ~1.3s warm-scanner
@@ -5799,7 +5856,9 @@ export class LSPService {
 									.filter(
 										(o) =>
 											!o.publishedThisContent &&
-											(o.outcome === "cut_off" || o.outcome === "silent") &&
+											(o.outcome === "cut_off" ||
+												o.outcome === "silent" ||
+												o.outcome === "demoted") &&
 											// #2324 R2-A/R3-A: ast-grep's napi fallback is a
 											// SECOND producer of coverage for this exact pair,
 											// dispatched CONCURRENTLY with this whole touch

@@ -675,7 +675,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		policy: "session_start",
 		resetName: "resetLSPService",
 		reason:
-			"The service is torn down and rebuilt per session; this reset is also the seam that carries the sweep hold and TS-repair guard resets.",
+			"The service is torn down and rebuilt per session; this reset also clears the adaptive auxiliary wait streak and demotion set, alongside the sweep hold and TS-repair guard resets.",
 	},
 	{
 		id: "lsp-mutation:noBridgeDbgLogged",

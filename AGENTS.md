@@ -819,6 +819,13 @@ siblings), but it stays excluded from last-phase stall attribution because it
 is a post-hoc record of a wait that already ran inside the touch's own phase,
 not the stall itself. (#1458)
 
+An auxiliary whose recorded grace wait reaches at least 90% of its budget for
+five consecutive dispatches is session-demoted from the awaited set. Its
+publication remains collect-later work, and the demotion emits one
+`aux_wait_demoted` degradation per server. The service reset at session start
+clears both the streak and demotion set, so a fresh session re-arms every
+auxiliary.
+
 An auxiliary scanner gets at most ONE outstanding `didOpen` resync at a time.
 A `clientScope: "all"` sweep fans a full re-scan at every neighbour inside a few
 milliseconds, so an unbounded fan-out stalls the scanner's stdin and walks the
