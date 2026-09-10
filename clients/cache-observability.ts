@@ -263,6 +263,10 @@ interface SessionAttributionState {
 	readonly findingIdentities: Set<string>;
 	findingIdentityCapRecorded: boolean;
 	turnEndAdvisoryBytes: number;
+	/** Delivered tool-result bytes summed over the turn (#2800 item 7). */
+	toolResultBytes: number;
+	/** Delivered tool results whose bound fired, counted over the turn. */
+	toolResultsTruncated: number;
 	/** Transcript length at the previous `context` observation. */
 	lastObservedMessageCount?: number;
 	/** Full-identity SHA-256 evidence from the previous usage record. */
@@ -330,6 +334,8 @@ function newAttributionState(): SessionAttributionState {
 		findingIdentities: new Set(),
 		findingIdentityCapRecorded: false,
 		turnEndAdvisoryBytes: 0,
+		toolResultBytes: 0,
+		toolResultsTruncated: 0,
 		summary: newCacheUsageSummary(),
 	};
 }
@@ -1324,6 +1330,8 @@ export function logCacheUsage(
 				state.turnEndAdvisoryBytes + state.injectedBytes.turnEndAdvisory,
 		};
 		const injectedFindingsRepeated = state.injectedFindingsRepeated;
+		const toolResultBytes = state.toolResultBytes;
+		const toolResultsTruncated = state.toolResultsTruncated;
 		// This record is the turn boundary: reset the per-turn accumulators and
 		// re-arm the prefix-break flag so the next verdict describes the NEXT gap.
 		state.lastUsageAtMs = nowMs;
@@ -1344,6 +1352,8 @@ export function logCacheUsage(
 		state.injectedBytes = emptyInjectedBytes();
 		state.injectedFindingsRepeated = 0;
 		state.turnEndAdvisoryBytes = 0;
+		state.toolResultBytes = 0;
+		state.toolResultsTruncated = 0;
 		// Clear the request stamp too: the next turn measures from ITS request, and
 		// a turn whose `context` call pi-lens never saw must fall back rather than
 		// reuse this one.
@@ -1387,6 +1397,11 @@ export function logCacheUsage(
 				attributionCharsCapped,
 				injectedBytes,
 				injectedFindingsRepeated,
+				// Delivered tool-result aggregation over the turn (#2800 item 7):
+				// the sum of each delivered footer's bytes= figure and the count
+				// of results whose bound fired.
+				toolResultBytes,
+				toolResultsTruncated,
 				...(context
 					? {
 							// MessageEndEvent has no request/context id in the host API. These
@@ -1602,6 +1617,34 @@ export function recordTurnEndAdvisoryBytes(
 		MAX_INJECTED_BYTES,
 		state.turnEndAdvisoryBytes + Math.max(0, bytes),
 	);
+}
+
+/**
+ * Fold one delivered tool result into the per-turn aggregation the
+ * `cache_usage` row reports as `toolResultBytes` / `toolResultsTruncated`
+ * (#2800 item 7). `bytes` is the delivered payload's UTF-8 byte count as
+ * stamped in the result's own footer, and `truncated` is the footer's
+ * truncated flag. Called from each host adapter's delivery seam; the row is
+ * emitted by `logCacheUsage`, which resets both figures at the turn boundary.
+ * The byte sum saturates at the attribution bound so the row stays bounded.
+ */
+export function recordToolResultDelivery(args: {
+	sessionId?: string;
+	sessionRole?: "primary" | "concurrent-secondary";
+	bytes: number;
+	truncated: boolean;
+}): void {
+	const state = attributionFor(
+		attributionKey(args.sessionId, args.sessionRole),
+	);
+	const bytes = Number.isFinite(args.bytes)
+		? Math.max(0, Math.floor(args.bytes))
+		: 0;
+	state.toolResultBytes = Math.min(
+		MAX_ATTRIBUTION_BYTES,
+		state.toolResultBytes + bytes,
+	);
+	if (args.truncated === true) state.toolResultsTruncated += 1;
 }
 
 /**

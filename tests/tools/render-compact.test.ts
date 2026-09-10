@@ -3,10 +3,19 @@ import {
 	baseName,
 	finalizeToolResult,
 	fullTextOf,
+	MAX_RESULT_BYTES,
 	renderToolResultContract,
 	renderToolText,
+	RESULT_FOOTER_RESERVE_BYTES,
 	selectCompactText,
 } from "../../tools/render-compact.js";
+
+/** Independently measures the delivered payload bytes a footer reports: the
+ * full rendered text minus the footer block the gate appended after it. */
+function deliveredPayloadBytes(text: string): number {
+	const footerStart = text.search(/\n\nresult (?:ok|error)\n/);
+	return Buffer.byteLength(text.slice(0, footerStart), "utf8");
+}
 
 describe("render-compact", () => {
 	const result = {
@@ -74,7 +83,9 @@ describe("render-compact", () => {
 		const text = result.content[0]?.text ?? "";
 		expect(text).toContain("result ok");
 		expect(text).toContain("diag severity=warning");
-		expect(text).toMatch(/usage tokens=\d+ elapsed-ms=0/);
+		expect(text).toMatch(
+			/usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)/,
+		);
 		// Exactly one footer: re-finalizing an already-final result must not
 		// append a second contract block (refs #2852 N4). `toContain` passed on
 		// double-stamped text, so count the verdict lines instead.
@@ -84,5 +95,70 @@ describe("render-compact", () => {
 		expect(
 			footerCount(renderToolResultContract(result).content[0]?.text ?? ""),
 		).toBe(1);
+	});
+
+	describe("delivered-byte reporting (refs #2800 item 7)", () => {
+		it("stamps exact delivered payload bytes on a normal result", () => {
+			const result = finalizeToolResult(
+				renderToolText("measured body", { symbols: 1 }),
+			);
+			const text = result.content[0]?.text ?? "";
+			const match = text.match(
+				/usage tokens=\d+ elapsed-ms=\d+ bytes=(\d+) truncated=(true|false)$/,
+			);
+			expect(match, "footer with bytes= and truncated=").not.toBeNull();
+			expect(match?.[2]).toBe("false");
+			// The expected value is measured from the rendered text, not derived
+			// from the production path's own computation.
+			expect(Number(match?.[1])).toBe(deliveredPayloadBytes(text));
+		});
+
+		it("keeps an oversized delivered text (footer included) inside MAX_RESULT_BYTES", () => {
+			const result = finalizeToolResult(
+				renderToolText("x".repeat(MAX_RESULT_BYTES * 2)),
+			);
+			const text = result.content[0]?.text ?? "";
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_RESULT_BYTES,
+			);
+			expect(text).toMatch(/truncated=true$/);
+			expect(text).toContain("characters omitted");
+			const delivered = Number(text.match(/bytes=(\d+)/)?.[1]);
+			// bytes= describes the delivered payload, never the pre-bound input.
+			expect(delivered).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+			expect(delivered).toBe(deliveredPayloadBytes(text));
+		});
+
+		it("keeps the error verdict and delivered bytes on an isError result", () => {
+			const result = finalizeToolResult({
+				...renderToolText("boom"),
+				isError: true,
+			});
+			const text = result.content[0]?.text ?? "";
+			expect(text).toMatch(
+				/result error\nusage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=false$/,
+			);
+			expect(Number(text.match(/bytes=(\d+)/)?.[1])).toBe(
+				deliveredPayloadBytes(text),
+			);
+		});
+
+		it("reserves the footer's maximum size inside the result budget", () => {
+			expect(RESULT_FOOTER_RESERVE_BYTES).toBeGreaterThan(0);
+			expect(RESULT_FOOTER_RESERVE_BYTES).toBeLessThan(MAX_RESULT_BYTES);
+		});
+
+		it("bounds the footer's diag section so the reserve stays sound", () => {
+			const diagnostics = Array.from({ length: 5_000 }, () => ({
+				severity: "w".repeat(300),
+			}));
+			const result = finalizeToolResult(
+				renderToolText("body", { diagnostics }),
+			);
+			const text = result.content[0]?.text ?? "";
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_RESULT_BYTES,
+			);
+		});
 	});
 });

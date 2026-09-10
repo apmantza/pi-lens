@@ -152,8 +152,10 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 		// gate's re-stat throttle disabled above, the very next call sees the
 		// advanced mtime. The fixture body exceeds MAX_RESULT_BYTES, making
 		// this the one configuration in which the bound-vs-warning ordering is
-		// observable (refs #2852 N2): binding before warning would deliver
-		// 40,960 bytes PLUS the warning.
+		// observable (refs #2852 N2, re-ordered by #2800 item 7): the warning is
+		// part of the payload the bound protects, and the footer is stamped
+		// after the bound with the footer's own size reserved, so warning plus
+		// bounded payload plus footer still fit the budget.
 		await harness.request(10, "initialize", {
 			protocolVersion: "2025-06-18",
 			capabilities: {},
@@ -176,6 +178,18 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 		expect(text).toContain("characters omitted");
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
 			MAX_RESULT_BYTES,
+		);
+		// Item 7 (refs #2800): the footer is stamped after the bound, so the
+		// delivered text (footer included) stays inside the budget and the
+		// footer reports the delivered payload with the truncated flag.
+		expect(text).toMatch(
+			/\n\nresult ok\nusage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=true$/,
+		);
+		const delivered = Number(text.match(/bytes=(\d+)/)?.[1]);
+		expect(Number.isFinite(delivered), "bytes= present").toBe(true);
+		expect(delivered).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+		expect(text.indexOf("warmCodeStale: true")).toBeLessThan(
+			text.indexOf("\n\nresult ok"),
 		);
 		// N1: the wire result must not carry the unbounded `details` duplicate —
 		// the whole serialized result stays within the text budget plus the

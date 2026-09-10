@@ -111,10 +111,7 @@ import {
 } from "./clients/tool-config.js";
 import { recordDegradationOnce } from "./clients/degradation-ledger.js";
 import { wrapToolsForCompactLine } from "./clients/tool-render.js";
-import {
-	finalizeToolResult,
-	renderToolResultContract,
-} from "./tools/render-compact.js";
+import { finalizeToolResultWithDelivery } from "./tools/render-compact.js";
 import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEventsGetter } from "./clients/lens-events.js";
 import { wireBusEmitterGetter } from "./clients/bus-publish.js";
@@ -276,6 +273,7 @@ import {
 	logCacheUsage,
 	observeCacheContext,
 	observeCachePrefix,
+	recordToolResultDelivery,
 	resetCacheFindingIdentitiesSession,
 	recordTurnEndAdvisoryBytes,
 } from "./clients/cache-observability.js";
@@ -1826,11 +1824,31 @@ function activateExtension(hostPi: ExtensionAPI) {
 			const execute = normalized.execute;
 			if (typeof execute === "function") {
 				normalized.execute = (...args: unknown[]) =>
-					Promise.resolve(execute(...args)).then((result) =>
-						finalizeToolResult(
-							result as Parameters<typeof renderToolResultContract>[0],
-						),
-					);
+					Promise.resolve(execute(...args)).then((result) => {
+						const delivery = finalizeToolResultWithDelivery(
+							result as Parameters<typeof finalizeToolResultWithDelivery>[0],
+						);
+						// #2800 item 7: the per-turn cache_usage row sums each delivered
+						// tool result's bytes. The SDK hands the live ExtensionContext as
+						// the fifth execute argument, so attribution mirrors the
+						// message_end handler: stable session id plus this activation's
+						// owned role.
+						if (lensEnabled) {
+							try {
+								const ctx = args[4];
+								const sessionId = getStableSessionId(ctx);
+								recordToolResultDelivery({
+									sessionId,
+									sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
+									bytes: delivery.deliveredBytes,
+									truncated: delivery.truncated,
+								});
+							} catch {
+								// Observability must never break tool delivery.
+							}
+						}
+						return delivery.result;
+					});
 			}
 			pi.registerTool(normalized as any);
 		} catch {
