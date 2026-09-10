@@ -1,47 +1,148 @@
 {
-  "pi": {
-    "descriptionTotal": 4403,
-    "total": 26012,
-    "tools": {
-      "ast_grep_outline": 1684,
-      "ast_grep_replace": 1930,
-      "ast_grep_search": 4118,
-      "effective_config": 736,
-      "lens_diagnostic_mark": 1434,
-      "lens_diagnostics": 4115,
-      "lsp_diagnostics": 1621,
-      "lsp_navigation": 3672,
-      "module_report": 1845,
-      "pi_lens_activate_tools": 424,
-      "project_report": 904,
-      "read_enclosing": 1250,
-      "read_symbol": 901,
-      "symbol_search": 1378
-    }
-  },
-  "mcp": {
-    "descriptionTotal": 6272,
-    "total": 27240,
-    "tools": {
-      "pilens_analyze": 998,
-      "pilens_ast_grep_replace": 2043,
-      "pilens_ast_grep_search": 4496,
-      "pilens_diagnostics": 4036,
-      "pilens_effective_config": 1187,
-      "pilens_health": 355,
-      "pilens_latency": 333,
-      "pilens_lsp_diagnostics": 1709,
-      "pilens_lsp_navigation": 3896,
-      "pilens_module_report": 1811,
-      "pilens_project_report": 828,
-      "pilens_project_scan": 580,
-      "pilens_read_enclosing": 1202,
-      "pilens_read_symbol": 721,
-      "pilens_rebuild": 364,
-      "pilens_session_end": 107,
-      "pilens_session_start": 475,
-      "pilens_symbol_search": 1399,
-      "pilens_turn_end": 700
-    }
-  }
+	"pi": {
+		"budget": 27697,
+		"descriptionTotal": 3570,
+		"schemaTotal": 21609,
+		"tools": {
+			"ast_grep_outline": {
+				"description": 269,
+				"schema": 1380
+			},
+			"ast_grep_replace": {
+				"description": 124,
+				"schema": 1773
+			},
+			"ast_grep_search": {
+				"description": 94,
+				"schema": 3994
+			},
+			"effective_config": {
+				"description": 308,
+				"schema": 398
+			},
+			"lens_diagnostic_mark": {
+				"description": 303,
+				"schema": 1018
+			},
+			"lens_diagnostics": {
+				"description": 380,
+				"schema": 3459
+			},
+			"lsp_diagnostics": {
+				"description": 111,
+				"schema": 1477
+			},
+			"lsp_navigation": {
+				"description": 170,
+				"schema": 3458
+			},
+			"module_report": {
+				"description": 505,
+				"schema": 1295
+			},
+			"pi_lens_activate_tools": {
+				"description": 96,
+				"schema": 301
+			},
+			"project_report": {
+				"description": 364,
+				"schema": 498
+			},
+			"read_enclosing": {
+				"description": 275,
+				"schema": 922
+			},
+			"read_symbol": {
+				"description": 260,
+				"schema": 593
+			},
+			"symbol_search": {
+				"description": 311,
+				"schema": 1043
+			}
+		}
+	},
+	"mcp": {
+		"budget": 26909,
+		"descriptionTotal": 3494,
+		"schemaTotal": 20968,
+		"tools": {
+			"pilens_analyze": {
+				"description": 98,
+				"schema": 721
+			},
+			"pilens_ast_grep_replace": {
+				"description": 106,
+				"schema": 1862
+			},
+			"pilens_ast_grep_search": {
+				"description": 92,
+				"schema": 4083
+			},
+			"pilens_diagnostics": {
+				"description": 380,
+				"schema": 3548
+			},
+			"pilens_effective_config": {
+				"description": 295,
+				"schema": 422
+			},
+			"pilens_health": {
+				"description": 86,
+				"schema": 33
+			},
+			"pilens_latency": {
+				"description": 68,
+				"schema": 190
+			},
+			"pilens_lsp_diagnostics": {
+				"description": 111,
+				"schema": 1566
+			},
+			"pilens_lsp_navigation": {
+				"description": 120,
+				"schema": 3547
+			},
+			"pilens_module_report": {
+				"description": 509,
+				"schema": 1302
+			},
+			"pilens_project_report": {
+				"description": 306,
+				"schema": 522
+			},
+			"pilens_project_scan": {
+				"description": 101,
+				"schema": 401
+			},
+			"pilens_read_enclosing": {
+				"description": 282,
+				"schema": 920
+			},
+			"pilens_read_symbol": {
+				"description": 274,
+				"schema": 447
+			},
+			"pilens_rebuild": {
+				"description": 102,
+				"schema": 33
+			},
+			"pilens_session_end": {
+				"description": 74,
+				"schema": 33
+			},
+			"pilens_session_start": {
+				"description": 81,
+				"schema": 56
+			},
+			"pilens_symbol_search": {
+				"description": 318,
+				"schema": 1081
+			},
+			"pilens_turn_end": {
+				"description": 91,
+				"schema": 201
+			}
+		}
+	}
 }

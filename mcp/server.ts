@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { boundToolText } from "../tools/render-compact.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
@@ -506,11 +507,13 @@ function toolText(
 	structured?: unknown,
 	compact = false,
 ): { content: { type: "text"; text: string }[] } {
-	const text =
+	const rawText =
 		structured === undefined
 			? summary
 			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
-	return { content: [{ type: "text" as const, text }] };
+	return {
+		content: [{ type: "text" as const, text: boundToolText(rawText).text }],
+	};
 }
 
 // --- Graph-staleness signal (#536) -------------------------------------------
@@ -621,10 +624,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_analyze",
 		description:
-			"Run pi-lens's per-edit dispatch pipeline (LSP + linters + structural " +
-			"rules) on a single file and return its diagnostics plus the latency " +
-			"record for that dispatch (same schema as latency.log). The core review " +
-			"probe: shows a change's real behavioral + perf impact on a real file.",
+			"Run pi-lens's per-edit dispatch pipeline on one file. Example: analyze `src/app.ts` after an edit.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -663,8 +663,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_latency",
 		description:
-			"Return recent dispatch latency reports (latency.log schema: per-file " +
-			"total duration + per-runner timings). The review-loop measurement surface.",
+			"Return recent dispatch latency reports. Example: limit results to 5.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -682,19 +681,13 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_rebuild",
 		description:
-			"Rebuild pi-lens so subsequent `pilens_analyze mode=fresh` runs reflect " +
-			"the latest commit. Runs `npm run build` (in-place dev layout) or " +
-			"`npm run build:dist` (precompiled dist layout), matching how this server " +
-			"was launched. The missing link that makes the review loop honest: " +
-			"commit → pilens_rebuild → pilens_analyze mode=fresh.",
+			"Rebuild pi-lens so later fresh analyses use the latest commit. Example: rebuild after changing a tool.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
 		name: "pilens_project_scan",
 		description:
-			"Cheap project-wide scan (tree-sitter + fact rules) across source files, " +
-			"returning structural/quality diagnostics. Complements pilens_diagnostics " +
-			"mode=full (which adds active LSP).",
+			"Scan project files for structural and quality diagnostics. Example: cap the scan with `maxFiles: 20`.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -891,27 +884,13 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_health",
 		description:
-			"pi-lens runtime health for THIS server: alive LSP servers, last dispatch " +
-			"summary, session diagnostic counts, how many resolved config leaves each " +
-			"source tier decided, and the total CPU/RAM footprint attributable to " +
-			"pi-lens across every process it owns (host + LSP children) machine-wide, " +
-			"from the shared instance registry.",
+			"Return pi-lens runtime health for this server. Example: call it after a slow analysis.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
 		name: "pilens_effective_config",
 		description:
-			"The resolved pi-lens configuration with the provenance of every " +
-			"decision: which file and source tier each setting came from, the trust " +
-			"decision that applied, and which config files contributed. Pass `file` " +
-			"to also get, for that path, its canonical language, EVERY LSP server " +
-			"with the reason it was selected or denied — including which tier's " +
-			"config denied it, which a nearer file cannot lift — and the lint/format " +
-			"runners that would dispatch. This is the answer to 'why is X running / " +
-			"why is X not running' without reading logs. Redacted by construction: " +
-			"it reports sources, never values — no environment values, no command " +
-			"arguments beyond the binary itself, and config paths are home-relative. " +
-			"A tier-denied LSP decision cannot be lifted by a nearer config.",
+			"Explain resolved configuration and provenance. Response is redacted by construction: it contains no environment values, no command arguments beyond the binary, and home-relative paths; a tier-denied LSP decision cannot be lifted by a nearer config. Example: pass `file` to explain one selection.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -931,12 +910,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_session_start",
 		description:
-			"Run pi-lens's real session_start lifecycle: warm the dominant-language " +
-			"LSP (so subsequent pilens_analyze is LSP-complete), establish the " +
-			"error-debt baseline (tests/build pass-state) + complexity baselines, and " +
-			"kick off knip/jscpd/type-coverage/dep/secrets project scans. Returns " +
-			"project guidance + baseline; scan results land in caches (query via " +
-			"pilens_diagnostics afterwards). Run once per workspace before reviewing.",
+			"Initialize pi-lens for a workspace. Example: run once before reviewing a project.",
 		inputSchema: {
 			type: "object",
 			properties: { cwd: { type: "string" } },
@@ -945,13 +919,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_turn_end",
 		description:
-			"Run pi-lens's real turn_end lifecycle over the files changed this turn: " +
-			"knip dead-code + jscpd duplication (incremental), circular-dep checks, " +
-			"tests on affected targets, cascade to dependents, and the actionable/" +
-			"code-quality warning aggregation. Returns the turn-end advisory + test " +
-			"findings. `files` is OPTIONAL — pilens_analyze (and the PostToolUse hook) " +
-			"auto-register edited files into turn-state, so you can call this with no " +
-			"args after a series of edits; pass `files` to add any not analyzed.",
+			"Summarize checks for files changed this turn. Example: pass `files` for an unanalysed file.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -977,38 +945,25 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_ast_grep_search",
 		description:
-			"Structural (AST) code search via ast-grep — match by code structure, not " +
-			"text. Use complete patterns with arguments (e.g. 'console.log($MSG)', " +
-			"'function $NAME($$$ARGS) { $$$BODY }'), or use nodeKind to find every " +
-			"node of a known grammar kind. Metavariables do not match text inside " +
-			"quoted string literals; use an exact string or grep for wildcard text. " +
-			"This is the same schema and synthesis path as the pi tool.",
+			"Search code by AST structure rather than text. Example: find calls with `console.log($MSG)`.",
 		inputSchema: schemaWithCwd(astGrepSearchTool.parameters),
 	},
 	{
 		name: "pilens_ast_grep_replace",
 		description:
-			"Structural (AST) find-and-rewrite via ast-grep, e.g. pattern='var $X' " +
-			"rewrite='let $X'. DRY-RUN by default (apply=false shows the diff); set " +
-			"apply=true to write the changes to disk.",
+			"Find and rewrite code by AST structure; preview by default. Example: set `apply: false` to inspect a diff.",
 		inputSchema: schemaWithCwd(astGrepReplaceTool.parameters),
 	},
 	{
 		name: "pilens_lsp_navigation",
 		description:
-			"LSP code navigation: definition, typeDefinition, declaration, " +
-			"references, hover, documentSymbol, " +
-			"workspaceSymbol, implementation, call hierarchy (prepareCallHierarchy/" +
-			"incomingCalls/outgoingCalls), rename, codeAction, executeCommand " +
-			"(allowlisted, dry-run by default) — exact + type-aware, " +
-			"~50ms. Use before changing a signature to see every caller.",
+			'Navigate source with language-server operations. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},
 	{
 		name: "pilens_lsp_diagnostics",
 		description:
-			"Pure LSP diagnostics for a file, directory, or batch of files (type " +
-			"errors only — narrower than pilens_diagnostics, which spans all runners).",
+			'Query language-server diagnostics for files or directories. Example: use `{path: "src/app.ts"}` before a build.',
 		inputSchema: schemaWithCwd(lspDiagnosticsTool.parameters),
 	},
 ];
@@ -1797,9 +1752,15 @@ async function callTool(
 			args,
 			new AbortController().signal,
 			undefined,
-			{ cwd },
+			{ cwd, resultMaxItems: Number.POSITIVE_INFINITY },
 		)) as { content: { type: "text"; text: string }[] };
-		return { content: out.content };
+		return {
+			content: out.content.map((content) =>
+				content.type === "text"
+					? { ...content, text: boundToolText(content.text).text }
+					: content,
+			),
+		};
 	}
 
 	if (name === "pilens_lsp_navigation" || name === "pilens_lsp_diagnostics") {

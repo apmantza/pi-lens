@@ -436,6 +436,8 @@ export type DegradationKind =
 	 * the identity of the dropped write.
 	 */
 	| "managed-tool-refresh"
+	/** A complete MCP result exceeded the hard input budget (#2848). */
+	| "mcp-complete-result-budget-exceeded"
 	/**
 	 * A shell-out linter/analyzer runner (knip, vulture, jscpd, trivy-config, …)
 	 * produced no usable output — empty stdout, unparseable stdout (e.g. a
