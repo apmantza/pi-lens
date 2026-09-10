@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Fail session-start integration tests when the awaited handler exceeds its test budget.** (refs #2859)
+- **Fail session-start tests when the awaited handler crashes or exceeds its test budget, instead of passing vacuously.** (refs #2859)
