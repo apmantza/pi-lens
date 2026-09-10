@@ -2511,7 +2511,6 @@ async function formatFullMode(
 	return resultWithCold;
 }
 
-// @delivery-surface: lens-diagnostics:mode-all
 async function projectResolvedCwd(
 	summary: FileDiagnosticSummary,
 	cwd: string,
@@ -2535,6 +2534,7 @@ async function projectResolvedCwd(
 	};
 }
 
+// @delivery-surface: lens-diagnostics:mode-all
 async function formatAllMode(
 	cwd: string,
 	severity: string,
