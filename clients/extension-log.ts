@@ -27,6 +27,7 @@ import { isTestMode } from "./env-utils.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
+import { getTurnId } from "./turn-context.js";
 
 export const EXTENSION_LOG_FILE = path.join(
 	getGlobalPiLensLogDir(),
@@ -52,6 +53,7 @@ export interface ExtensionLogEntry {
 	/** Defaults to `error` (the level every migrated ungated site wrote at). */
 	level?: ExtensionLogLevel;
 	metadata?: Record<string, unknown>;
+	turnId?: string;
 }
 
 export function logExtension(entry: ExtensionLogEntry): void {
@@ -59,6 +61,7 @@ export function logExtension(entry: ExtensionLogEntry): void {
 	writer.log({
 		ts: new Date().toISOString(),
 		pid: process.pid,
+		turnId: getTurnId(),
 		level: entry.level ?? "error",
 		subsystem: entry.subsystem,
 		message: entry.message,

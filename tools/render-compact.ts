@@ -1,7 +1,7 @@
 // Compact tool-result rendering (refs #345).
 //
 // The navigable/structural tools (module_report, read_symbol, read_enclosing,
-// ast_grep_search, ast_grep_dump, ast_grep_outline) return large bodies that are
+// ast_grep_search, ast_grep_outline) return large bodies that are
 // useful to the MODEL but flood the user's terminal. The pi host renders a tool's
 // `content` verbatim only when the tool defines no `renderResult` (the
 // createResultFallback path in tool-execution.ts). By supplying a `renderResult`
