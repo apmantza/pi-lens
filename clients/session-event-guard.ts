@@ -146,7 +146,7 @@ export interface SessionEventGuardOptions {
  * The one policy for "a pi hook handler threw and production swallows it"
  * (#2884).
  *
- * Eight catch sites in `index.ts` absorb a crashed handler so a pi-lens bug
+ * Nine catch sites in `index.ts` absorb a crashed handler so a pi-lens bug
  * can never take down the host's session. Each of them used to write only
  * `dbg(...)`, and `dbg` writes nothing under vitest — so a crashed handler was
  * indistinguishable from a completed one. #2859 is what that costs: fourteen
@@ -154,7 +154,7 @@ export interface SessionEventGuardOptions {
  * one of those catches, every assertion after them was vacuous, and the file
  * stayed green. #2866 closed the hole for `session_start` with an inline
  * `if (process.env.VITEST) throw`; this function is that guard folded into one
- * place so the remaining seven cannot drift from it.
+ * place so the remaining eight cannot drift from it.
  *
  * Two things happen on every crash, in this order:
  *

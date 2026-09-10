@@ -2434,7 +2434,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// rethrows so the crash fails the test that caused it; production
 					// keeps the swallow, because a pi-lens session_start bug must
 					// never take down the host's session. #2866 wrote that guard
-					// inline here; #2884 folded it onto the shared helper so the seven
+					// inline here; #2884 folded it onto the shared helper so the eight
 					// sibling catches below cannot drift from it.
 					surfaceHandlerCrash("session_start", sessionErr, { dbg });
 				}
@@ -3335,7 +3335,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				sessionId: getStableSessionId(ctx),
 				ownerId: testRunnerDeliveryOwnerId,
 			}).catch((err) => {
-				// The only fire-and-forget site of the eight. `runQuietWindow` already
+				// The only fire-and-forget site of the nine. `runQuietWindow` already
 				// catches every task failure internally, so this catch sees only a
 				// crash in the quiet window's own scaffolding — and because nothing
 				// awaits this promise, the runner rethrow surfaces as an unhandled
