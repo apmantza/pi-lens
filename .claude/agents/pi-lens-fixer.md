@@ -232,6 +232,8 @@ or timer with "if it throws / if it never returns" columns (#2649 r3). Both
 tables found sites the prescribed patch would have missed. Fix everything the
 table exposes in the same round; a table that finds nothing is quoted too.
 
+**Every test id in a PR-body table must exist.** Every test id, probe id or fixture name you write into a state-space, writers-by-axis or population table must be a grep-able `it(` title or file name in the tree at handoff; the orchestrator greps each id before accepting the round, and a table whose ids do not exist is a fabricated claim that fails the round (2026-09-10: #2877 r3 and #2868 r3 each shipped a 48- to 72-cell table with zero real ids).
+
 **A governance exemption added in a fix round is a finding until the reviewer
 clears it.** Name each one in the review-round section with the reason the
 file demands and why it is a registration rather than silencing (#2654 r2

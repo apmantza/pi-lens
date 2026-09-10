@@ -214,9 +214,13 @@ function markersFor(
 	ctx: ToolCwdContext,
 ): readonly string[] {
 	if (kind === "lsp") return ctx.rootMarkers ?? [];
-	return kind === "formatter"
-		? (FORMATTER_MARKERS[tool] ?? [".gitignore"])
-		: (RUNNER_MARKERS[tool] ?? []);
+	// #2871: caller-supplied markers count for runners too. `RUNNER_MARKERS`
+	// covers the linter/formatter-shaped runners this module has always known;
+	// a caller that owns its own marker table — the test runner, whose
+	// `RUNNERS[x].configFiles` IS that table — passes it here rather than
+	// registering a second copy of the same data in this file.
+	if (kind === "runner") return ctx.rootMarkers ?? RUNNER_MARKERS[tool] ?? [];
+	return FORMATTER_MARKERS[tool] ?? [".gitignore"];
 }
 
 function emitResolution(
