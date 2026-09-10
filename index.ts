@@ -1915,23 +1915,76 @@ function activateExtension(hostPi: ExtensionAPI) {
 			"session_start",
 			async (event, ctx) => {
 				const sessionStartReason = (event as { reason?: string }).reason;
-				const sessionStartFile = (() => {
+				const sessionIdentityParts = (() => {
 					try {
-						return (
+						const sessionManager = (
 							ctx as {
-								sessionManager?: { getSessionFile?: () => string | undefined };
+								sessionManager?: {
+									getSessionId?: () => string | undefined;
+									getSessionFile?: () => string | undefined;
+								};
 							}
-						)?.sessionManager?.getSessionFile?.();
+						)?.sessionManager;
+						return {
+							sessionId: sessionManager?.getSessionId?.(),
+							sessionFile: sessionManager?.getSessionFile?.(),
+						};
+					} catch {
+						return { sessionId: undefined, sessionFile: undefined };
+					}
+				})();
+				const sessionStartKey =
+					sessionIdentityParts.sessionId ?? sessionIdentityParts.sessionFile;
+				const sessionStartIdentity =
+					sessionStartKey === undefined
+						? undefined
+						: `${sessionStartReason ?? ""}\u0000${sessionStartKey}`;
+				const liveToolPlan = (() => {
+					if (
+						getLensFlag("no-lazy-tools") === true ||
+						typeof (pi as unknown as { getActiveTools?: unknown })
+							.getActiveTools !== "function"
+					) {
+						return undefined;
+					}
+					try {
+						const piWithActiveTools = pi as unknown as {
+							getActiveTools: () => string[];
+						};
+						const lazyNames = new Set(
+							LAZY_TOOL_CATALOG.map((tool) => tool.name),
+						);
+						return planToolSet(
+							piWithActiveTools.getActiveTools(),
+							lazyNames,
+							isFreshSessionStart(sessionStartReason)
+								? new Set<string>()
+								: rememberedLazyTools,
+						);
 					} catch {
 						return undefined;
 					}
 				})();
-				const sessionStartIdentity = `${sessionStartReason ?? ""}\u0000${sessionStartFile ?? ""}`;
 				if (
-					sessionStartFile !== undefined &&
-					lastSessionStartIdentity === sessionStartIdentity
-				)
+					sessionStartIdentity !== undefined &&
+					lastSessionStartIdentity === sessionStartIdentity &&
+					liveToolPlan?.changed !== true
+				) {
+					emitBounded(
+						"session_start_duplicate_suppressed",
+						sessionStartIdentity,
+						{
+							durationMs: 0,
+							metadata: { reason: "duplicate start suppressed" },
+						},
+						{
+							ledgerKind: "session-start-duplicate",
+							risingEdgePer: "identity",
+							reason: "duplicate start suppressed",
+						},
+					);
 					return;
+				}
 				lastSessionStartIdentity = sessionStartIdentity;
 				const sessionStartMonotonicAt = performance.now();
 				warmDispatchAtSessionStart();

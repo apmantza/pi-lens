@@ -285,12 +285,17 @@ describe("index.ts integration", () => {
 	);
 
 	it(
-		"session_start restores tools once per session-file identity",
+		"session_start runs one pass per (session id, reason) and restores posture",
 		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
 			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
 			const { default: registerExtension } = await import("../index.js");
-			const { pi, handlers, tools, activeTools, activeToolSetCalls } =
-				createMockPi();
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers, activeTools, activeToolSetCalls } = createMockPi();
 			registerExtension(pi as any);
 			const sessionStart = handlers.session_start?.[0];
 			expect(sessionStart).toBeTypeOf("function");
@@ -305,17 +310,119 @@ describe("index.ts integration", () => {
 			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
 			const firstMutationCount = activeToolSetCalls.length;
 			expect(firstMutationCount).toBe(1);
+			expect([...activeTools]).not.toEqual(
+				expect.arrayContaining([
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lsp_navigation",
+					"lens_diagnostic_mark",
+				]),
+			);
 
-			// Model pi's rebuilt AgentSession: registered tools are active again.
-			for (const name of tools.keys()) activeTools.add(name);
 			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
 			expect(activeToolSetCalls).toHaveLength(firstMutationCount);
 
-			sessionFile = path.join(tmpDir, "session-b.jsonl");
-			(ctx as any).sessionManager.getSessionFile = () => sessionFile;
-			for (const name of tools.keys()) activeTools.add(name);
+			// A duplicate must still restore if the host's live posture drifted.
+			activeTools.add("ast_grep_search");
 			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
 			expect(activeToolSetCalls).toHaveLength(firstMutationCount + 1);
+			expect(activeTools).not.toContain("ast_grep_search");
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							phase?: string;
+							filePath?: string;
+							metadata?: Record<string, unknown>;
+						},
+				);
+			expect(
+				rows.filter((row) => row.phase === "session_start_runtime_reset"),
+			).toHaveLength(2);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(1);
+			expect(
+				rows.find((row) => row.phase === "session_start_duplicate_suppressed"),
+			).toEqual(
+				expect.objectContaining({
+					metadata: expect.objectContaining({
+						reason: "duplicate start suppressed",
+					}),
+				}),
+			);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"session_start dedupes no-session RPC by id and falls back to file",
+		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+
+			const noSessionCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "no-session-rpc",
+				sessionFile: undefined,
+				mode: "rpc",
+			});
+			await sessionStart?.(
+				makeSessionStartEvent({ reason: "fork" }),
+				noSessionCtx,
+			);
+			await sessionStart?.(
+				makeSessionStartEvent({ reason: "fork" }),
+				noSessionCtx,
+			);
+
+			const fileCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: undefined,
+				sessionFile: path.join(tmpDir, "fallback.jsonl"),
+				mode: "rpc",
+			});
+			await sessionStart?.(makeSessionStartEvent({ reason: "fork" }), fileCtx);
+			await sessionStart?.(makeSessionStartEvent({ reason: "fork" }), fileCtx);
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) => JSON.parse(line) as { phase?: string; filePath?: string },
+				);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(2);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -1151,7 +1258,7 @@ describe("index.ts integration", () => {
 			// the whole point of #1910 wiring the reset into handleSessionStart.
 			await primary.trigger(
 				"session_start",
-				{},
+				{ reason: "resume" },
 				makeCtx({ cwd: tmpDir, sessionId: "primary" }),
 			);
 			expect(cascadeTier._getOutstandingCascadeTouchesForTests()).toEqual([]);

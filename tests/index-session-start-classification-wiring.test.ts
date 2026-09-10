@@ -149,7 +149,7 @@ describe("index session_start wiring — classification logged with mode (#2129)
 		});
 	}, 30_000);
 
-	it("an accepted same-id replacement in a different root carries sameRoot:false", async () => {
+	it("an accepted replacement in a different root carries sameRoot:false", async () => {
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
 		clearLatencyLog();
@@ -157,15 +157,15 @@ describe("index session_start wiring — classification logged with mode (#2129)
 
 		const first = makeCtx({ cwd: hostRoot, sessionId: "host-session" });
 		await pi.emit("session_start", makeSessionStartEvent(), first);
-		invalidate(first);
 		const replacementRoot = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-replacement-root-"),
 		);
 		try {
+			(first as { cwd: string }).cwd = replacementRoot;
 			await pi.emit(
 				"session_start",
-				makeSessionStartEvent(),
-				makeCtx({ cwd: replacementRoot, sessionId: "host-session" }),
+				makeSessionStartEvent({ reason: "resume" }),
+				first,
 			);
 			await flushLatencyLog();
 
