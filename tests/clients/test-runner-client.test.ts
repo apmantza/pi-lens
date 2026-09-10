@@ -1920,7 +1920,10 @@ describe("test-runner-client", () => {
 			// `MAX_WALK_DEPTH` (64, with its cap-trip latency record) plus the
 			// `$HOME` ceiling the private loop never had. Nest deeper than the
 			// cap so the hoisted node_modules at tmpDir is out of range.
-			const deepDir = path.join(tmpDir, ...Array.from({ length: 70 }, () => "a"));
+			const deepDir = path.join(
+				tmpDir,
+				...Array.from({ length: 70 }, () => "a"),
+			);
 			fs.mkdirSync(deepDir, { recursive: true });
 			fs.writeFileSync(
 				path.join(deepDir, "package.json"),

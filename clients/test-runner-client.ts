@@ -16,7 +16,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { emitBounded } from "./bounded-telemetry.js";
-import { LEDGER_FIELD_MAX } from "./degradation-ledger.js";
+import {
+	LEDGER_FIELD_MAX,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
@@ -38,6 +41,7 @@ import { findNearestDirWithAnyBasename } from "./workspace-topology.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 import { stripAnsi } from "./sanitize.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 
 // --- Types ---
 
@@ -135,6 +139,23 @@ export interface RunnerConfig {
 	 * becoming its own test target.
 	 */
 	kinds: readonly FileKind[];
+	/**
+	 * #2871: markers that anchor the CHILD's working directory, when they are
+	 * not this runner's own `configFiles` (the default).
+	 *
+	 * A file-scoped runner names the file or its package in `args`, so running
+	 * it from the nearest directory carrying its manifest is exactly right —
+	 * `go test ./internal/lightning` only resolves from the module that owns
+	 * `go.mod`. A WHOLE-PROJECT runner names nothing: moving its cwd changes
+	 * WHICH project is built. `gradle` launches the literal `./gradlew`, so a
+	 * module carrying `build.gradle.kts` but no wrapper would fail with `spawn
+	 * ./gradlew ENOENT`; `maven`'s reactor may not resolve a submodule's
+	 * parent at all. Both therefore anchor on their LAUNCHER instead: a module
+	 * that carries its own wrapper is a self-contained build and runs there,
+	 * anything else walks up to the build that owns the wrapper (in practice
+	 * the dispatch root), which is what these runners did before #2871.
+	 */
+	spawnCwdMarkers?: readonly string[];
 	command: string;
 	// Name of the binary in node_modules/.bin (and every package manager's
 	// global bin dir) — defaults to the runner key. Must match the ACTUAL
@@ -362,6 +383,8 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 			"settings.gradle.kts",
 		],
 		command: process.platform === "win32" ? "gradlew.bat" : "./gradlew",
+		// The child's cwd must be a directory the wrapper actually lives in.
+		spawnCwdMarkers: ["gradlew", "gradlew.bat"],
 		args: (_testFile, _cwd) => ["test", "--no-daemon"],
 		parseJson: false,
 	},
@@ -369,6 +392,7 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		kinds: ["java", "kotlin"],
 		configFiles: ["pom.xml"],
 		command: "mvn",
+		spawnCwdMarkers: ["mvnw", "mvnw.cmd"],
 		args: (_testFile, _cwd) => ["test", "-q"],
 		parseJson: false,
 	},
@@ -1392,6 +1416,61 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * The working directory the test-runner CHILD is spawned in (#2871).
+	 *
+	 * AGENTS.md defect shape 40: `resolveToolCwd` is the one seam for a child
+	 * process's cwd, and this file resolved its own — it handed
+	 * `safeSpawnAsync` the dispatch root, so `RUNNERS.go.args` built
+	 * `./tools/tapctl/internal/lightning` relative to a root module that does
+	 * not own that package. Marker discovery, the `.git` fallback, the
+	 * dispatch-root fallback, the `$HOME` ceiling, the once-per-key `tool-cwd`
+	 * log line and the bounded `tool-cwd-resolution` degradation now all come
+	 * from the seam, with the runner's own table as the markers.
+	 *
+	 * This is a SECOND value, never a reassignment of `cwd`: the failed-target
+	 * ledger (`recordResult` → `getFailedTargets`, read back by
+	 * `getTestRunTarget`) is keyed by the DISPATCH root, and re-keying it per
+	 * module would make a recorded failure unfindable from the turn that
+	 * selects targets.
+	 *
+	 * The seam is allowed to fall back OUTSIDE the dispatch root (its
+	 * file-dir/`$HOME` branches, for a file that is not under it at all) —
+	 * that is right for a formatter asked to format a foreign file, and wrong
+	 * here: turn-end already refuses an out-of-tree target (#2522), and a test
+	 * runner spawned in `$HOME` would run whatever suite it found there. Such
+	 * a resolution is clamped back to the dispatch root.
+	 */
+	private resolveSpawnCwd(
+		runner: string,
+		config: RunnerConfig,
+		testFile: string,
+		dispatchRoot: string,
+	): string {
+		const root = path.resolve(dispatchRoot);
+		const resolved = resolveToolCwd("runner", runner, testFile, {
+			cwd: root,
+			rootMarkers: config.spawnCwdMarkers ?? config.configFiles,
+		});
+		if (!isUnderDir(resolved, root)) {
+			// A refusal nothing can observe is a vacuous guard. The seam's own
+			// `tool-cwd-resolution` row is not it: its marker/git branches take
+			// no record at all for a file outside the dispatch root, and where
+			// it does record, the row says what the SEAM decided, not that the
+			// runner declined it. Second writer to a shared kind, so the
+			// subject carries an explicit discriminator (`runner-spawn:`) and
+			// can never collide with the seam's own subject, which is the bare
+			// tool name — once per runner per session either way.
+			recordDegradationOnce({
+				kind: "tool-cwd-resolution",
+				subject: `runner-spawn:${runner}`,
+				reason: `spawn cwd ${resolved} is outside the dispatch root ${root}; ran the test from the dispatch root instead`,
+			});
+			return root;
+		}
+		return resolved;
+	}
+
+	/**
 	 * Run tests for a specific file without blocking the event loop, so LSP
 	 * messages, other file writes, and all async operations continue while
 	 * tests run.
@@ -1439,16 +1518,25 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args, env } = await this.resolveExec(
+			const spawnCwd = this.resolveSpawnCwd(
 				runner,
 				config,
 				absoluteTestFile,
 				cwd,
 			);
-			this.log(`Running (async): ${command} ${args.join(" ")}`);
+			const { command, args, env } = await this.resolveExec(
+				runner,
+				config,
+				absoluteTestFile,
+				cwd,
+				spawnCwd,
+			);
+			this.log(
+				`Running (async): ${command} ${args.join(" ")} (cwd ${spawnCwd})`,
+			);
 
 			const result = await safeSpawnAsync(command, args, {
-				cwd,
+				cwd: spawnCwd,
 				timeout: 60000,
 				env,
 				// #2522 R2 F1. `safeSpawnAsync` resolves `options.signal ?? ambient`,
@@ -2592,9 +2680,8 @@ export class TestRunnerClient {
 		// failure the agent could not tell from a real one (#2870, measured).
 		let goInfraVerdict = false;
 		if (runner === "go") {
-			goInfraVerdict = /^FAIL[^\S\n]+\S+[^\S\n]+\[(?:build|setup) failed\]/m.test(
-				output,
-			);
+			goInfraVerdict =
+				/^FAIL[^\S\n]+\S+[^\S\n]+\[(?:build|setup) failed\]/m.test(output);
 			// #1524-r4: `(?![^\n]*\[(?:build|setup) failed\])` rejects go's
 			// INFRASTRUCTURE verdict lines — `FAIL <pkg> [build failed]` (a
 			// compile error) and `FAIL <pkg> [setup failed]` (no packages to
@@ -2919,6 +3006,17 @@ export class TestRunnerClient {
 		config: RunnerConfig,
 		testFile: string,
 		cwd: string,
+		/**
+		 * #2871: the directory the child will RUN in, which is the only cwd
+		 * `args()` may be built against — go's package path is relative to it.
+		 * Where the binary and the Python environment are INSTALLED is a
+		 * different question with a different answer: they stay resolved from
+		 * the dispatch root, exactly as before, so a workspace package whose
+		 * dependencies are hoisted to the repo root still finds
+		 * `node_modules/.bin/<runner>` instead of falling through to `npx`.
+		 * Defaults to `cwd`, which is every call where the two are the same.
+		 */
+		spawnCwd: string = cwd,
 	): Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> {
 		// Run pytest through the project interpreter itself, not a generic `python`
 		// resolved from the host PATH. The child-only environment also keeps tools
@@ -2928,7 +3026,7 @@ export class TestRunnerClient {
 			if (pythonEnvironment) {
 				return {
 					command: pythonEnvironment.pythonPath,
-					args: config.args(testFile, cwd),
+					args: config.args(testFile, spawnCwd),
 					env: augmentPythonEnvironment(process.env, pythonEnvironment),
 				};
 			}
@@ -2941,9 +3039,9 @@ export class TestRunnerClient {
 			const suffix = process.platform === "win32" ? ".bat" : "";
 			const vendorBin = path.join(cwd, "vendor", "bin", `phpunit${suffix}`);
 			if (fs.existsSync(vendorBin)) {
-				return { command: vendorBin, args: config.args(testFile, cwd) };
+				return { command: vendorBin, args: config.args(testFile, spawnCwd) };
 			}
-			return { command: "phpunit", args: config.args(testFile, cwd) };
+			return { command: "phpunit", args: config.args(testFile, spawnCwd) };
 		}
 
 		const binName = config.binName ?? runner;
@@ -2956,7 +3054,7 @@ export class TestRunnerClient {
 		if (fs.existsSync(localBin)) {
 			return {
 				command: localBin,
-				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+				args: stripWrapperArgs(binName, config.args(testFile, spawnCwd)),
 			};
 		}
 
@@ -2965,11 +3063,11 @@ export class TestRunnerClient {
 		if (globalBin) {
 			return {
 				command: globalBin,
-				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+				args: stripWrapperArgs(binName, config.args(testFile, spawnCwd)),
 			};
 		}
 
-		return { command: config.command, args: config.args(testFile, cwd) };
+		return { command: config.command, args: config.args(testFile, spawnCwd) };
 	}
 
 	private emptyResult(

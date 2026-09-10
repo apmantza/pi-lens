@@ -87,7 +87,14 @@ describe("language-profile roots", () => {
 
 		const workspace = path.join(tmp, "repo");
 		const module = path.join(workspace, "app", "gw");
-		const file = path.join(module, "src", "test", "java", "com", "FooTest.java");
+		const file = path.join(
+			module,
+			"src",
+			"test",
+			"java",
+			"com",
+			"FooTest.java",
+		);
 
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(path.join(workspace, "go.mod"), "module example.com/x\n");
