@@ -21,8 +21,8 @@
     }
   },
   "mcp": {
-    "descriptionTotal": 6198,
-    "total": 27167,
+    "descriptionTotal": 6272,
+    "total": 27274,
     "tools": {
       "pilens_analyze": 998,
       "pilens_ast_grep_replace": 2043,
@@ -40,6 +40,7 @@
       "pilens_read_symbol": 721,
       "pilens_rebuild": 364,
       "pilens_session_start": 475,
+	  "pilens_session_end": 107,
       "pilens_symbol_search": 1399,
       "pilens_turn_end": 700
     }

@@ -1,17 +1,27 @@
 import { logExtension } from "./extension-log.js";
-import { TOOL_REGISTRY } from "./tool-config.js";
+import { TOOL_REGISTRY, type ToolRegistryEntry } from "./tool-config.js";
 
-const situationalTools = TOOL_REGISTRY.filter(
-	(tool) => "situational" in tool && tool.situational === true,
+export type SituationalToolName = Extract<
+	ToolRegistryEntry,
+	{ situational: true }
+>["name"];
+
+type SituationalToolEntry = Extract<ToolRegistryEntry, { situational: true }>;
+
+const situationalTools: readonly SituationalToolName[] = TOOL_REGISTRY.filter(
+	(tool): tool is SituationalToolEntry =>
+		"situational" in tool && tool.situational === true,
 ).map((tool) => tool.name);
 const situationalToolSet = new Set(situationalTools);
-const activated = new Set<string>();
-const called = new Set<string>();
+const activated = new Set<SituationalToolName>();
+const called = new Set<SituationalToolName>();
 let sessionStarted = false;
 let emitted = false;
 
-function observe(set: Set<string>, name: string): void {
-	if (situationalToolSet.has(name)) set.add(name);
+function observe(set: Set<SituationalToolName>, name: string): void {
+	if (situationalToolSet.has(name as SituationalToolName)) {
+		set.add(name as SituationalToolName);
+	}
 }
 
 export function observeSituationalToolActivation(
@@ -20,7 +30,7 @@ export function observeSituationalToolActivation(
 	for (const name of names) observe(activated, name);
 }
 
-export function observeSituationalToolCall(name: string): void {
+export function observeSituationalToolCall(name: SituationalToolName): void {
 	observe(called, name);
 }
 

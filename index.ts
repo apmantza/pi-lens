@@ -14,6 +14,7 @@ import {
 	recordDegradation,
 	renderDegradationLines,
 } from "./clients/degradation-ledger.js";
+import { toolRegistryEntryForPi } from "./clients/tool-config.js";
 import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
@@ -2434,7 +2435,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		observeSituationalToolCall((event as { toolName?: string }).toolName ?? "");
+		const toolEntry = toolRegistryEntryForPi(
+			(event as { toolName?: string }).toolName ?? "",
+		);
+		if (toolEntry && "situational" in toolEntry && toolEntry.situational) {
+			observeSituationalToolCall(toolEntry.name);
+		}
 		return handleToolCall({
 			event: event as unknown as Parameters<typeof handleToolCall>[0]["event"],
 			ctx: ctx as unknown as Parameters<typeof handleToolCall>[0]["ctx"],

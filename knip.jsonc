@@ -62,6 +62,7 @@
 		// consumer, so a lane can never hide dead code from knip.
 		"tests/real-harness/*.test.ts",
 		"tests/config/*.test.ts",
+		"tests/mcp/session-end.smoke.test.ts",
 		"tests/clients/*.test.ts",
 		"tests/clients/**/*.test.ts",
 		"tests/scripts/*.test.ts"

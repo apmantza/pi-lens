@@ -36,6 +36,9 @@ inherits. This contract adds the standing readout.
    records and by `message` from `extension.log` at `level:"error"`; any
    message that repeats per file or per occurrence is flagged as catalog
    shape 10 with the emit site if it can be found by grep.
+   Also report `Situational dead weight` from the `tools` extension-log row,
+   including its bounded `metadata.tools` list; `[]` means every situational
+   tool was activated or called in the session.
 6. **Backlogs**: `lsp_document_drift` rows by disposition, files affected,
    `driftAgeMs` p50/p95/max; `agent_end_deferred_mutation_drain` durations and
    coalesced path counts; `deferred_format_file` runs with `changed:true`

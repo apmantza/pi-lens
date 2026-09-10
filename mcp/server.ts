@@ -1940,7 +1940,10 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				sendResult(id ?? null, toolText(`Unknown or disabled tool: ${name}`));
 				return;
 			}
-			observeSituationalToolCall(name);
+			const entry = toolRegistryEntryForMcp(name);
+			if (entry && "situational" in entry && entry.situational) {
+				observeSituationalToolCall(entry.name);
+			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`
 			// (PI_LENS_MCP_AUTO_SESSION=1) but never completed successfully — never
 			// attempted, still in flight, or threw — nudge it here too. Cheap no-op

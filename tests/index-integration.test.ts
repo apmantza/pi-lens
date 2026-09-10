@@ -222,6 +222,60 @@ describe("index.ts integration", () => {
 	);
 
 	it(
+		"real pi session observes two situational calls before one shutdown row",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			await handlers.session_start?.[0]?.(
+				{},
+				makeCtx({ cwd: tmpDir, sessionId: "pi-dead-weight" }),
+			);
+			const toolCall = handlers.tool_call?.[0];
+			expect(toolCall).toBeTypeOf("function");
+			await toolCall?.(
+				{ toolName: "ast_grep_search", input: { pattern: "const $A = $B" } },
+				makeCtx({ cwd: tmpDir, sessionId: "pi-dead-weight" }),
+			);
+			await toolCall?.(
+				{ toolName: "ast_grep_replace", input: { pattern: "const $A = $B" } },
+				makeCtx({ cwd: tmpDir, sessionId: "pi-dead-weight" }),
+			);
+			await handlers.session_shutdown?.[0]?.(
+				{},
+				makeCtx({ cwd: tmpDir, sessionId: "pi-dead-weight" }),
+			);
+
+			expect(logExtension).toHaveBeenCalledWith({
+				subsystem: "tools",
+				level: "debug",
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_outline",
+						"ast_grep_dump",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			});
+			expect(
+				logExtension.mock.calls.filter(
+					([row]) =>
+						(row as { message?: string }).message ===
+						"situational tool dead weight",
+				),
+			).toHaveLength(1);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"session_shutdown uses fast LSP reset so teardown does not wait on graceful shutdown",
 		async () => {
 			const resetLSPService = vi.fn();

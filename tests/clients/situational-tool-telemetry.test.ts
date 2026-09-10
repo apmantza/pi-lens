@@ -24,18 +24,18 @@ describe("situational dead-weight telemetry", () => {
 		emitSituationalDeadWeight();
 
 		const entry = logExtension.mock.calls[0]?.[0] as ExtensionLogEntry;
-		expect(entry).toMatchObject({
+		expect(entry).toEqual({
 			subsystem: "tools",
 			level: "debug",
 			message: "situational tool dead weight",
-		});
-		expect(entry.metadata).toEqual({
-			tools: [
-				"ast_grep_replace",
-				"ast_grep_outline",
-				"ast_grep_dump",
-				"lens_diagnostic_mark",
-			],
+			metadata: {
+				tools: [
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"ast_grep_dump",
+					"lens_diagnostic_mark",
+				],
+			},
 		});
 	});
 
