@@ -11,6 +11,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	boundToolText,
+	COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES,
+} from "../../tools/render-compact.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { McpHarness, repoRoot } from "./harness.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
@@ -85,9 +93,8 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
 		// MCP must not keep the old whole-project-only verification advice.
 		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
-		expect(diagnosticsTool?.description).toContain("no cached diagnostics");
 		expect(diagnosticsTool?.description).toContain(
-			"unlike pilens_lsp_diagnostics",
+			"mode=full is an active LSP scan of paths",
 		);
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
@@ -313,4 +320,90 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		const res = await harness.request(4, "no/such/method");
 		expect((res.error as { code: number }).code).toBe(-32601);
 	}, 25_000);
+});
+
+describe("pi-lens MCP result bounds", { retry: 2 }, () => {
+	it("caps the complete MCP payload before retaining or logging it", async () => {
+		const previousHome = process.env.PI_LENS_HOME;
+		const home = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-result-budget-home-"),
+		);
+		process.env.PI_LENS_HOME = home;
+		resetDegradationLedger();
+		let input: string | undefined = Array.from(
+			{ length: 10_000 },
+			(_, index) => `const value${index} = "${"x".repeat(900)}";`,
+		).join("\n");
+		try {
+			if (typeof globalThis.gc === "function") globalThis.gc();
+			const before = process.memoryUsage().heapUsed;
+			const result = boundToolText(input);
+			input = undefined;
+			if (typeof globalThis.gc === "function") globalThis.gc();
+			const after = process.memoryUsage().heapUsed;
+			console.log(
+				`10,000-match probe: input=9218889 bytes, heap before=${before}, after=${after}, delta=${after - before} bytes`,
+			);
+			const logPath = result.text.match(/Full output: ([^\]\n]+)/)?.[1];
+			expect(result.text).toContain("[incomplete: ");
+			expect(result.text).toContain(
+				`budget ${COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES}]`,
+			);
+			expect(logPath).toBeTruthy();
+			const logged = fs.readFileSync(logPath as string, "utf8");
+			expect(Buffer.byteLength(logged)).toBeLessThan(8 * 1024 * 1024 + 1024);
+			expect(logged).toContain("value0");
+			expect(logged).toContain("value9999");
+			let secondInput: string | undefined = "y".repeat(
+				COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES + 1,
+			);
+			boundToolText(secondInput);
+			secondInput = undefined;
+			const budgetRows = getDegradationSummary().filter(
+				(row) => row.kind === "mcp-complete-result-budget-exceeded",
+			);
+			expect(budgetRows).toHaveLength(1);
+		} finally {
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	}, 180_000);
+
+	it("bounds a large AST replacement and keeps the full result in the session log", async () => {
+		const workspace = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-result-"),
+		);
+		const source = Array.from(
+			{ length: 320 },
+			(_, index) => `const value${index} = "${"x".repeat(900)}";`,
+		).join("\n");
+		const sourcePath = path.join(workspace, "large.ts");
+		fs.writeFileSync(sourcePath, source);
+		const harness = new McpHarness({ cwd: workspace });
+		try {
+			const res = await harness.request(1, "tools/call", {
+				name: "pilens_ast_grep_replace",
+				arguments: {
+					pattern: "const $X = $Y;",
+					rewrite: "let $X = $Y;",
+					lang: "typescript",
+					paths: [sourcePath],
+					apply: false,
+				},
+			});
+			const text = (res.result as { content: { text: string }[] }).content[0]
+				.text;
+			const logPath = text.match(/Full output: ([^\]\n]+)/)?.[1];
+			expect(Buffer.byteLength(text)).toBeLessThanOrEqual(40 * 1024);
+			expect(text).toMatch(/\d+ characters omitted/);
+			expect(logPath).toBeTruthy();
+			const fullText = fs.readFileSync(logPath as string, "utf8");
+			expect(Buffer.byteLength(fullText)).toBeGreaterThan(40 * 1024);
+			expect(fullText).toContain("value319");
+		} finally {
+			harness.dispose();
+			fs.rmSync(workspace, { recursive: true, force: true });
+		}
+	}, 45_000);
 });

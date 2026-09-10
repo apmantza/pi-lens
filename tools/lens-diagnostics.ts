@@ -253,7 +253,7 @@ export function createLensDiagnosticsTool(
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			'Query pi-lens diagnostics across ALL dispatch runners (unlike lsp_diagnostics, which is LSP only). mode=delta/all are cache-only and instant; mode=full is an expensive active LSP scan of paths (or the whole project) merged with cached runner state. If changed files have no cached diagnostics or their findings are stale, use mode=full with paths for a targeted active scan; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
+			'Query pi-lens diagnostics across dispatch runners. mode=delta/all are cache-only and instant; mode=full is an active LSP scan of paths (or the project) merged with cached runner state. If changed files have no cached diagnostics or stale findings, use mode=full with paths; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
 		promptSnippet:
 			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
