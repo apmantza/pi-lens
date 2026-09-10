@@ -14,7 +14,7 @@ import {
 	renderCompactProjectReport,
 	type ProjectReport,
 } from "../clients/lens-engine.js";
-import { compactRenderResult } from "./render-compact.js";
+import { compactRenderResult, renderToolText } from "./render-compact.js";
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -83,25 +83,17 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 				});
 			} catch (err) {
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Project report failed: ${errorMessage(err)}`,
-						},
-					],
+					...renderToolText(`Project report failed: ${errorMessage(err)}`),
 					isError: true,
 					details: { available: false },
 				};
 			}
 			if (!report.available) {
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text:
-								report.hint ?? "No review graph cached for this workspace yet.",
-						},
-					],
+					...renderToolText(
+						report.hint ?? "No review graph cached for this workspace yet.",
+						report,
+					),
 					isError: true,
 					details: { available: false, hint: report.hint },
 				};

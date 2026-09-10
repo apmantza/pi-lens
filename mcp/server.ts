@@ -1387,7 +1387,7 @@ async function callTool(
 			(graphStaleness ? `\n\n${graphStaleness}` : "");
 		if (view === "compact") {
 			const compactText = renderCompactModuleReport(report);
-			return {
+			return renderToolResultContract({
 				content: [
 					{
 						type: "text" as const,
@@ -1396,7 +1396,7 @@ async function callTool(
 							: compactText,
 					},
 				],
-			};
+			});
 		}
 		// Compact (unindented) JSON — matches the pi tool's mirror (#512); an
 		// agent parses this payload, it doesn't read it formatted.
@@ -1432,7 +1432,7 @@ async function callTool(
 			: undefined;
 		if (view === "compact") {
 			const compactText = renderCompactProjectReport(report);
-			return {
+			return renderToolResultContract({
 				content: [
 					{
 						type: "text" as const,
@@ -1441,7 +1441,7 @@ async function callTool(
 							: compactText,
 					},
 				],
-			};
+			});
 		}
 		const summary =
 			`Project report — ${report.hubs?.length ?? 0} hub(s), ` +
