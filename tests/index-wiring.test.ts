@@ -1614,28 +1614,39 @@ describe("hook handler crash surfacing (#2884)", () => {
 	});
 
 	it("classifies a stale observed-ledger refresh without recording a handler crash", async () => {
-		const pi = createPiMock();
-		extension(pi.asExtensionAPI());
-		const staleCtx = makeCtx({ cwd: tmp, sessionId: "refresh-stale" });
-		Object.defineProperty(staleCtx, "signal", {
-			configurable: true,
-			get() {
-				throw new Error(
-					"This extension ctx is stale after session replacement or reload",
-				);
-			},
-		});
+		const savedVitest = process.env.VITEST;
+		delete process.env.VITEST;
+		try {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			const staleCtx = makeCtx({ cwd: tmp, sessionId: "refresh-stale" });
+			Object.defineProperty(staleCtx, "signal", {
+				configurable: true,
+				get() {
+					// Keep the ctx live through dispatch, ambient-signal setup, and the
+					// observed sweep. The stale swap lands only at the refresh read.
+					if (new Error().stack?.includes("refreshObservedLedgerSafely"))
+						throw new Error(
+							"This extension ctx is stale after session replacement or reload",
+						);
+					return undefined;
+				},
+			});
 
-		await expect(
-			pi.emit("agent_settled", {}, staleCtx),
-		).resolves.toBeUndefined();
+			await expect(
+				pi.emit("agent_settled", {}, staleCtx),
+			).resolves.toBeUndefined();
 
-		expect(getDegradationSummary()).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ kind: "extension-ctx-stale" }),
-			]),
-		);
-		expect(crashLedgerGroup()).toBeUndefined();
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "extension-ctx-stale" }),
+				]),
+			);
+			expect(crashLedgerGroup()).toBeUndefined();
+		} finally {
+			if (savedVitest === undefined) delete process.env.VITEST;
+			else process.env.VITEST = savedVitest;
+		}
 	});
 
 	it("keeps swallowing a crashed turn_end off the test runner, with one bounded record", async () => {
