@@ -492,7 +492,7 @@ describe("PR body lint (#1844)", () => {
 		const result = lintLocalPrBody(
 			body.replace(
 				"The advisory check run is the record.",
-				"covered by existing record `tool-cwd-resolution` at `clients/existing-record.ts:42`",
+				"covered by existing record `tool-cwd-resolution` at `clients/existing-record.ts:1`",
 			),
 			process.cwd(),
 			() =>
@@ -501,7 +501,7 @@ describe("PR body lint (#1844)", () => {
 		expect(result.valid).toBe(true);
 	});
 
-	it("accepts a record literal from a runtime file touched by the diff", () => {
+	it("does not accept a record literal from a touched runtime file without an explicit claim", () => {
 		const source = join(process.cwd(), "clients", "touched-record.ts");
 		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
 		writeFileSync(
@@ -517,7 +517,30 @@ describe("PR body lint (#1844)", () => {
 			() =>
 				"diff --git a/clients/touched-record.ts b/clients/touched-record.ts\n+catch (error) { resolveToolCwd(error); }",
 		);
-		expect(result.valid).toBe(true);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("touched-record");
+	});
+
+	it.each([
+		["wrong literal", "missing-record", "1"],
+		["line too far", "tool-cwd-resolution", "100"],
+	])("rejects an invalid explicit record claim (%s)", (_case, kind, line) => {
+		const source = join(process.cwd(), "clients", "located-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(
+			source,
+			'recordDegradationOnce({ kind: "tool-cwd-resolution" });\n',
+		);
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				`covered by existing record \`${kind}\` at \`clients/located-record.ts:${line}\``,
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(false);
 	});
 
 	it("rejects an existing-record claim when the named file has no matching literal", () => {

@@ -1,9 +1,0 @@
-Unit tests UNKNOWN STEP 2026-09-09T23:33:43.9625491Z [mem-file] peakRssMb=1406 heapUsedMb=710 externalMb=3 tests/index-integration.test.ts
-Unit tests UNKNOWN STEP 2026-09-09T23:34:01.9359308Z [mem-file] peakRssMb=1300 heapUsedMb=68 externalMb=20 tests/clients/flake-shape-ratchet.test.ts
-Unit tests UNKNOWN STEP 2026-09-09T23:34:09.8512876Z [mem-file] peakRssMb=753 heapUsedMb=27 externalMb=2 tests/clients/availability-policy-coverage.test.ts
-Unit tests UNKNOWN STEP 2026-09-09T23:35:16.5459197Z ✓ pi-lens MCP server (stdio smoke) (11)
-Unit tests UNKNOWN STEP 2026-09-09T23:35:16.5477001Z ✓ answers tools/call pilens_analyze (warm) with a real dispatch result
-Unit tests UNKNOWN STEP 2026-09-09T23:35:16.6000000Z  FAIL default tests/clients/flake-shape-ratchet.test.ts > admission gate
- FAIL default tests/clients/flake-shape-ratchet.test.ts > admission gate
-Unit tests UNKNOWN STEP 2026-09-09T23:35:16.7000000Z shell: line 1: 2463 Killed node scripts/with-memory-watch.mjs -- npm test
-Unit tests UNKNOWN STEP 2026-09-09T23:35:16.7244505Z ##[error]Process completed with exit code 137.

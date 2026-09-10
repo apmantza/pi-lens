@@ -180,12 +180,15 @@ function isRuntimeObservabilityPath(name) {
 
 function runtimeObservabilityFromDiff(diff = "") {
 	const records = new Set();
+	const paths = new Set();
 	let runtime = false;
 	let added = "";
 	let currentRuntime = false;
 	for (const line of String(diff).split(/\r?\n/)) {
 		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
 		if (header) {
+			for (const path of header.slice(1))
+				if (isRuntimeObservabilityPath(path)) paths.add(path);
 			currentRuntime = [header[1], header[2]].some(isRuntimeObservabilityPath);
 			runtime ||= currentRuntime;
 			continue;
@@ -195,28 +198,10 @@ function runtimeObservabilityFromDiff(diff = "") {
 	}
 	if (!runtime) return { runtime: false, records, failurePath: false };
 	const blanked = blankCommentsAndStrings(added);
-	const calls = [
-		["recordDegradationOnce", ["kind"]],
-		["incrementDegradationCount", ["kind"]],
-		["logExtension", ["subsystem", "message"]],
-		["logLatency", ["phase", "event", "eventName", "name"]],
-		["emitBounded", ["kind", "event", "eventName"]],
-	];
-	for (const [name, fields] of calls) {
-		const callPattern = new RegExp(`${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`, "g");
-		for (const match of blanked.matchAll(callPattern)) {
-			const original = added.slice(match.index, match.index + match[0].length);
-			for (const field of fields) {
-				const value = new RegExp(`${field}\\s*:\\s*["']([^"']+)["']`).exec(
-					original,
-				)?.[1];
-				if (value) records.add(value);
-			}
-		}
-	}
 	return {
 		runtime: true,
-		records,
+		records: recordLiteralsFromRuntimeSource(added),
+		paths,
 		failurePath:
 			/\bcatch\b|\brecordDegradationOnce\b|\bthrow\b|\breturn\s+null\b/.test(
 				blanked,
@@ -261,17 +246,6 @@ function recordLiteralsFromRuntimeSource(source) {
 	return records;
 }
 
-function runtimePathsFromDiff(diff = "") {
-	const paths = new Set();
-	for (const line of String(diff).split(/\r?\n/)) {
-		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-		if (!header) continue;
-		for (const path of header.slice(1))
-			if (isRuntimeObservabilityPath(path)) paths.add(path);
-	}
-	return paths;
-}
-
 function lintRuntimeObservability(
 	body,
 	lines,
@@ -282,28 +256,36 @@ function lintRuntimeObservability(
 	const observation = runtimeObservabilityFromDiff(diff);
 	if (!observation.runtime) return [];
 	const content = observabilitySectionContent(body, lines, headings);
-	const touchedRecords = new Set(observation.records);
-	for (const path of runtimePathsFromDiff(diff)) {
+	for (const path of observation.paths) {
 		try {
 			for (const record of recordLiteralsFromRuntimeSource(
 				readFileSync(resolve(cwd, path), "utf8"),
 			))
-				touchedRecords.add(record);
+				observation.records.add(record);
 		} catch {
 			// A synthetic diff or a deleted path cannot prove a record exists.
 		}
 	}
-	if ([...touchedRecords].some((record) => content.includes(record))) return [];
 	const existingRecord =
 		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
 	if (existingRecord) {
-		const [, kind, file] = existingRecord;
+		const [, kind, file, lineText] = existingRecord;
+		const lineNumber = Number(lineText);
 		try {
 			const source = readFileSync(
 				isAbsolute(file) ? file : resolve(cwd, file),
 				"utf8",
 			);
-			if (recordLiteralsFromRuntimeSource(source).has(kind)) return [];
+			const sourceLines = source.split(/\r?\n/);
+			if (
+				recordLiteralsFromRuntimeSource(source).has(kind) &&
+				sourceLines.some(
+					(line, index) =>
+						Math.abs(index + 1 - lineNumber) <= 20 &&
+						(line.includes(`"${kind}"`) || line.includes(`'${kind}'`)),
+				)
+			)
+				return [];
 		} catch {
 			// Fall through to the existing strict error.
 		}

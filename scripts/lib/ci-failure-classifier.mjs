@@ -461,15 +461,6 @@ export function classifyFailureLog(rawLog) {
 	// Kill evidence is stronger than the network+timeout inference, but a
 	// genuine assertion/compiler failure beside a kill remains real below.
 	if (timeoutOnly && killClassification) return killClassification;
-	if (
-		killClassification &&
-		!ASSERTION_LINE.test(log) &&
-		!TYPESCRIPT_ERROR.test(log) &&
-		!INLINE_SUITE_FAIL.test(log) &&
-		!INLINE_TEST_FAIL_MARKER.test(log)
-	)
-		return killClassification;
-
 	if (timeoutOnly) {
 		const netEvidence = findNetworkUnreachableEvidence(log);
 		if (netEvidence) {

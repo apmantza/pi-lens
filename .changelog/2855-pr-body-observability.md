@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Accept existing bounded records in PR-body observability lint (refs #2855)** — verify an explicitly named record at its source file or discover records in touched runtime files.
+- **Verify explicit existing records in PR-body observability lint (refs #2855)** — require the named kind in the named source file and verify its cited line is within 20 lines of the literal.
