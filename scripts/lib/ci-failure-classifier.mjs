@@ -141,6 +141,7 @@ const ERROR_LINE = /^\s*(?:Error|[A-Za-z]+Error):[^\r\n]*$/;
 // guess at one).
 const MEM_WATCH_KILLED = /\[mem-watch\] KILLED[^\r\n]*/;
 const MEM_WATCH_SAMPLE = /\[mem-watch\][^\r\n]*availableMb=\d+ of \d+/g;
+const MEM_FILE_PEAK = /\[mem-file\] peakRssMb=(\d+)[^\r\n]*? (tests\/\S+)/g;
 const EXIT_137_SHAPED = /exit code 137|exitCode=137|signal=SIGKILL/;
 // (real log, run 32908647308, job 97998085238) the OOM killer took the
 // wrapper process itself, mid test run, before it could print any verdict:
@@ -385,10 +386,17 @@ function isTimeoutOnlyFailure(log) {
 }
 
 function findKillClassification(log) {
+	const peakFiles = [...log.matchAll(MEM_FILE_PEAK)]
+		.map((match) => ({ rss: Number(match[1]), file: match[2] }))
+		.sort((left, right) => right.rss - left.rss)
+		.slice(0, 3);
+	const peakDetail = peakFiles.length
+		? `; heaviest files by peak RSS: ${peakFiles.map(({ file, rss }) => `${file} (${rss} MB)`).join(", ")}`
+		: "";
 	const killedVerdict = MEM_WATCH_KILLED.exec(log);
 	if (killedVerdict) {
 		const evidence = describeKernelKillEvidence(log);
-		const detail = `no failing assertion; ${killedVerdict[0].trim()}${evidence ? `; ${evidence}` : ""}`;
+		const detail = `no failing assertion; ${killedVerdict[0].trim()}${peakDetail}${evidence ? `; ${evidence}` : ""}`;
 		return { kind: "infra-kill", detail };
 	}
 	if (
@@ -403,7 +411,7 @@ function findKillClassification(log) {
 		const baseDetail = lastSample
 			? `no failing assertion; last sample before the kill: ${lastSample}`
 			: "no failing assertion; no [mem-watch] verdict line -- the run ended before any verdict was printed";
-		const detail = `${baseDetail}${evidence ? `; ${evidence}` : ""}`;
+		const detail = `${baseDetail}${peakDetail}${evidence ? `; ${evidence}` : ""}`;
 		return { kind: "infra-kill", detail };
 	}
 	return null;
@@ -453,6 +461,14 @@ export function classifyFailureLog(rawLog) {
 	// Kill evidence is stronger than the network+timeout inference, but a
 	// genuine assertion/compiler failure beside a kill remains real below.
 	if (timeoutOnly && killClassification) return killClassification;
+	if (
+		killClassification &&
+		!ASSERTION_LINE.test(log) &&
+		!TYPESCRIPT_ERROR.test(log) &&
+		!INLINE_SUITE_FAIL.test(log) &&
+		!INLINE_TEST_FAIL_MARKER.test(log)
+	)
+		return killClassification;
 
 	if (timeoutOnly) {
 		const netEvidence = findNetworkUnreachableEvidence(log);
