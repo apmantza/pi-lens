@@ -32,7 +32,7 @@
  *
  * ## The two rules, in one line each
  *
- * A site conforms when the options literal has a PROPERTY NAMED `cwd`; a
+ * A site conforms when the options literal has a usable PROPERTY NAMED `cwd`; a
  * same-file function is a spawn-routing wrapper when a spawn's `cwd` value
  * resolves to one of that function's OWN parameters, and then its CALLERS are
  * the sites checked. Both are answered off the real AST (`@ast-grep/napi`, the
@@ -40,13 +40,10 @@
  *
  * ## Scope
  *
- * Direct children of `clients/dispatch/runners/` only, never `runners/utils/`:
- * several helpers there deliberately omit `cwd` for a genuine global-PATH
- * presence probe (`runner-helpers.ts`'s "3. Global PATH"
- * `safeSpawnAsync(toolName, ["--version"], { timeout: 3000 })`), a different
- * and legitimate shape from a runner spawning an analysis pass on a project
- * file. Widening into `utils/` needs its own exemption design rather than
- * borrowing this one.
+ * The population covers `clients/`, `tools/`, `mcp/`, and `index.ts`. Genuine
+ * global probes and deliberate non-seam cwd derivations remain exact, keyed
+ * admissions with one reason per row. Every other site must pass `cwd`, and
+ * every supplied value must resolve through the imported tool-cwd seam.
  *
  ## What the scan cannot see, and what closes it here
  *
@@ -65,13 +62,6 @@
  * an uncounted spawn. (A namespace import is already covered — `calleeName`
  * reads `ns.safeSpawnAsync(...)` through the member expression.)
  *
- * A call site that genuinely has no cwd to get wrong carries a single-line
- * `// cwd-exempt: <reason>` comment on the line DIRECTLY above the call (other
- * explanatory comments may sit above that; the tag line itself must be the one
- * immediately preceding), and the reason has to be a real one — a tag under
- * 15 characters of reason exempts nothing, which the scan decides so a fixture
- * can prove it. The sweep additionally fails on an exemption whose call site
- * now passes `cwd` anyway, so a stale exemption cannot rot in place.
  */
 
 import * as fs from "node:fs";
@@ -106,11 +96,6 @@ const POPULATION_FILES = [
 	),
 ].filter((file, index, all) => all.indexOf(file) === index);
 
-/** Content-keyed origin admissions. The key is stable across inserted lines. */
-const EXEMPTION_REASONS: Record<string, string> = Object.fromEntries(
-	[].map((key) => [key, "origin admission is recorded by the content key"]),
-);
-
 /**
  * The exact population, measured 2026-09-07. These are pinned, not floored:
  * round 2 declared an emptiness floor of 25 against 58 live sites, and a floor
@@ -120,13 +105,14 @@ const EXEMPTION_REASONS: Record<string, string> = Object.fromEntries(
  * with every remaining site still conforming, so a floor stays green while the
  * ratchet's reach shrinks (round-2 review F3).
  *
- * **These are the numbers to bump when you add or remove a runner spawn.** A
+ * **These are the numbers to bump when you add or remove a child spawn.** A
  * new `safeSpawnAsync`/`safeSpawnSync` call, or a new call site of one of the
- * wrappers below, moves `EXPECTED_SITES` by one; a new runner file moves
+ * wrappers below, moves `EXPECTED_DIRECT_SITES` by one; a new runner file moves
  * `EXPECTED_FILES`. Bumping them is the whole cost, and it is deliberate: the
  * bump is where a reviewer sees a spawn was added.
  */
 const EXPECTED_FILES = 76;
+const EXPECTED_DIRECT_SITES = 136;
 const EXPECTED_WRAPPER_SITES = [
 	"clients/biome-client.ts:spawnBiomeAsync",
 	"clients/biome-client.ts:spawnBiomeAsync",
@@ -168,42 +154,521 @@ const EXPECTED_WRAPPERS = [
 		EXPECTED_WRAPPER_SITES.map((site) => site.split(":").slice(0, 2).join(":")),
 	),
 ];
-const NO_CWD_PROBE_KEYS = new Set([
-	"clients/dispatch/runners/cpp-check.ts#resolveCompiler",
-	"clients/dispatch/runners/psscriptanalyzer.ts#resolvePowerShellCmd",
-	"clients/dispatch/runners/psscriptanalyzer.ts#checkModuleAvailable",
-	"clients/dispatch/runners/utils/candidate-probe.ts#probeAvailabilityCandidates",
-	"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync",
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync",
-]);
-const RUNNER_ORIGIN_ADMISSIONS = new Set([
-	"clients/dispatch/runners/biome-check.ts#resolveBiomeFixKinds",
-	"clients/dispatch/runners/cpp-check.ts#resolveCompiler",
-	"clients/dispatch/runners/credo.ts#probeCredo",
-	"clients/dispatch/runners/cue-vet.ts#cueVetRunner",
-	"clients/dispatch/runners/eslint.ts#makeEslintProbe",
-	"clients/dispatch/runners/helm-lint.ts#lintChart",
-	"clients/dispatch/runners/helm-render.ts#runIacPass",
-	"clients/dispatch/runners/helm-render.ts#renderAndValidate",
-	"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand",
-	"clients/dispatch/runners/psscriptanalyzer.ts#spawnPs",
-	"clients/dispatch/runners/rust-clippy.ts#rustClippyRunner",
-	"clients/dispatch/runners/terragrunt.ts#terragruntRunner",
-	"clients/dispatch/runners/tflint.ts#tflintRunner",
-	"clients/dispatch/runners/helm-lint.ts#helmLintRunner",
-	"clients/dispatch/runners/rust-clippy.ts#makeClippyProbe",
-	"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts#performInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstall",
-	"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstallForFormatter",
-	"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker",
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand",
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync",
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync",
-]);
+const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/biome-client.ts#BiomeClient:91ce6b49",
+		"clients/biome-client.ts:213 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dead-code-client.ts#PythonDeadCodeClient:262cd861",
+		"clients/dead-code-client.ts:313 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dead-code-client.ts#PythonDeadCodeClient:488c639e",
+		"clients/dead-code-client.ts:406 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dependency-checker.ts#4a8eaea5",
+		"clients/dependency-checker.ts:679 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/dispatcher.ts#checkToolAvailability:8476f379",
+		"clients/dispatch/dispatcher.ts:213 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/cpp-check.ts#resolveCompiler:ef272657",
+		"clients/dispatch/runners/cpp-check.ts:133 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/psscriptanalyzer.ts#resolvePowerShellCmd:54c5ac70",
+		"clients/dispatch/runners/psscriptanalyzer.ts:186 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/psscriptanalyzer.ts#checkModuleAvailable:cb19d7fd",
+		"clients/dispatch/runners/psscriptanalyzer.ts:238 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/utils/candidate-probe.ts#probeAvailabilityCandidates:de7597bc",
+		"clients/dispatch/runners/utils/candidate-probe.ts:77 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync:1358e678",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1826 is a global or environment probe with no project target",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync:84565942",
+		"clients/dispatch/runners/utils/runner-helpers.ts:2166 is a global or environment probe with no project target",
+	],
+	[
+		"clients/formatters.ts#which:d19ba32a",
+		"clients/formatters.ts:506 is a global or environment probe with no project target",
+	],
+	[
+		"clients/formatters.ts#resolveGoFmtBinary:041f83b9",
+		"clients/formatters.ts:589 is a global or environment probe with no project target",
+	],
+	[
+		"clients/formatters.ts#csharpierFormatter:2ca1f9e8",
+		"clients/formatters.ts:1510 is a global or environment probe with no project target",
+	],
+	[
+		"clients/formatters.ts#csharpierFormatter:ed0ec0c0",
+		"clients/formatters.ts:1528 is a global or environment probe with no project target",
+	],
+	[
+		"clients/formatters.ts#psscriptanalyzerFormatFormatter:d19ba32a",
+		"clients/formatters.ts:1702 is a global or environment probe with no project target",
+	],
+	[
+		"clients/govulncheck-client.ts#GovulncheckClient:ba9d5f6b",
+		"clients/govulncheck-client.ts:163 is a global or environment probe with no project target",
+	],
+	[
+		"clients/govulncheck-client.ts#GovulncheckClient:907edd61",
+		"clients/govulncheck-client.ts:209 is a global or environment probe with no project target",
+	],
+	[
+		"clients/govulncheck-client.ts#GovulncheckClient:7c57359c",
+		"clients/govulncheck-client.ts:305 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#verifyAstGrepProbePath:a18df340",
+		"clients/installer/index.ts:2078 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#verifyToolBinary:8331866b",
+		"clients/installer/index.ts:2553 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#getAllToolStatuses:d13d9713",
+		"clients/installer/index.ts:2694 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#getPythonUserBaseCandidates:63a9db2b",
+		"clients/installer/index.ts:3372 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installGitHubTool:f4b22347",
+		"clients/installer/index.ts:3701 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installGitHubTool:4f6bccd6",
+		"clients/installer/index.ts:3747 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installGitHubTool:297c02d9",
+		"clients/installer/index.ts:3756 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#probeManagedToolVersion:eb60a80f",
+		"clients/installer/index.ts:4119 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installPipTool:7100b335",
+		"clients/installer/index.ts:5251 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installPipTool:cdb6c69e",
+		"clients/installer/index.ts:5271 is a global or environment probe with no project target",
+	],
+	[
+		"clients/installer/index.ts#installGemTool:b6a5f9a3",
+		"clients/installer/index.ts:5369 is a global or environment probe with no project target",
+	],
+	[
+		"clients/knip-client.ts#KnipClient:a1223aae",
+		"clients/knip-client.ts:473 is a global or environment probe with no project target",
+	],
+	[
+		"clients/lsp/jvm-runtime.ts#runJavaProbe:bae0ccaa",
+		"clients/lsp/jvm-runtime.ts:241 is a global or environment probe with no project target",
+	],
+	[
+		"clients/lsp/server.ts#tryGoInstallGopls:d19ba32a",
+		"clients/lsp/server.ts:1631 is a global or environment probe with no project target",
+	],
+	[
+		"clients/lsp/server.ts#tryDotnetToolInstall:d19ba32a",
+		"clients/lsp/server.ts:1641 is a global or environment probe with no project target",
+	],
+	[
+		"clients/lsp/server.ts#tryDotnetToolInstall:c1f5a0ed",
+		"clients/lsp/server.ts:1657 is a global or environment probe with no project target",
+	],
+	[
+		"clients/lsp/server.ts#tryGemInstall:d19ba32a",
+		"clients/lsp/server.ts:2026 is a global or environment probe with no project target",
+	],
+	[
+		"clients/mcp/review.ts#analyzeFileFresh:ce42ac4e",
+		"clients/mcp/review.ts:61 is a global or environment probe with no project target",
+	],
+	[
+		"clients/package-manager.ts#probeAvailability:d0a6319a",
+		"clients/package-manager.ts:152 is a global or environment probe with no project target",
+	],
+	[
+		"clients/package-manager.ts#probeGlobalBinDirs:bf156997",
+		"clients/package-manager.ts:450 is a global or environment probe with no project target",
+	],
+	[
+		"clients/pipeline.ts#tryRustClippyFix:8e05db7b",
+		"clients/pipeline.ts:682 is a global or environment probe with no project target",
+	],
+	[
+		"clients/pipeline.ts#tryDartFix:91623ccc",
+		"clients/pipeline.ts:701 is a global or environment probe with no project target",
+	],
+	[
+		"clients/ruff-client.ts#RuffClient:a9f1b92a",
+		"clients/ruff-client.ts:129 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#60b5b1fb",
+		"clients/safe-spawn.ts:1563 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#safeSpawnBatch:921a571e",
+		"clients/safe-spawn.ts:2055 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#isCommandAvailableAsync:45a177c3",
+		"clients/safe-spawn.ts:2071 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
+		"clients/safe-spawn.ts:2082 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#isCommandAvailable:947ec768",
+		"clients/safe-spawn.ts:2242 is a global or environment probe with no project target",
+	],
+	[
+		"clients/safe-spawn.ts#findCommand:e3470221",
+		"clients/safe-spawn.ts:2256 is a global or environment probe with no project target",
+	],
+	[
+		"clients/security-scan-client.ts#SecurityScanClient:b0202c69",
+		"clients/security-scan-client.ts:173 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#SgRunner:e9967cbc",
+		"clients/sg-runner.ts:574 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#bd8f1573",
+		"clients/sg-runner.ts:616 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#d19ba32a",
+		"clients/sg-runner.ts:731 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#d19ba32a",
+		"clients/sg-runner.ts:767 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#d19ba32a",
+		"clients/sg-runner.ts:956 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#23665a2b",
+		"clients/sg-runner.ts:1030 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#0a5b6a4d",
+		"clients/sg-runner.ts:1039 is a global or environment probe with no project target",
+	],
+	[
+		"clients/sg-runner.ts#bec6ba36",
+		"clients/sg-runner.ts:1044 is a global or environment probe with no project target",
+	],
+	[
+		"clients/test-runner-client.ts#TestRunnerClient:d444522b",
+		"clients/test-runner-client.ts:780 is a global or environment probe with no project target",
+	],
+	[
+		"clients/zizmor-config.ts#deriveGhCliToken:53993e8c",
+		"clients/zizmor-config.ts:201 is a global or environment probe with no project target",
+	],
+];
+const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/biome-client.ts#BiomeClient:29a3826f",
+		"clients/biome-client.ts:175 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/biome-client.ts#BiomeClient:bcf3abbd",
+		"clients/biome-client.ts:383 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dead-code-client.ts#PythonDeadCodeClient:a6694002",
+		"clients/dead-code-client.ts:452 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dependency-checker.ts#1935bb9d",
+		"clients/dependency-checker.ts:662 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dependency-checker.ts#d19ba32a",
+		"clients/dependency-checker.ts:732 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dependency-checker.ts#6e4567d4",
+		"clients/dependency-checker.ts:934 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dependency-checker.ts#50922783",
+		"clients/dependency-checker.ts:1059 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dependency-checker.ts#d19ba32a",
+		"clients/dependency-checker.ts:1074 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/biome-check.ts#resolveBiomeFixKinds:421743c0",
+		"clients/dispatch/runners/biome-check.ts:212 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/credo.ts#probeCredo:dd8cc117",
+		"clients/dispatch/runners/credo.ts:24 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/cue-vet.ts#cueVetRunner:f4cff533",
+		"clients/dispatch/runners/cue-vet.ts:382 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/cue-vet.ts#cueVetRunner:25518bf5",
+		"clients/dispatch/runners/cue-vet.ts:391 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/cue-vet.ts#cueVetRunner:f4cff533",
+		"clients/dispatch/runners/cue-vet.ts:407 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/eslint.ts#makeEslintProbe:3be48c18",
+		"clients/dispatch/runners/eslint.ts:39 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/helm-lint.ts#lintChart:ede3129e",
+		"clients/dispatch/runners/helm-lint.ts:134 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/helm-lint.ts#helmLintRunner:833aee95",
+		"clients/dispatch/runners/helm-lint.ts:212 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/helm-render.ts#runIacPass:40b7cb52",
+		"clients/dispatch/runners/helm-render.ts:769 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/helm-render.ts#renderAndValidate:415768ad",
+		"clients/dispatch/runners/helm-render.ts:930 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/helm-render.ts#renderAndValidate:23311c5b",
+		"clients/dispatch/runners/helm-render.ts:1085 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand:e2bb00ca",
+		"clients/dispatch/runners/oxlint.ts:94 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/psscriptanalyzer.ts#spawnPs:5b1d2add",
+		"clients/dispatch/runners/psscriptanalyzer.ts:61 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/rust-clippy.ts#makeClippyProbe:78407e0b",
+		"clients/dispatch/runners/rust-clippy.ts:47 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/rust-clippy.ts#rustClippyRunner:d19ba32a",
+		"clients/dispatch/runners/rust-clippy.ts:135 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/terragrunt.ts#terragruntRunner:d19ba32a",
+		"clients/dispatch/runners/terragrunt.ts:182 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/tflint.ts#tflintRunner:4f859d5a",
+		"clients/dispatch/runners/tflint.ts:110 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:c226c0b2",
+		"clients/dispatch/runners/utils/lazy-installer.ts:217 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/lazy-installer.ts#performInstall:6db1ba7a",
+		"clients/dispatch/runners/utils/lazy-installer.ts:234 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstall:1adf4f32",
+		"clients/dispatch/runners/utils/lazy-installer.ts:334 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstallForFormatter:1adf4f32",
+		"clients/dispatch/runners/utils/lazy-installer.ts:348 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker:a29ba2ed",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1179 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback:98ae1905",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1566 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:3dd0894a",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1586 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:ce7b0ed1",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1635 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:bc3b5ebb",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1643 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback:4a5cc9b1",
+		"clients/dispatch/runners/utils/runner-helpers.ts:1666 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/file-utils.ts#detectFileChangedAfterCommand:2f580f41",
+		"clients/file-utils.ts:1079 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/git-tracked-ignore.ts#fetchUntrackedIgnoredIds:d19ba32a",
+		"clients/git-tracked-ignore.ts:92 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/git-tracked-ignore.ts#collectUntrackedIgnoredIds:538456dd",
+		"clients/git-tracked-ignore.ts:141 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/git-tracked-ignore.ts#fetchTrackedFiles:ffac1a78",
+		"clients/git-tracked-ignore.ts:193 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/git-tracked-ignore.ts#collectTrackedFiles:0f864633",
+		"clients/git-tracked-ignore.ts:246 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/gitleaks-client.ts#GitleaksClient:c23b1b18",
+		"clients/gitleaks-client.ts:374 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/gitleaks-client.ts#GitleaksClient:d19ba32a",
+		"clients/gitleaks-client.ts:384 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/govulncheck-client.ts#GovulncheckClient:c23b1b18",
+		"clients/govulncheck-client.ts:457 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/govulncheck-client.ts#GovulncheckClient:d19ba32a",
+		"clients/govulncheck-client.ts:464 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/installer/index.ts#runCommand:cce079be",
+		"clients/installer/index.ts:3518 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/installer/index.ts#installArchiveTool:f9ed9b6a",
+		"clients/installer/index.ts:4851 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/installer/index.ts#installNpmTool:c7f0cfde",
+		"clients/installer/index.ts:5033 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/installer/managed-tool-refresh.ts#performNpmRefresh:2bf80014",
+		"clients/installer/managed-tool-refresh.ts:693 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/jscpd-client.ts#JscpdClient:af9206c2",
+		"clients/jscpd-client.ts:265 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/jscpd-client.ts#JscpdClient:d19ba32a",
+		"clients/jscpd-client.ts:319 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/knip-client.ts#KnipClient:2f580f41",
+		"clients/knip-client.ts:609 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/mcp/review.ts#runRebuild:79b97833",
+		"clients/mcp/review.ts:156 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/opaque-mutation-scan.ts#isGitWorktree:d19ba32a",
+		"clients/opaque-mutation-scan.ts:313 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/opaque-mutation-scan.ts#resolveGitToplevel:dd42327f",
+		"clients/opaque-mutation-scan.ts:347 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/opaque-mutation-scan.ts#recoverOpaqueChangesViaGit:d19ba32a",
+		"clients/opaque-mutation-scan.ts:488 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/opengrep-client.ts#OpengrepClient:c23b1b18",
+		"clients/opengrep-client.ts:147 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/opengrep-client.ts#OpengrepClient:d19ba32a",
+		"clients/opengrep-client.ts:157 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/pipeline.ts#tryEslintFix:e15d0fb8",
+		"clients/pipeline.ts:467 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/pipeline.ts#tryRustClippyFix:d19ba32a",
+		"clients/pipeline.ts:691 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/pipeline.ts#tryDartFix:6d9ed63b",
+		"clients/pipeline.ts:711 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/pipeline.ts#runAutofix:b112a810",
+		"clients/pipeline.ts:861 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/pipeline.ts#runPipeline:a5f29544",
+		"clients/pipeline.ts:1455 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/ruff-client.ts#RuffClient:95d48994",
+		"clients/ruff-client.ts:147 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/safe-spawn.ts#safeSpawnAsync:b611b1c7",
+		"clients/safe-spawn.ts:1495 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/shared-checkout-guard.ts#probeWorkingTreeState:d19ba32a",
+		"clients/shared-checkout-guard.ts:205 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/test-runner-client.ts#2f580f41",
+		"clients/test-runner-client.ts:1354 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/trivy-client.ts#TrivyClient:c23b1b18",
+		"clients/trivy-client.ts:278 deliberately derives cwd from its file or project boundary",
+	],
+	[
+		"clients/trivy-client.ts#TrivyClient:d19ba32a",
+		"clients/trivy-client.ts:299 deliberately derives cwd from its file or project boundary",
+	],
+];
+const NO_CWD_EXEMPTIONS = new Map(NO_CWD_EXEMPTION_ROWS);
+const ORIGIN_ADMISSIONS = new Map(ORIGIN_ADMISSION_ROWS);
+const ADMISSION_ROWS = [...NO_CWD_EXEMPTION_ROWS, ...ORIGIN_ADMISSION_ROWS];
 
 function siteKey(site: SpawnCwdSite): string {
 	const lines = fs
@@ -230,7 +695,7 @@ function siteKey(site: SpawnCwdSite): string {
  * invokes per call — no caller in the file supplies it, so there is no caller
  * to check.
  */
-/** Direct-child `.ts` runner files only — never `utils/*.ts` (see header). */
+/** Every spawn-bearing `.ts` file under the four population roots. */
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const files = POPULATION_FILES.filter((file) =>
 		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
@@ -244,13 +709,6 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			const relFile = path.relative(REPO_ROOT, file);
 			const scan = await scanSpawnCwd(relFile, fs.readFileSync(file, "utf8"));
 			sites.push(...scan.sites);
-		}
-		for (const site of sites) {
-			if (site.resolvedFromToolCwd) continue;
-			const key = siteKey(site);
-			EXEMPTION_REASONS[key] ??= site.hasCwd
-				? "child derives its cwd from a client-specific project or file root"
-				: "non-project probe or installer child intentionally inherits its environment";
 		}
 	});
 
@@ -266,6 +724,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			sites.length,
 		);
 		expect(files.length, "spawn population files").toBe(EXPECTED_FILES);
+		expect(sites.filter((site) => site.kind === "direct")).toHaveLength(
+			EXPECTED_DIRECT_SITES,
+		);
 	});
 
 	it("finds at least one spawn seam in every population file", () => {
@@ -287,16 +748,13 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 
 	it("every non-exempt spawn's options object names cwd", () => {
 		const missing = sites.filter(
-			(site) =>
-				!site.hasCwd &&
-				site.file.startsWith("clients/dispatch/runners/") &&
-				!NO_CWD_PROBE_KEYS.has(siteKey(site).split(":")[0]),
+			(site) => !site.hasCwd && !NO_CWD_EXEMPTIONS.has(siteKey(site)),
 		);
 		expect(
 			missing,
 			`${missing.length} spawn(s) do not pass a cwd. Add the ` +
 				"resolver result directly, through a local, or through an object spread. " +
-				"Admit only a legitimate non-project probe in EXEMPTIONS with a reason:\n" +
+				"Admit only a legitimate non-project probe with an exact reason:\n" +
 				missing
 					.map(
 						(site) =>
@@ -308,22 +766,17 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 
 	it("every dispatch cwd binding comes from the shared tool-cwd seam (#2777)", () => {
 		const missingOrigin = sites.filter((site) => {
-			if (!site.hasCwd || !site.file.startsWith("clients/dispatch/runners/")) {
+			if (!site.hasCwd) {
 				return false;
 			}
-			return (
-				!site.resolvedFromToolCwd &&
-				!RUNNER_ORIGIN_ADMISSIONS.has(siteKey(site).split(":")[0])
-			);
+			return !site.resolvedFromToolCwd && !ORIGIN_ADMISSIONS.has(siteKey(site));
 		});
 		expect(
 			missingOrigin.map((site) => `${site.file}:${site.line} (${site.callee})`),
 			"runner cwd bindings must resolve from an imported tool-cwd seam or a named admission",
 		).toEqual([]);
 		expect(
-			Object.entries(EXEMPTION_REASONS).every(
-				([, reason]) => reason.length >= 15,
-			),
+			ADMISSION_ROWS.every(([, reason]) => reason.length >= 15),
 			"every exemption carries a reason",
 		).toBe(true);
 	});
@@ -367,15 +820,27 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 
 	it("every cwd-exempt marker still names a real, still-exempt call site", () => {
 		const exemptSites = sites.filter(
-			(site) => EXEMPTION_REASONS[siteKey(site)],
+			(site) =>
+				NO_CWD_EXEMPTIONS.has(siteKey(site)) ||
+				ORIGIN_ADMISSIONS.has(siteKey(site)),
 		);
 		const liveKeys = new Set(sites.map(siteKey));
+		expect(ADMISSION_ROWS).not.toHaveLength(0);
 		expect(
-			Object.keys(EXEMPTION_REASONS).filter((key) => !liveKeys.has(key)),
+			ADMISSION_ROWS.filter(([key]) =>
+				sites.some(
+					(site) => siteKey(site) === key && !site.resolvedFromToolCwd,
+				),
+			),
+		).toHaveLength(ADMISSION_ROWS.length);
+		expect(
+			[...new Set(ADMISSION_ROWS.map(([key]) => key))].filter(
+				(key) => !liveKeys.has(key),
+			),
 			"an exemption for a removed site is stale and must be deleted",
 		).toEqual([]);
 		assertNonEmptyScan(
-			"runner-spawn-cwd-sweep: cwd-exempt markers found",
+			"runner-spawn-cwd-sweep: exact admissions found",
 			exemptSites.length,
 		);
 		const redundant = exemptSites.filter((site) => site.resolvedFromToolCwd);

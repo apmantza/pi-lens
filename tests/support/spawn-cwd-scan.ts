@@ -490,12 +490,16 @@ interface ParamBinding {
 	viaObject: boolean;
 }
 
-/** Every `variable_declarator` inside one scope, not descending into nested
- * functions (whose declarations belong to their own scope). */
+/** Every `variable_declarator` directly owned by one lexical scope.
+ * Nested blocks own their declarations; including them here lets a sibling
+ * block launder its binding into a use after the block has closed. */
 function declaratorsIn(scope: SgNode): SgNode[] {
 	const found: SgNode[] = [];
 	const visit = (node: SgNode): void => {
 		if (node.id() !== scope.id() && isFunctionNode(node)) return;
+		if (node.id() !== scope.id() && String(node.kind()) === "statement_block") {
+			return;
+		}
 		if (node.kind() === "variable_declarator") found.push(node);
 		for (const child of node.children()) visit(child);
 	};
@@ -503,10 +507,23 @@ function declaratorsIn(scope: SgNode): SgNode[] {
 	return found;
 }
 
+/** All declarations in a function body, used only for parameter destructuring. */
+function allBodyDeclarators(fn: SgNode): SgNode[] {
+	const body = fn.field("body");
+	if (!body) return [];
+	const found: SgNode[] = [];
+	const visit = (node: SgNode): void => {
+		if (node.id() !== body.id() && isFunctionNode(node)) return;
+		if (node.kind() === "variable_declarator") found.push(node);
+		for (const child of node.children()) visit(child);
+	};
+	visit(body);
+	return found;
+}
+
 /** Every `variable_declarator` inside a function's own body. */
 function bodyDeclarators(fn: SgNode): SgNode[] {
-	const body = fn.field("body");
-	return body ? declaratorsIn(body) : [];
+	return allBodyDeclarators(fn);
 }
 
 /**
@@ -753,22 +770,6 @@ export async function scanSpawnCwd(
 		for (const child of node.children()) discoverLocalWrappers(child);
 	};
 	discoverLocalWrappers(root);
-	if (resolverNames.size === 0) {
-		// Inline detector fixtures predate import-aware binding checks. Preserve
-		// their resolver shorthand, but never bless a file-local same-named
-		// function: that is precisely the F10 laundering shape.
-		resolverNames.add("resolveToolCwd");
-		resolverNames.add("resolveRunnerCwd");
-		resolverNames.add("resolveFormatterCwd");
-		const visit = (node: SgNode): void => {
-			if (isFunctionNode(node)) {
-				const name = functionName(node);
-				if (name) resolverNames.delete(name);
-			}
-			for (const child of node.children()) visit(child);
-		};
-		visit(root);
-	}
 	// `callSites` owns the generic call-site boundary. Keep the AST nodes here
 	// for the runner-specific cwd dataflow, but use the shared census to ensure
 	// direct spawn sites are identified by the same seam as sibling sweeps.

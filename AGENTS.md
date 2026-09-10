@@ -1063,10 +1063,11 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 ### Dispatch, runners, formatters, and installer
 
 The runner-spawn-cwd sweep (`tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts`)
-scans runner, formatter, LSP, and test-runner child-spawn seams. Its AST needle
-requires each cwd value to resolve to `resolveToolCwd` or a named adapter; exact
-non-project probes and cross-file parameter routing use keyed, reasoned
-exemptions. Keep the population and exemption keys live when adding a spawn
+scans every spawn-bearing TypeScript file under `clients/`, `tools/`, `mcp/`,
+and `index.ts`. Its AST needle
+requires each supplied cwd value to resolve to the imported `clients/tool-cwd.ts` seam or its documented re-exports; exact
+global probes and deliberate non-seam cwd derivations use full
+`rel#symbol:hash(ownLine)` admissions with one reason per row. Keep the population, direct-site pin, wrapper list, and admission keys live when adding a spawn
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in

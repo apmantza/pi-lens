@@ -35,6 +35,15 @@ async function analyze(source: string): Promise<{
 	redundantExemptions: string[];
 	sites: string[];
 }> {
+	// Inline fixtures use the real seam-shaped import so the scanner never
+	// falls back to a resolver name. Keep the deliberate local-function and
+	// foreign-import probes untouched.
+	if (
+		!/^\s*import\b/m.test(source) &&
+		!/^\s*function\s+resolve(?:Tool|Runner|Formatter)Cwd\b/m.test(source)
+	) {
+		source = `${source}\nimport { resolveToolCwd } from "./tool-cwd.js";`;
+	}
 	const scan = await scanSpawnCwd("fixture.ts", source);
 	return {
 		flagged: scan.sites
@@ -118,8 +127,46 @@ describe("K1 — a direct safeSpawn* call", () => {
 		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
 	});
 
+	it("rejects a same-named resolver imported from a foreign module", async () => {
+		const source = `import { resolveToolCwd } from "./my-helpers.js";
+			import { safeSpawnAsync } from "../../safe-spawn.js";
+			async function run(ctx) {
+				await safeSpawnAsync("bad", [], { cwd: resolveToolCwd(ctx) });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
+	it("does not let a closed sibling block launder a function binding", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				if (ctx.fast) { const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
+	it("does not let a for-body binding poison the outer site", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx, files) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				for (const f of files) { const cwd = f.dir; await safeSpawnAsync("bad", [], { cwd }); }
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
 	it("requires resolver origin, including a local binding and object spread", async () => {
-		const source = `
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
 			const dir = resolveToolCwd("runner", "tool", file, ctx);
 			const options = { cwd: dir, timeout: 1000 };
 			await safeSpawn("tool", [], { ...options });
