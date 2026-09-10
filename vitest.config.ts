@@ -200,8 +200,9 @@ const timingSensitiveInclude = [
 	// to import measureMaxSyncBlockMs from tests/support/perf-harness.ts:
 	//   - lens-diagnostics-occupancy: diagnostics-run loop occupancy.
 	//   - workspace-diagnostics-occupancy: workspace-wide diagnostics fan-out.
-	//   - performance-report-occupancy / pipeline-snapshot-occupancy: report and
-	//     snapshot assembly walks.
+	//   - pipeline-snapshot-occupancy: snapshot assembly walks.
+	//   (performance-report-occupancy used to sit here; #2886 converted it
+	//   to a deterministic yield count, so it runs in the default project.)
 	//   - word-index-async-build: the async word-index build's yield behaviour.
 	//   - ruby-drive-dirs: not named "-occupancy", but runs two sampler-based
 	//     fail-then-pass screens over the Ruby drive-dir walk (#902 pattern).
@@ -211,7 +212,6 @@ const timingSensitiveInclude = [
 	//     admission alone (#1329) does not make that window contention-proof.
 	"tests/clients/lsp/ruby-drive-dirs.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-occupancy.test.ts",
-	"tests/clients/performance-report-occupancy.test.ts",
 	"tests/clients/pipeline-snapshot-occupancy.test.ts",
 	"tests/clients/review-graph-retention.test.ts",
 	"tests/clients/review-graph-superseded-persist.test.ts",
