@@ -224,11 +224,11 @@ const EXPECTED_WRAPPERS = [
 const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:488c639e~e7e502d1",
-		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd",
+		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd. #2894 left it: `analyze(root)`'s input is already a DIRECTORY, and `resolveToolCwd` takes a FILE and starts from `path.dirname` of it, so handing it a root would walk from that root's PARENT",
 	],
 	[
 		"clients/dependency-checker.ts#DependencyChecker.runCheckFile:fbbf6499~dcd12892",
-		"forwards runCheckFile's own `projectRoot` parameter into runMadgeSpawn; the parameter name carries no `cwd`, so the wrapper rule reads it as unsupplied",
+		"forwards runCheckFile's own `projectRoot` parameter into runMadgeSpawn; the parameter name carries no `cwd`, so the wrapper rule reads it as unsupplied. #2894 left the whole file: `checkFile`, `checkFilesBatch` and `scanProject` share ONE `projectRoot` per operation (one madge resolution, one import cache, one published state — the contract on `checkFilesBatch`), `scanProject` has no file at all, and `checkFile` has no production caller — `runtime-turn.ts` calls the batch. Per-file roots there is mechanism, and #2905 tracks it",
 	],
 	[
 		"clients/formatters.ts#which:040c257b",
@@ -272,7 +272,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/knip-client.ts#KnipClient.analyze:a1223aae~98d0e4c5",
-		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied",
+		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
 	],
 	[
 		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
@@ -378,7 +378,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.runAnalyze:b54a18c7~1167a91f",
-		"cwd is runAnalyze's own `root` parameter, the resolved project directory the client was asked to analyse",
+		"cwd is runAnalyze's own `root` parameter, the resolved project directory the client was asked to analyse — a directory the caller names, not a file the seam can resolve a root from (#2894)",
 	],
 	[
 		"clients/dependency-checker.ts#DependencyChecker.checkFile:1935bb9d~bed57757",
@@ -410,7 +410,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~3e35e485@1",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here. #2894 left it: a CUE package IS one directory, and `resolveToolCwd` walks UP to a marker or git root, so it cannot return a plain file directory in any repo (this runner already takes its availability cwd from the seam)",
 	],
 	[
 		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~3e35e485",
@@ -454,11 +454,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~2a7d9054",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in — a directory, not a marker root, so the #2894 fold does not reach it (the runner already resolves its availability cwd through the seam)",
 	],
 	[
 		"clients/dispatch/runners/tflint.ts#run:338013e8~a6e3b67b",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute — a Terraform module IS a directory, which is why #2894 left it where cue-vet and terragrunt stay",
 	],
 	[
 		"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:c226c0b2~c226c0b2",
@@ -510,7 +510,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/git-tracked-ignore.ts#collectUntrackedIgnoredIds:538456dd~538456dd",
-		"collectUntrackedIgnoredIds forwards its own `cwd` parameter, the repository root its callers pass",
+		"collectUntrackedIgnoredIds forwards its own `cwd` parameter, the repository root its callers pass — same #2894 verdict as collectTrackedFiles: the cwd is the git query's SUBJECT",
 	],
 	[
 		"clients/git-tracked-ignore.ts#fetchTrackedFiles:5fc25306~dbf27697",
@@ -518,7 +518,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/git-tracked-ignore.ts#collectTrackedFiles:0f864633~0f864633",
-		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass",
+		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass — `git ls-files` REPORTS ON that directory rather than resolving config from it, so moving it to a marker root would answer about a different repository (#2894)",
 	],
 	[
 		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~4bd5cc03",
@@ -562,7 +562,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/knip-client.ts#KnipClient.runAnalyze:b959739e~f5c0e305",
-		"cwd is `targetDir`, runAnalyze's own project-root parameter; knip resolves its config from there",
+		"cwd is `targetDir`, runAnalyze's own project-root parameter; knip resolves its config from there — a whole-project scan with no edited file for the seam to walk up from (#2894)",
 	],
 	[
 		"clients/mcp/review.ts#runRebuild:f93df254~9f5ecf07",
@@ -570,15 +570,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/opaque-mutation-scan.ts#isGitWorktree:7e6a8cd3~edb3d44f",
-		"cwd is isGitWorktree's own `root` parameter — `git rev-parse --is-inside-work-tree` asks about exactly that directory",
+		"cwd is isGitWorktree's own `root` parameter — `git rev-parse --is-inside-work-tree` asks about exactly that directory, so a seam that moved it to a marker root would answer a different question (#2894)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#resolveGitToplevel:49511e7e~1167a91f",
-		"cwd is resolveGitToplevel's own `root` parameter — `git rev-parse --show-toplevel` asks about exactly that directory",
+		"cwd is resolveGitToplevel's own `root` parameter — `git rev-parse --show-toplevel` asks about exactly that directory; the answer IS the root, so resolving one first would be circular (#2894)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#recoverOpaqueChangesViaGit:dad86fa7~1167a91f",
-		"cwd is recoverOpaqueChangesViaGit's own `root` parameter — `git status --porcelain` reports the worktree at that root",
+		"cwd is recoverOpaqueChangesViaGit's own `root` parameter — `git status --porcelain` reports the worktree at that root, which is the query's subject, not a config-resolution start (#2894)",
 	],
 	[
 		"clients/opengrep-client.ts#OpengrepClient.scan:c23b1b18~4bd5cc03",
@@ -614,7 +614,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/shared-checkout-guard.ts#probeWorkingTreeState:67edebd4~c87eec21",
-		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root",
+		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root. Not a tool probe in #2894's sense: it asks about a directory, so it cannot use the cwd-less probe seam",
 	],
 	[
 		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~4bd5cc03",
