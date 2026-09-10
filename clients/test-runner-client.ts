@@ -114,6 +114,25 @@ export interface TestFailure {
 // Runner detection: config file → runner name
 export interface RunnerConfig {
 	configFiles: string[];
+	/**
+	 * Source-file extensions this runner may be handed. Enforced as a hard gate
+	 * in `getTestRunTarget`: a runner must never be given a file whose language
+	 * it does not declare. The runner is otherwise chosen from the REPOSITORY
+	 * ROOT's config files alone (see `resolveProjectAnchor`), so in a repo
+	 * holding several languages the declaration order of RUNNERS decides the
+	 * winner and every other language is handed the wrong runner — a Java file
+	 * in a Go+Gradle monorepo resolved to `go` and `go test` answered
+	 * `FAIL <pkg> [setup failed]`.
+	 */
+	exts: string[];
+	/**
+	 * `false` when `args()` ignores the test file and runs the WHOLE project
+	 * (gradle/maven/cargo/dotnet). Such a runner is only safe when the edited
+	 * file belongs to the project rooted at `cwd` itself — in a multi-module
+	 * build, firing it for one module's file would compile and test every
+	 * module. Omitted means `true` (per-file targetable).
+	 */
+	perFileTargetable?: boolean;
 	command: string;
 	// Name of the binary in node_modules/.bin (and every package manager's
 	// global bin dir) — defaults to the runner key. Must match the ACTUAL
@@ -245,6 +264,7 @@ export function isExcludedTestTarget(
 export const RUNNERS: Record<string, RunnerConfig> = {
 	vitest: {
 		configFiles: ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs"],
+		exts: [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"],
 		command: "npx",
 		binName: "vitest",
 		args: (testFile, _cwd) => [
@@ -257,6 +277,7 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		parseJson: true,
 	},
 	jest: {
+		exts: [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"],
 		configFiles: [
 			"jest.config.ts",
 			"jest.config.js",
@@ -276,12 +297,14 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 	},
 	pytest: {
 		configFiles: ["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"],
+		exts: [".py"],
 		command: "python",
 		args: (testFile, _cwd) => ["-m", "pytest", testFile, "--tb=short", "-q"],
 		parseJson: false, // pytest JSON requires plugin, use text parsing
 	},
 	go: {
 		configFiles: ["go.mod"],
+		exts: [".go"],
 		command: "go",
 		args: (testFile, cwd) => {
 			// Convert file path to package path
@@ -293,30 +316,47 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 	},
 	cargo: {
 		configFiles: ["Cargo.toml"],
+		exts: [".rs"],
+		// `cargo test --no-fail-fast` has no single-file target: it runs the
+		// whole crate/workspace, so it is only safe at the project root.
+		perFileTargetable: false,
 		command: "cargo",
 		args: (_testFile, _cwd) => ["test", "--no-fail-fast"],
 		parseJson: false, // cargo test output is text-based
 	},
 	dotnet: {
 		configFiles: ["*.csproj", "*.sln"],
+		exts: [".cs", ".fs", ".vb"],
+		// `dotnet test --no-build` has no single-file target.
+		perFileTargetable: false,
 		command: "dotnet",
 		args: (_testFile, _cwd) => ["test", "--no-build"],
 		parseJson: false,
 	},
 	gradle: {
 		configFiles: ["build.gradle", "build.gradle.kts", "settings.gradle"],
+		exts: [".java", ".kt", ".kts", ".groovy", ".scala"],
+		// `./gradlew test` is a whole-BUILD invocation with no file target. In
+		// a multi-module build this would compile and test every module for a
+		// single module's edit, so it is only safe when the edited file
+		// belongs to the build rooted at cwd itself.
+		perFileTargetable: false,
 		command: process.platform === "win32" ? "gradlew.bat" : "./gradlew",
 		args: (_testFile, _cwd) => ["test", "--no-daemon"],
 		parseJson: false,
 	},
 	maven: {
 		configFiles: ["pom.xml"],
+		exts: [".java", ".kt", ".groovy", ".scala"],
+		// `mvn test -q` has no per-file target (no -Dtest/-pl narrowing here).
+		perFileTargetable: false,
 		command: "mvn",
 		args: (_testFile, _cwd) => ["test", "-q"],
 		parseJson: false,
 	},
 	rspec: {
 		configFiles: [".rspec", "spec/spec_helper.rb"],
+		exts: [".rb"],
 		command: "bundle",
 		// The real binary is "bundle" (the command runs `bundle exec rspec
 		// <file>`), NOT "rspec" — without this, binName defaulted to the
@@ -328,6 +368,7 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 	},
 	minitest: {
 		configFiles: ["Gemfile"],
+		exts: [".rb"],
 		command: "ruby",
 		args: (testFile, _cwd) => ["-Itest", testFile],
 		parseJson: false,
@@ -338,17 +379,29 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		// detectRunner's Priority-1 loop, mirroring the pytest/pyproject.toml
 		// handling above).
 		configFiles: ["phpunit.xml", "phpunit.xml.dist", "composer.json"],
+		exts: [".php"],
 		command: "phpunit",
 		args: (testFile, _cwd) => [testFile],
 		parseJson: false, // PHPUnit's default CLI output is text-based
 	},
 	mix: {
 		configFiles: ["mix.exs"],
+		exts: [".ex", ".exs"],
 		command: "mix",
 		args: (testFile, _cwd) => ["test", testFile],
 		parseJson: false, // mix test's default output is text-based
 	},
 };
+
+/**
+ * Every extension some runner declares support for, derived from RUNNERS so the
+ * per-file language gate and the runner table cannot drift apart — the "two
+ * hand-copied language tables" failure this subsystem has hit before (#1545,
+ * #657). A file whose extension is absent here can never be a test target.
+ */
+const RUNNER_SUPPORTED_EXTS = new Set(
+	Object.values(RUNNERS).flatMap((config) => config.exts),
+);
 
 /**
  * Drop the leading arg(s) of a runner's args() that merely NAME the binary
@@ -1227,6 +1280,68 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * Resolve the project/module that OWNS `sourceFilePath`, by walking upward
+	 * from the file's own directory to `cwd` and taking the NEAREST directory
+	 * that declares a runner for this file's language.
+	 *
+	 * This is what makes a polyglot monorepo work. `detectRunner(cwd, file)`
+	 * resolves against the repository root only, so a repo holding two or more
+	 * languages lets the declaration order of RUNNERS pick the winner and every
+	 * other language gets the wrong runner (a root `go.mod` beat
+	 * `app/developer-center-api-gateway/build.gradle.kts`, so `.java` files were
+	 * handed to `go test`). Nearest-wins also fixes nested modules: a repo can
+	 * carry several `go.mod` files (`tools/tapctl/go.mod`, `pkg/gotap/go.mod`),
+	 * so a `.go` file must anchor at ITS module, not the root.
+	 *
+	 * Returns `null` when no directory on the way up declares a runner for this
+	 * file's language. `null` means "do not guess" — guessing is how the
+	 * java/go mis-dispatch happened in the first place.
+	 *
+	 * This is the test runner's own sync analogue of the LSP subsystem's
+	 * `NearestRoot` (clients/lsp/server.ts): "nearest project root, bounded by a
+	 * stop dir" is this codebase's established idiom for a monorepo. It is not
+	 * reused directly because `NearestRoot` is async, returns a directory rather
+	 * than a runner, and layers LSP-only root-ceiling/exclusion policy on top —
+	 * whereas this runs on the sync turn-end path and must choose among N marker
+	 * sets with a language tie-break.
+	 */
+	private resolveProjectAnchor(
+		sourceFilePath: string,
+		cwd: string,
+	): { runner: string; config: RunnerConfig; anchorDir: string } | null {
+		const root = path.resolve(cwd);
+		const abs = path.resolve(root, sourceFilePath);
+		const ext = path.extname(abs);
+		// Outside the project root: keep the legacy root-based resolution rather
+		// than walking to the filesystem root. `getTestRunTarget` deliberately
+		// still returns a target here — the built-in exclusion layer owns that
+		// verdict and fails closed one layer later (#2522) — so this branch only
+		// adds the language gate, it does not refuse the file.
+		if (abs !== root && !abs.startsWith(root + path.sep)) {
+			const legacy = this.detectRunner(cwd, sourceFilePath);
+			if (legacy && legacy.config.exts.includes(ext)) {
+				return {
+					runner: legacy.runner,
+					config: legacy.config,
+					anchorDir: root,
+				};
+			}
+			return null;
+		}
+		let dir = path.dirname(abs);
+		for (;;) {
+			const hit = this.detectRunner(dir, sourceFilePath);
+			if (hit && hit.config.exts.includes(ext)) {
+				return { runner: hit.runner, config: hit.config, anchorDir: dir };
+			}
+			if (dir === root) return null;
+			const parent = path.dirname(dir);
+			if (parent === dir) return null;
+			dir = parent;
+		}
+	}
+
+	/**
 	 * Select the most useful test target for this edit.
 	 *
 	 * Strategy:
@@ -1243,8 +1358,22 @@ export class TestRunnerClient {
 		config: RunnerConfig;
 		strategy: "failed-first" | "related" | "self";
 	} | null {
-		const detected = this.detectRunner(cwd, sourceFilePath);
-		if (!detected) return null;
+		// Language gate FIRST. It has to sit above `selfIsTest` below: that flag
+		// short-circuits findTestFile, which holds the only other extension gate,
+		// so a .java file declared itself a test target and was then resolved to
+		// the `go` runner ("FAIL <pkg> [setup failed]").
+		if (!RUNNER_SUPPORTED_EXTS.has(path.extname(sourceFilePath))) return null;
+		const anchor = this.resolveProjectAnchor(sourceFilePath, cwd);
+		if (!anchor) return null;
+		// A whole-project runner (gradle/maven/cargo/dotnet) is only safe when
+		// the file belongs to the project at cwd; otherwise one module's edit
+		// triggers a full multi-module build — worse than no feedback at all.
+		if (
+			anchor.config.perFileTargetable === false &&
+			anchor.anchorDir !== path.resolve(cwd)
+		)
+			return null;
+		const detected = { runner: anchor.runner, config: anchor.config };
 
 		const failedSet = this.getFailedTargets(cwd, detected.runner);
 
