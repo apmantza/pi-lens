@@ -370,6 +370,64 @@ describe("index.ts integration", () => {
 	);
 
 	it(
+		"real pi restore keeps activated and called situational tools out of the row",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { mock, pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const ctx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "pi-restore-all-dead-weight",
+			});
+			await handlers.session_start?.[0]?.({}, ctx);
+			const activation = mock.getTool("pi_lens_activate_tools") as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			await activation.execute(
+				"activate",
+				{
+					tools: [
+						"ast_grep_search",
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+				undefined,
+				undefined,
+				ctx,
+			);
+			for (const toolName of [
+				"ast_grep_search",
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]) {
+				await handlers.tool_call?.[0]?.({ toolName, input: {} }, ctx);
+			}
+			mock.simulateSessionRebuild();
+			await handlers.session_start?.[0]?.({ reason: "reload" }, ctx);
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+			const rows = logExtension.mock.calls
+				.map(
+					([row]) =>
+						row as { message?: string; metadata?: { tools?: string[] } },
+				)
+				.filter((row) => row.message === "situational tool dead weight");
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.metadata?.tools).toEqual([]);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"session_shutdown uses fast LSP reset so teardown does not wait on graceful shutdown",
 		async () => {
 			const resetLSPService = vi.fn();

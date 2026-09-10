@@ -19,6 +19,7 @@ let sessionStarted = false;
 let emitted = false;
 let preserveObservationsOnReset = false;
 let connectionEnded = false;
+let sessionHost: "pi" | "mcp" = "mcp";
 
 function observe(set: Set<SituationalToolName>, name: string): void {
 	if (situationalToolSet.has(name as SituationalToolName)) {
@@ -49,9 +50,10 @@ export function resetSituationalToolTelemetry(): void {
 export function startSituationalToolTelemetrySession(
 	idempotent = false,
 	preserveOnReset = idempotent,
+	host: "pi" | "mcp" = "mcp",
 ): void {
-	if (idempotent && connectionEnded) return;
-	if (!idempotent) connectionEnded = false;
+	if (host === "mcp" && idempotent && connectionEnded) return;
+	if (host === "mcp" && !idempotent) connectionEnded = false;
 	if (sessionStarted && idempotent) return;
 	if (sessionStarted) {
 		preserveObservationsOnReset = false;
@@ -61,6 +63,7 @@ export function startSituationalToolTelemetrySession(
 		return;
 	}
 	preserveObservationsOnReset = preserveOnReset;
+	sessionHost = host;
 	resetSituationalToolTelemetry();
 	emitted = false;
 	sessionStarted = true;
@@ -70,7 +73,7 @@ export function startSituationalToolTelemetrySession(
 export function endSituationalToolTelemetry(): void {
 	if (!sessionStarted) return;
 	emitSituationalDeadWeight();
-	connectionEnded = true;
+	if (sessionHost === "mcp") connectionEnded = true;
 	preserveObservationsOnReset = false;
 	resetSituationalToolTelemetry();
 	sessionStarted = false;

@@ -191,6 +191,10 @@ describe("MCP connection-scoped situational dead-weight lifecycle", () => {
 				name: "pilens_session_end",
 				arguments: {},
 			});
+			await harness.request(3, "tools/call", {
+				name: "pilens_ast_grep_search",
+				arguments: { pattern: "const $A = $B" },
+			});
 			await harness.closeInput();
 			expect(await readDeadWeightRows(home)).toHaveLength(1);
 		} finally {

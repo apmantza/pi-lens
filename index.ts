@@ -2053,7 +2053,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 					resetOncePerSessionPhases();
 					startSituationalToolTelemetrySession(
 						!isFreshSessionStart(sessionReason),
-						false,
+						true,
+						"pi",
 					);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
@@ -2105,15 +2106,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 							getActiveTools?: () => string[];
 							setActiveTools?: (names: string[]) => void;
 						};
+						// A fresh conversation starts with no activation memory; a
+						// rebuild inherits the parent's. Replay this memory even when
+						// the host has no active-tool API or --no-lazy-tools is set.
+						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
+						restoredLazyToolNames = [...rememberedLazyTools];
 						if (
 							getLensFlag("no-lazy-tools") !== true &&
 							typeof piWithActiveTools.getActiveTools === "function" &&
 							typeof piWithActiveTools.setActiveTools === "function"
 						) {
-							// A fresh conversation starts with no activation memory; a
-							// rebuild inherits the parent's.
-							if (isFreshSessionStart(sessionReason))
-								rememberedLazyTools.clear();
 							const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
 							const plan = planToolSet(
 								piWithActiveTools.getActiveTools(),
@@ -2122,7 +2124,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 							);
 							if (plan.changed) {
 								piWithActiveTools.setActiveTools(plan.desired);
-								restoredLazyToolNames = [...rememberedLazyTools];
 								recordToolSetMutation({
 									addedCount: plan.addedCount,
 									removedCount: plan.removedCount,

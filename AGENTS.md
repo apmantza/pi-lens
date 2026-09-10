@@ -1609,11 +1609,13 @@ Optional reset methods may be absent from test doubles or embedders and must not
 turn session initialization into a failure; concrete clients still reset state.
 
 Situational-tool dead-weight telemetry has one owner per host lifecycle: pi
-opens and re-arms on each real session boundary, while MCP opens once per
-connection and treats repeated `pilens_session_start` calls as refreshes. MCP
-emits the existing row at the first of `pilens_session_end` or transport close;
-the opener-owned latch prevents either boundary from emitting twice. Restored
-pi activations pass through the activation observer after tool-set restoration.
+opens once per conversation and preserves `activated` and `called` across
+reload, resume, and fork starts; a process restart starts empty, and the pi
+restore path replays restored active tools as activations regardless of whether
+the active-tool set changed. MCP opens once per connection and treats repeated
+`pilens_session_start` calls as refreshes. MCP emits the existing row at the
+first of `pilens_session_end` or transport close; its connection-terminal latch
+is MCP-only, and pi neither reads nor arms it.
 
 The widget projection after `lens_diagnostics mode=full` uses the final
 post-policy, post-suppression summaries, not the confirmed-LSP reconciliation

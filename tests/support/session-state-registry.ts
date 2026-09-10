@@ -1062,11 +1062,11 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		id: "situational-tool-telemetry:sessionObservation",
 		module: "situational-tool-telemetry.ts",
 		state:
-			"activated, called (the dead-weight row's per-session observation sets), emitted (its once-per-row latch), and connectionEnded (the MCP connection-owned terminal latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag and connectionEnded are deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing them there would make endSituationalToolTelemetry() skip the session's own final row or re-open a terminal MCP connection",
+			"activated, called (the dead-weight row's conversation-scoped observation sets), emitted (its once-per-row latch), preserveObservationsOnReset (the pi non-fresh-start preservation gate), and connectionEnded (the MCP-only connection-terminal latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag. sessionStarted and connectionEnded are deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing sessionStarted would make endSituationalToolTelemetry() skip the session's own final row, and only the MCP host owns connectionEnded.",
 		policy: "session_start",
 		resetName: "resetSituationalToolTelemetry",
 		reason:
-			"#2800 item 8: the dead-weight line is one row per session naming the situational tools THIS session never used, so a replacement session inheriting the previous session's sets would report the new session's roster against the old session's evidence. The probe arms both sets plus the latch; the reset's sessionStarted exclusion is stated in the state field above.",
+			"#2800 item 8: the dead-weight line is one row per pi conversation or MCP connection naming situational tools that host never used. Pi preserves activated and called across reload, resume, and fork starts; process restart starts empty, and index.ts replays restored active tools as activations. MCP owns connectionEnded. The reset's sessionStarted exclusion and pi preservation gate are stated in the state field above.",
 		probe: {
 			arm: () => {
 				observeSituationalToolActivation(["lsp_navigation"]);
