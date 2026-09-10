@@ -874,7 +874,15 @@ describe("lens_diagnostics mode=delta", () => {
 				files: [
 					{
 						filePath: "/proj/src/foo.ts",
-						warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
+						warnings: [
+							{
+								line: 1,
+								rule: "r",
+								tool: "t",
+								message: "warn",
+								severity: "warning",
+							},
+						],
 					},
 				],
 				summary: { warnings: 1 },
@@ -893,7 +901,15 @@ describe("lens_diagnostics mode=delta", () => {
 					files: [
 						{
 							filePath: "/proj/src/foo.ts",
-							warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
+							warnings: [
+								{
+									line: 1,
+									rule: "r",
+									tool: "t",
+									message: "warn",
+									severity: "warning",
+								},
+							],
 						},
 					],
 					summary: { warnings: 1 },
