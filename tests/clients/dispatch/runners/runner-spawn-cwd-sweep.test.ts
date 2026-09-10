@@ -126,8 +126,8 @@ const POPULATION_FILES = [
  * They pin REACH, never conformance: see "Adding a spawn" in the header for
  * what a non-conforming new site costs instead.
  */
-const EXPECTED_FILES = 76;
-const EXPECTED_DIRECT_SITES = 136;
+const EXPECTED_FILES = 80;
+const EXPECTED_DIRECT_SITES = 142;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -177,6 +177,8 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/installer/index.ts:runCommand",
 	"clients/jscpd-client.ts:runScan",
 	"clients/knip-client.ts:runAnalyze",
+	"clients/lsp/launch.ts:trySpawn",
+	"clients/lsp/launch.ts:trySpawn",
 	"clients/opengrep-client.ts:runScan",
 	"clients/pipeline.ts:tryEslintFix",
 	"clients/pipeline.ts:runAutofix",
@@ -210,6 +212,22 @@ const EXPECTED_WRAPPERS = [
  *   issue, and {@link WORKLIST_CEILING} can only ever be lowered.
  */
 const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/child-unref.ts#spawnCollectStdoutResult:499d1fcc",
+		"fire-and-forget child collection uses no cwd because it only reaps process output",
+	],
+	[
+		"clients/instance-reaper.ts#killPidTree:18e7d7ac",
+		"process-tree cleanup spawn targets a pid and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/client.ts#killProcessTree:5e14087c",
+		"LSP process-tree cleanup targets a pid and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/launch.ts#stopLSP.killWindowsTree:7ff361c9",
+		"Windows LSP tree cleanup targets a pid and does not resolve project configuration",
+	],
 	[
 		"clients/biome-client.ts#BiomeClient.probeBiome:91ce6b49",
 		"`biome --version` presence probe through spawnBiomeAsync: no project target to resolve config against",
@@ -448,6 +466,22 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/lsp/launch.ts#trySpawn:e7bf6cb1~dbf27697",
+		"LSP launch helper receives its own cwd parameter from the server launch boundary",
+	],
+	[
+		"clients/lsp/launch.ts#trySpawn:86ab761d~dbf27697",
+		"LSP launch helper receives its own cwd parameter from the server launch boundary",
+	],
+	[
+		"clients/lsp/launch.ts#launchLSP:34d73dd1~2a84127e",
+		"launchLSP forwards its caller-provided cwd through trySpawn",
+	],
+	[
+		"clients/lsp/launch.ts#launchLSP:e7df4bb9~3f60133c",
+		"launchLSP forwards its caller-provided cwd through trySpawn",
+	],
 	[
 		"clients/biome-client.ts#BiomeClient.spawnBiomeAsync:29a3826f~29a3826f",
 		"cwd is spawnBiomeAsync's own `cwd` parameter; the checked sites are its two call sites in this file",
@@ -730,30 +764,36 @@ const SCAN_HOOK_TIMEOUT_MS = 30_000;
 
 /**
  * Whether a file can hold a site the scan recognises: one of the seam wrappers
- * by name, or a named `spawn`/`execFile` import from `child_process` or
- * `node:child_process`. It mirrors
+ * by name, or a binding to `spawn`/`execFile`/`exec`/`fork` from
+ * `child_process` or `node:child_process`. It mirrors
  * `spawn-cwd-scan.ts`'s own site rule deliberately — round 4's population
- * filter listed only the five seam names while the scanner also counted
- * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
- * could never move a pin (round-5 v4-N3). An ALIASED import is a stated bound
- * of both, tracked by #2888.
+ * filter listed only the five seam names while the scanner also counted child
+ * process calls, so a file whose only child spawn was a bare `spawn(` could
+ * never move a pin (round-5 v4-N3).
  */
 function holdsAScannableSpawn(source: string): boolean {
-	const hasUnaliasedChildProcessImport = [
+	const hasChildProcessImport = [
 		...source.matchAll(
-			/import(?:\s+[\w*$]+\s*,)?\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
+			/import\s+([\s\S]*?)\s+from\s*["'](?:node:)?child_process["']/g,
 		),
-	].some((match) =>
-		match[1]
-			.split(",")
-			.some((specifier) =>
-				/^(?:\s*)(?:spawn|execFile)(?:\s*)$/.test(specifier),
-			),
-	);
+	].some((match) => {
+		const clause = match[1].trim();
+		return (
+			/^[A-Za-z_$][\w$]*\s*(?:,|$)/.test(clause) ||
+			/^\*\s+as\s+[A-Za-z_$][\w$]*/.test(clause) ||
+			/\{[^}]*\b(?:spawn|execFile|exec|fork)\b/.test(clause)
+		);
+	});
+	const hasDynamicOrRequiredBinding =
+		/\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)/.test(
+			source,
+		);
+	const hasChildProcessBinding =
+		hasChildProcessImport || hasDynamicOrRequiredBinding;
 	return (
 		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
 			source,
-		) || hasUnaliasedChildProcessImport
+		) || hasChildProcessBinding
 	);
 }
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
@@ -819,8 +859,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	// one of the seam wrappers by name, or a named `spawn`/`execFile` import
 	// from `child_process` or `node:child_process`
 	// import (round-5 v4-N3 — the two lists used to disagree, so a file whose
-	// only child spawn was a bare `spawn(` could never move a pin). An ALIASED
-	// child_process import is a stated bound, tracked by #2888.
+	// only child spawn was a bare `spawn(` could never move a pin).
 	const files = POPULATION_FILES.filter((file) =>
 		holdsAScannableSpawn(fs.readFileSync(file, "utf8")),
 	);
@@ -874,11 +913,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	});
 
 	it("the population rule admits exactly what the scan can see", () => {
-		// The clause that matters is the second one: without it a file whose only
-		// child spawn is a bare `spawn(` from node:child_process is invisible to
-		// the sweep and cannot move a pin (round-5 v4-N3). The aliased form is the
-		// stated bound (#2888) and must stay OUT, or the sweep would pull in a
-		// file the scan finds no site in and red the seam-occupancy test above.
+		// The population predicate must admit every child-process binding spelling
+		// the AST scanner can resolve, or its reach pins cannot move with the code.
+		const childProcess = JSON.stringify("node:child_process");
 		expect(
 			holdsAScannableSpawn('const r = await safeSpawnAsync("t", [], {});'),
 			"a seam wrapper by name",
@@ -913,8 +950,32 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			holdsAScannableSpawn(
 				'import { spawn as nodeSpawn } from "node:child_process";\nnodeSpawn("t", []);',
 			),
-			"an aliased import is the stated bound, not a population file",
-		).toBe(false);
+			"an aliased named import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import * as cp from "node:child_process";\ncp.spawn("t", []);',
+			),
+			"a namespace import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import cp from "node:child_process";\ncp.spawn("t", []);',
+			),
+			"a default import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'const { spawn } = await import("node:child_process");\nspawn("t", []);',
+			),
+			"a dynamic destructure",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				`const cp = require(${childProcess});\ncp.spawn("t", []);`,
+			),
+			"a require namespace",
+		).toBe(true);
 		expect(
 			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
 			"a method named spawn on some object",

@@ -1134,9 +1134,8 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. Stated bounds: an ALIASED
-`node:child_process` import is not a site (#2888), and the scan does not follow
-a path computation into the seam. The `beforeAll` carries an explicit 30 s
+reasoned row, never a pin bump. The scan does not follow a path computation into
+the seam. The `beforeAll` carries an explicit 30 s
 timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
 contention and the `default` vitest project's hook budget is 10 s
 (#2872, refs #2777).

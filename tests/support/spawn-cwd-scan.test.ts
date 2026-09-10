@@ -1659,6 +1659,7 @@ async function run(ctx) {
 });
 
 describe("node:child_process is a site only when the file imports it", () => {
+	const CHILD_PROCESS = JSON.stringify("node:child_process");
 	it("a method named `spawn` on some object is not a child spawn", async () => {
 		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
 		// an LSP server definition's own method. Matching `spawn` by simple name
@@ -1678,6 +1679,41 @@ ${SEAM}
 async function run(ctx) {
 	spawn("tool", [], { cwd: ctx.cwd });
 }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	const aliasedFixtures = [
+		[
+			"aliased named import",
+			`import { spawn as s } from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"namespace import",
+			`import * as cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.spawn("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"default import",
+			`import cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.exec("tool", { cwd: ctx.cwd }); }`,
+		],
+		[
+			"dynamic destructuring",
+			`async function run(ctx) { const { fork } = await import(${CHILD_PROCESS}); fork("tool", [], { cwd: ctx.cwd }); }\n${SEAM}`,
+		],
+		[
+			"require namespace",
+			`const cp = require(${CHILD_PROCESS});\n${SEAM}\nfunction run(ctx) { cp.execFile("tool", [], { cwd: ctx.cwd }); }`,
+		],
+	] as const;
+	for (const [label, source] of aliasedFixtures) {
+		it(`resolves ${label}`, async () => {
+			expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+		});
+	}
+
+	it("resolves a destructured require alias", async () => {
+		const source = `const { spawn: s } = require(${CHILD_PROCESS});
+${SEAM}
+function run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`;
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });
