@@ -43,7 +43,10 @@ export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
  * `cwd` is STRIPPED rather than merely left out of {@link ProbeSpawnOptions}:
  * the type stops an object literal from carrying one, and the destructure
  * below removes one that arrived inside an already-typed options object a
- * caller widened or spread. A probe that genuinely needs to
+ * caller widened or spread. Both halves are guarded — deleting the
+ * destructure changes this call's text, which retires the sweep's admission
+ * row, and `tests/clients/probe-and-root-spawn-cwd.test.ts` reds on the
+ * smuggled cwd reaching the child. A probe that genuinely needs to
  * run somewhere — `mix credo --version` needs a mix project, `cargo clippy
  * --version` needs a package, `eslint --version` resolves a project-local
  * binary — must call `safeSpawnAsync` directly and be admitted by that sweep
@@ -60,5 +63,5 @@ export async function probeToolAsync(
 	// `cwd: undefined` is a strictness spike the `tests/config` ratchet counts).
 	const { cwd: _strippedCwd, ...rest } = (options ?? {}) as SafeSpawnOptions;
 	void _strippedCwd;
-	return safeSpawnAsync(command, [...args], rest);
+	return safeSpawnAsync(command, [...args], { ...rest });
 }

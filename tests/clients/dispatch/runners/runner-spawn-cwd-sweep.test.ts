@@ -359,7 +359,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
 	],
 	[
-		"clients/tool-probe.ts#probeToolAsync:821b69e9",
+		"clients/tool-probe.ts#probeToolAsync:2d247383",
 		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 24 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
 	],
 	[
