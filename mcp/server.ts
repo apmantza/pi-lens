@@ -1882,7 +1882,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 
 	switch (method) {
 		case "initialize": {
-			startSituationalToolTelemetrySession("mcp", false);
+			startSituationalToolTelemetrySession("mcp");
 			const requested = params?.protocolVersion;
 			sendResult(id ?? null, {
 				protocolVersion:
@@ -1934,7 +1934,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			}
 			const entry = toolRegistryEntryForMcp(name);
 			if (entry && "situational" in entry && entry.situational) {
-				startSituationalToolTelemetrySession("mcp", false);
+				startSituationalToolTelemetrySession("mcp");
 				observeSituationalToolCall(entry.name);
 			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`

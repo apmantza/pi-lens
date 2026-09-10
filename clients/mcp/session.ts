@@ -120,7 +120,7 @@ export interface SessionStartOutcome {
 export async function runSessionStart(
 	cwd: string,
 ): Promise<SessionStartOutcome> {
-	startSituationalToolTelemetrySession("mcp", false);
+	startSituationalToolTelemetrySession("mcp");
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 

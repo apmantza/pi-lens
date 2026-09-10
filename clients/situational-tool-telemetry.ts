@@ -59,19 +59,16 @@ export function resetSituationalToolTelemetry(): void {
 /**
  * Open the telemetry session for one host.
  *
- * Pi keeps one observation set for the conversation across resume and fork.
- * Reload re-runs the extension factory, so it emits the runtime's prior row
- * once and opens an empty set. A fresh `/new` start emits the prior row once
- * and opens an empty set. A process restart opens an empty set and recovers nothing:
+ * Pi owns one observation set per session file. A shutdown with a
+ * `targetSessionFile` emits the conversation that is ending before the host
+ * opens the replacement. Reload keeps the same file, so its factory rebuild
+ * does not split the row. A process restart opens an empty set and recovers nothing:
  * pi-lens's own activation memory (`rememberedLazyTools` in `index.ts`) is
  * empty in a new process, so the restore deactivates every situational tool,
  * and the host's restored active set is evidence of REGISTRATION, not of
  * model activation (#2866 review F1). MCP remains connection-scoped.
  */
-export function startSituationalToolTelemetrySession(
-	host: "pi" | "mcp",
-	fresh: boolean,
-): void {
+export function startSituationalToolTelemetrySession(host: "pi" | "mcp"): void {
 	if (host === "mcp") {
 		if (connectionEnded) return;
 		if (sessionStarted) return;
@@ -82,11 +79,6 @@ export function startSituationalToolTelemetrySession(
 		return;
 	}
 	if (sessionStarted) {
-		if (fresh) {
-			emitSituationalDeadWeight();
-			clearObservations();
-			emitted = false;
-		}
 		sessionHost = "pi";
 		return;
 	}

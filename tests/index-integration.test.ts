@@ -332,7 +332,7 @@ describe("index.ts integration", () => {
 	);
 
 	it.each(["reload", "resume", "fork"])(
-		"real pi %s start keeps the conversation's dead-weight observations",
+		"real pi %s start attributes dead-weight observations by session file",
 		async (reason) => {
 			const logExtension = vi.fn();
 			vi.doMock("../clients/extension-log.js", async (importActual) => ({
@@ -367,14 +367,14 @@ describe("index.ts integration", () => {
 						row as { message?: string; metadata?: { tools?: string[] } },
 				)
 				.filter((row) => row.message === "situational tool dead weight");
-			expect(rows).toHaveLength(reason === "reload" ? 2 : 1);
+			expect(rows).toHaveLength(reason === "reload" ? 1 : 2);
 			expect(rows[0]?.metadata?.tools).toEqual([
 				"ast_grep_replace",
 				"ast_grep_outline",
 				"lsp_navigation",
 				"lens_diagnostic_mark",
 			]);
-			if (reason === "reload") {
+			if (reason !== "reload") {
 				expect(rows[1]?.metadata?.tools).toEqual([
 					"ast_grep_search",
 					"ast_grep_replace",

@@ -603,13 +603,9 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
-		// #1453: fork/reload/resume are session REBUILDS. The host constructs a
-		// fresh AgentSession with every registered extension tool active
-		// (`simulateSessionRebuild`) before emitting the event, so pi-lens must
-		// RESTORE the parent's posture — the always-active baseline plus exactly
-		// the lazy tools the model activated. Skipping the mutation would leave
-		// all six lazy tools active; a plain baseline shrink would drop the
-		// model's activation. These assertions catch both.
+		// #1453: this mock models the host's all-active handoff, but it does not
+		// re-run the extension factory. Real-pi integration tests cover that
+		// factory boundary; this test covers the restore plan for a live closure.
 		it.each(["fork", "reload", "resume"])(
 			"restores the parent's tool posture on %s session_start",
 			async (reason) => {
@@ -638,7 +634,7 @@ describe("index.ts extension wiring", () => {
 					expect(parentPosture.has("ast_grep_search")).toBe(true);
 					expect(parentPosture.has("ast_grep_replace")).toBe(false);
 
-					// The host re-activates EVERYTHING before the rebuilt session
+					// The mock re-activates EVERYTHING before the rebuilt session
 					// announces itself.
 					await pi.simulateSessionShutdownAndRebuild(
 						reason as "fork" | "reload" | "resume",

@@ -138,8 +138,9 @@ export interface PiMock {
 	 * each construct a FRESH session that way before the event is emitted. The
 	 * active tool set is never persisted per session, so every registered tool
 	 * is active again by the time pi-lens's handler runs. The mock preserves the
-	 * extension closure for resume, fork, and new; real pi reload additionally
-	 * clears its extension cache and re-runs factories.
+	 * extension closure for every rebuild and does not re-run the factory. Real
+	 * pi re-runs the factory on reload, resume, fork, and new; the real-pi
+	 * integration tests cover that boundary.
 	 * Call this to reproduce pi's `session_shutdown` then `session_start` order.
 	 */
 	simulateSessionShutdownAndRebuild(
@@ -270,7 +271,12 @@ export function createPiMock(
 			}
 			await mock.emit(
 				"session_shutdown",
-				{ type: "session_shutdown", reason },
+				{
+					type: "session_shutdown",
+					reason,
+					targetSessionFile:
+						reason === "reload" ? undefined : "replacement-session-file",
+				},
 				ctx,
 			);
 			for (const name of tools.keys()) activeTools.add(name);

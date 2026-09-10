@@ -2058,14 +2058,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
-					// #2858: pi owns one conversation observation set. Rebuilt starts
-					// preserve it; only a fresh `/new` replacement emits and resets it.
+					// #2858: pi owns one observation set per session file. A replacement
+					// shutdown emits the ending file's row before the next set opens.
 					// Open this before the handler below can hang (#2859), so the
 					// session-end row does not depend on handleSessionStart returning.
-					startSituationalToolTelemetrySession(
-						"pi",
-						isFreshSessionStart(sessionReason),
-					);
+					startSituationalToolTelemetrySession("pi");
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2094,9 +2091,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// an active-tool set per session. Skipping the call on those reasons
 					// would therefore leave every lazy tool active forever AND change the
 					// advertised tool list relative to the parent's cached prompt prefix.
-					// Rebuilding the same set instead keeps the prefix identical and
-					// genuinely preserves the model's activations, because pi-lens's own
-					// closure state (`rememberedLazyTools`) survives the rebuild.
+					// Rebuilding the same set keeps the prefix identical when the
+					// activation closure remains available. Real pi re-runs this factory
+					// on every rebuild, so that closure is empty after replacement.
 					//
 					// Deliberately BELOW the #473 concurrent-secondary guard: the active
 					// tool set is shared runtime state (one loader per process), so a
@@ -3413,8 +3410,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 			);
 			return;
 		}
-		const shutdownReason = (event as { reason?: string } | undefined)?.reason;
-		if (shutdownReason !== "resume" && shutdownReason !== "fork") {
+		const shutdownEvent = event as
+			| { reason?: string; targetSessionFile?: string }
+			| undefined;
+		const shutdownReason = shutdownEvent?.reason;
+		const switchesSessionFile =
+			typeof shutdownEvent?.targetSessionFile === "string" &&
+			shutdownEvent.targetSessionFile.length > 0;
+		if (
+			switchesSessionFile ||
+			shutdownReason === "quit" ||
+			shutdownReason === undefined
+		) {
 			endSituationalToolTelemetry();
 		}
 
