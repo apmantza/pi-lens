@@ -161,8 +161,10 @@ export interface SpawnCwdScan {
  * Three of the five names (`safeSpawnSync`, `spawnSupervised`, `execa`) have
  * no definition in `clients/` today: they are admitted spellings, not live
  * call sites. This list therefore cannot be derived from the seam modules'
- * own exports without moving the population, so it stays curated — and every
- * name in it is pinned by `spawn-cwd-scan-vocabulary.test.ts`.
+ * own exports without moving the population, so it stays curated. The
+ * vocabulary test pins that each name is both scanned and admitted; a name with
+ * no production site (the three above) can be deleted without any red, so the
+ * curated list is a documented bound, not a guarded one.
  */
 export const SPAWN_NAMES = [
 	"safeSpawnAsync",

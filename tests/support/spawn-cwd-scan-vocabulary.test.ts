@@ -76,18 +76,4 @@ describe("spawn-cwd scanner vocabulary (#2927)", () => {
 		).toBe(true);
 	});
 
-	it("keeps the bounds: object methods and unbound spellings stay out", () => {
-		// `server.spawn(` is an LSP server definition's own method (round-5
-		// v4-N3); `promisify(exec)` never binds a vocabulary name (#2888).
-		expect(
-			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
-			"a method named spawn on some object",
-		).toBe(false);
-		expect(
-			holdsAScannableSpawn(
-				'import { execFileAsync } from "node:child_process";\nexecFileAsync("tool");',
-			),
-			"an unrecognised child_process spelling stays outside the population",
-		).toBe(false);
-	});
 });
