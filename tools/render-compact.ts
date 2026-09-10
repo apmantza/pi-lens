@@ -34,6 +34,27 @@ export const MAX_RESULT_BYTES = 40 * 1024;
 // unbounded result; ordinary results keep the complete-log contract below it.
 export const COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES = 8 * 1024 * 1024;
 
+// #2800 item 7: the footer is stamped AFTER the payload bound, so the
+// footer's own maximum size is reserved inside MAX_RESULT_BYTES. The reserve
+// is computed from the footer's widest literal: the `result error` verdict, a
+// bounded diag severity section, and maximum-width numeric fields with the
+// wider `truncated=false` value.
+const FOOTER_MAX_DIGITS = String(Number.MAX_SAFE_INTEGER).length;
+/** One `diag severity=` line is width-bounded so the footer's maximum size
+ * stays finite and the reserve above stays sound. */
+const FOOTER_DIAG_LINE_MAX_CHARS = 200;
+const FOOTER_DIAG_SECTION_MAX_BYTES = 1024;
+
+export const RESULT_FOOTER_RESERVE_BYTES = Buffer.byteLength(
+	`\n\nresult error\n${"x".repeat(FOOTER_DIAG_SECTION_MAX_BYTES)}\nusage tokens=${"9".repeat(FOOTER_MAX_DIGITS)} elapsed-ms=${"9".repeat(FOOTER_MAX_DIGITS)} bytes=${"9".repeat(FOOTER_MAX_DIGITS)} truncated=false`,
+	"utf8",
+);
+
+/** The payload byte budget the footer is stamped into: the delivered result
+ * budget minus the reserved footer maximum (#2800 item 7). */
+export const RESULT_PAYLOAD_BUDGET_BYTES =
+	MAX_RESULT_BYTES - RESULT_FOOTER_RESERVE_BYTES;
+
 export interface BoundedToolText {
 	text: string;
 	truncated: boolean;
@@ -66,10 +87,15 @@ function renderHeadTail(
 	return { text: render(low), keptCharacters: low };
 }
 
-/** Bound model-facing result text while retaining both the useful head and tail. */
-export function boundToolText(text: string): BoundedToolText {
+/** Bound model-facing result text while retaining both the useful head and tail.
+ * `maxBytes` defaults to the full result budget; the footer gate passes the
+ * payload budget that leaves room for the stamped footer (#2800 item 7). */
+export function boundToolText(
+	text: string,
+	maxBytes: number = MAX_RESULT_BYTES,
+): BoundedToolText {
 	const totalBytes = Buffer.byteLength(text, "utf8");
-	if (totalBytes <= MAX_RESULT_BYTES) {
+	if (totalBytes <= maxBytes) {
 		return { text, truncated: false, omittedCharacters: 0 };
 	}
 
@@ -104,7 +130,7 @@ export function boundToolText(text: string): BoundedToolText {
 		fs.writeFileSync(fullOutputPath, logText.text, "utf8");
 		const output = renderHeadTail(
 			logText.text,
-			MAX_RESULT_BYTES,
+			maxBytes,
 			() =>
 				`\n\n[incomplete: ${omittedBytes} bytes omitted, budget ${COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES}]\n\n[Full output: ${fullOutputPath}]\n\n`,
 		);
@@ -119,7 +145,7 @@ export function boundToolText(text: string): BoundedToolText {
 	fs.writeFileSync(fullOutputPath, text, "utf8");
 	const output = renderHeadTail(
 		text,
-		MAX_RESULT_BYTES,
+		maxBytes,
 		(head, tail) =>
 			`\n\n[${text.length - head - tail} characters omitted. Full output: ${fullOutputPath}]\n\n`,
 	);
@@ -153,9 +179,19 @@ export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
 }
 
 /** Matches an already-stamped contract footer at the end of the joined text.
- * A result re-entering the gate must not gain a second footer (refs #2852 N4). */
+ * A result re-entering the gate must not gain a second footer (refs #2852 N4).
+ * The byte and truncated groups let the gate read the kept footer's own
+ * delivery figures on re-entry (round 2 F1). */
 const CONTRACT_FOOTER_TAIL_RE =
-	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+$/;
+	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+ bytes=(\d+) truncated=(true|false)$/;
+
+/** Optional delivery figures the footer reports when the caller has already
+ * bounded the payload (#2800 item 7). Absent on a direct stamp of an unbound
+ * result, where the input text IS the delivered payload. */
+export interface ToolResultDeliveryStats {
+	bytes: number;
+	truncated: boolean;
+}
 
 /**
  * Add the stable, model-facing result footer shared by pi and MCP.
@@ -165,9 +201,14 @@ const CONTRACT_FOOTER_TAIL_RE =
  * time is not a property of a projection and must not make parity tests flaky.
  * Idempotent: a result whose text already ends with the footer is only
  * `isError`-normalized, never stamped twice.
+ *
+ * When `delivery` is given (the gate path), `bytes=`/`truncated=` describe the
+ * already-bound payload; otherwise they describe this function's input text,
+ * which is the delivered payload because no bound has run.
  */
 export function renderToolResultContract<T extends ToolResultContractLike>(
 	result: T,
+	delivery?: ToolResultDeliveryStats,
 ): T {
 	const normalized = {
 		...result,
@@ -184,23 +225,32 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
 	const text = textBlocks.join("\n");
 	if (CONTRACT_FOOTER_TAIL_RE.test(text)) return normalized;
 	const details = normalized.details as Record<string, unknown> | undefined;
-	const diagnostics = Array.isArray(details?.diagnostics)
-		? details.diagnostics
-				.filter(
-					(value): value is Record<string, unknown> =>
-						Boolean(value) && typeof value === "object",
-				)
-				.map((diagnostic) => diagnostic.severity)
-				.filter((severity): severity is string => typeof severity === "string")
-				.map((severity) => `diag severity=${severity}`)
-		: [];
+	// The diag section is width- and byte-bounded (#2800 item 7) so the
+	// footer's maximum size — and therefore the reserved budget above — stays
+	// finite regardless of how many diagnostics a result carries.
+	const diagLines: string[] = [];
+	let diagSectionBytes = 0;
+	if (Array.isArray(details?.diagnostics)) {
+		for (const value of details.diagnostics) {
+			if (!value || typeof value !== "object") continue;
+			const severity = (value as Record<string, unknown>).severity;
+			if (typeof severity !== "string") continue;
+			const line = `diag severity=${severity.slice(0, FOOTER_DIAG_LINE_MAX_CHARS)}`;
+			const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+			if (diagSectionBytes + lineBytes > FOOTER_DIAG_SECTION_MAX_BYTES) break;
+			diagLines.push(line);
+			diagSectionBytes += lineBytes;
+		}
+	}
 	const tokens =
 		normalized.usage?.tokens ?? Math.ceil(Buffer.byteLength(text, "utf8") / 4);
 	const elapsedMs = normalized.usage?.elapsedMs ?? 0;
+	const deliveredBytes = delivery?.bytes ?? Buffer.byteLength(text, "utf8");
+	const truncated = delivery?.truncated === true;
 	const contractLines = [
 		`result ${normalized.isError ? "error" : "ok"}`,
-		...diagnostics,
-		`usage tokens=${tokens} elapsed-ms=${elapsedMs}`,
+		...diagLines,
+		`usage tokens=${tokens} elapsed-ms=${elapsedMs} bytes=${deliveredBytes} truncated=${truncated ? "true" : "false"}`,
 	];
 	let lastTextIndex = -1;
 	for (let index = content.length - 1; index >= 0; index--) {
@@ -221,18 +271,31 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
 	};
 }
 
-/** Apply the #2848 byte bound to every text block of a rendered result. The
- * bound runs LAST in every composition so a result that already carries the
- * contract footer still fits MAX_RESULT_BYTES on delivery. */
-export function boundToolResultText<T extends CompactResultLike>(result: T): T {
-	if (!result.content) return result;
+/** Bound the payload text blocks so the footer stamped afterwards still fits
+ * inside MAX_RESULT_BYTES (refs #2800 item 7): each block is bounded to the
+ * result budget minus the reserved footer maximum, and the delivered byte
+ * count plus the bound's truncated flag travel with the result so the footer
+ * can report them. Per-block bounding is inherited from #2852; production
+ * results carry a single text block (renderToolText). */
+export function boundResultPayload<T extends CompactResultLike>(
+	result: T,
+): { result: T; deliveredBytes: number; truncated: boolean } {
+	if (!result.content) {
+		return { result, deliveredBytes: 0, truncated: false };
+	}
+	let deliveredBytes = 0;
+	let truncated = false;
+	const content = result.content.map((block) => {
+		if (block.type !== "text" || typeof block.text !== "string") return block;
+		const bound = boundToolText(block.text, RESULT_PAYLOAD_BUDGET_BYTES);
+		deliveredBytes += Buffer.byteLength(bound.text, "utf8");
+		truncated = truncated || bound.truncated;
+		return { ...block, text: bound.text };
+	});
 	return {
-		...result,
-		content: result.content.map((block) =>
-			block.type === "text" && typeof block.text === "string"
-				? { ...block, text: boundToolText(block.text).text }
-				: block,
-		),
+		result: { ...result, content },
+		deliveredBytes,
+		truncated,
 	};
 }
 
@@ -269,11 +332,72 @@ export function stripResultDetails<T extends CompactResultLike>(result: T): T {
 	return rest as T;
 }
 
+/** What the gate returns alongside the finished result: the figures the
+ * per-turn cache_usage row aggregates (#2800 item 7). */
+export interface FinalizedToolDelivery<T> {
+	result: T;
+	deliveredBytes: number;
+	truncated: boolean;
+}
+
+/** Finish a host-adapter result after its status and all warnings exist
+ * (#2800 item 7): the payload bound runs FIRST with the footer's own maximum
+ * size reserved inside MAX_RESULT_BYTES, then the footer is stamped LAST with
+ * the delivered payload's byte count and the bound's truncated flag. So
+ * `bytes=`/`truncated=` describe what the model actually receives, and the
+ * delivered text — footer included — never exceeds MAX_RESULT_BYTES.
+ *
+ * Re-entry (refs #2852 N4, round 2 F1): the bound still runs on an
+ * already-stamped result — master applied the bound after the stamp-skip, and
+ * the kept tail carries the footer through it — so re-entry is never delivered
+ * unbounded. A stamped result within the delivered budget is kept as-is; the
+ * figures are the kept footer's own prior values, never a footer-inclusive
+ * re-measure and never a hard-coded `false`. */
+export function finalizeToolResultWithDelivery<
+	T extends ToolResultContractLike,
+>(result: T): FinalizedToolDelivery<T> {
+	const normalized = { ...result, isError: result.isError === true } as T;
+	const existingText = fullTextOf(normalized);
+	const existingFooter = CONTRACT_FOOTER_TAIL_RE.exec(existingText);
+	if (
+		existingFooter &&
+		Buffer.byteLength(existingText, "utf8") <= MAX_RESULT_BYTES
+	) {
+		return {
+			result: normalized,
+			deliveredBytes: Number(existingFooter[1]),
+			truncated: existingFooter[2] === "true",
+		};
+	}
+	const bound = boundResultPayload(normalized);
+	const text = fullTextOf(bound.result);
+	const keptFooter = CONTRACT_FOOTER_TAIL_RE.exec(text);
+	if (keptFooter) {
+		// The bound ran and the kept tail still carries the footer, so there is
+		// nothing to stamp; the kept footer's figures stay the delivery
+		// contract (row 6: prior value kept).
+		return {
+			result: bound.result,
+			deliveredBytes: Number(keptFooter[1]),
+			truncated: keptFooter[2] === "true",
+		};
+	}
+	const stamped = renderToolResultContract(bound.result, {
+		bytes: bound.deliveredBytes,
+		truncated: bound.truncated,
+	});
+	return {
+		result: stamped,
+		deliveredBytes: bound.deliveredBytes,
+		truncated: bound.truncated,
+	};
+}
+
 /** Finish a host-adapter result after its status and all warnings exist. */
 export function finalizeToolResult<T extends ToolResultContractLike>(
 	result: T,
 ): T {
-	return boundToolResultText(renderToolResultContract(result));
+	return finalizeToolResultWithDelivery(result).result;
 }
 
 interface CompactSummaryInput<D = unknown> {

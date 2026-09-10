@@ -148,24 +148,24 @@ describe("result contract across registered tool surfaces", () => {
 			}
 			const mcpResultValue = mcpResult.result as ToolResult;
 			expect(mcpText, `${entry.name}: MCP result`).toMatch(
-				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
+				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/,
 			);
 			expect(
 				mcpText?.includes("result error"),
 				`${entry.name}: MCP verdict matches isError`,
 			).toBe(mcpResultValue.isError === true);
 			expect(mcpText, `${entry.name}: MCP usage`).toMatch(
-				/usage tokens=\d+ elapsed-ms=\d+/,
+				/usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)/,
 			);
 			expect(piText, `${entry.name}: pi result`).toMatch(
-				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
+				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/,
 			);
 			expect(
 				piText?.includes("result error"),
 				`${entry.name}: pi verdict matches isError`,
 			).toBe(piResult?.isError === true);
 			expect(piText, `${entry.name}: pi usage`).toMatch(
-				/usage tokens=\d+ elapsed-ms=\d+/,
+				/usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)/,
 			);
 		}
 	}, 30_000);
@@ -215,7 +215,7 @@ describe("result contract across registered tool surfaces", () => {
 			);
 			const text = result?.content?.[0]?.text;
 			expect(text, `${entry.name}: pi rendering`).toMatch(
-				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
+				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/,
 			);
 			expect(
 				text?.includes("result error"),
@@ -266,5 +266,155 @@ describe("result contract across registered tool surfaces", () => {
 			MAX_RESULT_BYTES,
 		);
 		expect(text).toContain("characters omitted");
+		// Item 7 (refs #2800): the footer reports the delivered payload, and the
+		// bound reserves the footer's own size, so footer included the text stays
+		// inside the budget. Dropping the reserve reds the byteLength assert;
+		// reporting pre-bound bytes reds the bytes= assert below.
+		const delivered = Number(text.match(/bytes=(\d+)/)?.[1]);
+		expect(Number.isFinite(delivered), "bytes= present").toBe(true);
+		expect(delivered).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+		expect(text).toMatch(/truncated=true$/);
+	});
+
+	it("stamps exact delivered bytes on a normal result through both surfaces", async () => {
+		// Item 7 (refs #2800): bytes= is the UTF-8 byte count of the delivered
+		// payload text (the footer excluded), measured here independently from
+		// the rendered text on both real surfaces.
+		const args = { path: path.join(cwd, "fixture.ts"), symbol: "enclosing" };
+		const readByteFigures = (text: string | undefined) => {
+			const match = text?.match(
+				/\n\nresult ok\nusage tokens=\d+ elapsed-ms=\d+ bytes=(\d+) truncated=(true|false)$/,
+			);
+			expect(match, "footer with bytes=/truncated=").not.toBeNull();
+			const payload = text?.slice(0, text.indexOf("\n\nresult ok")) as string;
+			return {
+				bytes: Number(match?.[1]),
+				truncated: match?.[2],
+				measured: Buffer.byteLength(payload, "utf8"),
+			};
+		};
+		const piTool = pi.getTool("read_symbol") as {
+			execute?: (...args: unknown[]) => Promise<ToolResult>;
+		};
+		const piResult = await piTool.execute?.(
+			"governance",
+			args,
+			new AbortController().signal,
+			undefined,
+			{ cwd },
+		);
+		const piFigures = readByteFigures(piResult?.content?.[0]?.text);
+		expect(piFigures.truncated).toBe("false");
+		expect(piFigures.bytes).toBe(piFigures.measured);
+		const mcpResult = await mcp.request(150, "tools/call", {
+			name: "pilens_read_symbol",
+			arguments: { ...args, file: args.path },
+		});
+		const mcpFigures = readByteFigures(
+			(mcpResult.result as ToolResult).content?.[0]?.text,
+		);
+		expect(mcpFigures.truncated).toBe("false");
+		expect(mcpFigures.bytes).toBe(mcpFigures.measured);
+	});
+
+	it("sums the turn's tool calls onto the real cache_usage row (refs #2800 item 7)", async () => {
+		// Real sinks: no cache-observability mock. Two normal calls plus one
+		// oversized call close a turn; the emitted message_end writes the real
+		// `cache_usage` latency row whose toolResultBytes must equal the sum of
+		// the delivered footers' bytes= figures, and whose toolResultsTruncated
+		// must count the oversized call. Dropping the wrapper aggregation reds
+		// both asserts with 0.
+		const { flushLatencyLog, getLatencyLogPath } =
+			await import("../../clients/latency-logger.js");
+		const sessionId = `row-bytes-${Date.now().toString(36)}`;
+		const ctx = {
+			cwd,
+			sessionManager: { getSessionId: () => sessionId },
+		};
+		const readSymbol = pi.getTool("read_symbol") as {
+			execute?: (...args: unknown[]) => Promise<ToolResult>;
+		};
+		const executed = [
+			await readSymbol.execute?.(
+				"row-1",
+				{ path: path.join(cwd, "fixture.ts"), symbol: "enclosing" },
+				new AbortController().signal,
+				undefined,
+				ctx,
+			),
+			await readSymbol.execute?.(
+				"row-2",
+				{ path: path.join(cwd, "fixture.ts"), symbol: "enclosing" },
+				new AbortController().signal,
+				undefined,
+				ctx,
+			),
+			await readSymbol.execute?.(
+				"row-3",
+				{ path: path.join(cwd, "big.ts"), symbol: "bigSymbol" },
+				new AbortController().signal,
+				undefined,
+				ctx,
+			),
+		];
+		const figures = executed.map((result) => {
+			const text = result?.content?.[0]?.text ?? "";
+			return {
+				bytes: Number(text.match(/bytes=(\d+)/)?.[1]),
+				truncated: /truncated=true$/.test(text),
+			};
+		});
+		for (const figure of figures) {
+			expect(Number.isFinite(figure.bytes), "footer bytes= present").toBe(true);
+		}
+		// #1742's sanctioned opt-out: the row must be read from the REAL sink,
+		// so test mode is scoped off for exactly this write/read window.
+		const previousTestMode = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			await pi.emit(
+				"message_end",
+				{
+					message: {
+						role: "assistant",
+						provider: "p",
+						model: "m",
+						usage: { input: 1, output: 1, cacheRead: 1, cacheWrite: 0 },
+					},
+				},
+				ctx,
+			);
+			await flushLatencyLog();
+		} finally {
+			if (previousTestMode === undefined) {
+				delete process.env.PI_LENS_TEST_MODE;
+			} else {
+				process.env.PI_LENS_TEST_MODE = previousTestMode;
+			}
+		}
+		const rows = fs
+			.readFileSync(getLatencyLogPath(), "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map(
+				(line) =>
+					JSON.parse(line) as {
+						phase?: string;
+						metadata?: Record<string, unknown>;
+					},
+			)
+			.filter(
+				(entry) =>
+					entry.phase === "cache_usage" &&
+					entry.metadata?.sessionId === sessionId,
+			);
+		expect(rows, "one cache_usage row for the session").toHaveLength(1);
+		const metadata = rows[0].metadata as Record<string, unknown>;
+		expect(metadata.toolResultBytes).toBe(
+			figures.reduce((sum, figure) => sum + figure.bytes, 0),
+		);
+		expect(metadata.toolResultsTruncated).toBe(
+			figures.filter((figure) => figure.truncated).length,
+		);
 	});
 });
