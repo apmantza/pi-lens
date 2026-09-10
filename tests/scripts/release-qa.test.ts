@@ -172,6 +172,7 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
 			) as { files: string[] }
 		).files;
+		const hasDist = fs.existsSync(path.join(REPO_ROOT, "dist"));
 		const pathPattern = /<(export|installed)>\/([^\s`]+)/g;
 		for (const parsed of rows) {
 			const matches = [...parsed.entryPoint.matchAll(pathPattern)];
@@ -182,10 +183,15 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 						`${parsed.id}: ${relative}`,
 					).toBe(true);
 				} else {
-					expect(
-						fs.existsSync(path.join(REPO_ROOT, relative)),
-						`${parsed.id}: ${relative} is not present in the packed export`,
-					).toBe(true);
+					// Stryker sandboxes contain tracked sources, not gitignored dist/.
+					// The package-file assertion below remains unconditional; this
+					// check runs when a local build makes the installed path available.
+					if (hasDist) {
+						expect(
+							fs.existsSync(path.join(REPO_ROOT, relative)),
+							`${parsed.id}: ${relative} is not present in the built export`,
+						).toBe(true);
+					}
 					expect(
 						packageFiles.some(
 							(file) =>
@@ -689,11 +695,11 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 	it("keeps host pip and npm policy overrides out of the install-row environment", () => {
 		const priorPip = process.env.PIP_BREAK_SYSTEM_PACKAGES;
 		const priorNpm = process.env.npm_config_userconfig;
-		process.env.PIP_BREAK_SYSTEM_PACKAGES = "1";
+		process.env.PIP_BREAK_SYSTEM_PACKAGES = "host-value";
 		process.env.npm_config_userconfig = "/host/.npmrc";
 		try {
 			const env = scratchEnv(scratchRoot);
-			expect(env.PIP_BREAK_SYSTEM_PACKAGES).toBeUndefined();
+			expect(env.PIP_BREAK_SYSTEM_PACKAGES).toBe("1");
 			expect(env.npm_config_userconfig).toBeUndefined();
 		} finally {
 			if (priorPip === undefined) delete process.env.PIP_BREAK_SYSTEM_PACKAGES;

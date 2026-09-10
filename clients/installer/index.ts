@@ -4977,12 +4977,25 @@ function recordPackageManagerInstallException(
 	packageName: string,
 	err: unknown,
 ): undefined {
-	const message = (err as Error).message;
+	const message = boundInstallError((err as Error).message);
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
 	installFailureReasons.set(toolId, message);
 	return undefined;
+}
+
+const INSTALL_ERROR_LINE_LIMIT = 1000;
+const INSTALL_CANDIDATE_ERROR_LIMIT = 200;
+
+function boundInstallError(
+	value: string,
+	limit = INSTALL_ERROR_LINE_LIMIT,
+): string {
+	const line = value.replace(/[\r\n]+/g, " ").trim();
+	return line.length > limit
+		? `${line.slice(0, limit - 3)}...`
+		: line;
 }
 
 async function installNpmTool(
@@ -5344,7 +5357,7 @@ async function installPipTool(
 				return packageName;
 			}
 
-			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${outcome.error}`;
+			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${boundInstallError(outcome.error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
 			errors.push(candidateError);
 			debugLog(`[pip-fallback] ${candidateError}`);
 		}

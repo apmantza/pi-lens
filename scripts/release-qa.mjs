@@ -1012,7 +1012,7 @@ export function npm(args, cwd, env) {
 export function scratchEnv(scratchRoot, extra = {}) {
 	const home = path.join(scratchRoot, "home");
 	// Keep only process settings needed to find the host tools and preserve their
-	// locale. In particular, never inherit PIP_* or npm_config_* policy overrides.
+	// locale. In particular, never inherit host package-manager policy overrides.
 	return {
 		...Object.fromEntries(
 			["PATH", "Path", "PATHEXT", "SystemRoot", "LANG", "LC_ALL", "CI"]
@@ -1025,6 +1025,9 @@ export function scratchEnv(scratchRoot, extra = {}) {
 		PILENS_DATA_DIR: path.join(home, ".pilens-data"),
 		PI_LENS_INSTALL_LOG: path.join(home, ".pi-lens", "install.log"),
 		npm_config_cache: path.join(scratchRoot, "npm-cache"),
+		// HOME is scratch-pinned, so this deliberately permits pip to measure
+		// package resolution instead of letting PEP 668 hide dead registry entries.
+		PIP_BREAK_SYSTEM_PACKAGES: "1",
 		ANTHROPIC_API_KEY:
 			process.env.ANTHROPIC_API_KEY || "sk-ant-dummy-release-qa",
 		...extra,

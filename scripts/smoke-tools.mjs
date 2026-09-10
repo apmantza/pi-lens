@@ -1717,13 +1717,6 @@ export function classifyInstallOutcome(toolId, deps) {
 		};
 	}
 	const reason = attempt.reason ?? "install failed (no reason recorded)";
-	if (/externally-managed-environment/i.test(reason)) {
-		return {
-			row: "skip",
-			networkUnreachable: false,
-			detail: `${toolId} unavailable (host policy: pip refuses system installs; toolchain policy: ${firstLine(reason)})`,
-		};
-	}
 	if (TRANSIENT_NETWORK_PATTERN.test(reason)) {
 		return {
 			row: "skip",
