@@ -61,6 +61,26 @@
  * the expected verdict per cell — is the "Detector state space (round 3)"
  * table on PR #2693, and every cell has a named fixture in
  * `spawn-cwd-scan.test.ts`.
+ *
+ * ## Freeze policy (#2927)
+ *
+ * A new scanner finding is a reason to SIMPLIFY this scanner, not to extend
+ * it. Every extension so far (rounds 1 through 5, #2888, #2902) closed the
+ * shown hole and left the next spelling open — AGENTS.md defect shape 34, "a
+ * guard that enumerates surface spellings". If a finding does not converge in
+ * one verify round, the fallback is an ast-grep rule matching any
+ * `child_process` call not routed through the seam, run by the existing rule
+ * engine, with this scanner deleted.
+ *
+ * ## The `// cwd-exempt:` escape hatch (#2923, kept)
+ *
+ * The tag stays as the documented escape hatch for a genuine non-project
+ * child: a presence probe that reads no file and no config. Live users are
+ * `cpp-check.ts`'s `cl` probe and `psscriptanalyzer.ts`'s two PowerShell
+ * presence probes; #2911 removes those tags, after which the channel has zero
+ * users and remains covered by the K10 self-tests alone. Deleting the parser
+ * instead would flag those sites and move the sweep pins, so deletion stays
+ * out until a lane carries the production tags with it.
  */
 
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
@@ -137,14 +157,32 @@ export interface SpawnCwdScan {
 }
 
 /** The seam's own wrappers: recognised by the callee's simple name, because
- * every one of them is a pi-lens export nothing else in the tree is called. */
-const SPAWN_NAMES = new Set([
+ * every one of them is a pi-lens export nothing else in the tree is called.
+ *
+ * ## One vocabulary (#2926, closed by #2927)
+ *
+ * This tuple is the SINGLE source of truth for the seam side of "what counts
+ * as a spawn". The scan's own site rule ({@link scanSpawnCwd}'s `siteNames`)
+ * and the sweep's population predicate ({@link holdsAScannableSpawn}, consumed
+ * by `runner-spawn-cwd-sweep.test.ts`) both derive from it — a second
+ * hand-written copy of this list is a defect, not a convenience. The #2902
+ * round-3 probe added one name here and all 140 sweep tests stayed green,
+ * because the population predicate carried its own copy and never saw it.
+ *
+ * Three of the five names (`safeSpawnSync`, `spawnSupervised`, `execa`) have
+ * no definition in `clients/` today: they are admitted spellings, not live
+ * call sites. This list therefore cannot be derived from the seam modules'
+ * own exports without moving the population, so it stays curated — and every
+ * name in it is pinned by `spawn-cwd-scan-vocabulary.test.ts`.
+ */
+export const SPAWN_NAMES = [
 	"safeSpawnAsync",
 	"safeSpawnSync",
 	"safeSpawn",
 	"spawnSupervised",
 	"execa",
-]);
+] as const;
+const SPAWN_NAME_SET = new Set<string>(SPAWN_NAMES);
 /**
  * `node:child_process` itself, recognised only when the file IMPORTS the name
  * unaliased. A simple-name match would read `server.spawn(root, …)` — an LSP
@@ -152,12 +190,47 @@ const SPAWN_NAMES = new Set([
  * `clients/lsp/index.ts` entered the population as a phantom site when the
  * population filter and this list were reconciled (round-5 v4-N3).
  *
+ * Same one-vocabulary rule as {@link SPAWN_NAMES}: the scan's import matcher
+ * below and the sweep's population predicate both derive from this tuple.
+ *
  * Stated bound: an ALIASED import (`import { spawn as nodeSpawn }`) is not a
  * site here — `clients/lsp/client.ts`, `clients/instance-reaper.ts` and
  * `clients/child-unref.ts` each spawn that way and are outside this sweep's
  * reach. Tracked by #2888.
  */
-const NODE_SPAWN_NAMES = new Set(["spawn", "execFile"]);
+export const NODE_SPAWN_NAMES = ["spawn", "execFile"] as const;
+const NODE_SPAWN_NAME_SET = new Set<string>(NODE_SPAWN_NAMES);
+/** The child_process import specifier the population predicate admits. */
+const NODE_SPAWN_SPECIFIER_PATTERN = new RegExp(
+	`^(?:\\s*)(?:${NODE_SPAWN_NAMES.join("|")})(?:\\s*)$`,
+);
+/** A seam-wrapper call the population predicate admits. */
+const SEAM_CALL_PATTERN = new RegExp(`\\b(?:${SPAWN_NAMES.join("|")})\\s*\\(`);
+
+/**
+ * Whether a file can hold a site the scan recognises: one of the seam
+ * wrappers by name, or an unaliased import of a {@link NODE_SPAWN_NAMES} name
+ * from `child_process` or `node:child_process`. This lives here, beside the
+ * two tuples, so the sweep's population filter and the scan's own site rule
+ * derive from one vocabulary instead of hand-copying it: round 4's filter
+ * listed only the five seam names while the scanner also counted
+ * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
+ * could never move a pin (round-5 v4-N3), and the #2902 round-3 probe showed
+ * the surviving copy drifting the same way (#2926). An ALIASED
+ * child_process import stays out on both sides, tracked by #2888.
+ */
+export function holdsAScannableSpawn(source: string): boolean {
+	const hasUnaliasedChildProcessImport = [
+		...source.matchAll(
+			/import(?:\s+[\w*$]+\s*,)?\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
+		),
+	].some((match) =>
+		match[1]
+			.split(",")
+			.some((specifier) => NODE_SPAWN_SPECIFIER_PATTERN.test(specifier)),
+	);
+	return SEAM_CALL_PATTERN.test(source) || hasUnaliasedChildProcessImport;
+}
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
 const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
@@ -277,7 +350,10 @@ function importedNodeSpawnNames(root: SgNode): Set<string> {
 							const text = named.text();
 							// `spawn as nodeSpawn` is an import_specifier with an alias;
 							// only the unaliased form is matched by simple name below.
-							if (NODE_SPAWN_NAMES.has(text) && !/\bas\b/.test(named.text())) {
+							if (
+								NODE_SPAWN_NAME_SET.has(text) &&
+								!/\bas\b/.test(named.text())
+							) {
 								names.add(text);
 							}
 						}
@@ -1250,7 +1326,10 @@ export async function scanSpawnCwd(
 	// One list decides what a site is, for the shared census below and for the
 	// loop that reads the sites: two copies of the rule meant a mutation of
 	// either one left the other enforcing it.
-	const siteNames = new Set([...SPAWN_NAMES, ...importedNodeSpawnNames(root)]);
+	const siteNames = new Set([
+		...SPAWN_NAME_SET,
+		...importedNodeSpawnNames(root),
+	]);
 	// A same-file function that RETURNS the seam's result is itself a seam
 	// resolver — `test-runner-client.ts`'s `resolveSpawnCwd` (#2879),
 	// `tool-cwd.ts`'s `resolveRunnerCwd`, `formatters.ts`'s

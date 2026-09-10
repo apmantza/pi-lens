@@ -87,6 +87,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { lineContentHash } from "../../../../clients/read-guard.js";
 import {
+	holdsAScannableSpawn,
 	type SpawnCwdSite,
 	scanSpawnCwd,
 } from "../../../support/spawn-cwd-scan.js";
@@ -724,33 +725,16 @@ const WORKLIST_CEILING = 0;
 const SCAN_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Whether a file can hold a site the scan recognises: one of the seam wrappers
- * by name, or a named `spawn`/`execFile` import from `child_process` or
- * `node:child_process`. It mirrors
- * `spawn-cwd-scan.ts`'s own site rule deliberately — round 4's population
- * filter listed only the five seam names while the scanner also counted
- * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
- * could never move a pin (round-5 v4-N3). An ALIASED import is a stated bound
- * of both, tracked by #2888.
+ * The population predicate lives in `tests/support/spawn-cwd-scan.ts` beside
+ * the two name tuples it derives from (one vocabulary, #2927): one of the
+ * seam wrappers by name, or a named `spawn`/`execFile` import from
+ * `child_process` or `node:child_process`. It mirrors the scan's own site
+ * rule deliberately — round 4's population filter listed only the five seam
+ * names while the scanner also counted `spawn`/`execFile`, so a file whose
+ * only child spawn was a bare `spawn(` could never move a pin (round-5
+ * v4-N3). An ALIASED child_process import is a stated bound of both, tracked
+ * by #2888.
  */
-function holdsAScannableSpawn(source: string): boolean {
-	const hasUnaliasedChildProcessImport = [
-		...source.matchAll(
-			/import(?:\s+[\w*$]+\s*,)?\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
-		),
-	].some((match) =>
-		match[1]
-			.split(",")
-			.some((specifier) =>
-				/^(?:\s*)(?:spawn|execFile)(?:\s*)$/.test(specifier),
-			),
-	);
-	return (
-		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
-			source,
-		) || hasUnaliasedChildProcessImport
-	);
-}
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
 const ORIGIN_ADMISSIONS = Object.fromEntries([
 	...ORIGIN_ADMISSION_ROWS,

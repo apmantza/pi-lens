@@ -1151,7 +1151,14 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. Stated bounds: an ALIASED
+reasoned row, never a pin bump. `SPAWN_NAMES` and `NODE_SPAWN_NAMES` in
+`tests/support/spawn-cwd-scan.ts` are the one vocabulary the scan's site rule
+and the sweep's population predicate both derive from, with per-name parity in
+`tests/support/spawn-cwd-scan-vocabulary.test.ts` (#2927). A new scanner
+finding is a reason to simplify the scanner, not extend it; the fallback is an
+ast-grep rule matching unseamed `child_process` calls. The `// cwd-exempt:`
+tag stays as the documented escape hatch for genuine non-project children.
+Stated bounds: an ALIASED
 `node:child_process` import is not a site (#2888), and the scan does not follow
 a path computation into the seam. The `beforeAll` carries an explicit 30 s
 timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
