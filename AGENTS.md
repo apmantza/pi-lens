@@ -1156,6 +1156,19 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+Lifecycle hook work uses `HOOK_WALL_BUDGET_MS` (`clients/hook-budgets.ts`) as
+the single wall-budget registry. Registered pi and MCP lifecycle handlers pass
+their live signal through `bounded()`; read-only `tool_result` never bootstraps
+analyzer clients, and unfinished edit, formatter, cascade, late-auxiliary, and
+deferred-mutation work remains on its existing off-hook delivery seam. A
+formatter aggregate or `_pendingCascadeRuns` cap records one bounded
+degradation and preserves the remainder for a later drain (#2523). The
+`AgentBehaviorClient` history is process-wide and is available before analyzer
+bootstrap residency, so read-only results cannot lose read-before-edit context.
+Classify bash by `extractWrittenPathsFromCommand` before selecting the
+`tool_result_read_only` or `tool_result_edit` budget; a bash command that
+creates or rewrites a path is edit-class work.
+
 The runner-spawn-cwd sweep (`tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts`)
 scans every spawn-bearing TypeScript file under `clients/`, `tools/`, `mcp/`,
 and `index.ts`. Its AST needle requires each supplied cwd value to resolve to

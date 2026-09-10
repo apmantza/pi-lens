@@ -715,6 +715,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		resetLSPService,
 		resetFormatService,
 	} = deps;
+	const turnIndexAtDispatch = runtime.turnIndex;
+	const clearOwnedTurnState = (): void => {
+		if (runtime.turnIndex !== turnIndexAtDispatch) {
+			dbg(
+				`turn_end: retaining newer turn state (dispatch=${turnIndexAtDispatch}, current=${runtime.turnIndex})`,
+			);
+			return;
+		}
+		cacheManager.clearTurnState(cwd, currentOwner);
+	};
 
 	// #449 slice 1: piggyback the instance-registry heartbeat on this existing
 	// per-turn touchpoint rather than adding a new timer/interval. Cheap (reads
@@ -777,7 +787,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		(turnState.files || turnState.owner || turnState.sessionId)
 	) {
 		dbg("turn_end: evicting stale turn-state owner");
-		cacheManager.clearTurnState(cwd, currentOwner);
+		clearOwnedTurnState();
 		turnState = cacheManager.readTurnState(cwd);
 	}
 
@@ -906,7 +916,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	if (cacheManager.isMaxCyclesExceeded(cwd)) {
 		dbg("turn_end: max cycles exceeded, clearing state and forcing through");
-		cacheManager.clearTurnState(cwd, currentOwner);
+		clearOwnedTurnState();
 		runtime.fixedThisTurn.clear();
 		resetFormatService();
 		return;
@@ -3881,7 +3891,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					});
 				}
 			}
-			cacheManager.clearTurnState(cwd, currentOwner);
+			clearOwnedTurnState();
 			runtime.fixedThisTurn.clear();
 			resetFormatService();
 			return;
@@ -3985,7 +3995,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		});
 	}
 	if (blockerParts.length === 0) {
-		cacheManager.clearTurnState(cwd, currentOwner);
+		clearOwnedTurnState();
 		// `staleSecretParts` counts here too (#1622 review M2): clearing the
 		// findings record while a stale secret is still unverified would drop the
 		// only surviving trace of it.

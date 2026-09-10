@@ -16,7 +16,7 @@
 		"tools": 4
 	},
 	"tsconfig.strict-optional.json": {
-		"clients": 357,
+		"clients": 358,
 		"clients/config-core": 1,
 		"clients/dispatch": 18,
 		"clients/dispatch/facts": 1,
@@ -25,7 +25,7 @@
 		"clients/dispatch/utils": 2,
 		"clients/installer": 25,
 		"clients/lsp": 58,
-		"clients/mcp": 6,
+		"clients/mcp": 7,
 		"clients/project-diagnostics": 3,
 		"clients/project-diagnostics/runner-adapters": 3,
 		"clients/redact": 2,

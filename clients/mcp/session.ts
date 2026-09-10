@@ -48,6 +48,8 @@ import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
 import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
+import { bounded } from "../deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -111,47 +113,57 @@ export interface SessionStartOutcome {
 	aliveLspClients: number;
 }
 
+const degradedSessionStart: SessionStartOutcome = {
+	aliveLspClients: 0,
+};
+
 /**
  * Run pi-lens's real session_start. Much of the work (scans, baseline, LSP warm)
  * runs in the background, so the immediate return carries the synchronous
  * guidance + whatever baseline/LSP state is ready; query `pilens_diagnostics` /
  * `pilens_health` afterwards for the scan results as they land.
  */
-export async function runSessionStart(
-	cwd: string,
-): Promise<SessionStartOutcome> {
+async function runSessionStartImpl(cwd: string): Promise<SessionStartOutcome> {
 	startSituationalToolTelemetrySession("mcp");
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 
-	await handleSessionStart({
-		ctxCwd: cwd,
-		// The MCP server has no TUI keystroke latency to protect, so the
-		// first-call-quick heuristic must not apply. Force "full" mode so
-		// the dominant-language LSP pre-warm, scans, and error-debt baseline
-		// all run on the first (and only) session_start of the process.
-		// An explicit PI_LENS_STARTUP_MODE env var still wins (handled in
-		// handleSessionStart — the override is only checked when the env var
-		// is unset).
-		startupModeOverride: "full",
-		getFlag: host.getFlag,
-		notify: noop,
-		dbg: noop,
-		log: noop,
-		runtime: ctx.runtime,
-		cacheManager: ctx.cacheManager,
-		astGrepClient: ctx.astGrepClient,
-		// The MCP server has already loaded the analyzer graph (an MCP call has
-		// nothing to defer to), so it hands the handler the same one-shape seam
-		// every other caller uses rather than a second, field-by-field shape.
-		bootstrap: residentBootstrapAccess(ctx.clients),
-		ensureTool: async (name: string) =>
-			(await import("../installer/index.js")).ensureTool(name),
-		cleanStaleTsBuildInfo: () => [],
-		resetDispatchBaselines: (cwdArg?: string) =>
-			resetDispatchBaselines(cwdArg ?? cwd),
-		resetLSPService,
-	});
+	await bounded(
+		handleSessionStart({
+			ctxCwd: cwd,
+			// The MCP server has no TUI keystroke latency to protect, so the
+			// first-call-quick heuristic must not apply. Force "full" mode so
+			// the dominant-language LSP pre-warm, scans, and error-debt baseline
+			// all run on the first (and only) session_start of the process.
+			// An explicit PI_LENS_STARTUP_MODE env var still wins (handled in
+			// handleSessionStart — the override is only checked when the env var
+			// is unset).
+			startupModeOverride: "full",
+			getFlag: host.getFlag,
+			notify: noop,
+			dbg: noop,
+			log: noop,
+			runtime: ctx.runtime,
+			cacheManager: ctx.cacheManager,
+			astGrepClient: ctx.astGrepClient,
+			// The MCP server has already loaded the analyzer graph (an MCP call has
+			// nothing to defer to), so it hands the handler the same one-shape seam
+			// every other caller uses rather than a second, field-by-field shape.
+			bootstrap: residentBootstrapAccess(ctx.clients),
+			ensureTool: async (name: string) =>
+				(await import("../installer/index.js")).ensureTool(name),
+			cleanStaleTsBuildInfo: () => [],
+			resetDispatchBaselines: (cwdArg?: string) =>
+				resetDispatchBaselines(cwdArg ?? cwd),
+			resetLSPService,
+		}),
+		{
+			ms: HOOK_WALL_BUDGET_MS.session_start,
+			signal: undefined,
+			hook: "session_start",
+			label: "handleSessionStart",
+		},
+	);
 
 	const baseline = ctx.runtime.errorDebtBaseline;
 	return {
@@ -161,6 +173,15 @@ export async function runSessionStart(
 			: undefined,
 		aliveLspClients: getLSPService().getAliveClientCount(),
 	};
+}
+
+export function runSessionStart(cwd: string): Promise<SessionStartOutcome> {
+	return bounded(runSessionStartImpl(cwd), {
+		ms: HOOK_WALL_BUDGET_MS.session_start,
+		signal: undefined,
+		hook: "session_start",
+		label: "mcp-session-start",
+	}).then((outcome) => outcome ?? degradedSessionStart);
 }
 
 export interface TurnEndOutcome {
@@ -179,6 +200,11 @@ interface TurnEndTransaction {
 	outcome: TurnEndOutcome;
 	commit: () => void;
 }
+
+const degradedTurnEnd: TurnEndTransaction = {
+	outcome: { filesRegistered: 0 },
+	commit: () => {},
+};
 
 interface PendingTurnEndDelivery {
 	cwd: string;
@@ -275,7 +301,7 @@ const inFlightIpcTurnEnds = new Map<string, Promise<TurnEndDelivery>>();
  * reads edited files from turn-state, so we register the caller-supplied files
  * first (a full-file range, importsChanged=true so dep/knip re-check broadly).
  */
-async function runTurnEndNow(
+async function runTurnEndNowImpl(
 	cwd: string,
 	files: string[] = [],
 	deferredDelivery = false,
@@ -311,6 +337,7 @@ async function runTurnEndNow(
 	};
 
 	await handleTurnEnd({
+		signal: undefined,
 		ctxCwd: cwd,
 		getFlag: host.getFlag,
 		dbg: noop,
@@ -353,6 +380,19 @@ async function runTurnEndNow(
 			acknowledgeTestFindings(ctx.cacheManager, cwd);
 		},
 	};
+}
+
+function runTurnEndNow(
+	cwd: string,
+	files: string[] = [],
+	deferredDelivery = false,
+): Promise<TurnEndTransaction> {
+	return bounded(runTurnEndNowImpl(cwd, files, deferredDelivery), {
+		ms: HOOK_WALL_BUDGET_MS.turn_end,
+		signal: undefined,
+		hook: "turn_end",
+		label: "mcp-turn-end",
+	}).then((transaction) => transaction ?? degradedTurnEnd);
 }
 
 /**

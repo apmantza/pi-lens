@@ -74,6 +74,8 @@ import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
+import type { LedgerHookKey } from "./hook-budgets.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
@@ -246,6 +248,8 @@ function exceedsLspSyncLimits(
 // --- Types ---
 
 export interface PipelineContext {
+	/** Live tool_result signal for aggregate formatter and dispatch bounds. */
+	signal?: AbortSignal;
 	filePath: string;
 	/** Language/tool root used for runner execution and config resolution. */
 	cwd: string;
@@ -1241,6 +1245,9 @@ export async function runFormatPhase(
 	filePath: string,
 	getFormatService: () => FormatService,
 	dbg: PipelineContext["dbg"],
+	signal?: AbortSignal,
+	budgetMs = HOOK_WALL_BUDGET_MS.tool_result_edit,
+	hook: LedgerHookKey = "tool_result_edit",
 ): Promise<FormatPhaseResult> {
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1251,7 +1258,11 @@ export async function runFormatPhase(
 	const formatService = getFormatService();
 	try {
 		formatService.recordRead(filePath);
-		const result = await formatService.formatFile(filePath);
+		const result = await formatService.formatFile(filePath, {
+			signal,
+			budgetMs,
+			hook,
+		});
 		// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
 		// `formattersUsed` (which drives change bookkeeping / turn summaries) and
 		// out of `formatFailures` (which requeues). Record it once, distinctly.
@@ -1400,7 +1411,12 @@ export async function runPipeline(
 	const formatDeferred =
 		!autoformatDisabled && !immediateFormat && !!fileContent;
 	if (!autoformatDisabled && immediateFormat && fileContent) {
-		const formatResult = await runFormatPhase(filePath, getFormatService, dbg);
+		const formatResult = await runFormatPhase(
+			filePath,
+			getFormatService,
+			dbg,
+			ctx.signal,
+		);
 		formatChanged = formatResult.formatChanged;
 		formattersUsed = formatResult.formattersUsed;
 		formatFailures = formatResult.formatFailures;
