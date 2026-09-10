@@ -25,8 +25,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	finalizeToolResult,
-	renderToolResultContract,
-	boundToolResultText,
+	finalizeToolResultWithDelivery,
 	renderToolText as toolText,
 	stripResultDetails,
 } from "../tools/render-compact.js";
@@ -1927,11 +1926,13 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			maybeAutoSessionStart();
 			try {
 				let result = await callTool(name, args);
-				result = renderToolResultContract(result);
 				// #535: pilens_analyze already self-routes (fresh-fork) when stale —
 				// see the forcedFresh branch inside callTool. Every other tool that
 				// depends on warm-only process state gets an honest-degrade warning
 				// instead, so the warm boundary never silently serves old code.
+				// The warning precedes the #2800 item 7 gate, so it is part of the
+				// payload the byte bound protects (kept in the retained tail) and
+				// its bytes land in the footer's delivered figure.
 				if (
 					WARN_ONLY_STALE_TOOLS.has(name) &&
 					!result.isError &&
@@ -1939,9 +1940,13 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				) {
 					result = withStaleWarning(result);
 				}
+				// #2800 item 7: the payload bound runs first with the footer's own
+				// size reserved, then the footer is stamped with the delivered
+				// payload's byte count and the bound's truncated flag.
+				const delivery = finalizeToolResultWithDelivery(result);
 				// The gate consumed `details` for the footer's diag lines above;
 				// strip it so the wire carries only the bounded text (#2852 N1).
-				sendResult(id ?? null, boundToolResultText(stripResultDetails(result)));
+				sendResult(id ?? null, stripResultDetails(delivery.result));
 			} catch (err) {
 				// Surface as a tool error (isError), not a transport error, so the
 				// agent sees the message instead of a dead request.

@@ -1984,13 +1984,15 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"as well as from every tool request (AC8).",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#handleRequest:3543a7ce~e5cc4ea3": {
+	"mcp/server.ts#handleRequest:3543a7ce~154cbab1": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
 			"MCP tool-request handler (LSP navigation/diagnostics) and the " +
 			"request dispatcher itself. An agent is waiting on its own " +
-			"request; no pi hook budget applies.",
+			"request; no pi hook budget applies. " +
+			"(Key re-derived on #2800 item 7: the callTool await's occurrence " +
+			"hash moved when the stale-warning block was hoisted above it.)",
 		owner: "#2523 slice 2",
 	},
 	"mcp/server.ts#startIpcServer:3c5e37d1~30036a6f": {

@@ -118,7 +118,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(first.content[0]?.text).toContain("pilens_ast_grep_search");
 		expect(first.content[0]?.text).toContain("dump=true");
 		expect(first.content[0]?.text).toMatch(
-			/result error\nusage tokens=\d+ elapsed-ms=\d+$/,
+			/result error\nusage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/,
 		);
 		const second = (
 			await harness.request(4, "tools/call", {
@@ -136,7 +136,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		).result as typeof first;
 		expect(unknown.isError).toBe(true);
 		expect(unknown.content[0]?.text).toMatch(
-			/result error\nusage tokens=\d+ elapsed-ms=\d+$/,
+			/result error\nusage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/,
 		);
 
 		const health = async (id: number) => {

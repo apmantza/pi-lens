@@ -14,6 +14,7 @@ import {
 	logCacheUsage,
 	observeCacheContext,
 	observeCachePrefix,
+	recordToolResultDelivery,
 	resetCacheFindingIdentitiesSession,
 	resetCachePrefixObservation,
 } from "../../clients/cache-observability.js";
@@ -95,6 +96,8 @@ describe("cache-observability — response-side usage (#1018)", () => {
 						other: 0,
 					},
 					injectedFindingsRepeated: 0,
+					toolResultBytes: 0,
+					toolResultsTruncated: 0,
 				},
 			},
 		]);
@@ -1686,5 +1689,65 @@ describe("cache-observability — per-source injection attribution (#1071)", () 
 			turnEndAdvisory: 0,
 			other: 0,
 		});
+	});
+});
+
+describe("cache-observability — tool-result delivery bytes (#2800 item 7)", () => {
+	beforeEach(() => {
+		latencyEntries.length = 0;
+		resetCachePrefixObservation();
+	});
+
+	const usageRows = () =>
+		latencyEntries.filter((entry) => entry.phase === "cache_usage");
+
+	it("sums two tool calls' delivered bytes onto the turn row", () => {
+		recordToolResultDelivery({
+			sessionId: "row",
+			bytes: 100,
+			truncated: false,
+		});
+		recordToolResultDelivery({
+			sessionId: "row",
+			bytes: 233,
+			truncated: false,
+		});
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "row" });
+		expect(usageRows()[0]?.metadata).toMatchObject({
+			toolResultBytes: 333,
+			toolResultsTruncated: 0,
+		});
+	});
+
+	it("counts truncated results and resets both figures at the turn boundary", () => {
+		recordToolResultDelivery({ sessionId: "turn", bytes: 50, truncated: true });
+		recordToolResultDelivery({
+			sessionId: "turn",
+			bytes: 10,
+			truncated: false,
+		});
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "turn" });
+		expect(usageRows()[0]?.metadata).toMatchObject({
+			toolResultBytes: 60,
+			toolResultsTruncated: 1,
+		});
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "turn" });
+		expect(usageRows()[1]?.metadata).toMatchObject({
+			toolResultBytes: 0,
+			toolResultsTruncated: 0,
+		});
+	});
+
+	it("saturates the byte sum at the attribution bound and never goes negative", () => {
+		recordToolResultDelivery({
+			sessionId: "sat",
+			bytes: 5_000_000,
+			truncated: false,
+		});
+		recordToolResultDelivery({ sessionId: "sat", bytes: -12, truncated: true });
+		logCacheUsage(assistantMessage(), undefined, { sessionId: "sat" });
+		const metadata = usageRows()[0]?.metadata;
+		expect(metadata?.toolResultBytes).toBeLessThanOrEqual(1_048_576);
+		expect(metadata?.toolResultsTruncated).toBe(1);
 	});
 });
