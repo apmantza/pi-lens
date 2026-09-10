@@ -490,25 +490,9 @@ interface ParamBinding {
 	viaObject: boolean;
 }
 
-/** Every `variable_declarator` directly owned by one lexical scope.
- * Nested blocks own their declarations; including them here lets a sibling
- * block launder its binding into a use after the block has closed. */
-function declaratorsIn(scope: SgNode): SgNode[] {
-	const found: SgNode[] = [];
-	const visit = (node: SgNode): void => {
-		if (node.id() !== scope.id() && isFunctionNode(node)) return;
-		if (node.id() !== scope.id() && String(node.kind()) === "statement_block") {
-			return;
-		}
-		if (node.kind() === "variable_declarator") found.push(node);
-		for (const child of node.children()) visit(child);
-	};
-	visit(scope);
-	return found;
-}
-
-/** All declarations in a function body, used only for parameter destructuring. */
-function allBodyDeclarators(fn: SgNode): SgNode[] {
+/** Every `variable_declarator` inside a function's own body, used only for
+ * parameter destructuring ({@link findParamBinding}). */
+function bodyDeclarators(fn: SgNode): SgNode[] {
 	const body = fn.field("body");
 	if (!body) return [];
 	const found: SgNode[] = [];
@@ -521,15 +505,175 @@ function allBodyDeclarators(fn: SgNode): SgNode[] {
 	return found;
 }
 
-/** Every `variable_declarator` inside a function's own body. */
-function bodyDeclarators(fn: SgNode): SgNode[] {
-	return allBodyDeclarators(fn);
+/**
+ * ## Lexical scope, taken from the grammar instead of from a list of kinds
+ *
+ * Rounds 1-3 answered "which binding does this `cwd` refer to?" by scanning
+ * declarators inside the nearest enclosing FUNCTION (r1), then inside
+ * "a function or a `statement_block`" (r2/r3). Each spelling closed the
+ * launderer it was shown and left the next scope node open: r3 shipped with a
+ * dead `switch` case and a `for` head still able to hand the real yamllint
+ * spawn a `ctx.cwd` with the sweep green (review v3 F1). Adding `switch_body`
+ * and a `for` head to that list would be the fourth spelling of the same
+ * mistake — AGENTS.md defect shape 34, a guard that enumerates surface
+ * spellings.
+ *
+ * So this asks the tree. A `const`/`let` binding's scope is the node that OWNS
+ * its declaration statement, whatever the grammar calls it; a `var` binding's
+ * scope is the enclosing function, wherever inside it the statement sits. The
+ * grammar's own node-type table — `@ast-grep/napi/lang/TypeScript.d.ts`,
+ * header "Auto-generated from tree-sitter TypeScript v0.23.2", the
+ * `node-types.json` tree-sitter generates — lists exactly fourteen node types
+ * that can own a declaration:
+ *
+ *   ambient_declaration · do_statement · else_clause · export_statement ·
+ *   for_in_statement · for_statement · if_statement · labeled_statement ·
+ *   program · statement_block · switch_case · switch_default ·
+ *   while_statement · with_statement
+ *
+ * Twelve of them ARE the scope, and need no mention here because
+ * {@link scopeOfDeclarator} reads whichever one the parse produced. Two are
+ * not, and are the only kinds this file has to name:
+ *
+ * - `export_statement` and `ambient_declaration` wrap a declaration without
+ *   scoping it (`export const cwd = …` is module-scoped, not
+ *   export-statement-scoped), so they are transparent; without this, a
+ *   module-level `export const cwd = resolveToolCwd(…)` would false-red.
+ * - `switch_case` / `switch_default` own the statement syntactically, but JS
+ *   scopes a case's declarations to the whole `switch_body`, so the scope
+ *   widens by one node.
+ *
+ * `spawn-cwd-scan.test.ts` regenerates the list of fourteen from that same
+ * file and fails unless every kind has a launderer fixture, so a grammar bump
+ * that adds a scope-owning node type reds there instead of silently opening
+ * the hole this comment describes.
+ */
+const TRANSPARENT_DECLARATION_WRAPPERS = new Set([
+	"export_statement",
+	"ambient_declaration",
+]);
+const SWITCH_CASE_KINDS = new Set(["switch_case", "switch_default"]);
+
+/** The `lexical_declaration` (`const`/`let`) or `variable_declaration` (`var`)
+ * statement a declarator belongs to. */
+function declarationStatementOf(decl: SgNode): SgNode | undefined {
+	for (let node = decl.parent(); node; node = node.parent()) {
+		const kind = String(node.kind());
+		if (kind === "lexical_declaration" || kind === "variable_declaration") {
+			return node;
+		}
+		if (isFunctionNode(node)) return undefined;
+	}
+	return undefined;
+}
+
+/** The node whose extent IS this declarator's lexical scope. */
+function scopeOfDeclarator(decl: SgNode): SgNode | undefined {
+	const statement = declarationStatementOf(decl);
+	if (!statement) return undefined;
+	if (String(statement.kind()) === "variable_declaration") {
+		// `var` is function-scoped and hoisted, so a sibling block cannot hide it.
+		for (let node = statement.parent(); node; node = node.parent()) {
+			if (isFunctionNode(node)) return node.field("body") ?? node;
+			if (String(node.kind()) === "program") return node;
+		}
+		return undefined;
+	}
+	let owner = statement.parent();
+	while (owner && TRANSPARENT_DECLARATION_WRAPPERS.has(String(owner.kind()))) {
+		owner = owner.parent();
+	}
+	if (owner && SWITCH_CASE_KINDS.has(String(owner.kind()))) {
+		owner = owner.parent();
+	}
+	return owner ?? undefined;
+}
+
+/** Whether a node's source range covers `index`. */
+function coversIndex(node: SgNode, index: number): boolean {
+	const range = node.range();
+	return range.start.index <= index && index < range.end.index;
 }
 
 /**
- * ONE hop of local resolution — round-4 R3-F4. Walks out from `from` to the
- * innermost enclosing scope that declares `name` with a plain identifier
- * binding and reports what it was ASSIGNED, so a check can judge the value
+ * Whether this node binds `name` WITHOUT a declaration statement — a
+ * function/arrow parameter, a `catch (name)` clause, a `for (const name of …)`
+ * head. Such a binding shadows everything outside it, and its value is not
+ * readable from the declaration, so a use it covers resolves to "unknown"
+ * rather than to an outer declaration: `run(ctx)` opening
+ * `const cwd = resolveRunnerCwd(…)` must not bless
+ * `withDir(ctx.cwd, (cwd) => safeSpawnAsync(…, { cwd }))`.
+ */
+function bindsNameWithoutDeclaration(node: SgNode, name: string): boolean {
+	if (isFunctionNode(node)) {
+		return parameterPatterns(node).some((pattern) =>
+			patternNames(pattern).includes(name),
+		);
+	}
+	const kind = String(node.kind());
+	if (kind === "catch_clause") {
+		const parameter = node.field("parameter");
+		return parameter ? patternNames(parameter).includes(name) : false;
+	}
+	if (kind === "for_in_statement") {
+		const declares = node
+			.children()
+			.some((child) => ["const", "let", "var"].includes(child.text()));
+		const left = node.field("left");
+		return declares && left ? patternNames(left).includes(name) : false;
+	}
+	return false;
+}
+
+/** Whether a declarator's own statement is a hoisted `var`. */
+function isHoistedDeclarator(decl: SgNode): boolean {
+	return (
+		String(declarationStatementOf(decl)?.kind() ?? "") === "variable_declaration"
+	);
+}
+
+/**
+ * Declarators of `name` owned by `node`'s subtree — excluding `alreadySeen`,
+ * the child subtree an inner iteration already covered — that are VISIBLE at
+ * `useIndex`: their scope covers the use, and (unless hoisted) they precede
+ * it.
+ */
+function visibleDeclaratorsIn(
+	node: SgNode,
+	alreadySeen: SgNode | undefined,
+	name: string,
+	useIndex: number,
+): SgNode[] {
+	const found: SgNode[] = [];
+	const visit = (current: SgNode): void => {
+		if (alreadySeen && current.id() === alreadySeen.id()) return;
+		// A function that does not contain the use can declare nothing visible
+		// to it — `var` included, since `var` reaches no further than its own
+		// function.
+		if (
+			current.id() !== node.id() &&
+			isFunctionNode(current) &&
+			!coversIndex(current, useIndex)
+		) {
+			return;
+		}
+		if (String(current.kind()) === "variable_declarator") {
+			const target = current.field("name");
+			if (target && patternNames(target).includes(name)) found.push(current);
+		}
+		for (const child of current.children()) visit(child);
+	};
+	visit(node);
+	return found.filter((decl) => {
+		const scope = scopeOfDeclarator(decl);
+		if (!scope || !coversIndex(scope, useIndex)) return false;
+		return isHoistedDeclarator(decl) || decl.range().start.index < useIndex;
+	});
+}
+
+/**
+ * ONE hop of local resolution — round-4 R3-F4. Reports what the binding of
+ * `name` VISIBLE AT `from` was assigned, so a check can judge the value
  * instead of the name.
  *
  * It exists because the positional-wrapper check has only the argument's own
@@ -537,58 +681,72 @@ function bodyDeclarators(fn: SgNode): SgNode[] {
  * process.cwd()` reads as conforming under `/cwd/i`, and `lintChart(root, c)`
  * with `const c = ctx.cwd` reads as a defect. One hop fixes both directions.
  *
+ * Three results, and the difference between the last two is what keeps the
+ * launderers closed (round-4 v3-F1):
+ *
+ * - `{ init }` — declared here, with this initializer.
+ * - `{ init: undefined }` — declared, value unknown (`let cwd;`, or a
+ *   reassignment after the declaration). Callers treat it as "supplies no
+ *   usable cwd", the fail-safe direction.
+ * - `undefined` — no readable declaration binds the name at this use: either
+ *   nothing does, or a parameter / `catch` / `for…of` head / destructuring
+ *   pattern does. Callers then judge the expression on its own, and the ORIGIN
+ *   rule stays unproven — a shadowing binder can never inherit an outer
+ *   binding's proof.
+ *
  * Exactly one hop, deliberately: `const a = b; const b = ctx.cwd` is not
- * followed, and neither is a re-assignment after the declaration. A name
- * declared with no initializer (`let cwd;`) resolves to "declared, unknown",
- * which the callers treat as NOT proven — the fail-safe direction.
+ * followed.
  */
 function resolveLocalInitializer(
 	from: SgNode,
 	name: string,
 ): { init?: SgNode } | undefined {
-	for (let node = from.parent(); node; node = node.parent()) {
-		const scope =
-			isFunctionNode(node) ||
-			String(node.kind()) === "statement_block" ||
-			String(node.kind()) === "program"
-				? isFunctionNode(node)
-					? node.field("body")
-					: node
-				: undefined;
-		if (!scope) continue;
-		const candidates = declaratorsIn(scope)
-			.filter((decl) => {
-				const target = decl.field("name");
-				return (
-					target?.kind() === "identifier" &&
-					target.text() === name &&
-					decl.range().start.index < from.range().start.index
-				);
-			})
-			.sort((a, b) => b.range().start.index - a.range().start.index);
-		for (const decl of candidates) {
+	const useIndex = from.range().start.index;
+	let alreadySeen: SgNode | undefined;
+	for (
+		let node = from.parent();
+		node;
+		alreadySeen = node, node = node.parent()
+	) {
+		const candidates = visibleDeclaratorsIn(node, alreadySeen, name, useIndex);
+		// Innermost scope wins; within one scope, the nearest declaration that
+		// precedes the use does.
+		candidates.sort((a, b) => {
+			const scopeA = scopeOfDeclarator(a)?.range().start.index ?? 0;
+			const scopeB = scopeOfDeclarator(b)?.range().start.index ?? 0;
+			if (scopeA !== scopeB) return scopeB - scopeA;
+			const beforeA = a.range().start.index < useIndex ? 0 : 1;
+			const beforeB = b.range().start.index < useIndex ? 0 : 1;
+			if (beforeA !== beforeB) return beforeA - beforeB;
+			return b.range().start.index - a.range().start.index;
+		});
+		const decl = candidates[0];
+		if (decl) {
 			const target = decl.field("name");
-			if (target?.kind() !== "identifier" || target.text() !== name) continue;
+			// A destructuring pattern binds the name but does not say what it
+			// holds — a shadow with an unreadable value, like a parameter.
+			if (target?.kind() !== "identifier") return undefined;
+			const scope = scopeOfDeclarator(decl);
 			// A later assignment changes the binding's value. Fail closed rather
 			// than attributing the spawn to the declaration's old initializer.
 			let reassigned = false;
-			const visit = (node: SgNode): void => {
-				if (reassigned || node.range().start.index > from.range().start.index)
-					return;
+			const visit = (current: SgNode): void => {
+				if (reassigned || current.range().start.index > useIndex) return;
 				if (
-					(String(node.kind()) === "assignment_expression" ||
-						String(node.kind()) === "augmented_assignment_expression") &&
-					node.field("left")?.text() === name &&
-					node.range().start.index > decl.range().end.index
+					(String(current.kind()) === "assignment_expression" ||
+						String(current.kind()) === "augmented_assignment_expression") &&
+					current.field("left")?.text() === name &&
+					current.range().start.index > decl.range().end.index
 				) {
 					reassigned = true;
 				}
-				for (const child of node.children()) visit(child);
+				for (const child of current.children()) visit(child);
 			};
-			visit(scope);
+			if (scope) visit(scope);
 			if (reassigned) return { init: undefined };
 			return { init: decl.field("value") ?? undefined };
 		}
+		if (bindsNameWithoutDeclaration(node, name)) return undefined;
 	}
 	return undefined;
 }

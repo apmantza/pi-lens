@@ -25,7 +25,12 @@
  * P6 the wrapper's parameter list only · P7 absent.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
+import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
 import { scanSpawnCwd } from "./spawn-cwd-scan.js";
 
 /** What the sweep itself asks of a scan, in a form a fixture can assert. */
@@ -910,4 +915,399 @@ describe("the wrapper rule itself", () => {
 			`${at(source, "lintChart(chartRoot, ctx.cwd);", "lintChart")}:wrapper`,
 		]);
 	});
+});
+
+// ── S — lexical scope, enumerated from the grammar ──────────────────────────
+
+/**
+ * ## Why this table is generated and not written
+ *
+ * Three rounds of this detector resolved a `cwd` identifier against a
+ * hand-written list of scope-opening node kinds — "the enclosing function"
+ * (r1), then "a function or a `statement_block`" (r2, r3). Each round closed
+ * the launderer the review had shown it and shipped with the next one open:
+ * the verify at `6f09c4cc5` moved yamllint's real spawn onto `ctx.cwd`, put
+ * the good binding in a dead `switch` case, and the sweep stayed green. Adding
+ * `switch_body` to the list would be the fourth spelling of one mistake
+ * (AGENTS.md defect shape 34).
+ *
+ * So the list comes from the grammar. `@ast-grep/napi` ships the tree-sitter
+ * `node-types` table for every language it bundles —
+ * `node_modules/@ast-grep/napi/lang/TypeScript.d.ts`, whose first line reads
+ * "Auto-generated from tree-sitter TypeScript v0.23.2". Every node type whose
+ * fields or children can hold a `lexical_declaration` / `variable_declaration`
+ * (directly, or through the `declaration` / `statement` supertypes) is a node
+ * that can OWN a declaration, and therefore a scope boundary the resolver has
+ * to get right. {@link declarationOwnerKindsFromGrammar} recomputes that set
+ * on every run; {@link SCOPE_CASES} must carry a fixture for each member, and
+ * the first test below fails if the two ever diverge — a grammar bump that
+ * adds a scope-owning node type reds HERE, with the kind named, instead of
+ * quietly opening the hole round 4 was sent to close.
+ *
+ * Recurrence this guards: PR #2877 review v3 F1 — a declarator inside a closed
+ * `switch` case or a `for` head laundered the binding a later spawn actually
+ * used.
+ */
+const GRAMMAR_NODE_TYPES_PATH = path.join(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"../../node_modules/@ast-grep/napi/lang/TypeScript.d.ts",
+);
+
+interface GrammarSlot {
+	types?: { type: string; named: boolean }[];
+}
+interface GrammarNodeType {
+	subtypes?: { type: string; named: boolean }[];
+	fields?: Record<string, GrammarSlot>;
+	children?: GrammarSlot;
+}
+
+/** Every node type the TypeScript grammar lets own a declaration statement. */
+function declarationOwnerKindsFromGrammar(): string[] {
+	const raw = fs.readFileSync(GRAMMAR_NODE_TYPES_PATH, "utf8");
+	const types = JSON.parse(
+		raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1),
+	) as Record<string, GrammarNodeType>;
+	// Close over supertypes: a slot that accepts `statement` accepts a
+	// `lexical_declaration`, and the grammar spells that indirection out.
+	const declarationTypes = new Set(["lexical_declaration", "variable_declaration"]);
+	for (let grew = true; grew; ) {
+		grew = false;
+		for (const [kind, node] of Object.entries(types)) {
+			if (declarationTypes.has(kind)) continue;
+			if (
+				(node.subtypes ?? []).some((sub) => declarationTypes.has(sub.type))
+			) {
+				declarationTypes.add(kind);
+				grew = true;
+			}
+		}
+	}
+	const owners: string[] = [];
+	for (const [kind, node] of Object.entries(types)) {
+		if (node.subtypes) continue; // a supertype alias, never a real node
+		const slots = [node.children, ...Object.values(node.fields ?? {})];
+		const ownsDeclaration = slots.some((slot) =>
+			(slot?.types ?? []).some((type) => declarationTypes.has(type.type)),
+		);
+		if (ownsDeclaration) owners.push(kind);
+	}
+	return owners.sort();
+}
+
+/** The node kinds that actually own a declaration in this fixture, read off
+ * the parse — so a row cannot claim to exercise `switch_case` while its
+ * source produces a plain block. */
+async function declarationOwnerKindsIn(source: string): Promise<string[]> {
+	const napi = await loadAstGrepNapi();
+	const root = napi.parse(napi.Lang.TypeScript, source).root();
+	const kinds = new Set<string>();
+	const visit = (node: SgNode): void => {
+		const kind = String(node.kind());
+		if (kind === "lexical_declaration" || kind === "variable_declaration") {
+			kinds.add(String(node.parent()?.kind() ?? "program"));
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	return [...kinds];
+}
+
+async function verdicts(source: string): Promise<string[]> {
+	const scan = await scanSpawnCwd("fixture.ts", source);
+	return scan.sites.map(
+		(site) => `hasCwd=${site.hasCwd} resolved=${site.resolvedFromToolCwd}`,
+	);
+}
+
+const SEAM = `import { resolveToolCwd } from "./tool-cwd.js";`;
+const GOOD = `resolveToolCwd("runner", "tool", file, ctx)`;
+
+interface ScopeCase {
+	/** The grammar node type that owns the shadow/hoisted declaration. */
+	owner: string;
+	what: string;
+	source: string;
+	/** One entry per site, in source order. */
+	expected: string[];
+}
+
+/**
+ * Two shapes, one per declaration form, because `const`/`let` and `var` are
+ * scoped differently and only one of them can be laundered:
+ *
+ * - **lexical owners** (`const`/`let`) take the LAUNDERER shape: the outer
+ *   binding is the #2691 defect (`ctx.cwd`), the good binding sits inside the
+ *   owner, and the spawn reads the outer one after the owner has closed. A
+ *   resolver that treats the owner as transparent reports `resolved=true` and
+ *   the sweep goes green on the defect — that is the bug this round fixes, so
+ *   every one of these rows reds on the pre-fix scanner.
+ * - **`var` owners** (`if (c) var cwd = …`, and the other bare-body
+ *   statements: a `const` there is a syntax error) take the HOISTED shape:
+ *   `var` is function-scoped, so the binding IS visible at the later spawn and
+ *   the honest verdict is `true`. The discriminating direction for these rows
+ *   is exactly that: a resolver that scoped the `var` to its owner node would
+ *   report `false` and false-red a legitimate seam use.
+ */
+const SCOPE_CASES: ScopeCase[] = [
+	{
+		owner: "statement_block",
+		what: "a closed sibling block cannot launder the binding the spawn reads",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	{ const cwd = ${GOOD}; void cwd; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "for_statement",
+		what: "a `for` head's binding dies with the loop",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	for (let cwd = ${GOOD}; false; ) { void cwd; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "switch_case",
+		what: "a dead `case`'s binding does not reach the spawn below the switch",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	switch (ctx.k) { case 1: const cwd = ${GOOD}; break; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "switch_default",
+		what: "same for `default:`",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ctx.cwd;
+	switch (ctx.k) { default: const cwd = ${GOOD}; }
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "program",
+		what: "a module-level binding reaches into every function below it",
+		source: `${SEAM}
+const cwd = ${GOOD};
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "export_statement",
+		what: "`export` wraps a declaration without scoping it",
+		source: `${SEAM}
+export const cwd = ${GOOD};
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "ambient_declaration",
+		what: "`declare const` has no initializer, so it supplies no usable cwd",
+		source: `${SEAM}
+declare const cwd: string;
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=false resolved=false"],
+	},
+	{
+		owner: "if_statement",
+		what: "a hoisted `var` in a bare consequence is visible after it",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "else_clause",
+		what: "same for a bare `else`",
+		source: `${SEAM}
+async function run(ctx) {
+	if (ctx.fast) { void 0; } else var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "while_statement",
+		what: "same for a bare `while` body",
+		source: `${SEAM}
+async function run(ctx) {
+	while (ctx.fast) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "do_statement",
+		what: "same for a bare `do` body",
+		source: `${SEAM}
+async function run(ctx) {
+	do var cwd = ${GOOD}; while (false);
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "for_in_statement",
+		what: "same for a bare `for…of` body",
+		source: `${SEAM}
+async function run(ctx, files) {
+	for (const f of files) var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "labeled_statement",
+		what: "same under a label",
+		source: `${SEAM}
+async function run(ctx) {
+	outer: var cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "with_statement",
+		what: "same inside `with` (illegal in a module, still in the grammar)",
+		source: `${SEAM}
+function run(ctx) {
+	with (ctx) var cwd = ${GOOD};
+	return safeSpawnAsync("b", [], { cwd });
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+];
+
+describe("S — every scope node type the grammar can produce", () => {
+	it("has a fixture for every declaration owner in the grammar's node types", () => {
+		const fromGrammar = declarationOwnerKindsFromGrammar();
+		expect(
+			fromGrammar.length,
+			`no declaration owners parsed out of ${GRAMMAR_NODE_TYPES_PATH} — the ` +
+				"generated node-type table moved or changed shape; fix this reader " +
+				"before trusting anything below it",
+		).toBeGreaterThan(5);
+		expect(
+			[...new Set(SCOPE_CASES.map((row) => row.owner))].sort(),
+			"every node type that can own a declaration is a scope boundary the " +
+				"resolver has to get right; give the new one a launderer fixture " +
+				"(lexical) or a hoisted fixture (`var`-only body) in SCOPE_CASES",
+		).toEqual(fromGrammar);
+	});
+
+	for (const row of SCOPE_CASES) {
+		it(`S-${row.owner}: ${row.what}`, async () => {
+			expect(
+				await declarationOwnerKindsIn(row.source),
+				`this fixture must really produce a declaration owned by ${row.owner}`,
+			).toContain(row.owner);
+			expect(await verdicts(row.source)).toEqual(row.expected);
+		});
+	}
+});
+
+/**
+ * The other half of "which binding does this name refer to": constructs that
+ * bind a name with no declaration statement, so the grammar's
+ * declaration-owner table above cannot enumerate them. Each one SHADOWS an
+ * outer binding, and the value it holds is not readable from the binding site
+ * — so the origin rule must report "not proven", never inherit the outer
+ * binding's proof. The fail-safe direction is built in: an unresolvable name
+ * yields no initializer, and no initializer means no resolver origin.
+ *
+ * Recurrence: the same v3-F1 laundering, one construct over. `run(ctx)` opens
+ * with `const cwd = resolveRunnerCwd(…)` in 44 runners, so ANY shadow inside
+ * `run` inherits a proof it never earned.
+ */
+const SHADOW_CASES: ScopeCase[] = [
+	{
+		owner: "arrow parameter",
+		what: "a callback parameter named cwd does not inherit the outer proof",
+		source: `${SEAM}
+async function run(ctx, withDir) {
+	const cwd = ${GOOD};
+	await withDir(ctx.cwd, async (cwd) => { await safeSpawnAsync("b", [], { cwd }); });
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "catch parameter",
+		what: "a catch binding shadows the outer one",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	try { void cwd; } catch (cwd) { await safeSpawnAsync("b", [], { cwd }); }
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "for…of head",
+		what: "a loop binding shadows the outer one inside the body",
+		source: `${SEAM}
+async function run(ctx, dirs) {
+	const cwd = ${GOOD};
+	for (const cwd of dirs) { await safeSpawnAsync("b", [], { cwd }); }
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "destructuring pattern",
+		what: "`const { cwd } = ctx` shadows the outer one with an unreadable value",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	{ const { cwd } = ctx; await safeSpawnAsync("b", [], { cwd }); }
+	void cwd;
+}`,
+		expected: ["hasCwd=true resolved=false"],
+	},
+	{
+		owner: "nested function (no shadow)",
+		what: "a closure that captures the outer binding keeps its proof",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	const inner = async () => { await safeSpawnAsync("b", [], { cwd }); };
+	await inner();
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+	{
+		owner: "inner block (no shadow)",
+		what: "a block that declares nothing keeps the enclosing proof",
+		source: `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	if (ctx.fast) { await safeSpawnAsync("b", [], { cwd }); }
+}`,
+		expected: ["hasCwd=true resolved=true"],
+	},
+];
+
+describe("S — bindings with no declaration statement", () => {
+	for (const row of SHADOW_CASES) {
+		it(`S-shadow-${row.owner}: ${row.what}`, async () => {
+			expect(await verdicts(row.source)).toEqual(row.expected);
+		});
+	}
 });
