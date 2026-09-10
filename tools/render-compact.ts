@@ -179,9 +179,11 @@ export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
 }
 
 /** Matches an already-stamped contract footer at the end of the joined text.
- * A result re-entering the gate must not gain a second footer (refs #2852 N4). */
+ * A result re-entering the gate must not gain a second footer (refs #2852 N4).
+ * The byte and truncated groups let the gate read the kept footer's own
+ * delivery figures on re-entry (round 2 F1). */
 const CONTRACT_FOOTER_TAIL_RE =
-	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+ bytes=\d+ truncated=(?:true|false)$/;
+	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+ bytes=(\d+) truncated=(true|false)$/;
 
 /** Optional delivery figures the footer reports when the caller has already
  * bounded the payload (#2800 item 7). Absent on a direct stamp of an unbound
@@ -343,21 +345,43 @@ export interface FinalizedToolDelivery<T> {
  * size reserved inside MAX_RESULT_BYTES, then the footer is stamped LAST with
  * the delivered payload's byte count and the bound's truncated flag. So
  * `bytes=`/`truncated=` describe what the model actually receives, and the
- * delivered text — footer included — never exceeds MAX_RESULT_BYTES. */
+ * delivered text — footer included — never exceeds MAX_RESULT_BYTES.
+ *
+ * Re-entry (refs #2852 N4, round 2 F1): the bound still runs on an
+ * already-stamped result — master applied the bound after the stamp-skip, and
+ * the kept tail carries the footer through it — so re-entry is never delivered
+ * unbounded. A stamped result within the delivered budget is kept as-is; the
+ * figures are the kept footer's own prior values, never a footer-inclusive
+ * re-measure and never a hard-coded `false`. */
 export function finalizeToolResultWithDelivery<
 	T extends ToolResultContractLike,
 >(result: T): FinalizedToolDelivery<T> {
 	const normalized = { ...result, isError: result.isError === true } as T;
 	const existingText = fullTextOf(normalized);
-	if (CONTRACT_FOOTER_TAIL_RE.test(existingText)) {
-		// Idempotent re-entry (refs #2852 N4): never stamp twice, never re-bound.
+	const existingFooter = CONTRACT_FOOTER_TAIL_RE.exec(existingText);
+	if (
+		existingFooter &&
+		Buffer.byteLength(existingText, "utf8") <= MAX_RESULT_BYTES
+	) {
 		return {
 			result: normalized,
-			deliveredBytes: Buffer.byteLength(existingText, "utf8"),
-			truncated: false,
+			deliveredBytes: Number(existingFooter[1]),
+			truncated: existingFooter[2] === "true",
 		};
 	}
 	const bound = boundResultPayload(normalized);
+	const text = fullTextOf(bound.result);
+	const keptFooter = CONTRACT_FOOTER_TAIL_RE.exec(text);
+	if (keptFooter) {
+		// The bound ran and the kept tail still carries the footer, so there is
+		// nothing to stamp; the kept footer's figures stay the delivery
+		// contract (row 6: prior value kept).
+		return {
+			result: bound.result,
+			deliveredBytes: Number(keptFooter[1]),
+			truncated: keptFooter[2] === "true",
+		};
+	}
 	const stamped = renderToolResultContract(bound.result, {
 		bytes: bound.deliveredBytes,
 		truncated: bound.truncated,
