@@ -603,6 +603,24 @@ turn one (#2815). If the host cannot resolve a stable session id, the guard
 records one bounded `turn-context-identity-fallback` degradation per session
 before using the detached fallback (#2815).
 
+A crashed pi hook handler is swallowed in production and LOUD under the test
+runner, through exactly one seam: `surfaceHandlerCrash` in
+`clients/session-event-guard.ts`. Every `index.ts` catch that absorbs a handler
+crash calls it — nine today (`session_start`, `session_before_fork`,
+`observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`,
+the `agent_settled` deferred-mutation drain, `quiet_window`, `message_end`) —
+and it logs, writes one bounded `hook-handler-crash` degradation per handler
+per session, and rethrows only when `process.env.VITEST` is set. Never
+reintroduce a `dbg`-only catch around a handler body: `dbg` writes nothing
+under vitest, so the crash is then indistinguishable from a completed handler
+and every assertion after the caller's `await` is vacuous while the file stays
+green (#2859's fourteen `session_start` awaits, #2884's two `turn_end` ones).
+The `isStaleExtensionCtxError` rethrow stays AHEAD of the call at every site
+that classifies it, so a benign session swap keeps its own single
+`extension-ctx-stale` record instead of being counted as a crash. A catch that
+guards a `pi.on` REGISTRATION against an older host is not in this class and
+keeps its plain swallow (#2884).
+
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
