@@ -1762,7 +1762,17 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"hook (AC8), unbounded exactly like its index.ts twin.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#73e6f55a~b6e340bc": {
+	"mcp/server.ts#5c4ca6a0~9ac0a7dd": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#73e6f55a~29980017": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -1771,7 +1781,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"request; no pi hook budget applies.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#73e6f55a~c0f0423f": {
+	"mcp/server.ts#73e6f55a~b6e340bc": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -1820,16 +1830,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 		owner: "#2523 slice 2",
 	},
 	"mcp/server.ts#callTool:355aebb4~f9eb7744": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:5c4ca6a0~9ac0a7dd": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -1909,7 +1909,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#d0096ea8~05547e1a": {
+	"mcp/server.ts#d0096ea8~3ba64d0e": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -2275,9 +2275,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"tools/ast-grep-search.ts": 6,
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
-	// #2846: one server-root await is required to project the authoritative
-	// server cwd; the hook helper remains bounded by the tool call lifecycle.
-	"tools/lens-diagnostics.ts": 13,
+	// #2846/#2800: the folded LSP probe adds one awaited internal tool path;
+	// it remains bounded by the tool call lifecycle.
+	"tools/lens-diagnostics.ts": 14,
 	// #2598 lowered both by one: `collectDiagnosticsForFile` and
 	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
 	// arm — the fallback for "a service shape without touchFile", which the

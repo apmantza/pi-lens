@@ -100,7 +100,7 @@ non-disableable names emit `PILENS_CFG_0009`.
 
 Valid names for `tools.<name>.enabled` include `ast_grep_search`,
 `ast_grep_replace`, `ast_grep_outline`, `lsp_navigation`,
-`lsp_diagnostics`, `lens_diagnostics`, `lens_diagnostic_mark`, `symbol_search`,
+`lens_diagnostics`, `lens_diagnostic_mark`, `symbol_search`,
 `module_report`, `project_report`, `read_symbol`, `read_enclosing`,
 `effective_config`, `analyze`, `health`, `latency`, `project_scan`, and
 `rebuild`. The activation loader and MCP lifecycle tools `session_start`,

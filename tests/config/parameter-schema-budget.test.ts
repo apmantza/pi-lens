@@ -15,7 +15,7 @@ const astClient = {
 
 const expected = {
 	ast_grep_search: {
-		total: 1567,
+		total: 1629,
 		maximum: 2995,
 		keys: [
 			"dump",
@@ -39,10 +39,16 @@ const expected = {
 		],
 	},
 	lens_diagnostics: {
-		total: 855,
+		total: 1612,
 		maximum: 2594,
 		keys: [
+			"source",
+			"scope",
 			"mode",
+			"path",
+			"concurrency",
+			"waitMs",
+			"serverScope",
 			"refreshRunners",
 			"maxProjectFiles",
 			"maxLspFiles",

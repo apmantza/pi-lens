@@ -416,6 +416,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			),
 			strictness: Type.Optional(
 				Type.String({
+					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
 					description: "Pattern matching strictness.",
 				}),
 			),

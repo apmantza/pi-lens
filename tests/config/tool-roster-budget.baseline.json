@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 20719,
-		"descriptionTotal": 3570,
-		"schemaTotal": 15265,
+		"budget": 19739,
+		"descriptionTotal": 3337,
+		"schemaTotal": 14607,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 269,
@@ -14,7 +14,7 @@
 			},
 			"ast_grep_search": {
 				"description": 94,
-				"schema": 1567
+				"schema": 1629
 			},
 			"effective_config": {
 				"description": 308,
@@ -25,12 +25,8 @@
 				"schema": 1018
 			},
 			"lens_diagnostics": {
-				"description": 380,
-				"schema": 855
-			},
-			"lsp_diagnostics": {
-				"description": 111,
-				"schema": 1477
+				"description": 258,
+				"schema": 1612
 			},
 			"lsp_navigation": {
 				"description": 170,
@@ -63,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 19996,
-		"descriptionTotal": 3554,
-		"schemaTotal": 14624,
+		"budget": 18918,
+		"descriptionTotal": 3321,
+		"schemaTotal": 13877,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -77,11 +73,11 @@
 			},
 			"pilens_ast_grep_search": {
 				"description": 92,
-				"schema": 1656
+				"schema": 1718
 			},
 			"pilens_diagnostics": {
-				"description": 380,
-				"schema": 944
+				"description": 258,
+				"schema": 1701
 			},
 			"pilens_effective_config": {
 				"description": 295,
@@ -94,10 +90,6 @@
 			"pilens_latency": {
 				"description": 68,
 				"schema": 190
-			},
-			"pilens_lsp_diagnostics": {
-				"description": 111,
-				"schema": 1566
 			},
 			"pilens_lsp_navigation": {
 				"description": 120,
