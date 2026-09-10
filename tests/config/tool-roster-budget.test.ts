@@ -33,6 +33,24 @@ const baselinePath = path.join(
 );
 const baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as Baseline;
 
+function updateBaselineSurface(
+	surface: "pi" | "mcp",
+	measurement: ReturnType<typeof measure>,
+): void {
+	if (process.env.UPDATE_TOOL_ROSTER_BASELINE !== "1") return;
+	const current = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as Baseline;
+	current[surface] = {
+		budget: Math.ceil(
+			(measurement.descriptionTotal + measurement.schemaTotal) * 1.1,
+		),
+		descriptionTotal: measurement.descriptionTotal,
+		schemaTotal: measurement.schemaTotal,
+		tools: measurement.measured,
+	};
+	baseline[surface] = current[surface];
+	fs.writeFileSync(baselinePath, `${JSON.stringify(current, null, "\t")}\n`);
+}
+
 function bytes(value: unknown): number {
 	return Buffer.byteLength(
 		typeof value === "string" ? value : JSON.stringify(value),
@@ -70,13 +88,15 @@ function report(
 
 function measure(tools: ListedTool[]) {
 	const measured = Object.fromEntries(
-		tools.map((tool) => [
-			tool.name,
-			{
-				description: descriptionBytes(tool),
-				schema: schemaBytes(tool),
-			},
-		]),
+		[...tools]
+			.sort((a, b) => a.name.localeCompare(b.name))
+			.map((tool) => [
+				tool.name,
+				{
+					description: descriptionBytes(tool),
+					schema: schemaBytes(tool),
+				},
+			]),
 	);
 	const descriptionTotal = tools.reduce(
 		(sum, tool) => sum + descriptionBytes(tool),
@@ -114,6 +134,7 @@ describe("tool roster description budget", () => {
 	it("keeps the pi roster within its two-sided baseline", () => {
 		expectUniqueNames(piTools);
 		const { measured, descriptionTotal, schemaTotal } = measure(piTools);
+		updateBaselineSurface("pi", { measured, descriptionTotal, schemaTotal });
 		const total = descriptionTotal + schemaTotal;
 		const detail = report(
 			"pi",
@@ -135,6 +156,7 @@ describe("tool roster description budget", () => {
 	it("keeps the MCP tools/list roster within its two-sided baseline", () => {
 		expectUniqueNames(mcpTools);
 		const { measured, descriptionTotal, schemaTotal } = measure(mcpTools);
+		updateBaselineSurface("mcp", { measured, descriptionTotal, schemaTotal });
 		const total = descriptionTotal + schemaTotal;
 		const detail = report(
 			"mcp",

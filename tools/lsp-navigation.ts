@@ -760,100 +760,86 @@ export function createLspNavigationTool(
 		parameters: Type.Object({
 			operation: Type.String({
 				description:
-					"LSP operation to perform. Valid values: " +
-					VALID_OPERATIONS.join(", "),
+					"LSP operation to perform. Valid values: definition, typeDefinition, declaration, references, hover, signatureHelp, documentSymbol, findSymbol, workspaceSymbol, codeAction, rename, rename_file, implementation, prepareCallHierarchy, incomingCalls, outgoingCalls, executeCommand, workspaceDiagnostics, capabilities.",
 			}),
 			path: Type.Optional(
 				Type.String({
-					description:
-						"Absolute or relative file path. Required for file-scoped operations; optional for workspaceSymbol/workspaceDiagnostics.",
+					description: "Target file path.",
 				}),
 			),
 			line: Type.Optional(
 				Type.Number({
-					description:
-						"Line number (1-based). Required for definition/references/hover/implementation",
+					description: "1-based line number.",
 				}),
 			),
 			character: Type.Optional(
 				Type.Number({
-					description:
-						"Character offset (1-based). Optional when symbol is provided; use -1 to force symbol-column resolution.",
+					description: "1-based character offset.",
 				}),
 			),
 			symbol: Type.Optional(
 				Type.String({
-					description:
-						"Symbol name on the target line for automatic character resolution. Use symbol#N to select the Nth occurrence on the line.",
+					description: "Symbol for automatic character resolution.",
 				}),
 			),
 			endLine: Type.Optional(
 				Type.Number({
-					description:
-						"End line (1-based). Optional; used by codeAction range.",
+					description: "1-based range end line.",
 				}),
 			),
 			endCharacter: Type.Optional(
 				Type.Number({
-					description:
-						"End character (1-based). Optional; used by codeAction range.",
+					description: "1-based range end character.",
 				}),
 			),
 			newName: Type.Optional(
 				Type.String({
-					description: "Required for rename operation.",
+					description: "New symbol name.",
 				}),
 			),
 			newFilePath: Type.Optional(
 				Type.String({
-					description: "Required for rename_file operation.",
+					description: "New file path.",
 				}),
 			),
 			apply: Type.Optional(
 				Type.Boolean({
-					description:
-						"rename/executeCommand: apply for real. rename defaults to preview; executeCommand defaults to a dry-run that only reports whether the command is advertised — set apply:true to actually run it.",
+					description: "Apply a mutation instead of previewing it.",
 				}),
 			),
 			command: Type.Optional(
 				Type.String({
-					description:
-						"executeCommand only: the server command id to run. Must be one the server advertised (see the capabilities operation).",
+					description: "Server command identifier.",
 				}),
 			),
 			commandArguments: Type.Optional(
 				Type.Array(Type.Unknown(), {
-					description:
-						"executeCommand only: arguments array passed to workspace/executeCommand.",
+					description: "Arguments for the server command.",
 				}),
 			),
 			query: Type.Optional(
 				Type.String({
-					description:
-						"Symbol name to search. Used by workspaceSymbol and findSymbol.",
+					description: "Symbol search query.",
 				}),
 			),
 			kinds: Type.Optional(
 				Type.Array(Type.String(), {
-					description:
-						"findSymbol only: restrict matches to symbol kind labels such as function, class, method, variable, interface.",
+					description: "Symbol-kind filters.",
 				}),
 			),
 			exactMatch: Type.Optional(
 				Type.Boolean({
-					description:
-						"findSymbol only: match whole symbol names/details exactly instead of substring matching.",
+					description: "Require an exact symbol match.",
 				}),
 			),
 			topLevelOnly: Type.Optional(
 				Type.Boolean({
-					description: "findSymbol only: do not search nested child symbols.",
+					description: "Exclude nested symbols.",
 				}),
 			),
 			maxResults: Type.Optional(
 				Type.Number({
-					description:
-						"findSymbol only: maximum matches to return. Default 20.",
+					description: "Maximum symbol matches.",
 				}),
 			),
 			callHierarchyItem: Type.Optional(
@@ -883,10 +869,7 @@ export function createLspNavigationTool(
 							}),
 						}),
 					},
-					{
-						description:
-							"Call hierarchy item. Required for incomingCalls/outgoingCalls",
-					},
+					{},
 				),
 			),
 		}),

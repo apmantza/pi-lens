@@ -21,6 +21,12 @@ Use `lens_diagnostics` with `source=lsp` before builds/tests or after touching s
 
 Prefer explicit `paths` batches after multi-file edits — bounded concurrency, no unrelated directory noise.
 
+### Parameter reference
+
+`lens_diagnostics` accepts `source: "session" | "lsp"` and `scope: "paths" | "workspace"`. Use `mode: "delta"` for the current turn, `"all"` for the cache-only session view, or `"full"` for an active scan. `path` selects one file or directory; `paths` filters a batch. `severity` is `"error"`, `"warning"`, or `"all"`; `serverScope` is `"primary"` or `"all"`.
+
+For `mode: "full"`, `refreshRunners: "cached" | "cheap" | "all" | "none"` (or `false`/`true`) controls project analyzers. The first three string modes can launch a fresh heavyweight analyzer pass, bounded by the slowest runner's roughly 180-second ceiling; `none` disables it. `maxProjectFiles` limits cheap project runners, `maxLspFiles` limits the LSP sweep, and `includeGenerated: true` includes generated-name paths. These three limits apply to full scans. `concurrency` and `waitMs` tune LSP batches.
+
 ## Navigation (Code Intelligence)
 
 | Question | Operation | Parameters |
@@ -40,6 +46,10 @@ Prefer explicit `paths` batches after multi-file edits — bounded concurrency, 
 | What does this call? | `prepareCallHierarchy` → `outgoingCalls` | path, line, character |
 | What commands does the server offer? | `capabilities` | (optional path) — lists advertised commands |
 | Run a server command (e.g. organize imports) | `executeCommand` | command (+ commandArguments); dry-run unless `apply:true` |
+
+The `operation` values are `definition`, `typeDefinition`, `declaration`, `references`, `hover`, `signatureHelp`, `documentSymbol`, `findSymbol`, `workspaceSymbol`, `codeAction`, `rename`, `rename_file`, `implementation`, `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`, `executeCommand`, `workspaceDiagnostics`, and `capabilities`.
+
+For `findSymbol`, pass `query`; optionally narrow with `kinds`, `exactMatch`, `topLevelOnly`, and `maxResults`. `rename_file` uses `newFilePath`. `symbol` resolves a character automatically; `character: -1` requests automatic resolution, and `symbol#N` selects a numbered symbol when the result lists one. `callHierarchyItem` is the object returned by `prepareCallHierarchy` and is required by the incoming/outgoing follow-up calls.
 
 ## Call Hierarchy Pattern
 
