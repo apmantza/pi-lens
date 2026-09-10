@@ -40,12 +40,6 @@ export const TOOL_REGISTRY = [
 		disableable: true,
 	},
 	{
-		name: "lsp_diagnostics",
-		piName: "lsp_diagnostics",
-		mcpName: "pilens_lsp_diagnostics",
-		disableable: true,
-	},
-	{
 		name: "lens_diagnostics",
 		piName: "lens_diagnostics",
 		mcpName: "pilens_diagnostics",

@@ -111,7 +111,6 @@ const EXPECTED_TOOLS = [
 	"ast_grep_outline",
 	"pi_lens_activate_tools",
 	"lens_diagnostics",
-	"lsp_diagnostics",
 	"lsp_navigation",
 	"lens_diagnostic_mark",
 	"symbol_search",
@@ -122,7 +121,6 @@ const EXPECTED_TOOLS = [
 ];
 const ALWAYS_ACTIVE_TOOLS = [
 	"lens_diagnostics",
-	"lsp_diagnostics",
 	"symbol_search",
 	"project_report",
 	"module_report",
@@ -549,7 +547,6 @@ describe("index.ts extension wiring", () => {
 				];
 				const ALWAYS_ACTIVE = [
 					"lens_diagnostics",
-					"lsp_diagnostics",
 					"symbol_search",
 					"project_report",
 					"module_report",
@@ -783,11 +780,7 @@ describe("index.ts extension wiring", () => {
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
 
-				for (const t of [
-					"lens_diagnostics",
-					"lsp_diagnostics",
-					"module_report",
-				]) {
+				for (const t of ["lens_diagnostics", "module_report"]) {
 					const tool = pi.getTool(t) as
 						| { renderCall?: unknown; renderResult?: unknown }
 						| undefined;

@@ -9647,7 +9647,7 @@
     "isBlocking",
     "recordLsp"
   ],
-  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:34:../../clients/lsp/config.js": [
+  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:35:../../clients/lsp/config.js": [
     "_peekConfigInFlightForTests",
     "createCustomServer",
     "explainServersForFile",
@@ -9662,7 +9662,7 @@
     "resetLSPConfigWarnCache",
     "resolveLspCwdForFile"
   ],
-  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:52:../../clients/lsp/client.js": [
+  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:53:../../clients/lsp/client.js": [
     "CLIENT_CAPABILITIES",
     "INITIALIZE_TIMEOUT_MS",
     "MAX_INCREMENTAL_TEXT_RETAINED_BYTES",
@@ -9689,7 +9689,7 @@
     "setupIncomingHandlers",
     "stripDiagnosticNoiseLines"
   ],
-  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:63:../../clients/widget-state.js": [
+  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:64:../../clients/widget-state.js": [
     "MAX_LSP_SERVER_RECORDS",
     "STALE_RECONCILE_DEBOUNCE_MS",
     "WIDGET_STATE_VERSION",
@@ -9722,7 +9722,7 @@
     "setSessionLanguages",
     "widgetDiagnosticUri"
   ],
-  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:75:../../clients/lsp/index.js": [
+  "tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts:76:../../clients/lsp/index.js": [
     "LSPCapabilitySnapshot",
     "LSPService",
     "__collectWorkspaceDiagnosticFilesForTest",

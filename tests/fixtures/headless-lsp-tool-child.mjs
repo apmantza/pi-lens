@@ -56,9 +56,9 @@ const { initLSPConfig } = await import(
 );
 await initLSPConfig(root);
 
-const tool = tools.get("lsp_diagnostics");
+const tool = tools.get("lens_diagnostics");
 if (!tool) {
-	process.stdout.write("no-tool:lsp_diagnostics\n");
+	process.stdout.write("no-tool:lens_diagnostics\n");
 	process.exit(2);
 }
 
@@ -70,7 +70,7 @@ async function run() {
 	process.stdout.write("tool-start\n");
 	const result = await tool.execute(
 		"headless-keepalive-probe",
-		{ paths: [path.join(root, "mod.py")], severity: "all", serverScope: "all" },
+		{ source: "lsp", scope: "paths", paths: [path.join(root, "mod.py")], severity: "all", serverScope: "all" },
 		new AbortController().signal,
 		null,
 		{ cwd: root },
