@@ -186,6 +186,138 @@ function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 	});
 }
 
+describe("lens_diagnostics source and scope routing", () => {
+	it("routes source=lsp through the real probe implementation", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
+		const file = path.join(cwd, "bad.ts");
+		fs.writeFileSync(file, "const value: number = 'bad';\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => [
+				{
+					severity: 1,
+					message: "probe finding",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			]),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const result = (await run(
+				makeTool({}, service),
+				{ source: "lsp", scope: "paths", paths: [file] },
+				cwd,
+			)) as any;
+			expect(result.isError).toBe(false);
+			expect(result.details.source).toBe("lsp");
+			expect(result.details.scope).toBe("paths");
+			expect(result.content[0].text).toContain("probe finding");
+			expect(service.getDiagnostics).toHaveBeenCalledWith(file, "full");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("source=lsp workspace scans the workspace without explicit paths", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-fold-workspace-"),
+		);
+		fs.writeFileSync(path.join(cwd, "one.ts"), "const one = 1;\n");
+		const service = {
+			runWorkspaceDiagnostics: vi.fn(async () => []),
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const result = (await run(
+				makeTool({}, service),
+				{ source: "lsp", scope: "workspace" },
+				cwd,
+			)) as any;
+			expect(result.isError).toBe(false);
+			expect(service.getDiagnostics).toHaveBeenCalled();
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("source=lsp workspace with an explicit path restricts the sweep to it, not the whole project (#2860 N2)", async () => {
+		// The SKILL.md "check a folder" recipe:
+		// lens_diagnostics({source:"lsp", scope:"workspace", path:"src/"}).
+		// Round 2 unconditionally deleted `path`/`paths` under scope=workspace
+		// and substituted `cwd`, silently widening a directory-scoped request
+		// into a whole-project sweep.
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-dir-"));
+		const sub = path.join(cwd, "src");
+		fs.mkdirSync(sub);
+		fs.writeFileSync(path.join(sub, "a.ts"), "const a = 1;\n");
+		fs.writeFileSync(path.join(cwd, "outside.ts"), "const b = 1;\n");
+		const touched: string[] = [];
+		const service = {
+			touchFile: vi.fn(async (file: string) => {
+				touched.push(file);
+				return undefined;
+			}),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const result = (await run(
+				makeTool({}, service),
+				{ source: "lsp", scope: "workspace", path: "src" },
+				cwd,
+			)) as any;
+			expect(result.isError).toBe(false);
+			expect(touched).toEqual([path.join(sub, "a.ts")]);
+			expect(touched).not.toContain(path.join(cwd, "outside.ts"));
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("source=lsp scope=paths and the omitted-scope default behave identically (#2860 F4: delta dropped from the schema, still a real internal default)", async () => {
+		// Two DIFFERENT files (not the same path reused across calls) so a
+		// process-level per-file result cache cannot mask the second call's
+		// own routing decision.
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-delta-"));
+		const fileA = path.join(cwd, "a.ts");
+		const fileB = path.join(cwd, "b.ts");
+		fs.writeFileSync(fileA, "const a = 1;\n");
+		fs.writeFileSync(fileB, "const b = 1;\n");
+		const touchedByScope = new Map<string, string[]>();
+		function makeService(key: string) {
+			return {
+				touchFile: vi.fn(async (f: string) => {
+					touchedByScope.set(key, [...(touchedByScope.get(key) ?? []), f]);
+					return undefined;
+				}),
+				getDiagnostics: vi.fn(async () => []),
+				getCapabilitySnapshots: vi.fn(async () => []),
+			};
+		}
+		try {
+			await run(
+				makeTool({}, makeService("paths")),
+				{ source: "lsp", scope: "paths", paths: [fileA] },
+				cwd,
+			);
+			await run(
+				makeTool({}, makeService("omitted")),
+				{ source: "lsp", paths: [fileB] },
+				cwd,
+			);
+			expect(touchedByScope.get("omitted")).toEqual([fileB]);
+			expect(touchedByScope.get("paths")).toEqual([fileA]);
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+});
+
 // ── compact render header ────────────────────────────────────────────────────
 
 // #1799: the compact header (shown in the tool-call row) reads details.totalBlocking
@@ -245,6 +377,58 @@ describe("lens_diagnostics compact render header", () => {
 	});
 });
 
+describe("lens_diagnostics source=lsp compact render", () => {
+	const identityTheme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+
+	function render(details: Record<string, unknown>) {
+		const component = makeTool().renderResult?.(
+			{ content: [{ type: "text", text: "" }], details, isError: false },
+			{ expanded: false },
+			identityTheme,
+			{ args: { source: "lsp", scope: "paths" }, lastComponent: undefined },
+		);
+		return (component?.render(200) ?? []).join("\n");
+	}
+
+	it("preserves severity-1 findings", () => {
+		const line = render({
+			source: "lsp",
+			totalDiagnostics: 2,
+			filesChecked: 1,
+		});
+		expect(line).toContain("2 diagnostics");
+		expect(line).not.toContain("clean");
+	});
+
+	it("preserves unconfirmed and timed-out files", () => {
+		const line = render({
+			source: "lsp",
+			totalDiagnostics: 0,
+			filesChecked: 1,
+			unconfirmedFiles: 1,
+			timedOutFiles: 1,
+		});
+		expect(line).toContain("unconfirmed");
+		expect(line).toContain("timed out");
+	});
+
+	it("preserves navigation-only and unavailable outcomes", () => {
+		expect(
+			render({ source: "lsp", filesChecked: 1, navigationOnlyFiles: 1 }),
+		).toContain("navigation-only");
+		expect(
+			render({
+				source: "lsp",
+				filesChecked: 1,
+				outcomeCounts: { unavailable: 1 },
+			}),
+		).toContain("not confirmed");
+	});
+});
+
 // ── schema ────────────────────────────────────────────────────────────────────
 
 describe("lens_diagnostics schema", () => {
@@ -274,29 +458,36 @@ describe("lens_diagnostics schema", () => {
 		expect(lspService.runWorkspaceDiagnostics).not.toHaveBeenCalled();
 	});
 
-	it("exposes full mode in the schema", () => {
+	it("exposes source and scope in the schema", () => {
 		const tool = makeTool();
 		const props = (tool.parameters as { properties: Record<string, any> })
 			.properties;
-		expect(props.mode.enum).toContain("full");
+		// #2860 round 3 N3/F4: `analyzers` was observationally identical to
+		// `session` at every scope (round-2 verify N3, mutation-proof: 446
+		// tests stayed green with the whole special-case deleted) and `delta`
+		// was byte-identical to `paths` for source=lsp (N2/F4) — both dropped
+		// from the model-facing enum rather than shipping dead choices.
+		expect(props.source.enum).toEqual(["session", "lsp"]);
+		expect(props.scope.enum).toEqual(["paths", "workspace"]);
 	});
 
 	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
-		// The completion hint used to claim cache-only mode=all verified files.
 		const tool = makeTool();
 		for (const text of [
 			tool.description,
 			tool.promptSnippet,
-			(tool.parameters.properties.mode as unknown as { description: string })
+			(tool.parameters.properties.source as unknown as { description: string })
 				.description,
 		]) {
-			expect(text).toMatch(/(?:mode=)?all[^.\n;]*cache-only/);
-			expect(text).toMatch(/(?:mode=)?full[^.\n;]*paths/);
-			// #2795 review: every surface says an empty cache is not proof of clean.
+			expect(text).toMatch(/session cache/i);
+			expect(text).toMatch(/lsp/i);
+			// #2860 round 3 F9: restored on every one of the three surfaces after
+			// round 2 dropped it from promptSnippet and the source parameter's
+			// own description (verify v2 mutation M7 — replacing the whole
+			// promptSnippet stayed green with no caveat assertion anywhere).
 			expect(text).toMatch(/empty cache[^.\n;]*(not proof|≠ clean)/i);
 		}
-		expect(tool.description).toContain("no cached diagnostics");
-		expect(tool.description).not.toContain("Use before declaring work done");
+		expect(tool.description).toContain("Empty cache is not proof of clean");
 	});
 });
 

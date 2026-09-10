@@ -20,7 +20,7 @@ const CONFIG_DENY =
 	"tier-denied LSP decision cannot be lifted by a nearer config";
 const COLD_CACHE =
 	"On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit.";
-const CACHE_ONLY = "mode=delta/all are cache-only and instant";
+const CACHE_ONLY = "Empty cache is not proof of clean";
 
 function byName(tools: ListedTool[], name: string): string {
 	const tool = tools.find((candidate) => candidate.name === name);

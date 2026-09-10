@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { CacheManager } from "../../clients/cache-manager.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 
 const getServersForFileWithConfig = vi.fn();
@@ -167,6 +168,21 @@ type RetireCall = {
  * the same wiring `index.ts` uses. Asserting on the coordinator's own state
  * rather than on a spy is what makes the F1 probe meaningful: the question is
  * not "did the hook fire" but "did an eslint-origin blocker survive".
+ *
+ * #2860 round 2 verify F2: this drove `createLspDiagnosticsTool` directly,
+ * wiring the `onConfirmedNoBlockers` callback itself — but the SHIPPED seam
+ * is `createLensDiagnosticsTool` (`source=lsp`), which builds its OWN probe
+ * internally (`tools/lens-diagnostics.ts:258`) and wires this callback via
+ * its `getRuntime` argument. Driving the probe directly left the real
+ * wiring with zero regression coverage: dropping it in
+ * `createLensDiagnosticsTool` (index.ts:1658's actual production call)
+ * left every test in this file green. Round 3 retargets at the shipped
+ * tool so the wiring itself is what's under test — `retires` is now
+ * populated by spying on `runtime.retireInlineBlockerOnConfirmedClean`
+ * itself (the exact call `retireInlineBlockerAndResyncGuard` makes,
+ * `clients/git-guard.ts:872`), not by a hand-built callback, so a dropped
+ * `getRuntime` wire or a dropped call inside `createLensDiagnosticsTool`
+ * both show up here as an empty `retires`.
  */
 async function runTool(
 	args: Record<string, unknown>,
@@ -174,27 +190,55 @@ async function runTool(
 	runtime: { retireInlineBlockerOnConfirmedClean: (...a: any[]) => boolean },
 	retires: RetireCall[],
 ): Promise<any> {
-	const { createLspDiagnosticsTool } =
-		await import("../../tools/lsp-diagnostics.js");
+	const { createLensDiagnosticsTool } =
+		await import("../../tools/lens-diagnostics.js");
+	// `vi.spyOn` with no `mockImplementation` calls through to the real
+	// method (the coordinator's actual retire/no-retire decision, and the
+	// `updateGitGuardStatus`/`syncGitGuardRecord` side effects that follow
+	// it in `retireInlineBlockerAndResyncGuard`), while still recording
+	// every call for the assertions below.
+	const spy = vi.spyOn(runtime as any, "retireInlineBlockerOnConfirmedClean");
 	let token = 100;
-	const tool = createLspDiagnosticsTool(
+	const cacheManager = new CacheManager();
+	// The callback lens-diagnostics.ts wires internally reads `runtime` off
+	// this getter and calls `retireInlineBlockerAndResyncGuard` itself —
+	// unlike the old direct-probe drive, the test no longer builds the
+	// callback by hand at all.
+	const tool = createLensDiagnosticsTool(
+		cacheManager,
+		() => cwd,
+		undefined,
+		undefined,
 		() => ++token,
-		({ filePath, writeIndex, coveredSources }) => {
-			retires.push({ filePath, writeIndex, coveredSources });
-			runtime.retireInlineBlockerOnConfirmedClean(
-				filePath,
-				writeIndex,
-				coveredSources,
-			);
-		},
+		undefined,
+		() => runtime as any,
 	);
-	return (await tool.execute(
-		"diag-1561",
-		args,
-		new AbortController().signal,
-		null,
-		{ cwd },
-	)) as any;
+	try {
+		return (await tool.execute(
+			"diag-1561",
+			{ ...args, source: "lsp", scope: "paths" },
+			new AbortController().signal,
+			null,
+			{ cwd },
+		)) as any;
+	} finally {
+		// `retires` tracks every call — i.e. every time the confirmed-clean
+		// hook FIRED — matching the old direct-callback semantics exactly:
+		// `retireInlineBlockerAndResyncGuard` calls this method
+		// unconditionally as its first statement whenever the probe confirms
+		// clean, independent of whether the coordinator actually retires the
+		// blocker (that separate question is what the snapshot assertions
+		// below check).
+		for (const call of spy.mock.calls) {
+			const [filePath, writeIndex, coveredSources] = call as [
+				string,
+				number | undefined,
+				string[],
+			];
+			retires.push({ filePath, writeIndex, coveredSources });
+		}
+		spy.mockRestore();
+	}
 }
 
 async function freshService(): Promise<void> {

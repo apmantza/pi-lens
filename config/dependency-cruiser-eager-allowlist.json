@@ -26,7 +26,6 @@
   "./clients/format-events-publish.js",
   "./clients/format-service.js",
   "./clients/formatters-lazy.js",
-  "./clients/git-guard.js",
   "./clients/host-ports.js",
   "./clients/installer/index.js",
   "./clients/instance-reaper.js",

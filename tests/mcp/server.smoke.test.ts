@@ -20,6 +20,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { McpHarness, repoRoot } from "./harness.js";
+import { stripSource } from "../support/sweep-kit.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation). retry: 2
@@ -33,6 +34,22 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 
 	afterAll(() => {
 		harness.dispose();
+	});
+
+	// #2860 round 4 N6: this scans the production construction itself. The
+	// previous test retyped the resolver expression, so deleting mcp/server.ts's
+	// real argument left the whole test population green. `stripSource` blanks
+	// comments and strings before the call-shape assertion.
+	it("passes isLensGuardEnabled() into createLensDiagnosticsTool", () => {
+		const source = stripSource(
+			fs.readFileSync(new URL("../../mcp/server.ts", import.meta.url), "utf8"),
+		);
+		const callStart = source.indexOf("createLensDiagnosticsTool(");
+		expect(callStart).toBeGreaterThanOrEqual(0);
+		const callEnd = source.indexOf("\n);", callStart);
+		expect(callEnd).toBeGreaterThan(callStart);
+		const call = source.slice(callStart, callEnd);
+		expect(call).toContain("() => isLensGuardEnabled(),");
 	});
 
 	it("completes the initialize handshake and mirrors the protocol version", async () => {
@@ -66,7 +83,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).not.toContain("pilens_ast_grep_dump");
 		expect(names).toContain("pilens_ast_grep_replace");
 		expect(names).toContain("pilens_lsp_navigation");
-		expect(names).toContain("pilens_lsp_diagnostics");
+		expect(names).not.toContain("pilens_lsp_diagnostics");
 		expect(names).toContain("pilens_symbol_search");
 		// pilens_impact was removed (#304) — its blast radius folded into
 		// pilens_module_report's `blastRadius` option.
@@ -91,11 +108,8 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			  }
 			| undefined;
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
-		// MCP must not keep the old whole-project-only verification advice.
-		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
-		expect(diagnosticsTool?.description).toContain(
-			"mode=full is an active LSP scan of paths",
-		);
+		expect(diagnosticsTool?.description).toContain("LSP probe");
+		expect(diagnosticsTool?.description).toContain("Empty cache is not proof");
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
 		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;
@@ -171,6 +185,61 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			)?.count,
 		).toBe(1);
 	});
+
+	it("maps the retired LSP diagnostics name to the folded tool", async () => {
+		const response = await harness.request(2800, "tools/call", {
+			name: "pilens_lsp_diagnostics",
+			arguments: { paths: ["missing-file.ts"], cwd: process.cwd() },
+		});
+		expect(response.error).toBeUndefined();
+		const result = response.result as {
+			isError?: boolean;
+			content?: { text: string }[];
+		};
+		expect(result.content?.[0]?.text).toContain("Checks not confirmed");
+		const health = await harness.request(2801, "tools/call", {
+			name: "pilens_health",
+			arguments: {},
+		});
+		expect(JSON.stringify(health.result)).toContain(
+			"lsp-diagnostics-compatibility",
+		);
+	});
+
+	// #2860 round 2 F3 (fixed round 2, unguarded until now): the retired
+	// name used to be exempted from the enabled-tool gate BY NAME
+	// (`name !== "pilens_lsp_diagnostics"`), so a project that disabled
+	// `lens_diagnostics` still got the retired name executed — including
+	// real language-server spawns. The fix checks the CANONICAL name
+	// (`pilens_diagnostics`) instead; this pins it so the config bypass
+	// cannot come back silently.
+	it("refuses pilens_lsp_diagnostics when lens_diagnostics is disabled by config (#2860 F3)", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-lsp-disabled-"),
+		);
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify({ tools: { lens_diagnostics: { enabled: false } } }),
+		);
+		const isolated = new McpHarness({ cwd });
+		try {
+			const res = await isolated.request(31, "tools/call", {
+				name: "pilens_lsp_diagnostics",
+				arguments: { cwd, paths: ["missing-file.ts"] },
+			});
+			const result = res.result as {
+				isError?: boolean;
+				content?: { text: string }[];
+			};
+			expect(result.isError).toBe(true);
+			expect(result.content?.[0]?.text).toContain(
+				"Unknown or disabled tool: pilens_lsp_diagnostics",
+			);
+		} finally {
+			isolated.dispose();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 25_000);
 
 	it("omits a config-disabled tool from the real MCP tools/list path", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-tools-"));

@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
 import { createAstGrepOutlineTool } from "../../tools/ast-grep-outline.js";
 import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
-import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
+import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
 import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -84,7 +84,12 @@ const REAL_TOOL_SCHEMAS: Record<string, Set<string>> = {
 	ast_grep_replace: schemaProps(createAstGrepReplaceTool(astGrepClientStub)),
 	ast_grep_outline: schemaProps(createAstGrepOutlineTool(astGrepClientStub)),
 	lsp_navigation: schemaProps(createLspNavigationTool(() => true)),
-	lsp_diagnostics: schemaProps(createLspDiagnosticsTool()),
+	lens_diagnostics: schemaProps(
+		createLensDiagnosticsTool(
+			{ readCache: () => undefined } as any,
+			() => "/proj",
+		),
+	),
 };
 
 /** Which real tool(s) each skill file documents params for. */
@@ -96,7 +101,7 @@ const FILE_TOOL_SCOPE: Record<string, string[]> = {
 	],
 	"skills/pi-lens-lsp-navigation/SKILL.md": [
 		"lsp_navigation",
-		"lsp_diagnostics",
+		"lens_diagnostics",
 	],
 };
 

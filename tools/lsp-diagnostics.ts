@@ -7,7 +7,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Type } from "../clients/deps/typebox.js";
 import {
 	getProjectIgnoreMatcher,
 	isExcludedDirName,
@@ -51,8 +50,7 @@ import {
 	isBlocking,
 	reconcileScanDiagnostics,
 } from "../clients/widget-state.js";
-import { baseName, compactRenderResult } from "./render-compact.js";
-import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
+import { makeProgressReporter } from "./scan-progress.js";
 import {
 	isWarmAttached,
 	tryWarmAttachedDiagnostics,
@@ -372,137 +370,9 @@ export function createLspDiagnosticsTool(
 	// "confirmed clean" for the same file. index.ts injects
 	// `runtime.retireInlineBlockerOnConfirmedClean`. Optional/undefined in tests.
 	onConfirmedNoBlockers?: (info: ConfirmedNoBlockersInfo) => void,
+	getService: () => ReturnType<typeof getLSPService> = getLSPService,
 ) {
 	return {
-		name: "lsp_diagnostics" as const,
-		label: "LSP Diagnostics",
-		description:
-			'Query language-server diagnostics for files or directories. Example: use `{path: "src/app.ts"}` before a build.',
-		promptSnippet: "Query language-server diagnostics",
-		renderResult: compactRenderResult<{
-			mode?: string;
-			phase?: string;
-			completed?: number;
-			total?: number;
-			filePath?: string;
-			diagnostics?: unknown[];
-			totalDiagnostics?: number;
-			filesChecked?: number;
-			filesScanned?: number;
-			cleanFiles?: number;
-			unconfirmedFiles?: number;
-			navigationOnlyFiles?: number;
-			timedOutFiles?: number;
-			outcomeCounts?: Record<string, number>;
-			incompleteFiles?: number;
-			unconfirmed?: boolean;
-			timedOut?: boolean;
-		}>(({ details, args, isError, text }) => {
-			// Streaming progress partials render the live bar (see scanningSummaryLine).
-			const scanning = scanningSummaryLine(details, text);
-			if (scanning) return scanning;
-			if (isError) {
-				return `lsp_diagnostics — ${text.split("\n")[0] ?? "error"}`;
-			}
-			const count =
-				details?.totalDiagnostics ?? details?.diagnostics?.length ?? 0;
-			const target = baseName(details?.filePath ?? args.path) || "workspace";
-			const files = details?.filesChecked ?? details?.filesScanned;
-			const scope =
-				typeof files === "number" && files > 1
-					? ` across ${files} files`
-					: target
-						? ` ${target}`
-						: "";
-			const noun = count === 1 ? "diagnostic" : "diagnostics";
-			// #533: a batch/directory result with any unconfirmed files must NEVER
-			// compact-render as a bare "N diagnostics" — that erases the fact some
-			// files' clean status was never actually confirmed by the server.
-			const unconfirmedFiles = details?.unconfirmedFiles ?? 0;
-			const navigationOnlyFiles = details?.navigationOnlyFiles ?? 0;
-			if (navigationOnlyFiles > 0) {
-				return `lsp_diagnostics${scope} — ${count} ${noun} · ${details?.cleanFiles ?? 0} clean · ${navigationOnlyFiles} navigation-only`;
-			}
-			if (unconfirmedFiles > 0) {
-				const cleanFiles = details?.cleanFiles ?? 0;
-				const timedOutFiles = details?.timedOutFiles ?? 0;
-				const suffix = timedOutFiles > 0 ? ` (${timedOutFiles} timed out)` : "";
-				return `lsp_diagnostics${scope} — ${count} ${noun} · ${cleanFiles} clean · ${unconfirmedFiles} unconfirmed${suffix}`;
-			}
-			const outcomeCounts = details?.outcomeCounts;
-			const notConfirmed = outcomeCounts
-				? (outcomeCounts.inconclusive ?? 0) +
-					(outcomeCounts.unavailable ?? 0) +
-					(outcomeCounts.unsupported ?? 0) +
-					(outcomeCounts.failed ?? 0)
-				: 0;
-			if (notConfirmed > 0) {
-				return `lsp_diagnostics${scope} — ${count} ${noun} · ${notConfirmed} checks not confirmed`;
-			}
-			if ((details?.incompleteFiles ?? 0) > 0) {
-				return `lsp_diagnostics${scope} — incomplete (${details?.incompleteFiles} files not confirmed)`;
-			}
-			// Single-file mode: 0 diagnostics from an unconfirmed result — either a
-			// silent-on-clean server or (#570) a timed-out check — is not a clean
-			// render either.
-			if (count === 0 && details?.unconfirmed) {
-				return details?.timedOut
-					? `lsp_diagnostics${scope} — timed out (result may be incomplete)`
-					: `lsp_diagnostics${scope} — unconfirmed (server cannot confirm clean)`;
-			}
-			return `lsp_diagnostics${scope} — ${count} ${noun}`;
-		}),
-		parameters: Type.Object({
-			path: Type.Optional(
-				Type.String({
-					description:
-						"File or directory path to check. For directories, all matching source files are scanned.",
-				}),
-			),
-			paths: Type.Optional(
-				Type.Array(Type.String(), {
-					minItems: 1,
-					maxItems: MAX_BATCH_FILES,
-					description:
-						"Explicit files to check as a bounded-concurrency batch. When provided, path is ignored.",
-				}),
-			),
-			severity: Type.Optional(
-				Type.String({
-					enum: ["error", "warning", "information", "hint", "all"],
-					description: "Filter by severity level (default: all)",
-				}),
-			),
-			concurrency: Type.Optional(
-				Type.Number({
-					description:
-						"Batch/directory concurrency, in distinct LSP server groups run in parallel " +
-						"(default 8, max 16) — not individual files. Files sharing one server " +
-						"(e.g. a same-language batch) are always processed one at a time against " +
-						"that server regardless of this value; this caps how many DIFFERENT " +
-						"servers run concurrently.",
-				}),
-			),
-			waitMs: Type.Optional(
-				Type.Number({
-					description:
-						"Optional per-file LSP wait budget for batch diagnostics. Uses server defaults when omitted.",
-				}),
-			),
-			serverScope: Type.Optional(
-				Type.String({
-					enum: ["primary", "all"],
-					description:
-						"'primary' (fast, low-noise): only the file's actual language " +
-						"server (e.g. typescript) — for 'does this have real type " +
-						"errors'. 'all' (default): also touches cross-cutting auxiliary " +
-						"scanners (ast-grep, opengrep, zizmor, typos, marksman) attached " +
-						"to this file, including findings for files not yet dispatched " +
-						"this session. Primary confirmation is always reported " +
-						"separately from auxiliary findings regardless of this setting.",
-				}),
-			),
-		}),
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
@@ -542,7 +412,7 @@ export function createLspDiagnosticsTool(
 			const serverScope: "primary" | "all" =
 				typedParams.serverScope === "primary" ? "primary" : "all";
 
-			const lspService = getLSPService();
+			const lspService = getService();
 			if (!lspService) {
 				return {
 					content: [
