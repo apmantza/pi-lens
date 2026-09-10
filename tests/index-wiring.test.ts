@@ -830,6 +830,171 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
+		it("keeps the departing conversation's posture when /new changes session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-new-retain-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const departing = makeCtx({
+					cwd: tmp,
+					sessionId: "new-departing",
+					sessionFile: path.join(tmp, "departing.jsonl"),
+				});
+				const replacement = makeCtx({
+					cwd: tmp,
+					sessionId: "new-replacement",
+					sessionFile: path.join(tmp, "replacement.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, departing);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					departing,
+				);
+
+				await pi.emit(
+					"session_shutdown",
+					{
+						type: "session_shutdown",
+						reason: "new",
+						targetSessionFile: path.join(tmp, "replacement.jsonl"),
+					},
+					departing,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit(
+					"session_start",
+					{
+						reason: "new",
+						previousSessionFile: path.join(tmp, "departing.jsonl"),
+					},
+					replacement,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{
+						type: "session_shutdown",
+						reason: "resume",
+						targetSessionFile: path.join(tmp, "departing.jsonl"),
+					},
+					replacement,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, departing);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("does not restore activation for a different session file on resume", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-identity-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const first = makeCtx({
+					cwd: tmp,
+					sessionId: "identity-a",
+					sessionFile: path.join(tmp, "a.jsonl"),
+				});
+				const second = makeCtx({
+					cwd: tmp,
+					sessionId: "identity-b",
+					sessionFile: path.join(tmp, "b.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, first);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					first,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "resume", targetSessionFile: path.join(tmp, "b.jsonl") },
+					first,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, second);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("clears remembered posture for the new conversation's current session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-fresh-file-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const current = makeCtx({
+					cwd: tmp,
+					sessionId: "fresh-current",
+					sessionFile: path.join(tmp, "current.jsonl"),
+				});
+				const departing = makeCtx({
+					cwd: tmp,
+					sessionId: "fresh-departing",
+					sessionFile: path.join(tmp, "departing.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, current);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					current,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "new", targetSessionFile: path.join(tmp, "current.jsonl") },
+					departing,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "new" }, current);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
 		// A genuinely new conversation drops the activation memory: the rebuilt
 		// all-active set shrinks back to the bare baseline.
 		it("forgets the previous conversation's activations on a new session", async () => {

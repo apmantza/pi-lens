@@ -3538,7 +3538,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		const switchesSessionFile =
 			typeof shutdownEvent?.targetSessionFile === "string" &&
 			shutdownEvent.targetSessionFile.length > 0;
-		if (shutdownReason === "new" || shutdownReason === "quit") {
+		if (shutdownReason === "quit") {
 			clearRememberedLazyTools(getSessionFile(ctx));
 		}
 		if (

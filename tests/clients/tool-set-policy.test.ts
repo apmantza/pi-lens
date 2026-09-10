@@ -16,6 +16,10 @@ import {
 	REMEMBERED_LAZY_TOOLS_MAX_SESSIONS,
 	supportsDeferredTools,
 } from "../../clients/tool-set-policy.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 
 const LAZY = new Set(["ast_grep_search", "ast_grep_replace", "lsp_navigation"]);
 /** What the host hands us on EVERY session_start: all tools active. */
@@ -30,7 +34,26 @@ const ALL_ACTIVE = [
 describe("tool-set cache policy", () => {
 	beforeEach(() => {
 		logLatency.mockClear();
+		resetDegradationLedger();
 		resetRememberedLazyToolsForTests();
+	});
+
+	it("records missing session-file identity once when activation memory is unavailable", () => {
+		rememberLazyTools(undefined, ["ast_grep_search"]);
+		rememberLazyTools(undefined, ["ast_grep_replace"]);
+
+		expect(getDegradationSummary()).toEqual([
+			expect.objectContaining({
+				kind: "tool-set-session-file-unavailable",
+				count: 1,
+				latestReasons: [
+					expect.objectContaining({
+						reason:
+							"session-file identity unavailable; activation memory is inert",
+					}),
+				],
+			}),
+		]);
 	});
 
 	it("bounds remembered session files with FIFO eviction", () => {
