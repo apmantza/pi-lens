@@ -19,7 +19,9 @@ import { emitBounded } from "./bounded-telemetry.js";
 import { LEDGER_FIELD_MAX } from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
 import { createSubsystemLogger } from "./extension-log.js";
+import { detectFileKind, type FileKind } from "./file-kinds.js";
 import { detectFileRole } from "./file-role.js";
+import { resolveLanguageRootForFile } from "./language-profile.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import {
@@ -27,13 +29,16 @@ import {
 	detectPythonEnvironment,
 } from "./python-environment.js";
 import {
+	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
 	toPosix,
 } from "./path-utils.js";
+import { findNearestDirWithAnyBasename } from "./workspace-topology.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 import { stripAnsi } from "./sanitize.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 
 // --- Types ---
 
@@ -114,6 +119,40 @@ export interface TestFailure {
 // Runner detection: config file → runner name
 export interface RunnerConfig {
 	configFiles: string[];
+	/**
+	 * #2870: the file kinds this runner can run, in `file-kinds.ts`'s
+	 * vocabulary — the ONE gate that decides whether a runner may be handed
+	 * an edited file. Before this, `detectRunner` answered from the project
+	 * root's config files alone, so in a repo carrying both a `go.mod` and a
+	 * Gradle build every `.java` file went to whichever runner is declared
+	 * first in this table (`go test ./src/test/java/...` → `FAIL [setup
+	 * failed]` on every Java edit).
+	 *
+	 * The kind check is the gate, NOT the resolved language root (AGENTS.md
+	 * defect shape 39): a `.java` file in a go-only repo resolves to the
+	 * workspace root — where `go.mod` lives — and must still get no target.
+	 * A kind no entry claims (markdown, yaml, an unknown extension) has no
+	 * runner, which is what stops a `README.md` under `docs/tests/` from
+	 * becoming its own test target.
+	 */
+	kinds: readonly FileKind[];
+	/**
+	 * #2871: markers that anchor the CHILD's working directory, when they are
+	 * not this runner's own `configFiles` (the default).
+	 *
+	 * A file-scoped runner names the file or its package in `args`, so running
+	 * it from the nearest directory carrying its manifest is exactly right —
+	 * `go test ./internal/lightning` only resolves from the module that owns
+	 * `go.mod`. A WHOLE-PROJECT runner names nothing: moving its cwd changes
+	 * WHICH project is built. `gradle` launches the literal `./gradlew`, so a
+	 * module carrying `build.gradle.kts` but no wrapper would fail with `spawn
+	 * ./gradlew ENOENT`; `maven`'s reactor may not resolve a submodule's
+	 * parent at all. Both therefore anchor on their LAUNCHER instead: a module
+	 * that carries its own wrapper is a self-contained build and runs there,
+	 * anything else walks up to the build that owns the wrapper (in practice
+	 * the dispatch root), which is what these runners did before #2871.
+	 */
+	spawnCwdMarkers?: readonly string[];
 	command: string;
 	// Name of the binary in node_modules/.bin (and every package manager's
 	// global bin dir) — defaults to the runner key. Must match the ACTUAL
@@ -169,10 +208,29 @@ const SOURCE_TO_TEST_PATTERNS: Array<{
 	{ ext: ".ex", testExts: ["_test.exs"], dirs: ["test"] },
 ];
 
-// Bound for walking up parent directories to find a hoisted node_modules
-// (monorepo workspaces) — deep enough for realistic nesting
-// (repo/packages/scope/pkg-name), never unbounded to the filesystem root.
-const MAX_NODE_MODULES_WALK_UP = 5;
+/**
+ * Nearest `node_modules/<packageName>` at or above `cwd` — monorepo workspace
+ * hoisting (npm/yarn/pnpm), where a workspace package's own `node_modules` may
+ * not exist at all and the runner lives in the workspace root's.
+ *
+ * #2870 net-count: this was a private bounded climb loop of its own (the
+ * fourth walker in this file). It is now the shared workspace-topology
+ * walker every other per-directory marker walk in the codebase goes through
+ * — same `walkUpDirs` primitive, the `$HOME` ceiling the private loop
+ * lacked, the `MAX_WALK_DEPTH` cap with its cap-trip latency record, and the
+ * per-directory marker cache, so a chain already walked for a language root
+ * is not re-`readdir`'d here. Returns the directory CONTAINING
+ * `node_modules` (the private loop returned the `node_modules` path itself;
+ * only the log line reads it).
+ */
+function findHoistedNodeModulesPackage(
+	cwd: string,
+	packageName: string,
+): string | undefined {
+	return findNearestDirWithAnyBasename(path.resolve(cwd), [
+		`node_modules/${packageName}`,
+	]);
+}
 
 // Bound for recursive descent into a Python test directory when the exact
 // same-relative-subdir mirror doesn't match (e.g. tests/unit/ grouping by
@@ -244,6 +302,7 @@ export function isExcludedTestTarget(
 
 export const RUNNERS: Record<string, RunnerConfig> = {
 	vitest: {
+		kinds: ["jsts"],
 		configFiles: ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs"],
 		command: "npx",
 		binName: "vitest",
@@ -257,6 +316,7 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		parseJson: true,
 	},
 	jest: {
+		kinds: ["jsts"],
 		configFiles: [
 			"jest.config.ts",
 			"jest.config.js",
@@ -275,12 +335,26 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		parseJson: true,
 	},
 	pytest: {
+		kinds: ["python"],
 		configFiles: ["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"],
+		// #2879 review round 3, F7: `pyproject.toml` is CONTENT-conditional in
+		// detection — the Priority-1 loop accepts it only when it carries
+		// `[tool.pytest.ini_options]` — but the cwd seam walks basenames, so
+		// handing `configFiles` over verbatim anchored the child on the very
+		// file detection had refused. Omitting it here makes the spawn walk
+		// stop only on evidence the detector itself would accept; a project
+		// whose ONLY pytest config is a real `[tool.pytest.ini_options]`
+		// section therefore falls back to the dispatch root, which is exactly
+		// where master ran it. (The proper fix is to carry detection's
+		// accepted evidence path into the spawn resolution instead of
+		// re-deriving it from a basename table — filed as a follow-up.)
+		spawnCwdMarkers: ["pytest.ini", "tox.ini", "setup.cfg"],
 		command: "python",
 		args: (testFile, _cwd) => ["-m", "pytest", testFile, "--tb=short", "-q"],
 		parseJson: false, // pytest JSON requires plugin, use text parsing
 	},
 	go: {
+		kinds: ["go"],
 		configFiles: ["go.mod"],
 		command: "go",
 		args: (testFile, cwd) => {
@@ -292,30 +366,47 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		parseJson: false, // Go test output is text-based
 	},
 	cargo: {
+		kinds: ["rust"],
 		configFiles: ["Cargo.toml"],
 		command: "cargo",
 		args: (_testFile, _cwd) => ["test", "--no-fail-fast"],
 		parseJson: false, // cargo test output is text-based
 	},
 	dotnet: {
+		kinds: ["csharp", "fsharp"],
 		configFiles: ["*.csproj", "*.sln"],
 		command: "dotnet",
 		args: (_testFile, _cwd) => ["test", "--no-build"],
 		parseJson: false,
 	},
 	gradle: {
-		configFiles: ["build.gradle", "build.gradle.kts", "settings.gradle"],
+		kinds: ["java", "kotlin"],
+		// #2870: `settings.gradle.kts` alongside its Groovy sibling — a
+		// Kotlin-DSL build whose root carries only the settings script was
+		// invisible to detection, the same one-spelling gap the java root
+		// markers had.
+		configFiles: [
+			"build.gradle",
+			"build.gradle.kts",
+			"settings.gradle",
+			"settings.gradle.kts",
+		],
 		command: process.platform === "win32" ? "gradlew.bat" : "./gradlew",
+		// The child's cwd must be a directory the wrapper actually lives in.
+		spawnCwdMarkers: ["gradlew", "gradlew.bat"],
 		args: (_testFile, _cwd) => ["test", "--no-daemon"],
 		parseJson: false,
 	},
 	maven: {
+		kinds: ["java", "kotlin"],
 		configFiles: ["pom.xml"],
 		command: "mvn",
+		spawnCwdMarkers: ["mvnw", "mvnw.cmd"],
 		args: (_testFile, _cwd) => ["test", "-q"],
 		parseJson: false,
 	},
 	rspec: {
+		kinds: ["ruby"],
 		configFiles: [".rspec", "spec/spec_helper.rb"],
 		command: "bundle",
 		// The real binary is "bundle" (the command runs `bundle exec rspec
@@ -327,22 +418,33 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		parseJson: false,
 	},
 	minitest: {
+		kinds: ["ruby"],
 		configFiles: ["Gemfile"],
 		command: "ruby",
 		args: (testFile, _cwd) => ["-Itest", testFile],
 		parseJson: false,
 	},
 	phpunit: {
+		kinds: ["php"],
 		// phpunit.xml(.dist) is the strong signal; composer.json is checked for
 		// a require-dev dependency on phpunit/phpunit (see the special case in
 		// detectRunner's Priority-1 loop, mirroring the pytest/pyproject.toml
 		// handling above).
 		configFiles: ["phpunit.xml", "phpunit.xml.dist", "composer.json"],
+		// #2879 review round 3, F7: same shape as pytest's `pyproject.toml`,
+		// and this one is load-bearing — phpunit reads `phpunit.xml` from its
+		// CWD only, so a child launched in a directory whose `composer.json`
+		// carries no `phpunit/phpunit` dependency runs with no bootstrap and
+		// no autoloader, and the resulting fatal error reaches the agent as a
+		// test failure (measured end to end with a fake phpunit recording its
+		// own cwd). `composer.json` is an anchor, never phpunit evidence.
+		spawnCwdMarkers: ["phpunit.xml", "phpunit.xml.dist"],
 		command: "phpunit",
 		args: (testFile, _cwd) => [testFile],
 		parseJson: false, // PHPUnit's default CLI output is text-based
 	},
 	mix: {
+		kinds: ["elixir"],
 		configFiles: ["mix.exs"],
 		command: "mix",
 		args: (testFile, _cwd) => ["test", testFile],
@@ -632,16 +734,137 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * Which runners may be handed `sourceFilePath`, and the directory their
+	 * config files are probed in (#2870).
+	 *
+	 * `eligible === null` means "no file was named" — the session-level
+	 * caller (`runtime-session.ts`'s summary) asks "what runner does this
+	 * project have" and has no file to scope to, so every runner stays a
+	 * candidate and the probe root is the dispatch root, exactly as before.
+	 *
+	 * A named file resolves TWO independent facts, and the order matters:
+	 *  - its KIND decides which runners may claim it at all (the gate), and
+	 *  - `resolveLanguageRootForFile` decides WHERE that kind's config files
+	 *    are looked for (the anchor) — the same per-kind, cached,
+	 *    workspace-clamped walk the dispatch runners already resolve their
+	 *    roots with, not a private walker.
+	 *
+	 * Returning `null` means no runner can own this file (a kind no entry
+	 * claims: markdown, yaml, an unknown extension), so no directory is
+	 * probed at all.
+	 */
+	private resolveDetectionScope(
+		cwd: string,
+		sourceFilePath?: string,
+	): { root: string; eligible: ReadonlySet<string> | null } | null {
+		if (sourceFilePath === undefined) return { root: cwd, eligible: null };
+		const absoluteFile = path.resolve(sourceFilePath);
+		// #2522 (pinned by "fails closed through the REAL getTestRunTarget when
+		// the resolved target is out of tree"): a file OUTSIDE the dispatch root
+		// keeps the pre-#2870 resolution — every runner, probed at the dispatch
+		// root — so `getTestRunTarget` still hands the exclusion layer a target
+		// to fail closed on instead of quietly answering "no runner" for a file
+		// the turn should refuse loudly. Per-file anchoring has nothing to
+		// anchor to out there: the language-root walk is clamped to the
+		// workspace, so every out-of-tree file resolves to the dispatch root
+		// anyway.
+		if (!isUnderDir(absoluteFile, path.resolve(cwd))) {
+			return { root: cwd, eligible: null };
+		}
+		const kind = detectFileKind(absoluteFile);
+		if (!kind) return null;
+		const eligible = new Set(
+			Object.entries(RUNNERS)
+				.filter(([, config]) => config.kinds.includes(kind))
+				.map(([name]) => name),
+		);
+		if (eligible.size === 0) return null;
+		return {
+			root: resolveLanguageRootForFile(absoluteFile, cwd),
+			eligible,
+		};
+	}
+
+	/**
 	 * Check if a test runner is available in the project
 	 * Detection order:
 	 * 1. Config files (vitest.config.ts, jest.config.js, etc.)
 	 * 2. package.json dependencies
 	 * 3. node_modules presence
+	 *
+	 * #2870: when `sourceFilePath` is given, the answer is scoped to that
+	 * file's kind and resolved language root — see `resolveDetectionScope`.
 	 */
 	detectRunner(
-		cwd: string,
+		dispatchRoot: string,
 		sourceFilePath?: string,
 	): { runner: string; config: RunnerConfig } | null {
+		const scope = this.resolveDetectionScope(dispatchRoot, sourceFilePath);
+		if (!scope) return null;
+		const { root, eligible } = scope;
+
+		const anchored = this.probeRunnersAt(root, eligible);
+		if (anchored) return anchored;
+
+		// #2879 review round 2, F1: the anchor is a LANGUAGE root, and
+		// `ROOT_MARKERS_BY_KIND` is deliberately BROADER than any runner's
+		// `configFiles` — `requirements.txt`, `setup.py`, `Pipfile`,
+		// `Rakefile`, `composer.lock`, `.classpath` all anchor a language
+		// without configuring a test runner. Probing the anchored directory
+		// ALONE therefore let any such intermediate marker shadow the
+		// project root's real runner config, and pytest/rspec/minitest/
+		// phpunit have no later priority to rescue them: four single-language
+		// repos went from a working runner to no target at all (measured, the
+		// review's `anchor.mjs` probe), which is exactly what #2870's amended
+		// criterion 4 protects.
+		//
+		// So the anchored probe is a PREFERENCE, not a restriction: on a miss,
+		// re-probe the dispatch root under the SAME kind gate. The gate is
+		// what keeps #2870 fixed — a `.java` file re-probing a polyglot root
+		// still cannot reach `go`, because `go` never claims the `java` kind.
+		const dispatch = path.resolve(dispatchRoot);
+		if (path.resolve(root) !== dispatch) {
+			const atDispatch = this.probeRunnersAt(dispatch, eligible);
+			if (atDispatch) return atDispatch;
+		}
+
+		// Priority 5: Check if pytest is available globally (Python files only)
+		const isPythonSource =
+			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
+		if (!isPythonSource) return null;
+
+		try {
+			const whichCmd = process.platform === "win32" ? "where" : "which";
+			const result = safeSpawn(whichCmd, ["pytest"], {
+				timeout: 2000,
+			});
+			if (result.status === 0) {
+				this.log("Detected pytest globally");
+				return { runner: "pytest", config: RUNNERS.pytest };
+			}
+		} catch (err) {
+			void err;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Priorities 1-4 of the detection ladder, against ONE directory: config
+	 * files, `package.json` dependencies, a hoisted `node_modules`, and the
+	 * glob-capable whole-project runners. `eligible` is the kind gate
+	 * (#2870); `null` means no file was named and every runner is a
+	 * candidate. Returns `null` when this directory configures no eligible
+	 * runner, which is what lets `detectRunner` try the dispatch root next.
+	 */
+	private probeRunnersAt(
+		cwd: string,
+		eligible: ReadonlySet<string> | null,
+	): { runner: string; config: RunnerConfig } | null {
+		// Keyed on the probed directory, not the dispatch root: two modules of
+		// one polyglot repo have different runners available, and a memo keyed
+		// on the shared dispatch root would serve the first module's verdict to
+		// every other module (#2870).
 		const rootKey = this.getCanonicalProjectRoot(cwd);
 		let byRunner = this.availableRunners.get(rootKey);
 		if (!byRunner) {
@@ -650,6 +873,7 @@ export class TestRunnerClient {
 		}
 		// Priority 1: Config files
 		for (const [name, config] of Object.entries(RUNNERS)) {
+			if (eligible && !eligible.has(name)) continue;
 			const cached = this.getRunnerAvailability(byRunner, name);
 			if (cached !== undefined) {
 				if (cached) {
@@ -710,17 +934,20 @@ export class TestRunnerClient {
 			};
 
 			// Check for vitest first (more specific than jest)
-			if (allDeps.vitest) {
+			if (allDeps.vitest && (!eligible || eligible.has("vitest"))) {
 				this.log("Detected vitest in package.json");
 				this.setRunnerAvailability(byRunner, "vitest", true, packageJsonPath);
 				return { runner: "vitest", config: RUNNERS.vitest };
 			}
-			if (allDeps.jest) {
+			if (allDeps.jest && (!eligible || eligible.has("jest"))) {
 				this.log("Detected jest in package.json");
 				this.setRunnerAvailability(byRunner, "jest", true, packageJsonPath);
 				return { runner: "jest", config: RUNNERS.jest };
 			}
-			if (allDeps.pytest || allDeps["pytest-cov"]) {
+			if (
+				(allDeps.pytest || allDeps["pytest-cov"]) &&
+				(!eligible || eligible.has("pytest"))
+			) {
 				this.log("Detected pytest in package.json (unusual)");
 				this.setRunnerAvailability(byRunner, "pytest", true, packageJsonPath);
 				return { runner: "pytest", config: RUNNERS.pytest };
@@ -733,22 +960,18 @@ export class TestRunnerClient {
 		// Priority 3: Check node_modules for installed packages, including a
 		// hoisted monorepo layout where cwd is a workspace package (e.g.
 		// packages/foo) but the runner only lives in node_modules at the
-		// workspace root (npm/yarn/pnpm workspace hoisting). Walk up a
-		// bounded number of parent directories looking for a node_modules
-		// containing the package — never an unbounded walk to the
-		// filesystem root.
-		const hoistedVitest = this.findHoistedNodeModulesPackage(cwd, "vitest");
-		if (hoistedVitest) {
-			this.log(`Detected vitest in node_modules (${hoistedVitest})`);
-			return { runner: "vitest", config: RUNNERS.vitest };
-		}
-		const hoistedJest = this.findHoistedNodeModulesPackage(cwd, "jest");
-		if (hoistedJest) {
-			this.log(`Detected jest in node_modules (${hoistedJest})`);
-			return { runner: "jest", config: RUNNERS.jest };
+		// workspace root (npm/yarn/pnpm workspace hoisting).
+		for (const name of ["vitest", "jest"] as const) {
+			if (eligible && !eligible.has(name)) continue;
+			const hoisted = findHoistedNodeModulesPackage(cwd, name);
+			if (hoisted) {
+				this.log(`Detected ${name} in node_modules (${hoisted})`);
+				return { runner: name, config: RUNNERS[name] };
+			}
 		}
 
 		for (const name of ["go", "cargo", "dotnet", "gradle", "maven"]) {
+			if (eligible && !eligible.has(name)) continue;
 			const config = RUNNERS[name];
 			const found = config.configFiles.some((cf) => {
 				// Handle glob patterns like *.csproj
@@ -770,51 +993,6 @@ export class TestRunnerClient {
 			}
 		}
 
-		// Priority 5: Check if pytest is available globally (Python files only)
-		const isPythonSource =
-			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
-		if (!isPythonSource) return null;
-
-		try {
-			const whichCmd = process.platform === "win32" ? "where" : "which";
-			const result = safeSpawn(whichCmd, ["pytest"], {
-				timeout: 2000,
-			});
-			if (result.status === 0) {
-				this.log("Detected pytest globally");
-				return { runner: "pytest", config: RUNNERS.pytest };
-			}
-		} catch (err) {
-			void err;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Walk up from `cwd` through parent directories looking for a
-	 * `node_modules/<packageName>` — handles monorepo workspace hoisting
-	 * (npm/yarn/pnpm), where a workspace package's own `node_modules` may
-	 * not exist at all, with dependencies hoisted to the workspace root
-	 * several directories up. Bounded by `MAX_NODE_MODULES_WALK_UP` levels
-	 * and stops at the filesystem root — never an unbounded walk.
-	 * Returns the `node_modules` directory where the package was found, or
-	 * null if not found within the bound.
-	 */
-	private findHoistedNodeModulesPackage(
-		cwd: string,
-		packageName: string,
-	): string | null {
-		let dir = path.resolve(cwd);
-		for (let level = 0; level <= MAX_NODE_MODULES_WALK_UP; level++) {
-			const nodeModulesPath = path.join(dir, "node_modules");
-			if (fs.existsSync(path.join(nodeModulesPath, packageName))) {
-				return nodeModulesPath;
-			}
-			const parent = path.dirname(dir);
-			if (parent === dir) break; // reached filesystem root
-			dir = parent;
-		}
 		return null;
 	}
 
@@ -1296,6 +1474,49 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * The working directory the test-runner CHILD is spawned in (#2871).
+	 *
+	 * AGENTS.md defect shape 40: `resolveToolCwd` is the one seam for a child
+	 * process's cwd, and this file resolved its own — it handed
+	 * `safeSpawnAsync` the dispatch root, so `RUNNERS.go.args` built
+	 * `./tools/tapctl/internal/lightning` relative to a root module that does
+	 * not own that package. Marker discovery, the `.git` fallback, the
+	 * dispatch-root fallback, the `$HOME` ceiling, the once-per-key `tool-cwd`
+	 * log line and the bounded `tool-cwd-resolution` degradation now all come
+	 * from the seam, with the runner's own table as the markers.
+	 *
+	 * This is a SECOND value, never a reassignment of `cwd`: the failed-target
+	 * ledger (`recordResult` → `getFailedTargets`, read back by
+	 * `getTestRunTarget`) is keyed by the DISPATCH root, and re-keying it per
+	 * module would make a recorded failure unfindable from the turn that
+	 * selects targets.
+	 *
+	 * Review round 2, F6: there is deliberately NO clamp on a resolution that
+	 * lands outside the dispatch root. The seam only answers outside it when
+	 * the FILE is outside it (`tool-cwd.ts`: every in-tree branch is
+	 * `isUnderDir`-checked), and the one production caller —
+	 * `runtime-turn.ts`'s turn-end batch, on both the fresh and the deferred
+	 * path — filters every target through `isExcludedTestTarget`, which fails
+	 * CLOSED out of tree (#2522). Round 1 shipped that clamp plus a
+	 * `tool-cwd-resolution` ledger row for it; neither could fire in a live
+	 * session, so the row was a record nothing could observe and the guard was
+	 * defence against a caller that does not exist. Both are gone. If a second
+	 * caller is ever added that can pass an out-of-tree file, it needs this
+	 * decision made where that caller is, with a test that reaches it.
+	 */
+	private resolveSpawnCwd(
+		runner: string,
+		config: RunnerConfig,
+		testFile: string,
+		dispatchRoot: string,
+	): string {
+		return resolveToolCwd("runner", runner, testFile, {
+			cwd: path.resolve(dispatchRoot),
+			rootMarkers: config.spawnCwdMarkers ?? config.configFiles,
+		});
+	}
+
+	/**
 	 * Run tests for a specific file without blocking the event loop, so LSP
 	 * messages, other file writes, and all async operations continue while
 	 * tests run.
@@ -1343,16 +1564,25 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args, env } = await this.resolveExec(
+			const spawnCwd = this.resolveSpawnCwd(
 				runner,
 				config,
 				absoluteTestFile,
 				cwd,
 			);
-			this.log(`Running (async): ${command} ${args.join(" ")}`);
+			const { command, args, env } = await this.resolveExec(
+				runner,
+				config,
+				absoluteTestFile,
+				cwd,
+				spawnCwd,
+			);
+			this.log(
+				`Running (async): ${command} ${args.join(" ")} (cwd ${spawnCwd})`,
+			);
 
 			const result = await safeSpawnAsync(command, args, {
-				cwd,
+				cwd: spawnCwd,
 				timeout: 60000,
 				env,
 				// #2522 R2 F1. `safeSpawnAsync` resolves `options.signal ?? ambient`,
@@ -2485,7 +2715,26 @@ export class TestRunnerClient {
 			const slash = name.indexOf("/");
 			return slash === -1 || !goFailNameSet.has(name.slice(0, slash));
 		}).length;
+		// #2870: go's own `[setup failed]` verdict line — "there was no package
+		// to test" — the positive twin of the `(?:build|setup) failed`
+		// lookahead below. #1524-r4 stopped it from being counted as a test
+		// failure but left it with no classification of its own, so whether the
+		// agent saw "could not run tests" or a fabricated `✗ 1/1 failed ✗ go
+		// failure` came down to whether go's output happened to contain the
+		// substring "error" (the runner-error condition below): `FAIL <pkg>
+		// [setup failed]` + `error: no packages to test` was advisory, the same
+		// line on its own was a blocking failure the agent could not tell from
+		// a real one (#2870, measured).
+		//
+		// `[build failed]` is deliberately NOT included (review round 2, F5).
+		// The maintainer's amendment on #2870 names `[setup failed]`; a go
+		// COMPILE error is usually one the agent just introduced, and
+		// downgrading it to advisory is a signal change on master's behaviour
+		// that belongs on the issue, not in this fix. Its classification is
+		// still the coin flip described above — see the PR body's follow-ups.
+		let goInfraVerdict = false;
 		if (runner === "go") {
+			goInfraVerdict = /^FAIL[^\S\n]+\S+[^\S\n]+\[setup failed\]/m.test(output);
 			// #1524-r4: `(?![^\n]*\[(?:build|setup) failed\])` rejects go's
 			// INFRASTRUCTURE verdict lines — `FAIL <pkg> [build failed]` (a
 			// compile error) and `FAIL <pkg> [setup failed]` (no packages to
@@ -2563,11 +2812,20 @@ export class TestRunnerClient {
 		// runner error they actually are). They still label a name onto
 		// `failures` above when `matched` or `goFailNames` already settled
 		// the question some other way, but they no longer settle it alone.
+		//
+		// #2870: `goInfraVerdict` is a SECOND sufficient condition, not a
+		// widening of the first. go's `[build failed]`/`[setup failed]` line is
+		// the runner itself saying no test ran, which is exactly what this
+		// branch reports — so it no longer has to also print the word "error"
+		// to be classified as one. The `!matched`/`goFailNames` vetoes still
+		// apply: a run that produced real go counts or a real `--- FAIL:` is a
+		// verdict, never a runner error, even if a later package failed to
+		// build.
 		const runnerError =
 			exitCode !== 0 &&
 			!matched &&
 			goFailNames.length === 0 &&
-			lower.includes("error")
+			(lower.includes("error") || goInfraVerdict)
 				? `Runner ${runner} exited with ${exitCode}`
 				: undefined;
 
@@ -2801,6 +3059,17 @@ export class TestRunnerClient {
 		config: RunnerConfig,
 		testFile: string,
 		cwd: string,
+		/**
+		 * #2871: the directory the child will RUN in, which is the only cwd
+		 * `args()` may be built against — go's package path is relative to it.
+		 * Where the binary and the Python environment are INSTALLED is a
+		 * different question with a different answer: they stay resolved from
+		 * the dispatch root, exactly as before, so a workspace package whose
+		 * dependencies are hoisted to the repo root still finds
+		 * `node_modules/.bin/<runner>` instead of falling through to `npx`.
+		 * Defaults to `cwd`, which is every call where the two are the same.
+		 */
+		spawnCwd: string = cwd,
 	): Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> {
 		// Run pytest through the project interpreter itself, not a generic `python`
 		// resolved from the host PATH. The child-only environment also keeps tools
@@ -2810,7 +3079,7 @@ export class TestRunnerClient {
 			if (pythonEnvironment) {
 				return {
 					command: pythonEnvironment.pythonPath,
-					args: config.args(testFile, cwd),
+					args: config.args(testFile, spawnCwd),
 					env: augmentPythonEnvironment(process.env, pythonEnvironment),
 				};
 			}
@@ -2823,9 +3092,9 @@ export class TestRunnerClient {
 			const suffix = process.platform === "win32" ? ".bat" : "";
 			const vendorBin = path.join(cwd, "vendor", "bin", `phpunit${suffix}`);
 			if (fs.existsSync(vendorBin)) {
-				return { command: vendorBin, args: config.args(testFile, cwd) };
+				return { command: vendorBin, args: config.args(testFile, spawnCwd) };
 			}
-			return { command: "phpunit", args: config.args(testFile, cwd) };
+			return { command: "phpunit", args: config.args(testFile, spawnCwd) };
 		}
 
 		const binName = config.binName ?? runner;
@@ -2838,7 +3107,7 @@ export class TestRunnerClient {
 		if (fs.existsSync(localBin)) {
 			return {
 				command: localBin,
-				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+				args: stripWrapperArgs(binName, config.args(testFile, spawnCwd)),
 			};
 		}
 
@@ -2847,11 +3116,11 @@ export class TestRunnerClient {
 		if (globalBin) {
 			return {
 				command: globalBin,
-				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+				args: stripWrapperArgs(binName, config.args(testFile, spawnCwd)),
 			};
 		}
 
-		return { command: config.command, args: config.args(testFile, cwd) };
+		return { command: config.command, args: config.args(testFile, spawnCwd) };
 	}
 
 	private emptyResult(
