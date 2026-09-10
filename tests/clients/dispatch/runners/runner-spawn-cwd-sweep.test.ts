@@ -87,6 +87,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { lineContentHash } from "../../../../clients/read-guard.js";
 import {
+	NODE_SPAWN_NAMES,
 	type SpawnCwdSite,
 	scanSpawnCwd,
 } from "../../../support/spawn-cwd-scan.js";
@@ -126,8 +127,8 @@ const POPULATION_FILES = [
  * They pin REACH, never conformance: see "Adding a spawn" in the header for
  * what a non-conforming new site costs instead.
  */
-const EXPECTED_FILES = 80;
-const EXPECTED_DIRECT_SITES = 148;
+const EXPECTED_FILES = 81;
+const EXPECTED_DIRECT_SITES = 149;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -234,7 +235,11 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawn:b6046d06",
-		"spawnSync is the safe-spawn implementation's synchronous child path and does not receive a dispatch cwd",
+		"forwards the caller's SafeSpawnOptions object unchanged before adding safe-spawn defaults; the sole test-runner caller supplies no cwd",
+	],
+	[
+		"clients/metrics-history.ts#getCurrentCommit:021d92f7~df24802d",
+		"execSync runs Git against hand-derived spawnDir = path.resolve(startDir), walked to the repository root; this metrics probe does not resolve project configuration from the dispatch cwd",
 	],
 	[
 		"clients/instance-reaper.ts#killPidTree:18e7d7ac",
@@ -796,6 +801,7 @@ const SCAN_HOOK_TIMEOUT_MS = 30_000;
  * never move a pin (round-5 v4-N3).
  */
 function holdsAScannableSpawn(source: string): boolean {
+	const nodeSpawnPattern = NODE_SPAWN_NAMES.join("|");
 	const hasChildProcessImport = [
 		...source.matchAll(
 			/import\s+([\s\S]*?)\s+from\s*["'](?:node:)?child_process["']/g,
@@ -805,7 +811,7 @@ function holdsAScannableSpawn(source: string): boolean {
 		return (
 			/^[A-Za-z_$][\w$]*\s*(?:,|$)/.test(clause) ||
 			/^\*\s+as\s+[A-Za-z_$][\w$]*/.test(clause) ||
-			/\{[^}]*\b(?:spawn|execFile|exec|fork)\b/.test(clause)
+			new RegExp(`\\{[^}]*\\b(?:${nodeSpawnPattern})\\b`).test(clause)
 		);
 	});
 	const hasDynamicOrRequiredBinding =
@@ -890,8 +896,8 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
-	// The scan is ~3.56–3.78 s over the 76–80-file population, measured idle and
-	// at `--maxWorkers=1` beside `tests/config`; four files add ~219 ms (+6%).
+	// A local measurement on 2026-09-10 records 3.808 s idle and 3.932 s under
+	// `--maxWorkers=1` beside `tests/config`, over the 81-file population.
 	// CI observed ~7 s for this file,
 	// so 30 s gives roughly 4x margin against the file wall and remains the
 	// ceiling this repo treats as a hook budget — an
@@ -1004,6 +1010,20 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 		expect(
 			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
 			"a method named spawn on some object",
+		).toBe(false);
+		for (const name of NODE_SPAWN_NAMES) {
+			expect(
+				holdsAScannableSpawn(
+					`import { ${name} } from "node:child_process";\n${name}("tool");`,
+				),
+				`scanner name ${name} is admitted by the population`,
+			).toBe(true);
+		}
+		expect(
+			holdsAScannableSpawn(
+				'import { execFileAsync } from "node:child_process";\nexecFileAsync("tool");',
+			),
+			"an unrecognised child_process spelling remains outside the population",
 		).toBe(false);
 	});
 

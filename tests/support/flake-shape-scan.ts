@@ -122,7 +122,8 @@ function testsRelative(absolute: string): string {
 
 /**
  * `tests/`-relative files that are the ratchet's OWN scanning infrastructure
- * — the ratchet's test file and this module's unit-test fixtures carry
+ * — the ratchet's test file, this module's unit-test fixtures, and the
+ * spawn-cwd fixture's synthetic child-process strings carry
  * literal spawn/timer/clock-matcher TEXT as synthetic fixture strings, and
  * `tests/` fully contains `tests/clients/flake-shape-ratchet.test.ts`, unlike
  * `single-flight-ratchet.test.ts`'s `clients/`-only scan target, which never

@@ -61,6 +61,11 @@
  * the expected verdict per cell — is the "Detector state space (round 3)"
  * table on PR #2693, and every cell has a named fixture in
  * `spawn-cwd-scan.test.ts`.
+ *
+ * Stated bounds: the scanner recognizes only the seven names in
+ * `NODE_SPAWN_NAMES` when bound from `child_process`; other child-process API
+ * spellings remain outside this scan and stay covered by the population's
+ * fail-safe bound assertion.
  */
 
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
@@ -153,7 +158,7 @@ const SPAWN_NAMES = new Set([
  * population filter and this list were reconciled (round-5 v4-N3).
  *
  */
-const NODE_SPAWN_NAMES = new Set([
+export const NODE_SPAWN_NAMES = [
 	"spawn",
 	"execFile",
 	"exec",
@@ -161,7 +166,8 @@ const NODE_SPAWN_NAMES = new Set([
 	"spawnSync",
 	"execFileSync",
 	"execSync",
-]);
+] as const;
+const NODE_SPAWN_NAME_SET = new Set(NODE_SPAWN_NAMES);
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
 const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
@@ -287,7 +293,9 @@ function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
 			const [imported, local] = spec
 				.split(/\s+as\s+/)
 				.map((part) => part.trim());
-			if (NODE_SPAWN_NAMES.has(imported))
+			if (
+				NODE_SPAWN_NAME_SET.has(imported as (typeof NODE_SPAWN_NAMES)[number])
+			)
 				bindings.direct.set(local || imported, imported);
 		}
 	};
@@ -317,7 +325,11 @@ function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
 						const [imported, local] = raw
 							.split(/\s*:\s*/)
 							.map((part) => part.trim());
-						if (NODE_SPAWN_NAMES.has(imported))
+						if (
+							NODE_SPAWN_NAME_SET.has(
+								imported as (typeof NODE_SPAWN_NAMES)[number],
+							)
+						)
 							bindings.direct.set(local || imported, imported);
 					}
 				} else if (/^[A-Za-z_$][\w$]*$/.test(name))
@@ -337,7 +349,11 @@ function isNodeSpawnCall(call: SgNode, bindings: NodeSpawnBindings): boolean {
 	if (fn.kind() !== "member_expression") return false;
 	const property = fn.field("property")?.text();
 	const object = fn.field("object");
-	if (!property || !NODE_SPAWN_NAMES.has(property)) return false;
+	if (
+		!property ||
+		!NODE_SPAWN_NAME_SET.has(property as (typeof NODE_SPAWN_NAMES)[number])
+	)
+		return false;
 	if (object?.kind() === "identifier" && bindings.namespaces.has(object.text()))
 		return true;
 	return /^\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)$/.test(
@@ -355,7 +371,11 @@ function nodeSpawnImportedName(
 	if (fn.kind() !== "member_expression") return undefined;
 	const property = fn.field("property")?.text();
 	const object = fn.field("object");
-	if (!property || !NODE_SPAWN_NAMES.has(property)) return undefined;
+	if (
+		!property ||
+		!NODE_SPAWN_NAME_SET.has(property as (typeof NODE_SPAWN_NAMES)[number])
+	)
+		return undefined;
 	if (object?.kind() === "identifier" && bindings.namespaces.has(object.text()))
 		return property;
 	if (/^\b(?:import|require)\s*\(/.test(object?.text() ?? "")) return property;

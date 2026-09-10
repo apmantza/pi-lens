@@ -1701,9 +1701,15 @@ async function run(ctx) {
 		],
 		[
 			"require namespace",
-			`const cp = require(${CHILD_PROCESS});\n${SEAM}\nfunction run(ctx) { cp.execFile("tool", [], { cwd: ctx.cwd }); }`,
+			`const cp = require("node:child_process");\n${SEAM}\nfunction run(ctx) { cp.execFile("tool", [], { cwd: ctx.cwd }); }`,
 		],
 	] as const;
+	it("resolves an execSync options object", async () => {
+		const source = `import { execSync } from "node:child_process";
+${SEAM}
+function check(ctx) { execSync("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
 	for (const [label, source] of aliasedFixtures) {
 		it(`resolves ${label}`, async () => {
 			expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);

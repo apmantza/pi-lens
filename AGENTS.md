@@ -1136,9 +1136,9 @@ Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
 reasoned row, never a pin bump. The scan does not follow a path computation into
 the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~3.56 s idle / ~3.78 s under `--maxWorkers=1`
-over the 76–80-file population; the four-file increase adds ~219 ms (+6%)
-contention and the `default` vitest project's hook budget is 10 s
+timeout because a local measurement on 2026-09-10 records 3.808 s idle and
+3.932 s under `--maxWorkers=1` over the 81-file population. The `default`
+Vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
