@@ -430,9 +430,7 @@ export function createLensDiagnosticsTool(
 				Type.String({
 					enum: ["delta", "all", "full"],
 					description:
-						"delta = current turn's fixable warnings (default). " +
-						"all = cache-only session diagnostics for edited/dispatched files; an empty cache is not proof of a clean file. " +
-						"full = expensive active LSP scan of paths (or the whole project) plus cached runner diagnostics.",
+						"delta = current turn; all = cache-only; full = active LSP scan of paths. Empty cache is not proof of clean.",
 				}),
 			),
 			path: Type.Optional(
@@ -463,57 +461,35 @@ export function createLensDiagnosticsTool(
 						Type.String({ enum: ["cached", "cheap", "all", "none"] }),
 					],
 					{
-						description:
-							"mode=full only: false/none = LSP + widget state only. cached/cheap/all all now trigger a FRESH run (#585) of the heavyweight project analyzers (knip, jscpd, madge, gitleaks, govulncheck, trivy, dead-code) in parallel — bounded by the slowest one (trivy's own ~180s ceiling) — instead of reading a possibly-stale session_start cache; safe to relaunch since each analyzer de-dupes concurrent runs against the same project root. cheap/all additionally refresh the in-process runners (tree-sitter + fact-rules + ast-grep) first.",
+						description: "Analyzer refresh mode for full view.",
 					},
 				),
 			),
 			maxProjectFiles: Type.Optional(
 				Type.Number({
-					description:
-						"mode=full refreshRunners=cheap/all only: cap project files scanned by the cheap project runners (tree-sitter + fact-rules + ast-grep). Does NOT bound the LSP sweep — use maxLspFiles for that.",
+					description: "Project-file limit for cheap runners.",
 				}),
 			),
 			maxLspFiles: Type.Optional(
 				Type.Number({
-					description:
-						"mode=full only: cap the number of files routed through the language server for the project-wide LSP sweep. On large projects (e.g. a Next.js app with thousands of source files) the uncapped sweep can take many minutes; set this to bound it. Default is generous (env PI_LENS_LSP_WORKSPACE_MAX_FILES, else 5000).",
+					description: "File limit for the LSP sweep.",
 				}),
 			),
 			includeGenerated: Type.Optional(
 				Type.Boolean({
-					description:
-						"mode=full refreshRunners=cheap/all only (no effect with refreshRunners=cached/none, since no project scan runs to apply it to): scan WITHOUT the generated/artifact NAME-heuristic filter (lockfiles, gen.ts-style names, generated/ dirs, …). Default false. Use when a scan's 'excluded by generated-name heuristics' notice suggests a real file was skipped.",
+					description: "Include generated-name paths in full scans.",
 				}),
 			),
 			severity: Type.Optional(
 				Type.String({
 					enum: ["error", "warning", "all"],
-					description: "Filter by severity (default: all).",
+					description: "Diagnostic severity filter.",
 				}),
 			),
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					maxItems: MAX_PATHS_ENTRIES,
-					description:
-						`Restrict any mode to an explicit file/directory list (max ${MAX_PATHS_ENTRIES} entries; ` +
-						"more errors instead of silently truncating). Entries may be relative " +
-						"(resolved against cwd) or absolute, and a directory entry matches all " +
-						'files under it (e.g. "src/"). mode=delta/all are a pure post-filter ' +
-						"of cached/session state — they can only show findings for files pi-lens " +
-						"has already dispatched, so an unseen file shows nothing (use mode=full " +
-						"for an active scan). mode=full actively scans exactly these paths (LSP " +
-						"sweep + cheap in-process runners); cached heavyweight analyzers " +
-						"(jscpd/madge/gitleaks/knip) and the project snapshot are still post-filtered " +
-						"cache reads, never relaunched. Explicitly-listed files are NOT filtered " +
-						"through the project ignore matcher (matching lsp_diagnostics' paths " +
-						"semantics) — naming a file is assumed to mean it regardless of " +
-						".gitignore/.pi-lens.json; a directory entry's expansion still honors " +
-						"ignore (and when the list mixes directories and files, mode=full scans " +
-						"via the ignore-filtered walk, so an ignore-excluded file entry is only " +
-						"guaranteed an active scan in a files-only list). Nonexistent entries " +
-						"are skipped (mode=full notes them; useful for git-staged-file wrappers " +
-						"where a deleted-but-staged path can appear).",
+					description: "Files or directories to filter.",
 				}),
 			),
 		}),

@@ -404,6 +404,8 @@ Each row cost a lane at least once; the prose above carries the record.
 
 | Mistake | Fix |
 |---------|-----|
+| Accepting a state-space table on its claims | Grep every test id in the table before accepting the round; #2877 r3 and #2868 r3 (2026-09-10) shipped 48–72-cell tables with zero real ids |
+| Arming `plegma watch --next` after the lane already settled | The watch only sees settlements newer than itself; check `plegma_status` by handle first and process a done lane directly (three lanes sat settled for hours, 2026-09-10) |
 | Pruning trees with `merge-base --is-ancestor` | Prune only trees whose branch is the head of the PR just merged (#2358's tree, 2026-09-06) |
 | Retargeting a PR base and waiting for CI | `edited` does not fire ci.yml; push a commit or close/reopen |
 | Reading `$?` after a pipe | `node scripts/ci-verdict.mjs <pr> --wait N; echo $?` on its own line |

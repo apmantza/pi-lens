@@ -1,0 +1,950 @@
+# Provenance: GitHub Actions run 34417355902, attempt 1, job 102685188877 (Unit tests), head 5e1a16c0416df3120897cdf2739298c0bd8655f9.
+# Fetched with: gh api repos/apmantza/pi-lens/actions/jobs/102685188877/logs --allow-escape-sequences.
+# Redaction: GitHub's existing secret masking is retained; no synthetic or reformatted lines were added.
+﻿2026-09-09T23:33:04.8723240Z Current runner version: '2.337.0'
+2026-09-09T23:33:04.8742744Z ##[group]Runner Image Provisioner
+2026-09-09T23:33:04.8743453Z Hosted Compute Agent
+2026-09-09T23:33:04.8743962Z Version: 20260828.587
+2026-09-09T23:33:04.8744519Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-09T23:33:04.8745112Z Build Date: 2026-08-28T16:44:25Z
+2026-09-09T23:33:04.8745944Z Worker ID: {23fbf152-5c02-4023-b095-324b100d249e}
+2026-09-09T23:33:04.8746533Z Azure Region: centralus
+2026-09-09T23:33:04.8747050Z ##[endgroup]
+2026-09-09T23:33:04.8748600Z ##[group]Operating System
+2026-09-09T23:33:04.8749113Z Ubuntu
+2026-09-09T23:33:04.8749560Z 24.04.5
+2026-09-09T23:33:04.8749977Z LTS
+2026-09-09T23:33:04.8750394Z ##[endgroup]
+2026-09-09T23:33:04.8750893Z ##[group]Runner Image
+2026-09-09T23:33:04.8751383Z Image: ubuntu-24.04
+2026-09-09T23:33:04.8751852Z Version: 20260907.300.1
+2026-09-09T23:33:04.8752870Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260907.300/images/ubuntu/Ubuntu2404-Readme.md
+2026-09-09T23:33:04.8754134Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260907.300
+2026-09-09T23:33:04.8754893Z ##[endgroup]
+2026-09-09T23:33:04.8756105Z ##[group]GITHUB_TOKEN Permissions
+2026-09-09T23:33:04.8757786Z Contents: read
+2026-09-09T23:33:04.8758289Z Metadata: read
+2026-09-09T23:33:04.8758790Z ##[endgroup]
+2026-09-09T23:33:04.8760401Z Secret source: Actions
+2026-09-09T23:33:04.8761170Z Cache mode: write
+2026-09-09T23:33:04.8761719Z Prepare workflow directory
+2026-09-09T23:33:04.9063448Z Prepare all required actions
+2026-09-09T23:33:04.9104426Z Getting action download info
+2026-09-09T23:33:05.1432300Z Download action repository 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' (SHA:3d3c42e5aac5ba805825da76410c181273ba90b1)
+2026-09-09T23:33:05.2267222Z Download action repository 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020' (SHA:820762786026740c76f36085b0efc47a31fe5020)
+2026-09-09T23:33:05.4393975Z Complete job name: Unit tests
+2026-09-09T23:33:05.5011635Z ##[group]Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+2026-09-09T23:33:05.5012511Z with:
+2026-09-09T23:33:05.5012938Z   ref: refs/pull/2848/merge
+2026-09-09T23:33:05.5013470Z   persist-credentials: false
+2026-09-09T23:33:05.5013997Z   repository: apmantza/pi-lens
+2026-09-09T23:33:05.5017957Z   token: ***
+2026-09-09T23:33:05.5018422Z   ssh-strict: true
+2026-09-09T23:33:05.5018848Z   ssh-user: git
+2026-09-09T23:33:05.5019245Z   clean: true
+2026-09-09T23:33:05.5019778Z   sparse-checkout-cone-mode: true
+2026-09-09T23:33:05.5020270Z   fetch-depth: 1
+2026-09-09T23:33:05.5020714Z   fetch-tags: false
+2026-09-09T23:33:05.5021136Z   show-progress: true
+2026-09-09T23:33:05.5021556Z   lfs: false
+2026-09-09T23:33:05.5022004Z   submodules: false
+2026-09-09T23:33:05.5022433Z   set-safe-directory: true
+2026-09-09T23:33:05.5022911Z   allow-unsafe-pr-checkout: false
+2026-09-09T23:33:05.5023615Z ##[endgroup]
+2026-09-09T23:33:05.5862861Z Syncing repository: apmantza/pi-lens
+2026-09-09T23:33:05.5864633Z ##[group]Getting Git version info
+2026-09-09T23:33:05.5865280Z Working directory is '/home/runner/work/pi-lens/pi-lens'
+2026-09-09T23:33:05.5866721Z [command]/usr/bin/git version
+2026-09-09T23:33:05.5930493Z git version 2.55.0
+2026-09-09T23:33:05.5950193Z ##[endgroup]
+2026-09-09T23:33:05.5975041Z Temporarily overriding HOME='/home/runner/work/_temp/288e0da5-b7ac-403c-9e31-363051fefd2d' before making global git config changes
+2026-09-09T23:33:05.5982737Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-09T23:33:05.5984235Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/pi-lens/pi-lens
+2026-09-09T23:33:05.6016626Z Deleting the contents of '/home/runner/work/pi-lens/pi-lens'
+2026-09-09T23:33:05.6019606Z ##[group]Determining repository object format
+2026-09-09T23:33:05.8663517Z ##[endgroup]
+2026-09-09T23:33:05.8671812Z ##[group]Initializing the repository
+2026-09-09T23:33:05.8672916Z [command]/usr/bin/git init /home/runner/work/pi-lens/pi-lens
+2026-09-09T23:33:05.8776108Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-09-09T23:33:05.8777882Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-09-09T23:33:05.8779538Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-09-09T23:33:05.8780905Z hint: call:
+2026-09-09T23:33:05.8781730Z hint:
+2026-09-09T23:33:05.8782750Z hint: 	git config --global init.defaultBranch <name>
+2026-09-09T23:33:05.8783861Z hint:
+2026-09-09T23:33:05.8784985Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-09-09T23:33:05.8786822Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-09-09T23:33:05.8788129Z hint:
+2026-09-09T23:33:05.8788960Z hint: 	git branch -m <name>
+2026-09-09T23:33:05.8789816Z hint:
+2026-09-09T23:33:05.8791179Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-09-09T23:33:05.8793258Z Initialized empty Git repository in /home/runner/work/pi-lens/pi-lens/.git/
+2026-09-09T23:33:05.8798339Z [command]/usr/bin/git remote add origin https://github.com/apmantza/pi-lens
+2026-09-09T23:33:05.8832839Z ##[endgroup]
+2026-09-09T23:33:05.8834030Z ##[group]Disabling automatic garbage collection
+2026-09-09T23:33:05.8835851Z [command]/usr/bin/git config --local gc.auto 0
+2026-09-09T23:33:05.8871264Z ##[endgroup]
+2026-09-09T23:33:05.8872784Z ##[group]Setting up auth
+2026-09-09T23:33:05.8874112Z Removing SSH command configuration
+2026-09-09T23:33:05.8887169Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-09T23:33:05.8930806Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-09T23:33:05.9222080Z Removing HTTP extra header
+2026-09-09T23:33:05.9227232Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-09T23:33:05.9256296Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-09T23:33:05.9422744Z Removing includeIf entries pointing to credentials config files
+2026-09-09T23:33:05.9427366Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-09T23:33:05.9453198Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-09T23:33:05.9613559Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-09-09T23:33:05.9645276Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/pi-lens/pi-lens/.git.path /home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:05.9670129Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/pi-lens/pi-lens/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:05.9699025Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:05.9726438Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:05.9749642Z ##[endgroup]
+2026-09-09T23:33:05.9751063Z ##[group]Fetching the repository
+2026-09-09T23:33:05.9756828Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/pull/2848/merge:refs/remotes/pull/2848/merge
+2026-09-09T23:33:06.9517771Z From https://github.com/apmantza/pi-lens
+2026-09-09T23:33:06.9520171Z  * [new ref]         refs/pull/2848/merge -> pull/2848/merge
+2026-09-09T23:33:06.9525181Z ##[endgroup]
+2026-09-09T23:33:06.9526970Z ##[group]Determining the checkout info
+2026-09-09T23:33:06.9528649Z ##[endgroup]
+2026-09-09T23:33:06.9529694Z [command]/usr/bin/git sparse-checkout disable
+2026-09-09T23:33:06.9569889Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-09-09T23:33:06.9596018Z ##[group]Checking out the ref
+2026-09-09T23:33:06.9597769Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/2848/merge
+2026-09-09T23:33:07.1380026Z Note: switching to 'refs/remotes/pull/2848/merge'.
+2026-09-09T23:33:07.1381558Z 
+2026-09-09T23:33:07.1382759Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-09T23:33:07.1385709Z changes and commit them, and you can discard any commits you make in this
+2026-09-09T23:33:07.1388222Z state without impacting any branches by switching back to a branch.
+2026-09-09T23:33:07.1389296Z 
+2026-09-09T23:33:07.1390207Z If you want to create a new branch to retain commits you create, you may
+2026-09-09T23:33:07.1392201Z do so (now or later) by using -c with the switch command. Example:
+2026-09-09T23:33:07.1393156Z 
+2026-09-09T23:33:07.1393575Z   git switch -c <new-branch-name>
+2026-09-09T23:33:07.1394309Z 
+2026-09-09T23:33:07.1394855Z Or undo this operation with:
+2026-09-09T23:33:07.1395982Z 
+2026-09-09T23:33:07.1396469Z   git switch -
+2026-09-09T23:33:07.1397123Z 
+2026-09-09T23:33:07.1398131Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-09T23:33:07.1399490Z 
+2026-09-09T23:33:07.1400960Z HEAD is now at abfd961 Merge 5e1a16c0416df3120897cdf2739298c0bd8655f9 into 7320ac24985d875eb685f09d6e98d1ae9c7d5f1e
+2026-09-09T23:33:07.1406209Z ##[endgroup]
+2026-09-09T23:33:07.1433301Z [command]/usr/bin/git log -1 --format=%H
+2026-09-09T23:33:07.1456840Z abfd9618bbe749d89e886b5b4cb0dc9812a15535
+2026-09-09T23:33:07.1470504Z ##[group]Removing auth
+2026-09-09T23:33:07.1472568Z Removing SSH command configuration
+2026-09-09T23:33:07.1476103Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-09T23:33:07.1499332Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-09T23:33:07.1697280Z Removing HTTP extra header
+2026-09-09T23:33:07.1701893Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-09T23:33:07.1713529Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-09T23:33:07.1877938Z Removing includeIf entries pointing to credentials config files
+2026-09-09T23:33:07.1880745Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-09T23:33:07.1902622Z includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git.path
+2026-09-09T23:33:07.1903449Z includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git/worktrees/*.path
+2026-09-09T23:33:07.1904103Z includeif.gitdir:/github/workspace/.git.path
+2026-09-09T23:33:07.1904582Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-09T23:33:07.1909932Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git.path
+2026-09-09T23:33:07.1928542Z /home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:07.1936084Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git.path \/home\/runner\/work\/_temp\/git\-credentials\-bfa87665\-f67d\-44cb\-a3a8\-da35b36a1508\.config
+2026-09-09T23:33:07.1962001Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git/worktrees/*.path
+2026-09-09T23:33:07.1980779Z /home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:07.1987695Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/pi-lens/pi-lens/.git/worktrees/*.path \/home\/runner\/work\/_temp\/git\-credentials\-bfa87665\-f67d\-44cb\-a3a8\-da35b36a1508\.config
+2026-09-09T23:33:07.2012189Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-09-09T23:33:07.2030813Z /github/runner_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:07.2039218Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-bfa87665\-f67d\-44cb\-a3a8\-da35b36a1508\.config
+2026-09-09T23:33:07.2067329Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-09-09T23:33:07.2085002Z /github/runner_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config
+2026-09-09T23:33:07.2091304Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-bfa87665\-f67d\-44cb\-a3a8\-da35b36a1508\.config
+2026-09-09T23:33:07.2116163Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-09T23:33:07.2271144Z Removing credentials config '/home/runner/work/_temp/git-credentials-bfa87665-f67d-44cb-a3a8-da35b36a1508.config'
+2026-09-09T23:33:07.2277016Z ##[endgroup]
+2026-09-09T23:33:07.2495883Z ##[group]Run actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+2026-09-09T23:33:07.2496395Z with:
+2026-09-09T23:33:07.2496732Z   node-version: 22
+2026-09-09T23:33:07.2497066Z   check-latest: false
+2026-09-09T23:33:07.2499464Z   token: ***
+2026-09-09T23:33:07.2499803Z   package-manager-cache: true
+2026-09-09T23:33:07.2500184Z ##[endgroup]
+2026-09-09T23:33:07.3517692Z Found in cache @ /opt/hostedtoolcache/node/22.23.2/x64
+2026-09-09T23:33:07.3519867Z ##[group]Environment details
+2026-09-09T23:33:07.7240144Z node: v22.23.2
+2026-09-09T23:33:07.7240802Z npm: 10.9.8
+2026-09-09T23:33:07.7241245Z yarn: 1.22.22
+2026-09-09T23:33:07.7242321Z ##[endgroup]
+2026-09-09T23:33:07.7255848Z Detected npm as the package manager from package.json's packageManager field. Auto caching has been enabled for npm. If you want to disable it, set package-manager-cache input to false
+2026-09-09T23:33:07.7268945Z [command]/opt/hostedtoolcache/node/22.23.2/x64/bin/npm config get cache
+2026-09-09T23:33:07.8155914Z /home/runner/.npm
+2026-09-09T23:33:07.9535763Z Cache hit for: node-cache-Linux-x64-npm-b51c6c4fc0fe2dfef865c4b36bfdc76c5cf851ec0413395899f4ca94f2d2f24a
+2026-09-09T23:33:09.1081498Z Received 117440512 of 163063230 (72.0%), 112.1 MBs/sec
+2026-09-09T23:33:09.3354092Z Received 163063230 of 163063230 (100.0%), 126.7 MBs/sec
+2026-09-09T23:33:09.3355636Z Cache Size: ~156 MB (163063230 B)
+2026-09-09T23:33:09.3387001Z [command]/usr/bin/tar -xf /home/runner/work/_temp/7a3685d0-29de-4839-bc67-8569ca479b6a/cache.tzst -P -C /home/runner/work/pi-lens/pi-lens --use-compress-program unzstd
+2026-09-09T23:33:09.4960189Z Cache restored successfully
+2026-09-09T23:33:09.5018871Z Cache restored from key: node-cache-Linux-x64-npm-b51c6c4fc0fe2dfef865c4b36bfdc76c5cf851ec0413395899f4ca94f2d2f24a
+2026-09-09T23:33:09.5158154Z ##[group]Run npm install --no-audit --no-fund
+2026-09-09T23:33:09.5158605Z [36;1mnpm install --no-audit --no-fund[0m
+2026-09-09T23:33:09.5190900Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:09.5191348Z ##[endgroup]
+2026-09-09T23:33:13.6514221Z npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+2026-09-09T23:33:17.0551834Z 
+2026-09-09T23:33:17.0553073Z > pi-lens@4.1.5 prepare
+2026-09-09T23:33:17.0554848Z > npm run build:dist && node scripts/download-grammars.js --core --dest grammars && node scripts/setup-git-hooks.mjs && node scripts/warm-loader-cache.mjs
+2026-09-09T23:33:17.0573870Z 
+2026-09-09T23:33:17.1459645Z 
+2026-09-09T23:33:17.1460852Z > pi-lens@4.1.5 build:dist
+2026-09-09T23:33:17.1462782Z > node -e "require('fs').rmSync('dist',{recursive:true,force:true})" && node scripts/build-dist-tsc.mjs tsconfig.dist.json && npm run bundle:dist
+2026-09-09T23:33:17.1463516Z 
+2026-09-09T23:33:18.3658611Z 
+2026-09-09T23:33:18.3660129Z > pi-lens@4.1.5 bundle:dist
+2026-09-09T23:33:18.3660940Z > node scripts/bundle-dist.mjs
+2026-09-09T23:33:18.3661325Z 
+2026-09-09T23:33:19.8827096Z 
+2026-09-09T23:33:19.8828308Z   dist/index.bundled.mjs  4.5mb ⚠️
+2026-09-09T23:33:19.8828655Z 
+2026-09-09T23:33:19.8828843Z ⚡ Done in 141ms
+2026-09-09T23:33:19.9248252Z [bundle] wrote self-contained dist/index.js
+2026-09-09T23:33:19.9729415Z Downloading core tree-sitter grammars (12) → /home/runner/work/pi-lens/pi-lens/grammars
+2026-09-09T23:33:20.0783041Z   ok    tree-sitter-json.wasm
+2026-09-09T23:33:20.0806829Z   ok    tree-sitter-html.wasm
+2026-09-09T23:33:20.0921816Z   ok    tree-sitter-go.wasm
+2026-09-09T23:33:20.1006131Z   ok    tree-sitter-yaml.wasm
+2026-09-09T23:33:20.1054458Z   ok    tree-sitter-css.wasm
+2026-09-09T23:33:20.1170941Z   ok    tree-sitter-java.wasm
+2026-09-09T23:33:20.1264551Z   ok    tree-sitter-python.wasm
+2026-09-09T23:33:20.1306951Z   ok    tree-sitter-javascript.wasm
+2026-09-09T23:33:20.1729404Z   ok    tree-sitter-rust.wasm
+2026-09-09T23:33:20.2362272Z   ok    tree-sitter-bash.wasm
+2026-09-09T23:33:20.2897921Z   ok    tree-sitter-typescript.wasm
+2026-09-09T23:33:20.3031466Z   ok    tree-sitter-tsx.wasm
+2026-09-09T23:33:20.3031973Z All grammars downloaded successfully.
+2026-09-09T23:33:20.3330623Z [setup-git-hooks] skipped (CI is set).
+2026-09-09T23:33:20.7433342Z [warm-loader-cache] not cached: dist/index.js after 229ms — no cache entry was written: dist-index.cb165eda.mjs
+2026-09-09T23:33:20.7570578Z 
+2026-09-09T23:33:20.7573888Z added 482 packages in 11s
+2026-09-09T23:33:20.9017979Z ##[group]Run npx ast-grep --version
+2026-09-09T23:33:20.9018383Z [36;1mnpx ast-grep --version[0m
+2026-09-09T23:33:20.9043127Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:20.9043445Z ##[endgroup]
+2026-09-09T23:33:21.0896001Z ast-grep 0.45.3
+2026-09-09T23:33:21.0992503Z ##[group]Run npm run build
+2026-09-09T23:33:21.0992984Z [36;1mnpm run build[0m
+2026-09-09T23:33:21.1023480Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:21.1024083Z ##[endgroup]
+2026-09-09T23:33:21.1803504Z 
+2026-09-09T23:33:21.1804141Z > pi-lens@4.1.5 build
+2026-09-09T23:33:21.1804745Z > tsc --project tsconfig.build.json
+2026-09-09T23:33:21.1805124Z 
+2026-09-09T23:33:22.7884293Z ##[group]Run npm run astgrep:self-scan
+2026-09-09T23:33:22.7884693Z [36;1mnpm run astgrep:self-scan[0m
+2026-09-09T23:33:22.7906369Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:22.7906704Z ##[endgroup]
+2026-09-09T23:33:22.8657654Z 
+2026-09-09T23:33:22.8658926Z > pi-lens@4.1.5 astgrep:self-scan
+2026-09-09T23:33:22.8659806Z > node scripts/run-astgrep-pi-lens.mjs
+2026-09-09T23:33:22.8660252Z 
+2026-09-09T23:33:22.9322257Z [astgrep-self-scan] running 13 pi-lens-self-scan rule(s): no-bare-host-path-in-win32-branch, no-bare-object-param, no-chained-type-assertions, no-raw-json-store-write, no-reflect-apply, no-reflect-apply-js, no-reflect-get, no-reflect-get-js, no-unknown-laundering, no-unknown-returns, no-unsafe-dictionary-any, no-win32-isabsolute-for-qualification, require-safety-comment-for-as-unknown-as
+2026-09-09T23:33:24.2117121Z [astgrep-self-scan] scanned 1633 file(s) with 13 effective rule(s); 0 raw finding(s)
+2026-09-09T23:33:24.2119690Z [astgrep-self-scan] clean: 0 finding(s), all present in the baseline (0 allowed entries).
+2026-09-09T23:33:24.2234952Z ##[group]Run echo "nproc=$(nproc)"
+2026-09-09T23:33:24.2235539Z [36;1mecho "nproc=$(nproc)"[0m
+2026-09-09T23:33:24.2235876Z [36;1mfree -m[0m
+2026-09-09T23:33:24.2236230Z [36;1mcat /sys/fs/cgroup/memory.max 2>/dev/null || true[0m
+2026-09-09T23:33:24.2257423Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:24.2257720Z ##[endgroup]
+2026-09-09T23:33:24.2312779Z nproc=4
+2026-09-09T23:33:24.2325007Z                total        used        free      shared  buff/cache   available
+2026-09-09T23:33:24.2325941Z Mem:           15988        1379       11306          45        3694       14608
+2026-09-09T23:33:24.2326828Z Swap:           3071           0        3071
+2026-09-09T23:33:24.2364187Z ##[group]Run node scripts/with-memory-watch.mjs -- npm test
+2026-09-09T23:33:24.2364623Z [36;1mnode scripts/with-memory-watch.mjs -- npm test[0m
+2026-09-09T23:33:24.2382264Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:33:24.2382589Z env:
+2026-09-09T23:33:24.2382870Z   PI_LENS_TEST_TIMEOUT_SCALE: 3
+2026-09-09T23:33:24.2383166Z   PI_LENS_TEST_NO_LOCK: 1
+2026-09-09T23:33:24.2383513Z ##[endgroup]
+2026-09-09T23:33:24.2659625Z [mem-watch] host cpus=4 totalMb=15989 availableMb=14609 source=meminfo intervalMs=2000 watcherPid=2456
+2026-09-09T23:33:24.3437929Z 
+2026-09-09T23:33:24.3438846Z > pi-lens@4.1.5 test
+2026-09-09T23:33:24.3439424Z > node scripts/with-test-lock.mjs -- vitest run
+2026-09-09T23:33:24.3439757Z 
+2026-09-09T23:33:24.5978168Z [test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:33:24.6317550Z 
+2026-09-09T23:33:24.6319682Z [1m[30m[46m RUN [49m[39m[22m [36mv5.0.0 [39m[90m/home/runner/work/pi-lens/pi-lens[39m
+2026-09-09T23:33:24.6320253Z 
+2026-09-09T23:33:26.0473462Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/merge-train-warden.test.ts [2m([22m[2m169 tests[22m[2m)[22m[32m 103[2mms[22m[39m
+2026-09-09T23:33:26.2683088Z [mem-watch] 23:33:26 availableMb=14231 of 15989
+2026-09-09T23:33:28.6241280Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lens-diagnostics.test.ts [2m([22m[2m117 tests[22m[2m)[22m[32m 290[2mms[22m[39m
+2026-09-09T23:33:29.9506723Z  [32m✓[39m [30m[42m default [49m[39m tests/config/hook-await-bounds.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 350[2mms[22m[39m
+2026-09-09T23:33:30.7124876Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/cascade-compute.test.ts [2m([22m[2m56 tests[22m[2m)[22m[33m 4404[2mms[22m[39m
+2026-09-09T23:33:30.7126574Z    [32m✓[39m computeCascadeForFile [2m(56)[22m
+2026-09-09T23:33:30.7132510Z      [33m[2m✓[22m[39m reads jsts neighbors from passive snapshot instead of active touching[33m 1508[2mms[22m[39m
+2026-09-09T23:33:30.9115220Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/test-runner-client.test.ts [2m([22m[2m183 tests[22m[2m)[22m[33m 593[2mms[22m[39m
+2026-09-09T23:33:32.2207029Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-turn-session.test.ts [2m([22m[2m59 tests[22m[2m)[22m[33m 496[2mms[22m[39m
+2026-09-09T23:33:32.8806863Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/client-internals.test.ts [2m([22m[2m127 tests[22m[2m)[22m[33m 5734[2mms[22m[39m
+2026-09-09T23:33:32.8822929Z    [32m✓[39m publishDiagnostics handler — superseded push guard (cache-poisoning fix) [2m(18)[22m
+2026-09-09T23:33:32.8823891Z      [33m[2m✓[22m[39m does not bind a late publish from an earlier reopen-resync as current (monotonic reopen)[33m 351[2mms[22m[39m
+2026-09-09T23:33:33.8038297Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-tool-result.test.ts [2m([22m[2m47 tests[22m[2m)[22m[33m 348[2mms[22m[39m
+2026-09-09T23:33:34.7544839Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/runner-helpers.test.ts [2m([22m[2m60 tests[22m[2m)[22m[33m 443[2mms[22m[39m
+2026-09-09T23:33:35.0877988Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-aux-grace.test.ts [2m([22m[2m47 tests[22m[2m)[22m[33m 2629[2mms[22m[39m
+2026-09-09T23:33:35.0915200Z    [32m✓[39m R8 — aux grace: touchFile with-auxiliary path [2m(14)[22m
+2026-09-09T23:33:35.0917494Z      [33m[2m✓[22m[39m partitions real lens_diagnostics results by delivering server id (#2776)[33m 854[2mms[22m[39m
+2026-09-09T23:33:36.1401947Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lsp-diagnostics.test.ts [2m([22m[2m59 tests[22m[2m)[22m[32m 279[2mms[22m[39m
+2026-09-09T23:33:36.7589584Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/server-policy.test.ts [2m([22m[2m83 tests[22m[2m)[22m[33m 1736[2mms[22m[39m
+2026-09-09T23:33:38.2820375Z [mem-watch] 23:33:38 availableMb=13045 of 15989
+2026-09-09T23:33:40.0739997Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-snapshot.test.ts [2m([22m[2m57 tests[22m[2m)[22m[33m 2959[2mms[22m[39m
+2026-09-09T23:33:40.0740984Z    [32m✓[39m project snapshot worker persist (#958) [2m(10)[22m
+2026-09-09T23:33:40.0742129Z      [33m[2m✓[22m[39m a slow generation-N worker write does NOT clobber a newer generation-N+1 body[33m 359[2mms[22m[39m
+2026-09-09T23:33:40.0744046Z      [33m[2m✓[22m[39m mutation proof: disabling the generation gate permits a stale promotion[33m 1070[2mms[22m[39m
+2026-09-09T23:33:40.0745777Z      [33m[2m✓[22m[39m read-your-writes across the legacy-upgrade window: an in-flight write shadows a stale legacy .json (#958)[33m 358[2mms[22m[39m
+2026-09-09T23:33:40.6734671Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/widget-state.test.ts [2m([22m[2m79 tests[22m[2m)[22m[32m 252[2mms[22m[39m
+2026-09-09T23:33:41.1767868Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/actionable-warnings-deferred-bounds.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 4657[2mms[22m[39m
+2026-09-09T23:33:41.1769428Z    [32m✓[39m #2504 r2 F3 — per-round-trip bound on the deferred loop [2m(5)[22m
+2026-09-09T23:33:41.1770751Z      [33m[2m✓[22m[39m does not let a wedged getDiagnostics hold the deferred loop open[33m 660[2mms[22m[39m
+2026-09-09T23:33:41.1772125Z      [33m[2m✓[22m[39m keys the in-band and the deferred loop separately, so neither silences the other[33m 363[2mms[22m[39m
+2026-09-09T23:33:41.1773901Z      [33m[2m✓[22m[39m does not record hook-await-exceeded for a healthy pull the loop's own shrinking residual cut short[33m 464[2mms[22m[39m
+2026-09-09T23:33:41.1788871Z    [32m✓[39m #2504 r3 F-A(d) — a second cold-cache turn lets the first finish [2m(3)[22m
+2026-09-09T23:33:41.1790470Z      [33m[2m✓[22m[39m declines the second arm instead of cancelling the in-flight loop[33m 403[2mms[22m[39m
+2026-09-09T23:33:41.1791680Z    [32m✓[39m #2504 r5 F2 — each entry is stamped when its own pull returned [2m(1)[22m
+2026-09-09T23:33:41.1792920Z      [33m[2m✓[22m[39m gives five files five stamps, none later than its own observation[33m 2008[2mms[22m[39m
+2026-09-09T23:33:41.5432019Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/read-guard-tool-lines.test.ts [2m([22m[2m104 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+2026-09-09T23:33:41.6441897Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-agent-end.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 202[2mms[22m[39m
+2026-09-09T23:33:42.6600682Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatters.test.ts [2m([22m[2m188 tests[22m[2m)[22m[33m 642[2mms[22m[39m
+2026-09-09T23:33:43.8230580Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/read-guard.test.ts [2m([22m[2m80 tests[22m[2m)[22m[33m 804[2mms[22m[39m
+2026-09-09T23:33:43.9625491Z [mem-file] peakRssMb=1406 heapUsedMb=710 externalMb=3 tests/index-integration.test.ts
+2026-09-09T23:33:43.9644715Z  [32m✓[39m [30m[42m default [49m[39m tests/index-integration.test.ts [2m([22m[2m51 tests[22m[2m)[22m[33m 12490[2mms[22m[39m
+2026-09-09T23:33:43.9676925Z    [32m✓[39m index.ts integration [2m(30)[22m
+2026-09-09T23:33:43.9685025Z      [33m[2m✓[22m[39m session_start handler passes working ensureTool closure into handleSessionStart[33m 842[2mms[22m[39m
+2026-09-09T23:33:43.9796893Z      [33m[2m✓[22m[39m primary session_shutdown emits one rollup and clears it, while zero stays silent[33m 1110[2mms[22m[39m
+2026-09-09T23:33:43.9813792Z      [32m✓[39m #1654 deferred-mutation drain runs at agent_settled, not agent_end [2m(5)[22m
+2026-09-09T23:33:43.9850790Z        [33m[2m✓[22m[39m session_shutdown does NOT drain (review round 1, F2) — a run that dies without settling strands until the next session's staleness claim, by design[33m 305[2mms[22m[39m
+2026-09-09T23:33:43.9917225Z      [33m[2m✓[22m[39m context injection keeps the prior-conversation prefix byte-identical across turns (#1016 cache win)[33m 357[2mms[22m[39m
+2026-09-09T23:33:44.0026394Z    [32m✓[39m #484 turn-summary emit at the agent_settled quiet window [2m(21)[22m
+2026-09-09T23:33:44.0086517Z      [33m[2m✓[22m[39m delivers stale staged test failures once through the next model context[33m 647[2mms[22m[39m
+2026-09-09T23:33:44.0087666Z      [33m[2m✓[22m[39m refuses a replacement session and retains the eligible marker[33m 580[2mms[22m[39m
+2026-09-09T23:33:44.0088998Z      [33m[2m✓[22m[39m session shutdown summarizes and clears each cache-observability role locally (#1996)[33m 755[2mms[22m[39m
+2026-09-09T23:33:44.0090149Z      [33m[2m✓[22m[39m message_end does not record attribution degradation for a live ctx[33m 314[2mms[22m[39m
+2026-09-09T23:33:44.0091277Z      [33m[2m✓[22m[39m message_end does not record attribution degradation for an inconclusive ctx[33m 355[2mms[22m[39m
+2026-09-09T23:33:44.0092524Z      [33m[2m✓[22m[39m message_end stale attribution uses the last live ctx session, not the replacement[33m 349[2mms[22m[39m
+2026-09-09T23:33:44.1827518Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/module-report.test.ts [2m([22m[2m88 tests[22m[2m)[22m[33m 1939[2mms[22m[39m
+2026-09-09T23:33:44.1886716Z    [32m✓[39m moduleReport — outline + structure [2m(17)[22m
+2026-09-09T23:33:44.1946721Z      [33m[2m✓[22m[39m reports callbackSupport honestly per language (tuned vs generic)[33m 532[2mms[22m[39m
+2026-09-09T23:33:44.2656027Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/ci-verdict.test.ts [2m([22m[2m98 tests[22m[2m)[22m[32m 179[2mms[22m[39m
+2026-09-09T23:33:45.3957842Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/refresh-and-sync-kind.test.ts [2m([22m[2m45 tests[22m[2m)[22m[33m 660[2mms[22m[39m
+2026-09-09T23:33:45.7879140Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-scanner-coverage-gap.test.ts [2m([22m[2m26 tests[22m[2m)[22m[33m 1509[2mms[22m[39m
+2026-09-09T23:33:45.7881032Z    [32m✓[39m #1459 — sweep fan-out must not black out a scanner silently [2m(14)[22m
+2026-09-09T23:33:45.7882522Z      [33m[2m✓[22m[39m a burst of resyncs issues one write, defers the rest, and never trips the breaker[33m 467[2mms[22m[39m
+2026-09-09T23:33:46.1174760Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/observed-mutation-net.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 443[2mms[22m[39m
+2026-09-09T23:33:47.0453707Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/managed-tool-refresh-strategies.test.ts [2m([22m[2m43 tests[22m[2m)[22m[33m 2399[2mms[22m[39m
+2026-09-09T23:33:47.0455123Z    [32m✓[39m pip strategy [2m(4)[22m
+2026-09-09T23:33:47.0456289Z      [33m[2m✓[22m[39m upgrades a stale package with -U, exactly once[33m 1027[2mms[22m[39m
+2026-09-09T23:33:47.0457781Z      [33m[2m✓[22m[39m degrades when the upgrade leaves a binary that cannot report a version[33m 308[2mms[22m[39m
+2026-09-09T23:33:47.0458742Z    [32m✓[39m one budget across all strategies [2m(2)[22m
+2026-09-09T23:33:47.0459678Z      [33m[2m✓[22m[39m re-arms across sessions rather than latching for the process[33m 313[2mms[22m[39m
+2026-09-09T23:33:47.1104464Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-diagnostics-cache.test.ts [2m([22m[2m58 tests[22m[2m)[22m[33m 598[2mms[22m[39m
+2026-09-09T23:33:47.3028093Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/ci-failure-classifier.test.ts [2m([22m[2m73 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+2026-09-09T23:33:47.4062588Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/path-utils.test.ts [2m([22m[2m145 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 105[2mms[22m[39m
+2026-09-09T23:33:47.5837710Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/cache-observability.test.ts [2m([22m[2m76 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+2026-09-09T23:33:47.7553009Z [90mstdout[2m | tests/clients/flake-shape-ratchet.test.ts
+2026-09-09T23:33:47.7554143Z [22m[39m[test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:33:47.7554742Z 
+2026-09-09T23:33:47.7692008Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/managed-tool-refresh.test.ts [2m([22m[2m64 tests[22m[2m)[22m[33m 1312[2mms[22m[39m
+2026-09-09T23:33:47.7697046Z    [32m✓[39m install-time stamping (review F4) [2m(4)[22m
+2026-09-09T23:33:47.7698410Z      [33m[2m✓[22m[39m keeps the version-bearing stamp through a real npm install (#1759 review F4)[33m 648[2mms[22m[39m
+2026-09-09T23:33:48.5528179Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/observed-mutation-integration.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 288[2mms[22m[39m
+2026-09-09T23:33:48.6098135Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lsp-navigation.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 256[2mms[22m[39m
+2026-09-09T23:33:49.2146582Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/helm-render.test.ts [2m([22m[2m49 tests[22m[2m)[22m[32m 191[2mms[22m[39m
+2026-09-09T23:33:49.4507865Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/latency-logger.test.ts [2m([22m[2m47 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+2026-09-09T23:33:49.8197909Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tool-policy.test.ts [2m([22m[2m68 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+2026-09-09T23:33:50.0706096Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session.test.ts [2m([22m[2m21 tests[22m[2m)[22m[33m 760[2mms[22m[39m
+2026-09-09T23:33:51.8237564Z  [32m✓[39m [30m[42m default [49m[39m tests/index-wiring.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 287[2mms[22m[39m
+2026-09-09T23:33:52.1167984Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/worktree-hygiene.test.ts [2m([22m[2m119 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+2026-09-09T23:33:52.4239583Z  [32m✓[39m [30m[42m default [49m[39m tests/support/sweep-kit.test.ts [2m([22m[2m76 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+2026-09-09T23:33:53.0739575Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph.service.test.ts [2m([22m[2m33 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 2588[2mms[22m[39m
+2026-09-09T23:33:53.0740969Z    [32m✓[39m review graph service [2m(28)[22m
+2026-09-09T23:33:53.0750396Z      [33m[2m✓[22m[39m recomputes a recreated mixed-case spelling after a missing walk entry (#2072 F2/F3)[33m 412[2mms[22m[39m
+2026-09-09T23:33:53.0761773Z      [33m[2m✓[22m[39m keeps an 8,000-file one-file rebuild within the changed-file bound (#2072 AC2)[33m 1133[2mms[22m[39m
+2026-09-09T23:33:53.8079398Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/ndjson-logger.test.ts [2m([22m[2m37 tests[22m[2m)[22m[33m 522[2mms[22m[39m
+2026-09-09T23:33:54.8437834Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/session-state-conformance.test.ts [2m([22m[2m128 tests[22m[2m)[22m[33m 1023[2mms[22m[39m
+2026-09-09T23:33:54.8497166Z    [32m✓[39m session-state sweep — coverage [2m(9)[22m
+2026-09-09T23:33:54.8530456Z      [33m[2m✓[22m[39m every session-state-shaped file is registered or exempted with a reason[33m 707[2mms[22m[39m
+2026-09-09T23:33:54.9970826Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-security-gap-rules.test.ts [2m([22m[2m64 tests[22m[2m)[22m[33m 842[2mms[22m[39m
+2026-09-09T23:33:55.8821909Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/effective-config.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+2026-09-09T23:33:56.3764521Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/oxlint.test.ts [2m([22m[2m49 tests[22m[2m)[22m[33m 1051[2mms[22m[39m
+2026-09-09T23:33:56.6819144Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-lens-config.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+2026-09-09T23:33:57.1958036Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index.test.ts [2m([22m[2m66 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 993[2mms[22m[39m
+2026-09-09T23:33:57.1959651Z    [32m✓[39m triggerBackgroundWordIndexBuild (#348 cold-query stampede guard) [2m(11)[22m
+2026-09-09T23:33:57.1961433Z      [33m[2m✓[22m[39m recompacts a share of the vocabulary, not once per edit (#2246)[33m 391[2mms[22m[39m
+2026-09-09T23:33:57.6220173Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-diagnostics/fresh-fetch.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+2026-09-09T23:33:58.0067056Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/finding-delivery-gate.test.ts [2m([22m[2m45 tests[22m[2m)[22m[32m 131[2mms[22m[39m
+2026-09-09T23:33:58.0738100Z error: Your local changes to the following files would be overwritten by merge:
+2026-09-09T23:33:58.0739188Z   src/generated.ts
+2026-09-09T23:33:58.0739780Z Merge with strategy ort failed.
+2026-09-09T23:33:58.4968235Z From /tmp/pi-lens-opaque-origin-1j0Znx
+2026-09-09T23:33:58.4976863Z  * branch            master     -> FETCH_HEAD
+2026-09-09T23:33:58.6057861Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/opaque-mutation-scan.test.ts [2m([22m[2m37 tests[22m[2m)[22m[33m 1180[2mms[22m[39m
+2026-09-09T23:33:58.7744592Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/late-auxiliary-findings.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 193[2mms[22m[39m
+2026-09-09T23:33:59.0819721Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/test-runner-python-environment.test.ts [2m([22m[2m96 tests[22m[2m)[22m[32m 178[2mms[22m[39m
+2026-09-09T23:33:59.3990058Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/call-graph.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+2026-09-09T23:33:59.4248294Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/diagnostic-dispositions.test.ts [2m([22m[2m43 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 320[2mms[22m[39m
+2026-09-09T23:33:59.8142899Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/ast-grep-search.test.ts [2m([22m[2m49 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+2026-09-09T23:34:00.1197753Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lens-config.test.ts [2m([22m[2m124 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+2026-09-09T23:34:00.2910485Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/pipeline.test.ts [2m([22m[2m24 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 115[2mms[22m[39m
+2026-09-09T23:34:01.0973908Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/instance-registry.test.ts [2m([22m[2m39 tests[22m[2m)[22m[33m 645[2mms[22m[39m
+2026-09-09T23:34:01.7425746Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-touch-collect.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 1435[2mms[22m[39m
+2026-09-09T23:34:01.7427331Z    [32m✓[39m LSPService.touchFile collectDiagnostics [2m(22)[22m
+2026-09-09T23:34:01.7428510Z      [33m[2m✓[22m[39m does not start a fallback server when its primary is available[33m 446[2mms[22m[39m
+2026-09-09T23:34:01.9359308Z [mem-file] peakRssMb=1300 heapUsedMb=68 externalMb=20 tests/clients/flake-shape-ratchet.test.ts
+2026-09-09T23:34:01.9714080Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/pi-host-contract.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+2026-09-09T23:34:02.9234753Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mutating-tool-classification.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+2026-09-09T23:34:03.2199017Z  [32m✓[39m [30m[42m default [49m[39m tests/support/spawn-cwd-scan.test.ts [2m([22m[2m60 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+2026-09-09T23:34:03.6200992Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/cue-vet.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+2026-09-09T23:34:03.8633761Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/sweep-warmup.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 1936[2mms[22m[39m
+2026-09-09T23:34:03.8635218Z    [32m✓[39m LSPService.ensureWarmForSweep (#667) [2m(4)[22m
+2026-09-09T23:34:03.8637380Z      [33m[2m✓[22m[39m performs exactly one warm-up round trip against a cold server, then treats it as warm (pure decision-logic: fake client state)[33m 407[2mms[22m[39m
+2026-09-09T23:34:04.2781046Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/flake-shape-ratchet.test.ts [2m([22m[2m57 tests[22m[2m)[22m[33m 13990[2mms[22m[39m
+2026-09-09T23:34:04.2797167Z    [32m✓[39m flake-shape ratchet (#2547) [2m(7)[22m
+2026-09-09T23:34:04.2798446Z      [33m[2m✓[22m[39m detector real-process-spawn: no new files, no risen counts vs. the baseline[33m 10673[2mms[22m[39m
+2026-09-09T23:34:04.2799544Z    [32m✓[39m flake-shape ratchet — admission gate [2m(6)[22m
+2026-09-09T23:34:04.2800436Z      [33m[2m✓[22m[39m ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership[33m 3286[2mms[22m[39m
+2026-09-09T23:34:04.6960777Z  [32m✓[39m [30m[42m default [49m[39m tests/source-filter.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+2026-09-09T23:34:04.7747996Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-runtime-exit-breaker.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 990[2mms[22m[39m
+2026-09-09T23:34:04.7749263Z    [32m✓[39m LSPService circuit breaker — post-init runtime exits (#1127) [2m(5)[22m
+2026-09-09T23:34:04.7762808Z      [33m[2m✓[22m[39m converges: N+1 early crash-loop respawns stop re-attaching and give up (fails on pre-fix unbounded respawn)[33m 445[2mms[22m[39m
+2026-09-09T23:34:04.9682373Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-resolved-phase.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 832[2mms[22m[39m
+2026-09-09T23:34:04.9707134Z    [32m✓[39m handleSessionStart publishes nothing about config resolution (#2526 round 3, S1) [2m(2)[22m
+2026-09-09T23:34:04.9708954Z      [33m[2m✓[22m[39m re-arms nothing and publishes no config-resolution line of its own[33m 315[2mms[22m[39m
+2026-09-09T23:34:04.9710468Z    [32m✓[39m MCP parity: the warm boot's config resolution records too (#2526) [2m(1)[22m
+2026-09-09T23:34:04.9711769Z      [33m[2m✓[22m[39m ensureLspConfig — the MCP server's boot seam — writes the row[33m 399[2mms[22m[39m
+2026-09-09T23:34:05.3251762Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-cache.test.ts [2m([22m[2m35 tests[22m[2m)[22m[33m 345[2mms[22m[39m
+2026-09-09T23:34:05.7792096Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/language-registry-drift.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+2026-09-09T23:34:05.8584320Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/dispatcher-flow.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+2026-09-09T23:34:06.5440816Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/availability-latching.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 1230[2mms[22m[39m
+2026-09-09T23:34:06.5442524Z    [32m✓[39m availability policy: cause taxonomy and messages (#1467) [2m(5)[22m
+2026-09-09T23:34:06.5443700Z      [33m[2m✓[22m[39m measures a synchronous host block against the probe window[33m 600[2mms[22m[39m
+2026-09-09T23:34:06.5445072Z      [33m[2m✓[22m[39m attributes a stall the loop recovered from before the probe settled[33m 600[2mms[22m[39m
+2026-09-09T23:34:06.7158251Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/instance-reaper-backstop.test.ts [2m([22m[2m33 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m[33m 631[2mms[22m[39m
+2026-09-09T23:34:07.4158273Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lens-map.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 153[2mms[22m[39m
+2026-09-09T23:34:07.9107603Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/knip-client.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+2026-09-09T23:34:08.7707744Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph-persist.test.ts [2m([22m[2m20 tests[22m[2m)[22m[33m 1397[2mms[22m[39m
+2026-09-09T23:34:08.9699209Z  [32m✓[39m [30m[42m default [49m[39m tests/config/global-dir-probe-redirect.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 773[2mms[22m[39m
+2026-09-09T23:34:09.2968034Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/sg-runner.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+2026-09-09T23:34:09.8512876Z [mem-file] peakRssMb=753 heapUsedMb=27 externalMb=2 tests/clients/availability-policy-coverage.test.ts
+2026-09-09T23:34:09.9446577Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/ast-grep-napi.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 779[2mms[22m[39m
+2026-09-09T23:34:10.4755854Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/resource-sampler.test.ts [2m([22m[2m49 tests[22m[2m)[22m[33m 307[2mms[22m[39m
+2026-09-09T23:34:11.0872450Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/availability-policy-coverage.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 3842[2mms[22m[39m
+2026-09-09T23:34:12.6664737Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/tool-discovery.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 3047[2mms[22m[39m
+2026-09-09T23:34:12.6687355Z    [32m✓[39m managed npm executable paths [2m(9)[22m
+2026-09-09T23:34:12.6688540Z      [33m[2m✓[22m[39m returns the stored Windows .cmd shim from the real npm install path[33m 512[2mms[22m[39m
+2026-09-09T23:34:12.6689802Z      [33m[2m✓[22m[39m passes the Vue verification budget through npm install[33m 502[2mms[22m[39m
+2026-09-09T23:34:12.6691176Z      [33m[2m✓[22m[39m passes the bash-language-server verification budget through npm install (#2194)[33m 504[2mms[22m[39m
+2026-09-09T23:34:12.6692394Z      [33m[2m✓[22m[39m passes the vscode-json-language-server verification budget through npm install (#2194)[33m 502[2mms[22m[39m
+2026-09-09T23:34:12.6693671Z      [33m[2m✓[22m[39m clears the madge managed-path memo when a managed install succeeds (#1276)[33m 502[2mms[22m[39m
+2026-09-09T23:34:12.6694877Z      [33m[2m✓[22m[39m does not let a rejected madge memo reset crash or silently swallow the install (#1276)[33m 502[2mms[22m[39m
+2026-09-09T23:34:12.8455630Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/tree-sitter-python-rule-regressions.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 1805[2mms[22m[39m
+2026-09-09T23:34:12.8457612Z    [32m✓[39m tree-sitter Python rule regressions (#2576) [2m(12)[22m
+2026-09-09T23:34:12.8472262Z      [33m[2m✓[22m[39m runs the production YAML rules and renders their capture messages[33m 621[2mms[22m[39m
+2026-09-09T23:34:12.8473780Z      [33m[2m✓[22m[39m suppresses only production-proven Python SQL safe forms[33m 864[2mms[22m[39m
+2026-09-09T23:34:12.9137651Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-diagnostics.test.ts [2m([22m[2m33 tests[22m[2m)[22m[33m 1101[2mms[22m[39m
+2026-09-09T23:34:12.9177060Z    [32m✓[39m scanProjectDiagnostics [2m(6)[22m
+2026-09-09T23:34:12.9178270Z      [33m[2m✓[22m[39m caps source collection before scanning[33m 860[2mms[22m[39m
+2026-09-09T23:34:12.9714716Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/partial-edit-apply.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+2026-09-09T23:34:13.2394683Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/cascade-tier.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 193[2mms[22m[39m
+2026-09-09T23:34:13.3602602Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-migration-scope.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 187[2mms[22m[39m
+2026-09-09T23:34:13.4999871Z  [32m✓[39m [30m[42m default [49m[39m tests/packaging.test.ts [2m([22m[2m40 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+2026-09-09T23:34:13.6500372Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/runner-status-semantics.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 474[2mms[22m[39m
+2026-09-09T23:34:13.7077843Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-warn.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+2026-09-09T23:34:13.8061770Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatters-ktfmt-gradle-style.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+2026-09-09T23:34:14.0804886Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/bash-file-access.test.ts [2m([22m[2m113 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+2026-09-09T23:34:14.4502915Z  [32m✓[39m [30m[42m default [49m[39m tests/config/bounded-eviction-idiom-sweep.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+2026-09-09T23:34:14.5522634Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/terragrunt.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 257[2mms[22m[39m
+2026-09-09T23:34:14.9590699Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-incremental.test.ts [2m([22m[2m23 tests[22m[2m)[22m[33m 878[2mms[22m[39m
+2026-09-09T23:34:14.9592712Z    [32m✓[39m cooperative removal staging counts the clock per token (#2067) [2m(2)[22m
+2026-09-09T23:34:14.9594027Z      [33m[2m✓[22m[39m stages a removal with clock reads bounded by tokens, not postings[33m 384[2mms[22m[39m
+2026-09-09T23:34:14.9595533Z      [33m[2m✓[22m[39m keeps the per-edit seam's replacement on the same bound[33m 450[2mms[22m[39m
+2026-09-09T23:34:15.6827839Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lens-diagnostics-rule-policy.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+2026-09-09T23:34:15.7022468Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-tool-call.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 137[2mms[22m[39m
+2026-09-09T23:34:15.9708116Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/agent-nudge.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+2026-09-09T23:34:16.4012736Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-document-drift.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 1774[2mms[22m[39m
+2026-09-09T23:34:16.4013678Z    [32m✓[39m LSPService disk-drift backstop (#1783) [2m(18)[22m
+2026-09-09T23:34:16.4014618Z      [33m[2m✓[22m[39m resynchronizes a document a bash bulk edit moved behind the server[33m 531[2mms[22m[39m
+2026-09-09T23:34:16.7388891Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/package-manager.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+2026-09-09T23:34:16.9630861Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/check-close-keywords.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+2026-09-09T23:34:16.9886630Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-rename-file.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 456[2mms[22m[39m
+2026-09-09T23:34:17.2830247Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/git-guard.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+2026-09-09T23:34:17.6537946Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig global configuration (#870)[2m > [22m[2mapplies global configuration when the project has no config
+2026-09-09T23:34:17.6540399Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-global-nzV1cN/lsp.json: move "servers" to /nonexistent-pi-lens-tests/config.json under "lsp.servers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6543956Z deprecated LSP config location in /tmp/pi-lens-lsp-global-nzV1cN/lsp.json: move "disabledServers" to /nonexistent-pi-lens-tests/config.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6546566Z deprecated LSP config location in /tmp/pi-lens-lsp-global-nzV1cN/lsp.json: move "warmFiles" to /nonexistent-pi-lens-tests/config.json under "lsp.warmFiles" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6547726Z 
+2026-09-09T23:34:17.6588257Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig global configuration (#870)[2m > [22m[2mmerges maps by id, replaces project-owned array fields, and unions denials
+2026-09-09T23:34:17.6591865Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-global-4jDLnZ/lsp.json: move "servers" to /nonexistent-pi-lens-tests/config.json under "lsp.servers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6594543Z deprecated LSP config location in /tmp/pi-lens-lsp-global-4jDLnZ/lsp.json: move "serverOverrides" to /nonexistent-pi-lens-tests/config.json under "lsp.serverOverrides" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6597388Z deprecated LSP config location in /tmp/pi-lens-lsp-global-4jDLnZ/lsp.json: move "disabledServers" to /nonexistent-pi-lens-tests/config.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6599734Z deprecated LSP config location in /tmp/pi-lens-lsp-global-4jDLnZ/lsp.json: move "warmFiles" to /nonexistent-pi-lens-tests/config.json under "lsp.warmFiles" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6602173Z deprecated LSP config location in /tmp/pi-lens-lsp-project-eTuAFT/.pi-lens/lsp.json: move "servers" to .pi-lens.json under "lsp.servers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6604541Z deprecated LSP config location in /tmp/pi-lens-lsp-project-eTuAFT/.pi-lens/lsp.json: move "serverOverrides" to .pi-lens.json under "lsp.serverOverrides" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6607283Z deprecated LSP config location in /tmp/pi-lens-lsp-project-eTuAFT/.pi-lens/lsp.json: move "disabledServers" to .pi-lens.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6609613Z deprecated LSP config location in /tmp/pi-lens-lsp-project-eTuAFT/.pi-lens/lsp.json: move "warmFiles" to .pi-lens.json under "lsp.warmFiles" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6610832Z 
+2026-09-09T23:34:17.6719139Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig walk confinement and canonical precedence (#2426)[2m > [22m[2mlets the canonical .pi-lens.json beat a leftover .pi-lens/lsp.json
+2026-09-09T23:34:17.6747632Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-canonical-eq9eFo/home/proj/.pi-lens/lsp.json: move "warmFiles" to .pi-lens.json under "lsp.warmFiles" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6764319Z deprecated LSP config location in /tmp/pi-lens-lsp-canonical-eq9eFo/home/proj/.pi-lens/lsp.json: move "disabledServers" to .pi-lens.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6765808Z 
+2026-09-09T23:34:17.6767288Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2ma global legacy lsp file denial survives a canonical project clear
+2026-09-09T23:34:17.6770178Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-spelling-P0JPdh/.pi-lens/lsp.json: move "disabledServers" to ~/.pi-lens/config.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6771587Z 
+2026-09-09T23:34:17.6781687Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2ma global root-spelled denial survives a canonical project clear
+2026-09-09T23:34:17.6784780Z [22m[39mdeprecated LSP config key in /tmp/pi-lens-lsp-spelling-fUahoO/.pi-lens/config.json: move "disabledServers" to "lsp.disabledServers" in the same file (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0002]
+2026-09-09T23:34:17.6786282Z 
+2026-09-09T23:34:17.6796425Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2munions across spellings instead of replacing the legacy one
+2026-09-09T23:34:17.6807841Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-spelling-1yaNQV/.pi-lens/lsp.json: move "disabledServers" to ~/.pi-lens/config.json under "lsp.disabledServers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6809407Z 
+2026-09-09T23:34:17.6813301Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2munions when the tiers swap spellings
+2026-09-09T23:34:17.6815918Z [22m[39mdeprecated LSP config key in /tmp/pi-lens-lsp-spelling-wzDlrg/proj/.pi-lens.json: move "disabledServers" to "lsp.disabledServers" in the same file (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0002]
+2026-09-09T23:34:17.6817119Z 
+2026-09-09T23:34:17.6831797Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2mmerges servers and serverOverrides by id across spellings
+2026-09-09T23:34:17.6836303Z [22m[39mdeprecated LSP config location in /tmp/pi-lens-lsp-spelling-D6oQq1/.pi-lens/lsp.json: move "servers" to ~/.pi-lens/config.json under "lsp.servers" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6839016Z deprecated LSP config location in /tmp/pi-lens-lsp-spelling-D6oQq1/.pi-lens/lsp.json: move "serverOverrides" to ~/.pi-lens/config.json under "lsp.serverOverrides" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6841379Z deprecated LSP config location in /tmp/pi-lens-lsp-spelling-D6oQq1/.pi-lens/lsp.json: move "warmFiles" to ~/.pi-lens/config.json under "lsp.warmFiles" (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0003]
+2026-09-09T23:34:17.6842455Z 
+2026-09-09T23:34:17.6844388Z [90mstderr[2m | tests/clients/lsp/config.test.ts[2m > [22m[2mloadLSPConfig — the deny union spans key spellings (#2427 round 2)[2m > [22m[2mkeeps canonical-wins-per-key inside a single document
+2026-09-09T23:34:17.6847049Z [22m[39mdeprecated LSP config key in /tmp/pi-lens-lsp-spelling-6KHz1D/proj/.pi-lens.json: move "warmFiles" to "lsp.warmFiles" in the same file (deprecated since 4.1.4; read for the last time before 5.0.0) [PILENS_CFG_0002]
+2026-09-09T23:34:17.6848197Z 
+2026-09-09T23:34:17.6871173Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/config.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 226[2mms[22m[39m
+2026-09-09T23:34:17.9972710Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-slop-rules.test.ts [2m([22m[2m51 tests[22m[2m)[22m[33m 731[2mms[22m[39m
+2026-09-09T23:34:18.0490943Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/availability-latch-properties.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 202[2mms[22m[39m
+2026-09-09T23:34:18.5520342Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lazy-install-retry.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 308[2mms[22m[39m
+2026-09-09T23:34:19.0934933Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/silent-clean-confirm.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 3215[2mms[22m[39m
+2026-09-09T23:34:19.0936571Z    [32m✓[39m touchFile silent-clean push-only confirm (#799) [2m(3)[22m
+2026-09-09T23:34:19.0945991Z      [33m[2m✓[22m[39m (a) a silent-clean push-only server (marksman) resolves quickly as CONFIRMED clean (0 diagnostics), not inconclusive[33m 457[2mms[22m[39m
+2026-09-09T23:34:19.0947341Z    [32m✓[39m touchFile capability-aware AGGREGATE wait (#814) [2m(6)[22m
+2026-09-09T23:34:19.0948977Z      [33m[2m✓[22m[39m (d) scope-all: EVERY spawned server is silent+tier3-silent — resolves at the max of their budgets as CONFIRMED clean[33m 1545[2mms[22m[39m
+2026-09-09T23:34:19.5795167Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/ast-grep-napi-html-embed.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 980[2mms[22m[39m
+2026-09-09T23:34:19.5796990Z    [32m✓[39m embedded <script> evaluation budget (#2347 review F2) [2m(5)[22m
+2026-09-09T23:34:19.5798118Z      [33m[2m✓[22m[39m keeps evaluating the in-budget scripts and records the budget cut[33m 556[2mms[22m[39m
+2026-09-09T23:34:19.6278066Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/availability-latching-siblings.test.ts [2m([22m[2m23 tests[22m[2m)[22m[33m 326[2mms[22m[39m
+2026-09-09T23:34:20.7457908Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-notify-inflight-throttle.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 2007[2mms[22m[39m
+2026-09-09T23:34:20.7496866Z    [32m✓[39m #1714 — sweep notify volume must not out-run an auxiliary [2m(10)[22m
+2026-09-09T23:34:20.7498200Z      [33m[2m✓[22m[39m keeps a sweep-shaped burst below the scanner's wedge ceiling[33m 465[2mms[22m[39m
+2026-09-09T23:34:20.7499488Z      [33m[2m✓[22m[39m keeps the demote-and-respawn self-heal reachable through the ceiling path[33m 359[2mms[22m[39m
+2026-09-09T23:34:20.7501095Z      [33m[2m✓[22m[39m records one stalled barrier however many waiters abandon it (M1)[33m 376[2mms[22m[39m
+2026-09-09T23:34:20.7501971Z      [33m[2m✓[22m[39m drops the backlog record when the stall ladder demotes the client (M2)[33m 340[2mms[22m[39m
+2026-09-09T23:34:20.7722119Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runner-timeout.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 681[2mms[22m[39m
+2026-09-09T23:34:20.7723569Z    [32m✓[39m runRunner in-flight phase attribution against real parallel groups (#1723 review F1/F2) [2m(5)[22m
+2026-09-09T23:34:20.7725078Z      [33m[2m✓[22m[39m E1-real: getPhaseForWindow names the hog over a still-live innocent runner that started well before the block window[33m 418[2mms[22m[39m
+2026-09-09T23:34:21.0898791Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/jscpd-client.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+2026-09-09T23:34:21.7758402Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-turn-secrets-disposition.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 366[2mms[22m[39m
+2026-09-09T23:34:22.1519010Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-race.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 923[2mms[22m[39m
+2026-09-09T23:34:22.1519715Z    [32m✓[39m LSPService race hardening [2m(15)[22m
+2026-09-09T23:34:22.1520445Z      [33m[2m✓[22m[39m deduplicates concurrent spawn for same server/root key[33m 379[2mms[22m[39m
+2026-09-09T23:34:22.1675821Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/pull-diagnostic-identifiers.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 2181[2mms[22m[39m
+2026-09-09T23:34:22.1678907Z    [32m✓[39m #1667 multi-identifier pull fan-out [2m(2)[22m
+2026-09-09T23:34:22.1680286Z      [33m[2m✓[22m[39m answers on the first useful result and merges the slow identifier in the background[33m 601[2mms[22m[39m
+2026-09-09T23:34:22.1681836Z    [32m✓[39m #1667 previousResultId inheritance is per identifier [2m(2)[22m
+2026-09-09T23:34:22.1683389Z      [33m[2m✓[22m[39m a resync clears every identifier's resultId basis, not just the bare one[33m 302[2mms[22m[39m
+2026-09-09T23:34:22.1684463Z    [32m✓[39m #1667 stale-write guards [2m(2)[22m
+2026-09-09T23:34:22.1685664Z      [33m[2m✓[22m[39m a late loser from an EARLIER fan-out never clobbers a newer result[33m 602[2mms[22m[39m
+2026-09-09T23:34:22.1687158Z      [33m[2m✓[22m[39m a resync mid-flight drops the in-flight source's write instead of resurrecting the path[33m 502[2mms[22m[39m
+2026-09-09T23:34:22.8659962Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2mpins PI_LENS_HOME and PILENS_DATA_DIR to a fresh temp dir when neither is set
+2026-09-09T23:34:22.8666737Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-home--4854-1788996862864-FF6ZC9 (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8669225Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-home--4854-1788996862864-FF6ZC9
+2026-09-09T23:34:22.8670064Z 
+2026-09-09T23:34:22.8692588Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2mleaves PILENS_DATA_DIR untouched when the caller already set it explicitly
+2026-09-09T23:34:22.8697569Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-home--4854-1788996862868-agPWOR (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8701548Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-home--4854-1788996862868-agPWOR
+2026-09-09T23:34:22.8702344Z 
+2026-09-09T23:34:22.8753687Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2m(a) never removes a scratch home whose owner.pid names a live process (helper-minted, end-to-end)
+2026-09-09T23:34:22.8760947Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862873-m8BQCX (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8764314Z [lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862874-4JUK0R (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8766794Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862874-4JUK0R
+2026-09-09T23:34:22.8767691Z 
+2026-09-09T23:34:22.8775765Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2m(b) removes a scratch home whose owner.pid names a dead process
+2026-09-09T23:34:22.8782614Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862876-yBjAiQ (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8784949Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862876-yBjAiQ
+2026-09-09T23:34:22.8786150Z 
+2026-09-09T23:34:22.8793973Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2m(c) skips a dir with no owner.pid that is still young (a mint mid-flight, not yet orphaned)
+2026-09-09T23:34:22.8801513Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862878-BCpLvz (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8803938Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862878-BCpLvz
+2026-09-09T23:34:22.8804848Z 
+2026-09-09T23:34:22.8811432Z [90mstderr[2m | tests/scripts/lsp-fixture-workspace.test.ts[2m > [22m[2mwithScratchHome (#2670/#2506-shape)[2m > [22m[2m(d) removes a dir with no owner.pid once it is old (the crashed-before-writing-its-pid fallback)
+2026-09-09T23:34:22.8818856Z [22m[39m[lsp-fixture-workspace] PI_LENS_HOME pinned to /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862880-xpnmsH (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.
+2026-09-09T23:34:22.8821113Z [lsp-fixture-workspace] scratch home complete: /tmp/pi-lens-scratch/lsp-fixture-workspace-test-home--4854-1788996862880-xpnmsH
+2026-09-09T23:34:22.8821995Z 
+2026-09-09T23:34:22.8879310Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/lsp-fixture-workspace.test.ts [2m([22m[2m21 tests[22m[2m)[22m[33m 976[2mms[22m[39m
+2026-09-09T23:34:22.8896647Z    [32m✓[39m bootstrapFixtureWorkspace (#2670/#2658) [2m(9)[22m
+2026-09-09T23:34:22.8897997Z      [33m[2m✓[22m[39m copies the fixture, registers the workspace as a session root, and returns workspace/absFile/cleanup[33m 901[2mms[22m[39m
+2026-09-09T23:34:22.9557906Z  [32m✓[39m [30m[42m default [49m[39m tests/config/sync-child-process-timeout.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+2026-09-09T23:34:23.2548332Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/psscriptanalyzer-availability.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 171[2mms[22m[39m
+2026-09-09T23:34:23.5570951Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/bounded-hook-await.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+2026-09-09T23:34:23.8614684Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/safe-spawn-windows-resolution.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+2026-09-09T23:34:24.2431403Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-tsserver-sync-confirm.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 1109[2mms[22m[39m
+2026-09-09T23:34:24.2434611Z    [32m✓[39m #707 per-edit tsserver sync clean-confirm in touchFile [2m(12)[22m
+2026-09-09T23:34:24.2447019Z      [33m[2m✓[22m[39m clean TS file: sync returns empty body → confirmed clean, inconclusive=false[33m 325[2mms[22m[39m
+2026-09-09T23:34:24.6671493Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/managed-bin-fastpath.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+2026-09-09T23:34:25.0520886Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/fact-store-bound.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 428[2mms[22m[39m
+2026-09-09T23:34:25.0588611Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/process-singletons.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+2026-09-09T23:34:26.4998426Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session-sequence-read-budget.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 772[2mms[22m[39m
+2026-09-09T23:34:26.7620378Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-session-refresh.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 1429[2mms[22m[39m
+2026-09-09T23:34:26.7621695Z    [32m✓[39m session-start incremental word-index refresh (#958) [2m(13)[22m
+2026-09-09T23:34:26.7622737Z      [33m[2m✓[22m[39m yields the refresh loop on a time budget, not only every 100 documents (#1197)[33m 795[2mms[22m[39m
+2026-09-09T23:34:28.2167528Z [mem-file] peakRssMb=945 heapUsedMb=150 externalMb=2 tests/config/lsp-service-double-sweep.test.ts
+2026-09-09T23:34:28.8860073Z  [32m✓[39m [30m[42m default [49m[39m tests/config/lsp-service-double-sweep.test.ts [2m([22m[2m28 tests[22m[2m)[22m[33m 5801[2mms[22m[39m
+2026-09-09T23:34:29.2957439Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/diagnostic-line-freshness.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 231[2mms[22m[39m
+2026-09-09T23:34:30.1857647Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph/live-graph-bound.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 265[2mms[22m[39m
+2026-09-09T23:34:30.3883648Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-lifecycle.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 2883[2mms[22m[39m
+2026-09-09T23:34:30.3917062Z    [32m✓[39m word-index lifecycle — full mode (#348) [2m(4)[22m
+2026-09-09T23:34:30.3918365Z      [33m[2m✓[22m[39m builds and persists when no snapshot exists yet (absent)[33m 1320[2mms[22m[39m
+2026-09-09T23:34:30.3927561Z      [33m[2m✓[22m[39m full-rebuilds legacy serialization and falls back after refresh refusal[33m 1329[2mms[22m[39m
+2026-09-09T23:34:30.7197595Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/read-bridge.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+2026-09-09T23:34:31.1009692Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-notice-bounds.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 631[2mms[22m[39m
+2026-09-09T23:34:31.1053515Z    [32m✓[39m round 7, F2: ONE buffer-notes-then-finalize seam, not one per loader [2m(2)[22m
+2026-09-09T23:34:31.1129036Z      [33m[2m✓[22m[39m composes the ignored-config note record in exactly one module[33m 580[2mms[22m[39m
+2026-09-09T23:34:31.9085243Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/smoke-fixture-coverage.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+2026-09-09T23:34:32.9638246Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/pull-diagnostic-budget-exhausted.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 614[2mms[22m[39m
+2026-09-09T23:34:34.2427661Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/symbol-search.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 337[2mms[22m[39m
+2026-09-09T23:34:34.4563827Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/skills-resolver.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+2026-09-09T23:34:34.7787557Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/cwd-probe-latching.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+2026-09-09T23:34:35.5969755Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-turn-finding-freshness.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+2026-09-09T23:34:36.0071737Z  [32m✓[39m [30m[42m default [49m[39m tests/mcp/analyze-cli.test.ts [2m([22m[2m20 tests[22m[2m)[22m[33m 9287[2mms[22m[39m
+2026-09-09T23:34:36.0072441Z    [32m✓[39m pi-lens-analyze bin [2m(7)[22m
+2026-09-09T23:34:36.0073178Z      [33m[2m✓[22m[39m reports structural warnings in plain CLI mode[33m 1626[2mms[22m[39m
+2026-09-09T23:34:36.0073932Z      [33m[2m✓[22m[39m reports hint-tier findings as advisories, not warnings, in the CLI header[33m 1203[2mms[22m[39m
+2026-09-09T23:34:36.0074605Z      [33m[2m✓[22m[39m emits a PostToolUse JSON envelope with --hook[33m 1663[2mms[22m[39m
+2026-09-09T23:34:36.0075274Z      [33m[2m✓[22m[39m stays silent (no output) on a clean file[33m 1232[2mms[22m[39m
+2026-09-09T23:34:36.0076844Z      [33m[2m✓[22m[39m exits with --file even when stdin is a pipe that is never closed[33m 1165[2mms[22m[39m
+2026-09-09T23:34:36.0077983Z      [33m[2m✓[22m[39m analyzes the file from a Claude Code PostToolUse stdin payload[33m 1583[2mms[22m[39m
+2026-09-09T23:34:36.1591263Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/session-lifecycle.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+2026-09-09T23:34:36.4265957Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-coordinator.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+2026-09-09T23:34:36.6668402Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/instance-reaper.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+2026-09-09T23:34:36.9678097Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/graph-cache.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 395[2mms[22m[39m
+2026-09-09T23:34:37.4328675Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/demoted-blocker-render-retirement.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+2026-09-09T23:34:37.7246028Z  [32m✓[39m [30m[42m default [49m[39m tests/source-filter-skip-observability.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+2026-09-09T23:34:37.9903466Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph-git-stamp.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 417[2mms[22m[39m
+2026-09-09T23:34:38.2419346Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/recent-touches.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 114[2mms[22m[39m
+2026-09-09T23:34:38.9468306Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/reverse-deps-cache.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1074[2mms[22m[39m
+2026-09-09T23:34:38.9469284Z    [32m✓[39m reverse-deps index cache (#459) [2m(9)[22m
+2026-09-09T23:34:38.9469982Z      [33m[2m✓[22m[39m builds + writes the index on the first cascade run[33m 645[2mms[22m[39m
+2026-09-09T23:34:39.0601813Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/wait-record-unrooted-candidates.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 675[2mms[22m[39m
+2026-09-09T23:34:39.0603982Z    [32m✓[39m getClientForFile wait records — unrooted candidates (#2525) [2m(7)[22m
+2026-09-09T23:34:39.0608744Z      [33m[2m✓[22m[39m lsp_client_wait_timeout names only the rooted candidate, not an unrooted deno-style fallback[33m 439[2mms[22m[39m
+2026-09-09T23:34:39.1434245Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/smoke-tools-genuine-install-failure.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+2026-09-09T23:34:39.5757885Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/rule-policy-dispatcher.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+2026-09-09T23:34:39.8622381Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/probe-cache.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+2026-09-09T23:34:40.2118656Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/bootstrap-on-demand.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 924[2mms[22m[39m
+2026-09-09T23:34:40.5522641Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatter-policy-consistency.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+2026-09-09T23:34:40.7515921Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mcp/ipc.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+2026-09-09T23:34:40.9326953Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session-retro-hydrate-warmup-race.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 506[2mms[22m[39m
+2026-09-09T23:34:41.1654538Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-query-loader.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 72[2mms[22m[39m
+2026-09-09T23:34:41.3694233Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-resolve.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+2026-09-09T23:34:41.6346708Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatter-unavailable-outcome.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 762[2mms[22m[39m
+2026-09-09T23:34:41.6348040Z    [32m✓[39m runFormatPhase feeds the deferred drain (#2413) [2m(2)[22m
+2026-09-09T23:34:41.6348794Z      [33m[2m✓[22m[39m routes unavailable out of formatFailures and records it once, distinctly[33m 365[2mms[22m[39m
+2026-09-09T23:34:41.7840923Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/tool-smoke-drift.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+2026-09-09T23:34:42.0938065Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mcp/analyze.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+2026-09-09T23:34:42.5384243Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/biome-check.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+2026-09-09T23:34:42.7440735Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-884-rules.test.ts [2m([22m[2m63 tests[22m[2m)[22m[33m 714[2mms[22m[39m
+2026-09-09T23:34:42.8358800Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/jvm-runtime.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 70[2mms[22m[39m
+2026-09-09T23:34:43.0850497Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/cache/rule-cache.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+2026-09-09T23:34:43.4006926Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tool-tier-degraded-selection.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 155[2mms[22m[39m
+2026-09-09T23:34:43.6953121Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-report.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 376[2mms[22m[39m
+2026-09-09T23:34:43.7924733Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/actionable-warnings.test.ts [2m([22m[2m9 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m[32m 28[2mms[22m[39m
+2026-09-09T23:34:43.8747825Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/process-scan.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+2026-09-09T23:34:44.4342096Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session-dispatch-reset.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+2026-09-09T23:34:44.9285669Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/atomic-write.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 1006[2mms[22m[39m
+2026-09-09T23:34:44.9286693Z    [32m✓[39m concurrent same-process writes to one target (#1205) [2m(4)[22m
+2026-09-09T23:34:44.9287391Z      [33m[2m✓[22m[39m async vs async: publishes exactly one payload, never a hybrid[33m 414[2mms[22m[39m
+2026-09-09T23:34:44.9288161Z      [33m[2m✓[22m[39m sync vs in-flight async: publishes exactly one payload, never a hybrid[33m 411[2mms[22m[39m
+2026-09-09T23:34:45.1609863Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/auxiliary-lsp.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+2026-09-09T23:34:45.2043027Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lsp-diagnostics-inline-blocker-retire.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 627[2mms[22m[39m
+2026-09-09T23:34:45.2044373Z    [32m✓[39m #1561 lsp_diagnostics retires a stale inline blocker [2m(10)[22m
+2026-09-09T23:34:45.2045828Z      [33m[2m✓[22m[39m retires on a confirmed-clean single-file check (the live incident's mode)[33m 496[2mms[22m[39m
+2026-09-09T23:34:45.3867737Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/bus-publish.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+2026-09-09T23:34:45.8143583Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/exit-blind-runners.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 256[2mms[22m[39m
+2026-09-09T23:34:45.9919731Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/version-drift.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 603[2mms[22m[39m
+2026-09-09T23:34:45.9921407Z    [32m✓[39m version-pin drift detection (#589) [2m(8)[22m
+2026-09-09T23:34:45.9922626Z      [33m[2m✓[22m[39m forces reinstall when the installed jscpd version no longer matches the pin[33m 593[2mms[22m[39m
+2026-09-09T23:34:46.9048821Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/installer-lifecycle.integration.test.ts [2m([22m[2m8 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 16004[2mms[22m[39m
+2026-09-09T23:34:46.9050397Z    [32m✓[39m installer process lifecycle (#945) [2m(8)[22m
+2026-09-09T23:34:46.9051594Z      [33m[2m✓[22m[39m serializes two processes so exactly one package-manager install runs[33m 1284[2mms[22m[39m
+2026-09-09T23:34:46.9052811Z      [33m[2m✓[22m[39m reports disabled installation and never spawns the package manager[33m 648[2mms[22m[39m
+2026-09-09T23:34:46.9054013Z      [33m[2m✓[22m[39m keeps a freshly installed intelephense and resolves it (#2722)[33m 1221[2mms[22m[39m
+2026-09-09T23:34:46.9055250Z      [33m[2m✓[22m[39m keeps a spawn-verified install whose probe came back inconclusive (#2722)[33m 4354[2mms[22m[39m
+2026-09-09T23:34:46.9057156Z      [33m[2m✓[22m[39m deletes an inconclusive install whose tree is NOT intact (R2-F2)[33m 4323[2mms[22m[39m
+2026-09-09T23:34:46.9058300Z      [33m[2m✓[22m[39m never records a partial install as succeeded (R2-F1)[33m 4171[2mms[22m[39m
+2026-09-09T23:34:47.3331512Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/gitleaks-scratch-exclusion.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 222[2mms[22m[39m
+2026-09-09T23:34:47.7902633Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/shutdown-wedged-connection.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1649[2mms[22m[39m
+2026-09-09T23:34:47.7927019Z    [32m✓[39m clientShutdown with a fully wedged connection (#1620) [2m(9)[22m
+2026-09-09T23:34:47.7964213Z      [33m[2m✓[22m[39m resolves, disposes, deregisters, and kills when both writes hang[33m 327[2mms[22m[39m
+2026-09-09T23:34:47.7965893Z      [33m[2m✓[22m[39m settles inside the shutdown budget so a demotion cannot leak[33m 1002[2mms[22m[39m
+2026-09-09T23:34:48.1358334Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/workspace-topology-conformance.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 2014[2mms[22m[39m
+2026-09-09T23:34:48.1413726Z    [32m✓[39m workspace-topology scan — detector shape [2m(3)[22m
+2026-09-09T23:34:48.1416920Z      [33m[2m✓[22m[39m excludes the seam owner structurally[33m 803[2mms[22m[39m
+2026-09-09T23:34:48.1418522Z    [32m✓[39m workspace-topology sweep — registered-or-fail coverage [2m(1)[22m
+2026-09-09T23:34:48.1419487Z      [33m[2m✓[22m[39m commits the exemption contract for consumers that do not register[33m 1195[2mms[22m[39m
+2026-09-09T23:34:48.2650641Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dependency-checker-madge-resolution.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 316[2mms[22m[39m
+2026-09-09T23:34:48.3793772Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph/build-latch.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 456[2mms[22m[39m
+2026-09-09T23:34:48.6127530Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/playground-verify-rule-sentinel.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+2026-09-09T23:34:49.0887921Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/parsed-nothing.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 277[2mms[22m[39m
+2026-09-09T23:34:49.3053128Z  [32m✓[39m [30m[42m default [49m[39m tests/config/sweep-floor-coverage.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 886[2mms[22m[39m
+2026-09-09T23:34:49.3093346Z    [32m✓[39m registered-or-fail sweep floors [2m(1)[22m
+2026-09-09T23:34:49.3094268Z      [33m[2m✓[22m[39m every sweep-shaped test uses sweep-kit or declares a reason[33m 879[2mms[22m[39m
+2026-09-09T23:34:49.4300311Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/advisory-provenance-finding-freshness.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+2026-09-09T23:34:49.6664527Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-diagnostics-clean-reanswer.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 719[2mms[22m[39m
+2026-09-09T23:34:49.8176159Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/analyze-pi-lens-logs.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 211[2mms[22m[39m
+2026-09-09T23:34:49.9017886Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/zizmor-token-latch.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+2026-09-09T23:34:50.0777916Z  [32m✓[39m [30m[42m default [49m[39m tests/skills/skill-doc-drift.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+2026-09-09T23:34:50.2734133Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/generation-guard.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+2026-09-09T23:34:50.4893589Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/npm-package-entry-verify-2722.test.ts [2m([22m[2m34 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 283[2mms[22m[39m
+2026-09-09T23:34:50.6050786Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/ignore-compile-memo.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+2026-09-09T23:34:50.8909471Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/client-selection-outcome.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 888[2mms[22m[39m
+2026-09-09T23:34:50.8911213Z    [32m✓[39m lsp_client_selected outcome discriminator (#1934) [2m(8)[22m
+2026-09-09T23:34:50.8912518Z      [33m[2m✓[22m[39m names a cold spawn, then a warm reuse, on the same record[33m 437[2mms[22m[39m
+2026-09-09T23:34:51.0199021Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/grammar-ensure-retry.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 198[2mms[22m[39m
+2026-09-09T23:34:51.0997729Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/degradation-ledger.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+2026-09-09T23:34:51.1432683Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/trivy-config.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+2026-09-09T23:34:51.3388155Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/hashline-anchor.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+2026-09-09T23:34:51.4920020Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/biome-check-runner.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 276[2mms[22m[39m
+2026-09-09T23:34:51.5605098Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-core/hostile-input.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+2026-09-09T23:34:51.6409887Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts [2m([22m[2m60 tests[22m[2m)[22m[32m 285[2mms[22m[39m
+2026-09-09T23:34:52.0859068Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/test-runner-delivery.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 122[2mms[22m[39m
+2026-09-09T23:34:52.7227243Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-tool-result-debounce.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 439[2mms[22m[39m
+2026-09-09T23:34:52.7831779Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/generation-guard-sweep.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 580[2mms[22m[39m
+2026-09-09T23:34:52.7833495Z    [32m✓[39m generation-guard declaration registry (#1741 charter direction) [2m(2)[22m
+2026-09-09T23:34:52.7879608Z      [33m[2m✓[22m[39m a migrated file drops out of the hand-rolled list[33m 394[2mms[22m[39m
+2026-09-09T23:34:53.0247676Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/module-report.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 524[2mms[22m[39m
+2026-09-09T23:34:53.0276930Z    [32m✓[39m module_report tool [2m(4)[22m
+2026-09-09T23:34:53.0291048Z      [33m[2m✓[22m[39m returns a navigable JSON report with derivable (not per-symbol) read args (outline)[33m 484[2mms[22m[39m
+2026-09-09T23:34:53.5844034Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/blocker-freshness.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 221[2mms[22m[39m
+2026-09-09T23:34:53.7047493Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mcp/session.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+2026-09-09T23:34:53.7679219Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/memory-sampler.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+2026-09-09T23:34:53.9467893Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/document-drift.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+2026-09-09T23:34:53.9568138Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/availability-classification-evidence.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+2026-09-09T23:34:54.1577851Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/instance-registry-multi-root.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 288[2mms[22m[39m
+2026-09-09T23:34:54.3353620Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/tool-registry-consistency.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+2026-09-09T23:34:54.8778189Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/analyze-config-resolution-smell.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 583[2mms[22m[39m
+2026-09-09T23:34:55.0429928Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lsp-diagnostics-cache.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+2026-09-09T23:34:55.6927793Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/blocker-freshness-widget-population.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 219[2mms[22m[39m
+2026-09-09T23:34:55.9119944Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/session-lifecycle-multi-root.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+2026-09-09T23:34:55.9361375Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/ast-grep-napi-language-coverage.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 443[2mms[22m[39m
+2026-09-09T23:34:56.1775996Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/workspace-topology.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+2026-09-09T23:34:56.5429191Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/garbage-battery.test.ts [2m([22m[2m266 tests[22m[2m)[22m[33m 2355[2mms[22m[39m
+2026-09-09T23:34:56.7227301Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-diagnostics-cache-expiry.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 475[2mms[22m[39m
+2026-09-09T23:34:56.7229291Z    [32m✓[39m runWorkspaceDiagnostics honors the expiry bound end to end (#1782 AC3) [2m(1)[22m
+2026-09-09T23:34:56.7230892Z      [33m[2m✓[22m[39m re-touches a file whose cached blocking entry predates the session instead of replaying it[33m 419[2mms[22m[39m
+2026-09-09T23:34:57.1851689Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/session-state-store.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+2026-09-09T23:34:57.4618069Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/reverse-deps.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 272[2mms[22m[39m
+2026-09-09T23:34:57.5907659Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/installer/github-release.test.ts [2m([22m[2m68 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+2026-09-09T23:34:58.1457824Z  [32m✓[39m [30m[42m default [49m[39m tests/index-loop-block-wiring.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1786[2mms[22m[39m
+2026-09-09T23:34:58.1459469Z    [32m✓[39m index turn_end loop_block wiring (#1122) [2m(7)[22m
+2026-09-09T23:34:58.1487367Z      [33m[2m✓[22m[39m (a) calls resetEventLoopMonitor at turn_end so the window is per-turn[33m 1077[2mms[22m[39m
+2026-09-09T23:34:58.1629469Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/advisory-data-dir-path.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+2026-09-09T23:34:58.3502047Z  [32m✓[39m [30m[42m default [49m[39m tests/scripts/clean-signal.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+2026-09-09T23:34:58.9161291Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/cargo-manifest.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 560[2mms[22m[39m
+2026-09-09T23:34:58.9162673Z    [32m✓[39m no hand-rolled [workspace]-table regex outside cargo-manifest.ts (#2498) [2m(5)[22m
+2026-09-09T23:34:58.9163938Z      [33m[2m✓[22m[39m clients/ carries the reader in cargo-manifest.ts only[33m 314[2mms[22m[39m
+2026-09-09T23:34:59.0117458Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session-snapshot-gate.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 119[2mms[22m[39m
+2026-09-09T23:34:59.2544988Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/grammar-poisoned-wasm.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 172[2mms[22m[39m
+2026-09-09T23:34:59.7423711Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/widget-dependency-drift-delivery-cap.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+2026-09-09T23:34:59.9637149Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mutation-attribution.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+2026-09-09T23:35:00.1812705Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-discovery-cost.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+2026-09-09T23:35:00.4343603Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/security-scan-probe-telemetry.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+2026-09-09T23:35:00.5476413Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 2770[2mms[22m[39m
+2026-09-09T23:35:00.5477764Z    [32m✓[39m runWorkspaceDiagnostics — batch-open restores #271 coalescing for a full sweep (#608) [2m(1)[22m
+2026-09-09T23:35:00.5479431Z      [33m[2m✓[22m[39m fires the watched-files notification once for a sweep over N previously-unopened files, not once per file[33m 2499[2mms[22m[39m
+2026-09-09T23:35:00.6217285Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/single-flight.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+2026-09-09T23:35:00.8735810Z [90mstdout[2m | tests/config/worker-budget.test.ts
+2026-09-09T23:35:00.8738720Z [22m[39m[test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:35:00.8739747Z 
+2026-09-09T23:35:00.8919195Z [90mstdout[2m | tests/config/worker-budget.test.ts[2m > [22m[2mvitest.config.ts wiring (#2042)[2m > [22m[2mtakes both worker caps from the resolver under CI
+2026-09-09T23:35:00.8946111Z [22m[39m[test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:35:00.8975721Z 
+2026-09-09T23:35:00.8991914Z [90mstdout[2m | tests/config/worker-budget.test.ts[2m > [22m[2mvitest.config.ts wiring (#2042)[2m > [22m[2mgives every project the derived heap ceiling under CI
+2026-09-09T23:35:00.8993489Z [22m[39m[test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:35:00.8994172Z 
+2026-09-09T23:35:00.9116703Z  [32m✓[39m [30m[42m default [49m[39m tests/config/worker-budget.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+2026-09-09T23:35:01.2163111Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dead-code-client.test.ts [2m([22m[2m18 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 22[2mms[22m[39m
+2026-09-09T23:35:01.2717328Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-posting-memory.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1830[2mms[22m[39m
+2026-09-09T23:35:01.2723508Z    [32m✓[39m word-index posting footprint (#2069) [2m(9)[22m
+2026-09-09T23:35:01.2737338Z      [33m[2m✓[22m[39m holds a built index well under the boxed representation's cost[33m 774[2mms[22m[39m
+2026-09-09T23:35:01.2739411Z      [33m[2m✓[22m[39m estimates under 16 bytes per posting entry (#2069 acceptance criterion 2)[33m 875[2mms[22m[39m
+2026-09-09T23:35:01.3216312Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/root-coalescing.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+2026-09-09T23:35:01.5388340Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-core/process-spec.test.ts [2m([22m[2m88 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+2026-09-09T23:35:01.6406104Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp-mutation-bridge-equivalence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+2026-09-09T23:35:02.0023978Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-python-rules.test.ts [2m([22m[2m37 tests[22m[2m)[22m[33m 476[2mms[22m[39m
+2026-09-09T23:35:02.5097557Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/topology-derived-cache-rearm.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 201[2mms[22m[39m
+2026-09-09T23:35:02.8745497Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/mutation-bridge.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+2026-09-09T23:35:02.8988312Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 853[2mms[22m[39m
+2026-09-09T23:35:03.1950355Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatters-bin-walker-home-ceiling.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+2026-09-09T23:35:03.4549139Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/profiling-coverage.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 274[2mms[22m[39m
+2026-09-09T23:35:03.5956602Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/fact-store-session-bound.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 791[2mms[22m[39m
+2026-09-09T23:35:03.5966857Z    [32m✓[39m FactStore session-fact bound (#2282) [2m(11)[22m
+2026-09-09T23:35:03.5967861Z      [33m[2m✓[22m[39m stops retaining an early file's delta baseline once a large batch exceeds the session-fact cap[33m 747[2mms[22m[39m
+2026-09-09T23:35:03.9384960Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-context-provenance.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 70[2mms[22m[39m
+2026-09-09T23:35:04.1525638Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/spawn-record-truth.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 761[2mms[22m[39m
+2026-09-09T23:35:04.1527353Z    [32m✓[39m LSP spawn records count truthfully (#2064) [2m(6)[22m
+2026-09-09T23:35:04.1528456Z      [33m[2m✓[22m[39m marks exactly one starter and N-1 joiners for one slow spawn[33m 472[2mms[22m[39m
+2026-09-09T23:35:04.2822338Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-sweep-hold.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+2026-09-09T23:35:04.4584388Z  [2m[90m↓[39m[22m [30m[42m default [49m[39m tests/clients/lsp/typescript-classic-repair.integration.test.ts [2m([22m[2m2 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m
+2026-09-09T23:35:04.4811686Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/trivy-client.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+2026-09-09T23:35:05.1905209Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/service-notify-adaptive-budget.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 564[2mms[22m[39m
+2026-09-09T23:35:05.1907314Z    [32m✓[39m #2358 — adaptive wedge window pricing [2m(5)[22m
+2026-09-09T23:35:05.1908605Z      [33m[2m✓[22m[39m defers the wedge demotion past the fixed floor when drain history says the server is slow[33m 396[2mms[22m[39m
+2026-09-09T23:35:05.7057829Z  [32m✓[39m [30m[42m default [49m[39m tests/index-config-resolved-session-wiring.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 156[2mms[22m[39m
+2026-09-09T23:35:06.7638411Z  [32m✓[39m [30m[42m default [49m[39m tests/tools/lsp-diagnostics-silent-clean-flow.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 2636[2mms[22m[39m
+2026-09-09T23:35:06.7640737Z    [32m✓[39m #1253 lsp_diagnostics end-to-end silent-clean confirmation [2m(7)[22m
+2026-09-09T23:35:06.7642162Z      [33m[2m✓[22m[39m reports a clean Markdown file as clean for serverScope primary[33m 678[2mms[22m[39m
+2026-09-09T23:35:06.7643659Z      [33m[2m✓[22m[39m a failed notify write stays inconclusive (no manufactured clean)[33m 809[2mms[22m[39m
+2026-09-09T23:35:06.7645028Z      [33m[2m✓[22m[39m a non-silent push-only straggler stays inconclusive[33m 657[2mms[22m[39m
+2026-09-09T23:35:07.9205071Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/runtime-session-warmup-prewarm.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 388[2mms[22m[39m
+2026-09-09T23:35:08.0996240Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/turn-scenarios.test.ts [2m([22m[2m6 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m[33m 1409[2mms[22m[39m
+2026-09-09T23:35:08.1046997Z    [32m✓[39m turn-simulation harness seed scenarios (#1635 item 1) [2m(6)[22m
+2026-09-09T23:35:08.1057252Z      [33m[2m✓[22m[39m knip-stale-unused-export (#1630) — pi-lens warned that assertSafeForCmdShell was unused while a test in the same tree imported it; a direct knip run returned 0 hits[33m 1335[2mms[22m[39m
+2026-09-09T23:35:08.1504021Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/rule-policy.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+2026-09-09T23:35:08.4013838Z [90mstdout[2m | tests/config/lsp-spawn-heavy-coverage.test.ts
+2026-09-09T23:35:08.4018395Z [22m[39m[test-budget] cpus=4 totalMemMb=15989 cpuCap=3 memCap=6 maxWorkers=3 heavyMaxWorkers=1 workerHeapMb=3072
+2026-09-09T23:35:08.4019316Z 
+2026-09-09T23:35:08.7201109Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/formatter-exit-code-posture.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 394[2mms[22m[39m
+2026-09-09T23:35:09.0043793Z  [32m✓[39m [30m[42m default [49m[39m tests/config/lsp-spawn-heavy-coverage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 548[2mms[22m[39m
+2026-09-09T23:35:09.0045549Z    [32m✓[39m lsp-spawn-heavy Vitest project coverage [2m(4)[22m
+2026-09-09T23:35:09.0046822Z      [33m[2m✓[22m[39m phases or documents every test that spawns a real LSP child[33m 542[2mms[22m[39m
+2026-09-09T23:35:09.4648086Z  [32m✓[39m [30m[42m default [49m[39m tests/mcp/turn-end-route.smoke.test.ts [2m([22m[2m10 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[33m 4127[2mms[22m[39m
+2026-09-09T23:35:09.4650509Z    [32m✓[39m warm turn-end IPC route (real spawn) [2m(10)[22m
+2026-09-09T23:35:09.4651565Z      [33m[2m✓[22m[39m still serves an untagged analyze request on a server that knows the route[33m 3581[2mms[22m[39m
+2026-09-09T23:35:09.9988146Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph-seq-fastpath.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 450[2mms[22m[39m
+2026-09-09T23:35:10.4288169Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/package-manager-availability-latch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 223[2mms[22m[39m
+2026-09-09T23:35:10.9167043Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/dispatch/runners/ast-grep-rule-tests.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+2026-09-09T23:35:10.9462625Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/review-graph/checkpoint-resume.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 624[2mms[22m[39m
+2026-09-09T23:35:11.2059867Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/bootstrap-lazy-liveness.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 2348[2mms[22m[39m
+2026-09-09T23:35:11.2061651Z    [32m✓[39m #2467 — activation never loads the analyzer bootstrap [2m(1)[22m
+2026-09-09T23:35:11.2063363Z      [33m[2m✓[22m[39m registers every host surface without one demand on the seam[33m 1016[2mms[22m[39m
+2026-09-09T23:35:11.3538973Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/project-lens-ignore.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 117[2mms[22m[39m
+2026-09-09T23:35:11.3923763Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/knip-project-toolchain.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+2026-09-09T23:35:11.7057913Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/launch.test.ts [2m([22m[2m13 tests[22m[2m | [22m[33m5 skipped[39m[2m)[22m[33m 342[2mms[22m[39m
+2026-09-09T23:35:11.7174143Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-golden-layouts.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 196[2mms[22m[39m
+2026-09-09T23:35:11.7194167Z [mem-watch] KILLED WITH HEADROOM — no failing assertion, and no sample fell below 12564 MB of 15989 MB, so the box was not short of memory at any sample point (2000ms sampling: a shorter spike, or a pressure-based kill by systemd-oomd, would not show up here). Read the kernel kill evidence step for the signal's sender. signal=SIGKILL totalMb=15989 lowWaterAvailableMb=12564 lowWaterAt=23:33:42 childPid=2463
+2026-09-09T23:35:11.7627319Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/formatter-degraded-selection.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+2026-09-09T23:35:12.0380870Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/extension-log.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 109[2mms[22m[39m
+2026-09-09T23:35:12.1047478Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/extension-terminal-silence.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 216[2mms[22m[39m
+2026-09-09T23:35:12.2747773Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-core/deny.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+2026-09-09T23:35:12.2827094Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/gitleaks-client.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+2026-09-09T23:35:12.3615079Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-observability.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 477[2mms[22m[39m
+2026-09-09T23:35:12.6010805Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/config-deprecation-registry.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+2026-09-09T23:35:13.5866078Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/lsp/workspace-diagnostics-sweep-attribution.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1140[2mms[22m[39m
+2026-09-09T23:35:13.5876034Z    [32m✓[39m #1723 sweep per-file touch is attributable [2m(6)[22m
+2026-09-09T23:35:13.5877347Z      [33m[2m✓[22m[39m names the sweep as the in-flight phase while a file's touch is running[33m 512[2mms[22m[39m
+2026-09-09T23:35:13.6417168Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/word-index-per-edit.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1125[2mms[22m[39m
+2026-09-09T23:35:13.6496771Z    [32m✓[39m computeCascadeForFile — word-index per-edit seam (#348 phase 2) [2m(6)[22m
+2026-09-09T23:35:13.6557041Z      [33m[2m✓[22m[39m updates the in-memory index with the edited file's content[33m 530[2mms[22m[39m
+2026-09-09T23:35:14.2627783Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/install-attempt-evidence.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 503[2mms[22m[39m
+2026-09-09T23:35:15.3287682Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-query-batch.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1374[2mms[22m[39m
+2026-09-09T23:35:15.3316670Z    [32m✓[39m runQueriesOnFile [2m(9)[22m
+2026-09-09T23:35:15.3346744Z      [33m[2m✓[22m[39m compiles and matches the repaired Go, Rust, and Kotlin rules (#884)[33m 674[2mms[22m[39m
+2026-09-09T23:35:15.8593050Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/actionable-warnings-bounds.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 314[2mms[22m[39m
+2026-09-09T23:35:16.2548012Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/single-flight-ratchet.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 1567[2mms[22m[39m
+2026-09-09T23:35:16.2596916Z    [32m✓[39m singleFlight ratchet (#1753) [2m(7)[22m
+2026-09-09T23:35:16.2627229Z      [33m[2m✓[22m[39m flags every hand-rolled in-flight declaration outside the primitive[33m 706[2mms[22m[39m
+2026-09-09T23:35:16.2637379Z      [33m[2m✓[22m[39m has no stale exemptions[33m 447[2mms[22m[39m
+2026-09-09T23:35:16.2638856Z      [33m[2m✓[22m[39m retires a forward declaration once its declaration lands[33m 408[2mms[22m[39m
+2026-09-09T23:35:16.2660486Z  [32m✓[39m [30m[42m default [49m[39m tests/clients/tree-sitter-client-init.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 103[2mms[22m[39m
+2026-09-09T23:35:16.4694789Z  [32m✓[39m [30m[42m default [49m[39m tests/config/ci-infra-kill-rerun-gate.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+2026-09-09T23:35:16.5393688Z  [32m✓[39m [30m[42m default [49m[39m tests/mcp/server.smoke.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 3785[2mms[22m[39m
+2026-09-09T23:35:16.5451935Z    [32m✓[39m pi-lens MCP server (stdio smoke) [2m(11)[22m
+2026-09-09T23:35:16.5459197Z      [33m[2m✓[22m[39m completes the initialize handshake and mirrors the protocol version[33m 511[2mms[22m[39m
+2026-09-09T23:35:16.5477001Z      [33m[2m✓[22m[39m omits a config-disabled tool from the real MCP tools/list path[33m 507[2mms[22m[39m
+2026-09-09T23:35:16.5478191Z      [33m[2m✓[22m[39m does not advertise rebuild from an installed package[33m 548[2mms[22m[39m
+2026-09-09T23:35:16.5479467Z      [33m[2m✓[22m[39m answers tools/call pilens_analyze (warm) with a real dispatch result[33m 1624[2mms[22m[39m
+2026-09-09T23:35:16.5480516Z    [32m✓[39m pi-lens MCP result bounds [2m(1)[22m
+2026-09-09T23:35:16.5481659Z      [33m[2m✓[22m[39m bounds a large AST replacement and keeps the full result in the session log[33m 532[2mms[22m[39m
+2026-09-09T23:35:16.7050910Z  [32m✓[39m [30m[42m default [49m[39m tests/config/label-manifest-coverage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+2026-09-09T23:35:16.7244505Z ##[error]Process completed with exit code 137.
+2026-09-09T23:35:16.7314694Z ##[group]Run set +e
+2026-09-09T23:35:16.7315143Z [36;1mset +e[0m
+2026-09-09T23:35:16.7316114Z [36;1m# Round-2 review F2: an empty arm must distinguish "asked, nothing[0m
+2026-09-09T23:35:16.7316898Z [36;1m# there" from "could not ask". Silence alone reads as the first and[0m
+2026-09-09T23:35:16.7317650Z [36;1m# can be the second.[0m
+2026-09-09T23:35:16.7318286Z [36;1mecho "--- kernel OOM/kill records ---"[0m
+2026-09-09T23:35:16.7318873Z [36;1mdm=$(sudo dmesg -T 2>/dev/null)[0m
+2026-09-09T23:35:16.7319414Z [36;1mif [ -z "$dm" ]; then[0m
+2026-09-09T23:35:16.7320442Z [36;1m  echo "(dmesg unavailable or empty - no evidence either way)"[0m
+2026-09-09T23:35:16.7321141Z [36;1melse[0m
+2026-09-09T23:35:16.7321532Z [36;1m  hits=$(printf '%s\n' "$dm" |[0m
+2026-09-09T23:35:16.7322247Z [36;1m    grep -iE 'out of memory|oom-kill|oom_reaper|killed process' |[0m
+2026-09-09T23:35:16.7322982Z [36;1m    tail -40)[0m
+2026-09-09T23:35:16.7323653Z [36;1m  if [ -z "$hits" ]; then[0m
+2026-09-09T23:35:16.7324318Z [36;1m    echo "(dmesg readable, zero OOM/kill records - the kernel OOM killer did not fire)"[0m
+2026-09-09T23:35:16.7324979Z [36;1m  else[0m
+2026-09-09T23:35:16.7325583Z [36;1m    printf '%s\n' "$hits"[0m
+2026-09-09T23:35:16.7325992Z [36;1m  fi[0m
+2026-09-09T23:35:16.7326324Z [36;1mfi[0m
+2026-09-09T23:35:16.7326686Z [36;1mecho "--- systemd-oomd ---"[0m
+2026-09-09T23:35:16.7327324Z [36;1msudo journalctl -u systemd-oomd --no-pager -n 40 2>/dev/null ||[0m
+2026-09-09T23:35:16.7327979Z [36;1m  echo "(journalctl unavailable)"[0m
+2026-09-09T23:35:16.7328656Z [36;1m# Round-2 review F1: reading /sys/fs/cgroup/memory.events reads the[0m
+2026-09-09T23:35:16.7329380Z [36;1m# ROOT cgroup, which cgroup v2 does not populate. It printed nothing[0m
+2026-09-09T23:35:16.7330088Z [36;1m# whether or not an event had occurred, so it could never support a[0m
+2026-09-09T23:35:16.7330800Z [36;1m# claim either way. Resolve this process's OWN cgroup and walk up to[0m
+2026-09-09T23:35:16.7331466Z [36;1m# the first ancestor that actually has the file.[0m
+2026-09-09T23:35:16.7332026Z [36;1mecho "--- cgroup memory.events ---"[0m
+2026-09-09T23:35:16.7332588Z [36;1mcg=$(awk -F: '$1=="0"{print $3}' /proc/self/cgroup 2>/dev/null)[0m
+2026-09-09T23:35:16.7333113Z [36;1mp="$cg"[0m
+2026-09-09T23:35:16.7333470Z [36;1mfound=""[0m
+2026-09-09T23:35:16.7333913Z [36;1mwhile [ -n "$p" ]; do[0m
+2026-09-09T23:35:16.7334363Z [36;1m  f="/sys/fs/cgroup${p%/}/memory.events"[0m
+2026-09-09T23:35:16.7334867Z [36;1m  if [ -r "$f" ]; then[0m
+2026-09-09T23:35:16.7335441Z [36;1m    echo "cgroup=${p} file=${f}"[0m
+2026-09-09T23:35:16.7335916Z [36;1m    cat "$f"[0m
+2026-09-09T23:35:16.7336310Z [36;1m    found=1[0m
+2026-09-09T23:35:16.7336673Z [36;1m    break[0m
+2026-09-09T23:35:16.7337053Z [36;1m  fi[0m
+2026-09-09T23:35:16.7337497Z [36;1m  if [ "$p" = "/" ]; then break; fi[0m
+2026-09-09T23:35:16.7337957Z [36;1m  p=$(dirname "$p")[0m
+2026-09-09T23:35:16.7338359Z [36;1mdone[0m
+2026-09-09T23:35:16.7338730Z [36;1mif [ -z "$found" ]; then[0m
+2026-09-09T23:35:16.7339512Z [36;1m  echo "(memory.events absent or unreadable from '${cg:-unknown}' up to root - no cgroup evidence either way)"[0m
+2026-09-09T23:35:16.7340269Z [36;1mfi[0m
+2026-09-09T23:35:16.7340708Z [36;1mecho "--- memory now ---"[0m
+2026-09-09T23:35:16.7341173Z [36;1mfree -m[0m
+2026-09-09T23:35:16.7341507Z [36;1mexit 0[0m
+2026-09-09T23:35:16.7371105Z shell: /usr/bin/bash -e {0}
+2026-09-09T23:35:16.7371644Z ##[endgroup]
+2026-09-09T23:35:16.7431742Z --- kernel OOM/kill records ---
+2026-09-09T23:35:16.8904417Z (dmesg readable, zero OOM/kill records - the kernel OOM killer did not fire)
+2026-09-09T23:35:16.8929622Z --- systemd-oomd ---
+2026-09-09T23:35:16.9028586Z -- No entries --
+2026-09-09T23:35:16.9056481Z --- cgroup memory.events ---
+2026-09-09T23:35:16.9078313Z cgroup=/system.slice/hosted-compute-agent.service file=/sys/fs/cgroup/system.slice/hosted-compute-agent.service/memory.events
+2026-09-09T23:35:16.9081727Z low 0
+2026-09-09T23:35:16.9082525Z high 0
+2026-09-09T23:35:16.9083037Z max 0
+2026-09-09T23:35:16.9083521Z oom 0
+2026-09-09T23:35:16.9083979Z oom_kill 0
+2026-09-09T23:35:16.9084499Z oom_group_kill 0
+2026-09-09T23:35:16.9085061Z --- memory now ---
+2026-09-09T23:35:16.9095084Z                total        used        free      shared  buff/cache   available
+2026-09-09T23:35:16.9102139Z Mem:           15988        2197       10344          47        3840       13791
+2026-09-09T23:35:16.9103473Z Swap:           3071           0        3071
+2026-09-09T23:35:16.9305025Z Post job cleanup.
+2026-09-09T23:35:17.0486367Z [command]/usr/bin/git version
+2026-09-09T23:35:17.0554798Z git version 2.55.0
+2026-09-09T23:35:17.0797011Z Temporarily overriding HOME='/home/runner/work/_temp/8f5d8e72-48e2-4651-b71f-ebce61afeb54' before making global git config changes
+2026-09-09T23:35:17.0807425Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-09T23:35:17.0808511Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/pi-lens/pi-lens
+2026-09-09T23:35:17.0809777Z Removing SSH command configuration
+2026-09-09T23:35:17.0810461Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-09-09T23:35:17.0827466Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-09-09T23:35:17.1257729Z Removing HTTP extra header
+2026-09-09T23:35:17.1259229Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-09T23:35:17.1337068Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-09-09T23:35:17.1604920Z Removing includeIf entries pointing to credentials config files
+2026-09-09T23:35:17.1610822Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-09T23:35:17.1678543Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-09-09T23:35:17.2368270Z Cleaning up orphan processes
+2026-09-09T23:35:17.2755879Z Terminate orphan process: pid (2474) (sh)
+2026-09-09T23:35:17.2786124Z Terminate orphan process: pid (2475) (node)
+2026-09-09T23:35:17.2816245Z Terminate orphan process: pid (2482) (node)
+2026-09-09T23:35:17.2947977Z Terminate orphan process: pid (8370) (node)
+2026-09-09T23:35:17.3009009Z Terminate orphan process: pid (8385) (node)
+2026-09-09T23:35:17.3033656Z Terminate orphan process: pid (8430) (node)
+

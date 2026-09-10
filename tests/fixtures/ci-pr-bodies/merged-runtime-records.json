@@ -1,0 +1,17 @@
+[
+	{
+		"name": "#2860",
+		"kind": "lsp-diagnostics-compatibility",
+		"diff": "diff --git a/mcp/server.ts b/mcp/server.ts\n+recordDegradationOnce({ kind: \"lsp-diagnostics-compatibility\" });\ndiff --git a/tools/lens-diagnostics.ts b/tools/lens-diagnostics.ts\n+logExtension({ subsystem: \"git-guard\" });\n+logLatency({ phase: \"lens_diagnostics_lsp_route\" });"
+	},
+	{
+		"name": "#2823",
+		"kind": "lsp_dependency_touch_capped",
+		"diff": "diff --git a/clients/lsp/index.ts b/clients/lsp/index.ts\n+recordDegradationOnce({ kind: \"lsp_dependency_touch_capped\" });\n+logLatency({ phase: \"lsp_external_change_resync\" });"
+	},
+	{
+		"name": "#2846",
+		"kind": "tool-cwd-resolution",
+		"diff": "diff --git a/clients/lsp/server.ts b/clients/lsp/server.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
+	}
+]

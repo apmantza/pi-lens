@@ -45,6 +45,12 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
 - Never `vi.waitFor` with real timers; never a `// flake-shape` admission for
   a test you wrote; never `git stash`; never edit `CHANGELOG.md` (one fragment
   under `.changelog/`, exactly one top-level entry).
+- Every test id, probe id or fixture name you write into a PR-body table
+  (state-space, writers-by-axis, population) must exist as a grep-able `it(`
+  title or file name in the tree at handoff. The orchestrator greps each id
+  before accepting the round; a table whose ids do not exist is a fabricated
+  claim and fails the round (2026-09-10: #2877 r3 and #2868 r3 each shipped a
+  48- to 72-cell table with zero real ids).
 - Before handoff, run `npm run preflight` last and paste its table in
   `PR_BODY.md` — a handoff without it is incomplete.
 - `PR_BODY.md` passes `node scripts/check-pr-body.mjs --lint-local PR_BODY.md`
