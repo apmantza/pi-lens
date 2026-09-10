@@ -333,7 +333,12 @@ is the procedure and defers here on conflict; 2026-09-09).**
   host — open, refresh (a second `session_start`), restore/fork, end,
   transport close — not only open and end: #2853's round-2 table had pi/MCP
   × open/end, and verify v2 found its three behaviour defects in exactly the
-  refresh, transport-close and restore cells it omitted. Severity is
+  refresh, transport-close and restore cells it omitted. A lifecycle
+  test's mutation red is shown in a WHOLE-FILE run (`vitest run <file>`, no
+  `-t`) before the round is accepted: #2853's rounds 6 and 7 quoted reds
+  that reproduced only under `-t`, because nine of the file's awaited
+  `handleSessionStart` calls never returned in the whole-file run (#2859)
+  and the guarded line was dead in CI's shape. Severity is
   earned by a reproduced instance: a HIGH with no failure scenario is a
   MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
   line) never count as an actionable round.
