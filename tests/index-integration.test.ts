@@ -78,10 +78,22 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 	};
 }
 
-// Mock read-guard for integration tests to avoid dynamic require issues
-vi.mock("../clients/read-guard.js", () => ({
-	lineContentHash: (line: string) => `mock:${line}`,
-	ReadGuard: class MockReadGuard {
+// Mock read-guard for integration tests to avoid dynamic require issues.
+//
+// #2884: this double used to be written out TWICE — once for `ReadGuard` and
+// once inside `createReadGuard` — and neither copy had `exportState`. Every
+// `turn_end` in this file therefore died on
+// `runtime.readGuard.exportState is not a function` and, because `index.ts`
+// swallowed the crash into `dbg`, the two cases that drove one never reached
+// the delivery path they were named for and could not fail. One class now, so
+// a method added for one entry point cannot be missing from the other, and the
+// persisted-state pair (`exportState`/`importState`) is production-faithful:
+// the same `version` field `clients/read-guard.ts` writes, read off the real
+// module so a version bump cannot silently make the double lie.
+vi.mock("../clients/read-guard.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/read-guard.js")>();
+	class MockReadGuard {
 		isNewFile() {
 			return false;
 		}
@@ -89,8 +101,13 @@ vi.mock("../clients/read-guard.js", () => ({
 			return { action: "allow" };
 		}
 		recordRead() {}
+		recordSymbolRead() {}
 		recordWritten() {}
 		noteCreatedFile() {}
+		hasKnownPath() {
+			return false;
+		}
+		forgetPath() {}
 		getReadHistory() {
 			return [];
 		}
@@ -98,6 +115,12 @@ vi.mock("../clients/read-guard.js", () => ({
 			return [];
 		}
 		addExemption() {}
+		exportState() {
+			return { version: actual.READ_GUARD_STATE_VERSION, reads: [] };
+		}
+		importState() {
+			return { imported: 0, dropped: 0 };
+		}
 		getSummary() {
 			return {
 				totalEdits: 0,
@@ -107,36 +130,14 @@ vi.mock("../clients/read-guard.js", () => ({
 				lspExpansionsHelped: 0,
 			};
 		}
-	},
-	createReadGuard: () =>
-		new (class MockReadGuard {
-			isNewFile() {
-				return false;
-			}
-			checkEdit() {
-				return { action: "allow" };
-			}
-			recordRead() {}
-			recordWritten() {}
-			noteCreatedFile() {}
-			getReadHistory() {
-				return [];
-			}
-			getEditHistory() {
-				return [];
-			}
-			addExemption() {}
-			getSummary() {
-				return {
-					totalEdits: 0,
-					totalBlocks: 0,
-					byReason: {},
-					byFile: {},
-					lspExpansionsHelped: 0,
-				};
-			}
-		})(),
-}));
+	}
+	return {
+		...actual,
+		lineContentHash: (line: string) => `mock:${line}`,
+		ReadGuard: MockReadGuard,
+		createReadGuard: () => new MockReadGuard(),
+	};
+});
 
 describe("index.ts integration", () => {
 	let tmpDir: string;
@@ -2789,6 +2790,78 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 					tmpDir,
 				)?.data.deliveryEligible,
 			).toMatchObject({ sessionId: stagedSessionId });
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"keeps primary and concurrent secondary test delivery on their owning activation",
+		async () => {
+			// Recurrence: this case existed before and proved nothing. It carried
+			// no `expect(` at all, and its `turn_end` died on this file's partial
+			// `read-guard` double (`exportState is not a function`) into
+			// `index.ts`'s silent catch, so it never reached the delivery path it
+			// is named for — #2859 deleted it, #2884 restores it with the missing
+			// mock method and real assertions. Two live activations each stage a
+			// delivery for their own session; each activation's own settle must
+			// mark ITS session eligible and leave the sibling's staged delivery
+			// alone.
+			mockSuiteDeps();
+			handleTurnEndHook = (deps) =>
+				deps.onTestRunnerComplete?.({
+					cwd: deps.ctxCwd ?? tmpDir,
+					sessionId: deps.sessionId,
+					generation: 1,
+					targetCount: deps.sessionId === "secondary-delivery" ? 22 : 11,
+					hasFindings: true,
+				});
+			const cache = new CacheManager(false);
+			cache.writeCache(
+				"test-runner-findings",
+				{ content: "FAIL cross-session.test.ts:1", testRunGeneration: 1 },
+				tmpDir,
+			);
+			const eligible = () =>
+				cache.readCache<{
+					deliveryEligible?: { sessionId: string; generation: number };
+				}>("test-runner-findings", tmpDir)?.data.deliveryEligible;
+
+			const { default: registerExtension } = await import("../index.js");
+			const primary = createMockPi();
+			registerExtension(primary.pi as any);
+			const secondary = createMockPi();
+			registerExtension(secondary.pi as any);
+			const primaryCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "primary-delivery",
+			});
+			const secondaryCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "secondary-delivery",
+			});
+
+			await primary.trigger("session_start", {}, primaryCtx);
+			await secondary.trigger("session_start", {}, secondaryCtx);
+			await primary.trigger("turn_end", {}, primaryCtx);
+			await secondary.trigger("turn_end", {}, secondaryCtx);
+
+			// Staging alone must never mark anything eligible — the idle boundary
+			// does that, per activation.
+			expect(eligible()).toBeUndefined();
+
+			await primary.trigger("agent_settled", {}, primaryCtx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(eligible()).toMatchObject({
+				sessionId: "primary-delivery",
+				generation: 1,
+			});
+
+			await secondary.trigger("agent_settled", {}, secondaryCtx);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(eligible()).toMatchObject({
+				sessionId: "secondary-delivery",
+				generation: 1,
+			});
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

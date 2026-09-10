@@ -191,6 +191,7 @@ import { resetTurnContext } from "./clients/turn-context.js";
 import { handleToolCall } from "./clients/runtime-tool-call.js";
 import {
 	isStaleExtensionCtxError,
+	surfaceHandlerCrash,
 	wrapSessionEventHandler,
 	wrapSessionEventHandlerWithResult,
 } from "./clients/session-event-guard.js";
@@ -2422,22 +2423,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// session swap as a pi-lens crash (#1929, same shape as the
 					// agent_end and turn_end catches).
 					if (isStaleExtensionCtxError(sessionErr)) throw sessionErr;
-					dbg(`session_start crashed: ${sessionErr}`);
-					dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
-					// #2859: `dbg` writes nothing in tests, so a crashed session_start
-					// was indistinguishable from a completed one — fourteen awaits in
-					// tests/index-integration.test.ts rejected into this catch (a
-					// leaked `vi.doMock` had dropped an installer export), every
-					// assertion after them was vacuous, and the whole file stayed
-					// green. A test budget cannot see this: the handler settles
-					// promptly, it just did nothing. Under the runner the crash fails
-					// the test that caused it; production keeps the swallow, because
-					// a pi-lens session_start bug must never take down the host's
-					// session. Deliberately `process.env.VITEST` and not
-					// `isTestMode()`: the question is whether a TEST is awaiting this
-					// handler, and the #2815 R7 case runs under vitest with
-					// PI_LENS_TEST_MODE=0.
-					if (process.env.VITEST) throw sessionErr;
+					// #2859/#2884: `dbg` writes nothing in tests, so a crashed
+					// session_start was indistinguishable from a completed one —
+					// fourteen awaits in tests/index-integration.test.ts rejected into
+					// this catch (a leaked `vi.doMock` had dropped an installer
+					// export), every assertion after them was vacuous, and the whole
+					// file stayed green. A test budget cannot see this: the handler
+					// settles promptly, it just did nothing. `surfaceHandlerCrash`
+					// logs, records one bounded ledger row, and under the runner
+					// rethrows so the crash fails the test that caused it; production
+					// keeps the swallow, because a pi-lens session_start bug must
+					// never take down the host's session. #2866 wrote that guard
+					// inline here; #2884 folded it onto the shared helper so the seven
+					// sibling catches below cannot drift from it.
+					surfaceHandlerCrash("session_start", sessionErr, { dbg });
 				}
 			},
 			{ dbg },
@@ -2459,7 +2458,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				`session_before_fork: stashed ${pendingForkSnapshot.files.length} file(s) + ${pendingForkReadGuard.reads.length} read-guard file(s) for the fork`,
 			);
 		} catch (forkErr) {
-			dbg(`session_before_fork crashed: ${forkErr}`);
+			surfaceHandlerCrash("session_before_fork", forkErr, { dbg });
 		}
 	});
 
@@ -2731,7 +2730,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				);
 			}
 		} catch (sweepErr) {
-			dbg(`observed_settled_sweep crashed: ${sweepErr}`);
+			surfaceHandlerCrash("observed_settled_sweep", sweepErr, { dbg });
 		}
 	}
 
@@ -2762,7 +2761,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				signal: ctx?.signal,
 			});
 		} catch (refreshErr) {
-			dbg(`observed_ledger_refresh crashed: ${refreshErr}`);
+			surfaceHandlerCrash("observed_ledger_refresh", refreshErr, { dbg });
 		}
 	}
 
@@ -2842,8 +2841,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// registration owns it, instead of a second copy here logging it as a
 			// crash (#1925).
 			if (isStaleExtensionCtxError(agentEndErr)) throw agentEndErr;
-			dbg(`agent_end crashed: ${agentEndErr}`);
-			dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
+			surfaceHandlerCrash("agent_end", agentEndErr, { dbg });
 		} finally {
 			setAmbientAbortSignal(undefined);
 		}
@@ -3105,8 +3103,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		} catch (turnEndErr) {
 			// One classifier for the stale-ctx class — see `agent_end` above.
 			if (isStaleExtensionCtxError(turnEndErr)) throw turnEndErr;
-			dbg(`turn_end crashed: ${turnEndErr}`);
-			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
+			surfaceHandlerCrash("turn_end", turnEndErr, { dbg });
 		} finally {
 			setAmbientAbortSignal(undefined);
 		}
@@ -3318,7 +3315,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// this site only declines to swallow it: rethrow, and the wrapper
 				// around the registration skips the run and counts it.
 				if (isStaleExtensionCtxError(drainErr)) throw drainErr;
-				dbg(`agent_settled deferred_mutation_drain crashed: ${drainErr}`);
+				// Under the runner the two `…Safely` helpers above rethrow their own
+				// crash into this catch, so ONE crash can leave two ledger subjects
+				// (the inner site and this one). That is a test-path artifact and
+				// deliberately not deduplicated: in production the inner catches
+				// swallow, so this catch only ever sees a crash the drain itself
+				// raised, and the record stays one row per real crash.
+				surfaceHandlerCrash("agent_settled deferred_mutation_drain", drainErr, {
+					dbg,
+				});
 			} finally {
 				setAmbientAbortSignal(undefined);
 			}
@@ -3330,7 +3335,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 				sessionId: getStableSessionId(ctx),
 				ownerId: testRunnerDeliveryOwnerId,
 			}).catch((err) => {
-				dbg(`quiet_window crashed: ${err}`);
+				// The only fire-and-forget site of the eight. `runQuietWindow` already
+				// catches every task failure internally, so this catch sees only a
+				// crash in the quiet window's own scaffolding — and because nothing
+				// awaits this promise, the runner rethrow surfaces as an unhandled
+				// rejection rather than as a rejected `await`. Vitest still fails the
+				// run on one (`Errors 1 error`, exit 1) and names the file, which is
+				// the whole point: a silently dead quiet window is what #2884 is
+				// about.
+				surfaceHandlerCrash("quiet_window", err, { dbg });
 			});
 			// #1123 item 4: dump active handles AFTER the quiet-window work is
 			// scheduled — the #1097-class leak (a stray ref'd timer surviving

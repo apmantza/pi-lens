@@ -142,6 +142,61 @@ export interface SessionEventGuardOptions {
 	dbg?: (message: string) => void;
 }
 
+/**
+ * The one policy for "a pi hook handler threw and production swallows it"
+ * (#2884).
+ *
+ * Eight catch sites in `index.ts` absorb a crashed handler so a pi-lens bug
+ * can never take down the host's session. Each of them used to write only
+ * `dbg(...)`, and `dbg` writes nothing under vitest — so a crashed handler was
+ * indistinguishable from a completed one. #2859 is what that costs: fourteen
+ * `session_start` awaits in `tests/index-integration.test.ts` rejected into
+ * one of those catches, every assertion after them was vacuous, and the file
+ * stayed green. #2866 closed the hole for `session_start` with an inline
+ * `if (process.env.VITEST) throw`; this function is that guard folded into one
+ * place so the remaining seven cannot drift from it.
+ *
+ * Two things happen on every crash, in this order:
+ *
+ * 1. **The production record.** One bounded `hook-handler-crash` row per
+ *    handler per session (`recordDegradationOnce`), so a handler that crashes
+ *    on every turn leaves one durable row and an exact ledger tally instead of
+ *    a silent no-op. It is written BEFORE the rethrow, so a test can assert the
+ *    production observability the runner path would otherwise hide.
+ * 2. **The runner rethrow.** Under vitest the crash is rethrown, so the test
+ *    whose `await` caused it fails with the real error instead of resolving.
+ *    In production nothing is rethrown and the caller's swallow stands.
+ *
+ * Deliberately `process.env.VITEST` and not `isTestMode()` (kept from #2859):
+ * the question is whether a TEST is awaiting this handler, and the #2815 R7
+ * case runs under vitest with `PI_LENS_TEST_MODE=0`.
+ *
+ * The stale-ctx class is NOT this function's business. Callers that classify
+ * it (`session_start`, `agent_end`, `turn_end`, the `agent_settled` drain)
+ * rethrow `isStaleExtensionCtxError` themselves BEFORE calling in, so a benign
+ * session swap keeps its own single record and never lands here as a crash.
+ */
+export function surfaceHandlerCrash(
+	handler: string,
+	err: unknown,
+	options: SessionEventGuardOptions = {},
+): void {
+	try {
+		options.dbg?.(`${handler} crashed: ${err}`);
+		options.dbg?.(
+			`${handler} crash stack: ${(err as Error | undefined)?.stack}`,
+		);
+	} catch {
+		// A debug sink must never decide whether a crash is recorded.
+	}
+	recordDegradationOnce({
+		kind: "hook-handler-crash",
+		subject: handler,
+		reason: `${handler} handler crashed and was swallowed: ${String(err)}`,
+	});
+	if (process.env.VITEST) throw err;
+}
+
 /** A pi event handler, in the shape `pi.on` delivers. */
 type SessionEventHandler = (event: never, ctx: never) => unknown;
 

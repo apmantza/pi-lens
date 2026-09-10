@@ -13,6 +13,21 @@ const symbolSearchExecution = vi.hoisted(() => ({
 const deliveryObservations = vi.hoisted(() => ({
 	rows: [] as Array<{ bytes: number; truncated: boolean }>,
 }));
+/**
+ * #2884: which `index.ts` catch site the current test wants to see crash. Each
+ * seam below throws only for its own site and otherwise delegates to the real
+ * export, so every other test in this file drives the unmodified path.
+ */
+const handlerCrashInjection = vi.hoisted(() => ({
+	site: undefined as
+		| undefined
+		| "session_start"
+		| "session_before_fork"
+		| "observed_settled_sweep"
+		| "observed_ledger_refresh"
+		| "deferred_mutation_drain"
+		| "quiet_window",
+}));
 
 vi.mock("../tools/activate-tools.js", async (importOriginal) => {
 	const actual =
@@ -64,6 +79,73 @@ vi.mock("../clients/cache-observability.js", async (importOriginal) => {
 		recordToolResultDelivery: (args: { bytes: number; truncated: boolean }) => {
 			deliveryObservations.rows.push(args);
 			actual.recordToolResultDelivery(args);
+		},
+	};
+});
+
+vi.mock("../clients/widget-state.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/widget-state.js")>();
+	return {
+		...actual,
+		exportWidgetState: (
+			...args: Parameters<typeof actual.exportWidgetState>
+		) => {
+			if (handlerCrashInjection.site === "session_before_fork")
+				throw new Error("probe: session_before_fork boom");
+			return actual.exportWidgetState(...args);
+		},
+	};
+});
+
+vi.mock("../clients/observed-mutation.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/observed-mutation.js")>();
+	return {
+		...actual,
+		runObservedSettledSweep: async (
+			...args: Parameters<typeof actual.runObservedSettledSweep>
+		) => {
+			if (handlerCrashInjection.site === "observed_settled_sweep")
+				throw new Error("probe: observed_settled_sweep boom");
+			return actual.runObservedSettledSweep(...args);
+		},
+		refreshObservedMutationLedger: async (
+			...args: Parameters<typeof actual.refreshObservedMutationLedger>
+		) => {
+			if (handlerCrashInjection.site === "observed_ledger_refresh")
+				throw new Error("probe: observed_ledger_refresh boom");
+			return actual.refreshObservedMutationLedger(...args);
+		},
+	};
+});
+
+vi.mock("../clients/runtime-agent-end.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/runtime-agent-end.js")>();
+	return {
+		...actual,
+		handleAgentEnd: async (
+			...args: Parameters<typeof actual.handleAgentEnd>
+		) => {
+			if (handlerCrashInjection.site === "deferred_mutation_drain")
+				throw new Error("probe: deferred_mutation_drain boom");
+			return actual.handleAgentEnd(...args);
+		},
+	};
+});
+
+vi.mock("../clients/quiet-window.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/quiet-window.js")>();
+	return {
+		...actual,
+		runQuietWindow: async (
+			...args: Parameters<typeof actual.runQuietWindow>
+		) => {
+			if (handlerCrashInjection.site === "quiet_window")
+				throw new Error("probe: quiet_window boom");
+			return actual.runQuietWindow(...args);
 		},
 	};
 });
@@ -126,7 +208,10 @@ vi.mock("../clients/bootstrap.js", async () => {
 	}));
 });
 vi.mock("../clients/runtime-session.js", () => ({
-	handleSessionStart: async () => {},
+	handleSessionStart: async () => {
+		if (handlerCrashInjection.site === "session_start")
+			throw new Error("probe: session_start boom");
+	},
 }));
 
 // The contract index.ts wires into the host. If a registration is dropped or
@@ -1345,5 +1430,216 @@ describe("stale extension ctx tolerance in event handlers (#1925)", () => {
 				(entry) => entry.kind === "extension-ctx-stale",
 			),
 		).toBeUndefined();
+	});
+});
+
+/**
+ * #2884 — a crashed hook handler must not be invisible under the test runner.
+ *
+ * Recurrence this guards: #2859. `index.ts` swallows a crashed handler into
+ * `dbg(...)` so a pi-lens bug can never take down the host's session, and `dbg`
+ * writes nothing under vitest — so fourteen `session_start` awaits in
+ * `tests/index-integration.test.ts` rejected into that catch, every assertion
+ * after them was vacuous, and the file stayed green. #2866 closed the hole for
+ * `session_start` alone; seven sibling catches still swallowed silently, and
+ * `turn_end`'s swallow had already hidden a partial `read-guard` mock in a live
+ * test. Each case below drives ONE real registration through `createPiMock`
+ * with a crash injected into the seam that catch site wraps, and asserts two
+ * independent effects: the crash reaches the caller under the runner, and
+ * production's swallow leaves one bounded `hook-handler-crash` ledger row that
+ * names the handler.
+ */
+describe("hook handler crash surfacing (#2884)", () => {
+	let tmp: string;
+
+	beforeEach(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-crash-surface-"));
+		handlerCrashInjection.site = undefined;
+		_resetSessionLifecycleForTests();
+		resetBusPublishForTests();
+		resetDegradationLedger();
+	});
+	afterEach(() => {
+		handlerCrashInjection.site = undefined;
+		_resetSessionLifecycleForTests();
+		resetBusPublishForTests();
+		resetDegradationLedger();
+		removeTempDirSync(tmp);
+	});
+
+	/** The bounded production record every swallowed crash must leave. */
+	function crashLedgerGroup() {
+		return getDegradationSummary().find(
+			(entry) => entry.kind === "hook-handler-crash",
+		);
+	}
+
+	function expectCrashRecorded(handler: string): void {
+		const group = crashLedgerGroup();
+		expect(
+			group,
+			`${handler} crashed without a hook-handler-crash ledger record`,
+		).toBeDefined();
+		expect(group?.latestReasons.map((reason) => reason.subject)).toContain(
+			handler,
+		);
+	}
+
+	/** A live ctx whose `signal` read throws something that is NOT a stale ctx. */
+	function makeCtxWhoseSignalCrashes(sessionId: string) {
+		const ctx = makeCtx({ cwd: tmp, sessionId });
+		Object.defineProperty(ctx, "signal", {
+			configurable: true,
+			get() {
+				throw new Error(`probe: ${sessionId} boom`);
+			},
+		});
+		return ctx;
+	}
+
+	it("surfaces a crashed session_start under the test runner and records it", async () => {
+		handlerCrashInjection.site = "session_start";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("session_start", makeSessionStartEvent(), makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: session_start boom");
+
+		expectCrashRecorded("session_start");
+	});
+
+	it("surfaces a crashed session_before_fork under the test runner and records it", async () => {
+		handlerCrashInjection.site = "session_before_fork";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("session_before_fork", {}, makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: session_before_fork boom");
+
+		expectCrashRecorded("session_before_fork");
+	});
+
+	it("surfaces a crashed observed_settled_sweep under the test runner and records it", async () => {
+		handlerCrashInjection.site = "observed_settled_sweep";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "sweep" })),
+		).rejects.toThrow("probe: observed_settled_sweep boom");
+
+		expectCrashRecorded("observed_settled_sweep");
+	});
+
+	it("surfaces a crashed observed_ledger_refresh under the test runner and records it", async () => {
+		handlerCrashInjection.site = "observed_ledger_refresh";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "refresh" })),
+		).rejects.toThrow("probe: observed_ledger_refresh boom");
+
+		expectCrashRecorded("observed_ledger_refresh");
+	});
+
+	it("surfaces a crashed agent_settled deferred_mutation_drain under the test runner and records it", async () => {
+		handlerCrashInjection.site = "deferred_mutation_drain";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "drain" })),
+		).rejects.toThrow("probe: deferred_mutation_drain boom");
+
+		expectCrashRecorded("agent_settled deferred_mutation_drain");
+	});
+
+	it("surfaces a crashed agent_end under the test runner and records it", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_end", { messages: [] }, makeCtxWhoseSignalCrashes("ae")),
+		).rejects.toThrow("probe: ae boom");
+
+		expectCrashRecorded("agent_end");
+	});
+
+	it("surfaces a crashed turn_end under the test runner and records it", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+		).rejects.toThrow("probe: te boom");
+
+		expectCrashRecorded("turn_end");
+	});
+
+	it("surfaces a crashed quiet_window under the test runner as an unhandled rejection", async () => {
+		// The one fire-and-forget site of the eight: nothing awaits
+		// `runQuietWindow`, so the runner rethrow can only surface as an
+		// unhandled rejection. Vitest fails a run on one (`Errors 1 error`,
+		// exit 1) — this test takes its own listener so the assertion is
+		// deterministic instead of relying on the runner's end-of-run report,
+		// and hands vitest's listeners straight back.
+		const savedListeners = process.listeners("unhandledRejection");
+		process.removeAllListeners("unhandledRejection");
+		const seen: unknown[] = [];
+		const capture = (reason: unknown) => {
+			seen.push(reason);
+		};
+		process.on("unhandledRejection", capture);
+		try {
+			handlerCrashInjection.site = "quiet_window";
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+
+			await pi.emit(
+				"agent_settled",
+				{},
+				makeCtx({ cwd: tmp, sessionId: "quiet" }),
+			);
+			await vi.waitFor(() => {
+				expect(seen).toHaveLength(1);
+			});
+		} finally {
+			process.off("unhandledRejection", capture);
+			for (const listener of savedListeners)
+				process.on("unhandledRejection", listener as never);
+		}
+
+		expect(String(seen[0])).toContain("probe: quiet_window boom");
+		expectCrashRecorded("quiet_window");
+	});
+
+	it("keeps swallowing a crashed turn_end off the test runner, with one bounded record", async () => {
+		// The production direction, and the only one the `if (process.env.VITEST)`
+		// guard's `if (true)` mutation can red: with no runner present the host's
+		// turn must still resolve, and the crash must still be counted exactly
+		// once per handler per session however many turns crash.
+		const savedVitest = process.env.VITEST;
+		process.env.VITEST = undefined as unknown as string;
+		delete process.env.VITEST;
+		try {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+
+			await expect(
+				pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+			).resolves.toBeUndefined();
+			await expect(
+				pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+			).resolves.toBeUndefined();
+		} finally {
+			if (savedVitest === undefined) delete process.env.VITEST;
+			else process.env.VITEST = savedVitest;
+		}
+
+		expectCrashRecorded("turn_end");
+		expect(crashLedgerGroup()?.count).toBe(1);
 	});
 });
