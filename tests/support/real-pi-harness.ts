@@ -51,6 +51,7 @@ export type RealPi = {
 	lens: {
 		latencyRows(): ReadonlyArray<JsonObject>;
 		extensionLog(): ReadonlyArray<JsonObject>;
+		sessionStartLog(): ReadonlyArray<string>;
 		degradations(): ReadonlyArray<JsonObject>;
 	};
 };
@@ -106,9 +107,11 @@ function fixtureProject(scenario: string, root: string): string {
 }
 
 function startRealPi(
-	scenario: "scenario-1" | "scenario-3",
+	scenario: string,
 	scriptFile: string,
 	homeOverride?: string,
+	args: readonly string[] = [],
+	env: Record<string, string> = {},
 ) {
 	const scratchRoot = homeOverride ?? SCRATCH_DIR_ROOT;
 	sweepScratchDirs(scratchRoot, "real-pi-", { maxAgeMs: 0 });
@@ -132,6 +135,7 @@ function startRealPi(
 			path.join(repoRoot, "index.js"),
 			"-e",
 			path.join(fixtureRoot, "scripted-provider.mjs"),
+			...args,
 		],
 		{
 			cwd: project,
@@ -143,6 +147,7 @@ function startRealPi(
 				REAL_PI_HARNESS_SCRIPT: scriptFile,
 				REAL_PI_HARNESS_PROVIDER_LOG: providerLog,
 				ANTHROPIC_API_KEY: "sk-ant-real-harness-dummy",
+				...env,
 			},
 		},
 	);
@@ -254,15 +259,27 @@ function startRealPi(
 }
 
 export async function withRealPi<T>(
-	options: { fixture: string; script: string; home?: string },
+	options: {
+		fixture: string;
+		script: string;
+		home?: string;
+		args?: readonly string[];
+		env?: Record<string, string>;
+	},
 	callback: (pi: RealPi) => Promise<T>,
 ): Promise<T> {
-	const fixture = options.fixture as "scenario-1" | "scenario-3";
+	const fixture = options.fixture;
 	const scriptFile = path.join(fixtureRoot, fixture, options.script);
 	if (!existsSync(scriptFile))
 		throw new Error(`real-harness fixture: ${options.script} does not exist`);
 	validateScript(JSON.parse(readFileSync(scriptFile, "utf8")), scriptFile);
-	const harness = startRealPi(fixture, scriptFile, options.home);
+	const harness = startRealPi(
+		fixture,
+		scriptFile,
+		options.home,
+		options.args,
+		options.env,
+	);
 	try {
 		let cursor = harness.events.length;
 		const matches = (kind: string, after: number) =>
@@ -329,6 +346,8 @@ export async function withRealPi<T>(
 			lens: {
 				latencyRows: () => readRows(path.join(harness.home, "latency.log")),
 				extensionLog: () => readRows(path.join(harness.home, "extension.log")),
+				sessionStartLog: () =>
+					readLines(path.join(harness.home, "sessionstart.log")),
 				degradations: () =>
 					readRows(path.join(harness.home, "degradation-ledger.json")),
 			},
@@ -354,4 +373,9 @@ function readRows(file: string): JsonObject[] {
 				return [];
 			}
 		});
+}
+
+function readLines(file: string): string[] {
+	if (!existsSync(file)) return [];
+	return readFileSync(file, "utf8").split("\n").filter(Boolean);
 }
