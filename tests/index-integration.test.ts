@@ -7,6 +7,7 @@ import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
+import { makeSessionStartEvent } from "./support/host-event-factory.js";
 // #2146: process-scope state (the primary-session registration, the instance
 // registry's mutation tail) now lives on `globalThis`, so `vi.resetModules()`
 // no longer clears it — that is the fix, not a regression. This suite gives
@@ -64,6 +65,8 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 					| undefined,
 		},
 		tools: mock.tools,
+		activeTools: mock.activeTools,
+		activeToolSetCalls: mock.activeToolSetCalls,
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
 			// No budget wrapper here: `createPiMock.on` already wraps every
@@ -78,65 +81,56 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 	};
 }
 
-// Mock read-guard for integration tests to avoid dynamic require issues
-vi.mock("../clients/read-guard.js", () => ({
-	lineContentHash: (line: string) => `mock:${line}`,
-	ReadGuard: class MockReadGuard {
-		isNewFile() {
-			return false;
-		}
-		checkEdit() {
-			return { action: "allow" };
-		}
-		recordRead() {}
-		recordWritten() {}
-		noteCreatedFile() {}
-		getReadHistory() {
-			return [];
-		}
-		getEditHistory() {
-			return [];
-		}
-		addExemption() {}
-		getSummary() {
-			return {
-				totalEdits: 0,
-				totalBlocks: 0,
-				byReason: {},
-				byFile: {},
-				lspExpansionsHelped: 0,
-			};
-		}
-	},
-	createReadGuard: () =>
-		new (class MockReadGuard {
-			isNewFile() {
-				return false;
-			}
-			checkEdit() {
-				return { action: "allow" };
-			}
-			recordRead() {}
-			recordWritten() {}
-			noteCreatedFile() {}
-			getReadHistory() {
-				return [];
-			}
-			getEditHistory() {
-				return [];
-			}
-			addExemption() {}
-			getSummary() {
-				return {
-					totalEdits: 0,
-					totalBlocks: 0,
-					byReason: {},
-					byFile: {},
-					lspExpansionsHelped: 0,
-				};
-			}
-		})(),
-}));
+// Mock read-guard for integration tests to avoid dynamic require issues.
+//
+// #2884: this double used to be written out TWICE — once for `ReadGuard` and
+// once inside `createReadGuard` — and neither copy had `exportState`. Every
+// `turn_end` in this file therefore died on
+// `runtime.readGuard.exportState is not a function` and, because `index.ts`
+// swallowed the crash into `dbg`, the two cases that drove one never reached
+// the delivery path they were named for and could not fail. One class now, so
+// a method added for one entry point cannot be missing from the other, and the
+// `exportState` is production-faithful: the same `version` field
+// `clients/read-guard.ts` writes, read off the real module so a version bump
+// cannot silently make the double lie. Nothing else was added — a probe that
+// made `importState`/`hasKnownPath`/`forgetPath`/`recordSymbolRead` throw left
+// the file green at 61 passed, so no path here reaches them, and a future path
+// that does now crashes LOUDLY rather than silently (that is this PR).
+vi.mock("../clients/read-guard.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/read-guard.js")>();
+	// Every member is an arrow-function class FIELD on purpose: a `return`
+	// inside a factory-local class body is the first `return_statement` the
+	// `vi-mock-export-sweep` parser finds, and it would then read that inner
+	// object as this mock's export list.
+	class MockReadGuard {
+		isNewFile = () => false;
+		checkEdit = () => ({ action: "allow" });
+		recordRead = () => {};
+		recordWritten = () => {};
+		noteCreatedFile = () => {};
+		getReadHistory = () => [];
+		getEditHistory = () => [];
+		addExemption = () => {};
+		exportState = () => ({
+			version: actual.READ_GUARD_STATE_VERSION,
+			reads: [],
+		});
+		getSummary = () => ({
+			totalEdits: 0,
+			totalBlocks: 0,
+			byReason: {},
+			byFile: {},
+			lspExpansionsHelped: 0,
+		});
+	}
+	return {
+		...(await importOriginal()),
+		lineContentHash: (line: string) => `mock:${line}`,
+		ReadGuard: MockReadGuard,
+		createReadGuard: () => new MockReadGuard(),
+	};
+});
 
 describe("index.ts integration", () => {
 	let tmpDir: string;
@@ -277,6 +271,195 @@ describe("index.ts integration", () => {
 			expect(prehandlerRows[0]).toEqual(
 				expect.objectContaining({ turnId: "primary-prehandler:0" }),
 			);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"session_start runs one pass per (session id, reason) and restores posture",
+		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers, activeTools, activeToolSetCalls } = createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+			expect(sessionStart).toBeTypeOf("function");
+
+			let sessionFile = path.join(tmpDir, "session-a.jsonl");
+			const ctx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "session-a",
+				sessionFile,
+				mode: "rpc",
+			});
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			const firstMutationCount = activeToolSetCalls.length;
+			expect(firstMutationCount).toBe(1);
+			expect([...activeTools]).not.toEqual(
+				expect.arrayContaining([
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lsp_navigation",
+					"lens_diagnostic_mark",
+				]),
+			);
+
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			expect(activeToolSetCalls).toHaveLength(firstMutationCount);
+
+			// A duplicate must still restore if the host's live posture drifted.
+			activeTools.add("ast_grep_search");
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			expect(activeToolSetCalls).toHaveLength(firstMutationCount + 1);
+			expect(activeTools).not.toContain("ast_grep_search");
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							phase?: string;
+							filePath?: string;
+							metadata?: Record<string, unknown>;
+						},
+				);
+			expect(
+				rows.filter((row) => row.phase === "session_start_runtime_reset"),
+			).toHaveLength(2);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(1);
+			expect(
+				rows.find((row) => row.phase === "session_start_duplicate_suppressed"),
+			).toEqual(
+				expect.objectContaining({
+					metadata: expect.objectContaining({
+						reason: "duplicate start suppressed",
+					}),
+				}),
+			);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"session_start dedupes no-session RPC by id and falls back to file",
+		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+
+			const noSessionCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "no-session-rpc",
+				sessionFile: undefined,
+				mode: "rpc",
+			});
+			await sessionStart?.(
+				makeSessionStartEvent({ reason: "fork" }),
+				noSessionCtx,
+			);
+			await sessionStart?.(
+				makeSessionStartEvent({ reason: "fork" }),
+				noSessionCtx,
+			);
+
+			const fileCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: undefined,
+				sessionFile: path.join(tmpDir, "fallback.jsonl"),
+				mode: "rpc",
+			});
+			await sessionStart?.(makeSessionStartEvent({ reason: "fork" }), fileCtx);
+			await sessionStart?.(makeSessionStartEvent({ reason: "fork" }), fileCtx);
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map(
+					(line) => JSON.parse(line) as { phase?: string; filePath?: string },
+				);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(2);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"session_start fails open when neither session id nor file is available",
+		async () => {
+			const previousHome = process.env.PI_LENS_HOME;
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_HOME = tmpDir;
+			process.env.PI_LENS_TEST_MODE = "0";
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/latency-logger.js");
+			const { default: registerExtension } = await import("../index.js");
+			const latency = await import("../clients/latency-logger.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+			const ctx = makeCtx({
+				cwd: tmpDir,
+				sessionId: undefined,
+				sessionFile: undefined,
+				mode: "rpc",
+			});
+
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+
+			await latency.flushLatencyLog();
+			const rows = fs
+				.readFileSync(latency.getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as { phase?: string });
+			expect(
+				rows.filter((row) => row.phase === "session_start_runtime_reset"),
+			).toHaveLength(2);
+			expect(
+				rows.filter(
+					(row) => row.phase === "session_start_duplicate_suppressed",
+				),
+			).toHaveLength(0);
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -1112,7 +1295,7 @@ describe("index.ts integration", () => {
 			// the whole point of #1910 wiring the reset into handleSessionStart.
 			await primary.trigger(
 				"session_start",
-				{},
+				{ reason: "resume" },
 				makeCtx({ cwd: tmpDir, sessionId: "primary" }),
 			);
 			expect(cascadeTier._getOutstandingCascadeTouchesForTests()).toEqual([]);
@@ -2621,10 +2804,13 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 
 	async function fireAgentSettled(
 		handlers: ReturnType<typeof createMockPi>["handlers"],
+		// #2884: a caller driving two concurrent activations needs each settle to
+		// carry its OWN session ctx. Default unchanged for every existing caller.
+		ctx: unknown = { cwd: tmpDir, isIdle: () => true },
 	) {
 		const settled = handlers.agent_settled?.[0];
 		expect(settled).toBeTypeOf("function");
-		await settled?.({}, { cwd: tmpDir, isIdle: () => true });
+		await settled?.({}, ctx);
 		// index.ts kicks runQuietWindow off unawaited (fire-and-forget by
 		// design — the SDK awaits the handler); drain the microtask queue so
 		// the stub's task chain completes before assertions.
@@ -2789,6 +2975,76 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 					tmpDir,
 				)?.data.deliveryEligible,
 			).toMatchObject({ sessionId: stagedSessionId });
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"keeps primary and concurrent secondary test delivery on their owning activation",
+		async () => {
+			// Recurrence: this case existed before and proved nothing. It carried
+			// no `expect(` at all, and its `turn_end` died on this file's partial
+			// `read-guard` double (`exportState is not a function`) into
+			// `index.ts`'s silent catch, so it never reached the delivery path it
+			// is named for — #2859 deleted it, #2884 restores it with the missing
+			// mock method and real assertions. Two live activations each stage a
+			// delivery for their own session; each activation's own settle must
+			// mark ITS session eligible and leave the sibling's staged delivery
+			// alone.
+			mockSuiteDeps();
+			handleTurnEndHook = (deps) =>
+				deps.onTestRunnerComplete?.({
+					cwd: deps.ctxCwd ?? tmpDir,
+					sessionId: deps.sessionId,
+					generation: 1,
+					targetCount: deps.sessionId === "secondary-delivery" ? 22 : 11,
+					hasFindings: true,
+				});
+			const cache = new CacheManager(false);
+			cache.writeCache(
+				"test-runner-findings",
+				{ content: "FAIL cross-session.test.ts:1", testRunGeneration: 1 },
+				tmpDir,
+			);
+			const eligible = () =>
+				cache.readCache<{
+					deliveryEligible?: { sessionId: string; generation: number };
+				}>("test-runner-findings", tmpDir)?.data.deliveryEligible;
+
+			const { default: registerExtension } = await import("../index.js");
+			const primary = createMockPi();
+			registerExtension(primary.pi as any);
+			const secondary = createMockPi();
+			registerExtension(secondary.pi as any);
+			const primaryCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "primary-delivery",
+			});
+			const secondaryCtx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "secondary-delivery",
+			});
+
+			await primary.trigger("session_start", {}, primaryCtx);
+			await secondary.trigger("session_start", {}, secondaryCtx);
+			await primary.trigger("turn_end", {}, primaryCtx);
+			await secondary.trigger("turn_end", {}, secondaryCtx);
+
+			// Staging alone must never mark anything eligible — the idle boundary
+			// does that, per activation.
+			expect(eligible()).toBeUndefined();
+
+			await fireAgentSettled(primary.handlers, primaryCtx);
+			expect(eligible()).toMatchObject({
+				sessionId: "primary-delivery",
+				generation: 1,
+			});
+
+			await fireAgentSettled(secondary.handlers, secondaryCtx);
+			expect(eligible()).toMatchObject({
+				sessionId: "secondary-delivery",
+				generation: 1,
+			});
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -3457,11 +3713,20 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			const { default: registerExtension } = await import("../index.js");
 			const primary = createMockPi();
 			registerExtension(primary.pi as any);
-			await primary.trigger(
-				"message_end",
-				{ message: { role: "assistant", usage: { input: 1, output: 1 } } },
-				makeStaleCtx(),
-			);
+			// The subject is the ORDER: the provider's token/cost row is written
+			// before the best-effort ledger count, so a dead ledger cannot cost a
+			// real usage record. #2884 additionally makes the ledger's throw
+			// visible under the runner — production still swallows it (proved by
+			// `keeps swallowing a crashed turn_end off the test runner, with one
+			// bounded record` in tests/index-wiring.test.ts), and this handler
+			// still must not lose the row on the way.
+			await expect(
+				primary.trigger(
+					"message_end",
+					{ message: { role: "assistant", usage: { input: 1, output: 1 } } },
+					makeStaleCtx(),
+				),
+			).rejects.toThrow("ledger unavailable");
 			expect(logCacheUsage).toHaveBeenCalledOnce();
 		},
 		INTEGRATION_TIMEOUT_MS,

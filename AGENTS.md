@@ -620,6 +620,27 @@ turn one (#2815). If the host cannot resolve a stable session id, the guard
 records one bounded `turn-context-identity-fallback` degradation per session
 before using the detached fallback (#2815).
 
+A crashed pi hook handler is swallowed in production and LOUD under the test
+runner, through exactly one seam: `surfaceHandlerCrash` in
+`clients/session-event-guard.ts`. Every `index.ts` catch that absorbs a handler
+crash calls it — nine today (`session_start`, `session_before_fork`,
+`observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`,
+the `agent_settled` deferred-mutation drain, `quiet_window`, `message_end`) —
+and it logs, writes one bounded `hook-handler-crash` degradation per handler
+per session, and rethrows only when `process.env.VITEST` is set, except at the
+fire-and-forget `quiet_window` catch, which passes `rethrow: false` because an
+unhandled rejection there can terminate the pi host before any caller observes
+it. Never
+reintroduce a `dbg`-only catch around a handler body: `dbg` writes nothing
+under vitest, so the crash is then indistinguishable from a completed handler
+and every assertion after the caller's `await` is vacuous while the file stays
+green (#2859's fourteen `session_start` awaits, #2884's two `turn_end` ones).
+The `isStaleExtensionCtxError` rethrow stays AHEAD of the call at every site
+that classifies it, so a benign session swap keeps its own single
+`extension-ctx-stale` record instead of being counted as a crash. A catch that
+guards a `pi.on` REGISTRATION against an older host is not in this class and
+keeps its plain swallow (#2884).
+
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
@@ -1025,12 +1046,12 @@ acts on the answer, read the freeze. The `lsp_notify_resync_deferred` row keeps
 recording the gate's action either way; the coverage fields report only what the
 touch is actually uncovered for. (#1586)
 
-Demoted auxiliary outcome rows retain the sibling rows' version-evidence axis:
+Demoted auxiliary outcome rows may use the version-evidence axis:
 `publishedThisContent` is true when the content binding matches or the client's
-per-path publication version advances beyond the pre-notify baseline. A
-version-less push has no binding, but its publication stamp still proves that
-the scanner answered; no publication and an older binding remain uncovered.
-(#2810 round 6)
+per-path publication version advances beyond the pre-notify baseline. Sibling
+and aggregate outcome rows remain binding-only. A version-less push therefore
+proves coverage only on the demoted row; no publication and an older binding
+remain uncovered. (#2810 round 6, #2896)
 
 A deferred cascade result that arrives LATE — past the turn-end settle cap, or
 in the quiet window after the turn already consumed its runs — must still reach
@@ -1151,11 +1172,15 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. Stated bounds: an ALIASED
-`node:child_process` import is not a site (#2888), and the scan does not follow
-a path computation into the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
-contention and the `default` vitest project's hook budget is 10 s
+reasoned row, never a pin bump. The scan does not follow a path computation into
+the seam. Stated bound (#2888): a `node:child_process` call is a site only when
+the file binds one of the seven `NODE_SPAWN_NAMES` (`tests/support/spawn-cwd-scan.ts`)
+from `child_process`; other spellings (`promisify(exec)`, a re-exported
+wrapper) are not sites, and the population's fail-safe assertion (exactly one
+non-seam site) is what surfaces a new one. The bound is stated in both places. The `beforeAll` carries an explicit 30 s
+timeout because a local measurement on 2026-09-10 records 3.808 s idle and
+3.932 s under `--maxWorkers=1` over the 81-file population. The `default`
+Vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
@@ -1621,6 +1646,16 @@ still open: a marker created BELOW a cached positive root is not seen until
 the session ends (#2922) — do not describe the class as closed.
 
 ### Session lifecycle, telemetry, and observability
+
+The pi host can emit duplicate RPC `session_start` events during one
+replacement. `index.ts` admits the complete primary mutation pass once per
+`(reason, session ID)` key, falling back to the session file when the stable ID
+is unavailable. A duplicate re-enters the restore path when the live active-tool
+set differs from the remembered plan. Keep this gate above tool restore,
+telemetry opening, registry resets, and `handleSessionStart`, so those state
+owners share one lifecycle boundary (#2890).
+The key is cleared per factory instance because pi re-runs the factory on every
+replacement; if that ever changes, clear the key in `session_shutdown`.
 
 The machine-global instance registry serializes every whole-file writer with
 an adjacent O_EXCL lock. Contenders use jittered backoff for 500ms, and locks

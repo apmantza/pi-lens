@@ -333,12 +333,50 @@ export interface AuxiliaryWaitEvidence {
 	 * #1493/#2810: evidence this auxiliary already published for this touch —
 	 * either a stored binding whose `contentHash` equals the touch's content
 	 * hash, or (version-less publishers) a per-path publication stamp that
-	 * advanced past the touch's pre-notify baseline. The stamp form cannot
-	 * prove the bytes matched (a late publication of the previous revision also
-	 * advances it); that bound is shared with the non-demoted outcome rows.
+	 * advanced past the touch's pre-notify baseline. The stamp form cannot prove
+	 * the bytes matched (a late publication of the previous revision also
+	 * advances it); only the demoted outcome row admits that form. The other
+	 * rows retain binding-only master semantics.
 	 * Absent/false → this touch has no publication of its own to point at.
 	 */
 	publishedThisContent?: boolean;
+}
+
+/**
+ * #2878: one publication-evidence predicate for auxiliary coverage. A
+ * content-hash binding proves that the stored publication describes these
+ * bytes. For a version-less publisher, an advanced per-path publication stamp
+ * proves that the auxiliary published after this touch's pre-notify baseline;
+ * the stamp alone cannot prove that the bytes matched. The pre-notify boolean
+ * passed as `bindingMatchesContent` preserves a binding that the notify
+ * cleared, while the live stamp covers a publication that landed after the
+ * wait began. The caller selects the master's row policy explicitly: only the
+ * demoted row enables the stamp union; the sibling and aggregate rows remain
+ * binding-only. Absent evidence fails closed.
+ */
+export function auxiliaryPublicationEvidence({
+	bindingMatchesContent,
+	baseline,
+	currentPathVersion,
+	allowStamp = true,
+	raced = true,
+}: {
+	bindingMatchesContent: boolean;
+	baseline: number | undefined;
+	currentPathVersion: number | undefined;
+	/** Whether this row's master semantics admit the per-path stamp. */
+	allowStamp?: boolean;
+	/** Whether the raced wait established the stamp evidence for this row. */
+	raced?: boolean;
+}): boolean {
+	return (
+		bindingMatchesContent ||
+		(allowStamp &&
+			raced &&
+			Number.isFinite(baseline) &&
+			currentPathVersion !== undefined &&
+			currentPathVersion > (baseline as number))
+	);
 }
 
 /**
