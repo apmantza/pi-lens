@@ -4,6 +4,7 @@ import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
 import { normalizeLoggedPath } from "./path-utils.js";
+import { getTurnId } from "./turn-context.js";
 
 const LATENCY_LOG_DIR = getGlobalPiLensLogDir();
 const LATENCY_LOG_FILE = path.join(LATENCY_LOG_DIR, "latency.log");
@@ -19,6 +20,7 @@ export interface LatencyEntry {
 	ts?: string;
 	/** Process that wrote the entry; used to isolate current-session telemetry. */
 	pid?: number;
+	turnId?: string;
 	/** ISO timestamp when the runner/phase started — diff with ts = durationMs */
 	startedAt?: string;
 	toolName?: string;
@@ -814,6 +816,7 @@ export function logLatency(entry: LatencyEntry): void {
 		...entry,
 		ts,
 		pid: process.pid,
+		turnId: entry.turnId ?? getTurnId(),
 		filePath: normalizeLoggedPath(entry.filePath),
 	});
 }
