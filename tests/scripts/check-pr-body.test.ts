@@ -562,7 +562,11 @@ describe("PR body lint (#1844)", () => {
 	])(
 		"rejects a traversal existing-record citation to a %s",
 		(_name, kind, file) => {
-			const probe = join(repositoryRoot, "scripts", "probe-record.mjs");
+			// The probe lives under a throwaway root, never the live repository
+			// (#2865 v5 N1: a probe written into scripts/ reds lint-js on a hard kill).
+			const root = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-traversal-"));
+			mkdirSync(join(root, "scripts"));
+			const probe = join(root, "scripts", "probe-record.mjs");
 			writeFileSync(
 				probe,
 				'recordDegradationOnce({ kind: "script-probe" });\n',
@@ -573,7 +577,7 @@ describe("PR body lint (#1844)", () => {
 						"The advisory check run is the record.",
 						`covered by existing record \`${kind}\` at \`${file}\``,
 					),
-					repositoryRoot,
+					root,
 					() =>
 						"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
 				);
@@ -584,7 +588,7 @@ describe("PR body lint (#1844)", () => {
 					],
 				});
 			} finally {
-				rmSync(probe, { force: true });
+				rmSync(root, { recursive: true, force: true });
 			}
 		},
 	);
