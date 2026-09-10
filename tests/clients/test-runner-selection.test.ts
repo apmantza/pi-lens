@@ -213,6 +213,126 @@ describe("#2870 runner selection is per file kind", () => {
 		expect(client.getTestRunTarget(outsideAnyModule, root)).toBeNull();
 	});
 
+	// Review round 2, F1. `ROOT_MARKERS_BY_KIND` is deliberately BROADER than
+	// any runner's `configFiles`: it answers "where does this language live",
+	// not "where is this language's test runner configured". Round 1 probed
+	// the anchored directory ALONE, so any intermediate directory carrying one
+	// of those anchor-only markers shadowed the project root's real runner
+	// config — and pytest/rspec/minitest/phpunit have no later priority to
+	// rescue them (Priority 4 covers go/cargo/dotnet/gradle/maven only,
+	// Priority 3 vitest/jest only). Measured on round 1's build: all four of
+	// these single-language repos returned NO TARGET where master picked the
+	// runner, breaking #2870's own amended criterion 4.
+	it.each([
+		{
+			language: "python",
+			rootMarker: ["pytest.ini", "[pytest]\n"],
+			anchorMarker: ["services/api/requirements.txt", "flask\n"],
+			testFile: ["services/api/tests/test_foo.py", "def test_x():\n    pass\n"],
+			runner: "pytest",
+		},
+		{
+			language: "ruby",
+			rootMarker: [".rspec", "--require spec_helper\n"],
+			anchorMarker: ["web/Rakefile", "task :default\n"],
+			testFile: ["web/spec/thing_spec.rb", "describe 'x' do end\n"],
+			runner: "rspec",
+		},
+		{
+			language: "php",
+			rootMarker: ["phpunit.xml", "<phpunit/>\n"],
+			// A composer.json with no phpunit dependency anchors the language
+			// but is NOT a phpunit config file — detectRunner's own special
+			// case says so.
+			anchorMarker: [
+				"app/composer.json",
+				'{"require":{"monolog/monolog":"^3"}}\n',
+			],
+			testFile: ["app/tests/ThingTest.php", "<?php\n"],
+			runner: "phpunit",
+		},
+		{
+			language: "java",
+			rootMarker: ["build.gradle", "\n"],
+			anchorMarker: ["mod/.classpath", "<classpath/>\n"],
+			testFile: ["mod/src/test/java/FooTest.java", "class FooTest {}\n"],
+			runner: "gradle",
+		},
+	])(
+		"keeps a single-language $language repo's runner when an anchor-only marker sits below the root",
+		({ language, rootMarker, anchorMarker, testFile, runner }) => {
+			const root = makeRoot(`pi-lens-2870-anchor-${language}-`);
+			write(root, rootMarker[0], rootMarker[1]);
+			write(root, anchorMarker[0], anchorMarker[1]);
+			const file = write(root, testFile[0], testFile[1]);
+
+			expect(
+				new TestRunnerClient(false).getTestRunTarget(file, root)?.runner,
+			).toBe(runner);
+		},
+	);
+
+	it("re-probes the dispatch root under the SAME kind gate, so a polyglot root still cannot claim a foreign file", () => {
+		// The dangerous direction of F1's fallback, found by mutating the
+		// re-probe to pass `null` instead of `eligible` (that mutation is
+		// otherwise INERT against every other fixture here, because in them the
+		// anchor already IS the dispatch root). Here the anchor sits strictly
+		// below it — `.classpath` anchors java in the module but configures no
+		// runner — so the fallback really does re-probe a root whose only
+		// runner config is `go.mod`. Ungated, that is #2870's exact defect one
+		// rung lower.
+		const root = makeRoot("pi-lens-2870-refallback-gate-");
+		write(root, "go.mod", "module example.com/x\n");
+		write(root, "app/gw/.classpath", "<classpath/>\n");
+		const javaTest = write(
+			root,
+			"app/gw/src/test/java/FooTest.java",
+			"class FooTest {}\n",
+		);
+
+		expect(
+			new TestRunnerClient(false).getTestRunTarget(javaTest, root),
+		).toBeNull();
+	});
+
+	// Review round 2, F3: the kind gate in Priorities 2 and 3 was load-bearing
+	// and untested — removing all four `eligible` conditions there left every
+	// case green while a `.py` file resolved to `vitest`, #2870's exact symptom
+	// one priority lower. Both fixtures below deliberately configure NO runner
+	// of the file's own kind, so the only way to a non-null answer is a runner
+	// the kind gate must refuse. Ruby, not Python: Priority 5's global
+	// `which pytest` rescue would make a `.py` expectation depend on whether
+	// the box has pytest installed.
+	it("refuses a package.json runner for a file of another kind (Priority 2)", () => {
+		const root = makeRoot("pi-lens-2870-prio2-");
+		write(
+			root,
+			"package.json",
+			JSON.stringify({
+				name: "x",
+				devDependencies: { vitest: "^3", jest: "^29", pytest: "^1" },
+			}),
+		);
+		const rubyTest = write(root, "spec/thing_spec.rb", "describe 'x' do end\n");
+
+		expect(
+			new TestRunnerClient(false).getTestRunTarget(rubyTest, root),
+		).toBeNull();
+	});
+
+	it("refuses a hoisted node_modules runner for a file of another kind (Priority 3)", () => {
+		const root = makeRoot("pi-lens-2870-prio3-");
+		fs.mkdirSync(path.join(root, "node_modules", "vitest"), {
+			recursive: true,
+		});
+		fs.mkdirSync(path.join(root, "node_modules", "jest"), { recursive: true });
+		const rubyTest = write(root, "spec/thing_spec.rb", "describe 'x' do end\n");
+
+		expect(
+			new TestRunnerClient(false).getTestRunTarget(rubyTest, root),
+		).toBeNull();
+	});
+
 	it("keeps the pre-#2870 resolution for a file outside the project root", () => {
 		// #2522's fail-closed contract: an out-of-tree target must still be
 		// PRODUCED so the exclusion layer refuses it, rather than disappearing

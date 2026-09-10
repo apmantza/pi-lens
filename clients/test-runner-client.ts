@@ -16,10 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { emitBounded } from "./bounded-telemetry.js";
-import {
-	LEDGER_FIELD_MAX,
-	recordDegradationOnce,
-} from "./degradation-ledger.js";
+import { LEDGER_FIELD_MAX } from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
@@ -784,10 +781,69 @@ export class TestRunnerClient {
 	): { runner: string; config: RunnerConfig } | null {
 		const scope = this.resolveDetectionScope(dispatchRoot, sourceFilePath);
 		if (!scope) return null;
-		const { root: cwd, eligible } = scope;
-		// Keyed on the RESOLVED root, not the dispatch root: two modules of one
-		// polyglot repo have different runners available, and a memo keyed on
-		// the shared dispatch root would serve the first module's verdict to
+		const { root, eligible } = scope;
+
+		const anchored = this.probeRunnersAt(root, eligible);
+		if (anchored) return anchored;
+
+		// #2879 review round 2, F1: the anchor is a LANGUAGE root, and
+		// `ROOT_MARKERS_BY_KIND` is deliberately BROADER than any runner's
+		// `configFiles` — `requirements.txt`, `setup.py`, `Pipfile`,
+		// `Rakefile`, `composer.lock`, `.classpath` all anchor a language
+		// without configuring a test runner. Probing the anchored directory
+		// ALONE therefore let any such intermediate marker shadow the
+		// project root's real runner config, and pytest/rspec/minitest/
+		// phpunit have no later priority to rescue them: four single-language
+		// repos went from a working runner to no target at all (measured, the
+		// review's `anchor.mjs` probe), which is exactly what #2870's amended
+		// criterion 4 protects.
+		//
+		// So the anchored probe is a PREFERENCE, not a restriction: on a miss,
+		// re-probe the dispatch root under the SAME kind gate. The gate is
+		// what keeps #2870 fixed — a `.java` file re-probing a polyglot root
+		// still cannot reach `go`, because `go` never claims the `java` kind.
+		const dispatch = path.resolve(dispatchRoot);
+		if (path.resolve(root) !== dispatch) {
+			const atDispatch = this.probeRunnersAt(dispatch, eligible);
+			if (atDispatch) return atDispatch;
+		}
+
+		// Priority 5: Check if pytest is available globally (Python files only)
+		const isPythonSource =
+			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
+		if (!isPythonSource) return null;
+
+		try {
+			const whichCmd = process.platform === "win32" ? "where" : "which";
+			const result = safeSpawn(whichCmd, ["pytest"], {
+				timeout: 2000,
+			});
+			if (result.status === 0) {
+				this.log("Detected pytest globally");
+				return { runner: "pytest", config: RUNNERS.pytest };
+			}
+		} catch (err) {
+			void err;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Priorities 1-4 of the detection ladder, against ONE directory: config
+	 * files, `package.json` dependencies, a hoisted `node_modules`, and the
+	 * glob-capable whole-project runners. `eligible` is the kind gate
+	 * (#2870); `null` means no file was named and every runner is a
+	 * candidate. Returns `null` when this directory configures no eligible
+	 * runner, which is what lets `detectRunner` try the dispatch root next.
+	 */
+	private probeRunnersAt(
+		cwd: string,
+		eligible: ReadonlySet<string> | null,
+	): { runner: string; config: RunnerConfig } | null {
+		// Keyed on the probed directory, not the dispatch root: two modules of
+		// one polyglot repo have different runners available, and a memo keyed
+		// on the shared dispatch root would serve the first module's verdict to
 		// every other module (#2870).
 		const rootKey = this.getCanonicalProjectRoot(cwd);
 		let byRunner = this.availableRunners.get(rootKey);
@@ -915,24 +971,6 @@ export class TestRunnerClient {
 				this.log(`Detected ${name} from config file`);
 				return { runner: name, config };
 			}
-		}
-
-		// Priority 5: Check if pytest is available globally (Python files only)
-		const isPythonSource =
-			typeof sourceFilePath === "string" && sourceFilePath.endsWith(".py");
-		if (!isPythonSource) return null;
-
-		try {
-			const whichCmd = process.platform === "win32" ? "where" : "which";
-			const result = safeSpawn(whichCmd, ["pytest"], {
-				timeout: 2000,
-			});
-			if (result.status === 0) {
-				this.log("Detected pytest globally");
-				return { runner: "pytest", config: RUNNERS.pytest };
-			}
-		} catch (err) {
-			void err;
 		}
 
 		return null;
@@ -1433,12 +1471,18 @@ export class TestRunnerClient {
 	 * module would make a recorded failure unfindable from the turn that
 	 * selects targets.
 	 *
-	 * The seam is allowed to fall back OUTSIDE the dispatch root (its
-	 * file-dir/`$HOME` branches, for a file that is not under it at all) —
-	 * that is right for a formatter asked to format a foreign file, and wrong
-	 * here: turn-end already refuses an out-of-tree target (#2522), and a test
-	 * runner spawned in `$HOME` would run whatever suite it found there. Such
-	 * a resolution is clamped back to the dispatch root.
+	 * Review round 2, F6: there is deliberately NO clamp on a resolution that
+	 * lands outside the dispatch root. The seam only answers outside it when
+	 * the FILE is outside it (`tool-cwd.ts`: every in-tree branch is
+	 * `isUnderDir`-checked), and the one production caller —
+	 * `runtime-turn.ts`'s turn-end batch, on both the fresh and the deferred
+	 * path — filters every target through `isExcludedTestTarget`, which fails
+	 * CLOSED out of tree (#2522). Round 1 shipped that clamp plus a
+	 * `tool-cwd-resolution` ledger row for it; neither could fire in a live
+	 * session, so the row was a record nothing could observe and the guard was
+	 * defence against a caller that does not exist. Both are gone. If a second
+	 * caller is ever added that can pass an out-of-tree file, it needs this
+	 * decision made where that caller is, with a test that reaches it.
 	 */
 	private resolveSpawnCwd(
 		runner: string,
@@ -1446,28 +1490,10 @@ export class TestRunnerClient {
 		testFile: string,
 		dispatchRoot: string,
 	): string {
-		const root = path.resolve(dispatchRoot);
-		const resolved = resolveToolCwd("runner", runner, testFile, {
-			cwd: root,
+		return resolveToolCwd("runner", runner, testFile, {
+			cwd: path.resolve(dispatchRoot),
 			rootMarkers: config.spawnCwdMarkers ?? config.configFiles,
 		});
-		if (!isUnderDir(resolved, root)) {
-			// A refusal nothing can observe is a vacuous guard. The seam's own
-			// `tool-cwd-resolution` row is not it: its marker/git branches take
-			// no record at all for a file outside the dispatch root, and where
-			// it does record, the row says what the SEAM decided, not that the
-			// runner declined it. Second writer to a shared kind, so the
-			// subject carries an explicit discriminator (`runner-spawn:`) and
-			// can never collide with the seam's own subject, which is the bare
-			// tool name — once per runner per session either way.
-			recordDegradationOnce({
-				kind: "tool-cwd-resolution",
-				subject: `runner-spawn:${runner}`,
-				reason: `spawn cwd ${resolved} is outside the dispatch root ${root}; ran the test from the dispatch root instead`,
-			});
-			return root;
-		}
-		return resolved;
 	}
 
 	/**
@@ -2669,19 +2695,26 @@ export class TestRunnerClient {
 			const slash = name.indexOf("/");
 			return slash === -1 || !goFailNameSet.has(name.slice(0, slash));
 		}).length;
-		// #2870: go's own INFRASTRUCTURE verdict line, the positive twin of the
-		// `(?:build|setup) failed` lookahead below. #1524-r4 stopped it from
-		// being counted as a test failure but left it with no classification of
-		// its own, so whether the agent saw "could not run tests" or a
-		// fabricated `✗ 1/1 failed ✗ go failure` came down to whether go's
-		// output happened to contain the substring "error" (the runner-error
-		// condition below): `FAIL <pkg> [setup failed]` + `error: no packages
-		// to test` was advisory, the same line on its own was a blocking
-		// failure the agent could not tell from a real one (#2870, measured).
+		// #2870: go's own `[setup failed]` verdict line — "there was no package
+		// to test" — the positive twin of the `(?:build|setup) failed`
+		// lookahead below. #1524-r4 stopped it from being counted as a test
+		// failure but left it with no classification of its own, so whether the
+		// agent saw "could not run tests" or a fabricated `✗ 1/1 failed ✗ go
+		// failure` came down to whether go's output happened to contain the
+		// substring "error" (the runner-error condition below): `FAIL <pkg>
+		// [setup failed]` + `error: no packages to test` was advisory, the same
+		// line on its own was a blocking failure the agent could not tell from
+		// a real one (#2870, measured).
+		//
+		// `[build failed]` is deliberately NOT included (review round 2, F5).
+		// The maintainer's amendment on #2870 names `[setup failed]`; a go
+		// COMPILE error is usually one the agent just introduced, and
+		// downgrading it to advisory is a signal change on master's behaviour
+		// that belongs on the issue, not in this fix. Its classification is
+		// still the coin flip described above — see the PR body's follow-ups.
 		let goInfraVerdict = false;
 		if (runner === "go") {
-			goInfraVerdict =
-				/^FAIL[^\S\n]+\S+[^\S\n]+\[(?:build|setup) failed\]/m.test(output);
+			goInfraVerdict = /^FAIL[^\S\n]+\S+[^\S\n]+\[setup failed\]/m.test(output);
 			// #1524-r4: `(?![^\n]*\[(?:build|setup) failed\])` rejects go's
 			// INFRASTRUCTURE verdict lines — `FAIL <pkg> [build failed]` (a
 			// compile error) and `FAIL <pkg> [setup failed]` (no packages to

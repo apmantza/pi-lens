@@ -59,10 +59,7 @@ vi.mock("../../clients/extension-log.js", async (importOriginal) => ({
 	logExtension,
 }));
 
-import {
-	getDegradationSummary,
-	resetDegradationLedger,
-} from "../../clients/degradation-ledger.js";
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
 import { removeTempDirSync } from "./test-utils.js";
 
@@ -76,8 +73,9 @@ beforeEach(() => {
 		return spawnResult;
 	});
 	logExtension.mockClear();
-	// The seam's log throttle and its degradation ledger both reset on the
-	// ledger generation, so every case starts with a fresh once-per-key state.
+	// The seam's once-per-resolution-key log throttle rides the degradation
+	// ledger's generation, so every case starts with a fresh latch — which is
+	// what makes the once-per-key assertion below mean anything.
 	resetDegradationLedger();
 });
 
@@ -212,57 +210,14 @@ describe("#2871 the test-runner child's cwd comes from resolveToolCwd", () => {
 		expect(fs.existsSync(path.join(spawned[0].cwd!, "gradlew"))).toBe(true);
 	});
 
-	it("clamps a resolution that falls outside the dispatch root, and records the fallback", async () => {
-		const parent = makeRoot("pi-lens-2871-outoftree-");
-		const project = path.join(parent, "project");
-		fs.mkdirSync(project, { recursive: true });
-		write(project, "vitest.config.ts", "export default {}\n");
-		const stray = write(parent, "outside/stray.test.ts", "export {};\n");
-
-		await new TestRunnerClient(false).runTestFileAsync(
-			stray,
-			project,
-			"vitest",
-			RUNNERS.vitest,
-		);
-
-		expect(spawned[0].cwd).toBe(project);
-		// Two bounded rows under one kind, distinguishable by subject: the
-		// seam's own record of the fallback it took (subject = the bare tool
-		// name), and the runner's record that it REFUSED that answer (subject
-		// discriminated by the `runner-spawn:` prefix). A count alone would go
-		// green if either writer's row were swallowed by the other's once-latch.
-		const group = getDegradationSummary().find(
-			(entry) => entry.kind === "tool-cwd-resolution",
-		);
-		expect(group?.count).toBe(2);
-		const subjects = group?.latestReasons.map((entry) => entry.subject) ?? [];
-		expect(subjects).toContain("vitest");
-		expect(subjects).toContain("runner-spawn:vitest");
-		expect(
-			group?.latestReasons.find(
-				(entry) => entry.subject === "runner-spawn:vitest",
-			)?.reason,
-		).toContain("outside the dispatch root");
-	});
-
-	it("records the refusal once per runner per session, not once per spawn", async () => {
-		const parent = makeRoot("pi-lens-2871-outoftree-once-");
-		const project = path.join(parent, "project");
-		fs.mkdirSync(project, { recursive: true });
-		write(project, "vitest.config.ts", "export default {}\n");
-		const stray = write(parent, "outside/stray.test.ts", "export {};\n");
-
-		const client = new TestRunnerClient(false);
-		await client.runTestFileAsync(stray, project, "vitest", RUNNERS.vitest);
-		await client.runTestFileAsync(stray, project, "vitest", RUNNERS.vitest);
-
-		expect(spawned).toHaveLength(2);
-		const group = getDegradationSummary().find(
-			(entry) => entry.kind === "tool-cwd-resolution",
-		);
-		expect(group?.count).toBe(2); // one seam row + one runner row, not four
-	});
+	// Review round 2, F6: the two cases that used to sit here — an
+	// out-of-tree file clamped back to the dispatch root, and the bounded
+	// `tool-cwd-resolution` row that recorded the refusal — are gone with the
+	// clamp itself. Neither could fire in a live session: the one production
+	// caller filters every target through `isExcludedTestTarget`, which fails
+	// closed out of tree (#2522), and the seam only answers outside the
+	// dispatch root for a file that is already outside it. They were a guard
+	// against a caller that does not exist and a record nothing could observe.
 
 	it("keeps the failed-target ledger keyed on the dispatch root", async () => {
 		// One `cwd` used to do six jobs here. The ledger `getTestRunTarget`

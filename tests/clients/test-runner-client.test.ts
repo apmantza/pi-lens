@@ -985,22 +985,28 @@ describe("test-runner-client", () => {
 			expect(result.failures).toEqual([]);
 		});
 
-		it("reports a go build failure with no 'error' text as a runner error", () => {
+		it("leaves a go build failure with no 'error' text blocking", () => {
+			// Review round 2, F5: the amendment on #2870 names `[setup failed]`
+			// only. A `[build failed]` package is a COMPILE error, usually one
+			// the agent just introduced, so this fix does not downgrade it —
+			// even though its classification still turns on whether the
+			// compiler happened to print the word "error" (the case above,
+			// where it does, still reads as a runner error via #1524's path).
+			// Pinned so the scope of the new branch cannot drift silently.
 			const result = parse(
 				"# example.com/pkg\n./main_test.go:8:2: undefined: Bar\nFAIL\texample.com/pkg [build failed]\n",
 				1,
 			);
 
-			expect(result.error).toBe("Runner go exited with 1");
-			expect(result.failed).toBe(0);
-			expect(result.failures).toEqual([]);
+			expect(result.error).toBeUndefined();
+			expect(result.failed).toBe(1);
 		});
 
-		it("keeps a real go test failure blocking even when a sibling package failed to build", () => {
+		it("keeps a real go test failure blocking even when a sibling package reported [setup failed]", () => {
 			// The `!matched`/`goFailNames` vetoes still decide: a run that
 			// produced a real `--- FAIL:` is a verdict, never advisory.
 			const result = parse(
-				"--- FAIL: TestA\n    a_test.go:5: boom\nFAIL\texample.com/a\t0.01s\nFAIL\texample.com/b [build failed]\n",
+				"--- FAIL: TestA\n    a_test.go:5: boom\nFAIL\texample.com/a\t0.01s\nFAIL\texample.com/b [setup failed]\n",
 				1,
 			);
 
