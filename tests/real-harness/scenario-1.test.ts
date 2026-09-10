@@ -18,7 +18,7 @@ function documentedToolBaselines(): { active: string[]; lazy: string[] } {
 		docs.indexOf("are registered", lazyStart),
 	);
 	const activeSection = docs.slice(
-		docs.indexOf("Six tools stay always-active"),
+		docs.indexOf("Five tools stay always-active"),
 		lazyStart,
 	);
 	return {

@@ -5,19 +5,19 @@ description: Navigate code with IDE features and run proactive LSP diagnostics o
 
 # LSP Navigation and Diagnostics
 
-Use `lsp_navigation` as **PRIMARY** for code intelligence. Use `lsp_diagnostics` as **PRIMARY** for proactive type/error checks. Do NOT use grep/glob/ast-grep first for code intelligence.
+Use `lsp_navigation` as **PRIMARY** for code intelligence. Use `lens_diagnostics` with `source=lsp` as **PRIMARY** for proactive type/error checks. Do NOT use grep/glob/ast-grep first for code intelligence.
 
 ## Diagnostics
 
-Use `lsp_diagnostics` before builds/tests or after touching several files:
+Use `lens_diagnostics` with `source=lsp` before builds/tests or after touching several files:
 
 | Need | Tool call |
 |---|---|
-| Check one file | `lsp_diagnostics({ path: "src/file.ts" })` |
-| Check a folder | `lsp_diagnostics({ path: "src/", severity: "error" })` |
-| Check exact touched files | `lsp_diagnostics({ paths: ["src/a.ts", "src/b.ts"], concurrency: 8 })` |
-| Slow server (Rust, Java) | `lsp_diagnostics({ paths: files, waitMs: 2000 })` |
-| Include warnings | `lsp_diagnostics({ paths: files, severity: "all" })` |
+| Check one file | `lens_diagnostics({ source: "lsp", scope: "paths", paths: ["src/file.ts"] })` |
+| Check a folder | `lens_diagnostics({ source: "lsp", scope: "workspace", path: "src/", severity: "error" })` |
+| Check exact touched files | `lens_diagnostics({ source: "lsp", scope: "paths", paths: ["src/a.ts", "src/b.ts"] })` |
+| Slow server (Rust, Java) | `lens_diagnostics({ source: "lsp", scope: "paths", paths: files, waitMs: 2000 })` |
+| Include warnings | `lens_diagnostics({ source: "lsp", scope: "paths", paths: files, severity: "all" })` |
 
 Prefer explicit `paths` batches after multi-file edits — bounded concurrency, no unrelated directory noise.
 
@@ -59,7 +59,7 @@ lsp_navigation(operation="outgoingCalls", callHierarchyItem=<item from step 1>)
 - **`workspaceSymbol` empty?** Always pass `path`. Unscoped queries are best-effort and frequently return nothing. If TypeScript returns "No Project", open the scoped file first.
 - **`references`** — query from the *definition site* for full cross-file coverage; usage-site queries can be partial.
 - **`signatureHelp`** — only valid at call-site argument positions; declaration positions return empty.
-- **`workspaceDiagnostics`** — tracked push snapshot only, not an active check. Use `lsp_diagnostics` when you need fresh results.
+- **`workspaceDiagnostics`** — tracked push snapshot only, not an active check. Use `lens_diagnostics` with `source=lsp` when you need fresh results.
 - **`codeAction`** — distinguish `quickfix` from generic refactors ("Move to new file"). Generic refactors are not error fixes.
 - **`prepareCallHierarchy`** — server-capability dependent; if unsupported, skip incoming/outgoing calls.
 
@@ -74,4 +74,4 @@ lsp_navigation(operation="outgoingCalls", callHierarchyItem=<item from step 1>)
 
 ## Golden Rule
 
-**Code intelligence → `lsp_navigation` first. Type/error validation → `lsp_diagnostics` first. Text/pattern search → grep/ast-grep.**
+**Code intelligence → `lsp_navigation` first. Type/error validation → `lens_diagnostics source=lsp` first. Text/pattern search → grep/ast-grep.**

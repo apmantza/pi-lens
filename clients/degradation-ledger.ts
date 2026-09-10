@@ -276,6 +276,8 @@ export type DegradationKind =
 	 * re-attempting the load — a same-process retry is dead. TreeSitterClient
 	 * latches this permanently instead of retrying on every parse call.
 	 */
+	/** A retired LSP diagnostics call was redirected to lens_diagnostics. */
+	| "lsp-diagnostics-compatibility"
 	| "lsp-diagnostics-timeout"
 	| "lsp-diagnostics-unsupported"
 	| "lsp-document-send-order"
