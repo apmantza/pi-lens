@@ -5,8 +5,12 @@ if (process.argv[2] !== "vi-mock") {
 	process.exit(2);
 }
 const result = spawnSync(
-	"node_modules/.bin/vitest",
+	process.execPath,
 	[
+		"scripts/with-test-lock.mjs",
+		"--shared",
+		"--",
+		"node_modules/.bin/vitest",
 		"run",
 		"tests/config/vi-mock-export-sweep.test.ts",
 		"--configLoader",

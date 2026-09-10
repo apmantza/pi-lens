@@ -40,14 +40,20 @@ function scan(): ViMockExportFinding[] {
 }
 
 function key(finding: ViMockExportFinding): string {
-	return `${relativePosix(REPO_ROOT, finding.file)}:${finding.specifier}:${finding.factoryProperties.join(",")}`;
+	return `${relativePosix(REPO_ROOT, finding.file)}:${finding.specifier}:${JSON.stringify(
+		[...finding.factoryProperties].sort(compareCodeUnits),
+	)}`;
+}
+
+function compareCodeUnits(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function baselineFrom(findings: ViMockExportFinding[]): Record<string, number> {
 	return Object.fromEntries(
 		findings
 			.map((finding) => [key(finding), finding.missing.length] as const)
-			.sort(([a], [b]) => a.localeCompare(b)),
+			.sort(([a], [b]) => compareCodeUnits(a, b)),
 	);
 }
 
@@ -225,7 +231,7 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			fs.writeFileSync(testFile, source);
 			const finding = findViMockExportGaps(testFile, source);
 			const admitted = {
-				[`${relativePosix(REPO_ROOT, finding[0].file)}:./module.js:a,b`]: 0,
+				[`${relativePosix(REPO_ROOT, finding[0].file)}:./module.js:["a","b"]`]: 0,
 			};
 			expect(
 				compareAgainstBaseline(finding, admitted).problems.join("\n"),
@@ -273,19 +279,51 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		}
 	});
 
-	it("reports every omitted production export and warns on newly omitted exports", () => {
-		const findings = scan();
-		const result = compareAgainstBaseline(findings, BASELINE);
-		console.warn(result.warnings.join("\n"));
-		expect(result.problems, result.problems.join("\n")).toEqual([]);
-	}, 60_000);
+	it("keeps factory fingerprints injective and code-unit ordered", () => {
+		const finding = (factoryProperties: string[]): ViMockExportFinding => ({
+			file: path.join(REPO_ROOT, "tests/config/case.test.ts"),
+			specifier: "./module.js",
+			productionFile: path.join(REPO_ROOT, "clients/module.ts"),
+			missing: [],
+			factoryProperties,
+			line: 1,
+		});
+		expect(key(finding(["a,b"]))).not.toBe(key(finding(["a", "b"])));
+		expect(
+			Object.keys(baselineFrom([finding(["a", "_"]), finding(["a", "Z"])])),
+		).toEqual([
+			'tests/config/case.test.ts:./module.js:["Z","a"]',
+			'tests/config/case.test.ts:./module.js:["_","a"]',
+		]);
+	});
 
-	it("baseline entries remain live", () => {
-		const findings = scan();
-		const live = new Set(findings.map(key));
-		const dead = Object.keys(BASELINE).filter((entry) => !live.has(entry));
-		expect(dead).toEqual([]);
-	}, 60_000);
+	it.skipIf(!!process.env.VI_MOCK_EXPORT_REGEN)(
+		"reports every omitted production export and warns on newly omitted exports",
+		() => {
+			const findings = scan();
+			const result = compareAgainstBaseline(findings, BASELINE);
+			if (result.warnings.length > 0)
+				process.stderr.write(
+					`${result.warnings.map((warning) => `WARNING ${warning}`).join("\n")}\n`,
+				);
+			process.stderr.write(
+				`vi-mock-export-sweep: ${result.warnings.length} warning row(s)\n`,
+			);
+			expect(result.problems, result.problems.join("\n")).toEqual([]);
+		},
+		60_000,
+	);
+
+	it.skipIf(!!process.env.VI_MOCK_EXPORT_REGEN)(
+		"baseline entries remain live",
+		() => {
+			const findings = scan();
+			const live = new Set(findings.map(key));
+			const dead = Object.keys(BASELINE).filter((entry) => !live.has(entry));
+			expect(dead).toEqual([]);
+		},
+		60_000,
+	);
 
 	it.skipIf(!process.env.VI_MOCK_EXPORT_REGEN)(
 		"regenerates the baseline",
