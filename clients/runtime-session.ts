@@ -2380,9 +2380,10 @@ export async function handleSessionStart(
 	// this session never activated or called) is session-scoped, so its sets
 	// and once-latch re-arm here beside the other registered resets. Both hosts
 	// open the session's row through startSituationalToolTelemetrySession()
-	// BEFORE this handler runs, so this clears that fresh session's empty sets;
-	// it deliberately leaves sessionStarted alone — clearing it would make
-	// endSituationalToolTelemetry() skip the session's own final row.
+	// BEFORE this handler runs, and a repeated MCP session_start refresh
+	// legitimately re-runs this handler — so the reset only acts when no
+	// telemetry session is open; clearing a live session here would wipe the
+	// calls recorded before the refresh.
 	resetSituationalToolTelemetry();
 	// #1782: re-arm the workspace-diagnostics cache session clock. Entries
 	// written before this instant assert findings from a session that is over,

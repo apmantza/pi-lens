@@ -17,14 +17,26 @@ const activated = new Set<SituationalToolName>();
 const called = new Set<SituationalToolName>();
 let sessionStarted = false;
 let emitted = false;
-let preserveObservationsOnReset = false;
+// Pi-only: a session that began from a rebuilt AgentSession (reload/resume/
+// fork) records no row; conversation-owned accounting across rebuilds is
+// #2858. Set by the opener, cleared by a fresh open or by the session's end.
+let suppressed = false;
+// MCP-only connection-terminal latch: once the connection's row is recorded,
+// repeated initialize/tool-call starts must not reopen the session.
 let connectionEnded = false;
+// Which host owns the open session; endSituationalToolTelemetry arms the MCP
+// latch only for an MCP session.
 let sessionHost: "pi" | "mcp" = "mcp";
 
 function observe(set: Set<SituationalToolName>, name: string): void {
 	if (situationalToolSet.has(name as SituationalToolName)) {
 		set.add(name as SituationalToolName);
 	}
+}
+
+function clearObservations(): void {
+	activated.clear();
+	called.clear();
 }
 
 export function observeSituationalToolActivation(
@@ -38,33 +50,61 @@ export function observeSituationalToolCall(name: SituationalToolName): void {
 }
 
 export function resetSituationalToolTelemetry(): void {
-	if (preserveObservationsOnReset) return;
-	activated.clear();
-	called.clear();
-	// The session opener owns the once-only latch. Session-start resets run after
-	// the opener and must not make a live session emit twice.
-	if (!sessionStarted) emitted = false;
+	// A live telemetry session owns its observation sets: both hosts open the
+	// session (which resets the sets) BEFORE handleSessionStart runs, and a
+	// repeated MCP session_start refresh legitimately re-runs that handler —
+	// clearing here would wipe the calls recorded before the refresh. This
+	// registered reset therefore only acts when no session is open.
+	if (sessionStarted) return;
+	clearObservations();
+	emitted = false;
 }
 
-/** Begin a fresh session, preserving one row for an abruptly replaced one. */
+/**
+ * Open the telemetry session for one host.
+ *
+ * Pi records the dead-weight row for fresh sessions only: a non-fresh start
+ * marks the session suppressed, `endSituationalToolTelemetry` records nothing
+ * for a suppressed session, and a fresh open clears the suppression and resets
+ * both observation sets. A fresh start that replaces a still-open pi session
+ * emits that session's row (unless it was suppressed) before opening the
+ * replacement. MCP keeps its connection-scoped lifecycle — a repeated start is
+ * an idempotent refresh and an ended connection never reopens — so `fresh` is
+ * MCP-inert and MCP callers pass false.
+ */
 export function startSituationalToolTelemetrySession(
-	idempotent = false,
-	preserveOnReset = idempotent,
-	host: "pi" | "mcp" = "mcp",
+	host: "pi" | "mcp",
+	fresh: boolean,
 ): void {
-	if (host === "mcp" && idempotent && connectionEnded) return;
-	if (host === "mcp" && !idempotent) connectionEnded = false;
-	if (sessionStarted && idempotent) return;
-	if (sessionStarted) {
-		preserveObservationsOnReset = false;
-		emitSituationalDeadWeight();
-		resetSituationalToolTelemetry();
+	if (host === "mcp") {
+		if (connectionEnded) return;
+		if (sessionStarted) return;
+		sessionHost = "mcp";
+		clearObservations();
 		emitted = false;
+		sessionStarted = true;
 		return;
 	}
-	preserveObservationsOnReset = preserveOnReset;
-	sessionHost = host;
-	resetSituationalToolTelemetry();
+	if (sessionStarted && !fresh) {
+		// Rebuilt session: it records no row (#2858), and the replaced
+		// session's partial tally is discarded without emitting it.
+		clearObservations();
+		emitted = false;
+		suppressed = true;
+		sessionHost = "pi";
+		return;
+	}
+	if (sessionStarted) {
+		if (!suppressed) emitSituationalDeadWeight();
+		clearObservations();
+		emitted = false;
+		suppressed = false;
+		sessionHost = "pi";
+		return;
+	}
+	sessionHost = "pi";
+	suppressed = !fresh;
+	clearObservations();
 	emitted = false;
 	sessionStarted = true;
 }
@@ -72,10 +112,11 @@ export function startSituationalToolTelemetrySession(
 /** Emit the one session-end row and make repeated shutdown calls harmless. */
 export function endSituationalToolTelemetry(): void {
 	if (!sessionStarted) return;
-	emitSituationalDeadWeight();
+	if (!suppressed) emitSituationalDeadWeight();
 	if (sessionHost === "mcp") connectionEnded = true;
-	preserveObservationsOnReset = false;
-	resetSituationalToolTelemetry();
+	clearObservations();
+	emitted = false;
+	suppressed = false;
 	sessionStarted = false;
 }
 
@@ -99,11 +140,13 @@ export function _getSituationalToolTelemetryStateForTests(): {
 	called: number;
 	emitted: boolean;
 	sessionStarted: boolean;
+	suppressed: boolean;
 } {
 	return {
 		activated: activated.size,
 		called: called.size,
 		emitted,
 		sessionStarted,
+		suppressed,
 	};
 }

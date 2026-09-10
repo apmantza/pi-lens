@@ -2051,10 +2051,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
+					// #2800 item 8: pi records the dead-weight row for fresh sessions
+					// only. A non-fresh start (reload/resume/fork) marks the session
+					// suppressed here, BEFORE the handler below can hang (#2859), so
+					// the session's end never depends on handleSessionStart returning.
 					startSituationalToolTelemetrySession(
-						!isFreshSessionStart(sessionReason),
-						true,
 						"pi",
+						isFreshSessionStart(sessionReason),
 					);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
@@ -2100,17 +2103,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// pinned devDependency version's API exists at runtime. Under
 					// `--no-lazy-tools` nothing is touched at all: all-active IS the
 					// requested posture.
-					let restoredLazyToolNames: string[] = [];
 					try {
 						const piWithActiveTools = pi as unknown as {
 							getActiveTools?: () => string[];
 							setActiveTools?: (names: string[]) => void;
 						};
 						// A fresh conversation starts with no activation memory; a
-						// rebuild inherits the parent's. Replay this memory even when
-						// the host has no active-tool API or --no-lazy-tools is set.
+						// rebuild inherits the parent's.
 						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
-						restoredLazyToolNames = [...rememberedLazyTools];
 						if (
 							getLensFlag("no-lazy-tools") !== true &&
 							typeof piWithActiveTools.getActiveTools === "function" &&
@@ -2276,9 +2276,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						resetDispatchBaselines,
 						resetLSPService,
 					});
-					// The handler resets session observations. Record restored activations
-					// after that reset so the restored tools are not reported as dead weight.
-					observeSituationalToolActivation(restoredLazyToolNames);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran

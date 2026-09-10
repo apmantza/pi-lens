@@ -6,6 +6,7 @@ vi.mock("../../clients/extension-log.js", () => ({ logExtension }));
 
 import {
 	emitSituationalDeadWeight,
+	endSituationalToolTelemetry,
 	observeSituationalToolActivation,
 	observeSituationalToolCall,
 	resetSituationalToolTelemetry,
@@ -55,10 +56,41 @@ describe("situational dead-weight telemetry", () => {
 	});
 
 	it("keeps the opener-owned latch armed for repeated emits", () => {
-		startSituationalToolTelemetrySession();
+		startSituationalToolTelemetrySession("pi", true);
 		emitSituationalDeadWeight();
 		emitSituationalDeadWeight();
 
 		expect(logExtension).toHaveBeenCalledTimes(1);
+		endSituationalToolTelemetry();
+	});
+
+	it("records no row when the pi session opened from a rebuilt start", () => {
+		startSituationalToolTelemetrySession("pi", false);
+		observeSituationalToolActivation(["ast_grep_search"]);
+		endSituationalToolTelemetry();
+
+		expect(logExtension).not.toHaveBeenCalled();
+	});
+
+	it("records the row again once a fresh pi open clears the suppression", () => {
+		startSituationalToolTelemetrySession("pi", false);
+		startSituationalToolTelemetrySession("pi", true);
+		observeSituationalToolCall("lsp_navigation");
+		endSituationalToolTelemetry();
+
+		expect(logExtension).toHaveBeenCalledTimes(1);
+		expect(logExtension).toHaveBeenCalledWith({
+			subsystem: "tools",
+			level: "debug",
+			message: "situational tool dead weight",
+			metadata: {
+				tools: [
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lens_diagnostic_mark",
+				],
+			},
+		});
 	});
 });
