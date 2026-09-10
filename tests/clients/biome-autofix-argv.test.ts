@@ -66,4 +66,26 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 			removeTempDirSync(tmpDir);
 		}
 	});
+
+	it("autofix resolves the same nested package root as the runner seam", async () => {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-biome-nested-"),
+		);
+		try {
+			const packageDir = path.join(tmpDir, "packages", "api");
+			const filePath = path.join(packageDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(path.join(packageDir, "biome.json"), "{}\n");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+
+			const { BiomeClient } = await import("../../clients/biome-client.js");
+			await new BiomeClient().fixFileAsync(filePath, tmpDir);
+			const lintCall = safeSpawnAsync.mock.calls.find((call: unknown[]) =>
+				(call[1] as string[]).includes("lint"),
+			) as [string, string[], { cwd?: string }];
+			expect(lintCall?.[2]?.cwd).toBe(packageDir);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
 });

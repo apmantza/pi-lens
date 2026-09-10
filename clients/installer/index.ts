@@ -80,6 +80,7 @@ import {
 	resetSafeSpawnWindowsCommandCache,
 	safeSpawnAsync,
 } from "../safe-spawn.js";
+import { probeToolAsync } from "../tool-probe.js";
 import { logSessionStart } from "../sessionstart-logger.js";
 
 // Global installation directory for pi-lens tools
@@ -2072,28 +2073,18 @@ function isAstGrepVersionOutput(output: string): boolean {
 }
 
 async function verifyAstGrepProbePath(binPath: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		let proc: ReturnType<typeof spawn>;
-		try {
-			proc = spawn(binPath, ["--version"], {
-				stdio: ["ignore", "pipe", "pipe"],
-				shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(binPath),
-				timeout: 5000,
-			});
-		} catch {
-			// SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL, the pidusage
-			// bug class, #533) — best-effort probe, resolve rather than reject.
-			resolve(false);
-			return;
-		}
-		let output = "";
-		proc.stdout?.on("data", (data) => (output += data));
-		proc.stderr?.on("data", (data) => (output += data));
-		proc.on("exit", (code) => {
-			resolve(code === 0 && isAstGrepVersionOutput(output));
-		});
-		proc.on("error", () => resolve(false));
+	// #2894: through the probe seam rather than a hand-rolled `spawn` promise.
+	// `probeToolAsync` already owns the synchronous-throw case (#533), the
+	// Windows `.cmd`/`.bat` resolution this used `shell: true` for, and the
+	// timeout tree-kill a bare `spawn({ timeout })` does not do.
+	const result = await probeToolAsync(binPath, ["--version"], {
+		timeout: 5000,
 	});
+	return (
+		!result.error &&
+		result.status === 0 &&
+		isAstGrepVersionOutput(`${result.stdout}${result.stderr}`)
+	);
 }
 
 // Exported for testing only.
@@ -2687,30 +2678,15 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 			status.installed = true;
 			status.source = "global-path";
 			status.path = tool.checkCommand;
-			// Try to get version
-			const versionResult = await new Promise<string>((resolve) => {
-				let proc: ReturnType<typeof spawn>;
-				try {
-					proc = spawn(tool.checkCommand, ["--version"], {
-						stdio: ["ignore", "pipe", "pipe"],
-						shell: process.platform === "win32",
-						timeout: 5000,
-					});
-				} catch {
-					// SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL, the
-					// pidusage bug class, #533) — best-effort, resolve empty version.
-					resolve("");
-					return;
-				}
-				let out = "";
-				proc.stdout?.on("data", (d) => (out += d));
-				proc.stderr?.on("data", (d) => (out += d));
-				proc.on("exit", () =>
-					resolve(out.trim().split("\n")[0]?.slice(0, 30) || ""),
-				);
-				proc.on("error", () => resolve(""));
+			// Try to get version — through the probe seam (#2894), which owns the
+			// synchronous-throw case (#533) and the timeout tree-kill that a bare
+			// `spawn({ timeout })` promise did not do.
+			const probe = await probeToolAsync(tool.checkCommand, ["--version"], {
+				timeout: 5000,
 			});
-			status.version = versionResult || undefined;
+			status.version =
+				`${probe.stdout}${probe.stderr}`.trim().split("\n")[0]?.slice(0, 30) ||
+				undefined;
 			statuses.push(status);
 			continue;
 		}
@@ -4116,7 +4092,7 @@ async function probeManagedToolVersion(
 	const cached = (await readProbeCache())[tool.id];
 	if (!cached?.path || !existsSync(cached.path)) return undefined;
 	try {
-		const result = await safeSpawnAsync(cached.path, tool.checkArgs, {
+		const result = await probeToolAsync(cached.path, tool.checkArgs, {
 			timeout: getToolVerificationTimeout(tool),
 			input: "",
 			ignoreAmbientSignal: true,

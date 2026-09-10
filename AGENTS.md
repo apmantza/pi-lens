@@ -1639,6 +1639,12 @@ package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
+The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
+negative walk re-runs on the next lookup, so a marker created where NONE was
+found is seen on the next resolution (#2894). The other half of the axis is
+still open: a marker created BELOW a cached positive root is not seen until
+the session ends (#2922) — do not describe the class as closed.
+
 ### Session lifecycle, telemetry, and observability
 
 The pi host can emit duplicate RPC `session_start` events during one

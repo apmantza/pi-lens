@@ -119,6 +119,9 @@ const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	oxlint: [".oxlintrc.json", "oxlint.config.js", "package.json"],
 	sqlfluff: [".sqlfluff", "pyproject.toml", "setup.cfg"],
 	prettier: [".prettierignore", "package.json"],
+	// #2894: cargo must run at the package root. This is the marker walk
+	// `rust-clippy.ts` used to do for itself with `findNearestContaining`.
+	"rust-clippy": ["Cargo.toml"],
 };
 
 const toolCwdGeneration = createGenerationSource("tool-cwd");
@@ -160,11 +163,19 @@ function findMarkerRoot(
 	]);
 	const cached = markerWalks.get(key);
 	if (cached && markerWalkGenerations.current(key) !== 0) {
-		if (!cached.marker || !cached.root) return cached;
-		// #2777: a marker can disappear during a session; do not reuse a stale root.
-		if (existsSync(path.join(cached.root, cached.marker))) return cached;
-		markerWalks.delete(key);
-		markerWalkGenerations.forget(key);
+		// A negative walk is not stable: a project marker can be created after
+		// the first resolution, so do not cache absence across calls. Positive
+		// results remain memoized and are still revalidated when their marker is
+		// deleted (#2894).
+		if (!cached.marker || !cached.root) {
+			markerWalks.delete(key);
+			markerWalkGenerations.forget(key);
+		} else {
+			// #2777: a marker can disappear during a session; do not reuse a stale root.
+			if (existsSync(path.join(cached.root, cached.marker))) return cached;
+			markerWalks.delete(key);
+			markerWalkGenerations.forget(key);
+		}
 	}
 	markerWalkCount++;
 	let current = path.resolve(startDir);

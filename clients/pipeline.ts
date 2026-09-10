@@ -72,6 +72,7 @@ import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { bounded } from "./deadline-utils.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -679,7 +680,7 @@ async function tryOxlintFix(filePath: string, cwd: string): Promise<number> {
 }
 
 async function tryRustClippyFix(filePath: string): Promise<string[]> {
-	const check = await safeSpawnAsync("cargo", ["--version"], { timeout: 5000 });
+	const check = await probeToolAsync("cargo", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
 	const cargoDir = findNearestContaining(path.dirname(path.resolve(filePath)), [
@@ -698,7 +699,7 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 }
 
 async function tryDartFix(filePath: string): Promise<string[]> {
-	const check = await safeSpawnAsync("dart", ["--version"], { timeout: 5000 });
+	const check = await probeToolAsync("dart", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
 	const pubspecDir = findNearestContaining(
