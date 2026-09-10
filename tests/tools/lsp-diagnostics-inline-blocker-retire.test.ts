@@ -59,7 +59,7 @@ vi.mock("../../clients/lsp/client.js", async () => {
 // The footer write is not what these tests assert; stub it so a widget-state
 // side effect cannot make the retire assertion pass or fail for the wrong
 // reason.
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 vi.mock("../../clients/widget-state.js", async () => {
 	const actual = await vi.importActual<
 		typeof import("../../clients/widget-state.js")
@@ -214,7 +214,7 @@ describe("#1561 lsp_diagnostics retires a stale inline blocker", () => {
 			await import("../../clients/runtime-coordinator.js");
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
-		reconcileScanDiagnosticsMock.mockReset();
+		reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 		retires = [];
 		runtime = new RuntimeCoordinator();
 		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1561-"));
@@ -453,6 +453,23 @@ describe("#1561 lsp_diagnostics retires a stale inline blocker", () => {
 		reconcileScanDiagnosticsMock.mockImplementation(() => {
 			throw new Error("footer write exploded");
 		});
+		runtime.recordInlineBlockers(file, "🔴 STOP", 1, ["lsp"]);
+
+		await runTool(
+			{ path: file, severity: "error", serverScope: "primary", waitMs: 10_000 },
+			tmp,
+			runtime,
+			retires,
+		);
+
+		expect(retires).toEqual([]);
+		expect(runtime.getInlineBlockersSnapshot()).toHaveLength(1);
+	});
+
+	it("F5: a rejected reconcile does not retire an inline blocker", async () => {
+		const file = path.join(tmp, "README.md");
+		arrangeCleanMarkdown(file);
+		reconcileScanDiagnosticsMock.mockReturnValue(false);
 		runtime.recordInlineBlockers(file, "🔴 STOP", 1, ["lsp"]);
 
 		await runTool(

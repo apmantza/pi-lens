@@ -77,7 +77,7 @@ describe("loadWorkspaceDiagnosticsCache / saveWorkspaceDiagnosticsCache (#671)",
 		expect(loaded?.entries["/a.ts"]).toEqual(entry);
 	});
 
-	it("records root, session, content, and scan provenance", () => {
+	it("records content and scan freshness without duplicate provenance", () => {
 		const filePath = path.join(tmp, "a.ts");
 		fs.writeFileSync(filePath, "const a = 1;\n");
 		const context = createWorkspaceDiagnosticsCacheContext(tmp);
@@ -93,12 +93,8 @@ describe("loadWorkspaceDiagnosticsCache / saveWorkspaceDiagnosticsCache (#671)",
 		const entry = Object.values(
 			loadWorkspaceDiagnosticsCache(tmp)!.entries,
 		)[0]!;
-		expect(entry.provenance).toEqual({
-			projectRoot: path.resolve(tmp),
-			sessionGeneration: expect.any(Number),
-			contentGeneration: hashDiagnosticContent("const a = 1;\n"),
-			scanGeneration: expect.any(Number),
-		});
+		expect(entry).not.toHaveProperty("provenance");
+		expect(entry.contentHash).toBe(hashDiagnosticContent("const a = 1;\n"));
 	});
 
 	it("fails open (undefined) when nothing has been cached yet", () => {

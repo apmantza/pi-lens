@@ -114,6 +114,8 @@ export interface FreshProjectDiagnosticsResult {
 	diagnostics: ProjectDiagnostic[];
 	/** Extractor ids that actually contributed findings this run. */
 	runners: string[];
+	/** Extractor ids that completed successfully, including clean results. */
+	completed: string[];
 	/** Extractor ids skipped this run (not applicable / tool unavailable, OR
 	 *  aborted before settling — see `abortedIds`). */
 	cold: string[];
@@ -235,6 +237,7 @@ export async function fetchFreshProjectDiagnostics(
 		return {
 			diagnostics: [],
 			runners: [],
+			completed: [],
 			cold: [...ANALYZER_IDS],
 			coldReasons: Object.fromEntries(
 				ANALYZER_IDS.map((id) => [id, unsafeRootReason]),
@@ -246,6 +249,7 @@ export async function fetchFreshProjectDiagnostics(
 	}
 	const diagnostics: ProjectDiagnostic[] = [];
 	const runners: string[] = [];
+	const completed: string[] = [];
 	const cold: string[] = [];
 	// #1623: the specific reason each `cold` id was skipped, captured at the
 	// gate that decided it — see FreshProjectDiagnosticsResult.coldReasons.
@@ -283,6 +287,7 @@ export async function fetchFreshProjectDiagnostics(
 		adapted: ProjectDiagnostic[],
 		elapsedMs: number,
 	): void {
+		pushUnique(completed, id);
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
 		const kept = applyDispositionsMultiFile(
 			adapted,
@@ -687,6 +692,7 @@ export async function fetchFreshProjectDiagnostics(
 		return {
 			diagnostics,
 			runners,
+			completed,
 			cold,
 			coldReasons,
 			failed,
@@ -702,6 +708,7 @@ export async function fetchFreshProjectDiagnostics(
 	return {
 		diagnostics,
 		runners,
+		completed,
 		cold,
 		coldReasons,
 		failed,

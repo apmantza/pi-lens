@@ -82,7 +82,7 @@ const mockSummaries: ReturnType<
 let mockStaleDropped = 0;
 let mockDependencyDemoted = 0;
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 const reconcileCorrelatedScanDiagnosticsMock = vi.fn();
 
 vi.mock("../../clients/widget-state.js", async (importOriginal) => {
@@ -129,7 +129,7 @@ beforeEach(() => {
 	mockSummaries.length = 0;
 	mockStaleDropped = 0;
 	mockDependencyDemoted = 0;
-	reconcileScanDiagnosticsMock.mockReset();
+	reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 	reconcileCorrelatedScanDiagnosticsMock.mockReset();
 	resetProjectLensConfigCache();
 });
@@ -2322,10 +2322,10 @@ describe("lens_diagnostics mode=full", () => {
 			),
 			{ mode: "full" },
 		);
-		// The clean answer lost the shared ordering guard, so the old finding
-		// remains visible rather than being silently hidden from full mode while
-		// mode=all can still deliver it.
-		expect(String(result.content[0].text)).toContain("old line 400 finding");
+		const text = String(result.content[0].text);
+		expect(text).toContain("old line 400 finding");
+		expect(text).toContain("[stale — re-run to confirm]");
+		expect(text).not.toContain("🔴 1 blocking");
 	});
 
 	it("dedups the napi project scan against ast-grep LSP findings despite the source prefix (#308)", async () => {

@@ -51,7 +51,7 @@ vi.mock("../../clients/lsp/index.js", async () => {
 });
 
 vi.mock("../../clients/widget-state.js", () => ({
-	reconcileScanDiagnostics: vi.fn(),
+	reconcileScanDiagnostics: vi.fn().mockReturnValue(true),
 }));
 
 import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";

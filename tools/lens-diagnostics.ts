@@ -27,6 +27,7 @@ import { DEPENDENCY_DRIFT_MAX_DELIVERIES } from "../clients/blocker-freshness.js
 import { freshnessFromMtime } from "../clients/freshness.js";
 import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions.js";
 import { gateFindingsByPathFreshness } from "../clients/advisory-provenance.js";
+import { markUnreconciledFindings } from "../clients/finding-delivery-gate.js";
 import { normalizeRuleId } from "../clients/dispatch/rule-id-normalize.js";
 import {
 	applyRulePolicy,
@@ -96,6 +97,7 @@ import {
 } from "../clients/widget-state.js";
 import { logLatency } from "../clients/latency-logger.js";
 import { logExtension } from "../clients/extension-log.js";
+import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js";
 import { detectFileRole } from "../clients/file-role.js";
@@ -1524,6 +1526,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 	 * widget state they did not actually re-check).
 	 */
 	authoritativeLspFiles?: ReadonlySet<string>,
+	authoritativeRunnerIds?: ReadonlySet<string>,
 ): FileDiagnosticSummary[] {
 	const byFile = new Map<string, FileDiagnosticSummary>();
 	const seen = new Set<string>();
@@ -1537,7 +1540,14 @@ function mergeDiagnosticsWithWidgetSummaries(
 		// practice; inline pi-lens-ignore comments are the primary
 		// suppression mechanism.
 		if (authoritativeLspFiles?.has(filePath)) continue;
-		const diagnostics = (summary.diagnostics ?? []).map((d) => ({ ...d }));
+		const diagnostics = (summary.diagnostics ?? [])
+			.filter(
+				(diagnostic) =>
+					!authoritativeRunnerIds?.has(
+						diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "",
+					),
+			)
+			.map((d) => ({ ...d }));
 		byFile.set(filePath, { ...summary, filePath, diagnostics });
 		for (const diagnostic of diagnostics) {
 			seen.add(diagnosticDedupKey(filePath, diagnostic));
@@ -1821,6 +1831,7 @@ async function formatFullMode(
 		: Promise.resolve<FreshProjectDiagnosticsResult>({
 				diagnostics: [],
 				runners: [],
+				completed: [],
 				// #1623: every heavyweight analyzer is ELIGIBLE for this project but
 				// this call never asked for it (refreshRunners wasn't cheap/all/
 				// cached) — the expensive fetch below deliberately never runs in
@@ -1896,6 +1907,7 @@ async function formatFullMode(
 			result.timedOut || result.error || mismatchedLspResults.has(result),
 	);
 	const authoritativeLspFiles = new Set<string>();
+	const unreconciledFiles = new Set<string>();
 	// #571: reconcile this scan's fresh, CONFIRMED per-file results into the
 	// footer cache. A footer write is never allowed to fail the tool call, so
 	// any unexpected throw is swallowed.
@@ -1944,11 +1956,26 @@ async function formatFullMode(
 			// for delivery. Otherwise full mode hides the old widget row while
 			// mode=all still serves it, creating a false clean/full disagreement.
 			// Older test doubles return undefined and retain legacy acceptance.
-			if (retired !== false) {
+			if (retired === true) {
 				authoritativeLspFiles.add(path.resolve(result.filePath));
+			} else {
+				unreconciledFiles.add(path.resolve(result.filePath));
+				recordDegradationOnce({
+					kind: "diagnostic-retained-unreconciled",
+					subject: `${path.resolve(result.filePath)}:lsp`,
+					reason:
+						"confirmed diagnostic result could not replace retained widget state",
+				});
 			}
 		} catch {
 			// Never let a footer-reconciliation hiccup fail the scan itself.
+			unreconciledFiles.add(path.resolve(result.filePath));
+			recordDegradationOnce({
+				kind: "diagnostic-retained-unreconciled",
+				subject: `${path.resolve(result.filePath)}:lsp`,
+				reason:
+					"confirmed diagnostic result failed during widget reconciliation",
+			});
 		}
 	}
 	// Project rule policy (`.pi-lens.json` `rules.<id>.disable`/`select`) —
@@ -1979,13 +2006,29 @@ async function formatFullMode(
 	// computed above, in the SAME `Promise.all` as the LSP sweep (#613) — only
 	// when the caller opted into project-runner state (otherwise it's the
 	// `Promise.resolve({...})` stub from `analyzersPromise` above).
+	const completedRunners = (extracted.completed ?? []).filter(
+		(id) => id !== "test-runner",
+	);
+	const runnerFreshSnapshot =
+		scannedSnapshot && completedRunners.length > 0
+			? {
+					...scannedSnapshot,
+					diagnostics: scannedSnapshot.diagnostics.filter(
+						(diagnostic) =>
+							!completedRunners.includes(
+								diagnostic.runner ?? diagnostic.tool ?? "",
+							),
+					),
+				}
+			: scannedSnapshot;
+	const foldedProjectSnapshot = foldExtraDiagnosticsIntoSnapshot(
+		runnerFreshSnapshot,
+		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
+		extracted.runners,
+		cwd,
+	);
 	const projectSnapshot = applyProjectRulePolicy(
-		foldExtraDiagnosticsIntoSnapshot(
-			scannedSnapshot,
-			extracted.diagnostics.filter((d) => includeFile(d.filePath)),
-			extracted.runners,
-			cwd,
-		),
+		foldedProjectSnapshot,
 		policyMap,
 	);
 	const projectDelta = applyProjectRulePolicy(
@@ -1995,6 +2038,34 @@ async function formatFullMode(
 		),
 		policyMap,
 	);
+	// A successful fresh runner result with no finding is authoritative for its
+	// completed runner and must retire that runner's retained widget rows. A
+	// cache-read test-runner result is deliberately excluded.
+	if (completedRunners.length > 0) {
+		const runnerFiles = new Set(
+			getFileDiagnosticSummaries()
+				.map((summary) => summary.filePath)
+				.concat(extracted.diagnostics.map((diagnostic) => diagnostic.filePath))
+				.filter(includeFile),
+		);
+		for (const filePath of runnerFiles) {
+			const summary = getFileDiagnosticSummaries().find(
+				(entry) => path.resolve(entry.filePath) === path.resolve(filePath),
+			);
+			if (summary) {
+				reconcileCorrelatedScanDiagnostics(
+					filePath,
+					summary.diagnostics.filter(
+						(diagnostic) =>
+							!completedRunners.includes(
+								diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "",
+							),
+					),
+					nextWriteIndex?.(),
+				);
+			}
+		}
+	}
 	// #630: only the CONFIRMED LSP results contribute diagnostics to the merge
 	// — an unconfirmed (timed-out/errored) file's placeholder `[]` must not be
 	// read as "0 issues, clean" via its LSP contribution. It can still
@@ -2020,7 +2091,7 @@ async function formatFullMode(
 			metadata: { files: authoritativeRetiredCount },
 		});
 	}
-	const summaries = await applyInlineSuppressionsToSummaries(
+	let summaries = await applyInlineSuppressionsToSummaries(
 		mergeDiagnosticsWithWidgetSummaries(
 			getFileDiagnosticSummaries().filter((summary) =>
 				includeFile(summary.filePath),
@@ -2029,10 +2100,22 @@ async function formatFullMode(
 			projectSnapshot,
 			projectDelta,
 			authoritativeLspFiles,
+			new Set(completedRunners),
 		),
 		cwd,
 		policyMap,
 	);
+	if (unreconciledFiles.size > 0) {
+		summaries = summaries.map((summary) =>
+			unreconciledFiles.has(path.resolve(summary.filePath))
+				? summarizeDiagnostics(
+						summary.filePath,
+						markUnreconciledFindings(summary.diagnostics),
+						summary.hasFinalSnapshot,
+					)
+				: summary,
+		);
+	}
 	// #1888: the full-mode summary above is the first seam where every
 	// producing lane is correlated. The earlier footer loop intentionally writes
 	// only CONFIRMED LSP results, so an ast-grep backpressure failure left
