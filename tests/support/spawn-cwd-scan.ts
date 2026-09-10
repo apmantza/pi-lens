@@ -39,10 +39,13 @@
  * structural. Every one of these is one mistake in four spellings —
  * AGENTS.md defect shape 34, "a guard that enumerates surface spellings".
  *
- * So the scan asks a parser the two questions that actually decide it:
+ * So the scan asks a parser the three questions that actually decide it:
  *
- * 1. does the options literal have a PROPERTY NAMED `cwd`, and
- * 2. does the `cwd` value inside a spawn resolve to a PARAMETER of an
+ * 1. does the options literal have a PROPERTY NAMED `cwd`, and is its value
+ *    usable,
+ * 2. does that value trace back to `resolveToolCwd` imported from the shared
+ *    seam (the #2777 origin rule), and
+ * 3. does the `cwd` value inside a spawn resolve to a PARAMETER of an
  *    enclosing named function (which makes that function a spawn-routing
  *    wrapper, and its own callers the sites that must be checked)?
  *
