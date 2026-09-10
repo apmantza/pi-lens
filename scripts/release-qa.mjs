@@ -669,6 +669,13 @@ export function runToolSmokeInstallProbe(ctx) {
 	}
 	let report = null;
 	let context = {};
+	const parseSmokeOutput = (stdout) => {
+		try {
+			return { report: JSON.parse(String(stdout ?? "").trim()) };
+		} catch {
+			return { context: { stdout } };
+		}
+	};
 	try {
 		const stdout = execFileSync(
 			process.execPath,
@@ -686,17 +693,14 @@ export function runToolSmokeInstallProbe(ctx) {
 				maxBuffer: 10 * 1024 * 1024,
 			},
 		);
-		try {
-			report = JSON.parse(stdout.trim());
-		} catch {
-			context = { stdout };
-		}
+		({ report, context } = parseSmokeOutput(stdout));
 	} catch (err) {
+		({ report, context } = parseSmokeOutput(err?.stdout));
 		context = {
+			...context,
 			exitCode: err?.status,
 			stderrTail: err?.stderr,
 			timedOut: Boolean(err?.killed),
-			stdout: err?.stdout,
 		};
 	}
 	const classified = classifyToolSmokeInstallReport(report, context);
@@ -1754,7 +1758,7 @@ async function main() {
 	log(`scratch root: ${scratchRoot}`);
 	log(
 		`pinned under ${scratchRoot}: ${PINNED_ENV_KEYS.join(", ")} ` +
-			"(allowlisted process environment; pip/npm policy overrides excluded)",
+			"(allowlisted process environment; pip policy: PIP_BREAK_SYSTEM_PACKAGES=1)",
 	);
 
 	let blocked = false;

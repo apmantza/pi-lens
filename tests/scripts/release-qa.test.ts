@@ -277,6 +277,40 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 		}
 	});
 
+	it("names a genuine install failure when smoke exits after printing JSON", () => {
+		const root = stubSmoke(
+			{
+				lane: "install-registry",
+				toolCount: 1,
+				installed: 0,
+				results: [
+					{
+						toolId: "yamllint",
+						state: "fail",
+						detail: "ensureTool(yamllint) failed: dead registry entry",
+					},
+				],
+			},
+			1,
+		);
+		const installedRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "release-qa-installed-"),
+		);
+		try {
+			const raw = runToolSmokeInstallProbe({
+				installedPkgDir: installedRoot,
+				exportRoot: root,
+				projectDir: root,
+				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
+			});
+			expect(raw.status).toBe("fail");
+			expect(raw.detail).toContain("yamllint");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(installedRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("passes the distinct installed root to the export smoke process", () => {
 		const exportRoot = fs.mkdtempSync(
 			path.join(os.tmpdir(), "release-qa-export-"),

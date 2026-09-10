@@ -1,4 +1,4 @@
 ---
 section: Fixed
 ---
-- Classify host-policy PEP 668 pip refusals as named release-QA skips and keep the installed-registry smoke environment deterministic.
+- Run the installed-registry release-QA smoke with a scratch-home pip policy and keep the measured registry deterministic.
