@@ -102,7 +102,11 @@ import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js"
 import { detectFileRole } from "../clients/file-role.js";
 import { STALE_LINE_MARKER } from "../clients/stale-marker.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
-import { createLspDiagnosticsTool } from "./lsp-diagnostics.js";
+import {
+	createLspDiagnosticsTool,
+	LSP_SEVERITY_FILTERS,
+	MAX_BATCH_FILES,
+} from "./lsp-diagnostics.js";
 import {
 	demotePastEofDiagnostics,
 	PAST_EOF_STALE_MARKER,
@@ -119,7 +123,7 @@ const MAX_DIAGNOSTICS_PER_FILE = 50;
 // narrow, not paginate. Erroring (rather than silently truncating) means a
 // caller can never believe it checked files it didn't (issue's stated
 // invariant).
-const MAX_PATHS_ENTRIES = 200;
+	const MAX_PATHS_ENTRIES = MAX_BATCH_FILES;
 
 // #1623: the reason rendered for every heavyweight-analyzer lane (gitleaks,
 // trivy, govulncheck, dead-code, knip, jscpd, madge, opengrep, test-runner)
@@ -315,12 +319,17 @@ export function createLensDiagnosticsTool(
 			incompleteFiles?: number;
 			unconfirmed?: boolean;
 			timedOut?: boolean;
+			filePath?: string;
 		}>(({ details, args, isError, text }) => {
 			if (details?.source === "lsp") {
 				const count = details.totalDiagnostics ?? 0;
 				const files = details.filesChecked ?? details.filesScanned ?? 0;
 				const noun = count === 1 ? "diagnostic" : "diagnostics";
-				const scope = files > 1 ? ` across ${files} files` : "";
+				const singleFile =
+					files === 1 && typeof details?.filePath === "string"
+						? ` ${path.basename(details.filePath)}`
+						: "";
+				const scope = files > 1 ? ` across ${files} files` : singleFile;
 				if (isError)
 					return `lens_diagnostics lsp — ${text.split("\n")[0] ?? "error"}`;
 				if ((details.navigationOnlyFiles ?? 0) > 0)
@@ -486,7 +495,7 @@ export function createLensDiagnosticsTool(
 			),
 			severity: Type.Optional(
 				Type.String({
-					enum: ["error", "warning", "all"],
+					enum: [...LSP_SEVERITY_FILTERS],
 					description: "Filter by severity (default: all).",
 				}),
 			),
@@ -529,7 +538,7 @@ export function createLensDiagnosticsTool(
 			const scope =
 				requestedScope ??
 				(legacyMode === "delta" || legacyMode === undefined
-					? "delta"
+					? source === "lsp" ? "paths" : "delta"
 					: "workspace");
 			const cwd = ctx.cwd ?? getCwd();
 			if (source === "lsp") {

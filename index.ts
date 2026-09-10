@@ -110,7 +110,10 @@ import {
 } from "./clients/tool-config.js";
 import { recordDegradationOnce } from "./clients/degradation-ledger.js";
 import { wrapToolsForCompactLine } from "./clients/tool-render.js";
-import { finalizeToolResultWithDelivery } from "./tools/render-compact.js";
+import {
+	finalizeToolResultWithDelivery,
+	renderToolText,
+} from "./tools/render-compact.js";
 import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEventsGetter } from "./clients/lens-events.js";
 import { wireBusEmitterGetter } from "./clients/bus-publish.js";
@@ -1795,8 +1798,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 			>;
 			const execute = normalized.execute;
 			if (typeof execute === "function") {
-				normalized.execute = (...args: unknown[]) =>
-					Promise.resolve(execute(...args)).then((result) => {
+					normalized.execute = (...args: unknown[]) =>
+						Promise.resolve(execute(...args)).then((result) => {
 						const delivery = finalizeToolResultWithDelivery(
 							result as Parameters<typeof finalizeToolResultWithDelivery>[0],
 						);
@@ -1820,7 +1823,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 							}
 						}
 						return delivery.result;
-					});
+						}, (err) => {
+							const text = err instanceof Error ? err.message : String(err);
+							return finalizeToolResultWithDelivery({
+								...renderToolText(`result error\n${text}`),
+								isError: true,
+							});
+						});
 			}
 			pi.registerTool(normalized as any);
 		} catch {

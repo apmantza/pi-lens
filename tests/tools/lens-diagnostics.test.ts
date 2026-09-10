@@ -463,6 +463,14 @@ describe("lens_diagnostics schema", () => {
 		// from the model-facing enum rather than shipping dead choices.
 		expect(props.source.enum).toEqual(["session", "lsp"]);
 		expect(props.scope.enum).toEqual(["paths", "workspace"]);
+		expect(props.paths.maxItems).toBe(100);
+		expect(props.severity.enum).toEqual([
+			"error",
+			"warning",
+			"information",
+			"hint",
+			"all",
+		]);
 	});
 
 	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
@@ -3588,7 +3596,7 @@ describe("lens_diagnostics paths", () => {
 		}
 	});
 
-	it("errors clearly when paths exceeds the 200-entry cap", async () => {
+	it("errors clearly when paths exceeds the 100-entry cap", async () => {
 		const many = Array.from({ length: 201 }, (_, i) => `/proj/src/f${i}.ts`);
 		const result = (await run(makeTool(), { mode: "all", paths: many })) as {
 			content: [{ type: "text"; text: string }];
@@ -3596,7 +3604,7 @@ describe("lens_diagnostics paths", () => {
 		};
 		expect(result.isError).toBe(true);
 		const text = String(result.content[0].text);
-		expect(text).toContain("200");
+		expect(text).toContain("100");
 	});
 
 	it("mode=full: a nonexistent path produces the skipped-note without throwing", async () => {
