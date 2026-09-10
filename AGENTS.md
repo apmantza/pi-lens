@@ -1008,12 +1008,12 @@ acts on the answer, read the freeze. The `lsp_notify_resync_deferred` row keeps
 recording the gate's action either way; the coverage fields report only what the
 touch is actually uncovered for. (#1586)
 
-Demoted auxiliary outcome rows retain the sibling rows' version-evidence axis:
+Demoted auxiliary outcome rows may use the version-evidence axis:
 `publishedThisContent` is true when the content binding matches or the client's
-per-path publication version advances beyond the pre-notify baseline. A
-version-less push has no binding, but its publication stamp still proves that
-the scanner answered; no publication and an older binding remain uncovered.
-(#2810 round 6)
+per-path publication version advances beyond the pre-notify baseline. Sibling
+and aggregate outcome rows remain binding-only. A version-less push therefore
+proves coverage only on the demoted row; no publication and an older binding
+remain uncovered. (#2810 round 6, #2896)
 
 A deferred cascade result that arrives LATE — past the turn-end settle cap, or
 in the quiet window after the turn already consumed its runs — must still reach

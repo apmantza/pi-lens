@@ -461,6 +461,13 @@ async function exerciseDemotedCoverageCell({
 	const pairs = drainPendingAuxiliaryCoverage().filter(
 		(pair) => pair.filePath === filePath && pair.serverId === "typos",
 	);
+	expect(
+		lastAuxOutcome(
+			logLatency.mock.calls.map(([row]) => row),
+			"typos",
+			filePath.slice(filePath.lastIndexOf("/") + 1),
+		),
+	).toBe("demoted");
 	if (evidence === "version" || evidence === "versionless") {
 		expect(result?.deferredServerIds).toBeUndefined();
 		expect(result?.unconfirmedServerIds).toBeUndefined();
@@ -1185,6 +1192,51 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		} finally {
 			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
 		}
+	});
+
+	it("PROBE-CUTOFF-STAMP keeps an advanced unbound cutoff auxiliary partial", async () => {
+		process.env.PI_LENS_AUX_GRACE_MS = "2000";
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		let published = false;
+		const auxiliaryClient = makeClient(2500, [], { serverId: "opengrep" });
+		auxiliaryClient.getDiagnosticsVersionForPath = vi.fn(() =>
+			published ? 1 : 0,
+		);
+		auxiliaryClient.waitForDiagnostics = vi.fn(
+			() => new Promise<void>(() => {}),
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(
+				makeClient(0, [makeDiagnostic("primary")], {
+					serverId: "ts-primary",
+				}),
+			)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		const touch = service.touchFile(FILE, "cutoff-stamp", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1000);
+		published = true;
+		await vi.advanceTimersByTimeAsync(1000);
+		const result = await touch;
+		expect(
+			lastAuxOutcome(
+				logLatency.mock.calls.map(([row]) => row),
+				"opengrep",
+				"main.ts",
+			),
+		).toBe("cut_off");
+		expect(result?.confirmation).toBe("partial");
+		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
 	});
 
 	it("neither counts nor resets the pressure streak on a resync deferral", async () => {
