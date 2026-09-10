@@ -111,6 +111,7 @@ function startRealPi(
 	scriptFile: string,
 	homeOverride?: string,
 	args: readonly string[] = [],
+	env: Record<string, string> = {},
 ) {
 	const scratchRoot = homeOverride ?? SCRATCH_DIR_ROOT;
 	sweepScratchDirs(scratchRoot, "real-pi-", { maxAgeMs: 0 });
@@ -145,8 +146,8 @@ function startRealPi(
 				HOME: home,
 				REAL_PI_HARNESS_SCRIPT: scriptFile,
 				REAL_PI_HARNESS_PROVIDER_LOG: providerLog,
-				PI_LENS_TEST_MODE: "0",
 				ANTHROPIC_API_KEY: "sk-ant-real-harness-dummy",
+				...env,
 			},
 		},
 	);
@@ -263,6 +264,7 @@ export async function withRealPi<T>(
 		script: string;
 		home?: string;
 		args?: readonly string[];
+		env?: Record<string, string>;
 	},
 	callback: (pi: RealPi) => Promise<T>,
 ): Promise<T> {
@@ -271,7 +273,13 @@ export async function withRealPi<T>(
 	if (!existsSync(scriptFile))
 		throw new Error(`real-harness fixture: ${options.script} does not exist`);
 	validateScript(JSON.parse(readFileSync(scriptFile, "utf8")), scriptFile);
-	const harness = startRealPi(fixture, scriptFile, options.home, options.args);
+	const harness = startRealPi(
+		fixture,
+		scriptFile,
+		options.home,
+		options.args,
+		options.env,
+	);
 	try {
 		let cursor = harness.events.length;
 		const matches = (kind: string, after: number) =>

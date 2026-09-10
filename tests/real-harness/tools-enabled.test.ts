@@ -29,6 +29,10 @@ function latestTools(pi: {
 }
 
 // flake-shape: real-process-spawn — these assertions require pi to load the built extension and report the provider payload across the process boundary
+// PI_LENS_TEST_MODE="0" opts this scenario's pi child out of vitest-inherited
+// test mode: its assertions read real sessionstart.log/extension.log rows, and
+// every NDJSON logger is a no-op under isTestMode(). Other scenarios keep the
+// harness default.
 describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 	it("omits a project-disabled tool from pi's wire roster and records it once", async () => {
 		await withRealPi(
@@ -36,6 +40,7 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 				fixture: "tools-disabled",
 				script: "script.json",
 				args: ["--no-lazy-tools"],
+				env: { PI_LENS_TEST_MODE: "0" },
 			},
 			async (pi) => {
 				await pi.prompt("report the tool roster");
@@ -67,7 +72,11 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 
 	it("keeps the activation loader registered and emits its config diagnostic once", async () => {
 		await withRealPi(
-			{ fixture: "loader-disabled", script: "script.json" },
+			{
+				fixture: "loader-disabled",
+				script: "script.json",
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
 			async (pi) => {
 				await pi.prompt("report the loader roster");
 				await pi.awaitAssistantTurn();
@@ -92,6 +101,7 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 				fixture: "cli-no-tool",
 				script: "script.json",
 				args: ["--no-lazy-tools", "--no-tool=lsp_navigation"],
+				env: { PI_LENS_TEST_MODE: "0" },
 			},
 			async (pi) => {
 				await pi.prompt("report the CLI roster");

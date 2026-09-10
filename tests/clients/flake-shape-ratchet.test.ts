@@ -771,6 +771,8 @@ function validateAdmission(
 }
 
 describe("flake-shape ratchet — admission gate", () => {
+	// #2857: the admission sweep reads every admitted file's source and timed
+	// out at vitest's 5 s default under full-suite load; give it a real budget.
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
 		const included = new Set([
 			...wallClockBudgetInclude(),
@@ -803,7 +805,7 @@ describe("flake-shape ratchet — admission gate", () => {
 			}
 		}
 		expect(problems).toEqual([]);
-	});
+	}, 30_000);
 
 	// `ADMITTED_AFTER_BASELINE` is empty in steady state, so the test above
 	// alone never proves `validateAdmission` catches anything. These fixtures
