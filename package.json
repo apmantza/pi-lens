@@ -54,6 +54,7 @@
 		"logs:smells": "node scripts/analyze-pi-lens-logs.mjs",
 		"complexity": "node scripts/complexity-report.mjs",
 		"changelog:check": "node scripts/rollup-changelog.mjs --check",
+		"test:regen": "node scripts/regen-test-baseline.mjs",
 		"changelog:release": "node scripts/changelog-release.mjs",
 		"changelog:extract": "node scripts/changelog-extract.mjs",
 		"release:backfill-notes": "node scripts/backfill-github-releases.mjs",
