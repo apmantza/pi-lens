@@ -5,8 +5,7 @@
 // Log fixtures under tests/fixtures/ci-failure-logs/ named *.real.log or
 // *.composite.log are REAL captured output (AGENTS.md shape 16 -- never
 // hand-write a fixture for an external system's behavior):
-// The #2848 capture is under tests/fixtures/ci-logs/ because it is the
-// complete raw job log fetched for this round.
+// The #2848 capture is a complete raw job log fetched for this round.
 //   - real-assertion-failure.real.log: run 32913518938, job 98012237782
 //     (fetch: `gh api repos/apmantza/pi-lens/actions/jobs/98012237782/logs`)
 //   - infra-kill-wrapper-killed.real.log: run 32908647308 attempt 1, job
@@ -70,15 +69,8 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "..", "fixtures", "ci-failure-logs");
-const capturedCiLogsDir = join(here, "..", "fixtures", "ci-logs");
 function fixture(name: string) {
-	return readFileSync(
-		join(
-			name === "infra-kill-2848.real.log" ? capturedCiLogsDir : fixturesDir,
-			name,
-		),
-		"utf8",
-	);
+	return readFileSync(join(fixturesDir, name), "utf8");
 }
 
 describe("classifyFailureLog (#2103)", () => {

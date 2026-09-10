@@ -1,0 +1,17 @@
+[
+	{
+		"name": "#2860",
+		"kind": "session-state-recovery",
+		"diff": "diff --git a/clients/runtime-session.ts b/clients/runtime-session.ts\n+recordDegradationOnce({ kind: \"session-state-recovery\" });"
+	},
+	{
+		"name": "#2823",
+		"kind": "tool-cwd-resolution",
+		"diff": "diff --git a/clients/tool-config.ts b/clients/tool-config.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
+	},
+	{
+		"name": "#2846",
+		"kind": "tool-cwd-resolution",
+		"diff": "diff --git a/clients/tool-cwd.ts b/clients/tool-cwd.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
+	}
+]

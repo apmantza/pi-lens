@@ -29,6 +29,19 @@ import {
 
 const body = `Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nWhole-tree grep completed.\n\n## Observability\nThe advisory check run is the record.`;
 const repositoryRoot = process.cwd();
+type MergedRuntimeRecord = { name: string; kind: string; diff: string };
+const mergedRuntimeRecords = JSON.parse(
+	readFileSync(
+		join(
+			repositoryRoot,
+			"tests",
+			"fixtures",
+			"ci-pr-bodies",
+			"merged-runtime-records.json",
+		),
+		"utf8",
+	),
+) as MergedRuntimeRecord[];
 
 function fetchForEvent(bodyText: string, files: unknown) {
 	return vi.fn().mockImplementation(async (url: string | URL | Request) => {
@@ -482,6 +495,20 @@ describe("PR body lint (#1844)", () => {
 		expect(result.errors.join(" ")).toContain("runtime-example");
 	});
 
+	it.each(mergedRuntimeRecords)(
+		"accepts the added-line record from merged runtime body %s",
+		({ name, kind, diff }) => {
+			const result = lintPrBody(
+				body.replace(
+					"The advisory check run is the record.",
+					`The bounded record is ${kind}.`,
+				),
+				{ diff },
+			);
+			expect(result, name).toEqual({ valid: true, errors: [] });
+		},
+	);
+
 	it("accepts an existing record named with its source location", () => {
 		const source = join(process.cwd(), "clients", "existing-record.ts");
 		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
@@ -518,7 +545,6 @@ describe("PR body lint (#1844)", () => {
 				"diff --git a/clients/touched-record.ts b/clients/touched-record.ts\n+catch (error) { resolveToolCwd(error); }",
 		);
 		expect(result.valid).toBe(false);
-		expect(result.errors.join(" ")).toContain("touched-record");
 	});
 
 	it.each([
@@ -539,6 +565,48 @@ describe("PR body lint (#1844)", () => {
 			process.cwd(),
 			() =>
 				"diff --git a/clients/new-path.ts b/clients/new-path.ts\\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(false);
+	});
+
+	it("rejects the right line when it contains the wrong record kind", () => {
+		const source = join(process.cwd(), "clients", "wrong-kind-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(
+			source,
+			'recordDegradationOnce({ kind: "different-record" });\n',
+		);
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `tool-cwd-resolution` at `clients/wrong-kind-record.ts:1`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result.valid).toBe(false);
+	});
+
+	it("rejects a comment at the cited line when the real record is elsewhere", () => {
+		const source = join(process.cwd(), "clients", "comment-record.ts");
+		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+		writeFileSync(
+			source,
+			[
+				'// recordDegradationOnce({ kind: "comment-record" });',
+				...Array.from({ length: 498 }, () => "export const filler = 1;"),
+				'recordDegradationOnce({ kind: "comment-record" });',
+			].join("\n") + "\n",
+		);
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `comment-record` at `clients/comment-record.ts:1`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
 		);
 		expect(result.valid).toBe(false);
 	});
