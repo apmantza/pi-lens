@@ -18,6 +18,7 @@ import { safeSpawnAsync } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import {
 	type ClientAvailabilityResult,
 	resolveManagedToolClient,
@@ -384,7 +385,9 @@ export class BiomeClient {
 
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
-			const configCwd = cwd ?? path.dirname(absolutePath);
+			const configCwd = resolveToolCwd("runner", "biome", absolutePath, {
+				...(cwd !== undefined && { cwd }),
+			});
 			// Shared config-args seam (#1247): the lint runner consumes the same
 			// builder, so `lint --write` can never drift to biome's default
 			// config when a user config or the package fallback exists.

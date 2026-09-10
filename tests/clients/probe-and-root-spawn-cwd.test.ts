@@ -235,4 +235,29 @@ describe("#2894 root seam: a hand-derived package root resolves through resolveT
 			spawned.filter((call) => call.args[1] === "--message-format=json"),
 		).toEqual([]);
 	});
+
+	it("cargo clippy sees a crate marker created after its first resolution", async () => {
+		const root = makeTree("clippy-created-later", {
+			"crates/engine/src/lib.rs": "pub fn f() {}\n",
+		});
+		const crateRoot = path.join(root, "crates", "engine");
+		const filePath = path.join(crateRoot, "src", "lib.rs");
+		const runner = (
+			await import("../../clients/dispatch/runners/rust-clippy.js")
+		).default;
+
+		const first = await runner.run(
+			makeRunnerCtx(filePath, root, { kind: "rust" }) as never,
+		);
+		expect(first.status).toBe("skipped");
+		fs.writeFileSync(path.join(crateRoot, "Cargo.toml"), "[package]\n");
+
+		const second = await runner.run(
+			makeRunnerCtx(filePath, root, { kind: "rust" }) as never,
+		);
+		expect(second.status).toBe("succeeded");
+		expect(
+			spawned.filter((call) => call.args[1] === "--message-format=json"),
+		).toHaveLength(1);
+	});
 });

@@ -138,7 +138,7 @@ const POPULATION_FILES = [
  * `security-scan-client.ts`). That is reach TRADED, not lost: the population
  * filter reads each file's CONTENT, so the moment any of those three writes a
  * `safeSpawnAsync(` again the file re-enters and its site is checked — and the
- * one cwd decision they used to make 24 times over is now made once, inside
+ * one cwd decision they used to make 23 times over is now made once, inside
  * `probeToolAsync`, where this file admits it by name.
  */
 const EXPECTED_FILES = 74;
@@ -360,7 +360,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/tool-probe.ts#probeToolAsync:2d247383",
-		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 24 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
+		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 23 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
 	],
 	[
 		"clients/zizmor-config.ts#deriveGhCliToken:6acc7c4b",
@@ -371,10 +371,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/biome-client.ts#BiomeClient.spawnBiomeAsync:29a3826f~29a3826f",
 		"cwd is spawnBiomeAsync's own `cwd` parameter; the checked sites are its two call sites in this file",
-	],
-	[
-		"clients/biome-client.ts#BiomeClient.fixFileAsync:21f726e7~87e15e1e",
-		"cwd is `configCwd` — the caller's cwd or the formatted file's own directory; BiomeClient is a formatter client with no DispatchContext to resolve from",
 	],
 	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.runAnalyze:b54a18c7~1167a91f",

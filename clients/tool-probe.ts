@@ -34,7 +34,7 @@ export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
  * NONE — the child inherits the host's directory and nothing it reports is
  * read out of a project. That is why the sweep in
  * `tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` admits ONE
- * cwd-less spawn here instead of the 24 it admitted before: every one of those
+ * cwd-less spawn here instead of the 23 it admitted before: every one of those
  * sites re-decided the same thing in its own words, and two dozen sentences a
  * reviewer has to re-read one at a time is how an admission table stops being
  * auditable (#2872 round 3 shipped 127 rows carrying two canned sentences,
