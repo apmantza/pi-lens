@@ -77,6 +77,29 @@ describe("language-profile roots", () => {
 		expect(root).toBe(pkg);
 	});
 
+	it("resolves a java file to a nested Kotlin-DSL Gradle module (#2870)", () => {
+		// Both java marker tables listed only the Groovy `build.gradle`, so a
+		// `.java` file in a `build.gradle.kts` module resolved to the workspace
+		// root — where a polyglot repo's `go.mod` then claimed it as a go test
+		// target. `kotlin` already listed both spellings.
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lang-root-"));
+		dirs.push(tmp);
+
+		const workspace = path.join(tmp, "repo");
+		const module = path.join(workspace, "app", "gw");
+		const file = path.join(module, "src", "test", "java", "com", "FooTest.java");
+
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "go.mod"), "module example.com/x\n");
+		fs.writeFileSync(path.join(module, "build.gradle.kts"), "\n");
+		fs.writeFileSync(file, "class FooTest {}\n");
+
+		expect(resolveLanguageRootForFile(file, workspace)).toBe(module);
+		// The same spelling gap in the PROJECT marker table left a Kotlin-DSL
+		// Gradle build reporting no configured java at all.
+		expect(detectProjectLanguageProfile(module).configured.java).toBe(true);
+	});
+
 	it("resolves C/C++ file root to nearest C/C++ marker", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lang-root-"));
 		dirs.push(tmp);

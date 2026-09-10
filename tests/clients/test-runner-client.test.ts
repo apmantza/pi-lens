@@ -967,6 +967,48 @@ describe("test-runner-client", () => {
 			expect(result.failures).toEqual([]);
 		});
 
+		// #2870: the two cases above passed only because their fixtures happen
+		// to contain the substring "error" ("compile error", "error: no
+		// packages to test"), which was the ONLY thing that reached the
+		// runner-error branch. Neither of go's own infrastructure verdicts
+		// prints that word reliably, and without it the same line rendered as
+		// `✗ 1/1 failed ✗ go failure` with "Fix failing tests before
+		// proceeding" — a blocking failure the agent could not tell from a
+		// real one, on every edit in the affected package (measured, #2870).
+		// These two straddle that boundary: the identical verdict lines with
+		// the word "error" removed.
+		it("reports a go setup failure with no 'error' text as a runner error", () => {
+			const result = parse("FAIL\texample.com/pkg [setup failed]\n", 1);
+
+			expect(result.error).toBe("Runner go exited with 1");
+			expect(result.failed).toBe(0);
+			expect(result.failures).toEqual([]);
+		});
+
+		it("reports a go build failure with no 'error' text as a runner error", () => {
+			const result = parse(
+				"# example.com/pkg\n./main_test.go:8:2: undefined: Bar\nFAIL\texample.com/pkg [build failed]\n",
+				1,
+			);
+
+			expect(result.error).toBe("Runner go exited with 1");
+			expect(result.failed).toBe(0);
+			expect(result.failures).toEqual([]);
+		});
+
+		it("keeps a real go test failure blocking even when a sibling package failed to build", () => {
+			// The `!matched`/`goFailNames` vetoes still decide: a run that
+			// produced a real `--- FAIL:` is a verdict, never advisory.
+			const result = parse(
+				"--- FAIL: TestA\n    a_test.go:5: boom\nFAIL\texample.com/a\t0.01s\nFAIL\texample.com/b [build failed]\n",
+				1,
+			);
+
+			expect(result.error).toBeUndefined();
+			expect(result.failed).toBe(1);
+			expect(result.failures[0]?.name).toBe("TestA");
+		});
+
 		it("counts clean packages as passed alongside a real failure in the same run", () => {
 			const result = parse(
 				"ok  \texample.com/a\t0.01s\n--- FAIL: TestB\n    b_test.go:5: assertion failed\nFAIL\texample.com/b\t0.01s\nok  \texample.com/c\t0.02s\n",
@@ -1872,9 +1914,13 @@ describe("test-runner-client", () => {
 			fs.mkdirSync(path.join(tmpDir, "node_modules", "vitest"), {
 				recursive: true,
 			});
-			// Nest the cwd deeper than MAX_NODE_MODULES_WALK_UP (5) so the
-			// hoisted node_modules at tmpDir is out of range.
-			const deepDir = path.join(tmpDir, "a", "b", "c", "d", "e", "f", "g");
+			// #2870: the private `MAX_NODE_MODULES_WALK_UP` climb (5 levels, no
+			// `$HOME` ceiling) folded onto `workspace-topology.ts`'s shared
+			// walker, so the bound under test is now that walker's
+			// `MAX_WALK_DEPTH` (64, with its cap-trip latency record) plus the
+			// `$HOME` ceiling the private loop never had. Nest deeper than the
+			// cap so the hoisted node_modules at tmpDir is out of range.
+			const deepDir = path.join(tmpDir, ...Array.from({ length: 70 }, () => "a"));
 			fs.mkdirSync(deepDir, { recursive: true });
 			fs.writeFileSync(
 				path.join(deepDir, "package.json"),
