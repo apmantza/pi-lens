@@ -177,6 +177,25 @@ describe("#2870 runner selection is per file kind", () => {
 		expect(target?.strategy).toBe("self");
 	});
 
+	it("treats an edited Go test file as its own target (refs #2880)", () => {
+		// `detectFileRole` missed the `_test.go` suffix, so editing
+		// `pkg/foo_test.go` took the related-discovery path: `findTestFile`
+		// looked for `foo_test_test.go`, found nothing, and the edit ran no
+		// tests. Measured pre-fix through this same seam:
+		// `getTestRunTarget(pkg/foo_test.go) === null`.
+		const root = makeRoot("pi-lens-2880-go-self-");
+		write(root, "go.mod", "module example.com/x\n");
+		write(root, "pkg/foo.go", "package foo\n");
+		const editedTest = write(root, "pkg/foo_test.go", "package foo\n");
+		const target = new TestRunnerClient(false).getTestRunTarget(
+			editedTest,
+			root,
+		);
+		expect(target?.runner).toBe("go");
+		expect(target?.strategy).toBe("self");
+		expect(target?.testFile).toBe(editedTest);
+	});
+
 	it("anchors a nested Go module's source file at its own module", () => {
 		const repo = makePolyglotRepo();
 		const target = new TestRunnerClient(false).getTestRunTarget(

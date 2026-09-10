@@ -80,19 +80,33 @@ function isTypeStub(content: string): boolean {
  */
 export function detectFileRole(filePath: string, content?: string): FileRole {
 	const windowsShaped = isWindowsPath(filePath);
-	const base = (
-		windowsShaped ? win32.basename(filePath) : basename(filePath)
-	).toLowerCase();
+	const rawBase = windowsShaped ? win32.basename(filePath) : basename(filePath);
+	const base = rawBase.toLowerCase();
 	const dir = (windowsShaped ? win32.dirname(filePath) : dirname(filePath))
 		.replace(/\\/g, "/")
 		.toLowerCase();
 
 	// --- Test ---
+	// Suffix conventions are derived from the test-runner client's own
+	// knowledge (SOURCE_TO_TEST_PATTERNS + RUNNERS kinds in
+	// clients/test-runner-client.ts), never a hand-written list:
+	// - `_test.` infix: Go (`*_test.go`), pytest (`*_test.py`), ExUnit
+	//   (`*_test.exs`), Dart (`*_test.dart`). The underscore anchor keeps
+	//   this precise: `contest.py` and `latest.ts` do not match.
+	// - `_spec.` infix: RSpec (`*_spec.rb`).
+	// - CamelCase `*Test(s).<ext>` suffix, matched case-SENSITIVELY on the
+	//   raw basename: JUnit/Surefire (`*Test.java`, `*TestCase.java`),
+	//   Kotlin (`*Test.kt`), dotnet (`*Test.cs`/`*Tests.cs`), PHPUnit
+	//   (`*Test.php`). Case matters: Surefire's `*Test.java` does not match
+	//   `contest.java`, so neither do we.
 	if (
 		base.includes(".test.") ||
 		base.includes(".spec.") ||
+		base.includes("_test.") ||
+		base.includes("_spec.") ||
 		base.startsWith("test_") ||
 		base.startsWith("spec_") ||
+		/(Test|Tests|TestCase)\.(java|kt|kts|cs|fs|php)$/.test(rawBase) ||
 		dir.includes("/__tests__/") ||
 		dir.includes("/test/") ||
 		dir.includes("/tests/") ||
