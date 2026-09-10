@@ -3,7 +3,7 @@
  * production exports. Recurrences: #2272 and #2782.
  *
  * The sweep uses transitive importer-use reachability over the test's
- * non-mocked production imports. The master admission contains 607 findings.
+ * non-mocked production imports. The master admission contains 605 findings.
  */
 
 import * as fs from "node:fs";
@@ -21,7 +21,7 @@ import {
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
-const BASELINE: Record<string, string[]> = JSON.parse(
+const BASELINE: Record<string, number> = JSON.parse(
 	fs.readFileSync(
 		path.join(REPO_ROOT, "tests/support/vi-mock-export-baseline.json"),
 		"utf8",
@@ -40,7 +40,43 @@ function scan(): ViMockExportFinding[] {
 }
 
 function key(finding: ViMockExportFinding): string {
-	return `${relativePosix(REPO_ROOT, finding.file)}:${finding.line}:${finding.specifier}`;
+	return `${relativePosix(REPO_ROOT, finding.file)}:${finding.specifier}:${finding.factoryProperties.join(",")}`;
+}
+
+function baselineFrom(findings: ViMockExportFinding[]): Record<string, number> {
+	return Object.fromEntries(
+		findings
+			.map((finding) => [key(finding), finding.missing.length] as const)
+			.sort(([a], [b]) => a.localeCompare(b)),
+	);
+}
+
+function compareAgainstBaseline(
+	findings: ViMockExportFinding[],
+	baseline: Record<string, number>,
+) {
+	const live = new Map(findings.map((finding) => [key(finding), finding]));
+	const problems: string[] = [];
+	const warnings: string[] = [];
+	for (const [entry, finding] of live) {
+		const admitted = baseline[entry];
+		if (admitted === undefined)
+			problems.push(
+				`${entry}: regression; missing ${finding.missing.join(", ")}`,
+			);
+		else if (finding.missing.length > admitted)
+			warnings.push(
+				`${entry}: missing count rose from ${admitted} to ${finding.missing.length}; missing ${finding.missing.join(", ")}`,
+			);
+		else if (finding.missing.length < admitted)
+			warnings.push(
+				`${entry}: missing count fell from ${admitted} to ${finding.missing.length}`,
+			);
+	}
+	for (const entry of Object.keys(baseline))
+		if (!live.has(entry))
+			problems.push(`${entry}: ratchet down; offender was fixed`);
+	return { problems, warnings };
 }
 
 describe("#2281 whole-module vi.mock export ratchet", () => {
@@ -154,28 +190,94 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		}
 	});
 
-	it("reports every omitted production export with a file:line and specifier", () => {
+	it("warns when production gains an omitted export", () => {
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const source = 'vi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(
+				moduleFile,
+				"export const a = 1;\nexport const b = 2;\n",
+			);
+			fs.writeFileSync(testFile, source);
+			const finding = findViMockExportGaps(testFile, source, "all");
+			const admissionKey = key(finding[0]);
+			expect(
+				compareAgainstBaseline(finding, { [admissionKey]: 0 }),
+			).toMatchObject({
+				problems: [],
+				warnings: [expect.stringContaining("b")],
+			});
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reds when a factory drops a previously provided export", () => {
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const source =
+				'import { a, b } from "./module.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(moduleFile, "export const a = 1; export const b = 2;\n");
+			fs.writeFileSync(testFile, source);
+			const finding = findViMockExportGaps(testFile, source);
+			const admitted = {
+				[`${relativePosix(REPO_ROOT, finding[0].file)}:./module.js:a,b`]: 0,
+			};
+			expect(
+				compareAgainstBaseline(finding, admitted).problems.join("\n"),
+			).toContain("regression");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the admission key stable when lines move", () => {
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const before =
+				'import { b } from "./module.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const after = `// inserted\n${before}`;
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(testFile, after);
+			const first = findViMockExportGaps(testFile, before)[0];
+			const second = findViMockExportGaps(testFile, after)[0];
+			expect(key(first)).toBe(key(second));
+			expect(key(second)).not.toContain(`:${second.line}:`);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("makes line-key mutation red", () => {
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const testFile = path.join(root, "case.test.ts");
+			const source =
+				'import { b } from "./module.js";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(testFile, source);
+			const finding = findViMockExportGaps(testFile, source)[0];
+			const oldKey = `${relativePosix(REPO_ROOT, finding.file)}:${finding.line}:${finding.specifier}`;
+			expect(
+				compareAgainstBaseline([finding], { [oldKey]: 1 }).problems.length,
+			).toBeGreaterThan(0);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports every omitted production export and warns on newly omitted exports", () => {
 		const findings = scan();
-		const live = new Map(findings.map((finding) => [key(finding), finding]));
-		const problems: string[] = [];
-		for (const [entry, finding] of live) {
-			const before = BASELINE[entry];
-			if (before === undefined) {
-				problems.push(
-					`${entry}: regression; missing ${finding.missing.join(", ")}`,
-				);
-			} else if (finding.missing.join("\0") !== before.join("\0")) {
-				problems.push(
-					`${entry}: missing export set changed from ${before.join(", ")} to ${finding.missing.join(", ")}; ` +
-						`missing ${finding.missing.join(", ")}`,
-				);
-			}
-		}
-		for (const entry of Object.keys(BASELINE)) {
-			if (!live.has(entry))
-				problems.push(`${entry}: ratchet down; offender was fixed`);
-		}
-		expect(problems, problems.join("\n")).toEqual([]);
+		const result = compareAgainstBaseline(findings, BASELINE);
+		console.warn(result.warnings.join("\n"));
+		expect(result.problems, result.problems.join("\n")).toEqual([]);
 	}, 60_000);
 
 	it("baseline entries remain live", () => {
@@ -184,4 +286,15 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		const dead = Object.keys(BASELINE).filter((entry) => !live.has(entry));
 		expect(dead).toEqual([]);
 	}, 60_000);
+
+	it.skipIf(!process.env.VI_MOCK_EXPORT_REGEN)(
+		"regenerates the baseline",
+		() => {
+			fs.writeFileSync(
+				path.join(REPO_ROOT, "tests/support/vi-mock-export-baseline.json"),
+				`${JSON.stringify(baselineFrom(scan()), null, "\t")}\n`,
+			);
+		},
+		60_000,
+	);
 });

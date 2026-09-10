@@ -1,0 +1,4 @@
+test(config): rekey vi.mock export admissions (#2816)
+
+Use factory-content fingerprints and missing-count ratchets so line moves and
+production export additions do not turn routine merges into regressions.
