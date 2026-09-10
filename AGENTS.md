@@ -620,6 +620,27 @@ turn one (#2815). If the host cannot resolve a stable session id, the guard
 records one bounded `turn-context-identity-fallback` degradation per session
 before using the detached fallback (#2815).
 
+A crashed pi hook handler is swallowed in production and LOUD under the test
+runner, through exactly one seam: `surfaceHandlerCrash` in
+`clients/session-event-guard.ts`. Every `index.ts` catch that absorbs a handler
+crash calls it — nine today (`session_start`, `session_before_fork`,
+`observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`,
+the `agent_settled` deferred-mutation drain, `quiet_window`, `message_end`) —
+and it logs, writes one bounded `hook-handler-crash` degradation per handler
+per session, and rethrows only when `process.env.VITEST` is set, except at the
+fire-and-forget `quiet_window` catch, which passes `rethrow: false` because an
+unhandled rejection there can terminate the pi host before any caller observes
+it. Never
+reintroduce a `dbg`-only catch around a handler body: `dbg` writes nothing
+under vitest, so the crash is then indistinguishable from a completed handler
+and every assertion after the caller's `await` is vacuous while the file stays
+green (#2859's fourteen `session_start` awaits, #2884's two `turn_end` ones).
+The `isStaleExtensionCtxError` rethrow stays AHEAD of the call at every site
+that classifies it, so a benign session swap keeps its own single
+`extension-ctx-stale` record instead of being counted as a crash. A catch that
+guards a `pi.on` REGISTRATION against an older host is not in this class and
+keeps its plain swallow (#2884).
+
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
@@ -1151,18 +1172,24 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. `SPAWN_NAMES` and `NODE_SPAWN_NAMES` in
-`tests/support/spawn-cwd-scan.ts` are the one vocabulary the scan's site rule
-and the sweep's population predicate both derive from, with per-name parity in
-`tests/support/spawn-cwd-scan-vocabulary.test.ts` (#2927). A new scanner
-finding is a reason to simplify the scanner, not extend it; the fallback is an
-ast-grep rule matching unseamed `child_process` calls. The `// cwd-exempt:`
-tag stays as the documented escape hatch for genuine non-project children.
-Stated bounds: an ALIASED
-`node:child_process` import is not a site (#2888), and the scan does not follow
-a path computation into the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
-contention and the `default` vitest project's hook budget is 10 s
+reasoned row, never a pin bump. `SPAWN_NAMES` and the seven-name
+`NODE_SPAWN_NAMES` in `tests/support/spawn-cwd-scan.ts` are the one vocabulary
+the scan's site rule and the sweep's population predicate both derive from,
+with per-name parity in `tests/support/spawn-cwd-scan-vocabulary.test.ts`
+(#2927). A new scanner finding is a reason to simplify the scanner, not extend
+it; the fallback is an ast-grep rule matching unseamed `child_process` calls.
+The `// cwd-exempt:` channel is deleted (#2927 item 2, #2923): #2911 removed
+its last three production tags, so the parser and its self-tests are gone and
+a genuine non-project child is admitted with a reasoned sweep row instead.
+Stated bound (#2888): a `node:child_process` call is a site only when the file
+binds one of the seven `NODE_SPAWN_NAMES` from `child_process`; other
+spellings (`promisify(exec)`, a re-exported wrapper) are not sites, and the
+population's fail-safe assertion (exactly one non-seam site) is what surfaces
+a new one. The bound is stated in both places. The scan does not follow a path
+computation into the seam. The `beforeAll` carries an explicit 30 s
+timeout because a local measurement on 2026-09-10 records 3.808 s idle and
+3.932 s under `--maxWorkers=1` over the 81-file population. The `default`
+Vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
@@ -1620,6 +1647,12 @@ exceed its cap when all records are active. #1389's bounded-by-nature tables (fi
 package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
+
+The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
+negative walk re-runs on the next lookup, so a marker created where NONE was
+found is seen on the next resolution (#2894). The other half of the axis is
+still open: a marker created BELOW a cached positive root is not seen until
+the session ends (#2922) — do not describe the class as closed.
 
 ### Session lifecycle, telemetry, and observability
 

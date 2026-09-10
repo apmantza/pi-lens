@@ -4,8 +4,8 @@
  * Runs `cargo clippy` for Rust files to catch common mistakes.
  */
 
-import { dirname, isAbsolute, join, resolve } from "node:path";
-import { findNearestContaining } from "../../path-utils.js";
+import { existsSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { rustClient } from "../../rust-client.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
@@ -24,6 +24,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { createCwdCachedProbe } from "./utils/runner-helpers.js";
 
 // Cached per-cwd `cargo clippy --version` probe (#120). Before this, the
@@ -125,9 +126,14 @@ const rustClippyRunner: RunnerDefinition = {
 			}
 		}
 
-		// Find the package root (where Cargo.toml is)
-		const cargoToml = findCargoToml(ctx.filePath);
-		if (!cargoToml) {
+		// The package root (where Cargo.toml is), through the shared cwd seam
+		// (#2894): `RUNNER_MARKERS["rust-clippy"]` is `["Cargo.toml"]`, so this
+		// IS the walk this runner used to do with `findNearestContaining` — plus
+		// the seam's dispatch-root and `$HOME` ceilings, which the hand-rolled
+		// walk had neither of. The gate then asks about exactly the directory
+		// cargo will run in, rather than about a separately-derived one.
+		const cargoDir = resolveRunnerCwd(ctx, "rust-clippy");
+		if (!existsSync(join(cargoDir, "Cargo.toml"))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -137,7 +143,7 @@ const rustClippyRunner: RunnerDefinition = {
 			["clippy", "--message-format=json", "-q"],
 			{
 				timeout: 60000,
-				cwd: cargoToml.replace("Cargo.toml", ""),
+				cwd: cargoDir,
 			},
 		);
 
@@ -149,7 +155,6 @@ const rustClippyRunner: RunnerDefinition = {
 
 		// Parse JSON output. span.file is relative to the package root, so pass
 		// the cargo dir to resolve diagnostics to absolute paths for filtering.
-		const cargoDir = cargoToml.replace("Cargo.toml", "");
 		const allDiagnostics = parseClippyOutput(raw, ctx.filePath, cargoDir);
 
 		if (allDiagnostics.length === 0) {
@@ -183,11 +188,6 @@ const rustClippyRunner: RunnerDefinition = {
 		};
 	},
 };
-
-function findCargoToml(filePath: string): string | undefined {
-	const dir = findNearestContaining(dirname(filePath), ["Cargo.toml"]);
-	return dir ? join(dir, "Cargo.toml") : undefined;
-}
 
 interface ClippySpan {
 	file?: string;

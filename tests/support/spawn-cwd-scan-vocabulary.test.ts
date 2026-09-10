@@ -48,6 +48,9 @@ describe("spawn-cwd scanner vocabulary (#2927)", () => {
 	});
 
 	it("scans and admits every node spawn name the vocabulary holds", async () => {
+		// Seven names since #2902 closed the aliased-import gap (#2888): each
+		// entry is admitted by the population predicate AND yields a direct
+		// site from the scan, so either side drifting reds here.
 		for (const name of NODE_SPAWN_NAMES) {
 			const source = `import { ${name} } from "node:child_process";\n${name}("tool", []);`;
 			const scan = await scanSpawnCwd("fixture.ts", source);
@@ -60,20 +63,31 @@ describe("spawn-cwd scanner vocabulary (#2927)", () => {
 				`node spawn ${name} is a population file`,
 			).toBe(true);
 		}
+		// An aliased binding resolves through the same table, on both sides.
+		const aliased = `import { spawn as nodeSpawn } from "node:child_process";\nnodeSpawn("t", []);`;
+		const aliasedScan = await scanSpawnCwd("fixture.ts", aliased);
+		expect(
+			aliasedScan.sites.map((site) => `${site.callee}:${site.kind}`),
+			"an aliased node spawn is a direct site",
+		).toEqual(["nodeSpawn:direct"]);
+		expect(
+			holdsAScannableSpawn(aliased),
+			"an aliased node spawn is a population file",
+		).toBe(true);
 	});
 
-	it("keeps the bounds: object methods and aliased imports stay out", () => {
+	it("keeps the bounds: object methods and unbound spellings stay out", () => {
 		// `server.spawn(` is an LSP server definition's own method (round-5
-		// v4-N3); an aliased import is the stated #2888 bound, on both sides.
+		// v4-N3); `promisify(exec)` never binds a vocabulary name (#2888).
 		expect(
 			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
 			"a method named spawn on some object",
 		).toBe(false);
 		expect(
 			holdsAScannableSpawn(
-				'import { spawn as nodeSpawn } from "node:child_process";\nnodeSpawn("t", []);',
+				'import { execFileAsync } from "node:child_process";\nexecFileAsync("tool");',
 			),
-			"an aliased import is the stated bound, not a population file",
+			"an unrecognised child_process spelling stays outside the population",
 		).toBe(false);
 	});
 });
