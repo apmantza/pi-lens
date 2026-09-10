@@ -328,7 +328,12 @@ is the procedure and defers here on conflict; 2026-09-09).**
   a per-finding disposition (`fixed | not fixed | new defect | withdrawn`)
   and a fixer handoff answers each finding id the same way; the orchestrator
   routes on the worst cell (a `new defect` opens the state-space rail; all
-  `fixed` merges on green; a `withdrawn` needs the reason). Severity is
+  `fixed` merges on green; a `withdrawn` needs the reason). A state-space
+  table for session or telemetry state enumerates every lifecycle EVENT per
+  host — open, refresh (a second `session_start`), restore/fork, end,
+  transport close — not only open and end: #2853's round-2 table had pi/MCP
+  × open/end, and verify v2 found its three behaviour defects in exactly the
+  refresh, transport-close and restore cells it omitted. Severity is
   earned by a reproduced instance: a HIGH with no failure scenario is a
   MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
   line) never count as an actionable round.
