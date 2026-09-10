@@ -727,6 +727,26 @@ const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
 const WORKLIST_CEILING = 1;
 /** See the comment on the `beforeAll` below for where this number comes from. */
 const SCAN_HOOK_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a file can hold a site the scan recognises: one of the seam wrappers
+ * by name, or an unaliased `node:child_process` import. It mirrors
+ * `spawn-cwd-scan.ts`'s own site rule deliberately — round 4's population
+ * filter listed only the five seam names while the scanner also counted
+ * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
+ * could never move a pin (round-5 v4-N3). An ALIASED import is a stated bound
+ * of both, tracked by #2888.
+ */
+function holdsAScannableSpawn(source: string): boolean {
+	return (
+		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
+			source,
+		) ||
+		/import\s*\{[^}]*\b(?:spawn|execFile)\b(?![^}]*\bas\b)[^}]*\}\s*from\s*["']node:child_process["']/.test(
+			source,
+		)
+	);
+}
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
 const ORIGIN_ADMISSIONS = Object.fromEntries([
 	...ORIGIN_ADMISSION_ROWS,
@@ -791,17 +811,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	// import (round-5 v4-N3 — the two lists used to disagree, so a file whose
 	// only child spawn was a bare `spawn(` could never move a pin). An ALIASED
 	// child_process import is a stated bound, tracked by #2888.
-	const files = POPULATION_FILES.filter((file) => {
-		const source = fs.readFileSync(file, "utf8");
-		return (
-			/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
-				source,
-			) ||
-			/import\s*\{[^}]*\b(?:spawn|execFile)\b(?![^}]*\bas\b)[^}]*\}\s*from\s*["']node:child_process["']/.test(
-				source,
-			)
-		);
-	});
+	const files = POPULATION_FILES.filter((file) =>
+		holdsAScannableSpawn(fs.readFileSync(file, "utf8")),
+	);
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
@@ -851,6 +863,40 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 		expect(sites.filter((site) => site.kind === "direct")).toHaveLength(
 			EXPECTED_DIRECT_SITES,
 		);
+	});
+
+	it("the population rule admits exactly what the scan can see", () => {
+		// The clause that matters is the second one: without it a file whose only
+		// child spawn is a bare `spawn(` from node:child_process is invisible to
+		// the sweep and cannot move a pin (round-5 v4-N3). The aliased form is the
+		// stated bound (#2888) and must stay OUT, or the sweep would pull in a
+		// file the scan finds no site in and red the seam-occupancy test above.
+		expect(
+			holdsAScannableSpawn('const r = await safeSpawnAsync("t", [], {});'),
+			"a seam wrapper by name",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import { spawn } from "node:child_process";\nspawn("t", []);',
+			),
+			"an unaliased node:child_process import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import { type ChildProcess, execFile } from "node:child_process";',
+			),
+			"an unaliased import beside a type import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import { spawn as nodeSpawn } from "node:child_process";\nnodeSpawn("t", []);',
+			),
+			"an aliased import is the stated bound, not a population file",
+		).toBe(false);
+		expect(
+			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
+			"a method named spawn on some object",
+		).toBe(false);
 	});
 
 	it("finds at least one spawn seam in every population file", () => {
