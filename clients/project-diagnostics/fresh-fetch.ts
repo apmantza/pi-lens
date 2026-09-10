@@ -114,9 +114,14 @@ export interface FreshProjectDiagnosticsResult {
 	diagnostics: ProjectDiagnostic[];
 	/** Extractor ids that actually contributed findings this run. */
 	runners: string[];
-	/** Extractor ids that completed successfully, including clean results. */
-	completed: string[];
-	/** Extractor ids whose successful result actually analysed the project. */
+	/**
+	 * Extractor ids whose result is the parsed output of a scan THIS call ran
+	 * over the analysis root — the opt-in `AnalysedRootSignal` each client
+	 * sets at its own parse site (#2154). `lens_diagnostics mode=full` retires
+	 * retained findings only for these ids, so a runner that reported
+	 * `success: true` without running (skipped, crashed before writing its
+	 * report, served from a memo) is deliberately absent.
+	 */
 	analyzed: string[];
 	/** Extractor ids skipped this run (not applicable / tool unavailable, OR
 	 *  aborted before settling — see `abortedIds`). */
@@ -239,7 +244,6 @@ export async function fetchFreshProjectDiagnostics(
 		return {
 			diagnostics: [],
 			runners: [],
-			completed: [],
 			analyzed: [],
 			cold: [...ANALYZER_IDS],
 			coldReasons: Object.fromEntries(
@@ -252,7 +256,6 @@ export async function fetchFreshProjectDiagnostics(
 	}
 	const diagnostics: ProjectDiagnostic[] = [];
 	const runners: string[] = [];
-	const completed: string[] = [];
 	const analyzed: string[] = [];
 	const cold: string[] = [];
 	// #1623: the specific reason each `cold` id was skipped, captured at the
@@ -286,13 +289,21 @@ export async function fetchFreshProjectDiagnostics(
 		coldReasons[id] = reason;
 	}
 
+	/**
+	 * `analysedRoot` is the client's own opt-in `AnalysedRootSignal` (#2154),
+	 * never a property of reaching this function: `success: true` is also what
+	 * a skipped, crashed-before-reporting or memoised run returns, and only the
+	 * client knows which of those it is. Findings are recorded either way — an
+	 * id that did not analyse the root simply carries no authority to retire a
+	 * retained finding.
+	 */
 	function record(
 		id: string,
 		adapted: ProjectDiagnostic[],
 		elapsedMs: number,
+		analysedRoot: boolean,
 	): void {
-		pushUnique(completed, id);
-		pushUnique(analyzed, id);
+		if (analysedRoot) pushUnique(analyzed, id);
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
 		const kept = applyDispositionsMultiFile(
 			adapted,
@@ -341,11 +352,11 @@ export async function fetchFreshProjectDiagnostics(
 				recordFailed("knip", result);
 				return;
 			}
-			if (result.analyzed === false || result.execution === "cache") {
-				markCold(
-					"knip",
-					result.summary ?? "knip result was not a fresh analysis",
-				);
+			// knip reports `success: true` for a run that never happened (no
+			// project root, a memo hit, an unparseable exit-0). Those belong in
+			// the honest `cold` channel, not in "fetched fresh this call".
+			if (result.analyzed !== true) {
+				markCold("knip", result.summary ?? "knip did not analyse this root");
 				return;
 			}
 			cacheManager.writeCache("knip", result, analysisRoot, {
@@ -355,6 +366,7 @@ export async function fetchFreshProjectDiagnostics(
 				"knip",
 				knipIssuesToProjectDiagnostics(analysisRoot, result.issues ?? []),
 				Date.now() - startMs,
+				true,
 			);
 		}),
 
@@ -386,10 +398,10 @@ export async function fetchFreshProjectDiagnostics(
 				recordFailed("jscpd", result);
 				return;
 			}
-			if (result.analyzed === false) {
+			if (result.analyzed !== true) {
 				markCold(
 					"jscpd",
-					"jscpd skipped because the project has no source files",
+					"jscpd did not analyse this root (no source files, or the scan produced no report)",
 				);
 				return;
 			}
@@ -400,6 +412,7 @@ export async function fetchFreshProjectDiagnostics(
 				"jscpd",
 				jscpdResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
+				true,
 			);
 		}),
 
@@ -424,6 +437,7 @@ export async function fetchFreshProjectDiagnostics(
 				"madge",
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),
 				Date.now() - startMs,
+				result.analyzed === true,
 			);
 		}),
 
@@ -466,6 +480,7 @@ export async function fetchFreshProjectDiagnostics(
 				"gitleaks",
 				gitleaksResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
+				result.analyzed === true,
 			);
 		}),
 
@@ -509,6 +524,7 @@ export async function fetchFreshProjectDiagnostics(
 				"govulncheck",
 				govulncheckResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
+				result.analyzed === true,
 			);
 		}),
 
@@ -550,6 +566,7 @@ export async function fetchFreshProjectDiagnostics(
 				"opengrep",
 				opengrepResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
+				result.analyzed === true,
 			);
 		}),
 
@@ -585,6 +602,7 @@ export async function fetchFreshProjectDiagnostics(
 				"trivy",
 				trivyResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
+				result.analyzed === true,
 			);
 		}),
 
@@ -618,6 +636,7 @@ export async function fetchFreshProjectDiagnostics(
 						"dead-code",
 						deadCodeResultToProjectDiagnostics(analysisRoot, result),
 						Date.now() - startMs,
+						result.analyzed === true,
 					);
 				}),
 			);
@@ -679,6 +698,9 @@ export async function fetchFreshProjectDiagnostics(
 					options.runtime,
 				),
 				Date.now() - startMs,
+				// Never authoritative: this lane reads the cache turn_end wrote,
+				// it never runs a suite over the root this call (#2154).
+				false,
 			);
 		}),
 	];
@@ -711,7 +733,6 @@ export async function fetchFreshProjectDiagnostics(
 		return {
 			diagnostics,
 			runners,
-			completed,
 			analyzed,
 			cold,
 			coldReasons,
@@ -728,7 +749,6 @@ export async function fetchFreshProjectDiagnostics(
 	return {
 		diagnostics,
 		runners,
-		completed,
 		analyzed,
 		cold,
 		coldReasons,

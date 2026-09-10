@@ -1874,7 +1874,14 @@ describe("lsp_diagnostics tool", () => {
 			}
 		});
 
+		// #2154 round 4: round 3's version of this case passed
+		// `createLspDiagnosticsTool(undefined, …)` — with no LSP service no
+		// result ever reached the guard, so it stayed green with the guard
+		// deleted outright. It now drives the same clean-result path as the
+		// test above, and asserts the seam WAS reached before asserting the
+		// callback was not called.
 		it("rejects an undefined reconciliation result as unconfirmed", async () => {
+			mocked.cascadeTier = "waits";
 			const tmpDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-undefined-"),
 			);
@@ -1885,7 +1892,7 @@ describe("lsp_diagnostics tool", () => {
 
 			try {
 				await createLspDiagnosticsTool(
-					undefined,
+					() => 1,
 					onConfirmedNoBlockers,
 				).execute(
 					"diag-reconcile-undefined",
@@ -1894,6 +1901,7 @@ describe("lsp_diagnostics tool", () => {
 					null,
 					{ cwd: "." },
 				);
+				expect(reconcileScanDiagnosticsMock).toHaveBeenCalledTimes(1);
 				expect(onConfirmedNoBlockers).not.toHaveBeenCalled();
 			} finally {
 				removeTempDirSync(tmpDir);

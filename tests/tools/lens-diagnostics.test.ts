@@ -938,10 +938,14 @@ function sum(
 
 describe("lens_diagnostics mode=full", () => {
 	it("retires only the analysed runner's retained row", async () => {
+		// Both directions: the analysed runner's row goes (R), and a row from a
+		// runner that did NOT analyse this call survives (O). #2154 round 3
+		// asserted only the first, so a filter that retired everything — the
+		// over-correction that silently deletes real findings — stayed green.
 		mockSummaries.push(
 			sum(
 				"/proj/src/stale.ts",
-				{ warnings: 1 },
+				{ warnings: 2 },
 				{
 					diagnostics: [
 						{
@@ -951,6 +955,13 @@ describe("lens_diagnostics mode=full", () => {
 							rule: "jscpd:duplicate-code",
 							tool: "jscpd",
 						},
+						{
+							severity: "warning",
+							message: "retained gitleaks finding",
+							line: 9,
+							rule: "gitleaks:secret",
+							tool: "gitleaks",
+						},
 					],
 				},
 			),
@@ -958,9 +969,8 @@ describe("lens_diagnostics mode=full", () => {
 		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 			diagnostics: [],
 			runners: [],
-			completed: ["jscpd"],
 			analyzed: ["jscpd"],
-			cold: [],
+			cold: ["gitleaks"],
 			timings: { jscpd: 1 },
 		});
 
@@ -971,6 +981,9 @@ describe("lens_diagnostics mode=full", () => {
 
 		expect(String(result.content[0].text)).not.toContain(
 			"stale runner finding",
+		);
+		expect(String(result.content[0].text)).toContain(
+			"retained gitleaks finding",
 		);
 	});
 

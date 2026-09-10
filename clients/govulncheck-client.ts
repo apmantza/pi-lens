@@ -17,6 +17,7 @@
  * Refs: #132
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -53,7 +54,7 @@ export interface GovulncheckFinding {
 	trace: GovulncheckTraceFrame[];
 }
 
-export interface GovulncheckResult {
+export interface GovulncheckResult extends AnalysedRootSignal {
 	success: boolean;
 	findings: GovulncheckFinding[];
 	scannedAt: string;
@@ -481,8 +482,10 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			}
 
 			const findings = parseGovulncheckJson(rawStdout);
+			// #2154: the one govulncheck site that parsed a scan of this root.
 			return {
 				success: true,
+				analyzed: true,
 				findings,
 				scannedAt,
 			};

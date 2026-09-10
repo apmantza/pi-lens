@@ -2012,7 +2012,6 @@ async function formatFullMode(
 		: Promise.resolve<FreshProjectDiagnosticsResult>({
 				diagnostics: [],
 				runners: [],
-				completed: [],
 				analyzed: [],
 				// #1623: every heavyweight analyzer is ELIGIBLE for this project but
 				// this call never asked for it (refreshRunners wasn't cheap/all/
@@ -2137,7 +2136,8 @@ async function formatFullMode(
 			// A result rejected by the shared ordering guard is not authoritative
 			// for delivery. Otherwise full mode hides the old widget row while
 			// mode=all still serves it, creating a false clean/full disagreement.
-			// Older test doubles return undefined and retain legacy acceptance.
+			// Strict `=== true`: `undefined` (a double that predates the boolean
+			// return) takes the unreconciled arm, never the retiring one.
 			if (retired === true) {
 				authoritativeLspFiles.add(path.resolve(result.filePath));
 			} else {
@@ -2188,9 +2188,13 @@ async function formatFullMode(
 	// computed above, in the SAME `Promise.all` as the LSP sweep (#613) — only
 	// when the caller opted into project-runner state (otherwise it's the
 	// `Promise.resolve({...})` stub from `analyzersPromise` above).
-	const authoritativeRunnerIds = (extracted.analyzed ?? []).filter(
-		(id) => id !== "test-runner",
-	);
+	// #2154: only ids whose client said it parsed a scan of this root this call
+	// (`FreshProjectDiagnosticsResult.analyzed`). Every exclusion — a skipped
+	// runner, a crash that still reported success, the cache-read test-runner
+	// lane — is decided at the record site in fresh-fetch.ts, not re-derived
+	// here; a second list of "which ids don't count" would be the mirror this
+	// repo's single-source-of-truth rule forbids.
+	const authoritativeRunnerIds = new Set(extracted.analyzed ?? []);
 	const foldedProjectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
@@ -2242,7 +2246,7 @@ async function formatFullMode(
 			projectSnapshot,
 			projectDelta,
 			authoritativeLspFiles,
-			new Set(authoritativeRunnerIds),
+			authoritativeRunnerIds,
 		),
 		cwd,
 		policyMap,

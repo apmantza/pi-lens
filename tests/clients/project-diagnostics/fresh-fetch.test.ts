@@ -64,6 +64,11 @@ function makeClients(
 			analyze: vi.fn().mockResolvedValue(
 				overrides.knipResult ?? {
 					success: true,
+					// A stub that stands for a knip run that actually happened
+					// carries the same opt-in signal the real client sets at its
+					// parse site (#2154) — without it fresh-fetch reports the
+					// runner cold, exactly as it would for a knip that no-oped.
+					analyzed: true,
 					issues: overrides.knipIssues ?? [],
 					unusedExports: [],
 					unusedFiles: [],
@@ -80,6 +85,7 @@ function makeClients(
 			scan: vi.fn().mockResolvedValue(
 				overrides.jscpdResult ?? {
 					success: true,
+					analyzed: true,
 					duplicatedLines: 0,
 					totalLines: 0,
 					percentage: 0,
@@ -93,12 +99,15 @@ function makeClients(
 				.mockResolvedValue(overrides.madgeAvailable ?? false),
 			scanProject: vi
 				.fn()
-				.mockResolvedValue(overrides.madgeResult ?? { circular: [], count: 0 }),
+				.mockResolvedValue(
+					overrides.madgeResult ?? { circular: [], count: 0, analyzed: true },
+				),
 		},
 		govulncheckClient: {
 			ensureAvailable: vi.fn().mockResolvedValue(true),
 			analyze: vi.fn().mockResolvedValue({
 				success: true,
+				analyzed: true,
 				findings: [],
 				scannedAt: "now",
 			}),
@@ -107,6 +116,7 @@ function makeClients(
 			ensureAvailable: vi.fn().mockResolvedValue(true),
 			scan: vi.fn().mockResolvedValue({
 				success: true,
+				analyzed: true,
 				findings: [],
 				scannedAt: "now",
 			}),
@@ -115,6 +125,7 @@ function makeClients(
 			ensureAvailable: vi.fn().mockResolvedValue(true),
 			scan: vi.fn().mockResolvedValue({
 				success: true,
+				analyzed: true,
 				findings: [],
 				scannedAt: "now",
 			}),
@@ -125,6 +136,7 @@ function makeClients(
 			ensureAvailable: vi.fn().mockResolvedValue(true),
 			scan: vi.fn().mockResolvedValue({
 				success: true,
+				analyzed: true,
 				findings: [],
 				scannedAt: "now",
 			}),
@@ -282,46 +294,6 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		);
 	});
 
-	it("does not treat successful empty no-op results as analysed runners", async () => {
-		const cacheManager = makeCacheManager();
-		const clients = makeClients({
-			knipResult: {
-				success: true,
-				analyzed: false,
-				issues: [],
-				unusedExports: [],
-				unusedFiles: [],
-				unusedDeps: [],
-				unlistedDeps: [],
-				summary: "No project root found; knip skipped",
-			},
-			jscpdAvailable: true,
-			jscpdResult: {
-				success: true,
-				analyzed: false,
-				clones: [],
-				duplicatedLines: 0,
-				totalLines: 0,
-				percentage: 0,
-			},
-		});
-
-		const result = await fetchFreshProjectDiagnostics(
-			cacheManager,
-			tmp,
-			clients,
-		);
-
-		expect(result.completed).not.toEqual(
-			expect.arrayContaining(["knip", "jscpd"]),
-		);
-		expect(result.analyzed).not.toEqual(
-			expect.arrayContaining(["knip", "jscpd"]),
-		);
-		expect(result.cold).toEqual(expect.arrayContaining(["knip", "jscpd"]));
-		expect(result.diagnostics).toEqual([]);
-	});
-
 	it("writes to the jscpd-ts cache key when a tsconfig.json is present", async () => {
 		fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{}");
 		const cacheManager = makeCacheManager();
@@ -329,6 +301,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			jscpdAvailable: true,
 			jscpdResult: {
 				success: true,
+				analyzed: true,
 				duplicatedLines: 4,
 				totalLines: 10,
 				percentage: 40,
