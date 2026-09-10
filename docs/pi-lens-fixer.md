@@ -53,6 +53,13 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   48- to 72-cell table with zero real ids).
 - Before handoff, run `npm run preflight` last and paste its table in
   `PR_BODY.md` — a handoff without it is incomplete.
+- One set of template headings per PR. A fix round APPENDS `## Round N` and
+  edits the existing `## Observability` / `## Tests` sections in place; it
+  never adds a second `## Observability` (the lint reads the first one, and a
+  stale first section was the most common `PR body` red on 2026-09-10). Lint
+  the FULL body you will publish (`gh pr view <n> --json body -q .body` plus
+  your round), against the real `origin/master...HEAD` diff (fetch first),
+  not a hand-shaped diff.
 - `PR_BODY.md` passes `node scripts/check-pr-body.mjs --lint-local PR_BODY.md`
   before handoff. The gate requires the headings `## Summary`, `## Tests`,
   `## Blast radius`, `## Class sweep`, `## Observability`, and
