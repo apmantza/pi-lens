@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -115,14 +117,16 @@ describe("#2523 slice 2 real hook budget seams", () => {
 		const gate = gatedPromise<never>();
 		formatterRunner.mockReturnValue(gate.promise);
 		const service = new FormatService("budget-test", true);
-		fs.writeFileSync("/tmp/budget-test.ts", "const value = 1;\n");
-		service.recordRead("/tmp/budget-test.ts");
-		const result = service.formatFile("/tmp/budget-test.ts", {
+		const filePath = path.join(os.tmpdir(), `budget-test-${process.pid}.ts`);
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		service.recordRead(filePath);
+		const result = service.formatFile(filePath, {
 			budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
 		});
 		await vi.advanceTimersByTimeAsync(HOOK_WALL_BUDGET_MS.tool_result_edit);
 		await expect(result).resolves.toMatchObject({ allSucceeded: false });
 		expect(gate.settled()).toBe(false);
+		fs.rmSync(filePath, { force: true });
 	});
 
 	it("keeps a caller-aborted formatter out of failure and requeue semantics", async () => {
@@ -131,13 +135,15 @@ describe("#2523 slice 2 real hook budget seams", () => {
 		const controller = new AbortController();
 		formatterRunner.mockReturnValue(gate.promise);
 		const service = new FormatService("abort-test", true);
-		fs.writeFileSync("/tmp/abort-test.ts", "const value = 1;\n");
-		service.recordRead("/tmp/abort-test.ts");
-		const result = service.formatFile("/tmp/abort-test.ts", {
+		const filePath = path.join(os.tmpdir(), `abort-test-${process.pid}.ts`);
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		service.recordRead(filePath);
+		const result = service.formatFile(filePath, {
 			signal: controller.signal,
 		});
 		controller.abort();
 		await expect(result).resolves.toMatchObject({ formatters: [] });
 		expect(gate.settled()).toBe(false);
+		fs.rmSync(filePath, { force: true });
 	});
 });

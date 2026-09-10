@@ -197,9 +197,9 @@ interface ToolResultDeps {
 	dbg: (msg: string) => void;
 	runtime: RuntimeCoordinator;
 	cacheManager: CacheManager;
-	biomeClient: BiomeClient;
-	ruffClient: RuffClient;
-	metricsClient: MetricsClient;
+	biomeClient?: BiomeClient;
+	ruffClient?: RuffClient;
+	metricsClient?: MetricsClient;
 	resetLSPService: (options?: LSPShutdownOptions) => void;
 	agentBehaviorRecord: (toolName: string, filePath?: string) => unknown[];
 	formatBehaviorWarnings: (warnings: unknown[]) => string;
@@ -237,7 +237,9 @@ interface ToolResultDeps {
 	_attachmentBudget?: { remaining: number };
 }
 
-async function ensureToolResultClients(deps: ToolResultDeps): Promise<boolean> {
+function ensureToolResultClients(
+	deps: ToolResultDeps,
+): boolean | Promise<boolean> {
 	if (deps.biomeClient && deps.ruffClient && deps.metricsClient) return true;
 	const request = {
 		reason: "tool-result-analysis",
@@ -245,17 +247,18 @@ async function ensureToolResultClients(deps: ToolResultDeps): Promise<boolean> {
 		timeoutMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
 		...(deps.signal === undefined ? {} : { signal: deps.signal }),
 	};
-	const clients = await bounded(requestBootstrapClients(request), {
+	return bounded(requestBootstrapClients(request), {
 		ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
 		signal: deps.signal,
 		hook: "tool_result_edit",
 		label: "tool-result-bootstrap-demand",
+	}).then((clients) => {
+		if (!clients) return false;
+		deps.biomeClient = clients.biomeClient;
+		deps.ruffClient = clients.ruffClient;
+		deps.metricsClient = clients.metricsClient;
+		return true;
 	});
-	if (!clients) return false;
-	deps.biomeClient = clients.biomeClient;
-	deps.ruffClient = clients.ruffClient;
-	deps.metricsClient = clients.metricsClient;
-	return true;
 }
 
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
@@ -1661,8 +1664,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					pathsEqual(candidate, filePath),
 				)
 			) {
+				const observedClients = ensureToolResultClients(deps);
 				if (
-					!(await bounded(ensureToolResultClients(deps), {
+					observedClients !== true &&
+					!(await bounded(Promise.resolve(observedClients), {
 						ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
 						signal: deps.signal ?? undefined,
 						hook: "tool_result_edit",
@@ -2067,8 +2072,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// (defined above `handleToolResult`), shared with the observed-mutation
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
+	const classifiedClients = ensureToolResultClients(deps);
 	if (
-		!(await bounded(ensureToolResultClients(deps), {
+		classifiedClients !== true &&
+		!(await bounded(Promise.resolve(classifiedClients), {
 			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
 			signal: deps.signal,
 			hook: "tool_result_edit",

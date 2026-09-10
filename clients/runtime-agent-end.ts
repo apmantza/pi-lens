@@ -570,6 +570,7 @@ export async function handleAgentEnd({
 								dbg,
 								ambientSignal,
 								30_000,
+								"agent_settled",
 							),
 							{
 								ms: HOOK_WALL_BUDGET_MS.agent_settled,

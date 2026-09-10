@@ -204,6 +204,14 @@ function guardSessionEvent<E, C, R>(
 			// below.
 			return skip(event, "pre-dispatch") as unknown as R;
 		try {
+			let signal: AbortSignal | undefined;
+			try {
+				signal = (ctx as { signal?: AbortSignal } | undefined)?.signal;
+			} catch (err) {
+				if (isStaleExtensionCtxError(err))
+					return Promise.resolve(skip(event, "mid-handler")) as R;
+				throw err;
+			}
 			const result = runWithTurnContext(stableSessionId(ctx), () =>
 				handler(event, ctx),
 			);
@@ -217,14 +225,6 @@ function guardSessionEvent<E, C, R>(
 						? options.budgetKey(event, ctx)
 						: (options.budgetKey ?? defaultBudgetKey(eventName));
 				if (budget === undefined) return recovered as R;
-				let signal: AbortSignal | undefined;
-				try {
-					signal = (ctx as { signal?: AbortSignal } | undefined)?.signal;
-				} catch (err) {
-					if (isStaleExtensionCtxError(err))
-						return Promise.resolve(skip(event, "mid-handler")) as R;
-					throw err;
-				}
 				return bounded(recovered, {
 					ms: HOOK_WALL_BUDGET_MS[budget],
 					// The settled drain must observe an aborted signal and requeue

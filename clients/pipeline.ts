@@ -74,6 +74,7 @@ import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
 import { bounded } from "./deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
+import type { LedgerHookKey } from "./hook-budgets.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
@@ -1245,6 +1246,7 @@ export async function runFormatPhase(
 	dbg: PipelineContext["dbg"],
 	signal?: AbortSignal,
 	budgetMs = HOOK_WALL_BUDGET_MS.tool_result_edit,
+	hook: LedgerHookKey = "tool_result_edit",
 ): Promise<FormatPhaseResult> {
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1258,6 +1260,7 @@ export async function runFormatPhase(
 		const result = await formatService.formatFile(filePath, {
 			signal,
 			budgetMs,
+			hook,
 		});
 		// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
 		// `formattersUsed` (which drives change bookkeeping / turn summaries) and

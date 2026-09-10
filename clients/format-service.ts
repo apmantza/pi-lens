@@ -22,6 +22,7 @@ import type {
 } from "./formatters.js";
 import { loadFormatters } from "./formatters-lazy.js";
 import { bounded } from "./deadline-utils.js";
+import type { LedgerHookKey } from "./hook-budgets.js";
 
 // --- Configuration ---
 
@@ -38,6 +39,7 @@ export interface FormatOptions {
 	/** Abort and aggregate wall budget for hook-owned formatting. */
 	signal?: AbortSignal;
 	budgetMs?: number;
+	hook?: LedgerHookKey;
 }
 
 export interface FormatSummary {
@@ -164,6 +166,7 @@ export class FormatService {
 		_concurrency = DEFAULT_FORMATTER_CONCURRENCY,
 		signal?: AbortSignal,
 		budgetMs = 30_000,
+		hook: LedgerHookKey = "tool_result_edit",
 	): Promise<FormatterResult[]> {
 		const results: FormatterResult[] = [];
 		const startedAt = Date.now();
@@ -190,7 +193,7 @@ export class FormatService {
 					{
 						ms: remainingMs,
 						signal,
-						hook: "tool_result_edit",
+						hook,
 						label: "formatter-aggregate",
 					},
 				);

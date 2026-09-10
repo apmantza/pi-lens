@@ -117,9 +117,9 @@ export type DegradationKind =
 	| "bus-stale"
 	| "cache-usage-attribution-stale"
 	| "cascade-budget-override-disarmed"
-	| "cascade-tier3-backlog-evicted"
 	/** Deferred cascade admission reached its bounded in-memory queue. */
-	| "cascade_pending_cap"
+	| "cascade-pending-cap"
+	| "cascade-tier3-backlog-evicted"
 	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an

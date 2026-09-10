@@ -2549,32 +2549,42 @@ function activateExtension(hostPi: ExtensionAPI) {
 						label: "tool-result-bootstrap",
 					})
 				: peekBootstrapClients();
-			return handleToolResult({
-				signal: ctx.signal,
-				event: event as any,
-				getFlag: (name: string, filePath?: string) =>
-					getLensFlag(name, filePath),
-				getFlagSource: (name: string, filePath?: string) =>
-					getLensFlagSource(name, filePath),
-				dbg,
-				runtime,
-				cacheManager,
-				biomeClient: resident!.biomeClient!,
-				ruffClient: resident!.ruffClient!,
-				metricsClient: resident!.metricsClient!,
-				resetLSPService,
-				readGuard: runtime.readGuard,
-				agentBehaviorRecord: (toolName, filePath) =>
-					resident?.agentBehaviorClient.recordToolCall(toolName, filePath) ??
-					[],
-				formatBehaviorWarnings: (warnings) =>
-					resident?.agentBehaviorClient.formatWarnings(warnings as any) ?? "",
-				// #791: tags any deferred-format record queued from this tool_result
-				// with the STABLE session id of the ctx that produced it, so a
-				// later agent_end can tell its own queued work apart from a
-				// concurrent in-process secondary session's.
-				sessionId: getStableSessionId(ctx),
-			});
+			return await bounded(
+				handleToolResult({
+					signal: ctx.signal,
+					event: event as any,
+					getFlag: (name: string, filePath?: string) =>
+						getLensFlag(name, filePath),
+					getFlagSource: (name: string, filePath?: string) =>
+						getLensFlagSource(name, filePath),
+					dbg,
+					runtime,
+					cacheManager,
+					biomeClient: resident?.biomeClient,
+					ruffClient: resident?.ruffClient,
+					metricsClient: resident?.metricsClient,
+					resetLSPService,
+					readGuard: runtime.readGuard,
+					agentBehaviorRecord: (toolName, filePath) =>
+						resident?.agentBehaviorClient.recordToolCall(toolName, filePath) ??
+						[],
+					formatBehaviorWarnings: (warnings) =>
+						resident?.agentBehaviorClient.formatWarnings(warnings as any) ?? "",
+					// #791: tags any deferred-format record queued from this tool_result
+					// with the STABLE session id of the ctx that produced it, so a
+					// later agent_end can tell its own queued work apart from a
+					// concurrent in-process secondary session's.
+					sessionId: getStableSessionId(ctx),
+				}),
+				{
+					ms: rtMutation
+						? HOOK_WALL_BUDGET_MS.tool_result_edit
+						: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+					signal: ctx.signal,
+					hook: rtMutation ? "tool_result_edit" : "tool_result_read_only",
+					label: "handleToolResult",
+				},
+			);
 		} finally {
 			setAmbientAbortSignal(undefined);
 		}

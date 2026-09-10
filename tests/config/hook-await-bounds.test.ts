@@ -2247,7 +2247,7 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"cancelled every startup scan with no retry). Two live bounds even then, " +
 		"because this call supplies the seam's own `bootstrapShutdownController` " +
 		"as `shutdownSignal`. The tool_call demand passes the ambient signal.",
-	"call:clients/format-service.ts#FormatService:6ec6083f~03a6efb1":
+	"call:clients/format-service.ts#FormatService:6ec6083f~f49a0718":
 		"The formatter aggregate receives the edit pipeline's live signal. The " +
 		"signal may be absent only in direct unit callers; the edit wall budget " +
 		"and the per-formatter leaf timer remain active in that harness.",
@@ -2324,6 +2324,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:index.ts#c06d5cf4~c78f4265":
 		"The session_start handler receives the live pi ctx.signal; the shared " +
 		"session_start budget bounds the handler await.",
+	"call:index.ts#c06d5cf4~e2427e95":
+		"The tool_result handler receives the live pi ctx.signal and the selected " +
+		"read-only or edit budget; the nested handler bound is deliberate.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */

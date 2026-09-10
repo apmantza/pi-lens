@@ -874,7 +874,7 @@ export class RuntimeCoordinator {
 		// The settled run enters the same accumulator off-hook and is therefore
 		// visible to the next turn-end drain.
 		recordDegradationOnce({
-			kind: "cascade_pending_cap",
+			kind: "cascade-pending-cap",
 			subject: "runtime-coordinator",
 			reason: `deferred cascade admission capped at ${MAX_PENDING_CASCADE_RUNS}`,
 		});
