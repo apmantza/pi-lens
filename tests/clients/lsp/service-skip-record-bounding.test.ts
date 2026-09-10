@@ -17,14 +17,24 @@
  * so the repeat-suppression assertions see 3 records instead of 1.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 
-const FIXTURE_ROOT = path.join(process.cwd(), "skip-record-bounding-fixture");
+// The fixture lives in os.tmpdir(), not under process.cwd(): a repo-root
+// fixture directory has no cleanup path, so runs kept `skip-record-bounding-fixture/`
+// behind and its marker file was once committed as a test artifact.
+const FIXTURE_ROOT = fs.mkdtempSync(
+	path.join(os.tmpdir(), "skip-record-bounding-"),
+);
 const FIXTURE_FILE = path.join(FIXTURE_ROOT, "main.fake");
 const OTHER_FILE = path.join(FIXTURE_ROOT, "other.fake");
+
+afterAll(() => {
+	fs.rmSync(FIXTURE_ROOT, { recursive: true, force: true });
+});
 
 const getServersForFileWithConfig = vi.fn();
 const isDirectLspCommandTemporarilyUnavailable = vi.fn(() => false);
@@ -96,7 +106,7 @@ describe("LSP per-file skip records are bounded (#1743)", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		latencyCalls.length = 0;
-		fs.mkdirSync(FIXTURE_ROOT, { recursive: true });
+		// mkdtempSync created FIXTURE_ROOT; each test refreshes only the marker.
 		fs.writeFileSync(path.join(FIXTURE_ROOT, ".fake-root"), "");
 		isDirectLspCommandTemporarilyUnavailable.mockReturnValue(false);
 		getServersForFileWithConfig.mockReset();

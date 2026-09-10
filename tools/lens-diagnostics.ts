@@ -43,10 +43,9 @@ import {
 } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import {
-	getServersForFileWithConfig,
 	primaryServerId,
+	resolveLspCwdForFile,
 } from "../clients/lsp/config.js";
-import { resolveLspServerCwd } from "../clients/lsp/server.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { LSPWorkspaceUnconfirmedReason } from "../clients/lsp/index.js";
 import { getFullScanWallClockMs } from "../clients/lsp/workspace-sweep-hold.js";
@@ -2515,22 +2514,15 @@ async function projectResolvedCwd(
 	summary: FileDiagnosticSummary,
 	cwd: string,
 ): Promise<FileDiagnosticSummary> {
-	const serverId = primaryServerId(summary.filePath);
-	const server = serverId
-		? getServersForFileWithConfig(summary.filePath).find(
-				(entry) => entry.id === serverId,
-			)
-		: undefined;
-	const resolvedCwd = server
-		? await resolveLspServerCwd(server, summary.filePath, cwd)
-		: undefined;
+	// #2777 O1: the whole three-way lookup lives on the LSP seam now. A file
+	// with no primary LSP server is `undefined` here by construction, and
+	// formatAllMode renders that row without a cwd term (N1) — the literal
+	// `cwd=undefined` cannot be produced.
+	const resolvedCwd = await resolveLspCwdForFile(summary.filePath, cwd);
 	return {
 		...summary,
 		...(resolvedCwd === undefined ? {} : { resolvedCwd }),
-		diagnostics: (summary.diagnostics ?? []).map((diagnostic) => ({
-			...diagnostic,
-			...(resolvedCwd === undefined ? {} : { resolvedCwd }),
-		})),
+		diagnostics: summary.diagnostics ?? [],
 	};
 }
 
@@ -2544,9 +2536,6 @@ async function formatAllMode(
 	pathsScope?: PathsScope,
 	dependencyDemoted = 0,
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
-	summaries = await Promise.all(
-		summaries.map((summary) => projectResolvedCwd(summary, cwd)),
-	);
 	// #2275 review F2: the widget footer stops DRAWING a dependency-drift
 	// demotion once it hits `DEPENDENCY_DRIFT_MAX_DELIVERIES` unconfirmed
 	// deliveries, but the record stays here (dropping it would make an
@@ -2666,6 +2655,13 @@ async function formatAllMode(
 		(a, b) =>
 			b.blocking - a.blocking || b.errors - a.errors || b.warnings - a.warnings,
 	);
+	// #2777 O2: only rendered rows resolve their root. The projection sits
+	// below the withIssues filter, so a 500-file session pays the cwd
+	// resolution for the handful of rows listed here, not for every summary
+	// the cache holds.
+	const rendered = await Promise.all(
+		sorted.map((summary) => projectResolvedCwd(summary, cwd)),
+	);
 
 	const lines: string[] = [];
 	let totalBlocking = 0;
@@ -2673,7 +2669,7 @@ async function formatAllMode(
 	let totalWarnings = 0;
 	let totalAdvisories = 0;
 
-	for (const s of sorted) {
+	for (const s of rendered) {
 		const rel = path.relative(cwd, s.filePath);
 		const parts: string[] = [];
 		if (s.blocking > 0) parts.push(`🔴 ${s.blocking} blocking`);
@@ -2689,7 +2685,10 @@ async function formatAllMode(
 		if (staleCount > 0) {
 			parts.push(`${staleCount} stale — re-run to confirm`);
 		}
-		lines.push(`${rel}  ${parts.join("  ")}  cwd=${s.resolvedCwd}`);
+		// #2777 N1: files with no primary LSP server have no resolvedCwd —
+		// omit the term rather than rendering the literal `cwd=undefined`.
+		if (s.resolvedCwd !== undefined) parts.push(`cwd=${s.resolvedCwd}`);
+		lines.push(`${rel}  ${parts.join("  ")}`);
 
 		// List the actual diagnostics (not just counts) so the agent can act on
 		// them without re-running anything — same "L<line>: <message>" shape as the

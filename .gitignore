@@ -6,6 +6,9 @@ features.md
 .pi-lens/
 .stryker/
 reports/
+# Test-run scratch dirs (vitest spawn helpers create `.tmp/pi-lens-test-*`
+# under the repo root; never tracked).
+.tmp/
 # Probe-home redirect target (#2506): getGlobalPiLensLogDir() sends the logs
 # of a probe run without a PI_LENS_HOME pin here instead of the real
 # ~/.pi-lens. Untracked by design -- if it were not ignored, every agent

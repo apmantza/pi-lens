@@ -2227,8 +2227,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// and its per-server root resolution. This remains an intentionally
 	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
 	// service dependencies; the scheduler itself bounds each recovery pass.
-	// #2777: root resolution is synchronous at the LSP chokepoint, removing
-	// the old unbounded server.root await from this helper's measured slice.
+	// #2777: root resolution now honors a server-computed root, so the seam is
+	// async, not synchronous. Both counts went UP by one for the same reason:
+	// +1 here for `await resolveLspServerCwd` in LSPService.resolveServerRoot,
+	// +1 in clients/lsp/server.ts for `await server.root` inside
+	// resolveLspServerCwd. Neither is the old bare probe being removed.
 	"clients/lsp/index.ts": 158,
 	"clients/lsp/server.ts": 112,
 	"clients/map-with-concurrency.ts": 2,

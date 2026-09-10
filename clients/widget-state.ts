@@ -54,8 +54,6 @@ function fileMapKey(filePath: string): string {
 
 export interface WidgetDiagnostic {
 	severity: string;
-	/** LSP tool cwd projected for lens_diagnostics reporting. */
-	resolvedCwd?: string;
 	semantic?: string;
 	message: string;
 	line?: number;

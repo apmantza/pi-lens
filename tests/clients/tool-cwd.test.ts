@@ -239,11 +239,14 @@ describe("resolveToolCwd (#2777)", () => {
 
 		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
 		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
-		expect(
-			freshLedger
-				.getDegradationSummary()
-				.filter((entry) => entry.kind === "tool-cwd-resolution"),
-		).toHaveLength(1);
+		// The summary groups per kind, so a `.filter(kind === …)` length can
+		// never exceed 1 — that guard stayed green if the once-latch were
+		// dropped and the record became an increment. Pin the group's exact
+		// event count instead: two resolutions, one user-visible degradation.
+		const group = freshLedger
+			.getDegradationSummary()
+			.find((entry) => entry.kind === "tool-cwd-resolution");
+		expect(group?.count).toBe(1);
 	});
 
 	it("matches glob root markers against files in the directory", () => {
