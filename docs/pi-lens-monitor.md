@@ -40,9 +40,11 @@ inherits. This contract adds the standing readout.
    including its bounded `metadata.tools` list; `[]` means every situational
    tool was activated or called in the conversation. Reload, resume, and fork
    preserve pi observations. A fresh `/new` replacement emits the prior row
-   once and starts a new set. After a process restart, restored active tools
-   count as activations, but prior calls cannot be recovered. MCP remains
-   connection-scoped and owns the terminal latch.
+   once and starts a new set. A process restart (`pi --continue`) recovers
+   nothing — the restore deactivates every situational tool — so the first row
+   after one legitimately lists all five, and shrinks only as the model
+   re-activates and uses them. MCP remains connection-scoped and owns the
+   terminal latch.
 6. **Backlogs**: `lsp_document_drift` rows by disposition, files affected,
    `driftAgeMs` p50/p95/max; `agent_end_deferred_mutation_drain` durations and
    coalesced path counts; `deferred_format_file` runs with `changed:true`

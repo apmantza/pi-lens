@@ -61,22 +61,24 @@ export function resetSituationalToolTelemetry(): void {
  *
  * Pi keeps one observation set for the conversation. Reload, resume, and fork
  * preserve it. A fresh `/new` start emits the prior row once and opens an
- * empty set. The boolean result identifies a process restart to the pi opener,
- * which may observe restored active tools as activations; `called` is not
- * recoverable across that restart. MCP remains connection-scoped.
+ * empty set. A process restart opens an empty set and recovers nothing:
+ * pi-lens's own activation memory (`rememberedLazyTools` in `index.ts`) is
+ * empty in a new process, so the restore deactivates every situational tool,
+ * and the host's restored active set is evidence of REGISTRATION, not of
+ * model activation (#2866 review F1). MCP remains connection-scoped.
  */
 export function startSituationalToolTelemetrySession(
 	host: "pi" | "mcp",
 	fresh: boolean,
-): boolean {
+): void {
 	if (host === "mcp") {
-		if (connectionEnded) return false;
-		if (sessionStarted) return false;
+		if (connectionEnded) return;
+		if (sessionStarted) return;
 		sessionHost = "mcp";
 		clearObservations();
 		emitted = false;
 		sessionStarted = true;
-		return true;
+		return;
 	}
 	if (sessionStarted) {
 		if (fresh) {
@@ -85,13 +87,12 @@ export function startSituationalToolTelemetrySession(
 			emitted = false;
 		}
 		sessionHost = "pi";
-		return false;
+		return;
 	}
 	sessionHost = "pi";
 	clearObservations();
 	emitted = false;
 	sessionStarted = true;
-	return true;
 }
 
 /** Emit the one session-end row and make repeated shutdown calls harmless. */

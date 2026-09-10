@@ -36,7 +36,7 @@ type Hook = (event: unknown, ctx: unknown) => unknown;
 /** A session_start test must fail if its awaited handler does not settle. */
 export const SESSION_START_TEST_BUDGET_MS = 5_000;
 
-export async function runSessionStartWithBudget<T>(
+async function runSessionStartWithBudget<T>(
 	hook: () => T | Promise<T>,
 ): Promise<T> {
 	try {

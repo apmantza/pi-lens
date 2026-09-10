@@ -2062,11 +2062,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// preserve it; only a fresh `/new` replacement emits and resets it.
 					// Open this before the handler below can hang (#2859), so the
 					// session-end row does not depend on handleSessionStart returning.
-					const piTelemetryProcessRestart =
-						startSituationalToolTelemetrySession(
-							"pi",
-							isFreshSessionStart(sessionReason),
-						);
+					startSituationalToolTelemetrySession(
+						"pi",
+						isFreshSessionStart(sessionReason),
+					);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2116,20 +2115,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 							getActiveTools?: () => string[];
 							setActiveTools?: (names: string[]) => void;
 						};
-						const activeToolNames =
-							typeof piWithActiveTools.getActiveTools === "function"
-								? piWithActiveTools.getActiveTools()
-								: [];
-						// A process restart loses the in-memory activation history. The
-						// host's restored active set is the only evidence available, so
-						// count those situational tools as activations. Calls remain
-						// intentionally unrecoverable across the restart.
-						if (
-							piTelemetryProcessRestart &&
-							!isFreshSessionStart(sessionReason)
-						) {
-							observeSituationalToolActivation(activeToolNames);
-						}
 						// A fresh conversation starts with no activation memory; a
 						// rebuild inherits the parent's.
 						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
@@ -2140,7 +2125,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						) {
 							const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
 							const plan = planToolSet(
-								activeToolNames,
+								piWithActiveTools.getActiveTools(),
 								lazyNames,
 								rememberedLazyTools,
 							);
@@ -2419,6 +2404,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 					if (isStaleExtensionCtxError(sessionErr)) throw sessionErr;
 					dbg(`session_start crashed: ${sessionErr}`);
 					dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
+					// #2859: `dbg` writes nothing in tests, so a crashed session_start
+					// was indistinguishable from a completed one — fourteen awaits in
+					// tests/index-integration.test.ts rejected into this catch (a
+					// leaked `vi.doMock` had dropped an installer export), every
+					// assertion after them was vacuous, and the whole file stayed
+					// green. A test budget cannot see this: the handler settles
+					// promptly, it just did nothing. Under the runner the crash fails
+					// the test that caused it; production keeps the swallow, because
+					// a pi-lens session_start bug must never take down the host's
+					// session. Deliberately `process.env.VITEST` and not
+					// `isTestMode()`: the question is whether a TEST is awaiting this
+					// handler, and the #2815 R7 case runs under vitest with
+					// PI_LENS_TEST_MODE=0.
+					if (process.env.VITEST) throw sessionErr;
 				}
 			},
 			{ dbg },

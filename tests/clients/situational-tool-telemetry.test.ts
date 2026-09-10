@@ -108,23 +108,4 @@ describe("situational dead-weight telemetry", () => {
 			},
 		});
 	});
-
-	it("counts restored active tools as activations after a process restart", () => {
-		startSituationalToolTelemetrySession("pi", false);
-		observeSituationalToolActivation([
-			"ast_grep_search",
-			"ast_grep_replace",
-			"ast_grep_outline",
-			"lsp_navigation",
-			"lens_diagnostic_mark",
-		]);
-		endSituationalToolTelemetry();
-
-		expect(logExtension).toHaveBeenCalledWith(
-			expect.objectContaining({
-				message: "situational tool dead weight",
-				metadata: { tools: [] },
-			}),
-		);
-	});
 });

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { createPiMock, makeCtx } from "./pi-mock.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+	createPiMock,
+	makeCtx,
+	SESSION_START_TEST_BUDGET_MS,
+} from "./pi-mock.js";
 
 describe("createPiMock", () => {
 	it("records flags and exposes defaults via getFlag", () => {
@@ -59,14 +63,25 @@ describe("createPiMock", () => {
 		expect(() => pi.getHandlerOrThrow("session_start")).toThrow(/no handler/);
 	});
 
+	// #2866 review F7: the budget's own timer is `setTimeout` inside
+	// `clients/deadline-utils`, so it is fakeable — a real 5s wait bought
+	// nothing but a wall-clock admission this suite does not need.
 	it("fails a session_start handler that never settles", async () => {
-		const pi = createPiMock();
-		pi.on("session_start", () => new Promise<never>(() => {}));
+		vi.useFakeTimers();
+		try {
+			const pi = createPiMock();
+			pi.on("session_start", () => new Promise<never>(() => {}));
 
-		await expect(pi.emit("session_start", {}, makeCtx())).rejects.toThrow(
-			/session_start handler exceeded test budget/,
-		);
-	}, 6_000);
+			const settled = pi.emit("session_start", {}, makeCtx());
+			const assertion = expect(settled).rejects.toThrow(
+				/session_start handler exceeded test budget/,
+			);
+			await vi.advanceTimersByTimeAsync(SESSION_START_TEST_BUDGET_MS);
+			await assertion;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	it("runCommand invokes the handler and captures notifications", async () => {
 		const pi = createPiMock();

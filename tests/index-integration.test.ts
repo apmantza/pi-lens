@@ -4,12 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
-import {
-	createPiMock,
-	makeCtx,
-	makeStaleCtx,
-	runSessionStartWithBudget,
-} from "./support/pi-mock.js";
+import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 // #2146: process-scope state (the primary-session registration, the instance
@@ -71,12 +66,12 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 		tools: mock.tools,
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
+			// No budget wrapper here: `createPiMock.on` already wraps every
+			// registered session_start handler, and `getHandlers` reads those
+			// wrapped functions back, so a second wrapper would only race an
+			// identical timer (#2866 review F5).
 			for (const handler of mock.getHandlers(event)) {
-				results.push(
-					event === "session_start"
-						? await runSessionStartWithBudget(() => handler(ev, ctx))
-						: await handler(ev, ctx),
-				);
+				results.push(await handler(ev, ctx));
 			}
 			return results;
 		},
