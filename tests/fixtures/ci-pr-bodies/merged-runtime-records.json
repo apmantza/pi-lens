@@ -1,13 +1,13 @@
 [
 	{
 		"name": "#2860",
-		"kind": "session-state-recovery",
-		"diff": "diff --git a/clients/runtime-session.ts b/clients/runtime-session.ts\n+recordDegradationOnce({ kind: \"session-state-recovery\" });"
+		"kind": "lsp-diagnostics-compatibility",
+		"diff": "diff --git a/mcp/server.ts b/mcp/server.ts\n+recordDegradationOnce({ kind: \"lsp-diagnostics-compatibility\" });\ndiff --git a/tools/lens-diagnostics.ts b/tools/lens-diagnostics.ts\n+logExtension({ subsystem: \"git-guard\" });\n+logLatency({ phase: \"lens_diagnostics_lsp_route\" });"
 	},
 	{
 		"name": "#2823",
-		"kind": "tool-cwd-resolution",
-		"diff": "diff --git a/clients/tool-config.ts b/clients/tool-config.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
+		"kind": "lsp_dependency_touch_capped",
+		"diff": "diff --git a/clients/lsp/index.ts b/clients/lsp/index.ts\n+recordDegradationOnce({ kind: \"lsp_dependency_touch_capped\" });\n+logLatency({ phase: \"lsp_external_change_resync\" });"
 	},
 	{
 		"name": "#2846",

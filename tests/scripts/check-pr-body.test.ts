@@ -42,6 +42,8 @@ const mergedRuntimeRecords = JSON.parse(
 		"utf8",
 	),
 ) as MergedRuntimeRecord[];
+// Regenerated from `gh pr diff 2860`, `gh pr diff 2823`, and `gh pr diff 2846`;
+// the snippets retain the real runtime paths and record literals from those diffs.
 
 function fetchForEvent(bodyText: string, files: unknown) {
 	return vi.fn().mockImplementation(async (url: string | URL | Request) => {
@@ -498,6 +500,7 @@ describe("PR body lint (#1844)", () => {
 	it.each(mergedRuntimeRecords)(
 		"accepts the added-line record from merged runtime body %s",
 		({ name, kind, diff }) => {
+			expect(diff).toContain(kind);
 			const result = lintPrBody(
 				body.replace(
 					"The advisory check run is the record.",
@@ -526,6 +529,45 @@ describe("PR body lint (#1844)", () => {
 				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
 		);
 		expect(result.valid).toBe(true);
+	});
+
+	it("rejects an existing-record claim pointing to a test file", () => {
+		const source = join(process.cwd(), "tests", "existing-record.test.ts");
+		mkdirSync(join(process.cwd(), "tests"), { recursive: true });
+		writeFileSync(source, 'recordDegradationOnce({ kind: "test-record" });\n');
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `test-record` at `tests/existing-record.test.ts:1`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result).toEqual({
+			valid: false,
+			errors: [
+				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+			],
+		});
+	});
+
+	it("rejects a stale existing-record citation without throwing", () => {
+		const result = lintLocalPrBody(
+			body.replace(
+				"The advisory check run is the record.",
+				"covered by existing record `missing-record` at `clients/does-not-exist.ts:1`",
+			),
+			process.cwd(),
+			() =>
+				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+		);
+		expect(result).toEqual({
+			valid: false,
+			errors: [
+				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+			],
+		});
 	});
 
 	it("does not accept a record literal from a touched runtime file without an explicit claim", () => {
