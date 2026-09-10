@@ -7,10 +7,10 @@ share) — current exception: `ast_grep_outline`
 (pi-lens-internal for now). `read_enclosing` gained MCP parity
 (`pilens_read_enclosing`) as of #536, closing #522 item 1. The standalone
 `lsp_diagnostics` tool was folded into `lens_diagnostics` (`source=lsp`,
-#2860); the MCP name `pilens_lsp_diagnostics` is a one-release compatibility
-redirect to `pilens_diagnostics` with `source=lsp` (`mcp/server.ts`), logging
-a `lsp-diagnostics-compatibility` degradation once per call — callers should
-move to `pilens_diagnostics`.
+#2860). The retired MCP name remains a one-release compatibility redirect to
+`pilens_diagnostics` with `source=lsp` and `scope=paths` (`mcp/server.ts`),
+logging one `lsp-diagnostics-compatibility` degradation per session. Callers
+should move to `pilens_diagnostics`.
 
 
 **Dynamic tooling.** Five tools stay always-active: `lens_diagnostics`,

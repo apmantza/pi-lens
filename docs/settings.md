@@ -74,7 +74,6 @@ column is the effective behavior when nothing is set.
 | `--no-delta` | `delta.enabled` | global | delta mode **on** (new diagnostics only) |
 | `--lens-guard` | `guard.enabled` | global | **off** |
 | `--lens-checkout-guard` | `guard.sharedCheckout` | global | **off** |
-
 | `--no-opengrep` | `opengrep.enabled` | global | Opengrep scanner **on** |
 | `--no-read-guard` | `readGuard.enabled` | global | read-before-edit monitor **on** |
 | `--no-lens-context` | `contextInjection.enabled` | global | context injection **on** |
@@ -87,6 +86,13 @@ column is the effective behavior when nothing is set.
 | `--no-lazy-tools` | `tools.lazy` | global | lazy tools **on** (five situational tools start inactive) |
 | `--no-tool=<name>` | `tools.<name>.enabled` | project | every lens tool **on** |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | global | **off** (madge runs at session start, not per turn) |
+| `--no-knip` | `knip.enabled` | project | knip analyzer **on** |
+| `--no-jscpd` | `jscpd.enabled` | project | jscpd analyzer **on** |
+| `--no-madge` | `madge.enabled` | project | madge analyzer **on** |
+| `--no-gitleaks` | `gitleaks.enabled` | project | gitleaks analyzer **on** |
+| `--no-govulncheck` | `govulncheck.enabled` | project | govulncheck analyzer **on** |
+| `--no-dead-code` | `deadCode.enabled` | project | dead-code analyzer **on** |
+| `--no-complexity` | `complexity.enabled` | project | complexity analyzer **on** |
 
 `--no-lazy-tools` keeps every pi-lens tool active for the whole session, so the
 advertised tool list never changes. The `pi_lens_activate_tools` loader stays

@@ -114,6 +114,13 @@ pi --lens-turn-summary   # Persist a per-turn summary of diagnostics, autofixes,
 pi --lens-compact-tool-line   # Render tool results as one compact, theme-aware line (closes #1327)
 pi --no-lazy-tools       # Keep every pi-lens tool active instead of activating the situational ones on demand
 pi --lens-turn-end-madge # Run the madge circular-dependency check at every turn end, not just at session start
+pi --no-knip             # Disable the knip session-start analyzer
+pi --no-jscpd            # Disable the jscpd session-start analyzer
+pi --no-madge            # Disable the madge session-start analyzer
+pi --no-gitleaks         # Disable the gitleaks session-start analyzer
+pi --no-govulncheck      # Disable the govulncheck session-start analyzer
+pi --no-dead-code        # Disable the dead-code session-start analyzer
+pi --no-complexity       # Disable the complexity session-start analyzer
 
 # Actionable warnings (all default off)
 pi --lens-actionable-warnings          # Report fixable warnings at turn end
