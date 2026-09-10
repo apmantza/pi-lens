@@ -878,6 +878,14 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		).toBe("demoted");
 		expect(result?.deferredServerIds).toEqual(["typos"]);
 		expect(result?.unconfirmedServerIds).toContain("typos");
+		// Observability: the promise is joinable to the pending pair that has to
+		// honour it, on the same `lsp_touch_file` row that carries the gap.
+		const touchRow = logLatency.mock.calls
+			.map(([row]) => row)
+			.filter((row: { phase?: string }) => row.phase === "lsp_touch_file")
+			.at(-1);
+		expect(touchRow?.metadata?.lateDeliveryServerIds).toEqual(["typos"]);
+		expect(touchRow?.metadata?.auxUnconfirmedServerIds).toEqual(["typos"]);
 		expect(
 			drainPendingAuxiliaryCoverage()
 				.filter((pair) => pair.filePath === FILE)
@@ -1828,6 +1836,10 @@ describe("#1470 — cut-off auxiliary honesty", () => {
 		// The defect: this was "confirmed" with no coverage caveat at all.
 		expect(result?.confirmation).toBe("partial");
 		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
+		// #2810: a cut-off scanner is marked collect-later, so the touch promises
+		// late delivery for it — the same partition the demoted case joins, and
+		// the reason the runner reports `deferred` rather than `skipped`.
+		expect(result?.deferredServerIds).toEqual(["opengrep"]);
 		// NARROWED, not collapsed — the primary answered, so the touch is not
 		// inconclusive and its diagnostics are not discarded (#533 cuts both ways).
 		expect(result?.inconclusive).toBeUndefined();
@@ -1899,6 +1911,9 @@ describe("#1470 — cut-off auxiliary honesty", () => {
 		expect(outcome).toBe("silent");
 		expect(result?.confirmation).toBe("partial");
 		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
+		// #2810: silent with no publication for these bytes is marked
+		// collect-later too, so this touch promises late delivery for it.
+		expect(result?.deferredServerIds).toEqual(["opengrep"]);
 		// NARROWED, not collapsed — the primary answered at 800ms, so the touch
 		// keeps its findings and is not inconclusive (#533 cuts both ways).
 		expect(result?.inconclusive).toBeUndefined();
@@ -2264,6 +2279,11 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 		expect(outcome).toBe("silent");
 		expect(result?.confirmation).toBe("partial");
 		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
+		// #2810: the aggregate ("all"-scope) producer marks no collect-later
+		// pairs, so it promises nothing. The promise is derived from the MARK,
+		// never from the outcome string, and only the with-auxiliary grace wait
+		// writes one.
+		expect(result?.deferredServerIds).toBeUndefined();
 		// NARROWED, not collapsed: the primary answered at 100ms, so its findings
 		// stand and the touch is not inconclusive (#533 cuts both ways).
 		expect(result?.inconclusive).toBeUndefined();
