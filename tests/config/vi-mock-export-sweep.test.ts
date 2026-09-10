@@ -3,7 +3,7 @@
  * production exports. Recurrences: #2272 and #2782.
  *
  * The sweep uses transitive importer-use reachability over the test's
- * non-mocked production imports. The master admission contains 605 findings.
+ * non-mocked production imports. The admission contains 358 findings.
  */
 
 import * as fs from "node:fs";
@@ -289,6 +289,481 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal<typeof import("./module.js")>(); return { ...actual, a: 1 }; });\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a two-statement no-argument importOriginal binding spread", () => {
+		// The PREMISE transcript's seventh shape: the alias idiom without a
+		// type argument is the same complete pass-through.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal(); return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a two-statement binding beside a nested helper", () => {
+		// Scope positive control for the F3 fix: a nested function inside the
+		// factory must not hide the body's own top-level awaited alias.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal(); function helper() { return 1; } return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a no-argument as-cast importOriginal pass-through spread", () => {
+		// Pins the as_expression arm of the shared unwrap: the generic-form
+		// as-cast test never reaches it (the misparse branch swallows the
+		// generic first), so only this no-argument form reds when the arm dies.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal() as any), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a no-argument satisfies importOriginal pass-through spread", () => {
+		// Pins the satisfies_expression arm specifically: deleting only that
+		// kind from the unwrap reds this test and leaves the as-cast green.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal() satisfies Record<string, unknown>), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a non-null-asserted importOriginal pass-through spread", () => {
+		// Review F2/X1 accept side: `...(await importOriginal())!` was clean
+		// on master; the shared unwrap covers non_null_expression.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal())!, a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a comment between await and the importOriginal call", () => {
+		// Review F2 accept side: a comment is a named child in this grammar,
+		// so operand picks must filter it through the shared seam.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await // why\n importOriginal()), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a generic pass-through that spreads a different module", () => {
+		// Review F1a reject side: the generic form must be identical to the
+		// no-argument form, which flags `...(await importOriginal("./other.js"))`.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(
+				moduleFile,
+				"export const b = 1;\nexport const c = 2;\n",
+			);
+			fs.writeFileSync(
+				importerFile,
+				'import { b, c } from "./module.js"; export { b, c };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./other.js")>("./other.js")), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b", "c"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a two-statement binding that awaits a different module", () => {
+		// Review F1b reject side: the alias value carries the same
+		// wrong-module argument through the two-statement entry point.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(
+				moduleFile,
+				"export const b = 1;\nexport const c = 2;\n",
+			);
+			fs.writeFileSync(
+				importerFile,
+				'import { b, c } from "./module.js"; export { b, c };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal<typeof import("./other.js")>("./other.js"); return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b", "c"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a generic spread with no call parentheses", () => {
+		// Criterion-1 reverse direction: `...(await importOriginal)` (no
+		// call) is not a pass-through, and neither is its generic twin.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("./module.js")>), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a simple-type-argument spread that passes a value", () => {
+		// Pins the await-in-callee branch's zero-argument check: deleting it
+		// lets `...(await importOriginal<T>("./other.js"))` read as complete.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\ntype T = typeof import("./module.js");\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal<T>("./other.js")), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a no-argument-form spread that passes a value", () => {
+		// Pins the await branch's zero-argument check, the twin the generic
+		// form must match.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal("./other.js")), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a parenthesised spread that passes a value", () => {
+		// Reject twin of the parenthesised accept: parens must not launder
+		// an argument either.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...((await importOriginal("./other.js"))), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags an as-cast spread that passes a value", () => {
+		// Reject twin of the as-cast accepts: the cast unwrap must not skip
+		// the argument check underneath.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal("./other.js") as any), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a satisfies spread that passes a value", () => {
+		// Reject twin of the satisfies accept.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal("./other.js") satisfies Record<string, unknown>), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a non-null-asserted spread that passes a value", () => {
+		// Reject twin of the non-null accept.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal("./other.js"))!, a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a commented spread that passes a value", () => {
+		// Reject twin of the comment accept: filtering the comment must not
+		// filter the argument check with it.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...(await // why\n importOriginal("./other.js")), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a spread of the factory binding itself without await", () => {
+		// The shared leaf helper only names the binding; the awaited-call
+		// shape around it still has to hold, or `...importOriginal()` would
+		// read as a pass-through of the factory function itself.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => ({ ...importOriginal(), a: 1 }));\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a spread alias bound to a non-awaited value", () => {
+		// Pins that aliases enter the set only through an awaited binding:
+		// collecting every same-named declarator would launder this object.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = {}; return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a two-statement generic binding with no call parentheses", () => {
+		// Alias-path twin of the no-call spread: the declaration proves its
+		// trailing `()` through error recovery, so a bare instantiation
+		// keeps flagging even though its value node matches the valid shape.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { const actual = await importOriginal<typeof import("./module.js")>; return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a spread laundered by a nested-helper binding", () => {
+		// Review F3 reject side: the only awaited `actual` binding lives
+		// inside a nested helper, so the top-level spread keeps flagging.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			const moduleFile = path.join(root, "module.ts");
+			const importerFile = path.join(root, "importer.ts");
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(moduleFile, "export const b = 1;\n");
+			fs.writeFileSync(
+				importerFile,
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./module.js", async (importOriginal) => { function helper() { const actual = await importOriginal(); return actual; } return { ...actual, a: 1 }; });\n';
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

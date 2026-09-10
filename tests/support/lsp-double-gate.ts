@@ -308,13 +308,18 @@ function resolveObjects(
 }
 
 /**
- * The identifier an expression names, through `as`-casts, parentheses and
- * non-null assertions. `mockReturnValue(service as never)` hands the seam an
+ * The identifier an expression names, through `as`-casts, parentheses,
+ * non-null assertions and `satisfies` expressions. `mockReturnValue(service as never)` hands the seam an
  * `as_expression`, not an identifier — reading the kind directly is why the
  * post-hoc shape (c) went undetected until a mutation probe found the branch
  * was unreachable.
+ *
+ * Comment nodes are skipped at each hop: a comment is a named child in this
+ * grammar, so `x /* why *\/ as T` would otherwise resolve to the comment
+ * instead of `x`. Shared with `tests/support/vi-mock-export-gate.ts`, which
+ * imports this rather than keeping its own unwrap loop (net-count rule).
  */
-function bareIdentifier(node: SgNode): string | undefined {
+export function bareIdentifier(node: SgNode): string | undefined {
 	let current: SgNode | undefined = node;
 	for (let hop = 0; current && hop <= MAX_RESOLUTION_DEPTH; hop++) {
 		if (current.kind() === "identifier") return current.text();
@@ -326,7 +331,9 @@ function bareIdentifier(node: SgNode): string | undefined {
 		) {
 			return undefined;
 		}
-		current = current.children().find((c) => c.isNamed());
+		current = current
+			.children()
+			.find((c) => c.isNamed() && c.kind() !== "comment");
 	}
 	return undefined;
 }
