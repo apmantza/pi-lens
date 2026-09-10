@@ -34,6 +34,15 @@ export interface ToolResultContractLike extends CompactResultLike {
 	usage?: { tokens?: number; elapsedMs?: number };
 }
 
+/** The one result type every pi-lens tool result conforms to (refs #2800).
+ * `isError` is required, so a tool's inferred execute union can never drop the
+ * flag and a test reading `result.isError` type-checks without a cast. */
+export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
+	content: Array<{ type: "text"; text: string }>;
+	isError: boolean;
+	details: D;
+}
+
 /**
  * Add the stable, model-facing result footer shared by pi and MCP.
  *
