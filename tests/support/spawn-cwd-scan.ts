@@ -929,7 +929,14 @@ function cwdValueLines(node: SgNode, seen = new Set<string>()): number[] {
 	};
 	addSpan(node);
 	const kind = String(node.kind());
-	if (kind === "identifier" || kind === "shorthand_property_identifier") {
+	if (kind === "pair") {
+		// The key line is already covered by the span; the value is where the
+		// laundering happens, and it may name a local declared elsewhere.
+		for (const line of cwdValueLines(cwdValueOf(node), seen)) lines.add(line);
+	} else if (
+		kind === "identifier" ||
+		kind === "shorthand_property_identifier"
+	) {
 		if (!seen.has(node.text())) {
 			seen.add(node.text());
 			const local = resolveLocalInitializer(node, node.text());

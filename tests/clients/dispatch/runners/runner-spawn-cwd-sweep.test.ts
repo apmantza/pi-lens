@@ -489,15 +489,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`mix credo --version` inside a createCwdCachedProbe closure: the `cwd` is the closure parameter that shared probe machinery supplies per call, so no call site in this file can be checked",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~01ecc7de@1",
+		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~e3b9420d@1",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~01ecc7de",
+		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~e3b9420d",
 		"same `fileDir` derivation, the package-wide `cue vet` pass",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~01ecc7de@2",
+		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~e3b9420d@2",
 		"same `fileDir` derivation, the single-file fallback pass",
 	],
 	[
@@ -537,11 +537,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is the directory of `findCargoToml(ctx.filePath)` — cargo must run at the package root, which is derived from the edited file rather than from the seam",
 	],
 	[
-		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~41a796da",
+		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~d27138c5",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in",
 	],
 	[
-		"clients/dispatch/runners/tflint.ts#run:338013e8~01ecc7de",
+		"clients/dispatch/runners/tflint.ts#run:338013e8~e3b9420d",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute",
 	],
 	[
@@ -561,7 +561,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"tryLazyInstallForFormatter forwards its own `cwd` parameter into runLazyInstall",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:8b06bf2f~010975bb",
+		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:8b06bf2f~d99d2124",
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
 	],
 	[
@@ -625,15 +625,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
 	],
 	[
-		"clients/installer/index.ts#installArchiveTool:ba060684~5fa3bd20",
+		"clients/installer/index.ts#installArchiveTool:ba060684~a938e107",
 		"cwd is TOOLS_DIR, the managed-tool install directory this archive is being extracted into",
 	],
 	[
-		"clients/installer/index.ts#installNpmTool.runInstallAttempt:166c7cea~5fa3bd20",
+		"clients/installer/index.ts#installNpmTool.runInstallAttempt:166c7cea~a938e107",
 		"cwd is TOOLS_DIR: the npm install runs in the managed-tool directory, never in the user's project",
 	],
 	[
-		"clients/installer/managed-tool-refresh.ts#performNpmRefresh:0b3e9872~1e408d91",
+		"clients/installer/managed-tool-refresh.ts#performNpmRefresh:0b3e9872~abe0cd3c",
 		"cwd is `toolsDir`, the managed-tool install directory being refreshed",
 	],
 	[
@@ -677,11 +677,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is tryEslintFix's own `cwd` parameter, used for the eslint `--version` probe; the checked site is runAutofix in this file",
 	],
 	[
-		"clients/pipeline.ts#tryRustClippyFix:cabb2369~c05db9cc",
+		"clients/pipeline.ts#tryRustClippyFix:cabb2369~86686e4d",
 		'cwd is `cargoDir` = findNearestContaining(dirname(filePath), ["Cargo.toml"]): `cargo clippy --fix` must run at the package root',
 	],
 	[
-		"clients/pipeline.ts#tryDartFix:656dd10b~a16ba942",
+		"clients/pipeline.ts#tryDartFix:656dd10b~7514b242",
 		'cwd is `pubspecDir` = findNearestContaining(dirname(filePath), ["pubspec.yaml"]): `dart fix --apply` must run at the package root',
 	],
 	[
@@ -697,7 +697,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is the caller's own `cwd` argument, falling back to the linted file's directory; RuffClient is an autofix client with no DispatchContext seam",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~772161b6",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~98fad979",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[

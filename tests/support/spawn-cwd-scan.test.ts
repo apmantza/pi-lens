@@ -1348,3 +1348,68 @@ describe("S — bindings with no declaration statement", () => {
 		});
 	}
 });
+
+/**
+ * `cwdLines` and `callLines` are what the live-tree sweep hashes into an
+ * admission key, so their contract is asserted here rather than only through
+ * the sweep. The recurrence: round 3's key hashed the `safeSpawnAsync(` line
+ * alone, so an admitted site's cwd could be swapped for `ctx.cwd` with the row
+ * still matching (v3-F2), and two spawns in one class method shared a key
+ * (v3-F3).
+ */
+describe("the lines an admission key is derived from", () => {
+	const lineOf = (source: string, needle: string): number =>
+		source.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+	it("covers the cwd property and the declaration of every local it hops through", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const dir = ${GOOD};
+	await safeSpawnAsync("t", [], {
+		cwd: dir,
+		timeout: 1000,
+	});
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].cwdLines).toEqual([
+			lineOf(source, "const dir ="),
+			lineOf(source, "cwd: dir"),
+		]);
+	});
+
+	it("reaches through a spread options local to the cwd inside it", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const options = { cwd: ctx.cwd, timeout: 1000 };
+	await safeSpawnAsync("t", [], { ...options });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].cwdLines).toEqual([lineOf(source, "const options =")]);
+	});
+
+	it("spans the whole call, so two spawns differ by what they run", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	const cwd = ${GOOD};
+	await safeSpawnAsync(
+		"t",
+		["--version"],
+		{ cwd },
+	);
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].callLines).toEqual([4, 5, 6, 7, 8]);
+	});
+
+	it("names the enclosing class and method, not the file's first declaration", async () => {
+		const source = `${SEAM}
+class Runner {
+	async probe(ctx) {
+		await safeSpawnAsync("t", ["--version"], { timeout: 1000 });
+	}
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].symbol).toBe("Runner.probe");
+		expect(scan.sites[0].cwdLines).toEqual([]);
+	});
+});
