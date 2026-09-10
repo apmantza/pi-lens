@@ -388,10 +388,12 @@ async function exerciseDemotedCoverageCell({
 	filePath,
 	content,
 	evidence,
+	demotionFilePath = filePath,
 }: {
 	filePath: string;
 	content: string;
 	evidence: "version" | "versionless" | "none" | "older";
+	demotionFilePath?: string;
 }) {
 	const { LSPService } = await import("../../../clients/lsp/index.js");
 	const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
@@ -436,7 +438,7 @@ async function exerciseDemotedCoverageCell({
 		.mockResolvedValueOnce(auxiliaryClient);
 	await service.getClientsForFile(FILE);
 	for (let i = 0; i < 5; i += 1) {
-		const pressure = service.touchFile(filePath, `pressure-${i}`, {
+		const pressure = service.touchFile(demotionFilePath, `pressure-${i}`, {
 			clientScope: "with-auxiliary",
 			auxiliaryServerIds: ["typos"],
 			collectDiagnostics: true,
@@ -725,6 +727,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			filePath: OTHER_FILE,
 			content: "small-current",
 			evidence: "version",
+			demotionFilePath: FILE,
 		});
 	});
 
@@ -741,6 +744,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			filePath: OTHER_FILE,
 			content: "small-versionless",
 			evidence: "versionless",
+			demotionFilePath: FILE,
 		});
 	});
 
@@ -757,6 +761,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			filePath: OTHER_FILE,
 			content: "small-none",
 			evidence: "none",
+			demotionFilePath: FILE,
 		});
 	});
 
@@ -773,6 +778,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			filePath: OTHER_FILE,
 			content: "small-older",
 			evidence: "older",
+			demotionFilePath: FILE,
 		});
 	});
 

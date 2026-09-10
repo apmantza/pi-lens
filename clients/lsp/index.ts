@@ -67,6 +67,7 @@ import { recordLspMutation, type LspMutationContext } from "../lsp-mutation.js";
 import { createLSPClient } from "./client.js";
 import {
 	auxiliaryCoverageGap,
+	auxiliaryPublicationEvidence,
 	bindingStateLabel,
 	composeBoundToCurrentDisk,
 	createDiskBindingCache,
@@ -5812,19 +5813,18 @@ export class LSPService {
 									auxWaits.map(async (aux) => {
 										const { budgetMs } = aux;
 										if (aux.demoted) {
-											const publishedEvidence =
-												Number.isFinite(aux.baseline) &&
-												readPathVersion(aux.client) !== undefined &&
-												(readPathVersion(aux.client) as number) >
-													(aux.baseline as number);
 											return {
 												serverId: aux.serverId,
 												outcome: deferredResyncServerIds.has(aux.serverId)
 													? ("deferred" as const)
 													: ("demoted" as const),
-												publishedThisContent:
-													auxCoversThisContent(aux.serverId) ||
-													publishedEvidence,
+												publishedThisContent: auxiliaryPublicationEvidence({
+													bindingMatchesContent: auxCoversThisContent(
+														aux.serverId,
+													),
+													baseline: aux.baseline,
+													currentPathVersion: readPathVersion(aux.client),
+												}),
 												budgetMs,
 												elapsedMs: 0,
 												elapsedSinceNotifyMs: 0,
@@ -5902,7 +5902,13 @@ export class LSPService {
 											// did not narrow the touch.
 											// #1586: through the one predicate, so this row and the merge
 											// below cannot disagree about the same scanner.
-											publishedThisContent: auxCoversThisContent(aux.serverId),
+											publishedThisContent: auxiliaryPublicationEvidence({
+												bindingMatchesContent: auxCoversThisContent(
+													aux.serverId,
+												),
+												baseline: aux.baseline,
+												currentPathVersion: currentPathVersion,
+											}),
 											budgetMs,
 											elapsedMs,
 											// #1458 S3: elapsed measured from BEFORE the primary wait
@@ -6194,7 +6200,11 @@ export class LSPService {
 									: publishedEvidence
 										? ("answered" as const)
 										: ("silent" as const),
-								publishedThisContent: auxCoversThisContent(entry.info.id),
+								publishedThisContent: auxiliaryPublicationEvidence({
+									bindingMatchesContent: auxCoversThisContent(entry.info.id),
+									baseline,
+									currentPathVersion,
+								}),
 								budgetMs: timeoutFor(entry.client.serverId),
 								elapsedMs: waitedMs,
 								elapsedSinceNotifyMs: waitedMs,

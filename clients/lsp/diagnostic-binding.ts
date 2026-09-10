@@ -342,6 +342,34 @@ export interface AuxiliaryWaitEvidence {
 }
 
 /**
+ * #2878: one publication-evidence predicate for auxiliary coverage. A
+ * content-hash binding proves that the stored publication describes these
+ * bytes. For a version-less publisher, an advanced per-path publication stamp
+ * proves that the auxiliary published after this touch's pre-notify baseline;
+ * the stamp alone cannot prove that the bytes matched. The pre-notify boolean
+ * passed as `bindingMatchesContent` preserves a binding that the notify
+ * cleared, while the live stamp covers a publication that landed after the
+ * wait began. Either form is evidence of a publication for this touch; absent
+ * evidence fails closed.
+ */
+export function auxiliaryPublicationEvidence({
+	bindingMatchesContent,
+	baseline,
+	currentPathVersion,
+}: {
+	bindingMatchesContent: boolean;
+	baseline: number | undefined;
+	currentPathVersion: number | undefined;
+}): boolean {
+	return (
+		bindingMatchesContent ||
+		(Number.isFinite(baseline) &&
+			currentPathVersion !== undefined &&
+			currentPathVersion > (baseline as number))
+	);
+}
+
+/**
  * #1493: the single policy deciding which auxiliaries a touch carries NO
  * evidence from. Both no-answer shapes belong here, because they are the same
  * fact about coverage:
