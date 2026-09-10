@@ -190,7 +190,7 @@ describe("AstGrepClient constructor — bundled rules health wiring (#2636)", ()
 			status: "absent",
 		});
 		// ensureAvailable() is the real "start of a scan" entry point every
-		// tools/ast-grep-*/ast-dump handler calls before doing any work — stub
+		// tools/ast-grep handler calls before doing any work — stub
 		// SgRunner's own implementation so this test never spawns a real
 		// ast-grep/npx process.
 		vi.spyOn(SgRunner.prototype, "ensureAvailable").mockResolvedValue(true);

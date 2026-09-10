@@ -27,7 +27,7 @@ type SearchDetails = {
 		endLine: number;
 		readSlice: { path: string; offset: number; limit: number };
 	}>;
-	suggestedDump?: { tool: string; lang: string };
+	suggestedDump?: { tool: string; mode: string; lang: string };
 	searchReads?: Array<{ file: string; startLine: number; endLine: number }>;
 };
 
@@ -81,6 +81,8 @@ describe("ast_grep_search tool", () => {
 			expect(properties).toHaveProperty("nodeKind");
 			expect(properties).toHaveProperty("hasDescendantKind");
 			expect((properties.paths as { maxItems?: number }).maxItems).toBe(200);
+			expect(properties).toHaveProperty("dump");
+			expect(properties).not.toHaveProperty("ast_grep_dump");
 		});
 	});
 
@@ -684,7 +686,7 @@ describe("ast_grep_search tool", () => {
 			expect(asSearchDetails(result.details).suggestedDump).toBeUndefined();
 		});
 
-		it("suggests ast_grep_dump for YAML-rule zero matches", async () => {
+		it("suggests dump mode for YAML-rule zero matches", async () => {
 			const searchWithRule = vi.fn().mockResolvedValue({
 				matches: [],
 				totalMatches: 0,
@@ -704,7 +706,8 @@ describe("ast_grep_search tool", () => {
 
 			expect(asSearchDetails(result.details).matchLocations).toEqual([]);
 			expect(asSearchDetails(result.details).suggestedDump).toMatchObject({
-				tool: "ast_grep_dump",
+				tool: "ast_grep_search",
+				mode: "dump",
 				lang: "typescript",
 			});
 		});
@@ -1001,7 +1004,7 @@ describe("ast_grep_search tool", () => {
 		expect(search).not.toHaveBeenCalled();
 	});
 
-	it("suggests ast_grep_dump when no matches are found", async () => {
+	it("suggests dump mode when no matches are found", async () => {
 		const tool = createAstGrepSearchTool(makeClient());
 		const result = await tool.execute(
 			"no-match",
@@ -1011,10 +1014,34 @@ describe("ast_grep_search tool", () => {
 			{ cwd: "." },
 		);
 
-		expect(String(result.content[0].text)).toContain("ast_grep_dump");
+		expect(String(result.content[0].text)).toContain("dump=true");
 		expect(asSearchDetails(result.details).suggestedDump).toMatchObject({
-			tool: "ast_grep_dump",
+			tool: "ast_grep_search",
+			mode: "dump",
 			lang: "typescript",
+		});
+	});
+
+	it("runs dump mode through the search handler with the shared result contract", async () => {
+		const dumpAst = vi
+			.fn()
+			.mockResolvedValue({ output: "program\n  identifier" });
+		const tool = createAstGrepSearchTool(makeClient({ dumpAst }));
+		const result = await tool.execute(
+			"dump",
+			{
+				dump: true,
+				pattern: "foo()",
+				lang: "typescript",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		expect(dumpAst).toHaveBeenCalledWith("foo()", "typescript");
+		expect(result).toMatchObject({
+			content: [{ type: "text", text: "program\n  identifier" }],
+			details: { mode: "dump", lang: "typescript", truncated: false },
 		});
 	});
 

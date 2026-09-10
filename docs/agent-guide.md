@@ -287,7 +287,7 @@ Registered as pi agent tools. Verified names:
 | `read_enclosing` | Smallest enclosing symbol/callback body for a file+line (records coverage). | Bridge a diagnostic location → exact body. |
 | `project_report` | Project-level structural report. | Orient in an unfamiliar project. |
 | `ast_grep_search` / `ast_grep_replace` | Structural AST search / replace. | Find or rewrite by code shape, not regex. |
-| `ast_grep_outline` / `ast_grep_dump` | Outline / AST dump. | Inspect structure. |
+| `ast_grep_outline` / `ast_grep_search` (`dump=true`) | Outline / AST dump. | Inspect structure. |
 | `lens_diagnostic_mark` | Mark a finding false-positive / suppressed / deferred / flagged-to-fix (honored across surfaces). | Triage a finding you've judged. |
 
 Funnel discipline: **`symbol_search` → `module_report` → `read_symbol`/`read_enclosing`**
