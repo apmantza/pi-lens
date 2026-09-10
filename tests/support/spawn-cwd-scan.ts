@@ -110,6 +110,8 @@ const SPAWN_NAMES = new Set([
 	"safeSpawn",
 	"spawnSupervised",
 	"execa",
+	"spawn",
+	"execFile",
 ]);
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
@@ -213,6 +215,42 @@ function isProcessCwdCall(node: SgNode): boolean {
 	return (fn?.text() ?? "").replace(/\s+/g, "") === "process.cwd";
 }
 
+/** Resolver bindings imported from the shared tool-cwd seam (or its one-hop
+ * runner helper). Names alone are deliberately insufficient: a local helper
+ * named `resolveToolCwd` is ordinary application code, not the seam. */
+function importedResolverNames(root: SgNode): Set<string> {
+	const names = new Set<string>();
+	const visit = (node: SgNode): void => {
+		if (String(node.kind()) === "import_statement") {
+			const source = node
+				.field("source")
+				?.text()
+				.replace(/^['"]|['"]$/g, "");
+			const shared =
+				source?.endsWith("/tool-cwd.js") ||
+				source?.endsWith("/runner-helpers.js");
+			if (shared) {
+				for (const child of node.children()) {
+					if (String(child.kind()) !== "import_clause") continue;
+					for (const spec of child.children()) {
+						const text = spec.text();
+						const match = text.match(
+							/\b(resolve(?:Tool|Runner|Formatter)Cwd)\b/,
+						);
+						if (match) {
+							const alias = text.match(/\bas\s+([A-Za-z_$][\w$]*)/);
+							names.add(alias?.[1] ?? match[1]);
+						}
+					}
+				}
+			}
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	return names;
+}
+
 /** The `cwd` property of an object literal: a `pair` keyed `cwd` or the
  * shorthand `cwd`. Never a comment, a string, a nested object's key, or a
  * spread — which is what makes state-space columns P2/P3/P5 and row K8
@@ -301,17 +339,22 @@ function carriesUsableCwd(value: SgNode): boolean {
 }
 
 /** Whether an expression is the resolver result, including one local/object hop. */
-function isResolveToolCwdCall(node: SgNode): boolean {
+function isResolveToolCwdCall(
+	node: SgNode,
+	resolverNames: Set<string>,
+): boolean {
 	if (node.kind() !== "call_expression") return false;
-	return new Set([
-		"resolveToolCwd",
-		"resolveRunnerCwd",
-		"resolveFormatterCwd",
-	]).has((node.field("function")?.text() ?? "").replace(/\s+/g, ""));
+	return resolverNames.has(
+		(node.field("function")?.text() ?? "").replace(/\s+/g, ""),
+	);
 }
 
-function resolvesFromToolCwd(node: SgNode, seen = new Set<string>()): boolean {
-	if (isResolveToolCwdCall(node)) return true;
+function resolvesFromToolCwd(
+	node: SgNode,
+	resolverNames: Set<string>,
+	seen = new Set<string>(),
+): boolean {
+	if (isResolveToolCwdCall(node, resolverNames)) return true;
 	if (
 		node.kind() === "identifier" ||
 		node.kind() === "shorthand_property_identifier"
@@ -319,18 +362,20 @@ function resolvesFromToolCwd(node: SgNode, seen = new Set<string>()): boolean {
 		if (seen.has(node.text())) return false;
 		seen.add(node.text());
 		const local = resolveLocalInitializer(node, node.text());
-		return local?.init ? resolvesFromToolCwd(local.init, seen) : false;
+		return local?.init
+			? resolvesFromToolCwd(local.init, resolverNames, seen)
+			: false;
 	}
 	if (node.kind() !== "object") return false;
 	for (const prop of namedParts(node)) {
 		if (String(prop.kind()) === "spread_element") {
 			const value = namedParts(prop)[0];
-			if (value && resolvesFromToolCwd(value, seen)) return true;
+			if (value && resolvesFromToolCwd(value, resolverNames, seen)) return true;
 			continue;
 		}
 		if (
 			cwdPropertyOf(node) === prop &&
-			resolvesFromToolCwd(cwdValueOf(prop), seen)
+			resolvesFromToolCwd(cwdValueOf(prop), resolverNames, seen)
 		)
 			return true;
 	}
@@ -485,15 +530,46 @@ function resolveLocalInitializer(
 	name: string,
 ): { init?: SgNode } | undefined {
 	for (let node = from.parent(); node; node = node.parent()) {
-		const scope = isFunctionNode(node)
-			? node.field("body")
-			: node.kind() === "program"
-				? node
+		const scope =
+			isFunctionNode(node) ||
+			String(node.kind()) === "statement_block" ||
+			String(node.kind()) === "program"
+				? isFunctionNode(node)
+					? node.field("body")
+					: node
 				: undefined;
 		if (!scope) continue;
-		for (const decl of declaratorsIn(scope)) {
+		const candidates = declaratorsIn(scope)
+			.filter((decl) => {
+				const target = decl.field("name");
+				return (
+					target?.kind() === "identifier" &&
+					target.text() === name &&
+					decl.range().start.index < from.range().start.index
+				);
+			})
+			.sort((a, b) => b.range().start.index - a.range().start.index);
+		for (const decl of candidates) {
 			const target = decl.field("name");
 			if (target?.kind() !== "identifier" || target.text() !== name) continue;
+			// A later assignment changes the binding's value. Fail closed rather
+			// than attributing the spawn to the declaration's old initializer.
+			let reassigned = false;
+			const visit = (node: SgNode): void => {
+				if (reassigned || node.range().start.index > from.range().start.index)
+					return;
+				if (
+					(String(node.kind()) === "assignment_expression" ||
+						String(node.kind()) === "augmented_assignment_expression") &&
+					node.field("left")?.text() === name &&
+					node.range().start.index > decl.range().end.index
+				) {
+					reassigned = true;
+				}
+				for (const child of node.children()) visit(child);
+			};
+			visit(scope);
+			if (reassigned) return { init: undefined };
 			return { init: decl.field("value") ?? undefined };
 		}
 	}
@@ -662,6 +738,37 @@ export async function scanSpawnCwd(
 	};
 
 	const calls = allCalls(root);
+	const resolverNames = importedResolverNames(root);
+	const discoverLocalWrappers = (node: SgNode): void => {
+		if (isFunctionNode(node)) {
+			const name = functionName(node);
+			if (
+				name &&
+				new Set(["resolveRunnerCwd", "resolveFormatterCwd"]).has(name) &&
+				allCalls(node).some((call) => isResolveToolCwdCall(call, resolverNames))
+			) {
+				resolverNames.add(name);
+			}
+		}
+		for (const child of node.children()) discoverLocalWrappers(child);
+	};
+	discoverLocalWrappers(root);
+	if (resolverNames.size === 0) {
+		// Inline detector fixtures predate import-aware binding checks. Preserve
+		// their resolver shorthand, but never bless a file-local same-named
+		// function: that is precisely the F10 laundering shape.
+		resolverNames.add("resolveToolCwd");
+		resolverNames.add("resolveRunnerCwd");
+		resolverNames.add("resolveFormatterCwd");
+		const visit = (node: SgNode): void => {
+			if (isFunctionNode(node)) {
+				const name = functionName(node);
+				if (name) resolverNames.delete(name);
+			}
+			for (const child of node.children()) visit(child);
+		};
+		visit(root);
+	}
 	// `callSites` owns the generic call-site boundary. Keep the AST nodes here
 	// for the runner-specific cwd dataflow, but use the shared census to ensure
 	// direct spawn sites are identified by the same seam as sibling sweeps.
@@ -673,6 +780,8 @@ export async function scanSpawnCwd(
 			"safeSpawn",
 			"spawnSupervised",
 			"execa",
+			"spawn",
+			"execFile",
 		].flatMap((name) =>
 			callSiteScanner
 				.find(new RegExp(`^${name}$`))
@@ -718,7 +827,8 @@ export async function scanSpawnCwd(
 			// R3-F1: the KEY is not the answer; the value has to supply one.
 			hasCwd: cwdProp !== undefined && carriesUsableCwd(cwdValueOf(cwdProp)),
 			resolvedFromToolCwd:
-				cwdProp !== undefined && resolvesFromToolCwd(cwdValueOf(cwdProp)),
+				cwdProp !== undefined &&
+				resolvesFromToolCwd(cwdValueOf(cwdProp), resolverNames),
 			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
@@ -764,11 +874,13 @@ export async function scanSpawnCwd(
 								const arg = argumentsOf(call)[wrapper.paramIndex];
 								const prop =
 									arg?.kind() === "object" ? cwdPropertyOf(arg) : undefined;
-								return prop ? resolvesFromToolCwd(cwdValueOf(prop)) : false;
+								return prop
+									? resolvesFromToolCwd(cwdValueOf(prop), resolverNames)
+									: false;
 							})()
 						: (() => {
 								const arg = argumentsOf(call)[wrapper.paramIndex];
-								return arg ? resolvesFromToolCwd(arg) : false;
+								return arg ? resolvesFromToolCwd(arg, resolverNames) : false;
 							})(),
 				exemptReason: exemptAbove(line),
 			});

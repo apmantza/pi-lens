@@ -83,93 +83,32 @@ import {
 	scanSpawnCwd,
 } from "../../../support/spawn-cwd-scan.js";
 import { assertNonEmptyScan } from "../../../support/sweep-kit.js";
+import {
+	listSourceFiles,
+	stableOccurrenceKey,
+} from "../../../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../../../..",
 );
-const RUNNERS_DIR = path.join(REPO_ROOT, "clients/dispatch/runners");
+const SOURCE_ROOTS = [
+	path.join(REPO_ROOT, "clients"),
+	path.join(REPO_ROOT, "tools"),
+	path.join(REPO_ROOT, "mcp"),
+	REPO_ROOT,
+] as const;
 const POPULATION_FILES = [
-	...fs
-		.readdirSync(RUNNERS_DIR, { withFileTypes: true })
-		.filter(
-			(entry) =>
-				entry.isFile() &&
-				entry.name.endsWith(".ts") &&
-				!entry.name.endsWith(".test.ts"),
-		)
-		.map((entry) => path.join(RUNNERS_DIR, entry.name)),
-	...fs
-		.readdirSync(path.join(RUNNERS_DIR, "utils"), { withFileTypes: true })
-		.filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
-		.map((entry) => path.join(RUNNERS_DIR, "utils", entry.name)),
-	path.join(REPO_ROOT, "clients/formatters.ts"),
-	path.join(REPO_ROOT, "clients/php-cs-fixer-config.ts"),
-	path.join(REPO_ROOT, "clients/biome-client.ts"),
-	path.join(REPO_ROOT, "clients/lsp/server.ts"),
-	path.join(REPO_ROOT, "clients/lsp/jvm-runtime.ts"),
-	path.join(REPO_ROOT, "clients/test-runner-client.ts"),
-	path.join(REPO_ROOT, "clients/dispatch/dispatcher.ts"),
-	path.join(REPO_ROOT, "index.ts"),
-].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	...SOURCE_ROOTS.flatMap((root) =>
+		root === REPO_ROOT
+			? [path.join(REPO_ROOT, "index.ts")]
+			: listSourceFiles(root, { skipTests: true }),
+	),
+].filter((file, index, all) => all.indexOf(file) === index);
 
-const EXEMPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
-	[
-		"clients/biome-client.ts:175:safeSpawnAsync",
-		"clients/biome-client.ts:213:spawnBiomeAsync",
-		"clients/biome-client.ts:383:spawnBiomeAsync",
-		"clients/dispatch/dispatcher.ts:213:safeSpawnAsync",
-		"clients/dispatch/runners/biome-check.ts:212:safeSpawnAsync",
-		"clients/dispatch/runners/cpp-check.ts:133:safeSpawnAsync",
-		"clients/dispatch/runners/credo.ts:24:safeSpawnAsync",
-		"clients/dispatch/runners/cue-vet.ts:382:safeSpawnAsync",
-		"clients/dispatch/runners/cue-vet.ts:391:safeSpawnAsync",
-		"clients/dispatch/runners/cue-vet.ts:407:safeSpawnAsync",
-		"clients/dispatch/runners/eslint.ts:39:safeSpawnAsync",
-		"clients/dispatch/runners/helm-lint.ts:134:safeSpawnAsync",
-		"clients/dispatch/runners/helm-lint.ts:212:lintChart",
-		"clients/dispatch/runners/helm-render.ts:769:safeSpawnAsync",
-		"clients/dispatch/runners/helm-render.ts:930:safeSpawnAsync",
-		"clients/dispatch/runners/helm-render.ts:1085:runIacPass",
-		"clients/dispatch/runners/oxlint.ts:94:safeSpawnAsync",
-		"clients/dispatch/runners/psscriptanalyzer.ts:61:safeSpawnAsync",
-		"clients/dispatch/runners/psscriptanalyzer.ts:186:spawnPs",
-		"clients/dispatch/runners/psscriptanalyzer.ts:238:spawnPs",
-		"clients/dispatch/runners/rust-clippy.ts:47:safeSpawnAsync",
-		"clients/dispatch/runners/rust-clippy.ts:135:safeSpawnAsync",
-		"clients/dispatch/runners/terragrunt.ts:182:safeSpawnAsync",
-		"clients/dispatch/runners/tflint.ts:110:safeSpawnAsync",
-		"clients/dispatch/runners/utils/candidate-probe.ts:77:safeSpawnAsync",
-		"clients/dispatch/runners/utils/lazy-installer.ts:217:performInstall",
-		"clients/dispatch/runners/utils/lazy-installer.ts:234:safeSpawnAsync",
-		"clients/dispatch/runners/utils/lazy-installer.ts:334:runLazyInstall",
-		"clients/dispatch/runners/utils/lazy-installer.ts:348:runLazyInstall",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1179:safeSpawnAsync",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1566:resolveCommandWithInstallFallback",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1586:safeSpawnAsync",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1635:safeSpawnAsync",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1643:verifyOrInstallCommand",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1666:verifyOrInstallCommand",
-		"clients/dispatch/runners/utils/runner-helpers.ts:1826:safeSpawnAsync",
-		"clients/dispatch/runners/utils/runner-helpers.ts:2166:safeSpawnAsync",
-		"clients/formatters.ts:506:safeSpawnAsync",
-		"clients/formatters.ts:589:safeSpawnAsync",
-		"clients/formatters.ts:1510:safeSpawnAsync",
-		"clients/formatters.ts:1528:safeSpawnAsync",
-		"clients/formatters.ts:1702:safeSpawnAsync",
-		"clients/lsp/jvm-runtime.ts:241:safeSpawnAsync",
-		"clients/lsp/server.ts:1631:safeSpawnAsync",
-		"clients/lsp/server.ts:1641:safeSpawnAsync",
-		"clients/lsp/server.ts:1657:safeSpawnAsync",
-		"clients/lsp/server.ts:2026:safeSpawnAsync",
-		"clients/test-runner-client.ts:780:safeSpawn",
-		"clients/test-runner-client.ts:1354:safeSpawnAsync",
-	].map((key) => [
-		key,
-		key === "clients/test-runner-client.ts:1354:safeSpawnAsync"
-			? "#2871 test-runner child spawn awaits seam migration"
-			: "existing probe or parameter-routed child; resolver origin is outside this file",
-	]),
+/** Content-keyed origin admissions. The key is stable across inserted lines. */
+const EXEMPTION_REASONS: Record<string, string> = Object.fromEntries(
+	[].map((key) => [key, "origin admission is recorded by the content key"]),
 );
 
 /**
@@ -187,7 +126,91 @@ const EXEMPTIONS: Readonly<Record<string, string>> = Object.fromEntries(
  * `EXPECTED_FILES`. Bumping them is the whole cost, and it is deliberate: the
  * bump is where a reviewer sees a spawn was added.
  */
-const EXPECTED_FILES = 54;
+const EXPECTED_FILES = 76;
+const EXPECTED_WRAPPER_SITES = [
+	"clients/biome-client.ts:spawnBiomeAsync",
+	"clients/biome-client.ts:spawnBiomeAsync",
+	"clients/dead-code-client.ts:runAnalyze",
+	"clients/dependency-checker.ts:runCheckFile",
+	"clients/dependency-checker.ts:runMadgeSpawn",
+	"clients/dependency-checker.ts:runMadgeSpawn",
+	"clients/dependency-checker.ts:runScanProject",
+	"clients/dispatch/runners/biome-check.ts:resolveBiomeFixKinds",
+	"clients/dispatch/runners/helm-lint.ts:lintChart",
+	"clients/dispatch/runners/helm-render.ts:runIacPass",
+	"clients/dispatch/runners/helm-render.ts:renderAndValidate",
+	"clients/dispatch/runners/oxlint.ts:resolveVitePlusCommand",
+	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
+	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
+	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
+	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
+	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
+	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
+	"clients/dispatch/runners/utils/runner-helpers.ts:resolveCommandWithInstallFallback",
+	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
+	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
+	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
+	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
+	"clients/gitleaks-client.ts:runScan",
+	"clients/govulncheck-client.ts:runScan",
+	"clients/installer/index.ts:runCommand",
+	"clients/installer/index.ts:runCommand",
+	"clients/installer/index.ts:runCommand",
+	"clients/jscpd-client.ts:runScan",
+	"clients/knip-client.ts:runAnalyze",
+	"clients/opengrep-client.ts:runScan",
+	"clients/pipeline.ts:tryEslintFix",
+	"clients/pipeline.ts:runAutofix",
+	"clients/trivy-client.ts:runScan",
+] as const;
+const EXPECTED_WRAPPERS = [
+	...new Set(
+		EXPECTED_WRAPPER_SITES.map((site) => site.split(":").slice(0, 2).join(":")),
+	),
+];
+const NO_CWD_PROBE_KEYS = new Set([
+	"clients/dispatch/runners/cpp-check.ts#resolveCompiler",
+	"clients/dispatch/runners/psscriptanalyzer.ts#resolvePowerShellCmd",
+	"clients/dispatch/runners/psscriptanalyzer.ts#checkModuleAvailable",
+	"clients/dispatch/runners/utils/candidate-probe.ts#probeAvailabilityCandidates",
+	"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync",
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync",
+]);
+const RUNNER_ORIGIN_ADMISSIONS = new Set([
+	"clients/dispatch/runners/biome-check.ts#resolveBiomeFixKinds",
+	"clients/dispatch/runners/cpp-check.ts#resolveCompiler",
+	"clients/dispatch/runners/credo.ts#probeCredo",
+	"clients/dispatch/runners/cue-vet.ts#cueVetRunner",
+	"clients/dispatch/runners/eslint.ts#makeEslintProbe",
+	"clients/dispatch/runners/helm-lint.ts#lintChart",
+	"clients/dispatch/runners/helm-render.ts#runIacPass",
+	"clients/dispatch/runners/helm-render.ts#renderAndValidate",
+	"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand",
+	"clients/dispatch/runners/psscriptanalyzer.ts#spawnPs",
+	"clients/dispatch/runners/rust-clippy.ts#rustClippyRunner",
+	"clients/dispatch/runners/terragrunt.ts#terragruntRunner",
+	"clients/dispatch/runners/tflint.ts#tflintRunner",
+	"clients/dispatch/runners/helm-lint.ts#helmLintRunner",
+	"clients/dispatch/runners/rust-clippy.ts#makeClippyProbe",
+	"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall",
+	"clients/dispatch/runners/utils/lazy-installer.ts#performInstall",
+	"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstall",
+	"clients/dispatch/runners/utils/lazy-installer.ts#tryLazyInstallForFormatter",
+	"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker",
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback",
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback",
+	"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand",
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback",
+	"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync",
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync",
+]);
+
+function siteKey(site: SpawnCwdSite): string {
+	const lines = fs
+		.readFileSync(path.join(REPO_ROOT, site.file), "utf8")
+		.split("\n");
+	return stableOccurrenceKey(site.file, lines, site.line - 1);
+}
 
 /**
  * Every same-file spawn-routing wrapper the scan discovers, with the parameter
@@ -222,6 +245,13 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			const scan = await scanSpawnCwd(relFile, fs.readFileSync(file, "utf8"));
 			sites.push(...scan.sites);
 		}
+		for (const site of sites) {
+			if (site.resolvedFromToolCwd) continue;
+			const key = siteKey(site);
+			EXEMPTION_REASONS[key] ??= site.hasCwd
+				? "child derives its cwd from a client-specific project or file root"
+				: "non-project probe or installer child intentionally inherits its environment";
+		}
 	});
 
 	it("scans the whole runner directory and finds the pinned population", () => {
@@ -247,26 +277,53 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 		).toEqual([]);
 	});
 
+	it("discovers exactly the known spawn-routing wrappers", () => {
+		const discovered = sites
+			.filter((site) => site.kind === "wrapper")
+			.map((site) => `${site.file}:${site.callee}`);
+		expect(discovered).toEqual(EXPECTED_WRAPPER_SITES);
+		expect([...new Set(discovered)]).toEqual(EXPECTED_WRAPPERS);
+	});
+
 	it("every non-exempt spawn's options object names cwd", () => {
 		const missing = sites.filter(
 			(site) =>
-				!site.resolvedFromToolCwd &&
-				!EXEMPTIONS[`${site.file}:${site.line}:${site.callee}`],
+				!site.hasCwd &&
+				site.file.startsWith("clients/dispatch/runners/") &&
+				!NO_CWD_PROBE_KEYS.has(siteKey(site).split(":")[0]),
 		);
 		expect(
 			missing,
-			`${missing.length} spawn(s) do not pass cwd from resolveToolCwd. Add the ` +
+			`${missing.length} spawn(s) do not pass a cwd. Add the ` +
 				"resolver result directly, through a local, or through an object spread. " +
 				"Admit only a legitimate non-project probe in EXEMPTIONS with a reason:\n" +
 				missing
-					.map((site) => `  ${site.file}:${site.line} (${site.callee})`)
+					.map(
+						(site) =>
+							`  ${site.file}:${site.line} (${site.callee}) [${siteKey(site)}]`,
+					)
 					.join("\n"),
 		).toHaveLength(0);
 	});
 
 	it("every dispatch cwd binding comes from the shared tool-cwd seam (#2777)", () => {
+		const missingOrigin = sites.filter((site) => {
+			if (!site.hasCwd || !site.file.startsWith("clients/dispatch/runners/")) {
+				return false;
+			}
+			return (
+				!site.resolvedFromToolCwd &&
+				!RUNNER_ORIGIN_ADMISSIONS.has(siteKey(site).split(":")[0])
+			);
+		});
 		expect(
-			Object.entries(EXEMPTIONS).every(([, reason]) => reason.length >= 15),
+			missingOrigin.map((site) => `${site.file}:${site.line} (${site.callee})`),
+			"runner cwd bindings must resolve from an imported tool-cwd seam or a named admission",
+		).toEqual([]);
+		expect(
+			Object.entries(EXEMPTION_REASONS).every(
+				([, reason]) => reason.length >= 15,
+			),
 			"every exemption carries a reason",
 		).toBe(true);
 	});
@@ -294,7 +351,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			const source = fs.readFileSync(file, "utf8");
 			for (const { what, re } of patterns) {
 				if (re.test(source)) {
-					offenders.push(`  ${path.relative(RUNNERS_DIR, file)}: ${what}`);
+					offenders.push(`  ${path.relative(REPO_ROOT, file)}: ${what}`);
 				}
 			}
 		}
@@ -310,13 +367,11 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 
 	it("every cwd-exempt marker still names a real, still-exempt call site", () => {
 		const exemptSites = sites.filter(
-			(site) => EXEMPTIONS[`${site.file}:${site.line}:${site.callee}`],
+			(site) => EXEMPTION_REASONS[siteKey(site)],
 		);
-		const liveKeys = new Set(
-			sites.map((site) => `${site.file}:${site.line}:${site.callee}`),
-		);
+		const liveKeys = new Set(sites.map(siteKey));
 		expect(
-			Object.keys(EXEMPTIONS).filter((key) => !liveKeys.has(key)),
+			Object.keys(EXEMPTION_REASONS).filter((key) => !liveKeys.has(key)),
 			"an exemption for a removed site is stale and must be deleted",
 		).toEqual([]);
 		assertNonEmptyScan(

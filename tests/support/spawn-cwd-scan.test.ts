@@ -72,6 +72,52 @@ function at(source: string, snippet: string, callee: string): string {
 // ── K1 · direct spawn ───────────────────────────────────────────────────────
 
 describe("K1 — a direct safeSpawn* call", () => {
+	it("resolves the innermost dominating block binding", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				await safeSpawnAsync("good", [], { cwd });
+				{ const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			true,
+			false,
+		]);
+	});
+
+	it("keeps the later resolver binding when the block appears first", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				{ const cwd = ctx.cwd; await safeSpawnAsync("bad", [], { cwd }); }
+				const cwd = resolveToolCwd("runner", "tool", file, ctx);
+				await safeSpawnAsync("good", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites.map((site) => site.resolvedFromToolCwd)).toEqual([
+			false,
+			true,
+		]);
+	});
+
+	it("rejects a resolver binding after reassignment", async () => {
+		const source = `import { resolveToolCwd } from "./tool-cwd.js";
+			async function run(ctx) {
+				let cwd = resolveToolCwd("runner", "tool", file, ctx);
+				cwd = ctx.cwd;
+				await safeSpawnAsync("bad", [], { cwd });
+			}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
+	it("rejects a file-local resolver with the seam name", async () => {
+		const source = `function resolveToolCwd() { return ctx.cwd; }
+			async function run() { await safeSpawnAsync("bad", [], { cwd: resolveToolCwd() }); }`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites[0].resolvedFromToolCwd).toBe(false);
+	});
+
 	it("requires resolver origin, including a local binding and object spread", async () => {
 		const source = `
 			const dir = resolveToolCwd("runner", "tool", file, ctx);
