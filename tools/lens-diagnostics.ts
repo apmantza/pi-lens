@@ -1542,18 +1542,11 @@ export function runnerRetirementDecision(
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
 	}
 	const resolvedFilePath = path.resolve(filePath);
-	const realpathOrResolved = (candidate: string): string => {
-		try {
-			return fsSync.realpathSync(candidate);
-		} catch {
-			return candidate;
-		}
-	};
-	const realFilePath = realpathOrResolved(resolvedFilePath);
+	const realFilePath = resolvedFilePath;
 	let incomplete = false;
 	let incompleteRoot: string | undefined;
 	for (const entry of coverage) {
-		const root = realpathOrResolved(path.resolve(entry.root));
+		const root = path.resolve(entry.root);
 		const relative = path.relative(root, realFilePath);
 		const underRoot =
 			relative === "" ||
@@ -1565,11 +1558,7 @@ export function runnerRetirementDecision(
 			continue;
 		}
 		if (!entry.files) return "retire";
-		if (
-			entry.files.some(
-				(file) => realpathOrResolved(path.resolve(file)) === realFilePath,
-			)
-		) {
+		if (entry.files.some((file) => path.resolve(file) === realFilePath)) {
 			return "retire";
 		}
 		// A complete file set proves that this file was not analysed. Keep the
@@ -2379,20 +2368,23 @@ async function formatFullMode(
 	// LSP sibling above — a retirement nobody can see is how a regression
 	// deletes findings silently. Bounded by construction: at most one row per
 	// mode=full call, and only when rows were actually retired.
+	const retiredRunnerIds = new Set<string>();
 	const runnerRetiredRows = getFileDiagnosticSummaries()
 		.filter((summary) => includeFile(summary.filePath))
 		.reduce(
 			(total, summary) =>
 				total +
-				(summary.diagnostics ?? []).filter(
-					(diagnostic) =>
+				(summary.diagnostics ?? []).filter((diagnostic) => {
+					const retired =
 						runnerRetirementDecision(
 							diagnostic,
 							summary.filePath,
 							authoritativeRunnerIds,
 							authoritativeRunnerCoverage,
-						) === "retire",
-				).length,
+						) === "retire";
+					if (retired) retiredRunnerIds.add(runnerIdOf(diagnostic));
+					return retired;
+				}).length,
 			0,
 		);
 	if (runnerRetiredRows > 0) {
@@ -2403,12 +2395,7 @@ async function formatFullMode(
 			durationMs: 0,
 			metadata: {
 				rows: runnerRetiredRows,
-				runners: [
-					...new Set([
-						...authoritativeRunnerIds,
-						...authoritativeRunnerCoverage.map((entry) => entry.runnerId),
-					]),
-				].join(","),
+				runners: [...retiredRunnerIds].join(","),
 				coverage: authoritativeRunnerCoverage.map((entry) => ({
 					runnerId: entry.runnerId,
 					root: entry.root,

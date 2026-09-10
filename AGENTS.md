@@ -1470,8 +1470,11 @@ Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` fre
 
 Project-runner retirement authority is recorded as `ProjectRunnerCoverage` on
 `FreshProjectDiagnosticsResult`, keyed by the runner id, analyzed root, and
-complete file set. `runnerRetirementDecision` in `tools/lens-diagnostics.ts`
-uses that coverage for both filtering and `runner_authoritative_widget_retire`;
+complete file set. Each runner client populates `analyzedFiles` from its parsed
+report or the file set it scanned; `fresh-fetch.ts` transports that evidence and
+does not walk the project or re-create runner ignore policies. `runnerRetirementDecision`
+in `tools/lens-diagnostics.ts` uses that coverage for both filtering and
+`runner_authoritative_widget_retire`;
 the `analyzed` id list remains a conservative fallback only when coverage is
 absent. An incomplete entry keeps findings under its root with a bounded record,
 and a language-specific dead-code client uses its own runner id so a shared

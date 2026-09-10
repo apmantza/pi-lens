@@ -693,7 +693,10 @@ export class KnipClient {
 			};
 		}
 
-		return this.dropOverridePinnedDeps(this.parseOutput(output), targetDir);
+		return this.dropOverridePinnedDeps(
+			this.parseOutput(output, targetDir),
+			targetDir,
+		);
 	}
 
 	/**
@@ -826,7 +829,7 @@ export class KnipClient {
 
 	// --- Internal ---
 
-	private parseOutput(output: string): KnipResult {
+	private parseOutput(output: string, root = process.cwd()): KnipResult {
 		try {
 			const data = JSON.parse(output);
 			const issues: KnipIssue[] = [];
@@ -851,6 +854,12 @@ export class KnipClient {
 
 			// Knip JSON format (grouped): { issues: [ { file, exports:[], files:[], dependencies:[], ... } ] }
 			const fileEntries: any[] = Array.isArray(data?.issues) ? data.issues : [];
+			const analyzedFiles = fileEntries
+				.map((entry) => entry?.file)
+				.filter(
+					(file): file is string => typeof file === "string" && file.length > 0,
+				)
+				.map((file) => path.resolve(root, file));
 
 			for (const entry of fileEntries) {
 				const file: string = entry.file ?? "";
@@ -920,6 +929,7 @@ export class KnipClient {
 				success: true,
 				// #2154: the one knip site that parsed a scan of this root.
 				analyzed: true,
+				...(analyzedFiles.length > 0 ? { analyzedFiles } : {}),
 				issues,
 				unusedExports,
 				unusedFiles,

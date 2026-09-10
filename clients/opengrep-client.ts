@@ -200,13 +200,24 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 				};
 			}
 
-			const findings = parseOpengrepReport(
-				fs.readFileSync(reportPath, "utf-8"),
-			);
+			const raw = fs.readFileSync(reportPath, "utf-8");
+			const findings = parseOpengrepReport(raw);
+			let analyzedFiles: string[] | undefined;
+			try {
+				const paths = (JSON.parse(raw) as { paths?: { scanned?: unknown } })
+					.paths?.scanned;
+				if (Array.isArray(paths))
+					analyzedFiles = paths
+						.filter((file): file is string => typeof file === "string")
+						.map((file) => path.resolve(cwd, file));
+			} catch {
+				/* parser already provides the failure boundary */
+			}
 			// #2154: the one opengrep site that parsed a scan of this root.
 			return {
 				success: true,
 				analyzed: true,
+				...(analyzedFiles ? { analyzedFiles } : {}),
 				findings,
 				scannedAt,
 			};

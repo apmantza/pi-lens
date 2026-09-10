@@ -1042,7 +1042,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		const cacheManager = makeCacheManager();
 		const pythonClient = {
 			id: "python",
-			language: "python",
+			language: "Python",
 			detect: vi.fn().mockReturnValue(true),
 			analyze: vi.fn().mockResolvedValue({
 				success: true,
@@ -1061,6 +1061,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 				unusedDeps: [],
 				unlistedDeps: [],
 				analyzed: true,
+				analyzedFiles: [path.resolve(tmp, "z.py")],
 			}),
 		};
 		const clients = makeClients();
@@ -1086,7 +1087,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(result.authoritativeCoverage).toContainEqual({
 			runnerId: "dead-code-python",
 			root: path.resolve(tmp),
-			files: [],
+			files: [path.resolve(tmp, "z.py")],
 			complete: true,
 		});
 	});

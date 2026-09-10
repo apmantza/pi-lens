@@ -524,10 +524,21 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			}
 
 			const findings = parseGovulncheckJson(rawStdout);
+			const analyzedFiles = [
+				...new Set(
+					findings.flatMap((finding) =>
+						finding.trace
+							.map((frame) => frame.filename)
+							.filter((file): file is string => typeof file === "string")
+							.map((file) => path.resolve(cwd, file)),
+					),
+				),
+			];
 			// #2154: the one govulncheck site that parsed a scan of this root.
 			return {
 				success: true,
 				analyzed: true,
+				...(analyzedFiles.length > 0 ? { analyzedFiles } : {}),
 				findings,
 				scannedAt,
 			};

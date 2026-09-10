@@ -83,15 +83,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Minimatch } from "minimatch";
 import type { BootstrapClients } from "../bootstrap.js";
 import type { CacheManager } from "../cache-manager.js";
 import type { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { applyDispositionsMultiFile } from "../diagnostic-dispositions.js";
-import {
-	getKnipIgnorePatterns,
-	getProjectIgnoreMatcher,
-} from "../file-utils.js";
+import { getKnipIgnorePatterns } from "../file-utils.js";
 import { isAtOrAboveHomeDir } from "../path-utils.js";
 import { GitleaksClient } from "../gitleaks-client.js";
 import { GovulncheckClient } from "../govulncheck-client.js";
@@ -249,7 +245,7 @@ export async function fetchFreshProjectDiagnostics(
 	signal?: AbortSignal,
 	options: { homeDir?: string; runtime?: RuntimeCoordinator } = {},
 ): Promise<FreshProjectDiagnosticsResult> {
-	const analysisRoot = fs.realpathSync(path.resolve(cwd));
+	const analysisRoot = path.resolve(cwd);
 	// #747: refuse to spawn any heavyweight analyzer when the analysis root is
 	// at — or above — the home directory (the #250/#253 escape class). Every
 	// analyzer here treats `analysisRoot` as a whole tree to walk; from $HOME
@@ -326,16 +322,17 @@ export async function fetchFreshProjectDiagnostics(
 		elapsedMs: number,
 		analysedRoot: boolean,
 		coverageRunnerId = id,
-		coverageFiles?: string[],
-		coverageComplete = true,
+		analysis?: { analyzedFiles?: string[]; analysisComplete?: boolean },
 	): void {
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
 			authoritativeCoverage.push({
 				runnerId: coverageRunnerId,
 				root: analysisRoot,
-				...(coverageFiles ? { files: coverageFiles } : {}),
-				complete: coverageComplete,
+				...(analysis?.analyzedFiles !== undefined
+					? { files: analysis.analyzedFiles }
+					: {}),
+				complete: analysis?.analysisComplete !== false,
 			});
 		}
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
@@ -354,41 +351,6 @@ export async function fetchFreshProjectDiagnostics(
 			diagnostics.push(...kept);
 			pushUnique(runners, id);
 		}
-	}
-
-	function coverageFiles(
-		patterns: readonly string[],
-		isCandidate: (filePath: string) => boolean,
-	): string[] {
-		const matcher = getProjectIgnoreMatcher(analysisRoot);
-		const globs = patterns.map((pattern) => new Minimatch(pattern));
-		const files: string[] = [];
-		const visit = (directory: string): void => {
-			let entries: fs.Dirent[];
-			try {
-				entries = fs.readdirSync(directory, { withFileTypes: true });
-			} catch {
-				return;
-			}
-			for (const entry of entries) {
-				const full = path.join(directory, entry.name);
-				if (entry.isSymbolicLink()) continue;
-				if (entry.isDirectory()) {
-					if (!matcher.isIgnored(full, true)) visit(full);
-					continue;
-				}
-				if (!entry.isFile() || matcher.isIgnored(full, false)) continue;
-				const relative = path
-					.relative(analysisRoot, full)
-					.split(path.sep)
-					.join("/");
-				if (!globs.some((glob) => glob.match(relative)) && isCandidate(full)) {
-					files.push(path.resolve(full));
-				}
-			}
-		};
-		visit(analysisRoot);
-		return files;
 	}
 
 	function recordFailed(
@@ -437,8 +399,7 @@ export async function fetchFreshProjectDiagnostics(
 				Date.now() - startMs,
 				true,
 				undefined,
-				coverageFiles(getKnipIgnorePatterns(), () => true),
-				result.analysisComplete !== false,
+				result,
 			);
 		}),
 
@@ -486,26 +447,7 @@ export async function fetchFreshProjectDiagnostics(
 				Date.now() - startMs,
 				true,
 				undefined,
-				coverageFiles(
-					[
-						"**/*.md",
-						"**/*.txt",
-						"**/*.json",
-						"**/*.yaml",
-						"**/*.yml",
-						"**/*.toml",
-						"**/*.lock",
-						"**/*.test.*",
-						"**/*.spec.*",
-						"**/__tests__/**",
-						"**/tests/**",
-					],
-					(file) =>
-						/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
-							file,
-						),
-				),
-				result.analysisComplete !== false,
+				result,
 			);
 		}),
 
@@ -531,6 +473,8 @@ export async function fetchFreshProjectDiagnostics(
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),
 				Date.now() - startMs,
 				result.analyzed === true,
+				undefined,
+				result,
 			);
 		}),
 
@@ -574,6 +518,8 @@ export async function fetchFreshProjectDiagnostics(
 				gitleaksResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				undefined,
+				result,
 			);
 		}),
 
@@ -618,6 +564,8 @@ export async function fetchFreshProjectDiagnostics(
 				govulncheckResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				undefined,
+				result,
 			);
 		}),
 
@@ -660,6 +608,8 @@ export async function fetchFreshProjectDiagnostics(
 				opengrepResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				undefined,
+				result,
 			);
 		}),
 
@@ -696,6 +646,8 @@ export async function fetchFreshProjectDiagnostics(
 				trivyResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				undefined,
+				result,
 			);
 		}),
 
@@ -737,17 +689,7 @@ export async function fetchFreshProjectDiagnostics(
 						Date.now() - startMs,
 						result.analyzed === true,
 						deadCodeRunnerId(result.language),
-						coverageFiles([], (file) => {
-							const extensions: Record<string, string> = {
-								python: ".py",
-								rust: ".rs",
-								go: ".go",
-								java: ".java",
-							};
-							const extension = extensions[result.language];
-							return extension !== undefined && file.endsWith(extension);
-						}),
-						result.analysisComplete !== false,
+						result,
 					);
 				}),
 			);
