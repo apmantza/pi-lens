@@ -20,6 +20,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { McpHarness, repoRoot } from "./harness.js";
+import { stripSource } from "../support/sweep-kit.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation). retry: 2
@@ -33,6 +34,22 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 
 	afterAll(() => {
 		harness.dispose();
+	});
+
+	// #2860 round 4 N6: this scans the production construction itself. The
+	// previous test retyped the resolver expression, so deleting mcp/server.ts's
+	// real argument left the whole test population green. `stripSource` blanks
+	// comments and strings before the call-shape assertion.
+	it("passes isLensGuardEnabled() into createLensDiagnosticsTool", () => {
+		const source = stripSource(
+			fs.readFileSync(new URL("../../mcp/server.ts", import.meta.url), "utf8"),
+		);
+		const callStart = source.indexOf("createLensDiagnosticsTool(");
+		expect(callStart).toBeGreaterThanOrEqual(0);
+		const callEnd = source.indexOf("\n);", callStart);
+		expect(callEnd).toBeGreaterThan(callStart);
+		const call = source.slice(callStart, callEnd);
+		expect(call).toContain("() => isLensGuardEnabled(),");
 	});
 
 	it("completes the initialize handshake and mirrors the protocol version", async () => {

@@ -557,6 +557,8 @@ const cacheManager = new CacheManager();
 // nothing — a no-op dressed as a fix, not a real parity gap. The 4th arg is left
 // at its default (`async () => {}`, already a no-op) rather than importing and
 // wiring a flush with nothing to flush.
+const isLensGuardEnabled = () =>
+	Boolean(createMcpHost(undefined, DEFAULT_CWD).getFlag("lens-guard"));
 const lensDiagnosticsTool = createLensDiagnosticsTool(
 	cacheManager,
 	() => DEFAULT_CWD,
@@ -575,7 +577,7 @@ const lensDiagnosticsTool = createLensDiagnosticsTool(
 	// `lens-guard` off — a config bypass on a durable cross-surface store.
 	// Matches index.ts:1656 and the two sibling readers
 	// (clients/runtime-tool-call.ts, clients/runtime-tool-result.ts).
-	() => Boolean(createMcpHost(undefined, DEFAULT_CWD).getFlag("lens-guard")),
+	() => isLensGuardEnabled(),
 );
 const astGrepClient = new AstGrepClient();
 const astGrepSearchTool = createAstGrepSearchTool(astGrepClient);
