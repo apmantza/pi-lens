@@ -5873,7 +5873,6 @@ export class LSPService {
 											bindingMatchesContent: false,
 											baseline: aux.baseline,
 											currentPathVersion,
-											allowStamp: true,
 											raced,
 										});
 										// #1459: a DEFERRED aux was never sent this content and is not
@@ -5906,15 +5905,10 @@ export class LSPService {
 											// did not narrow the touch.
 											// #1586: through the one predicate, so this row and the merge
 											// below cannot disagree about the same scanner.
-											publishedThisContent: auxiliaryPublicationEvidence({
-												bindingMatchesContent: auxCoversThisContent(
-													aux.serverId,
-												),
-												baseline: aux.baseline,
-												currentPathVersion: currentPathVersion,
-												allowStamp: false,
-												raced,
-											}),
+											// #2914: binding-only by construction — the direct call
+											// below is master's line; the stamp axis already decided
+											// the outcome above and must not re-admit the row here.
+											publishedThisContent: auxCoversThisContent(aux.serverId),
 											budgetMs,
 											elapsedMs,
 											// #1458 S3: elapsed measured from BEFORE the primary wait
@@ -6207,13 +6201,10 @@ export class LSPService {
 									: publishedEvidence
 										? ("answered" as const)
 										: ("silent" as const),
-								publishedThisContent: auxiliaryPublicationEvidence({
-									bindingMatchesContent: auxCoversThisContent(entry.info.id),
-									baseline,
-									currentPathVersion,
-									allowStamp: false,
-									raced: true,
-								}),
+								// #2914: binding-only by construction — the direct call
+								// below is master's line; the stamp axis already decided
+								// the outcome above and must not re-admit the row here.
+								publishedThisContent: auxCoversThisContent(entry.info.id),
 								budgetMs: timeoutFor(entry.client.serverId),
 								elapsedMs: waitedMs,
 								elapsedSinceNotifyMs: waitedMs,
