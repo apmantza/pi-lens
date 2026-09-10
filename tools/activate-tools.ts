@@ -39,10 +39,10 @@ export interface ActivateToolsOptions {
 	 * Called with every lazy tool name the model asked for, so the extension
 	 * can remember this logical session's activations and restore them after
 	 * the host rebuilds the session — fork/reload/resume construct a fresh
-	 * AgentSession with every registered tool active again, while pi-lens's
-	 * closure state survives (see clients/tool-set-policy.ts).
+	 * AgentSession with every registered tool active again. The module-level
+	 * session-file store survives the factory re-run (see clients/tool-set-policy.ts).
 	 */
-	onActivated?: (names: string[]) => void;
+	onActivated?: (names: string[], ctx: unknown) => void;
 	onMutation?: (mutation: {
 		addedCount: number;
 		removedCount: number;
@@ -109,7 +109,7 @@ export function createActivateToolsTool(
 			// Remember every requested tool, not just the newly-added ones: a
 			// tool that is already active still has to survive the next
 			// fork/reload/resume restore.
-			options.onActivated?.(requested);
+			options.onActivated?.(requested, ctx);
 
 			const active =
 				typeof pi.getActiveTools === "function" ? pi.getActiveTools() : [];
