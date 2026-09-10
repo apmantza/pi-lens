@@ -1413,3 +1413,175 @@ class Runner {
 		expect(scan.sites[0].cwdLines).toEqual([]);
 	});
 });
+
+/**
+ * ## R — rebinding, in every shape the grammar allows
+ *
+ * Round 4 asked "was this binding reassigned before the use?" with
+ * `left.text() === name`, which is one spelling of five: `({ cwd } = ctx)`,
+ * `({ dir: cwd } = ctx)`, `[cwd] = […]`, `(cwd) = ctx.cwd` and
+ * `for (cwd of dirs)` all rebind the name, and the round-4 verify shipped the
+ * literal #2691 defect into the real `yamllint.ts` through the first of them
+ * with the sweep green. AGENTS.md defect shape 34 — a guard that enumerates
+ * surface spellings — on the one axis round 4 did not rewrite.
+ *
+ * The rule is now structural: a rebinding is any assignment whose LEFT TARGET
+ * BINDS the name (the pattern is walked, parentheses unwrapped), plus a
+ * `for…of`/`for…in` head that assigns without declaring. Every row below must
+ * come back unproven: the seam value is gone by the time the spawn runs.
+ */
+const REBINDING_CASES: { id: string; what: string; rebind: string }[] = [
+	{ id: "R1", what: "plain assignment", rebind: "cwd = ctx.cwd;" },
+	{ id: "R2", what: "object destructuring", rebind: "({ cwd } = ctx);" },
+	{ id: "R3", what: "array destructuring", rebind: "[cwd] = [ctx.cwd];" },
+	{
+		id: "R4",
+		what: "`for…of` head without a declaration",
+		rebind: "for (cwd of dirs) { void cwd; }",
+	},
+	{
+		id: "R5",
+		what: "renamed object destructuring",
+		rebind: "({ dir: cwd } = ctx);",
+	},
+	{ id: "R6", what: "compound assignment", rebind: 'cwd += "/nested";' },
+	{
+		id: "R7",
+		what: "assignment inside a closure",
+		rebind: "(() => { cwd = ctx.cwd; })();",
+	},
+	{
+		id: "R8",
+		what: "assignment inside a block",
+		rebind: "if (ctx.fast) { cwd = ctx.cwd; }",
+	},
+	{ id: "R9", what: "parenthesised target", rebind: "(cwd) = ctx.cwd;" },
+	{
+		id: "R10",
+		what: "assignment inside a switch case",
+		rebind: "switch (ctx.k) { case 1: cwd = ctx.cwd; }",
+	},
+];
+
+describe("R — a rebinding before the use, whatever shape it takes", () => {
+	for (const row of REBINDING_CASES) {
+		it(`${row.id}: ${row.what} leaves the binding unproven`, async () => {
+			const source = `${SEAM}
+async function run(ctx, dirs) {
+	let cwd = ${GOOD};
+	${row.rebind}
+	await safeSpawnAsync("b", [], { cwd });
+}`;
+			expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+		});
+	}
+
+	it("a write to a PROPERTY is not a rebinding", async () => {
+		// `o.cwd = …` changes an object, not the local the spawn reads.
+		const source = `${SEAM}
+async function run(ctx, o) {
+	const cwd = ${GOOD};
+	o.cwd = ctx.cwd;
+	await safeSpawnAsync("b", [], { cwd });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+	});
+
+	it("a rebinding AFTER the use does not retro-poison it", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+	let cwd = ${GOOD};
+	await safeSpawnAsync("b", [], { cwd });
+	({ cwd } = ctx);
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+	});
+});
+
+describe("a same-file function that returns the seam is a seam resolver", () => {
+	it("follows a private method whose body returns resolveToolCwd (#2879)", async () => {
+		// `clients/test-runner-client.ts` migrated onto the seam through
+		// `private resolveSpawnCwd(…) { return resolveToolCwd(…) }`. Matching the
+		// two known wrapper names by hand — round 4's rule — called that
+		// conforming site non-seam on the merge result (round-5 v4-F2).
+		const source = `${SEAM}
+class Client {
+	private resolveSpawnCwd(runner, file, root) {
+		return resolveToolCwd("runner", runner, file, { cwd: root });
+	}
+	async run(ctx) {
+		const spawnCwd = this.resolveSpawnCwd("vitest", ctx.filePath, ctx.cwd);
+		await safeSpawnAsync("b", [], { cwd: spawnCwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+	});
+
+	it("does not follow a method that merely CALLS the seam", async () => {
+		// Logging the resolver's answer is not returning it.
+		const source = `${SEAM}
+class Client {
+	private resolveSpawnCwd(runner, file, root) {
+		void resolveToolCwd("runner", runner, file, { cwd: root });
+		return ctx.cwd;
+	}
+	async run(ctx) {
+		const spawnCwd = this.resolveSpawnCwd("vitest", ctx.filePath, ctx.cwd);
+		await safeSpawnAsync("b", [], { cwd: spawnCwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("follows a plain function and an arrow with a concise body", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx) {
+	return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+const resolveThere = (ctx) =>
+	resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+async function run(ctx) {
+	await safeSpawnAsync("a", [], { cwd: resolveHere(ctx) });
+	await safeSpawnAsync("b", [], { cwd: resolveThere(ctx) });
+}`;
+		expect(await verdicts(source)).toEqual([
+			"hasCwd=true resolved=true",
+			"hasCwd=true resolved=true",
+		]);
+	});
+});
+
+describe("round-5 scope and key residues", () => {
+	it("N1: a class static block is a `var` boundary the owner table cannot name", async () => {
+		// The static block's body is a plain `statement_block`, so the grammar's
+		// declaration-owner table says "statement_block" and nothing marks the
+		// block as a `var` scope. Round 4 credited the binding to the whole class
+		// (round-5 v4-N1).
+		const source = `${SEAM}
+class Runner {
+	static { var cwd = ${GOOD}; void cwd; }
+	async run(ctx) {
+		await safeSpawnAsync("b", [], { cwd });
+	}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("F4: the key covers a local the cwd expression only READS", async () => {
+		// `cwd: cargoToml.replace(…)` — round 4's key stopped at the call, so the
+		// local could be repointed at `ctx.cwd` with the admission intact
+		// (round-5 v4-F4).
+		const source = `${SEAM}
+async function run(ctx) {
+	const cargoToml = findCargoToml(ctx.filePath);
+	await safeSpawnAsync("t", [], { cwd: cargoToml.replace("Cargo.toml", "") });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		const lineOfText = (needle: string): number =>
+			source.split("\n").findIndex((line) => line.includes(needle)) + 1;
+		expect(scan.sites[0].cwdLines).toEqual([
+			lineOfText("const cargoToml"),
+			lineOfText("cwd: cargoToml.replace"),
+		]);
+	});
+});

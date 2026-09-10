@@ -219,7 +219,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`<vulture candidate> --version` availability probe over PATH candidates: no project target",
 	],
 	[
-		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:488c639e~a19bd142",
+		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:488c639e~e7e502d1",
 		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd",
 	],
 	[
@@ -331,7 +331,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`gem install <package> --no-document` into the global gem path",
 	],
 	[
-		"clients/knip-client.ts#KnipClient.analyze:a1223aae~e1452fe0",
+		"clients/knip-client.ts#KnipClient.analyze:a1223aae~98d0e4c5",
 		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied",
 	],
 	[
@@ -453,7 +453,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is spawnBiomeAsync's own `cwd` parameter; the checked sites are its two call sites in this file",
 	],
 	[
-		"clients/biome-client.ts#BiomeClient.fixFileAsync:21f726e7~188c602a",
+		"clients/biome-client.ts#BiomeClient.fixFileAsync:21f726e7~87e15e1e",
 		"cwd is `configCwd` — the caller's cwd or the formatted file's own directory; BiomeClient is a formatter client with no DispatchContext to resolve from",
 	],
 	[
@@ -489,15 +489,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`mix credo --version` inside a createCwdCachedProbe closure: the `cwd` is the closure parameter that shared probe machinery supplies per call, so no call site in this file can be checked",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~e3b9420d@1",
+		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~3e35e485@1",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~e3b9420d",
+		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~3e35e485",
 		"same `fileDir` derivation, the package-wide `cue vet` pass",
 	],
 	[
-		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~e3b9420d@2",
+		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~3e35e485@2",
 		"same `fileDir` derivation, the single-file fallback pass",
 	],
 	[
@@ -533,15 +533,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`cargo clippy --version` inside a createCwdCachedProbe closure: the `cwd` is the closure parameter the probe machinery supplies per call",
 	],
 	[
-		"clients/dispatch/runners/rust-clippy.ts#run:dba44d7f~19a492a2",
+		"clients/dispatch/runners/rust-clippy.ts#run:dba44d7f~6991f811",
 		"cwd is the directory of `findCargoToml(ctx.filePath)` — cargo must run at the package root, which is derived from the edited file rather than from the seam",
 	],
 	[
-		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~d27138c5",
+		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~2a7d9054",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in",
 	],
 	[
-		"clients/dispatch/runners/tflint.ts#run:338013e8~e3b9420d",
+		"clients/dispatch/runners/tflint.ts#run:338013e8~a6e3b67b",
 		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute",
 	],
 	[
@@ -693,11 +693,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"runPipeline forwards its own `cwd` parameter into runAutofix",
 	],
 	[
-		"clients/ruff-client.ts#RuffClient.fixFileAsync:22e02ee5~32f35590",
+		"clients/ruff-client.ts#RuffClient.fixFileAsync:22e02ee5~4421fb24",
 		"cwd is the caller's own `cwd` argument, falling back to the linted file's directory; RuffClient is an autofix client with no DispatchContext seam",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~98fad979",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~446d128f",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[
@@ -718,17 +718,15 @@ const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"clients/dispatch/runners/helm-lint.ts#run:833aee95~833aee95",
 		'#2882: helm-lint\'s run() reads `ctx.cwd` directly instead of resolveRunnerCwd(ctx, "helm") — the one runner still bypassing the #2777 seam, and this row retires when that lands',
 	],
-	[
-		"clients/test-runner-client.ts#TestRunnerClient.runTestFileAsync:d02073e6~dbf27697",
-		"#2871: the test-runner spawn takes its cwd from the client's own resolution instead of resolveToolCwd; PR #2879 moves it onto the seam and this row goes with it",
-	],
 ];
 /**
  * The worklist can only shrink. Lower this when a row lands; never raise it —
  * a new non-conforming site belongs in one of the two reasoned tables above,
  * or gets fixed.
  */
-const WORKLIST_CEILING = 2;
+const WORKLIST_CEILING = 1;
+/** See the comment on the `beforeAll` below for where this number comes from. */
+const SCAN_HOOK_TIMEOUT_MS = 30_000;
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
 const ORIGIN_ADMISSIONS = Object.fromEntries([
 	...ORIGIN_ADMISSION_ROWS,
@@ -788,14 +786,34 @@ function siteKeys(
 }
 
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
-	const files = POPULATION_FILES.filter((file) =>
-		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
-			fs.readFileSync(file, "utf8"),
-		),
-	);
+	// A file is in the population when it can hold a site the scan recognises:
+	// one of the seam wrappers by name, or an unaliased `node:child_process`
+	// import (round-5 v4-N3 — the two lists used to disagree, so a file whose
+	// only child spawn was a bare `spawn(` could never move a pin). An ALIASED
+	// child_process import is a stated bound, tracked by #2888.
+	const files = POPULATION_FILES.filter((file) => {
+		const source = fs.readFileSync(file, "utf8");
+		return (
+			/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
+				source,
+			) ||
+			/import\s*\{[^}]*\b(?:spawn|execFile)\b(?![^}]*\bas\b)[^}]*\}\s*from\s*["']node:child_process["']/.test(
+				source,
+			)
+		);
+	});
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
+	// The scan is 2.2 s over the 76-file population on an idle dev host (5.7 s
+	// before round 5's binding index; 5.9 s at `--maxWorkers=1` beside
+	// `tests/config`), and this file sits in the `default` vitest project,
+	// whose hook budget is vitest's own 10 s. CI ran it at ~11 s and skipped
+	// all seven assertions with `Hook timed out in 10000ms`. 30 s is ~13x the
+	// measured scan and the ceiling this repo treats as a hook budget — an
+	// explicit admission for THIS hook, not a project-wide bump, and not a move
+	// into `grammar-heavy` (that lane bounds concurrent tree-sitter WASM
+	// compiles; this scan compiles none).
 	beforeAll(async () => {
 		for (const file of files) {
 			const relFile = path.relative(REPO_ROOT, file);
@@ -806,7 +824,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			}
 			sites.push(...scan.sites);
 		}
-	});
+	}, SCAN_HOOK_TIMEOUT_MS);
 
 	const keyOf = (site: SpawnCwdSite): string => {
 		const key = keyBySite.get(site);
@@ -902,11 +920,14 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			"the worklist grew; a new non-conforming site belongs in a reasoned " +
 				"table or gets fixed",
 		).toBeLessThanOrEqual(WORKLIST_CEILING);
+		// The row's OWN retiring issue, at the front — not any issue the sentence
+		// happens to mention. Round 4 accepted `/#\d+/` anywhere, so a row could
+		// pass on an unrelated reference (round-5 v4-N2).
 		expect(
-			MIGRATION_WORKLIST_ROWS.filter(([, reason]) => !/#\d+/.test(reason)).map(
-				([key]) => key,
-			),
-			"a worklist row must name the issue that retires it",
+			MIGRATION_WORKLIST_ROWS.filter(
+				([, reason]) => !/^#\d+: /.test(reason),
+			).map(([key]) => key),
+			"a worklist row must OPEN with the issue that retires it (`#1234: …`)",
 		).toEqual([]);
 	});
 
