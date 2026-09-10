@@ -716,7 +716,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/helm-lint.ts#run:833aee95~833aee95",
-		'helm-lint\'s run() reads `ctx.cwd` directly instead of resolveRunnerCwd(ctx, "helm") — the one runner still bypassing the #2777 seam',
+		'#2882: helm-lint\'s run() reads `ctx.cwd` directly instead of resolveRunnerCwd(ctx, "helm") — the one runner still bypassing the #2777 seam, and this row retires when that lands',
 	],
 	[
 		"clients/test-runner-client.ts#TestRunnerClient.runTestFileAsync:d02073e6~dbf27697",
