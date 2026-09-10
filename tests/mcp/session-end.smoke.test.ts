@@ -14,23 +14,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "./harness.js";
 
 async function readDeadWeight(home: string): Promise<Record<string, unknown>> {
-	const logPath = path.join(home, "extension.log");
-	for (let attempt = 0; attempt < 40; attempt++) {
-		if (fs.existsSync(logPath)) {
-			const rows = fs
-				.readFileSync(logPath, "utf8")
-				.trim()
-				.split("\n")
-				.filter(Boolean)
-				.map((line) => JSON.parse(line) as Record<string, unknown>);
-			const row = rows.find(
-				(candidate) => candidate.message === "situational tool dead weight",
-			);
-			if (row) return row;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 25));
-	}
-	throw new Error("MCP dead-weight row was not written");
+	// One poll loop for both readers (flake-shape ratchet: one raw timer wait
+	// per file); the single-row reader is the first row of the multi-row one.
+	const [row] = await readDeadWeightRows(home);
+	return row as Record<string, unknown>;
 }
 
 async function readDeadWeightRows(
