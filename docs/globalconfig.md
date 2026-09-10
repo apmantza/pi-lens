@@ -18,6 +18,7 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `--no-autofix` | `autofix.enabled` | `true` |
 | `--no-lens-context` | `contextInjection.enabled` | `true` |
 | `--lens-guard` | `guard.enabled` | `false` |
+| `--lens-checkout-guard` | `guard.sharedCheckout` | `false` |
 | `--immediate-format` | `format.mode` (`"immediate"`) | `"deferred"` |
 | `--lens-turn-summary` | `turnSummary.enabled` | `false` |
 | `--lens-actionable-warnings` | `actionableWarnings.enabled` | `false` |

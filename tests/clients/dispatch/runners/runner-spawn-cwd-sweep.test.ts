@@ -713,18 +713,13 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runScan's own `cwd` parameter, the directory `trivy fs` is pointed at",
 	],
 ];
-const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
-	[
-		"clients/dispatch/runners/helm-lint.ts#run:833aee95~833aee95",
-		'#2882: helm-lint\'s run() reads `ctx.cwd` directly instead of resolveRunnerCwd(ctx, "helm") — the one runner still bypassing the #2777 seam, and this row retires when that lands',
-	],
-];
+const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [];
 /**
  * The worklist can only shrink. Lower this when a row lands; never raise it —
  * a new non-conforming site belongs in one of the two reasoned tables above,
  * or gets fixed.
  */
-const WORKLIST_CEILING = 1;
+const WORKLIST_CEILING = 0;
 /** See the comment on the `beforeAll` below for where this number comes from. */
 const SCAN_HOOK_TIMEOUT_MS = 30_000;
 
