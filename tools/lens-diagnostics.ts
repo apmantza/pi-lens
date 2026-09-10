@@ -1091,30 +1091,20 @@ function formatDeltaMode(
 		cwd,
 		quality?.generatedAt,
 	);
-	const matchingWarnings = <W extends { severity?: string }>(warnings: W[]) =>
+	const matchingWarnings = <W extends { severity: string }>(warnings: W[]) =>
 		warnings.filter((warning) =>
 			matchesRecordSeverity(warning.severity, severity),
 		);
 	const filteredActionableFiles = actionableFiles
 		.map((file) => ({
 			...file,
-			warnings: matchingWarnings(
-				file.warnings.map((warning) => ({
-					...warning,
-					severity: warning.severity ?? "warning",
-				})),
-			),
+			warnings: matchingWarnings(file.warnings),
 		}))
 		.filter((file) => file.warnings.length > 0);
 	const filteredQualityFiles = qualityFiles
 		.map((file) => ({
 			...file,
-			warnings: matchingWarnings(
-				file.warnings.map((warning) => ({
-					...warning,
-					severity: warning.severity ?? "info",
-				})),
-			),
+			warnings: matchingWarnings(file.warnings),
 		}))
 		.filter((file) => file.warnings.length > 0);
 
@@ -2850,7 +2840,8 @@ async function formatAllMode(
 		if (severity === "error") return s.blocking > 0 || s.errors > 0;
 		// #2414: a "warning" filter must not admit hint/info — that is exactly
 		// the "present hints as warnings" defect this issue exists to close.
-		if (severity === "warning") return s.warnings > 0;
+		if (severity === "warning")
+			return s.blocking > 0 || s.errors > 0 || s.warnings > 0;
 		// severity: "all" — a hint/info-only file (`advisories > 0`,
 		// warnings === 0) must still surface here, or the #2414 fix that stops
 		// hints inflating `warnings` would silently drop that file from the

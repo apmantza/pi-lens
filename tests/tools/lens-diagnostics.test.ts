@@ -325,6 +325,69 @@ describe("lens_diagnostics source and scope routing", () => {
 		}
 	});
 
+	it("keeps an error-only file visible at the warning threshold", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-severity-error-only-"),
+		);
+		const file = path.join(cwd, "error-only.ts");
+		fs.writeFileSync(file, "const errorOnly = 1;\n");
+		mockSummaries.push(
+			sum(
+				file,
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "SESSION-ERROR-ONLY",
+							line: 1,
+						},
+					],
+				},
+			),
+		);
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => [
+				{
+					severity: 1,
+					message: "LSP-ERROR-ONLY",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			]),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const sessionText = String(
+				(await run(makeTool(), { mode: "all", severity: "warning" }, cwd))
+					.content[0].text,
+			);
+			const lspText = String(
+				(
+					await run(
+						makeTool({}, service),
+						{
+							source: "lsp",
+							scope: "paths",
+							paths: [file],
+							severity: "warning",
+						},
+						cwd,
+					)
+				).content[0].text,
+			);
+			expect(sessionText).toContain("SESSION-ERROR-ONLY");
+			expect(lspText).toContain("LSP-ERROR-ONLY");
+		} finally {
+			mockSummaries.length = 0;
+			removeTempDirSync(cwd);
+		}
+	});
+
 	it("routes source=lsp through the real probe implementation", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
 		const file = path.join(cwd, "bad.ts");
@@ -3231,14 +3294,14 @@ describe("lens_diagnostics mode=all", () => {
 		expect(String(result.content[0].text)).toContain("pending");
 	});
 
-	it("severity=warning excludes blocking/error-only files", async () => {
+	it("severity=warning includes blocking/error-only files", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(sum("/proj/a.ts", { blocking: 1 }));
 		mockSummaries.push(sum("/proj/b.ts", { warnings: 2 }));
 		const result = await run(makeTool(), { mode: "all", severity: "warning" });
 		const text = String(result.content[0].text);
 		expect(text).toContain("b.ts");
-		expect(text).not.toContain("a.ts");
+		expect(text).toContain("a.ts");
 	});
 
 	it("severity=all shows all issue types", async () => {
