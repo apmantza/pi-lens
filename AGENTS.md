@@ -826,16 +826,38 @@ not the stall itself. (#1458)
 An auxiliary whose recorded wait reaches at least 90% of its budget for five
 consecutive dispatches is session-demoted from the awaited set. `answered`,
 `cut_off`, and `silent` outcomes count toward the pressure streak when their
-recorded wait reaches 90% of the declared budget. A below-50% wait resets the
-streak. `deferred` outcomes are ignored: they neither count nor reset because
-the server never received the content. A zero-duration deferred placeholder
-therefore cannot erase pressure evidence from real waits.
+recorded wait reaches 90% of the declared budget. Any other wait by those
+outcomes resets the streak — the reset threshold is that SAME 90% ratio, not
+the 50% re-promotion ratio, so an answer anywhere in the 50–90% band resets it
+too (#2810 round 4: the doc said 50% for three rounds while the code reset
+below 90%, and the control test answered at exactly 50% so it could not tell
+the two rules apart). `deferred` outcomes are ignored: they neither count nor
+reset because the server never received the content. A zero-duration deferred
+placeholder therefore cannot erase pressure evidence from real waits.
 Its publication remains collect-later work, and the demotion emits one
 `aux_wait_demoted` degradation per `serverId:normalizedRoot` key. Five
 consecutive late answers below half the budget re-promote that same key and
 emit one `aux_wait_repromoted` degradation. The service reset at session start
 clears both streaks and the demotion set, so a fresh session re-arms every
 auxiliary.
+
+The per-edit coverage notice partitions the gap by DELIVERY PATH, and the
+partition is derived from one fact only: whether the touch marked that pair
+collect-later (`markPendingAuxiliaryCoverage`). A marked scanner — `cut_off`,
+`silent` or `demoted` with no publication for these bytes — reads "deferred —
+diagnostics are incomplete; findings arrive at turn end if the scan lands", and
+the LSP runner reports `deferred` rather than `skipped`. Everything else in the
+gap reads "silent — diagnostics are incomplete (not a clean result)", the
+#1459 resync deferrals included: those never received the content, are never
+marked, and nothing arrives for them. Deriving the promise from any other set
+is the #2810 round-3 defect — it promised late delivery for the one class that
+cannot get it while reporting the class that does get it as an unexplained
+silence. The notice's once-per-session key carries both halves of the
+partition, so a scanner that moves between them is re-noticed instead of
+keeping the first wording it produced. The turn-end late-auxiliary drain
+delivers those findings as its own gated advisory and never writes the
+hash-bound last-known record: a partial touch leaves that cache cold on
+purpose (#1470/#570).
 
 An auxiliary scanner gets at most ONE outstanding `didOpen` resync at a time.
 A `clientScope: "all"` sweep fans a full re-scan at every neighbour inside a few

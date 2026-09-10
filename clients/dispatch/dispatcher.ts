@@ -615,15 +615,6 @@ function buildCoverageNotice(
 		// cwd, so the dedupe key differed by platform and by cwd (the #2219
 		// non-path-sentinel class). The cheap syntactic fold is what this
 		// session-scoped dedupe key actually needs.
-		const silentScannerSet = [...new Set(unconfirmedServerIds)]
-			.map(normalizeEphemeralMapKey)
-			// Code-unit comparator: the sorted set is a dedupe KEY, so ordering
-			// must be deterministic across locales — localeCompare is not.
-			.sort((a, b) => Number(a > b) - Number(a < b))
-			.join(",");
-		const onceKey = `${ctx.kind}:${ctx.filePath}:${silentScannerSet}`;
-		if (coverageNoticeSeen.has(onceKey)) return undefined;
-		coverageNoticeSeen.add(onceKey);
 		const deferredIds = new Set(
 			relevant.flatMap((r) => r.deferredServerIds ?? []),
 		);
@@ -638,10 +629,26 @@ function buildCoverageNotice(
 		const silentServerIds = unconfirmedServerIds.filter(
 			(id) => !deferredIds.has(id),
 		);
+		// Code-unit comparator: the sorted set is a dedupe KEY, so ordering
+		// must be deterministic across locales — localeCompare is not.
+		const dedupeSet = (ids: readonly string[]) =>
+			[...new Set(ids)]
+				.map(normalizeEphemeralMapKey)
+				.sort((a, b) => Number(a > b) - Number(a < b))
+				.join(",");
+		// #2810 round 4: the PARTITION is part of the identity, not just the
+		// scanner set. The same scanner can be silent on one edit and marked for
+		// late delivery on the next; keying on the unconfirmed set alone showed
+		// the session whichever message came first and suppressed the other, so a
+		// scanner that recovered a delivery path (or lost one) kept the stale
+		// wording for the rest of the session.
+		const onceKey = `${ctx.kind}:${ctx.filePath}:${dedupeSet(silentServerIds)}|${dedupeSet(deferredServerIds)}`;
+		if (coverageNoticeSeen.has(onceKey)) return undefined;
+		coverageNoticeSeen.add(onceKey);
 		const coverageParts: string[] = [];
 		if (deferredServerIds.length > 0) {
 			coverageParts.push(
-				`coverage: ${markerFor(deferredServerIds)} deferred — findings will arrive through the late path.`,
+				`coverage: ${markerFor(deferredServerIds)} deferred — diagnostics are incomplete; findings arrive at turn end if the scan lands.`,
 			);
 		}
 		if (silentServerIds.length > 0) {

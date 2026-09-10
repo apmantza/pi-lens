@@ -498,18 +498,18 @@ describe("runner status/semantic edge cases", () => {
 					deferredServerIds: ["typos"],
 				}),
 			);
-			expect((await runner.run(ctx(filePath, env.tmpDir) as never)).status).toBe(
-				"deferred",
-			);
+			expect(
+				(await runner.run(ctx(filePath, env.tmpDir) as never)).status,
+			).toBe("deferred");
 			touchFile.mockResolvedValue(
 				diagsResult([], {
 					confirmation: "partial",
 					unconfirmedServerIds: ["typos"],
 				}),
 			);
-			expect((await runner.run(ctx(filePath, env.tmpDir) as never)).status).toBe(
-				"skipped",
-			);
+			expect(
+				(await runner.run(ctx(filePath, env.tmpDir) as never)).status,
+			).toBe("skipped");
 		} finally {
 			env.cleanup();
 		}

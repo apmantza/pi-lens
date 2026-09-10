@@ -710,51 +710,6 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		resetDegradationLedger();
 	});
 
-	it("keeps late diagnostics merged to the touch hash and preserves a clean record", async () => {
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
-		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
-			serverId: "ts-primary",
-		});
-		const auxiliaryClient = makeClient(100, [makeDiagnostic("auxiliary")], {
-			serverId: "typos",
-		});
-		getServersForFileWithConfig.mockReturnValue([
-			makePrimaryServer("ts-primary"),
-			makeAuxServer("typos"),
-		]);
-		createLSPClient
-			.mockResolvedValueOnce(primaryClient)
-			.mockResolvedValueOnce(auxiliaryClient);
-		await service.getClientsForFile(FILE);
-		const content = "hash-bound";
-		const touch = service.touchFile(FILE, content, {
-			clientScope: "with-auxiliary",
-			auxiliaryServerIds: ["typos"],
-			collectDiagnostics: true,
-			diagnostics: "document",
-		});
-		await vi.advanceTimersByTimeAsync(200);
-		await touch;
-		const hash = hashDiagnosticContent(content);
-		service.primeLastKnownDiagnostics(FILE, hash, "typos", [
-			makeDiagnostic("late auxiliary"),
-		]);
-		const merged = service.getLastKnownDiagnostics(FILE, hash) ?? [];
-		expect(merged.map((diagnostic) => diagnostic.message)).toEqual(
-			expect.arrayContaining(["primary", "late auxiliary"]),
-		);
-		service.primeLastKnownDiagnostics(FILE, hash, "typos", []);
-		expect(service.getLastKnownDiagnostics(FILE, hash)).toEqual(merged);
-		service.primeLastKnownDiagnostics(
-			FILE,
-			hashDiagnosticContent("different content"),
-			"typos",
-			[makeDiagnostic("stale")],
-		);
-		expect(service.getLastKnownDiagnostics(FILE, hash)).toEqual(merged);
-	});
-
 	it("keeps a slow demoted auxiliary demoted until five genuinely fast late answers", async () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
@@ -940,9 +895,8 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
 		try {
 			const { LSPService } = await import("../../../clients/lsp/index.js");
-			const { drainPendingAuxiliaryCoverage } = await import(
-				"../../../clients/lsp/pending-aux-coverage.js"
-			);
+			const { drainPendingAuxiliaryCoverage } =
+				await import("../../../clients/lsp/pending-aux-coverage.js");
 			const service = new LSPService();
 			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
 			getServersForFileWithConfig.mockReturnValue([
@@ -1002,9 +956,8 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
 		try {
 			const { LSPService } = await import("../../../clients/lsp/index.js");
-			const { drainPendingAuxiliaryCoverage } = await import(
-				"../../../clients/lsp/pending-aux-coverage.js"
-			);
+			const { drainPendingAuxiliaryCoverage } =
+				await import("../../../clients/lsp/pending-aux-coverage.js");
 			const service = new LSPService();
 			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
 			getServersForFileWithConfig.mockReturnValue([
@@ -1076,9 +1029,8 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
 		try {
 			const { LSPService } = await import("../../../clients/lsp/index.js");
-			const { drainPendingAuxiliaryCoverage } = await import(
-				"../../../clients/lsp/pending-aux-coverage.js"
-			);
+			const { drainPendingAuxiliaryCoverage } =
+				await import("../../../clients/lsp/pending-aux-coverage.js");
 			const service = new LSPService();
 			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
 			getServersForFileWithConfig.mockReturnValue([

@@ -3732,17 +3732,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						}
 						continue;
 					}
-					if (
-						typeof service.primeLastKnownDiagnostics === "function" &&
-						pair.contentHash !== undefined
-					) {
-						service.primeLastKnownDiagnostics(
-							lateAuxPath,
-							pair.contentHash,
-							pair.serverId,
-							rawDiags,
-						);
-					}
+					// #2810 round 4: this drain does NOT write the hash-bound
+					// last-known record. The prime it used to call could only fire when
+					// a record already existed at the pair's hash — which requires a
+					// FULLY covered touch of those exact bytes, the one case where the
+					// scanner's findings are already in the record — so it was a no-op
+					// in the demoted steady state it was added for, and a #570/#1470
+					// hazard everywhere else (an auxiliary-only array replacing the
+					// merged one). Late findings reach the agent as the gated advisory
+					// below; the turn-end hash-guarded fast path stays cold for a file
+					// whose touch was partial, which is exactly what #1470 requires.
 					const lines = gate.live.map(
 						(f) =>
 							`  ${displayLateAuxPath}:${f.line}:${f.column} [${f.rule}] ${f.message}`,

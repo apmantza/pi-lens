@@ -59,7 +59,6 @@ import {
 } from "../path-utils.js";
 import type {
 	LSPClientInfo,
-	LSPDiagnostic,
 	LSPOperationSupport,
 	LSPPullFailure,
 	LSPShutdownOptions,
@@ -3573,27 +3572,6 @@ export class LSPService {
 		}
 	}
 
-	/** Prime the hash-bound cache after a late publication is delivered. */
-	primeLastKnownDiagnostics(
-		filePath: string,
-		contentHash: string,
-		serverId: string,
-		diagnostics: LSPDiagnostic[],
-	): void {
-		const normalizedKey = normalizeMapKey(filePath);
-		if (diagnostics.length === 0) return;
-		if (this.lastKnownContentHash.get(normalizedKey) !== contentHash) return;
-		const existing = this.lastKnownDiagnostics.get(normalizedKey) ?? [];
-		const retained = existing.filter(
-			(diagnostic) => diagnostic.serverId !== serverId,
-		);
-		const tagged = diagnostics.map((diagnostic) => ({
-			...diagnostic,
-			serverId,
-		}));
-		this.lastKnownDiagnostics.set(normalizedKey, [...retained, ...tagged]);
-	}
-
 	/**
 	 * #1668: deliver a `workspace/didChangeWatchedFiles` event for a disk
 	 * change the client did not author through open-document sync — a bash
@@ -5256,6 +5234,15 @@ export class LSPService {
 			// confirmation; `auxCutOffServerIds` stays cut_off-only so the R8 latency
 			// field keeps its original meaning.
 			let auxUnconfirmedServerIds: string[] | undefined;
+			// #2810: the auxiliaries this touch handed to the collect-later store —
+			// exactly the servers whose findings a turn-end drain can still deliver.
+			// Written by the ONE producer that marks them, from the same array it
+			// marks, so the promise the agent is shown cannot drift from the store.
+			// Round 3 derived the promise from the #1459 resync deferrals instead —
+			// the one set `pending-aux-coverage.ts` never marks — so the notice
+			// promised delivery that could not happen, while the demoted server,
+			// which IS marked, was reported as an unexplained silence on every edit.
+			let lateDeliveryServerIds: string[] | undefined;
 			// #707: tsserver sync clean-confirm state. `tsserverSyncEligible` is the
 			// full gate (evaluated once, before the wait); `tsserverSyncConfirmed`
 			// holds the sync commands' answer when the racing confirm won the wait
@@ -5969,13 +5956,11 @@ export class LSPService {
 									)
 									.map((o) => o.serverId);
 								if (collectLaterServerIds.length > 0) {
+									lateDeliveryServerIds = collectLaterServerIds;
 									markPendingAuxiliaryCoverage(
 										filePath,
 										collectLaterServerIds,
 										Date.now(),
-										undefined,
-										undefined,
-										this.hashContent(content),
 									);
 								}
 								logLatency({
@@ -7011,8 +6996,18 @@ export class LSPService {
 			// fully delivered. Nothing to record here: a skipped server keeps its original
 			// entry (and timestamp) so its window still expires naturally instead of being
 			// extended by every reuse.
-			if (uncoveredDeferredServerIds.length > 0) {
-				result.deferredServerIds = [...uncoveredDeferredServerIds];
+			// #2810: the half of the coverage gap that has a delivery path. Derived
+			// from `unconfirmedServerIds` so the two can never disagree about the
+			// same scanner, and intersected with the marked set so "findings will
+			// arrive through the late path" is said only where a pending pair
+			// exists. Everything else in the gap — a #1459 deferral, a breaker
+			// skip, an ast-grep already covered by its napi fallback — keeps the
+			// honest "silent, diagnostics are incomplete" half.
+			const lateDeliveryPending = unconfirmedServerIds.filter((serverId) =>
+				(lateDeliveryServerIds ?? []).includes(serverId),
+			);
+			if (lateDeliveryPending.length > 0) {
+				result.deferredServerIds = lateDeliveryPending;
 			}
 
 			logLatency({
@@ -7087,8 +7082,13 @@ export class LSPService {
 					...(uncoveredDeferredServerIds.length > 0 && {
 						deferredResyncServerIds: uncoveredDeferredServerIds,
 					}),
-					...(uncoveredDeferredServerIds.length > 0 && {
-						deferredServerIds: [...uncoveredDeferredServerIds],
+					// #2810: the scanners this touch promised late delivery for, so a
+					// field query can join the promise to the pending pair that has to
+					// honour it — and tell it apart from `deferredResyncServerIds`
+					// above, which is the door that opened BEFORE any wait and has no
+					// delivery path at all.
+					...(lateDeliveryPending.length > 0 && {
+						lateDeliveryServerIds: lateDeliveryPending,
 					}),
 					// #1549: auxiliaries whose own deadline lapsed — the wait produced no
 					// publication, or the notify write never landed. Distinct from the fields

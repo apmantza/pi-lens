@@ -168,7 +168,15 @@ export interface TouchFileResult {
 	 * it covered — the same exemption `cut_off` and `silent` get.
 	 */
 	unconfirmedServerIds?: string[];
-	/** Auxiliary findings that are guaranteed to arrive through the late path. */
+	/**
+	 * #2810: the subset of {@link TouchDiagnosticsResult.unconfirmedServerIds}
+	 * this touch handed to the collect-later store, i.e. the only scanners a
+	 * turn-end drain can still deliver findings for (`cut_off`, `silent` or
+	 * `demoted`, each with no publication for these bytes). Deliberately NOT the
+	 * #1459 resync deferrals: those never received the content, are never marked
+	 * collect-later, and nothing arrives for them — they stay in the silent half
+	 * of the coverage notice, which is what says the result is incomplete.
+	 */
 	deferredServerIds?: string[];
 	binding?: DiagnosticBinding;
 }
