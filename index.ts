@@ -1940,7 +1940,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						)?.sessionManager;
 						return {
 							sessionId: sessionManager?.getSessionId?.(),
-							sessionFile: sessionManager?.getSessionFile?.(),
+							sessionFile: getSessionFile(ctx),
 						};
 					} catch {
 						return { sessionId: undefined, sessionFile: undefined };
@@ -3538,9 +3538,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 		const switchesSessionFile =
 			typeof shutdownEvent?.targetSessionFile === "string" &&
 			shutdownEvent.targetSessionFile.length > 0;
-		if (shutdownReason === "quit") {
-			clearRememberedLazyTools(getSessionFile(ctx));
-		}
 		if (
 			switchesSessionFile ||
 			shutdownReason === "quit" ||

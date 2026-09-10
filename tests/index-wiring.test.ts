@@ -1034,6 +1034,54 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
+		// Round 4: `session_shutdown` with reason "quit" performs no
+		// activation-memory mutation — real pi exits on quit, so a clear
+		// there is production-inert. Re-adding one reds this case: the same
+		// file resumes with its posture intact.
+		it("retains remembered posture across a quit shutdown", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-quit-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "cache-quit",
+					sessionFile: path.join(tmp, "quit-session.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, ctx);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					ctx,
+				);
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+
+				await pi.simulateSessionShutdownAndRebuild("quit", ctx);
+
+				// The host rebuilds all-active, as on every replacement; the
+				// same file resumes with its posture intact.
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, ctx);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
 		// #473: the active tool set is process-shared runtime state. A
 		// concurrently-live secondary's session_start must not rewrite it out
 		// from under the still-live primary (last writer would win).

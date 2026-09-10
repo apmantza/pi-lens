@@ -98,6 +98,13 @@ describe("tool-set cache policy", () => {
 	});
 
 	it("does not create process-restart state without a session-file write", () => {
+		// Clearing an unknown file must not plant state a restart could read
+		// back, and clearing a written file must drop it through the real
+		// store. Mutation G (clear neutered to a no-op) leaves the written
+		// entry behind and reds the second assertion.
+		clearRememberedLazyTools("policy-restart-unknown");
+		expect([...getRememberedLazyTools("policy-restart-unknown")]).toEqual([]);
+		rememberLazyTools("policy-restart", ["ast_grep_search"]);
 		clearRememberedLazyTools("policy-restart");
 		expect([...getRememberedLazyTools("policy-restart")]).toEqual([]);
 	});
