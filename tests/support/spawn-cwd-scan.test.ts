@@ -1585,3 +1585,27 @@ async function run(ctx) {
 		]);
 	});
 });
+
+describe("node:child_process is a site only when the file imports it", () => {
+	it("a method named `spawn` on some object is not a child spawn", async () => {
+		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
+		// an LSP server definition's own method. Matching `spawn` by simple name
+		// made that a phantom site the moment the population filter and the
+		// scanner's name list were reconciled (round-5 v4-N3).
+		const source = `${SEAM}
+async function run(ctx, server) {
+	await server.spawn(ctx.cwd, { allowInstall: true });
+}`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.sites).toEqual([]);
+	});
+
+	it("an unaliased `node:child_process` import makes it one", async () => {
+		const source = `import { spawn } from "node:child_process";
+${SEAM}
+async function run(ctx) {
+	spawn("tool", [], { cwd: ctx.cwd });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+});
