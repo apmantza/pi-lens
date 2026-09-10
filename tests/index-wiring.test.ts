@@ -26,7 +26,8 @@ const handlerCrashInjection = vi.hoisted(() => ({
 		| "observed_settled_sweep"
 		| "observed_ledger_refresh"
 		| "deferred_mutation_drain"
-		| "quiet_window",
+		| "quiet_window"
+		| "message_end",
 }));
 
 vi.mock("../tools/activate-tools.js", async (importOriginal) => {
@@ -79,6 +80,11 @@ vi.mock("../clients/cache-observability.js", async (importOriginal) => {
 		recordToolResultDelivery: (args: { bytes: number; truncated: boolean }) => {
 			deliveryObservations.rows.push(args);
 			actual.recordToolResultDelivery(args);
+		},
+		logCacheUsage: (...args: Parameters<typeof actual.logCacheUsage>) => {
+			if (handlerCrashInjection.site === "message_end")
+				throw new Error("probe: message_end boom");
+			return actual.logCacheUsage(...args);
 		},
 	};
 });
@@ -1577,6 +1583,21 @@ describe("hook handler crash surfacing (#2884)", () => {
 		).rejects.toThrow("probe: te boom");
 
 		expectCrashRecorded("turn_end");
+	});
+
+	it("surfaces a crashed message_end under the test runner and records it", async () => {
+		// The ninth member, found by this PR's class sweep and absent from the
+		// issue's table: its catch says `handler error`, not `… crashed`, so the
+		// issue's grep never saw it.
+		handlerCrashInjection.site = "message_end";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("message_end", { message: {} }, makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: message_end boom");
+
+		expectCrashRecorded("message_end");
 	});
 
 	it("surfaces a crashed quiet_window under the test runner as an unhandled rejection", async () => {

@@ -3570,10 +3570,17 @@ function activateExtension(hostPi: ExtensionAPI) {
 					incrementDegradationCount(degradation);
 				}
 			} catch (err) {
-				dbg(`message_end handler error: ${err}`);
+				// #2884 class sweep: the ninth member. The issue's grep looked for
+				// `… crashed: ` and this one says `handler error`, so it was not in
+				// the table — same shape, same fix.
+				surfaceHandlerCrash("message_end", err, { dbg });
 			}
 		});
 	} catch (err) {
+		// NOT the same class: this catch guards the `pi.on` REGISTRATION against
+		// an older host that has no `message_end` event, so it must keep
+		// swallowing under the runner too — a host-capability probe is not a
+		// handler crash. Same for the `agent_settled` registration above.
 		dbg(`message_end subscribe failed (older pi host?): ${err}`);
 	}
 

@@ -3522,11 +3522,20 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			const { default: registerExtension } = await import("../index.js");
 			const primary = createMockPi();
 			registerExtension(primary.pi as any);
-			await primary.trigger(
-				"message_end",
-				{ message: { role: "assistant", usage: { input: 1, output: 1 } } },
-				makeStaleCtx(),
-			);
+			// The subject is the ORDER: the provider's token/cost row is written
+			// before the best-effort ledger count, so a dead ledger cannot cost a
+			// real usage record. #2884 additionally makes the ledger's throw
+			// visible under the runner — production still swallows it (proved by
+			// `keeps swallowing a crashed turn_end off the test runner, with one
+			// bounded record` in tests/index-wiring.test.ts), and this handler
+			// still must not lose the row on the way.
+			await expect(
+				primary.trigger(
+					"message_end",
+					{ message: { role: "assistant", usage: { input: 1, output: 1 } } },
+					makeStaleCtx(),
+				),
+			).rejects.toThrow("ledger unavailable");
 			expect(logCacheUsage).toHaveBeenCalledOnce();
 		},
 		INTEGRATION_TIMEOUT_MS,
