@@ -31,7 +31,13 @@ vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	logLatency,
 }));
 
-vi.mock("../../../clients/lsp/config.js", () => ({
+// importActual spread: the #2776 test loads the REAL tools/lens-diagnostics.js,
+// whose config.js import surface grows over time — a closed factory breaks on
+// every added export (resolveLspCwdForFile, #2777). The bare spread is also
+// the spelling the #2281 detector recognizes as pass-through, so this mock
+// needs no baseline admission. The overrides below stay explicit.
+vi.mock("../../../clients/lsp/config.js", async (importActual) => ({
+	...(await importActual()),
 	getServersForFileWithConfig,
 	primaryServerId: vi.fn(() => "ts-primary"),
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),

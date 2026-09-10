@@ -297,6 +297,52 @@ describe("lens_diagnostics schema", () => {
 // ── delta mode ────────────────────────────────────────────────────────────────
 
 describe("lens_diagnostics mode=delta", () => {
+	it("projects the resolved LSP cwd onto every diagnostic row (#2777)", async () => {
+		mockSummaries.push({
+			filePath: "/proj/src/a.ts",
+			blocking: 1,
+			errors: 1,
+			warnings: 0,
+			advisories: 0,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", semantic: "blocking", message: "boom", line: 3 },
+			],
+		});
+
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("cwd=/proj");
+	});
+
+	it("uses the server-owned cwd for the rendered row", async () => {
+		// #2846: the renderer must not independently rediscover a marker root.
+		const { LSP_SERVERS } = await import("../../clients/lsp/server.js");
+		const server = LSP_SERVERS.find((entry) => entry.id === "typescript");
+		if (!server) throw new Error("typescript server missing from registry");
+		const originalRoot = server.root;
+		server.root = async () => "/proj/server-owned-root";
+		mockSummaries.push({
+			filePath: "/proj/src/a.ts",
+			blocking: 1,
+			errors: 1,
+			warnings: 0,
+			advisories: 0,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", semantic: "blocking", message: "boom", line: 3 },
+			],
+		});
+		try {
+			const result = await run(makeTool(), { mode: "all" });
+			expect(String(result.content[0].text)).toContain(
+				"cwd=/proj/server-owned-root",
+			);
+		} finally {
+			server.root = originalRoot;
+		}
+	});
+
 	it("returns clean message when caches are empty", async () => {
 		const result = await run(makeTool());
 		expect(String(result.content[0].text)).toContain("No");
@@ -2383,6 +2429,86 @@ describe("lens_diagnostics mode=all", () => {
 		mockSummaries.length = 0;
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("No files diagnosed");
+	});
+
+	it("omits the cwd term for a file with no primary LSP server (#2777 N1)", async () => {
+		// `.txt` has no primary LSP server, so `projectResolvedCwd` leaves
+		// `resolvedCwd` unset. Pre-fix the row rendered the literal
+		// `cwd=undefined`; the term must be absent from the row instead.
+		mockSummaries.push({
+			filePath: "/proj/notes.txt",
+			blocking: 1,
+			errors: 1,
+			warnings: 0,
+			advisories: 0,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", semantic: "blocking", message: "boom", line: 1 },
+			],
+		});
+
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("notes.txt");
+		expect(text).toContain("🔴 1 blocking");
+		expect(text).not.toContain("cwd=undefined");
+	});
+
+	it("resolveLspCwdForFile splits primary-server files from non-LSP files (#2777 O1)", async () => {
+		// The O1 seam folds primaryServerId + getServersForFileWithConfig +
+		// resolveLspServerCwd into one call whose absent case is `undefined` —
+		// the shape that makes the N1 render guard structurally sound. The
+		// typescript server's FileDirRoot fallback makes the positive side
+		// deterministic even for a virtual path.
+		const { resolveLspCwdForFile } =
+			await import("../../clients/lsp/config.js");
+		expect(
+			await resolveLspCwdForFile("/proj/notes.txt", "/proj"),
+		).toBeUndefined();
+		expect(await resolveLspCwdForFile("/proj/src/a.ts", "/proj")).toBe(
+			"/proj/src",
+		);
+	});
+
+	it("resolves the primary-server cwd only for rendered rows (#2777 O2)", async () => {
+		// O2 moved the projection below the withIssues filter: a summary with
+		// nothing to render must not pay the root resolution. The `.txt` row
+		// has no findings at all (dropped by withIssues), the `.ts` row
+		// renders — so the seam is called exactly once, for the rendered file.
+		// Pre-O2 the projection ran over every summary and the count was 2.
+		const config = await import("../../clients/lsp/config.js");
+		const seamSpy = vi.spyOn(config, "resolveLspCwdForFile");
+		try {
+			mockSummaries.push({
+				filePath: "/proj/src/a.ts",
+				blocking: 1,
+				errors: 1,
+				warnings: 0,
+				advisories: 0,
+				hasFinalSnapshot: true,
+				diagnostics: [
+					{ severity: "error", semantic: "blocking", message: "boom", line: 1 },
+				],
+			});
+			mockSummaries.push({
+				filePath: "/proj/empty.txt",
+				blocking: 0,
+				errors: 0,
+				warnings: 0,
+				advisories: 0,
+				hasFinalSnapshot: true,
+				diagnostics: [],
+			});
+
+			const result = await run(makeTool(), { mode: "all" });
+			const text = String(result.content[0].text);
+			expect(text).toContain("src/a.ts");
+			expect(text).not.toContain("empty.txt");
+			expect(seamSpy).toHaveBeenCalledTimes(1);
+			expect(seamSpy.mock.calls[0]?.[0]).toBe("/proj/src/a.ts");
+		} finally {
+			seamSpy.mockRestore();
+		}
 	});
 
 	it("reports clean after a same-file backslash reconcile clears a forward-slash blocker (#1020)", async () => {

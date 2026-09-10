@@ -2,6 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LANGUAGES } from "../../clients/language-registry.js";
+import {
+	LSP_SERVERS,
+	resolveLspServerCwd,
+	type LSPServerInfo,
+} from "../../clients/lsp/server.js";
+import { LSPService } from "../../clients/lsp/index.js";
 
 let home: string;
 let toolCwd: typeof import("../../clients/tool-cwd.js");
@@ -100,6 +107,146 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("lsp", "custom", file, { cwd: project }),
 		).toBe(project);
+	});
+
+	it("preserves every registry language root through the shared seam", async () => {
+		const project = path.join(process.cwd(), ".probe-language-roots");
+		fs.rmSync(project, { recursive: true, force: true });
+		// #2846 H1: a workspace-priority wrapper must retain its marker metadata;
+		// otherwise Go silently falls back from a nested go.mod to the dispatch cwd.
+		const goServer = LSP_SERVERS.find((entry) => entry.id === "go");
+		expect(goServer?.root.rootMarkers).toEqual(
+			expect.arrayContaining(["go.mod"]),
+		);
+		const languageServers = LANGUAGES.map((language) => {
+			const serverId = language.lspId ?? language.id;
+			const server = LSP_SERVERS.find((entry) => entry.id === serverId);
+			return { language, server };
+		}).filter(
+			(
+				entry,
+			): entry is {
+				language: (typeof LANGUAGES)[number];
+				server: LSPServerInfo;
+			} => Boolean(entry.server?.root.rootMarkers?.length),
+		);
+		const table: string[] = [];
+
+		for (const { language, server } of languageServers) {
+			const nested = path.join(project, "packages", language.id);
+			const file = path.join(nested, "src", `main${language.extensions[0]}`);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			for (const marker of server.root.rootMarkers ?? []) {
+				const markerName = marker.replaceAll("*", "project");
+				const markerPath = path.join(nested, markerName);
+				fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+				fs.writeFileSync(markerPath, "");
+			}
+			const before = await server.root(file);
+			const after = await resolveLspServerCwd(server, file, project);
+			table.push(`${language.id}: ${before} === ${after}`);
+			expect(after, table.at(-1)).toBe(before);
+		}
+		console.log(table.join("\n"));
+		fs.rmSync(project, { recursive: true, force: true });
+	});
+
+	it("routes built-in language marker tables through the same seam", () => {
+		const project = path.join(home, "repo");
+		const python = path.join(project, "packages", "py", "src", "main.py");
+		const typescript = path.join(project, "packages", "ts", "src", "main.ts");
+		const ruby = path.join(project, "packages", "rb", "src", "main.rb");
+		fs.mkdirSync(path.dirname(python), { recursive: true });
+		fs.mkdirSync(path.dirname(typescript), { recursive: true });
+		fs.mkdirSync(path.dirname(ruby), { recursive: true });
+		fs.writeFileSync(path.join(project, "pyproject.toml"), "[tool.pyright]\n");
+		fs.writeFileSync(path.join(project, "package.json"), "{}\n");
+		fs.writeFileSync(
+			path.join(project, "Gemfile"),
+			'source "https://rubygems.org"\n',
+		);
+
+		for (const [id, file, expected] of [
+			["python", python, project],
+			["typescript", typescript, project],
+			["ruby", ruby, project],
+		] as const) {
+			const server = LSP_SERVERS.find((entry) => entry.id === id);
+			expect(server?.root.rootMarkers).toBeDefined();
+			expect(
+				toolCwd.resolveToolCwd("lsp", id, file, {
+					cwd: project,
+					rootMarkers: server?.root.rootMarkers,
+				}),
+			).toBe(expected);
+		}
+	});
+
+	it("uses the file directory for a built-in server with no marker", async () => {
+		const project = path.join(home, "repo");
+		const file = path.join(project, "nested", "src", "main.py");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const server = LSP_SERVERS.find((entry) => entry.id === "python");
+		if (!server) throw new Error("python server missing from registry");
+		const service = new LSPService(undefined, project);
+		const resolveRoot = (
+			service as unknown as {
+				resolveServerRoot(server: LSPServerInfo, file: string): Promise<string>;
+			}
+		).resolveServerRoot.bind(service);
+		expect(await resolveRoot(server, file)).toBe(path.dirname(file));
+	});
+
+	it("keeps a markerless server-computed root at the LSP seam", async () => {
+		const project = path.join(home, "repo");
+		const file = path.join(project, "packages", "app", "src", "main.ts");
+		const computedRoot = path.join(project, "server-owned-root");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const server: LSPServerInfo = {
+			id: "markerless-test-server",
+			name: "Markerless test server",
+			extensions: [".ts"],
+			root: async () => computedRoot,
+			spawn: vi.fn(),
+		};
+
+		expect(await resolveLspServerCwd(server, file, project)).toBe(computedRoot);
+	});
+
+	it("coalesces throwing and undefined server roots into one bounded fallback", async () => {
+		// #2846: a root failure must not abort selection or emit one row per touch.
+		vi.resetModules();
+		const { resolveLspServerCwd: freshResolve } =
+			await import("../../clients/lsp/server.js");
+		const freshLedger = await import("../../clients/degradation-ledger.js");
+		freshLedger.resetDegradationLedger();
+		const project = path.join(home, "repo");
+		const file = path.join(project, "src", "main.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		let calls = 0;
+		const server: LSPServerInfo = {
+			id: "failing-root-test-server",
+			name: "Failing root test server",
+			extensions: [".ts"],
+			root: async () => {
+				calls++;
+				if (calls === 1) throw new Error("root probe failed");
+				return undefined;
+			},
+			rootMarkers: ["missing.marker"],
+			spawn: vi.fn(),
+		};
+
+		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
+		expect(await freshResolve(server, file, project)).toBe(path.dirname(file));
+		// The summary groups per kind, so a `.filter(kind === …)` length can
+		// never exceed 1 — that guard stayed green if the once-latch were
+		// dropped and the record became an increment. Pin the group's exact
+		// event count instead: two resolutions, one user-visible degradation.
+		const group = freshLedger
+			.getDegradationSummary()
+			.find((entry) => entry.kind === "tool-cwd-resolution");
+		expect(group?.count).toBe(1);
 	});
 
 	it("matches glob root markers against files in the directory", () => {

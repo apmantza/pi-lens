@@ -2227,8 +2227,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// and its per-server root resolution. This remains an intentionally
 	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
 	// service dependencies; the scheduler itself bounds each recovery pass.
+	// #2777: root resolution now honors a server-computed root, so the seam is
+	// async. clients/lsp/index.ts stays at 158 (resolveServerRoot swapped one
+	// await for another); clients/lsp/server.ts went 111 -> 112 for the new
+	// `await server.root` inside resolveLspServerCwd. Neither number is the
+	// old bare probe being removed.
 	"clients/lsp/index.ts": 158,
-	"clients/lsp/server.ts": 111,
+	"clients/lsp/server.ts": 112,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	"clients/opaque-mutation-scan.ts": 10,
@@ -2268,7 +2273,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"tools/ast-grep-search.ts": 6,
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
-	"tools/lens-diagnostics.ts": 10,
+	// #2846: one server-root await is required to project the authoritative
+	// server cwd; the hook helper remains bounded by the tool call lifecycle.
+	"tools/lens-diagnostics.ts": 13,
 	// #2598 lowered both by one: `collectDiagnosticsForFile` and
 	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
 	// arm — the fallback for "a service shape without touchFile", which the

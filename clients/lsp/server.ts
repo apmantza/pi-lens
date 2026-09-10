@@ -61,6 +61,8 @@ import { logSessionStart } from "../sessionstart-logger.js";
 import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
 import { findLocalTyposConfig } from "../typos-config.js";
 import { resolvePackagePath } from "../package-root.js";
+import { resolveToolCwd } from "../tool-cwd.js";
+import { recordDegradationOnce } from "../degradation-ledger.js";
 import {
 	hasCargoWorkspaceTable,
 	readCargoWorkspaceExclude,
@@ -86,7 +88,65 @@ import {
 
 // --- Types ---
 
-export type RootFunction = (file: string) => Promise<string | undefined>;
+export type RootFunction = ((file: string) => Promise<string | undefined>) & {
+	/** Marker table projected into the shared tool-cwd resolver. */
+	rootMarkers?: readonly string[];
+};
+
+function withRootMarkers(
+	root: RootFunction,
+	markers: readonly string[],
+): RootFunction {
+	root.rootMarkers = markers;
+	return root;
+}
+
+/** Resolve a server identity cwd through the shared tool-cwd seam. */
+export async function resolveLspServerCwd(
+	server: Pick<LSPServerInfo, "id" | "root" | "rootMarkers">,
+	filePath: string,
+	sessionCwd: string,
+	onRootFailure?: (reason: string) => void,
+): Promise<string | undefined> {
+	const rootMarkers = server.rootMarkers ?? server.root.rootMarkers;
+	let serverRoot: string | undefined;
+	let rootFailed = false;
+	try {
+		serverRoot = await server.root(filePath);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		rootFailed = true;
+		onRootFailure?.(reason);
+	}
+	const isFileDirFallback =
+		serverRoot !== undefined &&
+		rootMarkers?.length &&
+		path.resolve(serverRoot) === path.resolve(path.dirname(filePath));
+	if (!serverRoot || isFileDirFallback) {
+		if (!serverRoot) {
+			recordDegradationOnce({
+				kind: "tool-cwd-resolution",
+				subject: server.id,
+				reason: `lsp:server-root-${rootFailed ? "failed" : "fallback"}:${filePath}`,
+			});
+		}
+		if (!rootMarkers?.length) return undefined;
+		return resolveToolCwd("lsp", server.id, filePath, {
+			cwd: path.dirname(path.resolve(filePath)),
+			rootMarkers,
+		});
+	}
+	const boundedServerRoot = enforceLspRootCeiling(
+		serverRoot,
+		sessionCwd,
+		filePath,
+	);
+	return resolveToolCwd("lsp", server.id, filePath, {
+		cwd: sessionCwd,
+		rootMarkers,
+		serverRoot: boundedServerRoot,
+	});
+}
 
 const FIXTURE_ROOT_SEGMENTS = new Set(["__fixtures__", "testdata"]);
 const FALLBACK_PROJECT_MARKERS = [
@@ -340,6 +400,8 @@ export interface LSPServerInfo {
 	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
 	custom?: boolean;
 	root: RootFunction;
+	/** Marker table used by the shared LSP cwd/root seam. */
+	rootMarkers?: readonly string[];
 	/**
 	 * "language" (default) = the file's primary language server (one is chosen per
 	 * file). "auxiliary" = a cross-cutting, diagnostic-only server (security,
@@ -1219,11 +1281,11 @@ function normalizeRootKey(root: string): string {
 
 function IgnoreHomeRoot(primary: RootFunction): RootFunction {
 	const homeKey = normalizeRootKey(os.homedir());
-	return async (file: string): Promise<string | undefined> => {
+	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const root = await primary(file);
 		if (!root) return undefined;
 		return normalizeRootKey(root) === homeKey ? undefined : root;
-	};
+	}, primary.rootMarkers ?? []);
 }
 
 function rubyBinCandidates(baseName: string): string[] {
@@ -1293,6 +1355,7 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 		name: spec.name,
 		extensions: spec.extensions,
 		root: spec.root,
+		rootMarkers: spec.root.rootMarkers,
 		fallbackFor: spec.fallbackFor,
 		availabilityKey:
 			typeof spec.command === "string" && isSimpleCommand(spec.command)
@@ -1344,13 +1407,13 @@ export function PriorityRoot(
 	const resolvers = markerGroups.map((markers) =>
 		NearestRoot(markers, excludePatterns, stopDir),
 	);
-	return async (file: string) => {
+	return withRootMarkers(async (file: string) => {
 		for (const resolve of resolvers) {
 			const root = await resolve(file);
 			if (root) return root;
 		}
 		return undefined;
-	};
+	}, markerGroups.flat());
 }
 
 export const FileDirRoot: RootFunction = async (file: string) => {
@@ -1362,19 +1425,22 @@ export function RootWithFallback(
 	primary: RootFunction,
 	fallback: RootFunction = FileDirRoot,
 ): RootFunction {
-	return async (file: string): Promise<string | undefined> => {
+	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const primaryRoot = await primary(file);
 		if (primaryRoot) return primaryRoot;
 		return fallback(file);
-	};
+	}, primary.rootMarkers ?? []);
 }
 
 export function WorkspacePriorityRoot(
 	markerGroups: string[][],
 	excludePatterns?: string[],
 ): RootFunction {
-	return async (file: string) =>
-		PriorityRoot(markerGroups, excludePatterns, process.cwd())(file);
+	return withRootMarkers(
+		async (file: string) =>
+			PriorityRoot(markerGroups, excludePatterns, process.cwd())(file),
+		markerGroups.flat(),
+	);
 }
 
 function isPermissionFsError(err: unknown): boolean {
@@ -1457,7 +1523,7 @@ export function NearestRoot(
 	// walk with stopDir for in-cwd files is the tracked optimization (#1412).
 	const inFlight = new Map<string, Promise<string | undefined>>();
 
-	return async (file: string): Promise<string | undefined> => {
+	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		// Cache key is the resolved directory — all files in the same dir share a root.
 		const startDir = path.resolve(path.dirname(file));
 		const dirKey = normalizeMapKey(startDir);
@@ -1506,6 +1572,7 @@ export function NearestRoot(
 				for (const pattern of includePatterns) {
 					if (
 						(await markerExists(currentDir, pattern)) &&
+						(pattern !== ".git" || currentDir !== os.tmpdir()) &&
 						!(await isExcludedLspRoot(currentDir))
 					) {
 						return enforceLspRootCeiling(currentDir, process.cwd(), file);
@@ -1530,7 +1597,7 @@ export function NearestRoot(
 		} finally {
 			inFlight.delete(dirKey);
 		}
-	};
+	}, includePatterns);
 }
 
 /** Alias kept for backward compatibility */
@@ -2131,29 +2198,32 @@ async function hasAgentLevelProjectMarker(
 	return false;
 }
 
-const TypeScriptRoot: RootFunction = DenoExcludeRoot(async (file) => {
-	const extensionRootKey = piAgentExtensionsRootKey(file);
-	if (extensionRootKey) {
-		// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
-		// LSP root.
-		const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
-		if (bounded) return bounded;
-		// No marker inside the extension boundary. If pi itself has a
-		// package.json at ~/.pi/agent/ (the #123 setup), the previous code
-		// returned undefined and the LSP silently failed to start. Fall
-		// back to a per-file scope so the LSP at least runs.
-		if (await hasAgentLevelProjectMarker(extensionRootKey)) {
-			return FileDirRoot(file);
+const TypeScriptRoot: RootFunction = withRootMarkers(
+	DenoExcludeRoot(async (file) => {
+		const extensionRootKey = piAgentExtensionsRootKey(file);
+		if (extensionRootKey) {
+			// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
+			// LSP root.
+			const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
+			if (bounded) return bounded;
+			// No marker inside the extension boundary. If pi itself has a
+			// package.json at ~/.pi/agent/ (the #123 setup), the previous code
+			// returned undefined and the LSP silently failed to start. Fall
+			// back to a per-file scope so the LSP at least runs.
+			if (await hasAgentLevelProjectMarker(extensionRootKey)) {
+				return FileDirRoot(file);
+			}
+			// Truly loose extension file with no project context anywhere
+			// relevant — preserve the existing skip behavior (LSP shouldn't
+			// analyze a lone .ts file with no package.json above or below).
+			return undefined;
 		}
-		// Truly loose extension file with no project context anywhere
-		// relevant — preserve the existing skip behavior (LSP shouldn't
-		// analyze a lone .ts file with no package.json above or below).
-		return undefined;
-	}
-	const projectRoot = await findTypeScriptProjectRoot(file);
-	if (projectRoot) return projectRoot;
-	return FileDirRoot(file);
-});
+		const projectRoot = await findTypeScriptProjectRoot(file);
+		if (projectRoot) return projectRoot;
+		return FileDirRoot(file);
+	}),
+	[...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS],
+);
 
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
@@ -2161,6 +2231,7 @@ export const TypeScriptServer: LSPServerInfo = {
 	extensions: JS_TS_LSP_EXTENSIONS,
 	autoPropagateDiagnostics: true,
 	root: TypeScriptRoot,
+	rootMarkers: TypeScriptRoot.rootMarkers,
 	async spawn(root, options) {
 		const fs = await import("node:fs/promises");
 		const nativeLsp = await findNativeTypeScriptLsp(root);
@@ -2542,7 +2613,7 @@ function sessionHoistCeiling(
 
 function RustWorkspaceRoot(): RootFunction {
 	const crateRoot = createRootDetector(["Cargo.toml", "Cargo.lock"]);
-	return async (file: string): Promise<string | undefined> => {
+	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const root = await crateRoot(file);
 		if (!root) return undefined;
 
@@ -2582,7 +2653,7 @@ function RustWorkspaceRoot(): RootFunction {
 			current = parent;
 		}
 		return root;
-	};
+	}, crateRoot.rootMarkers ?? []);
 }
 
 /**
@@ -2642,7 +2713,7 @@ function JavaWorkspaceRoot(): RootFunction {
 		"build.gradle",
 		".classpath",
 	]);
-	return async (file: string): Promise<string | undefined> => {
+	return withRootMarkers(async (file: string): Promise<string | undefined> => {
 		const root = await moduleRoot(file);
 		if (!root) return undefined;
 		// Only a Maven (pom.xml) module chain-hoists here — Gradle/.classpath module
@@ -2679,7 +2750,7 @@ function JavaWorkspaceRoot(): RootFunction {
 			current = parent;
 		}
 		return enforceLspRootCeiling(lastHop, sessionCwd, file);
-	};
+	}, moduleRoot.rootMarkers ?? []);
 }
 
 export const RustServer: LSPServerInfo = {

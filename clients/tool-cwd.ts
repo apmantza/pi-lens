@@ -6,6 +6,7 @@ import {
 	isRealGitMarker,
 	isAtOrAboveHomeDir,
 	isUnderDir,
+	isWindowsPath,
 	nameMatchesMarkerGlob,
 	normalizeEphemeralMapKey,
 } from "./path-utils.js";
@@ -23,6 +24,8 @@ export type ToolCwdKind = "runner" | "formatter" | "lsp";
 export interface ToolCwdContext {
 	cwd?: string;
 	rootMarkers?: readonly string[];
+	/** Root already computed by a caller-owned resolver. */
+	serverRoot?: string;
 	homeDir?: string;
 	/** Legacy config-carriage callers may inspect the home-level config itself. */
 	allowHomeMarker?: boolean;
@@ -268,6 +271,13 @@ export function resolveToolCwd(
 	const fileDir = path.dirname(absoluteFile);
 	const homeDir = ctx.homeDir ?? os.homedir();
 	const insideDispatch = isUnderDir(absoluteFile, dispatchRoot);
+	if (ctx.serverRoot) {
+		const rootPath = isWindowsPath(ctx.serverRoot) ? path.win32 : path;
+		const serverRoot = rootPath.resolve(ctx.serverRoot);
+		if (!ctx.suppressTelemetry)
+			emitResolution(kind, tool, serverRoot, "server-root");
+		return serverRoot;
+	}
 	const markers = markersFor(kind, tool, ctx);
 	const markerResult = markers.length
 		? findMarkerRoot(

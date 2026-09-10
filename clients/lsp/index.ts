@@ -104,6 +104,7 @@ import {
 	isDirectLspCommandTemporarilyUnavailable,
 	resetClassicTsRepairGuard,
 	resetLspLaunchAvailabilityGeneration,
+	resolveLspServerCwd,
 } from "./server.js";
 import {
 	classifyCascadeWaitTier,
@@ -1530,8 +1531,14 @@ export class LSPService {
 	private async resolveServerRoot(
 		server: LSPServerInfo,
 		filePath: string,
+		onRootFailure?: (reason: string) => void,
 	): Promise<string | undefined> {
-		const candidate = await server.root(filePath);
+		const candidate = await resolveLspServerCwd(
+			server,
+			filePath,
+			this.sessionCwd ?? process.cwd(),
+			onRootFailure,
+		);
 		if (!candidate) return undefined;
 		// #2052: a file outside EVERY initialized session cwd gets no client at
 		// all. The ceiling below is unchanged (`process.cwd()`, as before this
@@ -2877,6 +2884,7 @@ export class LSPService {
 		}> => {
 			const resolved = await Promise.all(
 				servers.map(async (server) => {
+					let rootFailureReason: string | undefined;
 					try {
 						return {
 							server,
@@ -2884,8 +2892,11 @@ export class LSPService {
 								server,
 								filePath,
 								rootMemo,
+								(reason) => {
+									rootFailureReason = reason;
+								},
 							),
-							reason: undefined as string | undefined,
+							reason: rootFailureReason,
 						};
 					} catch (error) {
 						return {
@@ -3752,11 +3763,12 @@ export class LSPService {
 		server: LSPServerInfo,
 		filePath: string,
 		memo?: Map<string, Promise<string | undefined>>,
+		onRootFailure?: (reason: string) => void,
 	): Promise<string | undefined> {
-		if (!memo) return this.resolveServerRoot(server, filePath);
+		if (!memo) return this.resolveServerRoot(server, filePath, onRootFailure);
 		const pending = memo.get(server.id);
 		if (pending !== undefined) return pending;
-		const started = this.resolveServerRoot(server, filePath);
+		const started = this.resolveServerRoot(server, filePath, onRootFailure);
 		memo.set(server.id, started);
 		return started;
 	}
