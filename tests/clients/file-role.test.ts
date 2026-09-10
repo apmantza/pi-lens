@@ -62,11 +62,12 @@ describe("detectFileRole", () => {
 		expect(detectFileRole("/home/dev/project/src/foo.ts")).toBe("source");
 	});
 
-	// Refs #2880: every test-file convention the test-runner client already
-	// dispatches on (SOURCE_TO_TEST_PATTERNS + RUNNERS kinds in
-	// clients/test-runner-client.ts) must classify as "test" here, or an
-	// edited test file takes the related-discovery path and runs the wrong
-	// tests or none. Each row pairs the convention with a co-located
+	// Refs #2880: hand-written pins for the test-file conventions the
+	// test-runner client dispatches on (informed by SOURCE_TO_TEST_PATTERNS
+	// + RUNNERS kinds in clients/test-runner-client.ts, not iterated from
+	// them — see #2928 for the single-classifier fold). A convention
+	// missing here lets an edited test file take the related-discovery
+	// path and run the wrong tests or none. Each row pairs the convention with a co-located
 	// source file the same convention must NOT claim, so a row proves its
 	// own name rule rather than a test-directory rule. The `_test.go` row
 	// is the reported defect: pre-fix it classified as "source" and

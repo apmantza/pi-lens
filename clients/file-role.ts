@@ -87,9 +87,10 @@ export function detectFileRole(filePath: string, content?: string): FileRole {
 		.toLowerCase();
 
 	// --- Test ---
-	// Suffix conventions are derived from the test-runner client's own
-	// knowledge (SOURCE_TO_TEST_PATTERNS + RUNNERS kinds in
-	// clients/test-runner-client.ts), never a hand-written list:
+	// Suffix conventions informed by the test-runner table
+	// (SOURCE_TO_TEST_PATTERNS + RUNNERS kinds in
+	// clients/test-runner-client.ts); hand-written, not iterated from it —
+	// see #2928 for the single-classifier fold:
 	// - `_test.` infix: Go (`*_test.go`), pytest (`*_test.py`), ExUnit
 	//   (`*_test.exs`), Dart (`*_test.dart`). The underscore anchor keeps
 	//   this precise: `contest.py` and `latest.ts` do not match.
