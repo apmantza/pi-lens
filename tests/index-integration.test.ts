@@ -4,7 +4,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
-import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
+import {
+	createPiMock,
+	makeCtx,
+	makeStaleCtx,
+	runSessionStartWithBudget,
+} from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 // #2146: process-scope state (the primary-session registration, the instance
@@ -67,7 +72,11 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
 			for (const handler of mock.getHandlers(event)) {
-				results.push(await handler(ev, ctx));
+				results.push(
+					event === "session_start"
+						? await runSessionStartWithBudget(() => handler(ev, ctx))
+						: await handler(ev, ctx),
+				);
 			}
 			return results;
 		},
@@ -76,6 +85,7 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 
 // Mock read-guard for integration tests to avoid dynamic require issues
 vi.mock("../clients/read-guard.js", () => ({
+	lineContentHash: (line: string) => `mock:${line}`,
 	ReadGuard: class MockReadGuard {
 		isNewFile() {
 			return false;
@@ -223,6 +233,8 @@ describe("index.ts integration", () => {
 			expect(handleSessionStartMock).toHaveBeenCalledTimes(1);
 			expect(ensureToolMock).toHaveBeenCalledWith("typescript-language-server");
 			expect(resetTurnContextMock).toHaveBeenCalledTimes(1);
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/installer/index.js");
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -324,9 +336,9 @@ describe("index.ts integration", () => {
 		INTEGRATION_TIMEOUT_MS,
 	);
 
-	it(
-		"real pi reload start records no dead-weight row at all",
-		async () => {
+	it.each(["reload", "resume", "fork"])(
+		"real pi %s start keeps the conversation's dead-weight observations",
+		async (reason) => {
 			const logExtension = vi.fn();
 			vi.doMock("../clients/extension-log.js", async (importActual) => ({
 				...(await importActual<typeof import("../clients/extension-log.js")>()),
@@ -349,7 +361,7 @@ describe("index.ts integration", () => {
 				ctx,
 			);
 			mock.simulateSessionRebuild();
-			await handlers.session_start?.[0]?.({ reason: "reload" }, ctx);
+			await handlers.session_start?.[0]?.({ reason }, ctx);
 			await handlers.session_shutdown?.[0]?.({}, ctx);
 
 			const rows = logExtension.mock.calls
@@ -358,7 +370,13 @@ describe("index.ts integration", () => {
 						row as { message?: string; metadata?: { tools?: string[] } },
 				)
 				.filter((row) => row.message === "situational tool dead weight");
-			expect(rows).toHaveLength(0);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.metadata?.tools).toEqual([
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

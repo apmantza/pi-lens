@@ -9357,9 +9357,6 @@
     "verifyToolBinary",
     "wasLastResolveTransient"
   ],
-  "tests/index-integration.test.ts:78:../clients/read-guard.js": [
-    "lineContentHash"
-  ],
   "tests/index-loop-block-wiring.test.ts:19:../clients/event-loop-monitor.js": [
     "_stopEventLoopMonitorForTest",
     "classifyLoopBlock",

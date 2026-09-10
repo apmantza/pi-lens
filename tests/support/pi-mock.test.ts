@@ -59,6 +59,15 @@ describe("createPiMock", () => {
 		expect(() => pi.getHandlerOrThrow("session_start")).toThrow(/no handler/);
 	});
 
+	it("fails a session_start handler that never settles", async () => {
+		const pi = createPiMock();
+		pi.on("session_start", () => new Promise<never>(() => {}));
+
+		await expect(pi.emit("session_start", {}, makeCtx())).rejects.toThrow(
+			/session_start handler exceeded test budget/,
+		);
+	}, 6_000);
+
 	it("runCommand invokes the handler and captures notifications", async () => {
 		const pi = createPiMock();
 		pi.registerCommand("greet", {

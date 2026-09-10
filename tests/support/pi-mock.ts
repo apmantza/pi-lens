@@ -16,6 +16,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import { withTimeout } from "../../clients/deadline-utils.js";
 
 interface RecordedFlag {
 	description?: string;
@@ -31,6 +32,27 @@ interface RecordedCommand {
 
 /** A handler registered via `pi.on(event, handler)`. */
 type Hook = (event: unknown, ctx: unknown) => unknown;
+
+/** A session_start test must fail if its awaited handler does not settle. */
+export const SESSION_START_TEST_BUDGET_MS = 5_000;
+
+export async function runSessionStartWithBudget<T>(
+	hook: () => T | Promise<T>,
+): Promise<T> {
+	try {
+		return await withTimeout(
+			Promise.resolve().then(hook),
+			SESSION_START_TEST_BUDGET_MS,
+		);
+	} catch (error) {
+		if (error instanceof Error && /^Timeout after /.test(error.message)) {
+			throw new Error(
+				`session_start handler exceeded test budget (${SESSION_START_TEST_BUDGET_MS}ms)`,
+			);
+		}
+		throw error;
+	}
+}
 
 /** A `ui.notify(...)` call captured for assertions. */
 interface CapturedNotification {
@@ -190,8 +212,13 @@ export function createPiMock(
 			activeTools.add(tool.name);
 		},
 		on(event, handler) {
+			const boundedHandler: Hook =
+				event === "session_start"
+					? (payload, ctx) =>
+							runSessionStartWithBudget(() => handler(payload, ctx))
+					: handler;
 			const list = handlers.get(event) ?? [];
-			list.push(handler);
+			list.push(boundedHandler);
 			handlers.set(event, list);
 		},
 		getFlag(name) {
