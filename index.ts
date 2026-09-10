@@ -2276,6 +2276,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// a concurrent secondary cannot erase the primary's live counter.
 					resetTurnContext(stableSessionId);
 					await handleSessionStart({
+						signal: ctx.signal,
 						ctxCwd: ctx.cwd,
 						sessionStartFiredAt,
 						sessionStartMonotonicAt,
@@ -2526,10 +2527,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 				},
 			});
 		}
+		// Read/Grep/Glob/Bash results have no mutation pipeline to update. Do
+		// not bootstrap the analyzer graph for them: the read-only hook has a
+		// 500ms total budget, and its remainder has no edit delivery to perform.
+		if (!rtMutation) return;
 		try {
 			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
 				await loadBootstrapClients();
 			return await handleToolResult({
+				signal: ctx.signal,
 				event: event as any,
 				getFlag: (name: string, filePath?: string) =>
 					getLensFlag(name, filePath),
@@ -2560,7 +2566,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 	(pi as any).on(
 		"tool_result",
-		wrapSessionEventHandler("tool_result", onToolResult, { dbg }),
+		wrapSessionEventHandler("tool_result", onToolResult, {
+			dbg,
+			budgetKey: (event, _ctx) => {
+				try {
+					return classifyMutatingTool(event, { recognizeOnly: true })
+						? "tool_result_edit"
+						: "tool_result_read_only";
+				} catch {
+					return "tool_result_read_only";
+				}
+			},
+		}),
 	);
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
@@ -2793,6 +2810,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			return;
 		}
 		await handleAgentEnd({
+			signal: ctx.signal,
 			ctxCwd: ctx.cwd,
 			getFlag: (name: string, filePath?: string) => getLensFlag(name, filePath),
 			getFlagSource: (name: string, filePath?: string) =>

@@ -55,6 +55,8 @@ const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
 const DEFERRED_FORMAT_CONCURRENCY = 3;
 
 interface AgentEndDeps {
+	/** Abort signal owned by the agent_end/agent_settled hook. */
+	signal?: AbortSignal;
 	ctxCwd?: string;
 	getFlag: (name: string, filePath?: string) => boolean | string | undefined;
 	/** Optional: provenance for dbg/skip logs — see `PipelineContext["getFlagSource"]` (#792). */

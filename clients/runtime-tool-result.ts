@@ -185,6 +185,8 @@ interface ToolResultEvent {
 }
 
 interface ToolResultDeps {
+	/** Abort signal owned by the tool_result hook. */
+	signal?: AbortSignal;
 	event: ToolResultEvent;
 	getFlag: (name: string, filePath?: string) => boolean | string | undefined;
 	/** Optional: provenance for dbg/skip logs — see `PipelineContext["getFlagSource"]` (#792). */
@@ -806,6 +808,7 @@ async function dispatchPipelineAnalysis(args: {
 
 	const pipelinePromise = runPipeline(
 		{
+			signal: deps.signal,
 			filePath,
 			cwd: dispatchCwd,
 			projectRoot: turnStateCwd,

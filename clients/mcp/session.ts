@@ -48,6 +48,8 @@ import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
 import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
+import { bounded } from "../deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -117,14 +119,13 @@ export interface SessionStartOutcome {
  * guidance + whatever baseline/LSP state is ready; query `pilens_diagnostics` /
  * `pilens_health` afterwards for the scan results as they land.
  */
-export async function runSessionStart(
-	cwd: string,
-): Promise<SessionStartOutcome> {
+async function runSessionStartImpl(cwd: string): Promise<SessionStartOutcome> {
 	startSituationalToolTelemetrySession("mcp");
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 
 	await handleSessionStart({
+		signal: undefined,
 		ctxCwd: cwd,
 		// The MCP server has no TUI keystroke latency to protect, so the
 		// first-call-quick heuristic must not apply. Force "full" mode so
@@ -161,6 +162,15 @@ export async function runSessionStart(
 			: undefined,
 		aliveLspClients: getLSPService().getAliveClientCount(),
 	};
+}
+
+export function runSessionStart(cwd: string): Promise<SessionStartOutcome> {
+	return bounded(runSessionStartImpl(cwd), {
+		ms: HOOK_WALL_BUDGET_MS.session_start,
+		signal: undefined,
+		hook: "session_start",
+		label: "mcp-session-start",
+	}) as Promise<SessionStartOutcome>;
 }
 
 export interface TurnEndOutcome {
@@ -275,7 +285,7 @@ const inFlightIpcTurnEnds = new Map<string, Promise<TurnEndDelivery>>();
  * reads edited files from turn-state, so we register the caller-supplied files
  * first (a full-file range, importsChanged=true so dep/knip re-check broadly).
  */
-async function runTurnEndNow(
+async function runTurnEndNowImpl(
 	cwd: string,
 	files: string[] = [],
 	deferredDelivery = false,
@@ -311,6 +321,7 @@ async function runTurnEndNow(
 	};
 
 	await handleTurnEnd({
+		signal: undefined,
 		ctxCwd: cwd,
 		getFlag: host.getFlag,
 		dbg: noop,
@@ -353,6 +364,19 @@ async function runTurnEndNow(
 			acknowledgeTestFindings(ctx.cacheManager, cwd);
 		},
 	};
+}
+
+function runTurnEndNow(
+	cwd: string,
+	files: string[] = [],
+	deferredDelivery = false,
+): Promise<TurnEndTransaction> {
+	return bounded(runTurnEndNowImpl(cwd, files, deferredDelivery), {
+		ms: HOOK_WALL_BUDGET_MS.turn_end,
+		signal: undefined,
+		hook: "turn_end",
+		label: "mcp-turn-end",
+	}) as Promise<TurnEndTransaction>;
 }
 
 /**

@@ -24,6 +24,10 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { TurnSummaryCollector } from "./turn-summary.js";
 import { deriveProviderFromModelId } from "./model-provider.js";
 import { beginTurnContext, setTurnContextSession } from "./turn-context.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
+
+/** Keep deferred cascade admission bounded without dropping late findings. */
+export const MAX_PENDING_CASCADE_RUNS = 32;
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -862,7 +866,24 @@ export class RuntimeCoordinator {
 	}
 
 	appendCascadePromise(p: Promise<CascadeRun>): void {
-		this._pendingCascadeRuns.push(p);
+		if (this._pendingCascadeRuns.length < MAX_PENDING_CASCADE_RUNS) {
+			this._pendingCascadeRuns.push(p);
+			return;
+		}
+		// Preserve delivery for overflow rather than growing the per-edit array.
+		// The settled run enters the same accumulator off-hook and is therefore
+		// visible to the next turn-end drain.
+		recordDegradationOnce({
+			kind: "cascade_pending_cap",
+			subject: "runtime-coordinator",
+			reason: `deferred cascade admission capped at ${MAX_PENDING_CASCADE_RUNS}`,
+		});
+		void p
+			.then((run) => this.appendCascadeRun(run))
+			.catch(() => {
+				// Pipeline promises are normally non-rejecting; preserve the existing
+				// failure sink if a caller violates that contract.
+			});
 	}
 
 	/**

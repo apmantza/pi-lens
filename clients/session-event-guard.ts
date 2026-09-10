@@ -66,6 +66,8 @@
 
 import { emitBounded } from "./bounded-telemetry.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS, type HookBudgetKey } from "./hook-budgets.js";
 import { probeCtxActive } from "./session-lifecycle.js";
 import { runWithTurnContext } from "./turn-context.js";
 
@@ -140,6 +142,10 @@ function recordStaleSkip(
 export interface SessionEventGuardOptions {
 	/** pi-lens's debug sink, so a skip is also visible in a dogfood trace. */
 	dbg?: (message: string) => void;
+	/** Hook budget; a function is used for read-only versus edit tool_result. */
+	budgetKey?:
+		| HookBudgetKey
+		| ((event: unknown, ctx: unknown) => HookBudgetKey | undefined);
 }
 
 /** A pi event handler, in the shape `pi.on` delivers. */
@@ -162,6 +168,17 @@ function guardSessionEvent<E, C, R>(
 	onStaleResult: (event: E) => Awaited<R>,
 	options: SessionEventGuardOptions,
 ): (event: E, ctx: C) => R {
+	const defaultBudgetKey = (eventName: string): HookBudgetKey | undefined => {
+		if (eventName === "tool_result") return "tool_result_edit";
+		if (
+			eventName === "session_start" ||
+			eventName === "turn_end" ||
+			eventName === "agent_end" ||
+			eventName === "agent_settled"
+		)
+			return eventName;
+		return undefined;
+	};
 	const skip = (event: E, detectedAt: StaleDetectionPoint): Awaited<R> => {
 		recordStaleSkip(eventName, detectedAt);
 		try {
@@ -191,13 +208,31 @@ function guardSessionEvent<E, C, R>(
 				handler(event, ctx),
 			);
 			if (isThenable(result)) {
-				// Recover the rejection in place. The host awaits the same promise
-				// it would have awaited anyway; it just resolves instead.
-				// SAFETY: the recovered promise settles to `Awaited<R>`, which the
-				// host consumes exactly as it would an `R` — see the note above.
-				return Promise.resolve(result).catch((err: unknown) => {
+				const recovered = Promise.resolve(result).catch((err: unknown) => {
 					if (isStaleExtensionCtxError(err)) return skip(event, "mid-handler");
 					throw err;
+				});
+				const budget =
+					typeof options.budgetKey === "function"
+						? options.budgetKey(event, ctx)
+						: (options.budgetKey ?? defaultBudgetKey(eventName));
+				if (budget === undefined) return recovered as unknown as R;
+				let signal: AbortSignal | undefined;
+				try {
+					signal = (ctx as { signal?: AbortSignal } | undefined)?.signal;
+				} catch (err) {
+					if (isStaleExtensionCtxError(err))
+						return Promise.resolve(skip(event, "mid-handler")) as unknown as R;
+					throw err;
+				}
+				return bounded(recovered, {
+					ms: HOOK_WALL_BUDGET_MS[budget],
+					// The settled drain must observe an aborted signal and requeue
+					// before its promise is released; its own workers read the same
+					// signal and remain bounded at their seams.
+					signal: budget === "agent_settled" ? undefined : signal,
+					hook: budget,
+					label: "registered-handler",
 				}) as unknown as R;
 			}
 			return result;
