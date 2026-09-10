@@ -1,0 +1,4 @@
+---
+section: Changed
+---
+- **Contracts from the 2026-09-10 merge train.** AGENTS.md catalog shapes 46 (a parser fed by a double whose shape the tool never emits), 47 (a detector whose corpus includes its own fixtures), 48 (check-then-act on a shared durable directory) and test screen 13 (a detector pinned only in the accept direction); the fixer contract adds "authority words are claims", "facts about master come from a fetched origin/master", "never assert CI", "a detector test has two directions", "tool output is a fixture, not a guess"; the merge-train skill adds five mistake rows (design question left to the fixer; guessed branch names; the ignored-path exclude in `git add`; `ci-verdict` exit 70 on API outages; a registry-membership guard changing other lanes' requirements). (refs #2900, #2913, #2921, #2924, #2929, #2930)
