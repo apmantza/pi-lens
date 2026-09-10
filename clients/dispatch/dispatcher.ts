@@ -560,6 +560,7 @@ export interface RunnerLatency {
 	status:
 		| "succeeded"
 		| "failed"
+		| "deferred"
 		| "skipped"
 		| "when_skipped"
 		| "test_file_skipped"
@@ -568,6 +569,7 @@ export interface RunnerLatency {
 	semantic: string;
 	skipReason?: RunnerSkipReason;
 	unconfirmedServerIds?: readonly string[];
+	deferredServerIds?: readonly string[];
 }
 
 export interface DispatchLatencyReport {
@@ -625,9 +627,14 @@ function buildCoverageNotice(
 		const shown = unconfirmedServerIds.slice(0, 4);
 		const remainder = unconfirmedServerIds.length - shown.length;
 		const marker = `${shown.join(", ")}${remainder > 0 ? ` +${remainder}` : ""}`;
+		const deferred = relevant.some(
+			(r) => r.status === "deferred" && (r.deferredServerIds?.length ?? 0) > 0,
+		);
 		return {
 			id: `coverage-partial:${ctx.kind}:${path.basename(ctx.filePath)}`,
-			message: `coverage: ${marker} silent — diagnostics are incomplete (not a clean result).`,
+			message: deferred
+				? `coverage: ${marker} deferred — findings will arrive through the late path.`
+				: `coverage: ${marker} silent — diagnostics are incomplete (not a clean result).`,
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -1058,6 +1065,9 @@ async function runGroup(
 			}),
 			...(result.unconfirmedServerIds !== undefined && {
 				unconfirmedServerIds: result.unconfirmedServerIds,
+			}),
+			...(result.deferredServerIds !== undefined && {
+				deferredServerIds: result.deferredServerIds,
 			}),
 		});
 		logLatency({

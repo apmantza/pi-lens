@@ -59,6 +59,7 @@ import {
 } from "../path-utils.js";
 import type {
 	LSPClientInfo,
+	LSPDiagnostic,
 	LSPOperationSupport,
 	LSPPullFailure,
 	LSPShutdownOptions,
@@ -117,6 +118,8 @@ export type { LSPCapabilitySnapshot } from "./wait-policy/index.js";
 const WORKSPACE_ATTRIBUTION_CLIENT_CAP = 16;
 const AUX_WAIT_DEMOTION_THRESHOLD = 5;
 const AUX_WAIT_DEMOTION_RATIO = 0.9;
+const AUX_WAIT_REPROMOTION_THRESHOLD = 5;
+const AUX_WAIT_REPROMOTION_RATIO = 0.5;
 
 /**
  * Request-local attribution for no-filePath workspace queries. The fixed site
@@ -1285,7 +1288,9 @@ export class LSPService {
 	>();
 	/** Session-scoped adaptive demotion for budget-hitting auxiliaries. */
 	private readonly auxWaitPressureStreak = new Map<string, number>();
+	private readonly auxWaitFastAnswerStreak = new Map<string, number>();
 	private readonly demotedAuxiliaryServerIds = new Set<string>();
+	private readonly demotedAuxiliaryBudgets = new Map<string, number>();
 	/**
 	 * #1934 review F1: what the last COMPLETED `spawnClient` call for a
 	 * (server, root) key decided, written by that call at every point it
@@ -1528,33 +1533,63 @@ export class LSPService {
 		};
 	}
 
-	private isAuxiliaryWaitDemoted(serverId: string): boolean {
-		return this.demotedAuxiliaryServerIds.has(serverId);
+	private isAuxiliaryWaitDemoted(serverId: string, root: string): boolean {
+		return this.demotedAuxiliaryServerIds.has(
+			`${serverId}:${normalizeMapKey(root ?? "")}`,
+		);
 	}
 
 	private noteAuxiliaryWait(
-		serverId: string,
+		key: string,
 		budgetMs: number,
 		elapsedMs: number,
 	): void {
-		if (this.demotedAuxiliaryServerIds.has(serverId)) return;
+		if (this.demotedAuxiliaryServerIds.has(key)) return;
 		if (elapsedMs < AUX_WAIT_DEMOTION_RATIO * budgetMs) {
-			this.auxWaitPressureStreak.delete(serverId);
+			this.auxWaitPressureStreak.delete(key);
 			return;
 		}
-		const streak = (this.auxWaitPressureStreak.get(serverId) ?? 0) + 1;
+		const streak = (this.auxWaitPressureStreak.get(key) ?? 0) + 1;
 		if (streak >= AUX_WAIT_DEMOTION_THRESHOLD) {
-			this.demotedAuxiliaryServerIds.add(serverId);
-			this.auxWaitPressureStreak.delete(serverId);
+			this.demotedAuxiliaryServerIds.add(key);
+			this.demotedAuxiliaryBudgets.set(key, budgetMs);
+			this.auxWaitPressureStreak.delete(key);
+			this.auxWaitFastAnswerStreak.delete(key);
 			recordDegradationOnce({
 				kind: "aux_wait_demoted",
-				subject: serverId,
+				subject: key,
 				reason:
 					"auxiliary reached at least 90% of its declared wait budget for five consecutive dispatches",
 			});
 			return;
 		}
-		this.auxWaitPressureStreak.set(serverId, streak);
+		this.auxWaitPressureStreak.set(key, streak);
+	}
+
+	private noteAuxiliaryLateAnswer(key: string, elapsedMs: number): void {
+		if (!this.demotedAuxiliaryServerIds.has(key)) return;
+		const budgetMs = this.demotedAuxiliaryBudgets.get(key);
+		if (
+			budgetMs === undefined ||
+			elapsedMs >= AUX_WAIT_REPROMOTION_RATIO * budgetMs
+		) {
+			this.auxWaitFastAnswerStreak.delete(key);
+			return;
+		}
+		const streak = (this.auxWaitFastAnswerStreak.get(key) ?? 0) + 1;
+		if (streak < AUX_WAIT_REPROMOTION_THRESHOLD) {
+			this.auxWaitFastAnswerStreak.set(key, streak);
+			return;
+		}
+		this.demotedAuxiliaryServerIds.delete(key);
+		this.demotedAuxiliaryBudgets.delete(key);
+		this.auxWaitFastAnswerStreak.delete(key);
+		recordDegradationOnce({
+			kind: "aux_wait_repromoted",
+			subject: key,
+			reason:
+				"auxiliary produced five consecutive late answers below half its declared wait budget",
+		});
 	}
 
 	/**
@@ -3518,6 +3553,40 @@ export class LSPService {
 			});
 		}
 		return out;
+	}
+
+	/** Record a fast answer observed by the turn-end late-results path. */
+	async observeLateAuxiliaryAnswer(
+		filePath: string,
+		serverId: string,
+		elapsedMs: number,
+	): Promise<void> {
+		for (const server of getServersForFileWithConfig(filePath)) {
+			if (server.id !== serverId) continue;
+			const root = await this.resolveServerRoot(server, filePath);
+			if (root === undefined) return;
+			this.noteAuxiliaryLateAnswer(
+				`${serverId}:${normalizeMapKey(root)}`,
+				elapsedMs,
+			);
+			return;
+		}
+	}
+
+	/** Prime the hash-bound cache after a late publication is delivered. */
+	primeLastKnownDiagnostics(
+		filePath: string,
+		content: string,
+		diagnostics: LSPDiagnostic[],
+	): void {
+		const normalizedKey = normalizeMapKey(filePath);
+		if (diagnostics.length > 0) {
+			this.lastKnownDiagnostics.set(normalizedKey, diagnostics);
+			this.lastKnownContentHash.set(normalizedKey, this.hashContent(content));
+		} else {
+			this.lastKnownDiagnostics.delete(normalizedKey);
+			this.lastKnownContentHash.delete(normalizedKey);
+		}
 	}
 
 	/**
@@ -5543,7 +5612,10 @@ export class LSPService {
 					if (
 						hasTouchAuxiliaries &&
 						entry.info.role === "auxiliary" &&
-						this.isAuxiliaryWaitDemoted(entry.info.id)
+						this.isAuxiliaryWaitDemoted(
+							entry.info.id,
+							entry.client.root ?? filePath,
+						)
 					) {
 						return Promise.resolve(undefined);
 					}
@@ -5712,7 +5784,9 @@ export class LSPService {
 												budgetMs: perServerRaceBudgets[i],
 												demoted: this.isAuxiliaryWaitDemoted(
 													spawned[i].info.id,
+													spawned[i].client.root ?? filePath,
 												),
+												root: spawned[i].client.root ?? filePath,
 											}
 										: null,
 								)
@@ -5722,6 +5796,7 @@ export class LSPService {
 									): x is {
 										promise: Promise<void | undefined>;
 										serverId: string;
+										root: string;
 										client: (typeof spawned)[number]["client"];
 										baseline: number | undefined;
 										budgetMs: number;
@@ -5747,7 +5822,9 @@ export class LSPService {
 										if (aux.demoted) {
 											return {
 												serverId: aux.serverId,
-												outcome: "demoted" as const,
+												outcome: deferredResyncServerIds.has(aux.serverId)
+													? ("deferred" as const)
+													: ("demoted" as const),
 												publishedThisContent: false,
 												budgetMs,
 												elapsedMs: 0,
@@ -5810,7 +5887,11 @@ export class LSPService {
 													? ("answered" as const)
 													: ("silent" as const);
 										const elapsedMs = Date.now() - auxWaitStartedAt;
-										this.noteAuxiliaryWait(aux.serverId, budgetMs, elapsedMs);
+										this.noteAuxiliaryWait(
+											`${aux.serverId}:${normalizeMapKey(aux.root)}`,
+											budgetMs,
+											elapsedMs,
+										);
 										return {
 											serverId: aux.serverId,
 											outcome,
@@ -6916,6 +6997,20 @@ export class LSPService {
 			// fully delivered. Nothing to record here: a skipped server keeps its original
 			// entry (and timestamp) so its window still expires naturally instead of being
 			// extended by every reuse.
+			const deferredAuxiliaryServerIds = spawned
+				.filter(
+					(entry) =>
+						entry.info.role === "auxiliary" &&
+						(deferredResyncServerIds.has(entry.info.id) ||
+							this.isAuxiliaryWaitDemoted(
+								entry.info.id,
+								entry.client.root ?? filePath,
+							)),
+				)
+				.map((entry) => entry.info.id);
+			if (deferredAuxiliaryServerIds.length > 0) {
+				result.deferredServerIds = deferredAuxiliaryServerIds;
+			}
 
 			logLatency({
 				type: "phase",
@@ -6988,6 +7083,27 @@ export class LSPService {
 					...(brokenSkippedServerIds.length > 0 && { brokenSkippedServerIds }),
 					...(uncoveredDeferredServerIds.length > 0 && {
 						deferredResyncServerIds: uncoveredDeferredServerIds,
+					}),
+					...(spawned.some(
+						(entry) =>
+							entry.info.role === "auxiliary" &&
+							(deferredResyncServerIds.has(entry.info.id) ||
+								this.isAuxiliaryWaitDemoted(
+									entry.info.id,
+									entry.client.root ?? filePath,
+								)),
+					) && {
+						deferredServerIds: spawned
+							.filter(
+								(entry) =>
+									entry.info.role === "auxiliary" &&
+									(deferredResyncServerIds.has(entry.info.id) ||
+										this.isAuxiliaryWaitDemoted(
+											entry.info.id,
+											entry.client.root ?? filePath,
+										)),
+							)
+							.map((entry) => entry.info.id),
 					}),
 					// #1549: auxiliaries whose own deadline lapsed — the wait produced no
 					// publication, or the notify write never landed. Distinct from the fields

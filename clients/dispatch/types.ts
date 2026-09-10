@@ -152,7 +152,7 @@ export function isRunnerSkipReason(value: unknown): value is RunnerSkipReason {
 }
 
 export interface RunnerResult {
-	status: "succeeded" | "failed" | "skipped";
+	status: "succeeded" | "failed" | "skipped" | "deferred";
 	/** Diagnostics found */
 	diagnostics: Diagnostic[];
 	/** Output semantic for these diagnostics */
@@ -174,6 +174,8 @@ export interface RunnerResult {
 	skipReason?: RunnerSkipReason;
 	/** Correlated scanner ids whose findings are absent from this result. */
 	unconfirmedServerIds?: readonly string[];
+	/** Correlated scanner ids whose findings are intentionally arriving late. */
+	deferredServerIds?: readonly string[];
 }
 
 // --- Dispatch Context ---

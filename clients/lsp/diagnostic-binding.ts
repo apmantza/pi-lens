@@ -168,6 +168,8 @@ export interface TouchFileResult {
 	 * it covered — the same exemption `cut_off` and `silent` get.
 	 */
 	unconfirmedServerIds?: string[];
+	/** Auxiliary findings that are guaranteed to arrive through the late path. */
+	deferredServerIds?: string[];
 	binding?: DiagnosticBinding;
 }
 

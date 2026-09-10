@@ -3662,6 +3662,36 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						}
 						continue;
 					}
+					// A demoted auxiliary still answers through this late path. Preserve
+					// the same hash-bound fast path as an awaited answer, and feed the
+					// measured late latency into the re-promotion streak.
+					try {
+						const lateContent = fs.readFileSync(lateAuxPath, "utf8");
+						if (typeof service.primeLastKnownDiagnostics === "function") {
+							service.primeLastKnownDiagnostics(
+								lateAuxPath,
+								lateContent,
+								rawDiags,
+							);
+						}
+					} catch {
+						// Freshness handling below remains authoritative for a deleted file.
+					}
+					if (typeof service.observeLateAuxiliaryAnswer === "function") {
+						await bounded(
+							service.observeLateAuxiliaryAnswer(
+								lateAuxPath,
+								pair.serverId,
+								cachedEntry.publishedAt - pair.markedAtMs,
+							),
+							{
+								ms: HOOK_WALL_BUDGET_MS.turn_end,
+								signal: deps.signal /* late observer */,
+								hook: "turn_end",
+								label: "observeLateAuxiliaryAnswer",
+							},
+						);
+					}
 					if (rawDiags.length === 0) {
 						lateAuxCleanConfirmed += 1;
 						continue;

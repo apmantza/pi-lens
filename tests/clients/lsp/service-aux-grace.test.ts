@@ -127,9 +127,11 @@ function makeClient(
 		 * without publishing".
 		 */
 		publishesWhenClean?: boolean;
+		delays?: number[];
 	} = {},
 ) {
 	let waitSettled = false;
+	let waitCalls = 0;
 	let version = 0;
 	// #1531: production stamps the PATH each publication was stored for, and both
 	// the wait's freshness gate and the aux evidence check read that stamp. A
@@ -138,6 +140,7 @@ function makeClient(
 	const stampsByPath = new Map<string, number>();
 	return {
 		isAlive: () => true,
+		root: "C:/repo",
 		shutdown: async () => {},
 		getWorkspaceDiagnosticsSupport: () => ({
 			advertised: false,
@@ -176,27 +179,24 @@ function makeClient(
 		waitForDiagnostics: vi.fn(
 			(filePath: string, timeoutMs: number) =>
 				new Promise<void>((resolve) =>
-					setTimeout(
-						() => {
-							const fitWithinBudget = delayMs <= timeoutMs;
-							if (fitWithinBudget) waitSettled = true;
-							// A genuine publish is what advances the version on a real
-							// client; a settle with NOTHING published must not, or the
-							// evidence-based outcome check below can't tell the two apart.
-							// #1493: an empty publish is still a publish — opt into it with
-							// `publishesWhenClean` to model a scanner that ran and found
-							// nothing.
-							if (
-								fitWithinBudget &&
-								(diags.length > 0 || options.publishesWhenClean)
-							) {
-								version += 1;
-								stampsByPath.set(filePath, version);
-							}
-							resolve();
-						},
-						Math.min(delayMs, timeoutMs),
-					),
+					(() => {
+						const currentDelay = options.delays?.[waitCalls++] ?? delayMs;
+						const fitWithinBudget = currentDelay <= timeoutMs;
+						setTimeout(
+							() => {
+								if (fitWithinBudget) waitSettled = true;
+								if (
+									fitWithinBudget &&
+									(diags.length > 0 || options.publishesWhenClean)
+								) {
+									version += 1;
+									stampsByPath.set(filePath, version);
+								}
+								resolve();
+							},
+							Math.min(currentDelay, timeoutMs),
+						);
+					})(),
 				),
 		),
 	};
@@ -549,7 +549,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			(group) => group.kind === "aux_wait_demoted",
 		);
 		expect(summary?.count).toBe(1);
-		expect(summary?.latestReasons[0]?.subject).toBe("typos");
+		expect(summary?.latestReasons[0]?.subject).toMatch(/^typos:/);
 		clearPendingAuxiliaryCoverage(FILE, "typos");
 		resetDegradationLedger();
 	});
@@ -571,7 +571,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			.mockResolvedValueOnce(primaryClient)
 			.mockResolvedValueOnce(auxiliaryClient);
 		await service.getClientsForFile(FILE);
-		for (let i = 0; i < 5; i += 1) {
+		for (let i = 0; i < 6; i += 1) {
 			const touch = service.touchFile(FILE, `fast-${i}`, {
 				clientScope: "with-auxiliary",
 				auxiliaryServerIds: ["typos"],
@@ -581,7 +581,88 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			await vi.advanceTimersByTimeAsync(750);
 			await touch;
 		}
-		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(5);
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(6);
+	});
+
+	it("re-promotes after five fast answers observed by the late path", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../../clients/degradation-ledger.js");
+		resetDegradationLedger();
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(1470, [makeDiagnostic("typos")], {
+			serverId: "typos",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(FILE, `demote-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1470);
+			await touch;
+		}
+		for (let i = 0; i < 5; i += 1) {
+			await service.observeLateAuxiliaryAnswer(FILE, "typos", 100);
+		}
+		const next = service.touchFile(FILE, "re-promoted", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1470);
+		await next;
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(6);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "aux_wait_repromoted",
+			)?.latestReasons[0]?.subject,
+		).toMatch(/^typos:/);
+		resetDegradationLedger();
+	});
+
+	it("resets pressure after an under-budget answer before the sixth dispatch", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(1470, [makeDiagnostic("typos")], {
+			serverId: "typos",
+			delays: [1470, 1470, 1470, 1470, 750, 1470, 1470],
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		for (let i = 0; i < 7; i += 1) {
+			const touch = service.touchFile(FILE, `mixed-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(i === 4 ? 750 : 1470);
+			await touch;
+		}
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(7);
 	});
 
 	it("gives an auxiliary its declared budget up to the global ceiling", async () => {
