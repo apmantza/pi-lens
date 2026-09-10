@@ -99,6 +99,7 @@ import {
 	formatSmellsSessionStartLine,
 	resetSmellsSessionState,
 } from "./smells-rollup.js";
+import { resetSituationalToolTelemetry } from "./situational-tool-telemetry.js";
 import {
 	findNearestProjectRoot,
 	getStartupScanMaxEntries,
@@ -2375,6 +2376,14 @@ export async function handleSessionStart(
 	// #1123 item 3: a fresh session can re-report smells that a prior session
 	// already surfaced once (see `checkSmellsAndNoteOnce`'s once-per-session gate).
 	resetSmellsSessionState();
+	// #2800 item 8: the situational-tool dead-weight observation (which tools
+	// this session never activated or called) is session-scoped, so its sets
+	// and once-latch re-arm here beside the other registered resets. Both hosts
+	// open the session's row through startSituationalToolTelemetrySession()
+	// BEFORE this handler runs, so this clears that fresh session's empty sets;
+	// it deliberately leaves sessionStarted alone — clearing it would make
+	// endSituationalToolTelemetry() skip the session's own final row.
+	resetSituationalToolTelemetry();
 	// #1782: re-arm the workspace-diagnostics cache session clock. Entries
 	// written before this instant assert findings from a session that is over,
 	// so they must revalidate before they can be served as current again.

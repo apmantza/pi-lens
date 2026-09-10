@@ -5,9 +5,9 @@ const logExtension = vi.hoisted(() => vi.fn());
 vi.mock("../../clients/extension-log.js", () => ({ logExtension }));
 
 import {
-	_observeSituationalCallForTests,
-	_observeSituationalActivationForTests,
 	emitSituationalDeadWeight,
+	observeSituationalToolActivation,
+	observeSituationalToolCall,
 	resetSituationalToolTelemetry,
 } from "../../clients/situational-tool-telemetry.js";
 
@@ -18,8 +18,8 @@ describe("situational dead-weight telemetry", () => {
 	});
 
 	it("names the registered situational tools not activated or called", () => {
-		_observeSituationalActivationForTests(["ast_grep_search"]);
-		_observeSituationalCallForTests("lsp_navigation");
+		observeSituationalToolActivation(["ast_grep_search"]);
+		observeSituationalToolCall("lsp_navigation");
 
 		emitSituationalDeadWeight();
 
@@ -35,7 +35,7 @@ describe("situational dead-weight telemetry", () => {
 	});
 
 	it("always emits the empty row after every situational tool was used", () => {
-		_observeSituationalActivationForTests([
+		observeSituationalToolActivation([
 			"ast_grep_search",
 			"ast_grep_replace",
 			"ast_grep_outline",

@@ -125,11 +125,12 @@ Turn subsystems off globally instead of retyping flags every session:
 
 The `tools.<name>.enabled` setting controls each model-facing tool. Valid names
 include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,
-`ast_grep_dump`, `lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
+`lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
 `lens_diagnostic_mark`, `symbol_search`, `module_report`, `project_report`,
 `read_symbol`, `read_enclosing`, `effective_config`, `analyze`, `health`,
 `latency`, `project_scan`, and `rebuild`. The activation loader and MCP
-lifecycle tools `session_start` and `turn_end` cannot be disabled.
+lifecycle tools `session_start`, `turn_end`, and `session_end` cannot be
+disabled.
 
 ## Project Config
 

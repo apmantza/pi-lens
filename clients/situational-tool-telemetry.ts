@@ -69,6 +69,17 @@ export function emitSituationalDeadWeight(): void {
 	});
 }
 
-export const _observeSituationalActivationForTests =
-	observeSituationalToolActivation;
-export const _observeSituationalCallForTests = observeSituationalToolCall;
+/** Test-only view of the module's state, for the #1635 session-state registry probe. */
+export function _getSituationalToolTelemetryStateForTests(): {
+	activated: number;
+	called: number;
+	emitted: boolean;
+	sessionStarted: boolean;
+} {
+	return {
+		activated: activated.size,
+		called: called.size,
+		emitted,
+		sessionStarted,
+	};
+}

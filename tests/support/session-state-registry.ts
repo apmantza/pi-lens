@@ -151,6 +151,13 @@ import {
 	resetLspMutationNoBridgeDbgLatch,
 	type LspMutationContext,
 } from "../../clients/lsp-mutation.js";
+import {
+	_getSituationalToolTelemetryStateForTests,
+	emitSituationalDeadWeight,
+	observeSituationalToolActivation,
+	observeSituationalToolCall,
+	resetSituationalToolTelemetry,
+} from "../../clients/situational-tool-telemetry.js";
 
 /**
  * When a piece of state must return to its initial value.
@@ -1052,6 +1059,28 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"#2319: #2249's declined-bind rollup is process-singleton backed (catalog shape 25), so the module-scope container scan could not see it. Its reset runs in index.ts's session_start closure on the primary-continuation path behind the #473 concurrent-secondary gate - a declined bind's own session_start increments these counters, so resetting there would erase every prior sibling's tally; the closure placement (with the emit-before-reset first line) still lets a primary that crashed before session_shutdown start from zero.",
 	},
 	{
+		id: "situational-tool-telemetry:sessionObservation",
+		module: "situational-tool-telemetry.ts",
+		state:
+			"activated, called (the dead-weight row's per-session observation sets) and emitted (its once-per-row latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag and is deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing it there would make endSituationalToolTelemetry() skip the session's own final row",
+		policy: "session_start",
+		resetName: "resetSituationalToolTelemetry",
+		reason:
+			"#2800 item 8: the dead-weight line is one row per session naming the situational tools THIS session never used, so a replacement session inheriting the previous session's sets would report the new session's roster against the old session's evidence. The probe arms both sets plus the latch; the reset's sessionStarted exclusion is stated in the state field above.",
+		probe: {
+			arm: () => {
+				observeSituationalToolActivation(["lsp_navigation"]);
+				observeSituationalToolCall("lsp_navigation");
+				emitSituationalDeadWeight();
+			},
+			isArmed: () => {
+				const state = _getSituationalToolTelemetryStateForTests();
+				return state.activated === 0 && state.called === 0 && !state.emitted;
+			},
+			reset: () => resetSituationalToolTelemetry(),
+		},
+	},
+	{
 		id: "smells-rollup:notifiedThisSession",
 		module: "smells-rollup.ts",
 		state: "notifiedThisSession",
@@ -1636,6 +1665,12 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// is what flags this file now.
 	"session-start-observability.ts": 0,
 	"sgconfig.ts": 2,
+	// #2800 item 8: the dead-weight line's two per-session observation sets
+	// (activated, called) plus situationalToolSet — an import-time frozen lookup
+	// over TOOL_REGISTRY that the container scan cannot distinguish from mutable
+	// state (SWEEP_HEURISTIC_LIMITS item 5). Registered above; the wired reset
+	// clears the two sets and the emitted latch.
+	"situational-tool-telemetry.ts": 3,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"slow-fs.ts": 1,

@@ -161,8 +161,6 @@ export function toolRegistryEntryForMcp(
 	return TOOL_REGISTRY.find((tool) => tool.mcpName === name);
 }
 
-export type LensToolName = (typeof LENS_TOOL_NAMES)[number];
-
 /** Resolve one tool. CLI names are comma-separated to support repeatable flags. */
 export function resolveLensToolEnabled(
 	name: string,
