@@ -1616,6 +1616,16 @@ Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries ar
 
 ### Session lifecycle, telemetry, and observability
 
+The pi host can emit duplicate RPC `session_start` events during one
+replacement. `index.ts` admits the complete primary mutation pass once per
+`(reason, session ID)` key, falling back to the session file when the stable ID
+is unavailable. A duplicate re-enters the restore path when the live active-tool
+set differs from the remembered plan. Keep this gate above tool restore,
+telemetry opening, registry resets, and `handleSessionStart`, so those state
+owners share one lifecycle boundary (#2890).
+The key is cleared per factory instance because pi re-runs the factory on every
+replacement; if that ever changes, clear the key in `session_shutdown`.
+
 The machine-global instance registry serializes every whole-file writer with
 an adjacent O_EXCL lock. Contenders use jittered backoff for 500ms, and locks
 older than 5s or owned by dead pids are displaced and reclaimed; a crash can

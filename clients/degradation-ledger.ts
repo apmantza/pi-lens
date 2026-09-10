@@ -659,6 +659,8 @@ export type DegradationKind =
 	 * the per-kind entry bound is reached.
 	 */
 	| "runner-parsed-nothing"
+	/** A duplicate RPC session start was suppressed after its first full pass. */
+	| "session-start-duplicate"
 	/** Incremental word-index churn required an arena re-compaction. */
 	| "shared-checkout-probe"
 	/**
