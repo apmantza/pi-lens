@@ -3,6 +3,7 @@ import { PathKeyedMap } from "../../path-keyed-map.js";
 import { normalizeMapKey } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { findNearestDirWithMarker } from "../../workspace-topology.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -201,6 +202,7 @@ const helmLintRunner: RunnerDefinition = {
 	timeoutMs: 35_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
+		const cwd = resolveRunnerCwd(ctx, "helm");
 		const workspaceRoot = path.resolve(ctx.projectRoot ?? ctx.cwd);
 		const startDir = path.dirname(path.resolve(ctx.filePath));
 		const discovered = findNearestDirWithMarker(startDir, "chartYamlPath");
@@ -209,7 +211,7 @@ const helmLintRunner: RunnerDefinition = {
 		if (!isWithin(workspaceRoot, chartRoot)) return SKIPPED;
 		const existing = inFlightByChartRoot.get(chartRoot);
 		if (existing) return existing;
-		const promise = lintChart(chartRoot, ctx.cwd).finally(() => {
+		const promise = lintChart(chartRoot, cwd).finally(() => {
 			if (inFlightByChartRoot.get(chartRoot) === promise)
 				inFlightByChartRoot.delete(chartRoot);
 		});
