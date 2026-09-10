@@ -330,10 +330,12 @@ export interface AuxiliaryWaitEvidence {
 	serverId: string;
 	outcome: AuxiliaryWaitOutcome;
 	/**
-	 * #1493: independent proof this auxiliary already published for EXACTLY the
-	 * content this touch carries — a stored binding whose `contentHash` equals
-	 * the touch's content hash. Such an auxiliary has reported on this file's
-	 * current bytes, so a wait that produced nothing new withholds nothing.
+	 * #1493/#2810: evidence this auxiliary already published for this touch —
+	 * either a stored binding whose `contentHash` equals the touch's content
+	 * hash, or (version-less publishers) a per-path publication stamp that
+	 * advanced past the touch's pre-notify baseline. The stamp form cannot
+	 * prove the bytes matched (a late publication of the previous revision also
+	 * advances it); that bound is shared with the non-demoted outcome rows.
 	 * Absent/false → this touch has no publication of its own to point at.
 	 */
 	publishedThisContent?: boolean;
@@ -372,7 +374,9 @@ export interface AuxiliaryWaitEvidence {
  * irrelevant once a verified publication for them exists. Exempting `silent` but
  * not `cut_off` on identical evidence would report the same coverage two ways
  * depending on which timer happened to win. This stays fail-closed — it
- * un-narrows only against a content-hash match, never against a timer.
+ * un-narrows only against publication evidence (content-hash match, or an
+ * advanced per-path publication stamp for version-less publishers), never
+ * against a timer.
  */
 export function auxiliaryCoverageGap(
 	evidence: readonly AuxiliaryWaitEvidence[],
