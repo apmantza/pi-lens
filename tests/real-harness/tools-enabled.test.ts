@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { TOOL_REGISTRY } from "../../clients/tool-config.js";
 import { withRealPi } from "../support/real-pi-harness.js";
 
 const realPiAvailable =
@@ -7,23 +8,11 @@ const realPiAvailable =
 		stdio: "ignore",
 	}).status === 0;
 
-const EXPECTED_PI_TOOLS = [
-	"lens_diagnostics",
-	"lsp_diagnostics",
-	"module_report",
-	"project_report",
-	"read_symbol",
-	"read_enclosing",
-	"symbol_search",
-	"pi_lens_activate_tools",
-	"ast_grep_search",
-	"ast_grep_replace",
-	"ast_grep_outline",
-	"ast_grep_dump",
-	"lsp_navigation",
-	"lens_diagnostic_mark",
-	"effective_config",
-];
+// Pi-surface entries of the canonical registry (clients/tool-config.ts), the
+// one source of truth for the model-facing tool roster (#2800).
+const EXPECTED_PI_TOOLS: string[] = TOOL_REGISTRY.flatMap((tool) =>
+	tool.piName ? [tool.piName] : [],
+);
 
 type WireTool = {
 	name: string;
