@@ -79,6 +79,10 @@ describe("result contract across registered tool surfaces", () => {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	});
 
+	// Whole-roster sweep: drives every paired registry tool through a real pi
+	// call AND a real MCP child (#2800 item 5). Under CI load it crossed
+	// vitest's 5 s default twice on #2852 r6 (run 34442664966, both
+	// attempts); the budget mirrors the other whole-tree sweeps (#2857).
 	it("keeps every paired registry tool's real rendered text identical", async () => {
 		const fixtures: Record<string, Record<string, unknown>> = {
 			ast_grep_search: {
@@ -164,7 +168,7 @@ describe("result contract across registered tool surfaces", () => {
 				/usage tokens=\d+ elapsed-ms=\d+/,
 			);
 		}
-	});
+	}, 30_000);
 
 	it("covers every pi-only registry tool through pi and proves MCP absence", async () => {
 		const piOnlyFixtures: Record<string, Record<string, unknown>> = {
