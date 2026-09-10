@@ -4953,12 +4953,23 @@ function recordPackageManagerInstallException(
 	packageName: string,
 	err: unknown,
 ): undefined {
-	const message = (err as Error).message;
+	const message = boundInstallError((err as Error).message);
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
 	installFailureReasons.set(toolId, message);
 	return undefined;
+}
+
+const INSTALL_ERROR_LINE_LIMIT = 1000;
+const INSTALL_CANDIDATE_ERROR_LIMIT = 200;
+
+function boundInstallError(
+	value: string,
+	limit = INSTALL_ERROR_LINE_LIMIT,
+): string {
+	const line = value.replace(/[\r\n]+/g, " ").trim();
+	return line.length > limit ? `${line.slice(0, limit - 3)}...` : line;
 }
 
 async function installNpmTool(
@@ -5222,7 +5233,7 @@ async function installPipTool(
 					: ["-m", "pip", ...verb, packageName],
 		}));
 
-		let lastError = "";
+		const errors: string[] = [];
 		for (const candidate of pipCandidates) {
 			const pipResult = await safeSpawnAsync(
 				candidate.command,
@@ -5320,12 +5331,13 @@ async function installPipTool(
 				return packageName;
 			}
 
-			lastError = `${candidate.command} ${candidate.args.join(" ")}: ${outcome.error}`;
-			debugLog(`[pip-fallback] ${lastError}`);
+			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${boundInstallError(outcome.error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
+			errors.push(candidateError);
+			debugLog(`[pip-fallback] ${candidateError}`);
 		}
 
 		throw new Error(
-			`Failed to install ${packageName}: no usable pip command found (${lastError || "unknown error"})`,
+			`Failed to install ${packageName}: no usable pip command found (${errors.join(" | ") || "unknown error"})`,
 		);
 	} catch (err) {
 		return recordPackageManagerInstallException(
