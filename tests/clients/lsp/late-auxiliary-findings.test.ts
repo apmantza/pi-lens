@@ -22,12 +22,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 
 const readCachedDiagnosticsForServers = vi.hoisted(() => vi.fn());
+const observeLateAuxiliaryAnswer = vi.hoisted(() => vi.fn());
 vi.mock("../../../clients/lsp/index.js", () => ({
 	// Only `getLSPService` crosses this seam in handleTurnEnd's import graph;
 	// the double still carries the full surface so a method this path grows
 	// later cannot throw into a swallow-all catch (#2582).
 	getLSPService: () =>
-		makeLspServiceDouble({ readCachedDiagnosticsForServers }),
+		makeLspServiceDouble({
+			readCachedDiagnosticsForServers,
+			observeLateAuxiliaryAnswer,
+		}),
 }));
 
 const logLatency = vi.hoisted(() => vi.fn());
@@ -153,6 +157,8 @@ function lateAuxRecord(): any | undefined {
 
 beforeEach(() => {
 	readCachedDiagnosticsForServers.mockReset();
+	observeLateAuxiliaryAnswer.mockReset();
+	observeLateAuxiliaryAnswer.mockResolvedValue(undefined);
 	logLatency.mockClear();
 	resetPendingAuxiliaryCoverage();
 	resetBoundedTelemetry();
@@ -167,6 +173,55 @@ afterEach(() => {
 });
 
 describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
+	it("PROBE-REPROMOTE-DRAIN: handleTurnEnd observes five fast late publications", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-repromote-") as any;
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "late-aux-repromote" });
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "repromote.ts");
+			let fastStreak = 0;
+			let auxWaitsAfterFive = 5;
+			let repromoted = false;
+			observeLateAuxiliaryAnswer.mockImplementation(
+				async (_filePath: string, _serverId: string, elapsedMs: number) => {
+					if (elapsedMs < 750) {
+						fastStreak += 1;
+						if (fastStreak === 5) {
+							auxWaitsAfterFive = 6;
+							repromoted = true;
+						}
+					}
+				},
+			);
+			readCachedDiagnosticsForServers.mockImplementation(
+				async () =>
+					new Map([
+						[
+							"opengrep",
+							{ diags: [diag(1, "late typo")], publishedAt: Date.now() },
+						],
+					]),
+			);
+
+			const deliveredPerTurn: number[] = [];
+			for (let turn = 0; turn < 5; turn += 1) {
+				runtime.beginTurn();
+				registerEdit(env, "late-aux-repromote", cacheManager, file);
+				markPendingAuxiliaryCoverage(file, ["opengrep"], Date.now() - 100);
+				await handleTurnEnd(makeDeps(runtime, cacheManager, env.tmpDir));
+				deliveredPerTurn.push(lateAuxRecord()?.metadata?.delivered ?? 0);
+			}
+
+			expect(deliveredPerTurn).toEqual([1, 1, 1, 1, 1]);
+			expect(observeLateAuxiliaryAnswer).toHaveBeenCalledTimes(5);
+			expect(auxWaitsAfterFive).toBe(6);
+			expect(repromoted).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("delivers findings an auxiliary published after its grace window expired", async () => {
 		const env = setupTestEnvironment("pi-lens-late-aux-deliver-") as any;
 		try {

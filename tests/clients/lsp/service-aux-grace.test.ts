@@ -387,11 +387,11 @@ function lastAuxOutcome(
 async function exerciseDemotedCoverageCell({
 	filePath,
 	content,
-	bindCurrentContent,
+	evidence,
 }: {
 	filePath: string;
 	content: string;
-	bindCurrentContent: boolean;
+	evidence: "version" | "versionless" | "none" | "older";
 }) {
 	const { LSPService } = await import("../../../clients/lsp/index.js");
 	const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
@@ -403,14 +403,30 @@ async function exerciseDemotedCoverageCell({
 	const auxiliaryClient = makeClient(1470, [makeDiagnostic("fast typos")], {
 		serverId: "typos",
 	});
-	const binding = bindCurrentContent
-		? { contentHash: hashDiagnosticContent(content) }
-		: { contentHash: hashDiagnosticContent("older content") };
+	let openCount = 0;
+	const binding =
+		evidence === "version"
+			? { contentHash: hashDiagnosticContent(content) }
+			: evidence === "older"
+				? { contentHash: hashDiagnosticContent("older content") }
+				: undefined;
 	(
 		auxiliaryClient as typeof auxiliaryClient & {
 			getDiagnosticBinding: ReturnType<typeof vi.fn>;
 		}
 	).getDiagnosticBinding = vi.fn(() => binding);
+	const originalOpen = auxiliaryClient.notify.open;
+	auxiliaryClient.notify.open = vi.fn(async (...args) => {
+		openCount += 1;
+		await originalOpen(...args);
+	});
+	auxiliaryClient.getDiagnosticsVersionForPath = vi.fn(() =>
+		evidence === "version" || evidence === "versionless"
+			? openCount > 5
+				? 1
+				: 0
+			: 0,
+	);
 	getServersForFileWithConfig.mockReturnValue([
 		makePrimaryServer("ts-primary"),
 		makeAuxServer("typos"),
@@ -443,7 +459,7 @@ async function exerciseDemotedCoverageCell({
 	const pairs = drainPendingAuxiliaryCoverage().filter(
 		(pair) => pair.filePath === filePath && pair.serverId === "typos",
 	);
-	if (bindCurrentContent) {
+	if (evidence === "version" || evidence === "versionless") {
 		expect(result?.deferredServerIds).toBeUndefined();
 		expect(result?.unconfirmedServerIds).toBeUndefined();
 		expect(result?.diags.map((diagnostic) => diagnostic.message)).toContain(
@@ -708,7 +724,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		await exerciseDemotedCoverageCell({
 			filePath: OTHER_FILE,
 			content: "small-current",
-			bindCurrentContent: true,
+			evidence: "version",
 		});
 	});
 
@@ -716,39 +732,55 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		await exerciseDemotedCoverageCell({
 			filePath: FILE,
 			content: "heavy-current",
-			bindCurrentContent: true,
+			evidence: "version",
 		});
 	});
 
-	it("marks an unpublished demoted auxiliary for a small file under a demoted root", async () => {
+	it("keeps a version-less demoted publication covered on a small file", async () => {
 		await exerciseDemotedCoverageCell({
 			filePath: OTHER_FILE,
-			content: "small-unpublished",
-			bindCurrentContent: false,
+			content: "small-versionless",
+			evidence: "versionless",
 		});
 	});
 
-	it("marks an unpublished demoted auxiliary for the heavy file", async () => {
+	it("keeps a version-less demoted publication covered on the heavy file", async () => {
 		await exerciseDemotedCoverageCell({
 			filePath: FILE,
-			content: "heavy-unpublished",
-			bindCurrentContent: false,
+			content: "heavy-versionless",
+			evidence: "versionless",
 		});
 	});
 
-	it("does not cover a demoted small file with an older publication under a demoted root", async () => {
+	it("marks a demoted small file with no publication as uncovered", async () => {
 		await exerciseDemotedCoverageCell({
 			filePath: OTHER_FILE,
-			content: "small-new",
-			bindCurrentContent: false,
+			content: "small-none",
+			evidence: "none",
 		});
 	});
 
-	it("does not cover a demoted heavy file with an older publication", async () => {
+	it("marks a demoted heavy file with no publication as uncovered", async () => {
 		await exerciseDemotedCoverageCell({
 			filePath: FILE,
-			content: "heavy-new",
-			bindCurrentContent: false,
+			content: "heavy-none",
+			evidence: "none",
+		});
+	});
+
+	it("marks an older demoted publication on a small file as uncovered", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: OTHER_FILE,
+			content: "small-older",
+			evidence: "older",
+		});
+	});
+
+	it("marks an older demoted publication on the heavy file as uncovered", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: FILE,
+			content: "heavy-older",
+			evidence: "older",
 		});
 	});
 

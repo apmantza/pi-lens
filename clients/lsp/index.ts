@@ -5812,14 +5812,19 @@ export class LSPService {
 									auxWaits.map(async (aux) => {
 										const { budgetMs } = aux;
 										if (aux.demoted) {
+											const publishedEvidence =
+												Number.isFinite(aux.baseline) &&
+												readPathVersion(aux.client) !== undefined &&
+												(readPathVersion(aux.client) as number) >
+													(aux.baseline as number);
 											return {
 												serverId: aux.serverId,
 												outcome: deferredResyncServerIds.has(aux.serverId)
 													? ("deferred" as const)
 													: ("demoted" as const),
-												publishedThisContent: auxCoversThisContent(
-													aux.serverId,
-												),
+												publishedThisContent:
+													auxCoversThisContent(aux.serverId) ||
+													publishedEvidence,
 												budgetMs,
 												elapsedMs: 0,
 												elapsedSinceNotifyMs: 0,
@@ -6932,9 +6937,8 @@ export class LSPService {
 				}
 				result.inconclusiveReason = verdict.inconclusiveReason;
 			} else if (collected !== undefined && primaryDiagnosticsUnsupported) {
-				// A navigation-only primary has no diagnostic confirmation to report.
-				// Auxiliary coverage cannot turn that capability boundary into a clean
-				// or partial diagnostic verdict.
+				// A navigation-only primary has no diagnostic confirmation to report,
+				// but an uncovered auxiliary still needs to be named for delivery.
 				if (unconfirmedServerIds.length > 0) {
 					result.unconfirmedServerIds = [...unconfirmedServerIds];
 				}

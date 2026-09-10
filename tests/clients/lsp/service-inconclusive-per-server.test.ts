@@ -608,6 +608,28 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(result?.inconclusiveReason).toBeUndefined();
 	});
 
+	it("names an uncovered auxiliary beside a navigation-only primary", async () => {
+		const service = await mountService({
+			primary: makeClient(100, [], {
+				serverId: "nav-primary",
+				customServer: true,
+			}),
+			aux: [
+				makeClient(100, [makeDiagnostic("answered scanner finding")], {
+					serverId: "opengrep",
+				}),
+				makeClient(10_000, [makeDiagnostic("uncovered scanner finding")], {
+					serverId: "zizmor",
+					waitForDiagnosticsRejects: true,
+				}),
+			],
+		});
+		const result = await touchOnce(service);
+
+		expect(result?.confirmation).toBeUndefined();
+		expect(result?.unconfirmedServerIds).toEqual(["zizmor"]);
+	});
+
 	it("waits once before latching a silent custom primary as navigation-only", async () => {
 		const primary = makeClient(100, [], {
 			serverId: "dexter",
