@@ -62,6 +62,5 @@ export async function probeToolAsync(
 	// contract says and what `exactOptionalPropertyTypes` wants (a present
 	// `cwd: undefined` is a strictness spike the `tests/config` ratchet counts).
 	const { cwd: _strippedCwd, ...rest } = (options ?? {}) as SafeSpawnOptions;
-	void _strippedCwd;
 	return safeSpawnAsync(command, [...args], { ...rest });
 }

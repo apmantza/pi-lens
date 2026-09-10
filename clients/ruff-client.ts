@@ -120,8 +120,8 @@ export class RuffClient {
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
 
-			// #2894: the root ruff resolves its config from comes from the shared
-			// seam, not from a local `cwd ?? path.dirname(file)`. `tool-policy.ts`
+			// #2894: the root ruff resolves its config from now comes from the
+			// shared seam, not a local `cwd ?? path.dirname(file)`. `tool-policy.ts`
 			// requires the lint runner (`ruff.ts`, on `resolveRunnerCwd`) and this
 			// autofix path to consume the SAME policy; deriving the root two
 			// different ways is how they drift, and the hand-rolled form ignored a
