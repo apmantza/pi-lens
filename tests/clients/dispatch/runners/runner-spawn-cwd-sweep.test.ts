@@ -239,7 +239,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/metrics-history.ts#getCurrentCommit:021d92f7~df24802d",
-		"execSync runs Git against hand-derived spawnDir = path.resolve(startDir), walked to the repository root; this metrics probe does not resolve project configuration from the dispatch cwd",
+		"execSync runs Git with cwd = spawnDir, an existence walk from path.resolve(startDir) (startDir = path.dirname(filePath)) up to the first directory that exists, not a walk to the repository root; the site passes that cwd, and hasCwd=false here is resolveLocalInitializer failing closed on the reassigned let; this metrics probe does not resolve project configuration from the dispatch cwd",
 	],
 	[
 		"clients/instance-reaper.ts#killPidTree:18e7d7ac",
