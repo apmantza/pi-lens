@@ -729,14 +729,6 @@ const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
  * or gets fixed.
  */
 const WORKLIST_CEILING = 2;
-/**
- * A floor on what the walk LOOKED AT, distinct from the pins above: a broken
- * root or glob reports "scanned 0", which is a different bug from "scanned
- * everything and flagged nothing" (#1755 review F4, `auditRegistry`'s two
- * emptiness messages).
- */
-const MIN_SCANNED_SITES = 100;
-
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
 const ORIGIN_ADMISSIONS = Object.fromEntries([
 	...ORIGIN_ADMISSION_ROWS,
@@ -866,9 +858,10 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			flagged: sites.filter((site) => !site.hasCwd).map(flag),
 			registered: [],
 			exemptions: NO_CWD_EXEMPTIONS,
+			// A tree where every spawn conforms must read as clean, not as a dead
+			// sweep: the reach pins above are what catch a scan that stopped
+			// seeing sites, and they do it without inverting.
 			minFlagged: 0,
-			scannedCount: sites.length,
-			minScanned: MIN_SCANNED_SITES,
 			remediation:
 				"Pass the resolver result — directly, through a local, or through an " +
 				"object spread. Admit a genuine non-project child only by adding a row " +
@@ -885,9 +878,10 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 				.map(flag),
 			registered: [],
 			exemptions: ORIGIN_ADMISSIONS,
+			// A tree where every spawn conforms must read as clean, not as a dead
+			// sweep: the reach pins above are what catch a scan that stopped
+			// seeing sites, and they do it without inverting.
 			minFlagged: 0,
-			scannedCount: sites.length,
-			minScanned: MIN_SCANNED_SITES,
 			remediation:
 				"Resolve the cwd through resolveToolCwd/resolveRunnerCwd/" +
 				"resolveFormatterCwd imported from the shared seam, or add a row to " +

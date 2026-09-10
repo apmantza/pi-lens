@@ -1064,11 +1064,18 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 The runner-spawn-cwd sweep (`tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts`)
 scans every spawn-bearing TypeScript file under `clients/`, `tools/`, `mcp/`,
-and `index.ts`. Its AST needle
-requires each supplied cwd value to resolve to the imported `clients/tool-cwd.ts` seam or its documented re-exports; exact
-global probes and deliberate non-seam cwd derivations use full
-`rel#symbol:hash(ownLine)` admissions with one reason per row. Keep the population, direct-site pin, wrapper list, and admission keys live when adding a spawn
-(#2872, refs #2777).
+and `index.ts`. Its AST needle requires each supplied cwd value to resolve to
+the imported `clients/tool-cwd.ts` seam or its documented re-exports, resolving
+the binding by the scope the tree-sitter grammar gives it rather than by a list
+of scope-opening node kinds. Genuine global probes and deliberate non-seam
+derivations are admitted per site by
+`rel#symbolPath:hash(callText)~hash(cwdExpression)` — so editing the admitted
+cwd VALUE retires the row — and every row carries a reason true of that site;
+sites whose honest reason is "this should move onto the seam" live in a
+ratcheted `MIGRATION_WORKLIST_ROWS` naming their issue instead. Both rules run
+through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a conforming
+spawn moves the population pins; adding a non-conforming one costs a reasoned
+row, never a pin bump (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
 `tools/render-compact.ts`: oversized text keeps its head and tail, reports the
