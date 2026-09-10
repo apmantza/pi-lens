@@ -309,11 +309,7 @@ describe("index.ts integration", () => {
 				level: "debug",
 				message: "situational tool dead weight",
 				metadata: {
-					tools: [
-						"ast_grep_outline",
-						"lsp_navigation",
-						"lens_diagnostic_mark",
-					],
+					tools: ["ast_grep_outline", "lsp_navigation", "lens_diagnostic_mark"],
 				},
 			});
 			expect(

@@ -29,11 +29,7 @@ describe("situational dead-weight telemetry", () => {
 			level: "debug",
 			message: "situational tool dead weight",
 			metadata: {
-				tools: [
-					"ast_grep_replace",
-					"ast_grep_outline",
-					"lens_diagnostic_mark",
-				],
+				tools: ["ast_grep_replace", "ast_grep_outline", "lens_diagnostic_mark"],
 			},
 		});
 	});
