@@ -283,19 +283,55 @@ export function boundResultPayload<T extends CompactResultLike>(
 	if (!result.content) {
 		return { result, deliveredBytes: 0, truncated: false };
 	}
-	let deliveredBytes = 0;
-	let truncated = false;
-	const content = result.content.map((block) => {
-		if (block.type !== "text" || typeof block.text !== "string") return block;
-		const bound = boundToolText(block.text, RESULT_PAYLOAD_BUDGET_BYTES);
-		deliveredBytes += Buffer.byteLength(bound.text, "utf8");
-		truncated = truncated || bound.truncated;
-		return { ...block, text: bound.text };
-	});
+	const joined = fullTextOf(result);
+	// The footer depends on this result's actual error, diagnostics, usage, and
+	// delivered byte count. Iterate to the fixed point so ordinary results do not
+	// reserve the widest possible footer, while the final bound remains sound.
+	let payloadBudget = RESULT_PAYLOAD_BUDGET_BYTES;
+	let bound = boundToolText(joined, payloadBudget);
+	for (let i = 0; i < 3; i++) {
+		const probe = renderToolResultContract(
+			{ ...result, content: [{ type: "text" as const, text: bound.text }] },
+			{
+				bytes: Buffer.byteLength(bound.text, "utf8"),
+				truncated: bound.truncated,
+			},
+		);
+		const footerStart = fullTextOf(probe).indexOf("\n\nresult ");
+		const footerBytes = Buffer.byteLength(
+			fullTextOf(probe).slice(footerStart),
+			"utf8",
+		);
+		payloadBudget = MAX_RESULT_BYTES - footerBytes;
+		bound = boundToolText(joined, payloadBudget);
+	}
+	const firstText = result.content.findIndex(
+		(block) => block.type === "text" && typeof block.text === "string",
+	);
+	let retainedText = false;
+	const content = result.content
+		.filter(
+			(block, index) =>
+				block.type !== "text" ||
+				typeof block.text !== "string" ||
+				index === firstText,
+		)
+		.map((block) => {
+			if (
+				block.type === "text" &&
+				typeof block.text === "string" &&
+				!retainedText
+			) {
+				retainedText = true;
+				return { ...block, text: bound.text };
+			}
+			return block;
+		});
+	const deliveredBytes = Buffer.byteLength(fullTextOf({ content }), "utf8");
 	return {
 		result: { ...result, content },
 		deliveredBytes,
-		truncated,
+		truncated: bound.truncated,
 	};
 }
 

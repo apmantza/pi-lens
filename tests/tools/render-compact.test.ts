@@ -131,6 +131,24 @@ describe("render-compact", () => {
 			expect(delivered).toBe(deliveredPayloadBytes(text));
 		});
 
+		it("bounds the joined text and reports joined bytes for multiple text blocks", () => {
+			const result = finalizeToolResult({
+				content: [
+					{ type: "text" as const, text: "a".repeat(MAX_RESULT_BYTES * 2) },
+					{ type: "text" as const, text: "b".repeat(MAX_RESULT_BYTES * 2) },
+				],
+				isError: false,
+				details: {},
+			});
+			const text = fullTextOf(result);
+			const delivered = Number(text.match(/bytes=(\d+)/)?.[1]);
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_RESULT_BYTES,
+			);
+			expect(delivered).toBe(deliveredPayloadBytes(text));
+			expect(text).toContain("characters omitted");
+		});
+
 		it("keeps a fitting stamped result untouched on re-entry and reports the footer's own figures", () => {
 			const first = finalizeToolResultWithDelivery(
 				renderToolText("y".repeat(MAX_RESULT_BYTES * 2)),

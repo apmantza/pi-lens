@@ -25,9 +25,7 @@ describe("MCP and pi tool construction stay wired to sibling surfaces (#2864)", 
 			source
 				.replace(/\/\/[^\n]*/g, "")
 				.replace(/\/\*[\s\S]*?\*\//g, "")
-				.replace(/(['\"])(?:\\.|(?!\1)[^\\])*\1/g, "\"\"");
-			expect(constructionNames(blank(pi))).toEqual(
-			constructionNames(blank(mcp)),
-		);
+				.replace(/(['\"])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+		expect(constructionNames(blank(pi))).toEqual(constructionNames(blank(mcp)));
 	});
 });

@@ -1798,38 +1798,41 @@ function activateExtension(hostPi: ExtensionAPI) {
 			>;
 			const execute = normalized.execute;
 			if (typeof execute === "function") {
-					normalized.execute = (...args: unknown[]) =>
-						Promise.resolve(execute(...args)).then((result) => {
-						const delivery = finalizeToolResultWithDelivery(
-							result as Parameters<typeof finalizeToolResultWithDelivery>[0],
-						);
-						// #2800 item 7: the per-turn cache_usage row sums each delivered
-						// tool result's bytes. The SDK hands the live ExtensionContext as
-						// the fifth execute argument, so attribution mirrors the
-						// message_end handler: stable session id plus this activation's
-						// owned role.
-						if (lensEnabled) {
-							try {
-								const ctx = args[4];
-								const sessionId = getStableSessionId(ctx);
-								recordToolResultDelivery({
-									sessionId,
-									sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
-									bytes: delivery.deliveredBytes,
-									truncated: delivery.truncated,
-								});
-							} catch {
-								// Observability must never break tool delivery.
+				normalized.execute = (...args: unknown[]) =>
+					Promise.resolve(execute(...args)).then(
+						(result) => {
+							const delivery = finalizeToolResultWithDelivery(
+								result as Parameters<typeof finalizeToolResultWithDelivery>[0],
+							);
+							// #2800 item 7: the per-turn cache_usage row sums each delivered
+							// tool result's bytes. The SDK hands the live ExtensionContext as
+							// the fifth execute argument, so attribution mirrors the
+							// message_end handler: stable session id plus this activation's
+							// owned role.
+							if (lensEnabled) {
+								try {
+									const ctx = args[4];
+									const sessionId = getStableSessionId(ctx);
+									recordToolResultDelivery({
+										sessionId,
+										sessionRole: classifyOwnedSessionEmission(ctx, sessionId),
+										bytes: delivery.deliveredBytes,
+										truncated: delivery.truncated,
+									});
+								} catch {
+									// Observability must never break tool delivery.
+								}
 							}
-						}
-						return delivery.result;
-						}, (err) => {
+							return delivery.result;
+						},
+						(err) => {
 							const text = err instanceof Error ? err.message : String(err);
 							return finalizeToolResultWithDelivery({
-								...renderToolText(`result error\n${text}`),
+								...renderToolText(text),
 								isError: true,
 							});
-						});
+						},
+					);
 			}
 			pi.registerTool(normalized as any);
 		} catch {

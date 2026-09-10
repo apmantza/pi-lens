@@ -187,7 +187,9 @@ function extractCodeBlockParamCandidates(text: string): string[] {
 	// Tool recipes also use JavaScript object literals, which do not contain
 	// assignment syntax. Read their keys so object-shaped examples cannot drift
 	// silently from the registered schema.
-	for (const block of text.matchAll(/lens_diagnostics\s*\(\s*\{([\s\S]*?)\}\s*\)/g)) {
+	for (const block of text.matchAll(
+		/lens_diagnostics\s*\(\s*\{([\s\S]*?)\}\s*\)/g,
+	)) {
 		for (const km of block[1].matchAll(/\b([a-zA-Z][a-zA-Z0-9]*)\s*:/g)) {
 			out.push(km[1]);
 		}

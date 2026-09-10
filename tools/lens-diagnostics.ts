@@ -123,7 +123,7 @@ const MAX_DIAGNOSTICS_PER_FILE = 50;
 // narrow, not paginate. Erroring (rather than silently truncating) means a
 // caller can never believe it checked files it didn't (issue's stated
 // invariant).
-	const MAX_PATHS_ENTRIES = MAX_BATCH_FILES;
+const MAX_PATHS_ENTRIES = MAX_BATCH_FILES;
 
 // #1623: the reason rendered for every heavyweight-analyzer lane (gitleaks,
 // trivy, govulncheck, dead-code, knip, jscpd, madge, opengrep, test-runner)
@@ -538,7 +538,9 @@ export function createLensDiagnosticsTool(
 			const scope =
 				requestedScope ??
 				(legacyMode === "delta" || legacyMode === undefined
-					? source === "lsp" ? "paths" : "delta"
+					? source === "lsp"
+						? "paths"
+						: "delta"
 					: "workspace");
 			const cwd = ctx.cwd ?? getCwd();
 			if (source === "lsp") {
