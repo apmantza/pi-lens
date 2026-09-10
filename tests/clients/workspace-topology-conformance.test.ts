@@ -375,6 +375,8 @@ describe("workspace-topology sweep — registered-or-fail coverage", () => {
 				"detectWorkspaceType reads getWorkspaceManifestMarkers but its module-graph cache is keyed by cwd and cleared by clearModuleGraphCache, registered in the session-state registry and reached at session start via resetDispatchBaselines — it re-arms at the session boundary through its own registered reset, not through the topology registry.",
 			"project-lens-config.ts":
 				"findPiLensConfigMarkerInDir feeds config discovery state keyed by config path + mtimeMs + size with per-directory-mtime validation — a freshness-key invalidation that does not depend on the topology index reset.",
+			"test-runner-client.ts":
+				"#2870: findNearestDirWithAnyBasename answers one hoisted-node_modules probe per detectRunner call and the result is used immediately, never memoized — the walk's own cache lives in workspace-topology and clears with resetWorkspaceTopology. The client's memos are not topology-derived and are self-invalidating besides: availableRunners keys on the resolved root and re-stats a positive verdict's evidence file on every read (a miss is never memoized, #2252), and the language-root walk it keys on comes from language-profile.ts, which registers its own reset.",
 		};
 
 		const consumers = scanTopologyConsumers();

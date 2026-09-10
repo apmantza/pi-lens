@@ -1,0 +1,705 @@
+{
+	"pi": {
+		"ast_grep_search": {
+			"type": "object",
+			"required": [
+				"lang"
+			],
+			"properties": {
+				"dump": {
+					"type": "boolean"
+				},
+				"pattern": {
+					"type": "string"
+				},
+				"lang": {
+					"type": "string",
+					"enum": [
+						"bash",
+						"c",
+						"cpp",
+						"csharp",
+						"css",
+						"elixir",
+						"go",
+						"haskell",
+						"html",
+						"java",
+						"javascript",
+						"json",
+						"kotlin",
+						"lua",
+						"nix",
+						"php",
+						"python",
+						"ruby",
+						"rust",
+						"scala",
+						"swift",
+						"tsx",
+						"typescript",
+						"yaml"
+					]
+				},
+				"paths": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"maxItems": 200
+				},
+				"selector": {
+					"type": "string"
+				},
+				"context": {
+					"type": "number"
+				},
+				"nodeKind": {
+					"type": "string"
+				},
+				"insideKind": {
+					"type": "string"
+				},
+				"hasKind": {
+					"type": "string"
+				},
+				"hasDescendantKind": {
+					"type": "string"
+				},
+				"follows": {
+					"type": "string"
+				},
+				"precedes": {
+					"type": "string"
+				},
+				"rule": {
+					"type": "string"
+				},
+				"skip": {
+					"type": "number"
+				},
+				"maxMatches": {
+					"type": "number"
+				},
+				"groupByFile": {
+					"type": "boolean"
+				},
+				"strictness": {
+					"type": "string",
+					"enum": [
+						"smart",
+						"relaxed",
+						"ast",
+						"cst",
+						"signature",
+						"template"
+					]
+				},
+				"validateOnly": {
+					"type": "boolean"
+				}
+			}
+		},
+		"lens_diagnostics": {
+			"type": "object",
+			"properties": {
+				"source": {
+					"type": "string",
+					"enum": [
+						"session",
+						"lsp"
+					]
+				},
+				"scope": {
+					"type": "string",
+					"enum": [
+						"paths",
+						"workspace"
+					]
+				},
+				"mode": {
+					"type": "string",
+					"enum": [
+						"delta",
+						"all",
+						"full"
+					]
+				},
+				"path": {
+					"type": "string"
+				},
+				"concurrency": {
+					"type": "number"
+				},
+				"waitMs": {
+					"type": "number"
+				},
+				"serverScope": {
+					"type": "string",
+					"enum": [
+						"primary",
+						"all"
+					]
+				},
+				"refreshRunners": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "string",
+							"enum": [
+								"cached",
+								"cheap",
+								"all",
+								"none"
+							]
+						}
+					]
+				},
+				"maxProjectFiles": {
+					"type": "number"
+				},
+				"maxLspFiles": {
+					"type": "number"
+				},
+				"includeGenerated": {
+					"type": "boolean"
+				},
+				"severity": {
+					"type": "string",
+					"enum": [
+						"error",
+						"warning",
+						"all"
+					]
+				},
+				"paths": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"maxItems": 200
+				}
+			}
+		},
+		"lsp_navigation": {
+			"type": "object",
+			"required": [
+				"operation"
+			],
+			"properties": {
+				"operation": {
+					"type": "string"
+				},
+				"path": {
+					"type": "string"
+				},
+				"line": {
+					"type": "number"
+				},
+				"character": {
+					"type": "number"
+				},
+				"symbol": {
+					"type": "string"
+				},
+				"endLine": {
+					"type": "number"
+				},
+				"endCharacter": {
+					"type": "number"
+				},
+				"newName": {
+					"type": "string"
+				},
+				"newFilePath": {
+					"type": "string"
+				},
+				"apply": {
+					"type": "boolean"
+				},
+				"command": {
+					"type": "string"
+				},
+				"commandArguments": {
+					"type": "array",
+					"items": {}
+				},
+				"query": {
+					"type": "string"
+				},
+				"kinds": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"exactMatch": {
+					"type": "boolean"
+				},
+				"topLevelOnly": {
+					"type": "boolean"
+				},
+				"maxResults": {
+					"type": "number"
+				},
+				"callHierarchyItem": {
+					"type": "object",
+					"required": [
+						"name",
+						"kind",
+						"uri",
+						"range",
+						"selectionRange"
+					],
+					"properties": {
+						"name": {
+							"type": "string"
+						},
+						"kind": {
+							"type": "number"
+						},
+						"uri": {
+							"type": "string"
+						},
+						"range": {
+							"type": "object",
+							"required": [
+								"start",
+								"end"
+							],
+							"properties": {
+								"start": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								},
+								"end": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								}
+							}
+						},
+						"selectionRange": {
+							"type": "object",
+							"required": [
+								"start",
+								"end"
+							],
+							"properties": {
+								"start": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								},
+								"end": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"mcp": {
+		"pilens_ast_grep_search": {
+			"type": "object",
+			"properties": {
+				"dump": {
+					"type": "boolean"
+				},
+				"pattern": {
+					"type": "string"
+				},
+				"lang": {
+					"type": "string",
+					"enum": [
+						"bash",
+						"c",
+						"cpp",
+						"csharp",
+						"css",
+						"elixir",
+						"go",
+						"haskell",
+						"html",
+						"java",
+						"javascript",
+						"json",
+						"kotlin",
+						"lua",
+						"nix",
+						"php",
+						"python",
+						"ruby",
+						"rust",
+						"scala",
+						"swift",
+						"tsx",
+						"typescript",
+						"yaml"
+					]
+				},
+				"paths": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"maxItems": 200
+				},
+				"selector": {
+					"type": "string"
+				},
+				"context": {
+					"type": "number"
+				},
+				"nodeKind": {
+					"type": "string"
+				},
+				"insideKind": {
+					"type": "string"
+				},
+				"hasKind": {
+					"type": "string"
+				},
+				"hasDescendantKind": {
+					"type": "string"
+				},
+				"follows": {
+					"type": "string"
+				},
+				"precedes": {
+					"type": "string"
+				},
+				"rule": {
+					"type": "string"
+				},
+				"skip": {
+					"type": "number"
+				},
+				"maxMatches": {
+					"type": "number"
+				},
+				"groupByFile": {
+					"type": "boolean"
+				},
+				"strictness": {
+					"type": "string",
+					"enum": [
+						"smart",
+						"relaxed",
+						"ast",
+						"cst",
+						"signature",
+						"template"
+					]
+				},
+				"validateOnly": {
+					"type": "boolean"
+				},
+				"cwd": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"lang"
+			]
+		},
+		"pilens_diagnostics": {
+			"type": "object",
+			"properties": {
+				"source": {
+					"type": "string",
+					"enum": [
+						"session",
+						"lsp"
+					]
+				},
+				"scope": {
+					"type": "string",
+					"enum": [
+						"paths",
+						"workspace"
+					]
+				},
+				"mode": {
+					"type": "string",
+					"enum": [
+						"delta",
+						"all",
+						"full"
+					]
+				},
+				"path": {
+					"type": "string"
+				},
+				"concurrency": {
+					"type": "number"
+				},
+				"waitMs": {
+					"type": "number"
+				},
+				"serverScope": {
+					"type": "string",
+					"enum": [
+						"primary",
+						"all"
+					]
+				},
+				"refreshRunners": {
+					"anyOf": [
+						{
+							"type": "boolean"
+						},
+						{
+							"type": "string",
+							"enum": [
+								"cached",
+								"cheap",
+								"all",
+								"none"
+							]
+						}
+					]
+				},
+				"maxProjectFiles": {
+					"type": "number"
+				},
+				"maxLspFiles": {
+					"type": "number"
+				},
+				"includeGenerated": {
+					"type": "boolean"
+				},
+				"severity": {
+					"type": "string",
+					"enum": [
+						"error",
+						"warning",
+						"all"
+					]
+				},
+				"paths": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"maxItems": 200
+				},
+				"cwd": {
+					"type": "string"
+				}
+			}
+		},
+		"pilens_lsp_navigation": {
+			"type": "object",
+			"properties": {
+				"operation": {
+					"type": "string"
+				},
+				"path": {
+					"type": "string"
+				},
+				"line": {
+					"type": "number"
+				},
+				"character": {
+					"type": "number"
+				},
+				"symbol": {
+					"type": "string"
+				},
+				"endLine": {
+					"type": "number"
+				},
+				"endCharacter": {
+					"type": "number"
+				},
+				"newName": {
+					"type": "string"
+				},
+				"newFilePath": {
+					"type": "string"
+				},
+				"apply": {
+					"type": "boolean"
+				},
+				"command": {
+					"type": "string"
+				},
+				"commandArguments": {
+					"type": "array",
+					"items": {}
+				},
+				"query": {
+					"type": "string"
+				},
+				"kinds": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"exactMatch": {
+					"type": "boolean"
+				},
+				"topLevelOnly": {
+					"type": "boolean"
+				},
+				"maxResults": {
+					"type": "number"
+				},
+				"callHierarchyItem": {
+					"type": "object",
+					"required": [
+						"name",
+						"kind",
+						"uri",
+						"range",
+						"selectionRange"
+					],
+					"properties": {
+						"name": {
+							"type": "string"
+						},
+						"kind": {
+							"type": "number"
+						},
+						"uri": {
+							"type": "string"
+						},
+						"range": {
+							"type": "object",
+							"required": [
+								"start",
+								"end"
+							],
+							"properties": {
+								"start": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								},
+								"end": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								}
+							}
+						},
+						"selectionRange": {
+							"type": "object",
+							"required": [
+								"start",
+								"end"
+							],
+							"properties": {
+								"start": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								},
+								"end": {
+									"type": "object",
+									"required": [
+										"line",
+										"character"
+									],
+									"properties": {
+										"line": {
+											"type": "number"
+										},
+										"character": {
+											"type": "number"
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"cwd": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"operation"
+			]
+		}
+	}
+}

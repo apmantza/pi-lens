@@ -146,6 +146,8 @@ kind: arrow_function
 
 **No matches?**
 
+For `nodeKind`, do not also pass `pattern` or `rule`; those forms are mutually exclusive. For `rule`, provide YAML containing both `id` and `language` fields. Use `strictness: relaxed` when unnamed punctuation is the only mismatch.
+
 1. Try `strictness: relaxed` — ignores unnamed punctuation (trailing commas, semicolons) that `smart` mode requires
 2. Use `ast_grep_search dump=true` on a sample snippet to verify the correct node kind
 3. Simplify the pattern and retry once
