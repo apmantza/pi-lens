@@ -1895,6 +1895,7 @@ async function formatFullMode(
 		(result) =>
 			result.timedOut || result.error || mismatchedLspResults.has(result),
 	);
+	const authoritativeLspFiles = new Set<string>();
 	// #571: reconcile this scan's fresh, CONFIRMED per-file results into the
 	// footer cache. A footer write is never allowed to fail the tool call, so
 	// any unexpected throw is swallowed.
@@ -1924,7 +1925,7 @@ async function formatFullMode(
 				"",
 				{ cwd, fileRole: detectFileRole(result.filePath) },
 			);
-			reconcileScanDiagnostics(
+			const retired = reconcileScanDiagnostics(
 				result.filePath,
 				retagged,
 				true,
@@ -1939,6 +1940,13 @@ async function formatFullMode(
 				// freshly-touched results (observed now).
 				result.observedAt,
 			);
+			// A result rejected by the shared ordering guard is not authoritative
+			// for delivery. Otherwise full mode hides the old widget row while
+			// mode=all still serves it, creating a false clean/full disagreement.
+			// Older test doubles return undefined and retain legacy acceptance.
+			if (retired !== false) {
+				authoritativeLspFiles.add(path.resolve(result.filePath));
+			}
 		} catch {
 			// Never let a footer-reconciliation hiccup fail the scan itself.
 		}
@@ -1995,9 +2003,6 @@ async function formatFullMode(
 	// #1993: files with a CONFIRMED, fully-covered LSP result are authoritative
 	// - the fresh sweep replaces their widget-store state instead of merging
 	// additively beside it.
-	const authoritativeLspFiles = new Set(
-		fullyCoveredLspResults.map((result) => path.resolve(result.filePath)),
-	);
 	// #1993 review: retirement must be observable - if a future regression
 	// makes the set falsely authoritative, findings would vanish silently.
 	const authoritativeRetiredCount = getFileDiagnosticSummaries().filter(

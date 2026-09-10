@@ -51,6 +51,13 @@ export const WORKSPACE_DIAGNOSTICS_CACHE_VERSION = 3;
 const CACHE_FILE = "lsp-workspace-diagnostics.json";
 
 export interface WorkspaceDiagnosticsCacheEntry {
+	/** Identity of the observation; the file-map key alone is not provenance. */
+	provenance?: {
+		projectRoot: string;
+		sessionGeneration: number;
+		contentGeneration: string;
+		scanGeneration: number;
+	};
 	diagnostics: LSPDiagnostic[];
 	count: number;
 	/** The file's own mtime (ms since epoch) at the moment it was scanned. */
@@ -565,6 +572,7 @@ export interface WorkspaceDiagnosticsCacheLookup {
 	 * mtime-staleness gate (#1093 / #1092).
 	 */
 	scannedAt: number;
+	provenance?: WorkspaceDiagnosticsCacheEntry["provenance"];
 }
 
 /**
@@ -727,6 +735,9 @@ export function createWorkspaceDiagnosticsCacheContext(
 			const key = cacheKeyFor(filePath);
 			const entry = entries[key];
 			if (!entry || entry.scopeKey !== scopeKey) return undefined;
+			if (entry.provenance && entry.provenance.projectRoot !== root) {
+				return undefined;
+			}
 			// #1782: age gate BEFORE the mtime/dependency gate — it is two number
 			// comparisons and no syscalls, so an expired entry costs strictly less
 			// than a served one did. An entry that asserts findings and predates
@@ -794,14 +805,22 @@ export function createWorkspaceDiagnosticsCacheContext(
 					}),
 				},
 				scannedAt: entry.scannedAt,
+				provenance: entry.provenance,
 			};
 		},
 		record(filePath, scopeKey, diagnostics, mtimeMs, contentHash, sizeBytes) {
+			const scanGeneration = Date.now();
 			entries[cacheKeyFor(filePath)] = {
+				provenance: {
+					projectRoot: root,
+					sessionGeneration: workspaceDiagnosticsCacheSessionStart(),
+					contentGeneration: contentHash ?? "unknown",
+					scanGeneration,
+				},
 				diagnostics,
 				count: diagnostics.length,
 				mtimeMs,
-				scannedAt: Date.now(),
+				scannedAt: scanGeneration,
 				scopeKey,
 				// #1793: stamp whether THIS FILE actually had dependency
 				// knowledge this sweep (not just whether SOME index was

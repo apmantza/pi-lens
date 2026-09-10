@@ -1385,6 +1385,8 @@ tier. (#2262)
 
 ### Caches, durable stores, and path keys
 
+Workspace diagnostic cache entries carry explicit project-root, session, content, and scan-generation provenance. Delivery may treat a sweep as authoritative only after the shared widget write accepts its ordering token; a rejected result remains visible as the older state so full and delta cannot silently disagree (#2154).
+
 The project-snapshot authoritative-write cache stamps both `mtimeMs` and size
 at save and after promotion. Both `loadProjectSnapshot` and
 `loadProjectSnapshotExportsAndRules` serve the in-process object only while

@@ -2286,6 +2286,48 @@ describe("lens_diagnostics mode=full", () => {
 		);
 	});
 
+	it("does not call a lower-order clean result authoritative (#2154)", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/moved.ts",
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "old line 400 finding",
+							line: 400,
+							rule: "knip:unused",
+						},
+					],
+				},
+			),
+		);
+		reconcileScanDiagnosticsMock.mockReturnValue(false);
+		const result = await run(
+			makeTool(
+				{},
+				{
+					runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+						{
+							filePath: "/proj/src/moved.ts",
+							diagnostics: [],
+							count: 0,
+							writeIndex: 1,
+						},
+					]),
+				},
+			),
+			{ mode: "full" },
+		);
+		// The clean answer lost the shared ordering guard, so the old finding
+		// remains visible rather than being silently hidden from full mode while
+		// mode=all can still deliver it.
+		expect(String(result.content[0].text)).toContain("old line 400 finding");
+	});
+
 	it("dedups the napi project scan against ast-grep LSP findings despite the source prefix (#308)", async () => {
 		// The ast-grep LSP keys its findings `ast-grep:<id>`; the napi scan (#308)
 		// uses the bare `<id>`. Same violation, same line — must collapse to ONE in
