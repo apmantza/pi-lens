@@ -41,9 +41,9 @@ export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
  * four of them false where they were read).
  *
  * `cwd` is STRIPPED rather than merely left out of {@link ProbeSpawnOptions}:
- * the type stops an object literal from carrying one, and the explicit
- * `cwd: undefined` below stops one that arrives inside an already-typed
- * options object a caller widened or spread. A probe that genuinely needs to
+ * the type stops an object literal from carrying one, and the destructure
+ * below removes one that arrived inside an already-typed options object a
+ * caller widened or spread. A probe that genuinely needs to
  * run somewhere — `mix credo --version` needs a mix project, `cargo clippy
  * --version` needs a package, `eslint --version` resolves a project-local
  * binary — must call `safeSpawnAsync` directly and be admitted by that sweep
@@ -54,5 +54,11 @@ export async function probeToolAsync(
 	args: readonly string[],
 	options?: ProbeSpawnOptions,
 ): Promise<SpawnResult> {
-	return safeSpawnAsync(command, [...args], { ...options, cwd: undefined });
+	// Destructured away rather than overwritten with `undefined`: the key is
+	// then genuinely ABSENT from what reaches the spawn, which is both what the
+	// contract says and what `exactOptionalPropertyTypes` wants (a present
+	// `cwd: undefined` is a strictness spike the `tests/config` ratchet counts).
+	const { cwd: _strippedCwd, ...rest } = (options ?? {}) as SafeSpawnOptions;
+	void _strippedCwd;
+	return safeSpawnAsync(command, [...args], rest);
 }
