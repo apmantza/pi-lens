@@ -5,9 +5,12 @@ const logLatency = vi.hoisted(() => vi.fn());
 vi.mock("../../clients/latency-logger.js", () => ({ logLatency }));
 
 import {
+	clearRememberedLazyTools,
+	getRememberedLazyTools,
 	isFreshSessionStart,
 	planToolSet,
 	recordToolSetMutation,
+	rememberLazyTools,
 	supportsDeferredTools,
 } from "../../clients/tool-set-policy.js";
 
@@ -23,6 +26,32 @@ const ALL_ACTIVE = [
 
 describe("tool-set cache policy", () => {
 	beforeEach(() => logLatency.mockClear());
+
+	it("records activation in the session-file store before a factory re-run", () => {
+		clearRememberedLazyTools("policy-before-rebuild");
+		rememberLazyTools("policy-before-rebuild", ["ast_grep_search"]);
+		expect([...getRememberedLazyTools("policy-before-rebuild")]).toEqual([
+			"ast_grep_search",
+		]);
+	});
+
+	it("keeps activation isolated by session file", () => {
+		clearRememberedLazyTools("policy-file-a");
+		clearRememberedLazyTools("policy-file-b");
+		rememberLazyTools("policy-file-a", ["ast_grep_search"]);
+		expect([...getRememberedLazyTools("policy-file-b")]).toEqual([]);
+	});
+
+	it("clears activation when a conversation switches session file", () => {
+		rememberLazyTools("policy-switched", ["ast_grep_search"]);
+		clearRememberedLazyTools("policy-switched");
+		expect([...getRememberedLazyTools("policy-switched")]).toEqual([]);
+	});
+
+	it("does not create process-restart state without a session-file write", () => {
+		clearRememberedLazyTools("policy-restart");
+		expect([...getRememberedLazyTools("policy-restart")]).toEqual([]);
+	});
 
 	it("classifies only startup and new as fresh logical sessions", () => {
 		expect(isFreshSessionStart(undefined)).toBe(true);

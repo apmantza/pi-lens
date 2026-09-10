@@ -321,6 +321,7 @@ export function makeCtx(
 	overrides: Partial<{
 		cwd: string;
 		sessionId: string;
+		sessionFile: string;
 		/**
 		 * #1334 S5: host project-trust decision. Omit entirely to simulate an
 		 * older host with no `isProjectTrusted` on the ctx — pi-lens must then
@@ -377,6 +378,7 @@ export function makeCtx(
 		// resume rehydration via `ctx.sessionManager.getSessionId()`.
 		sessionManager: {
 			getSessionId: () => overrides.sessionId,
+			getSessionFile: () => overrides.sessionFile ?? "mock-session-file",
 		},
 		model: overrides.model,
 		signal: undefined,

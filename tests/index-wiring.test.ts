@@ -731,6 +731,48 @@ describe("index.ts extension wiring", () => {
 			},
 		);
 
+		it("restores activation after a factory re-run for the same session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-factory-rebuild-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const sessionFile = path.join(tmp, "conversation.jsonl");
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "factory-rebuild",
+					sessionFile,
+				});
+				const first = createPiMock();
+				extension(first.asExtensionAPI());
+				await first.emit("session_start", { reason: "startup" }, ctx);
+				const loader = first.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"factory-rebuild",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					ctx,
+				);
+
+				const rebuilt = createPiMock();
+				extension(rebuilt.asExtensionAPI());
+				for (const name of rebuilt.tools.keys()) rebuilt.activeTools.add(name);
+				await rebuilt.emit("session_start", { reason: "reload" }, ctx);
+
+				expect(rebuilt.activeTools.has("ast_grep_search")).toBe(true);
+				expect(rebuilt.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
 		// A genuinely new conversation drops the activation memory: the rebuilt
 		// all-active set shrinks back to the bare baseline.
 		it("forgets the previous conversation's activations on a new session", async () => {

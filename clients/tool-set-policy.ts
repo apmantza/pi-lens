@@ -12,6 +12,36 @@ export interface ToolSetMutation {
 	deferralApplies: boolean;
 }
 
+// pi re-runs the extension factory for session rebuilds, but imports this
+// module once per process. Keep conversation activation memory here, keyed by
+// pi's session file rather than by a factory closure or process-wide session.
+const rememberedLazyToolsBySessionFile = new Map<string, Set<string>>();
+
+export function rememberLazyTools(
+	sessionFile: string | undefined,
+	names: readonly string[],
+): void {
+	if (!sessionFile) return;
+	const remembered =
+		rememberedLazyToolsBySessionFile.get(sessionFile) ?? new Set<string>();
+	for (const name of names) remembered.add(name);
+	rememberedLazyToolsBySessionFile.set(sessionFile, remembered);
+}
+
+export function getRememberedLazyTools(
+	sessionFile: string | undefined,
+): ReadonlySet<string> {
+	return sessionFile
+		? (rememberedLazyToolsBySessionFile.get(sessionFile) ?? new Set<string>())
+		: new Set<string>();
+}
+
+export function clearRememberedLazyTools(
+	sessionFile: string | undefined,
+): void {
+	if (sessionFile) rememberedLazyToolsBySessionFile.delete(sessionFile);
+}
+
 /** The only part of the host model object this module reads. */
 type DeferredToolModel = {
 	compat?: {

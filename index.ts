@@ -257,8 +257,11 @@ import {
 const LOOP_BLOCK_IDENTITY = "<pi-lens>";
 import {
 	isFreshSessionStart,
+	clearRememberedLazyTools,
+	getRememberedLazyTools,
 	planToolSet,
 	recordToolSetMutation,
+	rememberLazyTools,
 	supportsDeferredTools,
 } from "./clients/tool-set-policy.js";
 import {
@@ -1729,14 +1732,19 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const filteredLazyCatalog = LAZY_TOOL_CATALOG.filter((tool) =>
 		enabledLazyTools.has(tool.name),
 	);
-	// #1453: the lazy tools the model activated in THIS logical conversation.
-	// Extension closure state does NOT outlive a session rebuild. Measured
-	// against pi 0.85.1 (#2866 round 4): the
-	// module is imported once per process but this factory IS re-run on
-	// reload, new and resume, so this closure set does not survive a rebuild
-	// (#2889); the session_start restore below therefore deactivates every
-	// situational tool after any rebuild.
-	const rememberedLazyTools = new Set<string>();
+	// #1453/#2889: activation memory is module-owned and keyed by pi's session
+	// file, so it survives this factory re-run while staying conversation-local.
+	const getSessionFile = (ctx: unknown): string | undefined => {
+		try {
+			return (
+				ctx as {
+					sessionManager?: { getSessionFile?: () => string | undefined };
+				}
+			)?.sessionManager?.getSessionFile?.();
+		} catch {
+			return undefined;
+		}
+	};
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
 			getActiveTools?: () => string[];
@@ -1744,9 +1752,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 		},
 		filteredLazyCatalog,
 		{
-			onActivated: (names) => {
+			onActivated: (names, ctx) => {
 				observeSituationalToolActivation(names);
-				for (const name of names) rememberedLazyTools.add(name);
+				rememberLazyTools(getSessionFile(ctx), names);
 			},
 			onRejected: (name) => {
 				if (
@@ -2114,9 +2122,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// an active-tool set per session. Skipping the call on those reasons
 					// would therefore leave every lazy tool active forever AND change the
 					// advertised tool list relative to the parent's cached prompt prefix.
-					// Rebuilding the same set keeps the prefix identical when the
-					// activation closure remains available. Real pi re-runs this factory
-					// on every rebuild, so that closure is empty after replacement.
+					// Rebuilding the same set keeps the prefix identical. The remembered
+					// set is keyed by session file in the module-level policy store, so it
+					// survives pi re-running this factory on every rebuild.
 					//
 					// Deliberately BELOW the #473 concurrent-secondary guard: the active
 					// tool set is shared runtime state (one loader per process), so a
@@ -2136,8 +2144,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 							setActiveTools?: (names: string[]) => void;
 						};
 						// A fresh conversation starts with no activation memory; a
-						// rebuild inherits the parent's.
-						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
+						// rebuild inherits the current session file's memory.
+						const sessionFile = getSessionFile(ctx);
+						if (isFreshSessionStart(sessionReason)) {
+							clearRememberedLazyTools(sessionFile);
+						}
 						if (
 							getLensFlag("no-lazy-tools") !== true &&
 							typeof piWithActiveTools.getActiveTools === "function" &&
@@ -2147,7 +2158,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							const plan = planToolSet(
 								piWithActiveTools.getActiveTools(),
 								lazyNames,
-								rememberedLazyTools,
+								getRememberedLazyTools(sessionFile),
 							);
 							if (plan.changed) {
 								piWithActiveTools.setActiveTools(plan.desired);
@@ -3440,6 +3451,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 		const switchesSessionFile =
 			typeof shutdownEvent?.targetSessionFile === "string" &&
 			shutdownEvent.targetSessionFile.length > 0;
+		if (shutdownReason === "new" || shutdownReason === "quit") {
+			clearRememberedLazyTools(getSessionFile(ctx));
+		}
 		if (
 			switchesSessionFile ||
 			shutdownReason === "quit" ||
