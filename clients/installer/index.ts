@@ -4993,9 +4993,7 @@ function boundInstallError(
 	limit = INSTALL_ERROR_LINE_LIMIT,
 ): string {
 	const line = value.replace(/[\r\n]+/g, " ").trim();
-	return line.length > limit
-		? `${line.slice(0, limit - 3)}...`
-		: line;
+	return line.length > limit ? `${line.slice(0, limit - 3)}...` : line;
 }
 
 async function installNpmTool(
