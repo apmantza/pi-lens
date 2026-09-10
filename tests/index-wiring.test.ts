@@ -87,7 +87,7 @@ vi.mock("../clients/widget-state.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/widget-state.js")>();
 	return {
-		...actual,
+		...(await importOriginal()),
 		exportWidgetState: (
 			...args: Parameters<typeof actual.exportWidgetState>
 		) => {
@@ -102,7 +102,7 @@ vi.mock("../clients/observed-mutation.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/observed-mutation.js")>();
 	return {
-		...actual,
+		...(await importOriginal()),
 		runObservedSettledSweep: async (
 			...args: Parameters<typeof actual.runObservedSettledSweep>
 		) => {
@@ -124,7 +124,7 @@ vi.mock("../clients/runtime-agent-end.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/runtime-agent-end.js")>();
 	return {
-		...actual,
+		...(await importOriginal()),
 		handleAgentEnd: async (
 			...args: Parameters<typeof actual.handleAgentEnd>
 		) => {
@@ -139,7 +139,7 @@ vi.mock("../clients/quiet-window.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/quiet-window.js")>();
 	return {
-		...actual,
+		...(await importOriginal()),
 		runQuietWindow: async (
 			...args: Parameters<typeof actual.runQuietWindow>
 		) => {
@@ -1585,7 +1585,10 @@ describe("hook handler crash surfacing (#2884)", () => {
 		// unhandled rejection. Vitest fails a run on one (`Errors 1 error`,
 		// exit 1) — this test takes its own listener so the assertion is
 		// deterministic instead of relying on the runner's end-of-run report,
-		// and hands vitest's listeners straight back.
+		// and hands vitest's listeners straight back. Node delivers
+		// `unhandledRejection` at the end of the tick that rejected, so one
+		// `setImmediate` drain is enough and no wall-clock poll is needed
+		// (same technique as `tests/clients/lsp/push-wait-settle-rejection.test.ts`).
 		const savedListeners = process.listeners("unhandledRejection");
 		process.removeAllListeners("unhandledRejection");
 		const seen: unknown[] = [];
@@ -1603,15 +1606,14 @@ describe("hook handler crash surfacing (#2884)", () => {
 				{},
 				makeCtx({ cwd: tmp, sessionId: "quiet" }),
 			);
-			await vi.waitFor(() => {
-				expect(seen).toHaveLength(1);
-			});
+			await new Promise((resolve) => setImmediate(resolve));
 		} finally {
 			process.off("unhandledRejection", capture);
 			for (const listener of savedListeners)
 				process.on("unhandledRejection", listener as never);
 		}
 
+		expect(seen).toHaveLength(1);
 		expect(String(seen[0])).toContain("probe: quiet_window boom");
 		expectCrashRecorded("quiet_window");
 	});

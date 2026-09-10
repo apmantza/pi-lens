@@ -93,46 +93,37 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 vi.mock("../clients/read-guard.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/read-guard.js")>();
+	// Every member is an arrow-function class FIELD on purpose: a `return`
+	// inside a factory-local class body is the first `return_statement` the
+	// `vi-mock-export-sweep` parser finds, and it would then read that inner
+	// object as this mock's export list.
 	class MockReadGuard {
-		isNewFile() {
-			return false;
-		}
-		checkEdit() {
-			return { action: "allow" };
-		}
-		recordRead() {}
-		recordSymbolRead() {}
-		recordWritten() {}
-		noteCreatedFile() {}
-		hasKnownPath() {
-			return false;
-		}
-		forgetPath() {}
-		getReadHistory() {
-			return [];
-		}
-		getEditHistory() {
-			return [];
-		}
-		addExemption() {}
-		exportState() {
-			return { version: actual.READ_GUARD_STATE_VERSION, reads: [] };
-		}
-		importState() {
-			return { imported: 0, dropped: 0 };
-		}
-		getSummary() {
-			return {
-				totalEdits: 0,
-				totalBlocks: 0,
-				byReason: {},
-				byFile: {},
-				lspExpansionsHelped: 0,
-			};
-		}
+		isNewFile = () => false;
+		checkEdit = () => ({ action: "allow" });
+		recordRead = () => {};
+		recordSymbolRead = () => {};
+		recordWritten = () => {};
+		noteCreatedFile = () => {};
+		hasKnownPath = () => false;
+		forgetPath = () => {};
+		getReadHistory = () => [];
+		getEditHistory = () => [];
+		addExemption = () => {};
+		exportState = () => ({
+			version: actual.READ_GUARD_STATE_VERSION,
+			reads: [],
+		});
+		importState = () => ({ imported: 0, dropped: 0 });
+		getSummary = () => ({
+			totalEdits: 0,
+			totalBlocks: 0,
+			byReason: {},
+			byFile: {},
+			lspExpansionsHelped: 0,
+		});
 	}
 	return {
-		...actual,
+		...(await importOriginal()),
 		lineContentHash: (line: string) => `mock:${line}`,
 		ReadGuard: MockReadGuard,
 		createReadGuard: () => new MockReadGuard(),
@@ -2622,10 +2613,13 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 
 	async function fireAgentSettled(
 		handlers: ReturnType<typeof createMockPi>["handlers"],
+		// #2884: a caller driving two concurrent activations needs each settle to
+		// carry its OWN session ctx. Default unchanged for every existing caller.
+		ctx: unknown = { cwd: tmpDir, isIdle: () => true },
 	) {
 		const settled = handlers.agent_settled?.[0];
 		expect(settled).toBeTypeOf("function");
-		await settled?.({}, { cwd: tmpDir, isIdle: () => true });
+		await settled?.({}, ctx);
 		// index.ts kicks runQuietWindow off unawaited (fire-and-forget by
 		// design — the SDK awaits the handler); drain the microtask queue so
 		// the stub's task chain completes before assertions.
@@ -2849,15 +2843,13 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			// does that, per activation.
 			expect(eligible()).toBeUndefined();
 
-			await primary.trigger("agent_settled", {}, primaryCtx);
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await fireAgentSettled(primary.handlers, primaryCtx);
 			expect(eligible()).toMatchObject({
 				sessionId: "primary-delivery",
 				generation: 1,
 			});
 
-			await secondary.trigger("agent_settled", {}, secondaryCtx);
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await fireAgentSettled(secondary.handlers, secondaryCtx);
 			expect(eligible()).toMatchObject({
 				sessionId: "secondary-delivery",
 				generation: 1,
