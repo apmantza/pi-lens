@@ -165,6 +165,67 @@ function run(
 	return tool.execute("1", params, new AbortController().signal, null, { cwd });
 }
 
+describe("lens_diagnostics compact filename", () => {
+	it("names a real one-file paths request", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-one-file-"));
+		const file = path.join(cwd, "app.ts");
+		fs.writeFileSync(file, "const app = 1;\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const tool = makeTool({}, service);
+			const result = await run(tool, { source: "lsp", paths: [file] }, cwd);
+			const rendered = (
+				tool.renderResult?.(result, { expanded: false }, {} as Theme, {
+					args: { source: "lsp", paths: [file] },
+				}) as any
+			)
+				.render(200)
+				.join("\n");
+			expect(rendered).toContain("lens_diagnostics app.ts — 0 diagnostics");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("uses the diagnosed file when path and paths are both supplied", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-both-paths-"));
+		const diagnosed = path.join(cwd, "diagnosed.ts");
+		const unrelated = path.join(cwd, "unrelated.ts");
+		fs.writeFileSync(diagnosed, "const diagnosed = 1;\n");
+		fs.writeFileSync(unrelated, "const unrelated = 1;\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => []),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const tool = makeTool({}, service);
+			const result = await run(
+				tool,
+				{ source: "lsp", path: unrelated, paths: [diagnosed] },
+				cwd,
+			);
+			const rendered = (
+				tool.renderResult?.(result, { expanded: false }, {} as Theme, {
+					args: { source: "lsp", path: unrelated, paths: [diagnosed] },
+				}) as any
+			)
+				.render(200)
+				.join("\n");
+			expect(rendered).toContain(
+				"lens_diagnostics diagnosed.ts — 0 diagnostics",
+			);
+			expect(rendered).not.toContain("unrelated.ts");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+});
+
 function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-ignore-"));
 	fs.writeFileSync(
@@ -181,6 +242,152 @@ function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 }
 
 describe("lens_diagnostics source and scope routing", () => {
+	it("applies the same severity threshold to session and LSP sources", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-severity-threshold-"),
+		);
+		const file = path.join(cwd, "threshold.ts");
+		fs.writeFileSync(file, "const threshold = 1;\n");
+		const tiers = [
+			["error", "SESSION-ERROR", 1],
+			["warning", "SESSION-WARNING", 2],
+			["info", "SESSION-INFO", 3],
+			["hint", "SESSION-HINT", 4],
+		] as const;
+		mockSummaries.push(
+			sum(
+				file,
+				{ blocking: 1, errors: 1, warnings: 1, advisories: 2 },
+				{
+					diagnostics: tiers.map(([severity, message]) => ({
+						severity,
+						semantic: severity === "error" ? "blocking" : undefined,
+						message,
+						line: 1,
+					})),
+				},
+			),
+		);
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () =>
+				tiers.map(([_, message, severity]) => ({
+					severity,
+					message: message.replace("SESSION", "LSP"),
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				})),
+			),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			for (const [severity, expected] of [
+				["error", ["ERROR"]],
+				["warning", ["ERROR", "WARNING"]],
+				["information", ["ERROR", "WARNING", "INFO"]],
+				["hint", ["ERROR", "WARNING", "INFO", "HINT"]],
+			] as const) {
+				const sessionText = String(
+					(await run(makeTool(), { mode: "all", severity }, cwd)).content[0]
+						.text,
+				);
+				const lspText = String(
+					(
+						await run(
+							makeTool({}, service),
+							{ source: "lsp", scope: "paths", paths: [file], severity },
+							cwd,
+						)
+					).content[0].text,
+				);
+				const expectedTiers: readonly string[] = expected;
+				expect(
+					expected
+						.map((tier) => `SESSION-${tier}`)
+						.every((message) => sessionText.includes(message)),
+				).toBe(true);
+				expect(
+					expected
+						.map((tier) => `LSP-${tier}`)
+						.every((message) => lspText.includes(message)),
+				).toBe(true);
+				for (const tier of ["ERROR", "WARNING", "INFO", "HINT"])
+					if (!expectedTiers.includes(tier)) {
+						expect(sessionText).not.toContain(`SESSION-${tier}`);
+						expect(lspText).not.toContain(`LSP-${tier}`);
+					}
+			}
+		} finally {
+			mockSummaries.length = 0;
+			removeTempDirSync(cwd);
+		}
+	});
+
+	it("keeps an error-only file visible at the warning threshold", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-severity-error-only-"),
+		);
+		const file = path.join(cwd, "error-only.ts");
+		fs.writeFileSync(file, "const errorOnly = 1;\n");
+		mockSummaries.push(
+			sum(
+				file,
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "SESSION-ERROR-ONLY",
+							line: 1,
+						},
+					],
+				},
+			),
+		);
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => [
+				{
+					severity: 1,
+					message: "LSP-ERROR-ONLY",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			]),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const sessionText = String(
+				(await run(makeTool(), { mode: "all", severity: "warning" }, cwd))
+					.content[0].text,
+			);
+			const lspText = String(
+				(
+					await run(
+						makeTool({}, service),
+						{
+							source: "lsp",
+							scope: "paths",
+							paths: [file],
+							severity: "warning",
+						},
+						cwd,
+					)
+				).content[0].text,
+			);
+			expect(sessionText).toContain("SESSION-ERROR-ONLY");
+			expect(lspText).toContain("LSP-ERROR-ONLY");
+		} finally {
+			mockSummaries.length = 0;
+			removeTempDirSync(cwd);
+		}
+	});
+
 	it("routes source=lsp through the real probe implementation", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
 		const file = path.join(cwd, "bad.ts");
@@ -299,11 +506,15 @@ describe("lens_diagnostics source and scope routing", () => {
 				{ source: "lsp", scope: "paths", paths: [fileA] },
 				cwd,
 			);
-			await run(
+			const omittedResult = await run(
 				makeTool({}, makeService("omitted")),
 				{ source: "lsp", paths: [fileB] },
 				cwd,
 			);
+			expect(omittedResult.details).toMatchObject({
+				source: "lsp",
+				scope: "paths",
+			});
 			expect(touchedByScope.get("omitted")).toEqual([fileB]);
 			expect(touchedByScope.get("paths")).toEqual([fileA]);
 		} finally {
@@ -463,6 +674,14 @@ describe("lens_diagnostics schema", () => {
 		// from the model-facing enum rather than shipping dead choices.
 		expect(props.source.enum).toEqual(["session", "lsp"]);
 		expect(props.scope.enum).toEqual(["paths", "workspace"]);
+		expect(props.paths.maxItems).toBe(100);
+		expect(props.severity.enum).toEqual([
+			"error",
+			"warning",
+			"information",
+			"hint",
+			"all",
+		]);
 	});
 
 	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
@@ -655,7 +874,15 @@ describe("lens_diagnostics mode=delta", () => {
 				files: [
 					{
 						filePath: "/proj/src/foo.ts",
-						warnings: [{ line: 1, rule: "r", tool: "t", message: "warn" }],
+						warnings: [
+							{
+								line: 1,
+								rule: "r",
+								tool: "t",
+								message: "warn",
+								severity: "warning",
+							},
+						],
 					},
 				],
 				summary: { warnings: 1 },
@@ -666,6 +893,112 @@ describe("lens_diagnostics mode=delta", () => {
 		// No actionable warnings (they're warnings, not errors)
 		expect(text).toContain("No error");
 	});
+
+	it("severity=error excludes the cached warning in delta mode", async () => {
+		const result = await run(
+			makeTool({
+				"actionable-warnings": {
+					files: [
+						{
+							filePath: "/proj/src/foo.ts",
+							warnings: [
+								{
+									line: 1,
+									rule: "r",
+									tool: "t",
+									message: "warn",
+									severity: "warning",
+								},
+							],
+						},
+					],
+					summary: { warnings: 1 },
+				},
+			}),
+			{ mode: "delta", severity: "error" },
+		);
+		expect(String(result.content[0].text)).toContain("No error issues");
+	});
+
+	it.each([
+		["warning", ["ACTIONABLE-WARNING", "QUALITY-WARNING-TIER"]],
+		[
+			"information",
+			[
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+			],
+		],
+		[
+			"hint",
+			[
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+				"QUALITY-HINT-TIER",
+			],
+		],
+	])(
+		"filters delta cache records individually for severity=%s",
+		async (severity, expected) => {
+			const tool = makeTool({
+				"actionable-warnings": {
+					files: [
+						{
+							filePath: "/proj/a.ts",
+							warnings: [
+								{
+									severity: "warning",
+									line: 1,
+									message: "ACTIONABLE-WARNING",
+									tool: "runner",
+								},
+							],
+						},
+					],
+				},
+				"code-quality-warnings": {
+					files: [
+						{
+							filePath: "/proj/a.ts",
+							warnings: [
+								{
+									severity: "warning",
+									line: 2,
+									message: "QUALITY-WARNING-TIER",
+									tool: "quality",
+								},
+								{
+									severity: "info",
+									line: 3,
+									message: "QUALITY-INFORMATION-TIER",
+									tool: "quality",
+								},
+								{
+									severity: "hint",
+									line: 4,
+									message: "QUALITY-HINT-TIER",
+									tool: "quality",
+								},
+							],
+						},
+					],
+				},
+			});
+			const text = String(
+				(await run(tool, { mode: "delta", severity })).content[0].text,
+			);
+			for (const message of [
+				"ACTIONABLE-WARNING",
+				"QUALITY-WARNING-TIER",
+				"QUALITY-INFORMATION-TIER",
+				"QUALITY-HINT-TIER",
+			])
+				if (expected.includes(message)) expect(text).toContain(message);
+				else expect(text).not.toContain(message);
+		},
+	);
 
 	it("formats project diagnostics delta records", async () => {
 		// #1634 review round R3: appendProjectDiagnosticsDeltaLines now
@@ -2977,14 +3310,14 @@ describe("lens_diagnostics mode=all", () => {
 		expect(String(result.content[0].text)).toContain("pending");
 	});
 
-	it("severity=warning excludes blocking/error-only files", async () => {
+	it("severity=warning includes blocking/error-only files", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(sum("/proj/a.ts", { blocking: 1 }));
 		mockSummaries.push(sum("/proj/b.ts", { warnings: 2 }));
 		const result = await run(makeTool(), { mode: "all", severity: "warning" });
 		const text = String(result.content[0].text);
 		expect(text).toContain("b.ts");
-		expect(text).not.toContain("a.ts");
+		expect(text).toContain("a.ts");
 	});
 
 	it("severity=all shows all issue types", async () => {
@@ -3234,6 +3567,75 @@ describe("lens_diagnostics mode=all", () => {
 		expect(text).toContain("BOOM error here");
 		expect(text).not.toContain("minor warning here");
 	});
+
+	it.each([
+		["error", ["error-tier"]],
+		["warning", ["error-tier", "warning-tier"]],
+		[
+			"information",
+			["error-tier", "warning-tier", "info-tier", "note-tier", "help-tier"],
+		],
+		[
+			"hint",
+			[
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			],
+		],
+		[
+			"all",
+			[
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			],
+		],
+	])(
+		"mode=all applies the requested severity threshold: %s",
+		async (severity, expected) => {
+			mockSummaries.length = 0;
+			const diagnostics = [
+				"error",
+				"warning",
+				"info",
+				"note",
+				"help",
+				"hint",
+			].map((tier) => ({
+				severity: tier,
+				semantic: tier === "error" ? "blocking" : undefined,
+				message: `${tier}-tier`,
+				line: 1,
+			}));
+			mockSummaries.push(
+				sum(
+					"/proj/mixed.ts",
+					{ blocking: 1, errors: 1, warnings: 1, advisories: 2 },
+					{ diagnostics },
+				),
+			);
+			const text = String(
+				(await run(makeTool(), { mode: "all", severity })).content[0].text,
+			);
+			for (const message of expected) expect(text).toContain(message);
+			for (const message of [
+				"error-tier",
+				"warning-tier",
+				"info-tier",
+				"note-tier",
+				"help-tier",
+				"hint-tier",
+			])
+				if (!expected.includes(message)) expect(text).not.toContain(message);
+		},
+	);
 });
 
 // ── paths scope restrictor (#461) ───────────────────────────────────────────────
@@ -3588,7 +3990,7 @@ describe("lens_diagnostics paths", () => {
 		}
 	});
 
-	it("errors clearly when paths exceeds the 200-entry cap", async () => {
+	it("errors clearly when paths exceeds the 100-entry cap", async () => {
 		const many = Array.from({ length: 201 }, (_, i) => `/proj/src/f${i}.ts`);
 		const result = (await run(makeTool(), { mode: "all", paths: many })) as {
 			content: [{ type: "text"; text: string }];
@@ -3596,7 +3998,7 @@ describe("lens_diagnostics paths", () => {
 		};
 		expect(result.isError).toBe(true);
 		const text = String(result.content[0].text);
-		expect(text).toContain("200");
+		expect(text).toContain("100");
 	});
 
 	it("mode=full: a nonexistent path produces the skipped-note without throwing", async () => {

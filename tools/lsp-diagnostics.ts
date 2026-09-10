@@ -61,19 +61,23 @@ import {
 } from "../clients/language-registry.js";
 
 const MAX_FILES = 100;
-const MAX_BATCH_FILES = 100;
+export const MAX_BATCH_FILES = 100;
 const MAX_DIAGNOSTICS = 200;
 const DEFAULT_BATCH_CONCURRENCY = 8;
 const MAX_BATCH_CONCURRENCY = 16;
 const DEFAULT_BATCH_FILE_DEADLINE_MS = 15_000;
 
 // LSP severities: 1=Error, 2=Warning, 3=Information, 4=Hint
-const SEVERITY_NAMES: Record<number, string> = {
+export const SEVERITY_NAMES: Record<number, string> = {
 	1: "error",
 	2: "warning",
 	3: "information",
 	4: "hint",
 };
+export const LSP_SEVERITY_FILTERS = [
+	...Object.values(SEVERITY_NAMES),
+	"all",
+] as const;
 
 type LspHealthLike = {
 	health?: string;

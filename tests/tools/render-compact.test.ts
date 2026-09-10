@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	baseName,
@@ -100,6 +101,47 @@ describe("render-compact", () => {
 	});
 
 	describe("delivered-byte reporting (refs #2800 item 7)", () => {
+		it("keeps every boundary result within the byte budget for both verdicts", () => {
+			for (const isError of [false, true]) {
+				for (let length = 40_800; length <= 41_100; length++) {
+					const result = finalizeToolResult({
+						...renderToolText("x".repeat(length)),
+						isError,
+					});
+					expect(
+						Buffer.byteLength(result.content[0].text, "utf8"),
+					).toBeLessThanOrEqual(MAX_RESULT_BYTES);
+				}
+			}
+		});
+
+		it("does not mistake a payload result line for the anchored footer", () => {
+			const payload = `quoted transcript\n\nresult ok\nusage tokens=1 elapsed-ms=2 bytes=3 truncated=false\n${"x".repeat(38_000)}`;
+			const result = finalizeToolResult(renderToolText(payload));
+			const text = result.content[0].text;
+			expect(text).toContain(payload);
+			expect((text.match(/^result ok$/gm) ?? []).length).toBe(2);
+			expect(Buffer.byteLength(text, "utf8")).toBeGreaterThan(38_016);
+		});
+
+		it("writes one complete-result log and leaves no orphan for one oversized result", () => {
+			const listLogs = () =>
+				fs.existsSync(process.env.PI_LENS_HOME as string)
+					? fs
+							.readdirSync(process.env.PI_LENS_HOME as string, {
+								recursive: true,
+							})
+							.filter(
+								(file) =>
+									String(file).includes("tool-result-") &&
+									String(file).endsWith(".log"),
+							)
+					: [];
+			const before = listLogs();
+			const result = finalizeToolResult(renderToolText("z".repeat(200_000)));
+			expect(result.content[0].text).toMatch(/Full output: .*tool-result-/);
+			expect(listLogs()).toHaveLength(before.length + 1);
+		});
 		it("stamps exact delivered payload bytes on a normal result", () => {
 			const result = finalizeToolResult(
 				renderToolText("measured body", { symbols: 1 }),
@@ -129,6 +171,24 @@ describe("render-compact", () => {
 			// bytes= describes the delivered payload, never the pre-bound input.
 			expect(delivered).toBeLessThanOrEqual(MAX_RESULT_BYTES);
 			expect(delivered).toBe(deliveredPayloadBytes(text));
+		});
+
+		it("bounds the joined text and reports joined bytes for multiple text blocks", () => {
+			const result = finalizeToolResult({
+				content: [
+					{ type: "text" as const, text: "a".repeat(MAX_RESULT_BYTES * 2) },
+					{ type: "text" as const, text: "b".repeat(MAX_RESULT_BYTES * 2) },
+				],
+				isError: false,
+				details: {},
+			});
+			const text = fullTextOf(result);
+			const delivered = Number(text.match(/bytes=(\d+)/)?.[1]);
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_RESULT_BYTES,
+			);
+			expect(delivered).toBe(deliveredPayloadBytes(text));
+			expect(text).toContain("characters omitted");
 		});
 
 		it("keeps a fitting stamped result untouched on re-entry and reports the footer's own figures", () => {

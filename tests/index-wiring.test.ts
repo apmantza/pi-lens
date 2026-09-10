@@ -7,6 +7,12 @@ const activationToolFactoryOverride = vi.hoisted(() => ({
 	enabled: false,
 	description: undefined as string | undefined,
 }));
+const symbolSearchExecution = vi.hoisted(() => ({
+	mode: "normal" as "normal" | "reject" | "throw",
+}));
+const deliveryObservations = vi.hoisted(() => ({
+	rows: [] as Array<{ bytes: number; truncated: boolean }>,
+}));
 
 vi.mock("../tools/activate-tools.js", async (importOriginal) => {
 	const actual =
@@ -22,6 +28,42 @@ vi.mock("../tools/activate-tools.js", async (importOriginal) => {
 				...tool,
 				description: activationToolFactoryOverride.description,
 			};
+		},
+	};
+});
+
+vi.mock("../tools/symbol-search.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../tools/symbol-search.js")>();
+	return {
+		...actual,
+		createSymbolSearchTool: (
+			...args: Parameters<typeof actual.createSymbolSearchTool>
+		) => {
+			const tool = actual.createSymbolSearchTool(...args);
+			return {
+				...tool,
+				execute: async (...executeArgs: Parameters<typeof tool.execute>) => {
+					if (symbolSearchExecution.mode === "throw")
+						throw new Error("probe sync boom");
+					if (symbolSearchExecution.mode === "reject")
+						throw new Error("probe boom");
+					return tool.execute(...executeArgs);
+				},
+			};
+		},
+	};
+});
+
+vi.mock("../clients/cache-observability.js", async (importOriginal) => {
+	const actual =
+		(await importOriginal()) as typeof import("../clients/cache-observability.js");
+	return {
+		...(await importOriginal()),
+		...actual,
+		recordToolResultDelivery: (args: { bytes: number; truncated: boolean }) => {
+			deliveryObservations.rows.push(args);
+			actual.recordToolResultDelivery(args);
 		},
 	};
 });
@@ -148,6 +190,40 @@ const EXPECTED_HOOKS = [
 ];
 
 describe("index.ts extension wiring", () => {
+	it.each(["reject", "throw"])(
+		"returns a top-level bounded error result when symbol_search %s",
+		async (mode) => {
+			symbolSearchExecution.mode = mode as "reject" | "throw";
+			deliveryObservations.rows.length = 0;
+			try {
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const tool = pi.getTool("symbol_search") as any;
+				const result = await tool.execute(
+					"probe",
+					{ query: "x" },
+					new AbortController().signal,
+					undefined,
+					makeCtx({ cwd: process.cwd(), sessionId: "f1" }),
+				);
+				const text = result.content?.[0]?.text ?? "";
+				expect(result.content).toBeDefined();
+				expect(result.isError).toBe(true);
+				expect(text).toContain("result error");
+				expect(text.match(/^result error$/gm) ?? []).toHaveLength(1);
+				expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(40 * 1024);
+				const footerBytes = Number(
+					text.match(/bytes=(\d+)/)?.[1] ?? Number.NaN,
+				);
+				expect(deliveryObservations.rows).toEqual([
+					expect.objectContaining({ bytes: footerBytes, truncated: false }),
+				]);
+			} finally {
+				symbolSearchExecution.mode = "normal";
+			}
+		},
+	);
+
 	it("re-wires a recovered bus on a #473-guarded subagent session_start (#1383)", async () => {
 		_resetSessionLifecycleForTests();
 		resetBusPublishForTests();

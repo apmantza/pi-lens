@@ -49,6 +49,10 @@ export const RESULT_FOOTER_RESERVE_BYTES = Buffer.byteLength(
 	`\n\nresult error\n${"x".repeat(FOOTER_DIAG_SECTION_MAX_BYTES)}\nusage tokens=${"9".repeat(FOOTER_MAX_DIGITS)} elapsed-ms=${"9".repeat(FOOTER_MAX_DIGITS)} bytes=${"9".repeat(FOOTER_MAX_DIGITS)} truncated=false`,
 	"utf8",
 );
+// The literal reserve intentionally leaves about 1 KiB below MAX_RESULT_BYTES
+// for footer growth. Keep this conservative slack: deriving the bound by
+// iterating over a changing footer caused both overflows and repeated log writes
+// (round 2 F2/F7, refs #2862 and #2864).
 
 /** The payload byte budget the footer is stamped into: the delivered result
  * budget minus the reserved footer maximum (#2800 item 7). */
@@ -283,19 +287,37 @@ export function boundResultPayload<T extends CompactResultLike>(
 	if (!result.content) {
 		return { result, deliveredBytes: 0, truncated: false };
 	}
-	let deliveredBytes = 0;
-	let truncated = false;
-	const content = result.content.map((block) => {
-		if (block.type !== "text" || typeof block.text !== "string") return block;
-		const bound = boundToolText(block.text, RESULT_PAYLOAD_BUDGET_BYTES);
-		deliveredBytes += Buffer.byteLength(bound.text, "utf8");
-		truncated = truncated || bound.truncated;
-		return { ...block, text: bound.text };
-	});
+	const joined = fullTextOf(result);
+	// Reserve the widest footer once. This keeps the MAX_RESULT_BYTES invariant
+	// independent of payload contents and gives boundToolText one log write.
+	const bound = boundToolText(joined, RESULT_PAYLOAD_BUDGET_BYTES);
+	const firstText = result.content.findIndex(
+		(block) => block.type === "text" && typeof block.text === "string",
+	);
+	let retainedText = false;
+	const content = result.content
+		.filter(
+			(block, index) =>
+				block.type !== "text" ||
+				typeof block.text !== "string" ||
+				index === firstText,
+		)
+		.map((block) => {
+			if (
+				block.type === "text" &&
+				typeof block.text === "string" &&
+				!retainedText
+			) {
+				retainedText = true;
+				return { ...block, text: bound.text };
+			}
+			return block;
+		});
+	const deliveredBytes = Buffer.byteLength(fullTextOf({ content }), "utf8");
 	return {
 		result: { ...result, content },
 		deliveredBytes,
-		truncated,
+		truncated: bound.truncated,
 	};
 }
 

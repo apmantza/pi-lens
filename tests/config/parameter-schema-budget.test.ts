@@ -39,7 +39,7 @@ const expected = {
 		],
 	},
 	lens_diagnostics: {
-		total: 1612,
+		total: 1800,
 		maximum: 2594,
 		keys: [
 			"source",

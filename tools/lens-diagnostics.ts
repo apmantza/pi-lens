@@ -102,7 +102,11 @@ import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js"
 import { detectFileRole } from "../clients/file-role.js";
 import { STALE_LINE_MARKER } from "../clients/stale-marker.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
-import { createLspDiagnosticsTool } from "./lsp-diagnostics.js";
+import {
+	createLspDiagnosticsTool,
+	LSP_SEVERITY_FILTERS,
+	MAX_BATCH_FILES,
+} from "./lsp-diagnostics.js";
 import {
 	demotePastEofDiagnostics,
 	PAST_EOF_STALE_MARKER,
@@ -119,7 +123,7 @@ const MAX_DIAGNOSTICS_PER_FILE = 50;
 // narrow, not paginate. Erroring (rather than silently truncating) means a
 // caller can never believe it checked files it didn't (issue's stated
 // invariant).
-const MAX_PATHS_ENTRIES = 200;
+const MAX_PATHS_ENTRIES = MAX_BATCH_FILES;
 
 // #1623: the reason rendered for every heavyweight-analyzer lane (gitleaks,
 // trivy, govulncheck, dead-code, knip, jscpd, madge, opengrep, test-runner)
@@ -315,12 +319,26 @@ export function createLensDiagnosticsTool(
 			incompleteFiles?: number;
 			unconfirmed?: boolean;
 			timedOut?: boolean;
+			filePath?: string;
 		}>(({ details, args, isError, text }) => {
 			if (details?.source === "lsp") {
 				const count = details.totalDiagnostics ?? 0;
 				const files = details.filesChecked ?? details.filesScanned ?? 0;
 				const noun = count === 1 ? "diagnostic" : "diagnostics";
-				const scope = files > 1 ? ` across ${files} files` : "";
+				const filePath =
+					typeof details?.filePath === "string"
+						? details.filePath
+						: Array.isArray(args?.paths) &&
+							  args.paths.length === 1 &&
+							  typeof args.paths[0] === "string"
+							? args.paths[0]
+							: undefined;
+				const singleFile =
+					(details?.mode === "file" || files === 1) &&
+					typeof filePath === "string"
+						? ` ${path.basename(filePath)}`
+						: "";
+				const scope = files > 1 ? ` across ${files} files` : singleFile;
 				if (isError)
 					return `lens_diagnostics lsp — ${text.split("\n")[0] ?? "error"}`;
 				if ((details.navigationOnlyFiles ?? 0) > 0)
@@ -480,8 +498,9 @@ export function createLensDiagnosticsTool(
 			),
 			severity: Type.Optional(
 				Type.String({
-					enum: ["error", "warning", "all"],
-					description: "Diagnostic severity filter.",
+					enum: [...LSP_SEVERITY_FILTERS],
+					description:
+						"Filter by severity threshold (default: all): error shows errors; warning includes errors and warnings; information includes errors, warnings, and information; hint and all show every known tier.",
 				}),
 			),
 			paths: Type.Optional(
@@ -505,7 +524,9 @@ export function createLensDiagnosticsTool(
 			const scope =
 				requestedScope ??
 				(legacyMode === "delta" || legacyMode === undefined
-					? "delta"
+					? source === "lsp"
+						? "paths"
+						: "delta"
 					: "workspace");
 			const cwd = ctx.cwd ?? getCwd();
 			if (source === "lsp") {
@@ -1070,12 +1091,29 @@ function formatDeltaMode(
 		cwd,
 		quality?.generatedAt,
 	);
+	const matchingWarnings = <W extends { severity: string }>(warnings: W[]) =>
+		warnings.filter((warning) =>
+			matchesRecordSeverity(warning.severity, severity),
+		);
+	const filteredActionableFiles = actionableFiles
+		.map((file) => ({
+			...file,
+			warnings: matchingWarnings(file.warnings),
+		}))
+		.filter((file) => file.warnings.length > 0);
+	const filteredQualityFiles = qualityFiles
+		.map((file) => ({
+			...file,
+			warnings: matchingWarnings(file.warnings),
+		}))
+		.filter((file) => file.warnings.length > 0);
 
 	const lines: string[] = [];
 
-	// Fixable warnings from actionable-warnings
-	if (severity !== "error") {
-		for (const file of actionableFiles) {
+	// Fixable warnings from actionable-warnings and quality cache entries retain
+	// their own severity tier. Apply the same threshold semantics as the LSP path.
+	if (filteredActionableFiles.length > 0) {
+		for (const file of filteredActionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			lines.push(`${rel}`);
 			for (const w of file.warnings) {
@@ -1086,8 +1124,8 @@ function formatDeltaMode(
 	}
 
 	// Quality issues
-	if (severity !== "error") {
-		for (const file of qualityFiles) {
+	if (filteredQualityFiles.length > 0) {
+		for (const file of filteredQualityFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			if (!lines.includes(rel)) lines.push(rel);
 			for (const w of file.warnings) {
@@ -1105,11 +1143,13 @@ function formatDeltaMode(
 		includeFile,
 	);
 
-	const aw = actionableFiles.reduce(
+	const selectedActionableFiles = filteredActionableFiles;
+	const selectedQualityFiles = filteredQualityFiles;
+	const aw = selectedActionableFiles.reduce(
 		(count, file) => count + file.warnings.length,
 		0,
 	);
-	const cq = qualityFiles.reduce(
+	const cq = selectedQualityFiles.reduce(
 		(count, file) => count + file.warnings.length,
 		0,
 	);
@@ -1362,8 +1402,34 @@ function isErrorLike(d: WidgetDiagnostic): boolean {
 }
 
 function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
-	if (severity === "error") return isErrorLike(d);
-	if (severity === "warning") return !isErrorLike(d);
+	return matchesRecordSeverity(isErrorLike(d) ? "error" : d.severity, severity);
+}
+
+function matchesRecordSeverity(
+	recordSeverity: string | undefined,
+	requested: string,
+): boolean {
+	if (requested === "all") return true;
+	if (requested === "error") return recordSeverity === "error";
+	if (requested === "warning")
+		return recordSeverity === "error" || recordSeverity === "warning";
+	if (requested === "information")
+		return (
+			recordSeverity === "error" ||
+			recordSeverity === "warning" ||
+			recordSeverity === "info" ||
+			recordSeverity === "note" ||
+			recordSeverity === "help"
+		);
+	if (requested === "hint")
+		return (
+			recordSeverity === "error" ||
+			recordSeverity === "warning" ||
+			recordSeverity === "info" ||
+			recordSeverity === "note" ||
+			recordSeverity === "help" ||
+			recordSeverity === "hint"
+		);
 	return true;
 }
 
@@ -2774,7 +2840,8 @@ async function formatAllMode(
 		if (severity === "error") return s.blocking > 0 || s.errors > 0;
 		// #2414: a "warning" filter must not admit hint/info — that is exactly
 		// the "present hints as warnings" defect this issue exists to close.
-		if (severity === "warning") return s.warnings > 0;
+		if (severity === "warning")
+			return s.blocking > 0 || s.errors > 0 || s.warnings > 0;
 		// severity: "all" — a hint/info-only file (`advisories > 0`,
 		// warnings === 0) must still surface here, or the #2414 fix that stops
 		// hints inflating `warnings` would silently drop that file from the

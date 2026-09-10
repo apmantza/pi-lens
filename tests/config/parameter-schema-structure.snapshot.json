@@ -171,6 +171,8 @@
 					"enum": [
 						"error",
 						"warning",
+						"information",
+						"hint",
 						"all"
 					]
 				},
@@ -179,7 +181,7 @@
 					"items": {
 						"type": "string"
 					},
-					"maxItems": 200
+					"maxItems": 100
 				}
 			}
 		},
@@ -521,6 +523,8 @@
 					"enum": [
 						"error",
 						"warning",
+						"information",
+						"hint",
 						"all"
 					]
 				},
@@ -529,7 +533,7 @@
 					"items": {
 						"type": "string"
 					},
-					"maxItems": 200
+					"maxItems": 100
 				},
 				"cwd": {
 					"type": "string"
