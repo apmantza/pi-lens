@@ -271,6 +271,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the real host tool handler and read guard must cross the pi process boundary",
 	},
+	// 2026-09-10 (#2800): the tools.<name>.enabled roster is what pi's provider
+	// receives on the wire; a mocked host cannot certify which tools the real
+	// extension registered. Header on the file states why.
+	"real-process-spawn:real-harness/tools-enabled.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the provider wire roster is produced by a real pi host loading the built extension; an in-process double cannot certify tools.<name>.enabled",
+	},
 	// #2807 review F1/F4: the local CLI's exact argv and a shallow checkout's
 	// missing diff are the subjects; an in-process call cannot prove either.
 	"real-process-spawn:scripts/check-pr-body.test.ts": {
@@ -763,6 +771,8 @@ function validateAdmission(
 }
 
 describe("flake-shape ratchet — admission gate", () => {
+	// #2857: the admission sweep reads every admitted file's source and timed
+	// out at vitest's 5 s default under full-suite load; give it a real budget.
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
 		const included = new Set([
 			...wallClockBudgetInclude(),
@@ -795,7 +805,7 @@ describe("flake-shape ratchet — admission gate", () => {
 			}
 		}
 		expect(problems).toEqual([]);
-	});
+	}, 30_000);
 
 	// `ADMITTED_AFTER_BASELINE` is empty in steady state, so the test above
 	// alone never proves `validateAdmission` catches anything. These fixtures

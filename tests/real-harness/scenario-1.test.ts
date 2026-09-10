@@ -31,6 +31,19 @@ function documentedToolBaselines(): { active: string[]; lazy: string[] } {
 	};
 }
 
+// The provider observation's tools are wire objects ({ name, ...bytes }); the
+// roster assertion compares NAMES.
+function observedRoster(pi: {
+	providerObservations(): ReadonlyArray<Record<string, unknown>>;
+}): string[] {
+	const tools = pi.providerObservations().at(-1)?.tools;
+	return (Array.isArray(tools) ? tools : []).flatMap((tool) =>
+		typeof (tool as { name?: unknown }).name === "string"
+			? [(tool as { name: string }).name]
+			: [],
+	);
+}
+
 // flake-shape: real-process-spawn — the real host must load the built extension and preserve its tool roster across turns
 describe("real pi harness: load and tool-set restore", () => {
 	it("loads commands and restores the baseline across a second turn", async () => {
@@ -41,11 +54,10 @@ describe("real pi harness: load and tool-set restore", () => {
 				await pi.newSession();
 				await pi.prompt("run the scripted turn");
 				await pi.awaitAssistantTurn();
-				const first = pi.providerObservations();
-				const active = first.at(-1)?.tools as string[] | undefined;
+				const active = observedRoster(pi);
 				expect(
 					active
-						?.filter((name) =>
+						.filter((name) =>
 							[...baseline.active, ...baseline.lazy].includes(name),
 						)
 						.sort(),
@@ -53,7 +65,7 @@ describe("real pi harness: load and tool-set restore", () => {
 				await pi.prompt("run the second scripted turn");
 				await pi.awaitAssistantTurn();
 				expect(pi.toolResults()).toEqual([]);
-				const second = pi.providerObservations().at(-1)?.tools;
+				const second = observedRoster(pi);
 				expect(second).toEqual(active);
 			},
 		);
