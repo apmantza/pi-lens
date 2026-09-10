@@ -73,6 +73,7 @@ column is the effective behavior when nothing is set.
 | `--no-tests` | `tests.enabled` | global | test runner **on** |
 | `--no-delta` | `delta.enabled` | global | delta mode **on** (new diagnostics only) |
 | `--lens-guard` | `guard.enabled` | global | **off** |
+| `--lens-checkout-guard` | `guard.sharedCheckout` | global | **off** |
 
 | `--no-opengrep` | `opengrep.enabled` | global | Opengrep scanner **on** |
 | `--no-read-guard` | `readGuard.enabled` | global | read-before-edit monitor **on** |

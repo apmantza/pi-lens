@@ -107,6 +107,7 @@ pi --no-autofix          # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlflu
 pi --no-tests            # Skip test runner
 pi --no-delta            # Disable delta mode (show all diagnostics, not just new ones)
 pi --lens-guard          # Block git commit/push when unresolved blockers exist (experimental)
+pi --lens-checkout-guard # Decline git commands that rewrite the working tree while another live pi-lens session shares this dirty checkout (experimental)
 pi --no-opengrep         # Disable the Opengrep security scanner (default-on auxiliary LSP)
 pi --no-read-guard       # Disable the read-before-edit behavior monitor
 pi --lens-turn-summary   # Persist a per-turn summary of diagnostics, autofixes, and autoformats

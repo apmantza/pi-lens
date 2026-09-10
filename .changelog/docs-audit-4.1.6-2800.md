@@ -1,0 +1,4 @@
+---
+section: Changed
+---
+- **Audit and update user-facing and contributor docs against master for the v4.1.6 cut.** `docs/agent-tools.md` now describes `lens_diagnostics`' `source`/`scope`/`severity`-threshold contract (dropping the retired `analyzer` source), the retired `pilens_lsp_diagnostics` MCP compatibility redirect, the `lsp_navigation` 19-operation roster with a link to its SKILL.md parameter reference, and the result-delivery contract (`finalizeToolResult`, 40 KiB bound, `bytes=`/`truncated=` usage footer). `docs/settings.md`, `docs/globalconfig.md`, and `docs/usage.md` gained the missing `--lens-checkout-guard` / `guard.sharedCheckout` toggle. `docs/features.md`'s formatter list is corrected to the current 34-entry registry (drops the non-existent `fish_indent`, adds `ktfmt` and `terragrunt-hcl`). `docs/environment-variables.md` drops `PI_LENS_AUTO_INSTALL`, which no longer exists in code. (refs #2800)

@@ -123,11 +123,6 @@ the `dispatch.runnerTimeoutFloorMs` config key, which wins when both are set.
 
 ## Install control
 
-### `PI_LENS_AUTO_INSTALL`
-
-Set to `1` to auto-approve tool installs non-interactively (same as
-`--auto-install`). Off by default — installs prompt interactively.
-
 ### `PI_LENS_DISABLE_LSP_INSTALL`
 
 Set to `1` to skip auto-installing language servers. Off by default.
