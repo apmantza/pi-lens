@@ -372,6 +372,7 @@ export function createLspDiagnosticsTool(
 	// "confirmed clean" for the same file. index.ts injects
 	// `runtime.retireInlineBlockerOnConfirmedClean`. Optional/undefined in tests.
 	onConfirmedNoBlockers?: (info: ConfirmedNoBlockersInfo) => void,
+	getService: () => ReturnType<typeof getLSPService> = getLSPService,
 ) {
 	return {
 		name: "lsp_diagnostics" as const,
@@ -542,7 +543,7 @@ export function createLspDiagnosticsTool(
 			const serverScope: "primary" | "all" =
 				typedParams.serverScope === "primary" ? "primary" : "all";
 
-			const lspService = getLSPService();
+			const lspService = getService();
 			if (!lspService) {
 				return {
 					content: [

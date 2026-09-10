@@ -26,7 +26,6 @@ const EXACT_PARITY_TOOLS = new Set([
 	"ast_grep_search",
 	"ast_grep_replace",
 	"lsp_navigation",
-	"lsp_diagnostics",
 	"lens_diagnostics",
 	"module_report",
 ]);
@@ -98,12 +97,7 @@ describe("result contract across registered tool surfaces", () => {
 				apply: false,
 			},
 			lsp_navigation: { operation: "documentSymbol", path: "fixture.ts" },
-			lsp_diagnostics: { path: "bad.ts" },
-			lens_diagnostics: {
-				mode: "full",
-				paths: ["bad.ts"],
-				refreshRunners: "none",
-			},
+			lens_diagnostics: { source: "lsp", scope: "paths", paths: ["bad.ts"] },
 			symbol_search: { query: "fixture", paths: ["fixture.ts"] },
 			module_report: { path: "fixture.ts", view: "compact" },
 			project_report: { view: "compact", limit: 1 },

@@ -50,7 +50,6 @@ import { CacheManager } from "./clients/cache-manager.js";
 // #1561 F2: the retire hook re-syncs the gate latch and the persisted record
 // the same way the per-dispatch path does, so a retired blocker stops gating
 // the commit.
-import { retireInlineBlockerAndResyncGuard } from "./clients/git-guard.js";
 import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	clearWidgetState,
@@ -226,7 +225,6 @@ import { createLensDiagnosticMarkTool } from "./tools/lens-diagnostic-mark.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createAstGrepOutlineTool } from "./tools/ast-grep-outline.js";
-import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
 import {
 	createModuleReportTool,
@@ -1657,33 +1655,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			() => runtime.nextWriteIndex(),
 			captureLspStatusRepaint,
 			() => runtime,
-		),
-		createLspDiagnosticsTool(
-			// #571: same reconciliation wiring as lens_diagnostics mode=full, for
-			// the standalone on-demand check.
-			() => runtime.nextWriteIndex(),
-			// #1561: and the same confirmed result must retire this file's stale
-			// inline blocker, not only correct the footer. The eviction is logged so
-			// it is confirmable from the runtime log rather than from the absence of
-			// complaints (#1432 Gap 1).
-			// #1561 F2: the retire also recomputes the commit-gate latch and the
-			// persisted record — see `retireInlineBlockerAndResyncGuard`.
-			({ filePath, writeIndex, coveredSources, cwd }) => {
-				const retired = retireInlineBlockerAndResyncGuard({
-					runtime,
-					cacheManager,
-					cwd,
-					filePath,
-					writeIndex,
-					coveredSources,
-					lensGuardEnabled: getLensFlag("lens-guard") === true,
-				});
-				if (retired) {
-					dbg(
-						`inline_blocker: retired for ${filePath} — lsp_diagnostics confirmed clean (writeIndex ${writeIndex ?? "none"}, covered ${coveredSources.join(",") || "none"})`,
-					);
-				}
-			},
 		),
 		createSymbolSearchTool(() => runtime.projectRoot),
 		createEffectiveConfigTool(() => runtime.projectRoot, noToolFlag),

@@ -53,7 +53,7 @@ pi-lens exposes these high-value tools to agents:
 - `lens_diagnostics` — `mode=all` reports cached findings. If changed files have
   no cached diagnostics or stale findings, use `mode=full` with `paths` for
   targeted active verification. Omitting `paths` scans the whole project.
-- `lsp_navigation` / `lsp_diagnostics` — IDE-style navigation and diagnostics.
+- `lsp_navigation` / `lens_diagnostics` — IDE-style navigation and diagnostics.
 - `ast_grep_search` / `ast_grep_replace` — AST-aware structural search/replace.
 - `module_report` / `read_symbol` — navigable outline and targeted symbol-body
   reads; prefer these before broad full-file reads.

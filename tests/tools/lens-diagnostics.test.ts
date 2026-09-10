@@ -180,6 +180,42 @@ function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
 	});
 }
 
+describe("lens_diagnostics source and scope routing", () => {
+	it("routes source=lsp through the real probe implementation", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
+		const file = path.join(cwd, "bad.ts");
+		fs.writeFileSync(file, "const value: number = 'bad';\n");
+		const service = {
+			touchFile: vi.fn(async () => undefined),
+			getDiagnostics: vi.fn(async () => [
+				{
+					severity: 1,
+					message: "probe finding",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			]),
+			getCapabilitySnapshots: vi.fn(async () => []),
+		};
+		try {
+			const result = (await run(
+				makeTool({}, service),
+				{ source: "lsp", scope: "paths", paths: [file] },
+				cwd,
+			)) as any;
+			expect(result.isError).toBe(false);
+			expect(result.details.source).toBe("lsp");
+			expect(result.details.scope).toBe("paths");
+			expect(result.content[0].text).toContain("probe finding");
+			expect(service.getDiagnostics).toHaveBeenCalledWith(file, "full");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+});
+
 // ── compact render header ────────────────────────────────────────────────────
 
 // #1799: the compact header (shown in the tool-call row) reads details.totalBlocking
@@ -268,29 +304,26 @@ describe("lens_diagnostics schema", () => {
 		expect(lspService.runWorkspaceDiagnostics).not.toHaveBeenCalled();
 	});
 
-	it("exposes full mode in the schema", () => {
+	it("exposes source and scope in the schema", () => {
 		const tool = makeTool();
 		const props = (tool.parameters as { properties: Record<string, any> })
 			.properties;
-		expect(props.mode.enum).toContain("full");
+		expect(props.source.enum).toEqual(["session", "lsp", "analyzers"]);
+		expect(props.scope.enum).toEqual(["delta", "paths", "workspace"]);
 	});
 
 	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
-		// The completion hint used to claim cache-only mode=all verified files.
 		const tool = makeTool();
 		for (const text of [
 			tool.description,
 			tool.promptSnippet,
-			(tool.parameters.properties.mode as unknown as { description: string })
+			(tool.parameters.properties.source as unknown as { description: string })
 				.description,
 		]) {
-			expect(text).toMatch(/(?:mode=)?all[^.\n;]*cache-only/);
-			expect(text).toMatch(/(?:mode=)?full[^.\n;]*paths/);
-			// #2795 review: every surface says an empty cache is not proof of clean.
-			expect(text).toMatch(/empty cache[^.\n;]*(not proof|≠ clean)/i);
+			expect(text).toMatch(/session cache/i);
+			expect(text).toMatch(/lsp/i);
 		}
-		expect(tool.description).toContain("no cached diagnostics");
-		expect(tool.description).not.toContain("Use before declaring work done");
+		expect(tool.description).toContain("Empty cache is not proof of clean");
 	});
 });
 

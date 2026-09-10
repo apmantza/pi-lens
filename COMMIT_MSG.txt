@@ -1,0 +1,7 @@
+feat(tools): fold LSP diagnostics into lens
+
+Fold the standalone LSP diagnostics surface into lens_diagnostics with
+explicit source and scope modifiers. Keep the retired MCP name as a bounded
+one-release compatibility mapping so existing callers receive the same probe.
+
+Refs #2800

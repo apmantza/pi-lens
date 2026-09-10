@@ -86,6 +86,8 @@ collided appending to this file's tail in one night):
 
 Message-end stale attribution anchors the session id when a live ctx is handled, not when the stale event drains: replacement can make the active id point at the wrong session. The anchor resets from `handleSessionStart` and is covered by the session-state registry; stale rows use its last live value or `unknown`. Durable degradation metadata truncates every value and retains only a bounded caller-key prefix, reporting dropped keys while reserved row fields win. (#1956 R2)
 
+Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects `session`, `lsp`, or `analyzers`, and `scope` selects `delta`, `paths`, or `workspace`. The retired `lsp_diagnostics` MCP name is intercepted before the enabled-tool gate for one release, maps to `source=lsp`, and records `lsp-diagnostics-compatibility` once per session. The retired name stays out of `TOOL_REGISTRY`, pi/MCP rosters, skills, and user-facing docs. (#2800 item 2)
+
 - **Every new config key or env flag needs a demonstrated forcing function.** A
   knob added "for flexibility" is public API the moment it ships (schema
   stability policy #2418, written down in `docs/public-api-stability.md` and

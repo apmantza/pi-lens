@@ -66,7 +66,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).not.toContain("pilens_ast_grep_dump");
 		expect(names).toContain("pilens_ast_grep_replace");
 		expect(names).toContain("pilens_lsp_navigation");
-		expect(names).toContain("pilens_lsp_diagnostics");
+		expect(names).not.toContain("pilens_lsp_diagnostics");
 		expect(names).toContain("pilens_symbol_search");
 		// pilens_impact was removed (#304) — its blast radius folded into
 		// pilens_module_report's `blastRadius` option.
@@ -91,11 +91,8 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			  }
 			| undefined;
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
-		// MCP must not keep the old whole-project-only verification advice.
-		expect(diagnosticsTool?.description).toMatch(/all[^.\n;]*cache-only/);
-		expect(diagnosticsTool?.description).toContain(
-			"mode=full is an active LSP scan of paths",
-		);
+		expect(diagnosticsTool?.description).toContain("LSP probe");
+		expect(diagnosticsTool?.description).toContain("Empty cache is not proof");
 		const astSearchTool = tools.find(
 			(t) => t.name === "pilens_ast_grep_search",
 		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;
@@ -170,6 +167,26 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 				(group) => group.kind === "ast-grep-dump-compatibility",
 			)?.count,
 		).toBe(1);
+	});
+
+	it("maps the retired LSP diagnostics name to the folded tool", async () => {
+		const response = await harness.request(2800, "tools/call", {
+			name: "pilens_lsp_diagnostics",
+			arguments: { paths: ["missing-file.ts"], cwd: process.cwd() },
+		});
+		expect(response.error).toBeUndefined();
+		const result = response.result as {
+			isError?: boolean;
+			content?: { text: string }[];
+		};
+		expect(result.content?.[0]?.text).toContain("Checks not confirmed");
+		const health = await harness.request(2801, "tools/call", {
+			name: "pilens_health",
+			arguments: {},
+		});
+		expect(JSON.stringify(health.result)).toContain(
+			"lsp-diagnostics-compatibility",
+		);
 	});
 
 	it("omits a config-disabled tool from the real MCP tools/list path", async () => {

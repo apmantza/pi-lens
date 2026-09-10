@@ -88,7 +88,6 @@ import {
 } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
-import { createLspDiagnosticsTool } from "../tools/lsp-diagnostics.js";
 import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
 import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
 import {
@@ -585,7 +584,6 @@ const astGrepReplaceTool = createAstGrepReplaceTool(astGrepClient);
 const lspNavigationTool = createLspNavigationTool((name, cwd) =>
 	createMcpHost(undefined, cwd ?? DEFAULT_CWD).getFlag(name),
 );
-const lspDiagnosticsTool = createLspDiagnosticsTool();
 
 // Wrapped pi tools already declare their params as typebox (which IS JSON
 // Schema). Emit that directly as the MCP inputSchema (+ the MCP-only `cwd`)
@@ -642,10 +640,7 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_diagnostics",
-		description: lensDiagnosticsTool.description.replaceAll(
-			"lsp_diagnostics",
-			"pilens_lsp_diagnostics",
-		),
+		description: lensDiagnosticsTool.description,
 		inputSchema: schemaWithCwd(lensDiagnosticsTool.parameters),
 	},
 	{
@@ -948,12 +943,6 @@ const ALL_TOOLS = [
 			'Navigate source with language-server operations. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},
-	{
-		name: "pilens_lsp_diagnostics",
-		description:
-			'Query language-server diagnostics for files or directories. Example: use `{path: "src/app.ts"}` before a build.',
-		inputSchema: schemaWithCwd(lspDiagnosticsTool.parameters),
-	},
 ];
 // #920: published packages cannot rebuild themselves safely because their
 // build config is intentionally not shipped. Do not advertise the destructive
@@ -1060,6 +1049,19 @@ async function callTool(
 	name: string,
 	args: Record<string, unknown>,
 ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
+	if (name === "pilens_lsp_diagnostics") {
+		recordDegradationOnce({
+			kind: "lsp-diagnostics-compatibility",
+			subject: "lsp_diagnostics",
+			reason: "retired tool name redirected to pilens_diagnostics source=lsp",
+		});
+		name = "pilens_diagnostics";
+		args = {
+			...args,
+			source: "lsp",
+			scope: Array.isArray(args.paths) ? "paths" : "workspace",
+		};
+	}
 	if (name === "pilens_ast_grep_dump") {
 		recordDegradationOnce({
 			kind: "ast-grep-dump-compatibility",
@@ -1751,11 +1753,10 @@ async function callTool(
 		return out;
 	}
 
-	if (name === "pilens_lsp_navigation" || name === "pilens_lsp_diagnostics") {
+	if (name === "pilens_lsp_navigation") {
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		await ensureReady(cwd);
-		const tool =
-			name === "pilens_lsp_navigation" ? lspNavigationTool : lspDiagnosticsTool;
+		const tool = lspNavigationTool;
 		const out = (await tool.execute(
 			"mcp",
 			args,
@@ -1796,7 +1797,7 @@ async function callTool(
 //   pilens_session_start, pilens_turn_end      — mutate warm LSP/graph state;
 //     must run in-process, can't be forked fresh.
 //   pilens_ast_grep_search, pilens_ast_grep_replace,
-//   pilens_lsp_navigation, pilens_lsp_diagnostics — depend on the warm LSP
+//   pilens_lsp_navigation, pilens_diagnostics — depend on the warm LSP
 //     fleet / ast-grep client instances; no fresh-fork machinery exists for
 //     them today (only pilens_analyze's worker.ts loads a fresh dispatch
 //     graph) and the LSP fleet specifically CANNOT be recreated cheaply per
@@ -1825,7 +1826,6 @@ const WARN_ONLY_STALE_TOOLS = new Set([
 	"pilens_ast_grep_search",
 	"pilens_ast_grep_replace",
 	"pilens_lsp_navigation",
-	"pilens_lsp_diagnostics",
 	"pilens_read_symbol",
 	"pilens_read_enclosing",
 	"pilens_effective_config",
@@ -1895,6 +1895,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			}
 			if (
 				name !== "pilens_ast_grep_dump" &&
+				name !== "pilens_lsp_diagnostics" &&
 				name !== "pilens_rebuild" &&
 				!enabledToolsForCwd(
 					typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD,

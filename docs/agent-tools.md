@@ -8,7 +8,7 @@ share) — current exception: `ast_grep_outline`
 (`pilens_read_enclosing`) as of #536, closing #522 item 1.
 
 **Dynamic tooling.** Six tools stay always-active: `lens_diagnostics`,
-`lsp_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
+`lens_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
 `symbol_search`. Five situational tools — `ast_grep_search`, `ast_grep_replace`,
 `ast_grep_outline`, `lsp_navigation`, `lens_diagnostic_mark` —
 are registered but
@@ -34,7 +34,7 @@ results, belongs in the returned result so it is paid only when the tool runs.
   (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
   Content-anchored so marks survive edits; every mark is logged and published
   on the bus. See [dispositions.md](dispositions.md).
-- **`lsp_diagnostics`** — File- or directory-scoped LSP diagnostics via the
+- **`lens_diagnostics`** — Session-cache, LSP-probe, or analyzer diagnostics via the
   active language server.
 - **`lsp_navigation`** — IDE-style navigation: `definition`, `references`,
   `implementation`, `typeDefinition`, `declaration`, `rename`, `rename_file`,

@@ -38,7 +38,7 @@ everything LSP-related lives under an `lsp` namespace inside them.
 
 Each model-facing tool accepts `tools.<name>.enabled` in the config file. Valid
 names include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,
-`lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
+`lsp_navigation`, `lens_diagnostics`,
 `lens_diagnostic_mark`, `symbol_search`, `module_report`, `project_report`,
 `read_symbol`, `read_enclosing`, `effective_config`, `analyze`, `health`,
 `latency`, `project_scan`, and `rebuild`. The activation loader and MCP

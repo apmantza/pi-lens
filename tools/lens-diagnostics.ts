@@ -101,6 +101,7 @@ import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js"
 import { detectFileRole } from "../clients/file-role.js";
 import { STALE_LINE_MARKER } from "../clients/stale-marker.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
+import { createLspDiagnosticsTool } from "./lsp-diagnostics.js";
 import {
 	demotePastEofDiagnostics,
 	PAST_EOF_STALE_MARKER,
@@ -252,13 +253,18 @@ export function createLensDiagnosticsTool(
 		| import("../clients/runtime-coordinator.js").RuntimeCoordinator
 		| undefined,
 ) {
+	const lspProbe = createLspDiagnosticsTool(
+		nextWriteIndex,
+		undefined,
+		getLspService,
+	);
 	return {
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			'Query pi-lens diagnostics across dispatch runners. mode=delta/all are cache-only and instant; mode=full is an active LSP scan of paths (or the project) merged with cached runner state. If changed files have no cached diagnostics or stale findings, use mode=full with paths; an empty cache is not proof of a clean file. Example: use `{mode: "all"}` before declaring edits complete.',
+			'Query pi-lens diagnostics from the session cache, LSP probe, or analyzers at delta, paths, or workspace scope. Empty cache is not proof of clean; probe changed paths when findings are absent or stale. Example: `{source: "lsp", scope: "paths", paths: ["src/app.ts"]}`.',
 		promptSnippet:
-			"lens_diagnostics mode=all is cache-only and an empty cache is not proof of a clean file; verify changed files with mode=full and paths when cached findings are absent or stale",
+			"lens_diagnostics source=session reads the session cache; use source=lsp scope=paths for changed files with absent or stale findings",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;
@@ -336,6 +342,20 @@ export function createLensDiagnosticsTool(
 			return `lens_diagnostics ${mode} — ${parts.join(" · ")} (${files} files)${coldSuffix}${failedSuffix}`;
 		}),
 		parameters: Type.Object({
+			source: Type.Optional(
+				Type.String({
+					enum: ["session", "lsp", "analyzers"],
+					description:
+						"Evidence source: session cache, LSP probe, or analyzers.",
+				}),
+			),
+			scope: Type.Optional(
+				Type.String({
+					enum: ["delta", "paths", "workspace"],
+					description:
+						"Coverage scope: current delta, explicit paths, or workspace.",
+				}),
+			),
 			mode: Type.Optional(
 				Type.String({
 					enum: ["delta", "all", "full"],
@@ -413,6 +433,56 @@ export function createLensDiagnosticsTool(
 			onUpdate: unknown,
 			ctx: { cwd?: string; signal?: AbortSignal },
 		) {
+			const requestedSource = params.source as string | undefined;
+			const requestedScope = params.scope as string | undefined;
+			const legacyMode = params.mode as string | undefined;
+			const source =
+				requestedSource ?? (legacyMode === "full" ? "analyzers" : "session");
+			const scope =
+				requestedScope ??
+				(legacyMode === "delta" || legacyMode === undefined
+					? "delta"
+					: "workspace");
+			const cwd = ctx.cwd ?? getCwd();
+			if (source === "lsp") {
+				const lspParams = { ...params };
+				delete lspParams.source;
+				delete lspParams.scope;
+				if (scope === "paths" && !lspParams.paths && params.paths)
+					lspParams.paths = params.paths;
+				const result = (await lspProbe.execute(
+					_toolCallId,
+					lspParams,
+					signal,
+					onUpdate,
+					ctx.signal ? { cwd, signal: ctx.signal } : { cwd },
+				)) as {
+					content: Array<{ type: "text"; text: string }>;
+					isError?: boolean;
+					details?: Record<string, unknown>;
+				};
+				return {
+					...result,
+					content: result.content.map((block) => ({
+						...block,
+						text: block.text.replace(/^lsp_diagnostics/g, "lens_diagnostics"),
+					})),
+					isError: result.isError === true,
+					details: { ...result.details, source, scope },
+				};
+			}
+			if (requestedSource !== undefined) {
+				params = {
+					...params,
+					mode:
+						source === "analyzers"
+							? "full"
+							: scope === "workspace"
+								? "all"
+								: "delta",
+				};
+				if (source === "analyzers") params.refreshRunners ??= "all";
+			}
 			const repaintLspStatus = captureLspStatusRepaint?.(ctx);
 			const mode = (params.mode as string | undefined) ?? "delta";
 			const severity = (params.severity as string | undefined) ?? "all";
@@ -424,7 +494,6 @@ export function createLensDiagnosticsTool(
 			const maxProjectFiles = parsePositiveInt(params.maxProjectFiles);
 			const maxLspFiles = parsePositiveInt(params.maxLspFiles);
 			const includeGenerated = params.includeGenerated === true;
-			const cwd = ctx.cwd ?? getCwd();
 
 			let pathsScope: PathsScope | undefined;
 			try {
