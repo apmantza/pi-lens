@@ -33,6 +33,10 @@ merge — you report internally to the orchestrator.
    with the claimed messages. A test that passes pre-fix is a finding.
 4. Attack with probes, not prose. Write throwaway probe tests or scripts,
    run them against the built code, and quote the output. Delete probes after.
+   Probe SCRIPTS (`.mjs`/`.ts` files you write) live OUTSIDE the worktree
+   (the scratchpad or `<worktree>/../probes-<pr>`): an untracked `.mjs`
+   inside the tree is picked up by oxlint's self-lint scope and reds
+   `tests/scripts/lint-js.test.ts` (#2865 verify v3, 2026-09-10).
    Favorite attack classes for this repo:
    - Inversions: does the fix over-correct (real failures downgraded, healthy
      paths narrowed, legitimate results dropped)?
