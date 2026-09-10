@@ -337,6 +337,18 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 	pytest: {
 		kinds: ["python"],
 		configFiles: ["pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"],
+		// #2879 review round 3, F7: `pyproject.toml` is CONTENT-conditional in
+		// detection — the Priority-1 loop accepts it only when it carries
+		// `[tool.pytest.ini_options]` — but the cwd seam walks basenames, so
+		// handing `configFiles` over verbatim anchored the child on the very
+		// file detection had refused. Omitting it here makes the spawn walk
+		// stop only on evidence the detector itself would accept; a project
+		// whose ONLY pytest config is a real `[tool.pytest.ini_options]`
+		// section therefore falls back to the dispatch root, which is exactly
+		// where master ran it. (The proper fix is to carry detection's
+		// accepted evidence path into the spawn resolution instead of
+		// re-deriving it from a basename table — filed as a follow-up.)
+		spawnCwdMarkers: ["pytest.ini", "tox.ini", "setup.cfg"],
 		command: "python",
 		args: (testFile, _cwd) => ["-m", "pytest", testFile, "--tb=short", "-q"],
 		parseJson: false, // pytest JSON requires plugin, use text parsing
@@ -419,6 +431,14 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		// detectRunner's Priority-1 loop, mirroring the pytest/pyproject.toml
 		// handling above).
 		configFiles: ["phpunit.xml", "phpunit.xml.dist", "composer.json"],
+		// #2879 review round 3, F7: same shape as pytest's `pyproject.toml`,
+		// and this one is load-bearing — phpunit reads `phpunit.xml` from its
+		// CWD only, so a child launched in a directory whose `composer.json`
+		// carries no `phpunit/phpunit` dependency runs with no bootstrap and
+		// no autoloader, and the resulting fatal error reaches the agent as a
+		// test failure (measured end to end with a fake phpunit recording its
+		// own cwd). `composer.json` is an anchor, never phpunit evidence.
+		spawnCwdMarkers: ["phpunit.xml", "phpunit.xml.dist"],
 		command: "phpunit",
 		args: (testFile, _cwd) => [testFile],
 		parseJson: false, // PHPUnit's default CLI output is text-based

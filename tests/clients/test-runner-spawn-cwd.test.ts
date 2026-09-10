@@ -219,6 +219,78 @@ describe("#2871 the test-runner child's cwd comes from resolveToolCwd", () => {
 	// dispatch root for a file that is already outside it. They were a guard
 	// against a caller that does not exist and a record nothing could observe.
 
+	// Review round 3, F7. Two `configFiles` members are CONTENT-conditional in
+	// detection — `pytest` accepts `pyproject.toml` only with
+	// `[tool.pytest.ini_options]`, `phpunit` accepts `composer.json` only with
+	// a `phpunit/phpunit` dependency — but the cwd seam walks basenames, so
+	// handing the table over verbatim anchored the child on the very file the
+	// detector had REFUSED as evidence. Round 2's dispatch-root re-probe is
+	// what made it reachable end to end: detection succeeds at the root, and
+	// the spawn walk then stops below it on the rejected marker. Measured with
+	// a fake phpunit recording its own cwd: `<root>/app`, `NO phpunit.xml IN
+	// CWD`, where master ran in `<root>` with the config found. phpunit reads
+	// `phpunit.xml` from its cwd only, so that child has no bootstrap and no
+	// autoloader, and its fatal error reaches the agent as a test failure.
+	it("does not anchor the phpunit child on a composer.json the detector rejected", async () => {
+		const root = makeRoot("pi-lens-2879-f7-phpunit-");
+		write(root, "phpunit.xml", "<phpunit bootstrap='vendor/autoload.php'/>\n");
+		write(root, "app/composer.json", '{"require":{"monolog/monolog":"^3"}}\n');
+		const testFile = write(root, "app/tests/ThingTest.php", "<?php\n");
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			testFile,
+			root,
+			"phpunit",
+			RUNNERS.phpunit,
+		);
+
+		expect(spawned[0].cwd).toBe(root);
+		// The invariant, not just the path: the child runs where its config is.
+		expect(fs.existsSync(path.join(spawned[0].cwd!, "phpunit.xml"))).toBe(true);
+	});
+
+	it("still anchors the phpunit child on a module that carries its own phpunit.xml", async () => {
+		// The markers are narrowed, not removed: real phpunit evidence in a
+		// module still moves the child there.
+		const root = makeRoot("pi-lens-2879-f7-phpunit-nested-");
+		write(root, "phpunit.xml", "<phpunit/>\n");
+		const module = path.join(root, "app");
+		write(root, "app/phpunit.xml", "<phpunit/>\n");
+		const testFile = write(root, "app/tests/ThingTest.php", "<?php\n");
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			testFile,
+			root,
+			"phpunit",
+			RUNNERS.phpunit,
+		);
+
+		expect(spawned[0].cwd).toBe(module);
+	});
+
+	it("does not anchor the pytest child on a pyproject.toml the detector rejected", async () => {
+		const root = makeRoot("pi-lens-2879-f7-pytest-");
+		write(root, "pytest.ini", "[pytest]\n");
+		// No `[tool.pytest.ini_options]`: an anchor for the language, never
+		// pytest configuration.
+		write(root, "svc/pyproject.toml", "[project]\nname='svc'\n");
+		const testFile = write(
+			root,
+			"svc/tests/test_thing.py",
+			"def test_x():\n    pass\n",
+		);
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			testFile,
+			root,
+			"pytest",
+			RUNNERS.pytest,
+		);
+
+		expect(spawned[0].cwd).toBe(root);
+		expect(fs.existsSync(path.join(spawned[0].cwd!, "pytest.ini"))).toBe(true);
+	});
+
 	it("keeps the failed-target ledger keyed on the dispatch root", async () => {
 		// One `cwd` used to do six jobs here. The ledger `getTestRunTarget`
 		// reads is keyed by the dispatch root; keying it by the resolved module
