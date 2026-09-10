@@ -132,13 +132,20 @@ describe("helm-lint runner", () => {
 
 	it("passes the resolved cwd through the real dispatcher for a nested chart", async () => {
 		const projectRoot = fs.mkdtempSync(
-			path.join(os.homedir(), "pi-lens-helm-dispatch-"),
+			path.join(os.tmpdir(), "pi-lens-helm-dispatch-"),
 		);
 		try {
 			const callerCwd = path.join(projectRoot, "caller");
 			const chartRoot = path.join(projectRoot, "project", "charts", "child");
 			const filePath = createChart(chartRoot, "templates/deployment.yaml");
 			fs.mkdirSync(callerCwd, { recursive: true });
+			fs.mkdirSync(path.join(projectRoot, "project", ".git"), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(projectRoot, "project", ".git", "HEAD"),
+				"ref: refs/heads/main\n",
+			);
 
 			const registry = new RunnerRegistry();
 			registry.register(helmLintRunner);
@@ -161,7 +168,7 @@ describe("helm-lint runner", () => {
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"helm",
 				["lint", path.resolve(chartRoot)],
-				expect.objectContaining({ cwd: path.dirname(filePath) }),
+				expect.objectContaining({ cwd: path.join(projectRoot, "project") }),
 			);
 		} finally {
 			fs.rmSync(projectRoot, { recursive: true, force: true });
