@@ -1237,7 +1237,10 @@ export async function scanSpawnCwd(
 		name: calleeName(call),
 	}));
 	const resolverNames = importedResolverNames(root);
-	const nodeSpawnNames = importedNodeSpawnNames(root);
+	// One list decides what a site is, for the shared census below and for the
+	// loop that reads the sites: two copies of the rule meant a mutation of
+	// either one left the other enforcing it.
+	const siteNames = new Set([...SPAWN_NAMES, ...importedNodeSpawnNames(root)]);
 	// A same-file function that RETURNS the seam's result is itself a seam
 	// resolver — `test-runner-client.ts`'s `resolveSpawnCwd` (#2879),
 	// `tool-cwd.ts`'s `resolveRunnerCwd`, `formatters.ts`'s
@@ -1275,9 +1278,7 @@ export async function scanSpawnCwd(
 	const callSiteScanner = createCallSiteScanner(source, root);
 	const directSiteKeys = new Set(
 		callSiteScanner
-			.find(
-				new RegExp(`^(?:${[...SPAWN_NAMES, ...nodeSpawnNames].join("|")})$`),
-			)
+			.find(new RegExp(`^(?:${[...siteNames].join("|")})$`))
 			.map((site) => `${site.line}:${site.callee}`),
 	);
 	const sites: SpawnCwdSite[] = [];
@@ -1308,7 +1309,7 @@ export async function scanSpawnCwd(
 	};
 
 	for (const { call, name } of calls) {
-		if (!name || !(SPAWN_NAMES.has(name) || nodeSpawnNames.has(name))) continue;
+		if (!name || !siteNames.has(name)) continue;
 		const line = lineOf(call);
 		if (!directSiteKeys.has(`${line}:${name}`)) continue;
 		const optionsArg = argumentsOf(call)[SPAWN_OPTIONS_INDEX];
