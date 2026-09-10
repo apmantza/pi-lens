@@ -2086,14 +2086,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
-					// #2800 item 8: pi records the dead-weight row for fresh sessions
-					// only. A non-fresh start (reload/resume/fork) marks the session
-					// suppressed here, BEFORE the handler below can hang (#2859), so
-					// the session's end never depends on handleSessionStart returning.
-					startSituationalToolTelemetrySession(
-						"pi",
-						isFreshSessionStart(sessionReason),
-					);
+					// #2858: pi owns one conversation observation set. Rebuilt starts
+					// preserve it; only a fresh `/new` replacement emits and resets it.
+					// Open this before the handler below can hang (#2859), so the
+					// session-end row does not depend on handleSessionStart returning.
+					const piTelemetryProcessRestart =
+						startSituationalToolTelemetrySession(
+							"pi",
+							isFreshSessionStart(sessionReason),
+						);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2143,6 +2144,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 							getActiveTools?: () => string[];
 							setActiveTools?: (names: string[]) => void;
 						};
+						const activeToolNames =
+							typeof piWithActiveTools.getActiveTools === "function"
+								? piWithActiveTools.getActiveTools()
+								: [];
+						// A process restart loses the in-memory activation history. The
+						// host's restored active set is the only evidence available, so
+						// count those situational tools as activations. Calls remain
+						// intentionally unrecoverable across the restart.
+						if (
+							piTelemetryProcessRestart &&
+							!isFreshSessionStart(sessionReason)
+						) {
+							observeSituationalToolActivation(activeToolNames);
+						}
 						// A fresh conversation starts with no activation memory; a
 						// rebuild inherits the parent's.
 						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
@@ -2153,7 +2168,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						) {
 							const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
 							const plan = planToolSet(
-								piWithActiveTools.getActiveTools(),
+								activeToolNames,
 								lazyNames,
 								rememberedLazyTools,
 							);

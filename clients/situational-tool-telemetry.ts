@@ -17,15 +17,11 @@ const activated = new Set<SituationalToolName>();
 const called = new Set<SituationalToolName>();
 let sessionStarted = false;
 let emitted = false;
-// Pi-only: a session that began from a rebuilt AgentSession (reload/resume/
-// fork) records no row; conversation-owned accounting across rebuilds is
-// #2858. Set by the opener, cleared by a fresh open or by the session's end.
-let suppressed = false;
 // MCP-only connection-terminal latch: once the connection's row is recorded,
 // repeated initialize/tool-call starts must not reopen the session.
 let connectionEnded = false;
-// Which host owns the open session; endSituationalToolTelemetry arms the MCP
-// latch only for an MCP session.
+// Which host owns the open session; only MCP may arm connectionEnded. Pi state
+// belongs to the conversation and survives in-process session rebuilds.
 let sessionHost: "pi" | "mcp" = "mcp";
 
 function observe(set: Set<SituationalToolName>, name: string): void {
@@ -63,61 +59,48 @@ export function resetSituationalToolTelemetry(): void {
 /**
  * Open the telemetry session for one host.
  *
- * Pi records the dead-weight row for fresh sessions only: a non-fresh start
- * marks the session suppressed, `endSituationalToolTelemetry` records nothing
- * for a suppressed session, and a fresh open clears the suppression and resets
- * both observation sets. A fresh start that replaces a still-open pi session
- * emits that session's row (unless it was suppressed) before opening the
- * replacement. MCP keeps its connection-scoped lifecycle — a repeated start is
- * an idempotent refresh and an ended connection never reopens — so `fresh` is
- * MCP-inert and MCP callers pass false.
+ * Pi keeps one observation set for the conversation. Reload, resume, and fork
+ * preserve it. A fresh `/new` start emits the prior row once and opens an
+ * empty set. The boolean result identifies a process restart to the pi opener,
+ * which may observe restored active tools as activations; `called` is not
+ * recoverable across that restart. MCP remains connection-scoped.
  */
 export function startSituationalToolTelemetrySession(
 	host: "pi" | "mcp",
 	fresh: boolean,
-): void {
+): boolean {
 	if (host === "mcp") {
-		if (connectionEnded) return;
-		if (sessionStarted) return;
+		if (connectionEnded) return false;
+		if (sessionStarted) return false;
 		sessionHost = "mcp";
 		clearObservations();
 		emitted = false;
-		suppressed = false;
 		sessionStarted = true;
-		return;
-	}
-	if (sessionStarted && !fresh) {
-		// Rebuilt session: it records no row (#2858), and the replaced
-		// session's partial tally is discarded without emitting it.
-		clearObservations();
-		emitted = false;
-		suppressed = true;
-		sessionHost = "pi";
-		return;
+		return true;
 	}
 	if (sessionStarted) {
-		if (!suppressed) emitSituationalDeadWeight();
-		clearObservations();
-		emitted = false;
-		suppressed = false;
+		if (fresh) {
+			emitSituationalDeadWeight();
+			clearObservations();
+			emitted = false;
+		}
 		sessionHost = "pi";
-		return;
+		return false;
 	}
 	sessionHost = "pi";
-	suppressed = !fresh;
 	clearObservations();
 	emitted = false;
 	sessionStarted = true;
+	return true;
 }
 
 /** Emit the one session-end row and make repeated shutdown calls harmless. */
 export function endSituationalToolTelemetry(): void {
 	if (!sessionStarted) return;
-	if (!suppressed) emitSituationalDeadWeight();
+	emitSituationalDeadWeight();
 	if (sessionHost === "mcp") connectionEnded = true;
 	clearObservations();
 	emitted = false;
-	suppressed = false;
 	sessionStarted = false;
 }
 
@@ -141,13 +124,11 @@ export function _getSituationalToolTelemetryStateForTests(): {
 	called: number;
 	emitted: boolean;
 	sessionStarted: boolean;
-	suppressed: boolean;
 } {
 	return {
 		activated: activated.size,
 		called: called.size,
 		emitted,
 		sessionStarted,
-		suppressed,
 	};
 }

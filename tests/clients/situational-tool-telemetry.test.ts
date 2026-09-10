@@ -64,21 +64,36 @@ describe("situational dead-weight telemetry", () => {
 		endSituationalToolTelemetry();
 	});
 
-	it("records no row when the pi session opened from a rebuilt start", () => {
-		startSituationalToolTelemetrySession("pi", false);
+	it("preserves observations across a pi session rebuild", () => {
+		startSituationalToolTelemetrySession("pi", true);
 		observeSituationalToolActivation(["ast_grep_search"]);
+		observeSituationalToolCall("ast_grep_search");
+		startSituationalToolTelemetrySession("pi", false);
 		endSituationalToolTelemetry();
 
-		expect(logExtension).not.toHaveBeenCalled();
+		expect(logExtension).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			}),
+		);
 	});
 
-	it("records the row again once a fresh pi open clears the suppression", () => {
-		startSituationalToolTelemetrySession("pi", false);
+	it("emits the replaced pi conversation once on a fresh open", () => {
+		startSituationalToolTelemetrySession("pi", true);
+		observeSituationalToolCall("ast_grep_search");
 		startSituationalToolTelemetrySession("pi", true);
 		observeSituationalToolCall("lsp_navigation");
 		endSituationalToolTelemetry();
 
-		expect(logExtension).toHaveBeenCalledTimes(1);
+		expect(logExtension).toHaveBeenCalledTimes(2);
 		expect(logExtension).toHaveBeenCalledWith({
 			subsystem: "tools",
 			level: "debug",
@@ -92,5 +107,24 @@ describe("situational dead-weight telemetry", () => {
 				],
 			},
 		});
+	});
+
+	it("counts restored active tools as activations after a process restart", () => {
+		startSituationalToolTelemetrySession("pi", false);
+		observeSituationalToolActivation([
+			"ast_grep_search",
+			"ast_grep_replace",
+			"ast_grep_outline",
+			"lsp_navigation",
+			"lens_diagnostic_mark",
+		]);
+		endSituationalToolTelemetry();
+
+		expect(logExtension).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: { tools: [] },
+			}),
+		);
 	});
 });
