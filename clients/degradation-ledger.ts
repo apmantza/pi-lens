@@ -659,6 +659,8 @@ export type DegradationKind =
 	 * the per-kind entry bound is reached.
 	 */
 	| "runner-parsed-nothing"
+	/** A duplicate RPC session start was suppressed after its first full pass. */
+	| "session-start-duplicate"
 	/** Incremental word-index churn required an arena re-compaction. */
 	| "shared-checkout-probe"
 	/**
@@ -783,6 +785,8 @@ export type DegradationKind =
 	| "tool-cwd-resolution"
 	/** A loader request named a configured-disabled tool. */
 	| "tool-disabled"
+	/** Activation memory cannot key itself because the host supplied no session file. */
+	| "tool-set-session-file-unavailable"
 	/**
 	 * A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the

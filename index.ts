@@ -259,6 +259,7 @@ import {
 	isFreshSessionStart,
 	clearRememberedLazyTools,
 	getRememberedLazyTools,
+	inheritRememberedLazyTools,
 	planToolSet,
 	recordToolSetMutation,
 	rememberLazyTools,
@@ -1745,6 +1746,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 			return undefined;
 		}
 	};
+	// pi RPC can announce the same replacement twice. Keep one admission key for
+	// the complete session_start mutation pass so every downstream reset observes
+	// the same (reason, session file) identity. A different file remains a real
+	// replacement and must run the normal primary path.
+	// The key is cleared per factory instance because pi re-runs the factory on
+	// every replacement; if that ever changes, clear the key in session_shutdown.
+	let lastSessionStartIdentity: string | undefined;
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
 			getActiveTools?: () => string[];
@@ -1917,6 +1925,82 @@ function activateExtension(hostPi: ExtensionAPI) {
 		wrapSessionEventHandler(
 			"session_start",
 			async (event, ctx) => {
+				const sessionStartReason = (event as { reason?: string }).reason;
+				const previousSessionFile = (event as { previousSessionFile?: string })
+					.previousSessionFile;
+				const sessionIdentityParts = (() => {
+					try {
+						const sessionManager = (
+							ctx as {
+								sessionManager?: {
+									getSessionId?: () => string | undefined;
+									getSessionFile?: () => string | undefined;
+								};
+							}
+						)?.sessionManager;
+						return {
+							sessionId: sessionManager?.getSessionId?.(),
+							sessionFile: sessionManager?.getSessionFile?.(),
+						};
+					} catch {
+						return { sessionId: undefined, sessionFile: undefined };
+					}
+				})();
+				const sessionStartKey =
+					sessionIdentityParts.sessionId ?? sessionIdentityParts.sessionFile;
+				const sessionStartIdentity =
+					sessionStartKey === undefined
+						? undefined
+						: `${sessionStartReason ?? ""}\u0000${sessionStartKey}`;
+				// With neither a stable session ID nor a session file, fail open: the
+				// event cannot be safely identified for duplicate suppression.
+				const liveToolPlan = (() => {
+					if (
+						getLensFlag("no-lazy-tools") === true ||
+						typeof (pi as unknown as { getActiveTools?: unknown })
+							.getActiveTools !== "function"
+					) {
+						return undefined;
+					}
+					try {
+						const piWithActiveTools = pi as unknown as {
+							getActiveTools: () => string[];
+						};
+						const lazyNames = new Set(
+							LAZY_TOOL_CATALOG.map((tool) => tool.name),
+						);
+						return planToolSet(
+							piWithActiveTools.getActiveTools(),
+							lazyNames,
+							isFreshSessionStart(sessionStartReason)
+								? new Set<string>()
+								: getRememberedLazyTools(getSessionFile(ctx)),
+						);
+					} catch {
+						return undefined;
+					}
+				})();
+				if (
+					sessionStartIdentity !== undefined &&
+					lastSessionStartIdentity === sessionStartIdentity &&
+					liveToolPlan?.changed !== true
+				) {
+					emitBounded(
+						"session_start_duplicate_suppressed",
+						sessionStartIdentity,
+						{
+							durationMs: 0,
+							metadata: { reason: "duplicate start suppressed" },
+						},
+						{
+							ledgerKind: "session-start-duplicate",
+							risingEdgePer: "identity",
+							reason: "duplicate start suppressed",
+						},
+					);
+					return;
+				}
+				lastSessionStartIdentity = sessionStartIdentity;
 				const sessionStartMonotonicAt = performance.now();
 				warmDispatchAtSessionStart();
 				void warmLspService().catch((err) =>
@@ -1947,7 +2031,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// this line would be a no-op anyway.
 					const buildIdentity = getBuildIdentity(import.meta.url);
 					if (buildIdentity) dbg(formatBuildIdentity(buildIdentity));
-					const sessionReason = (event as { reason?: string }).reason;
+					const sessionReason = sessionStartReason;
 					dbg(
 						`session_start: disabled tools = ${disabledToolNames.join(",") || "none"}`,
 					);
@@ -2146,6 +2230,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 						// A fresh conversation starts with no activation memory; a
 						// rebuild inherits the current session file's memory.
 						const sessionFile = getSessionFile(ctx);
+						if (sessionStartReason === "fork") {
+							inheritRememberedLazyTools(previousSessionFile, sessionFile);
+						}
 						if (isFreshSessionStart(sessionReason)) {
 							clearRememberedLazyTools(sessionFile);
 						}

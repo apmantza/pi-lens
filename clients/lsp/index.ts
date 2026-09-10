@@ -67,6 +67,7 @@ import { recordLspMutation, type LspMutationContext } from "../lsp-mutation.js";
 import { createLSPClient } from "./client.js";
 import {
 	auxiliaryCoverageGap,
+	auxiliaryPublicationEvidence,
 	bindingStateLabel,
 	composeBoundToCurrentDisk,
 	createDiskBindingCache,
@@ -5576,9 +5577,11 @@ export class LSPService {
 					const baseline = diagnosticBaselines.get(entry.client);
 					const currentPathVersion = readPathVersion(entry.client);
 					if (
-						Number.isFinite(baseline) &&
-						currentPathVersion !== undefined &&
-						currentPathVersion > (baseline as number)
+						auxiliaryPublicationEvidence({
+							bindingMatchesContent: false,
+							baseline,
+							currentPathVersion,
+						})
 					) {
 						return true;
 					}
@@ -5812,19 +5815,18 @@ export class LSPService {
 									auxWaits.map(async (aux) => {
 										const { budgetMs } = aux;
 										if (aux.demoted) {
-											const publishedEvidence =
-												Number.isFinite(aux.baseline) &&
-												readPathVersion(aux.client) !== undefined &&
-												(readPathVersion(aux.client) as number) >
-													(aux.baseline as number);
 											return {
 												serverId: aux.serverId,
 												outcome: deferredResyncServerIds.has(aux.serverId)
 													? ("deferred" as const)
 													: ("demoted" as const),
-												publishedThisContent:
-													auxCoversThisContent(aux.serverId) ||
-													publishedEvidence,
+												publishedThisContent: auxiliaryPublicationEvidence({
+													bindingMatchesContent: auxCoversThisContent(
+														aux.serverId,
+													),
+													baseline: aux.baseline,
+													currentPathVersion: readPathVersion(aux.client),
+												}),
 												budgetMs,
 												elapsedMs: 0,
 												elapsedSinceNotifyMs: 0,
@@ -5867,11 +5869,13 @@ export class LSPService {
 										// ignoring sibling paths — and it is the SAME axis `baseline`
 										// was captured on above.
 										const currentPathVersion = readPathVersion(aux.client);
-										const publishedEvidence =
-											raced &&
-											Number.isFinite(aux.baseline) &&
-											currentPathVersion !== undefined &&
-											currentPathVersion > (aux.baseline as number);
+										const publishedEvidence = auxiliaryPublicationEvidence({
+											bindingMatchesContent: false,
+											baseline: aux.baseline,
+											currentPathVersion,
+											allowStamp: true,
+											raced,
+										});
 										// #1459: a DEFERRED aux was never sent this content and is not
 										// waited on at all, so its instantly-resolved placeholder
 										// promise must not read as "silent". "Silent" is the reserved
@@ -5902,7 +5906,15 @@ export class LSPService {
 											// did not narrow the touch.
 											// #1586: through the one predicate, so this row and the merge
 											// below cannot disagree about the same scanner.
-											publishedThisContent: auxCoversThisContent(aux.serverId),
+											publishedThisContent: auxiliaryPublicationEvidence({
+												bindingMatchesContent: auxCoversThisContent(
+													aux.serverId,
+												),
+												baseline: aux.baseline,
+												currentPathVersion: currentPathVersion,
+												allowStamp: false,
+												raced,
+											}),
 											budgetMs,
 											elapsedMs,
 											// #1458 S3: elapsed measured from BEFORE the primary wait
@@ -6183,10 +6195,11 @@ export class LSPService {
 						const outcomes = auxEntries.map((entry) => {
 							const baseline = diagnosticBaselines.get(entry.client);
 							const currentPathVersion = readPathVersion(entry.client);
-							const publishedEvidence =
-								Number.isFinite(baseline) &&
-								currentPathVersion !== undefined &&
-								currentPathVersion > (baseline as number);
+							const publishedEvidence = auxiliaryPublicationEvidence({
+								bindingMatchesContent: false,
+								baseline,
+								currentPathVersion,
+							});
 							return {
 								serverId: entry.info.id,
 								outcome: deferredResyncServerIds.has(entry.info.id)
@@ -6194,7 +6207,13 @@ export class LSPService {
 									: publishedEvidence
 										? ("answered" as const)
 										: ("silent" as const),
-								publishedThisContent: auxCoversThisContent(entry.info.id),
+								publishedThisContent: auxiliaryPublicationEvidence({
+									bindingMatchesContent: auxCoversThisContent(entry.info.id),
+									baseline,
+									currentPathVersion,
+									allowStamp: false,
+									raced: true,
+								}),
 								budgetMs: timeoutFor(entry.client.serverId),
 								elapsedMs: waitedMs,
 								elapsedSinceNotifyMs: waitedMs,

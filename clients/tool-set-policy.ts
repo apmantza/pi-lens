@@ -1,4 +1,6 @@
 import { logLatency } from "./latency-logger.js";
+import { BoundedFifoMap } from "./bounded-cache.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 
 type ToolSetMutationReason =
 	| "fresh_session_lazy_deactivation"
@@ -15,13 +17,24 @@ export interface ToolSetMutation {
 // pi re-runs the extension factory for session rebuilds, but imports this
 // module once per process. Keep conversation activation memory here, keyed by
 // pi's session file rather than by a factory closure or process-wide session.
-const rememberedLazyToolsBySessionFile = new Map<string, Set<string>>();
+export const REMEMBERED_LAZY_TOOLS_MAX_SESSIONS = 128;
+const rememberedLazyToolsBySessionFile = new BoundedFifoMap<
+	string,
+	Set<string>
+>(REMEMBERED_LAZY_TOOLS_MAX_SESSIONS);
 
 export function rememberLazyTools(
 	sessionFile: string | undefined,
 	names: readonly string[],
 ): void {
-	if (!sessionFile) return;
+	if (!sessionFile) {
+		recordDegradationOnce({
+			kind: "tool-set-session-file-unavailable",
+			subject: "activation",
+			reason: "session-file identity unavailable; activation memory is inert",
+		});
+		return;
+	}
 	const remembered =
 		rememberedLazyToolsBySessionFile.get(sessionFile) ?? new Set<string>();
 	for (const name of names) remembered.add(name);
@@ -40,6 +53,25 @@ export function clearRememberedLazyTools(
 	sessionFile: string | undefined,
 ): void {
 	if (sessionFile) rememberedLazyToolsBySessionFile.delete(sessionFile);
+}
+
+export function inheritRememberedLazyTools(
+	parentSessionFile: string | undefined,
+	childSessionFile: string | undefined,
+): void {
+	if (
+		!parentSessionFile ||
+		!childSessionFile ||
+		parentSessionFile === childSessionFile
+	)
+		return;
+	const remembered = rememberedLazyToolsBySessionFile.get(parentSessionFile);
+	if (remembered)
+		rememberedLazyToolsBySessionFile.set(childSessionFile, new Set(remembered));
+}
+
+export function resetRememberedLazyToolsForTests(): void {
+	rememberedLazyToolsBySessionFile.clear();
 }
 
 /** The only part of the host model object this module reads. */

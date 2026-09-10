@@ -694,7 +694,11 @@ describe("index.ts extension wiring", () => {
 					_resetSessionLifecycleForTests();
 					const pi = createPiMock();
 					extension(pi.asExtensionAPI());
-					const ctx = makeCtx({ cwd: tmp, sessionId: `cache-${reason}` });
+					const ctx = makeCtx({
+						cwd: tmp,
+						sessionId: `cache-${reason}`,
+						sessionFile: path.join(tmp, `${reason}-session.jsonl`),
+					});
 					await pi.emit("session_start", { reason: "startup" }, ctx);
 					const loader = pi.getTool("pi_lens_activate_tools") as {
 						execute: (...args: unknown[]) => Promise<unknown>;
@@ -773,6 +777,59 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
+		it("inherits activation from the parent session file on a fork", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-fork-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const parentFile = path.join(tmp, "parent.jsonl");
+				const childFile = path.join(tmp, "child.jsonl");
+				const parent = makeCtx({
+					cwd: tmp,
+					sessionId: "fork-parent",
+					sessionFile: parentFile,
+				});
+				const child = makeCtx({
+					cwd: tmp,
+					sessionId: "fork-child",
+					sessionFile: childFile,
+				});
+				await pi.emit("session_start", { reason: "startup" }, parent);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					parent,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "fork", targetSessionFile: childFile },
+					parent,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit(
+					"session_start",
+					{ reason: "fork", previousSessionFile: parentFile },
+					child,
+				);
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
 		// A genuinely new conversation drops the activation memory: the rebuilt
 		// all-active set shrinks back to the bare baseline.
 		it("forgets the previous conversation's activations on a new session", async () => {
@@ -783,7 +840,11 @@ describe("index.ts extension wiring", () => {
 				_resetSessionLifecycleForTests();
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
-				const ctx = makeCtx({ cwd: tmp, sessionId: "cache-new" });
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "cache-new",
+					sessionFile: path.join(tmp, "new-session.jsonl"),
+				});
 				await pi.emit("session_start", { reason: "startup" }, ctx);
 				const loader = pi.getTool("pi_lens_activate_tools") as {
 					execute: (...args: unknown[]) => Promise<unknown>;

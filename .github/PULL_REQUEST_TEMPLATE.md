@@ -73,9 +73,23 @@ explicitly with why.
 
 ## Observability
 
-Name the log or ledger record that proves this change works in production
-(file + event/kind), or name the gap. Docs/test-only PRs may state not
-applicable.
+The `PR body` check accepts exactly three forms here, nothing else:
+
+1. the literal record kind this diff ADDS in runtime code (a `kind: "..."`
+   passed to `recordDegradationOnce` / `incrementDegradationCount` / a
+   `logLatency` phase) — the literal must appear in the added lines;
+2. `covered by existing record \`<kind>\` at \`<runtime file>:<line>\`` when
+   the new failure path is observed by a record an existing seam already
+   emits (the cited line must sit within 20 lines of that literal, in a
+   runtime file, no `..` in the path);
+3. the exact sentence `No new failure path; no record added.` — valid ONLY
+   when the diff adds no `catch`, `throw`, `return null` or degradation
+   branch in runtime code.
+
+"name the gap" / "not applicable" are refused. One `## Observability`
+section per PR: fix rounds append under `## Round N` and never repeat this
+heading — the check reads the FIRST section and a stale first section is
+the usual red.
 
 ## Class sweep
 

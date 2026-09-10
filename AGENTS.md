@@ -346,6 +346,23 @@ is the procedure and defers here on conflict; 2026-09-09).**
   earned by a reproduced instance: a HIGH with no failure scenario is a
   MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
   line) never count as an actionable round.
+- **Measured, not asserted (2026-09-10).** Any statement in a PR body or a
+  review about the host (pi's event order, whether the extension factory
+  re-runs on a reason), the CI environment, or "this test is red on master
+  too" carries the transcript that measured it in the SAME environment (a
+  probe extension against real pi in rpc mode; the same file run on
+  origin/master in the same tree). A sentence without one is a claim and the
+  verify round treats it as false: #2866 rounds 2–3 and #2878 round 5 were
+  built on unmeasured host claims the verify overturned, and four workers
+  reported a sandbox-only red as "pre-existing on master". Rule fixes (a
+  scanner's scope rule, a lifecycle rule, a classification) are derived and
+  enumerated from their source of truth — the grammar's node table, pi's
+  pinned types measured live, the real return sites — never from the list of
+  cases a reviewer named; the list is the acceptance set, not the rule
+  (#2877 took seven rounds closing one named launderer per round until round
+  4 generated the scope table from the grammar). This binds the orchestrator's
+  briefs too: a brief that states a code fact from a reviewer's summary
+  without reading the sites is the same shape (#2896 round 1).
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a
@@ -1008,12 +1025,12 @@ acts on the answer, read the freeze. The `lsp_notify_resync_deferred` row keeps
 recording the gate's action either way; the coverage fields report only what the
 touch is actually uncovered for. (#1586)
 
-Demoted auxiliary outcome rows retain the sibling rows' version-evidence axis:
+Demoted auxiliary outcome rows may use the version-evidence axis:
 `publishedThisContent` is true when the content binding matches or the client's
-per-path publication version advances beyond the pre-notify baseline. A
-version-less push has no binding, but its publication stamp still proves that
-the scanner answered; no publication and an older binding remain uncovered.
-(#2810 round 6)
+per-path publication version advances beyond the pre-notify baseline. Sibling
+and aggregate outcome rows remain binding-only. A version-less push therefore
+proves coverage only on the demoted row; no publication and an older binding
+remain uncovered. (#2810 round 6, #2896)
 
 A deferred cascade result that arrives LATE — past the turn-end settle cap, or
 in the quiet window after the turn already consumed its runs — must still reach
@@ -1598,6 +1615,16 @@ package-manager/profile/package-root/session domains) require no cache layer.
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
 ### Session lifecycle, telemetry, and observability
+
+The pi host can emit duplicate RPC `session_start` events during one
+replacement. `index.ts` admits the complete primary mutation pass once per
+`(reason, session ID)` key, falling back to the session file when the stable ID
+is unavailable. A duplicate re-enters the restore path when the live active-tool
+set differs from the remembered plan. Keep this gate above tool restore,
+telemetry opening, registry resets, and `handleSessionStart`, so those state
+owners share one lifecycle boundary (#2890).
+The key is cleared per factory instance because pi re-runs the factory on every
+replacement; if that ever changes, clear the key in `session_shutdown`.
 
 The machine-global instance registry serializes every whole-file writer with
 an adjacent O_EXCL lock. Contenders use jittered backoff for 500ms, and locks
@@ -4120,6 +4147,7 @@ test pins the exact three rule names, the 29-entry baseline count, and the
 derived eager-import set.
 
 - TypeScript ESM throughout (`"type": "module"`)
+- Dynamic-tool activation memory is bounded to `REMEMBERED_LAZY_TOOLS_MAX_SESSIONS` session files through `BoundedFifoMap`; a fork copies the parent posture from pi's `previousSessionFile`, while a host without `getSessionFile()` records the bounded `tool-set-session-file-unavailable` degradation.
 - Edit the `.ts` sources only. Do **not** hand-edit sibling/generated `.js` files in this repo; pi loads TS via on-the-fly jiti transpilation and JS files are generated artifacts. If tests/runtime could see stale `.js`, run `npm run build` to regenerate from TS before testing.
 - Tests use vitest; mocks via `vi.mock` / `vi.hoisted`
 - Fire-and-forget background work uses `void expr` or `setImmediate`

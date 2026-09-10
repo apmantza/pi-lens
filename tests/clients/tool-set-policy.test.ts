@@ -11,6 +11,9 @@ import {
 	planToolSet,
 	recordToolSetMutation,
 	rememberLazyTools,
+	inheritRememberedLazyTools,
+	resetRememberedLazyToolsForTests,
+	REMEMBERED_LAZY_TOOLS_MAX_SESSIONS,
 	supportsDeferredTools,
 } from "../../clients/tool-set-policy.js";
 
@@ -25,7 +28,30 @@ const ALL_ACTIVE = [
 ];
 
 describe("tool-set cache policy", () => {
-	beforeEach(() => logLatency.mockClear());
+	beforeEach(() => {
+		logLatency.mockClear();
+		resetRememberedLazyToolsForTests();
+	});
+
+	it("bounds remembered session files with FIFO eviction", () => {
+		for (let i = 0; i < REMEMBERED_LAZY_TOOLS_MAX_SESSIONS + 1; i++) {
+			rememberLazyTools(`bounded-${i}`, ["ast_grep_search"]);
+		}
+		expect([...getRememberedLazyTools("bounded-0")]).toEqual([]);
+		expect([
+			...getRememberedLazyTools(
+				`bounded-${REMEMBERED_LAZY_TOOLS_MAX_SESSIONS}`,
+			),
+		]).toEqual(["ast_grep_search"]);
+	});
+
+	it("copies the parent's activation posture to a fork session file", () => {
+		rememberLazyTools("parent-file", ["ast_grep_search"]);
+		inheritRememberedLazyTools("parent-file", "child-file");
+		expect([...getRememberedLazyTools("child-file")]).toEqual([
+			"ast_grep_search",
+		]);
+	});
 
 	it("records activation in the session-file store before a factory re-run", () => {
 		clearRememberedLazyTools("policy-before-rebuild");
