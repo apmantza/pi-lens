@@ -1075,7 +1075,7 @@ of scope-opening node kinds. A rebinding of the resolved local before the
 spawn — in any of its five spellings, `({ cwd } = ctx)` included — leaves the
 value unproven. A rebinding anywhere after the declaration in the binding
 scope, including loop-carried writes after the spawn and hoisted function
-writes, also leaves it unproven. A same-file function whose statement body is
+writes, also leaves it unproven. A same-file function whose body is a single `return <seam call>;` statement (or the equivalent concise arrow expression) is
 exactly one `return <seam call>;` counts as the seam. Method promotion is
 receiver-scoped
 (`this.<name>`), while module functions promote only their module-level name.
@@ -1091,7 +1091,7 @@ conforming spawn moves the population pins; adding a non-conforming one costs a
 reasoned row, never a pin bump. Stated bounds: an ALIASED
 `node:child_process` import is not a site (#2888), and the scan does not follow
 a path computation into the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~2.2 s idle / ~3.6 s under `--maxWorkers=1`
+timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
 contention and the `default` vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
