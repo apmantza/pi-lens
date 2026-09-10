@@ -48,7 +48,13 @@ const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	sql: [".sqlfluff", "pyproject.toml"],
 	php: ["composer.json", "composer.lock"],
 	prisma: ["schema.prisma", "prisma/schema.prisma"],
-	java: ["pom.xml", "build.gradle", ".classpath"],
+	// #2870: `build.gradle.kts` is the Kotlin-DSL spelling of `build.gradle`
+	// and marks a Java module just as well — its absence here (and in
+	// ROOT_MARKERS_BY_KIND below) is what left a `.java` file in a
+	// Kotlin-DSL Gradle module resolving to the workspace root, where a
+	// polyglot repo's go.mod then claimed it. `kotlin` already lists both
+	// spellings; java listed only the Groovy one.
+	java: ["pom.xml", "build.gradle", "build.gradle.kts", ".classpath"],
 	kotlin: ["build.gradle.kts", "build.gradle", "pom.xml"],
 	swift: ["Package.swift"],
 	dart: ["pubspec.yaml"],
@@ -95,7 +101,11 @@ const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	sql: [".sqlfluff", "pyproject.toml", "setup.cfg", "tox.ini"],
 	php: ["composer.json", "composer.lock"],
 	prisma: ["prisma/schema.prisma", "schema.prisma"],
-	java: ["pom.xml", "build.gradle", ".classpath"],
+	// #2870: see PROJECT_MARKERS_BY_KIND.java above — this is the table
+	// `resolveLanguageRootForFile` walks, so the missing Kotlin-DSL spelling
+	// is what anchored a nested Gradle module's `.java` file at the
+	// workspace root.
+	java: ["pom.xml", "build.gradle", "build.gradle.kts", ".classpath"],
 	kotlin: ["build.gradle.kts", "build.gradle", "pom.xml"],
 	swift: ["Package.swift"],
 	dart: ["pubspec.yaml"],
