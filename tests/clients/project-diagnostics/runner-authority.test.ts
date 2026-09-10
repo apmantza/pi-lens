@@ -71,6 +71,43 @@ function reportWriter(flag: string, content: string) {
 	};
 }
 
+/**
+ * A real `govulncheck -mode=source -format=json` stream: one config record, the
+ * OSV entry, then the reachable finding. Record shapes are the ones
+ * `tests/clients/govulncheck-client.test.ts` pins against the tool's documented
+ * JSON protocol — not invented here.
+ */
+const GOVULNCHECK_STREAM = [
+	JSON.stringify({ config: { protocol_version: "v1.0.0" } }),
+	JSON.stringify({
+		osv: {
+			id: "GO-2024-1234",
+			summary: "Path traversal in archive/tar",
+			database_specific: { url: "https://pkg.go.dev/vuln/GO-2024-1234" },
+			affected: [
+				{
+					package: { name: "archive/tar" },
+					ranges: [{ events: [{ introduced: "0" }, { fixed: "1.21.5" }] }],
+				},
+			],
+		},
+	}),
+	JSON.stringify({
+		finding: {
+			osv: "GO-2024-1234",
+			fixed_version: "1.21.5",
+			trace: [
+				{
+					module: "archive/tar",
+					package: "archive/tar",
+					function: "extract",
+					position: { filename: "/proj/cmd/main.go", line: 42 },
+				},
+			],
+		},
+	}),
+].join("\n");
+
 function spawnReturns(outcome: SpawnOutcome): void {
 	spawnMock.mockImplementation(
 		async () =>
@@ -233,6 +270,24 @@ describe("runner authority is opt-in (#2154)", () => {
 		);
 
 		expect(result.analyzed).toContain("gitleaks");
+	});
+
+	it("keeps govulncheck out of the analysed set when the scan produced no output", async () => {
+		// The v4 F1 chain, end to end through the record site: a govulncheck
+		// that exits 0 having written nothing was authoritative, and deleted a
+		// real CVE row from mode=full and mode=all.
+		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+		spawnReturns({ status: 0, stdout: "" });
+		const client = new GovulncheckClient(false);
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			inertClients({ govulncheckClient: client as never }),
+		);
+
+		expect(result.analyzed).not.toContain("govulncheck");
 	});
 
 	it("keeps trivy out of the analysed set when the real scan produces no report", async () => {
@@ -455,9 +510,45 @@ describe("client results carry the analysed-this-root signal (#2154)", () => {
 		expect(skipped.analyzed).not.toBe(true);
 
 		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+
+		// Exit 0 with nothing on stdout. `govulncheck -format=json` always
+		// writes a JSON stream (config + progress records at minimum), so an
+		// empty one is never evidence of "no vulnerabilities" — round 4 parsed
+		// it as a clean scan and retired a real CVE row (v4 F1).
 		spawnReturns({ status: 0, stdout: "" });
+		const empty = await client.analyze(tmp);
+		expect(empty.analyzed).not.toBe(true);
+
+		// A real stream, exit 3 (govulncheck's findings-present code). Record
+		// shapes taken from the vectors in tests/clients/govulncheck-client.test.ts.
+		// Same instance: `dedupeScan` clears a settled run, so this is a second
+		// real scan, not a shared one.
+		spawnReturns({ status: 3, stdout: GOVULNCHECK_STREAM });
 		const parsed = await client.analyze(tmp);
 		expect(parsed.analyzed).toBe(true);
+		expect(parsed.findings.map((finding) => finding.osv)).toEqual([
+			"GO-2024-1234",
+		]);
+	});
+
+	it("does not mark an aborted govulncheck with partial output as analysed", async () => {
+		// `safeSpawnAsync` resolves a timeout / ambient abort as
+		// `{status: null, error, stdout: <partial>}`. Parsing that truncated
+		// stream yields whatever findings happened to have been flushed, which
+		// must never be authoritative over the retained ones (v4 F1).
+		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+		const client = new GovulncheckClient(false);
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		spawnReturns({
+			status: null,
+			error: { message: "spawn timed out after 120000ms" },
+			stdout: GOVULNCHECK_STREAM.slice(0, GOVULNCHECK_STREAM.length - 40),
+		});
+		const aborted = await client.analyze(tmp);
+
+		expect(aborted.analyzed).not.toBe(true);
+		expect(aborted.success).toBe(false);
 	});
 
 	it("marks the opengrep result analysed only when it parsed a report", async () => {

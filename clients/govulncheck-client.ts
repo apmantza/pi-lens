@@ -22,6 +22,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import {
+	firstOutputLine,
+	spawnFailedWithNoOutput,
+} from "./dispatch/runners/utils/spawn-outcome.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import {
@@ -468,16 +472,46 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 				{ cwd, timeout: SCAN_TIMEOUT_MS },
 			);
 
+			// #2154 v4 F1: this was the one runner client with no `result.error`
+			// check before its parse site. `safeSpawnAsync` reports a timeout or
+			// an ambient abort as `{status: null, error, stdout: <partial>}`, and
+			// the old guard (`!stdout.trim() && status !== 0 && status !== 3`)
+			// let that partial stream through as an authoritative scan. Same
+			// order as the seven sibling clients: the process first, its output
+			// second.
+			if (result.error) {
+				this.log(`Scan error: ${result.error.message}`);
+				return {
+					...EMPTY_RESULT,
+					scannedAt,
+					summary: result.error.message.slice(0, 200),
+				};
+			}
+
 			// govulncheck exits non-zero (status 3) when vulnerabilities are
 			// found — that's success from our perspective. Genuine failures
 			// produce empty stdout + a stderr message.
 			const rawStdout = result.stdout ?? "";
-			if (!rawStdout.trim() && result.status !== 0 && result.status !== 3) {
-				this.log(`Scan failed: ${(result.stderr ?? "").slice(0, 200)}`);
+			if (!rawStdout.trim()) {
+				// Nothing to parse. `govulncheck -format=json` always writes a
+				// stream (a `config` record at minimum), so an empty one is never
+				// evidence of "no vulnerabilities" — it must not retire a retained
+				// CVE finding, whatever the exit code. `spawnFailedWithNoOutput`
+				// is the same shared discriminator knip and dead-code use, in
+				// place of this file's hand-rolled status test.
+				if (spawnFailedWithNoOutput(result, rawStdout)) {
+					this.log(`Scan failed: ${(result.stderr ?? "").slice(0, 200)}`);
+					return {
+						...EMPTY_RESULT,
+						scannedAt,
+						summary: firstOutputLine(result.stderr) || "scan failed",
+					};
+				}
 				return {
 					...EMPTY_RESULT,
+					success: true,
 					scannedAt,
-					summary: (result.stderr ?? "").trim().split("\n")[0] || "scan failed",
+					summary: "govulncheck produced no output; nothing parsed",
 				};
 			}
 

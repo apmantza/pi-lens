@@ -1444,6 +1444,15 @@ function diagnosticDedupKey(
 	return [path.resolve(filePath), diagnostic.line ?? "?", ruleId].join(":");
 }
 
+/**
+ * Which project runner produced a retained row (#2154). ONE derivation, used by
+ * both the retirement filter and the record that counts what it retired — v2's
+ * N2 was two verbatim copies of this expression drifting apart.
+ */
+function runnerIdOf(diagnostic: WidgetDiagnostic): string {
+	return diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "";
+}
+
 function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
@@ -1697,15 +1706,26 @@ function mergeDiagnosticsWithWidgetSummaries(
 		// practice; inline pi-lens-ignore comments are the primary
 		// suppression mechanism.
 		if (authoritativeLspFiles?.has(filePath)) continue;
-		const diagnostics = (summary.diagnostics ?? [])
+		const retained = summary.diagnostics ?? [];
+		const diagnostics = retained
 			.filter(
-				(diagnostic) =>
-					!authoritativeRunnerIds?.has(
-						diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "",
-					),
+				(diagnostic) => !authoritativeRunnerIds?.has(runnerIdOf(diagnostic)),
 			)
 			.map((d) => ({ ...d }));
-		byFile.set(filePath, { ...summary, filePath, diagnostics });
+		byFile.set(
+			filePath,
+			// #2154 v4: when the filter retires rows, the stored tallies describe
+			// diagnostics that are no longer delivered — full mode rendered
+			// `main.go 1W … 1 warning` with no row under it. Recompute from what
+			// survived, and only then (an untouched file keeps its own counts).
+			diagnostics.length === retained.length
+				? { ...summary, filePath, diagnostics }
+				: summarizeDiagnostics(
+						filePath,
+						diagnostics,
+						summary.hasFinalSnapshot ?? true,
+					),
+		);
 		for (const diagnostic of diagnostics) {
 			seen.add(diagnosticDedupKey(filePath, diagnostic));
 		}
@@ -2211,6 +2231,32 @@ async function formatFullMode(
 			filePath: "",
 			durationMs: 0,
 			metadata: { files: authoritativeRetiredCount },
+		});
+	}
+	// #2154 v4 F2: the same rule for the runner arm, in the same shape as its
+	// LSP sibling above — a retirement nobody can see is how a regression
+	// deletes findings silently. Bounded by construction: at most one row per
+	// mode=full call, and only when rows were actually retired.
+	const runnerRetiredRows = getFileDiagnosticSummaries()
+		.filter((summary) => includeFile(summary.filePath))
+		.reduce(
+			(total, summary) =>
+				total +
+				(summary.diagnostics ?? []).filter((diagnostic) =>
+					authoritativeRunnerIds.has(runnerIdOf(diagnostic)),
+				).length,
+			0,
+		);
+	if (runnerRetiredRows > 0) {
+		logLatency({
+			type: "phase",
+			phase: "runner_authoritative_widget_retire",
+			filePath: "",
+			durationMs: 0,
+			metadata: {
+				rows: runnerRetiredRows,
+				runners: [...authoritativeRunnerIds].join(","),
+			},
 		});
 	}
 	let summaries = await applyInlineSuppressionsToSummaries(

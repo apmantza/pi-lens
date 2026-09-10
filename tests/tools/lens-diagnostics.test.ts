@@ -14,6 +14,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import {
+	_setRecentPhasesForTest,
+	getRecentLoggedPhases,
+} from "../../clients/latency-logger.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -979,12 +983,95 @@ describe("lens_diagnostics mode=full", () => {
 			{ mode: "full", refreshRunners: "cached" },
 		);
 
-		expect(String(result.content[0].text)).not.toContain(
-			"stale runner finding",
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("stale runner finding");
+		expect(text).toContain("retained gitleaks finding");
+		// #2154 v4: the file's own tally must lose the retired row with it.
+		// Before, the summary kept the stored counts while the row was
+		// filtered out, so full mode rendered "2W … 2 warnings" over a single
+		// visible finding — its own counts and rows disagreeing.
+		expect(text).toContain("src/stale.ts  1W");
+		expect(text).not.toContain("2W");
+	});
+
+	it("logs one bounded phase row when a runner retirement removes rows", async () => {
+		// #2154 v4 F2: retirement must be observable — the LSP arm logs
+		// `lsp_authoritative_widget_retire` twelve lines away, and the runner
+		// arm shipped with nothing, so the exact scenario the reviewer proved
+		// (a runner deleting a real finding) left no trace in any stream.
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "stale runner finding",
+							line: 4,
+							rule: "jscpd:duplicate-code",
+							tool: "jscpd",
+						},
+					],
+				},
+			),
 		);
-		expect(String(result.content[0].text)).toContain(
-			"retained gitleaks finding",
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: [],
+			timings: { jscpd: 1 },
+		});
+		// The phase ring is process-global; start from a known state so the
+		// assertion is about THIS call.
+		_setRecentPhasesForTest([]);
+
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
 		);
+
+		const phases = getRecentLoggedPhases().map((entry) => entry.phase);
+		expect(phases).toContain("runner_authoritative_widget_retire");
+	});
+
+	it("logs no runner retirement row when nothing was retired", async () => {
+		// The bound: one row per call, only when rows were actually removed —
+		// never a row on every healthy mode=full call.
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "retained gitleaks finding",
+							line: 9,
+							rule: "gitleaks:secret",
+							tool: "gitleaks",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: ["gitleaks"],
+			timings: { jscpd: 1 },
+		});
+		_setRecentPhasesForTest([]);
+
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+
+		const phases = getRecentLoggedPhases().map((entry) => entry.phase);
+		expect(phases).not.toContain("runner_authoritative_widget_retire");
 	});
 
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
