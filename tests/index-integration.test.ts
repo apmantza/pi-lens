@@ -87,9 +87,12 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 // swallowed the crash into `dbg`, the two cases that drove one never reached
 // the delivery path they were named for and could not fail. One class now, so
 // a method added for one entry point cannot be missing from the other, and the
-// persisted-state pair (`exportState`/`importState`) is production-faithful:
-// the same `version` field `clients/read-guard.ts` writes, read off the real
-// module so a version bump cannot silently make the double lie.
+// `exportState` is production-faithful: the same `version` field
+// `clients/read-guard.ts` writes, read off the real module so a version bump
+// cannot silently make the double lie. Nothing else was added — a probe that
+// made `importState`/`hasKnownPath`/`forgetPath`/`recordSymbolRead` throw left
+// the file green at 61 passed, so no path here reaches them, and a future path
+// that does now crashes LOUDLY rather than silently (that is this PR).
 vi.mock("../clients/read-guard.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/read-guard.js")>();
@@ -101,11 +104,8 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 		isNewFile = () => false;
 		checkEdit = () => ({ action: "allow" });
 		recordRead = () => {};
-		recordSymbolRead = () => {};
 		recordWritten = () => {};
 		noteCreatedFile = () => {};
-		hasKnownPath = () => false;
-		forgetPath = () => {};
 		getReadHistory = () => [];
 		getEditHistory = () => [];
 		addExemption = () => {};
@@ -113,7 +113,6 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 			version: actual.READ_GUARD_STATE_VERSION,
 			reads: [],
 		});
-		importState = () => ({ imported: 0, dropped: 0 });
 		getSummary = () => ({
 			totalEdits: 0,
 			totalBlocks: 0,
