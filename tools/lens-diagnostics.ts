@@ -67,7 +67,10 @@ import {
 	formatCacheAgeOld,
 	formatNotRunEntry,
 } from "../clients/project-diagnostics/extractors.js";
-import type { FreshProjectDiagnosticsResult } from "../clients/project-diagnostics/fresh-fetch.js";
+import type {
+	FreshProjectDiagnosticsResult,
+	ProjectRunnerCoverage,
+} from "../clients/project-diagnostics/fresh-fetch.js";
 import {
 	ANALYZER_IDS,
 	fetchFreshProjectDiagnostics,
@@ -1519,6 +1522,47 @@ function runnerIdOf(diagnostic: WidgetDiagnostic): string {
 	return diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "";
 }
 
+type RunnerRetirementDecision = "retire" | "keep" | "keep-with-record";
+
+/**
+ * The one project-runner retirement decision. Coverage is authoritative when
+ * present for the runner; the older id-only arm is used only when absent.
+ */
+export function runnerRetirementDecision(
+	diagnostic: WidgetDiagnostic,
+	filePath: string,
+	authoritativeRunnerIds: ReadonlySet<string> | undefined,
+	authoritativeCoverage: readonly ProjectRunnerCoverage[] | undefined,
+): RunnerRetirementDecision {
+	const runnerId = runnerIdOf(diagnostic);
+	const coverage = (authoritativeCoverage ?? []).filter(
+		(entry) => entry.runnerId === runnerId,
+	);
+	if (coverage.length === 0) {
+		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
+	}
+	const resolvedFilePath = path.resolve(filePath);
+	let partial = false;
+	for (const entry of coverage) {
+		const root = path.resolve(entry.root);
+		const relative = path.relative(root, resolvedFilePath);
+		const underRoot =
+			relative === "" ||
+			(!relative.startsWith("..") && !path.isAbsolute(relative));
+		if (!underRoot) continue;
+		if (!entry.complete) {
+			partial = true;
+			continue;
+		}
+		if (!entry.files) return "retire";
+		if (entry.files.some((file) => path.resolve(file) === resolvedFilePath)) {
+			return "retire";
+		}
+		partial = true;
+	}
+	return partial ? "keep-with-record" : "keep";
+}
+
 function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
@@ -1759,6 +1803,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 	 */
 	authoritativeLspFiles?: ReadonlySet<string>,
 	authoritativeRunnerIds?: ReadonlySet<string>,
+	authoritativeRunnerCoverage?: readonly ProjectRunnerCoverage[],
 ): FileDiagnosticSummary[] {
 	const byFile = new Map<string, FileDiagnosticSummary>();
 	const seen = new Set<string>();
@@ -1775,7 +1820,13 @@ function mergeDiagnosticsWithWidgetSummaries(
 		const retained = summary.diagnostics ?? [];
 		const diagnostics = retained
 			.filter(
-				(diagnostic) => !authoritativeRunnerIds?.has(runnerIdOf(diagnostic)),
+				(diagnostic) =>
+					runnerRetirementDecision(
+						diagnostic,
+						filePath,
+						authoritativeRunnerIds,
+						authoritativeRunnerCoverage,
+					) !== "retire",
 			)
 			.map((d) => ({ ...d }));
 		byFile.set(
@@ -2075,6 +2126,7 @@ async function formatFullMode(
 				diagnostics: [],
 				runners: [],
 				analyzed: [],
+				authoritativeCoverage: [],
 				// #1623: every heavyweight analyzer is ELIGIBLE for this project but
 				// this call never asked for it (refreshRunners wasn't cheap/all/
 				// cached) — the expensive fetch below deliberately never runs in
@@ -2257,6 +2309,7 @@ async function formatFullMode(
 	// here; a second list of "which ids don't count" would be the mirror this
 	// repo's single-source-of-truth rule forbids.
 	const authoritativeRunnerIds = new Set(extracted.analyzed ?? []);
+	const authoritativeRunnerCoverage = extracted.authoritativeCoverage ?? [];
 	const foldedProjectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
@@ -2308,8 +2361,14 @@ async function formatFullMode(
 		.reduce(
 			(total, summary) =>
 				total +
-				(summary.diagnostics ?? []).filter((diagnostic) =>
-					authoritativeRunnerIds.has(runnerIdOf(diagnostic)),
+				(summary.diagnostics ?? []).filter(
+					(diagnostic) =>
+						runnerRetirementDecision(
+							diagnostic,
+							summary.filePath,
+							authoritativeRunnerIds,
+							authoritativeRunnerCoverage,
+						) === "retire",
 				).length,
 			0,
 		);
@@ -2321,7 +2380,18 @@ async function formatFullMode(
 			durationMs: 0,
 			metadata: {
 				rows: runnerRetiredRows,
-				runners: [...authoritativeRunnerIds].join(","),
+				runners: [
+					...new Set([
+						...authoritativeRunnerIds,
+						...authoritativeRunnerCoverage.map((entry) => entry.runnerId),
+					]),
+				].join(","),
+				coverage: authoritativeRunnerCoverage.map((entry) => ({
+					runnerId: entry.runnerId,
+					root: entry.root,
+					files: entry.files?.length ?? 0,
+					complete: entry.complete,
+				})),
 			},
 		});
 	}
@@ -2335,6 +2405,7 @@ async function formatFullMode(
 			projectDelta,
 			authoritativeLspFiles,
 			authoritativeRunnerIds,
+			authoritativeRunnerCoverage,
 		),
 		cwd,
 		policyMap,

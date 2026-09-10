@@ -1060,6 +1060,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 				unusedFiles: [],
 				unusedDeps: [],
 				unlistedDeps: [],
+				analyzed: true,
 			}),
 		};
 		const clients = makeClients();
@@ -1082,6 +1083,11 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect.anything(),
 		);
 		expect(result.runners).toContain("dead-code");
+		expect(result.authoritativeCoverage).toContainEqual({
+			runnerId: "dead-code-python",
+			root: path.resolve(tmp),
+			complete: true,
+		});
 	});
 
 	it("runs all analyzers in parallel, not serially", async () => {

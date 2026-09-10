@@ -1407,6 +1407,200 @@ describe("lens_diagnostics mode=full", () => {
 		expect(phases).not.toContain("runner_authoritative_widget_retire");
 	});
 
+	it("retires only findings covered by a complete runner root", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/nested/src.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "nested",
+							tool: "dead-code",
+							rule: "dead-code:export",
+						},
+					],
+				},
+			),
+			sum(
+				"/proj/src.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "other root",
+							tool: "dead-code",
+							rule: "dead-code:export",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["dead-code"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{ runnerId: "dead-code", root: "/proj/nested", complete: true },
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("nested");
+		expect(text).toContain("other root");
+	});
+
+	it("keeps findings outside a runner file set", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/inside-set.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "inside-set",
+							tool: "jscpd",
+							rule: "jscpd:duplicate",
+						},
+					],
+				},
+			),
+			sum(
+				"/proj/outside-set.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "outside-set",
+							tool: "jscpd",
+							rule: "jscpd:duplicate",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "jscpd",
+					root: "/proj",
+					files: ["/proj/inside-set.ts"],
+					complete: true,
+				},
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("inside-set");
+		expect(text).toContain("outside-set");
+	});
+
+	it("keeps partial runner findings and preserves the id fallback boundary", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/partial.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "partial",
+							tool: "knip",
+							rule: "knip:file",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["knip"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{ runnerId: "knip", root: "/proj", complete: false },
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		expect(String(result.content[0].text)).toContain("partial");
+	});
+
+	it("does not let one dead-code language retire another language finding", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/python.py",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "python dead code",
+							tool: "dead-code",
+							rule: "dead-code:file",
+						},
+					],
+				},
+			),
+			sum(
+				"/proj/rust.rs",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "rust dead code",
+							tool: "dead-code",
+							rule: "dead-code:file",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["dead-code"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "dead-code",
+					root: "/proj",
+					files: ["/proj/python.py"],
+					complete: true,
+				},
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("python dead code");
+		expect(text).toContain("rust dead code");
+	});
+
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
