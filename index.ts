@@ -2434,7 +2434,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// rethrows so the crash fails the test that caused it; production
 					// keeps the swallow, because a pi-lens session_start bug must
 					// never take down the host's session. #2866 wrote that guard
-					// inline here; #2884 folded it onto the shared helper so the eight
+					// inline here; #2884 folded it onto the shared helper so the nine
 					// sibling catches below cannot drift from it.
 					surfaceHandlerCrash("session_start", sessionErr, { dbg });
 				}
@@ -2750,6 +2750,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	async function refreshObservedLedgerSafely(
 		ctx: DeferredDrainCtx,
 	): Promise<void> {
+		const signal = ctx?.signal;
 		try {
 			await refreshObservedMutationLedger({
 				turnIndex: runtime.turnIndex,
@@ -2758,7 +2759,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// rather than a read (#2449 review round 2, F3).
 				getStoredLineHashes: (candidate) =>
 					storedLineHashesFor(runtime.readGuard, candidate),
-				signal: ctx?.signal,
+				signal,
 			});
 		} catch (refreshErr) {
 			surfaceHandlerCrash("observed_ledger_refresh", refreshErr, { dbg });
@@ -3335,15 +3336,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 				sessionId: getStableSessionId(ctx),
 				ownerId: testRunnerDeliveryOwnerId,
 			}).catch((err) => {
-				// The only fire-and-forget site of the nine. `runQuietWindow` already
-				// catches every task failure internally, so this catch sees only a
-				// crash in the quiet window's own scaffolding — and because nothing
-				// awaits this promise, the runner rethrow surfaces as an unhandled
-				// rejection rather than as a rejected `await`. Vitest still fails the
-				// run on one (`Errors 1 error`, exit 1) and names the file, which is
-				// the whole point: a silently dead quiet window is what #2884 is
-				// about.
-				surfaceHandlerCrash("quiet_window", err, { dbg });
+				// This is the only fire-and-forget site of the nine. Nothing awaits
+				// this promise, so rethrowing here creates an unhandled rejection
+				// that can terminate the pi host. The bounded row is the observable
+				// for this site; production and the test runner must keep the host alive.
+				surfaceHandlerCrash("quiet_window", err, { dbg, rethrow: false });
 			});
 			// #1123 item 4: dump active handles AFTER the quiet-window work is
 			// scheduled — the #1097-class leak (a stray ref'd timer surviving

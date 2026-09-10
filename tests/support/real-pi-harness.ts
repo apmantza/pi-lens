@@ -143,6 +143,8 @@ function startRealPi(
 			stdio: ["pipe", "pipe", "pipe"],
 			env: {
 				...process.env,
+				// Keep the real host outside Vitest's runner-only rethrow mode.
+				VITEST: undefined,
 				PI_LENS_HOME: home,
 				HOME: home,
 				REAL_PI_HARNESS_SCRIPT: scriptFile,

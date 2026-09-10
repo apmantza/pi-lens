@@ -140,6 +140,8 @@ function recordStaleSkip(
 export interface SessionEventGuardOptions {
 	/** pi-lens's debug sink, so a skip is also visible in a dogfood trace. */
 	dbg?: (message: string) => void;
+	/** Keep a floating fire-and-forget rejection from terminating the host. */
+	rethrow?: boolean;
 }
 
 /**
@@ -154,7 +156,7 @@ export interface SessionEventGuardOptions {
  * one of those catches, every assertion after them was vacuous, and the file
  * stayed green. #2866 closed the hole for `session_start` with an inline
  * `if (process.env.VITEST) throw`; this function is that guard folded into one
- * place so the remaining eight cannot drift from it.
+ * place so the remaining nine cannot drift from it.
  *
  * Two things happen on every crash, in this order:
  *
@@ -175,6 +177,9 @@ export interface SessionEventGuardOptions {
  * it (`session_start`, `agent_end`, `turn_end`, the `agent_settled` drain)
  * rethrow `isStaleExtensionCtxError` themselves BEFORE calling in, so a benign
  * session swap keeps its own single record and never lands here as a crash.
+ * The quiet-window site is intentionally the exception to the test-runner
+ * rethrow: it is fire-and-forget, so a rethrow would be an unhandled rejection
+ * that can terminate the pi host before its caller can observe the failure.
  */
 export function surfaceHandlerCrash(
 	handler: string,
@@ -194,7 +199,7 @@ export function surfaceHandlerCrash(
 		subject: handler,
 		reason: `${handler} handler crashed and was swallowed: ${String(err)}`,
 	});
-	if (process.env.VITEST) throw err;
+	if (process.env.VITEST && options.rethrow !== false) throw err;
 }
 
 /** A pi event handler, in the shape `pi.on` delivers. */

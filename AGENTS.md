@@ -627,7 +627,10 @@ crash calls it — nine today (`session_start`, `session_before_fork`,
 `observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`,
 the `agent_settled` deferred-mutation drain, `quiet_window`, `message_end`) —
 and it logs, writes one bounded `hook-handler-crash` degradation per handler
-per session, and rethrows only when `process.env.VITEST` is set. Never
+per session, and rethrows only when `process.env.VITEST` is set, except at the
+fire-and-forget `quiet_window` catch, which passes `rethrow: false` because an
+unhandled rejection there can terminate the pi host before any caller observes
+it. Never
 reintroduce a `dbg`-only catch around a handler body: `dbg` writes nothing
 under vitest, so the crash is then indistinguishable from a completed handler
 and every assertion after the caller's `await` is vacuous while the file stays

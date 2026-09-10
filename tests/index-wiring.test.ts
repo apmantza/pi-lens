@@ -1600,43 +1600,42 @@ describe("hook handler crash surfacing (#2884)", () => {
 		expectCrashRecorded("message_end");
 	});
 
-	it("surfaces a crashed quiet_window under the test runner as an unhandled rejection", async () => {
-		// The one fire-and-forget site of the eight: nothing awaits
-		// `runQuietWindow`, so the runner rethrow can only surface as an
-		// unhandled rejection. Vitest fails a run on one (`Errors 1 error`,
-		// exit 1) — this test takes its own listener so the assertion is
-		// deterministic instead of relying on the runner's end-of-run report,
-		// and hands vitest's listeners straight back. Node delivers
-		// `unhandledRejection` at the end of the tick that rejected, so one
-		// `setImmediate` drain is enough and no wall-clock poll is needed
-		// (same technique as `tests/clients/lsp/push-wait-settle-rejection.test.ts`).
-		const savedListeners = process.listeners("unhandledRejection");
-		process.removeAllListeners("unhandledRejection");
-		const seen: unknown[] = [];
-		const capture = (reason: unknown) => {
-			seen.push(reason);
-		};
-		process.on("unhandledRejection", capture);
-		try {
-			handlerCrashInjection.site = "quiet_window";
-			const pi = createPiMock();
-			extension(pi.asExtensionAPI());
+	it("records a crashed quiet_window while the fire-and-forget host survives", async () => {
+		handlerCrashInjection.site = "quiet_window";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
 
-			await pi.emit(
-				"agent_settled",
-				{},
-				makeCtx({ cwd: tmp, sessionId: "quiet" }),
-			);
-			await new Promise((resolve) => setImmediate(resolve));
-		} finally {
-			process.off("unhandledRejection", capture);
-			for (const listener of savedListeners)
-				process.on("unhandledRejection", listener as never);
-		}
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "quiet" })),
+		).resolves.toBeUndefined();
+		await new Promise<void>((resolve) => setImmediate(resolve));
 
-		expect(seen).toHaveLength(1);
-		expect(String(seen[0])).toContain("probe: quiet_window boom");
 		expectCrashRecorded("quiet_window");
+	});
+
+	it("classifies a stale observed-ledger refresh without recording a handler crash", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		const staleCtx = makeCtx({ cwd: tmp, sessionId: "refresh-stale" });
+		Object.defineProperty(staleCtx, "signal", {
+			configurable: true,
+			get() {
+				throw new Error(
+					"This extension ctx is stale after session replacement or reload",
+				);
+			},
+		});
+
+		await expect(
+			pi.emit("agent_settled", {}, staleCtx),
+		).resolves.toBeUndefined();
+
+		expect(getDegradationSummary()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "extension-ctx-stale" }),
+			]),
+		);
+		expect(crashLedgerGroup()).toBeUndefined();
 	});
 
 	it("keeps swallowing a crashed turn_end off the test runner, with one bounded record", async () => {
