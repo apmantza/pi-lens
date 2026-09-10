@@ -606,15 +606,6 @@ function buildCoverageNotice(
 		...new Set(relevant.flatMap((r) => r.unconfirmedServerIds ?? [])),
 	];
 	if (unconfirmedServerIds.length > 0) {
-		// The marker describes this exact silent-scanner set. A scanner can
-		// recover while another goes dark on the same file, so the set belongs
-		// in the session dedupe identity rather than only kind and path.
-		// #2016: these are SCANNER IDS, not filesystem paths. `normalizeMapKey`
-		// would realpath each one; on Windows that fails, falls through to
-		// `resolveNonExisting`, and resolves the id against the CURRENT process
-		// cwd, so the dedupe key differed by platform and by cwd (the #2219
-		// non-path-sentinel class). The cheap syntactic fold is what this
-		// session-scoped dedupe key actually needs.
 		const deferredIds = new Set(
 			relevant.flatMap((r) => r.deferredServerIds ?? []),
 		);
@@ -629,8 +620,17 @@ function buildCoverageNotice(
 		const silentServerIds = unconfirmedServerIds.filter(
 			(id) => !deferredIds.has(id),
 		);
-		// Code-unit comparator: the sorted set is a dedupe KEY, so ordering
-		// must be deterministic across locales — localeCompare is not.
+		// The marker describes this exact scanner set. A scanner can recover
+		// while another goes dark on the same file, so the set belongs in the
+		// session dedupe identity rather than only kind and path.
+		// #2016: these are SCANNER IDS, not filesystem paths. `normalizeMapKey`
+		// would realpath each one; on Windows that fails, falls through to
+		// `resolveNonExisting`, and resolves the id against the CURRENT process
+		// cwd, so the dedupe key differed by platform and by cwd (the #2219
+		// non-path-sentinel class). The cheap syntactic fold is what this
+		// session-scoped dedupe key actually needs. Code-unit comparator: the
+		// sorted set is a KEY, so ordering must be deterministic across locales
+		// — localeCompare is not.
 		const dedupeSet = (ids: readonly string[]) =>
 			[...new Set(ids)]
 				.map(normalizeEphemeralMapKey)
