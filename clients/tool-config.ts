@@ -8,24 +8,35 @@ export const TOOL_REGISTRY = [
 		name: "ast_grep_search",
 		piName: "ast_grep_search",
 		mcpName: "pilens_ast_grep_search",
+		situational: true,
+		summary:
+			"AST-aware structural code search across ~40 languages (ast-grep patterns).",
 		disableable: true,
 	},
 	{
 		name: "ast_grep_replace",
 		piName: "ast_grep_replace",
 		mcpName: "pilens_ast_grep_replace",
+		situational: true,
+		summary: "AST-aware structural code rewrite/refactor (ast-grep patterns).",
 		disableable: true,
 	},
 	{
 		name: "ast_grep_outline",
 		piName: "ast_grep_outline",
 		mcpName: undefined,
+		situational: true,
+		summary:
+			"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
 		disableable: true,
 	},
 	{
 		name: "lsp_navigation",
 		piName: "lsp_navigation",
 		mcpName: "pilens_lsp_navigation",
+		situational: true,
+		summary:
+			"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
 		disableable: true,
 	},
 	{
@@ -44,6 +55,9 @@ export const TOOL_REGISTRY = [
 		name: "lens_diagnostic_mark",
 		piName: "lens_diagnostic_mark",
 		mcpName: undefined,
+		situational: true,
+		summary:
+			"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
 		disableable: true,
 	},
 	{
@@ -130,6 +144,12 @@ export const TOOL_REGISTRY = [
 		mcpName: "pilens_turn_end",
 		disableable: false,
 	},
+	{
+		name: "session_end",
+		piName: undefined,
+		mcpName: "pilens_session_end",
+		disableable: false,
+	},
 ] as const;
 
 export const LENS_TOOL_NAMES = TOOL_REGISTRY.map(
@@ -149,8 +169,6 @@ export function toolRegistryEntryForMcp(
 ): ToolRegistryEntry | undefined {
 	return TOOL_REGISTRY.find((tool) => tool.mcpName === name);
 }
-
-export type LensToolName = (typeof LENS_TOOL_NAMES)[number];
 
 /** Resolve one tool. CLI names are comma-separated to support repeatable flags. */
 export function resolveLensToolEnabled(

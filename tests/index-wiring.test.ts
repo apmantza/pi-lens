@@ -521,7 +521,7 @@ describe("index.ts extension wiring", () => {
 			expect(properties).toHaveProperty("limit");
 		});
 
-		// #dynamic-tooling: 6 situational tools are registered but start
+		// #dynamic-tooling: 5 situational tools are registered but start
 		// inactive on a host that supports pi's dynamic tool loading
 		// (pi.getActiveTools/setActiveTools); the 6 always-active tools plus
 		// the loader itself stay active. Newly-activated tools only need to
@@ -529,7 +529,7 @@ describe("index.ts extension wiring", () => {
 		// #643: the deactivation call moved from synchronous registration into
 		// the session_start handler (the correct lifecycle point — see
 		// index.ts), so this test now fires session_start before asserting.
-		it("registers the 6 situational tools inactive and everything else active on a dynamic-tooling host", async () => {
+		it("registers the 5 situational tools inactive and everything else active on a dynamic-tooling host", async () => {
 			const tmp = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-wiring-session-start-"),
 			);

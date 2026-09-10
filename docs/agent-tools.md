@@ -9,14 +9,14 @@ share) — current exception: `ast_grep_outline`
 
 **Dynamic tooling.** Six tools stay always-active: `lens_diagnostics`,
 `lsp_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
-`symbol_search`. Six situational tools — `ast_grep_search`, `ast_grep_replace`,
+`symbol_search`. Five situational tools — `ast_grep_search`, `ast_grep_replace`,
 `ast_grep_outline`, `lsp_navigation`, `lens_diagnostic_mark` —
 are registered but
 inactive by default; the model activates the ones it needs via the always-active
 loader tool `pi_lens_activate_tools`, per pi's dynamic-tool-loading API
 (`pi.setActiveTools`/`pi.getActiveTools`). The loader explicitly reports
 "Available starting next turn"; do not retry the tool in the same turn.
-Feature-detected: on hosts without that API, the six situational tools fall back
+Feature-detected: on hosts without that API, the five situational tools fall back
 to being statically active, exactly as before (`tools/activate-tools.ts`, wired
 in `index.ts`).
 

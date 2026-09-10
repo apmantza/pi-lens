@@ -89,6 +89,12 @@ import {
 	resolveLensToolEnabled,
 	toolRegistryEntryForMcp,
 } from "../clients/tool-config.js";
+import {
+	endSituationalToolTelemetry,
+	observeSituationalToolCall,
+	startSituationalToolTelemetrySession,
+} from "../clients/situational-tool-telemetry.js";
+import { flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -930,6 +936,15 @@ const ALL_TOOLS = [
 		},
 	},
 	{
+		name: "pilens_session_end",
+		description:
+			"End the MCP connection's telemetry session and write its bounded situational-tool telemetry line. This is terminal for the connection.",
+		inputSchema: {
+			type: "object",
+			properties: {},
+		},
+	},
+	{
 		name: "pilens_ast_grep_search",
 		description:
 			"Search code by AST structure rather than text. Example: find calls with `console.log($MSG)`.",
@@ -1708,6 +1723,11 @@ async function callTool(
 		return toolText(lines.filter(Boolean).join("\n"), outcome);
 	}
 
+	if (name === "pilens_session_end") {
+		endSituationalToolTelemetry();
+		return toolText("Session ended.");
+	}
+
 	if (name === "pilens_turn_end") {
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		await ensureReady(cwd);
@@ -1857,6 +1877,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 
 	switch (method) {
 		case "initialize": {
+			startSituationalToolTelemetrySession("mcp", false);
 			const requested = params?.protocolVersion;
 			sendResult(id ?? null, {
 				protocolVersion:
@@ -1895,6 +1916,11 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			) {
 				sendResult(id ?? null, toolText(`Unknown or disabled tool: ${name}`));
 				return;
+			}
+			const entry = toolRegistryEntryForMcp(name);
+			if (entry && "situational" in entry && entry.situational) {
+				startSituationalToolTelemetrySession("mcp", false);
+				observeSituationalToolCall(entry.name);
 			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`
 			// (PI_LENS_MCP_AUTO_SESSION=1) but never completed successfully — never
@@ -1958,7 +1984,10 @@ process.stdin.on("data", (chunk: string) => {
 		newlineIndex = buffer.indexOf("\n");
 	}
 });
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+	endSituationalToolTelemetry();
+	void flushExtensionLog().finally(() => process.exit(0));
+});
 
 startIpcServer();
 console.error(`[pi-lens-mcp] ready (cwd=${DEFAULT_CWD})`);

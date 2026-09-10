@@ -47,6 +47,7 @@ import { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
+import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -119,6 +120,7 @@ export interface SessionStartOutcome {
 export async function runSessionStart(
 	cwd: string,
 ): Promise<SessionStartOutcome> {
+	startSituationalToolTelemetrySession("mcp", false);
 	const ctx = await getMcpSessionContext();
 	const host = createMcpHost(undefined, cwd);
 

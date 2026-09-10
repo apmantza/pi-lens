@@ -151,6 +151,13 @@ import {
 	resetLspMutationNoBridgeDbgLatch,
 	type LspMutationContext,
 } from "../../clients/lsp-mutation.js";
+import {
+	_getSituationalToolTelemetryStateForTests,
+	emitSituationalDeadWeight,
+	observeSituationalToolActivation,
+	observeSituationalToolCall,
+	resetSituationalToolTelemetry,
+} from "../../clients/situational-tool-telemetry.js";
 
 /**
  * When a piece of state must return to its initial value.
@@ -1052,6 +1059,28 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"#2319: #2249's declined-bind rollup is process-singleton backed (catalog shape 25), so the module-scope container scan could not see it. Its reset runs in index.ts's session_start closure on the primary-continuation path behind the #473 concurrent-secondary gate - a declined bind's own session_start increments these counters, so resetting there would erase every prior sibling's tally; the closure placement (with the emit-before-reset first line) still lets a primary that crashed before session_shutdown start from zero.",
 	},
 	{
+		id: "situational-tool-telemetry:sessionObservation",
+		module: "situational-tool-telemetry.ts",
+		state:
+			"activated, called (the dead-weight row's per-session observation sets), emitted (its once-per-row latch), suppressed (the pi non-fresh-start suppression mark), sessionHost (which host owns the open session), and connectionEnded (the MCP-only connection-terminal latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag. sessionStarted, suppressed, and connectionEnded are deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing sessionStarted would make endSituationalToolTelemetry() skip the session's own final row, the opener marks suppression before this reset runs and clearing it here would erase a rebuilt session's suppression before its own end, and only the MCP host owns connectionEnded. The reset also refuses to clear while a telemetry session is live (a repeated MCP session_start refresh re-runs handleSessionStart and must not wipe calls recorded before it); this reset is the registry's structural hook and the real clearing happens in endSituationalToolTelemetry() and in the opener itself.",
+		policy: "session_start",
+		resetName: "resetSituationalToolTelemetry",
+		reason:
+			"#2800 item 8: the dead-weight line is one row per fresh pi session or MCP connection naming situational tools that host never used. Pi records the row for fresh sessions only: a reload, resume, or fork start marks the session suppressed and records nothing (conversation-owned accounting across rebuilds is #2858); a process restart starts empty. MCP owns connectionEnded. The reset's sessionStarted/suppressed exclusions are stated in the state field above.",
+		probe: {
+			arm: () => {
+				observeSituationalToolActivation(["lsp_navigation"]);
+				observeSituationalToolCall("lsp_navigation");
+				emitSituationalDeadWeight();
+			},
+			isArmed: () => {
+				const state = _getSituationalToolTelemetryStateForTests();
+				return state.activated === 0 && state.called === 0 && !state.emitted;
+			},
+			reset: () => resetSituationalToolTelemetry(),
+		},
+	},
+	{
 		id: "smells-rollup:notifiedThisSession",
 		module: "smells-rollup.ts",
 		state: "notifiedThisSession",
@@ -1636,6 +1665,12 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// is what flags this file now.
 	"session-start-observability.ts": 0,
 	"sgconfig.ts": 2,
+	// #2800 item 8: the dead-weight line's two per-session observation sets
+	// (activated, called) plus situationalToolSet — an import-time frozen lookup
+	// over TOOL_REGISTRY that the container scan cannot distinguish from mutable
+	// state (SWEEP_HEURISTIC_LIMITS item 5). Registered above; the wired reset
+	// clears the two sets and the emitted latch.
+	"situational-tool-telemetry.ts": 3,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"slow-fs.ts": 1,

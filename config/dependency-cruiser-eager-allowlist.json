@@ -75,6 +75,7 @@
   "./clients/session-start-observability.js",
   "./clients/session-state-store.js",
   "./clients/sessionstart-logger.js",
+  "./clients/situational-tool-telemetry.js",
   "./clients/skills-resolver.js",
   "./clients/smells-rollup.js",
   "./clients/startup-timing.js",

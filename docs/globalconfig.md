@@ -42,7 +42,7 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `startup.mode` | `full` | `quick`, `full`, or `minimal`; `PI_LENS_STARTUP_MODE` wins |
 | `startup.scans.enabled` | `true` | `true` or `false` |
 
-By default pi-lens registers six situational tools (the `ast_grep_*` family,
+By default pi-lens registers five situational tools (the `ast_grep_*` family,
 `lsp_navigation`, `lens_diagnostic_mark`) inactive and exposes a small loader,
 `pi_lens_activate_tools`, that the model calls to activate the ones it needs.
 `--no-lazy-tools` turns that off: every pi-lens tool is active from the first
@@ -125,11 +125,12 @@ Turn subsystems off globally instead of retyping flags every session:
 
 The `tools.<name>.enabled` setting controls each model-facing tool. Valid names
 include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,
-`ast_grep_dump`, `lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
+`lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
 `lens_diagnostic_mark`, `symbol_search`, `module_report`, `project_report`,
 `read_symbol`, `read_enclosing`, `effective_config`, `analyze`, `health`,
 `latency`, `project_scan`, and `rebuild`. The activation loader and MCP
-lifecycle tools `session_start` and `turn_end` cannot be disabled.
+lifecycle tools `session_start`, `turn_end`, and `session_end` cannot be
+disabled.
 
 ## Project Config
 

@@ -15,6 +15,10 @@ import {
 	renderDegradationLines,
 } from "./clients/degradation-ledger.js";
 import {
+	TOOL_REGISTRY,
+	toolRegistryEntryForPi,
+} from "./clients/tool-config.js";
+import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
 	readProjectTrustFromContext,
@@ -255,6 +259,12 @@ import {
 	recordToolSetMutation,
 	supportsDeferredTools,
 } from "./clients/tool-set-policy.js";
+import {
+	endSituationalToolTelemetry,
+	observeSituationalToolActivation,
+	observeSituationalToolCall,
+	startSituationalToolTelemetrySession,
+} from "./clients/situational-tool-telemetry.js";
 import {
 	type CacheContextInjectionSlice,
 	clearCachePrefixSession,
@@ -1723,33 +1733,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 			}),
 		),
 	];
-	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
-		{
-			name: "ast_grep_search",
-			summary:
-				"AST-aware structural code search across ~40 languages (ast-grep patterns).",
-		},
-		{
-			name: "ast_grep_replace",
-			summary:
-				"AST-aware structural code rewrite/refactor (ast-grep patterns).",
-		},
-		{
-			name: "ast_grep_outline",
-			summary:
-				"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
-		},
-		{
-			name: "lsp_navigation",
-			summary:
-				"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
-		},
-		{
-			name: "lens_diagnostic_mark",
-			summary:
-				"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
-		},
-	];
+	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = TOOL_REGISTRY.filter(
+		(
+			entry,
+		): entry is Extract<
+			(typeof TOOL_REGISTRY)[number],
+			{ situational: true }
+		> => "situational" in entry && entry.situational === true,
+	).map(({ name, summary }) => ({ name, summary }));
 	const enabledLazyTools = new Set(
 		LAZY_TOOL_CATALOG.filter((tool) => isToolEnabled(tool.name)).map(
 			(tool) => tool.name,
@@ -1776,6 +1767,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		filteredLazyCatalog,
 		{
 			onActivated: (names) => {
+				observeSituationalToolActivation(names);
 				for (const name of names) rememberedLazyTools.add(name);
 			},
 			onRejected: (name) => {
@@ -1829,7 +1821,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		}
 	}
 
-	// Dynamic tooling (#pi 0.80.x+): deactivate the 6 situational tools so they
+	// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools so they
 	// start inactive and the model must call `pi_lens_activate_tools` to bring
 	// them in (next-turn visibility, per the docs' loader pattern). This used
 	// to run synchronously right here, immediately after registration — but
@@ -2059,6 +2051,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
+					// #2800 item 8: pi records the dead-weight row for fresh sessions
+					// only. A non-fresh start (reload/resume/fork) marks the session
+					// suppressed here, BEFORE the handler below can hang (#2859), so
+					// the session's end never depends on handleSessionStart returning.
+					startSituationalToolTelemetrySession(
+						"pi",
+						isFreshSessionStart(sessionReason),
+					);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2108,15 +2108,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 							getActiveTools?: () => string[];
 							setActiveTools?: (names: string[]) => void;
 						};
+						// A fresh conversation starts with no activation memory; a
+						// rebuild inherits the parent's.
+						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
 						if (
 							getLensFlag("no-lazy-tools") !== true &&
 							typeof piWithActiveTools.getActiveTools === "function" &&
 							typeof piWithActiveTools.setActiveTools === "function"
 						) {
-							// A fresh conversation starts with no activation memory; a
-							// rebuild inherits the parent's.
-							if (isFreshSessionStart(sessionReason))
-								rememberedLazyTools.clear();
 							const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
 							const plan = planToolSet(
 								piWithActiveTools.getActiveTools(),
@@ -2424,6 +2423,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
+		const toolEntry = toolRegistryEntryForPi(
+			(event as { toolName?: string }).toolName ?? "",
+		);
+		if (toolEntry && "situational" in toolEntry && toolEntry.situational) {
+			observeSituationalToolCall(toolEntry.name);
+		}
 		return handleToolCall({
 			event: event as unknown as Parameters<typeof handleToolCall>[0]["event"],
 			ctx: ctx as unknown as Parameters<typeof handleToolCall>[0]["ctx"],
@@ -3387,6 +3392,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			);
 			return;
 		}
+		endSituationalToolTelemetry();
 
 		// #1654: no drain runs here — see the module comment above
 		// `runDeferredMutationDrain` (review round 1, F2/F3/F4/F5) for why a

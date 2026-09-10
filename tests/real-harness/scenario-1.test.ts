@@ -12,7 +12,7 @@ function documentedToolBaselines(): { active: string[]; lazy: string[] } {
 		),
 		"utf8",
 	);
-	const lazyStart = docs.indexOf("Six situational tools");
+	const lazyStart = docs.indexOf("Five situational tools");
 	const section = docs.slice(
 		lazyStart,
 		docs.indexOf("are registered", lazyStart),

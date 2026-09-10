@@ -1610,6 +1610,19 @@ Session-start lifecycle hooks must tolerate capability-shaped injected clients.
 Optional reset methods may be absent from test doubles or embedders and must not
 turn session initialization into a failure; concrete clients still reset state.
 
+Situational-tool dead-weight telemetry has one owner per host lifecycle: pi
+opens once per fresh session and records the row only for sessions that never
+saw a non-fresh start — a reload, resume, or fork start marks the session
+suppressed, the replaced session's partial tally is discarded unemitted, and
+`endSituationalToolTelemetry` records nothing for a suppressed session; a
+fresh open clears the suppression and resets both sets. The opener runs in
+index.ts before `await handleSessionStart`, so the suppression does not depend
+on the handler returning (#2859); conversation-owned accounting across rebuilds
+is #2858. A process restart starts empty. MCP opens once per connection and
+treats repeated `pilens_session_start` calls as refreshes. MCP emits the
+existing row at the first of `pilens_session_end` or transport close; its
+connection-terminal latch is MCP-only, and pi neither reads nor arms it.
+
 The widget projection after `lens_diagnostics mode=full` uses the final
 post-policy, post-suppression summaries, not the confirmed-LSP reconciliation
 loop. That final seam has correlated the LSP, project-scan, delta, and retained

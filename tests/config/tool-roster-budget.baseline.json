@@ -63,9 +63,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 26791,
-		"descriptionTotal": 3420,
-		"schemaTotal": 20935,
+		"budget": 26975,
+		"descriptionTotal": 3554,
+		"schemaTotal": 20968,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -125,6 +125,10 @@
 			},
 			"pilens_rebuild": {
 				"description": 102,
+				"schema": 33
+			},
+			"pilens_session_end": {
+				"description": 134,
 				"schema": 33
 			},
 			"pilens_session_start": {
