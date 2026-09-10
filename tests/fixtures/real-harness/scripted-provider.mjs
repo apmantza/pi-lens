@@ -40,7 +40,14 @@ export default function scriptedProvider(pi) {
 			const stream = createAssistantMessageEventStream();
 			const action = script[turn++];
 			if (observationPath) {
-				appendFileSync(observationPath, `${JSON.stringify({ turn: turn - 1, tools: context.tools?.map((tool) => tool.name) ?? [] })}\n`);
+				const tools = context.tools?.map((tool) => ({
+					name: tool.name,
+					descriptionBytes: Buffer.byteLength(tool.description ?? ""),
+					schemaBytes: Buffer.byteLength(JSON.stringify(tool.parameters ?? {})),
+					surfaceBytes: Buffer.byteLength(tool.description ?? "") +
+						Buffer.byteLength(JSON.stringify(tool.parameters ?? {})),
+				})) ?? [];
+				appendFileSync(observationPath, `${JSON.stringify({ turn: turn - 1, tools })}\n`);
 			}
 			(async () => {
 				const output = {
