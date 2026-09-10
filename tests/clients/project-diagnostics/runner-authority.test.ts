@@ -551,6 +551,61 @@ describe("client results carry the analysed-this-root signal (#2154)", () => {
 		expect(aborted.success).toBe(false);
 	});
 
+	it("does not mark a non-zero govulncheck with config-only output as analysed", async () => {
+		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+		const client = new GovulncheckClient(false);
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		spawnReturns({
+			status: 1,
+			stdout: JSON.stringify({ config: { protocol_version: "v1.0.0" } }),
+			stderr: "loading packages: compile failure",
+		});
+		const result = await client.analyze(tmp);
+
+		expect(result.success).toBe(false);
+		expect(result.analyzed).not.toBe(true);
+		expect(result.findings).toHaveLength(0);
+	});
+
+	it("does not mark a non-zero govulncheck with config-and-progress output as analysed", async () => {
+		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+		const client = new GovulncheckClient(false);
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		spawnReturns({
+			status: 1,
+			stdout: [
+				JSON.stringify({ config: { protocol_version: "v1.0.0" } }),
+				JSON.stringify({ progress: { message: "Scanning..." } }),
+			].join("\n"),
+			stderr: "loading packages: compile failure",
+		});
+		const result = await client.analyze(tmp);
+
+		expect(result.success).toBe(false);
+		expect(result.analyzed).not.toBe(true);
+		expect(result.findings).toHaveLength(0);
+	});
+
+	it("does not mark a truncated non-zero govulncheck stream as analysed", async () => {
+		fs.writeFileSync(path.join(tmp, "go.mod"), "module demo\n");
+		const client = new GovulncheckClient(false);
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		const osvRecord = GOVULNCHECK_STREAM.split("\n")[1];
+		spawnReturns({
+			status: 1,
+			stdout: [GOVULNCHECK_STREAM.split("\n")[0], osvRecord].join("\n"),
+			stderr: "loading packages: compile failure",
+		});
+		const result = await client.analyze(tmp);
+
+		expect(result.success).toBe(false);
+		expect(result.analyzed).not.toBe(true);
+		expect(result.findings).toHaveLength(0);
+	});
+
 	it("marks the opengrep result analysed only when it parsed a report", async () => {
 		const client = new OpengrepClient(false);
 		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);

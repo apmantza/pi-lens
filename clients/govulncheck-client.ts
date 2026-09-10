@@ -489,9 +489,17 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			}
 
 			// govulncheck exits non-zero (status 3) when vulnerabilities are
-			// found — that's success from our perspective. Genuine failures
-			// produce empty stdout + a stderr message.
+			// found — that's success from our perspective. Any other exit code
+			// means the scan was not analysed, even if its config preamble or
+			// partial stream reached stdout before the failure.
 			const rawStdout = result.stdout ?? "";
+			if (result.status !== 0 && result.status !== 3) {
+				return {
+					...EMPTY_RESULT,
+					scannedAt,
+					summary: firstOutputLine(result.stderr) || "scan failed",
+				};
+			}
 			if (!rawStdout.trim()) {
 				// Nothing to parse. `govulncheck -format=json` always writes a
 				// stream (a `config` record at minimum), so an empty one is never
