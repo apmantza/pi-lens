@@ -278,7 +278,7 @@ Registered as pi agent tools. Verified names:
 
 | Tool | What it does | Use it to… |
 |---|---|---|
-| `lens_diagnostics` | Session-cache, LSP-probe, or analyzer diagnostics with `source` and `scope` selectors. | Use `source=lsp` with `scope=paths` for targeted checks; an empty cache is not proof of clean. |
+| `lens_diagnostics` | Session-cache or LSP-probe diagnostics with `source` and `scope` selectors. | Use `source=lsp` with `scope=paths` for targeted checks; an empty cache is not proof of clean. |
 | `lsp_navigation` | LSP navigation (definition/references/etc.). | Trace symbols semantically. |
 | `symbol_search` | Ranked identifier search over the warm word index (BM25 + priors). | Entry point of the discovery funnel. |
 | `module_report` | Navigable outline + signatures + decorators + imports + callbacks for a file; optional `blastRadius`. | Understand a module without reading the whole body. |
@@ -314,7 +314,7 @@ pi-lens is also an MCP server. The same capabilities are mirrored under a `pilen
 prefix: `pilens_diagnostics`, `pilens_analyze`, `pilens_module_report`,
 `pilens_symbol_search`, `pilens_read_symbol`, `pilens_read_enclosing`,
 `pilens_project_report`, `pilens_project_scan`, `pilens_lsp_navigation`,
-`pilens_diagnostics`, `pilens_ast_grep_search`/`pilens_ast_grep_replace`,
+`pilens_ast_grep_search`/`pilens_ast_grep_replace`,
 `pilens_session_start`/`pilens_turn_end`, `pilens_health`, `pilens_latency`,
 `pilens_rebuild` (source checkouts only). Note MCP has **no read-guard** — mirror reads
 don't record edit coverage. Prefer the **warm** review path; MCP `fresh` mode

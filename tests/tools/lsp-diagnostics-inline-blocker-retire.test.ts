@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { CacheManager } from "../../clients/cache-manager.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 
 const getServersForFileWithConfig = vi.fn();
@@ -167,6 +168,21 @@ type RetireCall = {
  * the same wiring `index.ts` uses. Asserting on the coordinator's own state
  * rather than on a spy is what makes the F1 probe meaningful: the question is
  * not "did the hook fire" but "did an eslint-origin blocker survive".
+ *
+ * #2860 round 2 verify F2: this drove `createLspDiagnosticsTool` directly,
+ * wiring the `onConfirmedNoBlockers` callback itself — but the SHIPPED seam
+ * is `createLensDiagnosticsTool` (`source=lsp`), which builds its OWN probe
+ * internally (`tools/lens-diagnostics.ts:258`) and wires this callback via
+ * its `getRuntime` argument. Driving the probe directly left the real
+ * wiring with zero regression coverage: dropping it in
+ * `createLensDiagnosticsTool` (index.ts:1658's actual production call)
+ * left every test in this file green. Round 3 retargets at the shipped
+ * tool so the wiring itself is what's under test — `retires` is now
+ * populated by spying on `runtime.retireInlineBlockerOnConfirmedClean`
+ * itself (the exact call `retireInlineBlockerAndResyncGuard` makes,
+ * `clients/git-guard.ts:872`), not by a hand-built callback, so a dropped
+ * `getRuntime` wire or a dropped call inside `createLensDiagnosticsTool`
+ * both show up here as an empty `retires`.
  */
 async function runTool(
 	args: Record<string, unknown>,
@@ -174,27 +190,55 @@ async function runTool(
 	runtime: { retireInlineBlockerOnConfirmedClean: (...a: any[]) => boolean },
 	retires: RetireCall[],
 ): Promise<any> {
-	const { createLspDiagnosticsTool } =
-		await import("../../tools/lsp-diagnostics.js");
+	const { createLensDiagnosticsTool } =
+		await import("../../tools/lens-diagnostics.js");
+	// `vi.spyOn` with no `mockImplementation` calls through to the real
+	// method (the coordinator's actual retire/no-retire decision, and the
+	// `updateGitGuardStatus`/`syncGitGuardRecord` side effects that follow
+	// it in `retireInlineBlockerAndResyncGuard`), while still recording
+	// every call for the assertions below.
+	const spy = vi.spyOn(runtime as any, "retireInlineBlockerOnConfirmedClean");
 	let token = 100;
-	const tool = createLspDiagnosticsTool(
+	const cacheManager = new CacheManager();
+	// The callback lens-diagnostics.ts wires internally reads `runtime` off
+	// this getter and calls `retireInlineBlockerAndResyncGuard` itself —
+	// unlike the old direct-probe drive, the test no longer builds the
+	// callback by hand at all.
+	const tool = createLensDiagnosticsTool(
+		cacheManager,
+		() => cwd,
+		undefined,
+		undefined,
 		() => ++token,
-		({ filePath, writeIndex, coveredSources }) => {
-			retires.push({ filePath, writeIndex, coveredSources });
-			runtime.retireInlineBlockerOnConfirmedClean(
-				filePath,
-				writeIndex,
-				coveredSources,
-			);
-		},
+		undefined,
+		() => runtime as any,
 	);
-	return (await tool.execute(
-		"diag-1561",
-		args,
-		new AbortController().signal,
-		null,
-		{ cwd },
-	)) as any;
+	try {
+		return (await tool.execute(
+			"diag-1561",
+			{ ...args, source: "lsp", scope: "paths" },
+			new AbortController().signal,
+			null,
+			{ cwd },
+		)) as any;
+	} finally {
+		// `retires` tracks every call — i.e. every time the confirmed-clean
+		// hook FIRED — matching the old direct-callback semantics exactly:
+		// `retireInlineBlockerAndResyncGuard` calls this method
+		// unconditionally as its first statement whenever the probe confirms
+		// clean, independent of whether the coordinator actually retires the
+		// blocker (that separate question is what the snapshot assertions
+		// below check).
+		for (const call of spy.mock.calls) {
+			const [filePath, writeIndex, coveredSources] = call as [
+				string,
+				number | undefined,
+				string[],
+			];
+			retires.push({ filePath, writeIndex, coveredSources });
+		}
+		spy.mockRestore();
+	}
 }
 
 async function freshService(): Promise<void> {
@@ -498,5 +542,119 @@ describe("#1561 lsp_diagnostics retires a stale inline blocker", () => {
 			files.map((f) => path.resolve(f)).sort(),
 		);
 		expect(runtime.getInlineBlockersSnapshot()).toHaveLength(0);
+	});
+});
+
+// #2860 round 3 N4: `mcp/server.ts:560-578` builds the ONLY production
+// `createLensDiagnosticsTool` call that passes 7 (not 8) arguments — the
+// 8th, `isLensGuardEnabled`, silently took its `() => true` default,
+// so the MCP surface unconditionally resynced the commit-gate
+// `turn-end-findings` record on every confirmed-clean check, even for a
+// project that never turned `lens-guard` on. Mirrors mcp/server.ts:578's
+// exact resolver expression (`Boolean(createMcpHost(undefined,
+// cwd).getFlag("lens-guard"))`) and reuses this file's real
+// `RuntimeCoordinator` + confirmed-clean machinery. A deliberately THIN
+// cacheManager (missing `inspectCache`, which only `syncGitGuardRecord`
+// calls) makes the guard's effect directly observable: it throws if
+// `syncGitGuardRecord` runs, and stays silent if the (default-off)
+// `lens-guard` flag correctly gated it out — the same TypeError shape
+// round-2 verify's own probe hit.
+describe("#2860 N4: MCP-shaped construction resolves the real lens-guard flag", () => {
+	let tmp: string;
+	let runtime: InstanceType<
+		typeof import("../../clients/runtime-coordinator.js").RuntimeCoordinator
+	>;
+
+	beforeEach(async () => {
+		const { RuntimeCoordinator } =
+			await import("../../clients/runtime-coordinator.js");
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		reconcileScanDiagnosticsMock.mockReset();
+		runtime = new RuntimeCoordinator();
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-n4-"));
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "50";
+		await freshService();
+	});
+
+	afterEach(async () => {
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		await (service as { destroy?: () => Promise<void> })?.destroy?.();
+		removeTempDirSync(tmp);
+	});
+
+	function thinCacheManager() {
+		// Real CacheManager methods minus `inspectCache` — the one
+		// `syncGitGuardRecord` (clients/git-guard.ts:897) calls that nothing
+		// else in this flow needs.
+		return {
+			readCache: vi.fn(() => undefined),
+			writeCache: vi.fn(),
+			clearCache: vi.fn(),
+		} as any;
+	}
+
+	async function runConfirmedCleanCheck(isLensGuardEnabled?: () => boolean) {
+		const file = path.join(tmp, "README.md");
+		fs.writeFileSync(file, "# Example\n");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [makeServer("marksman", tmp)] : [],
+		);
+		createLSPClient.mockImplementation(async (opts: { serverId: string }) =>
+			makeAnsweringClient(opts.serverId, tmp, file, []),
+		);
+		runtime.recordInlineBlockers(file, "🔴 STOP", 1, ["lsp"]);
+
+		const { createLensDiagnosticsTool } =
+			await import("../../tools/lens-diagnostics.js");
+		// The retire write's token must be a real reservation strictly newer
+		// than the blocker's own dispatch index (1, above) — the
+		// write-ordering guard (#555/#560) otherwise treats an equal/older
+		// index as stale and silently declines the retire.
+		let token = 100;
+		const tool = createLensDiagnosticsTool(
+			thinCacheManager(),
+			() => tmp,
+			undefined,
+			undefined,
+			() => ++token,
+			undefined,
+			() => runtime as any,
+			isLensGuardEnabled,
+		);
+		return tool.execute(
+			"diag-n4",
+			{
+				path: file,
+				source: "lsp",
+				scope: "paths",
+				severity: "error",
+				serverScope: "primary",
+				waitMs: 10_000,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: tmp },
+		);
+	}
+
+	it("does not resync the commit-gate record when lens-guard is off (the default)", async () => {
+		const { createMcpHost } = await import("../../clients/mcp/host-shim.js");
+		// mcp/server.ts:578's exact expression, against a fresh PI_LENS_HOME
+		// with no guard.enabled config — the registry default is `false`
+		// (clients/lens-flag-registry.ts:133).
+		const isLensGuardEnabled = () =>
+			Boolean(createMcpHost(undefined, tmp).getFlag("lens-guard"));
+		const result = (await runConfirmedCleanCheck(isLensGuardEnabled)) as any;
+		expect(result.isError).toBeFalsy();
+		// The retire itself still happens (isLensGuardEnabled only gates the
+		// EXTRA resync, not the retire) — the blocker is gone either way.
+		expect(runtime.getInlineBlockersSnapshot()).toHaveLength(0);
+	});
+
+	it("mutation: hardcoding isLensGuardEnabled=true reaches syncGitGuardRecord and reds on the thin cacheManager", async () => {
+		await expect(runConfirmedCleanCheck(() => true)).rejects.toThrow(
+			/inspectCache/,
+		);
 	});
 });

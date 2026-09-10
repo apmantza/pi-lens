@@ -285,9 +285,9 @@ export function createLensDiagnosticsTool(
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			'Query pi-lens diagnostics from the session cache, LSP probe, or analyzers at delta, paths, or workspace scope. Empty cache is not proof of clean; probe changed paths when findings are absent or stale. Example: `{source: "lsp", scope: "paths", paths: ["src/app.ts"]}`.',
+			'Query pi-lens diagnostics from the session cache or an active LSP probe, at paths or workspace scope. Empty cache is not proof of clean; probe changed paths when findings are absent or stale. Example: `{source: "lsp", scope: "paths", paths: ["src/app.ts"]}`.',
 		promptSnippet:
-			"lens_diagnostics source=session reads the session cache; use source=lsp scope=paths for changed files with absent or stale findings",
+			"lens_diagnostics source=session reads the session cache and an empty cache is not proof of a clean file; use source=lsp scope=paths for changed files when cached findings are absent or stale",
 		renderResult: compactRenderResult<{
 			mode?: string;
 			phase?: string;
@@ -406,16 +406,22 @@ export function createLensDiagnosticsTool(
 		parameters: Type.Object({
 			source: Type.Optional(
 				Type.String({
-					enum: ["session", "lsp", "analyzers"],
+					enum: ["session", "lsp"],
 					description:
-						"Evidence source: session cache, LSP probe, or analyzers.",
+						"Evidence source: session cache (empty cache is not proof of a " +
+						"clean file — use source=lsp for changed files) or an active LSP probe.",
 				}),
 			),
 			scope: Type.Optional(
 				Type.String({
-					enum: ["delta", "paths", "workspace"],
+					enum: ["paths", "workspace"],
 					description:
-						"Coverage scope: current delta, explicit paths, or workspace.",
+						// #2860: no schema value maps to "current turn's delta" — the
+						// default (omitted scope) already gives that for
+						// source=session, and for source=lsp `delta` was byte-identical
+						// to `paths` (round-2 verify N/F4), so exposing it would only
+						// invite a caller to believe it does something distinct.
+						"Coverage scope: explicit paths, or workspace (default: current turn's delta for source=session).",
 				}),
 			),
 			mode: Type.Optional(
@@ -519,8 +525,7 @@ export function createLensDiagnosticsTool(
 			const requestedSource = params.source as string | undefined;
 			const requestedScope = params.scope as string | undefined;
 			const legacyMode = params.mode as string | undefined;
-			const source =
-				requestedSource ?? (legacyMode === "full" ? "analyzers" : "session");
+			const source = requestedSource ?? "session";
 			const scope =
 				requestedScope ??
 				(legacyMode === "delta" || legacyMode === undefined
@@ -531,11 +536,21 @@ export function createLensDiagnosticsTool(
 				const lspParams = { ...params };
 				delete lspParams.source;
 				delete lspParams.scope;
-				if (scope === "workspace") {
-					delete lspParams.path;
-					delete lspParams.paths;
+				// #2860: explicit `path`/`paths` always win. `scope=workspace`
+				// only supplies a `cwd` default (a full workspace sweep) when the
+				// caller gave NEITHER — it must never override an explicit
+				// narrower request (the #2052 root-eviction hang and the
+				// SKILL.md "check a folder" recipe both depend on this: a
+				// directory `path` under scope=workspace scans that directory,
+				// not the whole project).
+				const hasExplicitPath =
+					typeof lspParams.path === "string" && lspParams.path.length > 0;
+				const hasExplicitPaths =
+					Array.isArray(lspParams.paths) && lspParams.paths.length > 0;
+				if (scope === "workspace" && !hasExplicitPath && !hasExplicitPaths) {
 					lspParams.path = cwd;
 				}
+				const lspStart = Date.now();
 				const result = (await lspProbe.execute(
 					_toolCallId,
 					lspParams,
@@ -547,12 +562,29 @@ export function createLensDiagnosticsTool(
 					isError?: boolean;
 					details?: Record<string, unknown>;
 				};
+				// #2860 F11: the folded route's own durable trace — without this,
+				// F1's class of defect (a real LSP result rendering as "clean")
+				// leaves no record in latency.log distinguishing source=lsp from
+				// source=session. One record per tool call (not per file), same
+				// convention as the mode=all `blocker_freshness_widget_gate`
+				// phase above.
+				logLatency({
+					type: "phase",
+					toolName: "lens_diagnostics",
+					filePath: cwd,
+					phase: "lens_diagnostics_lsp_route",
+					durationMs: Date.now() - lspStart,
+					metadata: {
+						scope,
+						isError: result.isError === true,
+						totalDiagnostics: result.details?.totalDiagnostics ?? 0,
+						cleanFiles: result.details?.cleanFiles ?? 0,
+						unconfirmedFiles: result.details?.unconfirmedFiles ?? 0,
+						timedOutFiles: result.details?.timedOutFiles ?? 0,
+					},
+				});
 				return {
 					...result,
-					content: result.content.map((block) => ({
-						...block,
-						text: block.text.replace(/^lsp_diagnostics/g, "lens_diagnostics"),
-					})),
 					isError: result.isError === true,
 					details: { ...result.details, source, scope },
 				};
@@ -561,15 +593,7 @@ export function createLensDiagnosticsTool(
 				const effectiveMode =
 					legacyMode ??
 					(scope === "workspace" ? "all" : scope === "paths" ? "all" : "delta");
-				params = {
-					...params,
-					mode:
-						source === "analyzers" && effectiveMode === "delta"
-							? "delta"
-							: effectiveMode,
-				};
-				if (source === "analyzers" && effectiveMode !== "delta")
-					params.refreshRunners ??= "all";
+				params = { ...params, mode: effectiveMode };
 			}
 			const repaintLspStatus = captureLspStatusRepaint?.(ctx);
 			const mode = (params.mode as string | undefined) ?? "delta";

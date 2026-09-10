@@ -189,6 +189,41 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		);
 	});
 
+	// #2860 round 2 F3 (fixed round 2, unguarded until now): the retired
+	// name used to be exempted from the enabled-tool gate BY NAME
+	// (`name !== "pilens_lsp_diagnostics"`), so a project that disabled
+	// `lens_diagnostics` still got the retired name executed — including
+	// real language-server spawns. The fix checks the CANONICAL name
+	// (`pilens_diagnostics`) instead; this pins it so the config bypass
+	// cannot come back silently.
+	it("refuses pilens_lsp_diagnostics when lens_diagnostics is disabled by config (#2860 F3)", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-lsp-disabled-"),
+		);
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify({ tools: { lens_diagnostics: { enabled: false } } }),
+		);
+		const isolated = new McpHarness({ cwd });
+		try {
+			const res = await isolated.request(31, "tools/call", {
+				name: "pilens_lsp_diagnostics",
+				arguments: { cwd, paths: ["missing-file.ts"] },
+			});
+			const result = res.result as {
+				isError?: boolean;
+				content?: { text: string }[];
+			};
+			expect(result.isError).toBe(true);
+			expect(result.content?.[0]?.text).toContain(
+				"Unknown or disabled tool: pilens_lsp_diagnostics",
+			);
+		} finally {
+			isolated.dispose();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 25_000);
+
 	it("omits a config-disabled tool from the real MCP tools/list path", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-tools-"));
 		fs.writeFileSync(

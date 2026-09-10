@@ -50,10 +50,11 @@ for the consumer-facing version of this routing.
 
 pi-lens exposes these high-value tools to agents:
 
-- `lens_diagnostics` — `mode=all` reports cached findings. If changed files have
-  no cached diagnostics or stale findings, use `mode=full` with `paths` for
-  targeted active verification. Omitting `paths` scans the whole project.
-- `lsp_navigation` / `lens_diagnostics` — IDE-style navigation and diagnostics.
+- `lens_diagnostics` — `source=session` (default) reports cached findings; an
+  empty cache is not proof of a clean file. If changed files have no cached
+  diagnostics or stale findings, use `source=lsp scope=paths` for targeted
+  active verification (or `scope=workspace` to sweep a whole directory/project).
+- `lsp_navigation` — IDE-style code navigation (definition/references/etc.).
 - `ast_grep_search` / `ast_grep_replace` — AST-aware structural search/replace.
 - `module_report` / `read_symbol` — navigable outline and targeted symbol-body
   reads; prefer these before broad full-file reads.

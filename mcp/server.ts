@@ -569,6 +569,13 @@ const lensDiagnosticsTool = createLensDiagnosticsTool(
 	// an MCP session context exists there is no session to compare against and
 	// validation skips the check, which is the honest classification.
 	() => peekMcpSessionRuntime(),
+	// #2860: without this, the default `() => true` applies on the MCP
+	// surface and every confirmed-clean LSP probe unconditionally resyncs the
+	// commit-gate `turn-end-findings` record even when the project has
+	// `lens-guard` off — a config bypass on a durable cross-surface store.
+	// Matches index.ts:1656 and the two sibling readers
+	// (clients/runtime-tool-call.ts, clients/runtime-tool-result.ts).
+	() => Boolean(createMcpHost(undefined, DEFAULT_CWD).getFlag("lens-guard")),
 );
 const astGrepClient = new AstGrepClient();
 const astGrepSearchTool = createAstGrepSearchTool(astGrepClient);
@@ -1058,7 +1065,18 @@ async function callTool(
 		args = {
 			...args,
 			source: "lsp",
-			scope: Array.isArray(args.paths) ? "paths" : "workspace",
+			// #2860: the retired tool's contract was always "path or paths is
+			// required" (tools/lsp-diagnostics.ts's own early return) — it never
+			// had a bare "sweep the whole workspace" mode. `scope: "paths"` is a
+			// no-op for source=lsp (lens-diagnostics.ts only special-cases
+			// scope==="workspace"), so whatever `path`/`paths` the caller sent
+			// (or didn't) passes straight through to the probe's own path/paths
+			// handling unchanged, reproducing master's behavior exactly —
+			// including its error when neither is present. Mapping absent
+			// `paths` to `scope:"workspace"` here previously caused every
+			// no-args call to substitute `cwd` and run a whole-project LSP sweep
+			// instead (root-eviction smoke: 129 sweeps, 180s timeout x3).
+			scope: "paths",
 		};
 	}
 	if (name === "pilens_ast_grep_dump") {
