@@ -1,6 +1,7 @@
 [
   "./clients/agent-nudge.js",
   "./clients/ast-grep-client.js",
+  "./clients/bash-file-access.js",
   "./clients/bootstrap.js",
   "./clients/bounded-cache.js",
   "./clients/bounded-telemetry.js",

@@ -124,6 +124,7 @@ export class FormatService {
 			DEFAULT_FORMATTER_CONCURRENCY,
 			options.signal,
 			options.budgetMs,
+			options.hook,
 		);
 
 		// Record new file state after formatting

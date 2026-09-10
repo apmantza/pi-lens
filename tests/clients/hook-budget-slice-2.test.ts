@@ -129,6 +129,36 @@ describe("#2523 slice 2 real hook budget seams", () => {
 		fs.rmSync(filePath, { force: true });
 	});
 
+	it("forwards the executing hook to the formatter aggregate ledger", async () => {
+		vi.useFakeTimers();
+		const gate = gatedPromise<never>();
+		formatterRunner.mockReturnValue(gate.promise);
+		const service = new FormatService("hook-attribution-test", true);
+		const filePath = path.join(
+			os.tmpdir(),
+			`hook-attribution-test-${process.pid}.ts`,
+		);
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		service.recordRead(filePath);
+		const result = service.formatFile(filePath, {
+			budgetMs: HOOK_WALL_BUDGET_MS.agent_settled,
+			hook: "agent_settled",
+		});
+		await vi.advanceTimersByTimeAsync(HOOK_WALL_BUDGET_MS.agent_settled);
+		await result;
+		expect(
+			getDegradationSummary().some(
+				(group) =>
+					group.kind === "hook-await-exceeded" &&
+					group.latestReasons.some((reason) =>
+						reason.subject.includes("agent_settled:formatter-aggregate"),
+					),
+			),
+		).toBe(true);
+		gate.resolve(undefined as never);
+		fs.rmSync(filePath, { force: true });
+	});
+
 	it("keeps a caller-aborted formatter out of failure and requeue semantics", async () => {
 		vi.useFakeTimers();
 		const gate = gatedPromise<never>();

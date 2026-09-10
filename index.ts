@@ -46,6 +46,7 @@ import {
 	markAnalyzerBootstrapShutdown,
 	peekBootstrapClients,
 	requestBootstrapClients,
+	getAgentBehaviorClient,
 	type SessionBootstrapAccess,
 } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";
@@ -79,6 +80,7 @@ import {
 	storedLineHashesFor,
 } from "./clients/observed-mutation-sources.js";
 import { classifyMutatingTool } from "./clients/mutating-tool.js";
+import { extractWrittenPathsFromCommand } from "./clients/bash-file-access.js";
 import { resolveLanguageRootForFile } from "./clients/language-profile.js";
 import { countFileLines } from "./clients/read-guard-tool-lines.js";
 import { registerReadBridge } from "./clients/read-bridge.js";
@@ -2520,6 +2522,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// `index.ts` and `tools/` too.
 		const rtToolName = (event as { toolName?: string })?.toolName;
 		const rtMutation = classifyMutatingTool(event, { recognizeOnly: true });
+		const bashCommand = (event as { input?: { command?: unknown } })?.input
+			?.command;
+		const bashWrite =
+			rtToolName === "bash" &&
+			typeof bashCommand === "string" &&
+			extractWrittenPathsFromCommand(
+				bashCommand,
+				ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
+			).length > 0;
+		const editClass = rtMutation !== undefined || bashWrite;
 		if (rtMutation) {
 			logLatency({
 				type: "phase",
@@ -2541,7 +2553,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// clients on that path; the handler requests them lazily if mutation work
 		// actually reaches the pipeline.
 		try {
-			const resident = rtMutation
+			const resident = editClass
 				? await bounded(loadBootstrapClients(), {
 						ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
 						signal: ctx.signal,
@@ -2566,10 +2578,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 					resetLSPService,
 					readGuard: runtime.readGuard,
 					agentBehaviorRecord: (toolName, filePath) =>
-						resident?.agentBehaviorClient.recordToolCall(toolName, filePath) ??
-						[],
+						(
+							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+						).recordToolCall(toolName, filePath),
 					formatBehaviorWarnings: (warnings) =>
-						resident?.agentBehaviorClient.formatWarnings(warnings as any) ?? "",
+						(
+							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+						).formatWarnings(warnings as any),
 					// #791: tags any deferred-format record queued from this tool_result
 					// with the STABLE session id of the ctx that produced it, so a
 					// later agent_end can tell its own queued work apart from a
@@ -2577,11 +2592,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 					sessionId: getStableSessionId(ctx),
 				}),
 				{
-					ms: rtMutation
+					ms: editClass
 						? HOOK_WALL_BUDGET_MS.tool_result_edit
 						: HOOK_WALL_BUDGET_MS.tool_result_read_only,
 					signal: ctx.signal,
-					hook: rtMutation ? "tool_result_edit" : "tool_result_read_only",
+					hook: editClass ? "tool_result_edit" : "tool_result_read_only",
 					label: "handleToolResult",
 				},
 			);
@@ -2596,7 +2611,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 			dbg,
 			budgetKey: (event, _ctx) => {
 				try {
-					return classifyMutatingTool(event, { recognizeOnly: true })
+					return classifyMutatingTool(event, { recognizeOnly: true }) ||
+						(typeof (event as { input?: { command?: unknown } })?.input
+							?.command === "string" &&
+							extractWrittenPathsFromCommand(
+								(event as { input: { command: string } }).input.command,
+								(_ctx as { cwd?: string })?.cwd ??
+									runtime.projectRoot ??
+									process.cwd(),
+							).length > 0)
 						? "tool_result_edit"
 						: "tool_result_read_only";
 				} catch {

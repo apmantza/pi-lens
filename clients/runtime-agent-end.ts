@@ -641,7 +641,25 @@ export async function handleAgentEnd({
 				continue;
 			}
 			const result = entry.result;
-			if (!result) continue;
+			if (!result) {
+				// The abort branch above already requeues work that never started;
+				// preserve its established ownership for an in-flight caller abort.
+				if (ambientSignal?.aborted) continue;
+				const reason =
+					entry.error ?? "deferred formatter exceeded agent_settled budget";
+				summary.failed.push({ filePath, errors: [reason] });
+				requeue(
+					[
+						{
+							...record,
+							kinds: new Set(["format"]),
+							toolNames: new Set(record.toolNames),
+						},
+					],
+					"format-failed",
+				);
+				continue;
+			}
 
 			summary.formatted++;
 
