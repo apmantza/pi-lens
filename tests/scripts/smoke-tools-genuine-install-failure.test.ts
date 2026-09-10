@@ -138,6 +138,17 @@ const CASES: Array<{
 		expectRow: "skip",
 	},
 	{
+		name: "PEP 668 externally-managed-environment is a named host-policy skip",
+		toolId: "jedi-language-server",
+		attempt: {
+			outcome: "failed",
+			reason: "error: externally-managed-environment",
+		},
+		toolchainPresence: { pip: true },
+		expectRow: "skip",
+		expectContains: "pip refuses system installs",
+	},
+	{
 		name: "ETIMEDOUT is treated as transient",
 		toolId: "vscode-css-languageserver",
 		attempt: { outcome: "failed", reason: "npm error ETIMEDOUT" },

@@ -5246,7 +5246,7 @@ async function installPipTool(
 					: ["-m", "pip", ...verb, packageName],
 		}));
 
-		let lastError = "";
+		const errors: string[] = [];
 		for (const candidate of pipCandidates) {
 			const pipResult = await safeSpawnAsync(
 				candidate.command,
@@ -5344,12 +5344,13 @@ async function installPipTool(
 				return packageName;
 			}
 
-			lastError = `${candidate.command} ${candidate.args.join(" ")}: ${outcome.error}`;
-			debugLog(`[pip-fallback] ${lastError}`);
+			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${outcome.error}`;
+			errors.push(candidateError);
+			debugLog(`[pip-fallback] ${candidateError}`);
 		}
 
 		throw new Error(
-			`Failed to install ${packageName}: no usable pip command found (${lastError || "unknown error"})`,
+			`Failed to install ${packageName}: no usable pip command found (${errors.join(" | ") || "unknown error"})`,
 		);
 	} catch (err) {
 		return recordPackageManagerInstallException(

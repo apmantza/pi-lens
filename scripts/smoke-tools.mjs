@@ -37,6 +37,7 @@
  *   node scripts/smoke-tools.mjs --lsp [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --lsp-gate [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --format [lang ...] [--install] [--verbose]
+ *   node scripts/smoke-tools.mjs --install --install-registry --installer-root=<path>
  *
  * Requires a built dist/ (run `npm run build:dist` first).
  */
@@ -1426,10 +1427,9 @@ function parseArgs(argv) {
 		else if (arg === "--format") format = true;
 		else if (arg === "--tier1") tier1 = true;
 		else if (arg === "--install-registry") installRegistry = true;
-		else if (arg === "--installer-root") {
-			installerRoot = argv[++i];
-			if (!installerRoot) throw new Error("--installer-root requires a path");
-		} else if (arg.startsWith("--min-pass="))
+		else if (arg.startsWith("--installer-root="))
+			installerRoot = arg.slice("--installer-root=".length);
+		else if (arg.startsWith("--min-pass="))
 			minPass = Number.parseInt(arg.slice("--min-pass=".length), 10);
 		else if (arg === "--autofix") autofix = true;
 		else langs.push(arg);
@@ -1717,6 +1717,13 @@ export function classifyInstallOutcome(toolId, deps) {
 		};
 	}
 	const reason = attempt.reason ?? "install failed (no reason recorded)";
+	if (/externally-managed-environment/i.test(reason)) {
+		return {
+			row: "skip",
+			networkUnreachable: false,
+			detail: `${toolId} unavailable (host policy: pip refuses system installs; toolchain policy: ${firstLine(reason)})`,
+		};
+	}
 	if (TRANSIENT_NETWORK_PATTERN.test(reason)) {
 		return {
 			row: "skip",
@@ -1870,8 +1877,14 @@ export async function runInstallRegistrySmoke({
 			toolchainPresence,
 		} = deps);
 	} else {
+		if (!installerRoot) {
+			console.error(
+				"installer root missing: --installer-root=<path> is required for the installed registry smoke",
+			);
+			process.exit(2);
+		}
 		const installerEntry = path.join(
-			installerRoot ?? repoRoot,
+			installerRoot,
 			"dist",
 			"clients",
 			"installer",

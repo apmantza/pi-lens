@@ -654,6 +654,12 @@ export function classifyToolSmokeInstallReport(report, context = {}) {
  * @returns {{ status: string, detail: string, shows?: string, witness?: { ext: string, content: string } }}
  */
 export function runToolSmokeInstallProbe(ctx) {
+	if (!ctx.installedPkgDir) {
+		return {
+			status: "error",
+			detail: "installer root is missing; installed registry was not measured",
+		};
+	}
 	const script = path.join(ctx.exportRoot, "scripts", "smoke-tools.mjs");
 	if (!fs.existsSync(script)) {
 		return {
@@ -670,8 +676,7 @@ export function runToolSmokeInstallProbe(ctx) {
 				script,
 				"--install",
 				"--install-registry",
-				"--installer-root",
-				ctx.installedPkgDir,
+				`--installer-root=${ctx.installedPkgDir}`,
 			],
 			{
 				cwd: ctx.projectDir,
@@ -1006,8 +1011,14 @@ export function npm(args, cwd, env) {
  */
 export function scratchEnv(scratchRoot, extra = {}) {
 	const home = path.join(scratchRoot, "home");
+	// Keep only process settings needed to find the host tools and preserve their
+	// locale. In particular, never inherit PIP_* or npm_config_* policy overrides.
 	return {
-		...process.env,
+		...Object.fromEntries(
+			["PATH", "Path", "PATHEXT", "SystemRoot", "LANG", "LC_ALL", "CI"]
+				.filter((key) => process.env[key] !== undefined)
+				.map((key) => [key, process.env[key]]),
+		),
 		HOME: home,
 		USERPROFILE: home,
 		PI_LENS_HOME: path.join(home, ".pi-lens"),
@@ -1740,7 +1751,7 @@ async function main() {
 	log(`scratch root: ${scratchRoot}`);
 	log(
 		`pinned under ${scratchRoot}: ${PINNED_ENV_KEYS.join(", ")} ` +
-			"(nothing this run spawns can reach the ambient home)",
+			"(allowlisted process environment; pip/npm policy overrides excluded)",
 	);
 
 	let blocked = false;

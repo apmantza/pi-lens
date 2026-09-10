@@ -183,6 +183,10 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 					).toBe(true);
 				} else {
 					expect(
+						fs.existsSync(path.join(REPO_ROOT, relative)),
+						`${parsed.id}: ${relative} is not present in the packed export`,
+					).toBe(true);
+					expect(
 						packageFiles.some(
 							(file) =>
 								relative === file ||
@@ -248,9 +252,12 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 			installed: 0,
 			results: [{ toolId: "dead-tool", state: "fail", detail: "E404" }],
 		});
+		const installedRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "release-qa-installed-"),
+		);
 		try {
 			const raw = runToolSmokeInstallProbe({
-				installedPkgDir: root,
+				installedPkgDir: installedRoot,
 				exportRoot: root,
 				projectDir: root,
 				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
@@ -260,7 +267,47 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 			expect(verdictExitCode(verdict.verdict)).toBe(1);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(installedRoot, { recursive: true, force: true });
 		}
+	});
+
+	it("passes the distinct installed root to the export smoke process", () => {
+		const exportRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "release-qa-export-"),
+		);
+		const installedRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "release-qa-installed-"),
+		);
+		fs.mkdirSync(path.join(exportRoot, "scripts"));
+		fs.writeFileSync(
+			path.join(exportRoot, "scripts", "smoke-tools.mjs"),
+			"process.stdout.write(JSON.stringify({lane:'install-registry',toolCount:1,installed:1,results:[],ok:true,args:process.argv.slice(2)}))",
+		);
+		try {
+			const raw = runToolSmokeInstallProbe({
+				exportRoot,
+				installedPkgDir: installedRoot,
+				projectDir: exportRoot,
+				env: process.env,
+			});
+			expect(raw.status).toBe("pass");
+			expect(raw.witness?.content).toContain(
+				`--installer-root=${installedRoot}`,
+			);
+		} finally {
+			fs.rmSync(exportRoot, { recursive: true, force: true });
+			fs.rmSync(installedRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("makes a missing installer root inconclusive instead of green", () => {
+		const raw = runToolSmokeInstallProbe({
+			exportRoot: "/tmp/export",
+			installedPkgDir: "",
+			projectDir: "/tmp",
+			env: process.env,
+		});
+		expect(raw.status).toBe("error");
 	});
 
 	it("maps a network-unreachable install row to exit 3 through the real smoke process boundary", () => {
@@ -637,6 +684,23 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 		expect(() => npm(["--version"], REPO_ROOT)).toThrow(
 			/npm\(\) requires the pinned scratch env/,
 		);
+	});
+
+	it("keeps host pip and npm policy overrides out of the install-row environment", () => {
+		const priorPip = process.env.PIP_BREAK_SYSTEM_PACKAGES;
+		const priorNpm = process.env.npm_config_userconfig;
+		process.env.PIP_BREAK_SYSTEM_PACKAGES = "1";
+		process.env.npm_config_userconfig = "/host/.npmrc";
+		try {
+			const env = scratchEnv(scratchRoot);
+			expect(env.PIP_BREAK_SYSTEM_PACKAGES).toBeUndefined();
+			expect(env.npm_config_userconfig).toBeUndefined();
+		} finally {
+			if (priorPip === undefined) delete process.env.PIP_BREAK_SYSTEM_PACKAGES;
+			else process.env.PIP_BREAK_SYSTEM_PACKAGES = priorPip;
+			if (priorNpm === undefined) delete process.env.npm_config_userconfig;
+			else process.env.npm_config_userconfig = priorNpm;
+		}
 	});
 
 	it("keeps a packed package's own lifecycle script inside the scratch root", () => {

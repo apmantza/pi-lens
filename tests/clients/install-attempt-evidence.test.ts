@@ -188,6 +188,19 @@ describe("the installer records what its attempt did (#1500)", () => {
 		expect(attempt?.reason).toBe(reason);
 	});
 
+	it("preserves a PEP 668 pip refusal for downstream classification", async () => {
+		safeSpawnAsync.mockResolvedValue({
+			stdout: "",
+			stderr: "error: externally-managed-environment",
+			status: 1,
+		});
+		const { ensureTool, getInstallAttempt } = await installer();
+		expect(await ensureTool("cmake-language-server")).toBeUndefined();
+		expect(getInstallAttempt("cmake-language-server")?.reason).toContain(
+			"externally-managed-environment",
+		);
+	});
+
 	it("a successful install records succeeded", async () => {
 		safeSpawnAsync.mockImplementation(async () => {
 			// The install "downloads" the package: plant what npm would leave.
