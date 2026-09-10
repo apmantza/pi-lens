@@ -75,5 +75,4 @@ describe("spawn-cwd scanner vocabulary (#2927)", () => {
 			"an aliased node spawn is a population file",
 		).toBe(true);
 	});
-
 });
