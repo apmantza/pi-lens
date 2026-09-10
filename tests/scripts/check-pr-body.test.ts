@@ -527,11 +527,6 @@ describe("PR body lint (#1844)", () => {
 			process.cwd(),
 			() =>
 				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
-			{
-				headFiles: new Map([
-					["clients/existing-record.ts", readFileSync(source, "utf8")],
-				]),
-			},
 		);
 		expect(result.valid).toBe(true);
 	});
@@ -1177,9 +1172,80 @@ describe("head-tree citations and test references", () => {
 		);
 	});
 
-	it("requires an adjacent quote to match source text within three lines", () => {
+	it("requires an adjacent quote to match source text within twenty lines", () => {
 		const result = lintPrBody(
 			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nwrong source\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("accepts a plain citation without a quote", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:1\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts a citation in a table cell without a quote", () => {
+		expect(
+			lintPrBody(`${body}\n| Evidence | \`clients/citation.ts:1\` |`, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts range citations by their first line", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:1-2\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts approximate-line citations by their hinted line", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:~1\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("pins the ±20 citation quote window", () => {
+		const source = Array.from({ length: 40 }, (_, index) =>
+			index === 20
+				? "boundary source line"
+				: index === 21
+					? "outside source line"
+					: `line ${index + 1}`,
+		).join("\n");
+		const localOptions = {
+			headFiles: new Map([["clients/window.ts", source]]),
+		};
+		const accepted = lintPrBody(
+			`${body}\nEvidence: \`clients/window.ts:1\`\n\`\`\`ts\nboundary source line\n\`\`\``,
+			localOptions,
+		);
+		expect(accepted).toEqual({ valid: true, errors: [] });
+		const rejected = lintPrBody(
+			`${body}\nEvidence: \`clients/window.ts:1\`\n\`\`\`text\noutside source line\n\`\`\``,
+			localOptions,
+		);
+		expect(rejected.errors.join(" ")).toContain("within ±20 lines");
+	});
+
+	it("checks every repeated citation quote", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\nexport const value = "head source";\n\`\`\`\nAgain: \`clients/citation.ts:1\`\n\`\`\`ts\ntotally fabricated\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("recognizes only real transcript quote shapes", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\n$ npm test\nTests 1 passed (1)\n\`\`\``,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("does not treat incidental pass or fail words as transcripts", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nthis source failed a review\n\`\`\``,
 			options,
 		);
 		expect(result.errors.join(" ")).toContain("does not match HEAD source");
@@ -1218,6 +1284,30 @@ describe("head-tree citations and test references", () => {
 			options,
 		);
 		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("normalizes canonical it titles in table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`it("fabricated table title")\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated table title");
+	});
+
+	it("checks canonical it titles in prose", () => {
+		const result = lintPrBody(
+			`${body}\nThe test is it("fabricated prose title").`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated prose title");
+	});
+
+	it("checks bare test titles in table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`fabricated bare title\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated bare title");
 	});
 
 	it("rejects a fabricated short table identifier", () => {

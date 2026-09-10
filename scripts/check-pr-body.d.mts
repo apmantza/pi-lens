@@ -13,6 +13,7 @@ export declare function lintPrBody(
 		diff?: string;
 		cwd?: string;
 		git?: (args: string[], options?: Record<string, unknown>) => string;
+		workingTree?: boolean;
 		headFiles?: Map<string, string>;
 	},
 ): {
@@ -27,9 +28,6 @@ export declare function lintLocalPrBody(
 	body: string,
 	cwd?: string,
 	git?: (args: string[], options?: Record<string, unknown>) => string,
-	extraOptions?: {
-		headFiles?: Map<string, string>;
-	},
 ): { valid: boolean; errors: string[] };
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },

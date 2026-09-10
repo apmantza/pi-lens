@@ -306,7 +306,7 @@ function pathLineReferences(text) {
 	return [...String(text ?? "").matchAll(CODE_CITATION)].map((match) => ({
 		file: match[1],
 		lineText: match[2],
-		line: Number(match[2]),
+		line: Number(match[2].replace(/^~/, "").split("-", 1)[0]),
 		index: match.index,
 	}));
 }
@@ -327,8 +327,12 @@ function sourceQuoteAfter(lines, bodyLine) {
 }
 
 function isTranscriptQuote(quote) {
-	return /(?:origin\/master|git\s|npm\s|npx\s|vitest|test files?\b|tests?\s+\d+\s+(?:failed|passed)|pass(?:ed)?\b|fail(?:ed)?\b|exit(?:code)?\s*=)/i.test(
-		quote.text.join("\n"),
+	const lines = quote.text.join("\n");
+	return (
+		/^(?:text|console|shell|sh|bash|output)$/i.test(quote.info) &&
+		/^(?:\s*(?:\$|>)\s+(?:git|npm|npx|vitest|tsc)\b|\s*Test Files?\b.*\b(?:failed|passed)\b|\s*Tests?\s+\d+\s+(?:failed|passed)\b|\s*(?:PASS|FAIL)\s+(?:\||$)|\s*npm ERR!|\s*error TS\d+|.*\borigin\/master\b)/im.test(
+			lines,
+		)
 	);
 }
 
@@ -336,7 +340,6 @@ function lintCodeCitations(body, options = {}) {
 	const errors = [];
 	const rawLines = String(body ?? "").split(/\r?\n/);
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	const seen = new Set();
 	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
 		visibleBody,
 	)) {
@@ -345,28 +348,19 @@ function lintCodeCitations(body, options = {}) {
 		const existingRecordCitation = /covered by existing record\b/.test(
 			rawLines[bodyLine] ?? "",
 		);
-		if (seen.has(key) && !existingRecordCitation) continue;
-		seen.add(key);
 		const source = headFileSource(file, options);
 		if (source === null) {
 			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
 			continue;
 		}
 		const sourceRows = sourceLines(source);
-		if (
-			!/^\d+$/.test(lineText) ||
-			lineNumber < 1 ||
-			lineNumber > sourceRows.length
-		) {
+		if (lineNumber < 1 || lineNumber > sourceRows.length) {
 			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
 			continue;
 		}
 		if (existingRecordCitation) continue;
 		const quote = sourceQuoteAfter(rawLines, bodyLine);
-		if (!quote) {
-			errors.push(`PR body citation ${key} lacks a quoted source line.`);
-			continue;
-		}
+		if (!quote) continue;
 		if (isTranscriptQuote(quote)) continue;
 		const start = Math.max(0, lineNumber - 1 - 20);
 		const finish = Math.min(sourceRows.length, lineNumber + 20);
@@ -395,7 +389,9 @@ function lintTestReferences(body, options = {}) {
 			const match = /^`([^`]+)`$/.exec(cell);
 			if (!match) continue;
 			const reference = match[1].trim();
-			if (/^[A-Za-z]\d{2,}$/.test(reference)) references.push(reference);
+			const title = /^it\(\s*["'`]([^"'`]+)["'`]\s*\)$/.exec(reference)?.[1];
+			if (title) references.push(title);
+			else if (/^[A-Za-z]\d{2,}$/.test(reference)) references.push(reference);
 			else if (reference.startsWith("it(") && !/\)\s*$/.test(reference))
 				references.push(reference);
 			else if (

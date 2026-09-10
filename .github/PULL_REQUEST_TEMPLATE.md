@@ -9,8 +9,9 @@ Closes #NNN — only when every acceptance criterion is met. Otherwise Refs
 The reference must ALSO be in the PR title — the title becomes the
 merge-commit subject.
 
-Citations: every code fact uses ``path:line`` plus the quoted source line;
-test ids in tables are real `it(` titles; pre-existing-red claims carry the
+Citations: every code fact uses ``path:line``; an offered fenced quote is
+checked against the cited source line. Test ids in tables are real `it(` titles;
+pre-existing-red claims carry the
 `origin/master` transcript.
 
 ## Type of change
