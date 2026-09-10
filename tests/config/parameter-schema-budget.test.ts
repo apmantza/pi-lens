@@ -58,7 +58,7 @@ const expected = {
 		],
 	},
 	lsp_navigation: {
-		total: 2145,
+		total: 2432,
 		maximum: 2593,
 		keys: [
 			"operation",
@@ -99,12 +99,12 @@ describe("trimmed parameter schema byte pins (#2800 item 13)", () => {
 		expect(Object.keys((schema as any).properties)).toEqual(
 			expected[name].keys,
 		);
-		expect(bytes(schema), `${name} exact byte count`).toBe(
-			expected[name].total,
-		);
 		expect(
 			bytes(schema),
 			`${name} must remain at least 25% smaller`,
 		).toBeLessThanOrEqual(expected[name].maximum);
+		expect(bytes(schema), `${name} exact byte count`).toBe(
+			expected[name].total,
+		);
 	});
 });

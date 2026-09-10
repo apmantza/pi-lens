@@ -47,6 +47,7 @@ function updateBaselineSurface(
 		schemaTotal: measurement.schemaTotal,
 		tools: measurement.measured,
 	};
+	baseline[surface] = current[surface];
 	fs.writeFileSync(baselinePath, `${JSON.stringify(current, null, "\t")}\n`);
 }
 
