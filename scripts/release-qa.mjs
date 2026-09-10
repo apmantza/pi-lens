@@ -650,15 +650,15 @@ export function classifyToolSmokeInstallReport(report, context = {}) {
 
 /**
  * Run the installed smoke boundary for the registry baseline row.
- * @param {{ installedPkgDir: string, projectDir: string, env: NodeJS.ProcessEnv }} ctx
+ * @param {{ exportRoot: string, installedPkgDir: string, projectDir: string, env: NodeJS.ProcessEnv }} ctx
  * @returns {{ status: string, detail: string, shows?: string, witness?: { ext: string, content: string } }}
  */
 export function runToolSmokeInstallProbe(ctx) {
-	const script = path.join(ctx.installedPkgDir, "scripts", "smoke-tools.mjs");
+	const script = path.join(ctx.exportRoot, "scripts", "smoke-tools.mjs");
 	if (!fs.existsSync(script)) {
 		return {
 			status: "fail",
-			detail: `smoke-tools.mjs is not in the installed package (${script})`,
+			detail: `smoke-tools.mjs is not in the export root (${script})`,
 		};
 	}
 	let report = null;
@@ -666,7 +666,13 @@ export function runToolSmokeInstallProbe(ctx) {
 	try {
 		const stdout = execFileSync(
 			process.execPath,
-			[script, "--install", "--install-registry"],
+			[
+				script,
+				"--install",
+				"--install-registry",
+				"--installer-root",
+				ctx.installedPkgDir,
+			],
 			{
 				cwd: ctx.projectDir,
 				encoding: "utf8",
@@ -1666,9 +1672,9 @@ const ROW_PROBES = {
 	},
 
 	// The installer registry's ground truth (#2663): the smoke's install lane
-	// runs against the INSTALLED package's own dist (the script resolves its
-	// dist relative to its own location), so a registry entry that is dead in
-	// the shipped artifact is one red row here — the same red row shape the
+	// runs its harness from the exported source tree but loads the INSTALLED
+	// package's own dist, so a registry entry that is dead in the shipped
+	// artifact is one red row here — the same red row shape the
 	// fixture lanes produce (#2661) — instead of a ⚠ skip folded into
 	// "toolchain absent". The classification is the lane's own
 	// `classifyToolSmokeInstallReport` mapping; a registry-unreachable verdict
@@ -1741,6 +1747,7 @@ async function main() {
 	let blockedReason = "";
 	let candidateFailure = "";
 	let exportedCommit = "";
+	let exportRoot = REPO_ROOT;
 	let packListing = null;
 	let installedPkgDir = "";
 	let rpc = null;
@@ -1776,6 +1783,7 @@ async function main() {
 
 		if (opts.from === "tree") {
 			const exported = exportHeadForPack(scratchRoot);
+			exportRoot = exported.dir;
 			exportedCommit = exported.commit;
 			// The export carries no node_modules, and `prepare`'s bundle step
 			// (scripts/bundle-dist.mjs) inlines the pure-JS runtime deps with
@@ -1917,6 +1925,7 @@ async function main() {
 		env,
 		gitRef: opts.gitRef,
 		installedPkgDir,
+		exportRoot,
 		mcp,
 		mcpTools,
 		packListing,

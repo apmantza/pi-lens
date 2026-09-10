@@ -108,6 +108,7 @@ export function shipVerdict(
 	},
 ): Verdict;
 export function runToolSmokeInstallProbe(ctx: {
+	exportRoot: string;
 	installedPkgDir: string;
 	projectDir: string;
 	env: NodeJS.ProcessEnv;

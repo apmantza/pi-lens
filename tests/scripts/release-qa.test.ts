@@ -164,6 +164,41 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 			"umbrella",
 		]);
 	});
+
+	it("requires every documented entry-point path in its named source (#2893)", () => {
+		const { rows } = parseBaselineRows(baselineText());
+		const packageFiles = (
+			JSON.parse(
+				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+			) as { files: string[] }
+		).files;
+		const pathPattern = /<(export|installed)>\/([^\s`]+)/g;
+		for (const parsed of rows) {
+			const matches = [...parsed.entryPoint.matchAll(pathPattern)];
+			for (const [, source, relative] of matches) {
+				if (source === "export") {
+					expect(
+						fs.existsSync(path.join(REPO_ROOT, relative)),
+						`${parsed.id}: ${relative}`,
+					).toBe(true);
+				} else {
+					expect(
+						packageFiles.some(
+							(file) =>
+								relative === file ||
+								relative.startsWith(file.replace(/\/$/, "")),
+						),
+						`${parsed.id}: ${relative} is not packaged`,
+					).toBe(true);
+				}
+			}
+		}
+		const smoke = rows.find((parsed) => parsed.id === "tool-smoke-install");
+		expect(smoke?.entryPoint).toContain("<export>/scripts/smoke-tools.mjs");
+		expect(smoke?.entryPoint).toContain(
+			"<installed>/dist/clients/installer/index.js",
+		);
+	});
 });
 
 describe("release-QA matrix and probe map are one list (#2606)", () => {
@@ -216,6 +251,7 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 		try {
 			const raw = runToolSmokeInstallProbe({
 				installedPkgDir: root,
+				exportRoot: root,
 				projectDir: root,
 				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
 			});
@@ -244,6 +280,7 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 		try {
 			const raw = runToolSmokeInstallProbe({
 				installedPkgDir: root,
+				exportRoot: root,
 				projectDir: root,
 				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
 			});
