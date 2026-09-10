@@ -95,6 +95,8 @@ export interface PendingAuxCoverageEntry {
 	 * touch (a producer re-mark for a newer revision) advances it (#2027).
 	 */
 	markedAtMs: number;
+	/** SHA-256 of the touch content this late publication must describe. */
+	contentHash?: string;
 	/**
 	 * When the most recent turn-end probe re-armed this pair, if it did.
 	 * The re-arm TTL measures from THIS clock, not from `markedAtMs`: every
@@ -159,6 +161,7 @@ export function markPendingAuxiliaryCoverage(
 	markedAtMs: number = Date.now(),
 	rearmedAtMs?: number,
 	rearmCount?: number,
+	contentHash?: string,
 ): void {
 	for (const serverId of serverIds) {
 		const key = pairKey(filePath, serverId);
@@ -173,11 +176,12 @@ export function markPendingAuxiliaryCoverage(
 			pending.set(
 				key,
 				rearmedAtMs === undefined
-					? { filePath, serverId, markedAtMs }
+					? { filePath, serverId, markedAtMs, contentHash }
 					: {
 							filePath,
 							serverId,
 							markedAtMs: existing.markedAtMs,
+							contentHash: existing.contentHash,
 							lastRearmedAtMs: rearmedAtMs,
 							rearmCount: rearmCount ?? (existing.rearmCount ?? 0) + 1,
 						},
@@ -187,11 +191,12 @@ export function markPendingAuxiliaryCoverage(
 		const evicted = pending.set(
 			key,
 			rearmedAtMs === undefined
-				? { filePath, serverId, markedAtMs }
+				? { filePath, serverId, markedAtMs, contentHash }
 				: {
 						filePath,
 						serverId,
 						markedAtMs,
+						contentHash,
 						lastRearmedAtMs: rearmedAtMs,
 						rearmCount: rearmCount ?? 1,
 					},
@@ -213,6 +218,7 @@ export function rearmPendingAuxiliaryCoverage(
 		refreshBaseline ? rearmedAtMs : pair.markedAtMs,
 		rearmedAtMs,
 		nextCount,
+		pair.contentHash,
 	);
 }
 

@@ -624,17 +624,34 @@ function buildCoverageNotice(
 		const onceKey = `${ctx.kind}:${ctx.filePath}:${silentScannerSet}`;
 		if (coverageNoticeSeen.has(onceKey)) return undefined;
 		coverageNoticeSeen.add(onceKey);
-		const shown = unconfirmedServerIds.slice(0, 4);
-		const remainder = unconfirmedServerIds.length - shown.length;
-		const marker = `${shown.join(", ")}${remainder > 0 ? ` +${remainder}` : ""}`;
-		const deferred = relevant.some(
-			(r) => r.status === "deferred" && (r.deferredServerIds?.length ?? 0) > 0,
+		const deferredIds = new Set(
+			relevant.flatMap((r) => r.deferredServerIds ?? []),
 		);
+		const markerFor = (ids: readonly string[]) => {
+			const shown = ids.slice(0, 4);
+			const remainder = ids.length - shown.length;
+			return `${shown.join(", ")}${remainder > 0 ? ` +${remainder}` : ""}`;
+		};
+		const deferredServerIds = unconfirmedServerIds.filter((id) =>
+			deferredIds.has(id),
+		);
+		const silentServerIds = unconfirmedServerIds.filter(
+			(id) => !deferredIds.has(id),
+		);
+		const coverageParts: string[] = [];
+		if (deferredServerIds.length > 0) {
+			coverageParts.push(
+				`coverage: ${markerFor(deferredServerIds)} deferred — findings will arrive through the late path.`,
+			);
+		}
+		if (silentServerIds.length > 0) {
+			coverageParts.push(
+				`coverage: ${markerFor(silentServerIds)} silent — diagnostics are incomplete (not a clean result).`,
+			);
+		}
 		return {
 			id: `coverage-partial:${ctx.kind}:${path.basename(ctx.filePath)}`,
-			message: deferred
-				? `coverage: ${marker} deferred — findings will arrive through the late path.`
-				: `coverage: ${marker} silent — diagnostics are incomplete (not a clean result).`,
+			message: coverageParts.join("\n"),
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",

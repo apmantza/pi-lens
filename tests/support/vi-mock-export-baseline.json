@@ -2797,7 +2797,7 @@
     "runScriptArgs",
     "updateArgs"
   ],
-  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:37:../../../../clients/safe-spawn.js": [
+  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:38:../../../../clients/safe-spawn.js": [
     "SpawnFailureError",
     "classifySpawnFailure",
     "getAmbientAbortSignal",
@@ -2805,10 +2805,10 @@
     "isCommandAvailableAsync",
     "resetSafeSpawnWindowsCommandCache"
   ],
-  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:42:../../../../clients/dispatch/runners/utils/lazy-installer.js": [
+  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:43:../../../../clients/dispatch/runners/utils/lazy-installer.js": [
     "getLazyInstallAttempt"
   ],
-  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:46:../../../../clients/lsp/index.js": [
+  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:47:../../../../clients/lsp/index.js": [
     "LSPCapabilitySnapshot",
     "LSPService",
     "__collectWorkspaceDiagnosticFilesForTest",
@@ -2824,7 +2824,7 @@
     "resyncGitChangedFiles",
     "runPerServerGroups"
   ],
-  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:63:../../../../clients/warm-attach.js": [
+  "tests/clients/dispatch/runners/runner-status-semantics.test.ts:64:../../../../clients/warm-attach.js": [
     "isWarmAttached"
   ],
   "tests/clients/dispatch/runners/secondary-language-runners.test.ts:10:../../../../clients/safe-spawn.js": [

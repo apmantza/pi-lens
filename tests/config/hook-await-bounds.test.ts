@@ -2350,10 +2350,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"optional only for the standalone MCP adapter and unit harnesses. The " +
 		"turn_end wall budget is always live, and timeout falls back to raw findings " +
 		"so security findings remain blockers.",
-	"call:clients/runtime-turn.ts#e953bca9~67c7ff0d":
-		"The late auxiliary re-promotion observer uses the live `turn_end` " +
-		"ctx.signal from `deps.signal`; the wall budget bounds root resolution " +
-		"without delaying the rest of late-findings delivery.",
+	"call:clients/runtime-turn.ts#e953bca9~404f0b0f":
+		"The late auxiliary re-promotion observer receives the live `turn_end` " +
+		"ctx.signal from `deps.signal` when pi supplies one, but that signal is " +
+		"optional on the MCP adapter and unit harness. One shared turn-end deadline " +
+		"bounds the entire drained-pair loop, so missing abort provenance cannot " +
+		"multiply the wall budget by the 50-pair cap.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */

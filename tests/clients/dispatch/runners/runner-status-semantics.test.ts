@@ -26,6 +26,7 @@ const diagsResult = (
 		// the named servers.
 		confirmation?: "confirmed" | "partial";
 		unconfirmedServerIds?: string[];
+		deferredServerIds?: string[];
 	} = {},
 ) => ({ diags, ...extra });
 const readFileContent = vi.fn(() => "const x = 1;\n");
@@ -442,6 +443,38 @@ describe("runner status/semantic edge cases", () => {
 			);
 			expect(result.output).toContain("Type error");
 			expect(result.output).toContain("coverage: opengrep silent");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("names deferred and silent scanners separately in one coverage notice (#2810)", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-mixed-coverage-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos", "zizmor"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			const result = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(result.output).toContain("coverage: typos deferred");
+			expect(result.output).toContain("coverage: zizmor silent");
+			expect(result.output).not.toContain("zizmor deferred");
 		} finally {
 			env.cleanup();
 		}

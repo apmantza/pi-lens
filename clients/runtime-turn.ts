@@ -3543,6 +3543,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	let lateAuxCoverageGapDropCount = 0;
 	const lateAuxStuckPairs: Array<{ filePath: string; serverId: string }> = [];
 	if (drainedPairs.length > 0) {
+		const lateObserverDeadline = Date.now() + HOOK_WALL_BUDGET_MS.turn_end;
 		const byFile = new Map<string, typeof drainedPairs>();
 		for (const pair of drainedPairs) {
 			const list = byFile.get(pair.filePath);
@@ -3662,21 +3663,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						}
 						continue;
 					}
-					// A demoted auxiliary still answers through this late path. Preserve
-					// the same hash-bound fast path as an awaited answer, and feed the
-					// measured late latency into the re-promotion streak.
-					try {
-						const lateContent = fs.readFileSync(lateAuxPath, "utf8");
-						if (typeof service.primeLastKnownDiagnostics === "function") {
-							service.primeLastKnownDiagnostics(
-								lateAuxPath,
-								lateContent,
-								rawDiags,
-							);
-						}
-					} catch {
-						// Freshness handling below remains authoritative for a deleted file.
-					}
+					// A demoted auxiliary still answers through this late path. Feed the
+					// measured late latency into the re-promotion streak. Cache priming is
+					// below the freshness gate so a changed file cannot resurrect stale data.
 					if (typeof service.observeLateAuxiliaryAnswer === "function") {
 						await bounded(
 							service.observeLateAuxiliaryAnswer(
@@ -3685,7 +3674,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 								cachedEntry.publishedAt - pair.markedAtMs,
 							),
 							{
-								ms: HOOK_WALL_BUDGET_MS.turn_end,
+								ms: Math.max(1, lateObserverDeadline - Date.now()),
 								signal: deps.signal /* late observer */,
 								hook: "turn_end",
 								label: "observeLateAuxiliaryAnswer",
@@ -3742,6 +3731,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							lateAuxAnswered += 1;
 						}
 						continue;
+					}
+					if (
+						typeof service.primeLastKnownDiagnostics === "function" &&
+						pair.contentHash !== undefined
+					) {
+						service.primeLastKnownDiagnostics(
+							lateAuxPath,
+							pair.contentHash,
+							pair.serverId,
+							rawDiags,
+						);
 					}
 					const lines = gate.live.map(
 						(f) =>

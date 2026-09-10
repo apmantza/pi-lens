@@ -3576,17 +3576,22 @@ export class LSPService {
 	/** Prime the hash-bound cache after a late publication is delivered. */
 	primeLastKnownDiagnostics(
 		filePath: string,
-		content: string,
+		contentHash: string,
+		serverId: string,
 		diagnostics: LSPDiagnostic[],
 	): void {
 		const normalizedKey = normalizeMapKey(filePath);
-		if (diagnostics.length > 0) {
-			this.lastKnownDiagnostics.set(normalizedKey, diagnostics);
-			this.lastKnownContentHash.set(normalizedKey, this.hashContent(content));
-		} else {
-			this.lastKnownDiagnostics.delete(normalizedKey);
-			this.lastKnownContentHash.delete(normalizedKey);
-		}
+		if (diagnostics.length === 0) return;
+		if (this.lastKnownContentHash.get(normalizedKey) !== contentHash) return;
+		const existing = this.lastKnownDiagnostics.get(normalizedKey) ?? [];
+		const retained = existing.filter(
+			(diagnostic) => diagnostic.serverId !== serverId,
+		);
+		const tagged = diagnostics.map((diagnostic) => ({
+			...diagnostic,
+			serverId,
+		}));
+		this.lastKnownDiagnostics.set(normalizedKey, [...retained, ...tagged]);
 	}
 
 	/**
@@ -5887,11 +5892,13 @@ export class LSPService {
 													? ("answered" as const)
 													: ("silent" as const);
 										const elapsedMs = Date.now() - auxWaitStartedAt;
-										this.noteAuxiliaryWait(
-											`${aux.serverId}:${normalizeMapKey(aux.root)}`,
-											budgetMs,
-											elapsedMs,
-										);
+										if (outcome !== "deferred") {
+											this.noteAuxiliaryWait(
+												`${aux.serverId}:${normalizeMapKey(aux.root)}`,
+												budgetMs,
+												elapsedMs,
+											);
+										}
 										return {
 											serverId: aux.serverId,
 											outcome,
@@ -5962,7 +5969,14 @@ export class LSPService {
 									)
 									.map((o) => o.serverId);
 								if (collectLaterServerIds.length > 0) {
-									markPendingAuxiliaryCoverage(filePath, collectLaterServerIds);
+									markPendingAuxiliaryCoverage(
+										filePath,
+										collectLaterServerIds,
+										Date.now(),
+										undefined,
+										undefined,
+										this.hashContent(content),
+									);
 								}
 								logLatency({
 									type: "phase",
@@ -6997,19 +7011,8 @@ export class LSPService {
 			// fully delivered. Nothing to record here: a skipped server keeps its original
 			// entry (and timestamp) so its window still expires naturally instead of being
 			// extended by every reuse.
-			const deferredAuxiliaryServerIds = spawned
-				.filter(
-					(entry) =>
-						entry.info.role === "auxiliary" &&
-						(deferredResyncServerIds.has(entry.info.id) ||
-							this.isAuxiliaryWaitDemoted(
-								entry.info.id,
-								entry.client.root ?? filePath,
-							)),
-				)
-				.map((entry) => entry.info.id);
-			if (deferredAuxiliaryServerIds.length > 0) {
-				result.deferredServerIds = deferredAuxiliaryServerIds;
+			if (uncoveredDeferredServerIds.length > 0) {
+				result.deferredServerIds = [...uncoveredDeferredServerIds];
 			}
 
 			logLatency({
@@ -7084,26 +7087,8 @@ export class LSPService {
 					...(uncoveredDeferredServerIds.length > 0 && {
 						deferredResyncServerIds: uncoveredDeferredServerIds,
 					}),
-					...(spawned.some(
-						(entry) =>
-							entry.info.role === "auxiliary" &&
-							(deferredResyncServerIds.has(entry.info.id) ||
-								this.isAuxiliaryWaitDemoted(
-									entry.info.id,
-									entry.client.root ?? filePath,
-								)),
-					) && {
-						deferredServerIds: spawned
-							.filter(
-								(entry) =>
-									entry.info.role === "auxiliary" &&
-									(deferredResyncServerIds.has(entry.info.id) ||
-										this.isAuxiliaryWaitDemoted(
-											entry.info.id,
-											entry.client.root ?? filePath,
-										)),
-							)
-							.map((entry) => entry.info.id),
+					...(uncoveredDeferredServerIds.length > 0 && {
+						deferredServerIds: [...uncoveredDeferredServerIds],
 					}),
 					// #1549: auxiliaries whose own deadline lapsed — the wait produced no
 					// publication, or the notify write never landed. Distinct from the fields

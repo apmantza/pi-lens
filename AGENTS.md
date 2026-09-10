@@ -821,8 +821,11 @@ not the stall itself. (#1458)
 
 An auxiliary whose recorded wait reaches at least 90% of its budget for five
 consecutive dispatches is session-demoted from the awaited set. `answered`,
-`cut_off`, and `silent` outcomes count when their recorded wait reaches that
-threshold; `deferred` does not because the server never received the content.
+`cut_off`, and `silent` outcomes count toward the pressure streak when their
+recorded wait reaches 90% of the declared budget. A below-50% wait resets the
+streak. `deferred` outcomes are ignored: they neither count nor reset because
+the server never received the content. A zero-duration deferred placeholder
+therefore cannot erase pressure evidence from real waits.
 Its publication remains collect-later work, and the demotion emits one
 `aux_wait_demoted` degradation per `serverId:normalizedRoot` key. Five
 consecutive late answers below half the budget re-promote that same key and

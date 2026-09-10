@@ -80,13 +80,13 @@ function makePrimaryServer(id: string, ext = ".ts") {
 }
 
 /** An auxiliary server (role:"auxiliary"). */
-function makeAuxServer(id: string, ext = ".ts") {
+function makeAuxServer(id: string, ext = ".ts", projectRoot = "C:/repo") {
 	return {
 		id,
 		name: id,
 		extensions: [ext],
 		role: "auxiliary" as const,
-		root: async () => "C:/repo",
+		root: async () => projectRoot,
 		spawn: vi.fn(async () => ({
 			process: makeFakeProcess(),
 			source: "test",
@@ -118,6 +118,7 @@ function makeClient(
 	diags: ReturnType<typeof makeDiagnostic>[] = [],
 	options: {
 		serverId?: string;
+		root?: string;
 		/**
 		 * #1493: publish on settle even with an EMPTY diagnostics set — a scanner
 		 * that ran to budget and found nothing. Production bumps
@@ -140,7 +141,7 @@ function makeClient(
 	const stampsByPath = new Map<string, number>();
 	return {
 		isAlive: () => true,
-		root: "C:/repo",
+		root: options.root ?? "C:/repo",
 		shutdown: async () => {},
 		getWorkspaceDiagnosticsSupport: () => ({
 			advertised: false,
@@ -632,6 +633,130 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 			)?.latestReasons[0]?.subject,
 		).toMatch(/^typos:/);
 		resetDegradationLedger();
+	});
+
+	it("keeps late diagnostics merged to the touch hash and preserves a clean record", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(100, [makeDiagnostic("auxiliary")], {
+			serverId: "typos",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		const content = "hash-bound";
+		const touch = service.touchFile(FILE, content, {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(200);
+		await touch;
+		const hash = hashDiagnosticContent(content);
+		service.primeLastKnownDiagnostics(FILE, hash, "typos", [
+			makeDiagnostic("late auxiliary"),
+		]);
+		const merged = service.getLastKnownDiagnostics(FILE, hash) ?? [];
+		expect(merged.map((diagnostic) => diagnostic.message)).toEqual(
+			expect.arrayContaining(["primary", "late auxiliary"]),
+		);
+		service.primeLastKnownDiagnostics(FILE, hash, "typos", []);
+		expect(service.getLastKnownDiagnostics(FILE, hash)).toEqual(merged);
+		service.primeLastKnownDiagnostics(
+			FILE,
+			hashDiagnosticContent("different content"),
+			"typos",
+			[makeDiagnostic("stale")],
+		);
+		expect(service.getLastKnownDiagnostics(FILE, hash)).toEqual(merged);
+	});
+
+	it("keeps a slow demoted auxiliary demoted until five genuinely fast late answers", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [], { serverId: "ts-primary" });
+		const auxiliaryClient = makeClient(1470, [], { serverId: "typos" });
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(FILE, `slow-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1470);
+			await touch;
+		}
+		for (let i = 0; i < 5; i += 1) {
+			await service.observeLateAuxiliaryAnswer(FILE, "typos", 1400);
+		}
+		const stillDemoted = service.touchFile(FILE, "still-demoted", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1470);
+		await stillDemoted;
+		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(5);
+	});
+
+	it("scopes demotion by the auxiliary server root", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primaryA = makeClient(0, [], {
+			serverId: "ts-primary",
+			root: "C:/a",
+		});
+		const auxA = makeClient(1470, [], { serverId: "typos", root: "C:/a" });
+		const fileA = "C:/a/main.ts";
+		let root = "C:/a";
+		getServersForFileWithConfig.mockImplementation(() => [
+			makePrimaryServer("ts-primary", ".ts"),
+			makeAuxServer("typos", ".ts", root),
+		]);
+		createLSPClient.mockResolvedValueOnce(primaryA).mockResolvedValueOnce(auxA);
+		await service.getClientsForFile(fileA);
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(fileA, `root-a-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1470);
+			await touch;
+		}
+		root = "C:/b";
+		for (let i = 0; i < 5; i += 1) {
+			await service.observeLateAuxiliaryAnswer(fileA, "typos", 100);
+		}
+		root = "C:/a";
+		const touchB = service.touchFile(fileA, "root-a-still-demoted", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1470);
+		await touchB;
+		expect(auxA.waitForDiagnostics).toHaveBeenCalledTimes(5);
 	});
 
 	it("resets pressure after an under-budget answer before the sixth dispatch", async () => {
