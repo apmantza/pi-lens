@@ -270,7 +270,11 @@ function lintRuntimeObservability(
 		return [];
 	const existingRecord =
 		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
-	if (existingRecord && isRuntimeObservabilityPath(existingRecord[2])) {
+	if (
+		existingRecord &&
+		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecord[2]) &&
+		isRuntimeObservabilityPath(existingRecord[2])
+	) {
 		const [, kind, file, lineText] = existingRecord;
 		const lineNumber = Number(lineText);
 		try {

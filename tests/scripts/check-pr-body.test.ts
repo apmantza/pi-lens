@@ -552,6 +552,43 @@ describe("PR body lint (#1844)", () => {
 		});
 	});
 
+	it.each([
+		[
+			"tests file",
+			"runner-unavailable",
+			"clients/../tests/support/session-state-registry.ts:429",
+		],
+		["scripts probe", "script-probe", "clients/../scripts/probe-record.mjs:1"],
+	])(
+		"rejects a traversal existing-record citation to a %s",
+		(_name, kind, file) => {
+			const probe = join(repositoryRoot, "scripts", "probe-record.mjs");
+			writeFileSync(
+				probe,
+				'recordDegradationOnce({ kind: "script-probe" });\n',
+			);
+			try {
+				const result = lintLocalPrBody(
+					body.replace(
+						"The advisory check run is the record.",
+						`covered by existing record \`${kind}\` at \`${file}\``,
+					),
+					repositoryRoot,
+					() =>
+						"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+				);
+				expect(result).toEqual({
+					valid: false,
+					errors: [
+						'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+					],
+				});
+			} finally {
+				rmSync(probe, { force: true });
+			}
+		},
+	);
+
 	it("rejects a stale existing-record citation without throwing", () => {
 		const result = lintLocalPrBody(
 			body.replace(

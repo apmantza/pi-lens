@@ -12,6 +12,6 @@
 	{
 		"name": "#2846",
 		"kind": "tool-cwd-resolution",
-		"diff": "diff --git a/clients/tool-cwd.ts b/clients/tool-cwd.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
+		"diff": "diff --git a/clients/lsp/server.ts b/clients/lsp/server.ts\n+recordDegradationOnce({ kind: \"tool-cwd-resolution\" });"
 	}
 ]
