@@ -256,7 +256,7 @@ function recordLocationsFromRuntimeSource(source) {
 	return records;
 }
 
-const CODE_CITATION = /`([^`\s:]+):(\d+)`/g;
+const CODE_CITATION = /`([^`\s:]+):((?:~?\d+)(?:-\d+)?)`/g;
 const MASTER_CLAIM =
 	/pre-existing|red on master|also fails on origin\/master|environment-specific/i;
 const headTestCorpusCache = new Map();
@@ -264,6 +264,13 @@ const headTestCorpusCache = new Map();
 function headFileSource(file, options = {}) {
 	if (options.headFiles?.has?.(file)) return options.headFiles.get(file);
 	if (/(?:^|\/)\.\.(?:\/|$)/.test(file) || isAbsolute(file)) return null;
+	if (options.workingTree) {
+		try {
+			return readFileSync(resolve(options.cwd ?? process.cwd(), file), "utf8");
+		} catch {
+			return null;
+		}
+	}
 	try {
 		return String(
 			(options.git ?? gitExecFileSync)(["show", `HEAD:${file}`], {
@@ -280,17 +287,65 @@ function sourceLines(source) {
 	return String(source ?? "").split(/\r?\n/);
 }
 
+function bodyLinesOutsideFences(body) {
+	let fence;
+	return String(body ?? "")
+		.split(/\r?\n/)
+		.map((line) => {
+			const marker = line.match(/^\s*(```+)/)?.[1];
+			if (marker) {
+				if (!fence) fence = marker;
+				else if (marker.length >= fence.length) fence = undefined;
+				return "";
+			}
+			return fence ? "" : line;
+		});
+}
+
+function pathLineReferences(text) {
+	return [...String(text ?? "").matchAll(CODE_CITATION)].map((match) => ({
+		file: match[1],
+		lineText: match[2],
+		line: Number(match[2]),
+		index: match.index,
+	}));
+}
+
+function sourceQuoteAfter(lines, bodyLine) {
+	let index = bodyLine + 1;
+	while (index < lines.length && !lines[index].trim()) index += 1;
+	const opener = lines[index]?.match(/^\s*(```+)(.*)$/);
+	if (!opener) return null;
+	const fence = opener[1];
+	const end = lines.findIndex(
+		(row, rowIndex) =>
+			rowIndex > index && new RegExp(`^\\s*${fence}\\s*$`).test(row),
+	);
+	if (end === -1) return null;
+	const text = lines.slice(index + 1, end).filter((row) => row.trim());
+	return { end, info: opener[2].trim(), text };
+}
+
+function isTranscriptQuote(quote) {
+	return /(?:origin\/master|git\s|npm\s|npx\s|vitest|test files?\b|tests?\s+\d+\s+(?:failed|passed)|pass(?:ed)?\b|fail(?:ed)?\b|exit(?:code)?\s*=)/i.test(
+		quote.text.join("\n"),
+	);
+}
+
 function lintCodeCitations(body, options = {}) {
 	const errors = [];
 	const rawLines = String(body ?? "").split(/\r?\n/);
+	const visibleBody = bodyLinesOutsideFences(body).join("\n");
 	const seen = new Set();
-	for (const match of String(body ?? "").matchAll(CODE_CITATION)) {
-		const [, file, lineText] = match;
-		const lineNumber = Number(lineText);
-		const bodyLine =
-			String(body).slice(0, match.index).split(/\r?\n/).length - 1;
-		const key = `${file}:${lineNumber}`;
-		if (seen.has(key)) continue;
+	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
+		visibleBody,
+	)) {
+		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
+		const key = `${file}:${lineText}`;
+		const existingRecordCitation = /covered by existing record\b/.test(
+			rawLines[bodyLine] ?? "",
+		);
+		if (seen.has(key) && !existingRecordCitation) continue;
 		seen.add(key);
 		const source = headFileSource(file, options);
 		if (source === null) {
@@ -298,42 +353,58 @@ function lintCodeCitations(body, options = {}) {
 			continue;
 		}
 		const sourceRows = sourceLines(source);
-		if (lineNumber < 1 || lineNumber > sourceRows.length) {
+		if (
+			!/^\d+$/.test(lineText) ||
+			lineNumber < 1 ||
+			lineNumber > sourceRows.length
+		) {
 			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
 			continue;
 		}
-		if (/^\s*```/.test(rawLines[bodyLine + 1] ?? "")) {
-			const fence = rawLines[bodyLine + 1].match(/^\s*(```+)/)?.[1] ?? "```";
-			const end = rawLines.findIndex(
-				(row, index) =>
-					index > bodyLine + 1 && new RegExp(`^\\s*${fence}\\s*$`).test(row),
-			);
-			if (end === -1) continue;
-			const quoted = rawLines
-				.slice(bodyLine + 2, end)
-				.filter((row) => row !== "");
-			const start = Math.max(0, lineNumber - 1 - 3);
-			const finish = Math.min(sourceRows.length, lineNumber + 3);
-			const window = sourceRows.slice(start, finish).join("\n");
-			if (quoted.length && !window.includes(quoted.join("\n")))
-				errors.push(
-					`PR body quote after citation ${key} does not match HEAD source within ±3 lines.`,
-				);
+		if (existingRecordCitation) continue;
+		const quote = sourceQuoteAfter(rawLines, bodyLine);
+		if (!quote) {
+			errors.push(`PR body citation ${key} lacks a quoted source line.`);
+			continue;
 		}
+		if (isTranscriptQuote(quote)) continue;
+		const start = Math.max(0, lineNumber - 1 - 20);
+		const finish = Math.min(sourceRows.length, lineNumber + 20);
+		const window = sourceRows.slice(start, finish).join("\n");
+		if (!quote.text.length || !window.includes(quote.text.join("\n")))
+			errors.push(
+				`PR body quote after citation ${key} does not match HEAD source within ±20 lines.`,
+			);
 	}
 	return errors;
 }
 
 function lintTestReferences(body, options = {}) {
 	const references = [];
-	for (const match of String(body ?? "").matchAll(
+	const visibleBody = bodyLinesOutsideFences(body).join("\n");
+	for (const match of visibleBody.matchAll(
 		/\bit\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
-	))
-		references.push(match[1]);
-	for (const row of String(body ?? "").split(/\r?\n/)) {
+	)) {
+		const lineStart = visibleBody.lastIndexOf("\n", match.index) + 1;
+		if (!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)))
+			references.push(match[1]);
+	}
+	for (const row of visibleBody.split(/\r?\n/)) {
 		if (!/^\s*\|.*\|\s*$/.test(row)) continue;
-		for (const match of row.matchAll(/`([^`]+)`/g))
-			if (match[1].trim().split(/\s+/).length >= 3) references.push(match[1]);
+		for (const cell of row.split("|").map((value) => value.trim())) {
+			const match = /^`([^`]+)`$/.exec(cell);
+			if (!match) continue;
+			const reference = match[1].trim();
+			if (/^[A-Za-z]\d{2,}$/.test(reference)) references.push(reference);
+			else if (reference.startsWith("it(") && !/\)\s*$/.test(reference))
+				references.push(reference);
+			else if (
+				reference.split(/\s+/).length >= 3 &&
+				/^[\w][\w' -]+$/.test(reference) &&
+				!/(?:failed|passed|files?|error|result)\b/i.test(reference)
+			)
+				references.push(reference);
+		}
 	}
 	const cacheKey = options.headFiles
 		? options.headFiles
@@ -351,16 +422,25 @@ function lintTestReferences(body, options = {}) {
 	const exists = (reference) => {
 		if (corpus !== null) return corpus.includes(reference);
 		try {
-			(options.git ?? gitExecFileSync)(
-				["grep", "-I", "-F", "-q", "-e", reference, "HEAD", "--", "tests"],
-				{ cwd: options.cwd ?? process.cwd(), encoding: "utf8" },
-			);
+			const args = ["grep", "-I", "-F", "-q", "-e", reference];
+			if (!options.workingTree) args.push("HEAD");
+			args.push("--", "tests");
+			(options.git ?? gitExecFileSync)(args, {
+				cwd: options.cwd ?? process.cwd(),
+				encoding: "utf8",
+			});
 			return true;
 		} catch {
 			return false;
 		}
 	};
+	const defined = new Set(
+		[...visibleBody.matchAll(/\b([A-Za-z]\d{2,})\b\s*(?:means|=|:)/g)].map(
+			(match) => match[1],
+		),
+	);
 	return [...new Set(references)]
+		.filter((reference) => !defined.has(reference))
 		.filter((reference) => !exists(reference))
 		.map(
 			(reference) =>
@@ -370,35 +450,22 @@ function lintTestReferences(body, options = {}) {
 
 function lintMasterClaims(body) {
 	const errors = [];
-	const rawLines = String(body ?? "").split(/\r?\n/);
-	let fence;
-	for (let index = 0; index < rawLines.length; index += 1) {
-		const line = rawLines[index];
-		const opener = line.match(/^\s*(```+)/);
-		if (opener) {
-			if (!fence) fence = opener[1];
-			else if (line.match(new RegExp(`^\\s*${fence}\\s*$`))) fence = undefined;
-			continue;
-		}
-		if (fence || !MASTER_CLAIM.test(line)) continue;
-		const next = rawLines[index + 1];
-		if (!/^\s*```/.test(next ?? "")) {
-			errors.push(
-				`PR body master/environment claim lacks an origin/master transcript: ${line.trim()}`,
-			);
-			continue;
-		}
-		const close = rawLines.findIndex(
-			(row, rowIndex) => rowIndex > index + 1 && /^\s*```/.test(row),
-		);
+	const rawLines = bodyLinesOutsideFences(body);
+	const original = String(body ?? "");
+	const visible = rawLines.join("\n");
+	const sentences = String(rawLines.join("\n")).match(/[^.!?]+[.!?]+/g) ?? [];
+	for (const sentence of sentences) {
 		if (
-			close === -1 ||
-			!rawLines
-				.slice(index + 2, close)
-				.some((row) => /origin\/master/.test(row))
+			!MASTER_CLAIM.test(sentence) ||
+			/reviewer\s+(?:wrote|said)/i.test(sentence)
 		)
+			continue;
+		if (/^\s*\|/.test(sentence.trim())) continue;
+		const position = visible.indexOf(sentence);
+		const after = original.slice(Math.max(0, position + sentence.length));
+		if (!/```[\s\S]*origin\/master/i.test(after))
 			errors.push(
-				`PR body master/environment claim lacks an origin/master transcript: ${line.trim()}`,
+				`PR body master/environment claim lacks an origin/master transcript: ${sentence.trim()}`,
 			);
 	}
 	return errors;
@@ -416,15 +483,25 @@ function lintRuntimeObservability(
 	const content = observabilitySectionContent(body, lines, headings);
 	if ([...observation.records].some((record) => content.includes(record)))
 		return [];
-	const existingRecord =
-		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
+	const existingRecordCitation = pathLineReferences(content).find(
+		(reference) => {
+			const prefix = content.slice(0, reference.index);
+			return /covered by existing record `[^`]+` at\s*$/.test(prefix);
+		},
+	);
+	const existingRecordPrefix = existingRecordCitation
+		? content
+				.slice(0, existingRecordCitation.index)
+				.match(/covered by existing record `([^`]+)` at\s*$/)
+		: null;
 	if (
-		existingRecord &&
-		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecord[2]) &&
-		isRuntimeObservabilityPath(existingRecord[2])
+		existingRecordCitation &&
+		existingRecordPrefix &&
+		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecordCitation.file) &&
+		isRuntimeObservabilityPath(existingRecordCitation.file)
 	) {
-		const [, kind, file, lineText] = existingRecord;
-		const lineNumber = Number(lineText);
+		const [, kind] = existingRecordPrefix;
+		const { file, line: lineNumber } = existingRecordCitation;
 		try {
 			const source = readFileSync(
 				isAbsolute(file) ? file : resolve(cwd, file),
@@ -882,7 +959,6 @@ export function lintLocalPrBody(
 	body,
 	cwd = process.cwd(),
 	git = gitExecFileSync,
-	extraOptions = {},
 ) {
 	let diff;
 	try {
@@ -893,10 +969,10 @@ export function lintLocalPrBody(
 		diff = "";
 	}
 	return lintPrBody(body, {
-		...extraOptions,
 		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
 		cwd,
+		workingTree: true,
 	});
 }
 

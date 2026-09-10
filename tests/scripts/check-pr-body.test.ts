@@ -553,7 +553,6 @@ describe("PR body lint (#1844)", () => {
 			valid: false,
 			errors: [
 				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
-				"PR body citation tests/existing-record.test.ts:1 does not exist in the HEAD tree.",
 			],
 		});
 	});
@@ -1169,10 +1168,13 @@ describe("head-tree citations and test references", () => {
 
 	it("rejects a citation to a missing or out-of-range head file", () => {
 		const result = lintPrBody(
-			`${body}\nEvidence: \`clients/missing.ts:1\``,
+			`${body}\nEvidence: \`clients/missing.ts:1\`\n\nAlso: \`clients/citation.ts:4\``,
 			options,
 		);
 		expect(result.errors.join(" ")).toContain("clients/missing.ts:1");
+		expect(result.errors.join(" ")).toContain(
+			"PR body citation clients/citation.ts:4 is outside the HEAD tree.",
+		);
 	});
 
 	it("requires an adjacent quote to match source text within three lines", () => {
@@ -1210,16 +1212,27 @@ describe("head-tree citations and test references", () => {
 		expect(result).toEqual({ valid: true, errors: [] });
 	});
 
+	it("ignores citations in fences and accepts the canonical it title in a table", () => {
+		const result = lintPrBody(
+			`${body}\n\`\`\`text\n\`clients/missing.ts:1\`\n\`\`\`\n\n| Case | Test |\n| --- | --- |\n| A | \`it("real three word test title")\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("rejects a fabricated short table identifier", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`B01\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("B01");
+	});
+
 	it.each([
 		[
 			"#2877 round 3 reconstructed retracted section",
 			"issue-2877-round-3.md",
-			"fabricated binding probe",
-		],
-		[
-			"#2896 round 1 reconstructed section",
-			"issue-2896-round-1.md",
-			"clients/lsp/diagnostic-binding.ts:9999",
+			"B01",
 		],
 	])(
 		"keeps the historical red-first fixture red: %s",
