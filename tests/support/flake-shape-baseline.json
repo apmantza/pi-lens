@@ -48,6 +48,7 @@
 		"real-harness/negative.test.ts": 2,
 		"real-harness/scenario-1.test.ts": 1,
 		"real-harness/scenario-3.test.ts": 1,
+		"real-harness/tools-enabled.test.ts": 5,
 		"scripts/analyze-config-resolution-smell.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,
 		"scripts/astgrep-self-scan.test.ts": 2,
