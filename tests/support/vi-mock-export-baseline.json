@@ -560,7 +560,6 @@
 	"tests/config/module-instance-binding.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getToolEnvironment\",\"isSpawnableCommand\",\"resetPathWalkMemo\"]": 45,
 	"tests/config/module-instance-binding.test.ts:../../clients/latency-logger.js:[\"getLastLoggedPhase\",\"logLatency\"]": 4,
 	"tests/config/module-instance-binding.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 17,
-	"tests/index-integration.test.ts:../clients/read-guard.js:[\"ReadGuard\",\"createReadGuard\"]": 1,
 	"tests/index-loop-block-wiring.test.ts:../clients/event-loop-monitor.js:[\"getEventLoopStats\",\"resetEventLoopMonitor\",\"startEventLoopMonitor\"]": 5,
 	"tests/index-loop-block-wiring.test.ts:../clients/latency-logger.js:[\"getLastLoggedPhase\",\"getPhaseForWindow\",\"logLatency\"]": 17,
 	"tests/index-lsp-idle-reset.test.ts:../clients/read-guard.js:[\"action\"]": 1,

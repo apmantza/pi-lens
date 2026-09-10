@@ -56,7 +56,7 @@ describe("situational dead-weight telemetry", () => {
 	});
 
 	it("keeps the opener-owned latch armed for repeated emits", () => {
-		startSituationalToolTelemetrySession("pi", true);
+		startSituationalToolTelemetrySession("pi");
 		emitSituationalDeadWeight();
 		emitSituationalDeadWeight();
 
@@ -64,33 +64,70 @@ describe("situational dead-weight telemetry", () => {
 		endSituationalToolTelemetry();
 	});
 
-	it("records no row when the pi session opened from a rebuilt start", () => {
-		startSituationalToolTelemetrySession("pi", false);
+	it("preserves observations across a pi session rebuild", () => {
+		startSituationalToolTelemetrySession("pi");
 		observeSituationalToolActivation(["ast_grep_search"]);
+		observeSituationalToolCall("ast_grep_search");
+		startSituationalToolTelemetrySession("pi");
+		expect(logExtension).not.toHaveBeenCalled();
 		endSituationalToolTelemetry();
 
-		expect(logExtension).not.toHaveBeenCalled();
+		expect(logExtension).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			}),
+		);
 	});
 
-	it("records the row again once a fresh pi open clears the suppression", () => {
-		startSituationalToolTelemetrySession("pi", false);
-		startSituationalToolTelemetrySession("pi", true);
-		observeSituationalToolCall("lsp_navigation");
+	it("repeated pi session_start with the same conversation is idempotent", () => {
+		startSituationalToolTelemetrySession("pi");
+		observeSituationalToolCall("ast_grep_search");
+		startSituationalToolTelemetrySession("pi");
 		endSituationalToolTelemetry();
 
 		expect(logExtension).toHaveBeenCalledTimes(1);
-		expect(logExtension).toHaveBeenCalledWith({
-			subsystem: "tools",
-			level: "debug",
-			message: "situational tool dead weight",
-			metadata: {
-				tools: [
-					"ast_grep_search",
-					"ast_grep_replace",
-					"ast_grep_outline",
-					"lens_diagnostic_mark",
-				],
-			},
-		});
+		expect(logExtension.mock.calls[0]?.[0]).toEqual(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			}),
+		);
+	});
+
+	it("session_shutdown quit emits and clears the pi dead-weight row", () => {
+		startSituationalToolTelemetrySession("pi");
+		observeSituationalToolCall("ast_grep_search");
+		endSituationalToolTelemetry();
+		endSituationalToolTelemetry();
+
+		expect(logExtension).toHaveBeenCalledTimes(1);
+		expect(logExtension.mock.calls[0]?.[0]).toEqual(
+			expect.objectContaining({
+				message: "situational tool dead weight",
+				metadata: {
+					tools: [
+						"ast_grep_replace",
+						"ast_grep_outline",
+						"lsp_navigation",
+						"lens_diagnostic_mark",
+					],
+				},
+			}),
+		);
 	});
 });

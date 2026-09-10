@@ -1730,11 +1730,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 		enabledLazyTools.has(tool.name),
 	);
 	// #1453: the lazy tools the model activated in THIS logical conversation.
-	// Extension closure state outlives a session rebuild (the runner keeps the
-	// activated extension; it does not re-run this factory), which is exactly
-	// what lets a fork/reload/resume restore the parent's tool posture. Reset
-	// on startup/new, carried across fork/reload/resume — see the session_start
-	// handler below.
+	// Extension closure state does NOT outlive a session rebuild. Measured
+	// against pi 0.85.1 (#2866 round 4): the
+	// module is imported once per process but this factory IS re-run on
+	// reload, new and resume, so this closure set does not survive a rebuild
+	// (#2889); the session_start restore below therefore deactivates every
+	// situational tool after any rebuild.
 	const rememberedLazyTools = new Set<string>();
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
@@ -2080,14 +2081,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
-					// #2800 item 8: pi records the dead-weight row for fresh sessions
-					// only. A non-fresh start (reload/resume/fork) marks the session
-					// suppressed here, BEFORE the handler below can hang (#2859), so
-					// the session's end never depends on handleSessionStart returning.
-					startSituationalToolTelemetrySession(
-						"pi",
-						isFreshSessionStart(sessionReason),
-					);
+					// #2858: pi owns one observation set per session file. A replacement
+					// shutdown emits the ending file's row before the next set opens.
+					// Open this before the handler below can hang (#2859), so the
+					// session-end row does not depend on handleSessionStart returning.
+					startSituationalToolTelemetrySession("pi");
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2116,9 +2114,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// an active-tool set per session. Skipping the call on those reasons
 					// would therefore leave every lazy tool active forever AND change the
 					// advertised tool list relative to the parent's cached prompt prefix.
-					// Rebuilding the same set instead keeps the prefix identical and
-					// genuinely preserves the model's activations, because pi-lens's own
-					// closure state (`rememberedLazyTools`) survives the rebuild.
+					// Rebuilding the same set keeps the prefix identical when the
+					// activation closure remains available. Real pi re-runs this factory
+					// on every rebuild, so that closure is empty after replacement.
 					//
 					// Deliberately BELOW the #473 concurrent-secondary guard: the active
 					// tool set is shared runtime state (one loader per process), so a
@@ -2426,6 +2424,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 					if (isStaleExtensionCtxError(sessionErr)) throw sessionErr;
 					dbg(`session_start crashed: ${sessionErr}`);
 					dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
+					// #2859: `dbg` writes nothing in tests, so a crashed session_start
+					// was indistinguishable from a completed one — fourteen awaits in
+					// tests/index-integration.test.ts rejected into this catch (a
+					// leaked `vi.doMock` had dropped an installer export), every
+					// assertion after them was vacuous, and the whole file stayed
+					// green. A test budget cannot see this: the handler settles
+					// promptly, it just did nothing. Under the runner the crash fails
+					// the test that caused it; production keeps the swallow, because
+					// a pi-lens session_start bug must never take down the host's
+					// session. Deliberately `process.env.VITEST` and not
+					// `isTestMode()`: the question is whether a TEST is awaiting this
+					// handler, and the #2815 R7 case runs under vitest with
+					// PI_LENS_TEST_MODE=0.
+					if (process.env.VITEST) throw sessionErr;
 				}
 			},
 			{ dbg },
@@ -3347,7 +3359,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// --- Session shutdown: release all handles so subagent processes exit cleanly ---
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
-	(pi as any).on("session_shutdown", (_event: unknown, ctx: unknown) => {
+	(pi as any).on("session_shutdown", (event: unknown, ctx: unknown) => {
 		// #473: a concurrently-live in-process subagent session shutting down
 		// (its sibling primary — the real parent — still active) must NOT run
 		// the shared-infra teardown below: no LSP fleet shutdown, no idle-timer
@@ -3421,7 +3433,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 			);
 			return;
 		}
-		endSituationalToolTelemetry();
+		const shutdownEvent = event as
+			| { reason?: string; targetSessionFile?: string }
+			| undefined;
+		const shutdownReason = shutdownEvent?.reason;
+		const switchesSessionFile =
+			typeof shutdownEvent?.targetSessionFile === "string" &&
+			shutdownEvent.targetSessionFile.length > 0;
+		if (
+			switchesSessionFile ||
+			shutdownReason === "quit" ||
+			shutdownReason === undefined
+		) {
+			endSituationalToolTelemetry();
+		}
 
 		// #1654: no drain runs here — see the module comment above
 		// `runDeferredMutationDrain` (review round 1, F2/F3/F4/F5) for why a

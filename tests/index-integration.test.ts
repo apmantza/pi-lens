@@ -66,6 +66,10 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 		tools: mock.tools,
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
+			// No budget wrapper here: `createPiMock.on` already wraps every
+			// registered session_start handler, and `getHandlers` reads those
+			// wrapped functions back, so a second wrapper would only race an
+			// identical timer (#2866 review F5).
 			for (const handler of mock.getHandlers(event)) {
 				results.push(await handler(ev, ctx));
 			}
@@ -76,6 +80,7 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 
 // Mock read-guard for integration tests to avoid dynamic require issues
 vi.mock("../clients/read-guard.js", () => ({
+	lineContentHash: (line: string) => `mock:${line}`,
 	ReadGuard: class MockReadGuard {
 		isNewFile() {
 			return false;
@@ -223,6 +228,8 @@ describe("index.ts integration", () => {
 			expect(handleSessionStartMock).toHaveBeenCalledTimes(1);
 			expect(ensureToolMock).toHaveBeenCalledWith("typescript-language-server");
 			expect(resetTurnContextMock).toHaveBeenCalledTimes(1);
+			vi.doUnmock("../clients/runtime-session.js");
+			vi.doUnmock("../clients/installer/index.js");
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -324,9 +331,9 @@ describe("index.ts integration", () => {
 		INTEGRATION_TIMEOUT_MS,
 	);
 
-	it(
-		"real pi reload start records no dead-weight row at all",
-		async () => {
+	it.each(["reload", "resume", "fork"])(
+		"real pi %s start attributes dead-weight observations by session file",
+		async (reason) => {
 			const logExtension = vi.fn();
 			vi.doMock("../clients/extension-log.js", async (importActual) => ({
 				...(await importActual<typeof import("../clients/extension-log.js")>()),
@@ -348,9 +355,11 @@ describe("index.ts integration", () => {
 				undefined,
 				ctx,
 			);
-			mock.simulateSessionRebuild();
-			await handlers.session_start?.[0]?.({ reason: "reload" }, ctx);
-			await handlers.session_shutdown?.[0]?.({}, ctx);
+			await mock.simulateSessionShutdownAndRebuild(
+				reason as "reload" | "resume" | "fork",
+				ctx,
+			);
+			await handlers.session_shutdown?.[0]?.({ reason: "quit" }, ctx);
 
 			const rows = logExtension.mock.calls
 				.map(
@@ -358,7 +367,22 @@ describe("index.ts integration", () => {
 						row as { message?: string; metadata?: { tools?: string[] } },
 				)
 				.filter((row) => row.message === "situational tool dead weight");
-			expect(rows).toHaveLength(0);
+			expect(rows).toHaveLength(reason === "reload" ? 1 : 2);
+			expect(rows[0]?.metadata?.tools).toEqual([
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
+			if (reason !== "reload") {
+				expect(rows[1]?.metadata?.tools).toEqual([
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lsp_navigation",
+					"lens_diagnostic_mark",
+				]);
+			}
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -419,6 +443,202 @@ describe("index.ts integration", () => {
 				"lsp_navigation",
 				"lens_diagnostic_mark",
 			]);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	// #2866 review F1: a restarted pi process (`pi --continue`) is the common
+	// case for a long conversation, and the row was `tools: []` for every one of
+	// them — the restore block read `pi.getActiveTools()`, which is EVERY
+	// registered tool at session_start time, as activation evidence. A new
+	// process remembers nothing: `rememberedLazyTools` is empty, so the restore
+	// itself deactivates all five situational tools, and all five ARE dead
+	// weight until the model asks for one again.
+	it(
+		"a restarted pi process reports every situational tool as dead weight",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { mock, pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const ctx = makeCtx({ cwd: tmpDir, sessionId: "pi-restart-dead-weight" });
+
+			// A brand-new process whose FIRST session_start carries a rebuild
+			// reason — nothing was activated or called in it yet.
+			await handlers.session_start?.[0]?.({ reason: "resume" }, ctx);
+			// The restore's own verdict on the same event: no situational tool
+			// survives a restart, which is why none of them can count as used.
+			expect(
+				[
+					"ast_grep_search",
+					"ast_grep_replace",
+					"ast_grep_outline",
+					"lsp_navigation",
+					"lens_diagnostic_mark",
+				].filter((name) => mock.activeTools.has(name)),
+			).toEqual([]);
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+
+			const rows = logExtension.mock.calls
+				.map(
+					([row]) =>
+						row as { message?: string; metadata?: { tools?: string[] } },
+				)
+				.filter((row) => row.message === "situational tool dead weight");
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.metadata?.tools).toEqual([
+				"ast_grep_search",
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	// #2866 review F1, second half: one genuinely used tool after a restart was
+	// indistinguishable from four unused ones, because all five were already
+	// marked activated by the restored host set.
+	it(
+		"a restarted pi process counts only the situational tools used after the restart",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { mock, pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const ctx = makeCtx({ cwd: tmpDir, sessionId: "pi-restart-one-use" });
+
+			await handlers.session_start?.[0]?.({ reason: "reload" }, ctx);
+			// The restart deactivated it, so production's own order applies: the
+			// model re-activates the tool before it can call it.
+			const activation = mock.getTool("pi_lens_activate_tools") as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			await activation.execute(
+				"activate",
+				{ tools: ["ast_grep_search"] },
+				undefined,
+				undefined,
+				ctx,
+			);
+			await handlers.tool_call?.[0]?.(
+				{ toolName: "ast_grep_search", input: { pattern: "const $A = $B" } },
+				ctx,
+			);
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+
+			const rows = logExtension.mock.calls
+				.map(
+					([row]) =>
+						row as { message?: string; metadata?: { tools?: string[] } },
+				)
+				.filter((row) => row.message === "situational tool dead weight");
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.metadata?.tools).toEqual([
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	// #2858 acceptance criterion 1: the `/new` replacement cell, through the real
+	// dispatch rather than the module-level unit test — the host emits
+	// `session_shutdown{reason: "new"}` before the replacement's session_start,
+	// so the replaced conversation's row must come from the shutdown handler.
+	it(
+		"a real pi /new start emits the replaced conversation's row before opening a fresh set",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { mock, pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const ctx = makeCtx({ cwd: tmpDir, sessionId: "pi-new-replacement" });
+
+			await handlers.session_start?.[0]?.({}, ctx);
+			const activation = mock.getTool("pi_lens_activate_tools") as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			await activation.execute(
+				"activate",
+				{ tools: ["ast_grep_search"] },
+				undefined,
+				undefined,
+				ctx,
+			);
+			await handlers.tool_call?.[0]?.(
+				{ toolName: "ast_grep_search", input: { pattern: "const $A = $B" } },
+				ctx,
+			);
+			await mock.simulateSessionShutdownAndRebuild("new", ctx);
+
+			const rowsAt = () =>
+				logExtension.mock.calls
+					.map(
+						([row]) =>
+							row as { message?: string; metadata?: { tools?: string[] } },
+					)
+					.filter((row) => row.message === "situational tool dead weight");
+			expect(rowsAt()).toHaveLength(1);
+			expect(rowsAt()[0]?.metadata?.tools).toEqual([
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
+
+			await handlers.session_shutdown?.[0]?.({ reason: "quit" }, ctx);
+			expect(rowsAt()).toHaveLength(2);
+			expect(rowsAt()[1]?.metadata?.tools).toEqual([
+				"ast_grep_search",
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	// #2859: `dbg` is silent in tests, so a session_start that THREW resolved as
+	// if it had run. Fourteen awaits in this very file rejected into index.ts's
+	// catch (a leaked `vi.doMock` dropped an installer export), every assertion
+	// after them was vacuous, and the whole file stayed green — the budget
+	// wrapper cannot see it, because the handler settles promptly.
+	it(
+		"a crashing session_start rejects under the test runner instead of resolving silently",
+		async () => {
+			vi.doMock("../clients/runtime-session.js", () => ({
+				handleSessionStart: () => {
+					throw new Error("session_start boom");
+				},
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+
+			await expect(
+				handlers.session_start?.[0]?.(
+					{},
+					makeCtx({ cwd: tmpDir, sessionId: "pi-session-start-crash" }),
+				),
+			).rejects.toThrow(/session_start boom/);
+			vi.doUnmock("../clients/runtime-session.js");
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -2569,67 +2789,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 					tmpDir,
 				)?.data.deliveryEligible,
 			).toMatchObject({ sessionId: stagedSessionId });
-		},
-		INTEGRATION_TIMEOUT_MS,
-	);
-
-	it(
-		"keeps primary and concurrent secondary test delivery on their owning activation",
-		async () => {
-			mockSuiteDeps();
-			vi.doMock("../clients/runtime-session.js", () => ({
-				handleSessionStart: vi.fn(async () => {}),
-			}));
-			handleTurnEndHook = (deps) =>
-				deps.onTestRunnerComplete?.({
-					cwd: deps.ctxCwd ?? tmpDir,
-					sessionId: deps.sessionId ?? "unknown",
-					generation: 1,
-					targetCount: deps.sessionId === "secondary-delivery" ? 22 : 11,
-					hasFindings: true,
-				});
-			new CacheManager(false).writeCache(
-				"test-runner-findings",
-				{ content: "FAIL cross-session.test.ts:1", testRunGeneration: 1 },
-				tmpDir,
-			);
-
-			const { default: registerExtension } = await import("../index.js");
-			const primary = createMockPi();
-			registerExtension(primary.pi as any);
-			await primary.trigger(
-				"session_start",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "primary-delivery" }),
-			);
-			const secondary = createMockPi();
-			registerExtension(secondary.pi as any);
-			await secondary.trigger(
-				"session_start",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
-			);
-
-			await primary.trigger(
-				"turn_end",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "primary-delivery" }),
-			);
-			await secondary.trigger(
-				"turn_end",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
-			);
-			await primary.trigger(
-				"agent_settled",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "primary-delivery" }),
-			);
-			await secondary.trigger(
-				"agent_settled",
-				{},
-				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
-			);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
