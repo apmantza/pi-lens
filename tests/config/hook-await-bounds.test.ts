@@ -1984,7 +1984,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"as well as from every tool request (AC8).",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#handleRequest:3543a7ce~154cbab1": {
+	"mcp/server.ts#handleRequest:3543a7ce~e5cc4ea3": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:

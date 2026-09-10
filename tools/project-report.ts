@@ -14,11 +14,23 @@ import {
 	renderCompactProjectReport,
 	type ProjectReport,
 } from "../clients/lens-engine.js";
-import { compactRenderResult } from "./render-compact.js";
+import {
+	compactRenderResult,
+	renderToolText,
+	type LensToolResult,
+} from "./render-compact.js";
 
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
+
+type ProjectReportDetails = {
+	available?: boolean;
+	hint?: string | undefined;
+	hubs?: number;
+	entryPoints?: number;
+	view?: string;
+};
 
 export function createProjectReportTool(getProjectRoot: () => string) {
 	return {
@@ -27,24 +39,22 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 		description:
 			"Orient in a project from its review graph, with ranked hubs and entry points. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use project_report before module_report when the target file is unknown.",
 		promptSnippet: "Orient in a project before choosing a file",
-		renderResult: compactRenderResult<{
-			available?: boolean;
-			hint?: string;
-			hubs?: number;
-			entryPoints?: number;
-			view?: string;
-		}>(({ details, isError }) => {
-			if (isError || details?.available === false) {
-				return `project_report — unavailable${details?.hint ? `: ${details.hint}` : ""}`;
-			}
-			const parts = [
-				`${details?.hubs ?? 0} hub(s)`,
-				`${details?.entryPoints ?? 0} entry point(s)`,
-			];
-			const view =
-				details?.view && details.view !== "default" ? ` [${details.view}]` : "";
-			return `project_report  ${parts.join(" · ")}${view}`;
-		}),
+		renderResult: compactRenderResult<ProjectReportDetails>(
+			({ details, isError }) => {
+				if (isError || details?.available === false) {
+					return `project_report — unavailable${details?.hint ? `: ${details.hint}` : ""}`;
+				}
+				const parts = [
+					`${details?.hubs ?? 0} hub(s)`,
+					`${details?.entryPoints ?? 0} entry point(s)`,
+				];
+				const view =
+					details?.view && details.view !== "default"
+						? ` [${details.view}]`
+						: "";
+				return `project_report  ${parts.join(" · ")}${view}`;
+			},
+		),
 		parameters: Type.Object({
 			limit: Type.Optional(
 				Type.Number({
@@ -72,7 +82,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
-		) {
+		): Promise<LensToolResult<ProjectReportDetails>> {
 			const cwd = getProjectRoot() || ctx.cwd || ".";
 			let report: ProjectReport;
 			try {
@@ -83,25 +93,17 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 				});
 			} catch (err) {
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Project report failed: ${errorMessage(err)}`,
-						},
-					],
+					...renderToolText(`Project report failed: ${errorMessage(err)}`),
 					isError: true,
 					details: { available: false },
 				};
 			}
 			if (!report.available) {
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text:
-								report.hint ?? "No review graph cached for this workspace yet.",
-						},
-					],
+					...renderToolText(
+						report.hint ?? "No review graph cached for this workspace yet.",
+						report,
+					),
 					isError: true,
 					details: { available: false, hint: report.hint },
 				};
@@ -112,6 +114,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 					: JSON.stringify(report);
 			return {
 				content: [{ type: "text" as const, text }],
+				isError: false,
 				details: {
 					available: true,
 					hubs: report.hubs?.length ?? 0,

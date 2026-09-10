@@ -27,7 +27,9 @@ import { randomUUID } from "node:crypto";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { getGlobalPiLensLogDir } from "../clients/probe-home-state.js";
 
-const MAX_RESULT_BYTES = 40 * 1024;
+/** The per-result delivery bound (#2848). Exported so surface gates and their
+ * pins assert the real budget instead of restating the literal. */
+export const MAX_RESULT_BYTES = 40 * 1024;
 // 2026-09-10: cap the complete MCP payload before it can retain or log an
 // unbounded result; ordinary results keep the complete-log contract below it.
 export const COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES = 8 * 1024 * 1024;
@@ -135,6 +137,143 @@ export interface CompactResultLike<D = unknown> {
 	content?: Array<{ type: string; text?: string }>;
 	isError?: boolean;
 	details?: D;
+}
+
+export interface ToolResultContractLike extends CompactResultLike {
+	usage?: { tokens?: number; elapsedMs?: number };
+}
+
+/** The one result type every pi-lens tool result conforms to (refs #2800).
+ * `isError` is required, so a tool's inferred execute union can never drop the
+ * flag and a test reading `result.isError` type-checks without a cast. */
+export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
+	content: Array<{ type: "text"; text: string }>;
+	isError: boolean;
+	details: D;
+}
+
+/** Matches an already-stamped contract footer at the end of the joined text.
+ * A result re-entering the gate must not gain a second footer (refs #2852 N4). */
+const CONTRACT_FOOTER_TAIL_RE =
+	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+$/;
+
+/**
+ * Add the stable, model-facing result footer shared by pi and MCP.
+ *
+ * The host adapters own transport and terminal styling; this function owns the
+ * textual contract. Defaults are deliberately deterministic because elapsed
+ * time is not a property of a projection and must not make parity tests flaky.
+ * Idempotent: a result whose text already ends with the footer is only
+ * `isError`-normalized, never stamped twice.
+ */
+export function renderToolResultContract<T extends ToolResultContractLike>(
+	result: T,
+): T {
+	const normalized = {
+		...result,
+		isError: result.isError === true,
+	} as T;
+	const content = result.content ?? [];
+	const textBlocks = content
+		.filter(
+			(block): block is { type: "text"; text: string } =>
+				block.type === "text" && typeof block.text === "string",
+		)
+		.map((block) => block.text);
+	if (textBlocks.length === 0) return normalized;
+	const text = textBlocks.join("\n");
+	if (CONTRACT_FOOTER_TAIL_RE.test(text)) return normalized;
+	const details = normalized.details as Record<string, unknown> | undefined;
+	const diagnostics = Array.isArray(details?.diagnostics)
+		? details.diagnostics
+				.filter(
+					(value): value is Record<string, unknown> =>
+						Boolean(value) && typeof value === "object",
+				)
+				.map((diagnostic) => diagnostic.severity)
+				.filter((severity): severity is string => typeof severity === "string")
+				.map((severity) => `diag severity=${severity}`)
+		: [];
+	const tokens =
+		normalized.usage?.tokens ?? Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+	const elapsedMs = normalized.usage?.elapsedMs ?? 0;
+	const contractLines = [
+		`result ${normalized.isError ? "error" : "ok"}`,
+		...diagnostics,
+		`usage tokens=${tokens} elapsed-ms=${elapsedMs}`,
+	];
+	let lastTextIndex = -1;
+	for (let index = content.length - 1; index >= 0; index--) {
+		const block = content[index];
+		if (block?.type === "text" && typeof block.text === "string") {
+			lastTextIndex = index;
+			break;
+		}
+	}
+	if (lastTextIndex < 0) return normalized;
+	return {
+		...normalized,
+		content: content.map((block, index) =>
+			index === lastTextIndex && block.type === "text"
+				? { ...block, text: `${block.text}\n\n${contractLines.join("\n")}` }
+				: block,
+		),
+	};
+}
+
+/** Apply the #2848 byte bound to every text block of a rendered result. The
+ * bound runs LAST in every composition so a result that already carries the
+ * contract footer still fits MAX_RESULT_BYTES on delivery. */
+export function boundToolResultText<T extends CompactResultLike>(result: T): T {
+	if (!result.content) return result;
+	return {
+		...result,
+		content: result.content.map((block) =>
+			block.type === "text" && typeof block.text === "string"
+				? { ...block, text: boundToolText(block.text).text }
+				: block,
+		),
+	};
+}
+
+/** Build the raw result envelope shared by both host adapters: the summary is
+ * joined with the structured payload's fenced JSON, and the payload also rides
+ * along as `details` for surface-side consumers (pi's compact-line summarizer,
+ * the MCP gate's `diag severity=` footer lines). The contract footer and the
+ * #2848 byte bound are NOT applied here — each surface stamps them once, after
+ * the tool's own result exists (`finalizeToolResult` / the MCP dispatcher). */
+export function renderToolText(
+	summary: string,
+	structured?: unknown,
+	compact = false,
+): {
+	content: { type: "text"; text: string }[];
+	details?: unknown;
+} {
+	const rawText =
+		structured === undefined
+			? summary
+			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
+	return {
+		content: [{ type: "text" as const, text: rawText }],
+		details: structured,
+	};
+}
+
+/** Drop the structured `details` field from a finished result. The MCP gate
+ * consumes `details` for the footer's `diag severity=` lines and then strips
+ * it before delivery, so the wire carries only the bounded text blocks
+ * (refs #2852 N1); pi keeps `details` for its compact-line summarizer. */
+export function stripResultDetails<T extends CompactResultLike>(result: T): T {
+	const { details: _details, ...rest } = result;
+	return rest as T;
+}
+
+/** Finish a host-adapter result after its status and all warnings exist. */
+export function finalizeToolResult<T extends ToolResultContractLike>(
+	result: T,
+): T {
+	return boundToolResultText(renderToolResultContract(result));
 }
 
 interface CompactSummaryInput<D = unknown> {

@@ -1090,6 +1090,12 @@ The CI failure classifier normalizes CRLF and leading GitHub Actions
 before any anchored evidence needle runs. Keep transport normalization at this
 seam so Windows and Unix logs exercise identical classifier rules. (#2839)
 
+Model-facing tool output uses `renderToolText` and
+`renderToolResultContract` (`tools/render-compact.ts`) at both host-adapter
+seams. Keep result status, diagnostic severity, and usage lines there so pi
+registration and the MCP mirror cannot grow separate projections. The MCP
+server owns only transport and tool-specific execution. (#2800)
+
 The dispatch lsp-runner's `touchFile` call has its OWN 5-second cold-spawn
 wait floor (`RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs`,
 `clients/dispatch/runners/lsp.ts`), separate from installer verification —
@@ -2317,6 +2323,12 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   host-neutral facades the engine composes (they're misnamed "mcp" — they're not
   MCP-specific). The whole host coupling of the dispatch core is **one method**,
   `PiAgentAPI.getFlag` (`clients/mcp/host-shim.ts` → `createMcpHost`).
+- Result-contract governance covers every `TOOL_REGISTRY` row: paired tools use
+  real fixture inputs and compare complete rendered text where both hosts share
+  the same payload shape; host-specific payloads still assert the shared status
+  and usage footer, and pi-only rows invoke their real pi handler while proving
+  no MCP name is listed. A registry row without an explicit case is a failure,
+  not an implicit skip.
 - **Transport is hand-rolled, zero-dep** (newline-delimited JSON-RPC). NO MCP SDK:
   `npm install --omit=dev` does **not** omit `optionalDependencies` (only
   `--omit=optional` does, which pi doesn't pass), so even an "optional" SDK would
