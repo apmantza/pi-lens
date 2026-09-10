@@ -160,6 +160,10 @@ export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
 export function renderToolResultContract<T extends ToolResultContractLike>(
 	result: T,
 ): T {
+	const normalized = {
+		...result,
+		isError: result.isError === true,
+	} as T;
 	const content = result.content ?? [];
 	const textBlocks = content
 		.filter(
@@ -167,10 +171,9 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
 				block.type === "text" && typeof block.text === "string",
 		)
 		.map((block) => block.text);
-	if (textBlocks.length === 0) return result;
+	if (textBlocks.length === 0) return normalized;
 	const text = textBlocks.join("\n");
-	if (/^usage tokens=\d+ elapsed-ms=\d+$/m.test(text)) return result;
-	const details = result.details as Record<string, unknown> | undefined;
+	const details = normalized.details as Record<string, unknown> | undefined;
 	const diagnostics = Array.isArray(details?.diagnostics)
 		? details.diagnostics
 				.filter(
@@ -182,10 +185,10 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
 				.map((severity) => `diag severity=${severity}`)
 		: [];
 	const tokens =
-		result.usage?.tokens ?? Math.ceil(Buffer.byteLength(text, "utf8") / 4);
-	const elapsedMs = result.usage?.elapsedMs ?? 0;
+		normalized.usage?.tokens ?? Math.ceil(Buffer.byteLength(text, "utf8") / 4);
+	const elapsedMs = normalized.usage?.elapsedMs ?? 0;
 	const contractLines = [
-		`result ${result.isError ? "error" : "ok"}`,
+		`result ${normalized.isError ? "error" : "ok"}`,
 		...diagnostics,
 		`usage tokens=${tokens} elapsed-ms=${elapsedMs}`,
 	];
@@ -197,9 +200,9 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
 			break;
 		}
 	}
-	if (lastTextIndex < 0) return result;
+	if (lastTextIndex < 0) return normalized;
 	return {
-		...result,
+		...normalized,
 		content: content.map((block, index) =>
 			index === lastTextIndex && block.type === "text"
 				? { ...block, text: `${block.text}\n\n${contractLines.join("\n")}` }
@@ -229,17 +232,25 @@ export function renderToolText(
 	summary: string,
 	structured?: unknown,
 	compact = false,
-): { content: { type: "text"; text: string }[] } {
+): {
+	content: { type: "text"; text: string }[];
+	details?: unknown;
+} {
 	const rawText =
 		structured === undefined
 			? summary
 			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
-	return boundToolResultText(
-		renderToolResultContract({
-			content: [{ type: "text" as const, text: rawText }],
-			details: structured,
-		}),
-	);
+	return {
+		content: [{ type: "text" as const, text: rawText }],
+		details: structured,
+	};
+}
+
+/** Finish a host-adapter result after its status and all warnings exist. */
+export function finalizeToolResult<T extends ToolResultContractLike>(
+	result: T,
+): T {
+	return boundToolResultText(renderToolResultContract(result));
 }
 
 interface CompactSummaryInput<D = unknown> {

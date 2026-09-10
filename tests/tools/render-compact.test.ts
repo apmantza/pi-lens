@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	baseName,
+	finalizeToolResult,
 	fullTextOf,
 	renderToolResultContract,
 	renderToolText,
@@ -65,13 +66,17 @@ describe("render-compact", () => {
 	});
 
 	it("renders one stable result and usage contract", () => {
-		const result = renderToolText("result body", {
-			diagnostics: [{ severity: "warning" }],
-		});
+		const result = finalizeToolResult(
+			renderToolText("result body", {
+				diagnostics: [{ severity: "warning" }],
+			}),
+		);
 		const text = result.content[0]?.text ?? "";
 		expect(text).toContain("result ok");
 		expect(text).toContain("diag severity=warning");
 		expect(text).toMatch(/usage tokens=\d+ elapsed-ms=0/);
-		expect(renderToolResultContract(result)).toBe(result);
+		expect(renderToolResultContract(result).content[0]?.text).toContain(
+			"result ok",
+		);
 	});
 });

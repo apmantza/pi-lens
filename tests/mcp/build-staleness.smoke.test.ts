@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES } from "../../tools/render-compact.js";
 import { McpHarness, repoRoot } from "./harness.js";
 
 describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
@@ -101,6 +102,9 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 		};
 		expect(result.isError).toBeFalsy();
 		expect(result.content[0].text).toContain("warmCodeStale: true");
+		expect(
+			Buffer.byteLength(result.content[0].text, "utf8"),
+		).toBeLessThanOrEqual(COMPLETE_MCP_RESULT_INPUT_BUDGET_BYTES);
 	}, 25_000);
 
 	it("also warns on pilens_latency (a second warn-only tool, confirms the set isn't a single hardcoded name)", async () => {

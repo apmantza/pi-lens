@@ -120,6 +120,9 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(first.isError).toBe(true);
 		expect(first.content[0]?.text).toContain("pilens_ast_grep_search");
 		expect(first.content[0]?.text).toContain("dump=true");
+		expect(first.content[0]?.text).toMatch(
+			/result error\nusage tokens=\d+ elapsed-ms=\d+$/,
+		);
 		const second = (
 			await harness.request(4, "tools/call", {
 				name: "pilens_ast_grep_dump",
@@ -127,6 +130,17 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			})
 		).result as typeof first;
 		expect(second.isError).toBe(true);
+		expect(second.content[0]?.text).toContain("result error");
+
+		const unknown = (
+			await harness.request(5, "tools/call", {
+				name: "pilens_not_a_tool",
+			})
+		).result as typeof first;
+		expect(unknown.isError).toBe(true);
+		expect(unknown.content[0]?.text).toMatch(
+			/result error\nusage tokens=\d+ elapsed-ms=\d+$/,
+		);
 
 		const health = async (id: number) => {
 			const response = await harness.request(id, "tools/call", {
@@ -203,6 +217,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 				isError?: boolean;
 			};
 			expect(result.isError).toBe(true);
+			expect(result.content[0].text).toContain("result error");
 			expect(result.content[0].text).toContain(
 				"unavailable in an installed pi-lens package",
 			);

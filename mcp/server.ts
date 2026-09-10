@@ -24,8 +24,9 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-	boundToolResultText,
+	finalizeToolResult,
 	renderToolResultContract,
+	boundToolResultText,
 	renderToolText as toolText,
 } from "../tools/render-compact.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
@@ -1352,18 +1353,16 @@ async function callTool(
 			(graphStaleness ? `\n\n${graphStaleness}` : "");
 		if (view === "compact") {
 			const compactText = renderCompactModuleReport(report);
-			return boundToolResultText(
-				renderToolResultContract({
-					content: [
-						{
-							type: "text" as const,
-							text: graphStaleness
-								? `${compactText}\n\n${graphStaleness}`
-								: compactText,
-						},
-					],
-				}),
-			);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: graphStaleness
+							? `${compactText}\n\n${graphStaleness}`
+							: compactText,
+					},
+				],
+			};
 		}
 		// Compact (unindented) JSON — matches the pi tool's mirror (#512); an
 		// agent parses this payload, it doesn't read it formatted.
@@ -1399,18 +1398,16 @@ async function callTool(
 			: undefined;
 		if (view === "compact") {
 			const compactText = renderCompactProjectReport(report);
-			return boundToolResultText(
-				renderToolResultContract({
-					content: [
-						{
-							type: "text" as const,
-							text: graphStaleness
-								? `${compactText}\n\n${graphStaleness}`
-								: compactText,
-						},
-					],
-				}),
-			);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: graphStaleness
+							? `${compactText}\n\n${graphStaleness}`
+							: compactText,
+					},
+				],
+			};
 		}
 		const summary =
 			`Project report — ${report.hubs?.length ?? 0} hub(s), ` +
@@ -1458,16 +1455,14 @@ async function callTool(
 			? ` (${result.ambiguous.count} matches — returned the ${result.kind}; pass \`kind\` to disambiguate: ${result.ambiguous.kinds.join(", ")})`
 			: "";
 		const header = `${result.kind} ${result.name}${ambiguityNote}${sigSuffix}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
-		return boundToolResultText(
-			renderToolResultContract({
-				content: [
-					{
-						type: "text" as const,
-						text: `${header}\n\n${result.source ?? ""}`,
-					},
-				],
-			}),
-		);
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: `${header}\n\n${result.source ?? ""}`,
+				},
+			],
+		};
 	}
 
 	if (name === "pilens_read_enclosing") {
@@ -1524,16 +1519,14 @@ async function callTool(
 			? `${result.startLine}-${result.endLine} (partial of ${result.enclosingStartLine}-${result.enclosingEndLine})`
 			: `${result.startLine}-${result.endLine}`;
 		const header = `${result.kind} ${result.name}  ${path.relative(cwd, result.path)}:${range}`;
-		return boundToolResultText(
-			renderToolResultContract({
-				content: [
-					{
-						type: "text" as const,
-						text: `${header}\n\n${result.source ?? ""}`,
-					},
-				],
-			}),
-		);
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: `${header}\n\n${result.source ?? ""}`,
+				},
+			],
+		};
 	}
 
 	if (name === "pilens_health") {
@@ -1667,7 +1660,7 @@ async function callTool(
 			undefined,
 			{ cwd },
 		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
-		return boundToolResultText(renderToolResultContract(out));
+		return out;
 	}
 
 	if (name === "pilens_latency") {
@@ -1734,7 +1727,7 @@ async function callTool(
 			undefined,
 			{ cwd, resultMaxItems: Number.POSITIVE_INFINITY },
 		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
-		return boundToolResultText(renderToolResultContract(out));
+		return out;
 	}
 
 	if (name === "pilens_lsp_navigation" || name === "pilens_lsp_diagnostics") {
@@ -1749,7 +1742,7 @@ async function callTool(
 			undefined,
 			{ cwd },
 		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
-		return boundToolResultText(renderToolResultContract(out));
+		return out;
 	}
 
 	return { ...toolText(`Unknown tool: ${name}`), isError: true };
@@ -1885,7 +1878,13 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 					typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD,
 				).some((tool) => tool.name === name)
 			) {
-				sendResult(id ?? null, toolText(`Unknown or disabled tool: ${name}`));
+				sendResult(
+					id ?? null,
+					finalizeToolResult({
+						...toolText(`Unknown or disabled tool: ${name}`),
+						isError: true,
+					}),
+				);
 				return;
 			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`
@@ -1897,6 +1896,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			maybeAutoSessionStart();
 			try {
 				let result = await callTool(name, args);
+				result = renderToolResultContract(result);
 				// #535: pilens_analyze already self-routes (fresh-fork) when stale —
 				// see the forcedFresh branch inside callTool. Every other tool that
 				// depends on warm-only process state gets an honest-degrade warning
@@ -1908,16 +1908,19 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				) {
 					result = withStaleWarning(result);
 				}
-				sendResult(id ?? null, result);
+				sendResult(id ?? null, boundToolResultText(result));
 			} catch (err) {
 				// Surface as a tool error (isError), not a transport error, so the
 				// agent sees the message instead of a dead request.
-				sendResult(id ?? null, {
-					...toolText(
-						`pi-lens tool '${name}' failed: ${(err as Error).message}`,
-					),
-					isError: true,
-				});
+				sendResult(
+					id ?? null,
+					finalizeToolResult({
+						...toolText(
+							`pi-lens tool '${name}' failed: ${(err as Error).message}`,
+						),
+						isError: true,
+					}),
+				);
 			}
 			return;
 		}

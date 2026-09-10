@@ -107,7 +107,10 @@ import {
 } from "./clients/tool-config.js";
 import { recordDegradationOnce } from "./clients/degradation-ledger.js";
 import { wrapToolsForCompactLine } from "./clients/tool-render.js";
-import { renderToolResultContract } from "./tools/render-compact.js";
+import {
+	finalizeToolResult,
+	renderToolResultContract,
+} from "./tools/render-compact.js";
 import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEventsGetter } from "./clients/lens-events.js";
 import { wireBusEmitterGetter } from "./clients/bus-publish.js";
@@ -1832,7 +1835,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			if (typeof execute === "function") {
 				normalized.execute = (...args: unknown[]) =>
 					Promise.resolve(execute(...args)).then((result) =>
-						renderToolResultContract(
+						finalizeToolResult(
 							result as Parameters<typeof renderToolResultContract>[0],
 						),
 					);

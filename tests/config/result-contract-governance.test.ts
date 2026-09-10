@@ -128,11 +128,24 @@ describe("result contract across registered tool surfaces", () => {
 					`${entry.name}: complete rendered text`,
 				).toBe(stableRenderedText(entry.name, piText));
 			}
-			expect(mcpText, `${entry.name}: MCP result`).toContain("result ");
+			const mcpResultValue = mcpResult.result as ToolResult;
+			expect(mcpText, `${entry.name}: MCP result`).toMatch(
+				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
+			);
+			expect(
+				mcpText?.includes("result error"),
+				`${entry.name}: MCP verdict matches isError`,
+			).toBe(mcpResultValue.isError === true);
 			expect(mcpText, `${entry.name}: MCP usage`).toMatch(
 				/usage tokens=\d+ elapsed-ms=\d+/,
 			);
-			expect(piText, `${entry.name}: pi result`).toContain("result ");
+			expect(piText, `${entry.name}: pi result`).toMatch(
+				/result (?:ok|error)\n(?:diag severity=.*\n)?usage tokens=\d+ elapsed-ms=\d+$/,
+			);
+			expect(
+				piText?.includes("result error"),
+				`${entry.name}: pi verdict matches isError`,
+			).toBe(piResult?.isError === true);
 			expect(piText, `${entry.name}: pi usage`).toMatch(
 				/usage tokens=\d+ elapsed-ms=\d+/,
 			);
