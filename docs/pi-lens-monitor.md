@@ -38,7 +38,10 @@ inherits. This contract adds the standing readout.
    shape 10 with the emit site if it can be found by grep.
    Also report `Situational dead weight` from the `tools` extension-log row,
    including its bounded `metadata.tools` list; `[]` means every situational
-   tool was activated or called in the session.
+   tool was activated or called in the session. A pi session that saw a
+   reload, resume or fork `session_start` records no row by design (#2858),
+   so a missing row after one of those is suppression, not breakage; a
+   missing row after a fresh session is a defect.
 6. **Backlogs**: `lsp_document_drift` rows by disposition, files affected,
    `driftAgeMs` p50/p95/max; `agent_end_deferred_mutation_drain` durations and
    coalesced path counts; `deferred_format_file` runs with `changed:true`

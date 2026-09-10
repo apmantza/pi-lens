@@ -82,6 +82,7 @@ export function startSituationalToolTelemetrySession(
 		sessionHost = "mcp";
 		clearObservations();
 		emitted = false;
+		suppressed = false;
 		sessionStarted = true;
 		return;
 	}
