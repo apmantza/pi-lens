@@ -30,7 +30,7 @@ import { removeTempDirSync } from "../test-utils.js";
 import { _resetStateCacheForTests } from "../../../clients/diagnostic-dispositions.js";
 
 vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
+	...((await importOriginal()) as typeof import("../../../clients/safe-spawn.js")),
 	safeSpawnAsync: vi.fn(async () => ({
 		error: null,
 		status: 0,
@@ -102,7 +102,9 @@ afterEach(() => {
 	removeTempDirSync(tmp);
 });
 
-function makeCacheManager(readCache: (scanner: string) => unknown = () => null) {
+function makeCacheManager(
+	readCache: (scanner: string) => unknown = () => null,
+) {
 	return {
 		writeCache: vi.fn(),
 		readCache: vi.fn(readCache),
