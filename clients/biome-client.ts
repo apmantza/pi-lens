@@ -15,8 +15,10 @@ import { isFileKind } from "./file-kinds.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import {
 	type ClientAvailabilityResult,
 	resolveManagedToolClient,
@@ -210,7 +212,14 @@ export class BiomeClient {
 		let result: Awaited<ReturnType<typeof this.spawnBiomeAsync>>;
 		let hostStallMs: number;
 		try {
-			result = await this.spawnBiomeAsync(["--version"], PROBE_TIMEOUT_MS);
+			// The presence probe asks whether biome answers at all, so it goes
+			// through the probe seam (no cwd) rather than through
+			// `spawnBiomeAsync`, whose optional `cwd` exists for the analysis
+			// spawns that DO resolve a project config (#2894).
+			const { cmd, args: prefix } = await this.getBiomeBinary();
+			result = await probeToolAsync(cmd, [...prefix, "--version"], {
+				timeout: PROBE_TIMEOUT_MS,
+			});
 		} finally {
 			hostStallMs = sampler.stop();
 		}
@@ -376,7 +385,9 @@ export class BiomeClient {
 
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
-			const configCwd = cwd ?? path.dirname(absolutePath);
+			const configCwd = resolveToolCwd("runner", "biome", absolutePath, {
+				...(cwd !== undefined && { cwd }),
+			});
 			// Shared config-args seam (#1247): the lint runner consumes the same
 			// builder, so `lint --write` can never drift to biome's default
 			// config when a user config or the package fallback exists.

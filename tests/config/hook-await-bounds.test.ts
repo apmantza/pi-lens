@@ -2142,7 +2142,16 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// budget and up to three attempts, so the hook path got shorter, not longer.
 	// Like every other entry here neither can take a hook's signal until #2523
 	// AC4 threads it through the deps types.
-	"clients/installer/index.ts": 197,
+	// 197 → 198 (#2894): `verifyAstGrepProbePath` traded a hand-rolled
+	// `new Promise` around a raw `spawn` — which awaited nothing, and whose
+	// `timeout` killed only the direct child — for one `await probeToolAsync`.
+	// `getAllToolStatuses`'s version probe made the same trade and is await-
+	// neutral (its `await new Promise` became `await probeToolAsync`), so the
+	// module gains exactly one. The await it gains is the seam's, with the
+	// tree-kill teardown the raw spawn never had; like every other entry here
+	// it cannot take a hook's signal until #2523 AC4 threads it through the
+	// deps types.
+	"clients/installer/index.ts": 198,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,

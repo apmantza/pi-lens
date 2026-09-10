@@ -4,6 +4,12 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DispatchContext } from "../../../../clients/dispatch/types.js";
 import {
+	createDispatchContext,
+	dispatchForFile,
+	RunnerRegistry,
+} from "../../../../clients/dispatch/dispatcher.js";
+import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import {
 	capFastExitSpawnResult,
 	capKilledSpawnResult,
 	capThenAbortedSpawnResult,
@@ -122,6 +128,51 @@ describe("helm-lint runner", () => {
 				resourceLabel: "helm-lint",
 			}),
 		);
+	});
+
+	it("passes the resolved cwd through the real dispatcher for a nested chart", async () => {
+		const projectRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-helm-dispatch-"),
+		);
+		try {
+			const callerCwd = path.join(projectRoot, "caller");
+			const chartRoot = path.join(projectRoot, "project", "charts", "child");
+			const filePath = createChart(chartRoot, "templates/deployment.yaml");
+			fs.mkdirSync(callerCwd, { recursive: true });
+			fs.mkdirSync(path.join(projectRoot, "project", ".git"), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(projectRoot, "project", ".git", "HEAD"),
+				"ref: refs/heads/main\n",
+			);
+
+			const registry = new RunnerRegistry();
+			registry.register(helmLintRunner);
+			const ctx = createDispatchContext(
+				filePath,
+				callerCwd,
+				{ getFlag: () => false },
+				new FactStore(),
+				undefined,
+				undefined,
+				projectRoot,
+			);
+
+			await dispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: ["helm-lint"] }],
+				registry,
+			);
+
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				"helm",
+				["lint", path.resolve(chartRoot)],
+				expect.objectContaining({ cwd: path.join(projectRoot, "project") }),
+			);
+		} finally {
+			fs.rmSync(projectRoot, { recursive: true, force: true });
+		}
 	});
 
 	it("deduplicates concurrent edits by canonical chart root", async () => {

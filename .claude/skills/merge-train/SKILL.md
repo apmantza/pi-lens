@@ -404,6 +404,11 @@ Each row cost a lane at least once; the prose above carries the record.
 
 | Mistake | Fix |
 |---------|-----|
+| Reading a CI verdict without checking the SHA it judged | `ci-verdict --wait` returned exit 0 for the PREVIOUS head seconds after a push (#2878 trailing, 2026-09-10); compare the verdict's SHA with `gh pr view --json headRefOid` before merging |
+| Reporting "pushed" before `git log -1` shows the commit | Two trailing commits failed the pre-commit hook (changelog one-entry rule, unused vars) and the ledger/body already said pushed; verify the head, then write the row |
+| Folding a worker's extra changelog fragment into an existing one | One fragment = one top-level entry (`rollup-changelog --check`); keep a second fragment separate or drop it |
+| Accepting a worker's "pre-existing red on master" | Run the file on origin/master in YOUR environment before believing it; four workers reported env-specific reds as master reds (2026-09-10) |
+| Letting a fix round enumerate cases instead of deriving the rule | #2877 took 7 rounds; the brief for a rule fix demands derivation from the source of truth (grammar table, measured host sequence) |
 | Accepting a state-space table on its claims | Grep every test id in the table before accepting the round; #2877 r3 and #2868 r3 (2026-09-10) shipped 48–72-cell tables with zero real ids |
 | Arming `plegma watch --next` after the lane already settled | The watch only sees settlements newer than itself; check `plegma_status` by handle first and process a done lane directly (three lanes sat settled for hours, 2026-09-10) |
 | Pruning trees with `merge-base --is-ancestor` | Prune only trees whose branch is the head of the PR just merged (#2358's tree, 2026-09-06) |

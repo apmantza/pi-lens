@@ -1145,6 +1145,15 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"#2366: staged test results belong to their owning session and must not cross a primary session replacement; the durable findings cache remains available to pull diagnostics.",
 	},
 	{
+		id: "tool-set-policy:rememberedLazyToolsBySessionFile",
+		module: "tool-set-policy.ts",
+		state: "rememberedLazyToolsBySessionFile",
+		policy: "process_lifetime",
+		resetName: "resetRememberedLazyToolsForTests",
+		reason:
+			"Activation posture must survive factory rebuilds and return-to-session transitions; the bounded FIFO cap limits process-lifetime retention without clearing live conversation memory.",
+	},
+	{
 		id: "tree-sitter-shared:webTreeSitterLoadFailed",
 		module: "tree-sitter-shared.ts",
 		state:
@@ -1683,6 +1692,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// `let`) plus its `_resetBundledQueriesRootHealthForTests` export (the
 	// scan's reset-signal detector) — see this file's EXEMPT_SESSION_STATE_FILES
 	// entry above for why it is exempt rather than registered.
+	"tool-set-policy.ts": 1,
 	"tree-sitter-query-loader.ts": 2,
 	"tree-sitter-shared.ts": 0,
 	"turn-context.ts": 0,

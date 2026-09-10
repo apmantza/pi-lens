@@ -1190,7 +1190,8 @@ export class TestRunnerClient {
 	 * file whose *related* test file needs to be discovered).
 	 *
 	 * Primary signal: `detectFileRole` (naming convention: `.test.`/`.spec.`
-	 * basenames, `test_`/`spec_` prefixes, `__tests__/`/`tests/`/`spec/`
+	 * basenames, `_test.`/`_spec.` suffix infixes, `*Test(s).<ext>` CamelCase
+	 * suffixes, `test_`/`spec_` prefixes, `__tests__/`/`tests/`/`spec/`
 	 * directories — shared with the rest of the codebase, not a second
 	 * parallel detector).
 	 *

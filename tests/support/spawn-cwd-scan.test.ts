@@ -1659,6 +1659,7 @@ async function run(ctx) {
 });
 
 describe("node:child_process is a site only when the file imports it", () => {
+	const CHILD_PROCESS = '"node:child_process"';
 	it("a method named `spawn` on some object is not a child spawn", async () => {
 		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
 		// an LSP server definition's own method. Matching `spawn` by simple name
@@ -1678,6 +1679,74 @@ ${SEAM}
 async function run(ctx) {
 	spawn("tool", [], { cwd: ctx.cwd });
 }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	const aliasedFixtures = [
+		[
+			"aliased named import",
+			`import { spawn as s } from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"namespace import",
+			`import * as cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.spawn("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"default import",
+			`import cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.exec("tool", { cwd: ctx.cwd }); }`,
+		],
+		[
+			"dynamic destructuring",
+			`async function run(ctx) { const { fork } = await import(${CHILD_PROCESS}); fork("tool", [], { cwd: ctx.cwd }); }\n${SEAM}`,
+		],
+		[
+			"require namespace",
+			`const cp = require("node:child_process");\n${SEAM}\nfunction run(ctx) { cp.execFile("tool", [], { cwd: ctx.cwd }); }`,
+		],
+	] as const;
+	it("resolves an execSync options object", async () => {
+		const source = `import { execSync } from "node:child_process";
+${SEAM}
+function check(ctx) { execSync("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+	for (const [label, source] of aliasedFixtures) {
+		it(`resolves ${label}`, async () => {
+			expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+		});
+	}
+
+	it("resolves an exec alias by imported name", async () => {
+		const source = `import { exec as run } from "node:child_process";
+${SEAM}
+function check(ctx) { run("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("resolves a spawn imported as exec by imported name", async () => {
+		const source = `import { spawn as exec } from "node:child_process";
+${SEAM}
+function check(ctx) { exec("tool", [], { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("follows a parameter-shaped options wrapper", async () => {
+		const source = `import { spawn as nodeSpawn } from "node:child_process";
+function pass(command, args, options) { return nodeSpawn(command, args, options); }
+function check(ctx) { pass("tool", [], { cwd: ctx.cwd }); }`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.wrappers).toEqual([
+			{ name: "pass", mode: "options", paramIndex: 2 },
+		]);
+		expect(
+			scan.sites.map((site) => `${site.kind}:${site.callee}:${site.hasCwd}`),
+		).toEqual(["direct:nodeSpawn:false", "wrapper:pass:true"]);
+	});
+
+	it("resolves a destructured require alias", async () => {
+		const source = `const { spawn: s } = require(${CHILD_PROCESS});
+${SEAM}
+function run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`;
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });

@@ -346,6 +346,23 @@ is the procedure and defers here on conflict; 2026-09-09).**
   earned by a reproduced instance: a HIGH with no failure scenario is a
   MEDIUM at most, and safe deltas (a sentence, a comment, a literal, a doc
   line) never count as an actionable round.
+- **Measured, not asserted (2026-09-10).** Any statement in a PR body or a
+  review about the host (pi's event order, whether the extension factory
+  re-runs on a reason), the CI environment, or "this test is red on master
+  too" carries the transcript that measured it in the SAME environment (a
+  probe extension against real pi in rpc mode; the same file run on
+  origin/master in the same tree). A sentence without one is a claim and the
+  verify round treats it as false: #2866 rounds 2–3 and #2878 round 5 were
+  built on unmeasured host claims the verify overturned, and four workers
+  reported a sandbox-only red as "pre-existing on master". Rule fixes (a
+  scanner's scope rule, a lifecycle rule, a classification) are derived and
+  enumerated from their source of truth — the grammar's node table, pi's
+  pinned types measured live, the real return sites — never from the list of
+  cases a reviewer named; the list is the acceptance set, not the rule
+  (#2877 took seven rounds closing one named launderer per round until round
+  4 generated the scope table from the grammar). This binds the orchestrator's
+  briefs too: a brief that states a code fact from a reviewer's summary
+  without reading the sites is the same shape (#2896 round 1).
 - *Contract edits land in the repo files* (`AGENTS.md`, `docs/pi-lens-*.md`);
   any runner-side copy is synced from them and the repository wins on drift.
   `CLAUDE.md` and the skills are pointers. Runner-specific mechanics (a
@@ -602,6 +619,27 @@ session's counter, so primary, secondary, resume, and fork starts each begin at
 turn one (#2815). If the host cannot resolve a stable session id, the guard
 records one bounded `turn-context-identity-fallback` degradation per session
 before using the detached fallback (#2815).
+
+A crashed pi hook handler is swallowed in production and LOUD under the test
+runner, through exactly one seam: `surfaceHandlerCrash` in
+`clients/session-event-guard.ts`. Every `index.ts` catch that absorbs a handler
+crash calls it — nine today (`session_start`, `session_before_fork`,
+`observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`,
+the `agent_settled` deferred-mutation drain, `quiet_window`, `message_end`) —
+and it logs, writes one bounded `hook-handler-crash` degradation per handler
+per session, and rethrows only when `process.env.VITEST` is set, except at the
+fire-and-forget `quiet_window` catch, which passes `rethrow: false` because an
+unhandled rejection there can terminate the pi host before any caller observes
+it. Never
+reintroduce a `dbg`-only catch around a handler body: `dbg` writes nothing
+under vitest, so the crash is then indistinguishable from a completed handler
+and every assertion after the caller's `await` is vacuous while the file stays
+green (#2859's fourteen `session_start` awaits, #2884's two `turn_end` ones).
+The `isStaleExtensionCtxError` rethrow stays AHEAD of the call at every site
+that classifies it, so a benign session swap keeps its own single
+`extension-ctx-stale` record instead of being counted as a crash. A catch that
+guards a `pi.on` REGISTRATION against an older host is not in this class and
+keeps its plain swallow (#2884).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
@@ -1008,12 +1046,12 @@ acts on the answer, read the freeze. The `lsp_notify_resync_deferred` row keeps
 recording the gate's action either way; the coverage fields report only what the
 touch is actually uncovered for. (#1586)
 
-Demoted auxiliary outcome rows retain the sibling rows' version-evidence axis:
+Demoted auxiliary outcome rows may use the version-evidence axis:
 `publishedThisContent` is true when the content binding matches or the client's
-per-path publication version advances beyond the pre-notify baseline. A
-version-less push has no binding, but its publication stamp still proves that
-the scanner answered; no publication and an older binding remain uncovered.
-(#2810 round 6)
+per-path publication version advances beyond the pre-notify baseline. Sibling
+and aggregate outcome rows remain binding-only. A version-less push therefore
+proves coverage only on the demoted row; no publication and an older binding
+remain uncovered. (#2810 round 6, #2896)
 
 A deferred cascade result that arrives LATE — past the turn-end settle cap, or
 in the quiet window after the turn already consumed its runs — must still reach
@@ -1147,11 +1185,15 @@ reason is "this should move onto the seam" live in a ratcheted
 `MIGRATION_WORKLIST_ROWS` whose reason OPENS with the issue that retires it.
 Both rules run through `auditRegistry` (`tests/support/sweep-kit.ts`). Adding a
 conforming spawn moves the population pins; adding a non-conforming one costs a
-reasoned row, never a pin bump. Stated bounds: an ALIASED
-`node:child_process` import is not a site (#2888), and the scan does not follow
-a path computation into the seam. The `beforeAll` carries an explicit 30 s
-timeout because the scan is ~2.8 s idle / ~3.7 s under `--maxWorkers=1`
-contention and the `default` vitest project's hook budget is 10 s
+reasoned row, never a pin bump. The scan does not follow a path computation into
+the seam. Stated bound (#2888): a `node:child_process` call is a site only when
+the file binds one of the seven `NODE_SPAWN_NAMES` (`tests/support/spawn-cwd-scan.ts`)
+from `child_process`; other spellings (`promisify(exec)`, a re-exported
+wrapper) are not sites, and the population's fail-safe assertion (exactly one
+non-seam site) is what surfaces a new one. The bound is stated in both places. The `beforeAll` carries an explicit 30 s
+timeout because a local measurement on 2026-09-10 records 3.808 s idle and
+3.932 s under `--maxWorkers=1` over the 81-file population. The `default`
+Vitest project's hook budget is 10 s
 (#2872, refs #2777).
 
 Model-facing tool results use the single `boundToolText` seam in
@@ -1610,7 +1652,23 @@ package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
+The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
+negative walk re-runs on the next lookup, so a marker created where NONE was
+found is seen on the next resolution (#2894). The other half of the axis is
+still open: a marker created BELOW a cached positive root is not seen until
+the session ends (#2922) — do not describe the class as closed.
+
 ### Session lifecycle, telemetry, and observability
+
+The pi host can emit duplicate RPC `session_start` events during one
+replacement. `index.ts` admits the complete primary mutation pass once per
+`(reason, session ID)` key, falling back to the session file when the stable ID
+is unavailable. A duplicate re-enters the restore path when the live active-tool
+set differs from the remembered plan. Keep this gate above tool restore,
+telemetry opening, registry resets, and `handleSessionStart`, so those state
+owners share one lifecycle boundary (#2890).
+The key is cleared per factory instance because pi re-runs the factory on every
+replacement; if that ever changes, clear the key in `session_shutdown`.
 
 The machine-global instance registry serializes every whole-file writer with
 an adjacent O_EXCL lock. Contenders use jittered backoff for 500ms, and locks
@@ -2888,7 +2946,7 @@ npm test              # vitest run (all tests)
 npx tsc --project tsconfig.json --noEmit   # type-check
 npm run lint          # tsc type-check + oxlint (npm run lint:js) over .mjs/.cjs/.js AND clients/tools/mcp/index.ts, --deny-warnings (tests/** TS still ignored, tracked by #2462)
 npm run build         # emit JS from TS; run before tests after source changes if stale JS may be present
-node scripts/smoke-tools.mjs [--install] [--step2] [--verbose] [lang ...]   # live tool-smoke (#209, opt-in/nightly): installs + runs each tool through the REAL dispatch path against tests/fixtures/tool-smoke/<lang>/; --step2 also asserts a parseable diagnostic. Add --lsp for the LSP-handshake layer, --format for the formatter pipeline, or --autofix for the pipeline safe-autofix phase. Not a per-PR gate, not shipped in the tarball.
+node scripts/smoke-tools.mjs [--install] [--step2] [--verbose] [lang ...]   # live tool-smoke (#209, opt-in/nightly): installs + runs each tool through the REAL dispatch path against tests/fixtures/tool-smoke/<lang>/; --step2 also asserts a parseable diagnostic. Add --lsp for the LSP-handshake layer, --format for the formatter pipeline, or --autofix for the pipeline safe-autofix phase. Not a per-PR gate. This harness is not shipped in the tarball; the release-QA install-registry row runs it from its archived export root and passes --installer-root to load the installed package's registry (#2893). Its scratch environment deliberately sets PIP_BREAK_SYSTEM_PACKAGES=1 with HOME pinned inside scratch, so PEP 668 cannot hide a dead pip registry entry.
 #   --lsp fixtures support two optional per-fixture fields (#530): `setup` (string/argv command run in the COPIED temp workspace before touchFile — e.g. `typescript7`/`typescript7-clean` run `npm install typescript@7 --no-save --no-audit --no-fund` there, since typescript-go's per-platform native binary can't be a committed static fixture; setup failure reports a distinct `setup-failed` status, never a false pass, bounded by a 120s timeout) and `expectLaunchVariant` (asserts the live `getCapabilitySnapshots(file)` `launchVariant` — e.g. `"native-ts7"` — so a silent fallback to the classic `typescript-language-server` FAILS even though a diagnostic arrived; the native and classic servers share the same `"typescript"` server id, so the diagnostic alone can't distinguish them). Both fixtures verified live 2026-07: typescript@7.0.2 installs from npm, its `tsc --lsp --stdio` genuinely speaks LSP framing (`\r\n\r\n` Content-Length headers over stdio, confirmed via a hand-rolled initialize), and PR #526's assumed invocation is correct.
 #   --format drives getFormattersForFile→formatFile via FormatService (what runFormatPhase uses; the lint path NEVER runs formatters): asserts the expected formatter is selected (config-gated ones ship the config their detect() needs — .prettierrc/gleam.toml/Gemfile/pyproject[tool.black]/stylua.toml/.cljfmt.edn/.php-cs-fixer.php/.editorconfig) and that it actually reformats a mis-formatted fixture (changed===true). Covers 30/33 formatters (tests/fixtures/format-smoke/<lang>/); only nixfmt/ocamlformat/swiftformat remain (no Windows toolchain). Plain-command formatters (stylua/cljfmt/php-cs-fixer/google-java-format/clang-format) need their binary ON PATH or formatFile reports success=false; managed-dir ones (taplo/shfmt/ktlint) don't. EXIT-CODE POSTURE (#1337): formatFile is STRICT BY DEFAULT — a nonzero exit is a formatting failure, never a silent "already formatted". Only lint-autofix formatters (rubocop/standardrb/ktlint/sqlfluff) opt out via `lenientExitCode`, whose string VALUE is the required benign-nonzero evidence. Before adding a formatter, check whether its in-place mode can exit nonzero benignly (usually it cannot — that behavior lives behind `--check`/`--dry-run`/`--set-exit-if-changed`); biome is the exception that needs `--no-errors-on-unmatched`, since it exits 1 on paths its own config ignores. Guarded by tests/clients/dispatch/formatter-exit-code-posture.test.ts.
 #   --autofix drives runAutofix (the pipeline phase that applies fixable linters in --fix mode — distinct from lint-only dispatch AND from formatters; it MUTATES files): asserts the policy-selected tool applied a fix (fixedCount>0). Live-validates 11 (ruff/biome/rubocop/sqlfluff/rust-clippy/dart-analyze/stylelint/eslint/golangci-lint/markdownlint/oxlint in tests/fixtures/autofix-smoke/<lang>/); ktlint blocked by #218; detekt wired but CI-deferred (needs detekt CLI+formatting plugin). Workspaces are git-init'd so VCS-gated fixers (cargo fix) run. Autofix gating MIRRORS each tool's lint-policy strategy (config-first: eslint/oxlint/golangci-lint/detekt; smart-default: the rest) — guarded by tests/clients/autofix-policy-consistency.test.ts (autofix policy ↔ AUTOFIX_CAPABILITIES ↔ lint policy gates).
@@ -4133,13 +4191,14 @@ test pins the exact three rule names, the 29-entry baseline count, and the
 derived eager-import set.
 
 - TypeScript ESM throughout (`"type": "module"`)
+- Dynamic-tool activation memory is bounded to `REMEMBERED_LAZY_TOOLS_MAX_SESSIONS` session files through `BoundedFifoMap`; a fork copies the parent posture from pi's `previousSessionFile`, while a host without `getSessionFile()` records the bounded `tool-set-session-file-unavailable` degradation.
 - Edit the `.ts` sources only. Do **not** hand-edit sibling/generated `.js` files in this repo; pi loads TS via on-the-fly jiti transpilation and JS files are generated artifacts. If tests/runtime could see stale `.js`, run `npm run build` to regenerate from TS before testing.
 - Tests use vitest; mocks via `vi.mock` / `vi.hoisted`
 - Fire-and-forget background work uses `void expr` or `setImmediate`
 - `logSessionStart()` is a no-op in test mode (`VITEST` env var)
 - LSP tool: use `goToDefinition` / `findReferences` before grepping for symbols
 - ast-grep AST inspection is `ast_grep_search` with `dump=true`; the retired `ast_grep_dump` name is handled by a one-session compatibility pointer and is absent from both advertised tool rosters.
-- **Dynamic tooling (pi's registered-but-inactive tool loading, `index.ts` tool-registration block).** 5 tools stay always-active: `lens_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`, `symbol_search`. 5 situational tools — `ast_grep_search` (including `dump=true` AST inspection), `ast_grep_replace`, `ast_grep_outline`, `lsp_navigation`, `lens_diagnostic_mark` — are registered inactive and activated on demand via the always-active loader tool `pi_lens_activate_tools` (`tools/activate-tools.ts`). Activation is additive and skips `setActiveTools` when the requested set is already active. pi-lens RESTORES the set on EVERY `session_start` reason, it never skips: the host builds a fresh `AgentSession` with `includeAllExtensionTools: true` on fork/reload/resume exactly as on startup and never persists an active-tool set per session, so every registered tool is active again by the time the handler runs. `startup`/`new` clear the remembered-activation set (`rememberedLazyTools` in `index.ts`) and the restore is therefore the plain baseline shrink. Pi re-runs the extension factory on reload, resume, fork, and new, so factory closure state is not a conversation store; the module itself remains loaded once in the process. The pi situational dead-weight row is conversation-owned by session file: a shutdown with `targetSessionFile` emits the ending conversation's `activated` and `called` row before new, resume, or fork opens the replacement; reload keeps the same file and preserves the row across its rebuild; quit emits the final row. A process restart starts BOTH sets empty — `rememberedLazyTools` is empty in a new process, so the restore itself deactivates all five, and the row correctly names all five until the model activates or calls one again. The host's restored active set is never read as activation evidence: it is every registered tool on every reason, so doing that made the row unconditionally `[]` after any `pi --continue` (#2866 review F1). Pi never reads or arms the MCP `connectionEnded` latch. The mutation block sits BELOW the #473 concurrent-secondary guard: the active tool set is process-shared runtime state and a secondary must not rewrite the live primary's. `--no-lazy-tools` or `tools.lazy=false` keeps every tool statically active when stable prompt caching matters more than tool-list weight. `clients/tool-set-policy.ts` owns the restore plan (`planToolSet`), reads the host’s own deferred-tool flag (`ctx.model.compat.supportsToolReferences`) rather than re-deriving it, and logs each real mutation to `latency.log` as `tool_set_mutation`. Feature detection remains fail-open: if `pi.getActiveTools`/`setActiveTools` are absent, all situational tools remain statically active. `LAZY_TOOL_CATALOG` (right below the `lazyTools` array) is the enum source `pi_lens_activate_tools` advertises — a tool added to `lazyTools` but NOT to this catalog is permanently unreachable on a dynamic-tooling host (caught in #690: `lens_diagnostic_mark` was added to `lazyTools` but initially missing from the catalog). (#1453, #2858)
+- **Dynamic tooling (pi's registered-but-inactive tool loading, `index.ts` tool-registration block).** 5 tools stay always-active: `lens_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`, `symbol_search`. 5 situational tools — `ast_grep_search` (including `dump=true` AST inspection), `ast_grep_replace`, `ast_grep_outline`, `lsp_navigation`, `lens_diagnostic_mark` — are registered inactive and activated on demand via the always-active loader tool `pi_lens_activate_tools` (`tools/activate-tools.ts`). Activation is additive and skips `setActiveTools` when the requested set is already active. pi-lens RESTORES the set on EVERY `session_start` reason, it never skips: the host builds a fresh `AgentSession` with `includeAllExtensionTools: true` on fork/reload/resume exactly as on startup and never persists an active-tool set per session, so every registered tool is active again by the time the handler runs. `startup`/`new` clear only the current session file's remembered activations in the module-level policy store. `/new` changes the current file, so its fresh-start clear applies to that new file; the departing file's entry remains available for a later `resume`, bounded by the FIFO session-file cap. Pi re-runs the extension factory on reload, resume, fork, and new, so factory closure state is not a conversation store; `clients/tool-set-policy.ts` keeps the remembered set at module level, keyed by `ctx.sessionManager.getSessionFile()`, and the module remains loaded once in the process. The pi situational dead-weight row is conversation-owned by session file: a shutdown with `targetSessionFile` emits the ending conversation's `activated` and `called` row before new, resume, or fork opens the replacement; reload keeps the same file and preserves the row across its rebuild; quit emits the final row. A process restart starts BOTH sets empty — the module-level session-file map is empty in a new process, so the restore itself deactivates all five, and the row correctly names all five until the model activates or calls one again. The host's restored active set is never read as activation evidence: it is every registered tool on every reason, so doing that made the row unconditionally `[]` after any `pi --continue` (#2866 review F1). Pi never reads or arms the MCP `connectionEnded` latch. The mutation block sits BELOW the #473 concurrent-secondary guard: the active tool set is process-shared runtime state and a secondary must not rewrite the live primary's. `--no-lazy-tools` or `tools.lazy=false` keeps every tool statically active when stable prompt caching matters more than tool-list weight. `clients/tool-set-policy.ts` owns the restore plan (`planToolSet`), reads the host’s own deferred-tool flag (`ctx.model.compat.supportsToolReferences`) rather than re-deriving it, and logs each real mutation to `latency.log` as `tool_set_mutation`. Feature detection remains fail-open: if `pi.getActiveTools`/`setActiveTools` are absent, all situational tools remain statically active. `LAZY_TOOL_CATALOG` (right below the `lazyTools` array) is the enum source `pi_lens_activate_tools` advertises — a tool added to `lazyTools` but NOT to this catalog is permanently unreachable on a dynamic-tooling host (caught in #690: `lens_diagnostic_mark` was added to `lazyTools` but initially missing from the catalog). (#1453, #2858)
 - `lens_diagnostic_mark` (#690, `tools/lens-diagnostic-mark.ts` + `clients/diagnostic-dispositions.ts` + `clients/dispatch/suppress-writer.ts`) is an agent-facing disposition layer over dispatch diagnostics: `false-positive` / `suppress` (writes an inline `pi-lens-ignore` comment) / `defer` (session-only, in-memory) / `flagged` (persists, tagged `📌 flagged-to-fix` in `lens_diagnostics mode=full`). Content-anchored with per-disposition binding strength — `false-positive` uses a STRICT anchor (rule+message+the flagged line's own content hash, so a rewritten line gets a fresh chance to re-fire); `suppress`/`defer`/`flagged` use a WEAK anchor (rule+message only, no line hash) so the mark survives incidental edits elsewhere on that line. Wired into both the per-edit dispatch path (`dispatcher.ts`) and the `mode=full` sweep (`lens-diagnostics.ts`). Every mark is NDJSON-logged (`clients/disposition-logger.ts` → `~/.pi-lens/dispositions.log`, incl. `previousDisposition` on re-marks and in-memory-only `defer` marks — the #181 rule-tuning signal, especially `false-positive` rates per rule) and published on the bus as `pilens:diagnostic:disposition` (`clients/disposition-publish.ts`, sibling producer per the format-events-publish "owns nothing in common" rule; emitter wired in index.ts alongside the other three), both from the single `markDisposition` choke point. pi-lens-internal only — situational, NOT mirrored into the MCP server (MCP has no equivalent tool; would need its own engine seam + tool route if that gap gets closed).
 - `ast_grep_outline` (#311, `tools/ast-grep-outline.ts` → `AstGrepClient.outline` → `ast-grep outline --json=compact`) is a SYNTAX-ONLY structure tool (no index/LSP); `module_report` stays the pi-lens-aware default. pi tool only — not mirrored to MCP (parity deferred, like `read_enclosing`).
 - `clients/runtime-config.ts` is "pure constants" by intent. Resolutions that read disk or env (e.g. `getRunnerTimeoutFloorMs`) must be **lazy memoized getters** with a `_resetForTests` hook, not module-level reads, so importing the file has no I/O side effect and tests can override inputs deterministically.
