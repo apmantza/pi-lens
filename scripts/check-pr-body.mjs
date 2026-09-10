@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 
@@ -195,28 +195,9 @@ function runtimeObservabilityFromDiff(diff = "") {
 	}
 	if (!runtime) return { runtime: false, records, failurePath: false };
 	const blanked = blankCommentsAndStrings(added);
-	const calls = [
-		["recordDegradationOnce", ["kind"]],
-		["incrementDegradationCount", ["kind"]],
-		["logExtension", ["subsystem", "message"]],
-		["logLatency", ["phase", "event", "eventName", "name"]],
-		["emitBounded", ["kind", "event", "eventName"]],
-	];
-	for (const [name, fields] of calls) {
-		const callPattern = new RegExp(`${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`, "g");
-		for (const match of blanked.matchAll(callPattern)) {
-			const original = added.slice(match.index, match.index + match[0].length);
-			for (const field of fields) {
-				const value = new RegExp(`${field}\\s*:\\s*["']([^"']+)["']`).exec(
-					original,
-				)?.[1];
-				if (value) records.add(value);
-			}
-		}
-	}
 	return {
 		runtime: true,
-		records,
+		records: recordLiteralsFromRuntimeSource(added),
 		failurePath:
 			/\bcatch\b|\brecordDegradationOnce\b|\bthrow\b|\breturn\s+null\b/.test(
 				blanked,
@@ -236,12 +217,82 @@ function observabilitySectionContent(body, lines, headings) {
 	return lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n");
 }
 
-function lintRuntimeObservability(body, lines, headings, diff) {
+function recordLiteralsFromRuntimeSource(source) {
+	return new Set(
+		recordLocationsFromRuntimeSource(source).map(({ value }) => value),
+	);
+}
+
+function recordLocationsFromRuntimeSource(source) {
+	const records = [];
+	const blanked = blankCommentsAndStrings(source);
+	const calls = [
+		["recordDegradationOnce", ["kind"]],
+		["incrementDegradationCount", ["kind"]],
+		["logExtension", ["subsystem", "message"]],
+		["logLatency", ["phase", "event", "eventName", "name"]],
+		["emitBounded", ["kind", "event", "eventName"]],
+	];
+	for (const [name, fields] of calls) {
+		const callPattern = new RegExp(`${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`, "g");
+		for (const match of blanked.matchAll(callPattern)) {
+			const original = source.slice(match.index, match.index + match[0].length);
+			for (const field of fields) {
+				const fieldMatch = new RegExp(`${field}\\s*:\\s*["']([^"']+)["']`).exec(
+					original,
+				);
+				const value = fieldMatch?.[1];
+				if (value) {
+					const valueIndex =
+						match.index + fieldMatch.index + fieldMatch[0].indexOf(value);
+					records.push({
+						value,
+						line: source.slice(0, valueIndex).split("\n").length,
+					});
+				}
+			}
+		}
+	}
+	return records;
+}
+
+function lintRuntimeObservability(
+	body,
+	lines,
+	headings,
+	diff,
+	cwd = process.cwd(),
+) {
 	const observation = runtimeObservabilityFromDiff(diff);
 	if (!observation.runtime) return [];
 	const content = observabilitySectionContent(body, lines, headings);
 	if ([...observation.records].some((record) => content.includes(record)))
 		return [];
+	const existingRecord =
+		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
+	if (
+		existingRecord &&
+		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecord[2]) &&
+		isRuntimeObservabilityPath(existingRecord[2])
+	) {
+		const [, kind, file, lineText] = existingRecord;
+		const lineNumber = Number(lineText);
+		try {
+			const source = readFileSync(
+				isAbsolute(file) ? file : resolve(cwd, file),
+				"utf8",
+			);
+			if (
+				recordLocationsFromRuntimeSource(source).some(
+					({ value, line }) =>
+						value === kind && Math.abs(line - lineNumber) <= 20,
+				)
+			)
+				return [];
+		} catch {
+			// Fall through to the existing strict error.
+		}
+	}
 	if (
 		!observation.failurePath &&
 		content.includes("No new failure path; no record added.")
@@ -491,7 +542,13 @@ export function lintPrBody(body = "", options = {}) {
 	}
 	if (options.diff)
 		errors.push(
-			...lintRuntimeObservability(body, lines, headings, options.diff),
+			...lintRuntimeObservability(
+				body,
+				lines,
+				headings,
+				options.diff,
+				options.cwd,
+			),
 		);
 	return { valid: errors.length === 0, errors };
 }
@@ -686,6 +743,7 @@ export function lintLocalPrBody(
 	return lintPrBody(body, {
 		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
+		cwd,
 	});
 }
 

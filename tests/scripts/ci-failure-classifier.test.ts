@@ -5,6 +5,7 @@
 // Log fixtures under tests/fixtures/ci-failure-logs/ named *.real.log or
 // *.composite.log are REAL captured output (AGENTS.md shape 16 -- never
 // hand-write a fixture for an external system's behavior):
+// The #2848 capture is a complete raw job log fetched for this round.
 //   - real-assertion-failure.real.log: run 32913518938, job 98012237782
 //     (fetch: `gh api repos/apmantza/pi-lens/actions/jobs/98012237782/logs`)
 //   - infra-kill-wrapper-killed.real.log: run 32908647308 attempt 1, job
@@ -115,6 +116,44 @@ describe("classifyFailureLog (#2103)", () => {
 		// proves the classifier reads the actual samples rather than emitting a
 		// generic "OOM happened" string with no evidence behind it.
 		expect(result.detail).toContain("availableMb=12999 of 15989");
+	});
+
+	it("classifies the #2848 exit-137 log as infra despite incidental output needles", () => {
+		const result = classifyFailureLog(fixture("infra-kill-2848.real.log"));
+		expect(result.kind).toBe("infra-kill");
+		expect(result.detail).toContain(
+			"tests/index-integration.test.ts (1406 MB)",
+		);
+		expect(result.detail).toContain(
+			"tests/clients/flake-shape-ratchet.test.ts (1300 MB)",
+		);
+		expect(result.detail).toContain(
+			"tests/config/lsp-service-double-sweep.test.ts (945 MB)",
+		);
+		expect(result.detail).toMatch(
+			/heaviest files by peak RSS: tests\/index-integration\.test\.ts \(1406 MB\), tests\/clients\/flake-shape-ratchet\.test\.ts \(1300 MB\), tests\/config\/lsp-service-double-sweep\.test\.ts \(945 MB\)/,
+		);
+	});
+
+	it.each([
+		"2026-09-09T00:00:00.0000000Z  FAIL default tests/a.test.ts > broken\n",
+		"2026-09-09T00:00:00.0000000Z  Test Files  1 failed | 2 passed (3)\n",
+		"2026-09-09T00:00:00.0000000Z  Tests  1 failed | 2 passed (3)\n",
+	])("keeps summary failure evidence real beside exit 137 (%s)", (failure) => {
+		const result = classifyFailureLog(
+			`${failure}[mem-watch] KILLED WITH HEADROOM signal=SIGKILL totalMb=15989 lowWaterAvailableMb=12564\nexit code 137\n`,
+		);
+		expect(result.kind).toBe("real");
+	});
+
+	it("ignores malformed peak-RSS rows without throwing", () => {
+		expect(() =>
+			classifyFailureLog(
+				"[mem-file] peakRssMb=not-a-number tests/bad.test.ts\n" +
+					"[mem-file] peakRssMb=42\n" +
+					"[mem-watch] KILLED WITH HEADROOM signal=SIGKILL totalMb=15989 lowWaterAvailableMb=12564\n",
+			),
+		).not.toThrow();
 	});
 
 	it("classifies the pre-#2042 bare-Killed OOM shape (no wrapper existed yet)", () => {
