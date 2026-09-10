@@ -1129,6 +1129,17 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+**Pip-backed managed tools follow a private-install ladder (#2916).**
+`installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a
+normal `--user` install. A refusal containing
+`externally-managed-environment` records one bounded
+`pip-pep668-strategy-refused` row per tool and strategy and permits the next
+strategy. The final `--break-system-packages` attempt sets `PYTHONUSERBASE`
+to `<PI_LENS_HOME>/pip-user`; it never targets system site-packages. Every
+selected `bin`/`Scripts` directory is added to the current process path so
+`getToolPath` and availability status resolve the installed binary. Keep the
+strategy order and private-prefix boundary aligned with `docs/dependencies.md`.
+
 The runner-spawn-cwd sweep (`tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts`)
 scans every spawn-bearing TypeScript file under `clients/`, `tools/`, `mcp/`,
 and `index.ts`. Its AST needle requires each supplied cwd value to resolve to

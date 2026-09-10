@@ -3278,13 +3278,15 @@ async function findPipUserToolPath(
 	verificationArgs: string[] = ["--version"],
 	verificationTimeoutMs = 10_000,
 ): Promise<string | undefined> {
-	const isWindows = process.platform === "win32";
-	const userBaseCandidates = await getPythonUserBaseCandidates();
+	const isWindows = installerPlatform() === "win32";
+	const userBaseCandidates = [
+		path.join(getGlobalPiLensDir(), "pip-tools"),
+		path.join(getGlobalPiLensDir(), "pip-user"),
+		...(await getPythonUserBaseCandidates()),
+	];
 
 	for (const userBase of userBaseCandidates) {
-		const scriptDirs: string[] = [
-			path.join(userBase, isWindows ? "Scripts" : "bin"),
-		];
+		const scriptDirs: string[] = [pipScriptsDir(userBase, installerPlatform())];
 
 		if (isWindows) {
 			try {
@@ -4460,7 +4462,14 @@ async function refreshPackageManagerManagedTool(
 		tool.installStrategy === "pip"
 			? // `-U` is the whole fix: without it pip treats the installed copy as
 				// satisfying the requirement and the day-one version never moves.
-				await installPipTool(tool.id, tool.packageName, { upgrade: true })
+				await installPipTool(
+					tool.id,
+					tool.packageName,
+					tool.binaryName ?? tool.id,
+					{
+						upgrade: true,
+					},
+				)
 			: // `gem install` always fetches the newest version that satisfies the
 				// requirement, so the install command IS the upgrade command.
 				await installGemTool(tool.id, tool.packageName);
@@ -5213,27 +5222,32 @@ export function pipCommandCandidates(): string[] {
 		: ["pip3", "pip", "python3", "python"];
 }
 
+/** Resolve the script directory used by a Python installation on each OS. */
+export function pipScriptsDir(
+	base: string,
+	platform: NodeJS.Platform = installerPlatform(),
+): string {
+	return path.join(base, platform === "win32" ? "Scripts" : "bin");
+}
+
 /**
  * Install a pip package tool
  */
 async function installPipTool(
 	toolId: string,
 	packageName: string,
+	binaryName: string,
 	/**
 	 * Add `-U`, turning the install into an upgrade. Without it `pip install`
 	 * treats an already-present package as satisfied and leaves the day-one
 	 * version in place forever — the freeze #1747 is about. The flag is the ONLY
-	 * difference between install and refresh: same command ladder, same
-	 * `--user` target, so a refresh can never write somewhere the install would
-	 * not have.
+	 * difference between install and refresh within each selected environment.
 	 */
 	options: { upgrade?: boolean } = {},
 ): Promise<string | undefined> {
 	try {
-		const isWindows = process.platform === "win32";
-		const verb = options.upgrade
-			? ["install", "-U", "--user"]
-			: ["install", "--user"];
+		const isWindows = installerPlatform() === "win32";
+		const verb = options.upgrade ? ["install", "-U"] : ["install"];
 		// Built from `pipCommandCandidates()` — the single source of truth this
 		// module and any other caller (the tool-smoke lane's toolchain-presence
 		// probe, #2661 review) share, rather than a second, independently
@@ -5246,26 +5260,140 @@ async function installPipTool(
 					: ["-m", "pip", ...verb, packageName],
 		}));
 
+		const pep668 = /externally-managed-environment/i;
+		const refuse = (strategy: string, reason: string): void => {
+			recordDegradationOnce({
+				kind: "pip-pep668-strategy-refused",
+				subject: `${toolId}:${strategy}`,
+				reason,
+			});
+			logSessionStart(
+				`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${reason})`,
+			);
+		};
+		const run = (command: string, args: string[], env?: NodeJS.ProcessEnv) =>
+			safeSpawnAsync(command, args, {
+				timeout: 120_000,
+				ignoreAmbientSignal: true,
+				lifetimeCoupled: true,
+				env,
+			});
+		const addBinToPath = async (
+			binDir: string,
+		): Promise<string | undefined> => {
+			try {
+				await fs.access(binDir);
+			} catch {
+				return undefined;
+			}
+			const currentPath = process.env.PATH || process.env.Path || "";
+			const separator = isWindows ? ";" : path.delimiter;
+			if (
+				!currentPath
+					.toLowerCase()
+					.split(separator)
+					.includes(binDir.toLowerCase())
+			) {
+				const updatedPath = `${binDir}${separator}${currentPath}`;
+				process.env.PATH = updatedPath;
+				if (isWindows) process.env.Path = updatedPath;
+			}
+			const names = isWindows
+				? [`${binaryName}.exe`, `${binaryName}.cmd`, binaryName]
+				: [binaryName];
+			for (const name of names) {
+				const candidate = path.join(binDir, name);
+				try {
+					await fs.access(candidate);
+					return candidate;
+				} catch {
+					// continue
+				}
+			}
+			return undefined;
+		};
+
+		if (await isCommandAvailable("pipx")) {
+			const result = await run("pipx", [
+				options.upgrade ? "upgrade" : "install",
+				packageName,
+			]);
+			const error = (result.error?.message ?? result.stderr).trim();
+			if (result.status === 0) {
+				const location = await run("pipx", [
+					"environment",
+					"--value",
+					"PIPX_BIN_DIR",
+				]);
+				const binDir =
+					location.status === 0 && location.stdout.trim()
+						? location.stdout.trim()
+						: path.join(os.homedir(), ".local", "bin");
+				const binaryPath = await addBinToPath(binDir);
+				if (binaryPath) return binaryPath;
+				throw new Error(
+					`pipx installed ${packageName} but ${binaryName} is not resolvable`,
+				);
+			}
+			if (!pep668.test(error)) throw new Error(`pipx install failed: ${error}`);
+			refuse("pipx", error);
+		}
+
+		const pythonCandidates = pipCandidates
+			.filter(
+				({ command }) =>
+					command === "python3" || command === "python" || command === "py",
+			)
+			.filter(({ command }) => isCommandAvailable(command));
+		const venvRoot = path.join(getGlobalPiLensDir(), "pip-tools");
+		for (const candidate of pythonCandidates) {
+			const venvBin = pipScriptsDir(venvRoot, installerPlatform());
+			let venvPip = path.join(venvBin, isWindows ? "pip.exe" : "pip");
+			try {
+				await fs.access(venvPip);
+			} catch {
+				const created = await run(candidate.command, ["-m", "venv", venvRoot]);
+				const error = (created.error?.message ?? created.stderr).trim();
+				if (created.status !== 0) {
+					refuse("venv", error || "python venv module unavailable");
+					continue;
+				}
+			}
+			try {
+				await fs.access(venvPip);
+			} catch {
+				venvPip = path.join(venvBin, isWindows ? "pip.cmd" : "pip3");
+				try {
+					await fs.access(venvPip);
+				} catch {
+					refuse("venv", "venv created without a pip executable");
+					continue;
+				}
+			}
+			const result = await run(venvPip, [...verb, packageName]);
+			const error = (result.error?.message ?? result.stderr).trim();
+			if (result.status === 0) {
+				const binaryPath = await addBinToPath(venvBin);
+				if (binaryPath) return binaryPath;
+				throw new Error(
+					`venv installed ${packageName} but ${binaryName} is not resolvable`,
+				);
+			}
+			if (!pep668.test(error))
+				throw new Error(`venv pip install failed: ${error}`);
+			refuse("venv", error);
+		}
+
 		let lastError = "";
 		for (const candidate of pipCandidates) {
-			const pipResult = await safeSpawnAsync(
-				candidate.command,
-				candidate.args,
-				{
-					timeout: 120_000,
-					ignoreAmbientSignal: true,
-					lifetimeCoupled: true,
-				},
-			);
-			const outcome = {
-				ok: pipResult.status === 0,
-				error: (pipResult.error?.message ?? pipResult.stderr).trim(),
-			};
-
-			if (outcome.ok) {
-				// Ensure user-level scripts directory is available in current process PATH.
-				// This helps tools installed via `pip install --user` become immediately callable.
-				const userBaseResult = await new Promise<string>((resolve) => {
+			const args =
+				candidate.command === "pip" || candidate.command === "pip3"
+					? [...verb, "--user", packageName]
+					: ["-m", "pip", ...verb, "--user", packageName];
+			const result = await run(candidate.command, args);
+			const error = (result.error?.message ?? result.stderr).trim();
+			if (result.status === 0) {
+				const base = await new Promise<string>((resolve) => {
 					let probe: ReturnType<typeof spawn>;
 					try {
 						probe = spawn(candidate.command, ["-m", "site", "--user-base"], {
@@ -5273,79 +5401,55 @@ async function installPipTool(
 							shell: isWindows,
 						});
 					} catch {
-						// SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL, the
-						// pidusage bug class, #533) — best-effort probe, resolve empty.
 						resolve("");
 						return;
 					}
 					let stdout = "";
 					probe.stdout?.on("data", (data) => (stdout += data));
-					probe.on("exit", (code) => {
-						if (code === 0) resolve(stdout.trim());
-						else resolve("");
-					});
+					probe.on("exit", (code) => resolve(code === 0 ? stdout.trim() : ""));
 					probe.on("error", () => resolve(""));
 				});
-
-				if (userBaseResult) {
-					const candidateScriptDirs: string[] = [
-						path.join(userBaseResult, isWindows ? "Scripts" : "bin"),
-					];
-
-					if (isWindows) {
-						// Some Python setups report USER_BASE as ...\Roaming\Python,
-						// while scripts live in ...\Roaming\Python\PythonXY\Scripts.
-						try {
-							const children = await fs.readdir(userBaseResult, {
-								withFileTypes: true,
-							});
-							for (const entry of children) {
-								if (!entry.isDirectory()) continue;
-								if (!/^python\d+$/i.test(entry.name)) continue;
-								candidateScriptDirs.push(
-									path.join(userBaseResult, entry.name, "Scripts"),
-								);
-							}
-						} catch {
-							// ignore
-						}
-					}
-
-					const currentPath =
-						process.env.PATH || process.env.Path || process.env.path || "";
-					const separator = isWindows ? ";" : ":";
-					const normalizedPath = currentPath
-						.toLowerCase()
-						.split(separator)
-						.map((p) => p.trim());
-
-					for (const scriptsDir of candidateScriptDirs) {
-						try {
-							await fs.access(scriptsDir);
-							if (!normalizedPath.includes(scriptsDir.toLowerCase())) {
-								const existingPath =
-									process.env.PATH ||
-									process.env.Path ||
-									process.env.path ||
-									"";
-								const updatedPath = `${scriptsDir}${separator}${existingPath}`;
-								process.env.PATH = updatedPath;
-								if (isWindows) {
-									process.env.Path = updatedPath;
-								}
-								debugLog(`Added pip user scripts dir to PATH: ${scriptsDir}`);
-							}
-						} catch {
-							debugLog(`pip user scripts dir not accessible: ${scriptsDir}`);
-						}
-					}
-				}
-
-				return packageName;
+				const binaryPath = base
+					? await addBinToPath(pipScriptsDir(base, installerPlatform()))
+					: undefined;
+				// Keep the historical normal-user result even when the interpreter's
+				// user-base probe is unavailable. The next availability probe owns
+				// resolution through PATH and its user-base candidates.
+				return binaryPath ?? packageName;
 			}
+			lastError = `${candidate.command} ${candidate.args.join(" ")}: ${error}`;
+			if (pep668.test(error)) {
+				refuse("user", error);
+				break;
+			}
+			throw new Error(`pip install failed: ${lastError}`);
+		}
 
-			lastError = `${candidate.command} ${candidate.args.join(" ")}: ${outcome.error}`;
-			debugLog(`[pip-fallback] ${lastError}`);
+		const privateBase = path.join(getGlobalPiLensDir(), "pip-user");
+		const privateEnv = { ...process.env, PYTHONUSERBASE: privateBase };
+		for (const candidate of pipCandidates) {
+			const args =
+				candidate.command === "pip" || candidate.command === "pip3"
+					? [...verb, "--user", "--break-system-packages", packageName]
+					: [
+							"-m",
+							"pip",
+							...verb,
+							"--user",
+							"--break-system-packages",
+							packageName,
+						];
+			const result = await run(candidate.command, args, privateEnv);
+			const error = (result.error?.message ?? result.stderr).trim();
+			if (result.status !== 0)
+				throw new Error(`private-prefix pip install failed: ${error}`);
+			const binaryPath = await addBinToPath(
+				pipScriptsDir(privateBase, installerPlatform()),
+			);
+			if (binaryPath) return binaryPath;
+			throw new Error(
+				`private-prefix pip installed ${packageName} but ${binaryName} is not resolvable`,
+			);
 		}
 
 		throw new Error(
@@ -5543,7 +5647,11 @@ export async function installTool(toolId: string): Promise<boolean> {
 
 			case "pip": {
 				if (!tool.packageName) return false;
-				const pipPath = await installPipTool(tool.id, tool.packageName);
+				const pipPath = await installPipTool(
+					tool.id,
+					tool.packageName,
+					tool.binaryName ?? tool.id,
+				);
 				return finishInstallAttempt(tool.id, pipPath !== undefined, startedAt);
 			}
 
