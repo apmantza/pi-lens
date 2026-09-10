@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import { DRIFT_ISSUE_LABEL } from "../../scripts/lib/drift-issue.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { docsSectionLines } from "../support/docs-section.js";
 
 /**
  * `.github/workflows/labels.yml` runs `micnncim/action-label-syncer` with
@@ -65,20 +66,14 @@ function readLabelManifest(): { raw: string; labels: LabelEntry[] } {
 
 const ISSUE_TRIAGE_HEADING = "## Issue triage & labels";
 
-/** The lines of AGENTS.md's "Issue triage & labels" section, heading excluded. */
+/**
+ * The lines of AGENTS.md's "Issue triage & labels" section, heading
+ * excluded. Shares `docsSectionLines` with the docs-membership guard
+ * (`tests/docs/features-counts.test.ts`); the `/\n## /` boundary is that
+ * section's own rule, not the default any-ATX-heading one.
+ */
 function issueTriageSectionLines(agentsMd: string): string[] {
-	const start = agentsMd.indexOf(ISSUE_TRIAGE_HEADING);
-	if (start === -1) {
-		throw new Error(
-			`AGENTS.md's "${ISSUE_TRIAGE_HEADING}" heading was not found — did ` +
-				"the doc move or get retitled? Update this sweep's marker to match.",
-		);
-	}
-	const rest = agentsMd.slice(start + ISSUE_TRIAGE_HEADING.length);
-	const nextHeadingOffset = rest.search(/\n## /);
-	const section =
-		nextHeadingOffset === -1 ? rest : rest.slice(0, nextHeadingOffset);
-	return section.split("\n");
+	return docsSectionLines(agentsMd, ISSUE_TRIAGE_HEADING, /\n## /);
 }
 
 /**

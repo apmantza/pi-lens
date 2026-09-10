@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { ALL_FORMATTERS } from "../../clients/formatters.js";
 import { LSP_SERVERS } from "../../clients/lsp/server.js";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
+import { docsSectionLines } from "../support/docs-section.js";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -27,15 +28,6 @@ const mcpMd = readFileSync(path.join(repoRoot, "docs/mcp.md"), "utf8");
 function claimedCount(pattern: RegExp): number | undefined {
 	const match = pattern.exec(featuresMd);
 	return match ? Number(match[1]) : undefined;
-}
-
-/** Lines of one `### `/`## ` section, exclusive of the next heading. */
-function sectionLines(md: string, heading: string): string[] {
-	const start = md.indexOf(heading);
-	if (start === -1) throw new Error(`docs heading not found: ${heading}`);
-	const rest = md.slice(start + heading.length);
-	const end = rest.search(/^#{1,6} /m);
-	return (end === -1 ? rest : rest.slice(0, end)).split("\n");
 }
 
 /** First comma-separated prose line of a section: the member list. */
@@ -82,75 +74,50 @@ describe("docs/features.md counts match the registries", () => {
 
 describe("docs/features.md formatter list matches ALL_FORMATTERS", () => {
 	it("names every registry formatter and no stale member", () => {
-		const raw = commaListLine(sectionLines(featuresMd, "### Formatters"));
+		const raw = commaListLine(docsSectionLines(featuresMd, "### Formatters"));
 		const docs = raw.split(",").map((t) => normalizeFormatterToken(t.trim()));
 		const registry = ALL_FORMATTERS.map((f) => f.name);
 		const { missing, extra } = diffByName(docs, registry);
-		// Stale on master: #2917 round 2 corrects the docs list (drops
-		// fish_indent, adds ktfmt and terragrunt-hcl). Remove this exemption
-		// when #2917 merges; the necessity checks below fail once it is stale.
-		const EXEMPT_MISSING = new Set(["ktfmt", "terragrunt-hcl"]);
-		const EXEMPT_EXTRA = new Set(["fish_indent"]);
-		const liveMissing = missing.filter((n) => !EXEMPT_MISSING.has(n));
-		const liveExtra = extra.filter((n) => !EXEMPT_EXTRA.has(n));
-		expect({ missing: liveMissing, extra: liveExtra }).toEqual({
-			missing: [],
-			extra: [],
-		});
-		for (const n of EXEMPT_MISSING) expect(missing).toContain(n);
-		for (const n of EXEMPT_EXTRA) expect(extra).toContain(n);
+		expect({ missing, extra }).toEqual({ missing: [], extra: [] });
 	});
 });
 
-/** Auxiliary scanners are listed separately in docs; only primary ids here. */
-const AUXILIARY_SERVER_IDS = new Set([
-	"opengrep",
-	"ast-grep",
-	"zizmor",
-	"typos",
-]);
+/**
+ * Auxiliary scanners attach alongside the file's language server and are
+ * listed separately in docs, so only primary ids are claimed here. Derived
+ * from each entry's `role`, never a hand list (#2924 F5): renaming an
+ * auxiliary id or flipping a role moves the expectation with the registry.
+ */
+const AUXILIARY_SERVER_IDS = new Set(
+	LSP_SERVERS.filter((s) => s.role === "auxiliary").map((s) => s.id),
+);
 
-/** Docs language label (parenthetical stripped) to the server ids it claims. */
-const DOCS_LANGUAGE_TO_SERVER_IDS: Record<string, readonly string[]> = {
-	TypeScript: ["typescript"],
-	Deno: ["deno"],
-	Python: ["python", "python-jedi"],
-	Go: ["go"],
-	Rust: ["rust"],
-	Ruby: ["ruby"],
-	PHP: ["php"],
-	"C#": ["csharp", "omnisharp"],
-	"F#": ["fsharp"],
-	Java: ["java"],
-	Kotlin: ["kotlin"],
-	Swift: ["swift"],
-	Dart: ["dart"],
-	Lua: ["lua"],
-	"C/C++": ["cpp"],
-	Zig: ["zig"],
-	Haskell: ["haskell"],
-	Elixir: ["elixir", "expert"],
-	Gleam: ["gleam"],
-	OCaml: ["ocaml"],
-	Clojure: ["clojure"],
-	CUE: ["cue"],
-	Terraform: ["terraform"],
-	Nix: ["nix"],
-	Bash: ["bash"],
-	Docker: ["docker"],
-	YAML: ["yaml"],
-	JSON: ["json"],
-	HTML: ["html"],
-	TOML: ["toml"],
-	Prisma: ["prisma"],
-	Vue: ["vue"],
-	Svelte: ["svelte"],
-	CSS: ["css"],
+/**
+ * Docs spelling overrides for the servers whose `docs/features.md` label is
+ * not their registry id (#2924 F2). Every other non-auxiliary server is
+ * claimed by its id, case-insensitively, so a new server whose docs label
+ * equals its id needs no edit here; one whose label differs adds one
+ * override entry. The necessity check in the test reds on a stale key, so a
+ * removed or renamed server cannot leave a silent override behind.
+ */
+const DOCS_LABEL_OVERRIDES: Record<string, string> = {
+	"python-jedi": "Python",
+	csharp: "C#",
+	omnisharp: "C#",
+	fsharp: "F#",
+	cpp: "C/C++",
+	expert: "Elixir",
+	marksman: "Markdown",
 };
 
+/** Docs label a registry id is claimed under: the override, else the id. */
+function docsLabelForServerId(id: string): string {
+	return DOCS_LABEL_OVERRIDES[id] ?? id;
+}
+
 describe("docs/features.md LSP list matches LSP_SERVERS", () => {
-	it.skip("covers every non-auxiliary server id (skipped: docs stale on master, #2917)", () => {
-		const line = sectionLines(featuresMd, "### LSP Support").find((l) =>
+	it("covers every non-auxiliary server id", () => {
+		const line = docsSectionLines(featuresMd, "### LSP Support").find((l) =>
 			l.startsWith("LSP servers for:"),
 		);
 		if (line === undefined)
@@ -163,29 +130,40 @@ describe("docs/features.md LSP list matches LSP_SERVERS", () => {
 			.map((t) => t.trim())
 			.filter((t) => t.length > 0);
 		const serverIds = new Set(LSP_SERVERS.map((s) => s.id));
-		const unknownLabels = labels.filter(
-			(l) => DOCS_LANGUAGE_TO_SERVER_IDS[l] === undefined,
-		);
-		const claimedIds = new Set(
-			labels.flatMap((l) => DOCS_LANGUAGE_TO_SERVER_IDS[l] ?? []),
-		);
-		const danglingIds = [...claimedIds]
-			.filter((id) => !serverIds.has(id))
+		for (const id of Object.keys(DOCS_LABEL_OVERRIDES)) {
+			expect(serverIds.has(id), `stale docs-label override: ${id}`).toBe(true);
+		}
+		const labelToIds = new Map<string, string[]>();
+		for (const s of LSP_SERVERS) {
+			if (AUXILIARY_SERVER_IDS.has(s.id)) continue;
+			const label = docsLabelForServerId(s.id).toLowerCase();
+			labelToIds.set(label, [...(labelToIds.get(label) ?? []), s.id]);
+		}
+		const unknownLabels = labels
+			.filter((l) => !labelToIds.has(l.toLowerCase()))
 			.sort();
-		const missing = [...serverIds]
+		const claimedIds = new Set(
+			labels.flatMap((l) => labelToIds.get(l.toLowerCase()) ?? []),
+		);
+		const missingIds = LSP_SERVERS.map((s) => s.id)
 			.filter((id) => !AUXILIARY_SERVER_IDS.has(id) && !claimedIds.has(id))
 			.sort();
-		expect({ unknownLabels, danglingIds, missing }).toEqual({
+		const expectedLabels = new Set(labelToIds.keys());
+		const docsLabels = new Set(labels.map((l) => l.toLowerCase()));
+		const extraLabels = [...docsLabels]
+			.filter((l) => !expectedLabels.has(l))
+			.sort();
+		expect({ unknownLabels, missingIds, extraLabels }).toEqual({
 			unknownLabels: [],
-			danglingIds: [],
-			missing: [],
+			missingIds: [],
+			extraLabels: [],
 		});
 	});
 });
 
 describe("docs/mcp.md tool table matches TOOL_REGISTRY", () => {
-	it.skip("tables every registered MCP tool (skipped: docs stale on master, #2917)", () => {
-		const rows = sectionLines(mcpMd, "## MCP tool surface");
+	it("tables every registered MCP tool", () => {
+		const rows = docsSectionLines(mcpMd, "## MCP tool surface");
 		const docs = rows.flatMap((l) => {
 			const match = /^\|\s*`(pilens_[a-z_]+)`\s*\|/.exec(l);
 			return match ? [match[1]] : [];
