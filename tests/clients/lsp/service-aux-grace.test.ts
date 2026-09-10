@@ -384,6 +384,80 @@ function lastAuxOutcome(
 	return outcomes.at(-1)?.outcome;
 }
 
+async function exerciseDemotedCoverageCell({
+	filePath,
+	content,
+	bindCurrentContent,
+}: {
+	filePath: string;
+	content: string;
+	bindCurrentContent: boolean;
+}) {
+	const { LSPService } = await import("../../../clients/lsp/index.js");
+	const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
+		await import("../../../clients/lsp/pending-aux-coverage.js");
+	const service = new LSPService();
+	const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+		serverId: "ts-primary",
+	});
+	const auxiliaryClient = makeClient(1470, [makeDiagnostic("fast typos")], {
+		serverId: "typos",
+	});
+	const binding = bindCurrentContent
+		? { contentHash: hashDiagnosticContent(content) }
+		: { contentHash: hashDiagnosticContent("older content") };
+	(
+		auxiliaryClient as typeof auxiliaryClient & {
+			getDiagnosticBinding: ReturnType<typeof vi.fn>;
+		}
+	).getDiagnosticBinding = vi.fn(() => binding);
+	getServersForFileWithConfig.mockReturnValue([
+		makePrimaryServer("ts-primary"),
+		makeAuxServer("typos"),
+	]);
+	createLSPClient
+		.mockResolvedValueOnce(primaryClient)
+		.mockResolvedValueOnce(auxiliaryClient);
+	await service.getClientsForFile(FILE);
+	for (let i = 0; i < 5; i += 1) {
+		const pressure = service.touchFile(filePath, `pressure-${i}`, {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1500);
+		await pressure;
+		drainPendingAuxiliaryCoverage();
+	}
+	const result = await (async () => {
+		const touch = service.touchFile(filePath, content, {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1500);
+		return touch;
+	})();
+	const pairs = drainPendingAuxiliaryCoverage().filter(
+		(pair) => pair.filePath === filePath && pair.serverId === "typos",
+	);
+	if (bindCurrentContent) {
+		expect(result?.deferredServerIds).toBeUndefined();
+		expect(result?.unconfirmedServerIds).toBeUndefined();
+		expect(result?.diags.map((diagnostic) => diagnostic.message)).toContain(
+			"fast typos",
+		);
+		expect(pairs).toEqual([]);
+	} else {
+		expect(result?.deferredServerIds).toEqual(["typos"]);
+		expect(result?.unconfirmedServerIds).toContain("typos");
+		expect(pairs).toHaveLength(1);
+	}
+	clearPendingAuxiliaryCoverage(filePath, "typos");
+}
+
 describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -628,6 +702,54 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		expect(summary?.latestReasons[0]?.subject).toMatch(/^typos:/);
 		clearPendingAuxiliaryCoverage(FILE, "typos");
 		resetDegradationLedger();
+	});
+
+	it("keeps a published demoted auxiliary covered on a small file under a demoted root", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: OTHER_FILE,
+			content: "small-current",
+			bindCurrentContent: true,
+		});
+	});
+
+	it("keeps a published demoted auxiliary covered on the heavy file", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: FILE,
+			content: "heavy-current",
+			bindCurrentContent: true,
+		});
+	});
+
+	it("marks an unpublished demoted auxiliary for a small file under a demoted root", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: OTHER_FILE,
+			content: "small-unpublished",
+			bindCurrentContent: false,
+		});
+	});
+
+	it("marks an unpublished demoted auxiliary for the heavy file", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: FILE,
+			content: "heavy-unpublished",
+			bindCurrentContent: false,
+		});
+	});
+
+	it("does not cover a demoted small file with an older publication under a demoted root", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: OTHER_FILE,
+			content: "small-new",
+			bindCurrentContent: false,
+		});
+	});
+
+	it("does not cover a demoted heavy file with an older publication", async () => {
+		await exerciseDemotedCoverageCell({
+			filePath: FILE,
+			content: "heavy-new",
+			bindCurrentContent: false,
+		});
 	});
 
 	it("keeps an auxiliary that answers at half budget awaited", async () => {

@@ -172,6 +172,30 @@ describe("analyzeFile", () => {
 		expect(typeof result.durationMs).toBe("number");
 	});
 
+	it("counts a deferred LSP runner as ran while preserving its status", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce([])
+			.mockReturnValueOnce([
+				{
+					filePath: tsFile,
+					fileKind: "jsts",
+					runners: [
+						{
+							runnerId: "lsp",
+							status: "deferred",
+							diagnosticCount: 0,
+							durationMs: 10,
+						},
+					],
+				},
+			] as never);
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(result.lsp).toMatchObject({ ran: true, status: "deferred" });
+	});
+
 	it("attaches the latency report appended during this dispatch", async () => {
 		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
 

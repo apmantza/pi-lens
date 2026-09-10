@@ -3664,7 +3664,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						continue;
 					}
 					// A demoted auxiliary still answers through this late path. Feed the
-					// measured late latency into the re-promotion streak. Cache priming is
+					// publication-minus-mark interval into the re-promotion streak. This is
+					// delivery latency observed by the drain, not the scanner's total scan
+					// latency. Cache priming is
 					// below the freshness gate so a changed file cannot resurrect stale data.
 					if (typeof service.observeLateAuxiliaryAnswer === "function") {
 						await bounded(

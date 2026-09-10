@@ -5817,7 +5817,9 @@ export class LSPService {
 												outcome: deferredResyncServerIds.has(aux.serverId)
 													? ("deferred" as const)
 													: ("demoted" as const),
-												publishedThisContent: false,
+												publishedThisContent: auxCoversThisContent(
+													aux.serverId,
+												),
 												budgetMs,
 												elapsedMs: 0,
 												elapsedSinceNotifyMs: 0,
@@ -6933,6 +6935,9 @@ export class LSPService {
 				// A navigation-only primary has no diagnostic confirmation to report.
 				// Auxiliary coverage cannot turn that capability boundary into a clean
 				// or partial diagnostic verdict.
+				if (unconfirmedServerIds.length > 0) {
+					result.unconfirmedServerIds = [...unconfirmedServerIds];
+				}
 			} else if (collected !== undefined && coverageGap) {
 				// #1470/#1493: narrowed, not collapsed. Reached for EITHER no-answer
 				// shape — a cut-off auxiliary or a silent one with nothing published for

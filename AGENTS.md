@@ -835,9 +835,10 @@ the two rules apart). `deferred` outcomes are ignored: they neither count nor
 reset because the server never received the content. A zero-duration deferred
 placeholder therefore cannot erase pressure evidence from real waits.
 Its publication remains collect-later work, and the demotion emits one
-`aux_wait_demoted` degradation per `serverId:normalizedRoot` key. Five
-consecutive late answers below half the budget re-promote that same key and
-emit one `aux_wait_repromoted` degradation. The service reset at session start
+`aux_wait_demoted` degradation per `serverId:normalizedRoot` key. The late
+drain measures publication-minus-mark time, not total scan latency; five
+consecutive observed late publications below half the budget re-promote that
+same key and emit one `aux_wait_repromoted` degradation. The service reset at session start
 clears both streaks and the demotion set, so a fresh session re-arms every
 auxiliary.
 
