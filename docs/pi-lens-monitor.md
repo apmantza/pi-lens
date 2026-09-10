@@ -41,7 +41,7 @@ inherits. This contract adds the standing readout.
    tool was activated or called in the conversation. A shutdown with
    `targetSessionFile` emits the ending conversation's row before a new set
    opens for new, resume, or fork. Reload re-runs the extension factory but
-   keeps the same session file, so it preserves one conversation row. A process restart (`pi --continue`) recovers
+   keeps the same session file, so it preserves one conversation row. Caveat: resuming into the session you are already in still carries `targetSessionFile`, so one conversation is split into two rows and a tool activated before the resume is listed as dead weight in the second (pi exposes no current-session-file accessor; not fixed). A process restart (`pi --continue`) recovers
    nothing — the restore deactivates every situational tool — so the first row
    after one legitimately lists all five, and shrinks only as the model
    re-activates and uses them. MCP remains connection-scoped and owns the

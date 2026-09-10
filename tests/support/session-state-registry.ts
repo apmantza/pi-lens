@@ -1066,7 +1066,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		policy: "session_start",
 		resetName: "resetSituationalToolTelemetry",
 		reason:
-			"#2858: the dead-weight line is one row per pi conversation or MCP connection naming situational tools that host never used. Resume and fork preserve pi observations; reload re-runs the extension factory and emits the prior runtime row before opening a new set; a fresh /new replacement emits once and resets; a process restart starts both sets empty and recovers nothing, because the restore deactivates every situational tool in a new process (#2866 review F1 — the host's restored active set is every registered tool, not evidence of activation). MCP owns connectionEnded. The reset's sessionStarted exclusion is stated in the state field above.",
+			"#2858: the dead-weight line is one row per pi conversation or MCP connection naming situational tools that host never used. The row belongs to the conversation identified by pi's session file: a shutdown that switches the file (new, resume, fork — pi sends targetSessionFile) emits the ending conversation's row and resets; reload keeps the same file and preserves the observations even though pi re-runs the extension factory (the module state survives); a process restart starts both sets empty and recovers nothing, because the restore deactivates every situational tool in a new process (#2866 review F1 — the host's restored active set is every registered tool, not evidence of activation). MCP owns connectionEnded. The reset's sessionStarted exclusion is stated in the state field above.",
 		probe: {
 			arm: () => {
 				observeSituationalToolActivation(["lsp_navigation"]);

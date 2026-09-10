@@ -1727,11 +1727,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 		enabledLazyTools.has(tool.name),
 	);
 	// #1453: the lazy tools the model activated in THIS logical conversation.
-	// Extension closure state outlives a session rebuild (the runner keeps the
-	// activated extension; it does not re-run this factory), which is exactly
-	// what lets a fork/reload/resume restore the parent's tool posture. Reset
-	// on startup/new, carried across fork/reload/resume — see the session_start
-	// handler below.
+	// Extension closure state does NOT outlive a session rebuild. Measured
+	// against pi 0.85.1 (#2866 round 4): the
+	// module is imported once per process but this factory IS re-run on
+	// reload, new and resume, so this closure set does not survive a rebuild
+	// (#2889); the session_start restore below therefore deactivates every
+	// situational tool after any rebuild.
 	const rememberedLazyTools = new Set<string>();
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
