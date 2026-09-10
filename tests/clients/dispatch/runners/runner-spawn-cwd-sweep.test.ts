@@ -360,7 +360,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/tool-probe.ts#probeToolAsync:c29ed877~c29ed877",
-		"THE probe seam (#2894): `probeToolAsync` spawns a tool's own presence/version invocation and STRIPS whatever `cwd` reached it, because \"does this binary exist, and what does it call itself\" has the same answer from every directory. The 24 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class",
+		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 24 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
 	],
 	[
 		"clients/zizmor-config.ts#deriveGhCliToken:6acc7c4b",
