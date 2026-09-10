@@ -7,6 +7,7 @@ import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
+import { makeSessionStartEvent } from "./support/host-event-factory.js";
 // #2146: process-scope state (the primary-session registration, the instance
 // registry's mutation tail) now lives on `globalThis`, so `vi.resetModules()`
 // no longer clears it — that is the fix, not a regression. This suite gives
@@ -64,6 +65,8 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 					| undefined,
 		},
 		tools: mock.tools,
+		activeTools: mock.activeTools,
+		activeToolSetCalls: mock.activeToolSetCalls,
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
 			// No budget wrapper here: `createPiMock.on` already wraps every
@@ -277,6 +280,42 @@ describe("index.ts integration", () => {
 			expect(prehandlerRows[0]).toEqual(
 				expect.objectContaining({ turnId: "primary-prehandler:0" }),
 			);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"session_start restores tools once per session-file identity",
+		async () => {
+			vi.doUnmock("../clients/runtime-session.js");
+			const { default: registerExtension } = await import("../index.js");
+			const { pi, handlers, tools, activeTools, activeToolSetCalls } =
+				createMockPi();
+			registerExtension(pi as any);
+			const sessionStart = handlers.session_start?.[0];
+			expect(sessionStart).toBeTypeOf("function");
+
+			let sessionFile = path.join(tmpDir, "session-a.jsonl");
+			const ctx = makeCtx({
+				cwd: tmpDir,
+				sessionId: "session-a",
+				sessionFile,
+				mode: "rpc",
+			});
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			const firstMutationCount = activeToolSetCalls.length;
+			expect(firstMutationCount).toBe(1);
+
+			// Model pi's rebuilt AgentSession: registered tools are active again.
+			for (const name of tools.keys()) activeTools.add(name);
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			expect(activeToolSetCalls).toHaveLength(firstMutationCount);
+
+			sessionFile = path.join(tmpDir, "session-b.jsonl");
+			(ctx as any).sessionManager.getSessionFile = () => sessionFile;
+			for (const name of tools.keys()) activeTools.add(name);
+			await sessionStart?.(makeSessionStartEvent({ reason: "resume" }), ctx);
+			expect(activeToolSetCalls).toHaveLength(firstMutationCount + 1);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

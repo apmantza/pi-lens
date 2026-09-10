@@ -1737,6 +1737,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// (#2889); the session_start restore below therefore deactivates every
 	// situational tool after any rebuild.
 	const rememberedLazyTools = new Set<string>();
+	// pi RPC can announce the same replacement twice. Keep one admission key for
+	// the complete session_start mutation pass so every downstream reset observes
+	// the same (reason, session file) identity. A different file remains a real
+	// replacement and must run the normal primary path.
+	let lastSessionStartIdentity: string | undefined;
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
 			getActiveTools?: () => string[];
@@ -1909,6 +1914,25 @@ function activateExtension(hostPi: ExtensionAPI) {
 		wrapSessionEventHandler(
 			"session_start",
 			async (event, ctx) => {
+				const sessionStartReason = (event as { reason?: string }).reason;
+				const sessionStartFile = (() => {
+					try {
+						return (
+							ctx as {
+								sessionManager?: { getSessionFile?: () => string | undefined };
+							}
+						)?.sessionManager?.getSessionFile?.();
+					} catch {
+						return undefined;
+					}
+				})();
+				const sessionStartIdentity = `${sessionStartReason ?? ""}\u0000${sessionStartFile ?? ""}`;
+				if (
+					sessionStartFile !== undefined &&
+					lastSessionStartIdentity === sessionStartIdentity
+				)
+					return;
+				lastSessionStartIdentity = sessionStartIdentity;
 				const sessionStartMonotonicAt = performance.now();
 				warmDispatchAtSessionStart();
 				void warmLspService().catch((err) =>
@@ -1939,7 +1963,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// this line would be a no-op anyway.
 					const buildIdentity = getBuildIdentity(import.meta.url);
 					if (buildIdentity) dbg(formatBuildIdentity(buildIdentity));
-					const sessionReason = (event as { reason?: string }).reason;
+					const sessionReason = sessionStartReason;
 					dbg(
 						`session_start: disabled tools = ${disabledToolNames.join(",") || "none"}`,
 					);
