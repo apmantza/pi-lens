@@ -647,6 +647,15 @@ export class KnipClient {
 			// nonzero exit with nothing to parse is never a clean run, here or
 			// there.
 			if (spawnFailedWithNoOutput(result, output)) {
+				if (result.failure === "timeout") {
+					return {
+						...EMPTY_RESULT,
+						success: true,
+						analyzed: true,
+						analysisComplete: false,
+						summary: "Knip timed out after partial execution",
+					};
+				}
 				// #1816: one shared wording, one truncation, signal named. The
 				// binary-source discriminator (#1721's whole point — WHICH knip
 				// ran) survives as a named field rather than as prose.

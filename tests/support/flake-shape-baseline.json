@@ -45,7 +45,7 @@
 		"mcp/build-graph-cli.test.ts": 1,
 		"packaging-pack-manifest.test.ts": 3,
 		"real-harness/child-exit.test.ts": 1,
-		"real-harness/diagnostic-provenance.test.ts": 1,
+		"real-harness/diagnostic-provenance.test.ts": 2,
 		"real-harness/negative.test.ts": 2,
 		"real-harness/scenario-1.test.ts": 1,
 		"real-harness/scenario-3.test.ts": 1,

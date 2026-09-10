@@ -1086,6 +1086,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(result.authoritativeCoverage).toContainEqual({
 			runnerId: "dead-code-python",
 			root: path.resolve(tmp),
+			files: [],
 			complete: true,
 		});
 	});

@@ -360,6 +360,14 @@ export class JscpdClient {
 			// the same one.)
 			const reportPath = path.join(outDir, "jscpd-report.json");
 			if (!fs.existsSync(reportPath)) {
+				if (result.failure === "timeout") {
+					return {
+						...EMPTY_RESULT,
+						success: true,
+						analyzed: true,
+						analysisComplete: false,
+					};
+				}
 				if (result.status !== 0) {
 					// #1816: one shared wording, one truncation, signal named.
 					// `reportMissing` is the artifact-tool arm of the same

@@ -26,4 +26,8 @@ export interface AnalysedRootSignal {
 	/** True only when this result is the parsed output of a scan this call
 	 *  performed over the analysis root. See the module doc. */
 	analyzed?: boolean;
+	/** Files the scan's include/ignore policy actually admitted. */
+	analyzedFiles?: string[];
+	/** False when the process stopped after producing only a partial result. */
+	analysisComplete?: boolean;
 }

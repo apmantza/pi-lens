@@ -1542,25 +1542,48 @@ export function runnerRetirementDecision(
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
 	}
 	const resolvedFilePath = path.resolve(filePath);
-	let partial = false;
+	const realpathOrResolved = (candidate: string): string => {
+		try {
+			return fsSync.realpathSync(candidate);
+		} catch {
+			return candidate;
+		}
+	};
+	const realFilePath = realpathOrResolved(resolvedFilePath);
+	let incomplete = false;
+	let incompleteRoot: string | undefined;
 	for (const entry of coverage) {
-		const root = path.resolve(entry.root);
-		const relative = path.relative(root, resolvedFilePath);
+		const root = realpathOrResolved(path.resolve(entry.root));
+		const relative = path.relative(root, realFilePath);
 		const underRoot =
 			relative === "" ||
 			(!relative.startsWith("..") && !path.isAbsolute(relative));
 		if (!underRoot) continue;
 		if (!entry.complete) {
-			partial = true;
+			incomplete = true;
+			incompleteRoot = entry.root;
 			continue;
 		}
 		if (!entry.files) return "retire";
-		if (entry.files.some((file) => path.resolve(file) === resolvedFilePath)) {
+		if (
+			entry.files.some(
+				(file) => realpathOrResolved(path.resolve(file)) === realFilePath,
+			)
+		) {
 			return "retire";
 		}
-		partial = true;
+		// A complete file set proves that this file was not analysed. Keep the
+		// finding without classifying the result as a partial scan.
 	}
-	return partial ? "keep-with-record" : "keep";
+	if (incomplete) {
+		recordDegradationOnce({
+			kind: "runner-authoritative-widget-partial",
+			subject: `${runnerId}:${incompleteRoot ?? "unknown"}`,
+			reason: "runner coverage is incomplete; retained findings were kept",
+		});
+		return "keep-with-record";
+	}
+	return "keep";
 }
 
 function summarizeDiagnostics(

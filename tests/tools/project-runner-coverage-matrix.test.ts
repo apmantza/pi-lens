@@ -62,7 +62,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: knip file-set under-root keeps-with-record", () => {
+	it("coverage matrix: knip file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("knip"),
@@ -77,7 +77,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: knip file-set another-root keeps", () => {
 		expect(
@@ -194,7 +194,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: jscpd file-set under-root keeps-with-record", () => {
+	it("coverage matrix: jscpd file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("jscpd"),
@@ -209,7 +209,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: jscpd file-set another-root keeps", () => {
 		expect(
@@ -326,7 +326,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: madge file-set under-root keeps-with-record", () => {
+	it("coverage matrix: madge file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("madge"),
@@ -341,7 +341,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: madge file-set another-root keeps", () => {
 		expect(
@@ -458,7 +458,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: gitleaks file-set under-root keeps-with-record", () => {
+	it("coverage matrix: gitleaks file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("gitleaks"),
@@ -473,7 +473,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: gitleaks file-set another-root keeps", () => {
 		expect(
@@ -590,7 +590,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: govulncheck file-set under-root keeps-with-record", () => {
+	it("coverage matrix: govulncheck file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("govulncheck"),
@@ -605,7 +605,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: govulncheck file-set another-root keeps", () => {
 		expect(
@@ -722,7 +722,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: opengrep file-set under-root keeps-with-record", () => {
+	it("coverage matrix: opengrep file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("opengrep"),
@@ -737,7 +737,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: opengrep file-set another-root keeps", () => {
 		expect(
@@ -854,7 +854,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: trivy file-set under-root keeps-with-record", () => {
+	it("coverage matrix: trivy file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("trivy"),
@@ -869,7 +869,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: trivy file-set another-root keeps", () => {
 		expect(
@@ -986,7 +986,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: dead-code file-set under-root keeps-with-record", () => {
+	it("coverage matrix: dead-code file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("dead-code-python"),
@@ -1001,7 +1001,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: dead-code file-set another-root keeps", () => {
 		expect(
@@ -1118,7 +1118,7 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
-	it("coverage matrix: test-runner file-set under-root keeps-with-record", () => {
+	it("coverage matrix: test-runner file-set under-root keeps", () => {
 		expect(
 			runnerRetirementDecision(
 				diagnostic("test-runner"),
@@ -1133,7 +1133,7 @@ describe("project runner coverage state space (#2887)", () => {
 					},
 				],
 			),
-		).toBe("keep-with-record");
+		).toBe("keep");
 	});
 	it("coverage matrix: test-runner file-set another-root keeps", () => {
 		expect(

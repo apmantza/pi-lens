@@ -476,6 +476,8 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		// nonzero exit with no findings on stdout is never clean now,
 		// regardless of whether stderr said anything.
 		const output = result.stdout || "";
+		const partial =
+			result.failure === "timeout" || result.outputTruncated === true;
 		if (!output.trim()) {
 			const stderr = (result.stderr || "").trim();
 			// Same discriminator every dispatch/runners linter uses
@@ -511,11 +513,16 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 				...emptyResult(this.language),
 				success: true,
 				analyzed: true,
+				...(partial ? { analysisComplete: false } : {}),
 				summary: "No dead code found",
 				durationMs,
 			};
 		}
-		return { ...this.parseOutput(output, root), durationMs };
+		return {
+			...this.parseOutput(output, root),
+			durationMs,
+			...(partial ? { analysisComplete: false } : {}),
+		};
 	}
 
 	private parseOutput(output: string, root: string): DeadCodeResult {
