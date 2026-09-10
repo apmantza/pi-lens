@@ -48,6 +48,8 @@ vi.mock("../../../clients/lsp/client.js", () => ({
 }));
 
 const FILE = "C:/repo/main.ts";
+/** A second file under the SAME root, so both share one auxiliary client. */
+const OTHER_FILE = "C:/repo/other.ts";
 const AUX_GRACE_MS = 500; // Default PI_LENS_AUX_GRACE_MS
 
 function makeFakeProcess() {
@@ -307,6 +309,79 @@ function makeVersionlessLateClient(serverId = "opengrep") {
 				),
 		),
 	};
+}
+
+/**
+ * #2810: an auxiliary whose `didOpen` write for ONE file can be held open on
+ * demand, so a concurrent touch of ANOTHER file hits the #1459 resync gate and
+ * is DEFERRED. That gate is the production door the "will findings arrive
+ * late?" question turns on, so the tests that pin it drive the real gate
+ * rather than hand-feeding a deferral set.
+ */
+function makeWedgeableAux(
+	delayMs: number,
+	diags: ReturnType<typeof makeDiagnostic>[] = [],
+	serverId = "typos",
+) {
+	let wedgePath: string | undefined;
+	let hold: (() => void) | undefined;
+	const client = {
+		...makeClient(delayMs, diags, { serverId }),
+		notify: {
+			open: vi.fn((filePath: string) =>
+				filePath === wedgePath
+					? new Promise<void>((resolve) => {
+							hold = resolve;
+						})
+					: Promise.resolve(),
+			),
+			change: vi.fn(async () => {}),
+			close: vi.fn(async () => {}),
+		},
+	};
+	return {
+		client,
+		/** Hold this file's next didOpen write open (claims the resync slot). */
+		wedgeOn: (filePath: string) => {
+			wedgePath = filePath;
+		},
+		/** Let the held write settle, releasing the slot. */
+		release: () => {
+			wedgePath = undefined;
+			hold?.();
+			hold = undefined;
+		},
+		/** Waits this auxiliary actually ran for one file (not the wedge file). */
+		waitsOn: (filePath: string) =>
+			client.waitForDiagnostics.mock.calls.filter(
+				(call: unknown[]) => call[0] === filePath,
+			).length,
+	};
+}
+
+/**
+ * The last `lsp_aux_wait_outcome` row's outcome for one server id ON ONE FILE.
+ * The file filter matters: a concurrent touch of another file emits its own
+ * row, and it settles last whenever that touch is the wedged one.
+ */
+function lastAuxOutcome(
+	rows: { phase?: string; filePath?: string; metadata?: unknown }[],
+	serverId: string,
+	fileSuffix: string,
+): string | undefined {
+	const outcomes = rows
+		.filter(
+			(row) =>
+				row.phase === "lsp_aux_wait_outcome" &&
+				(row.filePath ?? "").endsWith(fileSuffix),
+		)
+		.flatMap(
+			(row) =>
+				(row.metadata as { outcomes?: { serverId: string; outcome: string }[] })
+					?.outcomes ?? [],
+		)
+		.filter((outcome) => outcome.serverId === serverId);
+	return outcomes.at(-1)?.outcome;
 }
 
 describe("R8 — aux grace: touchFile with-auxiliary path", () => {
@@ -760,6 +835,12 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 	});
 
 	it("resets pressure after an under-budget answer before the sixth dispatch", async () => {
+		// #2810 S1 (three rounds on this axis): the reset threshold is the
+		// DEMOTION ratio (90% of budget), not the re-promotion ratio (50%). The
+		// original control answered at exactly 750ms = 50% of the 1500ms budget,
+		// so it was true under both readings and could not tell them apart —
+		// AGENTS.md documented "below 50% resets" while the code reset below 90%.
+		// 1200ms = 80% sits in the band that separates them.
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
 		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
@@ -767,7 +848,7 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		});
 		const auxiliaryClient = makeClient(1470, [makeDiagnostic("typos")], {
 			serverId: "typos",
-			delays: [1470, 1470, 1470, 1470, 750, 1470, 1470],
+			delays: [1470, 1470, 1470, 1470, 1200, 1470, 1470],
 		});
 		getServersForFileWithConfig.mockReturnValue([
 			makePrimaryServer("ts-primary"),
@@ -784,10 +865,297 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 				collectDiagnostics: true,
 				diagnostics: "document",
 			});
-			await vi.advanceTimersByTimeAsync(i === 4 ? 750 : 1470);
+			await vi.advanceTimersByTimeAsync(i === 4 ? 1200 : 1470);
 			await touch;
 		}
 		expect(auxiliaryClient.waitForDiagnostics).toHaveBeenCalledTimes(7);
+	});
+
+	it("promises late delivery for a demoted auxiliary instead of reporting it silent", async () => {
+		// #2810 round-4 F1. Round 3 bound the touch's "findings arrive late" set
+		// to the #1459 resync deferrals — the one set `pending-aux-coverage.ts`
+		// says is NEVER marked collect-later — and dropped the DEMOTED server,
+		// which IS marked, out of it. The user-visible result was "typos silent —
+		// diagnostics are incomplete" on every edit for a scanner whose findings
+		// the turn-end drain does deliver.
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
+			await import("../../../clients/lsp/pending-aux-coverage.js");
+		const service = new LSPService();
+		const primaryClient = makeClient(0, [makeDiagnostic("primary")], {
+			serverId: "ts-primary",
+		});
+		const auxiliaryClient = makeClient(1470, [makeDiagnostic("typos")], {
+			serverId: "typos",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("typos"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxiliaryClient);
+		await service.getClientsForFile(FILE);
+		for (let i = 0; i < 5; i += 1) {
+			const touch = service.touchFile(FILE, `pressure-${i}`, {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1500);
+			await touch;
+		}
+		const sixth = service.touchFile(FILE, "after-demotion", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["typos"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(1500);
+		const result = await sixth;
+		expect(
+			lastAuxOutcome(
+				logLatency.mock.calls.map(([row]) => row),
+				"typos",
+				"main.ts",
+			),
+		).toBe("demoted");
+		expect(result?.deferredServerIds).toEqual(["typos"]);
+		expect(result?.unconfirmedServerIds).toContain("typos");
+		expect(
+			drainPendingAuxiliaryCoverage()
+				.filter((pair) => pair.filePath === FILE)
+				.map((pair) => pair.serverId),
+		).toEqual(["typos"]);
+		clearPendingAuxiliaryCoverage(FILE, "typos");
+	});
+
+	it("never promises late delivery for a resync-deferred auxiliary", async () => {
+		// #2810 round-4 F1, the other direction: a #1459-deferred scanner never
+		// received these bytes, is never marked collect-later, and nothing will
+		// arrive for it — the next edit re-sends the content. Round 3's binding
+		// told the agent "findings will arrive through the late path" for exactly
+		// this scanner.
+		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const { drainPendingAuxiliaryCoverage } = await import(
+				"../../../clients/lsp/pending-aux-coverage.js"
+			);
+			const service = new LSPService();
+			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
+			getServersForFileWithConfig.mockReturnValue([
+				makePrimaryServer("ts-primary"),
+				makeAuxServer("typos"),
+			]);
+			createLSPClient.mockImplementation(
+				async (options: { serverId?: string }) =>
+					options?.serverId === "typos"
+						? aux.client
+						: makeClient(0, [makeDiagnostic("primary")], {
+								serverId: "ts-primary",
+							}),
+			);
+			await service.getClientsForFile(FILE);
+			aux.wedgeOn(OTHER_FILE);
+			const wedging = service.touchFile(OTHER_FILE, "wedge", {
+				clientScope: "all",
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const deferred = service.touchFile(FILE, "deferred-content", {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(20_000);
+			aux.release();
+			await vi.advanceTimersByTimeAsync(20_000);
+			const [, result] = await Promise.all([wedging, deferred]);
+			expect(
+				lastAuxOutcome(
+					logLatency.mock.calls.map(([row]) => row),
+					"typos",
+					"main.ts",
+				),
+			).toBe("deferred");
+			expect(result?.unconfirmedServerIds).toContain("typos");
+			expect(result?.deferredServerIds).toBeUndefined();
+			expect(
+				drainPendingAuxiliaryCoverage().filter(
+					(pair) => pair.filePath === FILE && pair.serverId === "typos",
+				),
+			).toEqual([]);
+		} finally {
+			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		}
+	});
+
+	it("keeps a demoted auxiliary unmarked and unpromised when the resync gate defers it", async () => {
+		// #2810 round-4 F3 (mutation E, green for three rounds): the demoted
+		// early return must still classify a #1459 deferral as `deferred`, or a
+		// scanner that never received these bytes is marked collect-later and the
+		// turn-end drain replays its PREVIOUS revision's cache.
+		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const { drainPendingAuxiliaryCoverage } = await import(
+				"../../../clients/lsp/pending-aux-coverage.js"
+			);
+			const service = new LSPService();
+			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
+			getServersForFileWithConfig.mockReturnValue([
+				makePrimaryServer("ts-primary"),
+				makeAuxServer("typos"),
+			]);
+			createLSPClient.mockImplementation(
+				async (options: { serverId?: string }) =>
+					options?.serverId === "typos"
+						? aux.client
+						: makeClient(0, [makeDiagnostic("primary")], {
+								serverId: "ts-primary",
+							}),
+			);
+			await service.getClientsForFile(FILE);
+			for (let i = 0; i < 5; i += 1) {
+				const touch = service.touchFile(FILE, `pressure-${i}`, {
+					clientScope: "with-auxiliary",
+					auxiliaryServerIds: ["typos"],
+					collectDiagnostics: true,
+					diagnostics: "document",
+				});
+				await vi.advanceTimersByTimeAsync(1500);
+				await touch;
+			}
+			drainPendingAuxiliaryCoverage();
+			aux.wedgeOn(OTHER_FILE);
+			const wedging = service.touchFile(OTHER_FILE, "wedge", {
+				clientScope: "all",
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const demotedAndDeferred = service.touchFile(FILE, "deferred-content", {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(20_000);
+			aux.release();
+			await vi.advanceTimersByTimeAsync(20_000);
+			const [, result] = await Promise.all([wedging, demotedAndDeferred]);
+			expect(
+				lastAuxOutcome(
+					logLatency.mock.calls.map(([row]) => row),
+					"typos",
+					"main.ts",
+				),
+			).toBe("deferred");
+			expect(result?.deferredServerIds).toBeUndefined();
+			expect(
+				drainPendingAuxiliaryCoverage().filter(
+					(pair) => pair.filePath === FILE && pair.serverId === "typos",
+				),
+			).toEqual([]);
+		} finally {
+			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		}
+	});
+
+	it("neither counts nor resets the pressure streak on a resync deferral", async () => {
+		// #2810 round-4 F2 (mutation H, green for two rounds): a deferred
+		// placeholder's ~0ms wait must not reach `noteAuxiliaryWait`. Without the
+		// guard it takes the under-ratio branch and DELETES the streak, so an
+		// auxiliary whose fan-out gate defers it every few dispatches — the #1459
+		// case, the busiest scanner there is — can never accumulate five
+		// consecutive pressure waits and adaptive demotion never fires for it.
+		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const { drainPendingAuxiliaryCoverage } = await import(
+				"../../../clients/lsp/pending-aux-coverage.js"
+			);
+			const service = new LSPService();
+			const aux = makeWedgeableAux(1470, [makeDiagnostic("typos")]);
+			getServersForFileWithConfig.mockReturnValue([
+				makePrimaryServer("ts-primary"),
+				makeAuxServer("typos"),
+			]);
+			createLSPClient.mockImplementation(
+				async (options: { serverId?: string }) =>
+					options?.serverId === "typos"
+						? aux.client
+						: makeClient(0, [makeDiagnostic("primary")], {
+								serverId: "ts-primary",
+							}),
+			);
+			await service.getClientsForFile(FILE);
+			// Four consecutive at-budget answers: pressure 4/5.
+			for (let i = 0; i < 4; i += 1) {
+				const touch = service.touchFile(FILE, `pressure-${i}`, {
+					clientScope: "with-auxiliary",
+					auxiliaryServerIds: ["typos"],
+					collectDiagnostics: true,
+					diagnostics: "document",
+				});
+				await vi.advanceTimersByTimeAsync(1500);
+				await touch;
+			}
+			expect(aux.waitsOn(FILE)).toBe(4);
+			// A genuine #1459 deferral in the middle of the sequence.
+			aux.wedgeOn(OTHER_FILE);
+			const wedging = service.touchFile(OTHER_FILE, "wedge", {
+				clientScope: "all",
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1);
+			const deferred = service.touchFile(FILE, "deferred-content", {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(20_000);
+			aux.release();
+			await vi.advanceTimersByTimeAsync(20_000);
+			await Promise.all([wedging, deferred]);
+			expect(aux.waitsOn(FILE)).toBe(4);
+			// The fifth qualifying wait completes the streak…
+			const fifth = service.touchFile(FILE, "pressure-4", {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1500);
+			await fifth;
+			expect(aux.waitsOn(FILE)).toBe(5);
+			// …so the NEXT dispatch is demoted, not awaited.
+			const sixth = service.touchFile(FILE, "after-demotion", {
+				clientScope: "with-auxiliary",
+				auxiliaryServerIds: ["typos"],
+				collectDiagnostics: true,
+				diagnostics: "document",
+			});
+			await vi.advanceTimersByTimeAsync(1500);
+			await sixth;
+			expect(aux.waitsOn(FILE)).toBe(5);
+			expect(
+				lastAuxOutcome(
+					logLatency.mock.calls.map(([row]) => row),
+					"typos",
+					"main.ts",
+				),
+			).toBe("demoted");
+			drainPendingAuxiliaryCoverage();
+		} finally {
+			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		}
 	});
 
 	it("gives an auxiliary its declared budget up to the global ceiling", async () => {

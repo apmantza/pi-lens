@@ -480,6 +480,88 @@ describe("runner status/semantic edge cases", () => {
 		}
 	});
 
+	it("reports a late-delivery scanner as deferred and an unpromised one as skipped (#2810)", async () => {
+		// #2810 round-4 F1, runner half of the chain: the two coverage classes
+		// must not collapse into one status. A scanner the touch marked
+		// collect-later is `deferred` (its findings arrive at turn end); one the
+		// touch has no delivery path for stays `skipped` (#1470's honest gap).
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-late-status-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			expect((await runner.run(ctx(filePath, env.tmpDir) as never)).status).toBe(
+				"deferred",
+			);
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+				}),
+			);
+			expect((await runner.run(ctx(filePath, env.tmpDir) as never)).status).toBe(
+				"skipped",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("re-notices the same scanner when it moves from silent to late-delivery pending (#2810)", async () => {
+		// #2810 round-4 F1, second axis: the once-per-session dedupe key was built
+		// from the UNCONFIRMED set alone, so the first message a scanner produced
+		// was the only one the session ever showed. A scanner first reported
+		// silent and later marked collect-later kept the "not a clean result"
+		// wording forever (and vice versa).
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-notice-partition-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+				}),
+			);
+			const first = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(first.output).toContain("coverage: typos silent");
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["typos"],
+					deferredServerIds: ["typos"],
+				}),
+			);
+			const second = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				[{ mode: "all" as const, runnerIds: ["lsp"] }],
+				registry,
+			);
+			expect(second.output).toContain("coverage: typos deferred");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("lsp runner still reports the PRIMARY's findings when only an auxiliary was cut off (#1470)", async () => {
 		// The other half of the narrowing: collapsing a partial touch to
 		// skipped/inconclusive across the board would discard a trustworthy
