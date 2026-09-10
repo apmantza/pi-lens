@@ -5,8 +5,8 @@
  * resolved at a different seam than its child spawn", and the #2872 sweep's
  * admission tables going unauditable):
  *
- * 1. PROBES. 24 availability/version spawns each decided "no cwd" in their own
- *    words, and the sweep carried 24 sentences a reviewer had to re-read one
+ * 1. PROBES. 23 availability/version spawns each decided "no cwd" in their own
+ *    words, and the sweep carried 23 sentences a reviewer had to re-read one
  *    at a time. `probeToolAsync` owns that decision now, and it STRIPS a cwd
  *    rather than merely omitting one — the failure mode being closed is a
  *    probe that quietly acquires a project directory through an options

@@ -35,7 +35,7 @@ export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
  * read out of a project. That is why the sweep in
  * `tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` admits ONE
  * cwd-less spawn here instead of the 23 it admitted before: every one of those
- * sites re-decided the same thing in its own words, and two dozen sentences a
+ * sites re-decided the same thing in its own words, and 23 sentences a
  * reviewer has to re-read one at a time is how an admission table stops being
  * auditable (#2872 round 3 shipped 127 rows carrying two canned sentences,
  * four of them false where they were read).
