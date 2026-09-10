@@ -18,6 +18,7 @@ export interface ViMockExportFinding {
 	specifier: string;
 	productionFile: string;
 	missing: string[];
+	factoryProperties: string[];
 }
 
 export type ViMockExportMode = "imported" | "all";
@@ -360,6 +361,7 @@ export function findViMockExportGaps(
 				specifier,
 				productionFile,
 				missing,
+				factoryProperties: [...propertyNames(object)].sort(),
 			});
 		}
 	}
