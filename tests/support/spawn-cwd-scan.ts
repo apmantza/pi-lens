@@ -415,9 +415,10 @@ function carriesUsableCwd(value: SgNode, index: BindingIndex): boolean {
 }
 
 /**
- * Whether `expr` IS what `fn` hands back: the argument of a `return` inside it
- * (through `await`/parentheses), or a concise arrow's body. A seam call used
- * for a log line or a side effect does not make its function a resolver.
+ * Whether `expr` IS what `fn` hands back: the sole statement in a block-bodied
+ * resolver must be a `return` of the expression (through `await`/parentheses),
+ * or a concise arrow's body. A seam call used for a log line or a side effect
+ * does not make its function a resolver.
  */
 function returnsExpression(
 	fn: SgNode,
@@ -445,17 +446,13 @@ function returnsExpression(
 		if (String(body.kind()) !== "statement_block") {
 			returns = [unwrap(body)];
 		} else {
-			returns = [];
-			const visit = (node: SgNode): void => {
-				if (node.id() !== fn.id() && isFunctionNode(node)) return;
-				if (String(node.kind()) === "return_statement") {
-					const returned = namedParts(node)[0];
-					if (returned) returns?.push(unwrap(returned));
-					return;
-				}
-				for (const child of node.children()) visit(child);
-			};
-			visit(body);
+			const statements = namedParts(body);
+			const only = statements.length === 1 ? statements[0] : undefined;
+			const returned =
+				only && String(only.kind()) === "return_statement"
+					? namedParts(only)[0]
+					: undefined;
+			returns = returned ? [unwrap(returned)] : [];
 		}
 		returnCache.set(cacheKey, returns);
 	}

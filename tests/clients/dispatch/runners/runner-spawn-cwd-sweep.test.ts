@@ -730,7 +730,8 @@ const SCAN_HOOK_TIMEOUT_MS = 30_000;
 
 /**
  * Whether a file can hold a site the scan recognises: one of the seam wrappers
- * by name, or an unaliased `node:child_process` import. It mirrors
+ * by name, or a named `spawn`/`execFile` import from `child_process` or
+ * `node:child_process`. It mirrors
  * `spawn-cwd-scan.ts`'s own site rule deliberately — round 4's population
  * filter listed only the five seam names while the scanner also counted
  * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
@@ -740,7 +741,7 @@ const SCAN_HOOK_TIMEOUT_MS = 30_000;
 function holdsAScannableSpawn(source: string): boolean {
 	const hasUnaliasedChildProcessImport = [
 		...source.matchAll(
-			/import\s*\{([^}]*)\}\s*from\s*["']node:child_process["']/g,
+			/import(?:\s+[\w*$]+\s*,)?\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
 		),
 	].some((match) =>
 		match[1]
@@ -815,7 +816,8 @@ function siteKeys(
 
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	// A file is in the population when it can hold a site the scan recognises:
-	// one of the seam wrappers by name, or an unaliased `node:child_process`
+	// one of the seam wrappers by name, or a named `spawn`/`execFile` import
+	// from `child_process` or `node:child_process`
 	// import (round-5 v4-N3 — the two lists used to disagree, so a file whose
 	// only child spawn was a bare `spawn(` could never move a pin). An ALIASED
 	// child_process import is a stated bound, tracked by #2888.
@@ -825,12 +827,10 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
-	// The scan is 2.2 s over the 76-file population on an idle dev host (5.7 s
-	// before round 5's binding index; 5.9 s at `--maxWorkers=1` beside
-	// `tests/config`), and this file sits in the `default` vitest project,
-	// whose hook budget is vitest's own 10 s. CI ran it at ~11 s and skipped
-	// all seven assertions with `Hook timed out in 10000ms`. 30 s is ~13x the
-	// measured scan and the ceiling this repo treats as a hook budget — an
+	// The scan is ~2.8–3.7 s over the 76-file population, measured idle and at
+	// `--maxWorkers=1` beside `tests/config`. CI observed ~7 s for this file,
+	// so 30 s gives roughly 4x margin against the file wall and remains the
+	// ceiling this repo treats as a hook budget — an
 	// explicit admission for THIS hook, not a project-wide bump, and not a move
 	// into `grammar-heavy` (that lane bounds concurrent tree-sitter WASM
 	// compiles; this scan compiles none).
@@ -882,6 +882,14 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 		expect(
 			holdsAScannableSpawn('const r = await safeSpawnAsync("t", [], {});'),
 			"a seam wrapper by name",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn('import { spawn } from "child_process";'),
+			"an unaliased child_process import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn('import cp, { spawn } from "node:child_process";'),
+			"a default plus named child_process import",
 		).toBe(true);
 		expect(
 			holdsAScannableSpawn(

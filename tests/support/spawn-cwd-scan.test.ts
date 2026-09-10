@@ -1585,6 +1585,29 @@ async function run(ctx) {
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 
+	it("rejects a promoted resolver with a bare return", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (!ready) return;
+		return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("rejects a promoted resolver with implicit fall-through", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (ready) return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
 	it("does not credit a same-named module function for a method resolver", async () => {
 		const source = `${SEAM}
 class Client {
