@@ -31,9 +31,9 @@ function writeFakePip(
 				? 'echo "No matching distribution found" >&2; exit 1'
 				: [
 						'case " $* " in *" --break-system-packages "*)',
-						'mkdir -p "$PYTHONUSERBASE/bin"',
+						'/bin/mkdir -p "$PYTHONUSERBASE/bin"',
 						'printf "#!/bin/sh\\necho ruff 1.0\\n" > "$PYTHONUSERBASE/bin/ruff"',
-						'chmod 750 "$PYTHONUSERBASE/bin/ruff"',
+						'/bin/chmod 750 "$PYTHONUSERBASE/bin/ruff"',
 						"exit 0;;",
 						'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
 					].join("\n");
@@ -50,11 +50,11 @@ function writeFakePythonWithVenv(binDir: string): void {
 		`#!/bin/sh
 if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
   root="$3"
-  mkdir -p "$root/bin"
+  /bin/mkdir -p "$root/bin"
   printf '#!/bin/sh\necho venv-pip\n' > "$root/bin/pip"
-  chmod 750 "$root/bin/pip"
+  /bin/chmod 750 "$root/bin/pip"
   printf '#!/bin/sh\necho ruff 2.0\n' > "$root/bin/ruff"
-  chmod 750 "$root/bin/ruff"
+  /bin/chmod 750 "$root/bin/ruff"
   exit 0
 fi
 if [ "$1" = "-m" ] && [ "$2" = "site" ]; then
@@ -66,10 +66,67 @@ exit 1
 	);
 }
 
-function writeFakePythonWithoutVenv(binDir: string): void {
+function writeFakePythonWithoutVenv(
+	binDir: string,
+	mode: "pep668" | "genuine" | "private" = "pep668",
+): void {
+	const pipFailure =
+		mode === "genuine"
+			? 'echo "No matching distribution found" >&2'
+			: 'echo "error: externally-managed-environment" >&2';
 	writeExecutable(
 		path.join(binDir, "python3"),
-		'#!/bin/sh\necho "No module named venv" >&2\nexit 1\n',
+		`#!/bin/sh
+if [ "$2" = "pip" ]; then
+  ${pipFailure}
+else
+  echo "No module named venv" >&2
+fi
+exit 1
+`,
+	);
+}
+
+function writeFakePythonUserInstall(binDir: string): void {
+	writeExecutable(
+		path.join(binDir, "python3"),
+		`#!/bin/sh
+if [ "$2" = "venv" ]; then
+  echo venv >> "$FAKE_PYTHON_LOG"
+  echo "No module named venv" >&2
+  exit 1
+fi
+if [ "$2" = "pip" ] && [ "$4" = "--user" ]; then
+  /bin/mkdir -p "$FAKE_USER_BASE/bin"
+  printf '#!/bin/sh\necho ruff user\n' > "$FAKE_USER_BASE/bin/ruff"
+  /bin/chmod 750 "$FAKE_USER_BASE/bin/ruff"
+  exit 0
+fi
+if [ "$2" = "site" ]; then
+  echo "$FAKE_USER_BASE"
+  exit 0
+fi
+exit 1
+`,
+	);
+}
+
+function writeFakePip3UserInstall(binDir: string): void {
+	writeExecutable(
+		path.join(binDir, "pip3"),
+		`#!/bin/sh
+if [ "$1" = "install" ] && [ "$2" = "--user" ]; then
+  /bin/mkdir -p "$FAKE_USER_BASE/bin"
+  printf '#!/bin/sh\necho ruff pip3\n' > "$FAKE_USER_BASE/bin/ruff"
+  /bin/chmod 750 "$FAKE_USER_BASE/bin/ruff"
+  exit 0
+fi
+if [ "$1" = "-m" ] && [ "$2" = "site" ]; then
+  echo "$FAKE_USER_BASE"
+  exit 0
+fi
+exit 1
+`,
 	);
 }
 
@@ -95,7 +152,7 @@ async function runInstaller(
 			env: {
 				...process.env,
 				PI_LENS_HOME: home,
-				PATH: `${binDir}${path.delimiter}/usr/bin${path.delimiter}/bin`,
+				PATH: binDir,
 				PI_LENS_DISABLE_TOOL_INSTALL: "0",
 				PI_LENS_DEBUG: "1",
 				...extraEnv,
@@ -121,9 +178,9 @@ describe("real pip installer PEP 668 strategy selection (#2916)", () => {
 			path.join(bin, "pipx"),
 			`#!/bin/sh
 if [ "$1" = "install" ]; then
-  mkdir -p "$FAKE_PIPX_BIN"
+  /bin/mkdir -p "$FAKE_PIPX_BIN"
   printf '#!/bin/sh\\necho ruff 3.0\\n' > "$FAKE_PIPX_BIN/ruff"
-  chmod 750 "$FAKE_PIPX_BIN/ruff"
+  /bin/chmod 750 "$FAKE_PIPX_BIN/ruff"
 elif [ "$1" = "environment" ]; then
   echo "$FAKE_PIPX_BIN"
 fi
@@ -134,6 +191,34 @@ fi
 		});
 		expect(program.result.installed).toBe(true);
 		expect(program.result.path).toContain("pipx-bin");
+	});
+
+	it("falls through a missing pip3 to python3 -m pip", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePythonUserInstall(bin);
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_USER_BASE: path.join(root, "user-base"),
+		});
+		expect(result.result.installed).toBe(true);
+		expect(result.result.path).toContain(path.join("user-base", "bin"));
+	});
+
+	it("uses pip3 after a non-PEP-668 pipx refusal", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeExecutable(
+			path.join(bin, "pipx"),
+			'#!/bin/sh\necho "ruff already seems to be installed" >&2\nexit 1\n',
+		);
+		writeFakePip3UserInstall(bin);
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_USER_BASE: path.join(root, "user-base"),
+		});
+		expect(result.result.installed).toBe(true);
+		expect(result.result.path).toContain(path.join("user-base", "bin"));
 	});
 
 	it("creates and resolves the pi-lens venv", async () => {
@@ -159,7 +244,7 @@ fi
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "pep668");
-		writeFakePythonWithoutVenv(bin);
+		writeFakePythonWithoutVenv(bin, "pep668");
 		const result = await runInstaller(root, bin, "ruff", { FAKE_PIP_LOG: log });
 		expect(result.result.installed).toBe(false);
 		expect(result.result.reason).toContain("externally-managed-environment");
@@ -170,7 +255,7 @@ fi
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "private");
-		writeFakePythonWithoutVenv(bin);
+		writeFakePythonWithoutVenv(bin, "private");
 		const result = await runInstaller(root, bin, "ruff", { FAKE_PIP_LOG: log });
 		expect(result.result.installed).toBe(true);
 		expect(result.result.path).toContain(path.join("pip-user", "bin"));
@@ -186,7 +271,7 @@ fi
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "pep668");
-		writeFakePythonWithoutVenv(bin);
+		writeFakePythonWithoutVenv(bin, "pep668");
 		const result = await runInstaller(root, bin, "ruff", { FAKE_PIP_LOG: log });
 		expect(result.result.reason).toMatch(/externally-managed-environment/);
 	});
@@ -202,7 +287,7 @@ fi
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "pep668");
-		writeFakePythonWithoutVenv(bin);
+		writeFakePythonWithoutVenv(bin, "pep668");
 		const result = await runInstaller(
 			root,
 			bin,
@@ -213,7 +298,7 @@ fi
 		const row = result.result.summary.find(
 			(entry: { kind: string }) => entry.kind === "pip-pep668-strategy-refused",
 		);
-		expect(row?.count).toBe(2);
+		expect(row?.count).toBe(1);
 	});
 
 	it("preserves genuine nonexistent-package failures", async () => {
@@ -221,7 +306,7 @@ fi
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "genuine");
-		writeFakePythonWithoutVenv(bin);
+		writeFakePythonWithoutVenv(bin, "genuine");
 		const result = await runInstaller(root, bin, "ruff", { FAKE_PIP_LOG: log });
 		expect(result.result.installed).toBe(false);
 		expect(result.result.reason).toContain("No matching distribution");

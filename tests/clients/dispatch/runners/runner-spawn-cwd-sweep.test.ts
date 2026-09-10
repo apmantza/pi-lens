@@ -319,10 +319,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`<cached managed binary> <checkArgs>` version probe for the managed-tool refresh",
 	],
 	[
-		"clients/installer/index.ts#installPipTool:ba749b5d",
-		"`pip install <package>` into the user/managed site, not into the project",
-	],
-	[
 		"clients/installer/index.ts#installPipTool:3042a73f",
 		"`python -m site --user-base` after a pip install, to find where the binary landed",
 	],

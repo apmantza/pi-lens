@@ -67,9 +67,14 @@ const _installerRequire = createRequire(import.meta.url);
 
 import { createGunzip } from "node:zlib";
 import { TRANSIENT_MAX_COOLDOWN_MS } from "../dispatch/runners/utils/availability-policy.js";
-import { recordDegradationOnce } from "../degradation-ledger.js";
+import {
+	getDegradationLedgerGeneration,
+	recordDegradationOnce,
+} from "../degradation-ledger.js";
 import { commitDurableStoreAsync } from "../durable-store.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
+import { createGenerationMap } from "../generation-guard.js";
+import { resolveToolCwd } from "../tool-cwd.js";
 import {
 	allAvailableGlobalBinDirs,
 	installArgs,
@@ -5230,6 +5235,8 @@ export function pipScriptsDir(
 	return path.join(base, platform === "win32" ? "Scripts" : "bin");
 }
 
+const pipPep668LoggedRefusals = createGenerationMap("installer-pep668-log");
+
 /**
  * Install a pip package tool
  */
@@ -5262,20 +5269,38 @@ async function installPipTool(
 
 		const pep668 = /externally-managed-environment/i;
 		const refuse = (strategy: string, reason: string): void => {
+			if (!pep668.test(reason)) return;
+			const subject = `${toolId}:${strategy}`;
 			recordDegradationOnce({
 				kind: "pip-pep668-strategy-refused",
-				subject: `${toolId}:${strategy}`,
+				subject,
 				reason,
 			});
-			logSessionStart(
-				`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${reason})`,
-			);
+			const logKey = `${getDegradationLedgerGeneration()}:${subject}`;
+			if (pipPep668LoggedRefusals.current(logKey) === 0) {
+				pipPep668LoggedRefusals.bump(logKey);
+				logSessionStart(
+					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${reason})`,
+				);
+			}
+		};
+		const succeeded = (strategy: string, binaryPath: string): string => {
+			recordDegradationOnce({
+				kind: "pip-install-strategy-succeeded",
+				subject: `${toolId}:${strategy}`,
+				reason: binaryPath,
+			});
+			return binaryPath;
 		};
 		const run = (command: string, args: string[], env?: NodeJS.ProcessEnv) =>
 			safeSpawnAsync(command, args, {
 				timeout: 120_000,
 				ignoreAmbientSignal: true,
 				lifetimeCoupled: true,
+				cwd: resolveToolCwd("runner", toolId, getGlobalPiLensDir(), {
+					cwd: getGlobalPiLensDir(),
+					suppressTelemetry: true,
+				}),
 				env,
 			});
 		const addBinToPath = async (
@@ -5330,23 +5355,26 @@ async function installPipTool(
 						? location.stdout.trim()
 						: path.join(os.homedir(), ".local", "bin");
 				const binaryPath = await addBinToPath(binDir);
-				if (binaryPath) return binaryPath;
+				if (binaryPath) return succeeded("pipx", binaryPath);
 				throw new Error(
 					`pipx installed ${packageName} but ${binaryName} is not resolvable`,
 				);
 			}
-			if (!pep668.test(error)) throw new Error(`pipx install failed: ${error}`);
 			refuse("pipx", error);
 		}
 
-		const pythonCandidates = pipCandidates
-			.filter(
-				({ command }) =>
-					command === "python3" || command === "python" || command === "py",
-			)
-			.filter(({ command }) => isCommandAvailable(command));
+		const pythonCandidates = pipCandidates.filter(
+			({ command }) =>
+				command === "python3" || command === "python" || command === "py",
+		);
+		const pythonAvailability = await Promise.all(
+			pythonCandidates.map(({ command }) => isCommandAvailable(command)),
+		);
+		const availablePythonCandidates = pythonCandidates.filter(
+			(_, index) => pythonAvailability[index],
+		);
 		const venvRoot = path.join(getGlobalPiLensDir(), "pip-tools");
-		for (const candidate of pythonCandidates) {
+		for (const candidate of availablePythonCandidates) {
 			const venvBin = pipScriptsDir(venvRoot, installerPlatform());
 			let venvPip = path.join(venvBin, isWindows ? "pip.exe" : "pip");
 			try {
@@ -5366,7 +5394,6 @@ async function installPipTool(
 				try {
 					await fs.access(venvPip);
 				} catch {
-					refuse("venv", "venv created without a pip executable");
 					continue;
 				}
 			}
@@ -5374,17 +5401,16 @@ async function installPipTool(
 			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status === 0) {
 				const binaryPath = await addBinToPath(venvBin);
-				if (binaryPath) return binaryPath;
+				if (binaryPath) return succeeded("venv", binaryPath);
 				throw new Error(
 					`venv installed ${packageName} but ${binaryName} is not resolvable`,
 				);
 			}
-			if (!pep668.test(error))
-				throw new Error(`venv pip install failed: ${error}`);
 			refuse("venv", error);
 		}
 
 		let lastError = "";
+		let userRefused = false;
 		for (const candidate of pipCandidates) {
 			const args =
 				candidate.command === "pip" || candidate.command === "pip3"
@@ -5415,15 +5441,18 @@ async function installPipTool(
 				// Keep the historical normal-user result even when the interpreter's
 				// user-base probe is unavailable. The next availability probe owns
 				// resolution through PATH and its user-base candidates.
-				return binaryPath ?? packageName;
+				return succeeded("user", binaryPath ?? packageName);
 			}
-			lastError = `${candidate.command} ${candidate.args.join(" ")}: ${error}`;
+			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${error}`;
+			if (!/spawn .* ENOENT/i.test(error) || !lastError)
+				lastError = candidateError;
 			if (pep668.test(error)) {
+				userRefused = true;
 				refuse("user", error);
-				break;
 			}
-			throw new Error(`pip install failed: ${lastError}`);
 		}
+		if (!userRefused)
+			throw new Error(`pip install failed: ${lastError || "unknown error"}`);
 
 		const privateBase = path.join(getGlobalPiLensDir(), "pip-user");
 		const privateEnv = { ...process.env, PYTHONUSERBASE: privateBase };
@@ -5441,12 +5470,16 @@ async function installPipTool(
 						];
 			const result = await run(candidate.command, args, privateEnv);
 			const error = (result.error?.message ?? result.stderr).trim();
-			if (result.status !== 0)
-				throw new Error(`private-prefix pip install failed: ${error}`);
+			if (result.status !== 0) {
+				const candidateError = `${candidate.command} ${args.join(" ")}: ${error}`;
+				if (!/spawn .* ENOENT/i.test(error) || !lastError)
+					lastError = candidateError;
+				continue;
+			}
 			const binaryPath = await addBinToPath(
 				pipScriptsDir(privateBase, installerPlatform()),
 			);
-			if (binaryPath) return binaryPath;
+			if (binaryPath) return succeeded("private-prefix", binaryPath);
 			throw new Error(
 				`private-prefix pip installed ${packageName} but ${binaryName} is not resolvable`,
 			);

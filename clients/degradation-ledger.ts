@@ -504,6 +504,7 @@ export type DegradationKind =
 	 * (#1857 class sweep).
 	 */
 	| "path-variant-unresolved"
+	| "pip-install-strategy-succeeded"
 	| "pip-pep668-strategy-refused"
 	/**
 	 * The orphan backstop's OWN process-table scanner blew the scan timeout and

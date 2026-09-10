@@ -2214,9 +2214,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// budget and up to three attempts, so the hook path got shorter, not longer.
 	// Like every other entry here neither can take a hook's signal until #2523
 	// AC4 threads it through the deps types.
-	// #2916 adds thirteen venv, pipx, and private-prefix install probes. Their
+	// #2916 adds fourteen venv, pipx, private-prefix, and cwd-resolution probes. Their
 	// unbounded awaits remain outside hook signal plumbing until #2523 AC4.
-	"clients/installer/index.ts": 210,
+	"clients/installer/index.ts": 211,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,
