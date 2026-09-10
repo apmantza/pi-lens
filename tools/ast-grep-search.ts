@@ -343,12 +343,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 		}),
 		parameters: Type.Object({
 			dump: Type.Optional(Type.Boolean()),
-			pattern: Type.Optional(
-				Type.String({
-					description:
-						"AST pattern (use function/class/call context, not text). Required unless `rule` or `nodeKind` is provided. Do not put metavariables inside quoted string literals; they match literally.",
-				}),
-			),
+			pattern: Type.Optional(Type.String({ description: "AST pattern." })),
 			lang: Type.String({
 				enum: [...LANGUAGES] as string[],
 				description: "Target language",
@@ -356,90 +351,77 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					maxItems: MAX_PATHS,
-					description: `Specific files/folders to search (max ${MAX_PATHS} entries)`,
+					description: "Files or directories to search.",
 				}),
 			),
 			selector: Type.Optional(
 				Type.String({
-					description:
-						"Advanced: restrict search to a specific AST node kind (for example 'call_expression' or 'function_declaration'). This narrows matching; it does not extract fields from matches.",
+					description: "AST node kind filter.",
 				}),
 			),
 			context: Type.Optional(
 				Type.Number({
-					description: "Show N lines before/after each match for context",
+					description: "Context lines around matches.",
 				}),
 			),
 			nodeKind: Type.Optional(
 				Type.String({
-					description:
-						"Expert escape hatch: find every node of this AST kind (for example `call_expression`) without a pattern. Node kinds vary by language; use dump=true to discover them. Mutually exclusive with `pattern` and `rule`; combines with structural constraints.",
+					description: "AST node kind without a pattern.",
 				}),
 			),
 			insideKind: Type.Optional(
 				Type.String({
-					description:
-						'Restrict matches to nodes inside an ancestor of this AST node kind. Example: `insideKind: "function_declaration"` finds the pattern only when it appears inside a function body. Searches all ancestors (stopBy: end), not just the immediate parent. Synthesizes a YAML rule — takes precedence over `selector` and `strictness`.',
+					description: "Ancestor AST node kind filter.",
 				}),
 			),
 			hasKind: Type.Optional(
 				Type.String({
-					description:
-						'Restrict matches to nodes whose immediate child has this AST node kind (ast-grep default stopBy: neighbor). Example: `hasKind: "await_expression"`.',
+					description: "Immediate-child AST node kind filter.",
 				}),
 			),
 			hasDescendantKind: Type.Optional(
 				Type.String({
-					description:
-						"Restrict matches to nodes containing this AST node kind anywhere in their descendants. Explicit recursive form (`stopBy: end`); use this instead of `hasKind` when nesting is not immediate.",
+					description: "Recursive descendant AST node kind filter.",
 				}),
 			),
 			follows: Type.Optional(
 				Type.String({
-					description:
-						'Restrict matches to nodes that immediately follow a sibling matching this pattern. Example: `follows: "return $X"` finds the pattern only when preceded by a return statement.',
+					description: "Preceding sibling pattern filter.",
 				}),
 			),
 			precedes: Type.Optional(
 				Type.String({
-					description:
-						"Restrict matches to nodes that immediately precede a sibling matching this pattern.",
+					description: "Following sibling pattern filter.",
 				}),
 			),
 			rule: Type.Optional(
 				Type.String({
-					description:
-						"Raw ast-grep YAML rule. When provided, routes through `sg scan --config` instead of `sg run -p`, unlocking the full rule DSL. Takes precedence over `pattern` and structural-intent params. The YAML must include `id` and `language` fields.",
+					description: "Raw ast-grep YAML rule.",
 				}),
 			),
 			skip: Type.Optional(
 				Type.Number({
-					description:
-						"Match offset for pagination. Skip the first N matches and return the next page. Use when results are truncated — increment by the page size to retrieve subsequent pages.",
+					description: "Matches to skip for pagination.",
 				}),
 			),
 			maxMatches: Type.Optional(
 				Type.Number({
-					description: `Cap on matches returned per call (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}). Lower it to keep a broad search compact; raise it to page less. Also sets the pagination step for skip.`,
+					description: "Maximum matches to return.",
 				}),
 			),
 			groupByFile: Type.Optional(
 				Type.Boolean({
-					description:
-						"Render results grouped by file (one line per file with L<line>:<col> locations) instead of each match's body. Compact distribution view for high-volume searches; match read-slices remain in details.matchLocations.",
+					description: "Group matches by file.",
 				}),
 			),
 			strictness: Type.Optional(
 				Type.String({
-					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
-					description:
-						"Pattern matching strictness. 'smart' (default) ignores comments and whitespace. 'relaxed' also ignores unnamed nodes like punctuation — useful when optional trailing commas cause misses. 'ast' ignores all whitespace. 'signature' matches only structural shape, ignoring bodies.",
+					description: "Pattern matching strictness.",
 				}),
 			),
 			validateOnly: Type.Optional(
 				Type.Boolean({
-					description:
-						"Validate/compile the pattern or rule without scanning project files. Helps distinguish a bad pattern/rule from a real no-match result.",
+					description: "Validate without scanning.",
 				}),
 			),
 		}),
