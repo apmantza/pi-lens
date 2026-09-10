@@ -23,6 +23,7 @@ import { resetPendingRunnerFindings } from "./dispatch/pending-runner-findings.j
 import type { FileKind } from "./file-kinds.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import {
+	drainProjectDataDirMigrations,
 	getGlobalPiLensDir,
 	getKnipIgnorePatterns,
 	getProjectDataDir,
@@ -2465,6 +2466,18 @@ export async function handleSessionStart(
 	// project data roots and machine-global registry root once per session start;
 	// this is fire-and-forget and bounded so it never delays startup.
 	const projectDataDir = getProjectDataDir(cwd);
+	// #2874: `getProjectDataDir` queues one migration per old-slug directory
+	// it renames (or finds coexisting with its hashed successor). Drain here
+	// so each migration emits one bounded record per session at most.
+	for (const migration of drainProjectDataDirMigrations()) {
+		recordDegradationOnce({
+			kind: "data_dir_migrated",
+			subject: path.basename(migration.to),
+			reason: migration.renamed
+				? `renamed ${path.basename(migration.from)}`
+				: `old and new both present; using ${path.basename(migration.to)}`,
+		});
+	}
 	// #1609 review F1: sweepOwnStagingFiles does not recurse, so the installer's
 	// bin/ and tools/ subdirectories (clients/installer/index.ts's
 	// GITHUB_BIN_DIR / TOOLS_DIR, now atomic-write.js writers too) need their

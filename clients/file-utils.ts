@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Minimatch, type MinimatchOptions } from "./deps/minimatch.js";
@@ -57,14 +58,136 @@ export function getProjectDataDir(cwd: string): string {
 		return legacyProjectDir;
 	}
 	const base = configuredBase || path.join(getGlobalPiLensDir(), "projects");
+	const readable = projectDataDirReadableSlug(cwd);
+	const hash = projectDataDirRootHash(cwd);
+	const slug = `${readable || "default"}-${hash}`;
+	const dir = path.join(base.trim(), slug);
+	return settleProjectDataDir(base.trim(), readable || "default", dir);
+}
+
+/**
+ * The human-readable half of the project data-dir slug: the absolute root
+ * with separators folded to dashes and anything else stripped.
+ *
+ * #2874: this form ALONE is not an identity — `src/pi-lens` and
+ * `src/pi/lens` fold to the same string. It is only ever combined with
+ * {@link projectDataDirRootHash}. Never use it as a directory name alone.
+ */
+function projectDataDirReadableSlug(cwd: string): string {
 	const normalized = normalizeFilePath(path.resolve(cwd));
-	const slug = normalized
+	return normalized
 		.replace(/^[a-z]:/i, "") // strip Windows drive letter
 		.replace(/\/+/g, "-") // separators → dashes
 		.replace(/[^A-Za-z0-9-]/g, "") // strip anything else
 		.replace(/^-+/, "") // trim leading dashes
 		.replace(/-+$/, ""); // trim trailing dashes
-	return path.join(base.trim(), slug || "default");
+}
+
+/**
+ * The discriminating half of the project data-dir slug: the first 8 hex
+ * chars of the SHA-256 of the canonical absolute root (realpath'd where the
+ * root resolves, resolved-absolute otherwise so a missing root still hashes
+ * stably). Pinned on purpose — changing the algorithm or its input renames
+ * every project data directory, so that needs its own migration.
+ */
+function projectDataDirRootHash(cwd: string): string {
+	const resolved = path.resolve(cwd);
+	let canonical = resolved;
+	try {
+		canonical = fs.realpathSync(resolved);
+	} catch {
+		// Best-effort: the root may not exist yet; hash the resolved path.
+	}
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+}
+
+export interface ProjectDataDirMigration {
+	/** The pre-#2874 slug directory the state moved away from (or coexists). */
+	from: string;
+	/** The hashed-slug directory now in use. */
+	to: string;
+	/** True when an atomic rename moved the state; false when both existed. */
+	renamed: boolean;
+}
+
+const pendingDataDirMigrations: ProjectDataDirMigration[] = [];
+const settledDataDirs = new Map<string, string>();
+
+/**
+ * One-time upgrade from a pre-#2874 slug directory to its hashed name.
+ * When the old directory exists and the new one does not, the state moves
+ * with one atomic `renameSync` (same parent, so same filesystem). When both
+ * exist the new one wins and nothing moves. Either case queues one
+ * {@link ProjectDataDirMigration} for the session-start drain, which emits
+ * the `data_dir_migrated` record. Best-effort throughout: on any failure the
+ * caller gets the pre-existing directory and behavior is unchanged.
+ *
+ * No ledger import here on purpose: `probe-home-state.ts` documents that a
+ * direct edge between this module and `degradation-ledger.ts` in either
+ * direction adds `no-client-cycles` violations, so the record is emitted by
+ * the drain site in `runtime-session.ts` instead.
+ */
+function settleProjectDataDir(
+	base: string,
+	oldSlug: string,
+	dir: string,
+): string {
+	const hit = settledDataDirs.get(dir);
+	if (hit !== undefined) {
+		return hit;
+	}
+	const oldDir = path.join(base, oldSlug);
+	if (oldDir === dir) {
+		settledDataDirs.set(dir, dir);
+		return dir;
+	}
+	const newExists = fs.existsSync(dir);
+	const oldExists = fs.existsSync(oldDir);
+	if (!oldExists) {
+		// Steady state: nothing to migrate from. No record either way.
+		settledDataDirs.set(dir, dir);
+		return dir;
+	}
+	if (!newExists) {
+		try {
+			fs.renameSync(oldDir, dir);
+		} catch {
+			// Best-effort: do NOT memoize, so a later call retries the
+			// rename, and keep serving the pre-existing directory meanwhile.
+			return oldDir;
+		}
+	}
+	// Either the rename just moved the state, or both directories already
+	// existed and the new one wins. Queue one migration for the drain.
+	settledDataDirs.set(dir, dir);
+	if (pendingDataDirMigrations.length < 32) {
+		pendingDataDirMigrations.push({
+			from: oldDir,
+			to: dir,
+			renamed: !newExists,
+		});
+	}
+	return dir;
+}
+
+/**
+ * Drain the queued {@link ProjectDataDirMigration}s, clearing the queue.
+ * Called once per session start by `handleSessionStart`; each migration is
+ * therefore recorded at most once ever, which satisfies the once-per-session
+ * bound. Test-only callers must not rely on queue depth across drains.
+ */
+export function drainProjectDataDirMigrations(): ProjectDataDirMigration[] {
+	return pendingDataDirMigrations.splice(0);
+}
+
+/**
+ * Test-only reset for the settled-directory memo. The memo is a pure
+ * performance cache (one `existsSync` pair saved per latched directory), so
+ * clearing it changes no observable behavior — it lets a test stage an
+ * old-slug directory AFTER learning the new name, then resolve again.
+ */
+export function _resetProjectDataDirMemoForTests(): void {
+	settledDataDirs.clear();
 }
 
 /**

@@ -156,6 +156,14 @@ export type DegradationKind =
 	 * one — but the COUNT is the pool-miss signal that `lsp_client_selected`
 	 * cannot carry, since the warm-only callers never reach selection.
 	 */
+	/**
+	 * #2874: a pre-hash project data-dir slug directory was renamed once to
+	 * its hashed slug (or an old/new pair was found coexisting and the new
+	 * one preferred), so two roots that differ only in separator-vs-hyphen
+	 * placement stop sharing one data directory. Subject is the new slug.
+	 * Recorded ONCE per migrated directory via the session-start drain.
+	 */
+	| "data_dir_migrated"
 	| "demoted-finding-retired"
 	| "diagnostic-retained-unreconciled"
 	| "dispatch-non-absolute-baseline-path"
