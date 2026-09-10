@@ -153,7 +153,15 @@ const SPAWN_NAMES = new Set([
  * population filter and this list were reconciled (round-5 v4-N3).
  *
  */
-const NODE_SPAWN_NAMES = new Set(["spawn", "execFile", "exec", "fork"]);
+const NODE_SPAWN_NAMES = new Set([
+	"spawn",
+	"execFile",
+	"exec",
+	"fork",
+	"spawnSync",
+	"execFileSync",
+	"execSync",
+]);
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
 const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
@@ -257,14 +265,14 @@ function isProcessCwdCall(node: SgNode): boolean {
 }
 
 interface NodeSpawnBindings {
-	direct: Set<string>;
+	direct: Map<string, string>;
 	namespaces: Set<string>;
 }
 
 /** Resolve named, default, namespace, dynamic, and require child-process bindings. */
 function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
 	const bindings: NodeSpawnBindings = {
-		direct: new Set(),
+		direct: new Map(),
 		namespaces: new Set(),
 	};
 	const addClause = (clause: string): void => {
@@ -280,7 +288,7 @@ function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
 				.split(/\s+as\s+/)
 				.map((part) => part.trim());
 			if (NODE_SPAWN_NAMES.has(imported))
-				bindings.direct.add(local || imported);
+				bindings.direct.set(local || imported, imported);
 		}
 	};
 	const visit = (node: SgNode): void => {
@@ -310,7 +318,7 @@ function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
 							.split(/\s*:\s*/)
 							.map((part) => part.trim());
 						if (NODE_SPAWN_NAMES.has(imported))
-							bindings.direct.add(local || imported);
+							bindings.direct.set(local || imported, imported);
 					}
 				} else if (/^[A-Za-z_$][\w$]*$/.test(name))
 					bindings.namespaces.add(name);
@@ -335,6 +343,27 @@ function isNodeSpawnCall(call: SgNode, bindings: NodeSpawnBindings): boolean {
 	return /^\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)$/.test(
 		object?.text() ?? "",
 	);
+}
+
+function nodeSpawnImportedName(
+	call: SgNode,
+	bindings: NodeSpawnBindings,
+): string | undefined {
+	const fn = call.field("function");
+	if (!fn) return undefined;
+	if (fn.kind() === "identifier") return bindings.direct.get(fn.text());
+	if (fn.kind() !== "member_expression") return undefined;
+	const property = fn.field("property")?.text();
+	const object = fn.field("object");
+	if (!property || !NODE_SPAWN_NAMES.has(property)) return undefined;
+	if (object?.kind() === "identifier" && bindings.namespaces.has(object.text()))
+		return property;
+	if (/^\b(?:import|require)\s*\(/.test(object?.text() ?? "")) return property;
+	return undefined;
+}
+
+function nodeSpawnOptionsIndex(importedName: string): number {
+	return importedName === "exec" || importedName === "execSync" ? 1 : 2;
 }
 
 /** Resolver bindings imported from the shared tool-cwd seam (or its one-hop
@@ -1386,7 +1415,12 @@ export async function scanSpawnCwd(
 			continue;
 		const line = lineOf(call);
 		if (!directSiteKeys.has(`${line}:${name}`)) continue;
-		const optionsIndex = name === "exec" ? 1 : SPAWN_OPTIONS_INDEX;
+		const importedName = isNodeSpawnCall(call, nodeSpawnBindings)
+			? nodeSpawnImportedName(call, nodeSpawnBindings)
+			: undefined;
+		const optionsIndex = importedName
+			? nodeSpawnOptionsIndex(importedName)
+			: SPAWN_OPTIONS_INDEX;
 		const optionsArg = argumentsOf(call)[optionsIndex];
 		const cwdProp =
 			optionsArg && optionsArg.kind() === "object"
@@ -1414,6 +1448,17 @@ export async function scanSpawnCwd(
 			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
+		if (!cwdProp && importedName && optionsArg?.kind() === "identifier") {
+			const binder = findBinder(optionsArg, declaratorCache);
+			const wrapperName = binder && functionName(binder.fn);
+			if (wrapperName && !wrappersByName.has(wrapperName)) {
+				wrappersByName.set(wrapperName, {
+					name: wrapperName,
+					mode: "options",
+					paramIndex: binder.binding.paramIndex,
+				});
+			}
+		}
 	}
 
 	// Fixed point: a wrapper's own call site can reveal a further wrapper, so

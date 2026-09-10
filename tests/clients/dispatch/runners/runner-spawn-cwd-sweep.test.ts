@@ -127,7 +127,7 @@ const POPULATION_FILES = [
  * what a non-conforming new site costs instead.
  */
 const EXPECTED_FILES = 80;
-const EXPECTED_DIRECT_SITES = 142;
+const EXPECTED_DIRECT_SITES = 148;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -214,7 +214,27 @@ const EXPECTED_WRAPPERS = [
 const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/child-unref.ts#spawnCollectStdoutResult:499d1fcc",
-		"fire-and-forget child collection uses no cwd because it only reaps process output",
+		"forwards a caller-supplied SpawnOptions object unchanged; its process-snapshot caller supplies no cwd and its argv does not resolve project configuration",
+	],
+	[
+		"clients/lsp/launch.ts#runStderrGuardedProbe:eedfa033",
+		"execFileSync runs a stderr probe and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/launch.ts#findBinaryOnPath:90f3c9a8",
+		"execFileSync runs a PATH lookup and does not resolve project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#killPidTreeSync:7ca6002e",
+		"spawnSync targets a process identifier for process-tree cleanup, not project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#ensureUtf8ConsoleCodePageOnce:97609a28",
+		"spawnSync runs a Windows console-code-page probe and does not resolve project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#safeSpawn:b6046d06",
+		"spawnSync is the safe-spawn implementation's synchronous child path and does not receive a dispatch cwd",
 	],
 	[
 		"clients/instance-reaper.ts#killPidTree:18e7d7ac",
@@ -466,6 +486,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
+	[
+		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~0cd6d898",
+		"the synchronous safe-spawn path derives its cwd from its own compatibility options, not the dispatch resolveToolCwd seam",
+	],
 	[
 		"clients/lsp/launch.ts#trySpawn:e7bf6cb1~dbf27697",
 		"LSP launch helper receives its own cwd parameter from the server launch boundary",
@@ -866,8 +890,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
-	// The scan is ~2.8–3.7 s over the 76-file population, measured idle and at
-	// `--maxWorkers=1` beside `tests/config`. CI observed ~7 s for this file,
+	// The scan is ~3.56–3.78 s over the 76–80-file population, measured idle and
+	// at `--maxWorkers=1` beside `tests/config`; four files add ~219 ms (+6%).
+	// CI observed ~7 s for this file,
 	// so 30 s gives roughly 4x margin against the file wall and remains the
 	// ceiling this repo treats as a hook budget — an
 	// explicit admission for THIS hook, not a project-wide bump, and not a move

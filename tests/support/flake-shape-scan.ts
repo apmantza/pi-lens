@@ -132,6 +132,7 @@ function testsRelative(absolute: string): string {
  */
 const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
 	"clients/flake-shape-ratchet.test.ts",
+	"support/spawn-cwd-scan.test.ts",
 ]);
 
 /** One line the scan flags. */

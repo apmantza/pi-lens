@@ -1659,7 +1659,7 @@ async function run(ctx) {
 });
 
 describe("node:child_process is a site only when the file imports it", () => {
-	const CHILD_PROCESS = JSON.stringify("node:child_process");
+	const CHILD_PROCESS = '"node:child_process"';
 	it("a method named `spawn` on some object is not a child spawn", async () => {
 		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
 		// an LSP server definition's own method. Matching `spawn` by simple name
@@ -1709,6 +1709,33 @@ async function run(ctx) {
 			expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 		});
 	}
+
+	it("resolves an exec alias by imported name", async () => {
+		const source = `import { exec as run } from "node:child_process";
+${SEAM}
+function check(ctx) { run("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("resolves a spawn imported as exec by imported name", async () => {
+		const source = `import { spawn as exec } from "node:child_process";
+${SEAM}
+function check(ctx) { exec("tool", [], { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("follows a parameter-shaped options wrapper", async () => {
+		const source = `import { spawn as nodeSpawn } from "node:child_process";
+function pass(command, args, options) { return nodeSpawn(command, args, options); }
+function check(ctx) { pass("tool", [], { cwd: ctx.cwd }); }`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.wrappers).toEqual([
+			{ name: "pass", mode: "options", paramIndex: 2 },
+		]);
+		expect(
+			scan.sites.map((site) => `${site.kind}:${site.callee}:${site.hasCwd}`),
+		).toEqual(["direct:nodeSpawn:false", "wrapper:pass:true"]);
+	});
 
 	it("resolves a destructured require alias", async () => {
 		const source = `const { spawn: s } = require(${CHILD_PROCESS});
