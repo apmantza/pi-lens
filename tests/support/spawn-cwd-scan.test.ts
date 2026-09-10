@@ -970,14 +970,15 @@ function declarationOwnerKindsFromGrammar(): string[] {
 	) as Record<string, GrammarNodeType>;
 	// Close over supertypes: a slot that accepts `statement` accepts a
 	// `lexical_declaration`, and the grammar spells that indirection out.
-	const declarationTypes = new Set(["lexical_declaration", "variable_declaration"]);
-	for (let grew = true; grew; ) {
+	const declarationTypes = new Set([
+		"lexical_declaration",
+		"variable_declaration",
+	]);
+	for (let grew = true; grew;) {
 		grew = false;
 		for (const [kind, node] of Object.entries(types)) {
 			if (declarationTypes.has(kind)) continue;
-			if (
-				(node.subtypes ?? []).some((sub) => declarationTypes.has(sub.type))
-			) {
+			if ((node.subtypes ?? []).some((sub) => declarationTypes.has(sub.type))) {
 				declarationTypes.add(kind);
 				grew = true;
 			}

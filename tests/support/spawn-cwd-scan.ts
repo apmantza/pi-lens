@@ -78,6 +78,35 @@ export interface SpawnCwdSite {
 	/** Whether the cwd value is proven to originate at resolveToolCwd. */
 	resolvedFromToolCwd: boolean;
 	/**
+	 * The enclosing named functions and classes, outermost first
+	 * (`SgRunner.probeVersion`), or undefined at module scope. Read off the
+	 * AST because the text heuristic in `sweep-kit`'s `findEnclosingSymbol`
+	 * only matches COLUMN-ZERO declarations: in a class-shaped file every
+	 * method resolved to the same symbol, and three `sg-runner.ts` spawns
+	 * whose call line is the stereotyped `const result = await
+	 * safeSpawnAsync(` collided on one admission key (round-4 v3-F3).
+	 */
+	symbol?: string;
+	/**
+	 * The 1-based source lines whose CONTENT decides the cwd this site passes:
+	 * the `cwd` property itself, plus the declaration of every local the value
+	 * hops through. Empty when the site passes no cwd.
+	 *
+	 * The sweep hashes them into the admission key, so an admitted site whose
+	 * cwd VALUE changes — `cwd: fileDir` edited to `cwd: ctx.cwd`, #2691's own
+	 * defect — retires its admission instead of inheriting it (round-4 v3-F2:
+	 * the key hashed the `safeSpawnAsync(` call line, which no cwd edit
+	 * touches).
+	 */
+	cwdLines: number[];
+	/**
+	 * The 1-based source lines the call expression itself spans — callee, argv
+	 * and options. The sweep hashes them into the admission key so a row names
+	 * ONE call rather than a stereotyped first line: three `sg-runner.ts`
+	 * spawns all open `const result = await safeSpawnAsync(`.
+	 */
+	callLines: number[];
+	/**
 	 * Text after `// cwd-exempt:` on the line DIRECTLY above the call, when
 	 * that text is a real reason (see {@link MIN_EXEMPT_REASON_LENGTH}). A tag
 	 * with a too-short reason leaves this undefined, so the site is reported
@@ -628,7 +657,8 @@ function bindsNameWithoutDeclaration(node: SgNode, name: string): boolean {
 /** Whether a declarator's own statement is a hoisted `var`. */
 function isHoistedDeclarator(decl: SgNode): boolean {
 	return (
-		String(declarationStatementOf(decl)?.kind() ?? "") === "variable_declaration"
+		String(declarationStatementOf(decl)?.kind() ?? "") ===
+		"variable_declaration"
 	);
 }
 
@@ -854,6 +884,68 @@ function isCwdBearingExpression(node: SgNode): boolean {
 	return namedParts(node).some(isCwdBearingExpression);
 }
 
+/** The 1-based lines a node spans. */
+function spanLines(node: SgNode): number[] {
+	const range = node.range();
+	const lines: number[] = [];
+	for (let line = range.start.line; line <= range.end.line; line++) {
+		lines.push(line + 1);
+	}
+	return lines;
+}
+
+/** Every enclosing named function and class, outermost first. An anonymous
+ * arrow contributes nothing, which is what keeps a probe closure's key tied
+ * to the factory around it rather than to a name that does not exist. */
+function enclosingSymbolPath(node: SgNode): string | undefined {
+	const parts: string[] = [];
+	for (let current = node.parent(); current; current = current.parent()) {
+		if (isFunctionNode(current)) {
+			const name = functionName(current);
+			if (name) parts.push(name);
+			continue;
+		}
+		if (String(current.kind()).endsWith("class_declaration")) {
+			const name = current.field("name")?.text();
+			if (name) parts.push(name);
+		}
+	}
+	return parts.length > 0 ? parts.reverse().join(".") : undefined;
+}
+
+/**
+ * The 1-based lines whose content decides a cwd value: the node's own span,
+ * plus the declaration span of every local it hops through (the same hops
+ * {@link resolvesFromToolCwd} follows, so the key covers exactly what the
+ * verdict was read from).
+ */
+function cwdValueLines(node: SgNode, seen = new Set<string>()): number[] {
+	const lines = new Set<number>();
+	const addSpan = (target: SgNode): void => {
+		const range = target.range();
+		for (let line = range.start.line; line <= range.end.line; line++) {
+			lines.add(line + 1);
+		}
+	};
+	addSpan(node);
+	const kind = String(node.kind());
+	if (kind === "identifier" || kind === "shorthand_property_identifier") {
+		if (!seen.has(node.text())) {
+			seen.add(node.text());
+			const local = resolveLocalInitializer(node, node.text());
+			if (local?.init) {
+				for (const line of cwdValueLines(local.init, seen)) lines.add(line);
+			}
+		}
+	} else if (kind === "object") {
+		const prop = cwdPropertyOf(node);
+		if (prop) {
+			for (const line of cwdValueLines(cwdValueOf(prop), seen)) lines.add(line);
+		}
+	}
+	return [...lines].sort((a, b) => a - b);
+}
+
 /** The named arguments of a call, in order. */
 function argumentsOf(call: SgNode): SgNode[] {
 	return namedParts(call.field("arguments"));
@@ -993,6 +1085,9 @@ export async function scanSpawnCwd(
 			resolvedFromToolCwd:
 				cwdProp !== undefined &&
 				resolvesFromToolCwd(cwdValueOf(cwdProp), resolverNames),
+			symbol: enclosingSymbolPath(call),
+			cwdLines: cwdProp ? cwdValueLines(cwdProp) : [],
+			callLines: spanLines(call),
 			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
@@ -1046,6 +1141,15 @@ export async function scanSpawnCwd(
 								const arg = argumentsOf(call)[wrapper.paramIndex];
 								return arg ? resolvesFromToolCwd(arg, resolverNames) : false;
 							})(),
+				symbol: enclosingSymbolPath(call),
+				callLines: spanLines(call),
+				cwdLines: (() => {
+					const arg = argumentsOf(call)[wrapper.paramIndex];
+					if (!arg) return [];
+					if (wrapper.mode === "positional") return cwdValueLines(arg);
+					const prop = arg.kind() === "object" ? cwdPropertyOf(arg) : undefined;
+					return prop ? cwdValueLines(prop) : [];
+				})(),
 				exemptReason: exemptAbove(line),
 			});
 		}
