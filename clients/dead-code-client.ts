@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { findLocalBinsAt, VENV_BIN_DIRS } from "./package-manager.js";
 import { findNearestMarkerRoot } from "./path-utils.js";
 import { getScratchTreeFnmatchPatterns } from "./scratch-tree-policy.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
 import {
 	type ProbeEvidence,
 	classifyProbeFailure,
@@ -311,7 +311,7 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 			let probe: Awaited<ReturnType<typeof safeSpawnAsync>>;
 			let hostStallMs: number;
 			try {
-				probe = await safeSpawnAsync(c.cmd, [...c.prefix, "--version"], {
+				probe = await probeToolAsync(c.cmd, [...c.prefix, "--version"], {
 					timeout: 5000,
 				});
 			} finally {

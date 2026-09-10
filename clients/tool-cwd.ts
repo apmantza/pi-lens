@@ -119,6 +119,9 @@ const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	oxlint: [".oxlintrc.json", "oxlint.config.js", "package.json"],
 	sqlfluff: [".sqlfluff", "pyproject.toml", "setup.cfg"],
 	prettier: [".prettierignore", "package.json"],
+	// #2894: cargo must run at the package root. This is the marker walk
+	// `rust-clippy.ts` used to do for itself with `findNearestContaining`.
+	"rust-clippy": ["Cargo.toml"],
 };
 
 const toolCwdGeneration = createGenerationSource("tool-cwd");

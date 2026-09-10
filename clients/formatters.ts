@@ -42,7 +42,7 @@ import {
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "./package-manager.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
 import { getToolPath } from "./installer/index.js";
@@ -586,7 +586,7 @@ async function resolveGoFmtBinary(): Promise<string | null> {
 	const inPath = await which("gofmt");
 	if (inPath) return inPath;
 
-	const goCheck = await safeSpawnAsync("go", ["env", "GOROOT"], {
+	const goCheck = await probeToolAsync("go", ["env", "GOROOT"], {
 		timeout: 5000,
 	});
 	if (goCheck.error || goCheck.status !== 0) return null;
@@ -1507,12 +1507,10 @@ export const csharpierFormatter: FormatterInfo = {
 		}
 		// CSharpier 0.x: invoked through the dotnet driver.
 		if ((await which("dotnet")) !== null) {
-			const legacy = await safeSpawnAsync(
+			const legacy = await probeToolAsync(
 				"dotnet",
 				["csharpier", "--version"],
-				{
-					timeout: 5000,
-				},
+				{ timeout: 5000 },
 			);
 			if (!legacy.error && legacy.status === 0) {
 				return ["dotnet", "csharpier", filePath];
@@ -1525,7 +1523,7 @@ export const csharpierFormatter: FormatterInfo = {
 		if ((await which("csharpier")) !== null) return true;
 		// … or the legacy dotnet-driver form (CSharpier 0.x).
 		if ((await which("dotnet")) === null) return false;
-		const result = await safeSpawnAsync("dotnet", ["csharpier", "--version"], {
+		const result = await probeToolAsync("dotnet", ["csharpier", "--version"], {
 			timeout: 5000,
 		});
 		return !result.error && result.status === 0;
@@ -1699,7 +1697,7 @@ export const psscriptanalyzerFormatFormatter: FormatterInfo = {
 		const pwsh = (await which("pwsh")) ?? (await which("powershell"));
 		if (!pwsh) return false;
 		// Check PSScriptAnalyzer module is available
-		const result = await safeSpawnAsync(
+		const result = await probeToolAsync(
 			pwsh,
 			[
 				"-NoProfile",

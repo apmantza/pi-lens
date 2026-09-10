@@ -45,7 +45,7 @@ import {
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
-import { safeSpawnAsync } from "../../../safe-spawn.js";
+import { probeToolAsync, safeSpawnAsync } from "../../../safe-spawn.js";
 import { compareOrdinal } from "../../../string-utils.js";
 import {
 	getToolCommandSpec,
@@ -1823,7 +1823,7 @@ async function probeAstGrepCommandAsync(
 	let check: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		check = await safeSpawnAsync(cmd, [...argsPrefix, "--version"], {
+		check = await probeToolAsync(cmd, [...argsPrefix, "--version"], {
 			timeout: 5000,
 		});
 	} finally {
@@ -2163,7 +2163,7 @@ export async function resolveLocalFirstAsync(
 	if (globalBin) return { cmd: globalBin, args: [] };
 
 	// 3. Global PATH (already installed system-wide, on PATH)
-	const globalCheck = await safeSpawnAsync(toolName, ["--version"], {
+	const globalCheck = await probeToolAsync(toolName, ["--version"], {
 		timeout: 3000,
 	});
 	if (!globalCheck.error && globalCheck.status === 0) {

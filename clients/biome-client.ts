@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { isFileKind } from "./file-kinds.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync, safeSpawnAsync } from "./safe-spawn.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
 import {
@@ -210,7 +210,14 @@ export class BiomeClient {
 		let result: Awaited<ReturnType<typeof this.spawnBiomeAsync>>;
 		let hostStallMs: number;
 		try {
-			result = await this.spawnBiomeAsync(["--version"], PROBE_TIMEOUT_MS);
+			// The presence probe asks whether biome answers at all, so it goes
+			// through the probe seam (no cwd) rather than through
+			// `spawnBiomeAsync`, whose optional `cwd` exists for the analysis
+			// spawns that DO resolve a project config (#2894).
+			const { cmd, args: prefix } = await this.getBiomeBinary();
+			result = await probeToolAsync(cmd, [...prefix, "--version"], {
+				timeout: PROBE_TIMEOUT_MS,
+			});
 		} finally {
 			hostStallMs = sampler.stop();
 		}

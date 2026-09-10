@@ -2062,6 +2062,45 @@ export async function safeSpawnBatch(
 }
 
 /**
+ * What a tool probe may set. `cwd` is deliberately ABSENT — see
+ * {@link probeToolAsync}.
+ */
+export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
+
+/**
+ * Run a tool's own presence/version invocation — `<tool> --version`,
+ * `cl`, `go version`, `Get-Module -ListAvailable …` — and hand back the raw
+ * spawn result for the caller's availability policy to classify.
+ *
+ * ## The contract: a probe never gets a `cwd` (#2894)
+ *
+ * A probe asks whether a binary exists and what it calls itself. The answer
+ * does not depend on the directory the child starts in, so this seam passes
+ * NONE — the child inherits the host's directory and nothing it reports is
+ * read out of a project. That is why the sweep in
+ * `tests/clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` admits ONE
+ * cwd-less spawn here instead of the 23 it admitted before: every one of
+ * those sites re-decided the same thing in its own words, and 23 sentences a
+ * reviewer has to re-read individually is how an admission table stops being
+ * auditable (#2872 round-3's two canned sentences, four of them false).
+ *
+ * `cwd` is stripped rather than merely omitted from {@link ProbeSpawnOptions}:
+ * the type stops an object LITERAL from carrying one, and the explicit
+ * `cwd: undefined` below stops one that arrives inside an already-typed
+ * options object a caller widened. A probe that genuinely needs to run
+ * somewhere — `mix credo --version` needs a mix project, `cargo clippy
+ * --version` needs a package — must call {@link safeSpawnAsync} directly and
+ * be admitted by the sweep on its own reason.
+ */
+export async function probeToolAsync(
+	command: string,
+	args: readonly string[],
+	options?: ProbeSpawnOptions,
+): Promise<SpawnResult> {
+	return safeSpawnAsync(command, [...args], { ...options, cwd: undefined });
+}
+
+/**
  * Check if a command is available in PATH (async version)
  */
 export async function isCommandAvailableAsync(

@@ -2,7 +2,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
-import { safeSpawnAsync, type SpawnResult } from "../../safe-spawn.js";
+import {
+	probeToolAsync,
+	safeSpawnAsync,
+	type SpawnResult,
+} from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type {
 	Diagnostic,
@@ -51,11 +55,16 @@ const PS_TIMEOUT_MS = 30000;
  * available". `safeSpawnAsync` carries the standard taxonomy — `failure`,
  * `spawnFailure.kind` and the errno on `error` — which is what lets the
  * availability policy tell a stall from an absence.
+ *
+ * The two presence probes that used to share this wrapper now go through
+ * `probeToolAsync` (#2894), so the only spawn left here is the ANALYSIS pass
+ * — which always has a project to resolve `PSScriptAnalyzerSettings.psd1`
+ * against. `cwd` is required to keep it that way.
  */
 function spawnPs(
 	cmd: string,
 	args: string[],
-	options: { timeoutMs?: number; cwd?: string } = {},
+	options: { timeoutMs?: number; cwd: string },
 ): Promise<SpawnResult> {
 	const { timeoutMs = PS_TIMEOUT_MS, cwd } = options;
 	return safeSpawnAsync(cmd, args, {
@@ -182,13 +191,11 @@ async function resolvePowerShellCmd(): Promise<string | null> {
 	for (const candidate of ["pwsh", "powershell"]) {
 		const sampler = startHostStallSampler();
 		const startedAt = Date.now();
-		// cwd-exempt: global interpreter-presence probe ("is pwsh/powershell on PATH at all"), not tied to any project
-		const result = await spawnPs(candidate, [
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			"exit 0",
-		]);
+		const result = await probeToolAsync(
+			candidate,
+			["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+			{ timeout: PS_TIMEOUT_MS, resourceLabel: "psscriptanalyzer" },
+		);
 		const hostStallMs = sampler.stop();
 		const elapsedMs = Date.now() - startedAt;
 		elapsedTotalMs += elapsedMs;
@@ -234,13 +241,16 @@ async function checkModuleAvailable(cmd: string): Promise<boolean> {
 
 	const sampler = startHostStallSampler();
 	const startedAt = Date.now();
-	// cwd-exempt: global module-presence probe -- PSScriptAnalyzer resolves from PowerShell's module search path, not a per-project install
-	const result = await spawnPs(cmd, [
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		"if (Get-Module -ListAvailable PSScriptAnalyzer) { exit 0 } else { exit 1 }",
-	]);
+	const result = await probeToolAsync(
+		cmd,
+		[
+			"-NoProfile",
+			"-NonInteractive",
+			"-Command",
+			"if (Get-Module -ListAvailable PSScriptAnalyzer) { exit 0 } else { exit 1 }",
+		],
+		{ timeout: PS_TIMEOUT_MS, resourceLabel: "psscriptanalyzer" },
+	);
 	const hostStallMs = sampler.stop();
 	const elapsedMs = Date.now() - startedAt;
 	if (!result.error && result.status === 0) {

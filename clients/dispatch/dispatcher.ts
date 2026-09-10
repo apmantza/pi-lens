@@ -41,7 +41,7 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
-import { safeSpawnAsync } from "../safe-spawn.js";
+import { probeToolAsync } from "../safe-spawn.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import {
 	classifyProbeFailure,
@@ -71,7 +71,7 @@ import { getToolProfile } from "./tool-profile.js";
 import { isRunnerSkipReason } from "./types.js";
 
 const dispatcherProbeFlights = createAvailabilityProbeFlight<
-	Awaited<ReturnType<typeof safeSpawnAsync>>
+	Awaited<ReturnType<typeof probeToolAsync>>
 >({ generation: () => getDispatchAvailabilityGeneration() });
 import type {
 	Diagnostic,
@@ -205,12 +205,12 @@ export async function checkToolAvailability(
 		// that overlapped the window and let the shared classifier read it.
 		const sampler = startHostStallSampler();
 		const startedAt = Date.now();
-		let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
+		let result: Awaited<ReturnType<typeof probeToolAsync>>;
 		let hostStallMs: number;
 		let probeJoined = false;
 		try {
 			const shared = dispatcherProbeFlights.run(`dispatcher:${key}`, () =>
-				safeSpawnAsync(command, ["--version"], {
+				probeToolAsync(command, ["--version"], {
 					timeout: TOOL_PROBE_TIMEOUT_MS,
 				}),
 			);

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawnAsync } from "../../safe-spawn.js";
+import { probeToolAsync, safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -130,7 +130,7 @@ async function resolveCompiler(
 	// this never resolves a config file or a target path, so there is no cwd
 	// for it to get wrong.
 	// cwd-exempt: presence probe only -- `cl` with no args and no target file, used solely to detect whether MSVC is on PATH
-	const clProbe = await safeSpawnAsync("cl", [], { timeout: 5000 });
+	const clProbe = await probeToolAsync("cl", [], { timeout: 5000 });
 	if (!clProbe.error && clProbe.status !== null) {
 		return {
 			command: "cl",

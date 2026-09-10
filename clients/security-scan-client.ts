@@ -15,7 +15,7 @@
 
 import * as path from "node:path";
 import { createSubsystemLogger } from "./extension-log.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./safe-spawn.js";
 import {
 	type AvailabilityCause,
 	type AvailabilityOutcome,
@@ -31,7 +31,7 @@ import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import { createSingleFlight } from "./single-flight.js";
 
 type SecurityProbeResult = {
-	probe: Awaited<ReturnType<typeof safeSpawnAsync>>;
+	probe: Awaited<ReturnType<typeof probeToolAsync>>;
 	binaryPath: string | null;
 };
 
@@ -158,7 +158,7 @@ export abstract class SecurityScanClient<TResult> {
 	protected async probeVersion(versionArgs: string[]): Promise<boolean> {
 		const sampler = startHostStallSampler();
 		const startedAt = Date.now();
-		let probe: Awaited<ReturnType<typeof safeSpawnAsync>>;
+		let probe: Awaited<ReturnType<typeof probeToolAsync>>;
 		let hostStallMs: number;
 		let resolvedBinaryPath: string | null = null;
 		let probeJoined = false;
@@ -170,7 +170,7 @@ export abstract class SecurityScanClient<TResult> {
 						await import("./installer/index.js");
 					const managed = await findManagedToolBinary(this.toolName);
 					return {
-						probe: await safeSpawnAsync(managed ?? this.toolName, versionArgs, {
+						probe: await probeToolAsync(managed ?? this.toolName, versionArgs, {
 							timeout: 5000,
 						}),
 						binaryPath: managed ?? null,

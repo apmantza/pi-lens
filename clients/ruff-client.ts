@@ -17,6 +17,7 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { isFileKind } from "./file-kinds.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import { ruffConfigArgs } from "./tool-policy.js";
 
 // --- Types ---
@@ -82,8 +83,11 @@ export class RuffClient {
 
 	/**
 	 * Async auto-fix variant for pipeline use (non-blocking spawn).
-	 * `cwd` is the dispatch language root (used for config discovery); when
-	 * omitted it defaults to the file's directory.
+	 * `cwd` is the dispatch language root. It is the seam's starting point,
+	 * not the answer: `resolveToolCwd` walks from the file to the nearest
+	 * `pyproject.toml`/`ruff.toml`/`.ruff.toml` at or above it, capped inside
+	 * `cwd` (and at `$HOME` when there is none), so a file in a nested package
+	 * gets that package's config rather than the workspace-root one.
 	 */
 	async fixFileAsync(
 		filePath: string,
@@ -116,15 +120,18 @@ export class RuffClient {
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
 
+			// #2894: the root ruff resolves its config from comes from the shared
+			// seam, not from a local `cwd ?? path.dirname(file)`. `tool-policy.ts`
+			// requires the lint runner (`ruff.ts`, on `resolveRunnerCwd`) and this
+			// autofix path to consume the SAME policy; deriving the root two
+			// different ways is how they drift, and the hand-rolled form ignored a
+			// nested `pyproject.toml` whenever the caller passed a workspace root.
+			const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, { cwd });
 			// Shared config-args seam (#1247): the lint runner consumes the same
 			// builder, so `check --fix` can never drift to ruff's default rule
 			// set when the project lacks its own config and the package-owned
 			// core.toml fallback applies.
-			const configArgs = ruffConfigArgs(cwd ?? path.dirname(absolutePath));
-			const spawnOpts = {
-				timeout: 10000,
-				cwd: cwd ?? path.dirname(absolutePath),
-			};
+			const configArgs = ruffConfigArgs(ruffCwd);
 
 			const pre = await safeSpawnAsync(
 				this.ruffCommand,
@@ -137,7 +144,7 @@ export class RuffClient {
 					...configArgs,
 					absolutePath,
 				],
-				spawnOpts,
+				{ timeout: 10000, cwd: ruffCwd },
 			);
 			const beforeDiags = pre.stdout?.trim()
 				? this.parseOutput(pre.stdout, absolutePath)
@@ -147,7 +154,7 @@ export class RuffClient {
 			const fix = await safeSpawnAsync(
 				this.ruffCommand,
 				["check", "--fix", ...configArgs, absolutePath],
-				{ timeout: 15000, cwd: cwd ?? path.dirname(absolutePath) },
+				{ timeout: 15000, cwd: ruffCwd },
 			);
 
 			if (fix.error) {
