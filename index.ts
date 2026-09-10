@@ -2051,7 +2051,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// reaches handleSessionStart and so never publishes an expectation
 					// line of its own — must not re-arm a live primary's claims.
 					resetOncePerSessionPhases();
-					startSituationalToolTelemetrySession();
+					startSituationalToolTelemetrySession(
+						!isFreshSessionStart(sessionReason),
+						false,
+					);
 					// #2249: same gate — a declined bind's own session_start must never
 					// reach here (it returned above), so this only fires for a genuine
 					// new primary. A crash or forced kill can skip session_shutdown's
@@ -2096,6 +2099,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// pinned devDependency version's API exists at runtime. Under
 					// `--no-lazy-tools` nothing is touched at all: all-active IS the
 					// requested posture.
+					let restoredLazyToolNames: string[] = [];
 					try {
 						const piWithActiveTools = pi as unknown as {
 							getActiveTools?: () => string[];
@@ -2118,7 +2122,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							);
 							if (plan.changed) {
 								piWithActiveTools.setActiveTools(plan.desired);
-								observeSituationalToolActivation([...rememberedLazyTools]);
+								restoredLazyToolNames = [...rememberedLazyTools];
 								recordToolSetMutation({
 									addedCount: plan.addedCount,
 									removedCount: plan.removedCount,
@@ -2271,6 +2275,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 						resetDispatchBaselines,
 						resetLSPService,
 					});
+					// The handler resets session observations. Record restored activations
+					// after that reset so the restored tools are not reported as dead weight.
+					observeSituationalToolActivation(restoredLazyToolNames);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran

@@ -278,6 +278,7 @@ describe("index.ts integration", () => {
 		"real pi session observes two situational calls before one shutdown row",
 		async () => {
 			const logExtension = vi.fn();
+			vi.doUnmock("../clients/runtime-session.js");
 			vi.doMock("../clients/extension-log.js", async (importActual) => ({
 				...(await importActual<typeof import("../clients/extension-log.js")>()),
 				logExtension,
@@ -319,6 +320,51 @@ describe("index.ts integration", () => {
 						"situational tool dead weight",
 				),
 			).toHaveLength(1);
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"real pi restore keeps restored activations out of the dead-weight row",
+		async () => {
+			const logExtension = vi.fn();
+			vi.doMock("../clients/extension-log.js", async (importActual) => ({
+				...(await importActual<typeof import("../clients/extension-log.js")>()),
+				logExtension,
+			}));
+			const { default: registerExtension } = await import("../index.js");
+			const { mock, pi, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const ctx = makeCtx({ cwd: tmpDir, sessionId: "pi-restore-dead-weight" });
+
+			await handlers.session_start?.[0]?.({}, ctx);
+			const activation = mock.getTool("pi_lens_activate_tools") as {
+				execute: (...args: unknown[]) => Promise<unknown>;
+			};
+			await activation.execute(
+				"activate",
+				{ tools: ["ast_grep_search"] },
+				undefined,
+				undefined,
+				ctx,
+			);
+			mock.simulateSessionRebuild();
+			await handlers.session_start?.[0]?.({ reason: "reload" }, ctx);
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+
+			const rows = logExtension.mock.calls
+				.map(
+					([row]) =>
+						row as { message?: string; metadata?: { tools?: string[] } },
+				)
+				.filter((row) => row.message === "situational tool dead weight");
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.metadata?.tools).toEqual([
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"lsp_navigation",
+				"lens_diagnostic_mark",
+			]);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

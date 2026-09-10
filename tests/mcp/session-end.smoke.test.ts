@@ -177,4 +177,25 @@ describe("MCP connection-scoped situational dead-weight lifecycle", () => {
 			fs.rmSync(home, { recursive: true, force: true });
 		}
 	}, 60_000);
+
+	it("flushes once when session_end is followed by stdin close", async () => {
+		const home = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-end-close-"),
+		);
+		const harness = new McpHarness({
+			env: { PI_LENS_HOME: home, PI_LENS_TEST_MODE: "0" },
+		});
+		try {
+			await harness.request(1, "initialize");
+			await harness.request(2, "tools/call", {
+				name: "pilens_session_end",
+				arguments: {},
+			});
+			await harness.closeInput();
+			expect(await readDeadWeightRows(home)).toHaveLength(1);
+		} finally {
+			harness.dispose();
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	}, 60_000);
 });

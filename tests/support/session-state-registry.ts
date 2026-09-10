@@ -1062,7 +1062,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		id: "situational-tool-telemetry:sessionObservation",
 		module: "situational-tool-telemetry.ts",
 		state:
-			"activated, called (the dead-weight row's per-session observation sets) and emitted (its once-per-row latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag and is deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing it there would make endSituationalToolTelemetry() skip the session's own final row",
+			"activated, called (the dead-weight row's per-session observation sets), emitted (its once-per-row latch), and connectionEnded (the MCP connection-owned terminal latch). situationalToolSet is also counted by the scan but is an import-time frozen lookup over TOOL_REGISTRY (SWEEP_HEURISTIC_LIMITS item 5); sessionStarted is the start/end pair's own in-progress flag and connectionEnded are deliberately NOT cleared by this reset — both hosts call startSituationalToolTelemetrySession() before handleSessionStart, so clearing them there would make endSituationalToolTelemetry() skip the session's own final row or re-open a terminal MCP connection",
 		policy: "session_start",
 		resetName: "resetSituationalToolTelemetry",
 		reason:

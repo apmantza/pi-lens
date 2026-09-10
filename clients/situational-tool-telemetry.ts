@@ -18,6 +18,7 @@ const called = new Set<SituationalToolName>();
 let sessionStarted = false;
 let emitted = false;
 let preserveObservationsOnReset = false;
+let connectionEnded = false;
 
 function observe(set: Set<SituationalToolName>, name: string): void {
 	if (situationalToolSet.has(name as SituationalToolName)) {
@@ -45,7 +46,12 @@ export function resetSituationalToolTelemetry(): void {
 }
 
 /** Begin a fresh session, preserving one row for an abruptly replaced one. */
-export function startSituationalToolTelemetrySession(idempotent = false): void {
+export function startSituationalToolTelemetrySession(
+	idempotent = false,
+	preserveOnReset = idempotent,
+): void {
+	if (idempotent && connectionEnded) return;
+	if (!idempotent) connectionEnded = false;
 	if (sessionStarted && idempotent) return;
 	if (sessionStarted) {
 		preserveObservationsOnReset = false;
@@ -54,7 +60,7 @@ export function startSituationalToolTelemetrySession(idempotent = false): void {
 		emitted = false;
 		return;
 	}
-	preserveObservationsOnReset = idempotent;
+	preserveObservationsOnReset = preserveOnReset;
 	resetSituationalToolTelemetry();
 	emitted = false;
 	sessionStarted = true;
@@ -64,6 +70,7 @@ export function startSituationalToolTelemetrySession(idempotent = false): void {
 export function endSituationalToolTelemetry(): void {
 	if (!sessionStarted) return;
 	emitSituationalDeadWeight();
+	connectionEnded = true;
 	preserveObservationsOnReset = false;
 	resetSituationalToolTelemetry();
 	sessionStarted = false;

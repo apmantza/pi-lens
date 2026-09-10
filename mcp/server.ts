@@ -94,6 +94,7 @@ import {
 	observeSituationalToolCall,
 	startSituationalToolTelemetrySession,
 } from "../clients/situational-tool-telemetry.js";
+import { flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -937,7 +938,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_session_end",
 		description:
-			"End the MCP session and write its bounded situational-tool telemetry line.",
+			"End the MCP connection's telemetry session and write its bounded situational-tool telemetry line. This is terminal for the connection.",
 		inputSchema: {
 			type: "object",
 			properties: {},
@@ -1985,7 +1986,7 @@ process.stdin.on("data", (chunk: string) => {
 });
 process.stdin.on("end", () => {
 	endSituationalToolTelemetry();
-	process.exit(0);
+	void flushExtensionLog().finally(() => process.exit(0));
 });
 
 startIpcServer();
