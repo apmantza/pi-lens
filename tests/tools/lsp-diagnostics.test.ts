@@ -44,7 +44,7 @@ vi.mock("../../clients/lsp/wait-policy/index.js", () => ({
 	classifyCascadeWaitTier: () => mocked.cascadeTier,
 }));
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 
 vi.mock("../../clients/widget-state.js", () => ({
 	reconcileScanDiagnostics: (...args: unknown[]) =>
@@ -59,7 +59,7 @@ describe("lsp_diagnostics tool", () => {
 		mocked.cascadeTier = "waits";
 		mocked.warmAttached = false;
 		mocked.attachedDiagnostics.mockReset();
-		reconcileScanDiagnosticsMock.mockReset();
+		reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 		mocked.service = makeLspServiceDouble({
 			getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
 				if (filePath.endsWith("bad.ts")) {
@@ -1880,6 +1880,32 @@ describe("lsp_diagnostics tool", () => {
 				expect(filePath).toBe(clean);
 				expect(confirmed).toBe(true);
 				expect(diags).toEqual([]);
+			} finally {
+				removeTempDirSync(tmpDir);
+			}
+		});
+
+		it("rejects an undefined reconciliation result as unconfirmed", async () => {
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-undefined-"),
+			);
+			const file = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(file, "const value = 1;\n");
+			reconcileScanDiagnosticsMock.mockReturnValue(undefined);
+			const onConfirmedNoBlockers = vi.fn();
+
+			try {
+				await createLspDiagnosticsTool(
+					undefined,
+					onConfirmedNoBlockers,
+				).execute(
+					"diag-reconcile-undefined",
+					{ path: file, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+				expect(onConfirmedNoBlockers).not.toHaveBeenCalled();
 			} finally {
 				removeTempDirSync(tmpDir);
 			}

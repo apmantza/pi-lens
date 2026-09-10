@@ -9554,13 +9554,13 @@
     "setSessionLanguages",
     "widgetDiagnosticUri"
   ],
-  "tests/tools/lens-diagnostics.test.ts:40:../../clients/project-diagnostics/fresh-fetch.js": [
+  "tests/tools/lens-diagnostics.test.ts:44:../../clients/project-diagnostics/fresh-fetch.js": [
     "ANALYZER_IDS"
   ],
-  "tests/tools/lens-diagnostics.test.ts:63:../../clients/project-diagnostics/cache.js": [
+  "tests/tools/lens-diagnostics.test.ts:67:../../clients/project-diagnostics/cache.js": [
     "saveProjectDiagnosticsSnapshot"
   ],
-  "tests/tools/lens-diagnostics.test.ts:88:../../clients/widget-state.js": [
+  "tests/tools/lens-diagnostics.test.ts:92:../../clients/widget-state.js": [
     "MAX_LSP_SERVER_RECORDS",
     "STALE_RECONCILE_DEBOUNCE_MS",
     "WIDGET_STATE_VERSION",
@@ -9589,7 +9589,7 @@
     "setSessionLanguages",
     "widgetDiagnosticUri"
   ],
-  "tests/tools/lens-diagnostics.test.ts:107:../../clients/diagnostic-line-freshness.js": [
+  "tests/tools/lens-diagnostics.test.ts:111:../../clients/diagnostic-line-freshness.js": [
     "MAX_SHARED_CACHE_ENTRIES",
     "PAST_EOF_STALE_MARKER",
     "_resetSharedLineCountCacheForTests",

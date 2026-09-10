@@ -116,6 +116,8 @@ export interface FreshProjectDiagnosticsResult {
 	runners: string[];
 	/** Extractor ids that completed successfully, including clean results. */
 	completed: string[];
+	/** Extractor ids whose successful result actually analysed the project. */
+	analyzed: string[];
 	/** Extractor ids skipped this run (not applicable / tool unavailable, OR
 	 *  aborted before settling — see `abortedIds`). */
 	cold: string[];
@@ -238,6 +240,7 @@ export async function fetchFreshProjectDiagnostics(
 			diagnostics: [],
 			runners: [],
 			completed: [],
+			analyzed: [],
 			cold: [...ANALYZER_IDS],
 			coldReasons: Object.fromEntries(
 				ANALYZER_IDS.map((id) => [id, unsafeRootReason]),
@@ -250,6 +253,7 @@ export async function fetchFreshProjectDiagnostics(
 	const diagnostics: ProjectDiagnostic[] = [];
 	const runners: string[] = [];
 	const completed: string[] = [];
+	const analyzed: string[] = [];
 	const cold: string[] = [];
 	// #1623: the specific reason each `cold` id was skipped, captured at the
 	// gate that decided it — see FreshProjectDiagnosticsResult.coldReasons.
@@ -288,6 +292,7 @@ export async function fetchFreshProjectDiagnostics(
 		elapsedMs: number,
 	): void {
 		pushUnique(completed, id);
+		pushUnique(analyzed, id);
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
 		const kept = applyDispositionsMultiFile(
 			adapted,
@@ -336,6 +341,13 @@ export async function fetchFreshProjectDiagnostics(
 				recordFailed("knip", result);
 				return;
 			}
+			if (result.analyzed === false || result.execution === "cache") {
+				markCold(
+					"knip",
+					result.summary ?? "knip result was not a fresh analysis",
+				);
+				return;
+			}
 			cacheManager.writeCache("knip", result, analysisRoot, {
 				scanDurationMs: Date.now() - startMs,
 			});
@@ -372,6 +384,13 @@ export async function fetchFreshProjectDiagnostics(
 			);
 			if (!result.success) {
 				recordFailed("jscpd", result);
+				return;
+			}
+			if (result.analyzed === false) {
+				markCold(
+					"jscpd",
+					"jscpd skipped because the project has no source files",
+				);
 				return;
 			}
 			cacheManager.writeCache(scannerKey, result, analysisRoot, {
@@ -693,6 +712,7 @@ export async function fetchFreshProjectDiagnostics(
 			diagnostics,
 			runners,
 			completed,
+			analyzed,
 			cold,
 			coldReasons,
 			failed,
@@ -709,6 +729,7 @@ export async function fetchFreshProjectDiagnostics(
 		diagnostics,
 		runners,
 		completed,
+		analyzed,
 		cold,
 		coldReasons,
 		failed,

@@ -282,6 +282,46 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		);
 	});
 
+	it("does not treat successful empty no-op results as analysed runners", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients({
+			knipResult: {
+				success: true,
+				analyzed: false,
+				issues: [],
+				unusedExports: [],
+				unusedFiles: [],
+				unusedDeps: [],
+				unlistedDeps: [],
+				summary: "No project root found; knip skipped",
+			},
+			jscpdAvailable: true,
+			jscpdResult: {
+				success: true,
+				analyzed: false,
+				clones: [],
+				duplicatedLines: 0,
+				totalLines: 0,
+				percentage: 0,
+			},
+		});
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+		);
+
+		expect(result.completed).not.toEqual(
+			expect.arrayContaining(["knip", "jscpd"]),
+		);
+		expect(result.analyzed).not.toEqual(
+			expect.arrayContaining(["knip", "jscpd"]),
+		);
+		expect(result.cold).toEqual(expect.arrayContaining(["knip", "jscpd"]));
+		expect(result.diagnostics).toEqual([]);
+	});
+
 	it("writes to the jscpd-ts cache key when a tsconfig.json is present", async () => {
 		fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{}");
 		const cacheManager = makeCacheManager();

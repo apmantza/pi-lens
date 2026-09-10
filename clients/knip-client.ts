@@ -50,6 +50,8 @@ export interface KnipIssue {
 
 export interface KnipResult {
 	success: boolean;
+	/** Whether knip actually analysed the resolved project root. */
+	analyzed?: boolean;
 	issues: KnipIssue[];
 	unusedExports: KnipIssue[];
 	unusedFiles: KnipIssue[];
@@ -436,6 +438,7 @@ export class KnipClient {
 			return {
 				...EMPTY_RESULT,
 				success: true,
+				analyzed: false,
 				summary: "No project root found; knip skipped",
 			};
 		}

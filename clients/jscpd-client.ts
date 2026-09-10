@@ -44,6 +44,8 @@ export interface DuplicateClone {
 
 export interface JscpdResult {
 	success: boolean;
+	/** Whether jscpd actually analysed source files. */
+	analyzed?: boolean;
 	clones: DuplicateClone[];
 	duplicatedLines: number;
 	totalLines: number;
@@ -244,7 +246,7 @@ export class JscpdClient {
 			return { ...EMPTY_RESULT };
 		}
 		if (!this.hasSourceFilesRecursive(targetDir)) {
-			return { ...EMPTY_RESULT, success: true };
+			return { ...EMPTY_RESULT, success: true, analyzed: false };
 		}
 
 		if (!(await this.ensureAvailable())) {

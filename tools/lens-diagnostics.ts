@@ -1832,6 +1832,7 @@ async function formatFullMode(
 				diagnostics: [],
 				runners: [],
 				completed: [],
+				analyzed: [],
 				// #1623: every heavyweight analyzer is ELIGIBLE for this project but
 				// this call never asked for it (refreshRunners wasn't cheap/all/
 				// cached) — the expensive fetch below deliberately never runs in
@@ -2006,23 +2007,11 @@ async function formatFullMode(
 	// computed above, in the SAME `Promise.all` as the LSP sweep (#613) — only
 	// when the caller opted into project-runner state (otherwise it's the
 	// `Promise.resolve({...})` stub from `analyzersPromise` above).
-	const completedRunners = (extracted.completed ?? []).filter(
+	const authoritativeRunnerIds = (extracted.analyzed ?? []).filter(
 		(id) => id !== "test-runner",
 	);
-	const runnerFreshSnapshot =
-		scannedSnapshot && completedRunners.length > 0
-			? {
-					...scannedSnapshot,
-					diagnostics: scannedSnapshot.diagnostics.filter(
-						(diagnostic) =>
-							!completedRunners.includes(
-								diagnostic.runner ?? diagnostic.tool ?? "",
-							),
-					),
-				}
-			: scannedSnapshot;
 	const foldedProjectSnapshot = foldExtraDiagnosticsIntoSnapshot(
-		runnerFreshSnapshot,
+		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
 		extracted.runners,
 		cwd,
@@ -2038,34 +2027,6 @@ async function formatFullMode(
 		),
 		policyMap,
 	);
-	// A successful fresh runner result with no finding is authoritative for its
-	// completed runner and must retire that runner's retained widget rows. A
-	// cache-read test-runner result is deliberately excluded.
-	if (completedRunners.length > 0) {
-		const runnerFiles = new Set(
-			getFileDiagnosticSummaries()
-				.map((summary) => summary.filePath)
-				.concat(extracted.diagnostics.map((diagnostic) => diagnostic.filePath))
-				.filter(includeFile),
-		);
-		for (const filePath of runnerFiles) {
-			const summary = getFileDiagnosticSummaries().find(
-				(entry) => path.resolve(entry.filePath) === path.resolve(filePath),
-			);
-			if (summary) {
-				reconcileCorrelatedScanDiagnostics(
-					filePath,
-					summary.diagnostics.filter(
-						(diagnostic) =>
-							!completedRunners.includes(
-								diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "",
-							),
-					),
-					nextWriteIndex?.(),
-				);
-			}
-		}
-	}
 	// #630: only the CONFIRMED LSP results contribute diagnostics to the merge
 	// — an unconfirmed (timed-out/errored) file's placeholder `[]` must not be
 	// read as "0 issues, clean" via its LSP contribution. It can still
@@ -2100,7 +2061,7 @@ async function formatFullMode(
 			projectSnapshot,
 			projectDelta,
 			authoritativeLspFiles,
-			new Set(completedRunners),
+			new Set(authoritativeRunnerIds),
 		),
 		cwd,
 		policyMap,

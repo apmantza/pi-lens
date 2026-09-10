@@ -10,6 +10,10 @@ import {
 	_resetDeferredForTests,
 	_resetStateCacheForTests,
 } from "../../clients/diagnostic-dispositions.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -116,6 +120,7 @@ vi.mock(
 );
 
 beforeEach(() => {
+	resetDegradationLedger();
 	projectDiagnosticsMocks.scanProjectDiagnostics.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
@@ -123,6 +128,7 @@ beforeEach(() => {
 	freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 		diagnostics: [],
 		runners: [],
+		analyzed: [],
 		cold: [],
 		timings: {},
 	});
@@ -740,6 +746,43 @@ function sum(
 }
 
 describe("lens_diagnostics mode=full", () => {
+	it("retires only the analysed runner's retained row", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "stale runner finding",
+							line: 4,
+							rule: "jscpd:duplicate-code",
+							tool: "jscpd",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			completed: ["jscpd"],
+			analyzed: ["jscpd"],
+			cold: [],
+			timings: { jscpd: 1 },
+		});
+
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+
+		expect(String(result.content[0].text)).not.toContain(
+			"stale runner finding",
+		);
+	});
+
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
@@ -1075,6 +1118,30 @@ describe("lens_diagnostics mode=full", () => {
 			(call) => call[0],
 		);
 		expect(reconciledFiles).not.toContain("/proj/src/timed-out.ts");
+	});
+
+	it("records an unreconciled confirmed result once per session and re-arms after reset", async () => {
+		const filePath = "/proj/src/rejected.ts";
+		const lspService = {
+			runWorkspaceDiagnostics: vi
+				.fn()
+				.mockResolvedValue([{ filePath, diagnostics: [], count: 0 }]),
+		};
+		reconcileScanDiagnosticsMock.mockReturnValue(undefined);
+
+		await run(makeTool({}, lspService), { mode: "full" });
+		await run(makeTool({}, lspService), { mode: "full" });
+		const firstSession = getDegradationSummary().find(
+			(group) => group.kind === "diagnostic-retained-unreconciled",
+		);
+		expect(firstSession?.count).toBe(1);
+
+		resetDegradationLedger();
+		await run(makeTool({}, lspService), { mode: "full" });
+		const secondSession = getDegradationSummary().find(
+			(group) => group.kind === "diagnostic-retained-unreconciled",
+		);
+		expect(secondSession?.count).toBe(1);
 	});
 
 	it("does not render an errored LSP file as clean, and distinguishes error from timeout in the note (#630)", async () => {
