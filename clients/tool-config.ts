@@ -26,13 +26,6 @@ export const TOOL_REGISTRY = [
 		disableable: true,
 	},
 	{
-		name: "ast_grep_dump",
-		piName: "ast_grep_dump",
-		mcpName: undefined,
-		situational: true,
-		disableable: true,
-	},
-	{
 		name: "lsp_navigation",
 		piName: "lsp_navigation",
 		mcpName: "pilens_lsp_navigation",

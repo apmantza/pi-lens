@@ -84,6 +84,7 @@
   "./clients/tool-definition.js",
   "./clients/tool-render.js",
   "./clients/tool-set-policy.js",
+  "./clients/turn-context.js",
   "./clients/turn-summary-render.js",
   "./clients/turn-summary.js",
   "./clients/user-notify.js",

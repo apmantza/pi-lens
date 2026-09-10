@@ -22,7 +22,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAstGrepDumpTool } from "../../tools/ast-dump.js";
 import { createAstGrepOutlineTool } from "../../tools/ast-grep-outline.js";
 import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
@@ -84,7 +83,6 @@ const REAL_TOOL_SCHEMAS: Record<string, Set<string>> = {
 	ast_grep_search: schemaProps(createAstGrepSearchTool(astGrepClientStub)),
 	ast_grep_replace: schemaProps(createAstGrepReplaceTool(astGrepClientStub)),
 	ast_grep_outline: schemaProps(createAstGrepOutlineTool(astGrepClientStub)),
-	ast_grep_dump: schemaProps(createAstGrepDumpTool(astGrepClientStub)),
 	lsp_navigation: schemaProps(createLspNavigationTool(() => true)),
 	lsp_diagnostics: schemaProps(createLspDiagnosticsTool()),
 };
@@ -95,7 +93,6 @@ const FILE_TOOL_SCOPE: Record<string, string[]> = {
 		"ast_grep_search",
 		"ast_grep_replace",
 		"ast_grep_outline",
-		"ast_grep_dump",
 	],
 	"skills/pi-lens-lsp-navigation/SKILL.md": [
 		"lsp_navigation",

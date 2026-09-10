@@ -106,28 +106,6 @@ describe("wrapToolForCompactLine — representative tools", () => {
 		),
 	};
 
-	// ast_grep_dump: mirrors tools/ast-dump.ts's lazy-tool summarizer shape.
-	const astGrepDumpTool = {
-		name: "ast_grep_dump" as const,
-		label: "AST-Grep Dump",
-		description: "d",
-		parameters: {} as never,
-		async execute() {
-			return { content: [] };
-		},
-		renderResult: compactRenderResult<{ lang?: string }>(
-			({ details, isError, lineCount, text }) => {
-				const lang = details?.lang ?? "";
-				if (isError)
-					return `ast_grep_dump ${lang} — ${text.split("\n")[0]}`.trim();
-				return `ast_grep_dump ${lang} — ${lineCount} AST nodes`.replace(
-					/\s+/g,
-					" ",
-				);
-			},
-		),
-	};
-
 	for (const [label, tool, result, expectSubstring] of [
 		[
 			"lens_diagnostics",
@@ -140,15 +118,6 @@ describe("wrapToolForCompactLine — representative tools", () => {
 			lspDiagnosticsTool,
 			{ content: [], details: { totalDiagnostics: 5 } },
 			"lsp_diagnostics",
-		],
-		[
-			"ast_grep_dump",
-			astGrepDumpTool,
-			{
-				content: [{ type: "text", text: "(program)\n" }],
-				details: { lang: "ts" },
-			},
-			"ast_grep_dump ts",
 		],
 	] as const) {
 		it(`${label}: collapsed result becomes a single combined line reusing its own summary`, () => {

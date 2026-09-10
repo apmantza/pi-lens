@@ -1,19 +1,18 @@
 {
   "pi": {
-    "descriptionTotal": 4558,
-    "total": 26718,
+    "descriptionTotal": 4403,
+    "total": 26012,
     "tools": {
-      "ast_grep_dump": 656,
       "ast_grep_outline": 1684,
       "ast_grep_replace": 1930,
-      "ast_grep_search": 4152,
+      "ast_grep_search": 4118,
       "effective_config": 736,
       "lens_diagnostic_mark": 1434,
       "lens_diagnostics": 4115,
       "lsp_diagnostics": 1621,
       "lsp_navigation": 3672,
       "module_report": 1845,
-      "pi_lens_activate_tools": 440,
+      "pi_lens_activate_tools": 424,
       "project_report": 904,
       "read_enclosing": 1250,
       "read_symbol": 901,
@@ -22,11 +21,11 @@
   },
   "mcp": {
     "descriptionTotal": 6272,
-    "total": 27274,
+    "total": 27240,
     "tools": {
       "pilens_analyze": 998,
       "pilens_ast_grep_replace": 2043,
-      "pilens_ast_grep_search": 4530,
+      "pilens_ast_grep_search": 4496,
       "pilens_diagnostics": 4036,
       "pilens_effective_config": 1187,
       "pilens_health": 355,
@@ -39,8 +38,8 @@
       "pilens_read_enclosing": 1202,
       "pilens_read_symbol": 721,
       "pilens_rebuild": 364,
+      "pilens_session_end": 107,
       "pilens_session_start": 475,
-	  "pilens_session_end": 107,
       "pilens_symbol_search": 1399,
       "pilens_turn_end": 700
     }

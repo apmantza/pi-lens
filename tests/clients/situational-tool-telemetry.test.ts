@@ -32,7 +32,6 @@ describe("situational dead-weight telemetry", () => {
 				tools: [
 					"ast_grep_replace",
 					"ast_grep_outline",
-					"ast_grep_dump",
 					"lens_diagnostic_mark",
 				],
 			},
@@ -44,7 +43,6 @@ describe("situational dead-weight telemetry", () => {
 			"ast_grep_search",
 			"ast_grep_replace",
 			"ast_grep_outline",
-			"ast_grep_dump",
 			"lsp_navigation",
 			"lens_diagnostic_mark",
 		]);

@@ -75,6 +75,7 @@ describe("MCP situational dead-weight session end", () => {
 			"pid",
 			"subsystem",
 			"ts",
+			"turnId",
 		]);
 		expect(row).toEqual(
 			expect.objectContaining({
@@ -85,7 +86,6 @@ describe("MCP situational dead-weight session end", () => {
 					tools: [
 						"ast_grep_replace",
 						"ast_grep_outline",
-						"ast_grep_dump",
 						"lsp_navigation",
 						"lens_diagnostic_mark",
 					],

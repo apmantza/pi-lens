@@ -1150,6 +1150,17 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"Tsconfig path and project-reference resolutions derive from workspace topology, so both memos must re-arm with that index.",
 	},
 	{
+		id: "turn-context:perSessionCounters",
+		module: "turn-context.ts",
+		state:
+			"the per-session turn counters keyed by stable session id (and the AsyncLocalStorage binding)",
+		policy: "session_start",
+		resetName: "resetTurnContext",
+		sessionStartClosureReset: true,
+		reason:
+			"#2815: turn context is process-singleton-backed state with per-session counters. Its reset must run once from the primary session_start closure, after concurrent-secondary classification, so a secondary cannot erase the primary's live turn identity; the coordinator only changes identity and begins turns.",
+	},
+	{
 		id: "workspace-modules:moduleSourceFilesMemo",
 		module: "review-graph/workspace-modules.ts",
 		state: "_moduleSourceFilesMemo",
@@ -1639,6 +1650,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// entry above for why it is exempt rather than registered.
 	"tree-sitter-query-loader.ts": 2,
 	"tree-sitter-shared.ts": 0,
+	"turn-context.ts": 0,
 	"warm-attach.ts": 0,
 	// #2275 added `renderedDependencyDriftFiles` (the drained per-turn footer
 	// delivery set) alongside the existing two.

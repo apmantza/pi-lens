@@ -4,6 +4,7 @@ import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
+import { getTurnId } from "./turn-context.js";
 import type {
 	ReviewGraph,
 	ReviewGraphPersistCoverage,
@@ -125,6 +126,7 @@ export interface ReviewGraphLogEntry {
 	ts?: string;
 	/** Logger process identity for machine-global log correlation. */
 	pid?: number;
+	turnId?: string;
 	phase:
 		| "build_started"
 		| "build_succeeded"
@@ -200,6 +202,7 @@ export function logReviewGraph(entry: ReviewGraphLogEntry): void {
 		...entry,
 		cwd: normalizeFilePath(entry.cwd),
 		pid: process.pid,
+		turnId: getTurnId(),
 	});
 }
 
