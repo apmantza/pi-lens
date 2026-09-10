@@ -527,6 +527,11 @@ describe("PR body lint (#1844)", () => {
 			process.cwd(),
 			() =>
 				"diff --git a/clients/new-path.ts b/clients/new-path.ts\n+catch (error) { resolveToolCwd(error); }",
+			{
+				headFiles: new Map([
+					["clients/existing-record.ts", readFileSync(source, "utf8")],
+				]),
+			},
 		);
 		expect(result.valid).toBe(true);
 	});
@@ -548,6 +553,7 @@ describe("PR body lint (#1844)", () => {
 			valid: false,
 			errors: [
 				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+				"PR body citation tests/existing-record.test.ts:1 does not exist in the HEAD tree.",
 			],
 		});
 	});
@@ -585,6 +591,7 @@ describe("PR body lint (#1844)", () => {
 					valid: false,
 					errors: [
 						'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+						`PR body citation ${file} does not exist in the HEAD tree.`,
 					],
 				});
 			} finally {
@@ -607,6 +614,7 @@ describe("PR body lint (#1844)", () => {
 			valid: false,
 			errors: [
 				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+				"PR body citation clients/does-not-exist.ts:1 does not exist in the HEAD tree.",
 			],
 		});
 	});
@@ -1147,6 +1155,84 @@ ${placeholder}`,
 		);
 		expect(result.valid).toBe(false);
 	});
+});
+
+describe("head-tree citations and test references", () => {
+	const headFiles = new Map([
+		[
+			"clients/citation.ts",
+			'export const value = "head source";\nexport const second = true;\n',
+		],
+		["tests/citation.test.ts", 'it("real three word test title", () => {});\n'],
+	]);
+	const options = { headFiles };
+
+	it("rejects a citation to a missing or out-of-range head file", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/missing.ts:1\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("clients/missing.ts:1");
+	});
+
+	it("requires an adjacent quote to match source text within three lines", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nwrong source\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("rejects fabricated it titles and table identifiers", () => {
+		const result = lintPrBody(
+			`${body}\nThe check uses it("fabricated test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`fabricated table test identifier\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated test title");
+		expect(result.errors.join(" ")).toContain(
+			"fabricated table test identifier",
+		);
+	});
+
+	it("requires origin/master transcripts for master-red claims", () => {
+		const result = lintPrBody(
+			`${body}\nThis is pre-existing and red on master.`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("origin/master transcript");
+	});
+
+	it("accepts real test references and an origin/master transcript", () => {
+		const result = lintPrBody(
+			`${body}\nThe real title is it("real three word test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`real three word test title\` |\n\nThis is pre-existing.\n\`\`\`text\nrun on origin/master: pass\n\`\`\``,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([
+		[
+			"#2877 round 3 reconstructed retracted section",
+			"issue-2877-round-3.md",
+			"fabricated binding probe",
+		],
+		[
+			"#2896 round 1 reconstructed section",
+			"issue-2896-round-1.md",
+			"clients/lsp/diagnostic-binding.ts:9999",
+		],
+	])(
+		"keeps the historical red-first fixture red: %s",
+		(_name, file, expected) => {
+			const fixture = readFileSync(
+				join(repositoryRoot, "tests", "fixtures", "ci-pr-bodies", file),
+				"utf8",
+			);
+			const result = lintPrBody(fixture, options);
+			expect(result.valid).toBe(false);
+			expect(result.errors.join(" ")).toContain(expected);
+		},
+	);
 });
 
 describe("local lint parity", () => {

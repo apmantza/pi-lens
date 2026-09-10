@@ -8,7 +8,13 @@ export declare function normalizePrBodyForChecking(
 ): { body: string; normalized: boolean };
 export declare function lintPrBody(
 	body?: string,
-	options?: { requireTestAssessment?: boolean; diff?: string },
+	options?: {
+		requireTestAssessment?: boolean;
+		diff?: string;
+		cwd?: string;
+		git?: (args: string[], options?: Record<string, unknown>) => string;
+		headFiles?: Map<string, string>;
+	},
 ): {
 	valid: boolean;
 	errors: string[];
@@ -21,6 +27,9 @@ export declare function lintLocalPrBody(
 	body: string,
 	cwd?: string,
 	git?: (args: string[], options?: Record<string, unknown>) => string,
+	extraOptions?: {
+		headFiles?: Map<string, string>;
+	},
 ): { valid: boolean; errors: string[] };
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },

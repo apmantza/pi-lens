@@ -1661,6 +1661,12 @@ Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`; local runs
 outside CI retain structural-only fallback. Runtime markers exclude test files,
 `__tests__` directories, and TypeScript declaration files.
 
+The PR-body lint verifies every backticked `path:line` against `HEAD`, checks an
+adjacent fenced quote against source text, checks test titles and table ids under
+`tests/`, and requires an `origin/master` transcript for master/environment
+claims. Both CI and `--lint-local` use the real `origin/master...HEAD` range;
+the lane remains advisory until ten consecutive merged PRs pass.
+
 Message-end attribution uses a bounded two-slot session anchor. A primary
 `session_start` rotates `lastStableSessionId` into `previousSessionId` because
 queued stale events from the replaced session can drain after the boundary;

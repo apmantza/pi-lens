@@ -256,6 +256,154 @@ function recordLocationsFromRuntimeSource(source) {
 	return records;
 }
 
+const CODE_CITATION = /`([^`\s:]+):(\d+)`/g;
+const MASTER_CLAIM =
+	/pre-existing|red on master|also fails on origin\/master|environment-specific/i;
+const headTestCorpusCache = new Map();
+
+function headFileSource(file, options = {}) {
+	if (options.headFiles?.has?.(file)) return options.headFiles.get(file);
+	if (/(?:^|\/)\.\.(?:\/|$)/.test(file) || isAbsolute(file)) return null;
+	try {
+		return String(
+			(options.git ?? gitExecFileSync)(["show", `HEAD:${file}`], {
+				cwd: options.cwd ?? process.cwd(),
+				encoding: "utf8",
+			}),
+		);
+	} catch {
+		return null;
+	}
+}
+
+function sourceLines(source) {
+	return String(source ?? "").split(/\r?\n/);
+}
+
+function lintCodeCitations(body, options = {}) {
+	const errors = [];
+	const rawLines = String(body ?? "").split(/\r?\n/);
+	const seen = new Set();
+	for (const match of String(body ?? "").matchAll(CODE_CITATION)) {
+		const [, file, lineText] = match;
+		const lineNumber = Number(lineText);
+		const bodyLine =
+			String(body).slice(0, match.index).split(/\r?\n/).length - 1;
+		const key = `${file}:${lineNumber}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		const source = headFileSource(file, options);
+		if (source === null) {
+			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
+			continue;
+		}
+		const sourceRows = sourceLines(source);
+		if (lineNumber < 1 || lineNumber > sourceRows.length) {
+			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
+			continue;
+		}
+		if (/^\s*```/.test(rawLines[bodyLine + 1] ?? "")) {
+			const fence = rawLines[bodyLine + 1].match(/^\s*(```+)/)?.[1] ?? "```";
+			const end = rawLines.findIndex(
+				(row, index) =>
+					index > bodyLine + 1 && new RegExp(`^\\s*${fence}\\s*$`).test(row),
+			);
+			if (end === -1) continue;
+			const quoted = rawLines
+				.slice(bodyLine + 2, end)
+				.filter((row) => row !== "");
+			const start = Math.max(0, lineNumber - 1 - 3);
+			const finish = Math.min(sourceRows.length, lineNumber + 3);
+			const window = sourceRows.slice(start, finish).join("\n");
+			if (quoted.length && !window.includes(quoted.join("\n")))
+				errors.push(
+					`PR body quote after citation ${key} does not match HEAD source within ±3 lines.`,
+				);
+		}
+	}
+	return errors;
+}
+
+function lintTestReferences(body, options = {}) {
+	const references = [];
+	for (const match of String(body ?? "").matchAll(
+		/\bit\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
+	))
+		references.push(match[1]);
+	for (const row of String(body ?? "").split(/\r?\n/)) {
+		if (!/^\s*\|.*\|\s*$/.test(row)) continue;
+		for (const match of row.matchAll(/`([^`]+)`/g))
+			if (match[1].trim().split(/\s+/).length >= 3) references.push(match[1]);
+	}
+	const cacheKey = options.headFiles
+		? options.headFiles
+		: (options.cwd ?? process.cwd());
+	let corpus = headTestCorpusCache.get(cacheKey);
+	if (corpus === undefined) {
+		corpus = options.headFiles
+			? [...options.headFiles]
+					.filter(([file]) => file.startsWith("tests/"))
+					.map(([, source]) => source)
+					.join("\n")
+			: null;
+		headTestCorpusCache.set(cacheKey, corpus);
+	}
+	const exists = (reference) => {
+		if (corpus !== null) return corpus.includes(reference);
+		try {
+			(options.git ?? gitExecFileSync)(
+				["grep", "-I", "-F", "-q", "-e", reference, "HEAD", "--", "tests"],
+				{ cwd: options.cwd ?? process.cwd(), encoding: "utf8" },
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	return [...new Set(references)]
+		.filter((reference) => !exists(reference))
+		.map(
+			(reference) =>
+				`PR body test reference is missing under tests/: ${reference}`,
+		);
+}
+
+function lintMasterClaims(body) {
+	const errors = [];
+	const rawLines = String(body ?? "").split(/\r?\n/);
+	let fence;
+	for (let index = 0; index < rawLines.length; index += 1) {
+		const line = rawLines[index];
+		const opener = line.match(/^\s*(```+)/);
+		if (opener) {
+			if (!fence) fence = opener[1];
+			else if (line.match(new RegExp(`^\\s*${fence}\\s*$`))) fence = undefined;
+			continue;
+		}
+		if (fence || !MASTER_CLAIM.test(line)) continue;
+		const next = rawLines[index + 1];
+		if (!/^\s*```/.test(next ?? "")) {
+			errors.push(
+				`PR body master/environment claim lacks an origin/master transcript: ${line.trim()}`,
+			);
+			continue;
+		}
+		const close = rawLines.findIndex(
+			(row, rowIndex) => rowIndex > index + 1 && /^\s*```/.test(row),
+		);
+		if (
+			close === -1 ||
+			!rawLines
+				.slice(index + 2, close)
+				.some((row) => /origin\/master/.test(row))
+		)
+			errors.push(
+				`PR body master/environment claim lacks an origin/master transcript: ${line.trim()}`,
+			);
+	}
+	return errors;
+}
+
 function lintRuntimeObservability(
 	body,
 	lines,
@@ -550,6 +698,9 @@ export function lintPrBody(body = "", options = {}) {
 				options.cwd,
 			),
 		);
+	errors.push(...lintCodeCitations(body, options));
+	errors.push(...lintTestReferences(body, options));
+	errors.push(...lintMasterClaims(body));
 	return { valid: errors.length === 0, errors };
 }
 
@@ -731,6 +882,7 @@ export function lintLocalPrBody(
 	body,
 	cwd = process.cwd(),
 	git = gitExecFileSync,
+	extraOptions = {},
 ) {
 	let diff;
 	try {
@@ -741,6 +893,7 @@ export function lintLocalPrBody(
 		diff = "";
 	}
 	return lintPrBody(body, {
+		...extraOptions,
 		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
 		cwd,

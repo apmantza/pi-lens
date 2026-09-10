@@ -85,7 +85,8 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   `## Test assessment` whenever the diff touches `tests/`; Observability
   names a record literal that appears in the runtime diff, and may say
   exactly "No new failure path; no record added." only when the diff adds no
-  failure path (no new catch, fallback or degradation branch). Record: on
+  failure path (no new catch, fallback or degradation branch). Every code fact
+  is a citation the check verifies. Record: on
   2026-09-10 most open PRs failed the PR-body check on one of these two rules.
 - No Git authority unless granted: leave changes uncommitted; hand off
   `PR_BODY.md` (template headings, every red and mutation quoted in ≤5 lines)
