@@ -50,6 +50,7 @@
  * Refs: #584, #111 (opengrep adoption), #387 (workspace-sweep serialization), #1562
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -85,7 +86,7 @@ export interface OpengrepFinding {
 	cwe?: string[];
 }
 
-export interface OpengrepResult {
+export interface OpengrepResult extends AnalysedRootSignal {
 	success: boolean;
 	findings: OpengrepFinding[];
 	scannedAt: string;
@@ -202,8 +203,10 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			const findings = parseOpengrepReport(
 				fs.readFileSync(reportPath, "utf-8"),
 			);
+			// #2154: the one opengrep site that parsed a scan of this root.
 			return {
 				success: true,
+				analyzed: true,
 				findings,
 				scannedAt,
 			};

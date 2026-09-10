@@ -77,6 +77,26 @@ describe("loadWorkspaceDiagnosticsCache / saveWorkspaceDiagnosticsCache (#671)",
 		expect(loaded?.entries["/a.ts"]).toEqual(entry);
 	});
 
+	it("records content and scan freshness without duplicate provenance", () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "const a = 1;\n");
+		const context = createWorkspaceDiagnosticsCacheContext(tmp);
+		context.record(
+			filePath,
+			buildScopeKey("all"),
+			[],
+			fs.statSync(filePath).mtimeMs,
+			hashDiagnosticContent("const a = 1;\n"),
+			fs.statSync(filePath).size,
+		);
+		context.persist();
+		const entry = Object.values(
+			loadWorkspaceDiagnosticsCache(tmp)!.entries,
+		)[0]!;
+		expect(entry).not.toHaveProperty("provenance");
+		expect(entry.contentHash).toBe(hashDiagnosticContent("const a = 1;\n"));
+	});
+
 	it("fails open (undefined) when nothing has been cached yet", () => {
 		expect(loadWorkspaceDiagnosticsCache(tmp)).toBeUndefined();
 	});

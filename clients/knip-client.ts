@@ -9,6 +9,7 @@
  * Docs: https://knip.dev/
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
@@ -48,7 +49,7 @@ export interface KnipIssue {
 	package?: string;
 }
 
-export interface KnipResult {
+export interface KnipResult extends AnalysedRootSignal {
 	success: boolean;
 	issues: KnipIssue[];
 	unusedExports: KnipIssue[];
@@ -450,7 +451,10 @@ export class KnipClient {
 			this.log(
 				`Analysis cache hit for ${key} at projectSeq ${options.projectSeq}`,
 			);
-			return { ...completed.result, execution: "cache" };
+			// #2154: a memo hit did not scan the root during THIS call, so it
+			// carries no authority to retire a retained finding — the flag is
+			// cleared even though the memoised result set it when it ran.
+			return { ...completed.result, execution: "cache", analyzed: false };
 		}
 
 		// A project that ships its own knip needs no managed install and no
@@ -670,7 +674,9 @@ export class KnipClient {
 			// status === 0 with empty stdout has never been observed against a
 			// real knip binary (a genuine clean run still prints
 			// `{"issues":[]}`), but a defensive fallback is cheap insurance
-			// against a future knip release that changes this.
+			// against a future knip release that changes this. Deliberately NOT
+			// `analyzed` (#2154): nothing was parsed, so this shape must not
+			// retire a retained knip finding — it is reported cold instead.
 			return {
 				...EMPTY_RESULT,
 				success: true,
@@ -903,6 +909,8 @@ export class KnipClient {
 
 			return {
 				success: true,
+				// #2154: the one knip site that parsed a scan of this root.
+				analyzed: true,
 				issues,
 				unusedExports,
 				unusedFiles,

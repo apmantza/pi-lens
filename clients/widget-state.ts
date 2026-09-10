@@ -576,7 +576,7 @@ export function recordDiagnostics(
 	// `reconcileStaleWidgetFiles`'s `mtimeMs > touchedAt` gate so a resolved
 	// finding renders forever (the #1092 touchedAt-re-arming defect).
 	observedAt?: number,
-): void {
+): boolean {
 	// Drop a write that's superseded by a later same-turn edit to this file
 	// whose pipeline finished first (same race class as #555). No cache write,
 	// no count/timestamp update, no render trigger — the recorded state must
@@ -585,7 +585,7 @@ export function recordDiagnostics(
 	// ordering token) always proceeds, same as version-less LSP servers in the
 	// #555 guard.
 	const key = fileMapKey(filePath);
-	if (!diagnosticsWriteGuard.shouldWrite(key, writeIndex)) return;
+	if (!diagnosticsWriteGuard.shouldWrite(key, writeIndex)) return false;
 	// Keep runner state ordered with the final diagnostic replacement. The
 	// guards are deliberately advanced in both directions because either verb
 	// may be the first completion from a pipeline.
@@ -603,6 +603,7 @@ export function recordDiagnostics(
 		observedTs,
 		key,
 	);
+	return true;
 }
 
 /** Map the raw diagnostic shape callers pass into stored {@link WidgetDiagnostic}s.
@@ -933,9 +934,9 @@ export function reconcileScanDiagnostics(
 	confirmed: boolean,
 	writeIndex?: number,
 	observedAt?: number,
-): void {
-	if (!confirmed) return;
-	recordDiagnostics(filePath, diagnostics, writeIndex, observedAt);
+): boolean {
+	if (!confirmed) return false;
+	return recordDiagnostics(filePath, diagnostics, writeIndex, observedAt);
 }
 
 /**

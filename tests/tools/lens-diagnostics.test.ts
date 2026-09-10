@@ -10,6 +10,14 @@ import {
 	_resetDeferredForTests,
 	_resetStateCacheForTests,
 } from "../../clients/diagnostic-dispositions.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
+	_setRecentPhasesForTest,
+	getRecentLoggedPhases,
+} from "../../clients/latency-logger.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -82,7 +90,7 @@ const mockSummaries: ReturnType<
 let mockStaleDropped = 0;
 let mockDependencyDemoted = 0;
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 const reconcileCorrelatedScanDiagnosticsMock = vi.fn();
 
 vi.mock("../../clients/widget-state.js", async (importOriginal) => {
@@ -116,6 +124,7 @@ vi.mock(
 );
 
 beforeEach(() => {
+	resetDegradationLedger();
 	projectDiagnosticsMocks.scanProjectDiagnostics.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
@@ -123,13 +132,14 @@ beforeEach(() => {
 	freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 		diagnostics: [],
 		runners: [],
+		analyzed: [],
 		cold: [],
 		timings: {},
 	});
 	mockSummaries.length = 0;
 	mockStaleDropped = 0;
 	mockDependencyDemoted = 0;
-	reconcileScanDiagnosticsMock.mockReset();
+	reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 	reconcileCorrelatedScanDiagnosticsMock.mockReset();
 	resetProjectLensConfigCache();
 });
@@ -1264,6 +1274,139 @@ function sum(
 }
 
 describe("lens_diagnostics mode=full", () => {
+	it("retires only the analysed runner's retained row", async () => {
+		// Both directions: the analysed runner's row goes (R), and a row from a
+		// runner that did NOT analyse this call survives (O). #2154 round 3
+		// asserted only the first, so a filter that retired everything — the
+		// over-correction that silently deletes real findings — stayed green.
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 2 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "stale runner finding",
+							line: 4,
+							rule: "jscpd:duplicate-code",
+							tool: "jscpd",
+						},
+						{
+							severity: "warning",
+							message: "retained gitleaks finding",
+							line: 9,
+							rule: "gitleaks:secret",
+							tool: "gitleaks",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: ["gitleaks"],
+			timings: { jscpd: 1 },
+		});
+
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("stale runner finding");
+		expect(text).toContain("retained gitleaks finding");
+		// #2154 v4: the file's own tally must lose the retired row with it.
+		// Before, the summary kept the stored counts while the row was
+		// filtered out, so full mode rendered "2W … 2 warnings" over a single
+		// visible finding — its own counts and rows disagreeing.
+		expect(text).toContain("src/stale.ts  1W");
+		expect(text).not.toContain("2W");
+	});
+
+	it("logs one bounded phase row when a runner retirement removes rows", async () => {
+		// #2154 v4 F2: retirement must be observable — the LSP arm logs
+		// `lsp_authoritative_widget_retire` twelve lines away, and the runner
+		// arm shipped with nothing, so the exact scenario the reviewer proved
+		// (a runner deleting a real finding) left no trace in any stream.
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "stale runner finding",
+							line: 4,
+							rule: "jscpd:duplicate-code",
+							tool: "jscpd",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: [],
+			timings: { jscpd: 1 },
+		});
+		// The phase ring is process-global; start from a known state so the
+		// assertion is about THIS call.
+		_setRecentPhasesForTest([]);
+
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+
+		const phases = getRecentLoggedPhases().map((entry) => entry.phase);
+		expect(phases).toContain("runner_authoritative_widget_retire");
+	});
+
+	it("logs no runner retirement row when nothing was retired", async () => {
+		// The bound: one row per call, only when rows were actually removed —
+		// never a row on every healthy mode=full call.
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "retained gitleaks finding",
+							line: 9,
+							rule: "gitleaks:secret",
+							tool: "gitleaks",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["jscpd"],
+			cold: ["gitleaks"],
+			timings: { jscpd: 1 },
+		});
+		_setRecentPhasesForTest([]);
+
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+
+		const phases = getRecentLoggedPhases().map((entry) => entry.phase);
+		expect(phases).not.toContain("runner_authoritative_widget_retire");
+	});
+
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
@@ -1599,6 +1742,30 @@ describe("lens_diagnostics mode=full", () => {
 			(call) => call[0],
 		);
 		expect(reconciledFiles).not.toContain("/proj/src/timed-out.ts");
+	});
+
+	it("records an unreconciled confirmed result once per session and re-arms after reset", async () => {
+		const filePath = "/proj/src/rejected.ts";
+		const lspService = {
+			runWorkspaceDiagnostics: vi
+				.fn()
+				.mockResolvedValue([{ filePath, diagnostics: [], count: 0 }]),
+		};
+		reconcileScanDiagnosticsMock.mockReturnValue(undefined);
+
+		await run(makeTool({}, lspService), { mode: "full" });
+		await run(makeTool({}, lspService), { mode: "full" });
+		const firstSession = getDegradationSummary().find(
+			(group) => group.kind === "diagnostic-retained-unreconciled",
+		);
+		expect(firstSession?.count).toBe(1);
+
+		resetDegradationLedger();
+		await run(makeTool({}, lspService), { mode: "full" });
+		const secondSession = getDegradationSummary().find(
+			(group) => group.kind === "diagnostic-retained-unreconciled",
+		);
+		expect(secondSession?.count).toBe(1);
 	});
 
 	it("does not render an errored LSP file as clean, and distinguishes error from timeout in the note (#630)", async () => {
@@ -2808,6 +2975,48 @@ describe("lens_diagnostics mode=full", () => {
 		expect(String(keepResult.content[0].text)).toContain(
 			"stale mid-edit state",
 		);
+	});
+
+	it("does not call a lower-order clean result authoritative (#2154)", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/moved.ts",
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "old line 400 finding",
+							line: 400,
+							rule: "knip:unused",
+						},
+					],
+				},
+			),
+		);
+		reconcileScanDiagnosticsMock.mockReturnValue(false);
+		const result = await run(
+			makeTool(
+				{},
+				{
+					runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+						{
+							filePath: "/proj/src/moved.ts",
+							diagnostics: [],
+							count: 0,
+							writeIndex: 1,
+						},
+					]),
+				},
+			),
+			{ mode: "full" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("old line 400 finding");
+		expect(text).toContain("[stale — re-run to confirm]");
+		expect(text).not.toContain("🔴 1 blocking");
 	});
 
 	it("dedups the napi project scan against ast-grep LSP findings despite the source prefix (#308)", async () => {

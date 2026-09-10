@@ -9,6 +9,7 @@
  * Docs: https://github.com/pahen/madge
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1026,7 +1027,7 @@ export class DependencyChecker {
 	 */
 	async scanProject(
 		cwd?: string,
-	): Promise<{ circular: CircularDep[]; count: number }> {
+	): Promise<{ circular: CircularDep[]; count: number } & AnalysedRootSignal> {
 		const projectRoot = path.resolve(cwd || process.cwd());
 
 		// Return early for non-existent or empty directories before probing/installing.
@@ -1068,7 +1069,7 @@ export class DependencyChecker {
 	private async runScanProject(
 		projectRoot: string,
 		gen: number,
-	): Promise<{ circular: CircularDep[]; count: number }> {
+	): Promise<{ circular: CircularDep[]; count: number } & AnalysedRootSignal> {
 		try {
 			const { cmd, prefix } = await this.resolveMadge(projectRoot);
 			const result = await safeSpawnAsync(
@@ -1105,7 +1106,11 @@ export class DependencyChecker {
 
 			this.publishState(gen, circular, circularFiles);
 
-			return { circular, count: circular.length };
+			// #2154: the one madge site that parsed a graph for this root. Every
+			// other return here (missing root, no top-level source file, madge
+			// unavailable, spawn error, parse throw) is the SAME empty shape and
+			// must not be read as "no cycles in this project".
+			return { circular, count: circular.length, analyzed: true };
 		} catch (err: any) {
 			this.log(`Scan error: ${err.message}`);
 			return { circular: [], count: 0 };

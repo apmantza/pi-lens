@@ -797,11 +797,12 @@ export function createWorkspaceDiagnosticsCacheContext(
 			};
 		},
 		record(filePath, scopeKey, diagnostics, mtimeMs, contentHash, sizeBytes) {
+			const scanGeneration = Date.now();
 			entries[cacheKeyFor(filePath)] = {
 				diagnostics,
 				count: diagnostics.length,
 				mtimeMs,
-				scannedAt: Date.now(),
+				scannedAt: scanGeneration,
 				scopeKey,
 				// #1793: stamp whether THIS FILE actually had dependency
 				// knowledge this sweep (not just whether SOME index was

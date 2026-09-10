@@ -12,6 +12,7 @@
  * implementing DeadCodeClient and adding to getDeadCodeClients().
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
@@ -49,7 +50,7 @@ export interface DeadCodeIssue {
 }
 
 /** Uniform result shape (mirrors KnipResult's buckets). */
-export interface DeadCodeResult {
+export interface DeadCodeResult extends AnalysedRootSignal {
 	success: boolean;
 	language: string;
 	unusedExports: DeadCodeIssue[];
@@ -503,9 +504,13 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 					durationMs,
 				};
 			}
+			// vulture's verified exit-code table (above): exit 0 with empty
+			// stdout IS the clean-run signal, so this ran over the root
+			// (#2154) — unlike knip, whose clean run always prints JSON.
 			return {
 				...emptyResult(this.language),
 				success: true,
+				analyzed: true,
 				summary: "No dead code found",
 				durationMs,
 			};
@@ -519,6 +524,8 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		return {
 			...emptyResult(this.language),
 			success: true,
+			// #2154: parsed vulture output for this root.
+			analyzed: true,
 			unusedExports,
 			summary:
 				total === 0

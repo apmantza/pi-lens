@@ -53,7 +53,7 @@ vi.mock("../../clients/lsp/client.js", async () => {
 	return { ...actual, createLSPClient };
 });
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 vi.mock("../../clients/widget-state.js", async () => {
 	const actual = await vi.importActual<
 		typeof import("../../clients/widget-state.js")
@@ -204,7 +204,7 @@ describe("#1253 lsp_diagnostics end-to-end silent-clean confirmation", () => {
 	beforeEach(async () => {
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
-		reconcileScanDiagnosticsMock.mockReset();
+		reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1253-e2e-"));
 		// Keep the silent server's real wait short — the gate under test is
 		// unchanged by the budget (see silent-clean-confirm.test.ts).

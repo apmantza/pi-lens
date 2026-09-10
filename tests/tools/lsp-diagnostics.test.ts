@@ -44,7 +44,7 @@ vi.mock("../../clients/lsp/wait-policy/index.js", () => ({
 	classifyCascadeWaitTier: () => mocked.cascadeTier,
 }));
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 
 vi.mock("../../clients/widget-state.js", () => ({
 	reconcileScanDiagnostics: (...args: unknown[]) =>
@@ -59,7 +59,7 @@ describe("lsp_diagnostics tool", () => {
 		mocked.cascadeTier = "waits";
 		mocked.warmAttached = false;
 		mocked.attachedDiagnostics.mockReset();
-		reconcileScanDiagnosticsMock.mockReset();
+		reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 		mocked.service = makeLspServiceDouble({
 			getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
 				if (filePath.endsWith("bad.ts")) {

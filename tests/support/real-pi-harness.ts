@@ -48,6 +48,7 @@ export type RealPi = {
 	awaitToolResult(name: string): Promise<HarnessEvent>;
 	killChildForTest(): void;
 	providerObservations(): ReadonlyArray<JsonObject>;
+	projectPath(): string;
 	lens: {
 		latencyRows(): ReadonlyArray<JsonObject>;
 		extensionLog(): ReadonlyArray<JsonObject>;
@@ -343,6 +344,7 @@ export async function withRealPi<T>(
 						event.type === "tool_execution_end",
 				),
 			providerObservations: () => harness.providerObservations(),
+			projectPath: () => harness.project,
 			lens: {
 				latencyRows: () => readRows(path.join(harness.home, "latency.log")),
 				extensionLog: () => readRows(path.join(harness.home, "extension.log")),

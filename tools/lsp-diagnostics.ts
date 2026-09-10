@@ -984,7 +984,14 @@ function reconcileWidgetFromLspResult(
 			content ?? "",
 			{ cwd, fileRole: detectFileRole(file, content) },
 		);
-		reconcileScanDiagnostics(file, retagged, true, writeIndex, observedAt);
+		const reconciled = reconcileScanDiagnostics(
+			file,
+			retagged,
+			true,
+			writeIndex,
+			observedAt,
+		);
+		if (!reconciled) return { confirmed: false, blocking: true };
 		// #1561: the blocking tally comes from the SAME `isBlocking` predicate the
 		// footer counts with — no second severity rule for the blocker-retire
 		// decision to drift away from.

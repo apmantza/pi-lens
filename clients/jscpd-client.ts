@@ -8,6 +8,7 @@
  * Docs: https://github.com/kucherenko/jscpd
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
@@ -42,7 +43,7 @@ export interface DuplicateClone {
 	tokens: number;
 }
 
-export interface JscpdResult {
+export interface JscpdResult extends AnalysedRootSignal {
 	success: boolean;
 	clones: DuplicateClone[];
 	duplicatedLines: number;
@@ -438,7 +439,15 @@ export class JscpdClient {
 				tokens: c.tokens ?? 0,
 			}));
 
-			return { success: true, clones, duplicatedLines, totalLines, percentage };
+			// #2154: the one jscpd site that parsed a scan of this root.
+			return {
+				success: true,
+				analyzed: true,
+				clones,
+				duplicatedLines,
+				totalLines,
+				percentage,
+			};
 		} catch (err) {
 			void err;
 			return {

@@ -141,6 +141,13 @@
 
 const MS_PER_MINUTE = 60_000;
 
+/** Mark retained findings whose replacement result could not be reconciled. */
+export function markUnreconciledFindings<T extends { stale?: boolean }>(
+	findings: readonly T[],
+): T[] {
+	return findings.map((finding) => ({ ...finding, stale: true }));
+}
+
 /**
  * Render a short, honest age suffix for a store that cannot be freshness-
  * gated per-path (see module doc). `undefined`/unparseable `scannedAt`

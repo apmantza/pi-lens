@@ -1,0 +1,6 @@
+{
+  "name": "real-harness-diagnostic-provenance",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "tsc" }
+}

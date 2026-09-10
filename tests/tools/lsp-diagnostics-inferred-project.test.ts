@@ -30,7 +30,7 @@ vi.mock("../../clients/lsp/wait-policy/index.js", () => ({
 	classifyCascadeWaitTier: () => "waits",
 }));
 
-const reconcileScanDiagnosticsMock = vi.fn();
+const reconcileScanDiagnosticsMock = vi.fn().mockReturnValue(true);
 
 vi.mock("../../clients/widget-state.js", () => ({
 	reconcileScanDiagnostics: (...args: unknown[]) =>
@@ -75,7 +75,7 @@ describe("lsp_diagnostics — inferred-project demotion (#1645 F3)", () => {
 	let cwd: string;
 
 	beforeEach(() => {
-		reconcileScanDiagnosticsMock.mockReset();
+		reconcileScanDiagnosticsMock.mockReset().mockReturnValue(true);
 		mocked.service = makeService();
 		cwd = fs.realpathSync(
 			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lspdiag-inferred-")),

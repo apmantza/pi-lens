@@ -41,7 +41,10 @@ vi.mock("../../clients/lsp/index.js", async () => {
 });
 
 const { reconcileScanDiagnostics } = vi.hoisted(() => ({
-	reconcileScanDiagnostics: vi.fn(),
+	// Production returns a boolean (accepted / rejected by the ordering
+	// guard); a double returning undefined put every result in this suite on
+	// the rejected arm production never takes (#2154 round 3, v3 T3).
+	reconcileScanDiagnostics: vi.fn((..._args: unknown[]) => true),
 }));
 vi.mock("../../clients/widget-state.js", () => ({
 	reconcileScanDiagnostics,

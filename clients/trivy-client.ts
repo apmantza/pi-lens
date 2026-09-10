@@ -41,6 +41,7 @@
  * Refs: #131, #1562
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -79,7 +80,7 @@ export interface TrivyLicenseFinding {
 	filePath?: string;
 }
 
-export interface TrivyResult {
+export interface TrivyResult extends AnalysedRootSignal {
 	success: boolean;
 	findings: TrivyFinding[];
 	/** Hardcoded-secret findings from the same `trivy fs` pass (#131 Mode 3). */
@@ -342,7 +343,15 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 			const findings = parseTrivyReport(raw);
 			const secrets = parseTrivySecrets(raw);
 			const licenses = parseTrivyLicenses(raw);
-			return { success: true, findings, secrets, licenses, scannedAt };
+			// #2154: the one trivy site that parsed a scan of this root.
+			return {
+				success: true,
+				analyzed: true,
+				findings,
+				secrets,
+				licenses,
+				scannedAt,
+			};
 		} catch (err) {
 			return {
 				...EMPTY_RESULT,

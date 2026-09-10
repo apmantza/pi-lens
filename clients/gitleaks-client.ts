@@ -55,6 +55,7 @@
  * Refs: #130, #1562
  */
 
+import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -123,7 +124,7 @@ export interface GitleaksFinding {
 		| "untracked";
 }
 
-export interface GitleaksResult {
+export interface GitleaksResult extends AnalysedRootSignal {
 	success: boolean;
 	findings: GitleaksFinding[];
 	scannedAt: string;
@@ -427,8 +428,10 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 				fs.readFileSync(reportPath, "utf-8"),
 			);
 			const findings = await classifyAndFilterFindings(rawFindings, cwd);
+			// #2154: the one gitleaks site that parsed a scan of this root.
 			return {
 				success: true,
+				analyzed: true,
 				findings,
 				scannedAt,
 			};

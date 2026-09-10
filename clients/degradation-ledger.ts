@@ -155,6 +155,7 @@ export type DegradationKind =
 	 * cannot carry, since the warm-only callers never reach selection.
 	 */
 	| "demoted-finding-retired"
+	| "diagnostic-retained-unreconciled"
 	| "dispatch-non-absolute-baseline-path"
 	/**
 	 * A server-initiated `workspace/applyEdit` fell back to the mutation

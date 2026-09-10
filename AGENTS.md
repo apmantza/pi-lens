@@ -1393,6 +1393,8 @@ tier. (#2262)
 
 ### Caches, durable stores, and path keys
 
+Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` freshness axes rather than duplicating them as nested provenance. A project runner retires that runner's retained widget findings only when its client set the opt-in `AnalysedRootSignal` (`clients/analysed-root.ts`) — i.e. the result is the parsed output of a scan that ran over this root during this call. `success: true` alone is not that signal: every runner client returns it for skips, memo hits and scans that crashed before writing a report, and a runner that did not run is reported cold instead. Delivery treats an LSP sweep as authoritative only after the shared widget write accepts its ordering token. A rejected result remains visible with `STALE_LINE_MARKER` and cannot retire an inline blocker, so full and delta cannot silently disagree (#2154).
+
 The project-snapshot authoritative-write cache stamps both `mtimeMs` and size
 at save and after promotion. Both `loadProjectSnapshot` and
 `loadProjectSnapshotExportsAndRules` serve the in-process object only while

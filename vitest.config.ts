@@ -311,6 +311,7 @@ export const realHarnessInclude = [
 	"tests/real-harness/negative.test.ts",
 	"tests/real-harness/child-exit.test.ts",
 	"tests/real-harness/tools-enabled.test.ts",
+	"tests/real-harness/diagnostic-provenance.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
