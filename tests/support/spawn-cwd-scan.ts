@@ -419,7 +419,12 @@ function carriesUsableCwd(value: SgNode, index: BindingIndex): boolean {
  * (through `await`/parentheses), or a concise arrow's body. A seam call used
  * for a log line or a side effect does not make its function a resolver.
  */
-function returnsExpression(fn: SgNode, expr: SgNode): boolean {
+function returnsExpression(
+	fn: SgNode,
+	expr: SgNode,
+	resolverNames: Set<string>,
+	returnCache: Map<string, SgNode[]>,
+): boolean {
 	const unwrap = (node: SgNode): SgNode => {
 		let current = node;
 		for (;;) {
@@ -433,17 +438,36 @@ function returnsExpression(fn: SgNode, expr: SgNode): boolean {
 		}
 	};
 	const body = fn.field("body");
-	if (body && String(body.kind()) !== "statement_block") {
-		return unwrap(body).id() === expr.id();
-	}
-	for (let node = expr.parent(); node; node = node.parent()) {
-		if (node.id() === fn.id() || isFunctionNode(node)) return false;
-		if (String(node.kind()) === "return_statement") {
-			const returned = namedParts(node)[0];
-			return returned !== undefined && unwrap(returned).id() === expr.id();
+	if (!body) return false;
+	const cacheKey = String(fn.id());
+	let returns = returnCache.get(cacheKey);
+	if (!returns) {
+		if (String(body.kind()) !== "statement_block") {
+			returns = [unwrap(body)];
+		} else {
+			returns = [];
+			const visit = (node: SgNode): void => {
+				if (node.id() !== fn.id() && isFunctionNode(node)) return;
+				if (String(node.kind()) === "return_statement") {
+					const returned = namedParts(node)[0];
+					if (returned) returns?.push(unwrap(returned));
+					return;
+				}
+				for (const child of node.children()) visit(child);
+			};
+			visit(body);
 		}
+		returnCache.set(cacheKey, returns);
 	}
-	return false;
+	return (
+		returns.length > 0 &&
+		returns.every(
+			(returned) =>
+				returned.kind() === "call_expression" &&
+				isResolveToolCwdCall(returned, resolverNames),
+		) &&
+		returns.some((returned) => returned.id() === expr.id())
+	);
 }
 
 /** Whether an expression is the resolver result, including one local/object hop. */
@@ -951,10 +975,7 @@ function resolveLocalInitializer(
 	// attributing the spawn to the declaration's old initializer.
 	const rebound = (index.assignmentsByName.get(name) ?? []).some(
 		(at) =>
-			at > winner.declEnd &&
-			at < useIndex &&
-			at >= winner.scopeStart &&
-			at < winner.scopeEnd,
+			at > winner.declEnd && at >= winner.scopeStart && at < winner.scopeEnd,
 	);
 	if (rebound) return { init: undefined };
 	return { init: winner.init };
@@ -1118,16 +1139,7 @@ function cwdValueLines(
 	};
 	addSpan(node);
 	const kind = String(node.kind());
-	if (kind === "pair") {
-		// The key line is already covered by the span; the value is where the
-		// laundering happens, and it may name a local declared elsewhere.
-		for (const line of cwdValueLines(cwdValueOf(node), seen, index)) {
-			lines.add(line);
-		}
-	} else if (
-		kind === "identifier" ||
-		kind === "shorthand_property_identifier"
-	) {
+	if (kind === "identifier" || kind === "shorthand_property_identifier") {
 		if (!seen.has(node.text())) {
 			seen.add(node.text());
 			const local = resolveLocalInitializer(node, node.text(), index);
@@ -1237,6 +1249,7 @@ export async function scanSpawnCwd(
 		name: calleeName(call),
 	}));
 	const resolverNames = importedResolverNames(root);
+	const returnCache = new Map<string, SgNode[]>();
 	// One list decides what a site is, for the shared census below and for the
 	// loop that reads the sites: two copies of the rule meant a mutation of
 	// either one left the other enforcing it.
@@ -1256,14 +1269,23 @@ export async function scanSpawnCwd(
 			for (let node = call.parent(); node; node = node.parent()) {
 				if (!isFunctionNode(node)) continue;
 				const name = functionName(node);
-				if (!name || resolverNames.has(name)) break;
+				if (
+					!name ||
+					resolverNames.has(name) ||
+					(String(node.kind()) === "method_definition" &&
+						resolverNames.has(`this.${name}`))
+				)
+					break;
 				// Only a RETURNED seam call makes the function a resolver; one used
 				// for a log line or a side effect does not.
-				if (!returnsExpression(node, call)) break;
-				resolverNames.add(name);
+				if (!returnsExpression(node, call, resolverNames, returnCache)) break;
 				// A method is reached as `this.m(...)`; nothing else in the file
 				// is that method, and any other receiver stays unproven.
-				resolverNames.add(`this.${name}`);
+				if (String(node.kind()) === "method_definition") {
+					resolverNames.add(`this.${name}`);
+				} else {
+					resolverNames.add(name);
+				}
 				grew = true;
 				break;
 			}

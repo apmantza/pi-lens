@@ -738,13 +738,21 @@ const SCAN_HOOK_TIMEOUT_MS = 30_000;
  * of both, tracked by #2888.
  */
 function holdsAScannableSpawn(source: string): boolean {
+	const hasUnaliasedChildProcessImport = [
+		...source.matchAll(
+			/import\s*\{([^}]*)\}\s*from\s*["']node:child_process["']/g,
+		),
+	].some((match) =>
+		match[1]
+			.split(",")
+			.some((specifier) =>
+				/^(?:\s*)(?:spawn|execFile)(?:\s*)$/.test(specifier),
+			),
+	);
 	return (
 		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
 			source,
-		) ||
-		/import\s*\{[^}]*\b(?:spawn|execFile)\b(?![^}]*\bas\b)[^}]*\}\s*from\s*["']node:child_process["']/.test(
-			source,
-		)
+		) || hasUnaliasedChildProcessImport
 	);
 }
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
@@ -886,6 +894,12 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 				'import { type ChildProcess, execFile } from "node:child_process";',
 			),
 			"an unaliased import beside a type import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import { execFile, spawn as nodeSpawn } from "node:child_process";',
+			),
+			"an unaliased import before an aliased import",
 		).toBe(true);
 		expect(
 			holdsAScannableSpawn(

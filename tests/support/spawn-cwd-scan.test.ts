@@ -1487,14 +1487,37 @@ async function run(ctx, o) {
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
 	});
 
-	it("a rebinding AFTER the use does not retro-poison it", async () => {
+	it("a straight-line rebinding AFTER the use leaves the binding unproven", async () => {
 		const source = `${SEAM}
 async function run(ctx) {
 	let cwd = ${GOOD};
 	await safeSpawnAsync("b", [], { cwd });
 	({ cwd } = ctx);
 }`;
-		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=true"]);
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+	});
+
+	it("R11: a retry-loop rebinding leaves the binding unproven", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+		let cwd = ${GOOD};
+		for (;;) {
+			await safeSpawnAsync("b", [], { cwd });
+			cwd = ctx.cwd;
+		}
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
+	});
+
+	it("rejects a hoisted function rebinding declared below the spawn", async () => {
+		const source = `${SEAM}
+async function run(ctx) {
+		let cwd = ${GOOD};
+		await safeSpawnAsync("b", [], { cwd });
+		bump();
+		function bump() { cwd = ctx.cwd; }
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=false resolved=false"]);
 	});
 });
 
@@ -1548,6 +1571,32 @@ async function run(ctx) {
 			"hasCwd=true resolved=true",
 			"hasCwd=true resolved=true",
 		]);
+	});
+
+	it("rejects a mixed-return resolver with an early host return", async () => {
+		const source = `${SEAM}
+function resolveHere(ctx, ready) {
+		if (!ready) return process.cwd();
+		return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+}
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveHere(ctx, true) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("does not credit a same-named module function for a method resolver", async () => {
+		const source = `${SEAM}
+class Client {
+		resolveSpawnCwd(ctx) {
+			return resolveToolCwd("runner", "tool", ctx.filePath, { cwd: ctx.cwd });
+		}
+}
+function resolveSpawnCwd(ctx) { return ctx.cwd; }
+async function run(ctx) {
+	await safeSpawnAsync("b", [], { cwd: resolveSpawnCwd(ctx) });
+}`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });
 

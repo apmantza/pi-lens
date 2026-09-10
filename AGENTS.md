@@ -1073,8 +1073,12 @@ the imported `clients/tool-cwd.ts` seam or its documented re-exports, resolving
 the binding by the scope the tree-sitter grammar gives it rather than by a list
 of scope-opening node kinds. A rebinding of the resolved local before the
 spawn — in any of its five spellings, `({ cwd } = ctx)` included — leaves the
-value unproven, and a same-file function that RETURNS the seam's result (a
-private `resolveSpawnCwd`, #2879) counts as the seam. Genuine global probes and
+value unproven. A rebinding anywhere after the declaration in the binding
+scope, including loop-carried writes after the spawn and hoisted function
+writes, also leaves it unproven. A same-file function whose every return
+resolves to the seam counts as the seam. Method promotion is receiver-scoped
+(`this.<name>`), while module functions promote only their module-level name.
+Genuine global probes and
 deliberate non-seam derivations are admitted per site by
 `rel#symbolPath:hash(callText)~hash(cwdExpression and every local it reads)` —
 so editing the admitted cwd VALUE, or the local it is computed from, retires
