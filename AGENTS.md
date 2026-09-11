@@ -186,14 +186,17 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 The PR-body citation checker uses one path-and-line reader for code and
 existing-record citations. CI resolves sources from `HEAD`; `--lint-local`
-resolves sources and test references from the working tree so uncommitted fixer
-changes can be cited. Fenced transcripts are excluded from citation and test
-reference scans. Source quotes must match within ±20 lines of the cited line;
+resolves sources and test references from the working tree, including untracked
+files under `tests/`, so uncommitted fixer changes can be cited. Fenced
+transcripts are excluded from citation and test-reference scans. Source quotes
+must match within ±20 lines of the cited line;
 transcript fences after citations are not source quotes. Test references come
 from declaration titles and paths under `tests/`, excluding the checker's own
 fixture inputs; the checker's own test contributes declaration titles only, and
 short identifiers use whole-token matching. The
-master-claim rule splits markdown blocks and sentences without treating dots in
+The test-reference corpus comes from lexer-emitted declaration string spans;
+table cells are candidates only under headers matching `/test|probe|case|witness|id/i`.
+The master-claim rule splits markdown blocks and sentences without treating dots in
 code spans as punctuation; a transcript must be in the next non-blank block.
 
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.

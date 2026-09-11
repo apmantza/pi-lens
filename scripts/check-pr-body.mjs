@@ -125,6 +125,8 @@ function hasRealContent(lines, section, placeholders) {
 function blankCommentsAndStrings(source) {
 	let state = "code";
 	let result = "";
+	const strings = [];
+	let stringStart = -1;
 	for (let index = 0; index < source.length; index += 1) {
 		const char = source[index];
 		const next = source[index + 1];
@@ -150,7 +152,14 @@ function blankCommentsAndStrings(source) {
 					result += " ";
 					index += 1;
 				}
-			} else if (char === state) state = "code";
+			} else if (char === state) {
+				strings.push({
+					start: stringStart,
+					end: index + 1,
+					value: source.slice(stringStart + 1, index),
+				});
+				state = "code";
+			}
 			continue;
 		}
 		if (char === "/" && next === "/") {
@@ -163,10 +172,11 @@ function blankCommentsAndStrings(source) {
 			state = "block-comment";
 		} else if (char === "'" || char === '"' || char === "`") {
 			result += " ";
+			stringStart = index;
 			state = char;
 		} else result += char;
 	}
-	return result;
+	return { text: result, strings };
 }
 
 function isRuntimeObservabilityPath(name) {
@@ -194,7 +204,7 @@ function runtimeObservabilityFromDiff(diff = "") {
 			added += `${line.slice(1)}\n`;
 	}
 	if (!runtime) return { runtime: false, records, failurePath: false };
-	const blanked = blankCommentsAndStrings(added);
+	const blanked = blankCommentsAndStrings(added).text;
 	return {
 		runtime: true,
 		records: recordLiteralsFromRuntimeSource(added),
@@ -225,7 +235,7 @@ function recordLiteralsFromRuntimeSource(source) {
 
 function recordLocationsFromRuntimeSource(source) {
 	const records = [];
-	const blanked = blankCommentsAndStrings(source);
+	const blanked = blankCommentsAndStrings(source).text;
 	const calls = [
 		["recordDegradationOnce", ["kind"]],
 		["incrementDegradationCount", ["kind"]],
@@ -294,14 +304,24 @@ function testCorpus(options = {}) {
 	if (cached) return cached;
 	let files = [];
 	try {
-		files = String(
+		const tracked = String(
 			(options.git ?? gitExecFileSync)(["ls-files", "--", "tests"], {
 				cwd,
 				encoding: "utf8",
 			}),
-		)
-			.split(/\r?\n/)
-			.filter(Boolean);
+		);
+		files = tracked.split(/\r?\n/).filter(Boolean);
+		if (options.workingTree) {
+			const untracked = String(
+				(options.git ?? gitExecFileSync)(
+					["ls-files", "--others", "--exclude-standard", "--", "tests"],
+					{ cwd, encoding: "utf8" },
+				),
+			)
+				.split(/\r?\n/)
+				.filter(Boolean);
+			files = [...new Set([...files, ...untracked])];
+		}
 	} catch {
 		const visit = (directory) => {
 			for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -333,16 +353,18 @@ function testCorpus(options = {}) {
 		} catch {
 			continue;
 		}
-		const code = blankCommentsAndStrings(source);
-		for (const match of source.matchAll(
-			/\b(?:it|test|describe)(?:\.each)?\s*\(\s*(["'`])((?:\\.|[\s\S])*?)\1/g,
-		)) {
-			if (
-				code.slice(match.index, match.index + 3) !==
-				source.slice(match.index, match.index + 3)
-			)
-				continue;
-			const title = match[2].replace(/\\(["'`\\])/g, "$1");
+		const lexed = blankCommentsAndStrings(source);
+		for (const string of lexed.strings) {
+			const prefix = lexed.text.slice(0, string.start).trimEnd();
+			const opening = prefix.lastIndexOf("(");
+			if (opening < 0) continue;
+			const beforeOpening = prefix.slice(0, opening).trimEnd();
+			const direct = /\b(?:it|test|describe)\s*$/.test(beforeOpening);
+			const each = /\b(?:it|test|describe)\s*\.each\s*$/.test(
+				beforeOpening.slice(0, beforeOpening.lastIndexOf("(")),
+			);
+			if (!direct && !each) continue;
+			const title = string.value.replace(/\\(["'`\\])/g, "$1");
 			if (title.trim()) titles.add(title.trim());
 		}
 	}
@@ -501,9 +523,7 @@ function lintTestReferences(body, options = {}) {
 	const references = [];
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
 	const corpus = testCorpus(options);
-	for (const match of visibleBody.matchAll(
-		/\bit\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
-	)) {
+	for (const match of visibleBody.matchAll(/\bit\(\s*["`]([^"`]+)["`]\s*\)/g)) {
 		const lineStart = visibleBody.lastIndexOf("\n", match.index) + 1;
 		if (
 			!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)) &&
@@ -511,13 +531,30 @@ function lintTestReferences(body, options = {}) {
 		)
 			references.push(match[1]);
 	}
-	for (const row of visibleBody.split(/\r?\n/)) {
-		if (!/^\s*\|.*\|\s*$/.test(row)) continue;
-		for (const cell of row.split("|").map((value) => value.trim())) {
+	const lines = visibleBody.split(/\r?\n/);
+	let headers = null;
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const row = lines[lineIndex];
+		if (/^\s*\|\s*:?-{3,}/.test(row)) {
+			headers = /^\s*\|.*\|\s*$/.test(lines[lineIndex - 1])
+				? lines[lineIndex - 1].split("|").map((value) => value.trim())
+				: null;
+			continue;
+		}
+		if (!headers || !/^\s*\|.*\|\s*$/.test(row)) {
+			if (!/^\s*\|/.test(row)) headers = null;
+			continue;
+		}
+		const cells = row.split("|").map((value) => value.trim());
+		for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+			if (!/(?:test|probe|case|witness|id)/i.test(headers[cellIndex] ?? ""))
+				continue;
+			const cell = cells[cellIndex];
 			const match = /`([^`]+)`/.exec(cell);
 			if (!match) continue;
 			const reference = match[1].trim();
-			const title = /^it\(\s*["'`]([^"'`]+)["'`]\s*\)$/.exec(reference)?.[1];
+			const title = /^it\(\s*["`]([^"`]+)["`]\s*\)$/.exec(reference)?.[1];
+			if (title?.includes("…")) continue;
 			if (title && !title.includes("…")) references.push(title);
 			else if (
 				corpus.paths.has(reference) ||
@@ -525,13 +562,8 @@ function lintTestReferences(body, options = {}) {
 			)
 				references.push(reference);
 			else if (corpus.titles.has(reference)) references.push(reference);
-			else if (
-				reference.split(/\s+/).length >= 3 &&
-				/^[\w][\w' -]+$/.test(reference) &&
-				!/(?:failed|passed|files?|error|result)\b/i.test(reference) &&
-				!/^\b(?:npm|npx|node|git|tsc|vitest)\b/i.test(reference)
-			)
-				references.push(reference);
+			else if (/^[0-9a-f]{7,40}$/i.test(reference)) continue;
+			else references.push(reference);
 		}
 	}
 	const exists = (reference) => {

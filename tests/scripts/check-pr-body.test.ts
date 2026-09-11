@@ -1393,6 +1393,66 @@ describe("head-tree citations and test references", () => {
 		expect(result.errors.join(" ")).toContain("fabricated bare title");
 	});
 
+	it("accepts a test path in a test column", () => {
+		const result = lintPrBody(
+			`${body}\n| Kind | Test id |\n| --- | --- |\n| path | \`tests/scripts/check-pr-body.test.ts\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("ignores non-test table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Command | Artifact |\n| --- | --- |\n| tool | \`python3 -m pip\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("ignores table header cells", () => {
+		const result = lintPrBody(
+			`${body}\n| \`fabricated header title\` | Test |\n| --- | --- |\n| Case | \`fabricated header value\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated header value");
+		expect(result.errors.join(" ")).not.toContain("fabricated header title");
+	});
+
+	it("rejects a command-shaped test cell without a real title", () => {
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`python3 -m pip\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("python3 -m pip");
+	});
+
+	it("rejects a fabricated bare test title", () => {
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`fabricated bare title\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated bare title");
+	});
+
+	it("ignores SHA cells in test columns", () => {
+		const result = lintPrBody(
+			`${body}\n| Test id |\n| --- |\n| \`deadbeef1234567890\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([["each template title"]])(
+		"harvests each declaration titles",
+		(_title) => {
+			const result = lintPrBody(
+				`${body}\n| Test |\n| --- |\n| \`harvests each declaration titles\` |`,
+				options,
+			);
+			expect(result).toEqual({ valid: true, errors: [] });
+		},
+	);
+
 	it("rejects a fabricated short table identifier", () => {
 		const result = lintPrBody(
 			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`B01\` |`,
@@ -1405,7 +1465,7 @@ describe("head-tree citations and test references", () => {
 		[
 			"#2877 round 3 reconstructed retracted section",
 			"issue-2877-round-3.md",
-			"B01",
+			"P01",
 		],
 	])(
 		"keeps the historical red-first fixture red: %s",
@@ -1438,6 +1498,19 @@ describe("local lint parity", () => {
 	it("acquires a non-empty origin/master...HEAD diff in a full checkout", () => {
 		const diff = localDiff();
 		expect(diff).toContain("diff --git a/");
+	});
+
+	it("includes untracked test files in local test references", () => {
+		mkdirSync(join(fixtureCwd, "tests", "scripts"), { recursive: true });
+		writeFileSync(
+			join(fixtureCwd, "tests", "scripts", "new.test.ts"),
+			'it("untracked working tree title", () => {});\n',
+		);
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`untracked working tree title\` |`,
+			{ cwd: fixtureCwd, workingTree: true },
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
 	});
 
 	it("rejects a runtime-shaped body that names no record", () => {
