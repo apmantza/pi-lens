@@ -25,7 +25,7 @@ const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/ci-infra-kill-rerun.yml";
 
 type WorkflowStep = { run?: unknown };
-type WorkflowJob = { if?: unknown; steps?: unknown };
+type WorkflowJob = { env?: unknown; if?: unknown; steps?: unknown };
 type ClassifyJob = { if?: unknown; steps?: unknown };
 type Workflow = {
 	on?: { pull_request?: { types?: unknown[] } };
@@ -248,6 +248,7 @@ describe("ci-infra-kill-rerun.yml synchronize label cleanup (#2856)", () => {
 		const run = (job?.steps as WorkflowStep[]).find((step) => step.run)?.run;
 		expect(run).toContain("--remove-label 'ci:infra'");
 		expect(run).toContain("--remove-label 'ci:real'");
+		expect(job?.env).toMatchObject({ GH_REPO: "${{ github.repository }}" });
 	});
 });
 
