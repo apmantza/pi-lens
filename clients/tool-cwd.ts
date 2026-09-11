@@ -127,7 +127,7 @@ export const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 const toolCwdGeneration = createGenerationSource("tool-cwd");
 const logged = createGenerationMap("tool-cwd-resolution-log");
 
-/** Pure key seam for ephemeral tool-cwd memo and log identity. */
+/** Pure key seam for resolution-log and runner-advisory identity. */
 export function _toolCwdEphemeralKey(parts: readonly string[]): string {
 	return parts.map(normalizeEphemeralMapKey).join("\0");
 }

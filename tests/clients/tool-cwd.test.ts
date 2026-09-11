@@ -90,6 +90,24 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
+	it("picks the nearest directory, not the first-listed marker (#2922)", () => {
+		// Recurrence: a marker-major walk would return the workspace root because
+		// `biome.json` sorts before `package.json` in the marker list. The walk is
+		// level-major, so the nearer directory wins even though its marker is
+		// later in the list. Every other case in this file places the SAME marker
+		// at both levels, which cannot tell the two orderings apart.
+		const workspace = path.join(home, "ws");
+		const pkg = path.join(workspace, "packages", "app");
+		const file = path.join(pkg, "src", "index.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "biome.json"), "{}\n");
+		fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+		expect(
+			toolCwd.resolveToolCwd("formatter", "biome", file, { cwd: workspace }),
+		).toBe(pkg);
+	});
+
 	it("uses the complete formatter marker population", () => {
 		const project = path.join(home, "repo");
 		const file = path.join(project, "src", "main.rs");
