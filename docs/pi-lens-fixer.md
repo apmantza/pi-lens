@@ -66,6 +66,30 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   the cases the reviewer named. Seven rounds on #2877 each closed the named
   launderer and left the next scope kind open until round 4 generated the
   scope table from the grammar.
+- Authority words are CLAIMS. "derived from", "iterates the table",
+  "exactly N", "never", "every" must each be provable by a mutation or a
+  grep pasted in the body (mutate the table the code is "derived from" and
+  show the test red; paste the grep behind "exactly N"). Otherwise write the
+  honest word: "informed by", "hand-written", "the N I found". 2026-09-10:
+  #2925 shipped "derived" in a code comment and the changelog while neither
+  the classifier nor its test imported the table.
+- Facts about master come from a freshly fetched `origin/master` (`git fetch
+  origin` first; quote `git log -1 origin/master`), never from your worktree's
+  base, and a deferral ("skipped until #N merges") is tested against the
+  branch it defers to. 2026-09-10: #2924 built a 3-entry exemption on "master
+  docs are stale" while the docs fix had already merged; the head redded
+  master on merge.
+- Never assert CI. A fixer cannot read CI; "mirrored CI job", "CI green",
+  "13/13 gates incl. Unit tests" are banned phrases. Report LOCAL runs with
+  the command and the totals; the orchestrator reads CI on the exact head.
+  2026-09-10: #2929 and #2897 round 2 both reported green while CI was red.
+- A detector test has two directions. Every accept test (the scanner treats
+  shape X as Y) gets a reject twin (the nearest wrong shape is still flagged).
+  AGENTS.md test screen 13; #2930 round 1 shipped six accept-only tests and
+  a false negative behind them.
+- Tool output is a fixture, not a guess. Code that parses a tool's output is
+  tested against output captured from the real binary (AGENTS.md shape 46);
+  a hand-shaped double proves nothing about the tool. #2900 round 4 (madge).
 - A change to a release-QA row (`docs/release-qa-baseline.md` +
   `scripts/release-qa.mjs`) runs `node scripts/release-qa.mjs` end to end
   once on the pushed head and quotes the verdict line in the body; the

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CascadeRun } from "../../clients/cascade-types.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 
 function run(
 	filePath: string,
@@ -16,6 +20,19 @@ function run(
 }
 
 describe("deferred cascade settle (#450)", () => {
+	it("keeps overflow promises attached to the next drain", async () => {
+		resetDegradationLedger();
+		const runtime = new RuntimeCoordinator();
+		for (let i = 0; i < 33; i++)
+			runtime.appendCascadePromise(Promise.resolve(run(`${i}.ts`)));
+		await new Promise<void>((resolve) => queueMicrotask(resolve));
+		const summary = getDegradationSummary();
+		expect(summary.some((entry) => entry.kind === "cascade-pending-cap")).toBe(
+			true,
+		);
+		const drained = runtime.consumeCascadeRuns();
+		expect(drained).toHaveLength(1);
+	});
 	it("appends fulfilled runs and reports settled count", async () => {
 		const runtime = new RuntimeCoordinator();
 		runtime.appendCascadePromise(Promise.resolve(run("a.ts")));

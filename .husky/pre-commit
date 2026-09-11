@@ -3,4 +3,11 @@ if [ -n "$PI_LENS_SKIP_HOOKS" ]; then
   exit 0
 fi
 
+# Handoff files never enter history (pi-lens #2807; 2026-09-10: four lanes
+# committed PR_BODY.md and redded gitignore-tracked-shadow in CI).
+if git diff --cached --name-only | grep -qE '(^|/)(PR_BODY\.md|COMMIT_MSG\.txt|REVIEW\.md|INVESTIGATION\.md|MONITOR\.md)$'; then
+  echo "[pre-commit] refusing to commit a handoff file (PR_BODY.md / COMMIT_MSG.txt / REVIEW.md / INVESTIGATION.md / MONITOR.md); git rm --cached it." >&2
+  exit 1
+fi
+
 npm run check:lockfile && npm run changelog:check && npm run lint

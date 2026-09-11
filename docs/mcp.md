@@ -113,11 +113,23 @@ New files:
 | tool | maps to | purpose |
 |------|---------|---------|
 | `pilens_analyze` | `analyzeFile` (warm) / worker (fresh) | run the per-edit pipeline on a file; returns diagnostics + timing. `mode: warm\|fresh`. **Correctness + mechanism probe.** |
-| `pilens_diagnostics` | lens-diagnostics formatters | delta/all/full project/session diagnostic state. |
+| `pilens_ast_grep_search` | `ast_grep_search` | AST-aware structural search. |
+| `pilens_ast_grep_replace` | `ast_grep_replace` | AST-aware structural replace. |
+| `pilens_diagnostics` | `lens_diagnostics` | session or LSP diagnostics, selected by `source`, `scope`, and `severity`. |
+| `pilens_effective_config` | `effective_config` | resolved configuration and provenance. |
 | `pilens_project_scan` | `scanProjectDiagnostics` | project-wide cheap scan. |
 | `pilens_latency` | `getLatencyReports` | latency records (latency.log schema). **Review-loop measurement.** |
 | `pilens_health` | `/lens-health` internals | runtime health snapshot. |
+| `pilens_lsp_navigation` | `lsp_navigation` | IDE-style LSP navigation. |
+| `pilens_module_report` | `module_report` | navigable module outline and dependents. |
+| `pilens_project_report` | `project_report` | project-level structure and diagnostics report. |
+| `pilens_read_enclosing` | `read_enclosing` | read the smallest enclosing symbol or callback. |
+| `pilens_read_symbol` | `read_symbol` | read one symbol body. |
 | `pilens_rebuild` | `npm run build:dist` | rebuild dist so `fresh` reflects the latest commit. Makes the loop self-contained. |
+| `pilens_session_end` | session lifecycle | close the MCP session and flush lifecycle state. |
+| `pilens_session_start` | session lifecycle | initialize session state and caches. |
+| `pilens_symbol_search` | `symbol_search` | search the persisted symbol index. |
+| `pilens_turn_end` | turn lifecycle | settle turn-end work and return findings. |
 
 ## Packaging / wiring
 

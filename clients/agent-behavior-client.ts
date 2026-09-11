@@ -191,3 +191,6 @@ export class AgentBehaviorClient {
 		this.fileEditCount.clear();
 	}
 }
+
+/** Process-wide behaviour history, independent of analyzer bootstrap residency. */
+export const agentBehaviorClient = new AgentBehaviorClient();

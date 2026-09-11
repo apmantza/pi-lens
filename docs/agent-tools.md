@@ -5,7 +5,12 @@ through the MCP mirror (`clients/lens-engine.ts` is the seam both adapters
 share) — current exception: `ast_grep_outline`
 (module_report supersedes them for discovery), and `lens_diagnostic_mark`
 (pi-lens-internal for now). `read_enclosing` gained MCP parity
-(`pilens_read_enclosing`) as of #536, closing #522 item 1.
+(`pilens_read_enclosing`) as of #536, closing #522 item 1. The standalone
+`lsp_diagnostics` tool was folded into `lens_diagnostics` (`source=lsp`,
+#2860). The retired MCP name remains a one-release compatibility redirect to
+`pilens_diagnostics` with `source=lsp` and `scope=paths` (`mcp/server.ts`),
+logging one `lsp-diagnostics-compatibility` degradation per session. Callers
+should move to `pilens_diagnostics`.
 
 
 **Dynamic tooling.** Five tools stay always-active: `lens_diagnostics`,
@@ -25,23 +30,39 @@ Tool descriptions contain the contract sentence and one example. Operational
 guidance, including cache state, scan scope, safety details, and lifecycle
 results, belongs in the returned result so it is paid only when the tool runs.
 
+**Result contract.** One post-result gate per surface — `finalizeToolResult` /
+`finalizeToolResultWithDelivery` in `tools/render-compact.ts`, wired into every
+pi tool's `execute` wrapper in `index.ts` and into the MCP `tools/call`
+dispatcher in `mcp/server.ts` — bounds every delivered result to 40 KiB
+(`MAX_RESULT_BYTES`) and stamps a trailing usage footer describing what was
+actually sent: `usage tokens=<n> elapsed-ms=<n> bytes=<n> truncated=<true|false>`.
+A rejected call (e.g. MCP's "Unknown or disabled tool") is rendered through the
+same gate rather than bypassing it.
+
 ## Per-edit
 
-- **`lens_diagnostics`** — Cached, LSP, or analyzer diagnostic state for the current session.
-  Modes: `delta` (current turn), `all` (resurfaces stale blockers dropped from
-  turn context), `full` (project-wide scan).
+- **`lens_diagnostics`** — Session-cache or LSP-probe diagnostic state, selected
+  by `source` (`session` default, or `lsp`) and `scope` (`paths` or
+  `workspace`; explicit `paths` always win over `scope`). `severity` is a
+  threshold, not an exact filter: `error` shows only errors; `warning` adds
+  warnings; `information` adds information; `hint`/`all` (default) show every
+  tier. Legacy `mode`: `delta` (current turn), `all` (resurfaces stale
+  blockers dropped from turn context), `full` (project-wide scan).
 - **`lens_diagnostic_mark`** — Triage a diagnostic: `false-positive` /
   `suppress` (writes an inline `pi-lens-ignore` comment) / `defer`
   (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
   Content-anchored so marks survive edits; every mark is logged and published
   on the bus. See [dispositions.md](dispositions.md).
-- **`lsp_navigation`** — IDE-style navigation: `definition`, `references`,
-  `implementation`, `typeDefinition`, `declaration`, `rename`, `rename_file`,
-  `hover`, `documentSymbol`, `workspaceSymbol`, `signatureHelp`,
-  `prepareCallHierarchy`, `incomingCalls`, `outgoingCalls`, `executeCommand`,
-  and `capabilities`. Position-based operations accept a `path`/`line`/`character`
-  triple. `documentSymbol` accepts a `kinds` filter (e.g. `function`, `class`)
-  and a `maxResults` cap (default 20, max 100) to keep large files bounded.
+- **`lsp_navigation`** — IDE-style navigation, 19 operations: `definition`,
+  `typeDefinition`, `declaration`, `references`, `hover`, `signatureHelp`,
+  `documentSymbol`, `findSymbol`, `workspaceSymbol`, `codeAction`, `rename`,
+  `rename_file`, `implementation`, `prepareCallHierarchy`, `incomingCalls`,
+  `outgoingCalls`, `executeCommand`, `workspaceDiagnostics`, and `capabilities`
+  (`tools/lsp-navigation.ts` operation description). Position-based operations
+  accept a `path`/`line`/`character` triple. `documentSymbol` accepts a `kinds`
+  filter (e.g. `function`, `class`) and a `maxResults` cap (default 20, max 100)
+  to keep large files bounded. Full per-operation parameter reference:
+  [skills/pi-lens-lsp-navigation/SKILL.md](../skills/pi-lens-lsp-navigation/SKILL.md).
 - **`ast_grep_search`** — AST-aware structural search across ~40 languages via
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
   modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural

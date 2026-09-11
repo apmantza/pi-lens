@@ -18,7 +18,7 @@
  * Rows: K1 direct · K2 destructured `{ cwd }` param · K3 options param
  * destructured in the body · K4 positional cwd param · K5 arrow/const form ·
  * K6 method form · K7 `createCwdCachedProbe` closure · K8 `...rest` spread ·
- * K9 opaque options identifier · K10 `// cwd-exempt:` tag.
+ * K9 opaque options identifier.
  *
  * Columns: P1 options KEY · P2 comment inside the options · P3 string value
  * inside the options · P4 another argument · P5 a non-`cwd` key's value ·
@@ -37,7 +37,6 @@ import { scanSpawnCwd } from "./spawn-cwd-scan.js";
 async function analyze(source: string): Promise<{
 	flagged: string[];
 	wrappers: string[];
-	redundantExemptions: string[];
 	sites: string[];
 }> {
 	// Inline fixtures use the real seam-shaped import so the scanner never
@@ -52,12 +51,9 @@ async function analyze(source: string): Promise<{
 	const scan = await scanSpawnCwd("fixture.ts", source);
 	return {
 		flagged: scan.sites
-			.filter((site) => !site.hasCwd && !site.exemptReason)
+			.filter((site) => !site.hasCwd)
 			.map((site) => `${site.line}:${site.callee}`),
 		wrappers: scan.wrappers.map((w) => `${w.name}:${w.mode}@${w.paramIndex}`),
-		redundantExemptions: scan.sites
-			.filter((site) => site.exemptReason && site.hasCwd)
-			.map((site) => `${site.line}:${site.callee}`),
 		sites: scan.sites.map((site) => `${site.line}:${site.callee}:${site.kind}`),
 	};
 }
@@ -768,74 +764,6 @@ describe("K8/K9 — an options object the scan cannot prove", () => {
 		expect(flagged).toEqual([
 			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
 		]);
-	});
-});
-
-// ── K10 · the exemption tag ─────────────────────────────────────────────────
-
-describe("K10 — `// cwd-exempt:` tags", () => {
-	it("f-exempt-absent: a tagged cwd-less site is exempt, not flagged", async () => {
-		const { flagged } = await analyze(`
-			async function probe() {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`);
-		expect(flagged).toEqual([]);
-	});
-
-	it("f-exempt-comment: the tag must be the line DIRECTLY above the call", async () => {
-		const source = `
-			async function probe() {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				// (an explanatory line that displaces the tag)
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`;
-		const { flagged } = await analyze(source);
-		expect(flagged).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("f-exempt-redundant: a tag above a site that DOES pass cwd is reported as redundant", async () => {
-		const source = `
-			async function probe(cwd) {
-				// cwd-exempt: presence probe only -- no target file and no config to resolve
-				await safeSpawnAsync("cl", [], { timeout: 5000, cwd });
-			}
-		`;
-		const { flagged, redundantExemptions } = await analyze(source);
-		expect(flagged).toEqual([]);
-		expect(redundantExemptions).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("f-exempt-thin-reason: a tag with no real reason exempts nothing", async () => {
-		// The admission has to cost something (defect shape 38): a bare tag is a
-		// one-line data edit that would otherwise buy a permanent pass.
-		const source = `
-			async function probe() {
-				// cwd-exempt: no
-				await safeSpawnAsync("cl", [], { timeout: 5000 });
-			}
-		`;
-		const { flagged } = await analyze(source);
-		expect(flagged).toEqual([
-			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
-		]);
-	});
-
-	it("exempts a WRAPPER call site by the tag above the wrapper call, not the spawn", async () => {
-		// psscriptanalyzer.ts's two `-Command` presence probes: the spawn lives
-		// inside `spawnPs` and always names cwd, so the tag has to bind to the
-		// caller's line or the exemption would be unexpressible.
-		const { flagged } = await analyze(`${K3_WRAPPER}
-			// cwd-exempt: global interpreter-presence probe, not tied to any project
-			spawnPs(cmd, ["-Command", "exit 0"], { timeoutMs: 1000 });
-		`);
-		expect(flagged).toEqual([]);
 	});
 });
 
@@ -1659,6 +1587,7 @@ async function run(ctx) {
 });
 
 describe("node:child_process is a site only when the file imports it", () => {
+	const CHILD_PROCESS = '"node:child_process"';
 	it("a method named `spawn` on some object is not a child spawn", async () => {
 		// `clients/lsp/index.ts` calls `server.spawn(root, { allowInstall })` —
 		// an LSP server definition's own method. Matching `spawn` by simple name
@@ -1678,6 +1607,74 @@ ${SEAM}
 async function run(ctx) {
 	spawn("tool", [], { cwd: ctx.cwd });
 }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	const aliasedFixtures = [
+		[
+			"aliased named import",
+			`import { spawn as s } from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"namespace import",
+			`import * as cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.spawn("tool", [], { cwd: ctx.cwd }); }`,
+		],
+		[
+			"default import",
+			`import cp from ${CHILD_PROCESS};\n${SEAM}\nfunction run(ctx) { cp.exec("tool", { cwd: ctx.cwd }); }`,
+		],
+		[
+			"dynamic destructuring",
+			`async function run(ctx) { const { fork } = await import(${CHILD_PROCESS}); fork("tool", [], { cwd: ctx.cwd }); }\n${SEAM}`,
+		],
+		[
+			"require namespace",
+			`const cp = require("node:child_process");\n${SEAM}\nfunction run(ctx) { cp.execFile("tool", [], { cwd: ctx.cwd }); }`,
+		],
+	] as const;
+	it("resolves an execSync options object", async () => {
+		const source = `import { execSync } from "node:child_process";
+${SEAM}
+function check(ctx) { execSync("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+	for (const [label, source] of aliasedFixtures) {
+		it(`resolves ${label}`, async () => {
+			expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+		});
+	}
+
+	it("resolves an exec alias by imported name", async () => {
+		const source = `import { exec as run } from "node:child_process";
+${SEAM}
+function check(ctx) { run("tool", { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("resolves a spawn imported as exec by imported name", async () => {
+		const source = `import { spawn as exec } from "node:child_process";
+${SEAM}
+function check(ctx) { exec("tool", [], { cwd: ctx.cwd }); }`;
+		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
+	});
+
+	it("follows a parameter-shaped options wrapper", async () => {
+		const source = `import { spawn as nodeSpawn } from "node:child_process";
+function pass(command, args, options) { return nodeSpawn(command, args, options); }
+function check(ctx) { pass("tool", [], { cwd: ctx.cwd }); }`;
+		const scan = await scanSpawnCwd("fixture.ts", source);
+		expect(scan.wrappers).toEqual([
+			{ name: "pass", mode: "options", paramIndex: 2 },
+		]);
+		expect(
+			scan.sites.map((site) => `${site.kind}:${site.callee}:${site.hasCwd}`),
+		).toEqual(["direct:nodeSpawn:false", "wrapper:pass:true"]);
+	});
+
+	it("resolves a destructured require alias", async () => {
+		const source = `const { spawn: s } = require(${CHILD_PROCESS});
+${SEAM}
+function run(ctx) { s("tool", [], { cwd: ctx.cwd }); }`;
 		expect(await verdicts(source)).toEqual(["hasCwd=true resolved=false"]);
 	});
 });

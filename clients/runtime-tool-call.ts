@@ -1,7 +1,6 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { loadBootstrapClients, requestBootstrapClients } from "./bootstrap.js";
-import { getAmbientAbortSignal } from "./safe-spawn.js";
 import type { CacheManager } from "./cache-manager.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { detectFileKind } from "./file-kinds.js";
@@ -1054,7 +1053,10 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				// budgeted families rather than leaving this site to spell its
 				// own axis value (#2557 review F7).
 				hook: "tool_call",
-				signal: getAmbientAbortSignal(),
+				// The ambient slot is populated by tool_result, after this hook has
+				// already run. Use the live tool_call signal so Escape can release
+				// this await (#2523 AC4).
+				signal: deps.ctx.signal,
 			})
 		)?.complexityClient;
 		const baseline = await complexityClient?.analyzeFile(filePath);
@@ -1384,6 +1386,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 									agentBehaviorClient,
 								} = await loadBootstrapClients();
 								const result = await handleToolResult({
+									signal: deps.ctx.signal,
 									event: {
 										toolName: "write",
 										input: { path: filePath },

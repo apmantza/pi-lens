@@ -106,6 +106,8 @@ export interface PiMock {
 	 * filters DOWN). Only meaningful when `supportsActiveTools` is true.
 	 */
 	readonly activeTools: Set<string>;
+	/** Number of host active-tool mutations, for lifecycle wiring assertions. */
+	readonly activeToolSetCalls: string[][];
 
 	// ── ExtensionAPI surface that index.ts uses ──────────────────────────────
 	registerFlag(name: string, options: RecordedFlag): void;
@@ -185,6 +187,7 @@ export function createPiMock(
 	const messageRenderers = new Map<string, unknown>();
 	const sentMessages: CapturedMessage[] = [];
 	const activeTools = new Set<string>();
+	const activeToolSetCalls: string[][] = [];
 
 	const mock: PiMock = {
 		flags,
@@ -195,6 +198,7 @@ export function createPiMock(
 		messageRenderers,
 		sentMessages,
 		activeTools,
+		activeToolSetCalls,
 
 		registerFlag(name, options) {
 			flags.set(name, options);
@@ -300,6 +304,7 @@ export function createPiMock(
 			if (supportsActiveTools) {
 				api.getActiveTools = () => Array.from(activeTools);
 				api.setActiveTools = (names: string[]) => {
+					activeToolSetCalls.push([...names]);
 					activeTools.clear();
 					for (const name of names) activeTools.add(name);
 				};
@@ -321,6 +326,7 @@ export function makeCtx(
 	overrides: Partial<{
 		cwd: string;
 		sessionId: string;
+		sessionFile?: string;
 		/**
 		 * #1334 S5: host project-trust decision. Omit entirely to simulate an
 		 * older host with no `isProjectTrusted` on the ctx — pi-lens must then
@@ -377,6 +383,7 @@ export function makeCtx(
 		// resume rehydration via `ctx.sessionManager.getSessionId()`.
 		sessionManager: {
 			getSessionId: () => overrides.sessionId,
+			getSessionFile: () => overrides.sessionFile,
 		},
 		model: overrides.model,
 		signal: undefined,

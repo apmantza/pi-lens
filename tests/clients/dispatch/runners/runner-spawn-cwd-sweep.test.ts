@@ -70,6 +70,10 @@
  *
  * ## Adding a spawn
  *
+ * A tool PRESENCE/VERSION probe is not one of these: call `probeToolAsync`
+ * (#2894) and it is neither a site nor a row, because that seam owns the
+ * no-cwd contract for the whole class. Everything else follows the rule below.
+ *
  * A new child spawn that passes a seam-resolved `cwd` costs one number:
  * `EXPECTED_DIRECT_SITES` (or `EXPECTED_WRAPPER_SITES`) moves by one, which is
  * where a reviewer sees the spawn was added. A new child spawn that does NOT
@@ -87,6 +91,8 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { lineContentHash } from "../../../../clients/read-guard.js";
 import {
+	holdsAScannableSpawn,
+	NODE_SPAWN_NAMES,
 	type SpawnCwdSite,
 	scanSpawnCwd,
 } from "../../../support/spawn-cwd-scan.js";
@@ -125,9 +131,20 @@ const POPULATION_FILES = [
  *
  * They pin REACH, never conformance: see "Adding a spawn" in the header for
  * what a non-conforming new site costs instead.
+ *
+ * #2894 moved 20 direct sites (136 -> 117) and 3 wrapper sites off this scan
+ * by folding every `--version`/presence probe onto `safe-spawn.ts`'s
+ * `probeToolAsync`, which is not a spawn NAME the scan recognises, so a file
+ * whose only child was a probe leaves the population entirely (76 -> 73 before `tool-probe.ts` itself joins it:
+ * `dispatch/dispatcher.ts`, `dispatch/runners/utils/candidate-probe.ts`,
+ * `security-scan-client.ts`). That is reach TRADED, not lost: the population
+ * filter reads each file's CONTENT, so the moment any of those three writes a
+ * `safeSpawnAsync(` again the file re-enters and its site is checked — and the
+ * one cwd decision they used to make 23 times over is now made once, inside
+ * `probeToolAsync`, where this file admits it by name.
  */
-const EXPECTED_FILES = 76;
-const EXPECTED_DIRECT_SITES = 136;
+const EXPECTED_FILES = 79;
+const EXPECTED_DIRECT_SITES = 130;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -148,7 +165,6 @@ const EXPECTED_DIRECT_SITES = 136;
  */
 const EXPECTED_WRAPPER_SITES = [
 	"clients/biome-client.ts:spawnBiomeAsync",
-	"clients/biome-client.ts:spawnBiomeAsync",
 	"clients/dead-code-client.ts:runAnalyze",
 	"clients/dependency-checker.ts:runCheckFile",
 	"clients/dependency-checker.ts:runMadgeSpawn",
@@ -159,8 +175,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/helm-render.ts:runIacPass",
 	"clients/dispatch/runners/helm-render.ts:renderAndValidate",
 	"clients/dispatch/runners/oxlint.ts:resolveVitePlusCommand",
-	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
-	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
 	"clients/dispatch/runners/psscriptanalyzer.ts:spawnPs",
 	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
@@ -177,6 +191,8 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/installer/index.ts:runCommand",
 	"clients/jscpd-client.ts:runScan",
 	"clients/knip-client.ts:runAnalyze",
+	"clients/lsp/launch.ts:trySpawn",
+	"clients/lsp/launch.ts:trySpawn",
 	"clients/opengrep-client.ts:runScan",
 	"clients/pipeline.ts:tryEslintFix",
 	"clients/pipeline.ts:runAutofix",
@@ -211,92 +227,64 @@ const EXPECTED_WRAPPERS = [
  */
 const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
-		"clients/biome-client.ts#BiomeClient.probeBiome:91ce6b49",
-		"`biome --version` presence probe through spawnBiomeAsync: no project target to resolve config against",
+		"clients/child-unref.ts#spawnCollectStdoutResult:499d1fcc",
+		"forwards a caller-supplied SpawnOptions object unchanged; its process-snapshot caller supplies no cwd and its argv does not resolve project configuration",
 	],
 	[
-		"clients/dead-code-client.ts#PythonDeadCodeClient.doEnsureAvailable:46c732a4",
-		"`<vulture candidate> --version` availability probe over PATH candidates: no project target",
+		"clients/lsp/launch.ts#runStderrGuardedProbe:eedfa033",
+		"execFileSync runs a stderr probe and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/launch.ts#findBinaryOnPath:90f3c9a8",
+		"execFileSync runs a PATH lookup and does not resolve project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#killPidTreeSync:7ca6002e",
+		"spawnSync targets a process identifier for process-tree cleanup, not project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#ensureUtf8ConsoleCodePageOnce:97609a28",
+		"spawnSync runs a Windows console-code-page probe and does not resolve project configuration",
+	],
+	[
+		"clients/safe-spawn.ts#safeSpawn:b6046d06",
+		"forwards the caller's SafeSpawnOptions object unchanged before adding safe-spawn defaults; the sole test-runner caller supplies no cwd",
+	],
+	[
+		"clients/metrics-history.ts#getCurrentCommit:021d92f7~df24802d",
+		"execSync runs Git with cwd = spawnDir, an existence walk from path.resolve(startDir) (startDir = path.dirname(filePath)) up to the first directory that exists, not a walk to the repository root; the site passes that cwd, and hasCwd=false here is resolveLocalInitializer failing closed on the reassigned let; this metrics probe does not resolve project configuration from the dispatch cwd",
+	],
+	[
+		"clients/instance-reaper.ts#killPidTree:18e7d7ac",
+		"process-tree cleanup spawn targets a pid and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/client.ts#killProcessTree:5e14087c",
+		"LSP process-tree cleanup targets a pid and does not resolve project configuration",
+	],
+	[
+		"clients/lsp/launch.ts#stopLSP.killWindowsTree:7ff361c9",
+		"Windows LSP tree cleanup targets a pid and does not resolve project configuration",
 	],
 	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:488c639e~e7e502d1",
-		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd",
+		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd. #2894 left it: `analyze(root)`'s input is already a DIRECTORY, and `resolveToolCwd` takes a FILE and starts from `path.dirname` of it, so handing it a root would walk from that root's PARENT",
 	],
 	[
 		"clients/dependency-checker.ts#DependencyChecker.runCheckFile:fbbf6499~dcd12892",
-		"forwards runCheckFile's own `projectRoot` parameter into runMadgeSpawn; the parameter name carries no `cwd`, so the wrapper rule reads it as unsupplied",
-	],
-	[
-		"clients/dispatch/dispatcher.ts#checkToolAvailability:8b362990",
-		"`<tool> --version` availability probe the dispatcher shares across runners: no project target",
-	],
-	[
-		"clients/dispatch/runners/cpp-check.ts#resolveCompiler:ef272657",
-		"`cl` with no arguments — an MSVC presence probe that reads no file and no config; carries the in-source cwd-exempt tag too",
-	],
-	[
-		"clients/dispatch/runners/psscriptanalyzer.ts#resolvePowerShellCmd:e2207b24",
-		"`pwsh -NoProfile -Command exit 0` interpreter-presence probe through spawnPs; carries the in-source cwd-exempt tag",
-	],
-	[
-		"clients/dispatch/runners/psscriptanalyzer.ts#checkModuleAvailable:2e480adc",
-		"`Get-Module -ListAvailable PSScriptAnalyzer` module-presence probe: PowerShell resolves modules from its own search path, not from a project",
-	],
-	[
-		"clients/dispatch/runners/utils/candidate-probe.ts#probeAvailabilityCandidates:612dec1d",
-		"shared availability-probe helper: runs each candidate with its probe args (`--version` and friends) to ask whether the binary exists at all",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync:b28406d1",
-		"`<ast-grep> --version` PATH probe for the sg sweep: no project target",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync:5e71e1e9",
-		"`<tool> --version` global-PATH step of the local-first resolution ladder: it asks whether the tool exists system-wide, after the project-local lookups have failed",
+		"forwards runCheckFile's own `projectRoot` parameter into runMadgeSpawn; the parameter name carries no `cwd`, so the wrapper rule reads it as unsupplied. #2894 left the whole file: `checkFile`, `checkFilesBatch` and `scanProject` share ONE `projectRoot` per operation (one madge resolution, one import cache, one published state — the contract on `checkFilesBatch`), `scanProject` has no file at all, and `checkFile` has no production caller — `runtime-turn.ts` calls the batch. Per-file roots there is mechanism, and #2905 tracks it",
 	],
 	[
 		"clients/formatters.ts#which:040c257b",
 		"`which`/`where <command>` PATH lookup: the answer is the same from any directory",
 	],
 	[
-		"clients/formatters.ts#resolveGoFmtBinary:8379fd5c",
-		"`go env GOROOT` — a toolchain query about the Go installation, not about the project",
-	],
-	[
-		"clients/formatters.ts#resolveCommand:057285b5",
-		"`dotnet csharpier --version` presence probe for the legacy driver form",
-	],
-	[
-		"clients/formatters.ts#detect:e11d4239",
-		"`dotnet csharpier --version` presence probe in the csharpier formatter's detect()",
-	],
-	[
-		"clients/formatters.ts#detect:4818fd92",
-		"`Get-Module -ListAvailable PSScriptAnalyzer` presence probe in the powershell formatter's detect()",
-	],
-	[
-		"clients/govulncheck-client.ts#GovulncheckClient.doEnsureAvailable:d94153fa",
-		"`go version` toolchain presence probe",
-	],
-	[
 		"clients/govulncheck-client.ts#GovulncheckClient.doEnsureAvailable:eff0855a",
 		"`go install golang.org/x/vuln/cmd/govulncheck@latest` — installs into the Go tool directory, not into the project",
 	],
 	[
-		"clients/govulncheck-client.ts#GovulncheckClient.doEnsureAvailable:ea10738d",
-		"`govulncheck -version` re-probe after the install attempt",
-	],
-	[
-		"clients/installer/index.ts#verifyAstGrepProbePath:56408f6e",
-		"`<binPath> --version` verification of a downloaded ast-grep binary",
-	],
-	[
 		"clients/installer/index.ts#verifyToolBinary:96ec5ee1",
 		"`<execPath> <verificationArgs>` verification that an installed managed binary runs at all",
-	],
-	[
-		"clients/installer/index.ts#getAllToolStatuses:54003c71",
-		"`<tool.checkCommand> --version` status sweep across installed tools",
 	],
 	[
 		"clients/installer/index.ts#getPythonUserBaseCandidates:3fead921",
@@ -315,10 +303,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`unzip -q -o <archive> -d <tmpDir>` extraction inside the global pi-lens bin directory",
 	],
 	[
-		"clients/installer/index.ts#probeManagedToolVersion:3050f1fc",
-		"`<cached managed binary> <checkArgs>` version probe for the managed-tool refresh",
-	],
-	[
 		"clients/installer/index.ts#installPipTool:ba749b5d",
 		"`pip install <package>` into the user/managed site, not into the project",
 	],
@@ -332,7 +316,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/knip-client.ts#KnipClient.analyze:a1223aae~98d0e4c5",
-		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied",
+		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
 	],
 	[
 		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
@@ -359,24 +343,8 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
-		"clients/package-manager.ts#probeAvailability:d0a6319a",
-		"`which`/`where <package manager>` PATH lookup",
-	],
-	[
 		"clients/package-manager.ts#probeGlobalBinDirs:bf156997",
 		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries",
-	],
-	[
-		"clients/pipeline.ts#tryRustClippyFix:8e05db7b",
-		"`cargo --version` presence probe, before the package root is known",
-	],
-	[
-		"clients/pipeline.ts#tryDartFix:91623ccc",
-		"`dart --version` presence probe, before the package root is known",
-	],
-	[
-		"clients/ruff-client.ts#RuffClient.fixFileAsync:61f923b4",
-		"the options object is the local `spawnOpts`, built two statements above with `cwd: cwd ?? path.dirname(absolutePath)`; the scan does not follow an opaque options identifier (stated bound), so the cwd it carries is invisible here",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawnAsync.killTree:77f62fd4",
@@ -403,16 +371,8 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`which`/`where <command>` PATH lookup returning the path (deprecated sync form)",
 	],
 	[
-		"clients/security-scan-client.ts#SecurityScanClient.probeVersion:355605e9",
-		"`<tool> <versionArgs>` version probe of a managed or PATH security binary",
-	],
-	[
 		"clients/sg-runner.ts#SgRunner.probeHomebrew:4df45ecb",
 		"`brew --prefix ast-grep` — asks Homebrew where it installed the binary",
-	],
-	[
-		"clients/sg-runner.ts#SgRunner.probeCommand:45a37c68",
-		"`<ast-grep candidate> --version` availability probe",
 	],
 	[
 		"clients/sg-runner.ts#SgRunner.execRaw:05d2e3a2",
@@ -443,22 +403,42 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
 	],
 	[
+		"clients/tool-probe.ts#probeToolAsync:2d247383",
+		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 23 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
+	],
+	[
 		"clients/zizmor-config.ts#deriveGhCliToken:6acc7c4b",
 		"`gh auth token` — reads the GitHub CLI's own credential store, which is per-user rather than per-project",
 	],
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
+		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~0cd6d898",
+		"the synchronous safe-spawn path derives its cwd from its own compatibility options, not the dispatch resolveToolCwd seam",
+	],
+	[
+		"clients/lsp/launch.ts#trySpawn:e7bf6cb1~dbf27697",
+		"LSP launch helper receives its own cwd parameter from the server launch boundary",
+	],
+	[
+		"clients/lsp/launch.ts#trySpawn:86ab761d~dbf27697",
+		"LSP launch helper receives its own cwd parameter from the server launch boundary",
+	],
+	[
+		"clients/lsp/launch.ts#launchLSP:34d73dd1~2a84127e",
+		"launchLSP forwards its caller-provided cwd through trySpawn",
+	],
+	[
+		"clients/lsp/launch.ts#launchLSP:e7df4bb9~3f60133c",
+		"launchLSP forwards its caller-provided cwd through trySpawn",
+	],
+	[
 		"clients/biome-client.ts#BiomeClient.spawnBiomeAsync:29a3826f~29a3826f",
 		"cwd is spawnBiomeAsync's own `cwd` parameter; the checked sites are its two call sites in this file",
 	],
 	[
-		"clients/biome-client.ts#BiomeClient.fixFileAsync:21f726e7~87e15e1e",
-		"cwd is `configCwd` — the caller's cwd or the formatted file's own directory; BiomeClient is a formatter client with no DispatchContext to resolve from",
-	],
-	[
 		"clients/dead-code-client.ts#PythonDeadCodeClient.runAnalyze:b54a18c7~1167a91f",
-		"cwd is runAnalyze's own `root` parameter, the resolved project directory the client was asked to analyse",
+		"cwd is runAnalyze's own `root` parameter, the resolved project directory the client was asked to analyse — a directory the caller names, not a file the seam can resolve a root from (#2894)",
 	],
 	[
 		"clients/dependency-checker.ts#DependencyChecker.checkFile:1935bb9d~bed57757",
@@ -490,7 +470,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/dispatch/runners/cue-vet.ts#run:f61eafcc~3e35e485@1",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)) — cue vets the file's own package directory; the scan does not follow a path computation, so the derivation is registered here. #2894 left it: a CUE package IS one directory, and `resolveToolCwd` walks UP to a marker or git root, so it cannot return a plain file directory in any repo (this runner already takes its availability cwd from the seam)",
 	],
 	[
 		"clients/dispatch/runners/cue-vet.ts#run:1803a70e~3e35e485",
@@ -533,16 +513,12 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`cargo clippy --version` inside a createCwdCachedProbe closure: the `cwd` is the closure parameter the probe machinery supplies per call",
 	],
 	[
-		"clients/dispatch/runners/rust-clippy.ts#run:dba44d7f~6991f811",
-		"cwd is the directory of `findCargoToml(ctx.filePath)` — cargo must run at the package root, which is derived from the edited file rather than from the seam",
-	],
-	[
 		"clients/dispatch/runners/terragrunt.ts#run:d106f5a8~2a7d9054",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): `terragrunt hcl validate` validates the unit directory the file sits in — a directory, not a marker root, so the #2894 fold does not reach it (the runner already resolves its availability cwd through the seam)",
 	],
 	[
 		"clients/dispatch/runners/tflint.ts#run:338013e8~a6e3b67b",
-		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute",
+		"cwd is `fileDir` = dirname(path.resolve(<resolveRunnerCwd result>, ctx.filePath)): tflint scans one module directory and its --config is passed absolute — a Terraform module IS a directory, which is why #2894 left it where cue-vet and terragrunt stay",
 	],
 	[
 		"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:c226c0b2~c226c0b2",
@@ -594,7 +570,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/git-tracked-ignore.ts#collectUntrackedIgnoredIds:538456dd~538456dd",
-		"collectUntrackedIgnoredIds forwards its own `cwd` parameter, the repository root its callers pass",
+		"collectUntrackedIgnoredIds forwards its own `cwd` parameter, the repository root its callers pass — same #2894 verdict as collectTrackedFiles: the cwd is the git query's SUBJECT",
 	],
 	[
 		"clients/git-tracked-ignore.ts#fetchTrackedFiles:5fc25306~dbf27697",
@@ -602,7 +578,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/git-tracked-ignore.ts#collectTrackedFiles:0f864633~0f864633",
-		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass",
+		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass — `git ls-files` REPORTS ON that directory rather than resolving config from it, so moving it to a marker root would answer about a different repository (#2894)",
 	],
 	[
 		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~4bd5cc03",
@@ -646,7 +622,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/knip-client.ts#KnipClient.runAnalyze:b959739e~f5c0e305",
-		"cwd is `targetDir`, runAnalyze's own project-root parameter; knip resolves its config from there",
+		"cwd is `targetDir`, runAnalyze's own project-root parameter; knip resolves its config from there — a whole-project scan with no edited file for the seam to walk up from (#2894)",
 	],
 	[
 		"clients/mcp/review.ts#runRebuild:f93df254~9f5ecf07",
@@ -654,15 +630,15 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/opaque-mutation-scan.ts#isGitWorktree:7e6a8cd3~edb3d44f",
-		"cwd is isGitWorktree's own `root` parameter — `git rev-parse --is-inside-work-tree` asks about exactly that directory",
+		"cwd is isGitWorktree's own `root` parameter — `git rev-parse --is-inside-work-tree` asks about exactly that directory, so a seam that moved it to a marker root would answer a different question (#2894)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#resolveGitToplevel:49511e7e~1167a91f",
-		"cwd is resolveGitToplevel's own `root` parameter — `git rev-parse --show-toplevel` asks about exactly that directory",
+		"cwd is resolveGitToplevel's own `root` parameter — `git rev-parse --show-toplevel` asks about exactly that directory; the answer IS the root, so resolving one first would be circular (#2894)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#recoverOpaqueChangesViaGit:dad86fa7~1167a91f",
-		"cwd is recoverOpaqueChangesViaGit's own `root` parameter — `git status --porcelain` reports the worktree at that root",
+		"cwd is recoverOpaqueChangesViaGit's own `root` parameter — `git status --porcelain` reports the worktree at that root, which is the query's subject, not a config-resolution start (#2894)",
 	],
 	[
 		"clients/opengrep-client.ts#OpengrepClient.scan:c23b1b18~4bd5cc03",
@@ -693,16 +669,12 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"runPipeline forwards its own `cwd` parameter into runAutofix",
 	],
 	[
-		"clients/ruff-client.ts#RuffClient.fixFileAsync:22e02ee5~4421fb24",
-		"cwd is the caller's own `cwd` argument, falling back to the linted file's directory; RuffClient is an autofix client with no DispatchContext seam",
-	],
-	[
 		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~446d128f",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[
 		"clients/shared-checkout-guard.ts#probeWorkingTreeState:67edebd4~c87eec21",
-		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root",
+		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root. Not a tool probe in #2894's sense: it asks about a directory, so it cannot use the cwd-less probe seam",
 	],
 	[
 		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~4bd5cc03",
@@ -713,49 +685,27 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runScan's own `cwd` parameter, the directory `trivy fs` is pointed at",
 	],
 ];
-const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [
-	[
-		"clients/dispatch/runners/helm-lint.ts#run:833aee95~833aee95",
-		'#2882: helm-lint\'s run() reads `ctx.cwd` directly instead of resolveRunnerCwd(ctx, "helm") — the one runner still bypassing the #2777 seam, and this row retires when that lands',
-	],
-];
+const MIGRATION_WORKLIST_ROWS: ReadonlyArray<readonly [string, string]> = [];
 /**
  * The worklist can only shrink. Lower this when a row lands; never raise it —
  * a new non-conforming site belongs in one of the two reasoned tables above,
  * or gets fixed.
  */
-const WORKLIST_CEILING = 1;
+const WORKLIST_CEILING = 0;
 /** See the comment on the `beforeAll` below for where this number comes from. */
 const SCAN_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Whether a file can hold a site the scan recognises: one of the seam wrappers
- * by name, or a named `spawn`/`execFile` import from `child_process` or
- * `node:child_process`. It mirrors
- * `spawn-cwd-scan.ts`'s own site rule deliberately — round 4's population
- * filter listed only the five seam names while the scanner also counted
- * `spawn`/`execFile`, so a file whose only child spawn was a bare `spawn(`
- * could never move a pin (round-5 v4-N3). An ALIASED import is a stated bound
- * of both, tracked by #2888.
+ * The population predicate lives in `tests/support/spawn-cwd-scan.ts` beside
+ * the two name tuples it derives from (one vocabulary, #2927): one of the
+ * seam wrappers by name, or a binding of a `NODE_SPAWN_NAMES` name from
+ * `child_process` or `node:child_process`. It mirrors the scan's own site
+ * rule deliberately — round 4's population filter listed only the five seam
+ * names while the scanner also counted child process calls, so a file whose
+ * only child spawn was a bare `spawn(` could never move a pin (round-5
+ * v4-N3). Unbound spellings (`promisify(exec)`, a re-exported wrapper) stay
+ * outside both, tracked by #2888.
  */
-function holdsAScannableSpawn(source: string): boolean {
-	const hasUnaliasedChildProcessImport = [
-		...source.matchAll(
-			/import(?:\s+[\w*$]+\s*,)?\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g,
-		),
-	].some((match) =>
-		match[1]
-			.split(",")
-			.some((specifier) =>
-				/^(?:\s*)(?:spawn|execFile)(?:\s*)$/.test(specifier),
-			),
-	);
-	return (
-		/\b(?:safeSpawnAsync|safeSpawnSync|safeSpawn|spawnSupervised|execa)\s*\(/.test(
-			source,
-		) || hasUnaliasedChildProcessImport
-	);
-}
 const NO_CWD_EXEMPTIONS = Object.fromEntries(NO_CWD_EXEMPTION_ROWS);
 const ORIGIN_ADMISSIONS = Object.fromEntries([
 	...ORIGIN_ADMISSION_ROWS,
@@ -819,16 +769,16 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	// one of the seam wrappers by name, or a named `spawn`/`execFile` import
 	// from `child_process` or `node:child_process`
 	// import (round-5 v4-N3 — the two lists used to disagree, so a file whose
-	// only child spawn was a bare `spawn(` could never move a pin). An ALIASED
-	// child_process import is a stated bound, tracked by #2888.
+	// only child spawn was a bare `spawn(` could never move a pin).
 	const files = POPULATION_FILES.filter((file) =>
 		holdsAScannableSpawn(fs.readFileSync(file, "utf8")),
 	);
 	const sites: SpawnCwdSite[] = [];
 	const keyBySite = new Map<SpawnCwdSite, string>();
 
-	// The scan is ~2.8–3.7 s over the 76-file population, measured idle and at
-	// `--maxWorkers=1` beside `tests/config`. CI observed ~7 s for this file,
+	// A local measurement on 2026-09-10 records 3.808 s idle and 3.932 s under
+	// `--maxWorkers=1` beside `tests/config`, over the 81-file population.
+	// CI observed ~7 s for this file,
 	// so 30 s gives roughly 4x margin against the file wall and remains the
 	// ceiling this repo treats as a hook budget — an
 	// explicit admission for THIS hook, not a project-wide bump, and not a move
@@ -874,11 +824,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	});
 
 	it("the population rule admits exactly what the scan can see", () => {
-		// The clause that matters is the second one: without it a file whose only
-		// child spawn is a bare `spawn(` from node:child_process is invisible to
-		// the sweep and cannot move a pin (round-5 v4-N3). The aliased form is the
-		// stated bound (#2888) and must stay OUT, or the sweep would pull in a
-		// file the scan finds no site in and red the seam-occupancy test above.
+		// The population predicate must admit every child-process binding spelling
+		// the AST scanner can resolve, or its reach pins cannot move with the code.
+		const childProcess = JSON.stringify("node:child_process");
 		expect(
 			holdsAScannableSpawn('const r = await safeSpawnAsync("t", [], {});'),
 			"a seam wrapper by name",
@@ -913,11 +861,49 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 			holdsAScannableSpawn(
 				'import { spawn as nodeSpawn } from "node:child_process";\nnodeSpawn("t", []);',
 			),
-			"an aliased import is the stated bound, not a population file",
-		).toBe(false);
+			"an aliased named import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import * as cp from "node:child_process";\ncp.spawn("t", []);',
+			),
+			"a namespace import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'import cp from "node:child_process";\ncp.spawn("t", []);',
+			),
+			"a default import",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				'const { spawn } = await import("node:child_process");\nspawn("t", []);',
+			),
+			"a dynamic destructure",
+		).toBe(true);
+		expect(
+			holdsAScannableSpawn(
+				`const cp = require(${childProcess});\ncp.spawn("t", []);`,
+			),
+			"a require namespace",
+		).toBe(true);
 		expect(
 			holdsAScannableSpawn("await server.spawn(root, { allowInstall });"),
 			"a method named spawn on some object",
+		).toBe(false);
+		for (const name of NODE_SPAWN_NAMES) {
+			expect(
+				holdsAScannableSpawn(
+					`import { ${name} } from "node:child_process";\n${name}("tool");`,
+				),
+				`scanner name ${name} is admitted by the population`,
+			).toBe(true);
+		}
+		expect(
+			holdsAScannableSpawn(
+				'import { execFileAsync } from "node:child_process";\nexecFileAsync("tool");',
+			),
+			"an unrecognised child_process spelling remains outside the population",
 		).toBe(false);
 	});
 

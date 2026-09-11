@@ -30,7 +30,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	classifyInstallOutcome,
 	ensureFixtureTools,
@@ -136,6 +136,16 @@ const CASES: Array<{
 			reason: "npm error E503 Service Unavailable",
 		},
 		expectRow: "skip",
+	},
+	{
+		name: "PEP 668 externally-managed-environment remains a genuine pip failure",
+		toolId: "jedi-language-server",
+		attempt: {
+			outcome: "failed",
+			reason: "error: externally-managed-environment",
+		},
+		toolchainPresence: { pip: true },
+		expectRow: "fail",
 	},
 	{
 		name: "ETIMEDOUT is treated as transient",
@@ -244,6 +254,26 @@ describe("classifyInstallOutcome (#2638/#2661) — outcome × toolchain table", 
 			},
 		});
 		expect(report.results[0].networkUnreachable).toBe(true);
+	});
+
+	it("does not fall back to the source checkout when installer root is absent", async () => {
+		const exit = vi.spyOn(process, "exit").mockImplementation(((
+			code?: number,
+		) => {
+			throw new Error(`process.exit(${code})`);
+		}) as never);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(runInstallRegistrySmoke()).rejects.toThrow(
+				"process.exit(2)",
+			);
+			expect(error).toHaveBeenCalledWith(
+				"installer root missing: --installer-root=<path> is required for the installed registry smoke",
+			);
+		} finally {
+			exit.mockRestore();
+			error.mockRestore();
+		}
 	});
 });
 

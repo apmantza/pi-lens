@@ -16,6 +16,7 @@ import {
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawnAsync, type SpawnResult } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
 import { createSingleFlight } from "./single-flight.js";
 import {
@@ -613,7 +614,7 @@ export class SgRunner {
 		let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
 		let hostStallMs: number;
 		try {
-			result = await safeSpawnAsync(cmd, [...argsPrefix, "--version"], {
+			result = await probeToolAsync(cmd, [...argsPrefix, "--version"], {
 				timeout: PROBE_TIMEOUT_MS,
 			});
 		} finally {
