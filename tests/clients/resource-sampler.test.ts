@@ -64,8 +64,6 @@ vi.mock("../../clients/instance-reaper.js", async (importOriginal) => {
 
 const {
 	sampleProcesses,
-	SPAWN_SAMPLE_FULL_RATE_TICKS,
-	SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER,
 	UsageAccumulator,
 	walkDescendantPids,
 	startSpawnUsageSampler,
@@ -873,11 +871,12 @@ describe("#2968 startSpawnUsageSampler backpressure", () => {
 		await vi.advanceTimersByTimeAsync(10_000);
 		sampler.stop();
 
+		// Literal expectations, not the module's own constants: a test that
+		// recomputes the interval from the values it is pinning would follow any
+		// edit to them instead of catching it.
 		const gaps = sampledAt.slice(1).map((at, i) => at - sampledAt[i]);
-		expect(gaps.slice(0, SPAWN_SAMPLE_FULL_RATE_TICKS - 1)).toEqual(
-			Array(SPAWN_SAMPLE_FULL_RATE_TICKS - 1).fill(100),
-		);
-		expect(Math.max(...gaps)).toBe(100 * SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER);
+		expect(gaps.slice(0, 7)).toEqual([100, 100, 100, 100, 100, 100, 100]);
+		expect(Math.max(...gaps)).toBe(1_600); // 16 x the 100ms base interval
 		// 10s at a flat 100ms interval is 101 ticks; the backoff makes it ~14.
 		expect(sampledAt.length).toBeLessThan(20);
 	});
