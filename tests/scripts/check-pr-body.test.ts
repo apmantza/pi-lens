@@ -406,12 +406,33 @@ describe("test-reference shape and placement", () => {
 			),
 			"utf8",
 		);
-		const direct = lintPrBody(fixture).errors.join(" ");
-		const local = lintLocalPrBody(fixture).errors.join(" ");
-		for (let index = 1; index <= 11; index += 1) {
-			const id = `Z${String(index).padStart(2, "0")}`;
-			expect(direct).toContain(id);
-			expect(local).toContain(id);
+		const fixtureRepo = mkdtempSync(join(repositoryRoot, ".tmp-pr-body-git-"));
+		try {
+			mkdirSync(join(fixtureRepo, "tests"));
+			writeFileSync(join(fixtureRepo, "tests", "fixture.test.ts"), "fixture\n");
+			gitExecFileSync(["init", "-q"], { cwd: fixtureRepo });
+			gitExecFileSync(["add", "tests/fixture.test.ts"], { cwd: fixtureRepo });
+			gitExecFileSync(
+				[
+					"-c",
+					"user.email=pi-lens-test@example.com",
+					"-c",
+					"user.name=pi-lens-test",
+					"commit",
+					"-qm",
+					"fixture",
+				],
+				{ cwd: fixtureRepo },
+			);
+			const direct = lintPrBody(fixture).errors.join(" ");
+			const local = lintLocalPrBody(fixture, fixtureRepo).errors.join(" ");
+			for (let index = 1; index <= 11; index += 1) {
+				const id = `Z${String(index).padStart(2, "0")}`;
+				expect(direct).toContain(id);
+				expect(local).toContain(id);
+			}
+		} finally {
+			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
 	});
 });
