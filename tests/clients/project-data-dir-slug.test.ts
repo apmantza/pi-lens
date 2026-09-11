@@ -40,13 +40,25 @@ import {
 const savedDataDir = process.env.PILENS_DATA_DIR;
 const savedHome = process.env.PI_LENS_HOME;
 
+// Every temp dir this file creates, removed in afterEach (#2929 round 4, F5:
+// the 80-iteration race loop left 464 /tmp/pi-lens-datadir-base-* behind).
+const tempDirs: string[] = [];
+
 function isolateDataDir(): string {
 	const base = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-datadir-base-"));
+	tempDirs.push(base);
 	process.env.PILENS_DATA_DIR = base;
 	process.env.PI_LENS_HOME = fs.mkdtempSync(
 		path.join(os.tmpdir(), "pi-lens-datadir-home-"),
 	);
+	tempDirs.push(process.env.PI_LENS_HOME);
 	return base;
+}
+
+function makeScratch(prefix: string): string {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	tempDirs.push(dir);
+	return dir;
 }
 
 function runRealProcess(
@@ -61,10 +73,23 @@ function runRealProcess(
 		});
 		let output = "";
 		let error = "";
+		// The child is always reaped: kill-on-settle is a no-op after a clean
+		// exit and bounds the orphan window when the child hangs (#2929 F5).
+		const kill = () => {
+			try {
+				child.kill();
+			} catch {
+				// Already exited; nothing to reap.
+			}
+		};
 		child.stdout.on("data", (chunk: Buffer) => (output += chunk));
 		child.stderr.on("data", (chunk: Buffer) => (error += chunk));
-		child.on("error", reject);
+		child.on("error", (err) => {
+			kill();
+			reject(err);
+		});
 		child.on("exit", (code) => {
+			kill();
 			if (code === 0) resolve(output.trim());
 			else reject(new Error(`child exited ${code}: ${error}`));
 		});
@@ -84,12 +109,15 @@ afterEach(() => {
 	}
 	drainProjectDataDirMigrations();
 	resetDegradationLedger();
+	for (const dir of tempDirs.splice(0)) {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 describe("project data-dir slug (#2874)", () => {
 	it("gives separator/hyphen twins distinct directories", () => {
 		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-twins-"));
+		const scratch = makeScratch("pi-lens-twins-");
 		const rootA = path.join(scratch, "src", "pi-lens");
 		const rootB = path.join(scratch, "src", "pi", "lens");
 		fs.mkdirSync(rootA, { recursive: true });
@@ -110,7 +138,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("returns the same directory for the same root across calls", () => {
 		isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-stable-"));
+		const scratch = makeScratch("pi-lens-stable-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 
@@ -124,7 +152,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("resolved root spelling stays the canonical directory identity", () => {
 		isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-symlink-"));
+		const scratch = makeScratch("pi-lens-symlink-");
 		const target = path.join(scratch, "target", "proj");
 		const linkParent = path.join(scratch, "linked");
 		fs.mkdirSync(target, { recursive: true });
@@ -138,7 +166,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("realpath failure keeps the resolved directory stable and records fallback", () => {
 		isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-realpath-"));
+		const scratch = makeScratch("pi-lens-realpath-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 		const healthy = getProjectDataDir(root);
@@ -149,7 +177,7 @@ describe("project data-dir slug (#2874)", () => {
 			const notices = drainProjectDataDirMigrations();
 			expect(notices).toHaveLength(1);
 			expect(notices[0]?.outcome).toBe("identity-fallback");
-			expect(notices[0]?.used).toBe(healthy);
+			expect(notices[0]?.to).toBe(healthy);
 		} finally {
 			realpathState.fail = false;
 		}
@@ -157,7 +185,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("two processes converge on one migrated directory", async () => {
 		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-race-"));
+		const scratch = makeScratch("pi-lens-race-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 		const hashedDir = getProjectDataDir(root);
@@ -176,17 +204,32 @@ describe("project data-dir slug (#2874)", () => {
 			"const { getProjectDataDir } = require('./clients/file-utils.js');",
 			"const ready = process.env.READY_FILE;",
 			"fs.writeFileSync(ready, 'ready');",
-			`while (!fs.existsSync(${JSON.stringify(barrier)})) {}`,
-			`process.stdout.write(getProjectDataDir(${JSON.stringify(root)}));`,
+			"(async () => {",
+			"  const t0 = Date.now();",
+			"  while (!fs.existsSync(process.env.BARRIER_FILE)) {",
+			"    if (Date.now() - t0 > 30000) { console.error('barrier timeout'); process.exit(1); }",
+			"    await new Promise((r) => setTimeout(r, 1));",
+			"  }",
+			`  process.stdout.write(getProjectDataDir(${JSON.stringify(root)}));`,
+			"})().catch((e) => { console.error(e); process.exit(1); });",
 		].join("\n");
 		const childEnv = {
 			...process.env,
 			PILENS_DATA_DIR: base,
 			PI_LENS_HOME: path.join(scratch, "home"),
+			BARRIER_FILE: barrier,
 		};
 		const first = runRealProcess({ ...childEnv, READY_FILE: readyA }, script);
 		const second = runRealProcess({ ...childEnv, READY_FILE: readyB }, script);
+		// Observe early child failures now: without these the ready loop below
+		// would spin to its deadline while the rejection waits for Promise.all.
+		void first.catch(() => {});
+		void second.catch(() => {});
+		const waitStart = Date.now();
 		while (!fs.existsSync(readyA) || !fs.existsSync(readyB)) {
+			if (Date.now() - waitStart > 30_000) {
+				throw new Error("race children never became ready");
+			}
 			await new Promise<void>((resolve) => setImmediate(resolve));
 		}
 		fs.writeFileSync(barrier, "go");
@@ -199,7 +242,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("migrates an old-slug directory by rename and preserves its contents", () => {
 		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-migrate-"));
+		const scratch = makeScratch("pi-lens-migrate-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 
@@ -225,7 +268,7 @@ describe("project data-dir slug (#2874)", () => {
 
 	it("prefers the new directory when both old and new exist", () => {
 		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-both-"));
+		const scratch = makeScratch("pi-lens-both-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 
@@ -247,11 +290,9 @@ describe("project data-dir slug (#2874)", () => {
 		expect(fs.existsSync(oldDir)).toBe(true);
 	});
 
-	it("rename failure records the directory actually used", () => {
+	it("rename failure keeps the legacy directory and records rename-failed", () => {
 		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-rename-failure-"),
-		);
+		const scratch = makeScratch("pi-lens-rename-failure-");
 		const root = path.join(scratch, "proj");
 		fs.mkdirSync(root, { recursive: true });
 		const hashedDir = getProjectDataDir(root);
@@ -265,12 +306,13 @@ describe("project data-dir slug (#2874)", () => {
 			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
 		});
 		try {
-			expect(getProjectDataDir(root)).toBe(oldDir);
+			const settled = getProjectDataDir(root);
+			expect(settled).toBe(oldDir);
 			const notices = drainProjectDataDirMigrations();
 			expect(notices).toHaveLength(1);
 			expect(notices[0]?.outcome).toBe("rename-failed");
-			expect(notices[0]?.used).toBe(oldDir);
-			expect(notices[0]?.used).not.toBe(notices[0]?.to);
+			expect(notices[0]?.to).toBe(hashedDir);
+			expect(notices[0]?.to).not.toBe(settled);
 		} finally {
 			rename.mockRestore();
 		}

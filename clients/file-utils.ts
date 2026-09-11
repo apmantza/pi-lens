@@ -126,12 +126,8 @@ function projectDataDirRootHash(canonicalRoot: string): string {
 }
 
 export interface ProjectDataDirMigration {
-	/** The pre-#2874 slug directory the state moved away from (or coexists). */
-	from: string;
 	/** The hashed-slug directory derived for the root. */
 	to: string;
-	/** The directory the current session actually uses. */
-	used: string;
 	/** The bounded outcome that the session-start drain renders. */
 	outcome: "renamed" | "coexisting" | "rename-failed" | "identity-fallback";
 }
@@ -170,9 +166,7 @@ function settleProjectDataDir(
 	if (!oldExists) {
 		if (identityFallback && pendingDataDirMigrations.length < 32) {
 			pendingDataDirMigrations.push({
-				from: dir,
 				to: dir,
-				used: dir,
 				outcome: "identity-fallback",
 			});
 		}
@@ -196,9 +190,7 @@ function settleProjectDataDir(
 			// failure notice for this process's memo key.
 			if (pendingDataDirMigrations.length < 32) {
 				pendingDataDirMigrations.push({
-					from: oldDir,
 					to: dir,
-					used: oldDir,
 					outcome: "rename-failed",
 				});
 			}
@@ -211,9 +203,7 @@ function settleProjectDataDir(
 	settledDataDirs.set(memoKey, dir);
 	if (pendingDataDirMigrations.length < 32) {
 		pendingDataDirMigrations.push({
-			from: oldDir,
 			to: dir,
-			used: dir,
 			outcome: newExists ? "coexisting" : "renamed",
 		});
 	}
@@ -1136,12 +1126,6 @@ export function getProjectIgnoreGlobs(rootDir: string): string[] {
 		.flatMap((pattern) => expandGitignorePattern(pattern));
 	projectIgnoreGlobsCache.set(resolvedRoot, { ...signature, globs });
 	return globs;
-}
-
-/** Reset project ignore caches so a long-lived host observes session-boundary config edits. */
-export function resetProjectIgnoreCaches(): void {
-	projectIgnoreMatcherCache.clear();
-	projectIgnoreGlobsCache.clear();
 }
 
 /**

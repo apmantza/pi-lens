@@ -28,7 +28,6 @@ import {
 	getKnipIgnorePatterns,
 	getProjectDataDir,
 	resetProjectDataDirSessionState,
-	resetProjectIgnoreCaches,
 } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
 import { resetGoAvailability } from "./go-client.js";
@@ -1900,7 +1899,6 @@ export async function handleSessionStart(
 	// shape 17. The resident clients themselves are deliberately kept.
 	resetAnalyzerBootstrapSessionState();
 	resetProjectDataDirSessionState();
-	resetProjectIgnoreCaches();
 	resetTestRunnerDelivery();
 	// #2450 fix round 3, catalog shape 17: the "bridge unavailable" dbg latch
 	// (`clients/lsp-mutation.ts`) is a process-lifetime once-per-session flag,
