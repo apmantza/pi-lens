@@ -1162,7 +1162,11 @@ normal `--user` install. A refusal containing
 `externally-managed-environment` records one bounded
 `pip-pep668-strategy-refused` row per tool and strategy and permits the next
 strategy. Every non-PEP-668 failure continues to the next available candidate
-binary, while the final attempted rung supplies the reported failure reason.
+binary. Candidate failure records use the argv actually spawned, retain the
+first meaningful diagnostic, append later rung failures in bounded entries,
+and apply `INSTALL_CANDIDATE_ERROR_LIMIT` to each entry; the final attempted
+rung remains visible in the aggregate reason. Unavailable Python candidates
+are filtered before the venv rung without spawning them.
 Each successful rung records one bounded `pip-install-strategy-succeeded` row
 with the tool, rung, and resolved binary path. The final `--break-system-packages` attempt sets `PYTHONUSERBASE`
 to `<PI_LENS_HOME>/pip-user`; it never targets system site-packages. Every

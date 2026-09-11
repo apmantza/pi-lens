@@ -2142,7 +2142,8 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// budget and up to three attempts, so the hook path got shorter, not longer.
 	// Like every other entry here neither can take a hook's signal until #2523
 	// AC4 threads it through the deps types.
-	// #2916 adds one cwd-resolved installer spawn to the measured slice.
+	// #2916 adds fourteen awaits across the pipx, venv, normal-user, and
+	// private-prefix candidate loops, including PATH and binary probes.
 	// 197 → 198 (#2894): `verifyAstGrepProbePath` traded a hand-rolled
 	// `new Promise` around a raw `spawn` — which awaited nothing, and whose
 	// `timeout` killed only the direct child — for one `await probeToolAsync`.

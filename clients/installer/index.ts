@@ -5396,7 +5396,7 @@ async function installPipTool(
 			refuse("venv", error);
 		}
 
-		let lastError = "";
+		const candidateErrors: string[] = [];
 		let userRefused = false;
 		for (const candidate of pipCandidates) {
 			const args =
@@ -5430,16 +5430,17 @@ async function installPipTool(
 				// resolution through PATH and its user-base candidates.
 				return succeeded("user", binaryPath ?? packageName);
 			}
-			const candidateError = `${candidate.command} ${candidate.args.join(" ")}: ${error}`;
-			if (!/spawn .* ENOENT/i.test(error) || !lastError)
-				lastError = candidateError;
+			const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
+			candidateErrors.push(candidateError);
 			if (pep668.test(error)) {
 				userRefused = true;
 				refuse("user", error);
 			}
 		}
 		if (!userRefused)
-			throw new Error(`pip install failed: ${lastError || "unknown error"}`);
+			throw new Error(
+				`pip install failed: ${candidateErrors.join(" | ") || "unknown error"}`,
+			);
 
 		const privateBase = path.join(getGlobalPiLensDir(), "pip-user");
 		const privateEnv = { ...process.env, PYTHONUSERBASE: privateBase };
@@ -5459,8 +5460,7 @@ async function installPipTool(
 			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status !== 0) {
 				const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-				if (!/spawn .* ENOENT/i.test(error) || !lastError)
-					lastError = candidateError;
+				candidateErrors.push(candidateError);
 				continue;
 			}
 			const binaryPath = await addBinToPath(
@@ -5472,7 +5472,9 @@ async function installPipTool(
 			);
 		}
 
-		throw new Error(`pip install failed: ${lastError || "unknown error"}`);
+		throw new Error(
+			`pip install failed: ${candidateErrors.join(" | ") || "unknown error"}`,
+		);
 	} catch (err) {
 		return recordPackageManagerInstallException(
 			toolId,

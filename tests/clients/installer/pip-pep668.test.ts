@@ -319,4 +319,20 @@ fi
 			"--break-system-packages",
 		);
 	});
+
+	it("preserves the first pip diagnostic across two failing candidates", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePip(bin, "genuine");
+		writeFakePythonWithoutVenv(bin, "genuine");
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: path.join(root, "pip.log"),
+		});
+		expect(result.result.installed).toBe(false);
+		expect(result.result.reason).toContain("pip3 install --user");
+		expect(result.result.reason).toContain("No matching distribution found");
+		expect(result.result.reason).toContain("python3 -m pip install --user");
+		expect(result.result.reason.length).toBeLessThan(500);
+	});
 });

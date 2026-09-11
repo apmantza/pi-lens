@@ -195,6 +195,28 @@ describe("the installer records what its attempt did (#1500)", () => {
 		expect(reason.length).toBeLessThan(1000);
 	});
 
+	it("does not spawn an unavailable Python interpreter", async () => {
+		const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-no-python-"));
+		fs.writeFileSync(path.join(binDir, "pip3"), "pip3", { mode: 0o755 });
+		const calls: string[] = [];
+		safeSpawnAsync.mockImplementation(
+			async (command: string, args: string[]) => {
+				calls.push(`${command} ${args.join(" ")}`);
+				return { stdout: "", stderr: "no pip", status: 1 };
+			},
+		);
+		const restorePath = withEnv({ PATH: binDir });
+		try {
+			const { ensureTool } = await installer();
+			await ensureTool("cmake-language-server");
+		} finally {
+			restorePath();
+			fs.rmSync(binDir, { recursive: true, force: true });
+		}
+		expect(calls).not.toContain("python3 -m venv");
+		expect(calls).not.toContain("python -m venv");
+	});
+
 	it("preserves a PEP 668 pip refusal for downstream classification", async () => {
 		safeSpawnAsync.mockResolvedValue({
 			stdout: "",
