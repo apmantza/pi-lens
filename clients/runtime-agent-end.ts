@@ -17,6 +17,8 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { admitBounded, emitBounded } from "./bounded-telemetry.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import {
 	newLspMutationCorrelationId,
 	type LspMutationContext,
@@ -55,6 +57,8 @@ const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
 const DEFERRED_FORMAT_CONCURRENCY = 3;
 
 interface AgentEndDeps {
+	/** Abort signal owned by the agent_end/agent_settled hook. */
+	signal?: AbortSignal;
 	ctxCwd?: string;
 	getFlag: (name: string, filePath?: string) => boolean | string | undefined;
 	/** Optional: provenance for dbg/skip logs — see `PipelineContext["getFlagSource"]` (#792). */
@@ -117,6 +121,7 @@ function recordProjectChange(args: {
 }
 
 export async function handleAgentEnd({
+	signal,
 	ctxCwd,
 	getFlag,
 	getFlagSource,
@@ -337,7 +342,7 @@ export async function handleAgentEnd({
 
 	// Mutation ordering is intentional: lint --write may disturb wrapping, so
 	// autofix reaches the final edited state first and formatting stabilizes it.
-	const ambientSignal = getAmbientAbortSignal();
+	const ambientSignal = signal ?? getAmbientAbortSignal();
 	const executedAutofixScopes = new Set<string>();
 	const autofixRecords = records.filter((candidate) =>
 		candidate.kinds.has("autofix"),
@@ -527,7 +532,7 @@ export async function handleAgentEnd({
 			record: (typeof formatRecords)[number];
 			filePath: string;
 			fileStart: number;
-			result?: Awaited<ReturnType<typeof runFormatPhase>>;
+			result: Awaited<ReturnType<typeof runFormatPhase>> | undefined;
 			error?: string;
 			missing?: boolean;
 		};
@@ -544,7 +549,13 @@ export async function handleAgentEnd({
 				const filePath = path.resolve(record.filePath);
 				started.add(index);
 				if (!nodeFs.existsSync(filePath)) {
-					work[index] = { record, filePath, fileStart, missing: true };
+					work[index] = {
+						record,
+						filePath,
+						fileStart,
+						result: undefined,
+						missing: true,
+					};
 					continue;
 				}
 				try {
@@ -552,13 +563,29 @@ export async function handleAgentEnd({
 						record,
 						filePath,
 						fileStart,
-						result: await runFormatPhase(filePath, getFormatService, dbg),
+						result: await bounded(
+							runFormatPhase(
+								filePath,
+								getFormatService,
+								dbg,
+								ambientSignal,
+								30_000,
+								"agent_settled",
+							),
+							{
+								ms: HOOK_WALL_BUDGET_MS.agent_settled,
+								signal: ambientSignal,
+								hook: "agent_settled",
+								label: "deferred-format",
+							},
+						),
 					};
 				} catch (err) {
 					work[index] = {
 						record,
 						filePath,
 						fileStart,
+						result: undefined,
 						error: err instanceof Error ? err.message : String(err),
 					};
 				}
@@ -614,7 +641,25 @@ export async function handleAgentEnd({
 				continue;
 			}
 			const result = entry.result;
-			if (!result) continue;
+			if (!result) {
+				// The abort branch above already requeues work that never started;
+				// preserve its established ownership for an in-flight caller abort.
+				if (ambientSignal?.aborted) continue;
+				const reason =
+					entry.error ?? "deferred formatter exceeded agent_settled budget";
+				summary.failed.push({ filePath, errors: [reason] });
+				requeue(
+					[
+						{
+							...record,
+							kinds: new Set(["format"]),
+							toolNames: new Set(record.toolNames),
+						},
+					],
+					"format-failed",
+				);
+				continue;
+			}
 
 			summary.formatted++;
 

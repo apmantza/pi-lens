@@ -1,5 +1,7 @@
 import "./clients/console-guard-install.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
+import { bounded } from "./clients/deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./clients/hook-budgets.js";
 import {
 	closeModuleLoadConsoleWindow,
 	installConsoleGuard,
@@ -44,6 +46,7 @@ import {
 	markAnalyzerBootstrapShutdown,
 	peekBootstrapClients,
 	requestBootstrapClients,
+	getAgentBehaviorClient,
 	type SessionBootstrapAccess,
 } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";
@@ -77,6 +80,7 @@ import {
 	storedLineHashesFor,
 } from "./clients/observed-mutation-sources.js";
 import { classifyMutatingTool } from "./clients/mutating-tool.js";
+import { extractWrittenPathsFromCommand } from "./clients/bash-file-access.js";
 import { resolveLanguageRootForFile } from "./clients/language-profile.js";
 import { countFileLines } from "./clients/read-guard-tool-lines.js";
 import { registerReadBridge } from "./clients/read-bridge.js";
@@ -258,8 +262,12 @@ import {
 const LOOP_BLOCK_IDENTITY = "<pi-lens>";
 import {
 	isFreshSessionStart,
+	clearRememberedLazyTools,
+	getRememberedLazyTools,
+	inheritRememberedLazyTools,
 	planToolSet,
 	recordToolSetMutation,
+	rememberLazyTools,
 	supportsDeferredTools,
 } from "./clients/tool-set-policy.js";
 import {
@@ -1730,14 +1738,19 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const filteredLazyCatalog = LAZY_TOOL_CATALOG.filter((tool) =>
 		enabledLazyTools.has(tool.name),
 	);
-	// #1453: the lazy tools the model activated in THIS logical conversation.
-	// Extension closure state does NOT outlive a session rebuild. Measured
-	// against pi 0.85.1 (#2866 round 4): the
-	// module is imported once per process but this factory IS re-run on
-	// reload, new and resume, so this closure set does not survive a rebuild
-	// (#2889); the session_start restore below therefore deactivates every
-	// situational tool after any rebuild.
-	const rememberedLazyTools = new Set<string>();
+	// #1453/#2889: activation memory is module-owned and keyed by pi's session
+	// file, so it survives this factory re-run while staying conversation-local.
+	const getSessionFile = (ctx: unknown): string | undefined => {
+		try {
+			return (
+				ctx as {
+					sessionManager?: { getSessionFile?: () => string | undefined };
+				}
+			)?.sessionManager?.getSessionFile?.();
+		} catch {
+			return undefined;
+		}
+	};
 	// pi RPC can announce the same replacement twice. Keep one admission key for
 	// the complete session_start mutation pass so every downstream reset observes
 	// the same (reason, session file) identity. A different file remains a real
@@ -1752,9 +1765,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 		},
 		filteredLazyCatalog,
 		{
-			onActivated: (names) => {
+			onActivated: (names, ctx) => {
 				observeSituationalToolActivation(names);
-				for (const name of names) rememberedLazyTools.add(name);
+				rememberLazyTools(getSessionFile(ctx), names);
 			},
 			onRejected: (name) => {
 				if (
@@ -1918,6 +1931,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 			"session_start",
 			async (event, ctx) => {
 				const sessionStartReason = (event as { reason?: string }).reason;
+				const previousSessionFile = (event as { previousSessionFile?: string })
+					.previousSessionFile;
 				const sessionIdentityParts = (() => {
 					try {
 						const sessionManager = (
@@ -1930,7 +1945,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						)?.sessionManager;
 						return {
 							sessionId: sessionManager?.getSessionId?.(),
-							sessionFile: sessionManager?.getSessionFile?.(),
+							sessionFile: getSessionFile(ctx),
 						};
 					} catch {
 						return { sessionId: undefined, sessionFile: undefined };
@@ -1964,7 +1979,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							lazyNames,
 							isFreshSessionStart(sessionStartReason)
 								? new Set<string>()
-								: rememberedLazyTools,
+								: getRememberedLazyTools(getSessionFile(ctx)),
 						);
 					} catch {
 						return undefined;
@@ -2196,9 +2211,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// an active-tool set per session. Skipping the call on those reasons
 					// would therefore leave every lazy tool active forever AND change the
 					// advertised tool list relative to the parent's cached prompt prefix.
-					// Rebuilding the same set keeps the prefix identical when the
-					// activation closure remains available. Real pi re-runs this factory
-					// on every rebuild, so that closure is empty after replacement.
+					// Rebuilding the same set keeps the prefix identical. The remembered
+					// set is keyed by session file in the module-level policy store, so it
+					// survives pi re-running this factory on every rebuild.
 					//
 					// Deliberately BELOW the #473 concurrent-secondary guard: the active
 					// tool set is shared runtime state (one loader per process), so a
@@ -2218,8 +2233,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 							setActiveTools?: (names: string[]) => void;
 						};
 						// A fresh conversation starts with no activation memory; a
-						// rebuild inherits the parent's.
-						if (isFreshSessionStart(sessionReason)) rememberedLazyTools.clear();
+						// rebuild inherits the current session file's memory.
+						const sessionFile = getSessionFile(ctx);
+						if (sessionStartReason === "fork") {
+							inheritRememberedLazyTools(previousSessionFile, sessionFile);
+						}
+						if (isFreshSessionStart(sessionReason)) {
+							clearRememberedLazyTools(sessionFile);
+						}
 						if (
 							getLensFlag("no-lazy-tools") !== true &&
 							typeof piWithActiveTools.getActiveTools === "function" &&
@@ -2229,7 +2250,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 							const plan = planToolSet(
 								piWithActiveTools.getActiveTools(),
 								lazyNames,
-								rememberedLazyTools,
+								getRememberedLazyTools(sessionFile),
 							);
 							if (plan.changed) {
 								piWithActiveTools.setActiveTools(plan.desired);
@@ -2357,34 +2378,42 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// session_start_prehandler row. Keep this inside the primary gate so
 					// a concurrent secondary cannot erase the primary's live counter.
 					resetTurnContext(stableSessionId);
-					await handleSessionStart({
-						ctxCwd: ctx.cwd,
-						sessionStartFiredAt,
-						sessionStartMonotonicAt,
-						extensionLoadedAt: PI_LENS_LOADED_AT_MS,
-						emitHostReadyDelay,
-						sessionReason,
-						handlerEnteredAt,
-						globalConfig,
-						projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
-						// #2129: this call site is only reached for "primary"/
-						// "sequential-replacement" — a declined start returned above.
-						sessionStartClassification: sessionStartDecision.classification,
-						sessionStartSameRoot: sessionStartDecision.sameRoot,
-						getFlag: (name: string) => getLensFlag(name),
-						notify: (msg, level) => notifyUi(ctx, msg, level),
-						dbg,
-						log,
-						runtime,
-						cacheManager,
-						astGrepClient,
-						bootstrap: sessionBootstrapAccess,
-						ensureTool: async (name: string) =>
-							(await import("./clients/installer/index.js")).ensureTool(name),
-						cleanStaleTsBuildInfo,
-						resetDispatchBaselines,
-						resetLSPService,
-					});
+					await bounded(
+						handleSessionStart({
+							ctxCwd: ctx.cwd,
+							sessionStartFiredAt,
+							sessionStartMonotonicAt,
+							extensionLoadedAt: PI_LENS_LOADED_AT_MS,
+							emitHostReadyDelay,
+							sessionReason,
+							handlerEnteredAt,
+							globalConfig,
+							projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
+							// #2129: this call site is only reached for "primary"/
+							// "sequential-replacement" — a declined start returned above.
+							sessionStartClassification: sessionStartDecision.classification,
+							sessionStartSameRoot: sessionStartDecision.sameRoot,
+							getFlag: (name: string) => getLensFlag(name),
+							notify: (msg, level) => notifyUi(ctx, msg, level),
+							dbg,
+							log,
+							runtime,
+							cacheManager,
+							astGrepClient,
+							bootstrap: sessionBootstrapAccess,
+							ensureTool: async (name: string) =>
+								(await import("./clients/installer/index.js")).ensureTool(name),
+							cleanStaleTsBuildInfo,
+							resetDispatchBaselines,
+							resetLSPService,
+						}),
+						{
+							ms: HOOK_WALL_BUDGET_MS.session_start,
+							signal: ctx.signal,
+							hook: "session_start",
+							label: "handleSessionStart",
+						},
+					);
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran
@@ -2590,6 +2619,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// `index.ts` and `tools/` too.
 		const rtToolName = (event as { toolName?: string })?.toolName;
 		const rtMutation = classifyMutatingTool(event, { recognizeOnly: true });
+		const bashCommand = (event as { input?: { command?: unknown } })?.input
+			?.command;
+		const bashWrite =
+			rtToolName === "bash" &&
+			typeof bashCommand === "string" &&
+			extractWrittenPathsFromCommand(
+				bashCommand,
+				ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
+			).length > 0;
+		const editClass = rtMutation !== undefined || bashWrite;
 		if (rtMutation) {
 			logLatency({
 				type: "phase",
@@ -2606,33 +2645,58 @@ function activateExtension(hostPi: ExtensionAPI) {
 				},
 			});
 		}
+		// Read/search results still need the complete handler for read registration,
+		// bash recovery, and observed third-party mutations. Use only resident
+		// clients on that path; the handler requests them lazily if mutation work
+		// actually reaches the pipeline.
 		try {
-			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
-				await loadBootstrapClients();
-			return await handleToolResult({
-				event: event as any,
-				getFlag: (name: string, filePath?: string) =>
-					getLensFlag(name, filePath),
-				getFlagSource: (name: string, filePath?: string) =>
-					getLensFlagSource(name, filePath),
-				dbg,
-				runtime,
-				cacheManager,
-				biomeClient,
-				ruffClient,
-				metricsClient,
-				resetLSPService,
-				readGuard: runtime.readGuard,
-				agentBehaviorRecord: (toolName, filePath) =>
-					agentBehaviorClient.recordToolCall(toolName, filePath),
-				formatBehaviorWarnings: (warnings) =>
-					agentBehaviorClient.formatWarnings(warnings as any),
-				// #791: tags any deferred-format record queued from this tool_result
-				// with the STABLE session id of the ctx that produced it, so a
-				// later agent_end can tell its own queued work apart from a
-				// concurrent in-process secondary session's.
-				sessionId: getStableSessionId(ctx),
-			});
+			const resident = editClass
+				? await bounded(loadBootstrapClients(), {
+						ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+						signal: ctx.signal,
+						hook: "tool_result_edit",
+						label: "tool-result-bootstrap",
+					})
+				: peekBootstrapClients();
+			return await bounded(
+				handleToolResult({
+					signal: ctx.signal,
+					event: event as any,
+					getFlag: (name: string, filePath?: string) =>
+						getLensFlag(name, filePath),
+					getFlagSource: (name: string, filePath?: string) =>
+						getLensFlagSource(name, filePath),
+					dbg,
+					runtime,
+					cacheManager,
+					biomeClient: resident?.biomeClient,
+					ruffClient: resident?.ruffClient,
+					metricsClient: resident?.metricsClient,
+					resetLSPService,
+					readGuard: runtime.readGuard,
+					agentBehaviorRecord: (toolName, filePath) =>
+						(
+							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+						).recordToolCall(toolName, filePath),
+					formatBehaviorWarnings: (warnings) =>
+						(
+							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+						).formatWarnings(warnings as any),
+					// #791: tags any deferred-format record queued from this tool_result
+					// with the STABLE session id of the ctx that produced it, so a
+					// later agent_end can tell its own queued work apart from a
+					// concurrent in-process secondary session's.
+					sessionId: getStableSessionId(ctx),
+				}),
+				{
+					ms: editClass
+						? HOOK_WALL_BUDGET_MS.tool_result_edit
+						: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+					signal: ctx.signal,
+					hook: editClass ? "tool_result_edit" : "tool_result_read_only",
+					label: "handleToolResult",
+				},
+			);
 		} finally {
 			setAmbientAbortSignal(undefined);
 		}
@@ -2640,7 +2704,26 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 	(pi as any).on(
 		"tool_result",
-		wrapSessionEventHandler("tool_result", onToolResult, { dbg }),
+		wrapSessionEventHandler("tool_result", onToolResult, {
+			dbg,
+			budgetKey: (event, _ctx) => {
+				try {
+					return classifyMutatingTool(event, { recognizeOnly: true }) ||
+						(typeof (event as { input?: { command?: unknown } })?.input
+							?.command === "string" &&
+							extractWrittenPathsFromCommand(
+								(event as { input: { command: string } }).input.command,
+								(_ctx as { cwd?: string })?.cwd ??
+									runtime.projectRoot ??
+									process.cwd(),
+							).length > 0)
+						? "tool_result_edit"
+						: "tool_result_read_only";
+				} catch {
+					return "tool_result_read_only";
+				}
+			},
+		}),
 	);
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
@@ -2874,6 +2957,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			return;
 		}
 		await handleAgentEnd({
+			signal: ctx.signal,
 			ctxCwd: ctx.cwd,
 			getFlag: (name: string, filePath?: string) => getLensFlag(name, filePath),
 			getFlagSource: (name: string, filePath?: string) =>

@@ -350,29 +350,27 @@ export interface AuxiliaryWaitEvidence {
  * the stamp alone cannot prove that the bytes matched. The pre-notify boolean
  * passed as `bindingMatchesContent` preserves a binding that the notify
  * cleared, while the live stamp covers a publication that landed after the
- * wait began. The caller selects the master's row policy explicitly: only the
- * demoted row enables the stamp union; the sibling and aggregate rows remain
- * binding-only. Absent evidence fails closed.
+ * wait began. This predicate is the union. Four callers use it; only the
+ * demoted row's `publishedThisContent` takes the union — the sibling and
+ * aggregate rows compute that field from `auxCoversThisContent` directly
+ * (#2914), while their `outcome` field still reads the stamp through this
+ * predicate. Absent evidence fails closed.
  */
 export function auxiliaryPublicationEvidence({
 	bindingMatchesContent,
 	baseline,
 	currentPathVersion,
-	allowStamp = true,
 	raced = true,
 }: {
 	bindingMatchesContent: boolean;
 	baseline: number | undefined;
 	currentPathVersion: number | undefined;
-	/** Whether this row's master semantics admit the per-path stamp. */
-	allowStamp?: boolean;
 	/** Whether the raced wait established the stamp evidence for this row. */
 	raced?: boolean;
 }): boolean {
 	return (
 		bindingMatchesContent ||
-		(allowStamp &&
-			raced &&
+		(raced &&
 			Number.isFinite(baseline) &&
 			currentPathVersion !== undefined &&
 			currentPathVersion > (baseline as number))
