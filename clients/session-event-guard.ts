@@ -274,6 +274,7 @@ function guardSessionEvent<E, C, R>(
 				// The signal read moved out of each handler's own try/catch and
 				// into the guard (#2523 hook budgets), so a ctx whose `signal`
 				// accessor throws for a NON-stale reason is a crashed handler and
+				// must leave the same record the handler's own catch used to (#2884).
 				// This preserves the old catch behavior for lifecycle handlers. The
 				// `tool_result` and `context` handlers never caught this signal read,
 				// so their non-stale accessor errors are surfaced as a swallowed

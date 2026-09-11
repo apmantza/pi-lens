@@ -1084,7 +1084,9 @@ export function extractDeletedPathsFromCommand(
  * `budgetKey` callback (no tool gate) — and the copies disagreed on the
  * first third-party case tried (`mcp__acme__shell` with `input.command`:
  * wrapper said edit, handler said read-only). Both call sites now share
- * this function, so they cannot drift again.
+ * this function, so the answer is written once — but the call sites
+ * themselves are not yet pinned (W4/M8, #2939), so a future tool-name gate
+ * re-introduced at one of them would still pass the suite.
  *
  * A result is edit-class when the mutation seam classifies it, or when its
  * `input.command` names written files. The command half carries no tool-name
