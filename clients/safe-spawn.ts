@@ -27,10 +27,7 @@ import { logLatency } from "./latency-logger.js";
 import { recordDegradation } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
 import { isFullyQualifiedWin32 } from "./path-utils.js";
-import {
-	SPAWN_SAMPLE_INTERVAL_MS,
-	startSpawnUsageSampler,
-} from "./resource-sampler.js";
+import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { compareOrdinal } from "./string-utils.js";
 
 export interface SpawnResourceUsage {
@@ -1569,8 +1566,13 @@ export async function safeSpawnAsync(
 		let usageSampler: { stop: () => SpawnResourceUsage | null };
 		try {
 			usageSampler = startSpawnUsageSampler(
+				// The poll CADENCE is the sampler's own policy (it owns the backoff
+				// too); the DEADLINE is this function's. Passing `undefined` rather
+				// than importing the cadence constant keeps this module's view of
+				// the sampler at one export, which is also what every existing
+				// `vi.mock` of it provides.
 				child.pid,
-				SPAWN_SAMPLE_INTERVAL_MS,
+				undefined,
 				timeout + SPAWN_SAMPLER_TEARDOWN_GRACE_MS,
 			);
 		} catch {

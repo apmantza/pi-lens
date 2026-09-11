@@ -4319,6 +4319,24 @@ those failures, so consumers leave usage unknown rather than fabricating zero
 samples, and records one bounded `resource-sampler-query-failed` degradation
 per query subject. (#1863)
 
+The spawn sampler is bounded on all three axes, and a new poller owes the same
+three. `startSpawnUsageSampler` polls a child through the process-table seam,
+and ONE Windows tick is two `powershell.exe` CIM queries plus a `taskkill.exe`
+whenever a query blows `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS` — so an unguarded
+interval is a process multiplier, not a timer. #2968 (external report) measured
+234 live `powershell.exe`/`taskkill.exe` (~10GB) behind four children that hung
+for 5-6h. The bounds: no tick starts while the previous one is in flight
+(CONCURRENCY); past `SPAWN_SAMPLE_FULL_RATE_TICKS` the delay doubles to
+`SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER` x the base (RATE — the 750ms interval
+exists to catch SHORT-LIVED children); polling ends at a hard cap that
+`safe-spawn.ts` derives from this spawn's own deadline plus its teardown grace
+(LIFETIME), because every stop path a spawn has — `exit`, `close`, `error` —
+requires the child to settle, and a hung child settles nothing. A capped
+sampler still returns what it gathered. Skipped ticks and the cap are counted
+on the ledger (`resource-sampler-tick-overlapped`,
+`resource-sampler-lifetime-capped`): a sampler that has silently stopped
+sampling is #1863's shape one level up. (#2968)
+
 File-operation rename filters match only the decoded URI path, never a basename
 fallback. Unsupported wire URI schemes fail closed; entity-kind probes are
 conditional on a filter declaring `matches` and use `lstat` so symlinks are

@@ -616,7 +616,10 @@ export const SPAWN_SAMPLE_LIFETIME_CAP_MS = 35_000;
  *    longest spawn timeout in the tree) costs ~26 polls instead of 240.
  * 3. LIFETIME — polling stops for good at `lifetimeCapMs`, measured from
  *    start. `stop()` still returns everything gathered up to that point; a
- *    capped sampler loses resolution, never the reading it already had.
+ *    capped sampler loses resolution, never the reading it already had. The
+ *    cap is read at TICK granularity, so the last poll can land up to one
+ *    backed-off interval (≤ 12s by default) before polling ends — the tick
+ *    that discovers the cap does no sampling and arms nothing.
  *
  * Ticks skipped for (1) and the cap in (3) are both recorded, bounded, on the
  * degradation ledger — a sampler that quietly stops sampling is the #1863 /
