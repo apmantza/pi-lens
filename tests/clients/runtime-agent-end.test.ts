@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import type { ActionableWarningsReport } from "../../clients/actionable-warnings.js";
 import { CacheManager } from "../../clients/cache-manager.js";
@@ -13,13 +13,8 @@ import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { getLastLoggedPhase } from "../../clients/latency-logger.js";
 import * as latencyLogger from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import { setAmbientAbortSignal } from "../../clients/safe-spawn.js";
-import {
-	createTempFile,
-	cleanupTestEnvironments,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import {
 	_resetForTests as resetBusPublish,
 	wireBusEmitter,
@@ -59,15 +54,6 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 });
 
 describe("runtime-agent-end deferred formatting", () => {
-	const cleanupAgentEndTemps = async () => {
-		await waitForProjectSnapshotPersistsForTests();
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		cleanupTestEnvironments("pi-lens-agent-end-");
-	};
-
-	afterEach(cleanupAgentEndTemps);
-	afterAll(cleanupAgentEndTemps);
-
 	it("does not resolve autofix clients for format-only records", async () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-format-only-clients-");
 		try {

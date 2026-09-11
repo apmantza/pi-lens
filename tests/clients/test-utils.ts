@@ -50,9 +50,8 @@ export function setupTestEnvironment(prefix = "pi-lens-test-"): {
 
 const activeTestEnvironments = new Set<string>();
 
-export function cleanupTestEnvironments(prefix: string): void {
+export function cleanupTestEnvironments(): void {
 	for (const tmpDir of activeTestEnvironments) {
-		if (!path.basename(tmpDir).startsWith(prefix)) continue;
 		removeTempDirSync(tmpDir);
 		activeTestEnvironments.delete(tmpDir);
 	}

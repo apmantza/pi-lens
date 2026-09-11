@@ -855,9 +855,8 @@ export class SgRunner {
 		sessionDir: string;
 		configFile: string;
 	} {
-		const sessionDir = path.join(
-			os.tmpdir(),
-			`pi-lens-temp-${ruleId}-${Date.now()}`,
+		const sessionDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), `pi-lens-temp-${ruleId}-`),
 		);
 		const rulesSubdir = path.join(sessionDir, "rules");
 		const configFile = path.join(sessionDir, ".sgconfig.yml");
@@ -951,8 +950,10 @@ export class SgRunner {
 		timeout = DEFAULT_EXEC_TIMEOUT_MS,
 		options: SgExecutionOptions = {},
 	): Promise<SgScanResult> {
-		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
+		let sessionDir: string | undefined;
 		try {
+			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
+			const configFile = path.join(sessionDir, ".sgconfig.yml");
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
 			const result = await safeSpawnAsync(
 				sgCmd,
@@ -974,7 +975,7 @@ export class SgRunner {
 			);
 			return this.interpretScanResult(result, ["scan"]);
 		} finally {
-			this.cleanupTempScan(sessionDir);
+			if (sessionDir) this.cleanupTempScan(sessionDir);
 		}
 	}
 
@@ -1009,8 +1010,10 @@ export class SgRunner {
 		timeout = DEFAULT_EXEC_TIMEOUT_MS,
 		options: SgExecutionOptions = {},
 	): Promise<{ matches: SgMatch[]; error?: string }> {
-		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
+		let sessionDir: string | undefined;
 		try {
+			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
+			const configFile = path.join(sessionDir, ".sgconfig.yml");
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
 			const scanArgs = [
 				...sgPre,
@@ -1071,7 +1074,7 @@ export class SgRunner {
 		} catch (err) {
 			return { matches: [], error: String(err) };
 		} finally {
-			this.cleanupTempScan(sessionDir);
+			if (sessionDir) this.cleanupTempScan(sessionDir);
 		}
 	}
 
