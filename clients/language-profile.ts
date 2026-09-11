@@ -120,6 +120,12 @@ const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	fsharp: DOTNET_FSHARP_ROOT_MARKERS,
 };
 
+/** Return the one shared marker vocabulary used to anchor this file kind. */
+export function rootMarkersForFile(filePath: string): readonly string[] {
+	const kind = detectFileKind(path.resolve(filePath));
+	return kind ? (ROOT_MARKERS_BY_KIND[kind] ?? []) : [];
+}
+
 function hasProjectMarker(projectRoot: string, marker: string): boolean {
 	if (!marker.includes("*"))
 		return fs.existsSync(path.join(projectRoot, marker));
@@ -239,7 +245,7 @@ export function resolveLanguageRootForFile(
 	const kind = detectFileKind(absoluteFilePath);
 	if (!kind) return path.resolve(workspaceRoot);
 
-	const markers = ROOT_MARKERS_BY_KIND[kind];
+	const markers = rootMarkersForFile(absoluteFilePath);
 	if (!markers || markers.length === 0) {
 		return path.resolve(workspaceRoot);
 	}

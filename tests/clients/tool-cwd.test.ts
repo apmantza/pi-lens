@@ -86,7 +86,7 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("formatter", "prettier", file, {
 				cwd: project,
-			}),
+			}).cwd,
 		).toBe(nested);
 	});
 
@@ -104,7 +104,8 @@ describe("resolveToolCwd (#2777)", () => {
 		fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
 
 		expect(
-			toolCwd.resolveToolCwd("formatter", "biome", file, { cwd: workspace }),
+			toolCwd.resolveToolCwd("formatter", "biome", file, { cwd: workspace })
+				.cwd,
 		).toBe(pkg);
 	});
 
@@ -114,7 +115,8 @@ describe("resolveToolCwd (#2777)", () => {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(path.join(project, "Cargo.toml"), "[package]\n");
 		expect(
-			toolCwd.resolveToolCwd("formatter", "rustfmt", file, { cwd: project }),
+			toolCwd.resolveToolCwd("formatter", "rustfmt", file, { cwd: project })
+				.cwd,
 		).toBe(project);
 	});
 
@@ -123,8 +125,38 @@ describe("resolveToolCwd (#2777)", () => {
 		const file = path.join(project, "packages", "app", "src", "main.ts");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		expect(
-			toolCwd.resolveToolCwd("lsp", "custom", file, { cwd: project }),
+			toolCwd.resolveToolCwd("lsp", "custom", file, { cwd: project }).cwd,
 		).toBe(project);
+	});
+
+	it("anchors runner cwd from the file kind when the runner has no private table (#2965)", () => {
+		// Recurrence: 37 runner keys fell through to the git-root walk because
+		// RUNNER_MARKERS covered only eight keys and markersFor returned [] for the
+		// rest. This exercises the shared language vocabulary through a runner.
+		const workspace = path.join(home, "repo");
+		const nested = path.join(workspace, "packages", "yaml");
+		const file = path.join(nested, "config.yaml");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(nested, ".yamllint.yml"), "---\n");
+
+		expect(
+			toolCwd.resolveToolCwd("runner", "actionlint", file, {
+				cwd: workspace,
+			}).cwd,
+		).toBe(nested);
+	});
+
+	it("returns the marker that anchored the cwd (#2966)", () => {
+		const workspace = path.join(home, "repo");
+		const file = path.join(workspace, "src", "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "Cargo.toml"), "[package]\n");
+
+		expect(
+			toolCwd.resolveToolCwd("runner", "rust-clippy", file, {
+				cwd: workspace,
+			}),
+		).toEqual({ cwd: workspace, marker: "Cargo.toml" });
 	});
 
 	it("preserves every registry language root through the shared seam", async () => {
@@ -195,7 +227,7 @@ describe("resolveToolCwd (#2777)", () => {
 				toolCwd.resolveToolCwd("lsp", id, file, {
 					cwd: project,
 					rootMarkers: server?.root.rootMarkers,
-				}),
+				}).cwd,
 			).toBe(expected);
 		}
 	});
@@ -277,7 +309,7 @@ describe("resolveToolCwd (#2777)", () => {
 			toolCwd.resolveToolCwd("lsp", "custom", file, {
 				cwd: project,
 				rootMarkers: ["*.csproj"],
-			}),
+			}).cwd,
 		).toBe(nested);
 	});
 
@@ -292,7 +324,7 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("formatter", "rustfmt", file, {
 				cwd: project,
-			}),
+			}).cwd,
 		).toBe(project);
 		fs.unlinkSync(marker);
 
@@ -300,7 +332,7 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("formatter", "rustfmt", file, {
 				cwd: project,
-			}),
+			}).cwd,
 		).toBe(nested);
 	});
 
@@ -313,7 +345,7 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("runner", "rust-clippy", file, {
 				cwd: project,
-			}),
+			}).cwd,
 		).toBe(project);
 		fs.writeFileSync(path.join(nested, "Cargo.toml"), "[package]\n");
 
@@ -322,57 +354,59 @@ describe("resolveToolCwd (#2777)", () => {
 		expect(
 			toolCwd.resolveToolCwd("runner", "rust-clippy", file, {
 				cwd: project,
-			}),
+			}).cwd,
 		).toBe(nested);
 	});
 
-	it("covers the RUNNER_MARKERS marker state space", () => {
-		for (const [tool, markers] of Object.entries(toolCwd.RUNNER_MARKERS)) {
-			const marker = markers[0];
-			if (!marker) throw new Error(`runner ${tool} has no marker`);
-			const project = path.join(home, tool.replaceAll("/", "-"));
-			const nested = path.join(project, "packages", "app");
-			const file = path.join(nested, "src", "main.ts");
-			fs.mkdirSync(path.dirname(file), { recursive: true });
+	it("covers shared language marker fallback and fresh marker creation (#2965)", () => {
+		// Recurrence: deleting RUNNER_MARKERS left most runner keys on the git
+		// fallback. The fallback must use ROOT_MARKERS_BY_KIND and re-walk next pass.
+		const project = path.join(home, "repo");
+		const nested = path.join(project, "packages", "app");
+		const file = path.join(nested, "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		expect(
+			toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, "actionlint"),
+		).toBe(project);
+		fs.writeFileSync(path.join(nested, "Cargo.toml"), "[package]\n");
+		expect(
+			toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, "actionlint"),
+		).toBe(nested);
+	});
 
-			// Create-later: a negative result must not become a session-wide fact.
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
-			).toBe(project);
-			fs.writeFileSync(path.join(nested, marker), "");
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
-			).toBe(nested);
-
-			// Create-below: a positive outer hit must yield to a nearer marker.
-			const outer = path.join(home, `${tool.replaceAll("/", "-")}-outer`);
-			const outerNested = path.join(outer, "packages", "app", "src");
-			const outerFile = path.join(outerNested, "main.ts");
-			fs.mkdirSync(outerNested, { recursive: true });
-			fs.writeFileSync(path.join(outer, marker), "");
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
-			).toBe(outer);
-			const nearer = path.join(outer, "packages", "app");
-			fs.writeFileSync(path.join(nearer, marker), "");
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
-			).toBe(nearer);
-
-			// Delete-at-root: a cached positive hit must not survive marker removal.
-			const deleted = path.join(home, `${tool.replaceAll("/", "-")}-deleted`);
-			const deletedFile = path.join(deleted, "src", "main.ts");
-			fs.mkdirSync(path.dirname(deletedFile), { recursive: true });
-			const deletedMarker = path.join(deleted, marker);
-			fs.writeFileSync(deletedMarker, "");
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
-			).toBe(deleted);
-			fs.unlinkSync(deletedMarker);
-			expect(
-				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
-			).toBe(deleted);
-		}
+	it("memoizes only the git fallback within one dispatch pass (#2964)", () => {
+		// Recurrence: the same .git walk ran once per runner in one synchronous
+		// dispatch. A pass memo is safe because a later dispatch receives a new
+		// context and therefore a new memo.
+		const project = path.join(home, "repo");
+		const foreign = path.join(home, "foreign", "src", "README.unknown");
+		const foreignRoot = path.dirname(path.dirname(foreign));
+		fs.mkdirSync(path.dirname(foreign), { recursive: true });
+		fs.mkdirSync(path.join(foreignRoot, ".git"));
+		fs.writeFileSync(
+			path.join(foreignRoot, ".git", "HEAD"),
+			"ref: refs/heads/main\n",
+		);
+		const memo = {};
+		const first = toolCwd.resolveToolCwd("runner", "actionlint", foreign, {
+			cwd: project,
+			homeDir: home,
+			toolCwdMemo: memo,
+		});
+		fs.rmSync(path.join(foreignRoot, ".git"), { recursive: true });
+		const second = toolCwd.resolveToolCwd("runner", "actionlint", foreign, {
+			cwd: project,
+			homeDir: home,
+			toolCwdMemo: memo,
+		});
+		expect(second.cwd).toBe(first.cwd);
+		const freshPass = toolCwd.resolveToolCwd("runner", "actionlint", foreign, {
+			cwd: project,
+			homeDir: home,
+			toolCwdMemo: {},
+		});
+		expect(first.cwd).toBe(foreignRoot);
+		expect(freshPass.cwd).toBe(path.dirname(foreign));
 	});
 
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {
@@ -383,11 +417,11 @@ describe("resolveToolCwd (#2777)", () => {
 		const first = toolCwd.resolveToolCwd("runner", "yamllint", foreign, {
 			cwd: project,
 			homeDir: home,
-		});
+		}).cwd;
 		const second = toolCwd.resolveToolCwd("runner", "yamllint", foreign, {
 			cwd: project,
 			homeDir: home,
-		});
+		}).cwd;
 		expect(first).toBe(path.dirname(foreign));
 		expect(second).toBe(first);
 		const summary = ledger

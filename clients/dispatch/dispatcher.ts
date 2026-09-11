@@ -367,6 +367,7 @@ export function createDispatchContext(
 		writeIndex,
 		telemetryModel,
 		telemetryProvider,
+		toolCwdMemo: {},
 
 		async hasTool(command: string): Promise<boolean> {
 			return checkToolAvailability(command, facts);

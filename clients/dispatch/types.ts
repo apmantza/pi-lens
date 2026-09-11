@@ -238,6 +238,8 @@ export interface DispatchContext {
 	 * attributed. Blank/absent outside a live agent turn (e.g. project scans). */
 	readonly telemetryModel?: string;
 	readonly telemetryProvider?: string;
+	/** Pass-scoped filesystem memo for the shared tool-cwd seam. */
+	readonly toolCwdMemo?: { gitRoot?: string | null };
 
 	hasTool(command: string): Promise<boolean>;
 	/** Log an advisory to the dispatch sink; `level` defaults to `error`. */

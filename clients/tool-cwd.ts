@@ -18,6 +18,7 @@ import {
 	createGenerationMap,
 	createGenerationSource,
 } from "./generation-guard.js";
+import { rootMarkersForFile } from "./language-profile.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
@@ -30,6 +31,13 @@ export interface ToolCwdContext {
 	/** Legacy config-carriage callers may inspect the home-level config itself. */
 	allowHomeMarker?: boolean;
 	suppressTelemetry?: boolean;
+	/** One synchronous dispatch's reusable `.git` fallback result. */
+	toolCwdMemo?: { gitRoot?: string | null };
+}
+
+export interface ToolCwdResolution {
+	cwd: string;
+	marker?: string;
 }
 
 export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
@@ -111,19 +119,6 @@ export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	],
 };
 
-export const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
-	yamllint: [".yamllint", "yamllint.yaml", "yamllint.yml", "pyproject.toml"],
-	ruff: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
-	"spellcheck/typos": ["_typos.toml", "typos.toml"],
-	biome: ["biome.json", "biome.jsonc", "package.json"],
-	oxlint: [".oxlintrc.json", "oxlint.config.js", "package.json"],
-	sqlfluff: [".sqlfluff", "pyproject.toml", "setup.cfg"],
-	prettier: [".prettierignore", "package.json"],
-	// #2894: cargo must run at the package root. This is the marker walk
-	// `rust-clippy.ts` used to do for itself with `findNearestContaining`.
-	"rust-clippy": ["Cargo.toml"],
-};
-
 const toolCwdGeneration = createGenerationSource("tool-cwd");
 const logged = createGenerationMap("tool-cwd-resolution-log");
 
@@ -190,15 +185,13 @@ function findMarkerRoot(
 function markersFor(
 	kind: ToolCwdKind,
 	tool: string,
+	file: string,
 	ctx: ToolCwdContext,
 ): readonly string[] {
 	if (kind === "lsp") return ctx.rootMarkers ?? [];
-	// #2871: caller-supplied markers count for runners too. `RUNNER_MARKERS`
-	// covers the linter/formatter-shaped runners this module has always known;
-	// a caller that owns its own marker table — the test runner, whose
-	// `RUNNERS[x].configFiles` IS that table — passes it here rather than
-	// registering a second copy of the same data in this file.
-	if (kind === "runner") return ctx.rootMarkers ?? RUNNER_MARKERS[tool] ?? [];
+	// #2965: runner fallback uses the language table that also anchors the
+	// dispatch context. A caller-owned table remains an explicit override.
+	if (kind === "runner") return ctx.rootMarkers ?? rootMarkersForFile(file);
 	return FORMATTER_MARKERS[tool] ?? [".gitignore"];
 }
 
@@ -248,7 +241,7 @@ export function resolveToolCwd(
 	tool: string,
 	file: string,
 	ctx: ToolCwdContext,
-): string {
+): ToolCwdResolution {
 	const dispatchRoot = path.resolve(ctx.cwd ?? process.cwd());
 	const absoluteFile = path.resolve(file);
 	const fileDir = path.dirname(absoluteFile);
@@ -259,9 +252,9 @@ export function resolveToolCwd(
 		const serverRoot = rootPath.resolve(ctx.serverRoot);
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, serverRoot, "server-root");
-		return serverRoot;
+		return { cwd: serverRoot };
 	}
-	const markers = markersFor(kind, tool, ctx);
+	const markers = markersFor(kind, tool, absoluteFile, ctx);
 	const markerResult = markers.length
 		? findMarkerRoot(
 				fileDir,
@@ -277,16 +270,34 @@ export function resolveToolCwd(
 		const finalReason = `marker:${markerResult.marker ?? markers[0]}`;
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, markerRoot, finalReason);
-		return markerRoot;
+		return {
+			cwd: markerRoot,
+			...(markerResult.marker !== undefined
+				? { marker: markerResult.marker }
+				: {}),
+		};
 	}
-	const gitResult = findMarkerRoot(fileDir, [".git"], homeDir);
+	const memo = ctx.toolCwdMemo;
+	if (memo && memo.gitRoot === undefined) {
+		const gitResult = findMarkerRoot(fileDir, [".git"], homeDir);
+		memo.gitRoot =
+			gitResult.root && isRealGitMarker(path.join(gitResult.root, ".git"))
+				? gitResult.root
+				: null;
+	}
 	const gitRoot =
-		gitResult.root && isRealGitMarker(path.join(gitResult.root, ".git"))
-			? gitResult.root
-			: null;
+		memo && memo.gitRoot !== undefined
+			? memo.gitRoot
+			: (() => {
+					const gitResult = findMarkerRoot(fileDir, [".git"], homeDir);
+					return gitResult.root &&
+						isRealGitMarker(path.join(gitResult.root, ".git"))
+						? gitResult.root
+						: null;
+				})();
 	if (gitRoot && (insideDispatch ? isUnderDir(gitRoot, dispatchRoot) : true)) {
 		if (!ctx.suppressTelemetry) emitResolution(kind, tool, gitRoot, "git-root");
-		return gitRoot;
+		return { cwd: gitRoot, marker: ".git" };
 	}
 	if (insideDispatch) {
 		if (kind === "formatter") {
@@ -299,11 +310,11 @@ export function resolveToolCwd(
 					reason: `${kind}:home-cap:${absoluteFile}`,
 				});
 			}
-			return fileDir;
+			return { cwd: fileDir };
 		}
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, dispatchRoot, "dispatch-root");
-		return dispatchRoot;
+		return { cwd: dispatchRoot };
 	}
 	const reason = isUnderDir(fileDir, homeDir)
 		? "file-dir-fallback"
@@ -316,7 +327,7 @@ export function resolveToolCwd(
 			reason: `${kind}:${reason}:${absoluteFile}`,
 		});
 	if (!ctx.suppressTelemetry) emitResolution(kind, tool, fallback, reason);
-	return fallback;
+	return { cwd: fallback };
 }
 
 /** Runner-shaped adapter kept at the same seam for every runner consumer. */
@@ -324,5 +335,12 @@ export function resolveRunnerCwd(
 	ctx: { cwd: string; filePath: string },
 	tool: string,
 ): string {
+	return resolveToolCwd("runner", tool, ctx.filePath, ctx).cwd;
+}
+
+export function resolveRunnerCwdWithReason(
+	ctx: { cwd: string; filePath: string },
+	tool: string,
+): ToolCwdResolution {
 	return resolveToolCwd("runner", tool, ctx.filePath, ctx);
 }
