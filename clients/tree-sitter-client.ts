@@ -3922,6 +3922,45 @@ export class TreeSitterClient {
 					captures.MOD?.text === "child_process" &&
 					/^(exec|execSync)$/.test(captures.FN?.text ?? "")
 				);
+			case "ts_sql_injection_sink": {
+				const template = captures.TEMPLATE?.text ?? "";
+				const knownPackages = [
+					"pg",
+					"mysql2",
+					"better-sqlite3",
+					"knex",
+					"prisma",
+					"@prisma/client",
+				];
+				if (rootNode) {
+					const stack = [rootNode];
+					while (stack.length > 0) {
+						const node = stack.pop();
+						if (!node) continue;
+						if (
+							node.type === "import_statement" &&
+							knownPackages.some(
+								(pkg) =>
+									node.text.includes(`"${pkg}"`) ||
+									node.text.includes(`'${pkg}'`),
+							)
+						) {
+							return true;
+						}
+						stack.push(...node.children);
+					}
+				}
+
+				// Inspect only the template's raw prefix. Leading SQL comments are
+				// ignored; comments and unrelated strings elsewhere cannot satisfy it.
+				const rawPrefix = template
+					.replace(/^`/, "")
+					.replace(/`$/, "")
+					.replace(/^(?:\s|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$))*/, "");
+				return /^(?:SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|DROP)(?:\s|[({;])/i.test(
+					rawPrefix,
+				);
+			}
 			case "ts_ssrf_sink": {
 				const fn = captures.FN?.text ?? "";
 				const obj = captures.OBJ?.text ?? "";

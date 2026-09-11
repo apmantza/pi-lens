@@ -93,6 +93,90 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBe(0);
 	});
 
+	describe("typescript sql-injection sink signal", () => {
+		it("silences child-process, task-runner, and custom execute false positives", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { exec, execFile } from "node:child_process";',
+					'import { run } from "task-runner";',
+					"declare function execute(query: string): void;",
+					"exec(`echo ${userInput}`);",
+					"execFile(`tool ${userInput}`);",
+					"run(`task ${userInput}`);",
+					"execute(`not a database command ${userInput}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+
+		it("fires for known DB-package imports", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import pg from "pg";',
+					'import mysql from "mysql2";',
+					'import { PrismaClient } from "@prisma/client";',
+					"declare const unknownClient: { execute(query: string): void };",
+					"pg.query(`SELECT * FROM users WHERE id = ${userId}`);",
+					"mysql.execute(`UPDATE users SET name = '${name}'`);",
+					"new PrismaClient().$queryRaw(`SELECT * FROM users WHERE id = ${id}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(3);
+		});
+
+		it("fires for a SQL-leading template with an unknown client", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				"declare const unknownClient: { execute(query: string): void };\n" +
+					"unknownClient.execute(`  /* generated */ DELETE FROM users WHERE id = ${id}`);\n",
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(1);
+		});
+
+		it("does not treat comments or unrelated strings as SQL sink signals", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"declare function execute(query: string): void;",
+					"// SELECT users should not make this helper a SQL sink",
+					'const label = "SELECT users";',
+					"execute(`not SQL: ${userInput}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+	});
+
 	it("does not match SQLAlchemy session.execute(stmt)", async () => {
 		const client = getSharedTreeSitterClient()!;
 		const query = await getQuery("python-sql-injection");

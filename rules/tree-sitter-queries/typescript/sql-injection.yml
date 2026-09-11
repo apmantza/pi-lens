@@ -1,15 +1,13 @@
 # SQL Injection Detection
 # Detects unsafe interpolation in SQL-like template literals.
-# Demoted from error/blocking to warning on 2026-09-10 (maintainer): the
-# query keys on the callee NAME only (query|execute|exec|run), so any
-# `run(`…${x}…`)` / `exec(`…`)` in non-SQL code fires — too many false
-# positives to block on. A real SQL sink needs a receiver/type signal.
+# The structural query keeps the common callee set, while the TypeScript-aware
+# post-filter requires a known DB-package import or a SQL-leading template.
 id: sql-injection
 name: SQL Injection Risk
-severity: warning
+severity: error
 category: security
 defect_class: injection
-inline_tier: warning
+inline_tier: blocking
 language: typescript
 
 message: "SQL injection risk — use parameterized queries, never interpolate into SQL"
@@ -35,12 +33,15 @@ query: |
       (member_expression property: (property_identifier) @SQL_FUNC)
     ]
     arguments: (arguments
-      (template_string (template_substitution) @INTERPOLATION))
-    (#match? @SQL_FUNC "^(query|execute|exec|run)$"))
+      (template_string (template_substitution) @INTERPOLATION) @TEMPLATE)
+    (#match? @SQL_FUNC "^(query|execute|exec|run|\\$queryRaw|\\$executeRaw)$"))
 
 metavars:
   - SQL_FUNC
+  - TEMPLATE
   - INTERPOLATION
+
+post_filter: ts_sql_injection_sink
 
 has_fix: false
 

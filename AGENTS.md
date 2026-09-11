@@ -3940,7 +3940,7 @@ Rules live in `rules/tree-sitter-queries/<language>/`. Disabled rules are in `ru
 
 Mixing different capture names in one `[...]` block causes tree-sitter to silently return zero matches (no compile error). Similarly, field values cannot be alternative groups: `right: [(identifier) (call_expression)]` is invalid — expand into separate alternatives or separate blocks.
 
-**Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
+**Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `ts_sql_injection_sink` (requires a known DB-package import or a SQL-leading template), and `check_secret_pattern` (variable name must match secret-sounding pattern). Keep detector guards code-based: comments or unrelated strings must not satisfy a sink signal, and every guard test names the recurrence it prevents.
 
 ## Experimental git guard (#1063)
 
