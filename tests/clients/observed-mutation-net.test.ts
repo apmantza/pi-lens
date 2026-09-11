@@ -1118,6 +1118,75 @@ describe("#2449 review round 2 — the settled sweep is incremental and honest",
 		}
 	});
 
+	it("rechecks an unchanged-stat file when its content hash is absent", async () => {
+		// #2984 and the #2952 timing probe: a budgeted hash omission is missing
+		// evidence. The observational net must fail open and look harder, even
+		// when a rewrite preserves size and mtime.
+		const env = setupTestEnvironment("pi-lens-2984-absent-hash-");
+		try {
+			const filePath = path.join(env.tmpDir, "large.ts");
+			const content = Buffer.alloc(
+				OBSERVED_SWEEP_HASH_BUDGET_BYTES + 1024,
+				0x61,
+			);
+			fs.writeFileSync(filePath, content);
+			const pinned = Math.floor(Date.now());
+			fs.utimesSync(filePath, new Date(pinned), new Date(pinned));
+			const baselineMtime = fs.statSync(filePath).mtimeMs;
+
+			const armed = await armObservedMutation(armArgs(filePath, env.tmpDir));
+			expect(armed.armed).toBe(true);
+			fs.writeFileSync(filePath, content);
+			fs.utimesSync(filePath, new Date(pinned), new Date(pinned));
+			expect(fs.statSync(filePath).mtimeMs).toBe(baselineMtime);
+
+			const sink = recorder();
+			const settled = await settleObservedMutation({
+				toolCallId: "call-observed-1",
+				toolName: "patch_file",
+				sessionGeneration: 1,
+				turnIndex: 1,
+				record: sink.record,
+			});
+
+			expect(settled.changedPaths).toEqual([]);
+			expect(settled.unverifiablePaths).toHaveLength(1);
+			expect(settled.replayed).toBe(0);
+			expect(sink.entries).toEqual([]);
+			expect(lookupLearnedMutatingTool("patch_file")).toBeUndefined();
+			// Unverifiable does not spend the clean latch. Two subsequent real,
+			// hashed no-op observations still reach the pre-existing clean limit.
+			const smallPath = path.join(env.tmpDir, "small.ts");
+			fs.writeFileSync(smallPath, SOURCE);
+			for (
+				let attempt = 0;
+				attempt < CLEAN_OBSERVATION_ARM_LIMIT;
+				attempt += 1
+			) {
+				const callId = `call-observed-clean-${attempt}`;
+				const cleanArmed = await armObservedMutation(
+					armArgs(smallPath, env.tmpDir, { toolCallId: callId }),
+				);
+				expect(cleanArmed).toMatchObject({ armed: true });
+				const clean = await settleObservedMutation({
+					toolCallId: callId,
+					toolName: "patch_file",
+					sessionGeneration: 1,
+					turnIndex: 1,
+					record: recorder().record,
+				});
+				expect(clean.unverifiablePaths).toEqual([]);
+				expect(clean.replayed).toBe(0);
+				expect(shouldArmObservationForTool("patch_file")).toBe(
+					attempt + 1 < CLEAN_OBSERVATION_ARM_LIMIT,
+				);
+			}
+			expect(shouldArmObservationForTool("patch_file")).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("names a file it cannot verify instead of replaying it on stat alone", async () => {
 		// F7's honest-degradation half. A file past the sweep's read budget can
 		// never carry a hash, so a stat that moves is un-provable either way —
