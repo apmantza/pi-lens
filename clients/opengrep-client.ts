@@ -98,7 +98,8 @@ export interface OpengrepResult extends AnalysedRootSignal {
 		| "spawn-failed"
 		| "no-report"
 		| "refused"
-		| "crashed";
+		| "crashed"
+		| "partial-no-paths";
 	partial?: true;
 }
 
@@ -242,7 +243,10 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			// #2154: the one opengrep site that parsed a scan of this root.
 			return {
 				success: true,
-				analyzed: true,
+				// A warning-level partial report with no scanned paths proves that
+				// the producer went cold. A complete empty report still proves a
+				// genuine scan, so it remains authoritative for the id-only fallback.
+				analyzed: !report.partial || report.scanned.length > 0,
 				...(report.scanned.length > 0
 					? {
 							analyzedFiles: report.scanned.map((file) =>
@@ -251,6 +255,9 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 						}
 					: {}),
 				...(report.partial ? { partial: true } : {}),
+				...(report.partial && report.scanned.length === 0
+					? { reason: "partial-no-paths" as const }
+					: {}),
 				findings: report.findings,
 				scannedAt,
 			};

@@ -829,6 +829,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		(clients.opengrepClient.scan as ReturnType<typeof vi.fn>).mockResolvedValue(
 			{
 				success: true,
+				analyzed: true,
 				scannedAt: "now",
 				findings: [
 					{
@@ -1194,6 +1195,35 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			clients,
 		);
 		expect(result.analyzed).toContain("opengrep");
+		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
+	// Recurrence: a successful partial report used to enter `analyzed` without
+	// paths, so the retirement fallback treated it as a clean empty scan.
+	it("keeps a partial opengrep scan with no paths cold", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep's warning-level partial report shape.
+				fs.writeFileSync(
+					report,
+					'{"results":[],"errors":[{"level":"warn","message":"invalid UTF-8"}],"paths":{"scanned":[]}}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		expect(result.analyzed).not.toContain("opengrep");
+		expect(result.cold).toContain("opengrep");
 		expect(result.authoritativeCoverage).toEqual([]);
 	});
 

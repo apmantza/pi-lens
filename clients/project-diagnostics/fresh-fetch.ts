@@ -602,6 +602,25 @@ export async function fetchFreshProjectDiagnostics(
 				recordFailed("opengrep", result);
 				return;
 			}
+			if (result.analyzed !== true) {
+				// A usable partial report with no scanned paths carries findings but
+				// no retirement authority. Keep those findings visible and mark the
+				// producer cold so retained findings cannot be retired as clean.
+				markCold(
+					"opengrep",
+					result.reason ??
+						result.summary ??
+						"opengrep partial scan produced no scanned paths",
+				);
+				record(
+					"opengrep",
+					opengrepResultToProjectDiagnostics(analysisRoot, result),
+					Date.now() - startMs,
+					false,
+					result,
+				);
+				return;
+			}
 			cacheManager.writeCache("opengrep", result, analysisRoot, {
 				scanDurationMs: Date.now() - startMs,
 			});

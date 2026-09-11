@@ -1156,6 +1156,16 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+Project-runner authority has two independent facts: a parsed scan may retire
+findings only when its producer establishes coverage, and a warning-level
+partial scan with no scanned paths is cold even when it returns successfully.
+Opengrep is the only producer with a complete `paths.scanned` report field in
+the current runner set. `clients/opengrep-client.ts` therefore sets
+`analyzed: false` for that partial shape, while a complete empty report keeps
+`analyzed: true`; `clients/project-diagnostics/fresh-fetch.ts` preserves any
+partial findings without granting retirement authority. Do not infer coverage
+from finding paths, duplicate endpoints, dependency targets, or issue paths.
+
 **Pip-backed managed tools follow a private-install ladder (#2916).**
 `installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a
 normal `--user` install. A refusal containing
