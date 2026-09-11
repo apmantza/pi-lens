@@ -15,13 +15,26 @@
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	buildProjectSnapshotFromRuntime,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	cleanupTestEnvironments,
+	createTempFile,
+	setupTestEnvironment,
+} from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/config.js", () => ({
@@ -101,6 +114,19 @@ describe("warm-pipeline size-skip notify (#775)", () => {
 	let restoreStartupMode: () => void;
 	let previousDataDir: string | undefined;
 
+	const cleanupWarmSkipNotifyTemps = async () => {
+		await waitForProjectSnapshotPersistsForTests();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		cleanupTestEnvironments("pi-lens-warm-skip-notify-");
+	};
+
+	// The warm pipeline can write after a test's finally block. Keep this
+	// family's roots tracked, then sweep after pending work has drained, as in
+	// #2912. The afterEach pass prevents a prior test's worker write from
+	// crossing into the next case; afterAll covers the final case.
+	afterEach(cleanupWarmSkipNotifyTemps);
+	afterAll(cleanupWarmSkipNotifyTemps);
+
 	beforeEach(() => {
 		restoreStartupMode = setStartupMode("full");
 		previousDataDir = process.env.PILENS_DATA_DIR;
@@ -149,7 +175,8 @@ describe("warm-pipeline size-skip notify (#775)", () => {
 				"PI_LENS_STARTUP_SCAN_MAX_ENTRIES",
 			);
 		} finally {
-			env.cleanup();
+			// Suite-level cleanup owns this root because the warm pipeline writes
+			// after the test body returns.
 		}
 	});
 
@@ -187,7 +214,8 @@ describe("warm-pipeline size-skip notify (#775)", () => {
 			);
 			expect(warmSkipNotices).toHaveLength(1);
 		} finally {
-			env.cleanup();
+			// Suite-level cleanup owns this root because the warm pipeline writes
+			// after the test body returns.
 		}
 	});
 
@@ -211,7 +239,8 @@ describe("warm-pipeline size-skip notify (#775)", () => {
 			);
 			expect(warmSkipNotices).toHaveLength(0);
 		} finally {
-			env.cleanup();
+			// Suite-level cleanup owns this root because the warm pipeline writes
+			// after the test body returns.
 		}
 	});
 });

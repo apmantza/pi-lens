@@ -13,6 +13,7 @@ import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { getLastLoggedPhase } from "../../clients/latency-logger.js";
 import * as latencyLogger from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import { setAmbientAbortSignal } from "../../clients/safe-spawn.js";
 import {
 	createTempFile,
@@ -59,6 +60,7 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
+		await waitForProjectSnapshotPersistsForTests();
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		cleanupTestEnvironments("pi-lens-agent-end-");
 	};

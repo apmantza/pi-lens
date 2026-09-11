@@ -42,7 +42,8 @@ export function setupTestEnvironment(prefix = "pi-lens-test-"): {
 		tmpDir,
 		cleanup: () => {
 			removeTempDirSync(tmpDir);
-			activeTestEnvironments.delete(tmpDir);
+			// Keep ownership tracked: deferred work can recreate this root after
+			// the per-test removal, and the owning suite must sweep it again.
 		},
 	};
 }
