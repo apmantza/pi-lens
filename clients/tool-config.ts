@@ -152,6 +152,22 @@ export const LENS_TOOL_NAMES = TOOL_REGISTRY.map(
 
 export type ToolRegistryEntry = (typeof TOOL_REGISTRY)[number];
 
+export type LensToolHost = "pi" | "mcp";
+
+/** Resolve the name an agent can call on the delivery host. */
+export function resolveLensToolName(
+	name: string,
+	host: LensToolHost = "pi",
+): string {
+	const entry = TOOL_REGISTRY.find(
+		(tool) =>
+			tool.name === name || tool.piName === name || tool.mcpName === name,
+	);
+	if (!entry) return name;
+	if (host === "mcp") return entry.mcpName ?? entry.piName ?? name;
+	return entry.piName ?? entry.name;
+}
+
 export function toolRegistryEntryForPi(
 	name: string,
 ): ToolRegistryEntry | undefined {

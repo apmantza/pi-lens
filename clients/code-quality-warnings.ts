@@ -6,6 +6,7 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { displayProjectDataPath, getProjectDataDir } from "./file-utils.js";
 import { normalizeMessage, stableFindingId } from "./finding-identity.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 
 export interface CodeQualityWarningRecord {
 	id: string;
@@ -372,6 +373,7 @@ export function appendCodeQualityWarningsHistory(
 export function formatCodeQualityWarningsAdvisory(
 	report: CodeQualityWarningsReport,
 	cwd: string,
+	host: LensToolHost = "pi",
 ): string | undefined {
 	if (report.summary.warnings === 0) return undefined;
 	const topRules = report.summary.topRules
@@ -402,7 +404,7 @@ export function formatCodeQualityWarningsAdvisory(
 		topRules ? `Top rules: ${topRules}` : undefined,
 		// #2521: tool route first (`mode=delta` covers the code-quality cache
 		// as well as the actionable one), resolved path second.
-		"Use lens_diagnostics with mode=delta to inspect these warnings.",
+		`Use ${resolveLensToolName("lens_diagnostics", host)} with mode=delta to inspect these warnings.`,
 		"No action required unless you are already refactoring these areas.",
 		`Raw report (only if you need the JSON): ${displayProjectDataPath(
 			cwd,

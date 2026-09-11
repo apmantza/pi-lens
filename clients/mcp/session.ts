@@ -347,6 +347,7 @@ async function runTurnEndNowImpl(
 		deadCodeClients: ctx.clients.deadCodeClients,
 		depChecker: ctx.clients.depChecker,
 		testRunnerClient: ctx.clients.testRunnerClient,
+		host: "mcp",
 		owner,
 		resetLSPService,
 		resetFormatService,

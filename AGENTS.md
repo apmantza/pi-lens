@@ -659,6 +659,12 @@ and MCP session lifecycle tools are non-disableable; unknown and attempted
 non-disableable keys share `PILENS_CFG_0009`. A surface roster without a
 registry entry is a governance failure (#2800 R2).
 
+Agent-facing advisory text resolves tool names through `resolveLensToolName`
+with the delivery adapter's host identity: pi uses `piName`, and MCP uses
+`mcpName` from this registry. The MCP session passes `host: "mcp"` at the
+`handleTurnEnd` seam; pi keeps the default `host: "pi"`. Do not add a second
+name map or hard-code a pi tool name in advisory output (#2535).
+
 ### LSP: acquisition, touches, waits, and diagnostics
 
 Alternate language servers declare their preferred server through

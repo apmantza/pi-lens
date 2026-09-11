@@ -90,6 +90,7 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { isSubagentSession } from "./subagent-mode.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { TurnStateOwner } from "./cache-manager.js";
+import type { LensToolHost } from "./tool-config.js";
 import { formatRunDurationMs } from "./run-duration.js";
 import {
 	isExcludedTestTarget,
@@ -455,6 +456,8 @@ interface TurnEndDeps {
 	sessionId?: string;
 	/** Abort signal from the event ctx that fired this turn_end. */
 	signal?: AbortSignal;
+	/** Delivery adapter whose tool names appear in agent-facing advisories. */
+	host?: LensToolHost;
 }
 
 /**
@@ -711,6 +714,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		depChecker,
 		testRunnerClient,
 		sessionId,
+		host = "pi",
 		owner,
 		resetLSPService,
 		resetFormatService,
@@ -3352,6 +3356,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const advisory = formatActionableWarningsAdvisory(
 				publishResult.report,
 				cwd,
+				host,
 			);
 			// @delivery-surface: runtime-turn:actionable-warnings-advisory
 			if (advisory) advisoryParts.push(advisory);
@@ -3407,7 +3412,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		});
 		writeCodeQualityWarningsReport(cacheManager, cwd, qualityReport);
 		appendCodeQualityWarningsHistory(cwd, qualityReport);
-		const advisory = formatCodeQualityWarningsAdvisory(qualityReport, cwd);
+		const advisory = formatCodeQualityWarningsAdvisory(
+			qualityReport,
+			cwd,
+			host,
+		);
 		// @delivery-surface: runtime-turn:code-quality-warnings-advisory
 		if (advisory) advisoryParts.push(advisory);
 		logLatency({
