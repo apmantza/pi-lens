@@ -525,8 +525,7 @@ function codeSpanMasked(text) {
 
 function endsSentence(text, index) {
 	const char = text[index];
-	if (!".!?".includes(char) || !/\s/.test(text[index + 1] ?? ""))
-		return false;
+	if (!".!?".includes(char) || !/\s/.test(text[index + 1] ?? "")) return false;
 	if (char === ".") {
 		if (text[index - 1] === "." || text[index + 1] === ".") return false;
 		if (/\d\.\d/.test(text.slice(Math.max(0, index - 1), index + 2)))
@@ -553,17 +552,6 @@ function splitMarkdownSentences(text) {
 	return sentences;
 }
 
-function validMarkdownTable(block) {
-	if (!block.table || block.lines.length < 2) return false;
-	const cells = (line) => line.split("|").map((cell) => cell.trim());
-	const headers = cells(block.lines[0]);
-	const separators = cells(block.lines[1]);
-	return (
-		separators.length === headers.length &&
-		separators.slice(1, -1).every((cell) => /^:?-{3,}:?$/.test(cell))
-	);
-}
-
 export function splitMarkdownUnits(body = "") {
 	const units = [];
 	for (const block of markdownBlocks(body)) {
@@ -579,9 +567,8 @@ export function splitMarkdownUnits(body = "") {
 			units.push({ kind: "list", text: block.text });
 			continue;
 		}
-		if (validMarkdownTable(block)) {
-			for (const line of block.lines)
-				units.push({ kind: "table", text: line });
+		if (block.table) {
+			for (const line of block.lines) units.push({ kind: "table", text: line });
 			continue;
 		}
 		for (const sentence of splitMarkdownSentences(block.text))
