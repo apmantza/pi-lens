@@ -59,6 +59,7 @@ import type { TestRunnerClient } from "./test-runner-client.js";
 import type { DeadCodeClient } from "./dead-code-client.js";
 import type { TodoScanner } from "./todo-scanner.js";
 import type { TrivyClient } from "./trivy-client.js";
+import { agentBehaviorClient } from "./agent-behavior-client.js";
 
 export interface BootstrapClients {
 	ruffClient: RuffClient;
@@ -95,6 +96,11 @@ export interface BootstrapClients {
  * by the single-flight primitive's identity-guarded release).
  */
 let residentClients: BootstrapClients | null = null;
+
+/** Behaviour history remains available before analyzer bootstrap completes. */
+export function getAgentBehaviorClient(): AgentBehaviorClient {
+	return agentBehaviorClient;
+}
 
 /**
  * Set by {@link markAnalyzerBootstrapShutdown} when the PRIMARY session tears
@@ -358,7 +364,7 @@ async function buildBootstrapClients(): Promise<BootstrapClients> {
 		load(
 			"agent-behavior",
 			async () =>
-				new (await import("./agent-behavior-client.js")).AgentBehaviorClient(),
+				(await import("./agent-behavior-client.js")).agentBehaviorClient,
 		),
 		loadList("dead-code", async () =>
 			(await import("./dead-code-client.js")).getDeadCodeClients(),

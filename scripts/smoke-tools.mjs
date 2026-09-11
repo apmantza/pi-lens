@@ -37,6 +37,7 @@
  *   node scripts/smoke-tools.mjs --lsp [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --lsp-gate [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --format [lang ...] [--install] [--verbose]
+ *   node scripts/smoke-tools.mjs --install --install-registry --installer-root=<path>
  *
  * Requires a built dist/ (run `npm run build:dist` first).
  */
@@ -1415,7 +1416,9 @@ function parseArgs(argv) {
 	let tier1 = false;
 	let minPass = null;
 	let installRegistry = false;
-	for (const arg of argv) {
+	let installerRoot = null;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
 		if (arg === "--step2") step2 = true;
 		else if (arg === "--verbose" || arg === "-v") verbose = true;
 		else if (arg === "--install") install = true;
@@ -1424,6 +1427,8 @@ function parseArgs(argv) {
 		else if (arg === "--format") format = true;
 		else if (arg === "--tier1") tier1 = true;
 		else if (arg === "--install-registry") installRegistry = true;
+		else if (arg.startsWith("--installer-root="))
+			installerRoot = arg.slice("--installer-root=".length);
 		else if (arg.startsWith("--min-pass="))
 			minPass = Number.parseInt(arg.slice("--min-pass=".length), 10);
 		else if (arg === "--autofix") autofix = true;
@@ -1441,6 +1446,7 @@ function parseArgs(argv) {
 		tier1,
 		minPass,
 		installRegistry,
+		installerRoot,
 	};
 }
 
@@ -1845,7 +1851,11 @@ export async function ensureFixtureTools(
  * is injectable for the same reason — the production value starts empty and
  * caches probe results per strategy.
  */
-export async function runInstallRegistrySmoke({ verbose, deps } = {}) {
+export async function runInstallRegistrySmoke({
+	verbose,
+	deps,
+	installerRoot,
+} = {}) {
 	let ensureTool;
 	let TOOLS = [];
 	let getInstallAttempt;
@@ -1860,8 +1870,14 @@ export async function runInstallRegistrySmoke({ verbose, deps } = {}) {
 			toolchainPresence,
 		} = deps);
 	} else {
+		if (!installerRoot) {
+			console.error(
+				"installer root missing: --installer-root=<path> is required for the installed registry smoke",
+			);
+			process.exit(2);
+		}
 		const installerEntry = path.join(
-			repoRoot,
+			installerRoot,
 			"dist",
 			"clients",
 			"installer",
@@ -2813,6 +2829,7 @@ async function main() {
 		tier1,
 		minPass,
 		installRegistry,
+		installerRoot,
 	} = parseArgs(process.argv.slice(2));
 
 	// Clean leftovers from prior runs (their file locks are released now).
@@ -2821,7 +2838,7 @@ async function main() {
 		console.error(`swept ${swept} leftover temp workspace(s)`);
 
 	if (installRegistry) {
-		const result = await runInstallRegistrySmoke({ verbose });
+		const result = await runInstallRegistrySmoke({ verbose, installerRoot });
 		console.log(JSON.stringify(result));
 		process.exit(result.ok ? 0 : 1);
 	}

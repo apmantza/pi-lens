@@ -4,6 +4,15 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      republish:
+        description: >-
+          Publish package.json's version to npm from its EXISTING tag
+          (recovers a release whose tag and GitHub release were created but
+          whose publish-npm job failed, e.g. v4.1.6 on 2026-09-10). The tag
+          and the GitHub release are not recreated.
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,6 +27,8 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       should_release: ${{ steps.meta.outputs.should_release }}
+      should_publish: ${{ steps.meta.outputs.should_publish }}
+      publish_ref: ${{ steps.meta.outputs.publish_ref }}
     steps:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -28,6 +39,8 @@ jobs:
       - name: Compute release metadata
         id: meta
         shell: bash
+        env:
+          REPUBLISH: ${{ inputs.republish || 'false' }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
@@ -41,10 +54,22 @@ jobs:
             SHOULD_RELEASE=true
           fi
 
+          # A manual `republish` run publishes the ALREADY-TAGGED tree to npm
+          # (the tag and the GitHub release stay as they are); a normal run
+          # publishes the commit it releases. Anything else never publishes.
+          SHOULD_PUBLISH="$SHOULD_RELEASE"
+          PUBLISH_REF="$GITHUB_SHA"
+          if [ "$SHOULD_RELEASE" = false ] && [ "$REPUBLISH" = true ]; then
+            SHOULD_PUBLISH=true
+            PUBLISH_REF="$TAG"
+          fi
+
           {
             echo "version=$VERSION"
             echo "tag=$TAG"
             echo "should_release=$SHOULD_RELEASE"
+            echo "should_publish=$SHOULD_PUBLISH"
+            echo "publish_ref=$PUBLISH_REF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify bump PR rolled up changelog entries
@@ -151,7 +176,12 @@ jobs:
   publish-npm:
     runs-on: ubuntu-latest
     needs: [prepare, release]
-    if: needs.prepare.outputs.should_release == 'true'
+    # Runs after a real release (release job succeeded) or on a manual
+    # `republish` (release job skipped because the tag already exists).
+    if: >-
+      ${{ !cancelled()
+          && needs.prepare.outputs.should_publish == 'true'
+          && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     permissions:
       contents: read
       # Required for OIDC trusted publishing: npm exchanges this job's GitHub
@@ -163,6 +193,7 @@ jobs:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ needs.prepare.outputs.publish_ref }}
           persist-credentials: false
 
       # yamllint disable-line rule:line-length
@@ -196,5 +227,13 @@ jobs:
           npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
           npx -y "npm@${npm_pin}" install --no-audit --no-fund
 
+      # Publish through the PINNED npm, not the runner's bundled one: since
+      # 9183f39c6 the pin step only caches npm@<pin> via npx (it no longer
+      # installs it globally), so a bare `npm publish` ran Node 22's bundled
+      # npm, which has no OIDC trusted-publishing support — the PUT went out
+      # unauthenticated and the registry answered E404 (v4.1.6, 2026-09-10:
+      # tag and GitHub release created, npm publish failed).
       - name: Publish to npm
-        run: npm publish
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" publish

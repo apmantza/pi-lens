@@ -15,6 +15,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import {
 	isStaleExtensionCtxError,
+	surfaceHandlerCrash,
 	wrapSessionEventHandler,
 	wrapSessionEventHandlerWithResult,
 } from "../../clients/session-event-guard.js";
@@ -286,5 +287,42 @@ describe("isStaleExtensionCtxError (#1925)", () => {
 		);
 		expect(isStaleExtensionCtxError(STALE_CTX_MESSAGE)).toBe(false);
 		expect(isStaleExtensionCtxError(undefined)).toBe(false);
+	});
+});
+
+/**
+ * #2884 — `surfaceHandlerCrash`'s own policy, at the unit level.
+ *
+ * `tests/index-wiring.test.ts` proves the helper is APPLIED to all nine
+ * `index.ts` catch sites. The case below is the one branch an end-to-end probe
+ * cannot reach: the debug sink itself throwing. Recurrence it prevents — a
+ * `dbg` that throws would otherwise replace the handler's error with the
+ * sink's on the way out of a production catch, and take the bounded record
+ * with it, so the host would see a debug-logger bug where a handler crash
+ * happened.
+ */
+describe("surfaceHandlerCrash (#2884)", () => {
+	beforeEach(() => {
+		resetDegradationLedger();
+	});
+
+	function crashGroup() {
+		return getDegradationSummary().find(
+			(group) => group.kind === "hook-handler-crash",
+		);
+	}
+
+	it("records and rethrows the HANDLER's error even when the debug sink throws", () => {
+		const original = new Error("handler boom");
+		expect(() =>
+			surfaceHandlerCrash("turn_end", original, {
+				dbg: () => {
+					throw new Error("sink boom");
+				},
+			}),
+		).toThrow(original);
+		expect(crashGroup()?.latestReasons.map((reason) => reason.subject)).toEqual(
+			["turn_end"],
+		);
 	});
 });

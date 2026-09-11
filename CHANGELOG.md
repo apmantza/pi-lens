@@ -16,6 +16,182 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.1.6] - 2026-09-10
+
+### Added
+
+- **Add an advisory incremental Stryker lane for changed scripts (refs #1844)** — `npm run mutation:diff` and the pull-request mutation lane use Stryker's command runner over changed `scripts/**/*.mjs` files and their related tests, report uncovered files, retain incremental results under ignored paths, and publish the mutation report for review.
+
+- **CI failures now distinguish infrastructure outages from real test failures and arm one rerun** (refs #2103, #2784) — the classifier recognizes exit-137 kills, CodeQL/SARIF outages, codeload throttling, and npm CI timeouts, while preserving assertion and TypeScript failures as real. It updates one PR comment, applies the manifest-managed CI label, and lets the verdict report an armed infrastructure rerun as pending; **Terminal CI rerun finalization now covers master push and repository-dispatch runs** (refs #2103, #2784) — the workflow finalizes second-attempt classifications for every supported event and records a bounded step summary when no associated PR exists.
+
+- Add an AST governance sweep for `vi.mock` factories that omit production exports. Refs #2281.
+
+- **Add an advisory Windows Vitest lane (refs #2536)** — Run the path-shape and configuration test subset on `windows-latest`.
+
+- **Add the tool-smoke install lane to the release-QA baseline (refs #2663, #2784)** — a `tool-smoke-install` row installs every npm/pip installer-registry entry through the real smoke harness, so a dead registry entry is a red do-not-ship row, a registry-unreachable lane is INCONCLUSIVE, and neither reads as green.
+
+- **Add a TypeScript strictness spike with scratch configs, per-directory counts, a two-sided ratchet, and an advisory report lane (refs #2697)** — the migration remains staged by directory instead of enabling either flag globally.
+
+- **Add a cwd-sensitive yamllint tool-smoke row (refs #2697, refs #2691)** — the real runner proves yamllint uses the dispatch cwd instead of the host process cwd for config discovery.
+
+- **Add tool-smoke cwd rows for nested discovery (refs #2777)** — the runner, formatter, and LSP smoke shapes assert their resolved cwd and reason log, while missing binaries remain visible skips.
+
+- **Add one command for every mechanical PR gate (refs #2790, #2784)** — `npm run preflight` runs the ordered local build, lint, formatting, changelog, lockfile, governance, and PR-document checks.
+
+- Stamp one session-scoped turn identifier on observability sink rows (refs #2815).
+
+- **Add a real pi RPC harness for load, tool-set restore, and read-guard scenarios (refs #2825)** — the serialized `real-harness` lane drives the built extension with a deterministic scripted provider and hermetic sinks.
+
+- **Make Knip a hard local preflight gate and cover every admitted test lane** (refs #2837) — `npm run preflight` runs Knip, while the Knip entry census covers real-harness, Windows, wall-clock, and workflow-invoked script populations with documented same-file export admissions.
+
+- **Gate nightly LSP smoke rows on primary diagnostics** (refs #2780) — the tool-smoke workflow now drives opted-in seeded fixtures through the real `lsp_diagnostics` handler, reports unavailable toolchains correctly, and tracks gate failures.
+
+- **`complexity (advisory)` CI job dogfoods pi-lens's own complexity client over `clients/`, `tools/` and `mcp/` (refs #2697)** — `npm run complexity` writes a Markdown report (top functions by cyclomatic/cognitive complexity, files over 1,000 lines, split candidates at the dispatch threshold of 15) to the step summary and an artifact; `ComplexityClient` exposes the per-function metrics it already computes, uses the dispatch cyclomatic metric for JS/TS, and fails when analysis produces no files or throws.
+
+- **One session-end line names the tools never activated or called (refs #2800)** — a bounded debug record per session on both surfaces, keyed by the tool registry, so roster decisions can read which tools carried no weight in a session; the monitor readout gains the line. MCP owns the row for the connection and emits it at `pilens_session_end` or transport close, whichever comes first; repeated `pilens_session_start` calls refresh without clearing observations. Pi records the row for fresh sessions only: a reload, resume, or fork start suppresses the session's row entirely (conversation-owned accounting tracked in #2858).
+
+- **Per-call tool-result observability**: the `usage tokens=<n> elapsed-ms=<n>` contract footer gains `bytes=<delivered payload bytes> truncated=<true|false>` on both host surfaces, the payload byte bound runs before the footer is stamped with the footer's own maximum size reserved so the delivered text (footer included) never exceeds 40 KiB for the single-text-block results production emits (the bound is per text block, inherited from #2852), and the per-turn `cache_usage` latency row aggregates `toolResultBytes` and `toolResultsTruncated` over the turn's tool calls (refs #2800)
+
+- **Guard workflow shell portability (refs #2625, #2784)** — Reject bash 4-only constructs in steps that can run on macOS runners, including matrix and reusable-workflow input expansion and executable command substitutions nested inside double quotes.
+
+- **Record injected bytes and repeated findings per turn (refs #2838)** — the existing cache attribution row records UTF-8 bytes by model-facing injection source and counts repeated finding identities with bounded per-session state.
+
+- **Check lockfile completeness under CI's npm (refs #2803, #2784)** — preflight and `check:lockfile --complete` reject optional dependency drift before merge; **Pin the clean production install to npm@11.18.0 (refs #2803, #2784)** — use
+  the repository's exact npm pin so a different npm version cannot rewrite the
+  committed lockfile.
+
+- **`tools.<name>.enabled` proven through a real pi RPC session (refs #2800)** — real-harness scenarios show a disabled tool absent from the tool list pi reports, the loader and MCP lifecycle tools refusing to be disabled with the config diagnostic, and `--no-tool` winning over config; the roster bytes pi receives per tool are measured on the wire.
+
+### Changed
+
+- Keep admission registries sorted and enforce declaration order with one shared sweep helper (refs #2671, #2784).
+
+- **Skip the PR title, body and close-keyword checks for dependabot PRs (refs #2714)** — the `pr-title-lint` and `pr-body-lint` jobs in lint.yml and the lint job in close-keywords.yml now carry a `dependabot[bot]` skip condition. A bump can never carry an issue ref or the PR-body template, so these checks no longer go red on every bump and no merge-train pass has to ignore them by hand. Lint, Unit tests, the install tests and the advisory lanes still run on bumps.
+
+- **Trim the three largest tool parameter schemas and pin both host rosters (refs #2800).**
+
+- **Adaptively demote budget-hitting auxiliaries, re-promote fast late answers, and deliver findings through the deferred runner path (refs #2810).**
+
+- **Tool probes and hand-derived package roots resolve through shared seams (refs #2894)** — a `probeToolAsync` seam owns the "a presence/version probe never gets a `cwd`" contract for 23 spawn sites that each decided it locally, `rust-clippy` takes its package root from `resolveRunnerCwd` (with `Cargo.toml` registered as its runner marker) instead of an uncapped `findNearestContaining` walk, and `ruff-client`'s autofix resolves its config root through `resolveToolCwd` so a file in a nested package gets that package's `pyproject.toml` rather than the workspace one.
+
+- **Preserve per-row auxiliary publication evidence semantics (refs #2892)** — demoted waits accept an advanced per-path stamp alongside a content binding, while sibling and aggregate rows remain binding-only.
+
+- **`ast_grep_dump` folded into `ast_grep_search` (refs #2800)** — AST inspection is `ast_grep_search` with `dump=true`, with the same result contract; the retired name answers for one session through a bounded compatibility response on both surfaces (one `ast-grep-dump-compatibility` record per session) and is absent from the tool registry and every tool listing.
+
+- **Audit and update user-facing and contributor docs against master for the v4.1.6 cut.** `docs/agent-tools.md` now describes `lens_diagnostics`' `source`/`scope`/`severity`-threshold contract, the one-release MCP compatibility redirect, the `lsp_navigation` 19-operation roster with a link to its SKILL.md parameter reference, and the result-delivery contract (`finalizeToolResult`, 40 KiB bound, `bytes=`/`truncated=` usage footer). `docs/settings.md`, `docs/globalconfig.md`, and `docs/usage.md` now agree on all registry flags, including the seven analyzer toggles. `docs/features.md`'s formatter list is corrected to the current 34-entry autoformat registry (drops `fish_indent`, which is a check-only dispatch runner rather than an entry in that registry, and adds `ktfmt` and `terragrunt-hcl`). `docs/environment-variables.md` drops `PI_LENS_AUTO_INSTALL`, which no longer exists in code. (refs #2800)
+
+- **Fold `lsp_diagnostics` into `lens_diagnostics` with source and scope modifiers; retain the MCP compatibility shim for one release.** (refs #2800)
+  Deprecated: `pilens_lsp_diagnostics` remains accepted by MCP for one release and maps to `source=lsp`.
+
+- **Make the oxfmt format check a CI gate (refs #2790, #2784)** — the workflow job now uses the gating name `oxfmt format check`, matching the hard `fmt:check` preflight gate and keeping formatting drift out of master.
+
+- **Fold `allowStamp` out of auxiliary coverage (closes #2914)** — The stamp-union predicate keeps one behaviour; the sibling and aggregate rows call the binding predicate directly.
+
+- **One result renderer for pi tool results and the MCP mirror (refs #2800)** — result status, diagnostic severity and usage lines come from one shared renderer on both surfaces, pinned by a both-surfaces governance test that drives real inputs for every paired registry tool and explicitly covers pi-only rows.
+  The renderer runs after each tool has set `isError`, then applies stale warnings, and bounds the final MCP payload to 40 KiB.
+
+- **Dropped a no-op string replacement in the tsgolint preflight test (refs #2709)** — CodeQL alert 49 (`js/identity-replacement`): the helper replaced `/package.json` with itself; the key lookup now only strips the `/tmp/` prefix.
+
+- **Pin the tool-roster description budget and trim paid metadata (refs #2800)** — pi and MCP tool registration now use concise contract-plus-example descriptions, with a two-sided baseline covering descriptions and schemas on both surfaces; the model-facing contract sentences (read coverage, diagnostic suppression ordering, configuration redaction, cold-cache guidance) stay in the paid description and are pinned per surface so a later trim cannot drop them.
+
+- **Add per-tool enablement (refs #2800)** — `tools.<name>.enabled` and repeatable `--no-tool=<name>` prevent disabled lens tools from registering on the pi and MCP surfaces. One registry now covers every model-facing tool, keeps the activation and MCP lifecycle tools non-disableable, and emits stable diagnostic code `PILENS_CFG_0009` for unknown or non-disableable keys. The resolved state appears in `effective_config`.
+
+- **`sql-injection` (TypeScript tree-sitter rule) is a warning, not a blocking error.** The query keys on the callee name only (`query|execute|exec|run`), so any template literal passed to a same-named non-SQL function fired a blocking finding; it stays as a warning until the rule gains a receiver/type signal.
+
+### Fixed
+
+- **Windows lane enumerated zero files because six scripts detected "am I the entry module" by string-comparing `import.meta.url` with `file://${process.argv[1]}`** (refs #2536) — on Windows the two spellings never match, so the main block never ran; every gate now compares against `pathToFileURL(process.argv[1]).href`, the win32 gate scanner excludes fixtures by the platform separator, and a governance test rejects the hand-built comparison.
+
+- **Bound turn-end Gitleaks classification (refs #2575)** — timed-out classification keeps raw findings fail-open. Thanks @stekman08.
+
+- **Prune merged clean worktrees with a per-run cap; never a tree with untracked files (refs #2631, #2538, #2784)** — the agent-worktree hygiene sweep now also removes any registered worktree whose branch tip is an ancestor of `origin/master` and whose checkout is clean, clears `.claude/worktrees/agent-*` leftovers that hold nothing but git's own `.git` gitlink, and caps removals per run with `--max` (default 10). An untracked file counts as a deliverable: only an empty `git status --porcelain` is clean, and the keep record names the first entry it protected.
+
+- **The format smoke lane installs the managed formatters it selects (refs #2767)** —
+  The `--install` path prefetches configured formatters through `ensureTool`
+  and the formatter pipeline resolves those managed binaries, with venv/local
+  → PATH → managed precedence; every managed resolver returns the typed
+  unavailable outcome instead of falling through to a bare command; GitHub and
+  archive installs record a typed unavailable outcome when no asset exists for
+  the host platform and architecture; the formatter-absence tests pin the
+  installer's independent PATH lookup so npm's `node_modules/.bin` prefix on
+  CI cannot resolve a dev-dependency binary.
+
+- **Unify tool cwd and root resolution (refs #2777)** — Runners, formatters, and LSP configuration walks now use one bounded, logged resolution seam.
+
+- **Fix runner no-config advisories logging once per tool and root at debug level (refs #2811)** — Dispatch now bounds constant runner advisories to one record per tool and resolved root per session.
+
+- **Key vi.mock export admissions by factory content and ratchet missing counts across line moves.** (refs #2816)
+
+- Make vi.mock export sweep warnings visible in default Vitest output and keep baseline regeneration successful when admissions change.
+
+- **Harden real pi harness waits and isolation (refs #2825)** — consume cursor-based events, honor scenario scripts, pin lane membership, and sweep shared scratch directories.
+
+- **Verify explicit existing records in PR-body observability lint (refs #2855)** — require the named kind in the named source file and verify its cited line is within 20 lines of the literal.
+
+- **Report peak RSS for exit-137 classifications (refs #2856)** — retain master’s real-failure precedence and include the three heaviest `[mem-file]` peaks in kill details.
+
+- **Attribute pi situational-tool observations by session file and emit on replacement.** A shutdown with `targetSessionFile` emits the conversation that is ending; reload re-runs the extension factory but keeps the same file and row. (refs #2858)
+
+- **Fail session-start tests when the awaited handler crashes or exceeds its test budget, instead of passing vacuously.** (refs #2859)
+
+- **Bound joined tool-result text with one conservative footer reserve, write one complete-result log, and convert rejecting pi tool executions into contract errors.** (refs #2862)
+
+- **Derive lens diagnostics limits and scope metadata from the LSP probe, preserve single-file names, and honor session severity tiers.** (refs #2864)
+
+- **Test-runner selection is per file kind and per module root, and a go `[setup failed]` result is advisory (refs #2870)** — a repo carrying both a `go.mod` and a Gradle build no longer hands every `.java` file to `go test` (the `RUNNERS` declaration order used to decide), a `README.md` or `.yaml` under a test directory no longer becomes its own test target, a nested Gradle or Go module anchors at its own build while a single-language repo keeps the runner it selected before, and go's `FAIL <pkg> [setup failed]` verdict reports as "could not run tests" instead of a fabricated blocking failure whose classification depended on whether go printed the word "error".
+
+- **The test runner spawns its child through `resolveToolCwd`, so a nested module's tests run from that module (refs #2871)** — a `.go` file in a nested `go.mod` module now runs `go test ./internal/…` from the module that owns the package instead of a root-relative path the root module cannot resolve, with the shared seam supplying marker discovery, the `.git`/dispatch-root fallbacks, the `$HOME` ceiling and one `tool-cwd` log line per resolution key; a whole-project build launches from the directory that owns its wrapper (`gradle`, `maven`), a child is never anchored on a config file the detector itself rejected as evidence (`pytest`'s `pyproject.toml`, `phpunit`'s `composer.json`), and the failed-target ledger stays keyed on the dispatch root.
+
+- **Make the runner spawn-cwd sweep verify resolver origin across the child-spawn population (refs #2872).** Bindings resolve by the grammar's own scope rather than a list of node kinds, any later rebinding leaves the value unproven, promoted resolvers must be a single seam return, and each admitted site is keyed by its cwd expression and the locals that expression reads, so a laundered or edited cwd cannot inherit an admission.
+
+- **Keep diagnostics visible for tolerant MCP severity inputs and apply one threshold across session and LSP sources, including error-only files at the warning threshold.** (refs #2864)
+
+- **Surface a crashed pi hook handler instead of swallowing it silently (refs #2884)** — the nine `index.ts` catch sites that absorb a handler crash (`session_start`, `session_before_fork`, `observed_settled_sweep`, `observed_ledger_refresh`, `agent_end`, `turn_end`, the `agent_settled` deferred-mutation drain, `quiet_window`, and `message_end`) now route through one shared `surfaceHandlerCrash` guard: production keeps the swallow but leaves one bounded `hook-handler-crash` degradation row per handler per session, and under the test runner the crash is rethrown so the awaiting test fails instead of resolving as if the handler had completed. The fire-and-forget `quiet_window` catch records the row without rethrowing, so a crash cannot terminate the pi host with an unhandled rejection.
+
+- **Resolve aliased child-process bindings (closes #2888)** — Extend the spawn-cwd test sweep to resolve aliased and namespaced child-process bindings.
+
+- **Make pi RPC `session_start` idempotent per reason and session ID, with a session-file fallback (refs #2890)** — repeated replacement events no longer repeat tool restoration or session-state resets, while a different session identity starts a new mutation pass.
+
+- **Deduplicate repeated RPC session starts (refs #2890)** — use the stable session ID, fall back to the session file, and re-run the restore when the host's active tool posture drifted.
+
+- **`lens_diagnostics mode=full` retires a stale finding only when the result that replaces it is genuinely authoritative: an LSP write the ordering guard accepted, or a project runner that actually analysed the root this call. A runner that reported success without running — no project root, no source files, a scan that crashed before writing its report — is reported cold instead of silently deleting the finding, and a retained result that could not be reconciled is labelled stale rather than served as a current blocker (refs #2154).**
+
+- **Require Windows-only test gates to name and enter the Windows Vitest lane (refs #2536, #2784)** — one shared population script drives the Windows job and governance sweep, with a job summary recording the executed gate count.
+
+- **Require runtime Observability sections to name a diff record (refs #2543, #2784)** — the PR-body checker matches observability record literals against added runtime lines and rejects unsupported no-failure claims.
+
+- **Make the merge-train warden label `red-ci` for any failing non-advisory check on the exact pull-request head (refs #2616, #2784)**.
+
+- **CI failure classifier: a test timeout beside registry network failures is infra, not real (refs #2839)** — A Unit-tests job whose only test-level failure is a vitest `Test timed out in Nms` line (no `AssertionError`, no compiler diagnostic) now classifies `infra-net` when the log also carries registry-unreachable evidence (`npm error code ECONNRESET` through every `npm-retry` attempt, codeload/SARIF 429/503, `npm ci` ETIMEDOUT, `npm-retry: attempt N network error`), so the once-per-SHA automatic rerun arms instead of the job sitting `ci:real`; PRs #2834 and #2835 both hit this and were re-run by hand. An `AssertionError` or a TypeScript `error TS` line beside the same network noise still classifies `real`, and a lone timeout with no network evidence is unchanged.
+
+- **`detectFileRole` recognises Go `_test.go` and the other table conventions (closes #2880)** — Editing `pkg/foo_test.go` produced no test target because the shared role classifier only knew `.test.`/`.spec.`/prefix/dir patterns. It now also matches the `_test.`/`_spec.` suffix infixes and the case-sensitive `*Test(s).<ext>` CamelCase suffix for Java/Kotlin/C#/F#/PHP, informed by the test-runner client's `SOURCE_TO_TEST_PATTERNS` + `RUNNERS` table; hand-written, see #2928 for the single-classifier fold, so an edited Go test file runs its own package tests.
+
+- **Route helm-lint through the runner cwd resolver (closes #2882)** — Helm lint now runs with the cwd selected by the shared dispatch runner seam.
+
+- **Preserve situational tool activations across pi rebuilds (refs #2889)** — Remember activations by session file so reload, resume, and fork restore the conversation's tool posture.
+
+- Run the installed-registry release-QA smoke with a scratch-home pip policy and keep the measured registry deterministic.
+
+- **Diagnostic verification guidance (closes #2792).** Agent and MCP descriptions distinguish cache-only reporting from active scans. Use `mode=full` with `paths` when changed files have absent or stale cached findings.
+
+- **Partition LSP diagnostics by server provenance (refs #2776)** — custom language servers now render their diagnostics as primary findings even when their server-authored `source` value differs from the registered server id.
+
+- **Re-sync LSP diagnostics after Git tree changes (refs #2817)** — open documents and bounded cached import dependencies are touched before scoped full diagnostics serve cached results; files without import-fact coverage receive a fresh requested-file touch; **Prove language-neutral LSP dependency resync through the real server path** (refs #2817); the language matrix derives its facts and fallback rows from the production import-facts predicate; the shared drift pass gives a Git-queued file one resync opportunity even when ordinary stat drift identifies the same file in that pass.
+
+- **Bound MCP tool results through the shared pi result seam (refs #2799, #2800)** — oversized results retain head and tail context, report omitted characters, and preserve the complete payload in the session log; the roster budget rejects duplicate tool names; results above the documented 8 MiB input budget keep a bounded head, an explicit incomplete marker and the tail in the session log, with one `mcp-complete-result-budget-exceeded` degradation per session.
+
+- **Flake-shape ratchet governs support-helper waits (refs #2563, #2784)** — the contention ratchet scans `.ts` and `.mts` support helpers, resolves aliased timers, and requires every support baseline row to carry a detector-specific reason, header, and serialized-lane proof through its importing tests; **Reduce flake-shape ratchet AST scanning cost (refs #2563, #2784)** — the whole-tree scan uses a comment/string-blanked textual pre-pass and parses each timer-bearing source file at most once per run.
+
+- **Label-sync post-merge validation fails when the syncer deletes or loses any label (refs #2614)** — the `labels.yml` sync job now snapshots the live label set before `action-label-syncer` runs and re-validates after: any before-vs-after deletion, or any manifest label missing from the live set, fails the job through `::error::label sync deleted or missing labels:` with the names printed, instead of a silent success while prune deletes labels (the #2553 recurrence, twice for the priority labels).
+
+- **Route built-in LSP roots through the tool-cwd seam and expose resolved cwd in `lens_diagnostics` (refs #2777)** — Built-in server marker tables now use the shared bounded resolver, and diagnostic rows identify the cwd used for their language server. Workspace-priority roots keep their complete marker tables through the seam (Go, JSON), and a server-computed root is the seam's input, never replaced (review rounds 2 and 4).
+
+- **Run the release-QA tool smoke from the export root (closes #2893)** — the install lane now executes the smoke harness from the archived source tree while loading the installer registry from the installed package, and measures pip entries under its scratch-pinned package policy.
+
+- **Docs membership guard asserts list members, not counts (closes #2919).** `tests/docs/features-counts.test.ts` now compares the `docs/features.md` formatter list member-by-member against `ALL_FORMATTERS`, the LSP language list against non-auxiliary `LSP_SERVERS` ids, and the `docs/mcp.md` tool table against `TOOL_REGISTRY`, and reports missing and extra names, so reinstating a removed member or swapping in a stale name fails the suite.
+
+- **Route tool configuration diagnostics through the shared note seam (refs #2800)** — unknown and non-disableable tool names use the bounded config notice path, and `tools.<name>.enabled` is documented across the config references.
+
 ## [4.1.5] - 2026-09-08
 
 ### Added

@@ -62,6 +62,60 @@ describe("detectFileRole", () => {
 		expect(detectFileRole("/home/dev/project/src/foo.ts")).toBe("source");
 	});
 
+	// Refs #2880: hand-written pins for the test-file conventions the
+	// test-runner client dispatches on (informed by SOURCE_TO_TEST_PATTERNS
+	// + RUNNERS kinds in clients/test-runner-client.ts, not iterated from
+	// them — see #2928 for the single-classifier fold). A convention
+	// missing here lets an edited test file take the related-discovery
+	// path and run the wrong tests or none. Each row pairs the convention with a co-located
+	// source file the same convention must NOT claim, so a row proves its
+	// own name rule rather than a test-directory rule. The `_test.go` row
+	// is the reported defect: pre-fix it classified as "source" and
+	// `getTestRunTarget` for the edited file returned null.
+	it("recognises every test-file convention the test-runner client dispatches on", () => {
+		const cases: Array<[string, "test" | "source"]> = [
+			// Go `*_test.go` suffix (the #2880 row).
+			["/repo/pkg/foo_test.go", "test"],
+			["/repo/pkg/foo.go", "source"],
+			// pytest knows BOTH `test_*.py` and `*_test.py`.
+			["/repo/pkg/test_foo.py", "test"],
+			["/repo/pkg/foo_test.py", "test"],
+			["/repo/pkg/foo.py", "source"],
+			// RSpec `*_spec.rb` suffix, outside any spec/ directory.
+			["/repo/pkg/thing_spec.rb", "test"],
+			["/repo/pkg/thing.rb", "source"],
+			// ExUnit `*_test.exs` suffix, outside the test/ tree.
+			["/repo/lib/accounts/user_test.exs", "test"],
+			["/repo/lib/accounts/user.ex", "source"],
+			// JUnit/Surefire/Gradle `*Test.java` suffix, outside src/test/.
+			["/repo/src/main/java/com/x/FooTest.java", "test"],
+			["/repo/src/main/java/com/x/Foo.java", "source"],
+			// Kotlin `*Test.kt` suffix.
+			["/repo/src/FooTest.kt", "test"],
+			["/repo/src/Foo.kt", "source"],
+			// dotnet `*Tests.cs` suffix.
+			["/repo/src/FooTests.cs", "test"],
+			["/repo/src/Foo.cs", "source"],
+			// PHPUnit `*Test.php` suffix.
+			["/repo/src/ThingTest.php", "test"],
+			["/repo/src/Thing.php", "source"],
+			// JS/TS `.test.`/`.spec.` infixes (pre-existing behavior, pinned).
+			["/repo/src/foo.test.ts", "test"],
+			["/repo/src/foo.spec.js", "test"],
+			// minitest `test_*.rb` prefix (pre-existing behavior, pinned).
+			["/repo/test/test_foo.rb", "test"],
+			// Anchor precision: the `_test.`/`_spec.` infixes need the
+			// underscore, and the CamelCase suffix needs the capital T, so
+			// ordinary words containing "test"/"spec" stay source.
+			["/repo/pkg/contest.py", "source"],
+			["/repo/src/latest.ts", "source"],
+			["/repo/src/main/java/com/x/contest.java", "source"],
+		];
+		for (const [file, expected] of cases) {
+			expect(detectFileRole(file), file).toBe(expected);
+		}
+	});
+
 	// #2346 negative proof: the longest-line real file in `clients/` that
 	// still classifies as plain SOURCE under the content-shape test. Measured
 	// on 2026-08-28 with the shipped probe algorithm: the overall maximum mean

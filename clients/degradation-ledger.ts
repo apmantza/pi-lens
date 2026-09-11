@@ -117,6 +117,8 @@ export type DegradationKind =
 	| "bus-stale"
 	| "cache-usage-attribution-stale"
 	| "cascade-budget-override-disarmed"
+	/** Deferred cascade admission reached its bounded in-memory queue. */
+	| "cascade-pending-cap"
 	| "cascade-tier3-backlog-evicted"
 	/**
 	 * A per-file touch skipped a language server because that server is in the
@@ -243,6 +245,16 @@ export type DegradationKind =
 	 */
 	| "hook-await-abandoned"
 	| "hook-await-exceeded"
+	/**
+	 * #2884: a pi hook handler in `index.ts` threw and the handler's own catch
+	 * swallowed it so the crash could not take down the host's session. Subject
+	 * is the catch site's handler name (`turn_end`, `quiet_window`, …), so the
+	 * ledger answers WHICH handler keeps dying after the first detailed row.
+	 * Bounded to one record per handler per session via `recordDegradationOnce`
+	 * in `clients/session-event-guard.ts` — a handler that crashes on every turn
+	 * must not turn the durable log into a stack-trace firehose.
+	 */
+	| "hook-handler-crash"
 	| "install-retry-exhausted"
 	| "installer-verification-inconclusive"
 	| "installer-verification-output-truncated"
@@ -785,6 +797,8 @@ export type DegradationKind =
 	| "tool-cwd-resolution"
 	/** A loader request named a configured-disabled tool. */
 	| "tool-disabled"
+	/** Activation memory cannot key itself because the host supplied no session file. */
+	| "tool-set-session-file-unavailable"
 	/**
 	 * A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the

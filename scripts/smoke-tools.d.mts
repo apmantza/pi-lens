@@ -244,6 +244,7 @@ export function ensureFixtureTools(
 }>;
 export function runInstallRegistrySmoke(options?: {
 	verbose?: boolean;
+	installerRoot?: string;
 	deps?: {
 		TOOLS: Array<{ id: string; installStrategy: string }>;
 		ensureTool: (toolId: string) => Promise<string | undefined>;

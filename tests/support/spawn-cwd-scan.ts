@@ -61,6 +61,21 @@
  * the expected verdict per cell — is the "Detector state space (round 3)"
  * table on PR #2693, and every cell has a named fixture in
  * `spawn-cwd-scan.test.ts`.
+ *
+ * ## Freeze policy (#2927)
+ *
+ * A new scanner finding is a reason to SIMPLIFY this scanner, not to extend
+ * it. Every extension so far (rounds 1 through 5, #2888, #2902) closed the
+ * shown hole and left the next spelling open — AGENTS.md defect shape 34, "a
+ * guard that enumerates surface spellings". If a finding does not converge in
+ * one verify round, the fallback is an ast-grep rule matching any
+ * `child_process` call not routed through the seam, run by the existing rule
+ * engine, with this scanner deleted.
+ *
+ * Stated bounds: the scanner recognizes only the seven names in
+ * `NODE_SPAWN_NAMES` when bound from `child_process`; other child-process API
+ * spellings remain outside this scan and stay covered by the population's
+ * fail-safe bound assertion.
  */
 
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
@@ -109,13 +124,6 @@ export interface SpawnCwdSite {
 	 * spawns all open `const result = await safeSpawnAsync(`.
 	 */
 	callLines: number[];
-	/**
-	 * Text after `// cwd-exempt:` on the line DIRECTLY above the call, when
-	 * that text is a real reason (see {@link MIN_EXEMPT_REASON_LENGTH}). A tag
-	 * with a too-short reason leaves this undefined, so the site is reported
-	 * like any other one missing a `cwd`.
-	 */
-	exemptReason?: string;
 }
 
 /**
@@ -137,38 +145,101 @@ export interface SpawnCwdScan {
 }
 
 /** The seam's own wrappers: recognised by the callee's simple name, because
- * every one of them is a pi-lens export nothing else in the tree is called. */
-const SPAWN_NAMES = new Set([
+ * every one of them is a pi-lens export nothing else in the tree is called.
+ *
+ * ## One vocabulary (#2926, closed by #2927)
+ *
+ * This tuple is the SINGLE source of truth for the seam side of "what counts
+ * as a spawn". The scan's own site rule ({@link scanSpawnCwd}'s
+ * `SPAWN_NAME_SET` membership and direct-site census) and the sweep's
+ * population predicate ({@link holdsAScannableSpawn}, consumed by
+ * `runner-spawn-cwd-sweep.test.ts`) both derive from it — a second
+ * hand-written copy of this list is a defect, not a convenience. The #2902
+ * round-3 probe added one name here and all 140 sweep tests stayed green,
+ * because the population predicate carried its own copy and never saw it.
+ *
+ * Three of the five names (`safeSpawnSync`, `spawnSupervised`, `execa`) have
+ * no definition in `clients/` today: they are admitted spellings, not live
+ * call sites. This list therefore cannot be derived from the seam modules'
+ * own exports without moving the population, so it stays curated. The
+ * vocabulary test pins that each name is both scanned and admitted; a name with
+ * no production site (the three above) can be deleted without any red, so the
+ * curated list is a documented bound, not a guarded one.
+ */
+export const SPAWN_NAMES = [
 	"safeSpawnAsync",
 	"safeSpawnSync",
 	"safeSpawn",
 	"spawnSupervised",
 	"execa",
-]);
+] as const;
+const SPAWN_NAME_SET = new Set<string>(SPAWN_NAMES);
 /**
- * `node:child_process` itself, recognised only when the file IMPORTS the name
- * unaliased. A simple-name match would read `server.spawn(root, …)` — an LSP
+ * `node:child_process` itself, recognised only when the file binds the name.
+ * A simple-name match would read `server.spawn(root, …)` — an LSP
  * server definition's own method — as a child spawn, which is how
  * `clients/lsp/index.ts` entered the population as a phantom site when the
  * population filter and this list were reconciled (round-5 v4-N3).
  *
- * Stated bound: an ALIASED import (`import { spawn as nodeSpawn }`) is not a
- * site here — `clients/lsp/client.ts`, `clients/instance-reaper.ts` and
- * `clients/child-unref.ts` each spawn that way and are outside this sweep's
- * reach. Tracked by #2888.
+ * Same one-vocabulary rule as {@link SPAWN_NAMES}: the scan's binding table
+ * below and the sweep's population predicate both derive from this tuple —
+ * seven names since #2902 closed the aliased-import gap (#2888). A binding
+ * the file never makes (`promisify(exec)`, a re-exported wrapper) is still
+ * outside both, and the population's fail-safe assertion is what surfaces it.
  */
-const NODE_SPAWN_NAMES = new Set(["spawn", "execFile"]);
+export const NODE_SPAWN_NAMES = [
+	"spawn",
+	"execFile",
+	"exec",
+	"fork",
+	"spawnSync",
+	"execFileSync",
+	"execSync",
+] as const;
+const NODE_SPAWN_NAME_SET = new Set(NODE_SPAWN_NAMES);
+/** A seam-wrapper call the population predicate admits, derived from
+ * {@link SPAWN_NAMES} — never a second hand-written copy of the list. */
+const SEAM_CALL_PATTERN = new RegExp(`\\b(?:${SPAWN_NAMES.join("|")})\\s*\\(`);
+
+/**
+ * Whether a file can hold a site the scan recognises: one of the seam
+ * wrappers by name, or a binding of a {@link NODE_SPAWN_NAMES} name from
+ * `child_process` or `node:child_process` (named, aliased, namespace,
+ * default, dynamic-import or require — every spelling the scan's own
+ * `importedNodeSpawnBindings` resolves). This lives here, beside the two
+ * tuples, so the sweep's population filter and the scan's own site rule
+ * derive from one vocabulary instead of hand-copying it: round 4's filter
+ * listed only the five seam names while the scanner also counted child
+ * process calls, so a file whose only child spawn was a bare `spawn(` could
+ * never move a pin (round-5 v4-N3), and the #2902 round-3 probe showed the
+ * surviving copy drifting the same way (#2926). The node alternation below
+ * derives from the tuple, so a name added here is admitted here by
+ * construction.
+ */
+export function holdsAScannableSpawn(source: string): boolean {
+	const nodeSpawnPattern = NODE_SPAWN_NAMES.join("|");
+	const hasChildProcessImport = [
+		...source.matchAll(
+			/import\s+([\s\S]*?)\s+from\s*["'](?:node:)?child_process["']/g,
+		),
+	].some((match) => {
+		const clause = match[1].trim();
+		return (
+			/^[A-Za-z_$][\w$]*\s*(?:,|$)/.test(clause) ||
+			/^\*\s+as\s+[A-Za-z_$][\w$]*/.test(clause) ||
+			new RegExp(`\\{[^}]*\\b(?:${nodeSpawnPattern})\\b`).test(clause)
+		);
+	});
+	const hasDynamicOrRequiredBinding =
+		/\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)/.test(
+			source,
+		);
+	const hasChildProcessBinding =
+		hasChildProcessImport || hasDynamicOrRequiredBinding;
+	return SEAM_CALL_PATTERN.test(source) || hasChildProcessBinding;
+}
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
-const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
-/**
- * An exemption needs a REASON, not a tag. Below this length the tag does not
- * exempt anything and the site is reported like any other missing `cwd` —
- * one rule in one place, so a fixture can prove it. Rounds 1 and 2 spelled
- * this as a separate assertion in the sweep, where it could only ever see the
- * live tree's (all long) reasons and so reverted green under any mutation.
- */
-const MIN_EXEMPT_REASON_LENGTH = 15;
 
 const FUNCTION_KINDS = new Set([
 	"function_declaration",
@@ -262,9 +333,35 @@ function isProcessCwdCall(node: SgNode): boolean {
 	return (fn?.text() ?? "").replace(/\s+/g, "") === "process.cwd";
 }
 
-/** The `node:child_process` names this file imports unaliased. */
-function importedNodeSpawnNames(root: SgNode): Set<string> {
-	const names = new Set<string>();
+interface NodeSpawnBindings {
+	direct: Map<string, string>;
+	namespaces: Set<string>;
+}
+
+/** Resolve named, default, namespace, dynamic, and require child-process bindings. */
+function importedNodeSpawnBindings(root: SgNode): NodeSpawnBindings {
+	const bindings: NodeSpawnBindings = {
+		direct: new Map(),
+		namespaces: new Set(),
+	};
+	const addClause = (clause: string): void => {
+		const namespace = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+		if (namespace) bindings.namespaces.add(namespace[1]);
+		const defaultImport = clause.match(/^\s*([A-Za-z_$][\w$]*)/);
+		if (defaultImport) bindings.namespaces.add(defaultImport[1]);
+		const named = clause.match(/\{([\s\S]*?)\}/)?.[1] ?? "";
+		for (const raw of named.split(",")) {
+			const spec = raw.replace(/\btype\b/g, "").trim();
+			if (!spec) continue;
+			const [imported, local] = spec
+				.split(/\s+as\s+/)
+				.map((part) => part.trim());
+			if (
+				NODE_SPAWN_NAME_SET.has(imported as (typeof NODE_SPAWN_NAMES)[number])
+			)
+				bindings.direct.set(local || imported, imported);
+		}
+	};
 	const visit = (node: SgNode): void => {
 		if (String(node.kind()) === "import_statement") {
 			const source = node
@@ -273,24 +370,83 @@ function importedNodeSpawnNames(root: SgNode): Set<string> {
 				.replace(/^['"]|['"]$/g, "");
 			if (source === "node:child_process" || source === "child_process") {
 				for (const child of node.children()) {
-					if (String(child.kind()) !== "import_clause") continue;
-					for (const spec of child.children()) {
-						for (const named of spec.children()) {
-							const text = named.text();
-							// `spawn as nodeSpawn` is an import_specifier with an alias;
-							// only the unaliased form is matched by simple name below.
-							if (NODE_SPAWN_NAMES.has(text) && !/\bas\b/.test(named.text())) {
-								names.add(text);
-							}
-						}
-					}
+					if (String(child.kind()) === "import_clause") addClause(child.text());
 				}
+			}
+		}
+		if (String(node.kind()) === "variable_declarator") {
+			const value = node.field("value")?.text() ?? "";
+			if (
+				/\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)/.test(
+					value,
+				)
+			) {
+				const name = node.field("name")?.text() ?? "";
+				const named = name.match(/^\{([\s\S]*?)\}$/)?.[1];
+				if (named) {
+					for (const raw of named.split(",")) {
+						const [imported, local] = raw
+							.split(/\s*:\s*/)
+							.map((part) => part.trim());
+						if (
+							NODE_SPAWN_NAME_SET.has(
+								imported as (typeof NODE_SPAWN_NAMES)[number],
+							)
+						)
+							bindings.direct.set(local || imported, imported);
+					}
+				} else if (/^[A-Za-z_$][\w$]*$/.test(name))
+					bindings.namespaces.add(name);
 			}
 		}
 		for (const child of node.children()) visit(child);
 	};
 	visit(root);
-	return names;
+	return bindings;
+}
+
+function isNodeSpawnCall(call: SgNode, bindings: NodeSpawnBindings): boolean {
+	const fn = call.field("function");
+	if (!fn) return false;
+	if (fn.kind() === "identifier") return bindings.direct.has(fn.text());
+	if (fn.kind() !== "member_expression") return false;
+	const property = fn.field("property")?.text();
+	const object = fn.field("object");
+	if (
+		!property ||
+		!NODE_SPAWN_NAME_SET.has(property as (typeof NODE_SPAWN_NAMES)[number])
+	)
+		return false;
+	if (object?.kind() === "identifier" && bindings.namespaces.has(object.text()))
+		return true;
+	return /^\b(?:import|require)\s*\(\s*["'](?:node:)?child_process["']\s*\)$/.test(
+		object?.text() ?? "",
+	);
+}
+
+function nodeSpawnImportedName(
+	call: SgNode,
+	bindings: NodeSpawnBindings,
+): string | undefined {
+	const fn = call.field("function");
+	if (!fn) return undefined;
+	if (fn.kind() === "identifier") return bindings.direct.get(fn.text());
+	if (fn.kind() !== "member_expression") return undefined;
+	const property = fn.field("property")?.text();
+	const object = fn.field("object");
+	if (
+		!property ||
+		!NODE_SPAWN_NAME_SET.has(property as (typeof NODE_SPAWN_NAMES)[number])
+	)
+		return undefined;
+	if (object?.kind() === "identifier" && bindings.namespaces.has(object.text()))
+		return property;
+	if (/^\b(?:import|require)\s*\(/.test(object?.text() ?? "")) return property;
+	return undefined;
+}
+
+function nodeSpawnOptionsIndex(importedName: string): number {
+	return importedName === "exec" || importedName === "execSync" ? 1 : 2;
 }
 
 /** Resolver bindings imported from the shared tool-cwd seam (or its one-hop
@@ -1180,8 +1336,8 @@ function argumentsOf(call: SgNode): SgNode[] {
  * was the only other key-only acceptance). An absent argument, an opaque
  * identifier (`opts`) and a spread-only literal (`{ ...rest }`) all read as
  * "no" — the fail-safe direction: the scan cannot prove conformance, so it
- * flags and the author either makes the `cwd` explicit or registers a
- * `// cwd-exempt:` reason. */
+ * flags and the author either makes the `cwd` explicit or admits the site
+ * with a reasoned sweep row. */
 function argumentSuppliesCwd(
 	call: SgNode,
 	argIndex: number,
@@ -1232,13 +1388,6 @@ export async function scanSpawnCwd(
 ): Promise<SpawnCwdScan> {
 	const napi = await loadAstGrepNapi();
 	const root = napi.parse(napi.Lang.TypeScript, source).root();
-	const rawLines = source.split("\n");
-	const exemptAbove = (line: number): string | undefined => {
-		const reason = EXEMPT_TAG.exec(rawLines[line - 2] ?? "")?.[1]?.trim();
-		return reason && reason.length >= MIN_EXEMPT_REASON_LENGTH
-			? reason
-			: undefined;
-	};
 
 	// One pass for the call census: every later rule filters this list instead
 	// of re-deriving `calleeName` per call. On `clients/installer/index.ts`
@@ -1253,7 +1402,7 @@ export async function scanSpawnCwd(
 	// One list decides what a site is, for the shared census below and for the
 	// loop that reads the sites: two copies of the rule meant a mutation of
 	// either one left the other enforcing it.
-	const siteNames = new Set([...SPAWN_NAMES, ...importedNodeSpawnNames(root)]);
+	const nodeSpawnBindings = importedNodeSpawnBindings(root);
 	// A same-file function that RETURNS the seam's result is itself a seam
 	// resolver — `test-runner-client.ts`'s `resolveSpawnCwd` (#2879),
 	// `tool-cwd.ts`'s `resolveRunnerCwd`, `formatters.ts`'s
@@ -1300,9 +1449,14 @@ export async function scanSpawnCwd(
 	const callSiteScanner = createCallSiteScanner(source, root);
 	const directSiteKeys = new Set(
 		callSiteScanner
-			.find(new RegExp(`^(?:${[...siteNames].join("|")})$`))
+			.find(new RegExp(`^(?:${SPAWN_NAMES.join("|")})$`))
 			.map((site) => `${site.line}:${site.callee}`),
 	);
+	for (const { call, name } of calls) {
+		if (name && isNodeSpawnCall(call, nodeSpawnBindings)) {
+			directSiteKeys.add(`${lineOf(call)}:${name}`);
+		}
+	}
 	const sites: SpawnCwdSite[] = [];
 	const wrappersByName = new Map<string, SpawnCwdWrapper>();
 
@@ -1331,10 +1485,20 @@ export async function scanSpawnCwd(
 	};
 
 	for (const { call, name } of calls) {
-		if (!name || !siteNames.has(name)) continue;
+		if (
+			!name ||
+			(!SPAWN_NAME_SET.has(name) && !isNodeSpawnCall(call, nodeSpawnBindings))
+		)
+			continue;
 		const line = lineOf(call);
 		if (!directSiteKeys.has(`${line}:${name}`)) continue;
-		const optionsArg = argumentsOf(call)[SPAWN_OPTIONS_INDEX];
+		const importedName = isNodeSpawnCall(call, nodeSpawnBindings)
+			? nodeSpawnImportedName(call, nodeSpawnBindings)
+			: undefined;
+		const optionsIndex = importedName
+			? nodeSpawnOptionsIndex(importedName)
+			: SPAWN_OPTIONS_INDEX;
+		const optionsArg = argumentsOf(call)[optionsIndex];
 		const cwdProp =
 			optionsArg && optionsArg.kind() === "object"
 				? cwdPropertyOf(optionsArg, index)
@@ -1358,9 +1522,19 @@ export async function scanSpawnCwd(
 			symbol: enclosingSymbolPath(call),
 			cwdLines: cwdProp ? cwdValueLines(cwdProp, new Set<string>(), index) : [],
 			callLines: spanLines(call),
-			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
+		if (!cwdProp && importedName && optionsArg?.kind() === "identifier") {
+			const binder = findBinder(optionsArg, declaratorCache);
+			const wrapperName = binder && functionName(binder.fn);
+			if (wrapperName && !wrappersByName.has(wrapperName)) {
+				wrappersByName.set(wrapperName, {
+					name: wrapperName,
+					mode: "options",
+					paramIndex: binder.binding.paramIndex,
+				});
+			}
+		}
 	}
 
 	// Fixed point: a wrapper's own call site can reveal a further wrapper, so
@@ -1437,7 +1611,6 @@ export async function scanSpawnCwd(
 						arg.kind() === "object" ? cwdPropertyOf(arg, index) : undefined;
 					return prop ? cwdValueLines(prop, new Set<string>(), index) : [];
 				})(),
-				exemptReason: exemptAbove(line),
 			});
 		}
 	}

@@ -3165,3 +3165,131 @@ describe("R8 — aux grace: ast-grep napi/aux-grace mark ordering (#2324 R2-A)",
 		pendingAux.resetPendingAuxiliaryCoverage();
 	});
 });
+
+/**
+ * #2914 — the sibling and aggregate `publishedThisContent` rows are
+ * binding-only by construction (master's direct `auxCoversThisContent` call).
+ * Each test below drives the stamp-only cell through the real touchFile: the
+ * auxiliary publishes during the wait (its per-path stamp advances past the
+ * pre-notify baseline, so the outcome reads "answered") while carrying no
+ * content binding for these bytes (the double exposes no
+ * `getDiagnosticBinding`, and the pre-notify snapshot is empty). The row must
+ * still report `publishedThisContent: false` — the stamp axis already decided
+ * the outcome, and re-admitting it here would let a late publication of the
+ * previous revision pose as coverage of this one. Rewriting either row as the
+ * stamp union flips its `publishedThisContent` to true and reds its test.
+ */
+describe("#2914 — non-demoted aux rows stay binding-only", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		logLatency.mockReset();
+		delete process.env.PI_LENS_AUX_GRACE_MS;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		delete process.env.PI_LENS_AUX_GRACE_MS;
+	});
+
+	function graceOutcomes() {
+		const row = logLatency.mock.calls.find(
+			([entry]) =>
+				entry.phase === "lsp_aux_wait_outcome" &&
+				entry.metadata?.waitShape === "aux_grace",
+		)?.[0];
+		return row?.metadata?.outcomes as
+			| Array<{
+					serverId: string;
+					outcome: string;
+					publishedThisContent?: boolean;
+			  }>
+			| undefined;
+	}
+
+	it("the with-auxiliary grace row reports binding-only on stamp-only evidence", async () => {
+		process.env.PI_LENS_AUX_GRACE_MS = String(AUX_GRACE_MS);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		// Aux publishes a finding at 400ms, inside the 500ms grace: its stamp
+		// advances, but the double carries no content binding for these bytes.
+		const primaryClient = makeClient(100, [makeDiagnostic("primary error")], {
+			serverId: "ts-primary",
+		});
+		const auxClient = makeClient(400, [makeDiagnostic("aux finding")], {
+			serverId: "opengrep-aux",
+		});
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep-aux"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxClient);
+		await service.getClientsForFile(FILE);
+
+		const touchPromise = service.touchFile(FILE, "stamp-only-grace", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep-aux"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(500);
+		const result = await touchPromise;
+
+		// Sanity that this is the stamp-only cell: the stamp decided the outcome.
+		const outcomes = graceOutcomes();
+		expect(outcomes?.[0]?.outcome).toBe("answered");
+		expect(result?.confirmation).toBe("confirmed");
+		// The pin: the row itself stays binding-only.
+		expect(outcomes?.[0]?.publishedThisContent).toBe(false);
+	});
+
+	it("the aggregate row reports binding-only on stamp-only evidence", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep"),
+		]);
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep"
+					? makeClient(900, [makeDiagnostic("aux finding")], {
+							serverId: "opengrep",
+						})
+					: makeClient(100, [makeDiagnostic("primary error")], {
+							serverId: "ts-primary",
+						}),
+		);
+
+		const touch = service.touchFile(FILE, "stamp-only-aggregate", {
+			clientScope: "all",
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(5000);
+		const result = await touch;
+		const outcomes = logLatency.mock.calls.find(
+			([entry]) => entry.phase === "lsp_aux_wait_outcome",
+		)?.[0]?.metadata?.outcomes as
+			| Array<{
+					serverId: string;
+					outcome: string;
+					publishedThisContent?: boolean;
+			  }>
+			| undefined;
+
+		// Sanity that this is the stamp-only cell: the stamp decided the outcome.
+		expect(outcomes?.[0]?.outcome).toBe("answered");
+		expect(result?.confirmation).toBe("confirmed");
+		expect(result?.unconfirmedServerIds).toBeUndefined();
+		// The pin: the row itself stays binding-only.
+		expect(outcomes?.[0]?.publishedThisContent).toBe(false);
+	});
+});
