@@ -28,6 +28,7 @@ import {
 	getKnipIgnorePatterns,
 	getProjectDataDir,
 	resetProjectDataDirSessionState,
+	resetProjectIgnoreCaches,
 } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
 import { resetGoAvailability } from "./go-client.js";
@@ -1899,6 +1900,7 @@ export async function handleSessionStart(
 	// shape 17. The resident clients themselves are deliberately kept.
 	resetAnalyzerBootstrapSessionState();
 	resetProjectDataDirSessionState();
+	resetProjectIgnoreCaches();
 	resetTestRunnerDelivery();
 	// #2450 fix round 3, catalog shape 17: the "bridge unavailable" dbg latch
 	// (`clients/lsp-mutation.ts`) is a process-lifetime once-per-session flag,
@@ -2477,9 +2479,14 @@ export async function handleSessionStart(
 		recordDegradationOnce({
 			kind: "data_dir_migrated",
 			subject: hash,
-			reason: migration.renamed
-				? "renamed legacy project data directory"
-				: "legacy and hashed project data directories both present; using hashed directory",
+			reason:
+				migration.outcome === "renamed"
+					? "using hashed directory after renaming legacy directory"
+					: migration.outcome === "coexisting"
+						? "using hashed directory because legacy and hashed directories both exist"
+						: migration.outcome === "rename-failed"
+							? "using legacy directory after hashed-directory rename failure"
+							: "using resolved directory after realpath fallback",
 		});
 	}
 	// #1609 review F1: sweepOwnStagingFiles does not recurse, so the installer's

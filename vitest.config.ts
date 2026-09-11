@@ -355,6 +355,7 @@ export const wallClockBudgetInclude = [
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
 	"tests/clients/metrics-history-stderr.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
+	"tests/clients/project-data-dir-slug.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	// #2622: adjacent read-guard stars previously produced exponential regex
 	// backtracking against a long non-matching path; the test measures the real

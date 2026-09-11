@@ -1,3 +1,5 @@
+// flake-shape: real-process-spawn — two real Node children must contend on the
+// production rename; an in-process mock cannot expose the cross-process ENOENT.
 /**
  * #2874: `getProjectDataDir`'s slug folded separators to `-`, so two roots
  * differing only in separator-vs-hyphen placement (`src/pi-lens` vs
@@ -120,7 +122,7 @@ describe("project data-dir slug (#2874)", () => {
 		expect(trailingSlash).toBe(first);
 	});
 
-	it("symlink and target share one canonical directory", () => {
+	it("resolved root spelling stays the canonical directory identity", () => {
 		isolateDataDir();
 		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-symlink-"));
 		const target = path.join(scratch, "target", "proj");
@@ -129,12 +131,12 @@ describe("project data-dir slug (#2874)", () => {
 		fs.mkdirSync(linkParent);
 		fs.symlinkSync(path.join(scratch, "target"), path.join(linkParent, "root"));
 
-		expect(getProjectDataDir(target)).toBe(
+		expect(getProjectDataDir(target)).not.toBe(
 			getProjectDataDir(path.join(linkParent, "root", "proj")),
 		);
 	});
 
-	it("realpath failure keeps the canonical directory stable", () => {
+	it("realpath failure keeps the resolved directory stable and records fallback", () => {
 		isolateDataDir();
 		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-realpath-"));
 		const root = path.join(scratch, "proj");
@@ -144,6 +146,10 @@ describe("project data-dir slug (#2874)", () => {
 		realpathState.fail = true;
 		try {
 			expect(getProjectDataDir(root)).toBe(healthy);
+			const notices = drainProjectDataDirMigrations();
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.outcome).toBe("identity-fallback");
+			expect(notices[0]?.used).toBe(healthy);
 		} finally {
 			realpathState.fail = false;
 		}
@@ -163,9 +169,13 @@ describe("project data-dir slug (#2874)", () => {
 		fs.writeFileSync(path.join(oldDir, "sessions.json"), "{}\n");
 		_resetProjectDataDirMemoForTests();
 		const barrier = path.join(scratch, "release");
+		const readyA = path.join(scratch, "ready-a");
+		const readyB = path.join(scratch, "ready-b");
 		const script = [
 			"const fs = require('node:fs');",
 			"const { getProjectDataDir } = require('./clients/file-utils.js');",
+			"const ready = process.env.READY_FILE;",
+			"fs.writeFileSync(ready, 'ready');",
 			`while (!fs.existsSync(${JSON.stringify(barrier)})) {}`,
 			`process.stdout.write(getProjectDataDir(${JSON.stringify(root)}));`,
 		].join("\n");
@@ -174,8 +184,11 @@ describe("project data-dir slug (#2874)", () => {
 			PILENS_DATA_DIR: base,
 			PI_LENS_HOME: path.join(scratch, "home"),
 		};
-		const first = runRealProcess(childEnv, script);
-		const second = runRealProcess(childEnv, script);
+		const first = runRealProcess({ ...childEnv, READY_FILE: readyA }, script);
+		const second = runRealProcess({ ...childEnv, READY_FILE: readyB }, script);
+		while (!fs.existsSync(readyA) || !fs.existsSync(readyB)) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
 		fs.writeFileSync(barrier, "go");
 		const dirs = await Promise.all([first, second]);
 		expect(dirs[0]).toBe(dirs[1]);
@@ -232,5 +245,34 @@ describe("project data-dir slug (#2874)", () => {
 		expect(settled).toBe(dir);
 		expect(fs.existsSync(path.join(settled, "new.txt"))).toBe(true);
 		expect(fs.existsSync(oldDir)).toBe(true);
+	});
+
+	it("rename failure records the directory actually used", () => {
+		const base = isolateDataDir();
+		const scratch = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-rename-failure-"),
+		);
+		const root = path.join(scratch, "proj");
+		fs.mkdirSync(root, { recursive: true });
+		const hashedDir = getProjectDataDir(root);
+		const oldDir = path.join(
+			base,
+			path.basename(hashedDir).replace(/-[0-9a-f]{8}$/, ""),
+		);
+		fs.mkdirSync(oldDir, { recursive: true });
+		_resetProjectDataDirMemoForTests();
+		const rename = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+			throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+		});
+		try {
+			expect(getProjectDataDir(root)).toBe(oldDir);
+			const notices = drainProjectDataDirMigrations();
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.outcome).toBe("rename-failed");
+			expect(notices[0]?.used).toBe(oldDir);
+			expect(notices[0]?.used).not.toBe(notices[0]?.to);
+		} finally {
+			rename.mockRestore();
+		}
 	});
 });

@@ -3015,13 +3015,15 @@ const cacheFile = path.join(getProjectDataDir(cwd), "cache", "my-file.json");
 - Default → `~/.pi-lens/projects/<project-slug>/`
 
 The default project slug is an opaque `<readable>-<8-hex-hash>` basename. The
-readable and hash halves derive from one canonical root string: `realpath`
-when available, otherwise `path.resolve`. Never parse the slug or expose its
+readable and hash halves derive from one resolved absolute root string.
+`realpathSync` is probed for a bounded fallback record, but its result is not
+used as identity because a transient boundary failure must not rename the
+directory. Never parse the slug or expose its
 path-derived readable half in agent-facing records. The 32-bit hash prefix
 only collides when roots share both the readable slug and the prefix, so its
 practical collision population is that twin-pair set. Legacy migration must
 converge concurrent starters on one hashed directory and emit one bounded
-record per directory pair.
+record per session outcome.
 
 **Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, install-choices.
 

@@ -63,8 +63,8 @@ export function getProjectDataDir(cwd: string): string {
 	const cached = settledDataDirs.get(memoKey);
 	if (cached !== undefined) return cached;
 	const canonical = canonicalProjectRoot(cwd);
-	const readable = projectDataDirReadableSlug(canonical);
-	const hash = projectDataDirRootHash(canonical);
+	const readable = projectDataDirReadableSlug(canonical.root);
+	const hash = projectDataDirRootHash(canonical.root);
 	const slug = `${readable || "default"}-${hash}`;
 	const dir = path.join(resolvedBase, slug);
 	const settled = settleProjectDataDir(
@@ -72,6 +72,7 @@ export function getProjectDataDir(cwd: string): string {
 		readable || "default",
 		dir,
 		memoKey,
+		canonical.fallback,
 	);
 	return settled;
 }
@@ -95,20 +96,29 @@ function projectDataDirReadableSlug(canonicalRoot: string): string {
 }
 
 /**
- * The canonical root is shared by both slug halves: realpath when available,
- * otherwise the resolved absolute path. The hash is the first 8 hex chars of
- * SHA-256 over that root. A collision needs the same readable slug and the
- * same 32-bit prefix, so the practical collision population is readable-slug
- * twin pairs. Pinned on purpose because changing it renames every directory.
+ * The canonical root is the resolved absolute path for both slug halves.
+ * `realpathSync` is probed only to expose a fallback boundary failure; using
+ * its result would let one root spelling change identity when the boundary
+ * recovers. The hash is the first 8 hex chars of SHA-256 over that root. A
+ * collision needs the same readable slug and the same 32-bit prefix, so the
+ * practical collision population is readable-slug twin pairs. Pinned on
+ * purpose because changing it renames every directory.
  */
-function canonicalProjectRoot(cwd: string): string {
+function canonicalProjectRoot(cwd: string): {
+	root: string;
+	fallback: boolean;
+} {
 	const resolved = path.resolve(cwd);
 	try {
-		return fs.realpathSync(resolved);
+		// Probe the root, but keep the resolved spelling as the identity in both
+		// success and fallback cases. Resolving only on success would let a
+		// transient boundary failure choose a second data directory.
+		fs.realpathSync(resolved);
 	} catch {
 		// Best-effort: the root may not exist yet.
-		return resolved;
+		return { root: resolved, fallback: true };
 	}
+	return { root: resolved, fallback: false };
 }
 
 function projectDataDirRootHash(canonicalRoot: string): string {
@@ -118,10 +128,12 @@ function projectDataDirRootHash(canonicalRoot: string): string {
 export interface ProjectDataDirMigration {
 	/** The pre-#2874 slug directory the state moved away from (or coexists). */
 	from: string;
-	/** The hashed-slug directory now in use. */
+	/** The hashed-slug directory derived for the root. */
 	to: string;
-	/** True when an atomic rename moved the state; false when both existed. */
-	renamed: boolean;
+	/** The directory the current session actually uses. */
+	used: string;
+	/** The bounded outcome that the session-start drain renders. */
+	outcome: "renamed" | "coexisting" | "rename-failed" | "identity-fallback";
 }
 
 const pendingDataDirMigrations: ProjectDataDirMigration[] = [];
@@ -150,12 +162,21 @@ function settleProjectDataDir(
 	oldSlug: string,
 	dir: string,
 	memoKey: string,
+	identityFallback: boolean,
 ): string {
 	const oldDir = path.join(base, oldSlug);
 	const newExists = fs.existsSync(dir);
 	const oldExists = fs.existsSync(oldDir);
 	if (!oldExists) {
-		// Steady state: nothing to migrate from. No record either way.
+		if (identityFallback && pendingDataDirMigrations.length < 32) {
+			pendingDataDirMigrations.push({
+				from: dir,
+				to: dir,
+				used: dir,
+				outcome: "identity-fallback",
+			});
+		}
+		// Steady state: nothing to migrate from.
 		settledDataDirs.set(memoKey, dir);
 		return dir;
 	}
@@ -169,15 +190,16 @@ function settleProjectDataDir(
 					return dir;
 				}
 				if (fs.existsSync(oldDir)) return oldDir;
+				return dir;
 			}
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return dir;
 			// Best-effort: retain the old directory and publish one bounded
 			// failure notice for this process's memo key.
 			if (pendingDataDirMigrations.length < 32) {
 				pendingDataDirMigrations.push({
 					from: oldDir,
 					to: dir,
-					renamed: false,
+					used: oldDir,
+					outcome: "rename-failed",
 				});
 			}
 			settledDataDirs.set(memoKey, oldDir);
@@ -191,7 +213,8 @@ function settleProjectDataDir(
 		pendingDataDirMigrations.push({
 			from: oldDir,
 			to: dir,
-			renamed: !newExists,
+			used: dir,
+			outcome: newExists ? "coexisting" : "renamed",
 		});
 	}
 	return dir;
@@ -199,9 +222,9 @@ function settleProjectDataDir(
 
 /**
  * Drain the queued {@link ProjectDataDirMigration}s, clearing the queue.
- * Called once per session start by `handleSessionStart`; each migration is
- * therefore recorded at most once ever, which satisfies the once-per-session
- * bound. Test-only callers must not rely on queue depth across drains.
+ * Called once per session start by `handleSessionStart`; each queued outcome is
+ * therefore recorded at most once per session. Test-only callers must not rely
+ * on queue depth across drains.
  */
 export function drainProjectDataDirMigrations(): ProjectDataDirMigration[] {
 	return pendingDataDirMigrations.splice(0);
@@ -1113,6 +1136,12 @@ export function getProjectIgnoreGlobs(rootDir: string): string[] {
 		.flatMap((pattern) => expandGitignorePattern(pattern));
 	projectIgnoreGlobsCache.set(resolvedRoot, { ...signature, globs });
 	return globs;
+}
+
+/** Reset project ignore caches so a long-lived host observes session-boundary config edits. */
+export function resetProjectIgnoreCaches(): void {
+	projectIgnoreMatcherCache.clear();
+	projectIgnoreGlobsCache.clear();
 }
 
 /**
