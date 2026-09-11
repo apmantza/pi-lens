@@ -1157,7 +1157,10 @@ describe("head-tree citations and test references", () => {
 			"clients/citation.ts",
 			'export const value = "head source";\nexport const second = true;\n',
 		],
-		["tests/citation.test.ts", 'it("real three word test title", () => {});\n'],
+		[
+			"tests/citation.test.ts",
+			'it("contains every label this repo\'s rules require to exist", () => {});\n',
+		],
 	]);
 	const options = { headFiles };
 
@@ -1227,6 +1230,30 @@ describe("head-tree citations and test references", () => {
 		expect(rejected.errors.join(" ")).toContain("within ±20 lines");
 	});
 
+	it("pins both sides of the ±20 window and resolves range hints from the first line", () => {
+		const source = Array.from({ length: 60 }, (_, index) =>
+			index === 0 ? "first source line" : `line ${index + 1}`,
+		).join("\n");
+		const localOptions = {
+			headFiles: new Map([["clients/window-both-sides.ts", source]]),
+		};
+		const accepted = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:21-60\`\n\`\`\`ts\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(accepted).toEqual({ valid: true, errors: [] });
+		const approximate = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:~21\`\n\`\`\`ts\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(approximate).toEqual({ valid: true, errors: [] });
+		const rejected = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:22\`\n\`\`\`text\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(rejected.errors.join(" ")).toContain("within ±20 lines");
+	});
+
 	it("checks every repeated citation quote", () => {
 		const result = lintPrBody(
 			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\nexport const value = "head source";\n\`\`\`\nAgain: \`clients/citation.ts:1\`\n\`\`\`ts\ntotally fabricated\n\`\`\``,
@@ -1251,6 +1278,30 @@ describe("head-tree citations and test references", () => {
 		expect(result.errors.join(" ")).toContain("does not match HEAD source");
 	});
 
+	it("does not treat an origin/master string in source as a transcript", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nconst branch = "origin/master";\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("checks a transcript-looking quote unless its fence is tagged as output", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\n$ npm test\nnot source\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("does not read preflight commands as test references", () => {
+		const result = lintPrBody(
+			`${body}\n| Gate | Command |\n| --- | --- |\n| typecheck | \`npx tsc --noEmit\` |\n| preflight | \`npm run preflight\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
 	it("rejects fabricated it titles and table identifiers", () => {
 		const result = lintPrBody(
 			`${body}\nThe check uses it("fabricated test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`fabricated table test identifier\` |`,
@@ -1272,7 +1323,31 @@ describe("head-tree citations and test references", () => {
 
 	it("accepts real test references and an origin/master transcript", () => {
 		const result = lintPrBody(
-			`${body}\nThe real title is it("real three word test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`real three word test title\` |\n\nThis is pre-existing.\n\`\`\`text\nrun on origin/master: pass\n\`\`\``,
+			`${body}\nThe real title is it("contains every label this repo's rules require to exist").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`contains every label this repo's rules require to exist\` |\n\nThis is pre-existing.\n\`\`\`text\n$ git log origin/master\n\`\`\``,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("requires the transcript in the next markdown block", () => {
+		const result = lintPrBody(
+			`${body}\nThis is pre-existing.\n\nUnrelated paragraph.\n\n\`\`\`text\nrun on origin/master\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("origin/master transcript");
+	});
+
+	it("accepts a reviewer-attributed pre-existing statement", () => {
+		const result = lintPrBody(
+			`${body}\nThe reviewer wrote that the failure is pre-existing on the base branch.`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("keeps dots inside code spans inside the sentence and table block", () => {
+		const result = lintPrBody(
+			`${body}\n| Convention | The pre-existing file is \`Fixture.Test.php\`. |`,
 			options,
 		);
 		expect(result).toEqual({ valid: true, errors: [] });
@@ -1280,7 +1355,7 @@ describe("head-tree citations and test references", () => {
 
 	it("ignores citations in fences and accepts the canonical it title in a table", () => {
 		const result = lintPrBody(
-			`${body}\n\`\`\`text\n\`clients/missing.ts:1\`\n\`\`\`\n\n| Case | Test |\n| --- | --- |\n| A | \`it("real three word test title")\` |`,
+			`${body}\n\`\`\`text\n\`clients/missing.ts:1\`\n\`\`\`\n\n| Case | Test |\n| --- | --- |\n| A | \`it("contains every label this repo's rules require to exist")\` |`,
 			options,
 		);
 		expect(result).toEqual({ valid: true, errors: [] });
@@ -1292,6 +1367,14 @@ describe("head-tree citations and test references", () => {
 			options,
 		);
 		expect(result.errors.join(" ")).toContain("fabricated table title");
+	});
+
+	it("checks canonical it titles with trailing table-cell content", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`it("fabricated trailing title")\` (regression) |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated trailing title");
 	});
 
 	it("checks canonical it titles in prose", () => {
@@ -1331,7 +1414,7 @@ describe("head-tree citations and test references", () => {
 				join(repositoryRoot, "tests", "fixtures", "ci-pr-bodies", file),
 				"utf8",
 			);
-			const result = lintPrBody(fixture, options);
+			const result = lintPrBody(fixture);
 			expect(result.valid).toBe(false);
 			expect(result.errors.join(" ")).toContain(expected);
 		},

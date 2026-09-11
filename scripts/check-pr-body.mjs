@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
@@ -287,6 +287,134 @@ function sourceLines(source) {
 	return String(source ?? "").split(/\r?\n/);
 }
 
+function testCorpus(options = {}) {
+	const cwd = options.cwd ?? process.cwd();
+	const cacheKey = `${cwd}:${options.workingTree ? "working" : "head"}`;
+	const cached = headTestCorpusCache.get(cacheKey);
+	if (cached) return cached;
+	let files = [];
+	try {
+		files = String(
+			(options.git ?? gitExecFileSync)(["ls-files", "--", "tests"], {
+				cwd,
+				encoding: "utf8",
+			}),
+		)
+			.split(/\r?\n/)
+			.filter(Boolean);
+	} catch {
+		const visit = (directory) => {
+			for (const entry of readdirSync(directory, { withFileTypes: true })) {
+				const path = resolve(directory, entry.name);
+				if (entry.isDirectory()) visit(path);
+				else if (path.endsWith(".ts") || path.endsWith(".tsx"))
+					files.push(path.slice(cwd.length + 1).replaceAll("\\", "/"));
+			}
+		};
+		try {
+			visit(resolve(cwd, "tests"));
+		} catch {
+			files = [];
+		}
+	}
+	const paths = new Set(files);
+	const titles = new Set();
+	for (const file of files) {
+		if (
+			file.startsWith("tests/fixtures/ci-pr-bodies/") ||
+			!/\.(?:[cm]?[jt]sx?)$/.test(file)
+		)
+			continue;
+		// The checker test contributes only its declaration titles. Its fixture
+		// strings and arbitrary prose never enter this corpus.
+		let source;
+		try {
+			source = readFileSync(resolve(cwd, file), "utf8");
+		} catch {
+			continue;
+		}
+		const code = blankCommentsAndStrings(source);
+		for (const match of source.matchAll(
+			/\b(?:it|test|describe)(?:\.each)?\s*\(\s*(["'`])((?:\\.|[\s\S])*?)\1/g,
+		)) {
+			if (
+				code.slice(match.index, match.index + 3) !==
+				source.slice(match.index, match.index + 3)
+			)
+				continue;
+			const title = match[2].replace(/\\(["'`\\])/g, "$1");
+			if (title.trim()) titles.add(title.trim());
+		}
+	}
+	const corpus = { paths, titles };
+	headTestCorpusCache.set(cacheKey, corpus);
+	return corpus;
+}
+
+function markdownBlocks(body) {
+	const lines = String(body ?? "").split(/\r?\n/);
+	const blocks = [];
+	let current = null;
+	let fence = null;
+	const flush = () => {
+		if (current?.lines.length) blocks.push(current);
+		current = null;
+	};
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index];
+		const marker = line.match(/^\s*(```+)/)?.[1];
+		if (marker || fence) {
+			if (marker && !fence && current && current.lines.length) flush();
+			if (!current) current = { lines: [], start: index, fence: true };
+			current.lines.push(line);
+			if (marker && !fence) fence = marker;
+			else if (fence && marker && marker.length >= fence.length) {
+				fence = null;
+				flush();
+			}
+			continue;
+		}
+		if (!line.trim()) {
+			flush();
+			continue;
+		}
+		if (/^\s*\|/.test(line) && current && !/^\s*\|/.test(current.lines[0]))
+			flush();
+		if (!current) current = { lines: [], start: index, fence: false };
+		current.lines.push(line);
+	}
+	flush();
+	return blocks.map((block) => ({
+		...block,
+		text: block.lines.join("\n"),
+		table: !block.fence && block.lines.every((line) => /^\s*\|/.test(line)),
+	}));
+}
+
+function splitMarkdownSentences(text) {
+	const sentences = [];
+	let start = 0;
+	let codeTicks = 0;
+	for (let index = 0; index < text.length; index += 1) {
+		if (text[index] === "`") {
+			let end = index;
+			while (text[end] === "`") end += 1;
+			const count = end - index;
+			if (!codeTicks) codeTicks = count;
+			else if (count === codeTicks) codeTicks = 0;
+			index = end - 1;
+			continue;
+		}
+		if (!codeTicks && /[.!?]/.test(text[index])) {
+			sentences.push({ text: text.slice(start, index + 1), start });
+			start = index + 1;
+		}
+	}
+	if (text.slice(start).trim())
+		sentences.push({ text: text.slice(start), start });
+	return sentences;
+}
+
 function bodyLinesOutsideFences(body) {
 	let fence;
 	return String(body ?? "")
@@ -330,7 +458,7 @@ function isTranscriptQuote(quote) {
 	const lines = quote.text.join("\n");
 	return (
 		/^(?:text|console|shell|sh|bash|output)$/i.test(quote.info) &&
-		/^(?:\s*(?:\$|>)\s+(?:git|npm|npx|vitest|tsc)\b|\s*Test Files?\b.*\b(?:failed|passed)\b|\s*Tests?\s+\d+\s+(?:failed|passed)\b|\s*(?:PASS|FAIL)\s+(?:\||$)|\s*npm ERR!|\s*error TS\d+|.*\borigin\/master\b)/im.test(
+		/^(?:\s*(?:\$|>)\s+(?:git|npm|npx|vitest|tsc)\b|\s*Test Files?\b.*\b(?:failed|passed)\b|\s*Tests?\s+\d+\s+(?:failed|passed)\b|\s*(?:PASS|FAIL)\s+(?:\||$)|\s*npm ERR!|\s*error TS\d+)/im.test(
 			lines,
 		)
 	);
@@ -345,9 +473,6 @@ function lintCodeCitations(body, options = {}) {
 	)) {
 		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
 		const key = `${file}:${lineText}`;
-		const existingRecordCitation = /covered by existing record\b/.test(
-			rawLines[bodyLine] ?? "",
-		);
 		const source = headFileSource(file, options);
 		if (source === null) {
 			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
@@ -358,7 +483,6 @@ function lintCodeCitations(body, options = {}) {
 			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
 			continue;
 		}
-		if (existingRecordCitation) continue;
 		const quote = sourceQuoteAfter(rawLines, bodyLine);
 		if (!quote) continue;
 		if (isTranscriptQuote(quote)) continue;
@@ -376,67 +500,44 @@ function lintCodeCitations(body, options = {}) {
 function lintTestReferences(body, options = {}) {
 	const references = [];
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
+	const corpus = testCorpus(options);
 	for (const match of visibleBody.matchAll(
 		/\bit\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
 	)) {
 		const lineStart = visibleBody.lastIndexOf("\n", match.index) + 1;
-		if (!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)))
+		if (
+			!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)) &&
+			!match[1].includes("…")
+		)
 			references.push(match[1]);
 	}
 	for (const row of visibleBody.split(/\r?\n/)) {
 		if (!/^\s*\|.*\|\s*$/.test(row)) continue;
 		for (const cell of row.split("|").map((value) => value.trim())) {
-			const match = /^`([^`]+)`$/.exec(cell);
+			const match = /`([^`]+)`/.exec(cell);
 			if (!match) continue;
 			const reference = match[1].trim();
 			const title = /^it\(\s*["'`]([^"'`]+)["'`]\s*\)$/.exec(reference)?.[1];
-			if (title) references.push(title);
-			else if (/^[A-Za-z]\d{2,}$/.test(reference)) references.push(reference);
-			else if (reference.startsWith("it(") && !/\)\s*$/.test(reference))
+			if (title && !title.includes("…")) references.push(title);
+			else if (
+				corpus.paths.has(reference) ||
+				/^[A-Za-z]\d{2,}$/.test(reference)
+			)
 				references.push(reference);
+			else if (corpus.titles.has(reference)) references.push(reference);
 			else if (
 				reference.split(/\s+/).length >= 3 &&
 				/^[\w][\w' -]+$/.test(reference) &&
-				!/(?:failed|passed|files?|error|result)\b/i.test(reference)
+				!/(?:failed|passed|files?|error|result)\b/i.test(reference) &&
+				!/^\b(?:npm|npx|node|git|tsc|vitest)\b/i.test(reference)
 			)
 				references.push(reference);
 		}
 	}
-	const cacheKey = options.headFiles
-		? options.headFiles
-		: (options.cwd ?? process.cwd());
-	let corpus = headTestCorpusCache.get(cacheKey);
-	if (corpus === undefined) {
-		corpus = options.headFiles
-			? [...options.headFiles]
-					.filter(([file]) => file.startsWith("tests/"))
-					.map(([, source]) => source)
-					.join("\n")
-			: null;
-		headTestCorpusCache.set(cacheKey, corpus);
-	}
 	const exists = (reference) => {
-		if (corpus !== null) return corpus.includes(reference);
-		try {
-			const args = ["grep", "-I", "-F", "-q", "-e", reference];
-			if (!options.workingTree) args.push("HEAD");
-			args.push("--", "tests");
-			(options.git ?? gitExecFileSync)(args, {
-				cwd: options.cwd ?? process.cwd(),
-				encoding: "utf8",
-			});
-			return true;
-		} catch {
-			return false;
-		}
+		return corpus.paths.has(reference) || corpus.titles.has(reference);
 	};
-	const defined = new Set(
-		[...visibleBody.matchAll(/\b([A-Za-z]\d{2,})\b\s*(?:means|=|:)/g)].map(
-			(match) => match[1],
-		),
-	);
 	return [...new Set(references)]
-		.filter((reference) => !defined.has(reference))
 		.filter((reference) => !exists(reference))
 		.map(
 			(reference) =>
@@ -446,23 +547,28 @@ function lintTestReferences(body, options = {}) {
 
 function lintMasterClaims(body) {
 	const errors = [];
-	const rawLines = bodyLinesOutsideFences(body);
-	const original = String(body ?? "");
-	const visible = rawLines.join("\n");
-	const sentences = String(rawLines.join("\n")).match(/[^.!?]+[.!?]+/g) ?? [];
-	for (const sentence of sentences) {
-		if (
-			!MASTER_CLAIM.test(sentence) ||
-			/reviewer\s+(?:wrote|said)/i.test(sentence)
-		)
-			continue;
-		if (/^\s*\|/.test(sentence.trim())) continue;
-		const position = visible.indexOf(sentence);
-		const after = original.slice(Math.max(0, position + sentence.length));
-		if (!/```[\s\S]*origin\/master/i.test(after))
-			errors.push(
-				`PR body master/environment claim lacks an origin/master transcript: ${sentence.trim()}`,
-			);
+	const blocks = markdownBlocks(body);
+	for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+		const block = blocks[blockIndex];
+		if (block.fence || block.table) continue;
+		for (const sentence of splitMarkdownSentences(block.text)) {
+			if (
+				!MASTER_CLAIM.test(sentence.text) ||
+				/reviewer\s+(?:wrote|said)/i.test(sentence.text)
+			)
+				continue;
+			const next = blocks[blockIndex + 1];
+			const hasTranscript =
+				next?.fence &&
+				/origin\/master/i.test(next.text) &&
+				/^(?:text|console|shell|sh|bash|output)\b/i.test(
+					next.lines[0]?.replace(/^\s*```+/, "") ?? "",
+				);
+			if (!hasTranscript)
+				errors.push(
+					`PR body master/environment claim lacks an origin/master transcript: ${sentence.text.trim()}`,
+				);
+		}
 	}
 	return errors;
 }

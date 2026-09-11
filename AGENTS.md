@@ -189,9 +189,12 @@ existing-record citations. CI resolves sources from `HEAD`; `--lint-local`
 resolves sources and test references from the working tree so uncommitted fixer
 changes can be cited. Fenced transcripts are excluded from citation and test
 reference scans. Source quotes must match within ±20 lines of the cited line;
-transcript fences after citations are not source quotes. Table cells are checked
-only when they contain a complete test title, a malformed `it(` fragment, or a
-short identifier such as `B01` that is not defined in the same body.
+transcript fences after citations are not source quotes. Test references come
+from declaration titles and paths under `tests/`, excluding the checker's own
+fixture inputs; the checker's own test contributes declaration titles only, and
+short identifiers use whole-token matching. The
+master-claim rule splits markdown blocks and sentences without treating dots in
+code spans as punctuation; a transcript must be in the next non-blank block.
 
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
 
@@ -1740,9 +1743,10 @@ outside CI retain structural-only fallback. Runtime markers exclude test files,
 `__tests__` directories, and TypeScript declaration files.
 
 The PR-body lint verifies every backticked `path:line` against `HEAD`, checks an
-offered adjacent fenced quote against source text, checks test titles and table
-ids under `tests/`, and requires an `origin/master` transcript for
-master/environment claims. Ranges and approximate line hints resolve from
+offered adjacent fenced quote against source text, checks declaration-backed
+test titles and paths under `tests/`, and requires an `origin/master` transcript
+in the next non-blank block for master/environment claims. Ranges and
+approximate line hints resolve from
 their first line. Both CI and `--lint-local` use the real
 `origin/master...HEAD` range; the lane remains advisory until ten consecutive
 merged PRs pass.
