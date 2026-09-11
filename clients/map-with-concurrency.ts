@@ -12,28 +12,41 @@
  *
  * Same shape as `ledger-bounds.ts` (#2426) for the degradation ledger's bound.
  *
- * NOT consolidated here: `lsp/client.ts` keeps its own file-local copy on
- * purpose (see its comment) — that is a documented decision, not drift.
+ * Callers that need results use the result-returning overload; callers that
+ * only need completion use the void overload. Keeping both forms here prevents
+ * per-caller worker-pool copies from drifting.
  */
 
 /**
  * Run `mapper` over `items` with at most `concurrency` in flight at once.
  */
-export async function mapWithConcurrency<T>(
+export function mapWithConcurrency<T>(
 	items: T[],
 	concurrency: number,
 	mapper: (item: T) => Promise<void>,
-): Promise<void> {
-	if (items.length === 0) return;
+): Promise<void>;
+export function mapWithConcurrency<T, R>(
+	items: T[],
+	concurrency: number,
+	mapper: (item: T) => Promise<R>,
+): Promise<R[]>;
+export async function mapWithConcurrency<T, R>(
+	items: T[],
+	concurrency: number,
+	mapper: (item: T) => Promise<R | void>,
+): Promise<R[] | void> {
+	if (items.length === 0) return [];
 	let nextIndex = 0;
 	const workerCount = Math.max(1, Math.min(concurrency, items.length));
+	const results = Array<R>(items.length);
 	const worker = async (): Promise<void> => {
 		while (true) {
 			const index = nextIndex++;
 			if (index >= items.length) return;
-			await mapper(items[index]);
+			results[index] = (await mapper(items[index])) as R;
 		}
 	};
 	const workers = Array.from({ length: workerCount }, () => worker());
 	await Promise.all(workers);
+	return results;
 }

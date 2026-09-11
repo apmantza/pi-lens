@@ -25,6 +25,7 @@ import {
 	getServersForFileWithConfig,
 	primaryServerId,
 } from "../clients/lsp/config.js";
+import { mapWithConcurrency } from "../clients/map-with-concurrency.js";
 import {
 	combineAbortSignals,
 	withDeadline,
@@ -243,56 +244,6 @@ function boundedPositiveInt(
  * for THIS tool's batch/directory sweep the same way #667 fixed it for the
  * workspace-diagnostics sweep.
  */
-async function mapWithConcurrency<R>(
-	items: string[],
-	concurrency: number,
-	mapper: (item: string, index: number) => Promise<R>,
-	lspService: NonNullable<ReturnType<typeof getLSPService>> | undefined,
-	signal?: AbortSignal,
-	onProgress?: (completed: number, total: number) => void,
-): Promise<R[]> {
-	const results: R[] = [];
-	let completed = 0;
-	// Multiple original indices can map to the same file path (duplicate
-	// entries in an explicit `paths` batch) — track them as a per-file queue
-	// so each occurrence still lands in its own original slot.
-	const pendingIndices = new Map<string, number[]>();
-	items.forEach((item, index) => {
-		const queue = pendingIndices.get(item);
-		if (queue) queue.push(index);
-		else pendingIndices.set(item, [index]);
-	});
-	const groups = groupFilesByPrimaryServer(items);
-	await runPerServerGroups(
-		groups,
-		concurrency,
-		async (group) => {
-			if (signal?.aborted) return;
-			const first = group.files[0];
-			if (
-				first &&
-				lspService &&
-				!isWarmAttached() &&
-				typeof lspService.ensureWarmForSweep === "function"
-			) {
-				await lspService.ensureWarmForSweep(first, { signal });
-				if (signal?.aborted) return;
-			}
-			for (const item of group.files) {
-				// Honor cancellation (Escape / turn abort): stop pulling new items
-				// rather than grind the whole batch. Completed entries are returned.
-				if (signal?.aborted) return;
-				const index = pendingIndices.get(item)!.shift()!;
-				results[index] = await mapper(item, index);
-				completed += 1;
-				onProgress?.(completed, items.length);
-			}
-		},
-		signal,
-	);
-	return results;
-}
-
 /**
  * Project-ignore predicate rooted at `root`, fail-open. Lets a directory scan
  * honor the user's `.pi-lens.json` / `.gitignore` patterns — not just the
@@ -1590,58 +1541,83 @@ async function collectBatchDiagnostics(
 	const resolvedCwd = options.cwd ?? process.cwd();
 	const cacheCtx = createWorkspaceDiagnosticsCacheContext(resolvedCwd);
 	const scopeKey = buildScopeKey(options.serverScope ?? "all");
-	const results = await mapWithConcurrency(
-		files,
+	const results = Array<FileDiagnosticResult>(files.length);
+	let completed = 0;
+	const pendingIndices = new Map<string, number[]>();
+	files.forEach((file, index) => {
+		const queue = pendingIndices.get(file);
+		if (queue) queue.push(index);
+		else pendingIndices.set(file, [index]);
+	});
+	const groups = groupFilesByPrimaryServer(files);
+	await runPerServerGroups(
+		groups,
 		options.concurrency,
-		async (file) => {
-			const work = collectFileDiagnosticResult(
-				file,
-				severity,
-				lspService,
-				options.waitMs,
-				options.nextWriteIndex,
-				options.serverScope,
-				cacheCtx,
-				scopeKey,
-				resolvedCwd,
-				options.onConfirmedNoBlockers,
-			);
-			const bounded = withDeadline(work, {
-				ms: batchFileDeadlineMs(),
-				onTimeout: "undefined",
-				onReject: "undefined",
-			});
-			const result = options.signal
-				? await Promise.race([
-						bounded,
-						new Promise<FileDiagnosticResult | undefined>((resolve) => {
-							if (options.signal?.aborted) {
-								resolve(undefined);
-								return;
-							}
-							options.signal?.addEventListener(
-								"abort",
-								() => resolve(undefined),
-								{
-									once: true,
-								},
-							);
-						}),
-					])
-				: await bounded;
-			return (
-				result ??
-				inconclusiveBatchResult(
+		async (group) => {
+			if (options.signal?.aborted) return;
+			const first = group.files[0];
+			if (
+				first &&
+				lspService &&
+				!isWarmAttached() &&
+				typeof lspService.ensureWarmForSweep === "function"
+			) {
+				await lspService.ensureWarmForSweep(first, {
+					signal: options.signal,
+				});
+				if (options.signal?.aborted) return;
+			}
+			await mapWithConcurrency(group.files, 1, async (file) => {
+				// Keep duplicate explicit paths in their original result slots.
+				const index = pendingIndices.get(file)!.shift()!;
+				const work = collectFileDiagnosticResult(
 					file,
-					options.signal?.aborted
-						? "Batch aborted before this file completed."
-						: `File check exceeded ${batchFileDeadlineMs()}ms.`,
-				)
-			);
+					severity,
+					lspService,
+					options.waitMs,
+					options.nextWriteIndex,
+					options.serverScope,
+					cacheCtx,
+					scopeKey,
+					resolvedCwd,
+					options.onConfirmedNoBlockers,
+				);
+				const bounded = withDeadline(work, {
+					ms: batchFileDeadlineMs(),
+					onTimeout: "undefined",
+					onReject: "undefined",
+				});
+				const result = options.signal
+					? await Promise.race([
+							bounded,
+							new Promise<FileDiagnosticResult | undefined>((resolve) => {
+								if (options.signal?.aborted) {
+									resolve(undefined);
+									return;
+								}
+								options.signal?.addEventListener(
+									"abort",
+									() => resolve(undefined),
+									{
+										once: true,
+									},
+								);
+							}),
+						])
+					: await bounded;
+				results[index] =
+					result ??
+					inconclusiveBatchResult(
+						file,
+						options.signal?.aborted
+							? "Batch aborted before this file completed."
+							: `File check exceeded ${batchFileDeadlineMs()}ms.`,
+					);
+				completed += 1;
+				options.onProgress?.(completed, files.length);
+			});
 		},
-		lspService,
 		options.signal,
-		options.onProgress,
 	);
 	// Persist whatever was recorded, including a partial/aborted sweep's
 	// already-completed files — same "don't throw away confirmed work"

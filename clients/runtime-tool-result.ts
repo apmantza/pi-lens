@@ -332,13 +332,11 @@ export function clearLastAnalyzedStateCache(): void {
  * with one owner (#2464 review round 3, F1) rather than two open-coded blocks
  * ~80 lines apart whose invariants only line up if a reader checks both.
  *
- * Exported for the isolation red in
- * `tests/clients/observed-mutation-integration.test.ts`: with
- * `claimPipelineDispatch` below now consulted by BOTH dispatch call sites, the
- * identity guard in the release has no reachable production trigger left, so
- * the only honest way to prove it is to drive the seam directly.
+ * Kept private because both dispatch call sites now use the shared claim before
+ * registration; publishing this seam without the claim obligation would make
+ * the identity guard's precondition easy to violate again.
  */
-export function registerInFlightPipeline(
+function registerInFlightPipeline(
 	filePath: string,
 	stateHash: string,
 	pipeline: InFlightPipeline,
@@ -365,7 +363,7 @@ export function registerInFlightPipeline(
  * deduping and its `participantIds`/`participantTotal` under-count. Delete only
  * when the outer map still points at the very map this registration went into.
  */
-export function releaseInFlightPipeline(
+function releaseInFlightPipeline(
 	filePath: string,
 	stateHash: string,
 	registered: Map<string, InFlightPipeline>,
@@ -418,7 +416,7 @@ export type PipelineDispatchClaim =
  * already analysed this turn — the duplicate-recording inversion #2464 exists
  * to remove.
  */
-export function claimPipelineDispatch(args: {
+function claimPipelineDispatch(args: {
 	filePath: string;
 	stateHash: string;
 	turnIndex: number;
@@ -1021,7 +1019,13 @@ async function dispatchPipelineAnalysis(args: {
 	// ladder (the #2402 after-write hash was never stamped), and a duplicate
 	// tool_result for the same bytes analysed the file a second time (the
 	// already-analysed latch was never set).
-	const finalStateHash = getFileStateHash(filePath);
+	// The latch identifies the bytes this pipeline actually analysed. A pipeline
+	// that reports no write analysed its input state, even if another writer
+	// changed disk while the await was parked. Only a pipeline-reported write
+	// makes the post-pipeline disk state the analysed identity (#2499).
+	const finalStateHash = result.fileModified
+		? getFileStateHash(filePath)
+		: initialStateHash;
 	lastAnalyzedStateByFile.set(filePath, {
 		turnIndex: runtime.turnIndex,
 		stateHash: finalStateHash,
@@ -1035,7 +1039,7 @@ async function dispatchPipelineAnalysis(args: {
 	// `initialStateHash` IS the post-write hash at both call sites — the
 	// classified chain passes `postWriteStateHash` verbatim, the observed path
 	// passes the same pre-settle digest.
-	if (finalStateHash !== initialStateHash) {
+	if (result.fileModified) {
 		for (const pair of nativeAppliedPairs) {
 			runtime.partialApplyRecords.noteAfterWriteHash(
 				filePath,

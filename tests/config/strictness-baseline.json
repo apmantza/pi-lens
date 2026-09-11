@@ -6,7 +6,7 @@
 		"clients/dispatch/rules": 12,
 		"clients/dispatch/runners": 95,
 		"clients/dispatch/runners/utils": 3,
-		"clients/lsp": 45,
+		"clients/lsp": 44,
 		"clients/lsp/wait-policy": 1,
 		"clients/project-diagnostics/runner-adapters": 1,
 		"clients/redact": 16,
