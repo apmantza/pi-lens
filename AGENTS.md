@@ -531,6 +531,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 49. **A long-lived container with no bound.** A module-level or bootstrap-lived `Map`/`Set` can grow for every file, project, or request even when a sibling reset exists. *Screen:* classify every scanned container as a bounded helper, a same-file named size comparison, a timer that deletes, removal on every settle path, or a content-keyed exemption with a natural-finiteness argument. A read-only TTL comparison is not eviction, and a session reset is not a bound without a finite key-space argument. *Detect:* `tests/config/bounded-container-guard.test.ts` reuses `session-state-scan.ts` across `clients/`, `tools/`, `mcp/`, and `index.ts`, then applies AST decisions and `auditRegistry`; its population and flagged floors must remain non-zero. The AST population excludes lifecycle-owned instances and never-written literal vocabularies, while dynamic growth admissions remain shrink-only. (#2981, refs #1644, #1999, #2549)
 
+The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
+
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
 into the replacement. The LSP service uses this rule in `lsp/index.ts` so a
@@ -3380,8 +3382,8 @@ Runs in the `tool_call` handler (`handleToolCall`, `clients/runtime-tool-call.ts
 
 The guard tracks more than the Read/Write/Edit tools. All of these register so a follow-up edit isn't falsely blocked:
 
-- **bash file VIEWS** (`clients/bash-file-access.ts` → `extractReadPathsFromCommand`): `cat`/`less`/`more`/`bat`/`nl` (full file), `head -N`/`tail -N` (the shown N lines), `sed -n 'A,Bp'` (lines A–B). Registered at tool_call via `recordRead` with the **exact line range** (the guard enforces ranges). `ls`/`find` are NOT views (name-only, reveal no editable content) — never registered, and registering them would falsely mark a file "read". `grep` is not a contiguous view but IS registered via the search path below.
-- **bash WRITES** (`extractWrittenPathsFromCommand`): `>`/`>>`/`N>`, `tee`, `sed -i`, `cp`/`mv` dest, `touch`. The agent authored the file, so — exactly like the Write tool — `noteCreatedFile` at tool_call + `recordWritten` at tool_result.
+- **bash file VIEWS** (`clients/bash-file-access.ts` → `extractReadPathsFromCommand`): `cat`/`less`/`more`/`bat`/`nl` (full file), `head -N`/`tail -N` (the shown N lines), `sed -n 'A,Bp'` (lines A–B). Registered at tool_result via `recordRead` with the **delivered line range** (the guard enforces ranges). `ls`/`find` are NOT views (name-only, reveal no editable content) — never registered, and registering them would falsely mark a file "read". `grep` is not a contiguous view but IS registered via the search path below. Native reads register a provisional resolved path at tool_call, then supersede its range at tool_result with the delivered range.
+- **bash WRITES** (`extractWrittenPathsFromCommand`): `>`/`>>`/`N>`, `tee`, `sed -i`, `cp`/`mv` dest, `touch`. The agent authored the file only after complete post-command evidence confirms a change, so recognized paths use the evidence fence and `recordWritten` at tool_result; creation is detected when the post snapshot contains a path absent from the pre snapshot. Missing evidence cannot authorize authorship: synthetic write dispatch inherits the parent evidence decision explicitly, while preserving authoritative-content, attachment-budget, and write-then-edit behavior.
 - **search tools** (`clients/search-read-registration.ts` → `registerSearchReads`, ±2-line context margin): a tool exposes the lines it revealed via `details.searchReads: {file, startLine(1-based), endLine}[]`; `handleToolResult` consumes that for **any** tool and registers reads of only those lines (never the whole file). Populated by `ast_grep_search` (#169, done) and bash `grep -n`/`egrep`/`fgrep` (output parsed via `extractGrepSearchReadsFromOutput`). `ast_grep_search` also returns `details.matchLocations[]` with ready `readSlice` handles; keep those handles in sync with any formatter changes. `lsp_navigation` already populates `searchReads` for the location-revealing operations (definition/typeDefinition/declaration/references/implementation/workspaceSymbol/incoming+outgoingCalls via `collectSearchReadsForOperation`); `documentSymbol` deliberately does NOT (shape, not body — same rule as `module_report`). **Still remaining:** the pi built-in `grep`/`glob` tool (reveals an editable span — wire it for parity; `ls`/`glob`/`find` stay excluded as name-only). New producers only need to populate `details.searchReads` — no hook change.
 
 **MUTATION-CLASSIFICATION SEAM (#2423):** `classifyMutatingTool`
@@ -4320,6 +4322,24 @@ Process-table resource samples preserve query outcome. `clients/child-unref.ts`
 those failures, so consumers leave usage unknown rather than fabricating zero
 samples, and records one bounded `resource-sampler-query-failed` degradation
 per query subject. (#1863)
+
+The spawn sampler is bounded on all three axes, and a new poller owes the same
+three. `startSpawnUsageSampler` polls a child through the process-table seam,
+and ONE Windows tick is two `powershell.exe` CIM queries plus a `taskkill.exe`
+whenever a query blows `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS` — so an unguarded
+interval is a process multiplier, not a timer. #2968 (external report) measured
+234 live `powershell.exe`/`taskkill.exe` (~10GB) behind four children that hung
+for 5-6h. The bounds: no tick starts while the previous one is in flight
+(CONCURRENCY); past `SPAWN_SAMPLE_FULL_RATE_TICKS` the delay doubles to
+`SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER` x the base (RATE — the 750ms interval
+exists to catch SHORT-LIVED children); polling ends at a hard cap that
+`safe-spawn.ts` derives from this spawn's own deadline plus its teardown grace
+(LIFETIME), because every stop path a spawn has — `exit`, `close`, `error` —
+requires the child to settle, and a hung child settles nothing. A capped
+sampler still returns what it gathered. Skipped ticks and the cap are counted
+on the ledger (`resource-sampler-tick-overlapped`,
+`resource-sampler-lifetime-capped`): a sampler that has silently stopped
+sampling is #1863's shape one level up. (#2968)
 
 File-operation rename filters match only the decoded URI path, never a basename
 fallback. Unsupported wire URI schemes fail closed; entity-kind probes are

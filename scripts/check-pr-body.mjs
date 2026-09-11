@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
@@ -125,6 +125,37 @@ function hasRealContent(lines, section, placeholders) {
 function blankCommentsAndStrings(source) {
 	let state = "code";
 	let result = "";
+	const strings = [];
+	let stringStart = -1;
+	let previousToken = null;
+	let stringPrefix = "";
+	// ECMAScript's lexical grammar permits a RegularExpressionLiteral where an
+	// expression starts. Classify the preceding token by whether it can end an
+	// expression; this covers expression-start keywords and punctuators without
+	// maintaining a list of individual regex contexts.
+	const expressionEndingPunctuation = new Set([")", "]", "}", "++", "--"]);
+	const expressionStartKeywords = new Set([
+		"await",
+		"case",
+		"delete",
+		"do",
+		"else",
+		"in",
+		"instanceof",
+		"new",
+		"of",
+		"return",
+		"throw",
+		"typeof",
+		"void",
+		"yield",
+	]);
+	const regexMayStart = (token) => {
+		if (token === null || expressionStartKeywords.has(token)) return true;
+		if (expressionEndingPunctuation.has(token)) return false;
+		return !/[$\w]/.test(token);
+	};
+	const decoded = (value) => value.replace(/\\([\s\S])/g, "$1");
 	for (let index = 0; index < source.length; index += 1) {
 		const char = source[index];
 		const next = source[index + 1];
@@ -142,6 +173,22 @@ function blankCommentsAndStrings(source) {
 			}
 			continue;
 		}
+		if (state === "regex" || state === "regex-class") {
+			result += char === "\n" ? "\n" : " ";
+			if (char === "\\") {
+				if (next === "\n") result += "\n";
+				else {
+					result += " ";
+					index += 1;
+				}
+			} else if (state === "regex" && char === "[") state = "regex-class";
+			else if (state === "regex-class" && char === "]") state = "regex";
+			else if (state === "regex" && char === "/") {
+				state = "code";
+				previousToken = "value";
+			}
+			continue;
+		}
 		if (state !== "code") {
 			result += char === "\n" ? "\n" : " ";
 			if (char === "\\") {
@@ -150,7 +197,17 @@ function blankCommentsAndStrings(source) {
 					result += " ";
 					index += 1;
 				}
-			} else if (char === state) state = "code";
+			} else if (char === state) {
+				strings.push({
+					start: stringStart,
+					end: index + 1,
+					quote: state,
+					text: decoded(source.slice(stringStart + 1, index)),
+					prefix: stringPrefix,
+				});
+				state = "code";
+				previousToken = "value";
+			}
 			continue;
 		}
 		if (char === "/" && next === "/") {
@@ -161,13 +218,35 @@ function blankCommentsAndStrings(source) {
 			result += "  ";
 			index += 1;
 			state = "block-comment";
+		} else if (char === "/" && regexMayStart(previousToken)) {
+			result += " ";
+			state = "regex";
 		} else if (char === "'" || char === '"' || char === "`") {
 			result += " ";
+			stringStart = index;
+			stringPrefix = result.slice(-256).trimEnd();
 			state = char;
-		} else result += char;
+			previousToken = "string";
+		} else {
+			result += char;
+			if (/[$\w]/.test(char)) {
+				let wordEnd = index + 1;
+				while (/[$\w]/.test(source[wordEnd] ?? "")) wordEnd += 1;
+				const word = source.slice(index, wordEnd);
+				result += word.slice(1);
+				index = wordEnd - 1;
+				previousToken = word;
+			} else if (char === next && (char === "+" || char === "-")) {
+				result += next;
+				index += 1;
+				previousToken = char + next;
+			} else if (!/\s/.test(char)) previousToken = char;
+		}
 	}
-	return result;
+	return { text: result, strings };
 }
+
+export { blankCommentsAndStrings };
 
 function isRuntimeObservabilityPath(name) {
 	return (
@@ -194,7 +273,7 @@ function runtimeObservabilityFromDiff(diff = "") {
 			added += `${line.slice(1)}\n`;
 	}
 	if (!runtime) return { runtime: false, records, failurePath: false };
-	const blanked = blankCommentsAndStrings(added);
+	const blanked = blankCommentsAndStrings(added).text;
 	return {
 		runtime: true,
 		records: recordLiteralsFromRuntimeSource(added),
@@ -225,7 +304,7 @@ function recordLiteralsFromRuntimeSource(source) {
 
 function recordLocationsFromRuntimeSource(source) {
 	const records = [];
-	const blanked = blankCommentsAndStrings(source);
+	const blanked = blankCommentsAndStrings(source).text;
 	const calls = [
 		["recordDegradationOnce", ["kind"]],
 		["incrementDegradationCount", ["kind"]],
@@ -256,6 +335,381 @@ function recordLocationsFromRuntimeSource(source) {
 	return records;
 }
 
+const CODE_CITATION = /`([^`\s:]+):((?:~?\d+)(?:-\d+)?)`/g;
+const MASTER_CLAIM =
+	/pre-existing|red on master|also fails on origin\/master|environment-specific/i;
+
+function headFileSource(file, options = {}) {
+	if (options.headFiles?.has?.(file)) return options.headFiles.get(file);
+	if (/(?:^|\/)\.\.(?:\/|$)/.test(file) || isAbsolute(file)) return null;
+	if (options.workingTree) {
+		try {
+			return readFileSync(resolve(options.cwd ?? process.cwd(), file), "utf8");
+		} catch {
+			return null;
+		}
+	}
+	try {
+		return String(
+			(options.git ?? gitExecFileSync)(["show", `HEAD:${file}`], {
+				cwd: options.cwd ?? process.cwd(),
+				encoding: "utf8",
+			}),
+		);
+	} catch {
+		return null;
+	}
+}
+
+function sourceLines(source) {
+	return String(source ?? "").split(/\r?\n/);
+}
+
+const HEAD_TEST_CORPUS_CACHE_LIMIT = 8;
+const headTestCorpusCache = new Map();
+
+function testCorpus(options = {}) {
+	const cwd = options.cwd ?? process.cwd();
+	let cacheKey;
+	if (!options.workingTree) {
+		try {
+			const revision = String(
+				(options.git ?? gitExecFileSync)(["rev-parse", "HEAD"], {
+					cwd,
+					encoding: "utf8",
+				}),
+			).trim();
+			if (revision) cacheKey = `${cwd}:${revision}`;
+		} catch {
+			// A failed revision lookup must not turn a mutable tree into a cache hit.
+		}
+	}
+	if (cacheKey) {
+		const cached = headTestCorpusCache.get(cacheKey);
+		if (cached) return cached;
+	}
+	let files = [];
+	try {
+		const tracked = String(
+			(options.git ?? gitExecFileSync)(["ls-files", "--", "tests"], {
+				cwd,
+				encoding: "utf8",
+			}),
+		);
+		files = tracked.split(/\r?\n/).filter(Boolean);
+		if (options.workingTree) {
+			const untracked = String(
+				(options.git ?? gitExecFileSync)(
+					["ls-files", "--others", "--exclude-standard", "--", "tests"],
+					{ cwd, encoding: "utf8" },
+				),
+			)
+				.split(/\r?\n/)
+				.filter(Boolean);
+			files = [...new Set([...files, ...untracked])];
+		}
+	} catch {
+		const visit = (directory) => {
+			for (const entry of readdirSync(directory, { withFileTypes: true })) {
+				const path = resolve(directory, entry.name);
+				if (entry.isDirectory()) visit(path);
+				else if (path.endsWith(".ts") || path.endsWith(".tsx"))
+					files.push(path.slice(cwd.length + 1).replaceAll("\\", "/"));
+			}
+		};
+		try {
+			visit(resolve(cwd, "tests"));
+		} catch {
+			files = [];
+		}
+	}
+	const paths = new Set(files);
+	const titles = new Set();
+	for (const file of files) {
+		if (
+			file.startsWith("tests/fixtures/ci-pr-bodies/") ||
+			!/\.(?:[cm]?[jt]sx?)$/.test(file)
+		)
+			continue;
+		// The checker test contributes only its declaration titles. Its fixture
+		// strings and arbitrary prose never enter this corpus.
+		let source;
+		try {
+			source = readFileSync(resolve(cwd, file), "utf8");
+		} catch {
+			continue;
+		}
+		const lexed = blankCommentsAndStrings(source);
+		for (const string of lexed.strings) {
+			const prefix = string.prefix;
+			const opening = prefix.lastIndexOf("(");
+			if (opening < 0) continue;
+			const beforeOpening = prefix.slice(0, opening).trimEnd();
+			const direct = /\b(?:it|test|describe)\s*$/.test(beforeOpening);
+			let depth = 0;
+			let matchingOpening = -1;
+			for (let index = beforeOpening.length - 1; index >= 0; index -= 1) {
+				if (beforeOpening[index] === ")") depth += 1;
+				else if (beforeOpening[index] === "(" && --depth === 0) {
+					matchingOpening = index;
+					break;
+				}
+			}
+			const each =
+				(matchingOpening >= 0 &&
+					/\b(?:it|test|describe)\s*\.each\s*$/.test(
+						beforeOpening.slice(0, matchingOpening).trimEnd(),
+					)) ||
+				/\b(?:it|test|describe)\s*\.each\s*(?:[\s\S]*\)|`[\s\S]*`)$/.test(
+					beforeOpening,
+				);
+			if (!direct && !each) continue;
+			const title = string.text;
+			if (title.trim()) titles.add(title.trim());
+		}
+	}
+	const corpus = { paths, titles };
+	if (cacheKey) {
+		if (headTestCorpusCache.size >= HEAD_TEST_CORPUS_CACHE_LIMIT)
+			headTestCorpusCache.delete(headTestCorpusCache.keys().next().value);
+		headTestCorpusCache.set(cacheKey, corpus);
+	}
+	return corpus;
+}
+
+function markdownBlocks(body) {
+	const lines = String(body ?? "").split(/\r?\n/);
+	const blocks = [];
+	let current = null;
+	let fence = null;
+	const flush = () => {
+		if (current?.lines.length) blocks.push(current);
+		current = null;
+	};
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index];
+		const marker = line.match(/^\s*(```+)/)?.[1];
+		if (marker || fence) {
+			if (marker && !fence && current && current.lines.length) flush();
+			if (!current) current = { lines: [], start: index, fence: true };
+			current.lines.push(line);
+			if (marker && !fence) fence = marker;
+			else if (fence && marker && marker.length >= fence.length) {
+				fence = null;
+				flush();
+			}
+			continue;
+		}
+		if (!line.trim()) {
+			flush();
+			continue;
+		}
+		if (/^\s*\|/.test(line) && current && !/^\s*\|/.test(current.lines[0]))
+			flush();
+		if (!current) current = { lines: [], start: index, fence: false };
+		current.lines.push(line);
+	}
+	flush();
+	return blocks.map((block) => ({
+		...block,
+		text: block.lines.join("\n"),
+		table: !block.fence && block.lines.every((line) => /^\s*\|/.test(line)),
+	}));
+}
+
+function splitMarkdownSentences(text) {
+	const sentences = [];
+	let start = 0;
+	let codeTicks = 0;
+	for (let index = 0; index < text.length; index += 1) {
+		if (text[index] === "`") {
+			let end = index;
+			while (text[end] === "`") end += 1;
+			const count = end - index;
+			if (!codeTicks) codeTicks = count;
+			else if (count === codeTicks) codeTicks = 0;
+			index = end - 1;
+			continue;
+		}
+		if (!codeTicks && /[.!?]/.test(text[index])) {
+			sentences.push({ text: text.slice(start, index + 1), start });
+			start = index + 1;
+		}
+	}
+	if (text.slice(start).trim())
+		sentences.push({ text: text.slice(start), start });
+	return sentences;
+}
+
+function bodyLinesOutsideFences(body) {
+	let fence;
+	return String(body ?? "")
+		.split(/\r?\n/)
+		.map((line) => {
+			const marker = line.match(/^\s*(```+)/)?.[1];
+			if (marker) {
+				if (!fence) fence = marker;
+				else if (marker.length >= fence.length) fence = undefined;
+				return "";
+			}
+			return fence ? "" : line;
+		});
+}
+
+function pathLineReferences(text) {
+	return [...String(text ?? "").matchAll(CODE_CITATION)].map((match) => ({
+		file: match[1],
+		lineText: match[2],
+		line: Number(match[2].replace(/^~/, "").split("-", 1)[0]),
+		index: match.index,
+	}));
+}
+
+function sourceQuoteAfter(lines, bodyLine) {
+	let index = bodyLine + 1;
+	while (index < lines.length && !lines[index].trim()) index += 1;
+	const opener = lines[index]?.match(/^\s*(```+)(.*)$/);
+	if (!opener) return null;
+	const fence = opener[1];
+	const end = lines.findIndex(
+		(row, rowIndex) =>
+			rowIndex > index && new RegExp(`^\\s*${fence}\\s*$`).test(row),
+	);
+	if (end === -1) return null;
+	const text = lines.slice(index + 1, end).filter((row) => row.trim());
+	return { end, info: opener[2].trim(), text };
+}
+
+function isTranscriptQuote(quote) {
+	const lines = quote.text.join("\n");
+	return (
+		/^(?:text|console|shell|sh|bash|output)$/i.test(quote.info) &&
+		/^(?:\s*(?:\$|>)\s+(?:git|npm|npx|vitest|tsc)\b|\s*Test Files?\b.*\b(?:failed|passed)\b|\s*Tests?\s+\d+\s+(?:failed|passed)\b|\s*(?:PASS|FAIL)\s+(?:\||$)|\s*npm ERR!|\s*error TS\d+)/im.test(
+			lines,
+		)
+	);
+}
+
+function lintCodeCitations(body, options = {}) {
+	const errors = [];
+	const rawLines = String(body ?? "").split(/\r?\n/);
+	const visibleBody = bodyLinesOutsideFences(body).join("\n");
+	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
+		visibleBody,
+	)) {
+		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
+		const key = `${file}:${lineText}`;
+		const source = headFileSource(file, options);
+		if (source === null) {
+			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
+			continue;
+		}
+		const sourceRows = sourceLines(source);
+		if (lineNumber < 1 || lineNumber > sourceRows.length) {
+			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
+			continue;
+		}
+		const quote = sourceQuoteAfter(rawLines, bodyLine);
+		if (!quote) continue;
+		if (isTranscriptQuote(quote)) continue;
+		const start = Math.max(0, lineNumber - 1 - 20);
+		const finish = Math.min(sourceRows.length, lineNumber + 20);
+		const window = sourceRows.slice(start, finish).join("\n");
+		if (!quote.text.length || !window.includes(quote.text.join("\n")))
+			errors.push(
+				`PR body quote after citation ${key} does not match HEAD source within ±20 lines.`,
+			);
+	}
+	return errors;
+}
+
+function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
+	const references = [];
+	const visibleBody = bodyLinesOutsideFences(body).join("\n");
+	for (const match of visibleBody.matchAll(
+		/\bit\(\s*(["'`])((?:\\\\.|[^\\\\])*?)\1\s*\)/g,
+	)) {
+		const lineStart = visibleBody.lastIndexOf("\n", match.index) + 1;
+		if (
+			!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)) &&
+			!match[2].includes("…")
+		)
+			references.push(match[2].replace(/\\([\s\S])/g, "$1"));
+	}
+	const lines = visibleBody.split(/\r?\n/);
+	let headers = null;
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const row = lines[lineIndex];
+		if (/^\s*\|\s*:?-{3,}/.test(row)) {
+			headers = /^\s*\|.*\|\s*$/.test(lines[lineIndex - 1])
+				? lines[lineIndex - 1].split("|").map((value) => value.trim())
+				: null;
+			continue;
+		}
+		if (!headers || !/^\s*\|.*\|\s*$/.test(row)) {
+			if (!/^\s*\|/.test(row)) headers = null;
+			continue;
+		}
+		const cells = row.split("|").map((value) => value.trim());
+		for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+			if (!/(?:test|probe|case|witness|id)/i.test(headers[cellIndex] ?? ""))
+				continue;
+			const cell = cells[cellIndex];
+			const match = /`([^`]+)`/.exec(cell);
+			if (!match) continue;
+			const reference = match[1].trim();
+			const title = /^it\(\s*["`]([^"`]+)["`]\s*\)$/.exec(reference)?.[1];
+			if (title?.includes("…")) continue;
+			if (title && !title.includes("…")) references.push(title);
+			else if (
+				corpus.paths.has(reference) ||
+				/^[A-Za-z]\d{2,}$/.test(reference)
+			)
+				references.push(reference);
+			else if (corpus.titles.has(reference)) references.push(reference);
+			else if (/^[0-9a-f]{7,40}$/i.test(reference)) continue;
+			else references.push(reference);
+		}
+	}
+	const exists = (reference) => {
+		return corpus.paths.has(reference) || corpus.titles.has(reference);
+	};
+	return [...new Set(references)]
+		.filter((reference) => !exists(reference))
+		.map(
+			(reference) =>
+				`PR body test reference is missing under tests/: ${reference}`,
+		);
+}
+
+function lintMasterClaims(body) {
+	const errors = [];
+	const blocks = markdownBlocks(body);
+	for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
+		const block = blocks[blockIndex];
+		if (block.fence || block.table) continue;
+		for (const sentence of splitMarkdownSentences(block.text)) {
+			if (
+				!MASTER_CLAIM.test(sentence.text) ||
+				/reviewer\s+(?:wrote|said)/i.test(sentence.text)
+			)
+				continue;
+			const next = blocks[blockIndex + 1];
+			const hasTranscript =
+				next?.fence &&
+				/origin\/master/i.test(next.text) &&
+				/^(?:text|console|shell|sh|bash|output)\b/i.test(
+					next.lines[0]?.replace(/^\s*```+/, "") ?? "",
+				);
+			if (!hasTranscript)
+				errors.push(
+					`PR body master/environment claim lacks an origin/master transcript: ${sentence.text.trim()}`,
+				);
+		}
+	}
+	return errors;
+}
+
 function lintRuntimeObservability(
 	body,
 	lines,
@@ -268,15 +722,25 @@ function lintRuntimeObservability(
 	const content = observabilitySectionContent(body, lines, headings);
 	if ([...observation.records].some((record) => content.includes(record)))
 		return [];
-	const existingRecord =
-		/covered by existing record `([^`]+)` at `([^`:]+):(\d+)`/.exec(content);
+	const existingRecordCitation = pathLineReferences(content).find(
+		(reference) => {
+			const prefix = content.slice(0, reference.index);
+			return /covered by existing record `[^`]+` at\s*$/.test(prefix);
+		},
+	);
+	const existingRecordPrefix = existingRecordCitation
+		? content
+				.slice(0, existingRecordCitation.index)
+				.match(/covered by existing record `([^`]+)` at\s*$/)
+		: null;
 	if (
-		existingRecord &&
-		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecord[2]) &&
-		isRuntimeObservabilityPath(existingRecord[2])
+		existingRecordCitation &&
+		existingRecordPrefix &&
+		!/(?:^|\/)\.\.(?:\/|$)/.test(existingRecordCitation.file) &&
+		isRuntimeObservabilityPath(existingRecordCitation.file)
 	) {
-		const [, kind, file, lineText] = existingRecord;
-		const lineNumber = Number(lineText);
+		const [, kind] = existingRecordPrefix;
+		const { file, line: lineNumber } = existingRecordCitation;
 		try {
 			const source = readFileSync(
 				isAbsolute(file) ? file : resolve(cwd, file),
@@ -550,6 +1014,9 @@ export function lintPrBody(body = "", options = {}) {
 				options.cwd,
 			),
 		);
+	errors.push(...lintCodeCitations(body, options));
+	errors.push(...lintTestReferences(body, options, testCorpus(options)));
+	errors.push(...lintMasterClaims(body));
 	return { valid: errors.length === 0, errors };
 }
 
@@ -744,6 +1211,7 @@ export function lintLocalPrBody(
 		requireTestAssessment: localTouchesTests(cwd, git),
 		diff,
 		cwd,
+		workingTree: true,
 	});
 }
 
