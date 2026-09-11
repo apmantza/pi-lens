@@ -852,6 +852,20 @@ export class ReadGuard {
 	}
 
 	/**
+	 * Replace the provisional tool-call read for a delivered native result.
+	 * The delivered range is authoritative; retaining the provisional record
+	 * would let checkCoverage union a host-capped read with the requested span.
+	 */
+	recordDeliveredRead(record: ReadRecord): void {
+		const key = this.key(record.filePath);
+		const records = this.reads.get(key);
+		if (records && records.length > 0) {
+			records.pop();
+		}
+		this.recordRead(record);
+	}
+
+	/**
 	 * Record a structured symbol read (the `readSymbol` engine capability / its
 	 * MCP mirror) as a genuine read of that symbol's line range — the
 	 * read-substitute tie-in for #245. `readSymbol` returns the verbatim body, so

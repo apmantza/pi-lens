@@ -9,6 +9,10 @@ import {
 	registerPrimarySession,
 	releasePrimarySession,
 } from "../../clients/session-lifecycle.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import {
@@ -65,6 +69,66 @@ beforeEach(() => {
 });
 
 describe("bash grep searchReads registration", () => {
+	it("supersedes the provisional native read before checkEdit", async () => {
+		const env = setupTestEnvironment("pi-lens-2802-native-supersession-");
+		try {
+			const filePath = path.join(env.tmpDir, "large.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 3000 }, (_, i) => `line${i + 1}`).join("\n") +
+					"\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolCall({
+				event: {
+					toolName: "read",
+					toolCallId: "2802-supersede",
+					input: { path: filePath, offset: 1, limit: 3000 },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			} as any);
+			const readTool = createReadToolDefinition(env.tmpDir);
+			const result = await readTool.execute(
+				"2802-supersede",
+				{ path: filePath, offset: 1, limit: 3000 },
+				undefined,
+				undefined,
+				{ cwd: env.tmpDir } as never,
+			);
+			await handleToolResult({
+				event: {
+					toolName: "read",
+					toolCallId: "2802-supersede",
+					input: { path: filePath, offset: 1, limit: 3000 },
+					content: result.content,
+					details: result.details,
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			expect(runtime.readGuard.checkEdit(filePath, [2500, 2500]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("registers the native read range the host delivered at EOF", async () => {
 		const env = setupTestEnvironment("pi-lens-2802-native-read-eof-");
 		try {
@@ -121,7 +185,8 @@ describe("bash grep searchReads registration", () => {
 			const filePath = path.join(env.tmpDir, "large.ts");
 			fs.writeFileSync(
 				filePath,
-				Array.from({ length: 3000 }, (_, i) => `line${i + 1}`).join("\n"),
+				Array.from({ length: 3000 }, (_, i) => `line${i + 1}`).join("\n") +
+					"\n",
 			);
 			const bashTool = createBashToolDefinition(env.tmpDir, {
 				exposeSessionEnvironment: false,
@@ -161,6 +226,91 @@ describe("bash grep searchReads registration", () => {
 					effectiveLimit: 2000,
 				}),
 			);
+			expect(runtime.readGuard.checkEdit(filePath, [500, 500]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a pipe-filtered short output on the full source span", async () => {
+		const env = setupTestEnvironment("pi-lens-2802-pipe-fallback-");
+		try {
+			const filePath = path.join(env.tmpDir, "pipe.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 50 }, (_, i) =>
+					i === 30 ? "MATCHME" : `line${i + 1}`,
+				).join("\n") + "\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolResult({
+				event: {
+					toolName: "bash",
+					input: { command: `cat ${filePath} | grep MATCHME` },
+					content: [{ type: "text", text: "MATCHME" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			expect(runtime.readGuard.checkEdit(filePath, [3, 3]).action).toBe(
+				"allow",
+			);
+			expect(runtime.readGuard.checkEdit(filePath, [31, 31]).action).toBe(
+				"allow",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("blocks every span when a multi-span bash view is clipped", async () => {
+		resetDegradationLedger();
+		const env = setupTestEnvironment("pi-lens-2802-multi-span-clip-");
+		try {
+			const paths = ["one.ts", "two.ts"].map((name) =>
+				path.join(env.tmpDir, name),
+			);
+			for (const filePath of paths)
+				fs.writeFileSync(
+					filePath,
+					Array.from({ length: 3000 }, (_, i) => `line${i}`).join("\n") + "\n",
+				);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolResult({
+				event: {
+					toolName: "bash",
+					input: { command: `cat ${paths[0]}; cat ${paths[1]}` },
+					content: [{ type: "text", text: "output" }],
+					details: { truncation: { truncated: true, outputLines: 2000 } },
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			for (const filePath of paths)
+				expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
+					"block",
+				);
+			expect(
+				getDegradationSummary().some(
+					(entry) => entry.kind === "bash_view_clipped",
+				),
+			).toBe(true);
 		} finally {
 			env.cleanup();
 		}

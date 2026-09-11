@@ -1915,6 +1915,8 @@ describe("index.ts integration", () => {
 			expect(recordRead).toHaveBeenCalledWith(
 				expect.objectContaining({
 					filePath: sourceFile,
+					requestedOffset: 1,
+					requestedLimit: 6,
 					effectiveOffset: 1,
 					effectiveLimit: 6,
 				}),

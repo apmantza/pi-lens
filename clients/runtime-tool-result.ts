@@ -1217,7 +1217,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// THIS set, not raw recognized - otherwise a redirect target dropped
 		// by the isError filter would be subtracted from recovery AND
 		// excluded here, attributed nowhere.
-		const recognizedWritten =
+		let recognizedWritten =
 			event.isError !== true
 				? recognized.filter(
 						(wp) =>
@@ -1232,6 +1232,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// them) — a deliberate divergence from the isError filter above, which
 		// exists for restore semantics where attribution would lie.
 		let opaquePaths: string[] = [];
+		let observedChangedPaths: Set<string> | undefined;
 		// Recovery runs for EVERY bash command with a pending baseline - not
 		// only recognized-empty ones. A mixed command (`python x.py > out.ts`
 		// plus script-internal writes) previously skipped observation entirely
@@ -1269,6 +1270,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 							!isExternalOrVendorFile(p, scanRoot) &&
 							!isPathIgnoredByProject(p, scanRoot, false),
 					);
+					observedChangedPaths = new Set(opaquePaths);
 				} else if (recovery.verdict === "unknown") {
 					// #2060: deliberately WIDER than the old `recognized.length > 0`
 					// guard. A fully opaque command whose probe failed is the shape
@@ -1303,6 +1305,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				});
 				if (outcome.snapshot && !outcome.unknownReason) {
 					opaquePaths = diffFileStats(pending.stats, outcome.snapshot);
+					observedChangedPaths = new Set(opaquePaths);
 				} else {
 					unknownReason =
 						outcome.unknownReason ??
@@ -1317,6 +1320,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					recognizedWritten.map((p) => normalizeMapKey(path.resolve(p))),
 				);
 				opaquePaths = opaquePaths.filter((p) => !survivingKeys.has(p));
+			}
+			if (observedChangedPaths) {
+				recognizedWritten = recognizedWritten.filter((file) =>
+					observedChangedPaths!.has(normalizeMapKey(path.resolve(file))),
+				);
 			}
 			if (unknownReason) {
 				logLatency({
@@ -1398,42 +1406,43 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				}
 			)?.truncation;
 			const parsedSpans = extractReadPathsFromCommand(command, workspaceRoot);
-			const spans = parsedSpans.flatMap((span) => {
-				if (
-					truncation?.truncated === true &&
-					truncation.totalLines === span.offset + span.limit - 1 &&
-					typeof truncation.outputLines === "number"
-				) {
-					const shown = Math.min(truncation.outputLines, span.limit);
-					return shown > 0
-						? [
-								{
-									...span,
-									offset: span.offset + span.limit - shown,
-									limit: shown,
-								},
-							]
-						: [];
+			let spans = parsedSpans;
+			if (
+				truncation?.truncated === true &&
+				typeof truncation.outputLines === "number"
+			) {
+				if (parsedSpans.length === 1) {
+					const span = parsedSpans[0];
+					// countFileLines intentionally preserves the split-based guard
+					// convention, where a trailing newline contributes an empty final
+					// element. The host's output line count does not include that
+					// element, so remove it from the span basis before taking the tail.
+					const hasTrailingNewline = nodeFs
+						.readFileSync(span.filePath, "utf8")
+						.endsWith("\n");
+					const spanLineCount = hasTrailingNewline
+						? Math.max(1, span.limit - 1)
+						: span.limit;
+					const shown = Math.min(truncation.outputLines, spanLineCount);
+					spans =
+						shown > 0
+							? [
+									{
+										...span,
+										offset: span.offset + spanLineCount - shown,
+										limit: shown,
+									},
+								]
+							: [];
+				} else if (parsedSpans.length > 1) {
+					recordDegradationOnce({
+						kind: "bash_view_clipped",
+						subject: command,
+						reason: "truncated bash view contained multiple spans",
+					});
+					spans = [];
 				}
-				if (truncation === undefined && span.offset === 1) {
-					const output = event.content
-						.map((part) => part.text ?? "")
-						.join("\n");
-					const notice = output.indexOf("\n\n[Showing ");
-					const shownText = notice >= 0 ? output.slice(0, notice) : output;
-					const shownLines =
-						shownText === "" ? 0 : shownText.split("\n").length;
-					if (shownLines > 0 && shownLines < span.limit) {
-						recordDegradationOnce({
-							kind: "bash_view_clipped",
-							subject: span.filePath,
-							reason: "bash view result omitted its host truncation range",
-						});
-						return [{ ...span, limit: shownLines }];
-					}
-				}
-				return [span];
-			});
+			}
 			for (const span of spans) {
 				if (isExternalOrVendorFile(span.filePath, workspaceRoot)) continue;
 				if (isPathIgnoredByProject(span.filePath, workspaceRoot, false))
@@ -1531,6 +1540,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		!getFlag("no-read-guard") &&
 		!isExternalOrVendorFile(filePath, workspaceRoot)
 	) {
+		const deliveredFilePath =
+			attribution?.resolvedPath && nodeFs.existsSync(attribution.resolvedPath)
+				? attribution.resolvedPath
+				: filePath;
+		if (!nodeFs.existsSync(deliveredFilePath)) return;
 		const input = event.input as { offset?: number; limit?: number };
 		const requestedOffset = input.offset ?? 1;
 		const requestedLimit = input.limit;
@@ -1539,7 +1553,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		)?.truncation;
 		const available = Math.max(
 			0,
-			countFileLines(filePath) - requestedOffset + 1,
+			countFileLines(deliveredFilePath) - requestedOffset + 1,
 		);
 		const deliveredLimit = Math.min(
 			available,
@@ -1549,15 +1563,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			logReadGuardEvent({
 				event: "read_pattern",
 				sessionId: runtime.telemetrySessionId,
-				filePath,
+				filePath: deliveredFilePath,
 				requestedOffset,
 				requestedLimit: requestedLimit ?? deliveredLimit,
 				effectiveOffset: requestedOffset,
 				effectiveLimit: deliveredLimit,
 				metadata: {
-					totalLines: countFileLines(filePath),
+					totalLines: countFileLines(deliveredFilePath),
 					isPartial: deliveredLimit < available,
-					fileKind: detectFileKind(filePath) ?? "unknown",
+					fileKind: detectFileKind(deliveredFilePath) ?? "unknown",
 					fractionRead:
 						available > 0
 							? Math.round((deliveredLimit / available) * 100) / 100
@@ -1565,8 +1579,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					expandedByTs: false,
 				},
 			});
-			deps.readGuard.recordRead({
-				filePath,
+			deps.readGuard.recordDeliveredRead({
+				filePath: deliveredFilePath,
 				requestedOffset,
 				requestedLimit: requestedLimit ?? deliveredLimit,
 				effectiveOffset: requestedOffset,
