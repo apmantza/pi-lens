@@ -60,6 +60,11 @@
  *     is recognised. This narrows what a unit may inherit routing from, so it
  *     is a false NEGATIVE (an actually-routed unit reads as unrouted) — the
  *     safer failure direction, and the one the whitelist was built for;
+ *   * a legitimate policy handle hidden behind a type alias (`type
+ *     ToolHandle = ReturnType<typeof makeToolProbe>; Map<string,
+ *     ToolHandle>`) is not resolved, so it reads as unrouted. This is another
+ *     false negative and the safe direction; type resolution is outside this
+ *     test-support analyser;
  *   * a `POLICY_FACTORY` imported under a renamed binding
  *     (`import { createCwdCachedProbe as ccp }`) does not match the factory's
  *     canonical name and reads as a hand-rolled latch, not a handle. Also a
