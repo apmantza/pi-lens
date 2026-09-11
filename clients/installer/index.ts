@@ -5267,7 +5267,7 @@ async function installPipTool(
 			if (pipPep668LoggedRefusals.current(logKey) === 0) {
 				pipPep668LoggedRefusals.bump(logKey);
 				logSessionStart(
-					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${reason})`,
+					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${boundInstallError(reason)})`,
 				);
 			}
 		};

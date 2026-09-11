@@ -1164,8 +1164,8 @@ normal `--user` install. A refusal containing
 strategy. Every non-PEP-668 failure continues to the next available candidate
 binary. Candidate failure records use the argv actually spawned, retain the
 first meaningful diagnostic, append later rung failures in bounded entries,
-and apply `INSTALL_CANDIDATE_ERROR_LIMIT` to each entry; the final attempted
-rung remains visible in the aggregate reason. Unavailable Python candidates
+and apply `INSTALL_CANDIDATE_ERROR_LIMIT` to each entry; the aggregate reason
+may omit later entries when its overall bound is reached. Unavailable Python candidates
 are filtered before the venv rung without spawning them.
 Each successful rung records one bounded `pip-install-strategy-succeeded` row
 with the tool, rung, and resolved binary path. The final `--break-system-packages` attempt sets `PYTHONUSERBASE`

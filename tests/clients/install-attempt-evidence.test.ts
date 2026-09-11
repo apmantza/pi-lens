@@ -213,8 +213,12 @@ describe("the installer records what its attempt did (#1500)", () => {
 			restorePath();
 			fs.rmSync(binDir, { recursive: true, force: true });
 		}
-		expect(calls).not.toContain("python3 -m venv");
-		expect(calls).not.toContain("python -m venv");
+		expect(calls.some((call) => call.startsWith("python3 -m venv "))).toBe(
+			false,
+		);
+		expect(calls.some((call) => call.startsWith("python -m venv "))).toBe(
+			false,
+		);
 	});
 
 	it("preserves a PEP 668 pip refusal for downstream classification", async () => {

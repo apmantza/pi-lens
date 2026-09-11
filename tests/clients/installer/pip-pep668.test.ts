@@ -21,22 +21,24 @@ function writeExecutable(file: string, source: string): void {
 
 function writeFakePip(
 	binDir: string,
-	mode: "pep668" | "private" | "genuine",
+	mode: "pep668" | "private" | "genuine" | "long-genuine",
 ): string {
 	const log = path.join(path.dirname(binDir), "pip.log");
 	const behavior =
 		mode === "pep668"
-			? 'echo "error: externally-managed-environment" >&2; exit 1'
+			? 'printf "error: externally-managed-environment\\n\\n× This environment is externally managed\\n╰─> To install Python packages system-wide, try apt install\\n    python3-xyz, where xyz is the package you are trying to install.\\n" >&2; exit 1'
 			: mode === "genuine"
 				? 'echo "No matching distribution found" >&2; exit 1'
-				: [
-						'case " $* " in *" --break-system-packages "*)',
-						'/bin/mkdir -p "$PYTHONUSERBASE/bin"',
-						'printf "#!/bin/sh\\necho ruff 1.0\\n" > "$PYTHONUSERBASE/bin/ruff"',
-						'/bin/chmod 750 "$PYTHONUSERBASE/bin/ruff"',
-						"exit 0;;",
-						'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
-					].join("\n");
+				: mode === "long-genuine"
+					? 'printf "No matching distribution found %1000s\\n" x >&2; exit 1'
+					: [
+							'case " $* " in *" --break-system-packages "*)',
+							'/bin/mkdir -p "$PYTHONUSERBASE/bin"',
+							'printf "#!/bin/sh\\necho ruff 1.0\\n" > "$PYTHONUSERBASE/bin/ruff"',
+							'/bin/chmod 750 "$PYTHONUSERBASE/bin/ruff"',
+							"exit 0;;",
+							'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
+						].join("\n");
 	writeExecutable(
 		path.join(binDir, "pip3"),
 		`#!/bin/sh\necho "$*" >> "$FAKE_PIP_LOG"\n${behavior}\n`,
@@ -68,12 +70,14 @@ exit 1
 
 function writeFakePythonWithoutVenv(
 	binDir: string,
-	mode: "pep668" | "genuine" | "private" = "pep668",
+	mode: "pep668" | "genuine" | "private" | "long-genuine" = "pep668",
 ): void {
 	const pipFailure =
 		mode === "genuine"
 			? 'echo "No matching distribution found" >&2'
-			: 'echo "error: externally-managed-environment" >&2';
+			: mode === "long-genuine"
+				? 'printf "No matching distribution found %1000s" x >&2'
+				: 'echo "error: externally-managed-environment" >&2';
 	writeExecutable(
 		path.join(binDir, "python3"),
 		`#!/bin/sh
@@ -277,8 +281,26 @@ fi
 		fs.mkdirSync(bin, { recursive: true });
 		const log = writeFakePip(bin, "pep668");
 		writeFakePythonWithoutVenv(bin, "pep668");
-		const result = await runInstaller(root, bin, "ruff", { FAKE_PIP_LOG: log });
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: log,
+			PI_LENS_TEST_MODE: "0",
+		});
 		expect(result.result.reason).toMatch(/externally-managed-environment/);
+		const sessionLog = fs.readFileSync(
+			path.join(root, "sessionstart.log"),
+			"utf8",
+		);
+		const refusalLines = sessionLog
+			.split("\n")
+			.filter((line) => line.includes("refused by PEP 668"));
+		expect(refusalLines).toHaveLength(1);
+		expect(refusalLines[0]?.length).toBeLessThanOrEqual(1000);
+		expect(
+			sessionLog
+				.trimEnd()
+				.split("\n")
+				.every((line) => line.startsWith("[")),
+		).toBe(true);
 	});
 
 	it("resolves Windows Scripts binaries", () => {
@@ -334,5 +356,24 @@ fi
 		expect(result.result.reason).toContain("No matching distribution found");
 		expect(result.result.reason).toContain("python3 -m pip install --user");
 		expect(result.result.reason.length).toBeLessThan(500);
+	});
+
+	it("bounds a long diagnostic for every pip candidate", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePip(bin, "long-genuine");
+		writeFakePythonWithoutVenv(bin, "long-genuine");
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: path.join(root, "pip.log"),
+		});
+		const reason = result.result.reason as string;
+		const firstCandidate = reason.split(" | ")[0] ?? "";
+		const diagnostic = firstCandidate.replace(
+			/^pip install failed: [^:]+: /,
+			"",
+		);
+		expect(diagnostic.length).toBeLessThanOrEqual(200);
+		expect(reason.length).toBeLessThanOrEqual(1000);
 	});
 });
