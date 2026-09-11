@@ -25,6 +25,7 @@ import {
 	POLL_INTERVAL_SECONDS,
 	resolveGhTimeoutMs,
 	resolveHeadSha,
+	resolveClassification,
 	resolveRepository,
 	resolveRequiredCheckNames,
 	resolveWaitCapSeconds,
@@ -1587,6 +1588,36 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 		};
 		resolveHeadSha("2539", ghExec);
 		expect(calls[0]).toEqual({ timeoutMs: DEFAULT_GH_TIMEOUT_MS });
+	});
+});
+
+describe("resolveClassification — label freshness (#2856)", () => {
+	it("ignores a verdict label whose classifier marker belongs to an older head", () => {
+		const ghExec = () =>
+			JSON.stringify({
+				headRefOid: "abcdef1234567",
+				labels: [{ name: "ci:real" }],
+				comments: [
+					{
+						body: "ci-classifier: real — first failure: old <!-- ci-classifier:sha=0123456789abc rerun=false -->",
+					},
+				],
+			});
+		expect(resolveClassification("2856", ghExec)).toBeNull();
+	});
+
+	it("accepts a verdict label only when its classifier marker matches the head", () => {
+		const ghExec = () =>
+			JSON.stringify({
+				headRefOid: "abcdef1234567",
+				labels: [{ name: "ci:infra" }],
+				comments: [
+					{
+						body: "ci-classifier: infra-kill (detail) <!-- ci-classifier:sha=abcdef1234567 rerun=false -->",
+					},
+				],
+			});
+		expect(resolveClassification("2856", ghExec)).toBe("infra-kill");
 	});
 });
 
