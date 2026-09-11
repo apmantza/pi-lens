@@ -17,6 +17,8 @@
  * runs strictly after test B's assertion has already been made.
  */
 import { afterAll, describe, expect, it } from "vitest";
+import { waitFor } from "../clients/interleaving-kit.js";
+import { stopLSP } from "../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "./fake-lsp-server.js";
 
 function isAlive(pid: number): boolean {
@@ -75,5 +77,187 @@ describe("spawnFakeLspServer — onTestFinished backstop (#2436)", () => {
 			50,
 		);
 		expect(died).toBe(true);
+	});
+});
+
+type OrderingFrame = {
+	id?: number;
+	method?: string;
+	params?: { version?: number; response?: string };
+	result?: { items?: unknown[] };
+	error?: { code?: number };
+};
+
+const ORDERING_URI = "file:///fixture-2824.ts";
+
+function orderingFrame(message: Record<string, unknown>): Buffer {
+	const body = JSON.stringify(message);
+	return Buffer.from(
+		`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n${body}`,
+		"utf8",
+	);
+}
+
+async function startOrderingFixture(env: Record<string, string>) {
+	const proc = await spawnFakeLspServer({ env: { ...process.env, ...env } });
+	const frames: OrderingFrame[] = [];
+	let buffer = Buffer.alloc(0);
+	proc.stdout.on("data", (chunk: Buffer) => {
+		buffer = Buffer.concat([buffer, chunk]);
+		while (true) {
+			const headerEnd = buffer.indexOf("\r\n\r\n");
+			if (headerEnd < 0) return;
+			const header = buffer.subarray(0, headerEnd).toString("utf8");
+			const length = /Content-Length:\s*(\d+)/i.exec(header);
+			if (!length) throw new Error(`missing Content-Length in ${header}`);
+			const bodyEnd = headerEnd + 4 + Number(length[1]);
+			if (buffer.length < bodyEnd) return;
+			frames.push(
+				JSON.parse(buffer.subarray(headerEnd + 4, bodyEnd).toString("utf8")),
+			);
+			buffer = buffer.subarray(bodyEnd);
+		}
+	});
+	const write = (message: Record<string, unknown>) =>
+		(
+			proc.stdin as NodeJS.WritableStream & { write: (data: Buffer) => void }
+		).write(orderingFrame(message));
+	write({
+		jsonrpc: "2.0",
+		id: 1,
+		method: "initialize",
+		params: { capabilities: {} },
+	});
+	await waitFor(
+		() => frames,
+		(value) => value.some((frame) => frame.id === 1),
+	);
+	write({ jsonrpc: "2.0", method: "initialized", params: {} });
+	write({
+		jsonrpc: "2.0",
+		method: "textDocument/didOpen",
+		params: {
+			textDocument: { uri: ORDERING_URI, version: 1, text: "const x = 1;" },
+		},
+	});
+	write({
+		jsonrpc: "2.0",
+		id: 2,
+		method: "textDocument/diagnostic",
+		params: { textDocument: { uri: ORDERING_URI } },
+	});
+	return { proc, frames };
+}
+
+describe("fake LSP pull/push ordering controls (#2824)", () => {
+	const waitForCompletion = (frames: OrderingFrame[]) =>
+		waitFor(
+			() => frames,
+			(value) => value.some((frame) => frame.method === "$/test/pullCompleted"),
+		);
+
+	it("pushBeforePullResponse emits the push before the pull response", async () => {
+		const { proc, frames } = await startOrderingFixture({
+			FAKE_LSP_PUSH_BEFORE_PULL_RESPONSE: "1",
+			FAKE_LSP_PULL_COMPLETION: "1",
+		});
+		try {
+			await waitForCompletion(frames);
+			const ordered = frames.filter(
+				(frame) =>
+					frame.method === "textDocument/publishDiagnostics" || frame.id === 2,
+			);
+			expect(ordered[0]?.method).toBe("textDocument/publishDiagnostics");
+			expect(ordered[1]?.id).toBe(2);
+		} finally {
+			await stopLSP(proc).catch(() => {});
+		}
+	});
+
+	it("pushAfterPullResponse emits the pull response before the push", async () => {
+		const { proc, frames } = await startOrderingFixture({
+			FAKE_LSP_PUSH_AFTER_PULL_RESPONSE: "1",
+			FAKE_LSP_PULL_COMPLETION: "1",
+		});
+		try {
+			await waitForCompletion(frames);
+			const ordered = frames.filter(
+				(frame) =>
+					frame.method === "textDocument/publishDiagnostics" || frame.id === 2,
+			);
+			expect(ordered[0]?.id).toBe(2);
+			expect(ordered[1]?.method).toBe("textDocument/publishDiagnostics");
+		} finally {
+			await stopLSP(proc).catch(() => {});
+		}
+	});
+
+	it("pushWithVersion carries the configured document version", async () => {
+		const { proc, frames } = await startOrderingFixture({
+			FAKE_LSP_PUSH_AFTER_PULL_RESPONSE: "1",
+			FAKE_LSP_PUSH_VERSION: "7",
+			FAKE_LSP_PULL_COMPLETION: "1",
+		});
+		try {
+			await waitForCompletion(frames);
+			expect(
+				frames.find(
+					(frame) => frame.method === "textDocument/publishDiagnostics",
+				)?.params?.version,
+			).toBe(7);
+		} finally {
+			await stopLSP(proc).catch(() => {});
+		}
+	});
+
+	it.each([
+		[
+			"-32601",
+			(frame: OrderingFrame | undefined) => frame?.error?.code === -32601,
+		],
+		["timeout", (frame: OrderingFrame | undefined) => frame === undefined],
+		[
+			"items",
+			(frame: OrderingFrame | undefined) => frame?.result?.items?.length === 1,
+		],
+		[
+			"empty",
+			(frame: OrderingFrame | undefined) => frame?.result?.items?.length === 0,
+		],
+	] as const)(
+		"respondPullWith(%s) returns the requested pull outcome",
+		async (response, matches) => {
+			const { proc, frames } = await startOrderingFixture({
+				FAKE_LSP_RESPOND_PULL_WITH: response,
+				FAKE_LSP_PULL_COMPLETION: "1",
+			});
+			try {
+				await waitForCompletion(frames);
+				expect(matches(frames.find((frame) => frame.id === 2))).toBe(true);
+			} finally {
+				await stopLSP(proc).catch(() => {});
+			}
+		},
+	);
+
+	it("signals pull completion only after the controlled operation is observable", async () => {
+		const { proc, frames } = await startOrderingFixture({
+			FAKE_LSP_PUSH_BEFORE_PULL_RESPONSE: "1",
+			FAKE_LSP_PULL_COMPLETION: "1",
+		});
+		try {
+			const completion = await waitFor(
+				() => frames.find((frame) => frame.method === "$/test/pullCompleted"),
+				(frame) => frame !== undefined,
+			);
+			expect(completion?.params?.response).toBe("default");
+			expect(
+				frames.some(
+					(frame) => frame.method === "textDocument/publishDiagnostics",
+				),
+			).toBe(true);
+		} finally {
+			await stopLSP(proc).catch(() => {});
+		}
 	});
 });

@@ -158,6 +158,55 @@ function sendApplyEdit(spec) {
 
 const openDocuments = new Map();
 
+// #2824: deterministic pull/push wire controls for the LSP wait-hardening
+// matrix. These are environment-configured because the fixture is a separate
+// process. The completion notification lets a test await the exact operation
+// through its governed child-progress wait, without observing a later state
+// after an unbounded timer has already fired.
+const PULL_PUSH_BEFORE_RESPONSE =
+	process.env.FAKE_LSP_PUSH_BEFORE_PULL_RESPONSE === "1";
+const PULL_PUSH_AFTER_RESPONSE =
+	process.env.FAKE_LSP_PUSH_AFTER_PULL_RESPONSE === "1";
+const PULL_PUSH_VERSION = Number.parseInt(
+	process.env.FAKE_LSP_PUSH_VERSION ?? "",
+	10,
+);
+const PULL_RESPONSE = process.env.FAKE_LSP_RESPOND_PULL_WITH;
+const PULL_COMPLETION_SIGNAL = process.env.FAKE_LSP_PULL_COMPLETION === "1";
+
+function sendPullPush(uri) {
+	send({
+		jsonrpc: "2.0",
+		method: "textDocument/publishDiagnostics",
+		params: {
+			uri,
+			...(Number.isInteger(PULL_PUSH_VERSION)
+				? { version: PULL_PUSH_VERSION }
+				: {}),
+			diagnostics: [
+				{
+					severity: 1,
+					code: "FAKE-2824-PUSH",
+					message: "diagnostic from ordered fake server push",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				},
+			],
+		},
+	});
+}
+
+function sendPullCompletion() {
+	if (!PULL_COMPLETION_SIGNAL) return;
+	send({
+		jsonrpc: "2.0",
+		method: "$/test/pullCompleted",
+		params: { response: PULL_RESPONSE ?? "default" },
+	});
+}
+
 // #1714: a single-threaded scanner with a finite intake ceiling, for the
 // full-sweep throttle tests.
 //
@@ -679,28 +728,44 @@ function handle(raw) {
 	if (data.method === "textDocument/diagnostic") {
 		if (process.env.FAKE_LSP_IGNORE_PULL === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
-		send({
-			jsonrpc: "2.0",
-			id: data.id,
-			result: {
-				kind: "full",
-				items: text.includes("fake-lsp-clean")
+		const uri = data.params?.textDocument?.uri;
+		const sendPullResponse = () => {
+			if (PULL_RESPONSE === "timeout") return;
+			if (PULL_RESPONSE === "-32601") {
+				send({
+					jsonrpc: "2.0",
+					id: data.id,
+					error: { code: -32601, message: "method not found" },
+				});
+				return;
+			}
+			const items =
+				PULL_RESPONSE === "empty" ||
+				(text.includes("fake-lsp-clean") && PULL_RESPONSE !== "items")
 					? []
 					: [
-					{
-						severity: 1,
-						code: "FAKE1001",
-						source: "fake-lsp",
-						message:
-							"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs",
-						range: {
-							start: { line: 0, character: 0 },
-							end: { line: 0, character: 5 },
-						},
-					},
-					],
-			},
-		});
+							{
+								severity: 1,
+								code: "FAKE1001",
+								source: "fake-lsp",
+								message:
+									"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 5 },
+								},
+							},
+						];
+			send({
+				jsonrpc: "2.0",
+				id: data.id,
+				result: { kind: "full", items },
+			});
+		};
+		if (PULL_PUSH_BEFORE_RESPONSE) sendPullPush(uri);
+		sendPullResponse();
+		if (PULL_PUSH_AFTER_RESPONSE) sendPullPush(uri);
+		sendPullCompletion();
 		return;
 	}
 
