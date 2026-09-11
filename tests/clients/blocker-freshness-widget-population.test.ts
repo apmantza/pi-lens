@@ -343,4 +343,41 @@ describe("blocker freshness sweep — widget-store population (#1790)", () => {
 		});
 		expect(counts.total).toBe(5);
 	});
+	// Self-drift axis regression: a non-LSP inline entry is now drift-checked, so
+	// "is it eligible" no longer answers "may a widget row chain onto it". Here the
+	// inline tree-sitter entry demotes on its OWN file's drift while the widget's
+	// pure-LSP row is demoted by an IMPORT that drifted. Chaining would have let
+	// the inline entry's self-only check stand in for both and never consult the
+	// import — so these must stay two independently checked rows.
+	it("does not chain a widget row onto a self-only (non-LSP) inline entry (#1790 F5, self-drift axis)", async () => {
+		const dir = makeDir("pi-lens-fresh-widgetpop-selfaxis-");
+		const consumer = path.join(dir, "consumer.ts");
+		const dep = path.join(dir, "dep.ts");
+		fs.writeFileSync(dep, "export const x = 1;\n");
+		fs.writeFileSync(
+			consumer,
+			'import { x } from "./dep.js";\nexport const y = x;\n',
+		);
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(consumer, "🔴 incomplete assertion", 1, [
+			"tree-sitter",
+		]);
+		recordCacheServedBlocking(consumer, "cached blocking finding", Date.now());
+		// Both axes drift: the blocker's own file AND the import it does not consult.
+		driftIntoFuture(dep);
+		driftIntoFuture(consumer);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir, {
+			additionalEntries: widgetAdditionalEntries(),
+		});
+		// Two rows, both demoted on their own axis — not one row standing in for both.
+		expect(counts.total).toBe(2);
+		expect(counts.revalidated).toBe(2);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+
+		const widgetDiags = getFileDiagnostics(consumer) ?? [];
+		expect(widgetDiags.some((d) => d.stale === true)).toBe(true);
+		expect(widgetDiags.some((d) => isBlocking(d))).toBe(false);
+	});
 });

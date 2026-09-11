@@ -371,3 +371,103 @@ describe("blocker freshness sweep — drift demotion (#1631)", () => {
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
 });
+
+// #1561 remainder: the self axis. #1631 review F4 correctly excluded a non-LSP
+// record from IMPORT drift, but excluded it from its OWN file's drift with it —
+// and no other path could clear such a record, because
+// `retireInlineBlockerOnConfirmedClean` needs `coveredSources` to cover
+// `"tree-sitter"` and `coveredSourcesForCheck` can only ever name registered LSP
+// servers. Live shape: a `ts-incomplete-assertion` blocker re-served every turn
+// for a whole session against a file proven clean by grep, LSP, and a passing test.
+describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
+	it("demotes a tree-sitter blocker when its own file drifted", async () => {
+		const dir = makeDir("pi-lens-fresh-selfts-");
+		const target = path.join(dir, "consult.test.ts");
+		fs.writeFileSync(target, "expect(foo).toBe;\n");
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(target, "🔴 L153: Incomplete assertion", 1, [
+			"tree-sitter",
+		]);
+		driftIntoFuture(target);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+	});
+
+	it("demotes an ast-grep blocker when its own file drifted", async () => {
+		const dir = makeDir("pi-lens-fresh-selfsg-");
+		const target = path.join(dir, "consumer.ts");
+		fs.writeFileSync(target, "export const y = 1;\n");
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
+			"ast-grep",
+		]);
+		driftIntoFuture(target);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+	});
+
+	// Deliberate: `pipeline.ts` contributes the literal `"unknown"` for an
+	// untagged diagnostic so an LSP check cannot claim coverage for it. That
+	// pins it against a COVERAGE claim; it says nothing about the file's bytes
+	// changing underneath the verdict, which invalidates it whatever raised it.
+	it('demotes an "unknown"-tagged blocker when its own file drifted', async () => {
+		const dir = makeDir("pi-lens-fresh-selfunk-");
+		const target = path.join(dir, "consumer.ts");
+		fs.writeFileSync(target, "export const y = 1;\n");
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(target, "🔴 untagged blocker", 1, ["unknown"]);
+		driftIntoFuture(target);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+	});
+
+	// The import axis stays excluded for non-LSP provenance — #1631 review F4's
+	// actual claim. Only the file's own bytes may demote these.
+	it("still keeps a tree-sitter blocker when only a dependency drifted", async () => {
+		const dir = makeDir("pi-lens-fresh-selftsdep-");
+		const consumer = path.join(dir, "consumer.ts");
+		const dep = path.join(dir, "dep.ts");
+		fs.writeFileSync(dep, "export const x = 1;\n");
+		fs.writeFileSync(
+			consumer,
+			'import { x } from "./dep.js";\nexport const y = x;\n',
+		);
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(consumer, "🔴 tree-sitter blocker", 1, [
+			"tree-sitter",
+		]);
+		driftIntoFuture(dep);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.kept).toBe(1);
+		expect(counts.revalidated).toBe(0);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
+	});
+
+	// A record with NO recorded provenance stays fail-closed, matching the test
+	// `retireInlineBlockerOnConfirmedClean` applies before it will retire.
+	it("leaves a record with no recorded sources untouched on own-file drift", async () => {
+		const dir = makeDir("pi-lens-fresh-selfnoprov-");
+		const target = path.join(dir, "consumer.ts");
+		fs.writeFileSync(target, "export const y = 1;\n");
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(target, "🔴 unknown provenance", 1);
+		driftIntoFuture(target);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.kept).toBe(1);
+		expect(counts.revalidated).toBe(0);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
+	});
+});

@@ -31,11 +31,35 @@
  * all runners, so an eslint, biome-check, or ast-grep security-rule (hardcoded
  * secret, CVE) finding can land here too. Only a language-server verdict is
  * actually invalidated by an IMPORT changing; an ast-grep secret match doesn't stop
- * being true because a file it imports was edited. The sweep therefore demotes an
- * entry only when its recorded `sources` (`InlineBlockerRecord.sources`) are ALL
- * `"lsp"` — a mixed or non-LSP-sourced blocker is left fully authoritative, the same
- * fail-closed shape `retireInlineBlockerOnConfirmedClean` already uses for
- * provenance it can't yet reason about.
+ * being true because a file it imports was edited.
+ *
+ * Self-drift axis (#1561 remainder). That reasoning covers the import axis and
+ * nothing else, but the original gate discarded BOTH axes for a non-LSP record:
+ * entries whose `sources` were not all `"lsp"` skipped the check entirely. A
+ * tree-sitter verdict about F's own syntax is emphatically invalidated by F's own
+ * bytes changing, and no other path could clear it —
+ * `retireInlineBlockerOnConfirmedClean` requires `coveredSources` to be a superset
+ * of the record's sources, `coveredSourcesForCheck` builds that set from the LSP
+ * server registry, and no registered server has id `"tree-sitter"`, so the retire
+ * could never fire however many clean checks ran. Live shape: a
+ * `ts-incomplete-assertion` blocker re-served every turn for the rest of a session
+ * against a file already proven clean by grep, LSP, and a passing test.
+ *
+ * So the sweep now runs over every entry that HAS recorded provenance, and picks
+ * the axis from the sources: all-`"lsp"` gets the own-file-plus-forward-imports
+ * walk, anything else (tree-sitter, ast-grep, mixed, or `"unknown"`) gets an
+ * own-file-only check. A record with NO recorded sources stays fail-closed and
+ * untouched, matching the test `retireInlineBlockerOnConfirmedClean` applies before
+ * it will retire. Demotion semantics are unchanged for every entry — same
+ * `markInlineBlockerStale` writer, same `"dependency-drift"` reason, same #1950
+ * delivery cap — so this widens WHICH entries are checked, not what a demotion
+ * means (defect shape 24: no second writer, no new discriminator).
+ *
+ * Boundary (defect shape 6): the self axis is mtime-only, inherited from
+ * `freshnessFromMtime`. A content change that preserves mtime is missed, and the
+ * entry is then kept at full authority — the pre-existing behavior, so a miss
+ * costs nothing beyond the status quo. Upgrading the sweep to `size` + content
+ * hash would strengthen both axes and belongs with the shared helper, not here.
  *
  * Resolution boundary (#1631 review F8): `extractForwardImportPaths` parses static
  * import/require syntax via tree-sitter. It does not, and cannot, resolve a
@@ -416,6 +440,15 @@ async function detectDrift(
 	recordedAtMs: number,
 	resolveForwardImports: ForwardImportResolver,
 	turnIndex: number | undefined,
+	/**
+	 * Check ONLY the record's own file, skipping the forward-import walk.
+	 * Used for non-`"lsp"` provenance (see the module doc's "Self-drift axis"
+	 * section): a tree-sitter or ast-grep verdict about F's own syntax is not
+	 * invalidated by an import changing, but it IS invalidated by F itself
+	 * changing. Skipping the walk also keeps the widened population cheap —
+	 * one stat per entry, no parse.
+	 */
+	selfOnly = false,
 ): Promise<DriftResult> {
 	const drifted: string[] = [];
 	const ownFreshness = freshnessFromMtime({
@@ -423,6 +456,7 @@ async function detectDrift(
 		referenceMs: recordedAtMs,
 	});
 	if (ownFreshness.verdict === "stale") drifted.push(filePath);
+	if (selfOnly) return { drifted, truncated: false };
 	const { mtimes, truncated } = await collectForwardImportMtimes(
 		cwd,
 		filePath,
@@ -457,10 +491,15 @@ interface SweepPopulationEntry {
 /**
  * Whether a population entry is eligible for the drift check at all — the same
  * three gates the main sweep loop applies (not already stale, has a timestamp
- * baseline, all-`"lsp"` sources). Factored out so the #1790 review F5 dedup
+ * baseline, HAS recorded provenance). Factored out so the #1790 review F5 dedup
  * decision below (chain vs. separate row) asks the IDENTICAL question the main
  * loop will ask, rather than a second hand-written approximation of it that
  * could drift from the real gates.
+ *
+ * The third gate reads "has provenance", not "is all-`lsp`": a non-LSP record is
+ * now eligible for the self-drift axis (own file only, no import walk). Widening
+ * it here and in the loop together is the point of the shared predicate — the
+ * loop still decides WHICH axis each eligible entry gets.
  */
 function isEligibleForDriftCheck(entry: {
 	stale: boolean;
@@ -469,11 +508,46 @@ function isEligibleForDriftCheck(entry: {
 }): boolean {
 	if (entry.stale) return false;
 	if (entry.recordedAtMs === undefined) return false;
+	return entry.sources !== undefined && entry.sources.length > 0;
+}
+
+/**
+ * All recorded sources are `"lsp"` — the record gets the full own-file PLUS
+ * forward-import walk. Anything else (tree-sitter, ast-grep, mixed, `"unknown"`)
+ * gets the self-only axis. One spelling, shared by the sweep loop and the
+ * chain decision below so the two can never disagree about which axis an entry
+ * is on.
+ */
+function isAllLspSourced(sources: readonly string[] | undefined): boolean {
 	return (
-		entry.sources !== undefined &&
-		entry.sources.length > 0 &&
-		entry.sources.every((source) => source === "lsp")
+		sources !== undefined &&
+		sources.length > 0 &&
+		sources.every((source) => source === "lsp")
 	);
+}
+
+/**
+ * Whether a duplicated widget row may be CHAINED onto this inline entry's single
+ * drift check instead of being given its own population row (#1790 review F5).
+ *
+ * Strictly stronger than {@link isEligibleForDriftCheck} since the self-drift
+ * axis landed, and deliberately so. A widget row from
+ * `getWidgetBlockingFilesForSweep` is pure-LSP by construction, so the check that
+ * speaks for it must walk forward imports. An inline entry on the self-only axis
+ * never consults imports, so chaining a widget row onto it would silently drop
+ * that row's import axis — the #1790 ghost, in a new disguise: the inline entry
+ * reports `kept`, the widget row is never independently checked, and its
+ * `isBlocking` stays true for a dependency that drifted.
+ *
+ * Such an inline entry is still drift-checked on its own axis. It just cannot
+ * answer another store's question.
+ */
+function canSubsumeLspWidgetRow(entry: {
+	stale: boolean;
+	recordedAtMs: number | undefined;
+	sources: readonly string[] | undefined;
+}): boolean {
+	return isEligibleForDriftCheck(entry) && isAllLspSourced(entry.sources);
 }
 
 /**
@@ -574,16 +648,22 @@ export async function sweepInlineBlockerFreshness(
 		// drop, not a merge. The main loop below short-circuits BEFORE ever
 		// calling `demote()` for an already-stale entry (the one-way
 		// dependency-drift latch — a forever-ghost once it fires once), an
-		// unstamped legacy record, or a non-LSP/mixed-sources entry (e.g. an
-		// unrelated ast-grep finding on the same file). Any of those swallows a
-		// chained widget demote even though the widget row is pure-LSP by
-		// construction (`getWidgetBlockingFilesForSweep` only emits LSP-sourced
-		// rows) and carries its OWN baseline. Eligibility belongs to the STORE
-		// the row came from, not the file path two stores happen to share — so
-		// only chain when the inline entry would itself reach `demote()`;
-		// otherwise give the widget row its own population entry so its own
-		// gates and its own drift check decide its own fate.
-		if (inlineEntry && isEligibleForDriftCheck(inlineEntry)) {
+		// unstamped legacy record, or a record with no provenance at all. Any of
+		// those swallows a chained widget demote even though the widget row is
+		// pure-LSP by construction (`getWidgetBlockingFilesForSweep` only emits
+		// LSP-sourced rows) and carries its OWN baseline. Eligibility belongs to
+		// the STORE the row came from, not the file path two stores happen to
+		// share — so only chain when the inline entry would itself reach
+		// `demote()`; otherwise give the widget row its own population entry so
+		// its own gates and its own drift check decide its own fate.
+		//
+		// Since the self-drift axis landed, "would reach `demote()`" is no longer
+		// enough: a non-LSP inline entry IS drift-checked now, but only against
+		// its own file. It never consults imports, so it cannot speak for a
+		// pure-LSP widget row whose dependency drifted. `canSubsumeLspWidgetRow`
+		// carries that stronger test; the unrelated-ast-grep-finding case in the
+		// paragraph above is now excluded by the axis, not by ineligibility.
+		if (inlineEntry && canSubsumeLspWidgetRow(inlineEntry)) {
 			// #1790 review F1: a duplicated path is counted and drift-checked ONCE
 			// (via the inline entry above), but BOTH stores must record the
 			// verdict — `markInlineBlockerStale` only ever touches
@@ -625,23 +705,35 @@ export async function sweepInlineBlockerFreshness(
 				counts.kept += 1;
 				continue;
 			}
-			// #1631 review F4: fail-closed on non-LSP (or unknown) provenance. Import
-			// drift only invalidates a language-server verdict; a mixed or non-`"lsp"`
-			// `sources` list is kept at full authority rather than demoted.
-			const isLspSourced =
-				entry.sources !== undefined &&
-				entry.sources.length > 0 &&
-				entry.sources.every((source) => source === "lsp");
-			if (!isLspSourced) {
+			// #1631 review F4 kept every non-`"lsp"` record at full authority. Its
+			// stated reason is about the IMPORT axis only — "an ast-grep secret match
+			// doesn't stop being true because a file it imports was edited" — but the
+			// gate discarded the self axis with it. A record with NO provenance at all
+			// stays fail-closed here, the same test
+			// `retireInlineBlockerOnConfirmedClean` applies before it will retire.
+			const recordedSources =
+				entry.sources !== undefined && entry.sources.length > 0
+					? entry.sources
+					: undefined;
+			if (recordedSources === undefined) {
 				counts.kept += 1;
 				continue;
 			}
+			// Self-drift axis. When the record's OWN file changed since the verdict was
+			// taken, the verdict describes content that is no longer on disk — true
+			// whatever raised it. An all-`"lsp"` record keeps the full import walk; a
+			// tree-sitter, ast-grep, mixed, or `"unknown"`-tagged record is checked
+			// against its own file only. Demotion, not deletion (#1419): the entry is
+			// re-served in the advisory channel marked `[stale — re-run to confirm]`
+			// and retires through the existing #1950 delivery cap.
+			const isLspSourced = isAllLspSourced(recordedSources);
 			const { drifted, truncated } = await detectDrift(
 				cwd,
 				entry.filePath,
 				entry.recordedAtMs,
 				resolveForwardImports,
 				turnIndex,
+				!isLspSourced,
 			);
 			if (truncated) counts.truncatedImports += 1;
 			if (drifted.length > 0) {
