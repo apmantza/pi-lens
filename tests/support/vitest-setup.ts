@@ -2,13 +2,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, afterEach, expect } from "vitest";
+import { afterAll, expect } from "vitest";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
-import {
-	cleanupTestEnvironments,
-	removeTempDirSync,
-} from "../clients/test-utils.js";
-import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
+import { removeTempDirSync } from "../clients/test-utils.js";
 
 // The review-graph persist is debounced in production (#260 circuit-breaker) so
 // a burst of edits collapses to one write. In tests that would race disk-snapshot
@@ -121,24 +117,6 @@ const tmpLeakBaselinePath = path.join(
 const TMP_LEAK_BASELINE = JSON.parse(
 	fs.readFileSync(tmpLeakBaselinePath, "utf8"),
 ) as TmpLeakBaseline[];
-
-// Deferred project work can recreate a fixture root after its test's finally
-// block. Keep every root minted by this worker tracked through that cleanup,
-// drain the production persistence seam, then remove all of this worker's
-// roots. The set is module-scope, so this process cannot observe or remove a
-// sibling Vitest worker's roots.
-afterEach(async () => {
-	await waitForProjectSnapshotPersistsForTests();
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	cleanupTestEnvironments(expect.getState().currentTestName);
-});
-
-// Roots minted while a file is being declared or in beforeAll have no test
-// owner. The file-level hook owns them and removes every root left in this
-// worker after the file completes.
-afterAll(() => {
-	cleanupTestEnvironments();
-});
 
 // Fixtures that may outlive their test file without reding the file.
 // An admitted entry is STILL removed by the afterAll below; admission only

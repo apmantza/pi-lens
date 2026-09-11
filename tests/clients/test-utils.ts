@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expect } from "vitest";
 
 // Windows keeps a file handle inside a just-used temp dir alive briefly after
 // a child process/watcher/background scan exits (AV scanning, delayed handle
@@ -38,26 +37,22 @@ export function setupTestEnvironment(prefix = "pi-lens-test-"): {
 	cleanup: () => void;
 } {
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-	activeTestEnvironments.set(tmpDir, expect.getState().currentTestName);
+	activeTestEnvironments.add(tmpDir);
 	return {
 		tmpDir,
 		cleanup: () => {
 			removeTempDirSync(tmpDir);
-			// Keep ownership tracked: deferred work can recreate this root after
-			// the per-test removal, and the owning suite must sweep it again.
+			// Keep the root tracked: deferred work can recreate it before the
+			// owning family's cleanup sweep runs.
 		},
 	};
 }
 
-// The map is deliberately module-scoped: Vitest gives each worker its own
-// module instance, so one worker cannot sweep another worker's live fixture.
-// A missing test name means the root was minted by describe/beforeAll setup;
-// the file-level afterAll owns that root instead of an individual afterEach.
-const activeTestEnvironments = new Map<string, string | undefined>();
+const activeTestEnvironments = new Set<string>();
 
-export function cleanupTestEnvironments(testName?: string): void {
-	for (const [tmpDir, owner] of activeTestEnvironments) {
-		if (testName !== undefined && owner !== testName) continue;
+export function cleanupTestEnvironments(prefix: string): void {
+	for (const tmpDir of activeTestEnvironments) {
+		if (!path.basename(tmpDir).startsWith(prefix)) continue;
 		removeTempDirSync(tmpDir);
 		activeTestEnvironments.delete(tmpDir);
 	}
