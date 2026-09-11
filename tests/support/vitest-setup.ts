@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, expect } from "vitest";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
+import { removeTempDirSync } from "../clients/test-utils.js";
 
 // The review-graph persist is debounced in production (#260 circuit-breaker) so
 // a burst of edits collapses to one write. In tests that would race disk-snapshot
@@ -46,10 +47,247 @@ process.env.PI_LENS_CONFIG_PATH = "/nonexistent-pi-lens-tests/config.json";
 // directory. Tests that deliberately exercise the real resolver (if any)
 // should construct their own explicit override rather than unsetting this
 // back to the real homedir.
-process.env.PI_LENS_HOME = fs.mkdtempSync(
-	path.join(os.tmpdir(), "pi-lens-test-home-"),
+// Tmp-fixture hygiene (#2912): keep the real TMPDIR so the final governance
+// owner observes the same namespace as production. Workers report additions;
+// the serialized owner removes unadmitted entries after its assertion.
+const tmpHygieneRealTmp = os.tmpdir();
+const tmpHygieneBaselinePath = path.join(
+	process.cwd(),
+	".probe-home",
+	`tmp-hygiene-baseline-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}.json`,
 );
-installGitFixtureEnv(process.env.PI_LENS_HOME);
+fs.mkdirSync(path.dirname(tmpHygieneBaselinePath), { recursive: true });
+let tmpHygieneBefore: Set<string>;
+try {
+	tmpHygieneBefore = new Set(
+		JSON.parse(fs.readFileSync(tmpHygieneBaselinePath, "utf8")) as string[],
+	);
+} catch {
+	const baseline = snapshotTmpPiLensEntries(
+		readTmpDirEntries(tmpHygieneRealTmp),
+	);
+	try {
+		const fd = fs.openSync(tmpHygieneBaselinePath, "wx");
+		fs.writeFileSync(fd, `${JSON.stringify(baseline)}\n`);
+		fs.closeSync(fd);
+		tmpHygieneBefore = new Set(baseline);
+	} catch {
+		for (let attempt = 0; attempt < 1000; attempt++) {
+			try {
+				tmpHygieneBefore = new Set(
+					JSON.parse(
+						fs.readFileSync(tmpHygieneBaselinePath, "utf8"),
+					) as string[],
+				);
+				break;
+			} catch {
+				if (attempt === 999)
+					throw new Error("tmp hygiene baseline did not settle");
+			}
+		}
+	}
+}
+const tmpHygieneHome = process.env.PI_LENS_HOME
+	? path.resolve(process.env.PI_LENS_HOME)
+	: path.join(process.cwd(), ".probe-home");
+fs.mkdirSync(tmpHygieneHome, { recursive: true });
+process.env.PI_LENS_HOME = tmpHygieneHome;
+installGitFixtureEnv(tmpHygieneHome);
+
+interface TmpLeakAdmission {
+	/** Test file (repo-relative) or "*" for every file. */
+	file: string;
+	/** Entry-name prefix exempted from the leak red (still removed). */
+	prefix: string;
+	/** Why the leftover cannot be self-cleaned. */
+	reason: string;
+	/** Issue tracking the remainder. */
+	issue: string;
+}
+
+type TmpLeakBaseline = Omit<TmpLeakAdmission, "file" | "issue"> & {
+	count: number;
+	owner: string;
+};
+
+const tmpLeakBaselinePath = path.join(
+	process.cwd(),
+	"tests/config/tmp-fixture-hygiene-baseline.json",
+);
+const TMP_LEAK_BASELINE = JSON.parse(
+	fs.readFileSync(tmpLeakBaselinePath, "utf8"),
+) as TmpLeakBaseline[];
+
+// Fixtures that may outlive their test file without reding the file.
+// An admitted entry is STILL removed by the afterAll below; admission only
+// suppresses the red, never the hygiene.
+const TMP_LEAK_ADMISSIONS: TmpLeakAdmission[] = [
+	...TMP_LEAK_BASELINE.map(({ prefix, reason }) => ({
+		file: "*",
+		prefix,
+		reason: `${reason} The admission is a ratchet baseline; remove it when the owner is fixed.`,
+		issue: "#2912",
+	})),
+	{
+		file: "*",
+		prefix: "pi-lens-ast-grep",
+		reason:
+			"Production-owned bounded sgconfig baseline cache (entry cap 24 with oldest-first eviction plus a 7-day stale sweep in clients/sgconfig.ts); its lifecycle is owned by the process rather than an individual test file.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-scratch",
+		reason:
+			"The sanctioned scripts/lib/scratch-dir.mjs process-owned root is shared by concurrent probes; its owner sweeps children, so the final test file does not remove an active sibling root.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-master-",
+		reason:
+			"A concurrent clean-master probe owns this explicitly named root outside the Vitest worker population; removing it would mutate a sibling agent's fixture.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-round2-",
+		reason:
+			"A concurrent round-two probe owns this explicitly named report file outside the Vitest worker population; removing it would mutate a sibling agent's evidence.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-test-home-",
+		reason:
+			"A sibling Vitest invocation creates this worker home outside the serialized run; the current invocation pins PI_LENS_HOME and must not delete another worker's home.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-mcp-",
+		reason:
+			"A concurrent MCP worker owns this socket or workspace prefix outside the serialized run; its child-exit cleanup is tested separately and this sweep cannot kill a sibling endpoint.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-result-contract-",
+		reason:
+			"A concurrent result-contract worker owns this fixture outside the serialized run; removing it would mutate another worker's active MCP test.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-wiring-fork-",
+		reason:
+			"A concurrent wiring-fork probe owns this explicitly named fixture outside the Vitest worker population; the hygiene owner cannot remove a sibling probe's live root.",
+		issue: "#2912",
+	},
+	{
+		file: "*",
+		prefix: "pi-lens-lockfile-complete-",
+		reason:
+			"A concurrent lockfile-completeness probe owns this fixture outside the Vitest worker population; the serialized owner cannot remove its live temporary root.",
+		issue: "#2912",
+	},
+];
+
+function readTmpDirEntries(dir: string): string[] {
+	try {
+		return fs.readdirSync(dir);
+	} catch {
+		return [];
+	}
+}
+
+function snapshotTmpPiLensEntries(entries: string[]): string[] {
+	return entries.filter((name) => name.startsWith("pi-lens-"));
+}
+
+function isAdmittedTmpLeak(
+	testFile: string,
+	entryName: string,
+	admissions: TmpLeakAdmission[] = TMP_LEAK_ADMISSIONS,
+): TmpLeakAdmission | undefined {
+	return admissions
+		.filter(
+			(admission) =>
+				(admission.file === "*" || testFile.endsWith(admission.file)) &&
+				entryName.startsWith(admission.prefix),
+		)
+		.sort((left, right) => right.prefix.length - left.prefix.length)[0];
+}
+
+export function tmpHygieneAdmissionFor(
+	testFile: string,
+	entryName: string,
+	admissions: TmpLeakAdmission[] = TMP_LEAK_ADMISSIONS,
+): TmpLeakAdmission | undefined {
+	return isAdmittedTmpLeak(testFile, entryName, admissions);
+}
+
+export function tmpHygieneUnadmittedEntries(
+	entries: string[],
+	testFile: string,
+	admissions: TmpLeakAdmission[] = TMP_LEAK_ADMISSIONS,
+): string[] {
+	return entries.filter(
+		(name) => !isAdmittedTmpLeak(testFile, name, admissions),
+	);
+}
+
+export function tmpHygieneLeakReport(): {
+	testFile: string;
+	leftovers: string[];
+} {
+	const testFile =
+		String(expect.getState().testPath ?? "unknown")
+			.replace(/\\/g, "/")
+			.split("/tests/")
+			.pop() ?? "unknown";
+	const after = new Set(
+		snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp)),
+	);
+	return {
+		testFile,
+		leftovers: tmpHygieneUnadmittedEntries(
+			[...after].filter((name) => !tmpHygieneBefore.has(name)),
+			testFile,
+		),
+	};
+}
+
+afterAll(() => {
+	const { testFile, leftovers } = tmpHygieneLeakReport();
+	const after = new Set(
+		snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp)),
+	);
+	const allNew = [...after].filter((name) => !tmpHygieneBefore.has(name));
+	if (process.env.PI_LENS_TMP_HYGIENE_TRACE === "1")
+		process.stderr.write(
+			`[tmp-hygiene-trace] tests/${testFile} leaked=${leftovers.length} entries=${allNew.join(",")}\n`,
+		);
+	const leakedCount = leftovers.length;
+	if (leakedCount > 0 && process.env.PI_LENS_TMP_HYGIENE_TRACE !== "1")
+		console.warn(
+			`[tmp-hygiene] observed ${leakedCount} unadmitted entry(s) from ${tmpHygieneRealTmp}; the serialized governance owner cleans them`,
+		);
+});
+
+export function cleanupTmpHygiene(): void {
+	const after = snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp));
+	for (const name of after) {
+		if (tmpHygieneBefore.has(name)) continue;
+		if (isAdmittedTmpLeak("config/tmp-fixture-hygiene.test.ts", name)) continue;
+		removeTempDirSync(path.join(tmpHygieneRealTmp, name));
+	}
+	try {
+		fs.rmSync(tmpHygieneBaselinePath, { force: true });
+	} catch {
+		// A stale ignored baseline is harmless; the next run uses a new id.
+	}
+}
 
 // Hand this worker the suite-wide tool template's probe cache (built once by
 // prewarm-tool-home.ts globalSetup). ensureTool's probe-cache fast path then
