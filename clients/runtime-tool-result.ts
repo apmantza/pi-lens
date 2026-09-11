@@ -2109,8 +2109,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			hook: "tool_result_edit",
 			label: "pipeline-analysis",
 		},
-	);
-	if (!dispatchOutcome) return;
+	)!;
 	if (dispatchOutcome.crashed) {
 		return dispatchOutcome.response;
 	}

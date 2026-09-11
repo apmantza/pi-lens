@@ -277,12 +277,19 @@ function guardSessionEvent<E, C, R>(
 				// must leave the same record — and the same test-runner rethrow —
 				// the handler's catch used to (#2884). In production
 				// `surfaceHandlerCrash` swallows and the event resolves to its no-op
-				// value, exactly as the handler's own catch + finally did.
+				// value. That parity holds for the handlers whose own catch did
+				// this work (`session_start`, `agent_end`, `turn_end`, and the
+				// `agent_settled` drain): `tool_result` has no catch (its
+				// `try` only clears the ambient signal in `finally`), and the
+				// `context` handler never reads `signal`, so for those two a
+				// non-stale throw reached the host on master and is now
+				// absorbed into a no-op plus one ledger row instead (#2939 F5).
+				// #2939 F4: `options.rethrow` is NOT forwarded here. No wrapper
+				// call site passes it (only the fire-and-forget `quiet_window`
+				// direct call does), so the spread was dead plumbing — the
+				// option's doc ("only surfaceHandlerCrash honors it") holds.
 				surfaceHandlerCrash(eventName, err, {
 					...(options.dbg === undefined ? {} : { dbg: options.dbg }),
-					...(options.rethrow === undefined
-						? {}
-						: { rethrow: options.rethrow }),
 				});
 				return Promise.resolve(onStaleResult(event)) as R;
 			}
