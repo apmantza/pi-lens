@@ -184,7 +184,9 @@ function findPublishStep(
 	return guardedSteps(workflow).find((step) => {
 		if (step.job !== "publish-npm") return false;
 		const code = blankShellComments(step.run);
-		return code.includes(`${pinned.form} publish`) && !code.includes("--dry-run");
+		return (
+			code.includes(`${pinned.form} publish`) && !code.includes("--dry-run")
+		);
 	});
 }
 
@@ -246,7 +248,11 @@ describe("release.yml npm pin gate (#2940)", () => {
 		// The same commit left prepare's install and dry-run publish bare too.
 		expect(findings).toEqual([
 			{ job: "prepare", step: "Install dependencies", verb: "install" },
-			{ job: "prepare", step: "Dry-run publish (validates tarball)", verb: "publish" },
+			{
+				job: "prepare",
+				step: "Dry-run publish (validates tarball)",
+				verb: "publish",
+			},
 			{ job: "publish-npm", step: "Publish to npm", verb: "publish" },
 		]);
 	});

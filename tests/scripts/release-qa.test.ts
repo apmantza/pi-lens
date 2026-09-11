@@ -377,38 +377,15 @@ describe("release-QA tool-smoke install lane (#2663)", () => {
 				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
 			});
 			expect(raw.status).toBe("unreachable");
+			// #2940: this lane's skip is the one that leaves ground truth
+			// UNMEASURED, so it — unlike a reachability skip — refuses the ship
+			// verdict. `main()` reads this flag, not "any skipped row".
+			expect(isUnmeasured(raw)).toBe(true);
 			const result = { id: "tool-smoke-install", ...classifyRowOutcome(raw) };
 			const verdict = shipVerdict([result], {
 				inconclusiveReason: "registry-unreachable row(s) left UNMEASURED",
 			});
 			expect(verdictExitCode(verdict.verdict)).toBe(3);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	it("keeps the registry-unreachable lane UNMEASURED, unlike a reachability skip", () => {
-		const root = stubSmoke({
-			lane: "install-registry",
-			toolCount: 1,
-			installed: 0,
-			results: [
-				{
-					toolId: "offline-tool",
-					state: "skip",
-					detail: "transient registry/network condition",
-					networkUnreachable: true,
-				},
-			],
-		});
-		try {
-			const raw = runToolSmokeInstallProbe({
-				installedPkgDir: root,
-				exportRoot: root,
-				projectDir: root,
-				env: { ...process.env, PI_LENS_HOME: path.join(root, ".probe-home") },
-			});
-			expect(isUnmeasured(raw)).toBe(true);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -576,7 +553,6 @@ describe("release-QA publish toolchain lane (#2940)", () => {
 		expect(verdict.verdict).toBe("SHIP-WITH-CAVEATS");
 		expect(verdictExitCode(verdict.verdict)).toBe(2);
 	});
-
 });
 
 describe("release-QA outcome rules (#2606)", () => {
