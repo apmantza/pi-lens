@@ -889,10 +889,17 @@ export function localTouchesTests(cwd = process.cwd(), git = gitExecFileSync) {
 			encoding: "utf8",
 		});
 	} catch {
-		names = git(["diff", "--name-only", "HEAD~1"], {
-			cwd,
-			encoding: "utf8",
-		});
+		try {
+			names = git(["diff", "--name-only", "HEAD~1"], {
+				cwd,
+				encoding: "utf8",
+			});
+		} catch {
+			// #2904 round 2 recurrence: shallow or single-commit repositories may
+			// have neither range; require assessment because assuming no test changes
+			// would weaken the lint.
+			return true;
+		}
 	}
 	return names.split(/\r?\n/).some((name) => name.startsWith("tests/"));
 }
