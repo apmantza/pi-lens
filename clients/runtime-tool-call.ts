@@ -868,7 +868,6 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// For partial reads (small limit, not from line 1), find the enclosing
 	// symbol and expand the read range to cover it. This gives the read guard
 	// accurate symbol-level coverage without requiring an LSP server.
-	let expandedByLsp = false;
 	let enclosingSymbol:
 		| {
 				name: string;
@@ -911,7 +910,6 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				readInput.limit = expansion.newLimit;
 				effectiveReadOffset = expansion.newOffset;
 				effectiveReadLimit = expansion.newLimit;
-				expandedByLsp = true;
 				let enriched = false;
 				let enrichedAncestry = expansion.ancestry;
 				const lspSymbols = await getOpenDocumentSymbols(filePath);
@@ -979,7 +977,10 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// --- Read-Before-Edit Guard: record reads ---
+	// Register the host-resolved path at tool_call. This path is load-bearing for
+	// the read guard and the observed-mutation settled sweep, including under
+	// --no-read-guard. The paired tool_result adds the authoritative delivered
+	// range after the host applies EOF and output-cap clipping (#2802 probe 3).
 	if (toolName === "read" && filePath && !isExternalOrVendor) {
 		const totalLines = countFileLines(filePath);
 		const deliveredLimit = effectiveReadLimit ?? 1;
@@ -1000,7 +1001,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					totalLines > 0
 						? Math.round((deliveredLimit / totalLines) * 100) / 100
 						: 1,
-				expandedByTs: expandedByLsp,
+				expandedByTs: enclosingSymbol !== undefined,
 			},
 		});
 		runtime.readGuard.recordRead({
@@ -1009,11 +1010,15 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			requestedLimit: requestedReadLimit ?? deliveredLimit,
 			effectiveOffset: effectiveReadOffset,
 			effectiveLimit: deliveredLimit,
-			expandedByLsp,
-			enclosingSymbol,
+			expandedByLsp: enclosingSymbol !== undefined,
+			...(enclosingSymbol !== undefined && { enclosingSymbol }),
 			turnIndex: runtime.turnIndex,
 			writeIndex: runtime.peekWriteIndex(),
 			timestamp: Date.now(),
+			provisional: true,
+			...(resolveToolCallCorrelationId(event) !== undefined && {
+				source: `native-read:${resolveToolCallCorrelationId(event)}:provisional`,
+			}),
 		});
 	}
 
@@ -1092,7 +1097,13 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 
 	// Track any Write so recordWritten can inject a synthetic read afterward.
 	// The agent authored the content (new or overwritten), so it trivially "knows" the file.
-	if (!isEditOnly && isWriteOrEdit && filePath && !getFlag("no-read-guard")) {
+	if (
+		!isEditOnly &&
+		isWriteOrEdit &&
+		event.toolName !== "bash" &&
+		filePath &&
+		!getFlag("no-read-guard")
+	) {
 		runtime.readGuard.noteCreatedFile(
 			filePath,
 			runtime.turnIndex,
