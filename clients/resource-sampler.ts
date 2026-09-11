@@ -45,11 +45,25 @@
  */
 
 import pidusage from "pidusage";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	incrementDegradationCount,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { terminateScannerChild } from "./instance-reaper.js";
 import { queryProcessTable } from "./process-snapshot.js";
 
 export const RESOURCE_SAMPLE_QUERY_TIMEOUT_MS = 2_000;
+
+/**
+ * ONE ledger subject for every spawn sampler in the session (#2968). The
+ * per-spawn identity (pid, command) is NOT the subject: a subject is a
+ * `tallies` key, and one key per spawn would make the ledger grow with the
+ * session's spawn count — catalog shape 9, the same leak this fix exists to
+ * close. The command that was sampled is already on the `spawn_resource_usage`
+ * latency row; what the ledger answers is "did sampling hit its bounds, and
+ * how often", which is a per-session tally.
+ */
+const SPAWN_SAMPLER_LEDGER_SUBJECT = "spawn-usage-sampler";
 
 function recordQueryFailure(
 	subject: string,
@@ -432,29 +446,6 @@ export interface SpawnUsageSummary {
 	peakRssBytes: number;
 }
 
-/**
- * Brackets one transient spawn with a short-interval poll. Usage:
- *
- *   const sampler = startSpawnUsageSampler(child.pid);
- *   child.on("close", () => {
- *     const usage = sampler.stop(); // null if never got a single sample
- *   });
- *
- * `intervalMs` defaults to 750ms — inside the issue's suggested 500ms-1s
- * band, cheap enough not to become a new source of measurable overhead for
- * the (usually sub-few-second) analyzer children this brackets. Best-effort:
- * a poll tick that throws (pid already gone, sampling error) is silently
- * skipped — it never stops the timer or the spawn early, and `stop()` is
- * always safe to call even if zero samples ever landed.
- *
- * Windows note: `clients/safe-spawn.ts` spawns with `shell: true` on Windows,
- * so `pid` here is `cmd.exe`'s pid, not the real tool's — sampling it alone
- * would report near-zero usage for the whole invocation. Each Windows tick
- * resolves `pid`'s live descendant tree (`findDescendantPidsWindows`) and
- * sums usage across `pid` + every descendant, so a `node`/`npx`-wrapped tool
- * (or one that re-execs itself) is actually captured. POSIX spawns are
- * unwrapped (`shell: false`), so `pid` there is already the real tool.
- */
 export interface ProcessTreeCpuSample {
 	/** True when the process tree burned CPU above the liveness floor. */
 	busy: boolean;
@@ -555,16 +546,97 @@ export async function sampleProcessTreeCpuPercent(
 	};
 }
 
+/**
+ * Base poll cadence — inside #620's suggested 500ms-1s band, cheap enough not
+ * to become measurable overhead for the (usually sub-few-second) analyzer
+ * children this brackets.
+ */
+export const SPAWN_SAMPLE_INTERVAL_MS = 750;
+
+/**
+ * #2968: how many ticks keep the full `intervalMs` cadence before the backoff
+ * starts. 8 × 750ms = the first 6 seconds, which covers the short-lived
+ * analyzer children the short interval exists for; a child still running past
+ * that is not short-lived and does not need sub-second resolution.
+ */
+export const SPAWN_SAMPLE_FULL_RATE_TICKS = 8;
+
+/**
+ * #2968: backoff ceiling, as a multiple of `intervalMs` (16 × 750ms = 12s).
+ * Past the full-rate window the delay doubles each tick up to this, so a
+ * long-lived child costs a bounded ~5 polls/minute instead of 80.
+ */
+export const SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER = 16;
+
+/**
+ * #2968: default hard bound on a sampler's polling lifetime — safe-spawn's own
+ * default 30s spawn timeout plus its teardown grace. The one production caller
+ * (`clients/safe-spawn.ts`) passes the deadline it actually computed; this
+ * default only ever applies to a caller that forgot, and it is deliberately
+ * the SAFE direction (bounded) rather than "poll forever".
+ */
+export const SPAWN_SAMPLE_LIFETIME_CAP_MS = 35_000;
+
+/**
+ * Brackets one transient spawn with a short-interval poll. Usage:
+ *
+ *   const sampler = startSpawnUsageSampler(child.pid, interval, capMs);
+ *   child.on("close", () => {
+ *     const usage = sampler.stop(); // null if never got a single sample
+ *   });
+ *
+ * Best-effort: a poll tick that throws (pid already gone, sampling error) is
+ * silently skipped — it never stops the polling or the spawn early, and
+ * `stop()` is always safe to call even if zero samples ever landed.
+ *
+ * Windows note: `clients/safe-spawn.ts` spawns with `shell: true` on Windows,
+ * so `pid` here is `cmd.exe`'s pid, not the real tool's — sampling it alone
+ * would report near-zero usage for the whole invocation. Each Windows tick
+ * resolves `pid`'s live descendant tree (`findDescendantPidsWindows`) and
+ * sums usage across `pid` + every descendant, so a `node`/`npx`-wrapped tool
+ * (or one that re-execs itself) is actually captured. POSIX spawns are
+ * unwrapped (`shell: false`), so `pid` there is already the real tool.
+ *
+ * ## Backpressure: three bounds, three axes (#2968, external report)
+ *
+ * A Windows tick is not free — it is TWO `powershell.exe` CIM queries (the
+ * descendant walk plus the usage read), and a query that blows
+ * `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS` adds a `taskkill.exe`. With a `setInterval`
+ * that neither waited for its own tick nor ever expired, four children that
+ * hung for 5-6 hours left 234 live `powershell.exe`/`taskkill.exe` processes
+ * (~10GB) parented by the host. Each bound below closes one axis; catalog
+ * shape 9 is exactly the shape where closing only one of them is not a fix:
+ *
+ * 1. CONCURRENCY — a tick never starts while the previous one is unsettled
+ *    (`inFlight`). The old `setInterval` fired regardless, so a query slower
+ *    than the interval stacked one more pair of children every tick.
+ * 2. RATE — past `SPAWN_SAMPLE_FULL_RATE_TICKS` the delay doubles per tick up
+ *    to `SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER × intervalMs`. The short
+ *    interval exists to catch short-lived children; a 180s runner (the
+ *    longest spawn timeout in the tree) costs ~26 polls instead of 240.
+ * 3. LIFETIME — polling stops for good at `lifetimeCapMs`, measured from
+ *    start. `stop()` still returns everything gathered up to that point; a
+ *    capped sampler loses resolution, never the reading it already had.
+ *
+ * Ticks skipped for (1) and the cap in (3) are both recorded, bounded, on the
+ * degradation ledger — a sampler that quietly stops sampling is the #1863 /
+ * #2132 shape one level up.
+ */
 export function startSpawnUsageSampler(
 	pid: number | undefined,
-	intervalMs = 750,
+	intervalMs = SPAWN_SAMPLE_INTERVAL_MS,
+	lifetimeCapMs = SPAWN_SAMPLE_LIFETIME_CAP_MS,
 ): { stop: () => SpawnUsageSummary | null } {
 	if (!Number.isFinite(pid) || (pid as number) <= 0) {
 		return { stop: () => null };
 	}
 	const targetPid = pid as number;
 	const accumulator = new UsageAccumulator();
+	const startedAt = Date.now();
 	let stopped = false;
+	let inFlight = false;
+	let tickCount = 0;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	const tick = async () => {
 		if (stopped) return;
@@ -591,20 +663,72 @@ export function startSpawnUsageSampler(
 		}
 	};
 
+	const releaseInFlight = (): void => {
+		inFlight = false;
+	};
+
+	/**
+	 * Delay before the NEXT tick, given how many have already run. Full rate
+	 * through the short-lived window, then doubling to the ceiling (#2968).
+	 */
+	const nextDelayMs = (): number => {
+		if (tickCount <= SPAWN_SAMPLE_FULL_RATE_TICKS) return intervalMs;
+		const grown = intervalMs * 2 ** (tickCount - SPAWN_SAMPLE_FULL_RATE_TICKS);
+		return Math.min(grown, intervalMs * SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER);
+	};
+
+	const arm = (delayMs: number): void => {
+		timer = setTimeout(runTick, delayMs);
+		// Never let this timer keep the process alive on its own.
+		timer.unref?.();
+	};
+
+	function runTick(): void {
+		timer = undefined;
+		if (stopped) return;
+		if (Date.now() - startedAt >= lifetimeCapMs) {
+			// LIFETIME bound: deliberately NOT re-armed. The accumulator is kept,
+			// so `stop()` still answers with everything gathered before the cap.
+			incrementDegradationCount({
+				kind: "resource-sampler-lifetime-capped",
+				subject: SPAWN_SAMPLER_LEDGER_SUBJECT,
+				reason: `spawn sampler stopped polling at its ${lifetimeCapMs}ms lifetime cap; the child was still running`,
+			});
+			return;
+		}
+		tickCount++;
+		if (inFlight) {
+			// CONCURRENCY bound: the previous tick's process-table queries have
+			// not settled, so starting another would stack a second set of
+			// children on top of them (#2968's Windows pile-up).
+			incrementDegradationCount({
+				kind: "resource-sampler-tick-overlapped",
+				subject: SPAWN_SAMPLER_LEDGER_SUBJECT,
+				reason: `spawn sampler skipped a poll tick: the previous sample was still in flight after ${intervalMs}ms`,
+			});
+		} else {
+			inFlight = true;
+			// `tick` never rejects (it is fully guarded), but settle BOTH ways
+			// anyway: a rejection that escaped would otherwise latch `inFlight`
+			// true and silently end all sampling.
+			void tick().then(releaseInFlight, releaseInFlight);
+		}
+		arm(nextDelayMs());
+	}
+
 	// Fire one tick immediately (short-lived children can exit before the
 	// first interval elapses) plus a recurring poll.
-	void tick();
-	const timer = setInterval(() => {
-		void tick();
-	}, intervalMs);
-	// Never let this timer keep the process alive on its own.
-	timer.unref?.();
+	tickCount = 1;
+	inFlight = true;
+	void tick().then(releaseInFlight, releaseInFlight);
+	arm(nextDelayMs());
 
 	return {
 		stop(): SpawnUsageSummary | null {
 			if (stopped) return accumulator.summarize();
 			stopped = true;
-			clearInterval(timer);
+			if (timer !== undefined) clearTimeout(timer);
+			timer = undefined;
 			return accumulator.summarize();
 		},
 	};

@@ -18,12 +18,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stopMock = vi.fn();
 const startSpawnUsageSamplerMock = vi.fn(
-	(_pid: number | undefined, _intervalMs?: number) => ({ stop: stopMock }),
+	(_pid: number | undefined, _intervalMs?: number, _lifetimeCapMs?: number) => ({
+		stop: stopMock,
+	}),
 );
-vi.mock("../../clients/resource-sampler.js", () => ({
-	startSpawnUsageSampler: (pid: number | undefined, intervalMs?: number) =>
-		startSpawnUsageSamplerMock(pid, intervalMs),
-}));
+// Spread the real module so its constants (SPAWN_SAMPLE_INTERVAL_MS, which
+// safe-spawn passes through) stay real and a future export addition passes
+// through instead of arriving undefined.
+vi.mock("../../clients/resource-sampler.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/resource-sampler.js")>();
+	return {
+		...actual,
+		startSpawnUsageSampler: (
+			pid: number | undefined,
+			intervalMs?: number,
+			lifetimeCapMs?: number,
+		) => startSpawnUsageSamplerMock(pid, intervalMs, lifetimeCapMs),
+	};
+});
 
 const logLatencyMock = vi.fn();
 vi.mock("../../clients/latency-logger.js", () => ({
@@ -54,6 +67,23 @@ describe("safeSpawnAsync resource-usage bracketing (#620)", () => {
 		const [pidArg] = startSpawnUsageSamplerMock.mock.calls[0];
 		expect(typeof pidArg).toBe("number");
 		expect(result.status).toBe(0);
+	});
+
+	it("bounds the sampler's polling lifetime by THIS spawn's own deadline (#2968)", async () => {
+		// Recurrence: #2968 — the sampler's only stop was the child's settle, so
+		// a child that never exits (a hung `.cmd` shim surviving `taskkill /F /T`)
+		// polled for hours. The bound has to come from the deadline safe-spawn
+		// actually computed for this spawn, not from a constant that knows
+		// nothing about the caller's timeout.
+		stopMock.mockReturnValue(null);
+		await safeSpawnAsync(NODE, EXIT_OK, { timeout: 12_000 });
+
+		const [, intervalMsArg, lifetimeCapMsArg] =
+			startSpawnUsageSamplerMock.mock.calls[0];
+		expect(intervalMsArg).toBe(750);
+		// 12s timeout + the 5s teardown grace (SIGTERM, 1s SIGKILL escalation,
+		// then at most 2s of pipe-idle wait).
+		expect(lifetimeCapMsArg).toBe(17_000);
 	});
 
 	it("stops the sampler exactly once and attaches resourceUsage when a summary landed", async () => {

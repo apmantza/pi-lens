@@ -64,6 +64,8 @@ vi.mock("../../clients/instance-reaper.js", async (importOriginal) => {
 
 const {
 	sampleProcesses,
+	SPAWN_SAMPLE_FULL_RATE_TICKS,
+	SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER,
 	UsageAccumulator,
 	walkDescendantPids,
 	startSpawnUsageSampler,
@@ -762,5 +764,121 @@ describe("startSpawnUsageSampler", () => {
 		const first = sampler.stop();
 		const second = sampler.stop();
 		expect(second).toEqual(first);
+	});
+});
+
+/**
+ * #2968 (external report, Windows 11 24H2): the sampler had no backpressure of
+ * any kind. `setInterval(() => void tick(), 750)` started a tick whether or not
+ * the previous one had settled, and nothing ever expired the timer — only the
+ * bracketed child's own settle (`exit`/`close`/`error` in safe-spawn) stopped
+ * it. Three `opengrep.exe` and one `typos-lsp.exe` that hung for 5-6.4 hours
+ * therefore kept polling, and because ONE Windows tick is two `powershell.exe`
+ * CIM queries (descendant walk + usage read) plus a `taskkill.exe` whenever a
+ * query blows `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS`, the host ended up parenting
+ * 234 live processes (~10GB). The reporter's own rate check: one child, 3.3s,
+ * powershell/taskkill 1 -> 13 unpatched, 1 -> 1 with the sampler short-circuited.
+ *
+ * Each test below pins one of the three bounds. They run on the POSIX
+ * (`pidusage`) path except where the assertion is about the spawned query
+ * children, which only exist on the Windows path; the bounds themselves live
+ * in platform-independent code, so a Linux CI lane genuinely exercises them.
+ */
+describe("#2968 startSpawnUsageSampler backpressure", () => {
+	beforeEach(() => {
+		pidusageMock.mockReset();
+		setPlatform("linux");
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("skips a poll tick while the previous one is still in flight", async () => {
+		// Recurrence: a tick that starts while the previous one is still querying
+		// the process table stacks a second set of children on the first — the
+		// concurrency axis of #2968's pile-up.
+		pidusageMock.mockImplementation(() => new Promise(() => {})); // never settles
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
+
+		await vi.advanceTimersByTimeAsync(0); // the immediate tick
+		await vi.advanceTimersByTimeAsync(5_000);
+
+		expect(pidusageMock).toHaveBeenCalledTimes(1);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "resource-sampler-tick-overlapped",
+			)?.count,
+		).toBeGreaterThanOrEqual(5);
+		expect(sampler.stop()).toBeNull();
+	});
+
+	it("starts no second process-table query while the first is unsettled (Windows path)", async () => {
+		// Recurrence: the same guard counted where the report counted it — in
+		// spawned children. Every unguarded tick was one more `powershell.exe`
+		// (two, once the first query returns) against a box already too slow to
+		// answer the previous one.
+		setPlatform("win32");
+		const spawned: ReturnType<typeof makeFakeChild>[] = [];
+		fakeSpawn = () => {
+			const child = makeFakeChild({ holdOpen: true }); // query never answers
+			spawned.push(child);
+			return child;
+		};
+		const sampler = startSpawnUsageSampler(999, 100, 60_000);
+
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(1_500); // 15 unguarded ticks' worth
+
+		expect(spawned.length).toBe(1);
+		sampler.stop();
+	});
+
+	it("stops polling at its lifetime cap and still returns what it gathered", async () => {
+		// Recurrence: the lifetime axis. The sampler's only stop was the child's
+		// own settle, so a child that never exits polled forever (5-6.4 hours in
+		// the report). Capping must not silently drop the reading already taken.
+		pidusageMock.mockResolvedValue({ "555": { cpu: 4, memory: 2048 } });
+		const sampler = startSpawnUsageSampler(555, 100, 1_000);
+
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(1_000);
+		const callsAtCap = pidusageMock.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(60_000); // a minute past the cap
+
+		expect(pidusageMock.mock.calls.length).toBe(callsAtCap);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "resource-sampler-lifetime-capped",
+			)?.count,
+		).toBe(1);
+		const summary = sampler.stop();
+		expect(summary?.sampleCount).toBe(callsAtCap);
+		expect(summary?.peakRssBytes).toBe(2048);
+	});
+
+	it("backs the interval off to the ceiling once the child outlives the short-lived window", async () => {
+		// Recurrence: the rate axis. The 750ms interval exists to catch
+		// short-lived children (the module's own comment says so); a child still
+		// running minutes later was paying the same two queries every 750ms.
+		const sampledAt: number[] = [];
+		pidusageMock.mockImplementation(async () => {
+			sampledAt.push(Date.now());
+			return { "555": { cpu: 1, memory: 10 } };
+		});
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
+
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(10_000);
+		sampler.stop();
+
+		const gaps = sampledAt.slice(1).map((at, i) => at - sampledAt[i]);
+		expect(gaps.slice(0, SPAWN_SAMPLE_FULL_RATE_TICKS - 1)).toEqual(
+			Array(SPAWN_SAMPLE_FULL_RATE_TICKS - 1).fill(100),
+		);
+		expect(Math.max(...gaps)).toBe(100 * SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER);
+		// 10s at a flat 100ms interval is 101 ticks; the backoff makes it ~14.
+		expect(sampledAt.length).toBeLessThan(20);
 	});
 });
