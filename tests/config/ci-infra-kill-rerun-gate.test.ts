@@ -25,9 +25,10 @@ const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/ci-infra-kill-rerun.yml";
 
 type WorkflowStep = { run?: unknown };
-type WorkflowJob = { if?: unknown; steps?: unknown };
+type WorkflowJob = { env?: unknown; if?: unknown; steps?: unknown };
 type ClassifyJob = { if?: unknown; steps?: unknown };
 type Workflow = {
+	on?: { pull_request?: { types?: unknown[] } };
 	jobs?: { classify?: ClassifyJob; "finalize-rerun"?: WorkflowJob };
 };
 
@@ -232,6 +233,22 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 		const stepRun = readClassifyStepRun();
 		expect(stepRun).toContain('"$RUN_EVENT" == "push"');
 		expect(stepRun).toContain('"$RUN_EVENT" == "repository_dispatch"');
+	});
+});
+
+describe("ci-infra-kill-rerun.yml synchronize label cleanup (#2856)", () => {
+	it("synchronize cleanup removes both verdict labels", () => {
+		const workflow = loadWorkflow();
+		expect(workflow.on?.pull_request?.types).toEqual(["synchronize"]);
+		const job = (workflow.jobs as Record<string, WorkflowJob>)[
+			"clear-stale-verdict-labels"
+		];
+		expect(job?.if).toContain("github.event_name == 'pull_request'");
+		expect(job?.if).toContain("github.event.action == 'synchronize'");
+		const run = (job?.steps as WorkflowStep[]).find((step) => step.run)?.run;
+		expect(run).toContain("--remove-label 'ci:infra'");
+		expect(run).toContain("--remove-label 'ci:real'");
+		expect(job?.env).toMatchObject({ GH_REPO: "${{ github.repository }}" });
 	});
 });
 

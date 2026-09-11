@@ -69,9 +69,9 @@ migrate-*.js
 
 # Documentation files - only keep specific docs in public repo
 *.md
+!tests/fixtures/ci-pr-bodies/*.md
 !CLAUDE.md
 !tests/fixtures/changelog-entries/*.md
-!tests/fixtures/ci-pr-bodies/*.md
 !.changelog/*.md
 !AGENTS.md
 !HISTORY.md

@@ -1,5 +1,4 @@
 // flake-shape: real-process-spawn — the exact local CLI and shallow checkout are the subject; an in-process call cannot prove either command boundary.
-import { execFileSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -9,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { beforeEach, describe, expect, it, afterEach, vi } from "vitest";
 import {
 	gitExecFileSync,
@@ -26,6 +26,7 @@ import {
 	resolveLivePrBody,
 	resolveTouchesTests,
 } from "../../scripts/check-pr-body.mjs";
+import { blankCommentsAndStrings } from "../../scripts/check-pr-body.mjs";
 
 const body = `Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nWhole-tree grep completed.\n\n## Observability\nThe advisory check run is the record.`;
 const repositoryRoot = process.cwd();
@@ -218,6 +219,7 @@ describe("flattened PR body repair", () => {
 });
 
 describe("test-reference shape and placement", () => {
+	it("A01", () => {});
 	const clean = (extra: string) => lintPrBody(`${body}\n${extra}`);
 	const missing = (result: ReturnType<typeof lintPrBody>, value: string) => {
 		expect(result.valid).toBe(false);
@@ -281,7 +283,7 @@ describe("test-reference shape and placement", () => {
 			for (const extra of [
 				`The command is \`${command}\`.`,
 				`- Run \`${command}\`.`,
-				`| Test |\n| --- |\n| \`${command}\` |`,
+				`| Notes |\n| --- |\n| \`${command}\` |`,
 			])
 				expect(clean(extra)).toEqual({ valid: true, errors: [] });
 		expect(
@@ -686,6 +688,7 @@ describe("PR body lint (#1844)", () => {
 					valid: false,
 					errors: [
 						'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+						`PR body citation ${file} does not exist in the HEAD tree.`,
 					],
 				});
 			} finally {
@@ -708,6 +711,7 @@ describe("PR body lint (#1844)", () => {
 			valid: false,
 			errors: [
 				'PR body Observability must name a record literal from the runtime diff; "No new failure path; no record added." is not valid when the added lines contain a failure path.',
+				"PR body citation clients/does-not-exist.ts:1 does not exist in the HEAD tree.",
 			],
 		});
 	});
@@ -1250,6 +1254,552 @@ ${placeholder}`,
 	});
 });
 
+describe("head-tree citations and test references", () => {
+	const headFiles = new Map([
+		[
+			"clients/citation.ts",
+			'export const value = "head source";\nexport const second = true;\n',
+		],
+		[
+			"tests/citation.test.ts",
+			'it("contains every label this repo\'s rules require to exist", () => {});\n',
+		],
+	]);
+	const options = { headFiles };
+
+	it("emits decoded string spans with quote kinds", () => {
+		const result = blankCommentsAndStrings(
+			`const single = 'a\\'b'; const double = "a\\\\b"; const template = \`value\`;`,
+		);
+		expect(result.strings.map(({ quote, text }) => ({ quote, text }))).toEqual([
+			{ quote: "'", text: "a'b" },
+			{ quote: '"', text: "a\\b" },
+			{ quote: "`", text: "value" },
+		]);
+	});
+
+	it("rejects a citation to a missing or out-of-range head file", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/missing.ts:1\`\n\nAlso: \`clients/citation.ts:4\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("clients/missing.ts:1");
+		expect(result.errors.join(" ")).toContain(
+			"PR body citation clients/citation.ts:4 is outside the HEAD tree.",
+		);
+	});
+
+	it("requires an adjacent quote to match source text within twenty lines", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nwrong source\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("accepts a plain citation without a quote", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:1\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts a citation in a table cell without a quote", () => {
+		expect(
+			lintPrBody(`${body}\n| Evidence | \`clients/citation.ts:1\` |`, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts range citations by their first line", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:1-2\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts approximate-line citations by their hinted line", () => {
+		expect(
+			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:~1\``, options),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("pins the ±20 citation quote window", () => {
+		const source = Array.from({ length: 40 }, (_, index) =>
+			index === 20
+				? "boundary source line"
+				: index === 21
+					? "outside source line"
+					: `line ${index + 1}`,
+		).join("\n");
+		const localOptions = {
+			headFiles: new Map([["clients/window.ts", source]]),
+		};
+		const accepted = lintPrBody(
+			`${body}\nEvidence: \`clients/window.ts:1\`\n\`\`\`ts\nboundary source line\n\`\`\``,
+			localOptions,
+		);
+		expect(accepted).toEqual({ valid: true, errors: [] });
+		const rejected = lintPrBody(
+			`${body}\nEvidence: \`clients/window.ts:1\`\n\`\`\`text\noutside source line\n\`\`\``,
+			localOptions,
+		);
+		expect(rejected.errors.join(" ")).toContain("within ±20 lines");
+	});
+
+	it("pins both sides of the ±20 window and resolves range hints from the first line", () => {
+		const source = Array.from({ length: 60 }, (_, index) =>
+			index === 0 ? "first source line" : `line ${index + 1}`,
+		).join("\n");
+		const localOptions = {
+			headFiles: new Map([["clients/window-both-sides.ts", source]]),
+		};
+		const accepted = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:21-60\`\n\`\`\`ts\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(accepted).toEqual({ valid: true, errors: [] });
+		const approximate = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:~21\`\n\`\`\`ts\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(approximate).toEqual({ valid: true, errors: [] });
+		const rejected = lintPrBody(
+			`${body}\nEvidence: \`clients/window-both-sides.ts:22\`\n\`\`\`text\nfirst source line\n\`\`\``,
+			localOptions,
+		);
+		expect(rejected.errors.join(" ")).toContain("within ±20 lines");
+	});
+
+	it("checks every repeated citation quote", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\nexport const value = "head source";\n\`\`\`\nAgain: \`clients/citation.ts:1\`\n\`\`\`ts\ntotally fabricated\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("recognizes only real transcript quote shapes", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\n$ npm test\nTests 1 passed (1)\n\`\`\``,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("does not treat incidental pass or fail words as transcripts", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nthis source failed a review\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("does not treat an origin/master string in source as a transcript", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`text\nconst branch = "origin/master";\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("checks a transcript-looking quote unless its fence is tagged as output", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\n$ npm test\nnot source\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("does not match HEAD source");
+	});
+
+	it("does not read preflight commands as test references", () => {
+		const result = lintPrBody(
+			`${body}\n| Gate | Command |\n| --- | --- |\n| typecheck | \`npx tsc --noEmit\` |\n| preflight | \`npm run preflight\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("rejects fabricated it titles and table identifiers", () => {
+		const result = lintPrBody(
+			`${body}\nThe check uses it("fabricated test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`fabricated table test identifier\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated test title");
+		expect(result.errors.join(" ")).toContain(
+			"fabricated table test identifier",
+		);
+	});
+
+	it("requires origin/master transcripts for master-red claims", () => {
+		const result = lintPrBody(
+			`${body}\nThis is pre-existing and red on master.`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("origin/master transcript");
+	});
+
+	it("accepts real test references and an origin/master transcript", () => {
+		const result = lintPrBody(
+			`${body}\nThe real title is it("contains every label this repo's rules require to exist").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`contains every label this repo's rules require to exist\` |\n\nThis is pre-existing.\n\`\`\`text\n$ git log origin/master\n\`\`\``,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("requires the transcript in the next markdown block", () => {
+		const result = lintPrBody(
+			`${body}\nThis is pre-existing.\n\nUnrelated paragraph.\n\n\`\`\`text\nrun on origin/master\n\`\`\``,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("origin/master transcript");
+	});
+
+	it("accepts a reviewer-attributed pre-existing statement", () => {
+		const result = lintPrBody(
+			`${body}\nThe reviewer wrote that the failure is pre-existing on the base branch.`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("keeps dots inside code spans inside the sentence and table block", () => {
+		const result = lintPrBody(
+			`${body}\n| Convention | The pre-existing file is \`Fixture.Test.php\`. |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("ignores citations in fences and accepts the canonical it title in a table", () => {
+		const result = lintPrBody(
+			`${body}\n\`\`\`text\n\`clients/missing.ts:1\`\n\`\`\`\n\n| Case | Test |\n| --- | --- |\n| A | \`it("contains every label this repo's rules require to exist")\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("normalizes canonical it titles in table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`it("fabricated table title")\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated table title");
+	});
+
+	it("checks canonical it titles with trailing table-cell content", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`it("fabricated trailing title")\` (regression) |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated trailing title");
+	});
+
+	it("checks canonical it titles in prose", () => {
+		const result = lintPrBody(
+			`${body}\nThe test is it("fabricated prose title").`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated prose title");
+	});
+
+	it("checks bare test titles in table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`fabricated bare title\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated bare title");
+	});
+
+	it("accepts a test path in a test column", () => {
+		const result = lintPrBody(
+			`${body}\n| Kind | Test id |\n| --- | --- |\n| path | \`tests/scripts/check-pr-body.test.ts\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("ignores non-test table cells", () => {
+		const result = lintPrBody(
+			`${body}\n| Command | Artifact |\n| --- | --- |\n| tool | \`python3 -m pip\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it("ignores table header cells", () => {
+		const result = lintPrBody(
+			`${body}\n| \`fabricated header title\` | Test |\n| --- | --- |\n| Case | \`fabricated header value\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated header value");
+		expect(result.errors.join(" ")).not.toContain("fabricated header title");
+	});
+
+	it("rejects a command-shaped test cell without a real title", () => {
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`python3 -m pip\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("python3 -m pip");
+	});
+
+	it("rejects a fabricated bare test title", () => {
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`fabricated bare title\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("fabricated bare title");
+	});
+
+	it("ignores SHA cells in test columns", () => {
+		const result = lintPrBody(
+			`${body}\n| Test id |\n| --- |\n| \`deadbeef1234567890\` |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
+	});
+
+	it.each([["each template title"]])(
+		"harvests each declaration titles",
+		(_title) => {
+			const result = lintPrBody(
+				`${body}\n| Test |\n| --- |\n| \`harvests each declaration titles\` |`,
+				options,
+			);
+			expect(result).toEqual({ valid: true, errors: [] });
+		},
+	);
+
+	it("rejects a fabricated short table identifier", () => {
+		const result = lintPrBody(
+			`${body}\n| Case | Test |\n| --- | --- |\n| A | \`B01\` |`,
+			options,
+		);
+		expect(result.errors.join(" ")).toContain("B01");
+	});
+
+	it("harvests titles after regex literals without confusing division", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "lexer.test.ts"),
+				[
+					'const pattern = /[:*?"<>|]/;',
+					'it("title after regex literal", () => {});',
+					"const returned = (() => { return /quoted/; })();",
+					'it("title after regex in a call", () => {});',
+					"const typed = typeof /typed/;",
+					'it("title after typeof regex", () => {});',
+					"const quotient = numerator / denominator;",
+					'it("title after division", () => {});',
+					'it.each([{ value: fn(1) }])(\"array each title\", () => {});',
+				].join("\n"),
+			);
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/lexer.test.ts\n" : "";
+			expect(
+				lintPrBody(
+					`${body}\n| Test |\n| --- |\n| \`title after regex literal\` |\n| \`title after regex in a call\` |\n| \`title after typeof regex\` |\n| \`title after division\` |\n| \`array each title\` |`,
+					{ cwd: fixtureCwd, git },
+				),
+			).toEqual({ valid: true, errors: [] });
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	// Prevent regex literals after expression-start tokens from laundering titles into the census.
+	it("rejects titles found inside a regex after an arrow while keeping declarations", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-arrow-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "lexer.test.ts"),
+				'const factory = () => /it("fabricated from regex")/;\nit("genuine declaration", () => {});\n',
+			);
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/lexer.test.ts\n" : "";
+			const result = lintPrBody(
+				`${body}\nThe tests are it("fabricated from regex") and it("genuine declaration").`,
+				{ cwd: fixtureCwd, git },
+			);
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain(
+				"PR body test reference is missing under tests/: fabricated from regex",
+			);
+			expect(result.errors).not.toContain(
+				"PR body test reference is missing under tests/: genuine declaration",
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	// Prevent a mutable working-tree corpus from accepting titles removed after a warm lint.
+	it("rebuilds the test corpus after a working-tree file changes", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-edit-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			const file = join(fixtureCwd, "tests", "mutable.test.ts");
+			writeFileSync(file, 'it("removed title", () => {});\n');
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/mutable.test.ts\n" : "";
+			expect(
+				lintPrBody(`${body}\nThe test is it("removed title").`, {
+					cwd: fixtureCwd,
+					git,
+				}),
+			).toEqual({ valid: true, errors: [] });
+			writeFileSync(file, 'it("replacement title", () => {});\n');
+			const result = lintPrBody(`${body}\nThe test is it("removed title").`, {
+				cwd: fixtureCwd,
+				git,
+			});
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain(
+				"PR body test reference is missing under tests/: removed title",
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("reuses the HEAD-tree corpus at one immutable revision", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-head-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "immutable.test.ts"),
+				'it("immutable HEAD title", () => {});\n',
+			);
+			const calls: string[][] = [];
+			const git = (args: string[]) => {
+				calls.push(args);
+				if (args[0] === "rev-parse") return "immutable-revision\n";
+				return args[0] === "ls-files" ? "tests/immutable.test.ts\n" : "";
+			};
+			const candidate = `${body}\nThe test is it("immutable HEAD title").`;
+			expect(lintPrBody(candidate, { cwd: fixtureCwd, git })).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(lintPrBody(candidate, { cwd: fixtureCwd, git })).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(calls.filter(([command]) => command === "ls-files")).toHaveLength(
+				1,
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("evicts the oldest HEAD-tree corpus beyond its bound", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-bound-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "bounded.test.ts"),
+				'it("bounded HEAD title", () => {});\n',
+			);
+			let revision = "revision-0";
+			const listings: string[][] = [];
+			const git = (args: string[]) => {
+				if (args[0] === "rev-parse") return `${revision}\n`;
+				if (args[0] === "ls-files") listings.push(args);
+				return args[0] === "ls-files" ? "tests/bounded.test.ts\n" : "";
+			};
+			for (let index = 0; index < 9; index += 1) {
+				revision = `revision-${index}`;
+				expect(
+					lintPrBody(`${body}\nit("bounded HEAD title")`, {
+						cwd: fixtureCwd,
+						git,
+					}),
+				).toEqual({ valid: true, errors: [] });
+			}
+			revision = "revision-0";
+			expect(
+				lintPrBody(`${body}\nit("bounded HEAD title")`, {
+					cwd: fixtureCwd,
+					git,
+				}),
+			).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(listings).toHaveLength(10);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("harvests a title containing sixty backslashes", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-"));
+		const title = `${"\\".repeat(60)} title`;
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "lexer.test.ts"),
+				`it(\"${title.replaceAll("\\", "\\\\")}\", () => {});\n`,
+			);
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/lexer.test.ts\n" : "";
+			const result = lintPrBody(
+				`${body}\n| Test |\n| --- |\n| \`${title}\` |`,
+				{ cwd: fixtureCwd, git },
+			);
+			expect(result).toEqual({ valid: true, errors: [] });
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("includes every declaration title found by the test census", () => {
+		const runGit = gitExecFileSync;
+		const grep = runGit(
+			["grep", "-nE", "\\b(it|test|describe)(\\.each)?\\s*\\(", "--", "tests/"],
+			{ encoding: "utf8", maxBuffer: 20 * 1024 * 1024 } as never,
+		);
+		const titles = new Set<string>();
+		for (const line of String(grep).split("\n")) {
+			const match =
+				/^\s*(?:it|test|describe)(?:\.each)?\s*\(\s*(["'`])((?:\\\\.|[^\\\\])*?)\1/.exec(
+					line,
+				);
+			if (match?.[2]?.trim()) titles.add(match[2].trim());
+		}
+		const missing = [...titles]
+			.filter((title) => !/[`|\r\n]/.test(title))
+			.filter((title) => {
+				const quote = title.includes('"') ? "'" : '"';
+				const escaped = title.replaceAll(quote, `\\${quote}`);
+				return lintPrBody(
+					`${body}\nit(${quote}${escaped}${quote})`,
+				).errors.some((error) => error.includes(title));
+			});
+		expect(missing).toEqual([]);
+	});
+
+	it.each([
+		[
+			"#2877 round 3 reconstructed retracted section",
+			"issue-2877-round-3.md",
+			"P01",
+		],
+	])(
+		"keeps the historical red-first fixture red: %s",
+		(_name, file, expected) => {
+			const fixture = readFileSync(
+				join(repositoryRoot, "tests", "fixtures", "ci-pr-bodies", file),
+				"utf8",
+			);
+			const result = lintPrBody(fixture);
+			expect(result.valid).toBe(false);
+			expect(result.errors.join(" ")).toContain(expected);
+		},
+	);
+});
+
 describe("local lint parity", () => {
 	let previousCwd: string;
 	let fixtureCwd: string;
@@ -1267,6 +1817,19 @@ describe("local lint parity", () => {
 	it("acquires a non-empty origin/master...HEAD diff in a full checkout", () => {
 		const diff = localDiff();
 		expect(diff).toContain("diff --git a/");
+	});
+
+	it("includes untracked test files in local test references", () => {
+		mkdirSync(join(fixtureCwd, "tests", "scripts"), { recursive: true });
+		writeFileSync(
+			join(fixtureCwd, "tests", "scripts", "new.test.ts"),
+			'it("untracked working tree title", () => {});\n',
+		);
+		const result = lintPrBody(
+			`${body}\n| Test |\n| --- |\n| \`untracked working tree title\` |`,
+			{ cwd: fixtureCwd, workingTree: true },
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
 	});
 
 	it("rejects a runtime-shaped body that names no record", () => {

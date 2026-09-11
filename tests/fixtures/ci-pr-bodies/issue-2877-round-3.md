@@ -9,10 +9,15 @@ The archived round-3 state-space tables are reconstructed here.
 | Block shadow | `Z01` | `Z02` | `Z03` |
 | Destructuring | `Z04` | `Z05` | `Z06` |
 | Parameter default | `Z07` | `Z08` | `Z09` |
+| Block shadow | `B01` | `B03` | `B05` |
+| Destructuring | `B29` | `B31` | `B32` |
+| Parameter default | `B21` | `B23` | `B24` |
 
 | Probe | Runner |
 | --- | --- |
 | `Z10` | `Z11` |
+| `P01` | ruff |
+| `P30` | test-runner |
 
 ## Blast radius
 
