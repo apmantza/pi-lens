@@ -37,12 +37,24 @@ export function setupTestEnvironment(prefix = "pi-lens-test-"): {
 	cleanup: () => void;
 } {
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	activeTestEnvironments.add(tmpDir);
 	return {
 		tmpDir,
 		cleanup: () => {
 			removeTempDirSync(tmpDir);
+			activeTestEnvironments.delete(tmpDir);
 		},
 	};
+}
+
+const activeTestEnvironments = new Set<string>();
+
+export function cleanupTestEnvironments(prefix: string): void {
+	for (const tmpDir of activeTestEnvironments) {
+		if (!path.basename(tmpDir).startsWith(prefix)) continue;
+		removeTempDirSync(tmpDir);
+		activeTestEnvironments.delete(tmpDir);
+	}
 }
 
 export function createTempFile(
