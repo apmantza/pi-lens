@@ -2,4 +2,4 @@
 section: Changed
 ---
 
-- **Keep incomplete observation evidence open for further checking (refs #2984)** — the observational mutation net treats a missing content hash as a change candidate even when size and mtime match, while authorship attribution remains assigned to #2952.
+- **Keep incomplete observation evidence separate from mutation attribution (refs #2984)** — the observational mutation net reports equal-stat, hashless captures as unverifiable, never replays them, and leaves attribution unchanged while retaining bounded coverage evidence.

@@ -523,6 +523,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 45. **A root-function wrapper that drops its marker metadata.** A wrapper can preserve the old asynchronous root result while returning no marker table to a shared cwd seam; #2846 made Go resolve nested `go.mod` roots through the old function but dispatch gopls from the session root. *Screen:* every root-function wrapper copies its complete marker table, and a registry-wide before/after probe compares direct roots with shared-seam roots; deleting the metadata copy must make the Go probe red (#2777).
 
+49. **An evidence gap promoted to a mutation.** A bounded file capture without a content hash can show only that the observation is unverifiable; treating equal stats as a replay invents an edit and teaches attribution from absent evidence (#2984, #2952). *Screen:* return a third `unverifiable` outcome, advance neither clean nor mutation attribution, record the bounded coverage gap, and replay only proven content or size changes. A real file beyond the hash budget with identical bytes must assert no replay and no attribution; a mutation of the outcome split must turn that test red.
+
 46. **A parser fed by a double whose shape the tool never emits.** *Screen:* any code that reads a tool's output (madge, knip, opengrep, pip, tsserver) is tested against output captured ONCE from the real binary (a fixture file with the command and version in its header), never against a hand-shaped object; the test that pins the parser reds when the fixture is swapped for the shape the code assumed. *e.g.* #2900 round 4 read madge's `--circular --json` as a graph and got array indices as "covered files" — coverage `[]` on a clean project, `["<cwd>/0"]` on a cyclic one — and its test fed a graph object the flag never emits; #2921 round 1 probed `pipx` availability through the ambient PATH its harness never controlled. *Detect:* a `vi.mock`/double returning a literal object for a spawn result with no fixture file behind it; an `Object.keys(data)` over tool output with no fixture asserting `data`'s shape.
 
 47. **A detector whose corpus includes its own fixtures.** *Screen:* a scanner that greps `tests/` (or any tree) for "does this id/needle exist" excludes its own fixture directory and its own test file BY CONSTRUCTION (a path filter in the corpus builder, pinned by a test), and matches whole tokens; otherwise the red-first fixture that proves the detector whitelists exactly the fabricated needles it exists to reject. *e.g.* #2913 round 3 committed `tests/fixtures/ci-pr-bodies/issue-2877-round-3.md` and `git grep -F` found its eleven fabricated ids there, so both shipping readers ACCEPTED the fixture body while the test passed only through an injected corpus. *Detect:* a fixture under the scanned root that contains the needles the scanner must reject; a substring grep (`-F` without `-w`) for identifiers.
@@ -3519,10 +3521,10 @@ post-result bytes — the state hash the in-flight composite key is built from �
 BEFORE the settle's yield. Move that read after the yield and a racing
 tool_result for the same path collapses two distinct pipelines into one.
 The observational net wraps the shared diff with its own direction: when a
-content hash is absent, it treats equal size/mtime as a candidate for more
-checking, because this question schedules work rather than granting authorship
-(#2984 and the #2952 timing probe). Authority decisions keep their separate
-fail-closed consumer contract in `runtime-tool-result.ts`.
+content hash is absent, equal size/mtime is `unverifiable`, not a mutation.
+This question may keep watching, but it cannot grant authorship without proven
+content change (#2984 and the #2952 timing probe). Authority decisions keep
+their separate fail-closed consumer contract in `runtime-tool-result.ts`.
 Steady-state cost is zero for a classified `write`/`edit` (the net is gated on
 `classifyMutatingTool` having returned `undefined` or the attribution still
 being provisional) and ~1.3ms for one armed observation of a file target, paid

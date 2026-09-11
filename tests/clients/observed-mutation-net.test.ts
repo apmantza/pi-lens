@@ -1149,9 +1149,39 @@ describe("#2449 review round 2 — the settled sweep is incremental and honest",
 				record: sink.record,
 			});
 
-			expect(settled.changedPaths).toHaveLength(1);
-			expect(settled.replayed).toBe(1);
-			expect(sink.entries).toHaveLength(1);
+			expect(settled.changedPaths).toEqual([]);
+			expect(settled.unverifiablePaths).toHaveLength(1);
+			expect(settled.replayed).toBe(0);
+			expect(sink.entries).toEqual([]);
+			expect(lookupLearnedMutatingTool("patch_file")).toBeUndefined();
+			// Unverifiable does not spend the clean latch. Two subsequent real,
+			// hashed no-op observations still reach the pre-existing clean limit.
+			const smallPath = path.join(env.tmpDir, "small.ts");
+			fs.writeFileSync(smallPath, SOURCE);
+			for (
+				let attempt = 0;
+				attempt < CLEAN_OBSERVATION_ARM_LIMIT;
+				attempt += 1
+			) {
+				const callId = `call-observed-clean-${attempt}`;
+				const cleanArmed = await armObservedMutation(
+					armArgs(smallPath, env.tmpDir, { toolCallId: callId }),
+				);
+				expect(cleanArmed).toMatchObject({ armed: true });
+				const clean = await settleObservedMutation({
+					toolCallId: callId,
+					toolName: "patch_file",
+					sessionGeneration: 1,
+					turnIndex: 1,
+					record: recorder().record,
+				});
+				expect(clean.unverifiablePaths).toEqual([]);
+				expect(clean.replayed).toBe(0);
+				expect(shouldArmObservationForTool("patch_file")).toBe(
+					attempt + 1 < CLEAN_OBSERVATION_ARM_LIMIT,
+				);
+			}
+			expect(shouldArmObservationForTool("patch_file")).toBe(false);
 		} finally {
 			env.cleanup();
 		}
