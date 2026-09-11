@@ -68,6 +68,12 @@ resource needs a row. Two outcomes are acceptable and one is not:
 
 Silently leaving a change unrowed is the failure this skill exists to prevent.
 
+A change to `.github/workflows/release.yml` or to `package.json`'s
+`packageManager` pin is already rowed: `publish-toolchain-pinned` drives the
+publish job's own `npx -y "npm@<pin>"` invocation against the candidate (#2940).
+Name it in the report as the covering row rather than re-deriving one — and if
+it reads SKIPPED, the publish path was NOT witnessed for this candidate.
+
 ### 3. Run the runner
 
 ```

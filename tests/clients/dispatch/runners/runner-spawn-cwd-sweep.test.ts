@@ -637,8 +637,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is recoverOpaqueChangesViaGit's own `root` parameter — `git status --porcelain` reports the worktree at that root, which is the query's subject, not a config-resolution start (#2894)",
 	],
 	[
-		"clients/opengrep-client.ts#OpengrepClient.scan:c23b1b18~4bd5cc03",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
+		"clients/opengrep-client.ts#OpengrepClient.scan:c23b1b18~74b63300",
+		"passes the realpath-canonicalized `targetDir` from the scan API's own argument",
 	],
 	[
 		"clients/opengrep-client.ts#OpengrepClient.runScan:93a73c72~353ea442",

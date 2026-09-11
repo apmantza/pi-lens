@@ -67,6 +67,7 @@ export interface RunnerOptions {
 export const BASELINE_TABLE_MARKER: string;
 export const BASELINE_COLUMNS: readonly string[];
 export const TOOL_SMOKE_INSTALL_ROW_ID: string;
+export const PUBLISH_TOOLCHAIN_ROW_ID: string;
 export const OUTCOME: {
 	readonly PASS: "PASS";
 	readonly FAIL: "FAIL";
@@ -118,6 +119,56 @@ export function runToolSmokeInstallProbe(ctx: {
 	shows?: string;
 	witness?: { ext: string; content: string };
 };
+/**
+ * Whether a probe's SKIPPED row leaves its lane unmeasured (#2663) — the
+ * registry-unreachable state that refuses the run's ship verdict — as opposed
+ * to a plain reachability skip, which does not (#2940).
+ */
+export function isUnmeasured(
+	probe: { status?: string; unmeasured?: boolean } | null | undefined,
+): boolean;
+/** Return the ids of rows whose registry-dependent probe was unmeasured. */
+export function unmeasuredRowIds(
+	results: ReadonlyArray<{ id: string; status?: string; unmeasured?: boolean }>,
+): string[];
+
+/**
+ * The publish job's toolchain → the release-QA row's verdict (#2940): the
+ * pinned invocation must ANSWER as the pin, and its dry-run publish must
+ * exit 0.
+ */
+export function classifyPublishToolchain(observed: {
+	pin?: string;
+	reportedVersion?: string;
+	dryRunExitCode?: number;
+	dryRunTail?: string;
+}): { status: string; detail: string; shows: string };
+
+/** Drive `release.yml`'s pinned npm over the exported candidate (#2940). */
+export function runPublishToolchainProbe(ctx: {
+	exportRoot: string;
+	exportedCommit?: string;
+	env: NodeJS.ProcessEnv;
+}): {
+	status: string;
+	detail: string;
+	shows?: string;
+	unmeasured?: boolean;
+	witness?: { ext: string; content: string };
+};
+
+/**
+ * npm through the pinned `npx -y "npm@<pin>"` invocation `release.yml`
+ * publishes with. `env` is optional in the TYPE and required at RUNTIME, for
+ * the same reason {@link npm}'s is.
+ */
+export function pinnedNpm(
+	pin: string,
+	args: string[],
+	cwd: string,
+	env?: NodeJS.ProcessEnv,
+): string;
+
 /**
  * The refusal message for a dirty checkout, or null when it is clean. A
  * `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
