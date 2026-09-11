@@ -217,6 +217,107 @@ describe("flattened PR body repair", () => {
 	});
 });
 
+describe("test-reference shape and placement", () => {
+	const clean = (extra: string) => lintPrBody(`${body}\n${extra}`);
+	const missing = (result: ReturnType<typeof lintPrBody>, value: string) => {
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain(value);
+	};
+
+	it("checks short ids in prose, bullets, and every table column", () => {
+		for (const extra of [
+			"The witness is `Z99`.",
+			"- The witness is `Z99`.",
+			"| Notes | Test |\n| --- | --- |\n| `Z99` | real |",
+			"| Notes | Test |\n| --- | --- |\n| real | `Z99` |",
+		])
+			missing(clean(extra), "Z99");
+	});
+
+	it("accepts short ids in the same placements when they are real", () => {
+		for (const extra of [
+			"The witness is `A01`.",
+			"- The witness is `A01`.",
+			"| Notes | Test |\n| --- | --- |\n| `A01` | real |",
+		])
+			expect(clean(extra).errors.join(" ")).not.toContain("A01");
+	});
+
+	it("checks paths and path-line citations everywhere, including directories", () => {
+		for (const extra of [
+			"The file is `tests/missing.test.ts`.",
+			"- The file is `tests/missing.test.ts:1`.",
+			"| Notes | Other |\n| --- | --- |\n| `tests/missing` | text |",
+		])
+			missing(clean(extra), extra.match(/`([^`]+)`/)?.[1] ?? "tests/");
+	});
+
+	it("checks free-text titles in prose, bullets, and test columns", () => {
+		for (const extra of [
+			"The fabricated test is it('fabricated title').",
+			"- The fabricated test is 'fabricated title'.",
+			"| Notes | Test |\n| --- | --- |\n| text | `fabricated title` |",
+		])
+			missing(clean(extra), "fabricated title");
+	});
+
+	it("ignores free-text titles under Notes and header cells", () => {
+		expect(
+			clean("| Notes | Other |\n| --- | --- |\n| `fabricated title` | text |")
+				.valid,
+		).toBe(true);
+		expect(
+			clean("| `fabricated title` | Test |\n| --- | --- |\n| text | real |")
+				.valid,
+		).toBe(true);
+	});
+
+	it("ignores commands in code spans in every placement", () => {
+		for (const command of [
+			"npx tsc --noEmit",
+			"npm run preflight",
+			"python3 -m pip",
+		])
+			for (const extra of [
+				`The command is \`${command}\`.`,
+				`- Run \`${command}\`.`,
+				`| Test |\n| --- |\n| \`${command}\` |`,
+			])
+				expect(clean(extra)).toEqual({ valid: true, errors: [] });
+		expect(
+			clean("| python3 -m pip | Notes |\n| --- | --- |\n| text | text |").valid,
+		).toBe(true);
+	});
+
+	it("accepts a real wrapped title and strips a trailing annotation", () => {
+		expect(
+			clean(
+				"| Test |\n| --- |\n| `it('strings: \"keep\" still blanks BLOCK comments')` (NEW) |",
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("rejects all eleven historical fabricated ids through both readers", () => {
+		const fixture = readFileSync(
+			join(
+				repositoryRoot,
+				"tests",
+				"fixtures",
+				"ci-pr-bodies",
+				"issue-2877-round-3.md",
+			),
+			"utf8",
+		);
+		const direct = lintPrBody(fixture).errors.join(" ");
+		const local = lintLocalPrBody(fixture).errors.join(" ");
+		for (let index = 1; index <= 11; index += 1) {
+			const id = `Z${String(index).padStart(2, "0")}`;
+			expect(direct).toContain(id);
+			expect(local).toContain(id);
+		}
+	});
+});
+
 const escapedNewlineFlattenedBody =
 	"## Summary\\nRestore real newlines for the escaped-newline flattening class (#2145).\\n\\n## Tests\\nAdds fixtures pinning literal backslash-n repair outside fences.\\n\\n## Blast radius\\nLimited to the body-lint script.\\n\\n## Class sweep\\nEscaped-newline flattening is the sibling of the space-flattening class already handled.\\n\\n## Observability\\nA notice logs the repaired PR number.";
 

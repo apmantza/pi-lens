@@ -256,6 +256,175 @@ function recordLocationsFromRuntimeSource(source) {
 	return records;
 }
 
+const TEST_REFERENCE_TOKEN = /`([^`]+)`/g;
+const TEST_ID = /^[A-Z]\d{2}$/;
+const TEST_PATH = /^tests\/(?:[^\s`]+)$/;
+const TEST_TITLE_WRAPPER = /^it\(\s*(["'])(.*?)\1\s*\)(?:\s*\([^)]*\))?$/;
+const TEST_COLUMN = /test|probe|case|witness|id/i;
+const COMMAND =
+	/^(?:npx\s+tsc\b|npm\s+run\s+(?:preflight|build|test)\b|python3\s+-m\s+pip\b)/i;
+const testCorpusCache = new Map();
+
+function testCorpus(options = {}) {
+	const cwd = options.cwd ?? process.cwd();
+	const cacheKey = `${cwd}:${options.workingTree ? "working" : "head"}`;
+	const cached = testCorpusCache.get(cacheKey);
+	if (cached) return cached;
+	let files = [];
+	try {
+		files = String(
+			(options.git ?? gitExecFileSync)(["ls-files", "--", "tests"], {
+				cwd,
+				encoding: "utf8",
+			}),
+		)
+			.split(/\r?\n/)
+			.filter(Boolean);
+		if (options.workingTree) {
+			files = [
+				...new Set([
+					...files,
+					...String(
+						(options.git ?? gitExecFileSync)(
+							["ls-files", "--others", "--exclude-standard", "--", "tests"],
+							{ cwd, encoding: "utf8" },
+						),
+					)
+						.split(/\r?\n/)
+						.filter(Boolean),
+				]),
+			];
+		}
+	} catch {
+		const empty = { paths: new Set(), titles: new Set() };
+		testCorpusCache.set(cacheKey, empty);
+		return empty;
+	}
+	const paths = new Set(files);
+	paths.add("tests/config");
+	const titles = new Set();
+	for (const file of files) {
+		if (!/\.(?:[cm]?[jt]sx?)$/.test(file)) continue;
+		let source;
+		try {
+			source = readFileSync(resolve(cwd, file), "utf8");
+		} catch {
+			continue;
+		}
+		const masked = blankCommentsAndStrings(source);
+		if (file !== "tests/scripts/check-pr-body.test.ts")
+			for (const id of source.matchAll(/\b[A-Z]\d{2}\b/g)) paths.add(id[0]);
+		for (const match of masked.matchAll(/\b(?:it|test)\s*(?:\.each)?\s*\(/g)) {
+			let index = match.index + match[0].length;
+			while (/\s/.test(source[index] ?? "")) index += 1;
+			const quote = source[index];
+			if (quote !== "'" && quote !== '"') continue;
+			let end = index + 1;
+			while (end < source.length && source[end] !== quote) {
+				if (source[end] === "\\") end += 1;
+				end += 1;
+			}
+			const title = source
+				.slice(index + 1, end)
+				.replace(/\\(["'\\])/g, "$1")
+				.trim();
+			if (title) titles.add(title);
+		}
+	}
+	const corpus = { paths, titles };
+	testCorpusCache.set(cacheKey, corpus);
+	return corpus;
+}
+
+function outsideFences(body) {
+	let fence = false;
+	return String(body ?? "")
+		.split(/\r?\n/)
+		.map((line) => {
+			if (/^\s*```/.test(line)) {
+				fence = !fence;
+				return "";
+			}
+			return fence ? "" : line;
+		})
+		.join("\n");
+}
+
+function normalizedReference(value) {
+	const token = value.trim();
+	if (COMMAND.test(token)) return null;
+	const wrapped = TEST_TITLE_WRAPPER.exec(token);
+	if (wrapped) return wrapped[2].replace(/\s*\([^)]*\)\s*$/, "").trim();
+	if (
+		TEST_ID.test(token) ||
+		TEST_PATH.test(token) ||
+		token.startsWith("tests/")
+	)
+		return token;
+	return token;
+}
+
+function lintTestReferences(body, options = {}) {
+	const visible = outsideFences(body);
+	const corpus = testCorpus({ ...options, workingTree: true });
+	const references = [];
+	const addToken = (raw, allowFreeText) => {
+		const wrapped = TEST_TITLE_WRAPPER.test(raw.trim());
+		const token = normalizedReference(raw);
+		if (!token) return;
+		const shortOrPath =
+			TEST_ID.test(token) ||
+			TEST_PATH.test(token) ||
+			token.startsWith("tests/");
+		if (shortOrPath || (allowFreeText && (wrapped || /\s/.test(token))))
+			references.push(token);
+	};
+	const lines = visible.split(/\r?\n/);
+	let tableHeaders = null;
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex];
+		const isBullet = /^\s*[-*+]\s+/.test(line);
+		const table = /^\s*\|.*\|\s*$/.test(line);
+		if (!table) tableHeaders = null;
+		if (
+			table &&
+			lineIndex + 1 < lines.length &&
+			/^\s*\|\s*:?-{3,}/.test(lines[lineIndex + 1])
+		) {
+			tableHeaders = line.split("|").map((cell) => cell.trim());
+			continue;
+		}
+		if (table && /^\s*\|\s*:?-{3,}/.test(line)) continue;
+		for (const match of line.matchAll(TEST_REFERENCE_TOKEN)) {
+			const cellIndex = table
+				? line.slice(0, match.index).split("|").length - 1
+				: -1;
+			const inTestColumn = Boolean(
+				tableHeaders && TEST_COLUMN.test(tableHeaders[cellIndex] ?? ""),
+			);
+			addToken(match[1], inTestColumn || isBullet || !table);
+		}
+		for (const match of line.matchAll(/\bit\(\s*(["'])(.*?)\1\s*\)/g))
+			if (isBullet || !table) addToken(match[0], true);
+		for (const match of line.matchAll(/(?:^|[\s:(])(["'])([^"'\n]{3,})\1/g))
+			if (isBullet || !table) addToken(match[2], true);
+	}
+	const exists = (reference) => {
+		const path = reference.match(/^(tests\/[^:]+):\d+$/)?.[1];
+		return (
+			corpus.paths.has(reference) ||
+			corpus.paths.has(path ?? reference) ||
+			corpus.titles.has(reference)
+		);
+	};
+	return [...new Set(references)]
+		.filter((reference) => !exists(reference))
+		.map(
+			(reference) =>
+				`PR body test reference is missing under tests/: ${reference}`,
+		);
+}
+
 function lintRuntimeObservability(
 	body,
 	lines,
@@ -550,6 +719,7 @@ export function lintPrBody(body = "", options = {}) {
 				options.cwd,
 			),
 		);
+	errors.push(...lintTestReferences(body, { cwd: options.cwd }));
 	return { valid: errors.length === 0, errors };
 }
 
