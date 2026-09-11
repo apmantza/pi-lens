@@ -626,53 +626,75 @@ function lintCodeCitations(body, options = {}) {
 function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 	const references = [];
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	for (const match of visibleBody.matchAll(
-		/\bit\(\s*(["'`])((?:\\\\.|[^\\\\])*?)\1\s*\)/g,
-	)) {
-		const lineStart = visibleBody.lastIndexOf("\n", match.index) + 1;
+	const addToken = (raw, allowFreeText, allowCommand = false) => {
+		const token = raw.trim();
 		if (
-			!/^\s*\|/.test(visibleBody.slice(lineStart, match.index)) &&
-			!match[2].includes("…")
-		)
-			references.push(match[2].replace(/\\([\s\S])/g, "$1"));
-	}
-	const lines = visibleBody.split(/\r?\n/);
-	let headers = null;
-	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-		const row = lines[lineIndex];
-		if (/^\s*\|\s*:?-{3,}/.test(row)) {
-			headers = /^\s*\|.*\|\s*$/.test(lines[lineIndex - 1])
-				? lines[lineIndex - 1].split("|").map((value) => value.trim())
-				: null;
-			continue;
-		}
-		if (!headers || !/^\s*\|.*\|\s*$/.test(row)) {
-			if (!/^\s*\|/.test(row)) headers = null;
-			continue;
-		}
-		const cells = row.split("|").map((value) => value.trim());
-		for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
-			if (!/(?:test|probe|case|witness|id)/i.test(headers[cellIndex] ?? ""))
-				continue;
-			const cell = cells[cellIndex];
-			const match = /`([^`]+)`/.exec(cell);
-			if (!match) continue;
-			const reference = match[1].trim();
-			const title = /^it\(\s*["`]([^"`]+)["`]\s*\)$/.exec(reference)?.[1];
-			if (title?.includes("…")) continue;
-			if (title && !title.includes("…")) references.push(title);
-			else if (
-				corpus.paths.has(reference) ||
-				/^[A-Za-z]\d{2,}$/.test(reference)
+			!allowCommand &&
+			/^(?:npx\s+tsc\b|npm\s+run\s+(?:preflight|build|test)\b|python3\s+-m\s+pip\b)/i.test(
+				token,
 			)
-				references.push(reference);
-			else if (corpus.titles.has(reference)) references.push(reference);
-			else if (/^[0-9a-f]{7,40}$/i.test(reference)) continue;
-			else references.push(reference);
+		)
+			return;
+		const wrapped = /^it\(\s*(["'])(.*?)\1\s*\)(?:\s*\([^)]*\))?$/.exec(token);
+		const value = wrapped
+			? wrapped[2].replace(/\s*\([^)]*\)\s*$/, "").trim()
+			: token;
+		const shortOrPath =
+			/^[A-Z]\d{2}$/.test(value) ||
+			/^tests\/[^\s`]+$/.test(value) ||
+			value.startsWith("tests/");
+		if (shortOrPath || (allowFreeText && (wrapped || /\s/.test(value))))
+			references.push(value);
+	};
+	const lines = visibleBody.split(/\r?\n/);
+	let tableHeaders = null;
+	const tableCells = (line) => line.split("|").map((cell) => cell.trim());
+	const isValidSeparator = (line, headers) => {
+		if (!headers) return false;
+		if (!/^\s*\|.*\|\s*$/.test(line)) return false;
+		const cells = tableCells(line);
+		return (
+			cells.length === headers.length &&
+			cells.slice(1, -1).every((cell) => /^:?-{3,}:?$/.test(cell))
+		);
+	};
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex];
+		const isBullet = /^\s*[-*+]\s+/.test(line);
+		const table = /^\s*\|.*\|\s*$/.test(line);
+		if (!table) tableHeaders = null;
+		if (
+			table &&
+			lineIndex + 1 < lines.length &&
+			isValidSeparator(lines[lineIndex + 1], tableCells(line))
+		) {
+			tableHeaders = tableCells(line);
+			continue;
 		}
+		const inTable = table && tableHeaders !== null;
+		if (inTable && isValidSeparator(line, tableHeaders)) continue;
+		for (const match of line.matchAll(/`([^`]+)`/g)) {
+			const cellIndex = inTable
+				? line.slice(0, match.index).split("|").length - 1
+				: -1;
+			const inTestColumn = Boolean(
+				inTable &&
+				/test|probe|case|witness|id/i.test(tableHeaders[cellIndex] ?? ""),
+			);
+			addToken(match[1], inTestColumn || isBullet || !inTable, inTestColumn);
+		}
+		for (const match of line.matchAll(/\bit\(\s*(["'])(.*?)\1\s*\)/g))
+			if (isBullet || !inTable) addToken(match[0], true);
+		for (const match of line.matchAll(/(?:^|[\s:(])(["'])([^"'\n]{3,})\1/g))
+			if (isBullet || !inTable) addToken(match[2], true);
 	}
 	const exists = (reference) => {
-		return corpus.paths.has(reference) || corpus.titles.has(reference);
+		const path = reference.match(/^(tests\/[^:]+):\d+$/)?.[1];
+		return (
+			corpus.paths.has(reference) ||
+			corpus.paths.has(path ?? reference) ||
+			corpus.titles.has(reference)
+		);
 	};
 	return [...new Set(references)]
 		.filter((reference) => !exists(reference))
@@ -1186,10 +1208,17 @@ export function localTouchesTests(cwd = process.cwd(), git = gitExecFileSync) {
 			encoding: "utf8",
 		});
 	} catch {
-		names = git(["diff", "--name-only", "HEAD~1"], {
-			cwd,
-			encoding: "utf8",
-		});
+		try {
+			names = git(["diff", "--name-only", "HEAD~1"], {
+				cwd,
+				encoding: "utf8",
+			});
+		} catch {
+			// #2904 round 2 recurrence: shallow or single-commit repositories may
+			// have neither range; require assessment because assuming no test changes
+			// would weaken the lint.
+			return true;
+		}
 	}
 	return names.split(/\r?\n/).some((name) => name.startsWith("tests/"));
 }
