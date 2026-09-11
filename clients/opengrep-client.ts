@@ -355,7 +355,7 @@ function readOpengrepReport(raw: string):
  * `--experimental` where semgrep's doesn't).
  */
 export function parseOpengrepReport(
-	rawOrParsed: string | unknown,
+	rawOrParsed: string | ParsedOpengrepReport,
 ): OpengrepFinding[] {
 	if (typeof rawOrParsed === "string" && !rawOrParsed.trim()) return [];
 	let parsed: unknown = rawOrParsed;
