@@ -379,59 +379,165 @@ describe("blocker freshness sweep — drift demotion (#1631)", () => {
 // `"tree-sitter"` and `coveredSourcesForCheck` can only ever name registered LSP
 // servers. Live shape: a `ts-incomplete-assertion` blocker re-served every turn
 // for a whole session against a file proven clean by grep, LSP, and a passing test.
+/**
+ * #2982: the self axis. #1631 review F4 excluded a non-`"lsp"` record from the
+ * sweep entirely, reasoning that an ast-grep secret match does not stop being
+ * true because a file it IMPORTS changed. True of the import axis, and it
+ * discarded the self axis with it: a tree-sitter verdict about a file's own
+ * syntax is invalidated by that file's own bytes changing, and nothing else
+ * could clear such a record.
+ *
+ * Demotion here is CONTENT-confirmed (mtime moving is not evidence a byte
+ * moved) and RE-ARMING (bytes that come back un-demote it), which is why it
+ * carries `"self-drift"` rather than `"dependency-drift"` and never enters the
+ * #1950 delivery cap.
+ */
 describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
-	it("demotes a tree-sitter blocker when its own file drifted", async () => {
+	/** Record the verdict against `before`, then land a real byte change. */
+	function recordThenEdit(
+		runtime: RuntimeCoordinator,
+		filePath: string,
+		summary: string,
+		sources: string[],
+		before: string,
+		after: string,
+	): void {
+		fs.writeFileSync(filePath, before);
+		runtime.recordInlineBlockers(filePath, summary, 1, sources);
+		fs.writeFileSync(filePath, after);
+		driftIntoFuture(filePath);
+	}
+
+	it("demotes a tree-sitter blocker when its own file changed", async () => {
 		const dir = makeDir("pi-lens-fresh-selfts-");
 		const target = path.join(dir, "consult.test.ts");
-		fs.writeFileSync(target, "expect(foo).toBe;\n");
-
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(target, "🔴 L153: Incomplete assertion", 1, [
-			"tree-sitter",
-		]);
-		driftIntoFuture(target);
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 L153: Incomplete assertion",
+			["tree-sitter"],
+			"expect(foo).toBe;\n",
+			"expect(foo).toBe(true);\n",
+		);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		const entry = runtime.getInlineBlockersSnapshot()[0];
+		expect(entry?.stale).toBe(true);
+		expect(entry?.staleReason).toBe("self-drift");
+	});
+
+	it("demotes an ast-grep blocker when its own file changed", async () => {
+		const dir = makeDir("pi-lens-fresh-selfsg-");
+		const target = path.join(dir, "consumer.ts");
+		const runtime = new RuntimeCoordinator();
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 hardcoded secret",
+			["ast-grep"],
+			"const token = 'aaa';\n",
+			"const token = process.env.TOKEN;\n",
+		);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
 		expect(counts.revalidated).toBe(1);
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
 	});
 
-	it("demotes an ast-grep blocker when its own file drifted", async () => {
-		const dir = makeDir("pi-lens-fresh-selfsg-");
+	it('demotes an "unknown"-tagged blocker when its own file changed', async () => {
+		const dir = makeDir("pi-lens-fresh-selfunk-");
 		const target = path.join(dir, "consumer.ts");
-		fs.writeFileSync(target, "export const y = 1;\n");
+		const runtime = new RuntimeCoordinator();
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 untagged blocker",
+			["unknown"],
+			"export const y = 1;\n",
+			"export const y = 1234567;\n",
+		);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+	});
+
+	// #2982 review, the blocking finding. mtime moving is not a byte moving. A
+	// `touch`, a checkout restoring identical bytes, or a no-op formatter pass
+	// must not walk a finding out of the authoritative channel.
+	it("does NOT demote when mtime moved but the content did not", async () => {
+		const dir = makeDir("pi-lens-fresh-selftouch-");
+		const target = path.join(dir, "config.ts");
+		fs.writeFileSync(target, "const token = 'aaa';\n");
 
 		const runtime = new RuntimeCoordinator();
 		runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
 			"ast-grep",
 		]);
+		// `touch`: mtime forward, every byte where it was.
 		driftIntoFuture(target);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
-		expect(counts.revalidated).toBe(1);
-		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+		expect(counts.revalidated).toBe(0);
+		expect(counts.kept).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
 
-	// Deliberate: `pipeline.ts` contributes the literal `"unknown"` for an
-	// untagged diagnostic so an LSP check cannot claim coverage for it. That
-	// pins it against a COVERAGE claim; it says nothing about the file's bytes
-	// changing underneath the verdict, which invalidates it whatever raised it.
-	it('demotes an "unknown"-tagged blocker when its own file drifted', async () => {
-		const dir = makeDir("pi-lens-fresh-selfunk-");
+	// The re-arm. This is what lets the axis skip the #1950 cap: a record that
+	// heals on its own needs no bounded-noise retirement.
+	it("heals a self-drift demotion when the content comes back", async () => {
+		const dir = makeDir("pi-lens-fresh-selfheal-");
+		const target = path.join(dir, "consumer.ts");
+		const runtime = new RuntimeCoordinator();
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 hardcoded secret",
+			["ast-grep"],
+			"const token = 'aaa';\n",
+			"const token = process.env.TOKEN;\n",
+		);
+
+		const first = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(first.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+
+		// The edit is reverted: the bytes are the recorded ones again.
+		fs.writeFileSync(target, "const token = 'aaa';\n");
+		driftIntoFuture(target);
+
+		const second = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(second.selfHealed).toBe(1);
+		const entry = runtime.getInlineBlockersSnapshot()[0];
+		expect(entry?.stale).toBe(false);
+		expect(entry?.staleReason).toBeUndefined();
+	});
+
+	// No size baseline means the tier cannot decide, so the record's state is
+	// left exactly as it is rather than demoted on the mtime signal alone.
+	it("leaves a record whose content tier cannot decide untouched", async () => {
+		const dir = makeDir("pi-lens-fresh-selfunver-");
 		const target = path.join(dir, "consumer.ts");
 		fs.writeFileSync(target, "export const y = 1;\n");
 
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(target, "🔴 untagged blocker", 1, ["unknown"]);
+		runtime.recordInlineBlockers(target, "🔴 blocker", 1, ["ast-grep"]);
+		// Strip the baseline the way a record predating this field would.
+		const rec = runtime.getInlineBlockersSnapshot()[0];
+		if (rec) delete (rec as { recordedSize?: number }).recordedSize;
+		fs.writeFileSync(target, "export const y = 987654321;\n");
 		driftIntoFuture(target);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
-		expect(counts.revalidated).toBe(1);
-		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+		expect(counts.selfUnverifiable).toBe(1);
+		expect(counts.revalidated).toBe(0);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
 
-	// The import axis stays excluded for non-LSP provenance — #1631 review F4's
-	// actual claim. Only the file's own bytes may demote these.
+	// The import axis stays excluded for non-LSP provenance, which is #1631
+	// review F4's actual claim.
 	it("still keeps a tree-sitter blocker when only a dependency drifted", async () => {
 		const dir = makeDir("pi-lens-fresh-selftsdep-");
 		const consumer = path.join(dir, "consumer.ts");
@@ -454,15 +560,14 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
 
-	// A record with NO recorded provenance stays fail-closed, matching the test
-	// `retireInlineBlockerOnConfirmedClean` applies before it will retire.
-	it("leaves a record with no recorded sources untouched on own-file drift", async () => {
+	it("leaves a record with no recorded sources untouched on own-file change", async () => {
 		const dir = makeDir("pi-lens-fresh-selfnoprov-");
 		const target = path.join(dir, "consumer.ts");
 		fs.writeFileSync(target, "export const y = 1;\n");
 
 		const runtime = new RuntimeCoordinator();
 		runtime.recordInlineBlockers(target, "🔴 unknown provenance", 1);
+		fs.writeFileSync(target, "export const y = 987654321;\n");
 		driftIntoFuture(target);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
@@ -470,36 +575,30 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		expect(counts.revalidated).toBe(0);
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
-	// SAFETY PIN. Demotion must not open the commit gate. `updateGitGuardStatus`
-	// counts `getInlineBlockersSnapshot().length` with no `stale` filter, so a
-	// demoted record still gates a commit exactly like an authoritative one —
-	// the property that makes widening this sweep to ast-grep/tree-sitter
-	// provenance safe. Without it, an out-of-band write that moves mtime while
-	// LEAVING a hardcoded secret in place would demote the blocker and let the
-	// commit through, with no dispatch to re-raise it (#1631 Case B, running in
-	// the harmful direction). If a future change teaches the guard to honor
-	// `stale`, it must exclude security-category sources first.
+
+	// SAFETY PIN. Demotion must not open the commit gate. updateGitGuardStatus
+	// counts getInlineBlockersSnapshot().length with no `stale` filter, so a
+	// demoted record still gates a commit. If a later change teaches the guard
+	// to honor `stale`, it must exclude security-category sources first.
 	it("a self-drift demotion does NOT open the git-guard commit gate", async () => {
 		const dir = makeDir("pi-lens-fresh-guardpin-");
 		const target = path.join(dir, "config.ts");
-		fs.writeFileSync(target, "const token = 'aaa';\n");
-
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
-			"ast-grep",
-		]);
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 hardcoded secret",
+			["ast-grep"],
+			"const token = 'aaa';\n",
+			"const token = 'aaa'; // still here, line moved\n",
+		);
 		runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
 		expect(runtime.gitGuardHasBlockers).toBe(true);
-
-		// Out-of-band write: mtime moves, the secret is still there, nothing
-		// re-dispatches the file.
-		driftIntoFuture(target);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
 		expect(counts.revalidated).toBe(1);
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
 
-		// Demoted for turn-end rendering, still blocking for the commit gate.
 		runtime.updateGitGuardStatus(false, "");
 		expect(runtime.gitGuardHasBlockers).toBe(true);
 	});

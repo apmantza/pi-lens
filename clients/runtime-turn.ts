@@ -989,6 +989,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			revalidated: blockerFreshness.revalidated,
 			alreadyStale: blockerFreshness.alreadyStale,
 			truncatedImports: blockerFreshness.truncatedImports,
+			selfHealed: blockerFreshness.selfHealed,
+			selfUnverifiable: blockerFreshness.selfUnverifiable,
 		},
 	});
 

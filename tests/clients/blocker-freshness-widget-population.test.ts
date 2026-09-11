@@ -364,7 +364,12 @@ describe("blocker freshness sweep — widget-store population (#1790)", () => {
 			"tree-sitter",
 		]);
 		recordCacheServedBlocking(consumer, "cached blocking finding", Date.now());
-		// Both axes drift: the blocker's own file AND the import it does not consult.
+		// Both axes drift: the blocker's own bytes (a real change, since the self
+		// axis is content-confirmed) AND the import it does not consult.
+		fs.writeFileSync(
+			consumer,
+			'import { x } from "./dep.js";\nexport const y = x + 1234567;\n',
+		);
 		driftIntoFuture(dep);
 		driftIntoFuture(consumer);
 
