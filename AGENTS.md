@@ -1478,7 +1478,8 @@ policies. `runnerRetirementDecision` in
 `tools/lens-diagnostics.ts` uses that coverage for filtering and
 `runner_authoritative_widget_retire`;
 the `analyzed` id list remains a conservative fallback only when coverage is
-absent. Coverage entries are complete because no partial producer exists. A
+absent. Coverage entries contain only non-empty scanned file sets; an empty set
+falls back to the runner-id gate. A
 language-specific dead-code client still uses its own runner id so a shared
 `dead-code` aggregate cannot retire another language's findings (#2887).
 

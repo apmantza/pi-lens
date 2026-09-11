@@ -321,15 +321,25 @@ export async function fetchFreshProjectDiagnostics(
 	): void {
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
-			if (id === "opengrep" && analysis?.analyzedFiles !== undefined) {
-				const root = fs.realpathSync.native(analysisRoot);
+			if (
+				id === "opengrep" &&
+				analysis?.analyzedFiles !== undefined &&
+				analysis.analyzedFiles.length > 0
+			) {
+				const root = (() => {
+					try {
+						return fs.realpathSync(analysisRoot);
+					} catch {
+						return path.resolve(analysisRoot);
+					}
+				})();
 				authoritativeCoverage.push({
 					runnerId: id,
 					root,
 					files: new Set(
 						analysis.analyzedFiles.map((file) => {
 							try {
-								return fs.realpathSync.native(file);
+								return fs.realpathSync(file);
 							} catch {
 								return path.resolve(file);
 							}

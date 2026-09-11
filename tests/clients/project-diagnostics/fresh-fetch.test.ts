@@ -1116,6 +1116,58 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(coverage[0].files).toEqual(new Set([path.resolve(tmp, "src/a.py")]));
 	});
 
+	it("does not record coverage for a captured failed empty opengrep scan", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep 1.29.0 --json on a symlink-root refusal.
+				fs.writeFileSync(
+					report,
+					'{"version":"1.29.0","results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"File not found"}],"paths":{"scanned":[]},"skipped_rules":[]}',
+				);
+				return { status: 2, stdout: "", stderr: "" };
+			},
+		);
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		expect(result.analyzed).toContain("opengrep");
+		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
+	it("does not record coverage for a captured successful empty opengrep scan", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep 1.29.0 --json with no matching language.
+				fs.writeFileSync(
+					report,
+					'{"version":"1.29.0","results":[],"errors":[],"paths":{"scanned":[]},"interfile_languages_used":[],"skipped_rules":[]}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		expect(result.analyzed).toContain("opengrep");
+		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
 	it("does not cache a dead-code result that did not analyse the root (#2887)", async () => {
 		const cacheManager = makeCacheManager();
 		const clients = makeClients();

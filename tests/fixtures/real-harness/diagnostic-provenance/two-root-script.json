@@ -1,4 +1,0 @@
-[
-  [{"type":"toolCall","name":"lens_diagnostics","arguments":{"mode":"full","paths":["src/moved.ts"],"refreshRunners":"cached"}}],
-  [{"type":"toolCall","name":"lens_diagnostics","arguments":{"mode":"full","paths":["nested/src/nested.ts"],"refreshRunners":"cached"}}]
-]

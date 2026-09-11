@@ -1110,11 +1110,7 @@ export class DependencyChecker {
 			// other return here (missing root, no top-level source file, madge
 			// unavailable, spawn error, parse throw) is the SAME empty shape and
 			// must not be read as "no cycles in this project".
-			return {
-				circular,
-				count: circular.length,
-				analyzed: true,
-			};
+			return { circular, count: circular.length, analyzed: true };
 		} catch (err: any) {
 			this.log(`Scan error: ${err.message}`);
 			return { circular: [], count: 0 };

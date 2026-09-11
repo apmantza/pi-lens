@@ -684,10 +684,7 @@ export class KnipClient {
 			};
 		}
 
-		return this.dropOverridePinnedDeps(
-			this.parseOutput(output, targetDir),
-			targetDir,
-		);
+		return this.dropOverridePinnedDeps(this.parseOutput(output), targetDir);
 	}
 
 	/**
@@ -820,8 +817,7 @@ export class KnipClient {
 
 	// --- Internal ---
 
-	private parseOutput(output: string, root = process.cwd()): KnipResult {
-		void root;
+	private parseOutput(output: string): KnipResult {
 		try {
 			const data = JSON.parse(output);
 			const issues: KnipIssue[] = [];

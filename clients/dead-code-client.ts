@@ -515,10 +515,7 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 				durationMs,
 			};
 		}
-		return {
-			...this.parseOutput(output, root),
-			durationMs,
-		};
+		return { ...this.parseOutput(output, root), durationMs };
 	}
 
 	private parseOutput(output: string, root: string): DeadCodeResult {

@@ -1539,7 +1539,7 @@ export function runnerRetirementDecision(
 ): RunnerRetirementDecision {
 	const runnerId = runnerIdOf(diagnostic);
 	const coverage = (authoritativeCoverage ?? []).filter(
-		(entry) => entry.runnerId === runnerId,
+		(entry) => entry.runnerId === runnerId && entry.files.size > 0,
 	);
 	if (coverage.length === 0) {
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";

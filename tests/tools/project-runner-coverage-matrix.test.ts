@@ -37,6 +37,16 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("keep");
 	});
+	it("coverage state: scanned-set ok empty falls back to id gate", () => {
+		expect(
+			runnerRetirementDecision(
+				diagnostic("opengrep"),
+				"/proj/retained.py",
+				new Set(["opengrep"]),
+				covered("opengrep"),
+			),
+		).toBe("retire");
+	});
 	it("coverage state: scanned-set error stale keeps", () => {
 		expect(
 			runnerRetirementDecision(
@@ -119,6 +129,31 @@ describe("project runner coverage state space (#2887)", () => {
 					],
 				),
 			).toBe("retire");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+	it("coverage state: scanned path resolves outside recorded root keeps", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-coverage-"));
+		const outside = path.join(root, "outside.ts");
+		const link = path.join(root, "inside.ts");
+		fs.writeFileSync(outside, "x");
+		fs.symlinkSync(outside, link, "file");
+		try {
+			expect(
+				runnerRetirementDecision(
+					diagnostic("opengrep"),
+					link,
+					new Set(["opengrep"]),
+					[
+						{
+							runnerId: "opengrep",
+							root: path.join(root, "project"),
+							files: new Set([outside]),
+						},
+					],
+				),
+			).toBe("keep");
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

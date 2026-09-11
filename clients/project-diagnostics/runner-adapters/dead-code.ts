@@ -2,7 +2,7 @@ import * as path from "node:path";
 import type { DeadCodeIssue, DeadCodeResult } from "../../dead-code-client.js";
 import type { ProjectDiagnostic } from "../types.js";
 
-export function deadCodeRunnerId(language: string): string {
+function deadCodeRunnerId(language: string): string {
 	return `dead-code-${language}`;
 }
 

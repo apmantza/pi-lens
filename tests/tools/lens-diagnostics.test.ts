@@ -1428,7 +1428,7 @@ describe("lens_diagnostics mode=full", () => {
 		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 			diagnostics: [],
 			runners: [],
-			analyzed: ["opengrep"],
+			analyzed: ["opengrep", "knip"],
 			cold: [],
 			timings: {},
 			authoritativeCoverage: [
