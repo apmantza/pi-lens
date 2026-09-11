@@ -130,6 +130,13 @@ const TMP_LEAK_BASELINE = JSON.parse(
 afterEach(async () => {
 	await waitForProjectSnapshotPersistsForTests();
 	await new Promise<void>((resolve) => setImmediate(resolve));
+	cleanupTestEnvironments(expect.getState().currentTestName);
+});
+
+// Roots minted while a file is being declared or in beforeAll have no test
+// owner. The file-level hook owns them and removes every root left in this
+// worker after the file completes.
+afterAll(() => {
 	cleanupTestEnvironments();
 });
 
