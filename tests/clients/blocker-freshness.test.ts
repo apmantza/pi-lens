@@ -470,4 +470,37 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		expect(counts.revalidated).toBe(0);
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
+	// SAFETY PIN. Demotion must not open the commit gate. `updateGitGuardStatus`
+	// counts `getInlineBlockersSnapshot().length` with no `stale` filter, so a
+	// demoted record still gates a commit exactly like an authoritative one —
+	// the property that makes widening this sweep to ast-grep/tree-sitter
+	// provenance safe. Without it, an out-of-band write that moves mtime while
+	// LEAVING a hardcoded secret in place would demote the blocker and let the
+	// commit through, with no dispatch to re-raise it (#1631 Case B, running in
+	// the harmful direction). If a future change teaches the guard to honor
+	// `stale`, it must exclude security-category sources first.
+	it("a self-drift demotion does NOT open the git-guard commit gate", async () => {
+		const dir = makeDir("pi-lens-fresh-guardpin-");
+		const target = path.join(dir, "config.ts");
+		fs.writeFileSync(target, "const token = 'aaa';\n");
+
+		const runtime = new RuntimeCoordinator();
+		runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
+			"ast-grep",
+		]);
+		runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
+		expect(runtime.gitGuardHasBlockers).toBe(true);
+
+		// Out-of-band write: mtime moves, the secret is still there, nothing
+		// re-dispatches the file.
+		driftIntoFuture(target);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+
+		// Demoted for turn-end rendering, still blocking for the commit gate.
+		runtime.updateGitGuardStatus(false, "");
+		expect(runtime.gitGuardHasBlockers).toBe(true);
+	});
 });
