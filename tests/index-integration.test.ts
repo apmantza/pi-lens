@@ -1823,7 +1823,7 @@ describe("index.ts integration", () => {
 	);
 
 	it(
-		"tool_call defers read registration until the host result",
+		"tool_call registers the resolved read path before the host result",
 		async () => {
 			const recordRead = vi.fn();
 			const mockReadGuard = {
@@ -1912,9 +1912,13 @@ describe("index.ts integration", () => {
 				{ cwd: tmpDir },
 			);
 
-			// Recurrence #2802: the requested range is not proof of what the
-			// native host read delivered. The paired tool_result registers it.
-			expect(recordRead).not.toHaveBeenCalled();
+			expect(recordRead).toHaveBeenCalledWith(
+				expect.objectContaining({
+					filePath: sourceFile,
+					effectiveOffset: 1,
+					effectiveLimit: 6,
+				}),
+			);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

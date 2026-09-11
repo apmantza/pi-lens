@@ -861,6 +861,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	const readInput = getReadToolInput(toolName, event.input);
 	const requestedReadOffset = readInput?.offset ?? 1;
 	const requestedReadLimit = readInput?.limit;
+	let effectiveReadOffset = requestedReadOffset;
 	let effectiveReadLimit = getEffectiveReadLimit(filePath, readInput);
 
 	// --- Opportunistic read expansion via tree-sitter ---
@@ -907,6 +908,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			if (expansion) {
 				readInput.offset = expansion.newOffset;
 				readInput.limit = expansion.newLimit;
+				effectiveReadOffset = expansion.newOffset;
 				effectiveReadLimit = expansion.newLimit;
 				let enriched = false;
 				let enrichedAncestry = expansion.ancestry;
@@ -975,9 +977,46 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// Native read registration is deferred to tool_result. The host may clamp a
-	// requested range at EOF or its output cap, so tool_call cannot know what the
-	// model actually saw (#2802 probe 3).
+	// Register the host-resolved path at tool_call. This path is load-bearing for
+	// the read guard and the observed-mutation settled sweep, including under
+	// --no-read-guard. The paired tool_result adds the authoritative delivered
+	// range after the host applies EOF and output-cap clipping (#2802 probe 3).
+	if (toolName === "read" && filePath && !isExternalOrVendor) {
+		const totalLines = countFileLines(filePath);
+		const deliveredLimit = effectiveReadLimit ?? 1;
+		logToolReadGuardEvent({
+			event: "read_pattern",
+			sessionId: runtime.telemetrySessionId,
+			filePath,
+			requestedOffset: requestedReadOffset,
+			requestedLimit: requestedReadLimit ?? deliveredLimit,
+			effectiveOffset: effectiveReadOffset,
+			effectiveLimit: deliveredLimit,
+			metadata: {
+				totalLines,
+				isPartial:
+					requestedReadLimit != null && requestedReadLimit < totalLines,
+				fileKind: detectFileKind(filePath) ?? "unknown",
+				fractionRead:
+					totalLines > 0
+						? Math.round((deliveredLimit / totalLines) * 100) / 100
+						: 1,
+				expandedByTs: enclosingSymbol !== undefined,
+			},
+		});
+		runtime.readGuard.recordRead({
+			filePath,
+			requestedOffset: requestedReadOffset,
+			requestedLimit: requestedReadLimit ?? deliveredLimit,
+			effectiveOffset: effectiveReadOffset,
+			effectiveLimit: deliveredLimit,
+			expandedByLsp: enclosingSymbol !== undefined,
+			...(enclosingSymbol !== undefined && { enclosingSymbol }),
+			turnIndex: runtime.turnIndex,
+			writeIndex: runtime.peekWriteIndex(),
+			timestamp: Date.now(),
+		});
+	}
 
 	// Record complexity baseline for historical tracking (booboo/tdi).
 	// Not shown inline - just captured for delta analysis.
