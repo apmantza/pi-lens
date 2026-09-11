@@ -71,6 +71,8 @@ const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 
 const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	jsts: [
+		"biome.json",
+		"biome.jsonc",
 		"package.json",
 		"tsconfig.json",
 		"jsconfig.json",
