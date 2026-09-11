@@ -529,6 +529,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 48. **Check-then-act on a shared durable directory.** *Screen:* a first-use migration or lazy create of a per-project directory (`existsSync` → `renameSync`/`mkdirSync`) is idempotent under two concurrent starters: the loser re-stats after `ENOENT`/`EEXIST`, returns the directory that now exists, and never returns a path that does not; canonicalise the identity ONCE (one realpath-or-resolve value feeds both the readable slug and the hash) so a symlinked root and a transient realpath failure land in the same directory; record once per session, never per event. Use the shared guarded `realpathOrResolve` helper when a scanner needs the same canonical root for its process and its coverage evidence. *e.g.* #2929 round 1: two real processes on a barrier, 80 iterations → 74 disagreeing directories, 74 sessions writing state into a directory that no longer existed. *Detect:* `existsSync(x)` followed by a rename/mkdir of `x` with no retry-after-race branch; a slug computed from `path.resolve` beside a hash computed from `realpathSync`.
 
+The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
+
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
 into the replacement. The LSP service uses this rule in `lsp/index.ts` so a
