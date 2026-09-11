@@ -1701,9 +1701,10 @@ Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries ar
 
 The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
 negative walk re-runs on the next lookup, so a marker created where NONE was
-found is seen on the next resolution (#2894). The other half of the axis is
-still open: a marker created BELOW a cached positive root is not seen until
-the session ends (#2922) — do not describe the class as closed.
+found is seen on the next resolution (#2894). A positive hit re-walks from its
+start directory to the cached root before reuse, so a nearer marker created
+during the session is also seen (#2922); keep both freshness halves when
+changing this seam.
 
 ### Session lifecycle, telemetry, and observability
 

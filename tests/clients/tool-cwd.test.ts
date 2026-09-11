@@ -331,6 +331,55 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
+	it("derived RUNNER_MARKERS marker memo state space", () => {
+		for (const [tool, markers] of Object.entries(toolCwd.RUNNER_MARKERS)) {
+			const marker = markers[0];
+			if (!marker) throw new Error(`runner ${tool} has no marker`);
+			const project = path.join(home, tool.replaceAll("/", "-"));
+			const nested = path.join(project, "packages", "app");
+			const file = path.join(nested, "src", "main.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+
+			// Create-later: a negative result must not become a session-wide fact.
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
+			).toBe(project);
+			fs.writeFileSync(path.join(nested, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
+			).toBe(nested);
+
+			// Create-below: a positive outer hit must yield to a nearer marker.
+			const outer = path.join(home, `${tool.replaceAll("/", "-")}-outer`);
+			const outerNested = path.join(outer, "packages", "app", "src");
+			const outerFile = path.join(outerNested, "main.ts");
+			fs.mkdirSync(outerNested, { recursive: true });
+			fs.writeFileSync(path.join(outer, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
+			).toBe(outer);
+			const nearer = path.join(outer, "packages", "app");
+			fs.writeFileSync(path.join(nearer, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
+			).toBe(nearer);
+
+			// Delete-at-root: a cached positive hit must not survive marker removal.
+			const deleted = path.join(home, `${tool.replaceAll("/", "-")}-deleted`);
+			const deletedFile = path.join(deleted, "src", "main.ts");
+			fs.mkdirSync(path.dirname(deletedFile), { recursive: true });
+			const deletedMarker = path.join(deleted, marker);
+			fs.writeFileSync(deletedMarker, "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
+			).toBe(deleted);
+			fs.unlinkSync(deletedMarker);
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
+			).toBe(deleted);
+		}
+	});
+
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {
 		const project = path.join(home, "repo");
 		const foreign = path.join(home, "tmp", "outside.ts");

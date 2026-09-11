@@ -111,7 +111,7 @@ export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	],
 };
 
-const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
+export const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 	yamllint: [".yamllint", "yamllint.yaml", "yamllint.yml", "pyproject.toml"],
 	ruff: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
 	"spellcheck/typos": ["_typos.toml", "typos.toml"],
@@ -150,36 +150,14 @@ function syncGeneration(): void {
 	}
 }
 
-function findMarkerRoot(
+function walkMarkerRoot(
 	startDir: string,
 	markers: readonly string[],
 	homeDir: string,
+	stopRoot?: string,
 ): { root: string | null; marker?: string } {
-	syncGeneration();
-	const key = _toolCwdEphemeralKey([
-		path.resolve(startDir),
-		...markers,
-		path.resolve(homeDir),
-	]);
-	const cached = markerWalks.get(key);
-	if (cached && markerWalkGenerations.current(key) !== 0) {
-		// A negative walk is not stable: a project marker can be created after
-		// the first resolution, so do not cache absence across calls. Positive
-		// results remain memoized and are still revalidated when their marker is
-		// deleted (#2894).
-		if (!cached.marker || !cached.root) {
-			markerWalks.delete(key);
-			markerWalkGenerations.forget(key);
-		} else {
-			// #2777: a marker can disappear during a session; do not reuse a stale root.
-			if (existsSync(path.join(cached.root, cached.marker))) return cached;
-			markerWalks.delete(key);
-			markerWalkGenerations.forget(key);
-		}
-	}
-	markerWalkCount++;
 	let current = path.resolve(startDir);
-	let result: { root: string | null; marker?: string } = { root: null };
+	const resolvedStopRoot = stopRoot ? path.resolve(stopRoot) : undefined;
 	for (let depth = 0; depth < 64; depth++) {
 		if (isAtOrAboveHomeDir(current, homeDir)) break;
 		for (const marker of markers) {
@@ -203,17 +181,55 @@ function findMarkerRoot(
 			} else {
 				found = existsSync(path.join(target, basename));
 			}
-			if (found) {
-				result = { root: current, marker };
-				markerWalks.set(key, result);
-				markerWalkGenerations.bump(key);
-				return result;
-			}
+			if (found) return { root: current, marker };
 		}
+		if (resolvedStopRoot && current === resolvedStopRoot) break;
 		const parentDir = path.dirname(current);
 		if (parentDir === current) break;
 		current = parentDir;
 	}
+	return { root: null };
+}
+
+function findMarkerRoot(
+	startDir: string,
+	markers: readonly string[],
+	homeDir: string,
+): { root: string | null; marker?: string } {
+	syncGeneration();
+	const key = _toolCwdEphemeralKey([
+		path.resolve(startDir),
+		...markers,
+		path.resolve(homeDir),
+	]);
+	const cached = markerWalks.get(key);
+	if (cached && markerWalkGenerations.current(key) !== 0) {
+		// A negative walk is not stable: a project marker can be created after
+		// the first resolution, so do not cache absence across calls. Positive
+		// results remain memoized and are still revalidated when their marker is
+		// deleted (#2894).
+		if (!cached.marker || !cached.root) {
+			markerWalks.delete(key);
+			markerWalkGenerations.forget(key);
+		} else {
+			// #2922: a nearer marker can appear below a cached root during a session.
+			// Rewalk only the cached positive prefix before accepting the memo.
+			const revalidated = walkMarkerRoot(
+				startDir,
+				markers,
+				homeDir,
+				cached.root,
+			);
+			if (revalidated.root) {
+				markerWalks.set(key, revalidated);
+				return revalidated;
+			}
+			markerWalks.delete(key);
+			markerWalkGenerations.forget(key);
+		}
+	}
+	markerWalkCount++;
+	const result = walkMarkerRoot(startDir, markers, homeDir);
 	markerWalks.set(key, result);
 	markerWalkGenerations.bump(key);
 	return result;
