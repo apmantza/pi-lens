@@ -3518,6 +3518,11 @@ synchronous, and `handleToolResult` reads everything it derives from the
 post-result bytes — the state hash the in-flight composite key is built from —
 BEFORE the settle's yield. Move that read after the yield and a racing
 tool_result for the same path collapses two distinct pipelines into one.
+The observational net wraps the shared diff with its own direction: when a
+content hash is absent, it treats equal size/mtime as a candidate for more
+checking, because this question schedules work rather than granting authorship
+(#2984 and the #2952 timing probe). Authority decisions keep their separate
+fail-closed consumer contract in `runtime-tool-result.ts`.
 Steady-state cost is zero for a classified `write`/`edit` (the net is gated on
 `classifyMutatingTool` having returned `undefined` or the attribution still
 being provisional) and ~1.3ms for one armed observation of a file target, paid

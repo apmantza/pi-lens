@@ -815,6 +815,9 @@ export async function armObservedMutation(
 	const targetKey = normalizeMapKey(path.resolve(args.targetPath));
 	seedLedger(outcome.value.stats);
 	if (outcome.value.capped) {
+		// #2984/#2952 timing probe recurrence: a partial observation must not
+		// become a clean baseline. This guard records the cap and carries it to
+		// settle, where the observational net fails open by staying unverifiable.
 		// A truncated universe is a real coverage gap and it is named here, at
 		// the moment it happens, so it is counted even for a call whose settle
 		// never arrives (catalog shape 10).
@@ -1034,7 +1037,7 @@ export async function settleObservedMutation(
 	const captured = capture.value;
 
 	seedLedger(captured.snapshot);
-	const changed = diffFileStats(pending.stats, captured.snapshot).filter(
+	const changed = diffObservedStats(pending.stats, captured.snapshot).filter(
 		(candidate) => args.isRecordable?.(candidate) !== false,
 	);
 	// Two different ways the observation can fall short of what the tool named:
@@ -1051,7 +1054,9 @@ export async function settleObservedMutation(
 		// An INCOMPLETE observation is not evidence of cleanliness — it is
 		// evidence we stopped looking. Advancing the clean latch on it would
 		// teach pi-lens to stop watching a tool it never finished watching, and
-		// with a directory wider than the cap that is every single call.
+		// with a directory wider than the cap that is every single call. The
+		// #2984/#2952 timing probe recurrence is why this guard fails open for
+		// the observational question: missing evidence schedules more checking.
 		if (truncated) noteObservedUnverifiable(args.toolName);
 		else noteObservedClean(args.toolName);
 		return {
@@ -1127,6 +1132,33 @@ export async function settleObservedMutation(
 		stoppedEarly: truncated,
 		reason: cutReason,
 	};
+}
+
+/**
+ * The observational net asks whether to look harder, so an absent content
+ * hash is a change candidate even when cheap stat fields are unchanged.
+ *
+ * #2984/#2952 timing probe recurrence: treating an uncompleted or budgeted
+ * observation as clean grants the wrong direction to a shared diff helper.
+ * Authorship keeps its separate fail-closed decision in #2952.
+ */
+function diffObservedStats(
+	before: FileStatsSnapshot,
+	after: FileStatsSnapshot,
+): string[] {
+	const changed = new Set(diffFileStats(before, after));
+	for (const [key, stat] of after) {
+		const previous = before.get(key);
+		if (
+			previous &&
+			(previous.hash === undefined || stat.hash === undefined) &&
+			previous.mtimeMs === stat.mtimeMs &&
+			previous.size === stat.size
+		) {
+			changed.add(key);
+		}
+	}
+	return [...changed];
 }
 
 export interface SettledSweepArgs {

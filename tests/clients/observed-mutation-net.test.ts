@@ -1118,6 +1118,45 @@ describe("#2449 review round 2 — the settled sweep is incremental and honest",
 		}
 	});
 
+	it("rechecks an unchanged-stat file when its content hash is absent", async () => {
+		// #2984 and the #2952 timing probe: a budgeted hash omission is missing
+		// evidence. The observational net must fail open and look harder, even
+		// when a rewrite preserves size and mtime.
+		const env = setupTestEnvironment("pi-lens-2984-absent-hash-");
+		try {
+			const filePath = path.join(env.tmpDir, "large.ts");
+			const content = Buffer.alloc(
+				OBSERVED_SWEEP_HASH_BUDGET_BYTES + 1024,
+				0x61,
+			);
+			fs.writeFileSync(filePath, content);
+			const pinned = Math.floor(Date.now());
+			fs.utimesSync(filePath, new Date(pinned), new Date(pinned));
+			const baselineMtime = fs.statSync(filePath).mtimeMs;
+
+			const armed = await armObservedMutation(armArgs(filePath, env.tmpDir));
+			expect(armed.armed).toBe(true);
+			fs.writeFileSync(filePath, content);
+			fs.utimesSync(filePath, new Date(pinned), new Date(pinned));
+			expect(fs.statSync(filePath).mtimeMs).toBe(baselineMtime);
+
+			const sink = recorder();
+			const settled = await settleObservedMutation({
+				toolCallId: "call-observed-1",
+				toolName: "patch_file",
+				sessionGeneration: 1,
+				turnIndex: 1,
+				record: sink.record,
+			});
+
+			expect(settled.changedPaths).toHaveLength(1);
+			expect(settled.replayed).toBe(1);
+			expect(sink.entries).toHaveLength(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("names a file it cannot verify instead of replaying it on stat alone", async () => {
 		// F7's honest-degradation half. A file past the sweep's read budget can
 		// never carry a hash, so a stat that moves is un-provable either way —
