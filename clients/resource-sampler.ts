@@ -551,7 +551,7 @@ export async function sampleProcessTreeCpuPercent(
  * to become measurable overhead for the (usually sub-few-second) analyzer
  * children this brackets.
  */
-export const SPAWN_SAMPLE_INTERVAL_MS = 750;
+const SPAWN_SAMPLE_INTERVAL_MS = 750;
 
 /**
  * #2968: how many ticks keep the full `intervalMs` cadence before the backoff
@@ -559,23 +559,14 @@ export const SPAWN_SAMPLE_INTERVAL_MS = 750;
  * analyzer children the short interval exists for; a child still running past
  * that is not short-lived and does not need sub-second resolution.
  */
-export const SPAWN_SAMPLE_FULL_RATE_TICKS = 8;
+const SPAWN_SAMPLE_FULL_RATE_TICKS = 8;
 
 /**
  * #2968: backoff ceiling, as a multiple of `intervalMs` (16 × 750ms = 12s).
  * Past the full-rate window the delay doubles each tick up to this, so a
  * long-lived child costs a bounded ~5 polls/minute instead of 80.
  */
-export const SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER = 16;
-
-/**
- * #2968: default hard bound on a sampler's polling lifetime — safe-spawn's own
- * default 30s spawn timeout plus its teardown grace. The one production caller
- * (`clients/safe-spawn.ts`) passes the deadline it actually computed; this
- * default only ever applies to a caller that forgot, and it is deliberately
- * the SAFE direction (bounded) rather than "poll forever".
- */
-export const SPAWN_SAMPLE_LIFETIME_CAP_MS = 35_000;
+const SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER = 16;
 
 /**
  * Brackets one transient spawn with a short-interval poll. Usage:
@@ -624,11 +615,16 @@ export const SPAWN_SAMPLE_LIFETIME_CAP_MS = 35_000;
  * Ticks skipped for (1) and the cap in (3) are both recorded, bounded, on the
  * degradation ledger — a sampler that quietly stops sampling is the #1863 /
  * #2132 shape one level up.
+ *
+ * `lifetimeCapMs` has no default ON PURPOSE: an unbounded sampler is the whole
+ * defect, so the bound is the caller's to state rather than something a future
+ * call site can forget. The cadence keeps its default, which is policy this
+ * module owns.
  */
 export function startSpawnUsageSampler(
 	pid: number | undefined,
 	intervalMs = SPAWN_SAMPLE_INTERVAL_MS,
-	lifetimeCapMs = SPAWN_SAMPLE_LIFETIME_CAP_MS,
+	lifetimeCapMs: number,
 ): { stop: () => SpawnUsageSummary | null } {
 	if (!Number.isFinite(pid) || (pid as number) <= 0) {
 		return { stop: () => null };

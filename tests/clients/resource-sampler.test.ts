@@ -522,7 +522,7 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 		fakeSpawn = () => makeFakeChild({ emitError: true });
 		vi.useFakeTimers();
 		try {
-			const sampler = startSpawnUsageSampler(999, 100);
+			const sampler = startSpawnUsageSampler(999, 100, 60_000);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(sampler.stop()).toBeNull();
 			expect(
@@ -692,7 +692,7 @@ describe("resource-sampler: fire-and-forget CIM spawns are unref'd (#1155)", () 
 			return child;
 		};
 
-		const sampler = startSpawnUsageSampler(999, 100);
+		const sampler = startSpawnUsageSampler(999, 100, 60_000);
 		await vi.advanceTimersByTimeAsync(0); // flush the immediate tick
 		sampler.stop();
 
@@ -719,15 +719,15 @@ describe("startSpawnUsageSampler", () => {
 	});
 
 	it("returns a no-op sampler (stop() => null) for an undefined/invalid pid", () => {
-		expect(startSpawnUsageSampler(undefined).stop()).toBeNull();
-		expect(startSpawnUsageSampler(0).stop()).toBeNull();
-		expect(startSpawnUsageSampler(-5).stop()).toBeNull();
+		expect(startSpawnUsageSampler(undefined, 100, 60_000).stop()).toBeNull();
+		expect(startSpawnUsageSampler(0, 100, 60_000).stop()).toBeNull();
+		expect(startSpawnUsageSampler(-5, 100, 60_000).stop()).toBeNull();
 	});
 
 	it("samples immediately on start and again on each poll tick, aggregating into a summary", async () => {
 		pidusageMock.mockResolvedValue({ "555": { cpu: 10, memory: 1000 } });
 
-		const sampler = startSpawnUsageSampler(555, 100);
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
 		await vi.advanceTimersByTimeAsync(0); // flush the immediate tick
 		await vi.advanceTimersByTimeAsync(250); // ~2-3 more ticks at 100ms
 
@@ -740,14 +740,14 @@ describe("startSpawnUsageSampler", () => {
 
 	it("stop() before any tick lands returns null (never a fabricated zero reading)", () => {
 		pidusageMock.mockImplementation(() => new Promise(() => {})); // never resolves
-		const sampler = startSpawnUsageSampler(555, 100);
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
 		expect(sampler.stop()).toBeNull();
 	});
 
 	it("a poll tick that rejects is silently skipped, not fatal to the sampler", async () => {
 		pidusageMock.mockRejectedValue(new Error("pid gone"));
 
-		const sampler = startSpawnUsageSampler(555, 100);
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
 		await vi.advanceTimersByTimeAsync(0);
 		await vi.advanceTimersByTimeAsync(300);
 
@@ -756,7 +756,7 @@ describe("startSpawnUsageSampler", () => {
 
 	it("stop() is idempotent — calling it twice returns the same summary and doesn't throw", async () => {
 		pidusageMock.mockResolvedValue({ "555": { cpu: 5, memory: 500 } });
-		const sampler = startSpawnUsageSampler(555, 100);
+		const sampler = startSpawnUsageSampler(555, 100, 60_000);
 		await vi.advanceTimersByTimeAsync(0);
 
 		const first = sampler.stop();
