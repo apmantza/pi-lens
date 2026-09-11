@@ -263,25 +263,7 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
-	it("memoizes marker walks for repeated files in one ledger generation", () => {
-		const project = path.join(home, "repo");
-		const nested = path.join(project, "packages", "app");
-		fs.mkdirSync(path.join(nested, "src"), { recursive: true });
-		fs.writeFileSync(path.join(project, "Cargo.toml"), "[package]\n");
-		const before = toolCwd._getToolCwdMarkerWalkCount();
-		for (let i = 0; i < 20; i++) {
-			toolCwd.resolveToolCwd(
-				"formatter",
-				"rustfmt",
-				path.join(nested, "src", `file-${i}.rs`),
-				{ cwd: project },
-			);
-		}
-		const walks = toolCwd._getToolCwdMarkerWalkCount() - before;
-		expect(walks).toBe(1);
-	});
-
-	it("re-walks when a memoized marker is deleted in the same session", () => {
+	it("falls through to the outer root when a marker is deleted", () => {
 		const project = path.join(home, "repo");
 		const nested = path.join(project, "src");
 		const file = path.join(nested, "main.rs");
@@ -294,7 +276,6 @@ describe("resolveToolCwd (#2777)", () => {
 				cwd: project,
 			}),
 		).toBe(project);
-		const walksAfterFirstResolution = toolCwd._getToolCwdMarkerWalkCount();
 		fs.unlinkSync(marker);
 
 		// #2777: deleting a marker must not leave the session stuck on its old root.
@@ -303,10 +284,6 @@ describe("resolveToolCwd (#2777)", () => {
 				cwd: project,
 			}),
 		).toBe(nested);
-		expect(toolCwd._getToolCwdMarkerWalkCount()).toBe(
-			// One marker walk plus the uncached .git fallback walk.
-			walksAfterFirstResolution + 2,
-		);
 	});
 
 	it("re-walks a negative marker result when a marker is created later", () => {
@@ -331,7 +308,7 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
-	it("derived RUNNER_MARKERS marker memo state space", () => {
+	it("covers the RUNNER_MARKERS marker state space", () => {
 		for (const [tool, markers] of Object.entries(toolCwd.RUNNER_MARKERS)) {
 			const marker = markers[0];
 			if (!marker) throw new Error(`runner ${tool} has no marker`);

@@ -126,24 +126,14 @@ export const RUNNER_MARKERS: Readonly<Record<string, readonly string[]>> = {
 
 const toolCwdGeneration = createGenerationSource("tool-cwd");
 const logged = createGenerationMap("tool-cwd-resolution-log");
-const markerWalks = new Map<string, { root: string | null; marker?: string }>();
-const markerWalkGenerations = createGenerationMap("tool-cwd-marker-walks");
-let markerWalkCount = 0;
 
 /** Pure key seam for ephemeral tool-cwd memo and log identity. */
 export function _toolCwdEphemeralKey(parts: readonly string[]): string {
 	return parts.map(normalizeEphemeralMapKey).join("\0");
 }
 
-/** Test probe for the per-generation walk memo; not part of runtime behavior. */
-export function _getToolCwdMarkerWalkCount(): number {
-	return markerWalkCount;
-}
-
 function syncGeneration(): void {
 	if (toolCwdGeneration.current() === getDegradationLedgerGeneration()) return;
-	markerWalks.clear();
-	markerWalkGenerations.clear();
 	logged.clear();
 	while (toolCwdGeneration.current() < getDegradationLedgerGeneration()) {
 		toolCwdGeneration.bump();
@@ -154,10 +144,8 @@ function walkMarkerRoot(
 	startDir: string,
 	markers: readonly string[],
 	homeDir: string,
-	stopRoot?: string,
 ): { root: string | null; marker?: string } {
 	let current = path.resolve(startDir);
-	const resolvedStopRoot = stopRoot ? path.resolve(stopRoot) : undefined;
 	for (let depth = 0; depth < 64; depth++) {
 		if (isAtOrAboveHomeDir(current, homeDir)) break;
 		for (const marker of markers) {
@@ -183,7 +171,6 @@ function walkMarkerRoot(
 			}
 			if (found) return { root: current, marker };
 		}
-		if (resolvedStopRoot && current === resolvedStopRoot) break;
 		const parentDir = path.dirname(current);
 		if (parentDir === current) break;
 		current = parentDir;
@@ -197,42 +184,7 @@ function findMarkerRoot(
 	homeDir: string,
 ): { root: string | null; marker?: string } {
 	syncGeneration();
-	const key = _toolCwdEphemeralKey([
-		path.resolve(startDir),
-		...markers,
-		path.resolve(homeDir),
-	]);
-	const cached = markerWalks.get(key);
-	if (cached && markerWalkGenerations.current(key) !== 0) {
-		// A negative walk is not stable: a project marker can be created after
-		// the first resolution, so do not cache absence across calls. Positive
-		// results remain memoized and are still revalidated when their marker is
-		// deleted (#2894).
-		if (!cached.marker || !cached.root) {
-			markerWalks.delete(key);
-			markerWalkGenerations.forget(key);
-		} else {
-			// #2922: a nearer marker can appear below a cached root during a session.
-			// Rewalk only the cached positive prefix before accepting the memo.
-			const revalidated = walkMarkerRoot(
-				startDir,
-				markers,
-				homeDir,
-				cached.root,
-			);
-			if (revalidated.root) {
-				markerWalks.set(key, revalidated);
-				return revalidated;
-			}
-			markerWalks.delete(key);
-			markerWalkGenerations.forget(key);
-		}
-	}
-	markerWalkCount++;
-	const result = walkMarkerRoot(startDir, markers, homeDir);
-	markerWalks.set(key, result);
-	markerWalkGenerations.bump(key);
-	return result;
+	return walkMarkerRoot(startDir, markers, homeDir);
 }
 
 function markersFor(

@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Marker memo refresh (closes #2922)** — Revalidate cached project roots so tools notice nearer markers created during a session.
+- **Marker-root freshness (refs #2922)** — Resolve the nearest marker with one synchronous walk per lookup, preserving visibility of nearer, created, and deleted markers without charging a redundant positive-cache rewalk.

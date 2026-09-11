@@ -1699,12 +1699,12 @@ package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
-The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
-negative walk re-runs on the next lookup, so a marker created where NONE was
-found is seen on the next resolution (#2894). A positive hit re-walks from its
-start directory to the cached root before reuse, so a nearer marker created
-during the session is also seen (#2922); keep both freshness halves when
-changing this seam.
+The marker walk in `clients/tool-cwd.ts` runs synchronously for each lookup. It
+does not memoize roots: a marker created during the session, a nearer marker,
+or a deleted marker is handled by the same full walk (#2894, #2922, #2777).
+Keep the home and depth ceilings when changing this seam; do not reintroduce a
+positive cache unless it skips filesystem work while preserving those
+freshness guarantees.
 
 ### Session lifecycle, telemetry, and observability
 
