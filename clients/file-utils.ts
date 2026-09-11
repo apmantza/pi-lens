@@ -46,7 +46,7 @@ import { safeSpawnAsync } from "./safe-spawn.js";
  * Override: set PILENS_DATA_DIR=/some/path — each project gets its own
  * subdirectory named after a sanitized form of its absolute path, e.g.
  *   PILENS_DATA_DIR=~/.pi-lens/projects
- *   → ~/.pi-lens/projects/home-user-myapp/
+ *   → ~/.pi-lens/projects/home-user-myapp-<8-hex-hash>/
  *
  * This keeps project folders clean and avoids creating .pi-lens folders
  * inside user projects.
@@ -58,11 +58,22 @@ export function getProjectDataDir(cwd: string): string {
 		return legacyProjectDir;
 	}
 	const base = configuredBase || path.join(getGlobalPiLensDir(), "projects");
-	const readable = projectDataDirReadableSlug(cwd);
-	const hash = projectDataDirRootHash(cwd);
+	const resolvedBase = base.trim();
+	const memoKey = `${resolvedBase}\0${path.resolve(cwd)}`;
+	const cached = settledDataDirs.get(memoKey);
+	if (cached !== undefined) return cached;
+	const canonical = canonicalProjectRoot(cwd);
+	const readable = projectDataDirReadableSlug(canonical);
+	const hash = projectDataDirRootHash(canonical);
 	const slug = `${readable || "default"}-${hash}`;
-	const dir = path.join(base.trim(), slug);
-	return settleProjectDataDir(base.trim(), readable || "default", dir);
+	const dir = path.join(resolvedBase, slug);
+	const settled = settleProjectDataDir(
+		resolvedBase,
+		readable || "default",
+		dir,
+		memoKey,
+	);
+	return settled;
 }
 
 /**
@@ -73,8 +84,8 @@ export function getProjectDataDir(cwd: string): string {
  * `src/pi/lens` fold to the same string. It is only ever combined with
  * {@link projectDataDirRootHash}. Never use it as a directory name alone.
  */
-function projectDataDirReadableSlug(cwd: string): string {
-	const normalized = normalizeFilePath(path.resolve(cwd));
+function projectDataDirReadableSlug(canonicalRoot: string): string {
+	const normalized = normalizeFilePath(canonicalRoot);
 	return normalized
 		.replace(/^[a-z]:/i, "") // strip Windows drive letter
 		.replace(/\/+/g, "-") // separators → dashes
@@ -84,21 +95,24 @@ function projectDataDirReadableSlug(cwd: string): string {
 }
 
 /**
- * The discriminating half of the project data-dir slug: the first 8 hex
- * chars of the SHA-256 of the canonical absolute root (realpath'd where the
- * root resolves, resolved-absolute otherwise so a missing root still hashes
- * stably). Pinned on purpose — changing the algorithm or its input renames
- * every project data directory, so that needs its own migration.
+ * The canonical root is shared by both slug halves: realpath when available,
+ * otherwise the resolved absolute path. The hash is the first 8 hex chars of
+ * SHA-256 over that root. A collision needs the same readable slug and the
+ * same 32-bit prefix, so the practical collision population is readable-slug
+ * twin pairs. Pinned on purpose because changing it renames every directory.
  */
-function projectDataDirRootHash(cwd: string): string {
+function canonicalProjectRoot(cwd: string): string {
 	const resolved = path.resolve(cwd);
-	let canonical = resolved;
 	try {
-		canonical = fs.realpathSync(resolved);
+		return fs.realpathSync(resolved);
 	} catch {
-		// Best-effort: the root may not exist yet; hash the resolved path.
+		// Best-effort: the root may not exist yet.
+		return resolved;
 	}
-	return createHash("sha256").update(canonical).digest("hex").slice(0, 8);
+}
+
+function projectDataDirRootHash(canonicalRoot: string): string {
+	return createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 8);
 }
 
 export interface ProjectDataDirMigration {
@@ -112,6 +126,10 @@ export interface ProjectDataDirMigration {
 
 const pendingDataDirMigrations: ProjectDataDirMigration[] = [];
 const settledDataDirs = new Map<string, string>();
+
+export function resetProjectDataDirSessionState(): void {
+	pendingDataDirMigrations.splice(0);
+}
 
 /**
  * One-time upgrade from a pre-#2874 slug directory to its hashed name.
@@ -131,35 +149,44 @@ function settleProjectDataDir(
 	base: string,
 	oldSlug: string,
 	dir: string,
+	memoKey: string,
 ): string {
-	const hit = settledDataDirs.get(dir);
-	if (hit !== undefined) {
-		return hit;
-	}
 	const oldDir = path.join(base, oldSlug);
-	if (oldDir === dir) {
-		settledDataDirs.set(dir, dir);
-		return dir;
-	}
 	const newExists = fs.existsSync(dir);
 	const oldExists = fs.existsSync(oldDir);
 	if (!oldExists) {
 		// Steady state: nothing to migrate from. No record either way.
-		settledDataDirs.set(dir, dir);
+		settledDataDirs.set(memoKey, dir);
 		return dir;
 	}
 	if (!newExists) {
 		try {
 			fs.renameSync(oldDir, dir);
-		} catch {
-			// Best-effort: do NOT memoize, so a later call retries the
-			// rename, and keep serving the pre-existing directory meanwhile.
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				if (fs.existsSync(dir)) {
+					settledDataDirs.set(memoKey, dir);
+					return dir;
+				}
+				if (fs.existsSync(oldDir)) return oldDir;
+			}
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return dir;
+			// Best-effort: retain the old directory and publish one bounded
+			// failure notice for this process's memo key.
+			if (pendingDataDirMigrations.length < 32) {
+				pendingDataDirMigrations.push({
+					from: oldDir,
+					to: dir,
+					renamed: false,
+				});
+			}
+			settledDataDirs.set(memoKey, oldDir);
 			return oldDir;
 		}
 	}
 	// Either the rename just moved the state, or both directories already
 	// existed and the new one wins. Queue one migration for the drain.
-	settledDataDirs.set(dir, dir);
+	settledDataDirs.set(memoKey, dir);
 	if (pendingDataDirMigrations.length < 32) {
 		pendingDataDirMigrations.push({
 			from: oldDir,

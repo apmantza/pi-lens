@@ -12,12 +12,23 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-	recordDegradationOnce,
-	resetDegradationLedger,
-	getDegradationSummary,
-} from "../../clients/degradation-ledger.js";
+import { spawn } from "node:child_process";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const realpathState = vi.hoisted(() => ({ fail: false }));
+vi.mock("node:fs", async () => {
+	const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+	return {
+		...actual,
+		realpathSync: (...args: Parameters<typeof actual.realpathSync>) => {
+			if (realpathState.fail) {
+				throw Object.assign(new Error("temporary failure"), { code: "EACCES" });
+			}
+			return actual.realpathSync(...args);
+		},
+	};
+});
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import {
 	drainProjectDataDirMigrations,
 	getProjectDataDir,
@@ -34,6 +45,28 @@ function isolateDataDir(): string {
 		path.join(os.tmpdir(), "pi-lens-datadir-home-"),
 	);
 	return base;
+}
+
+function runRealProcess(
+	env: NodeJS.ProcessEnv,
+	script: string,
+): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(process.execPath, ["-e", script], {
+			cwd: process.cwd(),
+			env,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let output = "";
+		let error = "";
+		child.stdout.on("data", (chunk: Buffer) => (output += chunk));
+		child.stderr.on("data", (chunk: Buffer) => (error += chunk));
+		child.on("error", reject);
+		child.on("exit", (code) => {
+			if (code === 0) resolve(output.trim());
+			else reject(new Error(`child exited ${code}: ${error}`));
+		});
+	});
 }
 
 afterEach(() => {
@@ -87,6 +120,70 @@ describe("project data-dir slug (#2874)", () => {
 		expect(trailingSlash).toBe(first);
 	});
 
+	it("symlink and target share one canonical directory", () => {
+		isolateDataDir();
+		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-symlink-"));
+		const target = path.join(scratch, "target", "proj");
+		const linkParent = path.join(scratch, "linked");
+		fs.mkdirSync(target, { recursive: true });
+		fs.mkdirSync(linkParent);
+		fs.symlinkSync(path.join(scratch, "target"), path.join(linkParent, "root"));
+
+		expect(getProjectDataDir(target)).toBe(
+			getProjectDataDir(path.join(linkParent, "root", "proj")),
+		);
+	});
+
+	it("realpath failure keeps the canonical directory stable", () => {
+		isolateDataDir();
+		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-realpath-"));
+		const root = path.join(scratch, "proj");
+		fs.mkdirSync(root, { recursive: true });
+		const healthy = getProjectDataDir(root);
+		_resetProjectDataDirMemoForTests();
+		realpathState.fail = true;
+		try {
+			expect(getProjectDataDir(root)).toBe(healthy);
+		} finally {
+			realpathState.fail = false;
+		}
+	});
+
+	it("two processes converge on one migrated directory", async () => {
+		const base = isolateDataDir();
+		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-race-"));
+		const root = path.join(scratch, "proj");
+		fs.mkdirSync(root, { recursive: true });
+		const hashedDir = getProjectDataDir(root);
+		const oldDir = path.join(
+			base,
+			path.basename(hashedDir).replace(/-[0-9a-f]{8}$/, ""),
+		);
+		fs.mkdirSync(oldDir, { recursive: true });
+		fs.writeFileSync(path.join(oldDir, "sessions.json"), "{}\n");
+		_resetProjectDataDirMemoForTests();
+		const barrier = path.join(scratch, "release");
+		const script = [
+			"const fs = require('node:fs');",
+			"const { getProjectDataDir } = require('./clients/file-utils.js');",
+			`while (!fs.existsSync(${JSON.stringify(barrier)})) {}`,
+			`process.stdout.write(getProjectDataDir(${JSON.stringify(root)}));`,
+		].join("\n");
+		const childEnv = {
+			...process.env,
+			PILENS_DATA_DIR: base,
+			PI_LENS_HOME: path.join(scratch, "home"),
+		};
+		const first = runRealProcess(childEnv, script);
+		const second = runRealProcess(childEnv, script);
+		fs.writeFileSync(barrier, "go");
+		const dirs = await Promise.all([first, second]);
+		expect(dirs[0]).toBe(dirs[1]);
+		expect(dirs[0]).toBe(hashedDir);
+		expect(fs.existsSync(path.join(hashedDir, "sessions.json"))).toBe(true);
+		expect(fs.existsSync(oldDir)).toBe(false);
+	});
+
 	it("migrates an old-slug directory by rename and preserves its contents", () => {
 		const base = isolateDataDir();
 		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-migrate-"));
@@ -135,44 +232,5 @@ describe("project data-dir slug (#2874)", () => {
 		expect(settled).toBe(dir);
 		expect(fs.existsSync(path.join(settled, "new.txt"))).toBe(true);
 		expect(fs.existsSync(oldDir)).toBe(true);
-	});
-
-	it("records data_dir_migrated once for a migration", () => {
-		const base = isolateDataDir();
-		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-record-"));
-		const root = path.join(scratch, "proj");
-		fs.mkdirSync(root, { recursive: true });
-
-		const dir = getProjectDataDir(root);
-		const oldDir = path.join(
-			base,
-			path.basename(dir).replace(/-[0-9a-f]{8}$/, ""),
-		);
-		fs.mkdirSync(oldDir, { recursive: true });
-		fs.writeFileSync(path.join(oldDir, "marker.json"), "{}");
-		_resetProjectDataDirMemoForTests();
-
-		getProjectDataDir(root);
-		const migrations = drainProjectDataDirMigrations();
-		expect(migrations.length).toBe(1);
-		expect(migrations[0]?.renamed).toBe(true);
-		for (const migration of migrations) {
-			recordDegradationOnce({
-				kind: "data_dir_migrated",
-				subject: path.basename(migration.to),
-				reason: migration.renamed
-					? `renamed ${path.basename(migration.from)}`
-					: `old and new both present; using ${path.basename(migration.to)}`,
-			});
-		}
-
-		const summary = getDegradationSummary();
-		const row = summary.find((entry) => entry.kind === "data_dir_migrated");
-		expect(row?.count).toBe(1);
-
-		// A second drain observes nothing further: one migration, one record.
-		expect(drainProjectDataDirMigrations().length).toBe(0);
-		getProjectDataDir(root);
-		expect(drainProjectDataDirMigrations().length).toBe(0);
 	});
 });

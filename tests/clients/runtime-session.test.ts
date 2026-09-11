@@ -2,7 +2,11 @@ import fs from "node:fs";
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getGlobalPiLensDir } from "../../clients/file-utils.js";
+import {
+	getGlobalPiLensDir,
+	getProjectDataDir,
+	_resetProjectDataDirMemoForTests,
+} from "../../clients/file-utils.js";
 import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
@@ -647,6 +651,30 @@ describe("fixture-loaded startup precedence", () => {
 			);
 			expect(second).toHaveLength(1);
 			expect(second[0]?.latestReasons[0]?.subject).toBe("startup-scans");
+		} finally {
+			await result.env.cleanup();
+		}
+	});
+
+	it("records data_dir_migrated once through the session-start drain", async () => {
+		const result = await runSessionStart("quick", (tmpDir) => {
+			const hashedDir = getProjectDataDir(tmpDir);
+			const oldDir = path.join(
+				path.dirname(hashedDir),
+				path.basename(hashedDir).replace(/-[0-9a-f]{8}$/, ""),
+			);
+			fs.mkdirSync(oldDir, { recursive: true });
+			fs.writeFileSync(path.join(oldDir, "marker.json"), "{}");
+			_resetProjectDataDirMemoForTests();
+		});
+		try {
+			const rows = getDegradationSummary().filter(
+				(entry) => entry.kind === "data_dir_migrated",
+			);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.count).toBe(1);
+			expect(rows[0]?.latestReasons[0]?.subject).toMatch(/^[0-9a-f]{8}$/);
+			expect(rows[0]?.latestReasons[0]?.reason).not.toContain("/");
 		} finally {
 			await result.env.cleanup();
 		}

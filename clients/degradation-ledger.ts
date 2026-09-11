@@ -1267,6 +1267,9 @@ const INFORMATIONAL_DEGRADATION_KINDS: ReadonlySet<string> = new Set([
 	// doc comment above) and is frequent/self-healing by design — a `⚠` would
 	// cry wolf on the sampler's ordinary best-effort data loss.
 	"resource-sampler-scanner-escalated",
+	// #2874: a successful legacy-directory migration is an upgrade tally, not
+	// a call to action. The hash-only subject avoids exposing the project path.
+	"data_dir_migrated",
 ]);
 
 export function renderDegradationLines(

@@ -27,6 +27,7 @@ import {
 	getGlobalPiLensDir,
 	getKnipIgnorePatterns,
 	getProjectDataDir,
+	resetProjectDataDirSessionState,
 } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
 import { resetGoAvailability } from "./go-client.js";
@@ -1897,6 +1898,7 @@ export async function handleSessionStart(
 	// every analyzer refused for the rest of the process — AGENTS.md defect
 	// shape 17. The resident clients themselves are deliberately kept.
 	resetAnalyzerBootstrapSessionState();
+	resetProjectDataDirSessionState();
 	resetTestRunnerDelivery();
 	// #2450 fix round 3, catalog shape 17: the "bridge unavailable" dbg latch
 	// (`clients/lsp-mutation.ts`) is a process-lifetime once-per-session flag,
@@ -2470,12 +2472,14 @@ export async function handleSessionStart(
 	// it renames (or finds coexisting with its hashed successor). Drain here
 	// so each migration emits one bounded record per session at most.
 	for (const migration of drainProjectDataDirMigrations()) {
+		const targetName = path.basename(migration.to);
+		const hash = targetName.match(/([0-9a-f]{8})$/)?.[1] ?? "unknown";
 		recordDegradationOnce({
 			kind: "data_dir_migrated",
-			subject: path.basename(migration.to),
+			subject: hash,
 			reason: migration.renamed
-				? `renamed ${path.basename(migration.from)}`
-				: `old and new both present; using ${path.basename(migration.to)}`,
+				? "renamed legacy project data directory"
+				: "legacy and hashed project data directories both present; using hashed directory",
 		});
 	}
 	// #1609 review F1: sweepOwnStagingFiles does not recurse, so the installer's
