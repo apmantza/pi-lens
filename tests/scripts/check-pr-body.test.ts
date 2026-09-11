@@ -1560,6 +1560,77 @@ describe("head-tree citations and test references", () => {
 		}
 	});
 
+	it("reuses the HEAD-tree corpus at one immutable revision", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-head-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "immutable.test.ts"),
+				'it("immutable HEAD title", () => {});\n',
+			);
+			const calls: string[][] = [];
+			const git = (args: string[]) => {
+				calls.push(args);
+				if (args[0] === "rev-parse") return "immutable-revision\n";
+				return args[0] === "ls-files" ? "tests/immutable.test.ts\n" : "";
+			};
+			const candidate = `${body}\nThe test is it("immutable HEAD title").`;
+			expect(lintPrBody(candidate, { cwd: fixtureCwd, git })).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(lintPrBody(candidate, { cwd: fixtureCwd, git })).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(calls.filter(([command]) => command === "ls-files")).toHaveLength(
+				1,
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	it("evicts the oldest HEAD-tree corpus beyond its bound", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-bound-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "bounded.test.ts"),
+				'it("bounded HEAD title", () => {});\n',
+			);
+			let revision = "revision-0";
+			const listings: string[][] = [];
+			const git = (args: string[]) => {
+				if (args[0] === "rev-parse") return `${revision}\n`;
+				if (args[0] === "ls-files") listings.push(args);
+				return args[0] === "ls-files" ? "tests/bounded.test.ts\n" : "";
+			};
+			for (let index = 0; index < 9; index += 1) {
+				revision = `revision-${index}`;
+				expect(
+					lintPrBody(`${body}\nit("bounded HEAD title")`, {
+						cwd: fixtureCwd,
+						git,
+					}),
+				).toEqual({ valid: true, errors: [] });
+			}
+			revision = "revision-0";
+			expect(
+				lintPrBody(`${body}\nit("bounded HEAD title")`, {
+					cwd: fixtureCwd,
+					git,
+				}),
+			).toEqual({
+				valid: true,
+				errors: [],
+			});
+			expect(listings).toHaveLength(10);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
 	it("harvests a title containing sixty backslashes", () => {
 		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-"));
 		const title = `${"\\".repeat(60)} title`;

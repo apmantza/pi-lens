@@ -365,8 +365,29 @@ function sourceLines(source) {
 	return String(source ?? "").split(/\r?\n/);
 }
 
+const HEAD_TEST_CORPUS_CACHE_LIMIT = 8;
+const headTestCorpusCache = new Map();
+
 function testCorpus(options = {}) {
 	const cwd = options.cwd ?? process.cwd();
+	let cacheKey;
+	if (!options.workingTree) {
+		try {
+			const revision = String(
+				(options.git ?? gitExecFileSync)(["rev-parse", "HEAD"], {
+					cwd,
+					encoding: "utf8",
+				}),
+			).trim();
+			if (revision) cacheKey = `${cwd}:${revision}`;
+		} catch {
+			// A failed revision lookup must not turn a mutable tree into a cache hit.
+		}
+	}
+	if (cacheKey) {
+		const cached = headTestCorpusCache.get(cacheKey);
+		if (cached) return cached;
+	}
 	let files = [];
 	try {
 		const tracked = String(
@@ -448,6 +469,11 @@ function testCorpus(options = {}) {
 		}
 	}
 	const corpus = { paths, titles };
+	if (cacheKey) {
+		if (headTestCorpusCache.size >= HEAD_TEST_CORPUS_CACHE_LIMIT)
+			headTestCorpusCache.delete(headTestCorpusCache.keys().next().value);
+		headTestCorpusCache.set(cacheKey, corpus);
+	}
 	return corpus;
 }
 
@@ -597,10 +623,9 @@ function lintCodeCitations(body, options = {}) {
 	return errors;
 }
 
-function lintTestReferences(body, options = {}) {
+function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 	const references = [];
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	const corpus = testCorpus(options);
 	for (const match of visibleBody.matchAll(
 		/\bit\(\s*(["'`])((?:\\\\.|[^\\\\])*?)\1\s*\)/g,
 	)) {
@@ -990,7 +1015,7 @@ export function lintPrBody(body = "", options = {}) {
 			),
 		);
 	errors.push(...lintCodeCitations(body, options));
-	errors.push(...lintTestReferences(body, options));
+	errors.push(...lintTestReferences(body, options, testCorpus(options)));
 	errors.push(...lintMasterClaims(body));
 	return { valid: errors.length === 0, errors };
 }
