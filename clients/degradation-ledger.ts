@@ -489,6 +489,8 @@ export type DegradationKind =
 	| "observed-mutation-budget"
 	/** A runner exceeded the observed inline budget and moved to collect-later. */
 	| "observed-mutation-dir-cap"
+	/** Opengrep completed with partial parsing warnings (#2943). */
+	| "opengrep-partial-scan"
 	/** Opengrep refused the requested root or reported a scan error (#2943). */
 	| "opengrep-scan-refused"
 	/** A pending runner entry was evicted at the bounded handoff cap (#2122). */

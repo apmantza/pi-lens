@@ -88,6 +88,111 @@ describe("opengrep report outcomes (#2943)", () => {
 		}
 	});
 
+	it("keeps findings and coverage when opengrep reports a partial parse warning", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					findingReport.replace(
+						'"errors":[]',
+						'"errors":[{"code":3,"level":"warn","type":["PartialParsing"],"message":"invalid UTF-8"}]',
+					),
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).toMatchObject({ success: true, analyzed: true });
+			expect(result.findings).toHaveLength(1);
+			expect(result.analyzedFiles).toEqual([
+				path.resolve(real, "<root>/src/a.js"),
+			]);
+			expect(getDegradationSummary()).toEqual([
+				expect.objectContaining({ kind: "opengrep-partial-scan" }),
+			]);
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a status-zero report with an error-level envelope entry", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					'{"results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"config failed"}],"paths":{"scanned":[]}}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).not.toHaveProperty("analyzed");
+			const [record] = getDegradationSummary();
+			expect(record).toMatchObject({ kind: "opengrep-scan-refused" });
+			expect(record.latestReasons[0].reason).toBe("config failed");
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a syntactically valid report without result or error arrays", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(args[args.indexOf("--json-output") + 1], "{}");
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).not.toHaveProperty("analyzed");
+			expect(getDegradationSummary()).toEqual([
+				expect.objectContaining({ kind: "opengrep-scan-refused" }),
+			]);
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	it("records a missing report and a timed-out scan as refused", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		const second = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync")
+			.mockResolvedValueOnce({ status: 137, stdout: "", stderr: "killed" })
+			.mockResolvedValueOnce({
+				status: null,
+				stdout: "",
+				stderr: "",
+				error: new Error("timed out"),
+				failure: "timeout",
+			});
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			await client.scan(real);
+			await client.scan(second);
+			expect(getDegradationSummary()).toEqual([
+				expect.objectContaining({ kind: "opengrep-scan-refused" }),
+			]);
+			expect(
+				getDegradationSummary()[0].latestReasons.map((entry) => entry.reason),
+			).toEqual(["killed", "timeout"]);
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+			fs.rmSync(second, { recursive: true, force: true });
+		}
+	});
+
 	it("returns a captured eval finding when the root is supplied through a symlink", async () => {
 		const { real, link } = await rootWithSymlink();
 		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(

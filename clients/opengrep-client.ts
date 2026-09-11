@@ -186,34 +186,52 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 
 			if (result.error) {
 				this.log(`Scan error: ${result.error.message}`);
+				const reason =
+					result.failure ??
+					(result.stderr ?? "").trim().split("\n")[0] ??
+					result.error.message;
+				this.recordRefusal(cwd, reason, result.status);
 				return {
 					...EMPTY_RESULT,
 					scannedAt,
-					summary: result.error.message.slice(0, 200),
+					summary: reason.slice(0, 200),
 				};
 			}
 
 			if (!fs.existsSync(reportPath)) {
+				const reason =
+					(result.stderr ?? "").trim().split("\n")[0] || "no report produced";
+				this.recordRefusal(cwd, reason, result.status);
 				return {
 					...EMPTY_RESULT,
 					scannedAt,
-					summary:
-						(result.stderr ?? "").trim().split("\n")[0] || "no report produced",
+					summary: reason,
 				};
 			}
 
 			const raw = fs.readFileSync(reportPath, "utf-8");
 			const report = parseOpengrepReportEnvelope(raw);
-			if (result.status !== 0 || report.errors.length > 0) {
+			if (
+				!report.parsed ||
+				result.status !== 0 ||
+				report.errors.some((error) => error.level !== "warn")
+			) {
 				const reason =
-					report.errors[0] ?? `opengrep exited with status ${result.status}`;
+					report.errors[0]?.message ??
+					(!report.parsed
+						? "unparseable opengrep report"
+						: `opengrep exited with status ${result.status}`);
+				this.recordRefusal(cwd, reason, result.status);
+				return { ...EMPTY_RESULT, scannedAt, summary: reason.slice(0, 200) };
+			}
+			const partial = report.errors.find((error) => error.level === "warn");
+			if (partial) {
 				recordDegradationOnce({
-					kind: "opengrep-scan-refused",
+					kind: "opengrep-partial-scan",
 					subject: cwd,
-					reason,
+					reason: partial.message,
 					metadata: { status: result.status },
 				});
-				return { ...EMPTY_RESULT, scannedAt, summary: reason.slice(0, 200) };
 			}
 			const findings = parseOpengrepReport(raw);
 			let analyzedFiles: string[] | undefined;
@@ -236,10 +254,12 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 				scannedAt,
 			};
 		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			this.recordRefusal(cwd, reason, undefined);
 			return {
 				...EMPTY_RESULT,
 				scannedAt,
-				summary: err instanceof Error ? err.message.slice(0, 200) : String(err),
+				summary: reason.slice(0, 200),
 			};
 		} finally {
 			try {
@@ -249,25 +269,55 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			}
 		}
 	}
+
+	private recordRefusal(
+		cwd: string,
+		reason: string,
+		status: number | null | undefined,
+	): void {
+		recordDegradationOnce({
+			kind: "opengrep-scan-refused",
+			subject: cwd,
+			reason,
+			metadata: { status },
+		});
+	}
 }
 
-function parseOpengrepReportEnvelope(raw: string): { errors: string[] } {
+function parseOpengrepReportEnvelope(raw: string): {
+	parsed: boolean;
+	errors: Array<{ level?: string; message: string }>;
+} {
 	try {
-		const parsed = JSON.parse(raw) as { errors?: unknown };
+		const parsed = JSON.parse(raw) as { errors?: unknown; results?: unknown };
+		if (!parsed || typeof parsed !== "object")
+			return { parsed: false, errors: [] };
 		const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
 		return {
+			parsed: Array.isArray(parsed.results) || Array.isArray(parsed.errors),
 			errors: errors
 				.map((error) => {
-					if (typeof error === "string") return error;
-					if (error && typeof error === "object" && "message" in error) {
-						return String((error as { message: unknown }).message);
-					}
-					return String(error);
+					if (typeof error === "string") return { message: error };
+					if (!error || typeof error !== "object") return undefined;
+					const entry = error as { level?: unknown; message?: unknown };
+					const level =
+						typeof entry.level === "string" ? entry.level : undefined;
+					const message =
+						typeof entry.message === "string" ? entry.message : undefined;
+					return level === undefined && message === undefined
+						? undefined
+						: {
+								...(level ? { level } : {}),
+								message: message ?? level ?? "opengrep scan error",
+							};
 				})
-				.filter((error) => error !== "undefined"),
+				.filter(
+					(error): error is { level?: string; message: string } =>
+						error !== undefined,
+				),
 		};
 	} catch {
-		return { errors: [] };
+		return { parsed: false, errors: [] };
 	}
 }
 
