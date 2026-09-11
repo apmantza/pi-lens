@@ -648,6 +648,16 @@ function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 	};
 	const lines = visibleBody.split(/\r?\n/);
 	let tableHeaders = null;
+	const tableCells = (line) => line.split("|").map((cell) => cell.trim());
+	const isValidSeparator = (line, headers) => {
+		if (!headers) return false;
+		if (!/^\s*\|.*\|\s*$/.test(line)) return false;
+		const cells = tableCells(line);
+		return (
+			cells.length === headers.length &&
+			cells.slice(1, -1).every((cell) => /^:?-{3,}:?$/.test(cell))
+		);
+	};
 	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
 		const line = lines[lineIndex];
 		const isBullet = /^\s*[-*+]\s+/.test(line);
@@ -656,26 +666,27 @@ function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 		if (
 			table &&
 			lineIndex + 1 < lines.length &&
-			/^\s*\|\s*:?-{3,}/.test(lines[lineIndex + 1])
+			isValidSeparator(lines[lineIndex + 1], tableCells(line))
 		) {
-			tableHeaders = line.split("|").map((cell) => cell.trim());
+			tableHeaders = tableCells(line);
 			continue;
 		}
-		if (table && /^\s*\|\s*:?-{3,}/.test(line)) continue;
+		const inTable = table && tableHeaders !== null;
+		if (inTable && isValidSeparator(line, tableHeaders)) continue;
 		for (const match of line.matchAll(/`([^`]+)`/g)) {
-			const cellIndex = table
+			const cellIndex = inTable
 				? line.slice(0, match.index).split("|").length - 1
 				: -1;
 			const inTestColumn = Boolean(
-				tableHeaders &&
+				inTable &&
 				/test|probe|case|witness|id/i.test(tableHeaders[cellIndex] ?? ""),
 			);
-			addToken(match[1], inTestColumn || isBullet || !table, inTestColumn);
+			addToken(match[1], inTestColumn || isBullet || !inTable, inTestColumn);
 		}
 		for (const match of line.matchAll(/\bit\(\s*(["'])(.*?)\1\s*\)/g))
-			if (isBullet || !table) addToken(match[0], true);
+			if (isBullet || !inTable) addToken(match[0], true);
 		for (const match of line.matchAll(/(?:^|[\s:(])(["'])([^"'\n]{3,})\1/g))
-			if (isBullet || !table) addToken(match[2], true);
+			if (isBullet || !inTable) addToken(match[2], true);
 	}
 	const exists = (reference) => {
 		const path = reference.match(/^(tests\/[^:]+):\d+$/)?.[1];

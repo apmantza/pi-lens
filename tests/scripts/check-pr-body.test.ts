@@ -1544,6 +1544,43 @@ describe("head-tree citations and test references", () => {
 		expect(result).toEqual({ valid: true, errors: [] });
 	});
 
+	// Prevent malformed pipe markup from hiding fabricated references by being
+	// treated as a table without the separator that makes columns meaningful.
+	it.each([
+		["missing separator", "| Test |\n| |\n| `fabricated missing separator` |"],
+		["empty separator", "| Test |\n| |\n| `fabricated empty separator` |"],
+		[
+			"malformed separator",
+			"| Test |\n| -- |\n| `fabricated malformed separator` |",
+		],
+	])("rejects a fabricated title in a %s pipe block", (_name, table) => {
+		const result = lintPrBody(`${body}\n${table}`, options);
+		expect(result.valid).toBe(false);
+		expect(result.errors).toContain(
+			`PR body test reference is missing under tests/: ${table.match(/fabricated [^`]+/)?.[0]}`,
+		);
+	});
+
+	it("keeps valid tables column-aware with CRLF line endings", () => {
+		const result = lintPrBody(
+			`${body}\r\n| Command | Test | Notes |\r\n| --- | --- | --- |\r\n| \`fabricated command column\` | \`fabricated test column\` | \`fabricated notes column\` |\r\n| \`npm run build\` | \`fabricated build title\` | prose |`,
+			options,
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors).toContain(
+			"PR body test reference is missing under tests/: fabricated test column",
+		);
+		expect(result.errors).toContain(
+			"PR body test reference is missing under tests/: fabricated build title",
+		);
+		expect(result.errors).not.toContain(
+			"PR body test reference is missing under tests/: fabricated command column",
+		);
+		expect(result.errors).not.toContain(
+			"PR body test reference is missing under tests/: fabricated notes column",
+		);
+	});
+
 	it("ignores table header cells", () => {
 		const result = lintPrBody(
 			`${body}\n| \`fabricated header title\` | Test |\n| --- | --- |\n| Case | \`fabricated header value\` |`,
@@ -1581,7 +1618,7 @@ describe("head-tree citations and test references", () => {
 		"harvests each declaration titles",
 		(_title) => {
 			const result = lintPrBody(
-				`${body}\n| Test |\n| --- |\n| \`harvests each declaration titles\` |`,
+				`${body}\n| Test |\n| --- |\n| \`ignores non-test table cells\` |`,
 				options,
 			);
 			expect(result).toEqual({ valid: true, errors: [] });
