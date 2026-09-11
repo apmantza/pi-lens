@@ -1541,7 +1541,7 @@ async function collectBatchDiagnostics(
 	const resolvedCwd = options.cwd ?? process.cwd();
 	const cacheCtx = createWorkspaceDiagnosticsCacheContext(resolvedCwd);
 	const scopeKey = buildScopeKey(options.serverScope ?? "all");
-	const results = Array<FileDiagnosticResult>(files.length);
+	const resultsByIndex = new Map<number, FileDiagnosticResult>();
 	let completed = 0;
 	const pendingIndices = new Map<string, number[]>();
 	files.forEach((file, index) => {
@@ -1567,58 +1567,70 @@ async function collectBatchDiagnostics(
 				});
 				if (options.signal?.aborted) return;
 			}
-			await mapWithConcurrency(group.files, 1, async (file) => {
-				// Keep duplicate explicit paths in their original result slots.
-				const index = pendingIndices.get(file)!.shift()!;
-				const work = collectFileDiagnosticResult(
-					file,
-					severity,
-					lspService,
-					options.waitMs,
-					options.nextWriteIndex,
-					options.serverScope,
-					cacheCtx,
-					scopeKey,
-					resolvedCwd,
-					options.onConfirmedNoBlockers,
-				);
-				const bounded = withDeadline(work, {
-					ms: batchFileDeadlineMs(),
-					onTimeout: "undefined",
-					onReject: "undefined",
-				});
-				const result = options.signal
-					? await Promise.race([
-							bounded,
-							new Promise<FileDiagnosticResult | undefined>((resolve) => {
-								if (options.signal?.aborted) {
-									resolve(undefined);
-									return;
-								}
-								options.signal?.addEventListener(
-									"abort",
-									() => resolve(undefined),
-									{
-										once: true,
-									},
-								);
-							}),
-						])
-					: await bounded;
-				results[index] =
-					result ??
-					inconclusiveBatchResult(
+			await mapWithConcurrency(
+				group.files,
+				1,
+				async (file) => {
+					// Keep duplicate explicit paths in their original result slots.
+					const index = pendingIndices.get(file)!.shift()!;
+					const work = collectFileDiagnosticResult(
 						file,
-						options.signal?.aborted
-							? "Batch aborted before this file completed."
-							: `File check exceeded ${batchFileDeadlineMs()}ms.`,
+						severity,
+						lspService,
+						options.waitMs,
+						options.nextWriteIndex,
+						options.serverScope,
+						cacheCtx,
+						scopeKey,
+						resolvedCwd,
+						options.onConfirmedNoBlockers,
 					);
-				completed += 1;
-				options.onProgress?.(completed, files.length);
-			});
+					const bounded = withDeadline(work, {
+						ms: batchFileDeadlineMs(),
+						onTimeout: "undefined",
+						onReject: "undefined",
+					});
+					const result = options.signal
+						? await Promise.race([
+								bounded,
+								new Promise<FileDiagnosticResult | undefined>((resolve) => {
+									if (options.signal?.aborted) {
+										resolve(undefined);
+										return;
+									}
+									options.signal?.addEventListener(
+										"abort",
+										() => resolve(undefined),
+										{
+											once: true,
+										},
+									);
+								}),
+							])
+						: await bounded;
+					resultsByIndex.set(
+						index,
+						result ??
+							inconclusiveBatchResult(
+								file,
+								options.signal?.aborted
+									? "Batch aborted before this file completed."
+									: `File check exceeded ${batchFileDeadlineMs()}ms.`,
+							),
+					);
+					completed += 1;
+					options.onProgress?.(completed, files.length);
+				},
+				options.signal,
+			);
 		},
 		options.signal,
 	);
+	// The retired local pool returned only slots whose mapper had run. Keep that
+	// dense abort contract while restoring the original file order for callers.
+	const results = [...resultsByIndex.entries()]
+		.sort(([left], [right]) => left - right)
+		.map(([, result]) => result);
 	// Persist whatever was recorded, including a partial/aborted sweep's
 	// already-completed files — same "don't throw away confirmed work"
 	// posture as `runWorkspaceDiagnostics`.

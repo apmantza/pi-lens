@@ -25,28 +25,40 @@ export function mapWithConcurrency<T>(
 	concurrency: number,
 	mapper: (item: T) => Promise<void>,
 ): Promise<void>;
+/**
+ * The result-returning overload returns a dense array containing only mapper
+ * results for items whose mapper actually ran. An aborting caller therefore
+ * gets no placeholder for an item that was never started; returned results
+ * retain the original item order. When `signal` is aborted, workers stop
+ * before taking another item.
+ */
 export function mapWithConcurrency<T, R>(
 	items: T[],
 	concurrency: number,
 	mapper: (item: T) => Promise<R>,
+	signal?: AbortSignal,
 ): Promise<R[]>;
 export async function mapWithConcurrency<T, R>(
 	items: T[],
 	concurrency: number,
 	mapper: (item: T) => Promise<R | void>,
+	signal?: AbortSignal,
 ): Promise<R[] | void> {
 	if (items.length === 0) return [];
 	let nextIndex = 0;
 	const workerCount = Math.max(1, Math.min(concurrency, items.length));
-	const results = Array<R>(items.length);
+	const results = new Map<number, R>();
 	const worker = async (): Promise<void> => {
 		while (true) {
+			if (signal?.aborted) return;
 			const index = nextIndex++;
 			if (index >= items.length) return;
-			results[index] = (await mapper(items[index])) as R;
+			results.set(index, (await mapper(items[index])) as R);
 		}
 	};
 	const workers = Array.from({ length: workerCount }, () => worker());
 	await Promise.all(workers);
-	return results;
+	return [...results.entries()]
+		.sort(([left], [right]) => left - right)
+		.map(([, result]) => result);
 }
