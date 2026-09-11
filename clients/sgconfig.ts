@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { load as loadYaml } from "./deps/js-yaml.js";
 import { resolvePackagePath } from "./package-root.js";
 import { findLocalToolConfig } from "./path-utils.js";
@@ -304,7 +305,83 @@ export function resolveBaselineSgconfig(
 	const ruleDirForYaml = mergedDir.split(path.sep).join("/");
 	fs.writeFileSync(file, `ruleDirs:\n  - ${JSON.stringify(ruleDirForYaml)}\n`);
 	cachedBaselines.set(root, { fingerprint, path: file, mergedDir });
+	// Only the current pair is protected: every other baseline this process
+	// resolved is an eviction candidate too, or the keep-set would grow with
+	// the root count and the cap could never fire. An evicted sibling
+	// re-materializes on its next resolve through the existsSync check above.
+	enforceBaselineEntryCap(dir, new Set([file, mergedDir]));
 	return file;
+}
+
+/**
+ * Hard bound on the shared scratch dir (#2912: it held ~703,000 entries after
+ * one merge train). An entry cap, not a per-session subdirectory: no
+ * session-end seam owns this module, and a cap is race-safe across concurrent
+ * processes — a sibling whose baseline is evicted re-materializes on its next
+ * resolve (the existsSync check above self-heals). Each root baseline is two
+ * entries (config + merged rules dir); 24 entries ≈ 12 live roots, ample for
+ * concurrent agents times worktrees. Eviction is oldest-mtime-first and emits
+ * one bounded record per session.
+ */
+const SG_BASELINE_RETAINED_ENTRIES = 24;
+
+function enforceBaselineEntryCap(dir: string, keep: Set<string>): void {
+	let names: string[];
+	try {
+		names = fs.readdirSync(dir);
+	} catch {
+		return;
+	}
+	const candidates: { full: string; mtimeMs: number; recursive: boolean }[] =
+		[];
+	for (const name of names) {
+		const isConfig = /^baseline(?:-\d+(?:-[a-f0-9]+)?)?\.sgconfig\.yml$/.test(
+			name,
+		);
+		const isMergedDir = /^baseline-\d+(?:-[a-f0-9]+)?\.rules$/.test(name);
+		if (!isConfig && !isMergedDir) continue;
+		const full = path.join(dir, name);
+		if (keep.has(full)) continue;
+		try {
+			candidates.push({
+				full,
+				mtimeMs: fs.statSync(full).mtimeMs,
+				recursive: isMergedDir,
+			});
+		} catch {
+			// Racing another session; leave its artifact alone.
+		}
+	}
+	const over = candidates.length + keep.size - SG_BASELINE_RETAINED_ENTRIES;
+	if (over <= 0) return;
+	candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
+	let evicted = 0;
+	for (const candidate of candidates.slice(0, over)) {
+		try {
+			fs.rmSync(candidate.full, {
+				recursive: candidate.recursive,
+				force: true,
+			});
+			evicted += 1;
+			for (const [root, baseline] of cachedBaselines) {
+				if (
+					baseline.path === candidate.full ||
+					baseline.mergedDir === candidate.full
+				) {
+					cachedBaselines.delete(root);
+				}
+			}
+		} catch {
+			// Racing another session; leave its artifact alone.
+		}
+	}
+	if (evicted > 0) {
+		recordDegradationOnce({
+			kind: "sgconfig-baseline-cap-evict",
+			subject: dir,
+			reason: `evicted ${evicted} oldest baseline entries over the ${SG_BASELINE_RETAINED_ENTRIES}-entry cap`,
+		});
+	}
 }
 
 function cleanupStaleBaselines(dir: string, keep: Set<string>): void {

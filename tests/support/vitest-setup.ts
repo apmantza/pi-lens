@@ -51,6 +51,128 @@ process.env.PI_LENS_HOME = fs.mkdtempSync(
 );
 installGitFixtureEnv(process.env.PI_LENS_HOME);
 
+// Tmp-fixture hygiene (#2912): every temp dir a test file creates under the
+// OS temp root is contained in a per-file private root and removed when the
+// file finishes, even when tests fail. `os.tmpdir()` reads TMPDIR/TMP/TEMP on
+// every call (probed 2026-09-11), so pointing those at the private root before
+// the test file loads contains every `fs.mkdtempSync(path.join(os.tmpdir(),
+// ...))` site without touching any call site. The setup `afterAll` below runs
+// AFTER the test file's own `afterAll` hooks (probed 2026-09-11), so it sees
+// the file's final state: leftovers are removed and, unless admitted below,
+// fail the file. Pre-existing /tmp junk is excluded by the before-snapshot.
+const tmpHygieneRealTmp = os.tmpdir();
+const tmpHygieneBefore = new Set(
+	snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp)),
+);
+const tmpHygieneRoot = fs.mkdtempSync(
+	path.join(os.tmpdir(), "pi-lens-test-file-"),
+);
+process.env.TMPDIR = tmpHygieneRoot;
+process.env.TMP = tmpHygieneRoot;
+process.env.TEMP = tmpHygieneRoot;
+
+interface TmpLeakAdmission {
+	/** Test file (repo-relative) or "*" for every file. */
+	file: string;
+	/** Entry-name prefix exempted from the leak red (still removed). */
+	prefix: string;
+	/** Why the leftover cannot be self-cleaned. */
+	reason: string;
+	/** Issue tracking the remainder. */
+	issue: string;
+}
+
+// Fixtures that may outlive their test file without reding the file.
+// An admitted entry is STILL removed by the afterAll below; admission only
+// suppresses the red, never the hygiene.
+const TMP_LEAK_ADMISSIONS: TmpLeakAdmission[] = [
+	{
+		file: "*",
+		prefix: "pi-lens-ast-grep",
+		reason:
+			"Production-owned bounded sgconfig baseline cache (entry cap 24 with oldest-first eviction plus a 7-day stale sweep in clients/sgconfig.ts); no test-owned cleanup seam exists for it, and the hook removes the directory with the private root regardless.",
+		issue: "#2912",
+	},
+];
+
+function readTmpDirEntries(dir: string): string[] {
+	try {
+		return fs.readdirSync(dir);
+	} catch {
+		return [];
+	}
+}
+
+function snapshotTmpPiLensEntries(entries: string[]): string[] {
+	return entries.filter((name) => name.startsWith("pi-lens-"));
+}
+
+function isAdmittedTmpLeak(
+	testFile: string,
+	entryName: string,
+): TmpLeakAdmission | undefined {
+	return TMP_LEAK_ADMISSIONS.find(
+		(admission) =>
+			(admission.file === "*" || testFile.endsWith(admission.file)) &&
+			entryName.startsWith(admission.prefix),
+	);
+}
+
+afterAll(() => {
+	const testFile = String(expect.getState().testPath ?? "unknown")
+		.replace(/\\/g, "/")
+		.split("/tests/")
+		.pop() ?? "unknown";
+	let leftovers: string[] = [];
+	try {
+		leftovers = fs
+			.readdirSync(tmpHygieneRoot)
+			.filter((name) => !isAdmittedTmpLeak(testFile, name));
+	} catch {
+		// Private root already gone; nothing to check.
+	}
+	const leakedCount = leftovers.length;
+	try {
+		fs.rmSync(tmpHygieneRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 200,
+		});
+	} catch (err) {
+		console.warn(
+			`[test cleanup] could not remove temp root ${tmpHygieneRoot}: ${
+				err instanceof Error ? err.message : String(err)
+			}`,
+		);
+	}
+	if (leakedCount > 0) {
+		const sample = leftovers.slice(0, 8).join(", ");
+		throw new Error(
+			`[tmp-hygiene] ${leakedCount} leaked temp entr${leakedCount === 1 ? "y" : "ies"} in ${tmpHygieneRoot}: ${sample}. ` +
+				`Remove each mkdtemp dir in an afterEach/afterAll through removeTempDirSync (tests/clients/test-utils.ts). ` +
+				`See tests/config/tmp-fixture-hygiene.test.ts.`,
+		);
+	}
+	// Informational only, never a red: parallel workers share /tmp, so this
+	// delta cannot attribute ownership. The static sweep owns hardcoded-/tmp
+	// sites; the private-root check above owns the rest.
+	const after = new Set(
+		snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp)),
+	);
+	let globalDelta = 0;
+	for (const name of after) {
+		if (!tmpHygieneBefore.has(name) && !name.startsWith("pi-lens-test-file-")) {
+			globalDelta += 1;
+		}
+	}
+	if (globalDelta > 0) {
+		process.stderr.write(
+			`[tmp-hygiene] tests/${testFile}: ${globalDelta} new /tmp/pi-lens-* entries outside the private root (not attributed, not a failure)\n`,
+		);
+	}
+});
+
 // Hand this worker the suite-wide tool template's probe cache (built once by
 // prewarm-tool-home.ts globalSetup). ensureTool's probe-cache fast path then
 // resolves the template's already-installed binaries instead of paying a cold

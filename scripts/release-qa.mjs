@@ -63,6 +63,10 @@
  *     --poll-cap-ms <n>    cap for polled async rows (default 120000)
  *     --git-ref <ref>      enable the git-install row against this pushed ref
  *     --keep               leave the scratch root on disk
+ *     --keep-scratch       alias for --keep
+ *     --scratch-root <dir> use this directory as the scratch root instead of
+ *                          a fresh mkdtemp dir (created when missing; a
+ *                          pre-existing directory is never removed on exit)
  *
  * Node-only, no new dependency. Every spawn is shell-free (execFile/spawn with
  * an argv array) per AGENTS.md.
@@ -922,6 +926,7 @@ export function parseArgs(argv) {
 		pollCapMs: DEFAULT_POLL_CAP_MS,
 		gitRef: undefined,
 		keep: false,
+		scratchRoot: undefined,
 	};
 	// Every value-taking option reads its value through `value()`, which
 	// refuses a missing one. A trailing `--pi` used to leave `opts.pi`
@@ -949,7 +954,8 @@ export function parseArgs(argv) {
 				throw new Error(`--poll-cap-ms must be a positive number, got ${raw}`);
 			}
 			opts.pollCapMs = parsed;
-		} else if (arg === "--keep") opts.keep = true;
+		} else if (arg === "--keep" || arg === "--keep-scratch") opts.keep = true;
+		else if (arg === "--scratch-root") opts.scratchRoot = value(++i, arg);
 		else throw new Error(`unknown option: ${arg}`);
 	}
 	return opts;
@@ -1708,6 +1714,38 @@ export function implementedRowIds() {
 	return Object.keys(ROW_PROBES).sort();
 }
 
+/** Best-effort scratch removal shared by the normal and crash exits. */
+export function removeScratchRoot(scratchRoot) {
+	try {
+		fs.rmSync(scratchRoot, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 200,
+		});
+	} catch (err) {
+		console.warn(`[release-qa] cleanup warning: ${err?.message || err}`);
+	}
+}
+
+// The crash exit at the bottom of this file cannot see main()'s locals, so
+// the active scratch root is published here when created and cleared after a
+// successful cleanup. A pre-existing --scratch-root directory is never
+// published: removing a directory the runner did not create would destroy
+// user state.
+let activeScratchRoot = null;
+
+export function noteActiveScratchRoot(scratchRoot) {
+	activeScratchRoot = scratchRoot;
+}
+
+export function cleanupActiveScratchRoot() {
+	if (!activeScratchRoot) return;
+	const root = activeScratchRoot;
+	activeScratchRoot = null;
+	removeScratchRoot(root);
+}
+
 async function main() {
 	let opts;
 	try {
@@ -1737,9 +1775,17 @@ async function main() {
 		}
 	}
 
-	const scratchRoot = fs.mkdtempSync(
-		path.join(os.tmpdir(), "pi-lens-release-qa-"),
-	);
+	const scratchPreexisting = opts.scratchRoot
+		? fs.existsSync(opts.scratchRoot)
+		: false;
+	const scratchRoot = opts.scratchRoot
+		? path.resolve(opts.scratchRoot)
+		: fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-release-qa-"));
+	if (opts.scratchRoot) fs.mkdirSync(scratchRoot, { recursive: true });
+	// Owned unless the caller named a directory that already existed: the
+	// runner removes only scratch it created, and only when not kept.
+	const scratchOwned = !scratchPreexisting;
+	if (scratchOwned && !opts.keep) noteActiveScratchRoot(scratchRoot);
 	const home = path.join(scratchRoot, "home");
 	fs.mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
 	fs.writeFileSync(
@@ -2043,17 +2089,9 @@ async function main() {
 	console.log(`report: ${reportPath}`);
 	console.log(`evidence: ${evidenceDir}`);
 
-	if (!opts.keep) {
-		try {
-			fs.rmSync(scratchRoot, {
-				recursive: true,
-				force: true,
-				maxRetries: 5,
-				retryDelay: 200,
-			});
-		} catch (err) {
-			console.warn(`[release-qa] cleanup warning: ${err?.message || err}`);
-		}
+	if (scratchOwned && !opts.keep) {
+		activeScratchRoot = null;
+		removeScratchRoot(scratchRoot);
 	}
 
 	process.exit(coverage.balanced ? verdictExitCode(verdict.verdict) : 4);
@@ -2094,6 +2132,7 @@ const invokedDirectly =
 if (invokedDirectly) {
 	main().catch((err) => {
 		console.error("[release-qa] crashed:", err);
+		cleanupActiveScratchRoot();
 		process.exit(4);
 	});
 }
