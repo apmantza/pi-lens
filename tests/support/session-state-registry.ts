@@ -512,6 +512,15 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"A once-per-session coverage notice must be sayable again to the next session's agent; `generatedSkipRecorded` (refs #2346) rides the same reset so a generated file's `dispatch_skipped_generated` record is emitted for the new session's dispatches of that file, not silently withheld because an older session already logged it.",
 	},
 	{
+		id: "file-utils:pendingDataDirMigrations",
+		module: "file-utils.ts",
+		state: "pendingDataDirMigrations",
+		policy: "session_start",
+		resetName: "resetProjectDataDirSessionState",
+		reason:
+			"Migration notices belong to the session that resolves the project data directory; clearing the bounded queue at session_start prevents a prior session's migration from being emitted again.",
+	},
+	{
 		id: "formatters:runtimeState",
 		module: "formatters.ts",
 		state: "detectionCache",
@@ -1346,6 +1355,8 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	"event-loop-hold.ts":
 		"in-flight tool-call keep-alive; scoped to one call's try/finally and force-released by its own max-age failsafe — a session boundary that cleared it would un-hold a still-running call and reintroduce #2507",
 	"extension-log.ts": "console-method guard installation",
+	"file-utils.ts":
+		"the settledDataDirs project-directory memo is process-lifetime identity state; it is keyed by configured base and resolved cwd, and resetting it at session_start would repeat filesystem migration checks without changing identity. The projectIgnoreMatcherCache and projectIgnoreGlobsCache in the same file are signature-validated content caches: every read re-checks .gitignore mtime+size, the .pi-lens.json path+mtime+size and the global-config mtime, with a 2 s cadence sweep for newly created nested sources, so a session boundary reset is unnecessary (#2929 round 4, F1)",
 	"format-events-publish.ts": "format event publisher registration",
 	"generated-artifacts.ts":
 		"generated-file classification derived from path patterns",
@@ -1520,6 +1531,12 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"disposition-publish.ts": 0,
 	"event-loop-hold.ts": 0,
 	"extension-log.ts": 2,
+	// #2874: the live scan sees settledDataDirs plus the two project-ignore
+	// caches. All three ride the file-level exemption above: the ignore caches
+	// are signature-validated per call (#2929 round 4, F1), so no reset exists
+	// to register. This pin counts all three module-level containers, not the
+	// migration queue array.
+	"file-utils.ts": 3,
 	"format-events-publish.ts": 0,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.

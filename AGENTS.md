@@ -1555,6 +1555,21 @@ tier. (#2262)
 
 Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` freshness axes rather than duplicating them as nested provenance. A project runner retires that runner's retained widget findings only when its client set the opt-in `AnalysedRootSignal` (`clients/analysed-root.ts`) — i.e. the result is the parsed output of a scan that ran over this root during this call. `success: true` alone is not that signal: every runner client returns it for skips, memo hits and scans that crashed before writing a report, and a runner that did not run is reported cold instead. Delivery treats an LSP sweep as authoritative only after the shared widget write accepts its ordering token. A rejected result remains visible with `STALE_LINE_MARKER` and cannot retire an inline blocker, so full and delta cannot silently disagree (#2154).
 
+Project-runner retirement authority is recorded as `ProjectRunnerCoverage` on
+`FreshProjectDiagnosticsResult`, keyed by the runner id, analyzed root, and
+scanned file set. Only clients whose parsed report explicitly supplies a
+scanned-path set populate `analyzedFiles`; on this seam that is opengrep's
+`paths.scanned`. Other clients emit no file evidence, so `fresh-fetch.ts`
+transports the signal without walking the project or re-creating runner
+policies. `runnerRetirementDecision` in
+`tools/lens-diagnostics.ts` uses that coverage for filtering and
+`runner_authoritative_widget_retire`;
+the `analyzed` id list remains a conservative fallback only when coverage is
+absent. Coverage entries contain only non-empty scanned file sets; an empty set
+falls back to the runner-id gate. A
+language-specific dead-code client still uses its own runner id so a shared
+`dead-code` aggregate cannot retire another language's findings (#2887).
+
 The project-snapshot authoritative-write cache stamps both `mtimeMs` and size
 at save and after promotion. Both `loadProjectSnapshot` and
 `loadProjectSnapshotExportsAndRules` serve the in-process object only while
@@ -3030,6 +3045,17 @@ const cacheFile = path.join(getProjectDataDir(cwd), "cache", "my-file.json");
 - If `PILENS_DATA_DIR` is set → `$PILENS_DATA_DIR/<project-slug>/`
 - Otherwise, if `<cwd>/.pi-lens/` already exists → use it (legacy)
 - Default → `~/.pi-lens/projects/<project-slug>/`
+
+The default project slug is an opaque `<readable>-<8-hex-hash>` basename. The
+readable and hash halves derive from one resolved absolute root string.
+`realpathSync` is probed for a bounded fallback record, but its result is not
+used as identity because a transient boundary failure must not rename the
+directory. Never parse the slug or expose its
+path-derived readable half in agent-facing records. The 32-bit hash prefix
+only collides when roots share both the readable slug and the prefix, so its
+practical collision population is that twin-pair set. Legacy migration must
+converge concurrent starters on one hashed directory and emit one bounded
+record per session outcome.
 
 **Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, install-choices.
 

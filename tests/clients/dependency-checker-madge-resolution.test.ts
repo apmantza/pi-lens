@@ -122,6 +122,34 @@ describe("DependencyChecker madge resolution (#766)", () => {
 		);
 	}
 
+	it("real client does not claim coverage from madge cycle output (#2887)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeSource("a.ts", ["./b.js"]);
+		findNodeToolBinary.mockResolvedValue("madge");
+		safeSpawnAsync.mockImplementation(async (_command, args: string[]) => {
+			if (args[0] === "--version") {
+				return {
+					status: 0,
+					error: undefined,
+					stdout: "madge 8.0.0",
+					stderr: "",
+				};
+			}
+			return {
+				status: 0,
+				error: undefined,
+				// Captured from madge 8 with --circular --json for an acyclic
+				// project: the output is an array of cycles, not a graph object.
+				stdout: "[]",
+				stderr: "",
+			};
+		});
+		const result = await new DependencyChecker().scanProject(tmp);
+		expect(result.analyzed).toBe(true);
+		expect(result.analyzedFiles).toBeUndefined();
+	});
+
 	it("keeps a project-pinned binary winning (#375), without consulting the installer", async () => {
 		const { DependencyChecker } =
 			await import("../../clients/dependency-checker.js");

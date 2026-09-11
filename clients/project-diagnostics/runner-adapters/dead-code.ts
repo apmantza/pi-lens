@@ -2,6 +2,10 @@ import * as path from "node:path";
 import type { DeadCodeIssue, DeadCodeResult } from "../../dead-code-client.js";
 import type { ProjectDiagnostic } from "../types.js";
 
+function deadCodeRunnerId(language: string): string {
+	return `dead-code-${language}`;
+}
+
 function deadCodeMessage(issue: DeadCodeIssue): string {
 	if (issue.category === "unlisted") return `Unlisted dependency ${issue.name}`;
 	if (issue.category === "dependency") return `Unused dependency ${issue.name}`;
@@ -30,7 +34,7 @@ export function deadCodeIssueToProjectDiagnostic(
 		severity: blocking ? "error" : "warning",
 		semantic: blocking ? "blocking" : "warning",
 		tool: "dead-code",
-		runner: `dead-code-${language}`,
+		runner: deadCodeRunnerId(language),
 		rule: `dead-code:${issue.category}`,
 		message: deadCodeMessage(issue),
 		source: "project-scan",

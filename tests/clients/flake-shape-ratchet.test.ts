@@ -92,6 +92,15 @@ const FLAKE_SHAPE_BASELINE: Baseline = JSON.parse(
 const ADMITTED_AFTER_BASELINE: Readonly<
 	Record<string, { detector: DetectorName; reason: string }>
 > = {
+	// 2026-09-11 (#2886 round 2): the /lens-perf occupancy row keeps one
+	// real-clock sampler assertion alongside its deterministic yield count —
+	// event-loop occupancy has no deterministic proxy; the yield count is
+	// O(input) and cannot see per-chunk block growth.
+	"elapsed-time-assertion:clients/performance-report-occupancy.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"event-loop occupancy has no deterministic proxy; the sampler row guards per-chunk block size the yield count cannot see",
+	},
 	// 2026-09-08 (#2622): the defect is wall-clock only — 2^N regex
 	// backtracking in both glob compilers; a fake clock measures nothing.
 	"elapsed-time-assertion:clients/read-guard-glob-nonbacktracking.test.ts": {
@@ -203,6 +212,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real git children emit stderr bytes whose metrics classification cannot be observed in-process",
+	},
+	"real-process-spawn:clients/project-data-dir-slug.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"two real Node children must contend on the production rename; an in-process mock cannot expose the cross-process ENOENT",
 	},
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
 		detector: "real-process-spawn",

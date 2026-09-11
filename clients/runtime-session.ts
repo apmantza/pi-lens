@@ -23,9 +23,11 @@ import { resetPendingRunnerFindings } from "./dispatch/pending-runner-findings.j
 import type { FileKind } from "./file-kinds.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import {
+	drainProjectDataDirMigrations,
 	getGlobalPiLensDir,
 	getKnipIgnorePatterns,
 	getProjectDataDir,
+	resetProjectDataDirSessionState,
 } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
 import { resetGoAvailability } from "./go-client.js";
@@ -1896,6 +1898,7 @@ export async function handleSessionStart(
 	// every analyzer refused for the rest of the process — AGENTS.md defect
 	// shape 17. The resident clients themselves are deliberately kept.
 	resetAnalyzerBootstrapSessionState();
+	resetProjectDataDirSessionState();
 	resetTestRunnerDelivery();
 	// #2450 fix round 3, catalog shape 17: the "bridge unavailable" dbg latch
 	// (`clients/lsp-mutation.ts`) is a process-lifetime once-per-session flag,
@@ -2465,6 +2468,25 @@ export async function handleSessionStart(
 	// project data roots and machine-global registry root once per session start;
 	// this is fire-and-forget and bounded so it never delays startup.
 	const projectDataDir = getProjectDataDir(cwd);
+	// #2874: `getProjectDataDir` queues one migration per old-slug directory
+	// it renames (or finds coexisting with its hashed successor). Drain here
+	// so each migration emits one bounded record per session at most.
+	for (const migration of drainProjectDataDirMigrations()) {
+		const targetName = path.basename(migration.to);
+		const hash = targetName.match(/([0-9a-f]{8})$/)?.[1] ?? "unknown";
+		recordDegradationOnce({
+			kind: "data_dir_migrated",
+			subject: hash,
+			reason:
+				migration.outcome === "renamed"
+					? "using hashed directory after renaming legacy directory"
+					: migration.outcome === "coexisting"
+						? "using hashed directory because legacy and hashed directories both exist"
+						: migration.outcome === "rename-failed"
+							? "using legacy directory after hashed-directory rename failure"
+							: "using resolved directory after realpath fallback",
+		});
+	}
 	// #1609 review F1: sweepOwnStagingFiles does not recurse, so the installer's
 	// bin/ and tools/ subdirectories (clients/installer/index.ts's
 	// GITHUB_BIN_DIR / TOOLS_DIR, now atomic-write.js writers too) need their

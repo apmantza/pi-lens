@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Minimatch, type MinimatchOptions } from "./deps/minimatch.js";
@@ -45,7 +46,7 @@ import { safeSpawnAsync } from "./safe-spawn.js";
  * Override: set PILENS_DATA_DIR=/some/path — each project gets its own
  * subdirectory named after a sanitized form of its absolute path, e.g.
  *   PILENS_DATA_DIR=~/.pi-lens/projects
- *   → ~/.pi-lens/projects/home-user-myapp/
+ *   → ~/.pi-lens/projects/home-user-myapp-<8-hex-hash>/
  *
  * This keeps project folders clean and avoids creating .pi-lens folders
  * inside user projects.
@@ -57,14 +58,176 @@ export function getProjectDataDir(cwd: string): string {
 		return legacyProjectDir;
 	}
 	const base = configuredBase || path.join(getGlobalPiLensDir(), "projects");
-	const normalized = normalizeFilePath(path.resolve(cwd));
-	const slug = normalized
+	const resolvedBase = base.trim();
+	const memoKey = `${resolvedBase}\0${path.resolve(cwd)}`;
+	const cached = settledDataDirs.get(memoKey);
+	if (cached !== undefined) return cached;
+	const canonical = canonicalProjectRoot(cwd);
+	const readable = projectDataDirReadableSlug(canonical.root);
+	const hash = projectDataDirRootHash(canonical.root);
+	const slug = `${readable || "default"}-${hash}`;
+	const dir = path.join(resolvedBase, slug);
+	const settled = settleProjectDataDir(
+		resolvedBase,
+		readable || "default",
+		dir,
+		memoKey,
+		canonical.fallback,
+	);
+	return settled;
+}
+
+/**
+ * The human-readable half of the project data-dir slug: the absolute root
+ * with separators folded to dashes and anything else stripped.
+ *
+ * #2874: this form ALONE is not an identity — `src/pi-lens` and
+ * `src/pi/lens` fold to the same string. It is only ever combined with
+ * {@link projectDataDirRootHash}. Never use it as a directory name alone.
+ */
+function projectDataDirReadableSlug(canonicalRoot: string): string {
+	const normalized = normalizeFilePath(canonicalRoot);
+	return normalized
 		.replace(/^[a-z]:/i, "") // strip Windows drive letter
 		.replace(/\/+/g, "-") // separators → dashes
 		.replace(/[^A-Za-z0-9-]/g, "") // strip anything else
 		.replace(/^-+/, "") // trim leading dashes
 		.replace(/-+$/, ""); // trim trailing dashes
-	return path.join(base.trim(), slug || "default");
+}
+
+/**
+ * The canonical root is the resolved absolute path for both slug halves.
+ * `realpathSync` is probed only to expose a fallback boundary failure; using
+ * its result would let one root spelling change identity when the boundary
+ * recovers. The hash is the first 8 hex chars of SHA-256 over that root. A
+ * collision needs the same readable slug and the same 32-bit prefix, so the
+ * practical collision population is readable-slug twin pairs. Pinned on
+ * purpose because changing it renames every directory.
+ */
+function canonicalProjectRoot(cwd: string): {
+	root: string;
+	fallback: boolean;
+} {
+	const resolved = path.resolve(cwd);
+	try {
+		// Probe the root, but keep the resolved spelling as the identity in both
+		// success and fallback cases. Resolving only on success would let a
+		// transient boundary failure choose a second data directory.
+		fs.realpathSync(resolved);
+	} catch {
+		// Best-effort: the root may not exist yet.
+		return { root: resolved, fallback: true };
+	}
+	return { root: resolved, fallback: false };
+}
+
+function projectDataDirRootHash(canonicalRoot: string): string {
+	return createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 8);
+}
+
+export interface ProjectDataDirMigration {
+	/** The hashed-slug directory derived for the root. */
+	to: string;
+	/** The bounded outcome that the session-start drain renders. */
+	outcome: "renamed" | "coexisting" | "rename-failed" | "identity-fallback";
+}
+
+const pendingDataDirMigrations: ProjectDataDirMigration[] = [];
+const settledDataDirs = new Map<string, string>();
+
+export function resetProjectDataDirSessionState(): void {
+	pendingDataDirMigrations.splice(0);
+}
+
+/**
+ * One-time upgrade from a pre-#2874 slug directory to its hashed name.
+ * When the old directory exists and the new one does not, the state moves
+ * with one atomic `renameSync` (same parent, so same filesystem). When both
+ * exist the new one wins and nothing moves. Either case queues one
+ * {@link ProjectDataDirMigration} for the session-start drain, which emits
+ * the `data_dir_migrated` record. Best-effort throughout: on any failure the
+ * caller gets the pre-existing directory and behavior is unchanged.
+ *
+ * No ledger import here on purpose: `probe-home-state.ts` documents that a
+ * direct edge between this module and `degradation-ledger.ts` in either
+ * direction adds `no-client-cycles` violations, so the record is emitted by
+ * the drain site in `runtime-session.ts` instead.
+ */
+function settleProjectDataDir(
+	base: string,
+	oldSlug: string,
+	dir: string,
+	memoKey: string,
+	identityFallback: boolean,
+): string {
+	const oldDir = path.join(base, oldSlug);
+	const newExists = fs.existsSync(dir);
+	const oldExists = fs.existsSync(oldDir);
+	if (!oldExists) {
+		if (identityFallback && pendingDataDirMigrations.length < 32) {
+			pendingDataDirMigrations.push({
+				to: dir,
+				outcome: "identity-fallback",
+			});
+		}
+		// Steady state: nothing to migrate from.
+		settledDataDirs.set(memoKey, dir);
+		return dir;
+	}
+	if (!newExists) {
+		try {
+			fs.renameSync(oldDir, dir);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				if (fs.existsSync(dir)) {
+					settledDataDirs.set(memoKey, dir);
+					return dir;
+				}
+				if (fs.existsSync(oldDir)) return oldDir;
+				return dir;
+			}
+			// Best-effort: retain the old directory and publish one bounded
+			// failure notice for this process's memo key.
+			if (pendingDataDirMigrations.length < 32) {
+				pendingDataDirMigrations.push({
+					to: dir,
+					outcome: "rename-failed",
+				});
+			}
+			settledDataDirs.set(memoKey, oldDir);
+			return oldDir;
+		}
+	}
+	// Either the rename just moved the state, or both directories already
+	// existed and the new one wins. Queue one migration for the drain.
+	settledDataDirs.set(memoKey, dir);
+	if (pendingDataDirMigrations.length < 32) {
+		pendingDataDirMigrations.push({
+			to: dir,
+			outcome: newExists ? "coexisting" : "renamed",
+		});
+	}
+	return dir;
+}
+
+/**
+ * Drain the queued {@link ProjectDataDirMigration}s, clearing the queue.
+ * Called once per session start by `handleSessionStart`; each queued outcome is
+ * therefore recorded at most once per session. Test-only callers must not rely
+ * on queue depth across drains.
+ */
+export function drainProjectDataDirMigrations(): ProjectDataDirMigration[] {
+	return pendingDataDirMigrations.splice(0);
+}
+
+/**
+ * Test-only reset for the settled-directory memo. The memo is a pure
+ * performance cache (one `existsSync` pair saved per latched directory), so
+ * clearing it changes no observable behavior — it lets a test stage an
+ * old-slug directory AFTER learning the new name, then resolve again.
+ */
+export function _resetProjectDataDirMemoForTests(): void {
+	settledDataDirs.clear();
 }
 
 /**

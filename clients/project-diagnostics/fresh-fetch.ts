@@ -123,6 +123,13 @@ export interface FreshProjectDiagnosticsResult {
 	 * report, served from a memo) is deliberately absent.
 	 */
 	analyzed: string[];
+	/**
+	 * File-level authority established by this fetch. A complete entry covers
+	 * every file below `root`; a file-set entry covers only its listed files.
+	 * The legacy `analyzed` list remains the conservative fallback for callers
+	 * that have no coverage entry yet (#2887).
+	 */
+	authoritativeCoverage?: ProjectRunnerCoverage[];
 	/** Extractor ids skipped this run (not applicable / tool unavailable, OR
 	 *  aborted before settling — see `abortedIds`). */
 	cold: string[];
@@ -186,6 +193,12 @@ export interface FreshProjectDiagnosticsResult {
 	dispositionSuppressedByLane?: Record<string, number>;
 }
 
+export interface ProjectRunnerCoverage {
+	runnerId: string;
+	root: string;
+	files: ReadonlySet<string>;
+}
+
 /** The heavyweight analyzers surfaced in `lens_diagnostics mode=full` — this is
  *  now the single source of truth for that list (#585 removed the parallel
  *  cache-only `EXTRACTORS` registry that used to shadow it). `warmTriggerFor`
@@ -245,6 +258,7 @@ export async function fetchFreshProjectDiagnostics(
 			diagnostics: [],
 			runners: [],
 			analyzed: [],
+			authoritativeCoverage: [],
 			cold: [...ANALYZER_IDS],
 			coldReasons: Object.fromEntries(
 				ANALYZER_IDS.map((id) => [id, unsafeRootReason]),
@@ -257,6 +271,7 @@ export async function fetchFreshProjectDiagnostics(
 	const diagnostics: ProjectDiagnostic[] = [];
 	const runners: string[] = [];
 	const analyzed: string[] = [];
+	const authoritativeCoverage: ProjectRunnerCoverage[] = [];
 	const cold: string[] = [];
 	// #1623: the specific reason each `cold` id was skipped, captured at the
 	// gate that decided it — see FreshProjectDiagnosticsResult.coldReasons.
@@ -302,8 +317,37 @@ export async function fetchFreshProjectDiagnostics(
 		adapted: ProjectDiagnostic[],
 		elapsedMs: number,
 		analysedRoot: boolean,
+		analysis?: { analyzedFiles?: string[] },
 	): void {
-		if (analysedRoot) pushUnique(analyzed, id);
+		if (analysedRoot) {
+			pushUnique(analyzed, id);
+			if (
+				id === "opengrep" &&
+				analysis?.analyzedFiles !== undefined &&
+				analysis.analyzedFiles.length > 0
+			) {
+				const root = (() => {
+					try {
+						return fs.realpathSync(analysisRoot);
+					} catch {
+						return path.resolve(analysisRoot);
+					}
+				})();
+				authoritativeCoverage.push({
+					runnerId: id,
+					root,
+					files: new Set(
+						analysis.analyzedFiles.map((file) => {
+							try {
+								return fs.realpathSync(file);
+							} catch {
+								return path.resolve(file);
+							}
+						}),
+					),
+				});
+			}
+		}
 		timings[id] = (timings[id] ?? 0) + elapsedMs;
 		const kept = applyDispositionsMultiFile(
 			adapted,
@@ -367,6 +411,7 @@ export async function fetchFreshProjectDiagnostics(
 				knipIssuesToProjectDiagnostics(analysisRoot, result.issues ?? []),
 				Date.now() - startMs,
 				true,
+				result,
 			);
 		}),
 
@@ -413,6 +458,7 @@ export async function fetchFreshProjectDiagnostics(
 				jscpdResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				true,
+				result,
 			);
 		}),
 
@@ -438,6 +484,7 @@ export async function fetchFreshProjectDiagnostics(
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),
 				Date.now() - startMs,
 				result.analyzed === true,
+				result,
 			);
 		}),
 
@@ -481,6 +528,7 @@ export async function fetchFreshProjectDiagnostics(
 				gitleaksResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				result,
 			);
 		}),
 
@@ -525,6 +573,7 @@ export async function fetchFreshProjectDiagnostics(
 				govulncheckResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				result,
 			);
 		}),
 
@@ -567,6 +616,7 @@ export async function fetchFreshProjectDiagnostics(
 				opengrepResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				result,
 			);
 		}),
 
@@ -603,6 +653,7 @@ export async function fetchFreshProjectDiagnostics(
 				trivyResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
+				result,
 			);
 		}),
 
@@ -629,14 +680,21 @@ export async function fetchFreshProjectDiagnostics(
 						recordFailed("dead-code", result);
 						return;
 					}
-					cacheManager.writeCache(cacheKey, result, analysisRoot, {
-						scanDurationMs: Date.now() - startMs,
-					});
+					if (result.analyzed === true) {
+						cacheManager.writeCache(cacheKey, result, analysisRoot, {
+							scanDurationMs: Date.now() - startMs,
+						});
+					}
+					const adapted = deadCodeResultToProjectDiagnostics(
+						analysisRoot,
+						result,
+					);
 					record(
 						"dead-code",
-						deadCodeResultToProjectDiagnostics(analysisRoot, result),
+						adapted,
 						Date.now() - startMs,
 						result.analyzed === true,
+						result,
 					);
 				}),
 			);
@@ -734,6 +792,7 @@ export async function fetchFreshProjectDiagnostics(
 			diagnostics,
 			runners,
 			analyzed,
+			authoritativeCoverage,
 			cold,
 			coldReasons,
 			failed,
@@ -750,6 +809,7 @@ export async function fetchFreshProjectDiagnostics(
 		diagnostics,
 		runners,
 		analyzed,
+		authoritativeCoverage,
 		cold,
 		coldReasons,
 		failed,

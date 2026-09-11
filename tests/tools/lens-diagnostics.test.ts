@@ -1407,6 +1407,168 @@ describe("lens_diagnostics mode=full", () => {
 		expect(phases).not.toContain("runner_authoritative_widget_retire");
 	});
 
+	it("logs runner coverage retirement evidence once per runner per session", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/src/clean.py",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "retained",
+							line: 1,
+							rule: "opengrep:x",
+							tool: "opengrep",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["opengrep", "knip"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "opengrep",
+					root: "/proj",
+					files: new Set(["/proj/src/clean.py"]),
+				},
+			],
+		});
+		_setRecentPhasesForTest([]);
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		expect(getRecentLoggedPhases().map((entry) => entry.phase)).toContain(
+			"runner_coverage_retired",
+		);
+		const retirement = getRecentLoggedPhases().find(
+			(entry) => entry.phase === "runner_authoritative_widget_retire",
+		);
+		expect(retirement?.metadata?.runners).toBe("opengrep");
+		_setRecentPhasesForTest([]);
+		await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		expect(getRecentLoggedPhases().map((entry) => entry.phase)).not.toContain(
+			"runner_coverage_retired",
+		);
+	});
+
+	it("retires only findings covered by an opengrep scanned path", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/nested/src.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "nested",
+							tool: "opengrep",
+							rule: "opengrep:export",
+						},
+					],
+				},
+			),
+			sum(
+				"/proj/src.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "other root",
+							tool: "opengrep",
+							rule: "opengrep:export",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["opengrep"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "opengrep",
+					root: "/proj/nested",
+					files: new Set(["/proj/nested/src.ts"]),
+				},
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("nested");
+		expect(text).toContain("other root");
+	});
+
+	it("keeps findings outside a runner file set", async () => {
+		mockSummaries.push(
+			sum(
+				"/proj/inside-set.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "inside-set",
+							tool: "opengrep",
+							rule: "opengrep:duplicate",
+						},
+					],
+				},
+			),
+			sum(
+				"/proj/outside-set.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "outside-set",
+							tool: "opengrep",
+							rule: "opengrep:duplicate",
+						},
+					],
+				},
+			),
+		);
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: ["opengrep"],
+			cold: [],
+			timings: {},
+			authoritativeCoverage: [
+				{
+					runnerId: "opengrep",
+					root: "/proj",
+					files: new Set(["/proj/inside-set.ts"]),
+				},
+			],
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("inside-set");
+		expect(text).toContain("outside-set");
+	});
+
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
