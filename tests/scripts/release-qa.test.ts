@@ -59,6 +59,7 @@ import {
 	runToolSmokeInstallProbe,
 	classifyPublishToolchain,
 	isUnmeasured,
+	unmeasuredRowIds,
 	pinnedNpm,
 	PUBLISH_TOOLCHAIN_ROW_ID,
 	runPublishToolchainProbe,
@@ -431,6 +432,40 @@ describe("release-QA publish toolchain lane (#2940)", () => {
 		expect(verdict.detail).toContain("E404");
 	});
 
+	it("passes an already-published dry run with the registry conflict noted", () => {
+		const verdict = classifyPublishToolchain({
+			pin: "11.18.0",
+			reportedVersion: "11.18.0",
+			dryRunExitCode: 1,
+			dryRunTail:
+				"npm error code EPUBLISHCONFLICT\nnpm error You cannot publish over the previously published versions: 4.1.6.\nnpm error A complete log can be found in: /tmp/npm-debug.log",
+		});
+		expect(verdict.status).toBe("pass");
+		expect(verdict.detail).toContain("already published");
+		expect(verdict.detail).toContain("EPUBLISHCONFLICT");
+	});
+
+	it("marks a pinned npm resolution failure as unmeasured", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "release-qa-npx-unreachable-"),
+		);
+		try {
+			fs.writeFileSync(
+				path.join(root, "package.json"),
+				'{"packageManager":"npm@11.18.0"}',
+			);
+			const raw = runPublishToolchainProbe({
+				exportRoot: root,
+				exportedCommit: "ed63eb2f8",
+				env: { ...process.env, PATH: path.join(root, "missing-bin") },
+			});
+			expect(raw.status).toBe("unreachable");
+			expect(raw.unmeasured).toBe(true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("errors rather than passing when package.json pins no npm", () => {
 		expect(
 			classifyPublishToolchain({ pin: "", reportedVersion: "11.18.0" }).status,
@@ -445,6 +480,20 @@ describe("release-QA publish toolchain lane (#2940)", () => {
 		});
 		expect(verdict.status).toBe("pass");
 		expect(verdict.detail).toContain("11.18.0");
+	});
+
+	it("records only unmeasured rows in the inconclusive reason set", () => {
+		expect(
+			unmeasuredRowIds([
+				{ id: "git-install-loads", status: "unreachable", unmeasured: false },
+				{
+					id: PUBLISH_TOOLCHAIN_ROW_ID,
+					status: "unreachable",
+					unmeasured: true,
+				},
+				{ id: "tool-smoke-install", status: "pass", unmeasured: false },
+			]),
+		).toEqual([PUBLISH_TOOLCHAIN_ROW_ID]);
 	});
 
 	// A stub `npx` on PATH ahead of the real one, so the probe's REAL argv is

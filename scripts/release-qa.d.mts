@@ -127,6 +127,10 @@ export function runToolSmokeInstallProbe(ctx: {
 export function isUnmeasured(
 	probe: { status?: string; unmeasured?: boolean } | null | undefined,
 ): boolean;
+/** Return the ids of rows whose registry-dependent probe was unmeasured. */
+export function unmeasuredRowIds(
+	results: ReadonlyArray<{ id: string; status?: string; unmeasured?: boolean }>,
+): string[];
 
 /**
  * The publish job's toolchain → the release-QA row's verdict (#2940): the

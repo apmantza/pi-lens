@@ -142,10 +142,12 @@ function findBareNpmInvocations(workflow: Workflow): BareNpmFinding[] {
 		// form's `"npm@${npm_pin}"` only the `${...}` expansion survives — so a
 		// pinned invocation cannot read as a bare one, and neither can prose.
 		const code = lexShell(step.run);
-		for (const match of code.matchAll(
-			/(?:^|[;\n(]|&&|\|\|?|\$\()\s*npm(?![\w@.-])\s+([a-z][\w-]*)/g,
-		)) {
-			findings.push({ job: step.job, step: step.name, verb: match[1] });
+		for (const match of code.matchAll(/(?<![\w@.-])npm(?![\w@.-])/g)) {
+			const verb =
+				code
+					.slice((match.index ?? 0) + match[0].length)
+					.match(/^\s+([a-z][\w-]*)/)?.[1] ?? "(unknown)";
+			findings.push({ job: step.job, step: step.name, verb });
 		}
 	}
 	return findings;
@@ -171,11 +173,14 @@ function findPinAssertionStep(
 	return guardedSteps(workflow).find((step) => {
 		if (step.job !== "publish-npm") return false;
 		const code = blankShellComments(step.run);
+		const lexed = lexShell(step.run);
 		const comparesToPin = new RegExp(
 			`(?:test|\\[\\[?)\\s+[^\\n]*\\$\\{?${pinned.variable}\\}?`,
 		).test(code);
 		return (
-			code.includes(`${pinned.form} --version`) &&
+			new RegExp(`npx\\s+-y\\s+\\$\\{${pinned.variable}\\}\\s+--version`).test(
+				lexed,
+			) &&
 			new RegExp(`\\$\\{?${pinned.variable}\\}?`).test(code) &&
 			(/\bexit\s+[1-9]/.test(code) || comparesToPin)
 		);
@@ -189,14 +194,14 @@ function findPinAssertionStep(
  */
 function findPublishStep(
 	workflow: Workflow,
-	pinned: { form: string },
+	pinned: { variable: string; form: string },
 ): WorkflowStep | undefined {
 	return guardedSteps(workflow).find((step) => {
 		if (step.job !== "publish-npm") return false;
-		const code = blankShellComments(step.run);
-		return (
-			code.includes(`${pinned.form} publish`) && !code.includes("--dry-run")
-		);
+		const code = lexShell(step.run);
+		return new RegExp(
+			`npx\\s+-y\\s+\\$\\{${pinned.variable}\\}\\s+publish(?![^\\n]*--dry-run)`,
+		).test(code);
 	});
 }
 
@@ -308,6 +313,52 @@ jobs:
 		const pinned = requirePinned(fixture);
 		expect(pinned.variable).toBe("npm_pin");
 		expect(findPinAssertionStep(fixture, pinned)).toBeUndefined();
+	});
+
+	it("does not let a single-quoted echo satisfy either runtime gate", () => {
+		const fixture = loadWorkflow(`
+jobs:
+  prepare:
+    steps: []
+  publish-npm:
+    steps:
+      - name: Echo-only assertion
+        run: echo 'npx -y "npm@\${npm_pin}" --version || exit 1'
+      - name: Echo-only publish
+        run: echo 'npx -y "npm@\${npm_pin}" publish'
+`);
+		const pinned = requirePinned(fixture);
+		expect(findPinAssertionStep(fixture, pinned)).toBeUndefined();
+		expect(findPublishStep(fixture, pinned)).toBeUndefined();
+	});
+
+	it("flags npm in shell command positions beyond the common separators", () => {
+		const fixture = loadWorkflow(`
+jobs:
+  prepare:
+    steps:
+      - name: Shell forms
+        run: |
+          \`npm publish\`
+          if true; then npm publish; fi
+          do npm publish; done
+          { npm publish; }
+          foo & npm publish
+          env X=1 npm publish
+          X=1 npm publish
+          /usr/bin/npm publish
+          npx npm publish
+          "npm" publish
+          command npm publish
+          exec npm publish
+          time npm publish
+          sudo npm publish
+          eval npm publish
+          xargs npm publish
+  publish-npm:
+    steps: []
+`);
+		expect(findBareNpmInvocations(fixture).length).toBeGreaterThanOrEqual(15);
 	});
 
 	it("derives the pin variable from the file rather than a fixed name", () => {

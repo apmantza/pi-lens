@@ -677,6 +677,13 @@ export function isUnmeasured(probe) {
 	return probe?.status === "unreachable" && probe?.unmeasured === true;
 }
 
+/** Return the rows whose registry-dependent probe could not run. */
+export function unmeasuredRowIds(results) {
+	return (results ?? [])
+		.filter((row) => row.unmeasured === true || isUnmeasured(row))
+		.map((row) => row.id);
+}
+
 /**
  * The publish job's toolchain → the release-QA row's verdict (#2940).
  *
@@ -705,15 +712,33 @@ export function classifyPublishToolchain(observed) {
 		return { status: "fail", detail: shows, shows };
 	}
 	const exitCode = observed?.dryRunExitCode;
-	const tail = String(observed?.dryRunTail ?? "")
-		.trim()
+	const lines = String(observed?.dryRunTail ?? "")
 		.split(/\r?\n/)
-		.filter((line) => line.trim().length > 0)
-		.slice(-1)[0];
+		.map((line) => line.trim())
+		.filter(Boolean);
 	if (exitCode !== 0) {
+		const conflict = lines.find((line) =>
+			/EPUBLISHCONFLICT|cannot publish over the previously published versions/i.test(
+				line,
+			),
+		);
+		if (conflict) {
+			const shows =
+				`npm ${pin} publish --dry-run reached the registry and packed the tarball; ` +
+				`the version is already published (${conflict})`;
+			return { status: "pass", detail: shows, shows };
+		}
+		const cause =
+			lines
+				.filter(
+					(line) =>
+						/^npm (?:error|ERR!)/i.test(line) &&
+						!/complete log can be found/i.test(line),
+				)
+				.slice(-1)[0] ?? lines.slice(-3).join(" | ");
 		const shows =
 			`npm ${pin} publish --dry-run exited ${exitCode ?? "(no exit code)"}` +
-			`${tail ? `: ${tail}` : ""}`;
+			`${cause ? `: ${cause}` : ""}`;
 		return { status: "fail", detail: shows, shows };
 	}
 	const shows = `npx -y "npm@${pin}" reported ${pin} and its publish --dry-run exited 0`;
@@ -759,7 +784,7 @@ export function runPublishToolchainProbe(ctx) {
 		reportedVersion = pinnedNpm(pin, ["--version"], ctx.exportRoot, ctx.env);
 	} catch (err) {
 		const detail = `the pinned invocation did not run: ${(err?.stderr || err?.message || err).toString().slice(0, 300)}`;
-		return { status: "fail", detail, shows: detail };
+		return { status: "unreachable", unmeasured: true, detail, shows: detail };
 	}
 	let dryRunOutput = "";
 	let dryRunExitCode = 0;
@@ -2139,7 +2164,6 @@ async function main() {
 	// UNMEASURED, not green, so the run refuses a ship verdict. Carried beside
 	// `blocked`/`candidateFailure` for the same reason they are: the verdict is
 	// about the run, not any one row's outcome cell.
-	const unreachableRows = [];
 	for (const row of rows) {
 		const probe = ROW_PROBES[row.id];
 		let raw;
@@ -2161,7 +2185,6 @@ async function main() {
 			}
 		}
 		const probeOutcome = classifyRowOutcome(raw);
-		if (isUnmeasured(raw)) unreachableRows.push(row.id);
 		let witnessPath = "";
 		if (raw.witness) {
 			const file = path.join(evidenceDir, `${row.id}.${raw.witness.ext}`);
@@ -2178,6 +2201,7 @@ async function main() {
 		);
 		results.push({
 			id: row.id,
+			unmeasured: isUnmeasured(raw),
 			outcome: classified.outcome,
 			detail: classified.detail,
 			implemented: attempted,
@@ -2186,6 +2210,7 @@ async function main() {
 		});
 		log(`  → ${formatOutcome(classified)}`);
 	}
+	const unreachableRows = unmeasuredRowIds(results);
 
 	if (mcp) await mcp.close();
 
