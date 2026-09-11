@@ -88,8 +88,13 @@ import { getActiveSessionId } from "./session-lifecycle.js";
 import { requestBootstrapClients } from "./bootstrap.js";
 import { bounded } from "./deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
 
 const AUTHORITATIVE_CONTENT_MAX_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
+
+// Keep same-turn analysis below the observed-directory capture bound so one
+// opaque codemod cannot monopolize the hook or analyzer fleet.
+const OBSERVED_DISPATCH_MAX_PATHS = 32;
 
 /**
  * Git subcommands that import ANOTHER commit's content into the index. The
@@ -1652,18 +1657,27 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			const observedAutofixMode: "immediate" | "deferred" =
 				receiptOutcome?.autofixMode ??
 				(observedKind === "edit" ? "deferred" : "immediate");
-			// Analyse the file the observation actually RECORDED, not merely the
-			// one the tool named: a directory-target tool names a path that is not
-			// a file at all, and `runPipeline` on it is meaningless. `changedPaths`
-			// is already filtered by the `isRecordable` predicate handed to the
-			// settle above, so membership here also implies not-vendored and
-			// not-gitignored — the same two gates the classified chain applies
-			// before its own dispatch.
-			if (
-				observedChangedPaths.some((candidate) =>
-					pathsEqual(candidate, filePath),
-				)
-			) {
+			// Analyse the files the observation actually RECORDED, not merely the
+			// path the tool named. A directory is never a pipeline target.
+			const observedDispatchPaths = observedChangedPaths
+				.filter((candidate) => {
+					try {
+						return !nodeFs.statSync(candidate).isDirectory();
+					} catch {
+						return false;
+					}
+				})
+				.slice(0, OBSERVED_DISPATCH_MAX_PATHS);
+			const observedDispatchDropped =
+				observedChangedPaths.length - observedDispatchPaths.length;
+			if (observedDispatchDropped > 0) {
+				incrementDegradationCount({
+					kind: "observed-mutation-dispatch-cap",
+					subject: event.toolName,
+					reason: `observed mutation dispatch capped at ${OBSERVED_DISPATCH_MAX_PATHS}; ${observedDispatchDropped} path(s) not dispatched`,
+				});
+			}
+			if (observedDispatchPaths.length > 0) {
 				const observedClients = ensureToolResultClients(deps);
 				if (
 					observedClients !== true &&
@@ -1684,65 +1698,80 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				// second overwrote the first's registry entry, and the first's
 				// release then evicted the outer entry a live, unrelated classified
 				// pipeline had since re-created under it.
-				const observedClaim = claimPipelineDispatch({
-					filePath,
-					stateHash: observedStateHash,
-					turnIndex: runtime.turnIndex,
-					participantId: observedReadGuardCorrelationId,
-					dbg,
-				});
-				if (!observedClaim.proceed) {
-					if (observedClaim.joined) {
-						await observedClaim.joined;
+				for (const observedPath of observedDispatchPaths) {
+					const observedDispatchSignal = deps.signal;
+					const observedJoinSignal = deps.signal;
+					const observedStateHashForPath = getFileStateHash(observedPath);
+					const observedClaim = claimPipelineDispatch({
+						filePath: observedPath,
+						stateHash: observedStateHashForPath,
+						turnIndex: runtime.turnIndex,
+						participantId: observedReadGuardCorrelationId,
+						dbg,
+					});
+					if (!observedClaim.proceed) {
+						if (observedClaim.joined) {
+							await bounded(observedClaim.joined, {
+								ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+								signal: observedJoinSignal,
+								hook: "tool_result_edit",
+								label: "observed-tool-result-join",
+							});
+						}
+						continue;
 					}
-					// Same terminal value as the block's own exit below: the bridge
-					// already recorded this edit, and the analysis it would have asked
-					// for is either running or already done.
-					return syntheticWriteContent.length > 0
-						? { content: [...event.content, ...syntheticWriteContent] }
-						: undefined;
-				}
-				const observedDispatchOutcome = await dispatchPipelineAnalysis({
-					deps,
-					runtime,
-					filePath,
-					dispatchCwd: resolveLanguageRootForFile(filePath, workspaceRoot),
-					turnStateCwd: path.resolve(workspaceRoot),
-					autofixMode: observedAutofixMode,
-					// #2423: no adapter/diff ranges exist for a "learned" (unnamed)
-					// tool — the classified chain below hits the same gap for this
-					// provenance and also leaves `modifiedRanges` undefined, so the
-					// dispatch runs unscoped (whole-file) exactly as it would there.
-					modifiedRanges: undefined,
-					writeIndex: runtime.nextWriteIndex(),
-					initialStateHash: observedStateHash,
-					readGuardCorrelationId: observedReadGuardCorrelationId,
-					requestedEditIndexes: getRequestedEditIndexes(event, observedKind),
-					requestedEditTotal: getRequestedEditCount(event, observedKind),
-					isPartialApplyResult:
-						((event.details ?? {}) as Record<string, unknown>)
-							.piLensPartialApply === true,
-					participantIds: [observedReadGuardCorrelationId],
-					participantTotal: 1,
-					toolResultStart,
-					nativeAppliedPairs: observedAppliedPairs,
-				});
-				if (observedDispatchOutcome.crashed) {
-					// #2464 review round 2, S6: parity with the classified chain — a
-					// pipeline crash surfaces its notice to the agent instead of being
-					// swallowed into a dbg line the model never sees. The recorded
-					// edit stands either way; only the analysis was lost.
-					dbg(
-						`tool_result: pipeline analysis crashed for the observed mutation on ${filePath}; the recorded edit stands, analysis did not run this turn`,
+					const observedDispatchOutcome = await bounded(
+						dispatchPipelineAnalysis({
+							deps,
+							runtime,
+							filePath: observedPath,
+							dispatchCwd: resolveLanguageRootForFile(
+								observedPath,
+								workspaceRoot,
+							),
+							turnStateCwd: path.resolve(workspaceRoot),
+							autofixMode: observedAutofixMode,
+							modifiedRanges: undefined,
+							writeIndex: runtime.nextWriteIndex(),
+							initialStateHash: observedStateHashForPath,
+							readGuardCorrelationId: observedReadGuardCorrelationId,
+							requestedEditIndexes: getRequestedEditIndexes(
+								event,
+								observedKind,
+							),
+							requestedEditTotal: getRequestedEditCount(event, observedKind),
+							isPartialApplyResult:
+								((event.details ?? {}) as Record<string, unknown>)
+									.piLensPartialApply === true,
+							participantIds: [observedReadGuardCorrelationId],
+							participantTotal: 1,
+							toolResultStart,
+							nativeAppliedPairs: observedAppliedPairs,
+						}),
+						{
+							ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+							signal: observedDispatchSignal,
+							hook: "tool_result_edit",
+							label: "observed-tool-result-analysis",
+						},
 					);
-					return observedDispatchOutcome.response;
+					if (observedDispatchOutcome?.crashed) {
+						// #2464 review round 2, S6: parity with the classified chain — a
+						// pipeline crash surfaces its notice to the agent instead of being
+						// swallowed into a dbg line the model never sees. The recorded
+						// edit stands either way; only the analysis was lost.
+						dbg(
+							`tool_result: pipeline analysis crashed for the observed mutation on ${observedPath}; the recorded edit stands, analysis did not run this turn`,
+						);
+						return observedDispatchOutcome.response;
+					}
 				}
 				dbg(
 					`tool_result: the observational settle already recorded ${observedReplayed} mutation(s) for "${event.toolName}"; kept the applied-edit records, mutation receipt, cachedExports refresh, and ran the pipeline dispatch (#2464); skipped the bridge-covered staleness stamp / turn-state ranges / change-log receipt / deferred autofix+format`,
 				);
 			} else {
 				dbg(
-					`tool_result: the observational settle recorded ${observedReplayed} mutation(s) for "${event.toolName}", none of them ${filePath} — nothing to analyse under the named path`,
+					`tool_result: the observational settle recorded ${observedReplayed} mutation(s) for "${event.toolName}", but no dispatchable changed paths remained`,
 				);
 			}
 		}

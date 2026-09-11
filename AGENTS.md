@@ -3459,6 +3459,12 @@ de-attribution run. One `unclassified-mutating-tool` degradation per tool keeps
 the registry gap visible; a truncated directory watch adds an
 `observed-mutation-dir-cap` tally naming the tool.
 
+When an observed directory mutation settles, `runtime-tool-result.ts` dispatches
+the recorded file paths, never the directory target. Same-turn analysis is
+capped at 32 paths, and each dispatched path carries the tool-result wall budget
+and abort signal. A cap records `observed-mutation-dispatch-cap` with the number
+of paths not dispatched; it must never degrade silently.
+
 A tool that names no file is caught by the `agent_settled` sweep, which runs
 BEFORE the deferred drain and re-baselines after it so pi-lens's own formatter
 output is never read as third-party drift. The sweep is INCREMENTAL and
