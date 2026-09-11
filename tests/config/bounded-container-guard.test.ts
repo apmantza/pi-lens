@@ -25,25 +25,27 @@ const BOUNDED_HELPERS = new Set([
 	"BoundedSet",
 	"PathKeyedMap",
 ]);
-const FINITE_REASONS: Readonly<Record<string, string>> = {
-	"clients/language-registry.ts#BY_EXTENSION":
-		"keyed by the finite supported language extension table",
-	"clients/language-registry.ts#BY_FILENAME":
-		"keyed by the finite supported language filename table",
-	"clients/language-registry.ts#BY_ID":
-		"keyed by the finite supported language id table",
-	"clients/language-registry.ts#BY_KIND":
-		"keyed by the finite supported file-kind table",
-	"clients/lens-flag-registry.ts#byName":
-		"keyed by the finite built-in lens flag catalog",
-	"clients/tool-policy.ts#FORMATTER_POLICY_BY_EXTENSION":
-		"keyed by the finite formatter extension policy table",
-	"clients/tool-policy.ts#FORMATTER_POLICY_BY_FILENAME":
-		"keyed by the finite formatter filename policy table",
-};
+// No currently flagged occurrence is a finite vocabulary. Keep the channel
+// content-keyed so a future exemption must be re-confirmed after an edit.
+const FINITE_REASONS: Readonly<Record<string, string>> = {};
 
 type Verdict = 1 | 2 | 3 | 5;
-type Site = { key: string; detail: string; name: string; verdict: Verdict };
+type KeyAxis =
+	| "file path"
+	| "cwd"
+	| "pid"
+	| "session id"
+	| "language id"
+	| "tool id"
+	| "undetermined";
+type Site = {
+	key: string;
+	detail: string;
+	name: string;
+	verdict: Verdict;
+	keyExpression: string | undefined;
+	keyAxis: KeyAxis;
+};
 
 function walk(node: any, visit: (node: any) => void): void {
 	visit(node);
@@ -112,6 +114,44 @@ export function isGrowthShapedContainer(source: string, name: string): boolean {
 		}
 	});
 	return declared && (!builtin || written);
+}
+
+function keyExpressionFor(source: string, name: string): string | undefined {
+	const root = parse(Lang.TypeScript, source).root();
+	let expression: string | undefined;
+	walk(root, (node) => {
+		if (expression || node.kind() === "subscript_expression") {
+			if (
+				node.kind() === "subscript_expression" &&
+				identifier(node.field("argument")) === name
+			)
+				expression = node.field("index")?.text();
+			return;
+		}
+		if (node.kind() !== "call_expression") return;
+		const fn = node.field("function");
+		if (
+			fn?.kind() !== "member_expression" ||
+			identifier(fn.field("object")) !== name ||
+			!["set", "add", "get", "has", "delete"].includes(
+				fn.field("property")?.text() ?? "",
+			)
+		)
+			return;
+		expression = node.field("arguments")?.namedChildren()[0]?.text();
+	});
+	return expression;
+}
+
+export function determineKeyAxis(expression: string | undefined): KeyAxis {
+	if (!expression) return "undetermined";
+	if (/file|path|artifact|snapshot|touch/i.test(expression)) return "file path";
+	if (/cwd|root|project|workspace|dir/i.test(expression)) return "cwd";
+	if (/pid|process/i.test(expression)) return "pid";
+	if (/session|turn/i.test(expression)) return "session id";
+	if (/language|lang/i.test(expression)) return "language id";
+	if (/tool|runner|package/i.test(expression)) return "tool id";
+	return "undetermined";
 }
 
 export function hasBoundedConstructor(source: string, name: string): boolean {
@@ -221,6 +261,8 @@ export function scan(): { sites: Site[]; scanned: number } {
 					detail: `${relative}:${container.line}`,
 					name: container.name,
 					verdict,
+					keyExpression: keyExpressionFor(source, container.name),
+					keyAxis: determineKeyAxis(keyExpressionFor(source, container.name)),
 				});
 			}
 		}
@@ -228,20 +270,11 @@ export function scan(): { sites: Site[]; scanned: number } {
 	return { sites, scanned };
 }
 
-function finiteReason(site: Site): string | undefined {
-	const prefix = site.detail.slice(0, site.detail.lastIndexOf(":"));
-	return FINITE_REASONS[`${prefix}#${site.name}`];
-}
-
-function admissionReason(site: Site): string {
-	const axis = /file|path|graph|snapshot|artifact|touch/i.test(site.name)
-		? "file path"
-		: /cwd|root|project|workspace|dir/i.test(site.name)
-			? "cwd"
-			: /pid|process/i.test(site.name)
-				? "pid"
-				: "session id";
-	return `unbounded growth admitted as shrink-only debt; key axis is ${axis} (${site.name})`;
+function finiteReason(
+	site: Site,
+	reasons: Readonly<Record<string, string>> = FINITE_REASONS,
+): string | undefined {
+	return reasons[site.key];
 }
 
 describe("#2981 long-lived containers are bounded or admitted", () => {
@@ -301,9 +334,6 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/tree-sitter-client.ts#TYPESCRIPT_SQL_KNOWN_PACKAGES:95dcb590",
 		"clients/widget-state.ts#setRenderCallback:d8f1770a",
 	];
-	const admissionReasons = Object.fromEntries(
-		admissions.map((site) => [site.key, admissionReason(site)]),
-	);
 	const audit = auditRegistry({
 		sweepName: "bounded container guard",
 		flagged: result.sites.filter((site) => site.verdict === 5),
@@ -319,10 +349,30 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 	it("scans a live population and accounts for every unbounded occurrence", () => {
 		expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
 		expect(
-			Object.values(admissionReasons).every((reason) =>
-				reason.includes("key axis is"),
-			),
-		).toBe(true);
+			admissions.filter((site) => site.keyAxis === "undetermined").length,
+		).toBeGreaterThan(0);
+	});
+	it("determines axes from key expressions and keeps unknown keys honest", () => {
+		expect(determineKeyAxis("filePath")).toBe("file path");
+		expect(determineKeyAxis("languageId")).toBe("language id");
+		expect(determineKeyAxis("opaqueKey")).toBe("undetermined");
+	});
+	it("requires a content-keyed exemption to survive an unchanged occurrence", () => {
+		const key = "fixture.ts#cache:abcd1234";
+		const site = {
+			key,
+			detail: "fixture.ts:1",
+			name: "cache",
+			verdict: 5 as const,
+			keyExpression: "filePath",
+			keyAxis: "file path" as const,
+		};
+		expect(finiteReason(site)).toBeUndefined();
+		const reasons = { [key]: "finite fixture key" };
+		expect(finiteReason(site, reasons)).toBe("finite fixture key");
+		expect(
+			finiteReason({ ...site, key: "fixture.ts#cache:changed" }, reasons),
+		).toBeUndefined();
 	});
 	it("keeps the five verdicts visible", () => {
 		const counts = new Map<Verdict, number>();
