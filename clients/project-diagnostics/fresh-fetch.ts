@@ -322,7 +322,6 @@ export async function fetchFreshProjectDiagnostics(
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
 			if (
-				id === "opengrep" &&
 				analysis?.analyzedFiles !== undefined &&
 				analysis.analyzedFiles.length > 0
 			) {
@@ -358,10 +357,15 @@ export async function fetchFreshProjectDiagnostics(
 
 	function recordFailed(
 		id: string,
-		result: { summary?: string } | object,
+		result:
+			| { summary?: string; reason?: FailedProjectAnalyzer["reason"] }
+			| object,
 	): void {
 		failed.push({
 			id,
+			...("reason" in result && result.reason !== undefined
+				? { reason: result.reason }
+				: {}),
 			summary:
 				"summary" in result && typeof result.summary === "string"
 					? result.summary

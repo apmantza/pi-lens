@@ -52,6 +52,7 @@ describe("opengrep report outcomes (#2943)", () => {
 			expect(result).toMatchObject({
 				success: false,
 				findings: [],
+				reason: "refused",
 			});
 			expect(result).not.toHaveProperty("analyzed");
 			expect(
@@ -94,10 +95,12 @@ describe("opengrep report outcomes (#2943)", () => {
 			async (_command, args: string[]) => {
 				fs.writeFileSync(
 					args[args.indexOf("--json-output") + 1],
-					findingReport.replace(
-						'"errors":[]',
-						'"errors":[{"code":3,"level":"warn","type":["PartialParsing"],"message":"invalid UTF-8"}]',
-					),
+					findingReport
+						.replace(
+							'"errors":[]',
+							'"errors":[{"code":3,"level":"warn","type":["PartialParsing"],"message":"invalid UTF-8"}]',
+						)
+						.replaceAll("<root>", real),
 				);
 				return { status: 0, stdout: "", stderr: "" };
 			},
@@ -106,11 +109,14 @@ describe("opengrep report outcomes (#2943)", () => {
 			const client = new OpengrepClient();
 			client.ensureAvailable = vi.fn().mockResolvedValue(true);
 			const result = await client.scan(real);
-			expect(result).toMatchObject({ success: true, analyzed: true });
+			expect(result).toMatchObject({
+				success: true,
+				analyzed: true,
+				partial: true,
+			});
+			expect(result.reason).toBeUndefined();
 			expect(result.findings).toHaveLength(1);
-			expect(result.analyzedFiles).toEqual([
-				path.resolve(real, "<root>/src/a.js"),
-			]);
+			expect(result.analyzedFiles).toEqual([path.resolve(real, "src/a.js")]);
 			expect(getDegradationSummary()).toEqual([
 				expect.objectContaining({ kind: "opengrep-partial-scan" }),
 			]);
@@ -125,7 +131,7 @@ describe("opengrep report outcomes (#2943)", () => {
 			async (_command, args: string[]) => {
 				fs.writeFileSync(
 					args[args.indexOf("--json-output") + 1],
-					'{"results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"config failed"}],"paths":{"scanned":[]}}',
+					'{"results":[],"errors":[{"code":2,"level":"warn","type":"PartialParsing","message":"warning"},{"code":2,"level":"error","type":"SemgrepError","message":"config failed"}],"paths":{"scanned":[]}}',
 				);
 				return { status: 0, stdout: "", stderr: "" };
 			},
@@ -134,7 +140,7 @@ describe("opengrep report outcomes (#2943)", () => {
 			const client = new OpengrepClient();
 			client.ensureAvailable = vi.fn().mockResolvedValue(true);
 			const result = await client.scan(real);
-			expect(result).not.toHaveProperty("analyzed");
+			expect(result).toMatchObject({ reason: "refused" });
 			const [record] = getDegradationSummary();
 			expect(record).toMatchObject({ kind: "opengrep-scan-refused" });
 			expect(record.latestReasons[0].reason).toBe("config failed");
@@ -186,7 +192,7 @@ describe("opengrep report outcomes (#2943)", () => {
 			]);
 			expect(
 				getDegradationSummary()[0].latestReasons.map((entry) => entry.reason),
-			).toEqual(["killed", "timeout"]);
+			).toEqual(["killed", "timeout: timed out"]);
 		} finally {
 			fs.rmSync(real, { recursive: true, force: true });
 			fs.rmSync(second, { recursive: true, force: true });
@@ -214,6 +220,53 @@ describe("opengrep report outcomes (#2943)", () => {
 		} finally {
 			fs.rmSync(real, { recursive: true, force: true });
 			fs.rmSync(link, { force: true });
+		}
+	});
+
+	it.each([
+		["bare null", "null"],
+		["missing level and message", '{"code":2,"type":"SemgrepError"}'],
+	])("refuses an unclassifiable error entry: %s", async (_label, error) => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					`{"results":[{"check_id":"eval-probe","path":"a.js","start":{"line":1}}],"errors":[${error}],"paths":{"scanned":["a.js"]}}`,
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).toMatchObject({ success: false, reason: "refused" });
+			expect(result.summary).toBe("unrecognised opengrep error entry");
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses an info-level error instead of treating it as a partial warning", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					'{"results":[],"errors":[{"level":"info","message":"informational"}],"paths":{"scanned":[]}}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).toMatchObject({ success: false, reason: "refused" });
+			expect(result.partial).toBeUndefined();
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
 		}
 	});
 });

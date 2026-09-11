@@ -93,6 +93,13 @@ export interface OpengrepResult extends AnalysedRootSignal {
 	findings: OpengrepFinding[];
 	scannedAt: string;
 	summary?: string;
+	reason?:
+		| "not-installed"
+		| "spawn-failed"
+		| "no-report"
+		| "refused"
+		| "crashed";
+	partial?: true;
 }
 
 const EMPTY_RESULT: Omit<OpengrepResult, "scannedAt"> = {
@@ -143,6 +150,7 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			return {
 				...EMPTY_RESULT,
 				scannedAt,
+				reason: "not-installed",
 				summary: "opengrep not installed",
 			};
 		}
@@ -186,14 +194,12 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 
 			if (result.error) {
 				this.log(`Scan error: ${result.error.message}`);
-				const reason =
-					result.failure ??
-					(result.stderr ?? "").trim().split("\n")[0] ??
-					result.error.message;
+				const reason = `${result.failure ?? "spawn-failed"}: ${result.error.message}`;
 				this.recordRefusal(cwd, reason, result.status);
 				return {
 					...EMPTY_RESULT,
 					scannedAt,
+					reason: "spawn-failed",
 					summary: reason.slice(0, 200),
 				};
 			}
@@ -205,52 +211,47 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 				return {
 					...EMPTY_RESULT,
 					scannedAt,
+					reason: "no-report",
 					summary: reason,
 				};
 			}
 
 			const raw = fs.readFileSync(reportPath, "utf-8");
-			const report = parseOpengrepReportEnvelope(raw);
-			if (
-				!report.parsed ||
-				result.status !== 0 ||
-				report.errors.some((error) => error.level !== "warn")
-			) {
+			const report = readOpengrepReport(raw);
+			if (report.verdict === "refused" || result.status !== 0) {
 				const reason =
-					report.errors[0]?.message ??
-					(!report.parsed
-						? "unparseable opengrep report"
-						: `opengrep exited with status ${result.status}`);
+					report.verdict === "refused"
+						? report.reason
+						: `opengrep exited with status ${result.status}`;
 				this.recordRefusal(cwd, reason, result.status);
-				return { ...EMPTY_RESULT, scannedAt, summary: reason.slice(0, 200) };
+				return {
+					...EMPTY_RESULT,
+					scannedAt,
+					reason: "refused",
+					summary: reason.slice(0, 200),
+				};
 			}
-			const partial = report.errors.find((error) => error.level === "warn");
-			if (partial) {
+			if (report.partial) {
 				recordDegradationOnce({
 					kind: "opengrep-partial-scan",
 					subject: cwd,
-					reason: partial.message,
+					reason: report.partial.reason,
 					metadata: { status: result.status },
 				});
-			}
-			const findings = parseOpengrepReport(raw);
-			let analyzedFiles: string[] | undefined;
-			try {
-				const paths = (JSON.parse(raw) as { paths?: { scanned?: unknown } })
-					.paths?.scanned;
-				if (Array.isArray(paths))
-					analyzedFiles = paths
-						.filter((file): file is string => typeof file === "string")
-						.map((file) => realpathOrResolve(path.resolve(cwd, file)));
-			} catch {
-				/* parser already provides the failure boundary */
 			}
 			// #2154: the one opengrep site that parsed a scan of this root.
 			return {
 				success: true,
 				analyzed: true,
-				...(analyzedFiles ? { analyzedFiles } : {}),
-				findings,
+				...(report.scanned.length > 0
+					? {
+							analyzedFiles: report.scanned.map((file) =>
+								realpathOrResolve(path.resolve(cwd, file)),
+							),
+						}
+					: {}),
+				...(report.partial ? { partial: true } : {}),
+				findings: report.findings,
 				scannedAt,
 			};
 		} catch (err) {
@@ -259,6 +260,7 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			return {
 				...EMPTY_RESULT,
 				scannedAt,
+				reason: "crashed",
 				summary: reason.slice(0, 200),
 			};
 		} finally {
@@ -284,41 +286,59 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 	}
 }
 
-function parseOpengrepReportEnvelope(raw: string): {
-	parsed: boolean;
-	errors: Array<{ level?: string; message: string }>;
-} {
+type ParsedOpengrepReport = {
+	errors?: unknown;
+	results?: unknown;
+	paths?: { scanned?: unknown };
+};
+
+function readOpengrepReport(raw: string):
+	| { verdict: "refused"; reason: string }
+	| {
+			verdict: "usable";
+			partial?: { reason: string };
+			findings: OpengrepFinding[];
+			scanned: string[];
+	  } {
+	let parsed: unknown;
 	try {
-		const parsed = JSON.parse(raw) as { errors?: unknown; results?: unknown };
-		if (!parsed || typeof parsed !== "object")
-			return { parsed: false, errors: [] };
-		const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
-		return {
-			parsed: Array.isArray(parsed.results) || Array.isArray(parsed.errors),
-			errors: errors
-				.map((error) => {
-					if (typeof error === "string") return { message: error };
-					if (!error || typeof error !== "object") return undefined;
-					const entry = error as { level?: unknown; message?: unknown };
-					const level =
-						typeof entry.level === "string" ? entry.level : undefined;
-					const message =
-						typeof entry.message === "string" ? entry.message : undefined;
-					return level === undefined && message === undefined
-						? undefined
-						: {
-								...(level ? { level } : {}),
-								message: message ?? level ?? "opengrep scan error",
-							};
-				})
-				.filter(
-					(error): error is { level?: string; message: string } =>
-						error !== undefined,
-				),
-		};
+		parsed = JSON.parse(raw);
 	} catch {
-		return { parsed: false, errors: [] };
+		return { verdict: "refused", reason: "unparseable opengrep report" };
 	}
+	if (!parsed || typeof parsed !== "object")
+		return { verdict: "refused", reason: "unparseable opengrep report" };
+	const report = parsed as ParsedOpengrepReport;
+	if (!Array.isArray(report.results) && !Array.isArray(report.errors))
+		return { verdict: "refused", reason: "unparseable opengrep report" };
+	const errors = (Array.isArray(report.errors) ? report.errors : []).map(
+		(error): { level?: string; message: string } => {
+			if (typeof error === "string") return { message: error };
+			if (!error || typeof error !== "object")
+				return { message: "unrecognised opengrep error entry" };
+			const entry = error as { level?: unknown; message?: unknown };
+			const level = typeof entry.level === "string" ? entry.level : undefined;
+			const message =
+				typeof entry.message === "string" ? entry.message : undefined;
+			return {
+				...(level ? { level } : {}),
+				message: message ?? level ?? "unrecognised opengrep error entry",
+			};
+		},
+	);
+	const refusal = errors.find((error) => error.level !== "warn");
+	if (refusal) return { verdict: "refused", reason: refusal.message };
+	const scanned = Array.isArray(report.paths?.scanned)
+		? report.paths.scanned.filter(
+				(file): file is string => typeof file === "string",
+			)
+		: [];
+	return {
+		verdict: "usable",
+		...(errors[0] ? { partial: { reason: errors[0].message } } : {}),
+		findings: parseOpengrepReport(parsed),
+		scanned,
+	};
 }
 
 // --- Parser ---
@@ -334,13 +354,17 @@ function parseOpengrepReportEnvelope(raw: string): {
  * CLI surface has drifted in places, e.g. `--files-with-matches` requires
  * `--experimental` where semgrep's doesn't).
  */
-export function parseOpengrepReport(raw: string): OpengrepFinding[] {
-	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
+export function parseOpengrepReport(
+	rawOrParsed: string | unknown,
+): OpengrepFinding[] {
+	if (typeof rawOrParsed === "string" && !rawOrParsed.trim()) return [];
+	let parsed: unknown = rawOrParsed;
+	if (typeof rawOrParsed === "string") {
+		try {
+			parsed = JSON.parse(rawOrParsed);
+		} catch {
+			return [];
+		}
 	}
 	if (!parsed || typeof parsed !== "object") return [];
 	const results = (parsed as Record<string, unknown>).results;

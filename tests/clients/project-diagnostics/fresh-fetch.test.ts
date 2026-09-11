@@ -1116,6 +1116,35 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(coverage[0].files).toEqual(new Set([path.resolve(tmp, "src/a.py")]));
 	});
 
+	it("records analyzed-file coverage for a non-opengrep runner", async () => {
+		const scanned = path.join(tmp, "src", "a.ts");
+		fs.mkdirSync(path.dirname(scanned), { recursive: true });
+		const clients = makeClients({
+			knipResult: {
+				success: true,
+				analyzed: true,
+				analyzedFiles: [scanned],
+				issues: [],
+				unusedExports: [],
+				unusedFiles: [],
+				unusedDeps: [],
+				unlistedDeps: [],
+				summary: "ok",
+			},
+		});
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		expect(result.authoritativeCoverage).toEqual([
+			expect.objectContaining({
+				runnerId: "knip",
+				files: new Set([scanned]),
+			}),
+		]);
+	});
+
 	it("does not record coverage for a captured failed empty opengrep scan", async () => {
 		const client = new OpengrepClient();
 		client.ensureAvailable = vi.fn().mockResolvedValue(true);
