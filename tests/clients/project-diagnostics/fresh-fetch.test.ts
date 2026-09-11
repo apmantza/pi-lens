@@ -276,6 +276,67 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(clients.knipClient.analyze).toHaveBeenCalledTimes(1);
 	});
 
+	it("runs the reporter's home-cwd reproduction for an explicit project root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "repo");
+		fs.mkdirSync(project, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			fakeHome,
+			clients,
+			undefined,
+			{ homeDir: fakeHome, analysisRoot: path.join(project, "..", "repo") },
+		);
+
+		expect(result.unsafeRoot).toBeUndefined();
+		expect(result.analysisRootError).toBeUndefined();
+		expect(clients.knipClient.analyze).toHaveBeenCalledWith(
+			fs.realpathSync(project),
+			expect.anything(),
+		);
+	});
+
+	it("refuses an explicit analysis root AT or ABOVE home (#2053, #749)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		fs.mkdirSync(fakeHome, { recursive: true });
+
+		for (const analysisRoot of [fakeHome, path.join(fakeHome, "..")]) {
+			const result = await fetchFreshProjectDiagnostics(
+				cacheManager,
+				path.join(fakeHome, "session"),
+				clients,
+				undefined,
+				{ homeDir: fakeHome, analysisRoot },
+			);
+
+			expect(result.unsafeRoot).toBe(true);
+			expect(result.coldReasons?.knip).toMatch(/at or above/i);
+		}
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(cacheManager.writeCache).not.toHaveBeenCalled();
+	});
+
+	it("refuses a missing or non-directory explicit analysis root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const missing = path.join(tmp, "missing-project");
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			undefined,
+			{ homeDir: path.join(tmp, "home"), analysisRoot: missing },
+		);
+
+		expect(result.analysisRootError).toMatch(/unavailable/i);
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+	});
+
 	it("reports jscpd cold when the tool isn't available, without writing cache", async () => {
 		const cacheManager = makeCacheManager();
 		const clients = makeClients({ jscpdAvailable: false });

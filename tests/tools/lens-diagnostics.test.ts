@@ -654,6 +654,26 @@ describe("lens_diagnostics schema", () => {
 		expect(props.mode).toBeDefined();
 		expect(props.severity).toBeDefined();
 		expect(props.refreshRunners).toBeDefined();
+		expect(props.analysisRoot).toBeDefined();
+	});
+
+	it("passes an explicit analysis root through mode=full (#2053)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "all",
+			analysisRoot: "/home/me/repo",
+		});
+
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).toHaveBeenCalledWith(
+			expect.anything(),
+			"/proj",
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ analysisRoot: "/home/me/repo" }),
+		);
 	});
 
 	it("defaults to delta mode when no params supplied", async () => {
