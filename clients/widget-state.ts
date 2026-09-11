@@ -24,6 +24,7 @@ import {
 	type Disposition,
 	type DispositionMarkTarget,
 } from "./diagnostic-dispositions.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 
 /**
  * Canonical key for the `files` map (and `diagnosticsWriteGuard`) — #1020.
@@ -274,19 +275,31 @@ export function reconcileWidgetDisposition(
 	content?: string,
 ): void {
 	const current = getFileDiagnostics(target.filePath);
-	if (!current) return;
+	if (!current) {
+		recordDegradationOnce({
+			kind: "widget-disposition-reconcile-fallback",
+			subject: target.filePath,
+			reason: "the marked finding's widget record is absent",
+		});
+		return;
+	}
 	let source = content ?? target.content;
 	if (source === undefined) {
 		try {
 			source = readFileSync(target.filePath, "utf8");
 		} catch {
+			recordDegradationOnce({
+				kind: "widget-disposition-reconcile-fallback",
+				subject: target.filePath,
+				reason: "the disposition anchor content could not be read",
+			});
 			source = "";
 		}
 	}
 	const active = new Set(
 		applyDispositions(current, cwd, target.filePath, source),
 	);
-	const normalized = current.map((diagnostic) => {
+	const normalized: WidgetDiagnostic[] = current.map((diagnostic) => {
 		const { strict, weak } = anchorsForDiagnostic(
 			cwd,
 			target.filePath,
@@ -301,11 +314,14 @@ export function reconcileWidgetDisposition(
 		) {
 			return { ...diagnostic, disposition: entry.disposition, flagged: false };
 		}
-		return {
-			...diagnostic,
-			disposition: undefined,
-			flagged: entry?.disposition === "flagged" || undefined,
-		};
+		const {
+			disposition: _disposition,
+			flagged: _flagged,
+			...baseDiagnostic
+		} = diagnostic;
+		return entry?.disposition === "flagged"
+			? { ...baseDiagnostic, flagged: true }
+			: baseDiagnostic;
 	});
 	const rec = getOrCreate(target.filePath);
 	commitDiagnostics(rec, target.filePath, normalized, Date.now());
@@ -346,10 +362,10 @@ export function wireWidgetDispositionSubscriber(
 			{
 				cwd: payload.cwd,
 				filePath: payload.filePath,
-				tool: typeof payload.tool === "string" ? payload.tool : undefined,
-				rule: typeof payload.rule === "string" ? payload.rule : undefined,
 				message: typeof payload.message === "string" ? payload.message : "",
-				line: typeof payload.line === "number" ? payload.line : undefined,
+				...(typeof payload.tool === "string" ? { tool: payload.tool } : {}),
+				...(typeof payload.rule === "string" ? { rule: payload.rule } : {}),
+				...(typeof payload.line === "number" ? { line: payload.line } : {}),
 			},
 			payload.disposition as Disposition,
 		);

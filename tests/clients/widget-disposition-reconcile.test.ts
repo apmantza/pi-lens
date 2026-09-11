@@ -6,10 +6,15 @@ import {
 	__testing,
 	clearWidgetState,
 	getFileDiagnostics,
+	reconcileWidgetDisposition,
 	recordDiagnostics,
 	renderWidget,
 	wireWidgetDispositionSubscriber,
 } from "../../clients/widget-state.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import {
 	markDisposition,
 	_resetStateCacheForTests,
@@ -41,12 +46,14 @@ beforeEach(() => {
 	clearWidgetState();
 	_resetStateCacheForTests();
 	_resetDispositionPublishForTests();
+	resetDegradationLedger();
 });
 
 afterEach(() => {
 	clearWidgetState();
 	_resetStateCacheForTests();
 	_resetDispositionPublishForTests();
+	resetDegradationLedger();
 	delete process.env.PI_LENS_HOME;
 	delete process.env.PI_LENS_BUS_PUBLISH;
 	try {
@@ -137,5 +144,31 @@ describe("widget disposition reconciliation (#1616)", () => {
 			blocking: 0,
 			errors: 0,
 		});
+	});
+
+	it("records an absent widget record once per file", () => {
+		reconcileWidgetDisposition(
+			process.cwd(),
+			{ ...targetBase, cwd: process.cwd(), filePath, content },
+			"false-positive",
+		);
+		reconcileWidgetDisposition(
+			process.cwd(),
+			{ ...targetBase, cwd: process.cwd(), filePath, content },
+			"false-positive",
+		);
+
+		expect(getDegradationSummary()).toEqual([
+			expect.objectContaining({
+				kind: "widget-disposition-reconcile-fallback",
+				count: 1,
+				latestReasons: [
+					expect.objectContaining({
+						subject: filePath,
+						reason: "the marked finding's widget record is absent",
+					}),
+				],
+			}),
+		]);
 	});
 });

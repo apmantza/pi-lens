@@ -906,6 +906,7 @@ export type DegradationKind =
 	 * `skills/` path; see `clients/skills-resolver.ts`.
 	 */
 	| "web-tree-sitter-load-failed"
+	| "widget-disposition-reconcile-fallback"
 	/**
 	 * #2636 (the #2626 class sweep's ast-grep leg): `AstGrepClient`'s
 	 * `ruleDir` fell back to `resolvePackagePath(import.meta.url, "rules")`
