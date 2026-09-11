@@ -39,6 +39,9 @@ const CORRUPTED_HEADING_TAILS = [
 	"eview round \\d+",
 ];
 const CORRUPTED_IDENTIFIER_TAILS = ["etchOpenPullRequests", "px"];
+const CODE_CITATION = /`([^`\s:]+):((?:~?\d+)(?:-\d+)?)`/g;
+const MASTER_CLAIM =
+	/pre-existing|red on master|also fails on origin\/master|environment-specific/i;
 
 // Fleet census from the review of 11 bodies: ## OBSERVABILITY x5,
 // ## what changed x6, ## verification x7, and ## Summary x1. “What changed”
@@ -256,6 +259,195 @@ function recordLocationsFromRuntimeSource(source) {
 	return records;
 }
 
+function headFileSource(file, options = {}) {
+	if (options.headFiles?.has?.(file)) return options.headFiles.get(file);
+	if (/(?:^|\/)\.\.(?:\/|$)/.test(file) || isAbsolute(file)) return null;
+	if (options.workingTree) {
+		try {
+			return readFileSync(resolve(options.cwd ?? process.cwd(), file), "utf8");
+		} catch {
+			return null;
+		}
+	}
+	try {
+		return String(
+			(options.git ?? gitExecFileSync)(["show", `HEAD:${file}`], {
+				cwd: options.cwd ?? process.cwd(),
+				encoding: "utf8",
+			}),
+		);
+	} catch {
+		return null;
+	}
+}
+
+function sourceLines(source) {
+	return String(source ?? "").split(/\r?\n/);
+}
+
+function pathLineReferences(text) {
+	return [...String(text ?? "").matchAll(CODE_CITATION)].map((match) => ({
+		file: match[1],
+		lineText: match[2],
+		line: Number(match[2].replace(/^~/, "").split("-", 1)[0]),
+		index: match.index,
+	}));
+}
+
+function sourceQuoteAfter(lines, bodyLine) {
+	let index = bodyLine + 1;
+	while (index < lines.length && !lines[index].trim()) index += 1;
+	const opener = lines[index]?.match(/^\s*((?:```+|~~~+))(.*)$/);
+	if (!opener) return null;
+	const fence = opener[1];
+	const end = lines.findIndex(
+		(row, rowIndex) =>
+			rowIndex > index && new RegExp(`^\\s*${fence}\\s*$`).test(row),
+	);
+	if (end === -1) return null;
+	return {
+		end,
+		info: opener[2].trim(),
+		text: lines.slice(index + 1, end).filter((row) => row.trim()),
+	};
+}
+
+function isTranscriptQuote(quote) {
+	const lines = quote.text.join("\n");
+	return (
+		/^(?:text|console|shell|sh|bash|output)$/i.test(quote.info) &&
+		/^(?:\s*(?:\$|>)\s+(?:git|npm|npx|vitest|tsc)\b|\s*Test Files?\b.*\b(?:failed|passed)\b|\s*Tests?\s+\d+\s+(?:failed|passed)\b|\s*(?:PASS|FAIL)\s+(?:\||$)|\s*npm ERR!|\s*error TS\d+|.*\borigin\/master\b)/im.test(
+			lines,
+		)
+	);
+}
+
+function lintCodeCitations(body, options = {}) {
+	const errors = [];
+	const rawLines = String(body ?? "").split(/\r?\n/);
+	const visibleBody = outsideFences(body).join("\n");
+	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
+		visibleBody,
+	)) {
+		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
+		const key = `${file}:${lineText}`;
+		if (/covered by existing record\b/.test(rawLines[bodyLine] ?? "")) continue;
+		const source = headFileSource(file, options);
+		if (source === null) {
+			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
+			continue;
+		}
+		const sourceRows = sourceLines(source);
+		if (lineNumber < 1 || lineNumber > sourceRows.length) {
+			errors.push(`PR body citation ${key} is outside the HEAD tree.`);
+			continue;
+		}
+		const quote = sourceQuoteAfter(rawLines, bodyLine);
+		if (!quote || isTranscriptQuote(quote)) continue;
+		const start = Math.max(0, lineNumber - 1 - 20);
+		const finish = Math.min(sourceRows.length, lineNumber + 20);
+		const window = sourceRows.slice(start, finish).join("\n");
+		if (!quote.text.length || !window.includes(quote.text.join("\n")))
+			errors.push(
+				`PR body quote after citation ${key} does not match HEAD source within ±20 lines.`,
+			);
+	}
+	return errors;
+}
+
+function codeSpanMasked(text) {
+	return String(text).replace(/(`+)([\s\S]*?)\1/g, (span) =>
+		" ".repeat(span.length),
+	);
+}
+
+function endsSentence(text, index) {
+	const char = text[index];
+	if (!".!?".includes(char) || !/\s/.test(text[index + 1] ?? "")) return false;
+	if (char === ".") {
+		if (text[index - 1] === "." || text[index + 1] === ".") return false;
+		if (/\d\.\d/.test(text.slice(Math.max(0, index - 1), index + 2)))
+			return false;
+		const word = text.slice(0, index).match(/[A-Za-z]+$/)?.[0] ?? "";
+		const token = text.slice(text.lastIndexOf(" ", index - 1) + 1, index);
+		if (word.length <= 3 && !/[/:]/.test(token)) return false;
+	}
+	return true;
+}
+
+export function splitMarkdownUnits(body = "") {
+	const lines = String(body).split(/\r?\n/);
+	const units = [];
+	let paragraph = [];
+	const flush = () => {
+		if (!paragraph.length) return;
+		const text = paragraph.join("\n");
+		const masked = codeSpanMasked(text);
+		let start = 0;
+		for (let index = 0; index < text.length; index += 1)
+			if (endsSentence(masked, index)) {
+				units.push({
+					kind: "sentence",
+					text: text.slice(start, index + 1).trim(),
+				});
+				start = index + 1;
+			}
+		if (text.slice(start).trim())
+			units.push({ kind: "sentence", text: text.slice(start).trim() });
+		paragraph = [];
+	};
+	let fence = [];
+	for (const line of lines) {
+		if (fence.length) {
+			fence.push(line);
+			if (/^\s*(?:```+|~~~+)\s*$/.test(line)) {
+				units.push({ kind: "fence", text: fence.join("\n") });
+				fence = [];
+			}
+			continue;
+		}
+		if (/^\s*(?:```+|~~~+)/.test(line)) {
+			flush();
+			fence = [line];
+		} else if (/^\s*(?:#{1,6}\s|\|.*\|\s*$|[-*+]\s+)/.test(line)) {
+			flush();
+			if (line.trim())
+				units.push({
+					kind: /^(?:[-*+]\s+)/.test(line.trim())
+						? "list"
+						: /^(?:#{1,6}\s)/.test(line.trim())
+							? "heading"
+							: "table",
+					text: line,
+				});
+		} else if (!line.trim()) flush();
+		else paragraph.push(line);
+	}
+	flush();
+	if (fence.length) units.push({ kind: "fence", text: fence.join("\n") });
+	return units;
+}
+
+function lintMasterClaims(body) {
+	const units = splitMarkdownUnits(body);
+	const errors = [];
+	for (let index = 0; index < units.length; index += 1) {
+		const unit = units[index];
+		if (
+			unit.kind === "fence" ||
+			!MASTER_CLAIM.test(unit.text) ||
+			/reviewer\s+(?:wrote|said)/i.test(unit.text)
+		)
+			continue;
+		const next = units[index + 1];
+		if (next?.kind === "fence" && /origin\/master/i.test(next.text)) continue;
+		errors.push(
+			`PR body master/environment claim lacks an origin/master transcript: ${unit.text.trim()}`,
+		);
+	}
+	return errors;
+}
+
 const TEST_REFERENCE_TOKEN = /`([^`]+)`/g;
 const TEST_ID = /^[A-Z]\d{2}$/;
 const TEST_PATH = /^tests\/(?:[^\s`]+)$/;
@@ -341,13 +533,14 @@ function outsideFences(body) {
 	return String(body ?? "")
 		.split(/\r?\n/)
 		.map((line) => {
-			if (/^\s*```/.test(line)) {
-				fence = !fence;
+			const marker = line.match(/^\s*((?:```+|~~~+))/)?.[1];
+			if (marker) {
+				if (!fence) fence = marker;
+				else if (marker.length >= fence.length) fence = false;
 				return "";
 			}
 			return fence ? "" : line;
-		})
-		.join("\n");
+		});
 }
 
 function normalizedReference(value) {
@@ -365,7 +558,7 @@ function normalizedReference(value) {
 }
 
 function lintTestReferences(body, options = {}) {
-	const visible = outsideFences(body);
+	const visible = outsideFences(body).join("\n");
 	const corpus = testCorpus({ ...options, workingTree: true });
 	const references = [];
 	const addToken = (raw, allowFreeText) => {
@@ -719,7 +912,9 @@ export function lintPrBody(body = "", options = {}) {
 				options.cwd,
 			),
 		);
+	errors.push(...lintCodeCitations(body, options));
 	errors.push(...lintTestReferences(body, { cwd: options.cwd }));
+	errors.push(...lintMasterClaims(body));
 	return { valid: errors.length === 0, errors };
 }
 

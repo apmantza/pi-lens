@@ -21,6 +21,7 @@ import {
 	lintLocalPrBody,
 	localDiff,
 	lintPrBody,
+	splitMarkdownUnits,
 	repairEscapedNewlineBody,
 	repairFlattenedBody,
 	resolveLivePrBody,
@@ -214,6 +215,103 @@ describe("flattened PR body repair", () => {
 	it("is idempotent", () => {
 		const repaired = repairFlattenedBody(flattenedBody);
 		expect(repairFlattenedBody(repaired)).toBe(repaired);
+	});
+});
+
+describe("Markdown claim units", () => {
+	it("keeps Markdown blocks atomic and splits ordinary paragraph sentences", () => {
+		const units = splitMarkdownUnits(
+			"# Heading\n\n| A | B |\n| --- | --- |\n| one | two |\n\n- list item. Still one unit.\n\nA paragraph has 4.1.6 and clients/a.ts:12. It ends here.\nNext question? Yes!\n\n```ts\nvalue();\n```",
+		);
+		expect(units.map(({ kind, text }) => [kind, text])).toEqual([
+			["heading", "# Heading"],
+			["table", "| A | B |"],
+			["table", "| --- | --- |"],
+			["table", "| one | two |"],
+			["list", "- list item. Still one unit."],
+			["sentence", "A paragraph has 4.1.6 and clients/a.ts:12."],
+			["sentence", "It ends here."],
+			["sentence", "Next question?"],
+			["sentence", "Yes!"],
+			["fence", "```ts\nvalue();\n```"],
+		]);
+	});
+
+	it("keeps code spans, abbreviations, and ellipses inside one sentence", () => {
+		expect(
+			splitMarkdownUnits(
+				"Use `client. value` here. E.g. keep this sentence together... Then finish.",
+			),
+		).toEqual([
+			{ kind: "sentence", text: "Use `client. value` here." },
+			{
+				kind: "sentence",
+				text: "E.g. keep this sentence together... Then finish.",
+			},
+		]);
+	});
+
+	it("requires a directly following origin/master fence for a master claim", () => {
+		const accepted = lintPrBody(
+			`${body}\n\nThis is pre-existing.\n\n\`\`\`text\nrun on origin/master: pass\n\`\`\``,
+		);
+		expect(accepted.errors).not.toContain(
+			expect.stringContaining("master/environment"),
+		);
+		const rejected = lintPrBody(
+			`${body}\n\nThis is pre-existing.\n\nEvidence follows.`,
+		);
+		expect(rejected.errors.join(" ")).toContain("origin/master transcript");
+	});
+
+	it("does not inspect master words inside a fenced block", () => {
+		expect(
+			lintPrBody(
+				`${body}\n\n\`\`\`text\npre-existing and red on master\n\`\`\``,
+			).valid,
+		).toBe(true);
+	});
+});
+
+describe("head-tree citations", () => {
+	const headFiles = new Map([
+		[
+			"clients/citation.ts",
+			Array.from({ length: 40 }, (_, index) =>
+				index === 20
+					? "const cited = true;"
+					: index === 39
+						? "const distant = true;"
+						: `const line${index + 1} = ${index};`,
+			).join("\n"),
+		],
+	]);
+
+	it("rejects a citation to a missing or out-of-range head file", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/missing.ts:1\`\nAlso: \`clients/citation.ts:41\``,
+			{ headFiles },
+		);
+		expect(result.errors.join(" ")).toContain("clients/missing.ts:1");
+		expect(result.errors.join(" ")).toContain("clients/citation.ts:41");
+	});
+
+	it("accepts cited source within three and twenty lines", () => {
+		for (const line of [1, 4, 21])
+			expect(
+				lintPrBody(
+					`${body}\nEvidence: \`clients/citation.ts:${line}\`\n\`\`\`ts\nconst cited = true;\n\`\`\``,
+					{ headFiles },
+				).valid,
+			).toBe(true);
+	});
+
+	it("rejects a fabricated quote outside the twenty-line evidence window", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:1\`\n\`\`\`ts\nconst distant = true;\n\`\`\``,
+			{ headFiles },
+		);
+		expect(result.errors.join(" ")).toContain("within ±20 lines");
 	});
 });
 

@@ -90,6 +90,12 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 `lens_diagnostics` severity is a threshold on both `source=session` and `source=lsp`: `error` includes errors, `warning` includes errors and warnings, `information` includes errors, warnings, and information, and `hint`/`all`/unset include every known tier. Named filters remain strict for unknown record tiers; an unknown requested value preserves the tolerant catch-all for MCP callers because arguments are not runtime-schema-validated. (#2875 round 4 N1/N2)
 
+PR-body claim units are Markdown-aware: `scripts/check-pr-body.mjs` treats
+headings, table rows, list items, and fenced blocks as atomic units, and splits
+ordinary paragraphs at sentence-ending punctuation while preserving code spans,
+decimals, versions, paths, abbreviations, and ellipses. Citation evidence uses
+the bounded ±20-line source window for runtime and test paths.
+
 - **Every new config key or env flag needs a demonstrated forcing function.** A
   knob added "for flexibility" is public API the moment it ships (schema
   stability policy #2418, written down in `docs/public-api-stability.md` and
