@@ -344,6 +344,76 @@ describe("bash grep searchReads registration", () => {
 		}
 	});
 
+	it("blocks a recognized bash write when observation evidence is unavailable", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		const env = setupTestEnvironment("pi-lens-2802-unknown-authorship-");
+		try {
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+			});
+			const filePath = path.join(env.tmpDir, "unknown.ts");
+			fs.writeFileSync(filePath, "const a = 1;\n", "utf8");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const command = `sed -i 's/const a = 1;/const a = 9;/' ${filePath}`;
+			await handleToolCall({
+				event: {
+					toolName: "bash",
+					toolCallId: "2802-unknown-authorship",
+					input: { command },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			} as any);
+			const bashTool = createBashToolDefinition(env.tmpDir, {
+				exposeSessionEnvironment: false,
+			});
+			const result = await bashTool.execute(
+				"2802-unknown-authorship",
+				{ command },
+				undefined,
+				undefined,
+				{ cwd: env.tmpDir } as never,
+			);
+			await handleToolResult({
+				event: {
+					toolName: "bash",
+					toolCallId: "2802-unknown-authorship",
+					input: { command },
+					content: result.content,
+					details: result.details,
+				},
+				_opaqueCaptureOptions: { forcedUnknownReason: "walk-failed" },
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			expect((runtime.readGuard as any).wasWrittenThisSession(filePath)).toBe(
+				false,
+			);
+			expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("blocks every span when a multi-span bash view is clipped", async () => {
 		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-2802-multi-span-clip-");

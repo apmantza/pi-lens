@@ -241,6 +241,8 @@ interface ToolResultDeps {
 	_attachmentBudget?: { remaining: number };
 	/** Internal test seam for making missing observation evidence reachable. */
 	_opaqueCaptureOptions?: Pick<CaptureOptions, "forcedUnknownReason">;
+	/** Internal: synthetic dispatch inherits the parent's read-guard evidence. */
+	_readGuardAuthorship?: boolean;
 }
 
 function ensureToolResultClients(
@@ -1092,7 +1094,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	const rawFilePath = (event.input as { path?: string }).path;
 	const workspaceRoot = runtime.projectRoot || process.cwd();
-	let bashAuthorshipConfirmed = event.toolName !== "bash";
+	let bashAuthorshipConfirmed =
+		deps._readGuardAuthorship ?? event.toolName !== "bash";
 
 	// #1642: a gitignored worktree edit got re-attributed onto a
 	// same-relative-path file in the parent checkout because this handler
@@ -1419,6 +1422,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				_autofixMode: autofixMode,
 				_attachmentBudget: syntheticAttachmentBudget,
 				_mutationSourceOverride: isOpaque ? "opaque-script" : undefined,
+				_readGuardAuthorship:
+					opaqueSet.has(wp) || recognizedAuthoredSet.has(wp),
 			});
 			if (syntheticResult) {
 				// #1590: forward verbatim. The synthetic call already charged the
@@ -2294,7 +2299,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			participantTotal,
 			toolResultStart,
 			nativeAppliedPairs,
-			allowReadGuardWrites: event.toolName !== "bash",
+			allowReadGuardWrites: bashAuthorshipConfirmed,
 		}),
 		{
 			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
