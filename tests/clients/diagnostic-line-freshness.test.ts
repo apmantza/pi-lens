@@ -21,7 +21,10 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const logLatency = vi.hoisted(() => vi.fn());
-vi.mock("../../clients/latency-logger.js", () => ({ logLatency }));
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
+	logLatency,
+}));
 
 import {
 	_resetSharedLineCountCacheForTests,

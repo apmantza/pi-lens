@@ -39,7 +39,8 @@ vi.mock("../../../../clients/sessionstart-logger.js", () => ({
 	logSessionStart: logSessionStartSpy,
 }));
 
-vi.mock("../../../../clients/latency-logger.js", () => ({
+vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));

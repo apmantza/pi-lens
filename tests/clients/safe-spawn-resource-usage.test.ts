@@ -26,7 +26,8 @@ vi.mock("../../clients/resource-sampler.js", () => ({
 }));
 
 const logLatencyMock = vi.fn();
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (...args: unknown[]) => logLatencyMock(...args),
 }));
 

@@ -13,7 +13,8 @@ import {
 } from "../../../support/real-runner-ctx.js";
 
 const { logLatency } = vi.hoisted(() => ({ logLatency: vi.fn() }));
-vi.mock("../../../../clients/latency-logger.js", () => ({
+vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (entry: unknown) => logLatency(entry),
 }));
 vi.mock("../../../../clients/lsp/wait-policy/index.js", () => ({

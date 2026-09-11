@@ -3,7 +3,8 @@ import type { LatencyEntry } from "../../clients/latency-logger.js";
 import { _resetProcessSingletonsForTests } from "../../clients/process-singletons.js";
 
 const latencyEntries = vi.hoisted(() => [] as LatencyEntry[]);
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (entry: LatencyEntry) => latencyEntries.push(entry),
 }));
 

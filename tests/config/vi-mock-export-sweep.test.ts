@@ -39,6 +39,19 @@ function scan(): ViMockExportFinding[] {
 	);
 }
 
+function scanLatencyLoggerSurface(): ViMockExportFinding[] {
+	const files = listSourceFiles(TESTS_ROOT, {
+		extensions: [".ts"],
+		exclude: (relative) => relative.startsWith("fixtures/"),
+	});
+	assertNonEmptyScan("#2281 latency-logger mock surface", files.length, 200);
+	return files
+		.flatMap((file) =>
+			findViMockExportGaps(file, fs.readFileSync(file, "utf8"), "all"),
+		)
+		.filter((finding) => finding.specifier.endsWith("latency-logger.js"));
+}
+
 function key(finding: ViMockExportFinding): string {
 	return `${relativePosix(REPO_ROOT, finding.file)}:${finding.specifier}:${JSON.stringify(
 		[...finding.factoryProperties].sort(compareCodeUnits),
@@ -86,6 +99,12 @@ function compareAgainstBaseline(
 }
 
 describe("#2281 whole-module vi.mock export ratchet", () => {
+	it("keeps every latency-logger mock on the real export surface", () => {
+		// Recurrence guard for #2272 and #2281: a whole-module factory mock can
+		// stay green until an untested production call reaches a newly added export.
+		expect(scanLatencyLoggerSurface()).toEqual([]);
+	}, 60_000);
+
 	it("flags an export used by a production importer", () => {
 		// Regression #2782: importer-use mode must not miss an indirect named import.
 		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
@@ -777,7 +796,7 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			const testFile = path.join(root, "case.test.ts");
 			fs.writeFileSync(moduleFile, "export const b = 1;\n");
 			const source =
-				'// import { b } from "./module.js";\nconst text = "b";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+				'// vi.mock("./module.js", () => ({ b: 1 }));\nconst text = "vi.mock(\\\"./module.js\\\", () => ({ b: 1 }))";\nvi.mock("./module.js", () => ({ a: 1 }));\n';
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toEqual([]);
 		} finally {
