@@ -153,9 +153,16 @@ function findBareNpmInvocations(workflow: Workflow): BareNpmFinding[] {
 
 /**
  * The publish-npm step that asserts, at run time, that the pinned npm is what
- * `publish` will run: it invokes the pinned form with `--version` and exits
- * non-zero when the answer differs from the pin. Read off comment-blanked
- * text, so a step that merely QUOTES the assertion does not carry it.
+ * `publish` will run: it invokes the pinned form with `--version` and FAILS the
+ * step when the answer differs from the pin. Read off comment-blanked text, so
+ * a step that merely QUOTES the assertion does not carry it — 9183f39c6's pin
+ * step ran the same `--version` and did nothing with the answer, which is the
+ * exact state this must not accept.
+ *
+ * Two failure spellings are accepted, both of them real in this tree: an
+ * explicit non-zero `exit` (release.yml, which also echoes the observed
+ * version so a failed release is diagnosable from the log) and a bare
+ * `test <pinned --version> = <pin>` (ci.yml's prod-install-build job).
  */
 function findPinAssertionStep(
 	workflow: Workflow,
@@ -164,10 +171,13 @@ function findPinAssertionStep(
 	return guardedSteps(workflow).find((step) => {
 		if (step.job !== "publish-npm") return false;
 		const code = blankShellComments(step.run);
+		const comparesToPin = new RegExp(
+			`(?:test|\\[\\[?)\\s+[^\\n]*\\$\\{?${pinned.variable}\\}?`,
+		).test(code);
 		return (
 			code.includes(`${pinned.form} --version`) &&
 			new RegExp(`\\$\\{?${pinned.variable}\\}?`).test(code) &&
-			/\bexit\s+1\b/.test(code)
+			(/\bexit\s+[1-9]/.test(code) || comparesToPin)
 		);
 	});
 }
