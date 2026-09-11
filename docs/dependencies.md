@@ -52,3 +52,14 @@ Auto-install behavior depends on gate type:
 | `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.
+
+## Pip tool installation order
+
+For pip-backed tools, pi-lens uses this order:
+
+1. Use `pipx install` when `pipx` is available.
+2. Create or reuse `<PI_LENS_HOME>/pip-tools` with `python3 -m venv`, then use that venv's `pip`.
+3. Use `pip install --user` when the interpreter accepts a normal user install.
+4. If PEP 668 refuses the user install, use `--user --break-system-packages` only with `PYTHONUSERBASE` set to the pi-lens-private `<PI_LENS_HOME>/pip-user` prefix.
+
+Pi-lens never passes `--break-system-packages` to a system prefix. It adds the selected pipx, venv, or private-prefix `bin`/`Scripts` directory to the current process path so the availability probe resolves the installed tool.

@@ -13,6 +13,7 @@
 		"clients/gitleaks-scratch-exclusion.test.ts": 7,
 		"clients/installer/installer-lifecycle.integration.test.ts": 2,
 		"clients/installer/markdownlint-verify-2045.test.ts": 1,
+		"clients/installer/pip-pep668.test.ts": 1,
 		"clients/installer/posix-group-kill.test.ts": 2,
 		"clients/installer/verify-binary-semantics.test.ts": 4,
 		"clients/instance-reaper-posix-ps.test.ts": 1,

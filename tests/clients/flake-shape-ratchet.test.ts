@@ -174,6 +174,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git children decide tracked-versus-ignored files from index state no stub reproduces",
 	},
+	"real-process-spawn:clients/installer/pip-pep668.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real installer subprocesses prove PEP 668 strategy selection and binary resolution across executable package-manager boundaries",
+	},
 	"real-process-spawn:clients/installer/posix-group-kill.test.ts": {
 		detector: "real-process-spawn",
 		reason:

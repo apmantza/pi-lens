@@ -338,6 +338,7 @@ export const wallClockBudgetInclude = [
 	"tests/clients/git-tracked-ignore.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
+	"tests/clients/installer/pip-pep668.test.ts",
 	"tests/clients/installer/posix-group-kill.test.ts",
 	"tests/clients/installer/verify-binary-semantics.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it

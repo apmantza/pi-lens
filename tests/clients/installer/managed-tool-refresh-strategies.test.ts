@@ -438,7 +438,9 @@ beforeEach(() => {
 	for (const name of ["java", "java.exe"]) {
 		fs.writeFileSync(path.join(fakeBin, name), "x");
 	}
-	process.env.PATH = `${fakeBin}${path.delimiter}${originalPath ?? ""}`;
+	// Availability probes must see only fixture binaries. In particular, an
+	// ambient pipx must not redirect pip refreshes to the pipx strategy.
+	process.env.PATH = fakeBin;
 	delete process.env.PI_LENS_DISABLE_TOOL_REFRESH;
 	delete process.env.PI_LENS_TOOL_REFRESH_MAX_PER_SESSION;
 	// `vitest.config.*` defaults this to "1" globally so an ordinary test run
