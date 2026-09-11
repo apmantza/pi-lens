@@ -41,6 +41,7 @@ import {
 	isAtOrAboveHomeDir,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
+	realpathOrResolve,
 } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import { retireInlineBlockerAndResyncGuard } from "../clients/git-guard.js";
@@ -1544,13 +1545,7 @@ export function runnerRetirementDecision(
 	if (coverage.length === 0) {
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
 	}
-	const realFilePath = (() => {
-		try {
-			return fsSync.realpathSync(filePath);
-		} catch {
-			return path.resolve(filePath);
-		}
-	})();
+	const realFilePath = realpathOrResolve(filePath);
 	for (const entry of coverage) {
 		const root = entry.root;
 		const relative = path.relative(root, realFilePath);
