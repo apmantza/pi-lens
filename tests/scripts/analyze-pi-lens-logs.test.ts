@@ -150,6 +150,22 @@ describe("analyze-pi-lens-logs.mjs", () => {
 				filePath: "/proj/b/x.ts",
 				durationMs: 3000,
 			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/a",
+				durationMs: 0,
+				metadata: { sessionId: "session-a", stale: true },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/a",
+				durationMs: 0,
+				metadata: { sessionId: "session-a", stale: false },
+			},
 		]
 			.map((e) => JSON.stringify(e))
 			.join("\n");
@@ -319,6 +335,14 @@ describe("analyze-pi-lens-logs.mjs", () => {
 		expect(report.latency.runnerBlockingFindings).toEqual({
 			lsp: 1,
 			"biome-check-json": 1,
+		});
+	});
+
+	it("reports stale test-runner verdict rate per session", () => {
+		expect(report.latency.testRunnerVerdicts["session-a"]).toEqual({
+			total: 2,
+			stale: 1,
+			rate: 0.5,
 		});
 	});
 

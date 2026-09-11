@@ -1961,6 +1961,10 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 				env.tmpDir,
 				"stale-session",
 			);
+			runtime.recordProjectMutation({
+				filePath: srcFile,
+				source: "agent-edit",
+			});
 
 			let resolveRun!: (v: {
 				file: string;
@@ -2003,6 +2007,10 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 			// test subprocess resolves — this is the routine, non-rare case from
 			// the real dogfooding logs.
 			runtime.beginTurn();
+			runtime.recordProjectMutation({
+				filePath: srcFile,
+				source: "agent-edit",
+			});
 			resolveRun({
 				file: testFile,
 				sourceFile: srcFile,
@@ -2021,6 +2029,7 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 				stale?: boolean;
 				superseded?: boolean;
 				provenance?: { files: unknown[] };
+				verdicts?: Array<{ sourceFile: string; fileSeq: number }>;
 			}>("test-runner-findings", env.tmpDir);
 
 			// The old behavior discarded this entirely (no cache entry at all).
@@ -2029,6 +2038,10 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 			expect(cached?.data?.superseded).toBe(true);
 			expect(cached?.data?.provenance?.files.length).toBeGreaterThan(0);
 			expect(cached?.data?.content).toContain("prior turn");
+			// #2542: preserve the sequence captured before the later edit.
+			expect(cached?.data?.verdicts).toEqual([
+				expect.objectContaining({ sourceFile: srcFile, fileSeq: 1 }),
+			]);
 		} finally {
 			env.cleanup();
 		}

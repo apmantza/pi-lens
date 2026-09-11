@@ -10,8 +10,10 @@
 
 import type { CacheManager } from "./cache-manager.js";
 import { emitBounded } from "./bounded-telemetry.js";
+import { logLatency } from "./latency-logger.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { consumeTestFindings, peekTestFindings } from "./runtime-context.js";
+import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
 
 const MAX_PENDING_DELIVERIES = 32;
 
@@ -28,6 +30,37 @@ interface PendingDelivery {
 }
 
 const pending = new Map<string, PendingDelivery>();
+
+function logDeliveredVerdicts(
+	cacheManager: CacheManager,
+	cwd: string,
+	runtime: RuntimeCoordinator,
+	delivery: PendingDelivery,
+): void {
+	const verdicts = cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		cwd,
+	)?.data?.verdicts;
+	for (const verdict of verdicts ?? []) {
+		const currentFileSeq = runtime.getFileSeq(verdict.sourceFile);
+		logLatency({
+			type: "phase",
+			phase: "test_runner_verdict_delivery",
+			filePath: cwd,
+			durationMs: 0,
+			metadata: {
+				sessionId: delivery.sessionId,
+				generation: delivery.generation,
+				file: verdict.file,
+				sourceFile: verdict.sourceFile,
+				fileSeqAtRun: verdict.fileSeq,
+				currentFileSeq,
+				stale: currentFileSeq > verdict.fileSeq,
+				sequenceGap: Math.max(0, currentFileSeq - verdict.fileSeq),
+			},
+		});
+	}
+}
 
 export interface TestRunnerDeliveryOwner {
 	ownerId: string;
@@ -315,6 +348,7 @@ export function consumeStagedTestRunnerFindings(args: {
 		record(deliveryKey, "superseded", delivery, { currentGeneration });
 		return undefined;
 	}
+	logDeliveredVerdicts(args.cacheManager, args.cwd, args.runtime, delivery);
 	const findings = consumeTestFindings(
 		args.cacheManager,
 		args.cwd,

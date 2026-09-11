@@ -599,6 +599,14 @@ turn-end delivery, and stale completed findings must re-arm a refreshed
 freshness baseline. Turn-end drains use a zero wait budget and requeue unsettled
 promises, so deferred work never adds a repeated per-turn stall (#2122).
 
+Async test-runner verdict telemetry is emitted at the post-agent consumption
+seam (`consumeStagedTestRunnerFindings`), not when the result is staged. Each
+structured verdict records the source file's `RuntimeCoordinator.getFileSeq`
+at dispatch and the live value at delivery, with `stale` and the non-negative
+sequence gap. `scripts/analyze-pi-lens-logs.mjs` rolls these rows up by session;
+the sample is measurement only until a longer dogfood run establishes whether
+stale verdicts need suppression or sequence-qualified delivery (#2542).
+
 Post-agent test-runner delivery is activation/session-owned: the staged record
 retains its owning host, cache, runtime, and event context, while the quiet
 window receives the settled event's stable session identity and activation
