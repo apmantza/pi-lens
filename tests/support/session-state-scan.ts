@@ -388,6 +388,8 @@ export interface SessionStateCandidate {
 	file: string;
 	/** Module-level `Map`/`Set` declarations found (name only). */
 	containers: string[];
+	/** Container names with their declaration line, for semantic sweeps. */
+	containerDetails?: Array<{ name: string; line: number }>;
 	/** Exported reset-shaped function names found. */
 	resets: string[];
 	/** True when at least one reset is an explicitly test-only seam. */
@@ -688,8 +690,10 @@ let cachedCandidates: SessionStateCandidate[] | undefined;
  */
 export function scanSessionStateCandidates(
 	dir = CLIENTS_ROOT,
+	options: { includeUnresetContainers?: boolean } = {},
 ): SessionStateCandidate[] {
-	const useCache = dir === CLIENTS_ROOT;
+	const includeUnreset = options.includeUnresetContainers === true;
+	const useCache = dir === CLIENTS_ROOT && !includeUnreset;
 	if (useCache && cachedCandidates) return cachedCandidates;
 	const containerDeclaration = containerDeclarationRegex(dir);
 	const found: SessionStateCandidate[] = [];
@@ -697,11 +701,15 @@ export function scanSessionStateCandidates(
 		// Stripped for the same reason the reachability walk is (R1): a
 		// commented-out declaration or reset export is not one.
 		const source = stripCommentsAndStrings(fs.readFileSync(absolute, "utf8"));
-		const containers = [...source.matchAll(containerDeclaration)].map(
-			(m) => m[1],
+		const containerDetails = [...source.matchAll(containerDeclaration)].map(
+			(m) => ({
+				name: m[1],
+				line: source.slice(0, m.index).split("\n").length,
+			}),
 		);
+		const containers = containerDetails.map((container) => container.name);
 		const resets = [...source.matchAll(EXPORTED_RESET)].map((m) => m[1]);
-		if (resets.length === 0) continue;
+		if (!includeUnreset && resets.length === 0) continue;
 		const hasTestOnlyReset = resets.some((r) => TEST_ONLY_RESET.test(r));
 		const hasProcessSingleton = PROCESS_SINGLETON_CALL.test(source);
 		// Signal A (container + reset), signal B (an explicit test-only reset
@@ -712,6 +720,7 @@ export function scanSessionStateCandidates(
 		found.push({
 			file: relativePosix(dir, absolute),
 			containers,
+			containerDetails,
 			resets,
 			hasTestOnlyReset,
 			hasProcessSingleton,
@@ -719,4 +728,11 @@ export function scanSessionStateCandidates(
 	}
 	if (useCache) cachedCandidates = found;
 	return found;
+}
+
+/** Source roots shipped by pi-lens, including non-client host adapters. */
+export function shippedContainerSourceRoots(): string[] {
+	return ["clients", "tools", "mcp"]
+		.map((root) => path.join(repoRoot, root))
+		.concat(path.join(repoRoot, "index.ts"));
 }
