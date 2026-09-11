@@ -231,19 +231,40 @@ export function diffFileStats(
 	before: FileStatsSnapshot,
 	after: FileStatsSnapshot,
 ): string[] {
+	const contentChanged = new Set(diffFileContent(before, after));
 	const changed: string[] = [];
 	for (const [key, stat] of after) {
 		const prev = before.get(key);
 		// Content confirm: same mtime tick + same size but different bytes.
-		const contentConfirm =
-			prev?.hash !== undefined &&
-			stat.hash !== undefined &&
-			prev.hash !== stat.hash;
+		const contentConfirm = contentChanged.has(key);
 		if (
 			!prev ||
 			prev.mtimeMs !== stat.mtimeMs ||
 			prev.size !== stat.size ||
 			contentConfirm
+		) {
+			changed.push(key);
+		}
+	}
+	return changed;
+}
+
+/**
+ * Return only paths whose bytes are confirmed different by hashes on both
+ * sides. Missing hashes are deliberately omitted: callers deciding authorship
+ * must treat unavailable content evidence as unknown, never as changed.
+ */
+export function diffFileContent(
+	before: FileStatsSnapshot,
+	after: FileStatsSnapshot,
+): string[] {
+	const changed: string[] = [];
+	for (const [key, stat] of after) {
+		const previous = before.get(key);
+		if (
+			previous?.hash !== undefined &&
+			stat.hash !== undefined &&
+			previous.hash !== stat.hash
 		) {
 			changed.push(key);
 		}

@@ -52,6 +52,8 @@ export interface ReadRecord {
 	 * read-recording bridge with the given consumer identifier.
 	 */
 	source?: string;
+	/** A requested native-read range that has not been confirmed as delivered. */
+	provisional?: boolean;
 }
 
 /**
@@ -548,6 +550,7 @@ export class ReadGuard {
 	// pi Write tool authored, independent of filesystem mtime granularity
 	// or clock skew (NFS, FAT32, etc.).
 	private readonly writtenThisSession = new Set<string>();
+	private readonly unchangedThisSession = new Set<string>();
 	// Existence-independent index for hasKnownPath/forgetPath (#1668 review
 	// F1). `this.key()` (normalizeFilePath) branches on whether `filePath`
 	// currently exists on disk: an existing file resolves to realpathSync
@@ -729,8 +732,8 @@ export class ReadGuard {
 			const provisionalIndex = records?.findIndex(
 				(candidate) => candidate.source === provisionalSource,
 			);
-			if (provisionalIndex === undefined || provisionalIndex < 0) return;
-			records!.splice(provisionalIndex, 1);
+			if (provisionalIndex !== undefined && provisionalIndex >= 0)
+				records!.splice(provisionalIndex, 1);
 		}
 		// #1668 review F1: index by the existence-independent syntactic key
 		// while the file is (presumably) still on disk, so a later
@@ -1270,6 +1273,7 @@ export class ReadGuard {
 	 */
 	recordWritten(rawFilePath: string): void {
 		const filePath = this.key(rawFilePath);
+		this.unchangedThisSession.delete(filePath);
 		// #1668 review F1: index by the existence-independent syntactic key
 		// (see `knownPathIndex`) so a later hasKnownPath/forgetPath lookup
 		// after an external delete can still find this entry's real key.
@@ -1288,6 +1292,13 @@ export class ReadGuard {
 				creation.writeIndex,
 			);
 		}
+	}
+
+	/** Record that a recognized mutation had complete evidence but changed no bytes. */
+	recordUnchanged(rawFilePath: string): void {
+		const filePath = this.key(rawFilePath);
+		this.unchangedThisSession.add(filePath);
+		this.writtenThisSession.delete(filePath);
 	}
 
 	/**
@@ -1490,6 +1501,7 @@ export class ReadGuard {
 	}
 
 	private wasWrittenThisSession(filePath: string): boolean {
+		if (this.unchangedThisSession.has(filePath)) return false;
 		// Authoritative path: we observed a write of this file via recordWritten.
 		// Survives mtime granularity (FAT32 ~2s), clock skew (NFS), and external
 		// tools that touch mtime backward.
@@ -1824,6 +1836,7 @@ export class ReadGuard {
 
 		// First pass: check symbol coverage and any single read that covers the edit.
 		for (const read of reads) {
+			if (read.provisional === true) continue;
 			const readStart = Math.max(
 				1,
 				read.effectiveOffset - this.config.contextLines,
@@ -1849,16 +1862,18 @@ export class ReadGuard {
 
 		// Second pass: merge all read intervals and check if their union covers
 		// [editStart, editEnd]. Handles multi-chunk reads (e.g. 1-100 + 101-200).
-		const intervals = reads.map(
-			(read) =>
-				[
-					Math.max(1, read.effectiveOffset - this.config.contextLines),
-					read.effectiveOffset +
-						read.effectiveLimit -
-						1 +
-						this.config.contextLines,
-				] as [number, number],
-		);
+		const intervals = reads
+			.filter((read) => read.provisional !== true)
+			.map(
+				(read) =>
+					[
+						Math.max(1, read.effectiveOffset - this.config.contextLines),
+						read.effectiveOffset +
+							read.effectiveLimit -
+							1 +
+							this.config.contextLines,
+					] as [number, number],
+			);
 
 		intervals.sort((a, b) => a[0] - b[0]);
 

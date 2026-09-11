@@ -113,7 +113,7 @@ export type DegradationKind =
 	 * degradation gets. Subject is `<hook>:<label>`, same as above, so the two
 	 * causes stay separable in `pilens_health`.
 	 */
-	| "bash_view_clipped"
+	| "bash-view-clipped"
 	| "biome-explain-unavailable"
 	| "bus-stale"
 	| "cache-usage-attribution-stale"
@@ -476,7 +476,7 @@ export type DegradationKind =
 	 * from the ledger alone.
 	 */
 	| "mode-suppression"
-	| "native_read_clipped"
+	| "native-read-clipped"
 	/**
 	 * A shell-out runner's tool DID produce output, exited nonzero, and the
 	 * runner's parser extracted ZERO diagnostics from it (#1948). The adjacent

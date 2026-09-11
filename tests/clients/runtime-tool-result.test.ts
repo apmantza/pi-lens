@@ -233,7 +233,7 @@ describe("bash grep searchReads registration", () => {
 			);
 			expect(
 				getDegradationSummary().some(
-					(entry) => entry.kind === "bash_view_clipped",
+					(entry) => entry.kind === "bash-view-clipped",
 				),
 			).toBe(true);
 		} finally {
@@ -350,6 +350,8 @@ describe("bash grep searchReads registration", () => {
 					filePath,
 					Array.from({ length: 3000 }, (_, i) => `line${i}`).join("\n") + "\n",
 				);
+			for (const filePath of paths)
+				fs.utimesSync(filePath, new Date(0), new Date(0));
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
 			await handleToolResult({
@@ -374,7 +376,7 @@ describe("bash grep searchReads registration", () => {
 				);
 			expect(
 				getDegradationSummary().some(
-					(entry) => entry.kind === "bash_view_clipped",
+					(entry) => entry.kind === "bash-view-clipped",
 				),
 			).toBe(true);
 		} finally {

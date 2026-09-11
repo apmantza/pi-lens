@@ -50,7 +50,7 @@ describe("ReadGuard", () => {
 		fileTimeState.hasChanged = false;
 		vi.mocked(logReadGuardEvent).mockClear();
 	});
-	it("pending native read replacement preserves unrelated records", () => {
+	it("supersedes only the correlated provisional native read", () => {
 		const filePath = "/tmp/native-read-identity.ts";
 		const guard = createReadGuard("native-read-identity-session");
 		const recordRead = guard.recordRead.bind(guard) as unknown as (
@@ -58,24 +58,26 @@ describe("ReadGuard", () => {
 			opts?: { supersedes?: { toolCallId: string } },
 		) => void;
 
-		// The recurrence is positional replacement: a concurrent result can
-		// remove a search credit or another read instead of its own provisional
-		// native-read record, reopening coverage the host did not deliver.
+		// The recurrence is identity laundering: a concurrent result must not
+		// replace another native read's provisional range.
 		recordRead(
 			createReadRecord(filePath, {
 				effectiveLimit: 3000,
-				source: "native-read:call-1:provisional",
+				source: "native-read:c1:provisional",
+				provisional: true,
 			}),
 		);
 		recordRead(
 			createReadRecord(filePath, {
+				effectiveOffset: 2000,
 				effectiveLimit: 2000,
-				source: "ast-grep-search",
+				source: "native-read:c2:provisional",
+				provisional: true,
 			}),
 		);
 
 		recordRead(createReadRecord(filePath, { effectiveLimit: 2000 }), {
-			supersedes: { toolCallId: "call-1" },
+			supersedes: { toolCallId: "c2" },
 		});
 
 		expect(
@@ -83,9 +85,23 @@ describe("ReadGuard", () => {
 				.getReadHistory(filePath)
 				.map((record) => [record.effectiveLimit, record.source]),
 		).toEqual([
-			[2000, "ast-grep-search"],
+			[3000, "native-read:c1:provisional"],
 			[2000, undefined],
 		]);
+		expect(guard.checkEdit(filePath, [2500, 2500]).action).toBe("block");
+		expect(guard.checkEdit(filePath, [1500, 1500]).action).toBe("allow");
+	});
+
+	it("records delivered coverage when its provisional identity is missing", () => {
+		const filePath = "/tmp/native-read-missing-provisional.ts";
+		const guard = createReadGuard("native-read-missing-provisional-session");
+		guard.recordRead(createReadRecord(filePath, { effectiveLimit: 2000 }), {
+			supersedes: { toolCallId: "evicted-call" },
+		});
+
+		// The recurrence is cap/path eviction: losing the provisional must not
+		// discard the delivered read and force an endless re-read loop.
+		expect(guard.checkEdit(filePath, [1500, 1500]).action).toBe("allow");
 		expect(guard.checkEdit(filePath, [2500, 2500]).action).toBe("block");
 	});
 	describe("Phase 1: Zero-read and FileTime checks", () => {

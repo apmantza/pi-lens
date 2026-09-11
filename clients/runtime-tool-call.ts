@@ -1015,6 +1015,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			turnIndex: runtime.turnIndex,
 			writeIndex: runtime.peekWriteIndex(),
 			timestamp: Date.now(),
+			provisional: true,
 			...(resolveToolCallCorrelationId(event) !== undefined && {
 				source: `native-read:${resolveToolCallCorrelationId(event)}:provisional`,
 			}),
@@ -1096,7 +1097,13 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 
 	// Track any Write so recordWritten can inject a synthetic read afterward.
 	// The agent authored the content (new or overwritten), so it trivially "knows" the file.
-	if (!isEditOnly && isWriteOrEdit && filePath && !getFlag("no-read-guard")) {
+	if (
+		!isEditOnly &&
+		isWriteOrEdit &&
+		event.toolName !== "bash" &&
+		filePath &&
+		!getFlag("no-read-guard")
+	) {
 		runtime.readGuard.noteCreatedFile(
 			filePath,
 			runtime.turnIndex,
