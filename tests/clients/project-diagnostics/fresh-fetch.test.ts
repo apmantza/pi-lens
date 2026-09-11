@@ -1138,7 +1138,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			tmp,
 			clients,
 		);
-		expect(result.analyzed).toContain("opengrep");
+		expect(result.analyzed).not.toContain("opengrep");
 		expect(result.authoritativeCoverage).toEqual([]);
 	});
 

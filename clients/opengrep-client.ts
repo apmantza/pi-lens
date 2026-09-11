@@ -56,7 +56,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { resolveOpengrepConfig } from "./opengrep-config.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { getScratchTreeDirNames } from "./scratch-tree-policy.js";
+import { realpathOrResolve } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 
@@ -134,7 +136,7 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 	 * opengrep process (mirrors `GitleaksClient`/`JscpdClient`).
 	 */
 	async scan(cwd: string): Promise<OpengrepResult> {
-		const targetDir = path.resolve(cwd);
+		const targetDir = realpathOrResolve(cwd);
 		const scannedAt = new Date().toISOString();
 
 		if (!(await this.ensureAvailable())) {
@@ -201,6 +203,18 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 			}
 
 			const raw = fs.readFileSync(reportPath, "utf-8");
+			const report = parseOpengrepReportEnvelope(raw);
+			if (result.status !== 0 || report.errors.length > 0) {
+				const reason =
+					report.errors[0] ?? `opengrep exited with status ${result.status}`;
+				recordDegradationOnce({
+					kind: "opengrep-scan-refused",
+					subject: cwd,
+					reason,
+					metadata: { status: result.status },
+				});
+				return { ...EMPTY_RESULT, scannedAt, summary: reason.slice(0, 200) };
+			}
 			const findings = parseOpengrepReport(raw);
 			let analyzedFiles: string[] | undefined;
 			try {
@@ -209,7 +223,7 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 				if (Array.isArray(paths))
 					analyzedFiles = paths
 						.filter((file): file is string => typeof file === "string")
-						.map((file) => path.resolve(cwd, file));
+						.map((file) => realpathOrResolve(path.resolve(cwd, file)));
 			} catch {
 				/* parser already provides the failure boundary */
 			}
@@ -234,6 +248,26 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 				// non-fatal
 			}
 		}
+	}
+}
+
+function parseOpengrepReportEnvelope(raw: string): { errors: string[] } {
+	try {
+		const parsed = JSON.parse(raw) as { errors?: unknown };
+		const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
+		return {
+			errors: errors
+				.map((error) => {
+					if (typeof error === "string") return error;
+					if (error && typeof error === "object" && "message" in error) {
+						return String((error as { message: unknown }).message);
+					}
+					return String(error);
+				})
+				.filter((error) => error !== "undefined"),
+		};
+	} catch {
+		return { errors: [] };
 	}
 }
 

@@ -1,13 +1,117 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as safeSpawn from "../../clients/safe-spawn.js";
 import {
 	OpengrepClient,
 	parseOpengrepReport,
 } from "../../clients/opengrep-client.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+
+beforeEach(() => resetDegradationLedger());
+
+describe("opengrep report outcomes (#2943)", () => {
+	const refusedReport =
+		// Captured from `opengrep 1.29.0 scan --config <root>/.opengrep.yml --json --json-output <report> --no-error --quiet --disable-version-check <symlink-root>`.
+		'{"version":"1.29.0","results":[],"errors":[{"code":2,"level":"error","type":"SemgrepError","message":"File not found: <symlink-root>"}],"paths":{"scanned":[]},"skipped_rules":[]}';
+	const emptyReport =
+		// Captured from `opengrep 1.29.0 scan --config <root>/.opengrep.yml --json --json-output <report> --no-error --quiet --disable-version-check <root>`.
+		'{"version":"1.29.0","results":[],"errors":[],"paths":{"scanned":[]},"interfile_languages_used":[],"skipped_rules":[]}';
+	const findingReport =
+		// Captured from `opengrep 1.29.0 scan --config <root>/.opengrep.yml --json --json-output <report> --no-error --quiet --disable-version-check <root>`.
+		'{"version":"1.29.0","results":[{"check_id":"eval-probe","path":"<root>/src/a.js","start":{"line":1,"col":1,"offset":0},"end":{"line":1,"col":10,"offset":9},"extra":{"metavars":{},"message":"eval","metadata":{},"severity":"WARNING","fingerprint":"478c0f999dcba205e49e7c9e4b1f2bc3847e96be8e86d3db7b08d1c6175d26aa28cc8e2a210b50b384fce77e4c03b9a532385899c044f46515f1eb51472e96be_0","lines":"eval(\'1\')","is_ignored":false,"validation_state":"NO_VALIDATOR","engine_kind":"OSS"}}],"errors":[],"paths":{"scanned":["<root>/src/a.js"]},"interfile_languages_used":[],"skipped_rules":[]}';
+
+	async function rootWithSymlink(): Promise<{ real: string; link: string }> {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		const link = `${real}-link`;
+		fs.mkdirSync(path.join(real, "src"));
+		fs.symlinkSync(real, link, "dir");
+		return { real, link };
+	}
+
+	it("reports a captured refused scan as cold with one bounded record", async () => {
+		const { real, link } = await rootWithSymlink();
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					refusedReport,
+				);
+				return { status: 2, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(link);
+			expect(result).toMatchObject({
+				success: false,
+				findings: [],
+			});
+			expect(result).not.toHaveProperty("analyzed");
+			expect(
+				getDegradationSummary().filter(
+					(group) => group.kind === "opengrep-scan-refused",
+				),
+			).toHaveLength(1);
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+			fs.rmSync(link, { force: true });
+		}
+	});
+
+	it("keeps a captured successful empty scan warm without a record", async () => {
+		const real = fs.mkdtempSync(path.join(os.tmpdir(), "p2943-client-"));
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				fs.writeFileSync(args[args.indexOf("--json-output") + 1], emptyReport);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(real);
+			expect(result).toMatchObject({
+				success: true,
+				analyzed: true,
+				findings: [],
+			});
+			expect(getDegradationSummary()).toEqual([]);
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	it("returns a captured eval finding when the root is supplied through a symlink", async () => {
+		const { real, link } = await rootWithSymlink();
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				expect(args.at(-1)).toBe(real);
+				fs.writeFileSync(
+					args[args.indexOf("--json-output") + 1],
+					findingReport.replaceAll("<root>", real),
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const client = new OpengrepClient();
+			client.ensureAvailable = vi.fn().mockResolvedValue(true);
+			const result = await client.scan(link);
+			expect(result.findings).toHaveLength(1);
+			expect(result.findings[0].checkId).toBe("eval-probe");
+		} finally {
+			fs.rmSync(real, { recursive: true, force: true });
+			fs.rmSync(link, { force: true });
+		}
+	});
+});
 
 /**
  * #591 review: opengrep's LSP mode does NOT honor `// nosemgrep` natively
