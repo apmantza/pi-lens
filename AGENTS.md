@@ -527,7 +527,7 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 47. **A detector whose corpus includes its own fixtures.** *Screen:* a scanner that greps `tests/` (or any tree) for "does this id/needle exist" excludes its own fixture directory and its own test file BY CONSTRUCTION (a path filter in the corpus builder, pinned by a test), and matches whole tokens; otherwise the red-first fixture that proves the detector whitelists exactly the fabricated needles it exists to reject. *e.g.* #2913 round 3 committed `tests/fixtures/ci-pr-bodies/issue-2877-round-3.md` and `git grep -F` found its eleven fabricated ids there, so both shipping readers ACCEPTED the fixture body while the test passed only through an injected corpus. *Detect:* a fixture under the scanned root that contains the needles the scanner must reject; a substring grep (`-F` without `-w`) for identifiers.
 
-48. **Check-then-act on a shared durable directory.** *Screen:* a first-use migration or lazy create of a per-project directory (`existsSync` → `renameSync`/`mkdirSync`) is idempotent under two concurrent starters: the loser re-stats after `ENOENT`/`EEXIST`, returns the directory that now exists, and never returns a path that does not; canonicalise the identity ONCE (one realpath-or-resolve value feeds both the readable slug and the hash) so a symlinked root and a transient realpath failure land in the same directory; record once per session, never per event. *e.g.* #2929 round 1: two real processes on a barrier, 80 iterations → 74 disagreeing directories, 74 sessions writing state into a directory that no longer existed. *Detect:* `existsSync(x)` followed by a rename/mkdir of `x` with no retry-after-race branch; a slug computed from `path.resolve` beside a hash computed from `realpathSync`.
+48. **Check-then-act on a shared durable directory.** *Screen:* a first-use migration or lazy create of a per-project directory (`existsSync` → `renameSync`/`mkdirSync`) is idempotent under two concurrent starters: the loser re-stats after `ENOENT`/`EEXIST`, returns the directory that now exists, and never returns a path that does not; canonicalise the identity ONCE (one realpath-or-resolve value feeds both the readable slug and the hash) so a symlinked root and a transient realpath failure land in the same directory; record once per session, never per event. Use the shared guarded `realpathOrResolve` helper when a scanner needs the same canonical root for its process and its coverage evidence. *e.g.* #2929 round 1: two real processes on a barrier, 80 iterations → 74 disagreeing directories, 74 sessions writing state into a directory that no longer existed. *Detect:* `existsSync(x)` followed by a rename/mkdir of `x` with no retry-after-race branch; a slug computed from `path.resolve` beside a hash computed from `realpathSync`.
 
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
@@ -1560,10 +1560,10 @@ Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` fre
 Project-runner retirement authority is recorded as `ProjectRunnerCoverage` on
 `FreshProjectDiagnosticsResult`, keyed by the runner id, analyzed root, and
 scanned file set. Only clients whose parsed report explicitly supplies a
-scanned-path set populate `analyzedFiles`; on this seam that is opengrep's
-`paths.scanned`. Other clients emit no file evidence, so `fresh-fetch.ts`
-transports the signal without walking the project or re-creating runner
-policies. `runnerRetirementDecision` in
+scanned-path set populate `analyzedFiles`; opengrep's source is
+`paths.scanned`. Any runner that supplies a non-empty file set may populate
+coverage; `fresh-fetch.ts` transports the signal without walking the project
+or re-creating runner policies. `runnerRetirementDecision` in
 `tools/lens-diagnostics.ts` uses that coverage for filtering and
 `runner_authoritative_widget_retire`;
 the `analyzed` id list remains a conservative fallback only when coverage is
@@ -1701,11 +1701,12 @@ package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
-The marker-walk memo in `clients/tool-cwd.ts` caches positive roots only. A
-negative walk re-runs on the next lookup, so a marker created where NONE was
-found is seen on the next resolution (#2894). The other half of the axis is
-still open: a marker created BELOW a cached positive root is not seen until
-the session ends (#2922) — do not describe the class as closed.
+The marker walk in `clients/tool-cwd.ts` runs synchronously for each lookup. It
+does not memoize roots: a marker created during the session, a nearer marker,
+or a deleted marker is handled by the same full walk (#2894, #2922, #2777).
+Keep the home and depth ceilings when changing this seam; do not reintroduce a
+positive cache unless it skips filesystem work while preserving those
+freshness guarantees.
 
 ### Session lifecycle, telemetry, and observability
 
@@ -3655,7 +3656,8 @@ A 2026 audit against `@earendil-works/pi-coding-agent` confirmed a few places wh
 
 ## Open design TODOs
 
-- **Project-diagnostics extractor registry (#179)** — the heavyweight project analyzers are normalized into `ProjectDiagnostic` records and surfaced via `lens_diagnostics` full mode. `clients/project-diagnostics/extractors.ts` is the single registry: each row maps an analyzer's **cached** result (by cache key) to per-file diagnostics via a pure `runner-adapters/*` function. **Cache-only — `mode=full` reads the caches and folds them in, it NEVER launches a scan** (so it can't relaunch or contend with the background session-start/turn-end runs, which share a global abort signal). **Done:** knip, jscpd (clone → both ends), madge (cycle → each file), gitleaks (secrets → blocking), govulncheck (reachable Go CVE → first traced source frame), trivy (dep CVE → manifest), dead-code (vulture/Python; unlisted → blocking), opengrep (CLI scan, #584; `ERROR` severity → blocking). **Not (cleanly) adaptable — left out on purpose:** type-coverage (wired but currently never run/cached — no cache to read), test-runner (caches a formatted string, not structured findings), call-graph (structural intelligence, not diagnostics). Adding an adaptable one is one adapter + one registry row — no `formatFullMode` surgery.
+- **Project-diagnostics extractor registry (#179)** — the heavyweight project analyzers are normalized into `ProjectDiagnostic` records and surfaced via `lens_diagnostics` full mode. `clients/project-diagnostics/extractors.ts` is the single registry: each row maps an analyzer's **cached** result (by cache key) to per-file diagnostics via a pure `runner-adapters/*` function. **Cache-only — `mode=full` reads the caches and folds them in, it NEVER launches a scan** (so it can't relaunch or contend with the background session-start/turn-end runs, which share a global abort signal). **Done:** knip, jscpd (clone → both ends), madge (cycle → each file), gitleaks (secrets → blocking), govulncheck (reachable Go CVE → first traced source frame), trivy (dep CVE → manifest), dead-code (vulture/Python; unlisted → blocking), opengrep (CLI scan, #584; `ERROR` severity → blocking). Opengrep `warn` partial-parsing entries preserve findings and scanned-path coverage, record `opengrep-partial-scan`, and treat malformed, error-level, missing-report, and process-failure outcomes as cold `opengrep-scan-refused` results. **Not (cleanly) adaptable — left out on purpose:** type-coverage (wired but currently never run/cached — no cache to read), test-runner (caches a formatted string, not structured findings), call-graph (structural intelligence, not diagnostics). Adding an adaptable one is one adapter + one registry row — no `formatFullMode` surgery.
+- **Opengrep outcome rows are a single discriminator contract (#2943).** `tests/clients/opengrep-client.test.ts` drives the real `OpengrepClient` through report, status, spawn, and filesystem outcomes, asserting result reason, partial state, findings, coverage, and degradation kind. A non-empty `analyzedFiles` array remains the only coverage signal; cached records may omit `analyzedFiles` for empty scans, and consumers must preserve the old empty-array spelling.
 
 - **LSP server `initializationOptions` overrides via project config** — `clients/lsp/config.ts` projects a `serverOverrides` key out of the `lsp` namespace of the canonical config files (see "Package scope" above and `docs/configuration.md`; the legacy locations still resolve for their deprecation window). Each entry is keyed by the built-in server `id` (e.g. `"rust"`, `"nix"`) and carries an `initializationOptions` object. In `clients/lsp/index.ts` `spawnClient()`, the override is fetched via `getServerInitOverride(server.id, filePath)` and deep-merged (user wins on conflicts) onto the server's built-in defaults via `mergeInitializationOptions`. Arrays are replaced, not merged (consistent with standard LSP settings merge semantics). Tests live in `tests/clients/lsp/server-init-overrides.test.ts`. Test files that mock `clients/lsp/config.js` must include `getServerInitOverride: vi.fn().mockReturnValue(undefined)` in the mock factory — existing service tests (`service-touch-collect`, `service-race`, `service-early-unblock`, `service-mode-grace`, `workspace-diagnostics-per-server`, `runtime-session-warm`) were updated accordingly.
 
