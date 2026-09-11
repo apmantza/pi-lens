@@ -330,6 +330,12 @@ describe("bash grep searchReads registration", () => {
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",
 			} as any);
+			expect((runtime.readGuard as any).wasWrittenThisSession(filePath)).toBe(
+				false,
+			);
+			expect(
+				(runtime.readGuard as any).unchangedThisSession.has(filePath),
+			).toBe(true);
 			expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
 				"block",
 			);

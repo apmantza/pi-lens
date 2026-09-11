@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
 import {
 	captureFileStats,
+	type CaptureOptions,
 	diffFileContent,
 	getOpaqueBaselineStore,
 	recoverOpaqueChangesViaGit,
@@ -238,6 +239,8 @@ interface ToolResultDeps {
 	 * — a direct write, bounded by the per-file cap alone.
 	 */
 	_attachmentBudget?: { remaining: number };
+	/** Internal test seam for making missing observation evidence reachable. */
+	_opaqueCaptureOptions?: Pick<CaptureOptions, "forcedUnknownReason">;
 }
 
 function ensureToolResultClients(
@@ -798,6 +801,8 @@ async function dispatchPipelineAnalysis(args: {
 	 * round 2, S1) — a call site cannot be trusted to remember to do it.
 	 */
 	nativeAppliedPairs: Array<{ oldText: string; newText: string | undefined }>;
+	// The original bash result can reach this helper without authorship
+	// evidence; synthetic write results deliberately set this true.
 	allowReadGuardWrites: boolean;
 }): Promise<
 	| { crashed: false; result: PipelineResult }
@@ -1317,6 +1322,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			} else if (pending.stats) {
 				const outcome = await captureFileStats(scanRoot, {
 					withHashes: true,
+					...deps._opaqueCaptureOptions,
 				});
 				if (outcome.snapshot && !outcome.unknownReason) {
 					opaquePaths = diffFileContent(pending.stats, outcome.snapshot);
@@ -1343,6 +1349,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				if (recognizedAuthored.length === 0) recognizedWritten = [];
 			} else if (unknownReason) {
 				recognizedAuthored = [];
+				// The bounded opaque_mutation_coverage_unknown record below remains
+				// the production proof that authorship evidence was unavailable.
 			}
 			if (unknownReason) {
 				logLatency({

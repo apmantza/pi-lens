@@ -103,6 +103,8 @@ export interface PendingOpaqueBaseline {
 
 export interface CaptureOptions {
 	budgetMs?: number;
+	/** Internal test seam for making an absent-evidence verdict reachable. */
+	forcedUnknownReason?: OpaqueUnknownReason;
 	/**
 	 * Read file contents and record sha1 hashes alongside mtime/size. Used on
 	 * the stat-diff path so the post-side diff can detect same-tick same-size
@@ -202,6 +204,9 @@ export async function captureFileStats(
 	root: string,
 	options: CaptureOptions = {},
 ): Promise<CaptureOutcome> {
+	if (options.forcedUnknownReason !== undefined) {
+		return { unknownReason: options.forcedUnknownReason, scannedCount: 0 };
+	}
 	const budgetMs = options.budgetMs ?? 50;
 	try {
 		const walk = await collectSourceFilesWithBudgetAsync(root, {
@@ -250,9 +255,9 @@ export function diffFileStats(
 }
 
 /**
- * Return only paths whose bytes are confirmed different by hashes on both
- * sides. Missing hashes are deliberately omitted: callers deciding authorship
- * must treat unavailable content evidence as unknown, never as changed.
+ * Return paths confirmed different by hashes, plus files absent before and
+ * present after. A missing baseline entry is evidence of creation; a missing
+ * hash on an existing entry remains unknown.
  */
 export function diffFileContent(
 	before: FileStatsSnapshot,
@@ -262,9 +267,10 @@ export function diffFileContent(
 	for (const [key, stat] of after) {
 		const previous = before.get(key);
 		if (
-			previous?.hash !== undefined &&
-			stat.hash !== undefined &&
-			previous.hash !== stat.hash
+			previous === undefined ||
+			(previous.hash !== undefined &&
+				stat.hash !== undefined &&
+				previous.hash !== stat.hash)
 		) {
 			changed.push(key);
 		}

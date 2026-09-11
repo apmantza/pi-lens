@@ -1297,8 +1297,10 @@ export class ReadGuard {
 	/** Record that a recognized mutation had complete evidence but changed no bytes. */
 	recordUnchanged(rawFilePath: string): void {
 		const filePath = this.key(rawFilePath);
-		this.unchangedThisSession.add(filePath);
-		this.writtenThisSession.delete(filePath);
+		// A no-op command is scoped to this command. It must not erase a
+		// confirmed Write from earlier in the session.
+		if (!this.writtenThisSession.has(filePath))
+			this.unchangedThisSession.add(filePath);
 	}
 
 	/**
