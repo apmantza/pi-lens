@@ -129,22 +129,32 @@ function blankCommentsAndStrings(source) {
 	let stringStart = -1;
 	let previousToken = null;
 	let stringPrefix = "";
-	const regexAfter = new Set([
-		"(",
-		"=",
-		",",
-		":",
-		"[",
-		"!",
-		"&",
-		"|",
-		"?",
-		"{",
-		"}",
-		";",
+	// ECMAScript's lexical grammar permits a RegularExpressionLiteral where an
+	// expression starts. Classify the preceding token by whether it can end an
+	// expression; this covers expression-start keywords and punctuators without
+	// maintaining a list of individual regex contexts.
+	const expressionEndingPunctuation = new Set([")", "]", "}", "++", "--"]);
+	const expressionStartKeywords = new Set([
+		"await",
+		"case",
+		"delete",
+		"do",
+		"else",
+		"in",
+		"instanceof",
+		"new",
+		"of",
 		"return",
+		"throw",
 		"typeof",
+		"void",
+		"yield",
 	]);
+	const regexMayStart = (token) => {
+		if (token === null || expressionStartKeywords.has(token)) return true;
+		if (expressionEndingPunctuation.has(token)) return false;
+		return !/[$\w]/.test(token);
+	};
 	const decoded = (value) => value.replace(/\\([\s\S])/g, "$1");
 	for (let index = 0; index < source.length; index += 1) {
 		const char = source[index];
@@ -208,7 +218,7 @@ function blankCommentsAndStrings(source) {
 			result += "  ";
 			index += 1;
 			state = "block-comment";
-		} else if (char === "/" && regexAfter.has(previousToken)) {
+		} else if (char === "/" && regexMayStart(previousToken)) {
 			result += " ";
 			state = "regex";
 		} else if (char === "'" || char === '"' || char === "`") {
@@ -226,6 +236,10 @@ function blankCommentsAndStrings(source) {
 				result += word.slice(1);
 				index = wordEnd - 1;
 				previousToken = word;
+			} else if (char === next && (char === "+" || char === "-")) {
+				result += next;
+				index += 1;
+				previousToken = char + next;
 			} else if (!/\s/.test(char)) previousToken = char;
 		}
 	}
@@ -324,7 +338,6 @@ function recordLocationsFromRuntimeSource(source) {
 const CODE_CITATION = /`([^`\s:]+):((?:~?\d+)(?:-\d+)?)`/g;
 const MASTER_CLAIM =
 	/pre-existing|red on master|also fails on origin\/master|environment-specific/i;
-const headTestCorpusCache = new Map();
 
 function headFileSource(file, options = {}) {
 	if (options.headFiles?.has?.(file)) return options.headFiles.get(file);
@@ -354,9 +367,6 @@ function sourceLines(source) {
 
 function testCorpus(options = {}) {
 	const cwd = options.cwd ?? process.cwd();
-	const cacheKey = `${cwd}:${options.workingTree ? "working" : "head"}`;
-	const cached = headTestCorpusCache.get(cacheKey);
-	if (cached) return cached;
 	let files = [];
 	try {
 		const tracked = String(
@@ -438,7 +448,6 @@ function testCorpus(options = {}) {
 		}
 	}
 	const corpus = { paths, titles };
-	headTestCorpusCache.set(cacheKey, corpus);
 	return corpus;
 }
 

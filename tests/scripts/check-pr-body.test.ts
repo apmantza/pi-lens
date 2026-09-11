@@ -1504,6 +1504,62 @@ describe("head-tree citations and test references", () => {
 		}
 	});
 
+	// Prevent regex literals after expression-start tokens from laundering titles into the census.
+	it("rejects titles found inside a regex after an arrow while keeping declarations", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-arrow-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			writeFileSync(
+				join(fixtureCwd, "tests", "lexer.test.ts"),
+				'const factory = () => /it("fabricated from regex")/;\nit("genuine declaration", () => {});\n',
+			);
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/lexer.test.ts\n" : "";
+			const result = lintPrBody(
+				`${body}\nThe tests are it("fabricated from regex") and it("genuine declaration").`,
+				{ cwd: fixtureCwd, git },
+			);
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain(
+				"PR body test reference is missing under tests/: fabricated from regex",
+			);
+			expect(result.errors).not.toContain(
+				"PR body test reference is missing under tests/: genuine declaration",
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
+	// Prevent a mutable working-tree corpus from accepting titles removed after a warm lint.
+	it("rebuilds the test corpus after a working-tree file changes", () => {
+		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-corpus-edit-"));
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			const file = join(fixtureCwd, "tests", "mutable.test.ts");
+			writeFileSync(file, 'it("removed title", () => {});\n');
+			const git = (args: string[]) =>
+				args[0] === "ls-files" ? "tests/mutable.test.ts\n" : "";
+			expect(
+				lintPrBody(`${body}\nThe test is it("removed title").`, {
+					cwd: fixtureCwd,
+					git,
+				}),
+			).toEqual({ valid: true, errors: [] });
+			writeFileSync(file, 'it("replacement title", () => {});\n');
+			const result = lintPrBody(`${body}\nThe test is it("removed title").`, {
+				cwd: fixtureCwd,
+				git,
+			});
+			expect(result.valid).toBe(false);
+			expect(result.errors).toContain(
+				"PR body test reference is missing under tests/: removed title",
+			);
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
+	});
+
 	it("harvests a title containing sixty backslashes", () => {
 		const fixtureCwd = mkdtempSync(join(tmpdir(), "pi-lens-lexer-"));
 		const title = `${"\\".repeat(60)} title`;
