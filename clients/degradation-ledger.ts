@@ -113,6 +113,7 @@ export type DegradationKind =
 	 * degradation gets. Subject is `<hook>:<label>`, same as above, so the two
 	 * causes stay separable in `pilens_health`.
 	 */
+	| "bash_view_clipped"
 	| "biome-explain-unavailable"
 	| "bus-stale"
 	| "cache-usage-attribution-stale"

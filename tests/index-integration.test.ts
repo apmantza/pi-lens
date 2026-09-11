@@ -1823,7 +1823,7 @@ describe("index.ts integration", () => {
 	);
 
 	it(
-		"tool_call records full-file reads from read.path with full line coverage",
+		"tool_call defers read registration until the host result",
 		async () => {
 			const recordRead = vi.fn();
 			const mockReadGuard = {
@@ -1912,16 +1912,9 @@ describe("index.ts integration", () => {
 				{ cwd: tmpDir },
 			);
 
-			expect(recordRead).toHaveBeenCalledTimes(1);
-			expect(recordRead).toHaveBeenCalledWith(
-				expect.objectContaining({
-					filePath: sourceFile,
-					requestedOffset: 1,
-					requestedLimit: 6,
-					effectiveOffset: 1,
-					effectiveLimit: 6,
-				}),
-			);
+			// Recurrence #2802: the requested range is not proof of what the
+			// native host read delivered. The paired tool_result registers it.
+			expect(recordRead).not.toHaveBeenCalled();
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

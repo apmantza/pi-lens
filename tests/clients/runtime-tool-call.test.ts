@@ -205,7 +205,7 @@ describe("handleToolCall", () => {
 		expect(recordRead).not.toHaveBeenCalled();
 	});
 
-	it("records a read-guard read for a full-file read and LSP-warms it", async () => {
+	it("defers native read registration until the host returns it and LSP-warms it", async () => {
 		touchFileMock.mockClear();
 		const env = setupTestEnvironment("pi-lens-runtime-tool-call-read-");
 		try {
@@ -226,12 +226,9 @@ describe("handleToolCall", () => {
 				}),
 			);
 
-			expect(recordRead).toHaveBeenCalledWith(
-				expect.objectContaining({
-					filePath,
-					effectiveOffset: 1,
-				}),
-			);
+			// Recurrence #2802: tool_call sees the requested range, not the range
+			// the host actually returned. Registration belongs to tool_result.
+			expect(recordRead).not.toHaveBeenCalled();
 			expect(touchFileMock).toHaveBeenCalled();
 		} finally {
 			env.cleanup();

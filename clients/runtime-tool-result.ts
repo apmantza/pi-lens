@@ -9,6 +9,7 @@ import {
 	recoverOpaqueChangesViaGit,
 } from "./opaque-mutation-scan.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { detectFileKind } from "./file-kinds.js";
 import {
 	extractReadPathsFromCommand,
 	extractDeletedPathsFromCommand,
@@ -62,6 +63,7 @@ import {
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
 } from "./read-guard-logger.js";
+import { countFileLines } from "./read-guard-tool-lines.js";
 import type { PiLensFlagSource } from "./lens-config.js";
 import type { EditToolDetails } from "@earendil-works/pi-coding-agent";
 import type { LSPShutdownOptions } from "./lsp/client.js";
@@ -88,6 +90,7 @@ import { getActiveSessionId } from "./session-lifecycle.js";
 import { requestBootstrapClients } from "./bootstrap.js";
 import { bounded } from "./deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 
 const AUTHORITATIVE_CONTENT_MAX_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 
@@ -1385,7 +1388,53 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			}
 		}
 		if (event.isError !== true && !getFlag("no-read-guard")) {
-			for (const span of extractReadPathsFromCommand(command, workspaceRoot)) {
+			const truncation = (
+				event.details as {
+					truncation?: {
+						truncated?: boolean;
+						totalLines?: number;
+						outputLines?: number;
+					};
+				}
+			)?.truncation;
+			const parsedSpans = extractReadPathsFromCommand(command, workspaceRoot);
+			const spans = parsedSpans.flatMap((span) => {
+				if (
+					truncation?.truncated === true &&
+					truncation.totalLines === span.offset + span.limit - 1 &&
+					typeof truncation.outputLines === "number"
+				) {
+					const shown = Math.min(truncation.outputLines, span.limit);
+					return shown > 0
+						? [
+								{
+									...span,
+									offset: span.offset + span.limit - shown,
+									limit: shown,
+								},
+							]
+						: [];
+				}
+				if (truncation === undefined && span.offset === 1) {
+					const output = event.content
+						.map((part) => part.text ?? "")
+						.join("\n");
+					const notice = output.indexOf("\n\n[Showing ");
+					const shownText = notice >= 0 ? output.slice(0, notice) : output;
+					const shownLines =
+						shownText === "" ? 0 : shownText.split("\n").length;
+					if (shownLines > 0 && shownLines < span.limit) {
+						recordDegradationOnce({
+							kind: "bash_view_clipped",
+							subject: span.filePath,
+							reason: "bash view result omitted its host truncation range",
+						});
+						return [{ ...span, limit: shownLines }];
+					}
+				}
+				return [span];
+			});
+			for (const span of spans) {
 				if (isExternalOrVendorFile(span.filePath, workspaceRoot)) continue;
 				if (isPathIgnoredByProject(span.filePath, workspaceRoot, false))
 					continue;
@@ -1467,6 +1516,65 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				projectRoot: workspaceRoot,
 				turnIndex: runtime.turnIndex,
 				writeIndex: runtime.peekWriteIndex(),
+			});
+		}
+	}
+
+	// Native read results are the authoritative read boundary. The tool_call
+	// input can request past EOF, and the host can cap bytes or lines before the
+	// result reaches the model. Register only the delivered range (#2802).
+	if (
+		deps.readGuard &&
+		event.toolName === "read" &&
+		event.isError !== true &&
+		filePath &&
+		!getFlag("no-read-guard") &&
+		!isExternalOrVendorFile(filePath, workspaceRoot)
+	) {
+		const input = event.input as { offset?: number; limit?: number };
+		const requestedOffset = input.offset ?? 1;
+		const requestedLimit = input.limit;
+		const truncation = (
+			event.details as { truncation?: { outputLines?: number } } | undefined
+		)?.truncation;
+		const available = Math.max(
+			0,
+			countFileLines(filePath) - requestedOffset + 1,
+		);
+		const deliveredLimit = Math.min(
+			available,
+			truncation?.outputLines ?? requestedLimit ?? available,
+		);
+		if (deliveredLimit > 0) {
+			logReadGuardEvent({
+				event: "read_pattern",
+				sessionId: runtime.telemetrySessionId,
+				filePath,
+				requestedOffset,
+				requestedLimit: requestedLimit ?? deliveredLimit,
+				effectiveOffset: requestedOffset,
+				effectiveLimit: deliveredLimit,
+				metadata: {
+					totalLines: countFileLines(filePath),
+					isPartial: deliveredLimit < available,
+					fileKind: detectFileKind(filePath) ?? "unknown",
+					fractionRead:
+						available > 0
+							? Math.round((deliveredLimit / available) * 100) / 100
+							: 1,
+					expandedByTs: false,
+				},
+			});
+			deps.readGuard.recordRead({
+				filePath,
+				requestedOffset,
+				requestedLimit: requestedLimit ?? deliveredLimit,
+				effectiveOffset: requestedOffset,
+				effectiveLimit: deliveredLimit,
+				expandedByLsp: false,
+				turnIndex: runtime.turnIndex,
+				writeIndex: runtime.peekWriteIndex(),
+				timestamp: Date.now(),
 			});
 		}
 	}

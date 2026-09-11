@@ -21,6 +21,10 @@ import {
 	resetVerifiedPathAttributionGuessCount,
 } from "../../clients/path-attribution-telemetry.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createBashToolDefinition,
+	createReadToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
 const readFileSyncSpy = vi.hoisted(() => vi.fn());
 vi.mock("node:fs", async (importOriginal) => {
@@ -61,6 +65,107 @@ beforeEach(() => {
 });
 
 describe("bash grep searchReads registration", () => {
+	it("registers the native read range the host delivered at EOF", async () => {
+		const env = setupTestEnvironment("pi-lens-2802-native-read-eof-");
+		try {
+			const filePath = path.join(env.tmpDir, "short.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 120 }, (_, i) => `line${i + 1}`).join("\n"),
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const recordRead = vi.spyOn(runtime.readGuard, "recordRead");
+			const readTool = createReadToolDefinition(env.tmpDir);
+			const result = await readTool.execute(
+				"2802",
+				{ path: filePath, offset: 1, limit: 400 },
+				undefined,
+				undefined,
+				{ cwd: env.tmpDir } as never,
+			);
+
+			await handleToolResult({
+				event: {
+					toolName: "read",
+					input: { path: filePath, offset: 1, limit: 400 },
+					content: result.content,
+					details: result.details,
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as never);
+
+			expect(recordRead).toHaveBeenCalledWith(
+				expect.objectContaining({
+					filePath,
+					requestedLimit: 400,
+					effectiveOffset: 1,
+					effectiveLimit: 120,
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("registers only the lines shown by the real bash host cap", async () => {
+		const env = setupTestEnvironment("pi-lens-2802-bash-cap-");
+		try {
+			const filePath = path.join(env.tmpDir, "large.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 3000 }, (_, i) => `line${i + 1}`).join("\n"),
+			);
+			const bashTool = createBashToolDefinition(env.tmpDir, {
+				exposeSessionEnvironment: false,
+			});
+			const result = await bashTool.execute(
+				"2802",
+				{ command: `cat ${filePath}` },
+				undefined,
+				undefined,
+				{ cwd: env.tmpDir } as never,
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const recordRead = vi.spyOn(runtime.readGuard, "recordRead");
+
+			await handleToolResult({
+				event: {
+					toolName: "bash",
+					input: { command: `cat ${filePath}` },
+					content: result.content,
+					details: result.details,
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as never);
+
+			expect(recordRead).toHaveBeenCalledWith(
+				expect.objectContaining({
+					filePath,
+					effectiveOffset: 1001,
+					effectiveLimit: 2000,
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("invalidates formatter selection through handleToolResult", async () => {
 		const { runPipeline } = await import("../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({

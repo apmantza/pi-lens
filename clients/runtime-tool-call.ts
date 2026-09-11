@@ -861,14 +861,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	const readInput = getReadToolInput(toolName, event.input);
 	const requestedReadOffset = readInput?.offset ?? 1;
 	const requestedReadLimit = readInput?.limit;
-	let effectiveReadOffset = requestedReadOffset;
 	let effectiveReadLimit = getEffectiveReadLimit(filePath, readInput);
 
 	// --- Opportunistic read expansion via tree-sitter ---
 	// For partial reads (small limit, not from line 1), find the enclosing
 	// symbol and expand the read range to cover it. This gives the read guard
 	// accurate symbol-level coverage without requiring an LSP server.
-	let expandedByLsp = false;
 	let enclosingSymbol:
 		| {
 				name: string;
@@ -909,9 +907,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			if (expansion) {
 				readInput.offset = expansion.newOffset;
 				readInput.limit = expansion.newLimit;
-				effectiveReadOffset = expansion.newOffset;
 				effectiveReadLimit = expansion.newLimit;
-				expandedByLsp = true;
 				let enriched = false;
 				let enrichedAncestry = expansion.ancestry;
 				const lspSymbols = await getOpenDocumentSymbols(filePath);
@@ -979,43 +975,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// --- Read-Before-Edit Guard: record reads ---
-	if (toolName === "read" && filePath && !isExternalOrVendor) {
-		const totalLines = countFileLines(filePath);
-		const deliveredLimit = effectiveReadLimit ?? 1;
-		logToolReadGuardEvent({
-			event: "read_pattern",
-			sessionId: runtime.telemetrySessionId,
-			filePath,
-			requestedOffset: requestedReadOffset,
-			requestedLimit: requestedReadLimit ?? deliveredLimit,
-			effectiveOffset: effectiveReadOffset,
-			effectiveLimit: deliveredLimit,
-			metadata: {
-				totalLines,
-				isPartial:
-					requestedReadLimit != null && requestedReadLimit < totalLines,
-				fileKind: detectFileKind(filePath) ?? "unknown",
-				fractionRead:
-					totalLines > 0
-						? Math.round((deliveredLimit / totalLines) * 100) / 100
-						: 1,
-				expandedByTs: expandedByLsp,
-			},
-		});
-		runtime.readGuard.recordRead({
-			filePath,
-			requestedOffset: requestedReadOffset,
-			requestedLimit: requestedReadLimit ?? deliveredLimit,
-			effectiveOffset: effectiveReadOffset,
-			effectiveLimit: deliveredLimit,
-			expandedByLsp,
-			enclosingSymbol,
-			turnIndex: runtime.turnIndex,
-			writeIndex: runtime.peekWriteIndex(),
-			timestamp: Date.now(),
-		});
-	}
+	// Native read registration is deferred to tool_result. The host may clamp a
+	// requested range at EOF or its output cap, so tool_call cannot know what the
+	// model actually saw (#2802 probe 3).
 
 	// Record complexity baseline for historical tracking (booboo/tdi).
 	// Not shown inline - just captured for delta analysis.
