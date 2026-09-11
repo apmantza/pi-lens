@@ -236,7 +236,7 @@ const timingSensitiveInclude = [
 	// membership from the process.cpuUsage marker and fails if it is absent.
 	//
 	// Read the `maxWorkers: 2` note below together with this entry. That note
-	// says the lane's heavy neighbour is gone; this file is a NEW one — three
+	// rests the cap on the remaining members' own measurements; this file is a NEW one — three
 	// cases that busy-spin a core for ~4.8s in total, which is exactly the
 	// shape that starved a sibling's sampler at cap 2 before. Measured rather
 	// than assumed when this landed: the full lane ran clean 4/4 at cap 2 with
