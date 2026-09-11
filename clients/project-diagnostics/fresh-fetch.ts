@@ -88,7 +88,7 @@ import type { CacheManager } from "../cache-manager.js";
 import type { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { applyDispositionsMultiFile } from "../diagnostic-dispositions.js";
 import { getKnipIgnorePatterns } from "../file-utils.js";
-import { isAtOrAboveHomeDir } from "../path-utils.js";
+import { isAtOrAboveHomeDir, realpathOrResolve } from "../path-utils.js";
 import { GitleaksClient } from "../gitleaks-client.js";
 import { GovulncheckClient } from "../govulncheck-client.js";
 import {
@@ -241,7 +241,7 @@ export async function fetchFreshProjectDiagnostics(
 	signal?: AbortSignal,
 	options: { homeDir?: string; runtime?: RuntimeCoordinator } = {},
 ): Promise<FreshProjectDiagnosticsResult> {
-	const analysisRoot = path.resolve(cwd);
+	const analysisRoot = realpathOrResolve(cwd);
 	// #747: refuse to spawn any heavyweight analyzer when the analysis root is
 	// at — or above — the home directory (the #250/#253 escape class). Every
 	// analyzer here treats `analysisRoot` as a whole tree to walk; from $HOME
@@ -322,27 +322,16 @@ export async function fetchFreshProjectDiagnostics(
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
 			if (
-				id === "opengrep" &&
 				analysis?.analyzedFiles !== undefined &&
 				analysis.analyzedFiles.length > 0
 			) {
-				const root = (() => {
-					try {
-						return fs.realpathSync(analysisRoot);
-					} catch {
-						return path.resolve(analysisRoot);
-					}
-				})();
+				const root = realpathOrResolve(analysisRoot);
 				authoritativeCoverage.push({
 					runnerId: id,
 					root,
 					files: new Set(
 						analysis.analyzedFiles.map((file) => {
-							try {
-								return fs.realpathSync(file);
-							} catch {
-								return path.resolve(file);
-							}
+							return realpathOrResolve(file);
 						}),
 					),
 				});
@@ -368,10 +357,15 @@ export async function fetchFreshProjectDiagnostics(
 
 	function recordFailed(
 		id: string,
-		result: { summary?: string } | object,
+		result:
+			| { summary?: string; reason?: FailedProjectAnalyzer["reason"] }
+			| object,
 	): void {
 		failed.push({
 			id,
+			...("reason" in result && result.reason !== undefined
+				? { reason: result.reason }
+				: {}),
 			summary:
 				"summary" in result && typeof result.summary === "string"
 					? result.summary

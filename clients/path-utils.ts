@@ -146,6 +146,16 @@ export function normalizeFilePath(filePath: string): string {
 	}
 }
 
+/** Resolve a filesystem identity once, retaining a usable absolute fallback. */
+export function realpathOrResolve(filePath: string): string {
+	const resolved = path.resolve(filePath);
+	try {
+		return realpathSync(resolved);
+	} catch {
+		return resolved;
+	}
+}
+
 /**
  * Normalize a logged `filePath`/`cwd` value, but ONLY when it is already a
  * fully-qualified path (#2219, the #2141 class's sibling loggers). Several
