@@ -97,10 +97,7 @@ import {
 } from "../project-trust.js";
 import { TrivyClient } from "../trivy-client.js";
 import { reasonFromAvailabilityVerdict } from "./extractors.js";
-import {
-	deadCodeResultToProjectDiagnostics,
-	deadCodeRunnerId,
-} from "./runner-adapters/dead-code.js";
+import { deadCodeResultToProjectDiagnostics } from "./runner-adapters/dead-code.js";
 import { gitleaksResultToProjectDiagnostics } from "./runner-adapters/gitleaks.js";
 import { govulncheckResultToProjectDiagnostics } from "./runner-adapters/govulncheck.js";
 import { jscpdResultToProjectDiagnostics } from "./runner-adapters/jscpd.js";
@@ -199,8 +196,7 @@ export interface FreshProjectDiagnosticsResult {
 export interface ProjectRunnerCoverage {
 	runnerId: string;
 	root: string;
-	files?: string[];
-	complete: boolean;
+	files: ReadonlySet<string>;
 }
 
 /** The heavyweight analyzers surfaced in `lens_diagnostics mode=full` — this is
@@ -321,17 +317,24 @@ export async function fetchFreshProjectDiagnostics(
 		adapted: ProjectDiagnostic[],
 		elapsedMs: number,
 		analysedRoot: boolean,
-		coverageRunnerId = id,
 		analysis?: { analyzedFiles?: string[] },
 	): void {
 		if (analysedRoot) {
 			pushUnique(analyzed, id);
-			if (analysis?.analyzedFiles !== undefined) {
+			if (id === "opengrep" && analysis?.analyzedFiles !== undefined) {
+				const root = fs.realpathSync.native(analysisRoot);
 				authoritativeCoverage.push({
-					runnerId: coverageRunnerId,
-					root: analysisRoot,
-					files: analysis.analyzedFiles,
-					complete: true,
+					runnerId: id,
+					root,
+					files: new Set(
+						analysis.analyzedFiles.map((file) => {
+							try {
+								return fs.realpathSync.native(file);
+							} catch {
+								return path.resolve(file);
+							}
+						}),
+					),
 				});
 			}
 		}
@@ -398,7 +401,6 @@ export async function fetchFreshProjectDiagnostics(
 				knipIssuesToProjectDiagnostics(analysisRoot, result.issues ?? []),
 				Date.now() - startMs,
 				true,
-				undefined,
 				result,
 			);
 		}),
@@ -446,7 +448,6 @@ export async function fetchFreshProjectDiagnostics(
 				jscpdResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				true,
-				undefined,
 				result,
 			);
 		}),
@@ -473,7 +474,6 @@ export async function fetchFreshProjectDiagnostics(
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),
 				Date.now() - startMs,
 				result.analyzed === true,
-				undefined,
 				result,
 			);
 		}),
@@ -518,7 +518,6 @@ export async function fetchFreshProjectDiagnostics(
 				gitleaksResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
-				undefined,
 				result,
 			);
 		}),
@@ -564,7 +563,6 @@ export async function fetchFreshProjectDiagnostics(
 				govulncheckResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
-				undefined,
 				result,
 			);
 		}),
@@ -608,7 +606,6 @@ export async function fetchFreshProjectDiagnostics(
 				opengrepResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
-				undefined,
 				result,
 			);
 		}),
@@ -646,7 +643,6 @@ export async function fetchFreshProjectDiagnostics(
 				trivyResultToProjectDiagnostics(analysisRoot, result),
 				Date.now() - startMs,
 				result.analyzed === true,
-				undefined,
 				result,
 			);
 		}),
@@ -688,7 +684,6 @@ export async function fetchFreshProjectDiagnostics(
 						adapted,
 						Date.now() - startMs,
 						result.analyzed === true,
-						deadCodeRunnerId(result.language),
 						result,
 					);
 				}),

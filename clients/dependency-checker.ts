@@ -1114,7 +1114,6 @@ export class DependencyChecker {
 				circular,
 				count: circular.length,
 				analyzed: true,
-				analyzedFiles: Object.keys(data).map((file) => path.resolve(file)),
 			};
 		} catch (err: any) {
 			this.log(`Scan error: ${err.message}`);

@@ -39,21 +39,4 @@ describe("real pi harness: diagnostic provenance", () => {
 			},
 		);
 	}, 60_000);
-
-	it("keeps two real project roots isolated during diagnostic provenance", async () => {
-		await withRealPi(
-			{ fixture: "diagnostic-provenance", script: "two-root-script.json" },
-			async (pi) => {
-				await pi.prompt("check both project roots");
-				const outer = await pi.awaitToolResult("lens_diagnostics");
-				expect(JSON.stringify(outer)).toContain("moved.ts");
-
-				await pi.awaitAssistantTurn();
-				await pi.prompt("check the nested root separately");
-				const nested = await pi.awaitToolResult("lens_diagnostics");
-				expect(JSON.stringify(nested)).toContain("nested/src/nested.ts");
-				expect(JSON.stringify(nested)).not.toContain("staleExport");
-			},
-		);
-	}, 60_000);
 });

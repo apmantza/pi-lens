@@ -1470,11 +1470,11 @@ Workspace diagnostic cache entries reuse their `scannedAt` and `contentHash` fre
 
 Project-runner retirement authority is recorded as `ProjectRunnerCoverage` on
 `FreshProjectDiagnosticsResult`, keyed by the runner id, analyzed root, and
-complete file set. Only clients whose parsed report explicitly supplies a
-scanned-path set populate `analyzedFiles`; today these are opengrep's
-`paths.scanned` and madge's graph keys. Other clients emit no file evidence, so
-`fresh-fetch.ts` transports the signal without walking the project or
-re-creating runner policies. `runnerRetirementDecision` in
+scanned file set. Only clients whose parsed report explicitly supplies a
+scanned-path set populate `analyzedFiles`; on this seam that is opengrep's
+`paths.scanned`. Other clients emit no file evidence, so `fresh-fetch.ts`
+transports the signal without walking the project or re-creating runner
+policies. `runnerRetirementDecision` in
 `tools/lens-diagnostics.ts` uses that coverage for filtering and
 `runner_authoritative_widget_retire`;
 the `analyzed` id list remains a conservative fallback only when coverage is

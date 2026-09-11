@@ -1435,8 +1435,7 @@ describe("lens_diagnostics mode=full", () => {
 				{
 					runnerId: "opengrep",
 					root: "/proj",
-					files: ["/proj/src/clean.py"],
-					complete: true,
+					files: new Set(["/proj/src/clean.py"]),
 				},
 			],
 		});
@@ -1448,6 +1447,10 @@ describe("lens_diagnostics mode=full", () => {
 		expect(getRecentLoggedPhases().map((entry) => entry.phase)).toContain(
 			"runner_coverage_retired",
 		);
+		const retirement = getRecentLoggedPhases().find(
+			(entry) => entry.phase === "runner_authoritative_widget_retire",
+		);
+		expect(retirement?.metadata?.runners).toBe("opengrep");
 		_setRecentPhasesForTest([]);
 		await run(
 			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
@@ -1458,7 +1461,7 @@ describe("lens_diagnostics mode=full", () => {
 		);
 	});
 
-	it("retires only findings covered by a complete runner root", async () => {
+	it("retires only findings covered by an opengrep scanned path", async () => {
 		mockSummaries.push(
 			sum(
 				"/proj/nested/src.ts",
@@ -1468,8 +1471,8 @@ describe("lens_diagnostics mode=full", () => {
 						{
 							severity: "warning",
 							message: "nested",
-							tool: "dead-code",
-							rule: "dead-code:export",
+							tool: "opengrep",
+							rule: "opengrep:export",
 						},
 					],
 				},
@@ -1482,8 +1485,8 @@ describe("lens_diagnostics mode=full", () => {
 						{
 							severity: "warning",
 							message: "other root",
-							tool: "dead-code",
-							rule: "dead-code:export",
+							tool: "opengrep",
+							rule: "opengrep:export",
 						},
 					],
 				},
@@ -1492,11 +1495,15 @@ describe("lens_diagnostics mode=full", () => {
 		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 			diagnostics: [],
 			runners: [],
-			analyzed: ["dead-code"],
+			analyzed: ["opengrep"],
 			cold: [],
 			timings: {},
 			authoritativeCoverage: [
-				{ runnerId: "dead-code", root: "/proj/nested", complete: true },
+				{
+					runnerId: "opengrep",
+					root: "/proj/nested",
+					files: new Set(["/proj/nested/src.ts"]),
+				},
 			],
 		});
 		const result = await run(
@@ -1518,8 +1525,8 @@ describe("lens_diagnostics mode=full", () => {
 						{
 							severity: "warning",
 							message: "inside-set",
-							tool: "jscpd",
-							rule: "jscpd:duplicate",
+							tool: "opengrep",
+							rule: "opengrep:duplicate",
 						},
 					],
 				},
@@ -1532,8 +1539,8 @@ describe("lens_diagnostics mode=full", () => {
 						{
 							severity: "warning",
 							message: "outside-set",
-							tool: "jscpd",
-							rule: "jscpd:duplicate",
+							tool: "opengrep",
+							rule: "opengrep:duplicate",
 						},
 					],
 				},
@@ -1542,15 +1549,14 @@ describe("lens_diagnostics mode=full", () => {
 		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
 			diagnostics: [],
 			runners: [],
-			analyzed: ["jscpd"],
+			analyzed: ["opengrep"],
 			cold: [],
 			timings: {},
 			authoritativeCoverage: [
 				{
-					runnerId: "jscpd",
+					runnerId: "opengrep",
 					root: "/proj",
-					files: ["/proj/inside-set.ts"],
-					complete: true,
+					files: new Set(["/proj/inside-set.ts"]),
 				},
 			],
 		});
@@ -1561,95 +1567,6 @@ describe("lens_diagnostics mode=full", () => {
 		const text = String(result.content[0].text);
 		expect(text).not.toContain("inside-set");
 		expect(text).toContain("outside-set");
-	});
-
-	it("keeps partial runner findings and preserves the id fallback boundary", async () => {
-		mockSummaries.push(
-			sum(
-				"/proj/partial.ts",
-				{ warnings: 1 },
-				{
-					diagnostics: [
-						{
-							severity: "warning",
-							message: "partial",
-							tool: "knip",
-							rule: "knip:file",
-						},
-					],
-				},
-			),
-		);
-		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
-			diagnostics: [],
-			runners: [],
-			analyzed: ["knip"],
-			cold: [],
-			timings: {},
-			authoritativeCoverage: [
-				{ runnerId: "knip", root: "/proj", complete: false },
-			],
-		});
-		const result = await run(
-			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
-			{ mode: "full", refreshRunners: "cached" },
-		);
-		expect(String(result.content[0].text)).toContain("partial");
-	});
-
-	it("does not let one dead-code language retire another language finding", async () => {
-		mockSummaries.push(
-			sum(
-				"/proj/python.py",
-				{ warnings: 1 },
-				{
-					diagnostics: [
-						{
-							severity: "warning",
-							message: "python dead code",
-							tool: "dead-code",
-							rule: "dead-code:file",
-						},
-					],
-				},
-			),
-			sum(
-				"/proj/rust.rs",
-				{ warnings: 1 },
-				{
-					diagnostics: [
-						{
-							severity: "warning",
-							message: "rust dead code",
-							tool: "dead-code",
-							rule: "dead-code:file",
-						},
-					],
-				},
-			),
-		);
-		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
-			diagnostics: [],
-			runners: [],
-			analyzed: ["dead-code"],
-			cold: [],
-			timings: {},
-			authoritativeCoverage: [
-				{
-					runnerId: "dead-code",
-					root: "/proj",
-					files: ["/proj/python.py"],
-					complete: true,
-				},
-			],
-		});
-		const result = await run(
-			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
-			{ mode: "full", refreshRunners: "cached" },
-		);
-		const text = String(result.content[0].text);
-		expect(text).not.toContain("python dead code");
-		expect(text).toContain("rust dead code");
 	});
 
 	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {

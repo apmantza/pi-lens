@@ -176,7 +176,7 @@ export function getLastLoggedPhase():
  */
 export function getRecentLoggedPhases(
 	limit = RECENT_PHASE_CAP,
-): Array<{ phase: string; ts: string }> {
+): Array<{ phase: string; ts: string; metadata?: Record<string, unknown> }> {
 	return recentPhases.slice(0, Math.min(limit, RECENT_PHASE_CAP));
 }
 
@@ -797,10 +797,10 @@ export function logLatency(entry: LatencyEntry): void {
 		entry.phase &&
 		!LAST_PHASE_EXCLUDED.has(entry.phase)
 	) {
-		recentPhases = [{ phase: entry.phase, ts }, ...recentPhases].slice(
-			0,
-			RECENT_PHASE_CAP,
-		);
+		recentPhases = [
+			{ phase: entry.phase, ts, metadata: entry.metadata },
+			...recentPhases,
+		].slice(0, RECENT_PHASE_CAP);
 	}
 	if (isTestMode()) {
 		return;

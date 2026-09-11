@@ -10,6 +10,8 @@ import {
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
 import { RuntimeCoordinator } from "../../../clients/runtime-coordinator.js";
+import { OpengrepClient } from "../../../clients/opengrep-client.js";
+import * as safeSpawn from "../../../clients/safe-spawn.js";
 import { removeTempDirSync } from "../test-utils.js";
 import {
 	_resetStateCacheForTests,
@@ -1083,12 +1085,35 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect.anything(),
 		);
 		expect(result.runners).toContain("dead-code");
-		expect(result.authoritativeCoverage).not.toContainEqual(
-			expect.objectContaining({
-				runnerId: "dead-code-python",
-				files: expect.anything(),
-			}),
+		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
+	it("records only the real opengrep scanned-path evidence", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep 1.25.0 --json on a clean fixture.
+				fs.writeFileSync(
+					report,
+					'{"version":"1.25.0","results":[],"errors":[],"paths":{"scanned":["src/a.py"]},"interfile_languages_used":[],"skipped_rules":[]}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
 		);
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		const coverage = result.authoritativeCoverage ?? [];
+		expect(coverage).toHaveLength(1);
+		expect(coverage[0].runnerId).toBe("opengrep");
+		expect(coverage[0].files).toEqual(new Set([path.resolve(tmp, "src/a.py")]));
 	});
 
 	it("does not cache a dead-code result that did not analyse the root (#2887)", async () => {

@@ -1525,7 +1525,7 @@ function runnerIdOf(diagnostic: WidgetDiagnostic): string {
 	return diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "";
 }
 
-type RunnerRetirementDecision = "retire" | "keep" | "keep-with-record";
+type RunnerRetirementDecision = "retire" | "keep";
 
 /**
  * The one project-runner retirement decision. Coverage is authoritative when
@@ -1544,42 +1544,23 @@ export function runnerRetirementDecision(
 	if (coverage.length === 0) {
 		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
 	}
-	const realpathOrResolved = (candidate: string): string => {
+	const realFilePath = (() => {
 		try {
-			return fsSync.realpathSync(candidate);
+			return fsSync.realpathSync(filePath);
 		} catch {
-			return path.resolve(candidate);
+			return path.resolve(filePath);
 		}
-	};
-	const realFilePath = realpathOrResolved(filePath);
-	let incomplete = false;
-	let incompleteRoot: string | undefined;
+	})();
 	for (const entry of coverage) {
-		const root = realpathOrResolved(entry.root);
+		const root = entry.root;
 		const relative = path.relative(root, realFilePath);
 		const underRoot =
 			relative === "" ||
 			(!relative.startsWith("..") && !path.isAbsolute(relative));
 		if (!underRoot) continue;
-		if (!entry.complete) {
-			incomplete = true;
-			incompleteRoot = entry.root;
-			continue;
-		}
-		if (!entry.files) return "retire";
-		if (entry.files.some((file) => realpathOrResolved(file) === realFilePath)) {
+		if (entry.files.has(realFilePath)) {
 			return "retire";
 		}
-		// A complete file set proves that this file was not analysed. Keep the
-		// finding without classifying the result as a partial scan.
-	}
-	if (incomplete) {
-		recordDegradationOnce({
-			kind: "runner-authoritative-widget-partial",
-			subject: `${runnerId}:${incompleteRoot ?? "unknown"}`,
-			reason: "runner coverage is incomplete; retained findings were kept",
-		});
-		return "keep-with-record";
 	}
 	return "keep";
 }
@@ -2414,8 +2395,7 @@ async function formatFullMode(
 				coverage: authoritativeRunnerCoverage.map((entry) => ({
 					runnerId: entry.runnerId,
 					root: entry.root,
-					files: entry.files?.length ?? 0,
-					complete: entry.complete,
+					files: entry.files.size,
 				})),
 			},
 		});

@@ -122,7 +122,7 @@ describe("DependencyChecker madge resolution (#766)", () => {
 		);
 	}
 
-	it("real client transports graph keys as analyzedFiles (#2887)", async () => {
+	it("real client does not claim coverage from madge cycle output (#2887)", async () => {
 		const { DependencyChecker } =
 			await import("../../clients/dependency-checker.js");
 		writeSource("a.ts", ["./b.js"]);
@@ -139,15 +139,15 @@ describe("DependencyChecker madge resolution (#766)", () => {
 			return {
 				status: 0,
 				error: undefined,
-				stdout: JSON.stringify({
-					[path.join(tmp, "a.ts")]: [path.join(tmp, "b.js")],
-				}),
+				// Captured from madge 8 with --circular --json for an acyclic
+				// project: the output is an array of cycles, not a graph object.
+				stdout: "[]",
 				stderr: "",
 			};
 		});
 		const result = await new DependencyChecker().scanProject(tmp);
 		expect(result.analyzed).toBe(true);
-		expect(result.analyzedFiles).toEqual([path.join(tmp, "a.ts")]);
+		expect(result.analyzedFiles).toBeUndefined();
 	});
 
 	it("keeps a project-pinned binary winning (#375), without consulting the installer", async () => {

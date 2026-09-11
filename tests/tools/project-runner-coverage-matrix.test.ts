@@ -13,7 +13,7 @@ const diagnostic = (tool: string): WidgetDiagnostic => ({
 	rule: `${tool}:finding`,
 });
 const covered = (runnerId: string, files?: string[]) => [
-	{ runnerId, root: "/proj", ...(files ? { files } : {}), complete: true },
+	{ runnerId, root: "/proj", files: new Set(files ?? []) },
 ];
 
 describe("project runner coverage state space (#2887)", () => {
@@ -30,10 +30,10 @@ describe("project runner coverage state space (#2887)", () => {
 	it("coverage state: scanned-set ok fresh keeps", () => {
 		expect(
 			runnerRetirementDecision(
-				diagnostic("madge"),
+				diagnostic("opengrep"),
 				"/proj/clean.ts",
-				new Set(["madge"]),
-				covered("madge", ["/proj/other.ts"]),
+				new Set(["opengrep"]),
+				covered("opengrep", ["/proj/other.ts"]),
 			),
 		).toBe("keep");
 	});
@@ -50,7 +50,7 @@ describe("project runner coverage state space (#2887)", () => {
 	it("coverage state: scanned-set error fresh keeps", () => {
 		expect(
 			runnerRetirementDecision(
-				diagnostic("madge"),
+				diagnostic("opengrep"),
 				"/proj/clean.ts",
 				undefined,
 				undefined,
@@ -114,8 +114,7 @@ describe("project runner coverage state space (#2887)", () => {
 						{
 							runnerId: "opengrep",
 							root: real,
-							files: [path.join(real, "a.py")],
-							complete: true,
+							files: new Set([fs.realpathSync(path.join(real, "a.py"))]),
 						},
 					],
 				),
