@@ -156,6 +156,88 @@ describe("tree-sitter security gap rules", () => {
 			expect(matches).toHaveLength(1);
 		});
 
+		it("binds the package signal to the receiver and covers documented sinks", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import mysql from "mysql2/promise";',
+					'import { Pool } from "pg";',
+					'import { PrismaClient } from "@prisma/client/edge";',
+					'import Database from "better-sqlite3";',
+					'import knex from "knex";',
+					"const prisma = new PrismaClient();",
+					"const db = new Database();",
+					"const pool = new Pool();",
+					"mysql.execute(`not prose ${value}`);",
+					"pool.query(`not prose ${value}`);",
+					"prisma.$queryRawUnsafe(`not prose ${value}`);",
+					"knex.raw(`not prose ${value}`);",
+					"db.prepare(`not prose ${value}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(5);
+		});
+
+		it("keeps imported database files quiet for unrelated command and HTTP templates", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					'import { exec } from "node:child_process";',
+					'import type { Knex } from "knex";',
+					"const pool = new Pool();",
+					"export function dump(dbName: string) {",
+					"  exec(`pg_dump ${dbName} > /tmp/out.sql`);",
+					"  run(`create app ${dbName}`);",
+					"  exec(`update ${dbName}`);",
+					"  http.execute(`DELETE /users/${dbName} HTTP/1.1`);",
+					"  fsq.run(`drop (${dbName}) from cache`);",
+					"}",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+
+		it("requires the SQL token after each supported leading verb", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"run(`select ${value}`);",
+					"run(`insert ${value}`);",
+					"run(`update ${value}`);",
+					"run(`delete ${value}`);",
+					"run(`create app ${value}`);",
+					"run(`drop (${value}) from cache`);",
+					"run(`MERGE INTO users USING ${value}`);",
+					"run(`TRUNCATE TABLE users WHERE id = ${value}`);",
+					"run(`REPLACE INTO users VALUES (${value})`);",
+					"run(`select * from users where id = ${value}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(4);
+		});
+
 		it("does not treat comments or unrelated strings as SQL sink signals", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("sql-injection");

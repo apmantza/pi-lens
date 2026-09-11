@@ -28,16 +28,27 @@ description: |
 
 query: |
   (call_expression
-    function: [
-      (identifier) @SQL_FUNC
-      (member_expression property: (property_identifier) @SQL_FUNC)
-    ]
+    function: (identifier) @SQL_FUNC
     arguments: (arguments
       (template_string (template_substitution) @INTERPOLATION) @TEMPLATE)
-    (#match? @SQL_FUNC "^(query|execute|exec|run|\\$queryRaw|\\$executeRaw)$"))
+    (#match? @SQL_FUNC "^(query|execute|exec|run|\\$queryRaw|\\$executeRaw|\\$queryRawUnsafe|\\$executeRawUnsafe|raw|prepare)$"))
+  (call_expression
+    function: (member_expression
+      object: (_) @OBJ
+      property: (property_identifier) @SQL_FUNC)
+    arguments: (arguments
+      (template_string (template_substitution) @INTERPOLATION) @TEMPLATE)
+    (#match? @SQL_FUNC "^(query|execute|exec|run|\\$queryRaw|\\$executeRaw|\\$queryRawUnsafe|\\$executeRawUnsafe|raw|prepare)$"))
+  (call_expression
+    function: (member_expression
+      object: (_) @OBJ
+      property: (property_identifier) @SQL_FUNC)
+    arguments: (template_string (template_substitution) @INTERPOLATION) @TEMPLATE
+    (#match? @SQL_FUNC "^(query|execute|exec|run|\\$queryRaw|\\$executeRaw|\\$queryRawUnsafe|\\$executeRawUnsafe|raw|prepare)$"))
 
 metavars:
   - SQL_FUNC
+  - OBJ
   - TEMPLATE
   - INTERPOLATION
 

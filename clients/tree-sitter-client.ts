@@ -98,6 +98,19 @@ const PYTHON_SQL_SINK_METHODS: ReadonlySet<string> = new Set([
 	"raw",
 ]);
 
+const TYPESCRIPT_SQL_KNOWN_PACKAGES: ReadonlySet<string> = new Set([
+	"pg",
+	"mysql2",
+	"better-sqlite3",
+	"knex",
+	"@prisma/client",
+]);
+
+const TYPESCRIPT_SQL_IMPORTS = new WeakMap<
+	TreeSitterNode,
+	ReadonlySet<string>
+>();
+
 // --- Type Declarations (local, no import needed) ---
 
 // biome-ignore lint/suspicious/noExplicitAny: Language from web-tree-sitter
@@ -3924,42 +3937,137 @@ export class TreeSitterClient {
 				);
 			case "ts_sql_injection_sink": {
 				const template = captures.TEMPLATE?.text ?? "";
-				const knownPackages = [
-					"pg",
-					"mysql2",
-					"better-sqlite3",
-					"knex",
-					"prisma",
-					"@prisma/client",
-				];
-				if (rootNode) {
-					const stack = [rootNode];
-					while (stack.length > 0) {
-						const node = stack.pop();
-						if (!node) continue;
-						if (
-							node.type === "import_statement" &&
-							knownPackages.some(
-								(pkg) =>
-									node.text.includes(`"${pkg}"`) ||
-									node.text.includes(`'${pkg}'`),
-							)
-						) {
-							return true;
-						}
-						stack.push(...node.children);
-					}
-				}
-
 				// Inspect only the template's raw prefix. Leading SQL comments are
 				// ignored; comments and unrelated strings elsewhere cannot satisfy it.
 				const rawPrefix = template
 					.replace(/^`/, "")
 					.replace(/`$/, "")
 					.replace(/^(?:\s|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$))*/, "");
-				return /^(?:SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|ALTER|DROP)(?:\s|[({;])/i.test(
-					rawPrefix,
-				);
+				if (
+					/^(?:SELECT[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\s+[\s\S]*\bSET\b|DELETE\s+FROM\b|CREATE\s+(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER)\b|DROP\s+(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER)\b|ALTER\s+(?:TABLE|INDEX|VIEW|DATABASE)\b|WITH[\s\S]*\bSELECT\b|MERGE\s+INTO\b|TRUNCATE\s+TABLE\b|REPLACE\s+INTO\b)/i.test(
+						rawPrefix,
+					)
+				)
+					return true;
+
+				if (!rootNode || !captures.OBJ) return false;
+				let imported = TYPESCRIPT_SQL_IMPORTS.get(rootNode);
+				if (!imported) {
+					const names = new Set<string>();
+					const stack = [rootNode];
+					while (stack.length > 0) {
+						const node = stack.pop();
+						if (!node) continue;
+						if (node.type === "import_statement") {
+							const source = node.childForFieldName?.("source")?.text ?? "";
+							const packageName = source.replace(/^['"]|['"]$/g, "");
+							const isKnown = [...TYPESCRIPT_SQL_KNOWN_PACKAGES].some(
+								(pkg) =>
+									packageName === pkg || packageName.startsWith(`${pkg}/`),
+							);
+							if (isKnown) {
+								const bindingText = node.text.slice(
+									0,
+									node.text.lastIndexOf("from"),
+								);
+								for (const match of bindingText.matchAll(/[A-Za-z_$][\w$]*/g)) {
+									if (match[0] !== "import" && match[0] !== "type")
+										names.add(match[0]);
+								}
+								const importStack = [node];
+								while (importStack.length > 0) {
+									const importNode = importStack.pop();
+									if (!importNode) continue;
+									if (
+										(importNode.type === "identifier" ||
+											importNode.type === "import_specifier") &&
+										importNode.text !== packageName
+									) {
+										names.add(importNode.text);
+									}
+									importStack.push(...importNode.children);
+								}
+							}
+						}
+						stack.push(...node.children);
+					}
+					const declarations = new Map<string, TreeSitterNode>();
+					const declarationStack = [rootNode];
+					while (declarationStack.length > 0) {
+						const node = declarationStack.pop();
+						if (!node) continue;
+						if (node.type === "variable_declarator") {
+							const name = node.childForFieldName?.("name")?.text;
+							const value = node.childForFieldName?.("value");
+							if (name && value) declarations.set(name, value);
+						}
+						declarationStack.push(...node.children);
+					}
+					const resolvesKnownValue = (
+						node: TreeSitterNode,
+						seen = new Set<string>(),
+					): boolean => {
+						if (node.type === "identifier") {
+							if (names.has(node.text)) return true;
+							if (seen.has(node.text)) return false;
+							const value = declarations.get(node.text);
+							if (!value) return false;
+							seen.add(node.text);
+							return resolvesKnownValue(value, seen);
+						}
+						if (node.type === "await_expression") {
+							const value = node.children.find((child) => child.isNamed);
+							return value ? resolvesKnownValue(value, seen) : false;
+						}
+						if (node.type === "new_expression") {
+							const ctor = node.childForFieldName?.("constructor");
+							return ctor ? resolvesKnownValue(ctor, seen) : false;
+						}
+						if (node.type === "call_expression") {
+							const fn = node.childForFieldName?.("function");
+							return fn ? resolvesKnownValue(fn, seen) : false;
+						}
+						if (node.type === "member_expression") {
+							const object = node.childForFieldName?.("object");
+							return object ? resolvesKnownValue(object, seen) : false;
+						}
+						return false;
+					};
+					let changed = true;
+					while (changed) {
+						changed = false;
+						for (const [name, value] of declarations) {
+							if (!names.has(name) && resolvesKnownValue(value)) {
+								names.add(name);
+								changed = true;
+							}
+						}
+					}
+					imported = names;
+					TYPESCRIPT_SQL_IMPORTS.set(rootNode, imported);
+				}
+
+				const resolvesToKnownClient = (node: TreeSitterNode): boolean => {
+					if (node.type === "identifier") return imported.has(node.text);
+					if (node.type === "await_expression") {
+						const value = node.children.find((child) => child.isNamed);
+						return value ? resolvesToKnownClient(value) : false;
+					}
+					if (node.type === "new_expression") {
+						const ctor = node.childForFieldName?.("constructor");
+						return ctor ? resolvesToKnownClient(ctor) : false;
+					}
+					if (node.type === "call_expression") {
+						const fn = node.childForFieldName?.("function");
+						return fn ? resolvesToKnownClient(fn) : false;
+					}
+					if (node.type === "member_expression") {
+						const object = node.childForFieldName?.("object");
+						return object ? resolvesToKnownClient(object) : false;
+					}
+					return false;
+				};
+				return resolvesToKnownClient(captures.OBJ);
 			}
 			case "ts_ssrf_sink": {
 				const fn = captures.FN?.text ?? "";
