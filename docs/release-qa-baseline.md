@@ -86,7 +86,29 @@ PR's packed tarball (#2700, the check #2587 was missing). `attw`
 | config-provenance | a project config is LOADED and its provenance is reportable | mcp-stdio | `tools/call` `pilens_effective_config` with the fixture file | result names the fixture's `.pi-lens.json` as a contributing document | tool result text | new — `tests/config/pi-lens-config-schema.test.ts` covers the schema, not the packaged load | — |
 | degradation-visible | a silently-ignored input is RECORDED as a degradation instead of vanishing | mcp-stdio | `tools/call` `pilens_health` with the fixture's project-tier `lsp.enabled` (a global-only setting) loaded | health text carries a `config-ignored` degradation line naming the fixture's `.pi-lens.json` | health tool result text | `clients/degradation-ledger.ts` is the reused machinery; no smoke asserts it end to end | #1605 lane 2 (availability-lifecycle): the degradation-recorded half; #1605 additionally asserts RECOVERY, which this row does not |
 | git-install-loads | a `git:` install of a pushed ref builds and loads in a real pi | git-install | `pi install git:github.com/apmantza/pi-lens@<ref>` then `get_commands` | at least 1 `lens-*` command and at least 4 skills | get_commands response JSON | `scripts/rpc-load-check.mjs` assertion, re-run against the git layout | — |
+| publish-toolchain-pinned | the RELEASE WORKFLOW's publish job runs the npm it pins, and that npm validates the tarball | npm-pack | `npx -y "npm@<packageManager pin>" --version` then `npx -y "npm@<packageManager pin>" publish --dry-run`, both in the scratch export | the pinned invocation reports the pin version AND the dry run exits 0, or npm reports the version is already published after packing; a pinned invocation resolution or registry failure leaves the row UNMEASURED | the two commands with their output | new — `tests/config/release-npm-pin-gate.test.ts` pins release.yml's TEXT; this row is the only thing that RUNS the publish job's toolchain before a tag exists (#2940) | — |
 | tool-smoke-install | every npm/pip entry in the installer registry resolves on a real install | npm-install | `node <export>/scripts/smoke-tools.mjs --install --install-registry --installer-root=<installed>/` (registry `<installed>/dist/clients/installer/index.js`; about 1m 29s cold on this box for 33 entries; harness from export root) | the report shows every npm/pip entry resolved or a named legitimate skip (toolchain absent, declined), and no genuine install failure; a registry-unreachable classification leaves the lane UNMEASURED; requires network access to the npm and pip registries | install-registry JSON report | `classifyInstallOutcome` from the #2661 fixture lanes — this lane sweeps the whole npm/pip registry, where fixture lanes exercise only the entries their fixtures name | — |
+
+## Why `publish-toolchain-pinned` runs on every candidate
+
+#2940: 9183f39c6 moved `release.yml`'s npm pin from a global install to
+`npx -y "npm@<pin>"` and left `npm publish` bare, so the publish job ran Node
+22's bundled npm — no OIDC trusted publishing — and the v4.1.6 run created the
+tag and the GitHub release before the registry answered E404. The `prepare`
+job's `--dry-run` publish could not see it: it ran a different npm.
+
+A `release.yml` change since the last tag is the obvious trigger for this row,
+and it is the one the skill's DIFF-row step (step 2) resolves to. The row runs
+on **every** tree run anyway, because the trigger has a hole: the pin's VALUE
+lives in `package.json`'s `packageManager`, not in the workflow, so a pin bump
+changes exactly the toolchain the publish job uses while leaving `release.yml`
+untouched. A release candidate whose publish path was never executed is the
+whole defect; gating the row on the workflow file would reproduce it one
+`packageManager` bump later.
+
+The row is SKIPPED — never a verdict — under `--from npm:<version>`: there is
+no exported tree to publish, and a dry-run publish fires this package's own
+`prepack`/`prepare`, so it may only ever run in the scratch export.
 
 ## Why `skills-registered` pins the registrar
 

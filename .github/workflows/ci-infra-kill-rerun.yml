@@ -6,10 +6,27 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  pull_request:
+    types: [synchronize]
 
 permissions: {}
 
 jobs:
+  clear-stale-verdict-labels:
+    name: Clear stale CI verdict labels
+    if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Clear labels from the previous head
+        shell: bash
+        run: gh pr edit "$PR_NUMBER" --remove-label 'ci:infra' --remove-label 'ci:real'
+
   classify:
     name: Classify failed Unit tests
     # pull_request runs, PLUS master runs (#2668): CI (ci.yml) reaches
