@@ -81,7 +81,7 @@ import {
 	storedLineHashesFor,
 } from "./clients/observed-mutation-sources.js";
 import { classifyMutatingTool } from "./clients/mutating-tool.js";
-import { extractWrittenPathsFromCommand } from "./clients/bash-file-access.js";
+import { isEditClassToolResult } from "./clients/bash-file-access.js";
 import { resolveLanguageRootForFile } from "./clients/language-profile.js";
 import { countFileLines } from "./clients/read-guard-tool-lines.js";
 import { registerReadBridge } from "./clients/read-bridge.js";
@@ -2621,16 +2621,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// `index.ts` and `tools/` too.
 		const rtToolName = (event as { toolName?: string })?.toolName;
 		const rtMutation = classifyMutatingTool(event, { recognizeOnly: true });
-		const bashCommand = (event as { input?: { command?: unknown } })?.input
-			?.command;
-		const bashWrite =
-			rtToolName === "bash" &&
-			typeof bashCommand === "string" &&
-			extractWrittenPathsFromCommand(
-				bashCommand,
-				ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
-			).length > 0;
-		const editClass = rtMutation !== undefined || bashWrite;
+		// #2939 F3: one edit-class predicate, shared with the `budgetKey`
+		// callback below — the two copies used to disagree on third-party
+		// shell tools carrying `input.command`.
+		const editClass = isEditClassToolResult(
+			event as { toolName?: string; input?: { command?: unknown } },
+			ctx?.cwd ?? runtime.projectRoot ?? process.cwd(),
+		);
 		if (rtMutation) {
 			logLatency({
 				type: "phase",
@@ -2710,15 +2707,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 			dbg,
 			budgetKey: (event, _ctx) => {
 				try {
-					return classifyMutatingTool(event, { recognizeOnly: true }) ||
-						(typeof (event as { input?: { command?: unknown } })?.input
-							?.command === "string" &&
-							extractWrittenPathsFromCommand(
-								(event as { input: { command: string } }).input.command,
-								(_ctx as { cwd?: string })?.cwd ??
-									runtime.projectRoot ??
-									process.cwd(),
-							).length > 0)
+					// #2939 F3: the same predicate as the handler body above.
+					return isEditClassToolResult(
+						event as { toolName?: string; input?: { command?: unknown } },
+						(_ctx as { cwd?: string })?.cwd ??
+							runtime.projectRoot ??
+							process.cwd(),
+					)
 						? "tool_result_edit"
 						: "tool_result_read_only";
 				} catch {
