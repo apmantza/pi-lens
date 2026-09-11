@@ -1111,6 +1111,18 @@ export function resetUtf8ConsoleCodePageStateForTests(): void {
 const EXIT_PIPE_IDLE_GRACE_MS = 100;
 const EXIT_PIPE_IDLE_MAX_WAIT_MS = 2000;
 
+/**
+ * #2968: how long past its own deadline this spawn's CPU/RSS sampler may keep
+ * polling. Everything this function does to end a child after the deadline
+ * fits inside it: `killTree`'s SIGTERM plus its 1000ms SIGKILL escalation (or
+ * Windows' `taskkill /F /T`), then at most EXIT_PIPE_IDLE_MAX_WAIT_MS of
+ * pipe-idle wait. A child still alive past deadline + this grace has outlived
+ * every teardown available here, so polling it further only buys the Windows
+ * process pile-up the report measured — and `stop()` still returns whatever
+ * the sampler gathered before the cap.
+ */
+const SPAWN_SAMPLER_TEARDOWN_GRACE_MS = 5_000;
+
 // ============================================================================
 // ASYNC VERSION (Recommended - Non-blocking)
 // ============================================================================
@@ -1544,9 +1556,25 @@ export async function safeSpawnAsync(
 		// best-effort/never-throws by design, but this call site wraps it anyway
 		// (belt and suspenders: the sampling seam must never be the reason a real
 		// spawn fails) with a no-op fallback sampler.
+		//
+		// #2968: the sampler's polling lifetime is bounded by THIS spawn's own
+		// deadline plus the teardown grace, not by the child's willingness to
+		// exit. `finalize`/the `error` handler still stop it on every settle
+		// path, but none of those paths exist for a child that never settles —
+		// a hung `.cmd` shim whose tree survives `taskkill /F /T` kept polling
+		// for 5-6 hours in the report.
 		let usageSampler: { stop: () => SpawnResourceUsage | null };
 		try {
-			usageSampler = startSpawnUsageSampler(child.pid);
+			usageSampler = startSpawnUsageSampler(
+				// The poll CADENCE is the sampler's own policy (it owns the backoff
+				// too); the DEADLINE is this function's. Passing `undefined` rather
+				// than importing the cadence constant keeps this module's view of
+				// the sampler at one export, which is also what every existing
+				// `vi.mock` of it provides.
+				child.pid,
+				undefined,
+				timeout + SPAWN_SAMPLER_TEARDOWN_GRACE_MS,
+			);
 		} catch {
 			usageSampler = { stop: () => null };
 		}
