@@ -3029,6 +3029,17 @@ const cacheFile = path.join(getProjectDataDir(cwd), "cache", "my-file.json");
 - Otherwise, if `<cwd>/.pi-lens/` already exists → use it (legacy)
 - Default → `~/.pi-lens/projects/<project-slug>/`
 
+The default project slug is an opaque `<readable>-<8-hex-hash>` basename. The
+readable and hash halves derive from one resolved absolute root string.
+`realpathSync` is probed for a bounded fallback record, but its result is not
+used as identity because a transient boundary failure must not rename the
+directory. Never parse the slug or expose its
+path-derived readable half in agent-facing records. The 32-bit hash prefix
+only collides when roots share both the readable slug and the prefix, so its
+practical collision population is that twin-pair set. Legacy migration must
+converge concurrent starters on one hashed directory and emit one bounded
+record per session outcome.
+
 **Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, install-choices.
 
 **Machine-global** (all routed through `getGlobalPiLensDir()`, `clients/file-utils.ts` — never hand-rolled `os.homedir()` + `.pi-lens`): latency.log, cascade.log, review-graph.log, tree-sitter.log, sessionstart.log, read-guard.log, actionable-warnings.log, dead-code.log, diagnostic-logger's `logs/`, tools/, bin/, intelephense/, probe-cache.json, and the #449 instance registry (`instances.json`). These are shared across all projects. `getGlobalPiLensDir()` respects `PI_LENS_HOME` (#525) — the machine-scoped sibling of `PILENS_DATA_DIR` above; setting it relocates the entire `~/.pi-lens` root for every one of those writers in one shot, since they all route through this single function.
