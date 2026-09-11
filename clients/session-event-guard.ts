@@ -280,9 +280,9 @@ function guardSessionEvent<E, C, R>(
 				// handler crash instead (#2939 F5). `rethrow` is intentionally not
 				// forwarded: wrappers do not pass it, and only `surfaceHandlerCrash`
 				// honors that option (#2939 F4).
-				surfaceHandlerCrash(eventName, err, {
-					dbg: options.dbg,
-				});
+				const crashOptions: SessionEventGuardOptions = {};
+				if (options.dbg !== undefined) crashOptions.dbg = options.dbg;
+				surfaceHandlerCrash(eventName, err, crashOptions);
 				return Promise.resolve(onStaleResult(event)) as R;
 			}
 			const result = runWithTurnContext(stableSessionId(ctx), () =>
