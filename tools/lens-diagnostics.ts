@@ -67,7 +67,10 @@ import {
 	formatCacheAgeOld,
 	formatNotRunEntry,
 } from "../clients/project-diagnostics/extractors.js";
-import type { FreshProjectDiagnosticsResult } from "../clients/project-diagnostics/fresh-fetch.js";
+import type {
+	FreshProjectDiagnosticsResult,
+	ProjectRunnerCoverage,
+} from "../clients/project-diagnostics/fresh-fetch.js";
 import {
 	ANALYZER_IDS,
 	fetchFreshProjectDiagnostics,
@@ -96,7 +99,10 @@ import {
 	type WidgetDiagnostic,
 	widgetDiagnosticUri,
 } from "../clients/widget-state.js";
-import { logLatency } from "../clients/latency-logger.js";
+import {
+	claimPhaseOncePerSession,
+	logLatency,
+} from "../clients/latency-logger.js";
 import { logExtension } from "../clients/extension-log.js";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
@@ -1519,6 +1525,46 @@ function runnerIdOf(diagnostic: WidgetDiagnostic): string {
 	return diagnostic.tool ?? diagnostic.rule?.split(":", 1)[0] ?? "";
 }
 
+type RunnerRetirementDecision = "retire" | "keep";
+
+/**
+ * The one project-runner retirement decision. Coverage is authoritative when
+ * present for the runner; the older id-only arm is used only when absent.
+ */
+export function runnerRetirementDecision(
+	diagnostic: WidgetDiagnostic,
+	filePath: string,
+	authoritativeRunnerIds: ReadonlySet<string> | undefined,
+	authoritativeCoverage: readonly ProjectRunnerCoverage[] | undefined,
+): RunnerRetirementDecision {
+	const runnerId = runnerIdOf(diagnostic);
+	const coverage = (authoritativeCoverage ?? []).filter(
+		(entry) => entry.runnerId === runnerId && entry.files.size > 0,
+	);
+	if (coverage.length === 0) {
+		return authoritativeRunnerIds?.has(runnerId) ? "retire" : "keep";
+	}
+	const realFilePath = (() => {
+		try {
+			return fsSync.realpathSync(filePath);
+		} catch {
+			return path.resolve(filePath);
+		}
+	})();
+	for (const entry of coverage) {
+		const root = entry.root;
+		const relative = path.relative(root, realFilePath);
+		const underRoot =
+			relative === "" ||
+			(!relative.startsWith("..") && !path.isAbsolute(relative));
+		if (!underRoot) continue;
+		if (entry.files.has(realFilePath)) {
+			return "retire";
+		}
+	}
+	return "keep";
+}
+
 function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
@@ -1759,6 +1805,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 	 */
 	authoritativeLspFiles?: ReadonlySet<string>,
 	authoritativeRunnerIds?: ReadonlySet<string>,
+	authoritativeRunnerCoverage?: readonly ProjectRunnerCoverage[],
 ): FileDiagnosticSummary[] {
 	const byFile = new Map<string, FileDiagnosticSummary>();
 	const seen = new Set<string>();
@@ -1775,7 +1822,13 @@ function mergeDiagnosticsWithWidgetSummaries(
 		const retained = summary.diagnostics ?? [];
 		const diagnostics = retained
 			.filter(
-				(diagnostic) => !authoritativeRunnerIds?.has(runnerIdOf(diagnostic)),
+				(diagnostic) =>
+					runnerRetirementDecision(
+						diagnostic,
+						filePath,
+						authoritativeRunnerIds,
+						authoritativeRunnerCoverage,
+					) !== "retire",
 			)
 			.map((d) => ({ ...d }));
 		byFile.set(
@@ -2075,6 +2128,7 @@ async function formatFullMode(
 				diagnostics: [],
 				runners: [],
 				analyzed: [],
+				authoritativeCoverage: [],
 				// #1623: every heavyweight analyzer is ELIGIBLE for this project but
 				// this call never asked for it (refreshRunners wasn't cheap/all/
 				// cached) — the expensive fetch below deliberately never runs in
@@ -2257,6 +2311,7 @@ async function formatFullMode(
 	// here; a second list of "which ids don't count" would be the mirror this
 	// repo's single-source-of-truth rule forbids.
 	const authoritativeRunnerIds = new Set(extracted.analyzed ?? []);
+	const authoritativeRunnerCoverage = extracted.authoritativeCoverage ?? [];
 	const foldedProjectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
@@ -2303,14 +2358,29 @@ async function formatFullMode(
 	// LSP sibling above — a retirement nobody can see is how a regression
 	// deletes findings silently. Bounded by construction: at most one row per
 	// mode=full call, and only when rows were actually retired.
+	const retiredRunnerCounts = new Map<string, number>();
 	const runnerRetiredRows = getFileDiagnosticSummaries()
 		.filter((summary) => includeFile(summary.filePath))
 		.reduce(
 			(total, summary) =>
 				total +
-				(summary.diagnostics ?? []).filter((diagnostic) =>
-					authoritativeRunnerIds.has(runnerIdOf(diagnostic)),
-				).length,
+				(summary.diagnostics ?? []).filter((diagnostic) => {
+					const retired =
+						runnerRetirementDecision(
+							diagnostic,
+							summary.filePath,
+							authoritativeRunnerIds,
+							authoritativeRunnerCoverage,
+						) === "retire";
+					if (retired) {
+						const runnerId = runnerIdOf(diagnostic);
+						retiredRunnerCounts.set(
+							runnerId,
+							(retiredRunnerCounts.get(runnerId) ?? 0) + 1,
+						);
+					}
+					return retired;
+				}).length,
 			0,
 		);
 	if (runnerRetiredRows > 0) {
@@ -2321,7 +2391,27 @@ async function formatFullMode(
 			durationMs: 0,
 			metadata: {
 				rows: runnerRetiredRows,
-				runners: [...authoritativeRunnerIds].join(","),
+				runners: [...retiredRunnerCounts.keys()].join(","),
+				coverage: authoritativeRunnerCoverage.map((entry) => ({
+					runnerId: entry.runnerId,
+					root: entry.root,
+					files: entry.files.size,
+				})),
+			},
+		});
+	}
+	for (const entry of authoritativeRunnerCoverage) {
+		if (!claimPhaseOncePerSession("runner_coverage_retired", entry.runnerId)) {
+			continue;
+		}
+		logLatency({
+			type: "phase",
+			phase: "runner_coverage_retired",
+			filePath: "",
+			durationMs: 0,
+			metadata: {
+				runnerId: entry.runnerId,
+				count: retiredRunnerCounts.get(entry.runnerId) ?? 0,
 			},
 		});
 	}
@@ -2335,6 +2425,7 @@ async function formatFullMode(
 			projectDelta,
 			authoritativeLspFiles,
 			authoritativeRunnerIds,
+			authoritativeRunnerCoverage,
 		),
 		cwd,
 		policyMap,

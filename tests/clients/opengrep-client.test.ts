@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { parseOpengrepReport } from "../../clients/opengrep-client.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+
+import * as safeSpawn from "../../clients/safe-spawn.js";
+import {
+	OpengrepClient,
+	parseOpengrepReport,
+} from "../../clients/opengrep-client.js";
 
 /**
  * #591 review: opengrep's LSP mode does NOT honor `// nosemgrep` natively
@@ -180,5 +188,30 @@ describe("parseOpengrepReport (#584)", () => {
 		});
 		const findings = parseOpengrepReport(raw);
 		expect(findings[0]).toMatchObject({ endLine: 5, endCol: 1, startCol: 3 });
+	});
+});
+
+describe("opengrep coverage evidence (#2887)", () => {
+	it("real client transports paths.scanned as analyzedFiles", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-opengrep-"));
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				fs.writeFileSync(
+					report,
+					JSON.stringify({ results: [], paths: { scanned: ["src/a.py"] } }),
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		try {
+			const result = await client.scan(root);
+			expect(result.analyzed).toBe(true);
+			expect(result.analyzedFiles).toEqual([path.resolve(root, "src/a.py")]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

@@ -842,7 +842,6 @@ export class KnipClient {
 
 			// Knip JSON format (grouped): { issues: [ { file, exports:[], files:[], dependencies:[], ... } ] }
 			const fileEntries: any[] = Array.isArray(data?.issues) ? data.issues : [];
-
 			for (const entry of fileEntries) {
 				const file: string = entry.file ?? "";
 
