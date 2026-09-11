@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +16,14 @@ import { freshnessFromMtime } from "./freshness.js";
 import { PAST_EOF_STALE_MARKER } from "./diagnostic-line-freshness.js";
 import { STALE_LINE_MARKER } from "./stale-marker.js";
 import type { FormatterOutcomeKind } from "./formatters.js";
+import {
+	applyDispositions,
+	anchorsForDiagnostic,
+	getDisposition,
+	registerWidgetDispositionReconciler,
+	type Disposition,
+	type DispositionMarkTarget,
+} from "./diagnostic-dispositions.js";
 
 /**
  * Canonical key for the `files` map (and `diagnosticsWriteGuard`) — #1020.
@@ -66,6 +75,8 @@ export interface WidgetDiagnostic {
 	 * (mode=full's suppression pass), never computed for mode=all/delta to
 	 * keep those cache-only and instant. */
 	flagged?: boolean;
+	/** Finding retained as an explicit suppressed bucket (#1616). */
+	disposition?: "false-positive" | "suppress";
 	/**
 	 * Wall-clock time this specific diagnostic was OBSERVED (#1186). Per-ENTRY,
 	 * not per-record: a merged record (see `reconcileCascadeNeighborLspErrors`)
@@ -253,6 +264,96 @@ function maybePruneInactiveFileRecords(): void {
 
 export function setRenderCallback(fn: () => void): void {
 	requestRenderFn = fn;
+}
+
+/** Reconcile a mark through the same apply/count/commit path as dispatch. */
+export function reconcileWidgetDisposition(
+	cwd: string,
+	target: DispositionMarkTarget,
+	_disposition: Disposition,
+	content?: string,
+): void {
+	const current = getFileDiagnostics(target.filePath);
+	if (!current) return;
+	let source = content ?? target.content;
+	if (source === undefined) {
+		try {
+			source = readFileSync(target.filePath, "utf8");
+		} catch {
+			source = "";
+		}
+	}
+	const active = new Set(
+		applyDispositions(current, cwd, target.filePath, source),
+	);
+	const normalized = current.map((diagnostic) => {
+		const { strict, weak } = anchorsForDiagnostic(
+			cwd,
+			target.filePath,
+			diagnostic,
+			source,
+		);
+		const entry = getDisposition(cwd, strict) ?? getDisposition(cwd, weak);
+		if (
+			!active.has(diagnostic) &&
+			(entry?.disposition === "false-positive" ||
+				entry?.disposition === "suppress")
+		) {
+			return { ...diagnostic, disposition: entry.disposition, flagged: false };
+		}
+		return {
+			...diagnostic,
+			disposition: undefined,
+			flagged: entry?.disposition === "flagged" || undefined,
+		};
+	});
+	const rec = getOrCreate(target.filePath);
+	commitDiagnostics(rec, target.filePath, normalized, Date.now());
+}
+
+registerWidgetDispositionReconciler((cwd, target, disposition) =>
+	reconcileWidgetDisposition(cwd, target, disposition, target.content),
+);
+
+export interface WidgetDispositionEvents {
+	events:
+		| { on?: (channel: string, handler: (data: unknown) => void) => unknown }
+		| undefined;
+}
+
+/** Consume the host-side disposition event and refresh the real widget store. */
+export function wireWidgetDispositionSubscriber(
+	args: WidgetDispositionEvents,
+): void {
+	args.events?.on?.("pilens:diagnostic:disposition", (data) => {
+		if (!data || typeof data !== "object") return;
+		const payload = data as Record<string, unknown>;
+		if (payload.source !== "pi-lens" || typeof payload.cwd !== "string") return;
+		if (
+			typeof payload.filePath !== "string" ||
+			typeof payload.disposition !== "string"
+		)
+			return;
+		if (typeof payload.message !== "string") return;
+		if (
+			!(
+				["false-positive", "suppress", "defer", "flagged"] as string[]
+			).includes(payload.disposition)
+		)
+			return;
+		reconcileWidgetDisposition(
+			payload.cwd,
+			{
+				cwd: payload.cwd,
+				filePath: payload.filePath,
+				tool: typeof payload.tool === "string" ? payload.tool : undefined,
+				rule: typeof payload.rule === "string" ? payload.rule : undefined,
+				message: typeof payload.message === "string" ? payload.message : "",
+				line: typeof payload.line === "number" ? payload.line : undefined,
+			},
+			payload.disposition as Disposition,
+		);
+	});
 }
 
 /**
@@ -711,6 +812,7 @@ function countDiagnostics(diags: WidgetDiagnostic[]): {
 	let errors = 0;
 	let warnings = 0;
 	for (const diagnostic of diags) {
+		if (diagnostic.disposition) continue;
 		if (isBlocking(diagnostic)) blocking++;
 		// A past-EOF stale entry keeps its severity for display purposes but is
 		// excluded from the error/warning tallies alongside blocking — its cited
@@ -1508,6 +1610,7 @@ export function renderWidget(
 	const totalBlocking = countBlockingIn(deduped);
 	const totalErrors = countTotalIn("error", deduped);
 	const totalWarnings = countTotalIn("warning", deduped);
+	const totalSuppressed = countSuppressedIn(deduped);
 	const hasPendingAnalysis = deduped.some(isPendingAnalysis);
 	const errorChunk =
 		totalErrors > 0
@@ -1531,6 +1634,9 @@ export function renderWidget(
 
 	const header = ` ${cyan("pi-lens")}${langStr ? "  " + dim(langStr) : ""}${lspChip}${summary ? "  " + summary : ""}`;
 	lines.push(fitLine(header, w));
+	if (totalSuppressed > 0) {
+		lines.push(fitLine(` ${dim(`suppressed: ${totalSuppressed}`)}`, w));
+	}
 
 	// File list — display order varies by mode
 	if (useHorizontal) {
@@ -1897,6 +2003,16 @@ function countTotalIn(
 	for (const rec of recs) {
 		if (severity === "error") n += rec.diagnosticCounts.errors;
 		else n += rec.diagnosticCounts.warnings;
+	}
+	return n;
+}
+
+function countSuppressedIn(recs: FileRecord[]): number {
+	let n = 0;
+	for (const rec of recs) {
+		for (const diagnostic of rec.allDiagnostics) {
+			if (diagnostic.disposition) n++;
+		}
 	}
 	return n;
 }
