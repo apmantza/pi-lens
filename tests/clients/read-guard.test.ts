@@ -50,6 +50,44 @@ describe("ReadGuard", () => {
 		fileTimeState.hasChanged = false;
 		vi.mocked(logReadGuardEvent).mockClear();
 	});
+	it("pending native read replacement preserves unrelated records", () => {
+		const filePath = "/tmp/native-read-identity.ts";
+		const guard = createReadGuard("native-read-identity-session");
+		const recordRead = guard.recordRead.bind(guard) as unknown as (
+			record: ReadRecord,
+			opts?: { supersedes?: { toolCallId: string } },
+		) => void;
+
+		// The recurrence is positional replacement: a concurrent result can
+		// remove a search credit or another read instead of its own provisional
+		// native-read record, reopening coverage the host did not deliver.
+		recordRead(
+			createReadRecord(filePath, {
+				effectiveLimit: 3000,
+				source: "native-read:call-1:provisional",
+			}),
+		);
+		recordRead(
+			createReadRecord(filePath, {
+				effectiveLimit: 2000,
+				source: "ast-grep-search",
+			}),
+		);
+
+		recordRead(createReadRecord(filePath, { effectiveLimit: 2000 }), {
+			supersedes: { toolCallId: "call-1" },
+		});
+
+		expect(
+			guard
+				.getReadHistory(filePath)
+				.map((record) => [record.effectiveLimit, record.source]),
+		).toEqual([
+			[2000, "ast-grep-search"],
+			[2000, undefined],
+		]);
+		expect(guard.checkEdit(filePath, [2500, 2500]).action).toBe("block");
+	});
 	describe("Phase 1: Zero-read and FileTime checks", () => {
 		it("blocks edit on never-read file", () => {
 			const guard = createReadGuard("test-session");

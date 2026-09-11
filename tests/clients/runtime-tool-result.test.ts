@@ -130,6 +130,7 @@ describe("bash grep searchReads registration", () => {
 	});
 
 	it("registers the native read range the host delivered at EOF", async () => {
+		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-2802-native-read-eof-");
 		try {
 			const filePath = path.join(env.tmpDir, "short.ts");
@@ -180,6 +181,7 @@ describe("bash grep searchReads registration", () => {
 	});
 
 	it("registers only the lines shown by the real bash host cap", async () => {
+		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-2802-bash-cap-");
 		try {
 			const filePath = path.join(env.tmpDir, "large.ts");
@@ -229,6 +231,11 @@ describe("bash grep searchReads registration", () => {
 			expect(runtime.readGuard.checkEdit(filePath, [500, 500]).action).toBe(
 				"block",
 			);
+			expect(
+				getDegradationSummary().some(
+					(entry) => entry.kind === "bash_view_clipped",
+				),
+			).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -266,6 +273,65 @@ describe("bash grep searchReads registration", () => {
 			);
 			expect(runtime.readGuard.checkEdit(filePath, [31, 31]).action).toBe(
 				"allow",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not mark a content-identical opaque rewrite as authored", async () => {
+		const env = setupTestEnvironment("pi-lens-2802-opaque-noop-");
+		try {
+			const filePath = path.join(env.tmpDir, "unchanged.ts");
+			fs.writeFileSync(filePath, "NEVER_PRESENT\n", "utf8");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const command = `sed -i 's/ABSENT_VALUE/x/' ${filePath}`;
+			await handleToolCall({
+				event: {
+					toolName: "bash",
+					toolCallId: "2802-noop",
+					input: { command },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			} as any);
+			const bashTool = createBashToolDefinition(env.tmpDir, {
+				exposeSessionEnvironment: false,
+			});
+			const result = await bashTool.execute(
+				"2802-noop",
+				{ command },
+				undefined,
+				undefined,
+				{ cwd: env.tmpDir } as never,
+			);
+			await handleToolResult({
+				event: {
+					toolName: "bash",
+					toolCallId: "2802-noop",
+					input: { command },
+					content: result.content,
+					details: result.details,
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+			expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
+				"block",
 			);
 		} finally {
 			env.cleanup();

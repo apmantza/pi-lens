@@ -1015,6 +1015,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			turnIndex: runtime.turnIndex,
 			writeIndex: runtime.peekWriteIndex(),
 			timestamp: Date.now(),
+			...(resolveToolCallCorrelationId(event) !== undefined && {
+				source: `native-read:${resolveToolCallCorrelationId(event)}:provisional`,
+			}),
 		});
 	}
 

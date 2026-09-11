@@ -476,6 +476,7 @@ export type DegradationKind =
 	 * from the ledger alone.
 	 */
 	| "mode-suppression"
+	| "native_read_clipped"
 	/**
 	 * A shell-out runner's tool DID produce output, exited nonzero, and the
 	 * runner's parser extracted ZERO diagnostics from it (#1948). The adjacent

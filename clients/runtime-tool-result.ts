@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
 import {
 	captureFileStats,
-	diffFileStats,
 	getOpaqueBaselineStore,
 	recoverOpaqueChangesViaGit,
 } from "./opaque-mutation-scan.js";
@@ -1232,7 +1231,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// them) — a deliberate divergence from the isError filter above, which
 		// exists for restore semantics where attribution would lie.
 		let opaquePaths: string[] = [];
-		let observedChangedPaths: Set<string> | undefined;
+		let observedChangedKeys: Set<string> | undefined;
 		// Recovery runs for EVERY bash command with a pending baseline - not
 		// only recognized-empty ones. A mixed command (`python x.py > out.ts`
 		// plus script-internal writes) previously skipped observation entirely
@@ -1270,7 +1269,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 							!isExternalOrVendorFile(p, scanRoot) &&
 							!isPathIgnoredByProject(p, scanRoot, false),
 					);
-					observedChangedPaths = new Set(opaquePaths);
+					observedChangedKeys = new Set(opaquePaths);
 				} else if (recovery.verdict === "unknown") {
 					// #2060: deliberately WIDER than the old `recognized.length > 0`
 					// guard. A fully opaque command whose probe failed is the shape
@@ -1304,8 +1303,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					withHashes: true,
 				});
 				if (outcome.snapshot && !outcome.unknownReason) {
-					opaquePaths = diffFileStats(pending.stats, outcome.snapshot);
-					observedChangedPaths = new Set(opaquePaths);
+					opaquePaths = [...outcome.snapshot].flatMap(([key, stat]) => {
+						const previous = pending.stats?.get(key);
+						return previous === undefined ||
+							previous.hash === undefined ||
+							stat.hash === undefined ||
+							previous.hash !== stat.hash
+							? [key]
+							: [];
+					});
+					observedChangedKeys = new Set(opaquePaths);
 				} else {
 					unknownReason =
 						outcome.unknownReason ??
@@ -1321,9 +1328,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				);
 				opaquePaths = opaquePaths.filter((p) => !survivingKeys.has(p));
 			}
-			if (observedChangedPaths) {
+			if (observedChangedKeys) {
 				recognizedWritten = recognizedWritten.filter((file) =>
-					observedChangedPaths!.has(normalizeMapKey(path.resolve(file))),
+					observedChangedKeys!.has(normalizeMapKey(path.resolve(file))),
 				);
 			}
 			if (unknownReason) {
@@ -1444,6 +1451,13 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					});
 					spans = [];
 				}
+				if (parsedSpans.length === 1) {
+					recordDegradationOnce({
+						kind: "bash_view_clipped",
+						subject: command,
+						reason: "truncated bash view narrowed a single span",
+					});
+				}
 			}
 			for (const span of spans) {
 				if (isExternalOrVendorFile(span.filePath, workspaceRoot)) continue;
@@ -1546,52 +1560,72 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			attribution?.resolvedPath && nodeFs.existsSync(attribution.resolvedPath)
 				? attribution.resolvedPath
 				: filePath;
-		if (!nodeFs.existsSync(deliveredFilePath)) return;
-		const input = event.input as { offset?: number; limit?: number };
-		const requestedOffset = input.offset ?? 1;
-		const requestedLimit = input.limit;
-		const truncation = (
-			event.details as { truncation?: { outputLines?: number } } | undefined
-		)?.truncation;
-		const available = Math.max(
-			0,
-			countFileLines(deliveredFilePath) - requestedOffset + 1,
-		);
-		const deliveredLimit = Math.min(
-			available,
-			truncation?.outputLines ?? requestedLimit ?? available,
-		);
-		if (deliveredLimit > 0) {
-			logReadGuardEvent({
-				event: "read_pattern",
-				sessionId: runtime.telemetrySessionId,
-				filePath: deliveredFilePath,
-				requestedOffset,
-				requestedLimit: requestedLimit ?? deliveredLimit,
-				effectiveOffset: requestedOffset,
-				effectiveLimit: deliveredLimit,
-				metadata: {
-					totalLines: countFileLines(deliveredFilePath),
-					isPartial: deliveredLimit < available,
-					fileKind: detectFileKind(deliveredFilePath) ?? "unknown",
-					fractionRead:
-						available > 0
-							? Math.round((deliveredLimit / available) * 100) / 100
-							: 1,
-					expandedByTs: false,
-				},
-			});
-			deps.readGuard.recordDeliveredRead({
-				filePath: deliveredFilePath,
-				requestedOffset,
-				requestedLimit: requestedLimit ?? deliveredLimit,
-				effectiveOffset: requestedOffset,
-				effectiveLimit: deliveredLimit,
-				expandedByLsp: false,
-				turnIndex: runtime.turnIndex,
-				writeIndex: runtime.peekWriteIndex(),
-				timestamp: Date.now(),
-			});
+		if (nodeFs.existsSync(deliveredFilePath)) {
+			const nativeReadToolCallId = resolveToolCallCorrelationId(event);
+			const input = event.input as { offset?: number; limit?: number };
+			const requestedOffset = input.offset ?? 1;
+			const requestedLimit = input.limit;
+			const truncation = (
+				event.details as
+					| {
+							truncation?: { outputLines?: number; truncated?: boolean };
+					  }
+					| undefined
+			)?.truncation;
+			const available = Math.max(
+				0,
+				countFileLines(deliveredFilePath) - requestedOffset + 1,
+			);
+			const deliveredLimit = Math.min(
+				available,
+				truncation?.outputLines ?? requestedLimit ?? available,
+			);
+			if (deliveredLimit > 0) {
+				if (truncation?.truncated === true && deliveredLimit < available) {
+					recordDegradationOnce({
+						kind: "native_read_clipped",
+						subject: deliveredFilePath,
+						reason: "native read result was clipped before delivery",
+					});
+				}
+				logReadGuardEvent({
+					event: "read_pattern",
+					sessionId: runtime.telemetrySessionId,
+					filePath: deliveredFilePath,
+					requestedOffset,
+					requestedLimit: requestedLimit ?? deliveredLimit,
+					effectiveOffset: requestedOffset,
+					effectiveLimit: deliveredLimit,
+					metadata: {
+						totalLines: countFileLines(deliveredFilePath),
+						isPartial: deliveredLimit < available,
+						fileKind: detectFileKind(deliveredFilePath) ?? "unknown",
+						fractionRead:
+							available > 0
+								? Math.round((deliveredLimit / available) * 100) / 100
+								: 1,
+						expandedByTs: false,
+					},
+				});
+				const deliveredRecord = {
+					filePath: deliveredFilePath,
+					requestedOffset,
+					requestedLimit: requestedLimit ?? deliveredLimit,
+					effectiveOffset: requestedOffset,
+					effectiveLimit: deliveredLimit,
+					expandedByLsp: false,
+					turnIndex: runtime.turnIndex,
+					writeIndex: runtime.peekWriteIndex(),
+					timestamp: Date.now(),
+				};
+				if (nativeReadToolCallId) {
+					deps.readGuard.recordRead(deliveredRecord, {
+						supersedes: { toolCallId: nativeReadToolCallId },
+					});
+				} else {
+					deps.readGuard.recordRead(deliveredRecord);
+				}
+			}
 		}
 	}
 

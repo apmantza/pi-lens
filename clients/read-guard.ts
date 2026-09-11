@@ -718,8 +718,20 @@ export class ReadGuard {
 	 * Record that a file was read.
 	 * Call this from the tool_call handler after any LSP expansion.
 	 */
-	recordRead(record: ReadRecord): void {
+	recordRead(
+		record: ReadRecord,
+		opts?: { supersedes?: { toolCallId: string } },
+	): void {
 		const filePath = this.key(record.filePath);
+		if (opts?.supersedes) {
+			const records = this.reads.get(filePath);
+			const provisionalSource = `native-read:${opts.supersedes.toolCallId}:provisional`;
+			const provisionalIndex = records?.findIndex(
+				(candidate) => candidate.source === provisionalSource,
+			);
+			if (provisionalIndex === undefined || provisionalIndex < 0) return;
+			records!.splice(provisionalIndex, 1);
+		}
 		// #1668 review F1: index by the existence-independent syntactic key
 		// while the file is (presumably) still on disk, so a later
 		// hasKnownPath/forgetPath lookup after an external delete can still
@@ -849,20 +861,6 @@ export class ReadGuard {
 
 		// Also update FileTime stamp for this file
 		this.fileTime.read(storedRecord.filePath);
-	}
-
-	/**
-	 * Replace the provisional tool-call read for a delivered native result.
-	 * The delivered range is authoritative; retaining the provisional record
-	 * would let checkCoverage union a host-capped read with the requested span.
-	 */
-	recordDeliveredRead(record: ReadRecord): void {
-		const key = this.key(record.filePath);
-		const records = this.reads.get(key);
-		if (records && records.length > 0) {
-			records.pop();
-		}
-		this.recordRead(record);
 	}
 
 	/**
