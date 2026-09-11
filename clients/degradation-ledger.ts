@@ -591,9 +591,10 @@ export type DegradationKind =
 	 * this kind means a session out-touched that cadence.
 	 */
 	/**
-	 * #2968: a `startSpawnUsageSampler` poll stopped at its LIFETIME cap
-	 * (`SPAWN_SAMPLE_LIFETIME_CAP_MS`, or the spawn's own deadline plus
-	 * teardown grace) while the child it brackets was still running — the
+	 * #2968: a `startSpawnUsageSampler` poll stopped at its LIFETIME cap — the
+	 * caller-supplied bound, which `safeSpawnAsync` derives as the spawn's
+	 * effective timeout plus `SPAWN_SAMPLER_TEARDOWN_GRACE_MS` — while the
+	 * child it brackets was still running; the
 	 * child outlived every teardown `safeSpawnAsync` owns. The summary
 	 * gathered before the cap is still returned; this is the row that says the
 	 * reading is truncated, and that something spawned is not dying. One
