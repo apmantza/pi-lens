@@ -5,11 +5,21 @@ const logLatency = vi.hoisted(() => vi.fn());
 vi.mock("../../clients/latency-logger.js", () => ({ logLatency }));
 
 import {
+	clearRememberedLazyTools,
+	getRememberedLazyTools,
 	isFreshSessionStart,
 	planToolSet,
 	recordToolSetMutation,
+	rememberLazyTools,
+	inheritRememberedLazyTools,
+	resetRememberedLazyToolsForTests,
+	REMEMBERED_LAZY_TOOLS_MAX_SESSIONS,
 	supportsDeferredTools,
 } from "../../clients/tool-set-policy.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 
 const LAZY = new Set(["ast_grep_search", "ast_grep_replace", "lsp_navigation"]);
 /** What the host hands us on EVERY session_start: all tools active. */
@@ -22,7 +32,82 @@ const ALL_ACTIVE = [
 ];
 
 describe("tool-set cache policy", () => {
-	beforeEach(() => logLatency.mockClear());
+	beforeEach(() => {
+		logLatency.mockClear();
+		resetDegradationLedger();
+		resetRememberedLazyToolsForTests();
+	});
+
+	it("records missing session-file identity once when activation memory is unavailable", () => {
+		rememberLazyTools(undefined, ["ast_grep_search"]);
+		rememberLazyTools(undefined, ["ast_grep_replace"]);
+
+		expect(getDegradationSummary()).toEqual([
+			expect.objectContaining({
+				kind: "tool-set-session-file-unavailable",
+				count: 1,
+				latestReasons: [
+					expect.objectContaining({
+						reason:
+							"session-file identity unavailable; activation memory is inert",
+					}),
+				],
+			}),
+		]);
+	});
+
+	it("bounds remembered session files with FIFO eviction", () => {
+		for (let i = 0; i < REMEMBERED_LAZY_TOOLS_MAX_SESSIONS + 1; i++) {
+			rememberLazyTools(`bounded-${i}`, ["ast_grep_search"]);
+		}
+		expect([...getRememberedLazyTools("bounded-0")]).toEqual([]);
+		expect([
+			...getRememberedLazyTools(
+				`bounded-${REMEMBERED_LAZY_TOOLS_MAX_SESSIONS}`,
+			),
+		]).toEqual(["ast_grep_search"]);
+	});
+
+	it("copies the parent's activation posture to a fork session file", () => {
+		rememberLazyTools("parent-file", ["ast_grep_search"]);
+		inheritRememberedLazyTools("parent-file", "child-file");
+		expect([...getRememberedLazyTools("child-file")]).toEqual([
+			"ast_grep_search",
+		]);
+	});
+
+	it("records activation in the session-file store before a factory re-run", () => {
+		clearRememberedLazyTools("policy-before-rebuild");
+		rememberLazyTools("policy-before-rebuild", ["ast_grep_search"]);
+		expect([...getRememberedLazyTools("policy-before-rebuild")]).toEqual([
+			"ast_grep_search",
+		]);
+	});
+
+	it("keeps activation isolated by session file", () => {
+		clearRememberedLazyTools("policy-file-a");
+		clearRememberedLazyTools("policy-file-b");
+		rememberLazyTools("policy-file-a", ["ast_grep_search"]);
+		expect([...getRememberedLazyTools("policy-file-b")]).toEqual([]);
+	});
+
+	it("clears activation when a conversation switches session file", () => {
+		rememberLazyTools("policy-switched", ["ast_grep_search"]);
+		clearRememberedLazyTools("policy-switched");
+		expect([...getRememberedLazyTools("policy-switched")]).toEqual([]);
+	});
+
+	it("does not create process-restart state without a session-file write", () => {
+		// Clearing an unknown file must not plant state a restart could read
+		// back, and clearing a written file must drop it through the real
+		// store. Mutation G (clear neutered to a no-op) leaves the written
+		// entry behind and reds the second assertion.
+		clearRememberedLazyTools("policy-restart-unknown");
+		expect([...getRememberedLazyTools("policy-restart-unknown")]).toEqual([]);
+		rememberLazyTools("policy-restart", ["ast_grep_search"]);
+		clearRememberedLazyTools("policy-restart");
+		expect([...getRememberedLazyTools("policy-restart")]).toEqual([]);
+	});
 
 	it("classifies only startup and new as fresh logical sessions", () => {
 		expect(isFreshSessionStart(undefined)).toBe(true);

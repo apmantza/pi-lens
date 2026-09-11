@@ -21,6 +21,8 @@ import type {
 	FormatterResult,
 } from "./formatters.js";
 import { loadFormatters } from "./formatters-lazy.js";
+import { bounded } from "./deadline-utils.js";
+import type { LedgerHookKey } from "./hook-budgets.js";
 
 // --- Configuration ---
 
@@ -34,6 +36,10 @@ export interface FormatOptions {
 	skip?: boolean;
 	/** Specific formatters to use (overrides detection) */
 	formatters?: string[];
+	/** Abort and aggregate wall budget for hook-owned formatting. */
+	signal?: AbortSignal;
+	budgetMs?: number;
+	hook?: LedgerHookKey;
 }
 
 export interface FormatSummary {
@@ -115,6 +121,10 @@ export class FormatService {
 		const results = await this.runFormattersWithConcurrency(
 			absolutePath,
 			formatters,
+			DEFAULT_FORMATTER_CONCURRENCY,
+			options.signal,
+			options.budgetMs,
+			options.hook,
 		);
 
 		// Record new file state after formatting
@@ -140,7 +150,7 @@ export class FormatService {
 				name: formatters[i].name,
 				success: r.success,
 				changed: r.changed,
-				error: r.error,
+				...(r.error === undefined ? {} : { error: r.error }),
 				outcome: r.outcome,
 			})),
 			anyChanged,
@@ -155,37 +165,53 @@ export class FormatService {
 		filePath: string,
 		formatters: FormatterInfo[],
 		_concurrency = DEFAULT_FORMATTER_CONCURRENCY,
+		signal?: AbortSignal,
+		budgetMs = 30_000,
+		hook: LedgerHookKey = "tool_result_edit",
 	): Promise<FormatterResult[]> {
 		const results: FormatterResult[] = [];
+		const startedAt = Date.now();
 
 		for (const formatter of formatters) {
-			// #1097: keep the timer handle so it can be cleared once the race
-			// settles. An uncleared, REF'D 30s setTimeout that outlives a fast
-			// `formatFile` win would keep a one-shot `pi --print` process alive for
-			// up to 30s after completion (same uncleared-race-timeout class as the
-			// LSP client-wait leak fixed in clients/lsp/index.ts).
-			let formatTimer: ReturnType<typeof setTimeout> | undefined;
-			try {
-				const timeoutMs = 30000;
-				const timeoutPromise = new Promise<FormatterResult>((_, reject) => {
-					formatTimer = setTimeout(
-						() =>
-							reject(
-								new Error(
-									`Formatter ${formatter.name} timed out after ${timeoutMs}ms`,
-								),
-							),
-						timeoutMs,
-					);
+			const remainingMs = budgetMs - (Date.now() - startedAt);
+			if (remainingMs <= 0) {
+				results.push({
+					success: false,
+					changed: false,
+					outcome: "failed",
+					error: `Formatter aggregate budget exhausted before ${formatter.name}`,
 				});
-
-				const result = await Promise.race([
+				continue;
+			}
+			// The shared bound owns both the aggregate timer and abort listener.
+			// This keeps one total formatter budget per file instead of re-arming a
+			// 30s timer for every formatter.
+			try {
+				const result = await bounded(
 					loadFormatters().then(({ formatFile }) =>
 						formatFile(filePath, formatter),
 					),
-					timeoutPromise,
-				]);
-				results.push(result);
+					{
+						ms: remainingMs,
+						signal,
+						hook,
+						label: "formatter-aggregate",
+					},
+				);
+				if (result) results.push(result);
+				else if (signal?.aborted) {
+					// Caller cancellation is intentional. Do not turn Escape into a
+					// formatter failure or requeue record.
+					break;
+				} else {
+					results.push({
+						success: false,
+						changed: false,
+						outcome: "failed",
+						error: `Formatter ${formatter.name} exceeded aggregate budget`,
+					});
+					break;
+				}
 			} catch (error) {
 				// A timeout or thrown error here is a real failure (#2413): the
 				// formatter ran and did not complete, distinct from an unavailable
@@ -196,8 +222,6 @@ export class FormatService {
 					outcome: "failed",
 					error: error instanceof Error ? error.message : String(error),
 				});
-			} finally {
-				if (formatTimer) clearTimeout(formatTimer);
 			}
 		}
 

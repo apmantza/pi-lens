@@ -236,6 +236,11 @@ fi
 		expect(fs.existsSync(path.join(root, "pip-tools", "bin", "pip"))).toBe(
 			true,
 		);
+		const success = result.result.summary.find(
+			(entry: { kind: string }) =>
+				entry.kind === "pip-install-strategy-succeeded",
+		);
+		expect(success?.latestReasons?.[0]?.subject).toBe("ruff:venv");
 		expect(fs.existsSync(log)).toBe(false);
 	});
 

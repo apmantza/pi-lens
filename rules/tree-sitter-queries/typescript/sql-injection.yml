@@ -1,11 +1,15 @@
 # SQL Injection Detection
-# Detects unsafe interpolation in SQL-like template literals
+# Detects unsafe interpolation in SQL-like template literals.
+# Demoted from error/blocking to warning on 2026-09-10 (maintainer): the
+# query keys on the callee NAME only (query|execute|exec|run), so any
+# `run(`…${x}…`)` / `exec(`…`)` in non-SQL code fires — too many false
+# positives to block on. A real SQL sink needs a receiver/type signal.
 id: sql-injection
 name: SQL Injection Risk
-severity: error
+severity: warning
 category: security
 defect_class: injection
-inline_tier: blocking
+inline_tier: warning
 language: typescript
 
 message: "SQL injection risk — use parameterized queries, never interpolate into SQL"

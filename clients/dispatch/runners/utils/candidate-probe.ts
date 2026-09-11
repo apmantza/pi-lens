@@ -12,7 +12,7 @@
  */
 
 import * as fs from "node:fs";
-import { safeSpawnAsync } from "../../../safe-spawn.js";
+import { probeToolAsync } from "../../../tool-probe.js";
 import {
 	type AvailabilityCause,
 	type ProbeEvidence,
@@ -71,10 +71,10 @@ export async function probeAvailabilityCandidates(
 			// Host-side budget: measure the loop stall that overlapped the probe so
 			// the shared policy can tell "no toolchain" from "the host was busy".
 			const sampler = startHostStallSampler();
-			let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
+			let result: Awaited<ReturnType<typeof probeToolAsync>>;
 			let stallMs: number;
 			try {
-				result = await safeSpawnAsync(candidate, [...probeArgs], {
+				result = await probeToolAsync(candidate, probeArgs, {
 					timeout: timeoutMs,
 				});
 			} finally {

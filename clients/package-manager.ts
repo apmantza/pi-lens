@@ -26,6 +26,7 @@ import {
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import {
 	createGenerationSource,
@@ -149,7 +150,7 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 	let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		result = await safeSpawnAsync(finder, [pm], { timeout: PROBE_TIMEOUT_MS });
+		result = await probeToolAsync(finder, [pm], { timeout: PROBE_TIMEOUT_MS });
 	} finally {
 		hostStallMs = sampler.stop();
 	}

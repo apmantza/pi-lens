@@ -66,6 +66,8 @@
 
 import { emitBounded } from "./bounded-telemetry.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS, type HookBudgetKey } from "./hook-budgets.js";
 import { probeCtxActive } from "./session-lifecycle.js";
 import { runWithTurnContext } from "./turn-context.js";
 
@@ -140,6 +142,71 @@ function recordStaleSkip(
 export interface SessionEventGuardOptions {
 	/** pi-lens's debug sink, so a skip is also visible in a dogfood trace. */
 	dbg?: (message: string) => void;
+	/** Hook budget; a function is used for read-only versus edit tool_result. */
+	budgetKey?:
+		| HookBudgetKey
+		| ((event: unknown, ctx: unknown) => HookBudgetKey | undefined);
+	/** Keep a floating fire-and-forget rejection from terminating the host. */
+	// Only surfaceHandlerCrash honors this option; event wrappers ignore it.
+	rethrow?: boolean;
+}
+
+/**
+ * The one policy for "a pi hook handler threw and production swallows it"
+ * (#2884).
+ *
+ * Nine catch sites in `index.ts` absorb a crashed handler so a pi-lens bug
+ * can never take down the host's session. Each of them used to write only
+ * `dbg(...)`, and `dbg` writes nothing under vitest — so a crashed handler was
+ * indistinguishable from a completed one. #2859 is what that costs: fourteen
+ * `session_start` awaits in `tests/index-integration.test.ts` rejected into
+ * one of those catches, every assertion after them was vacuous, and the file
+ * stayed green. #2866 closed the hole for `session_start` with an inline
+ * `if (process.env.VITEST) throw`; this function is that guard folded into one
+ * place so the remaining eight cannot drift from it.
+ *
+ * Two things happen on every crash, in this order:
+ *
+ * 1. **The production record.** One bounded `hook-handler-crash` row per
+ *    handler per session (`recordDegradationOnce`), so a handler that crashes
+ *    on every turn leaves one durable row and an exact ledger tally instead of
+ *    a silent no-op. It is written BEFORE the rethrow, so a test can assert the
+ *    production observability the runner path would otherwise hide.
+ * 2. **The runner rethrow.** Under vitest the crash is rethrown, so the test
+ *    whose `await` caused it fails with the real error instead of resolving.
+ *    In production nothing is rethrown and the caller's swallow stands.
+ *
+ * Deliberately `process.env.VITEST` and not `isTestMode()` (kept from #2859):
+ * the question is whether a TEST is awaiting this handler, and the #2815 R7
+ * case runs under vitest with `PI_LENS_TEST_MODE=0`.
+ *
+ * The stale-ctx class is NOT this function's business. Callers that classify
+ * it (`session_start`, `agent_end`, `turn_end`, the `agent_settled` drain)
+ * rethrow `isStaleExtensionCtxError` themselves BEFORE calling in, so a benign
+ * session swap keeps its own single record and never lands here as a crash.
+ * The quiet-window site is intentionally the exception to the test-runner
+ * rethrow: it is fire-and-forget, so a rethrow would be an unhandled rejection
+ * that can terminate the pi host before its caller can observe the failure.
+ */
+export function surfaceHandlerCrash(
+	handler: string,
+	err: unknown,
+	options: SessionEventGuardOptions = {},
+): void {
+	try {
+		options.dbg?.(`${handler} crashed: ${err}`);
+		options.dbg?.(
+			`${handler} crash stack: ${(err as Error | undefined)?.stack}`,
+		);
+	} catch {
+		// A debug sink must never decide whether a crash is recorded.
+	}
+	recordDegradationOnce({
+		kind: "hook-handler-crash",
+		subject: handler,
+		reason: `${handler} handler crashed and was swallowed: ${String(err)}`,
+	});
+	if (process.env.VITEST && options.rethrow !== false) throw err;
 }
 
 /** A pi event handler, in the shape `pi.on` delivers. */
@@ -162,6 +229,17 @@ function guardSessionEvent<E, C, R>(
 	onStaleResult: (event: E) => Awaited<R>,
 	options: SessionEventGuardOptions,
 ): (event: E, ctx: C) => R {
+	const defaultBudgetKey = (eventName: string): HookBudgetKey | undefined => {
+		if (eventName === "tool_result") return "tool_result_edit";
+		if (
+			eventName === "session_start" ||
+			eventName === "turn_end" ||
+			eventName === "agent_end" ||
+			eventName === "agent_settled"
+		)
+			return eventName;
+		return undefined;
+	};
 	const skip = (event: E, detectedAt: StaleDetectionPoint): Awaited<R> => {
 		recordStaleSkip(eventName, detectedAt);
 		try {
@@ -187,25 +265,56 @@ function guardSessionEvent<E, C, R>(
 			// below.
 			return skip(event, "pre-dispatch") as unknown as R;
 		try {
+			let signal: AbortSignal | undefined;
+			try {
+				signal = (ctx as { signal?: AbortSignal } | undefined)?.signal;
+			} catch (err) {
+				if (isStaleExtensionCtxError(err))
+					return Promise.resolve(skip(event, "mid-handler")) as R;
+				// The signal read moved out of each handler's own try/catch and
+				// into the guard (#2523 hook budgets), so a ctx whose `signal`
+				// accessor throws for a NON-stale reason is a crashed handler and
+				// must leave the same record — and the same test-runner rethrow —
+				// the handler's catch used to (#2884). In production
+				// `surfaceHandlerCrash` swallows and the event resolves to its no-op
+				// value, exactly as the handler's own catch + finally did.
+				surfaceHandlerCrash(eventName, err, {
+					...(options.dbg === undefined ? {} : { dbg: options.dbg }),
+					...(options.rethrow === undefined
+						? {}
+						: { rethrow: options.rethrow }),
+				});
+				return Promise.resolve(onStaleResult(event)) as R;
+			}
 			const result = runWithTurnContext(stableSessionId(ctx), () =>
 				handler(event, ctx),
 			);
 			if (isThenable(result)) {
-				// Recover the rejection in place. The host awaits the same promise
-				// it would have awaited anyway; it just resolves instead.
-				// SAFETY: the recovered promise settles to `Awaited<R>`, which the
-				// host consumes exactly as it would an `R` — see the note above.
-				return Promise.resolve(result).catch((err: unknown) => {
+				const recovered = Promise.resolve(result).catch((err: unknown) => {
 					if (isStaleExtensionCtxError(err)) return skip(event, "mid-handler");
 					throw err;
-				}) as unknown as R;
+				});
+				const budget =
+					typeof options.budgetKey === "function"
+						? options.budgetKey(event, ctx)
+						: (options.budgetKey ?? defaultBudgetKey(eventName));
+				if (budget === undefined) return recovered as R;
+				return bounded(recovered, {
+					ms: HOOK_WALL_BUDGET_MS[budget],
+					// The settled drain must observe an aborted signal and requeue
+					// before its promise is released; its own workers read the same
+					// signal and remain bounded at their seams.
+					signal: budget === "agent_settled" ? undefined : signal,
+					hook: budget,
+					label: "registered-handler",
+				}) as R;
 			}
 			return result;
 		} catch (err) {
 			if (isStaleExtensionCtxError(err))
 				// SAFETY: a synchronous handler's `R` is already its settled form,
 				// so `Awaited<R>` and `R` coincide here — see the note above.
-				return skip(event, "mid-handler") as unknown as R;
+				return skip(event, "mid-handler") as R;
 			throw err;
 		}
 	};

@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { probeToolAsync } from "./tool-probe.js";
 import {
 	firstOutputLine,
 	spawnFailedWithNoOutput,
@@ -165,7 +166,7 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 		let goOnPath: Awaited<ReturnType<typeof safeSpawnAsync>>;
 		let goHostStallMs: number;
 		try {
-			goOnPath = await safeSpawnAsync("go", ["version"], {
+			goOnPath = await probeToolAsync("go", ["version"], {
 				timeout: 5000,
 			});
 		} finally {
@@ -307,7 +308,7 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 		let reprobe: Awaited<ReturnType<typeof safeSpawnAsync>>;
 		let reprobeHostStallMs: number;
 		try {
-			reprobe = await safeSpawnAsync("govulncheck", ["-version"], {
+			reprobe = await probeToolAsync("govulncheck", ["-version"], {
 				timeout: 5000,
 			});
 		} finally {

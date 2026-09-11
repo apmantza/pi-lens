@@ -650,23 +650,41 @@ export function classifyToolSmokeInstallReport(report, context = {}) {
 
 /**
  * Run the installed smoke boundary for the registry baseline row.
- * @param {{ installedPkgDir: string, projectDir: string, env: NodeJS.ProcessEnv }} ctx
+ * @param {{ exportRoot: string, installedPkgDir: string, projectDir: string, env: NodeJS.ProcessEnv }} ctx
  * @returns {{ status: string, detail: string, shows?: string, witness?: { ext: string, content: string } }}
  */
 export function runToolSmokeInstallProbe(ctx) {
-	const script = path.join(ctx.installedPkgDir, "scripts", "smoke-tools.mjs");
+	if (!ctx.installedPkgDir) {
+		return {
+			status: "error",
+			detail: "installer root is missing; installed registry was not measured",
+		};
+	}
+	const script = path.join(ctx.exportRoot, "scripts", "smoke-tools.mjs");
 	if (!fs.existsSync(script)) {
 		return {
 			status: "fail",
-			detail: `smoke-tools.mjs is not in the installed package (${script})`,
+			detail: `smoke-tools.mjs is not in the export root (${script})`,
 		};
 	}
 	let report = null;
 	let context = {};
+	const parseSmokeOutput = (stdout) => {
+		try {
+			return { report: JSON.parse(String(stdout ?? "").trim()) };
+		} catch {
+			return { context: { stdout } };
+		}
+	};
 	try {
 		const stdout = execFileSync(
 			process.execPath,
-			[script, "--install", "--install-registry"],
+			[
+				script,
+				"--install",
+				"--install-registry",
+				`--installer-root=${ctx.installedPkgDir}`,
+			],
 			{
 				cwd: ctx.projectDir,
 				encoding: "utf8",
@@ -675,17 +693,14 @@ export function runToolSmokeInstallProbe(ctx) {
 				maxBuffer: 10 * 1024 * 1024,
 			},
 		);
-		try {
-			report = JSON.parse(stdout.trim());
-		} catch {
-			context = { stdout };
-		}
+		({ report, context } = parseSmokeOutput(stdout));
 	} catch (err) {
+		({ report, context } = parseSmokeOutput(err?.stdout));
 		context = {
+			...context,
 			exitCode: err?.status,
 			stderrTail: err?.stderr,
 			timedOut: Boolean(err?.killed),
-			stdout: err?.stdout,
 		};
 	}
 	const classified = classifyToolSmokeInstallReport(report, context);
@@ -1000,14 +1015,23 @@ export function npm(args, cwd, env) {
  */
 export function scratchEnv(scratchRoot, extra = {}) {
 	const home = path.join(scratchRoot, "home");
+	// Keep only process settings needed to find the host tools and preserve their
+	// locale. In particular, never inherit host package-manager policy overrides.
 	return {
-		...process.env,
+		...Object.fromEntries(
+			["PATH", "Path", "PATHEXT", "SystemRoot", "LANG", "LC_ALL", "CI"]
+				.filter((key) => process.env[key] !== undefined)
+				.map((key) => [key, process.env[key]]),
+		),
 		HOME: home,
 		USERPROFILE: home,
 		PI_LENS_HOME: path.join(home, ".pi-lens"),
 		PILENS_DATA_DIR: path.join(home, ".pilens-data"),
 		PI_LENS_INSTALL_LOG: path.join(home, ".pi-lens", "install.log"),
 		npm_config_cache: path.join(scratchRoot, "npm-cache"),
+		// HOME is scratch-pinned, so this deliberately permits pip to measure
+		// package resolution instead of letting PEP 668 hide dead registry entries.
+		PIP_BREAK_SYSTEM_PACKAGES: "1",
 		ANTHROPIC_API_KEY:
 			process.env.ANTHROPIC_API_KEY || "sk-ant-dummy-release-qa",
 		...extra,
@@ -1666,9 +1690,9 @@ const ROW_PROBES = {
 	},
 
 	// The installer registry's ground truth (#2663): the smoke's install lane
-	// runs against the INSTALLED package's own dist (the script resolves its
-	// dist relative to its own location), so a registry entry that is dead in
-	// the shipped artifact is one red row here — the same red row shape the
+	// runs its harness from the exported source tree but loads the INSTALLED
+	// package's own dist, so a registry entry that is dead in the shipped
+	// artifact is one red row here — the same red row shape the
 	// fixture lanes produce (#2661) — instead of a ⚠ skip folded into
 	// "toolchain absent". The classification is the lane's own
 	// `classifyToolSmokeInstallReport` mapping; a registry-unreachable verdict
@@ -1734,13 +1758,14 @@ async function main() {
 	log(`scratch root: ${scratchRoot}`);
 	log(
 		`pinned under ${scratchRoot}: ${PINNED_ENV_KEYS.join(", ")} ` +
-			"(nothing this run spawns can reach the ambient home)",
+			"(allowlisted process environment; pip policy: PIP_BREAK_SYSTEM_PACKAGES=1)",
 	);
 
 	let blocked = false;
 	let blockedReason = "";
 	let candidateFailure = "";
 	let exportedCommit = "";
+	let exportRoot = REPO_ROOT;
 	let packListing = null;
 	let installedPkgDir = "";
 	let rpc = null;
@@ -1776,6 +1801,7 @@ async function main() {
 
 		if (opts.from === "tree") {
 			const exported = exportHeadForPack(scratchRoot);
+			exportRoot = exported.dir;
 			exportedCommit = exported.commit;
 			// The export carries no node_modules, and `prepare`'s bundle step
 			// (scripts/bundle-dist.mjs) inlines the pure-JS runtime deps with
@@ -1917,6 +1943,7 @@ async function main() {
 		env,
 		gitRef: opts.gitRef,
 		installedPkgDir,
+		exportRoot,
 		mcp,
 		mcpTools,
 		packListing,
