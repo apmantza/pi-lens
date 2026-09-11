@@ -21,24 +21,45 @@ function writeExecutable(file: string, source: string): void {
 
 function writeFakePip(
 	binDir: string,
-	mode: "pep668" | "private" | "genuine" | "long-genuine",
+	mode:
+		| "pep668"
+		| "pep668-long"
+		| "private"
+		| "private-long"
+		| "genuine"
+		| "long-genuine",
 ): string {
 	const log = path.join(path.dirname(binDir), "pip.log");
+	const pep668Body =
+		'printf "error: externally-managed-environment\\n\\n× This environment is externally managed\\n╰─> To install Python packages system-wide, try apt install\\n    python3-xyz, where xyz is the package you are trying to install.\\n" >&2';
 	const behavior =
 		mode === "pep668"
-			? 'printf "error: externally-managed-environment\\n\\n× This environment is externally managed\\n╰─> To install Python packages system-wide, try apt install\\n    python3-xyz, where xyz is the package you are trying to install.\\n" >&2; exit 1'
-			: mode === "genuine"
-				? 'echo "No matching distribution found" >&2; exit 1'
-				: mode === "long-genuine"
-					? 'printf "No matching distribution found %1000s\\n" x >&2; exit 1'
-					: [
-							'case " $* " in *" --break-system-packages "*)',
-							'/bin/mkdir -p "$PYTHONUSERBASE/bin"',
-							'printf "#!/bin/sh\\necho ruff 1.0\\n" > "$PYTHONUSERBASE/bin/ruff"',
-							'/bin/chmod 750 "$PYTHONUSERBASE/bin/ruff"',
-							"exit 0;;",
-							'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
-						].join("\n");
+			? `${pep668Body}; exit 1`
+			: mode === "pep668-long"
+				? // PEP 668 literal first, then ~900 chars of retry preamble so the
+					// flattened reason exceeds the 1,000-char bound (N1 exercises it).
+					`${pep668Body}; printf "WARNING: Retrying (Retry(total=4)) %850s\\n" x >&2; exit 1`
+				: mode === "genuine"
+					? 'echo "No matching distribution found" >&2; exit 1'
+					: mode === "long-genuine"
+						? 'printf "No matching distribution found %1000s\\n" x >&2; exit 1'
+						: mode === "private-long"
+							? // User rung refuses with PEP 668 so the ladder reaches the
+								// private-prefix rung, which then fails long (N2 pins :5462).
+								[
+									'case " $* " in *" --break-system-packages "*)',
+									'printf "No matching distribution found %600s\\n" x >&2',
+									"exit 1;;",
+									'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
+								].join("\n")
+							: [
+									'case " $* " in *" --break-system-packages "*)',
+									'/bin/mkdir -p "$PYTHONUSERBASE/bin"',
+									'printf "#!/bin/sh\\necho ruff 1.0\\n" > "$PYTHONUSERBASE/bin/ruff"',
+									'/bin/chmod 750 "$PYTHONUSERBASE/bin/ruff"',
+									"exit 0;;",
+									'*) echo "error: externally-managed-environment" >&2; exit 1;; esac',
+								].join("\n");
 	writeExecutable(
 		path.join(binDir, "pip3"),
 		`#!/bin/sh\necho "$*" >> "$FAKE_PIP_LOG"\n${behavior}\n`,
@@ -279,7 +300,7 @@ fi
 		const root = scratchDir();
 		const bin = path.join(root, "bin");
 		fs.mkdirSync(bin, { recursive: true });
-		const log = writeFakePip(bin, "pep668");
+		const log = writeFakePip(bin, "pep668-long");
 		writeFakePythonWithoutVenv(bin, "pep668");
 		const result = await runInstaller(root, bin, "ruff", {
 			FAKE_PIP_LOG: log,
@@ -294,7 +315,13 @@ fi
 			.split("\n")
 			.filter((line) => line.includes("refused by PEP 668"));
 		expect(refusalLines).toHaveLength(1);
-		expect(refusalLines[0]?.length).toBeLessThanOrEqual(1000);
+		// The 1,000-char bound applies to the reason inside the line, not to
+		// the whole line: the timestamp plus the "refused by PEP 668" prefix
+		// ride on top, so a bound-exercising refusal line reads ~1,076 chars.
+		const loggedReason =
+			refusalLines[0]?.match(/refused by PEP 668 \((.*)\)$/)?.[1] ?? "";
+		expect(loggedReason.length).toBe(1000);
+		expect(refusalLines[0]?.length).toBeGreaterThan(1000);
 		expect(
 			sessionLog
 				.trimEnd()
@@ -375,5 +402,28 @@ fi
 		);
 		expect(diagnostic.length).toBeLessThanOrEqual(200);
 		expect(reason.length).toBeLessThanOrEqual(1000);
+	});
+
+	it("bounds a long diagnostic on the private-prefix rung", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePip(bin, "private-long");
+		writeFakePythonWithoutVenv(bin, "private");
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: path.join(root, "pip.log"),
+		});
+		expect(result.result.installed).toBe(false);
+		const reason = result.result.reason as string;
+		const privateEntries = reason
+			.split(" | ")
+			.filter((entry) => entry.includes("--break-system-packages"));
+		// The user rung refuses with PEP 668, so the ladder reaches the
+		// private-prefix rung: at least pip3's long failure must be present.
+		expect(privateEntries.length).toBeGreaterThan(0);
+		for (const entry of privateEntries) {
+			const diagnostic = entry.replace(/^(pip install failed: )?[^:]+: /, "");
+			expect(diagnostic.length).toBeLessThanOrEqual(200);
+		}
 	});
 });

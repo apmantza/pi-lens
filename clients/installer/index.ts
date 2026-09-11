@@ -5288,7 +5288,7 @@ async function installPipTool(
 					cwd: getGlobalPiLensDir(),
 					suppressTelemetry: true,
 				}),
-				env,
+				...(env ? { env } : {}),
 			});
 		const addBinToPath = async (
 			binDir: string,
