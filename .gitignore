@@ -71,6 +71,7 @@ migrate-*.js
 *.md
 !CLAUDE.md
 !tests/fixtures/changelog-entries/*.md
+!tests/fixtures/ci-pr-bodies/*.md
 !.changelog/*.md
 !AGENTS.md
 !HISTORY.md

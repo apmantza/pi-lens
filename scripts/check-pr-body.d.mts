@@ -8,7 +8,14 @@ export declare function normalizePrBodyForChecking(
 ): { body: string; normalized: boolean };
 export declare function lintPrBody(
 	body?: string,
-	options?: { requireTestAssessment?: boolean; diff?: string },
+	options?: {
+		requireTestAssessment?: boolean;
+		diff?: string;
+		cwd?: string;
+		git?: (args: string[], options?: Record<string, unknown>) => string;
+		workingTree?: boolean;
+		headFiles?: Map<string, string>;
+	},
 ): {
 	valid: boolean;
 	errors: string[];

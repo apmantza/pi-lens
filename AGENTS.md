@@ -184,6 +184,21 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 **PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` also checks runtime diff observability when its local range is available, so reviewers still judge the answers.
 
+The PR-body citation checker uses one path-and-line reader for code and
+existing-record citations. CI resolves sources from `HEAD`; `--lint-local`
+resolves sources and test references from the working tree, including untracked
+files under `tests/`, so uncommitted fixer changes can be cited. Fenced
+transcripts are excluded from citation and test-reference scans. Source quotes
+must match within ±20 lines of the cited line;
+transcript fences after citations are not source quotes. Test references come
+from declaration titles and paths under `tests/`, excluding the checker's own
+fixture inputs; the checker's own test contributes declaration titles only, and
+short identifiers use whole-token matching. The
+The test-reference corpus comes from lexer-emitted declaration string spans;
+table cells are candidates only under headers matching `/test|probe|case|witness|id/i`.
+The master-claim rule splits markdown blocks and sentences without treating dots in
+code spans as punctuation; a transcript must be in the next non-blank block.
+
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
 
 ## Contributing
@@ -1764,6 +1779,15 @@ the Unit tests checkout is shallow. If the range cannot be computed in GitHub
 Actions, `scripts/check-pr-body.mjs` fails with `diff unavailable:`; local runs
 outside CI retain structural-only fallback. Runtime markers exclude test files,
 `__tests__` directories, and TypeScript declaration files.
+
+The PR-body lint verifies every backticked `path:line` against `HEAD`, checks an
+offered adjacent fenced quote against source text, checks declaration-backed
+test titles and paths under `tests/`, and requires an `origin/master` transcript
+in the next non-blank block for master/environment claims. Ranges and
+approximate line hints resolve from
+their first line. Both CI and `--lint-local` use the real
+`origin/master...HEAD` range; the lane remains advisory until ten consecutive
+merged PRs pass.
 
 Message-end attribution uses a bounded two-slot session anchor. A primary
 `session_start` rotates `lastStableSessionId` into `previousSessionId` because
