@@ -22,7 +22,8 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 }));
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));

@@ -38,7 +38,8 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	getAmbientAbortSignal: () => undefined,
 	isCommandAvailableAsync: async () => false,
 }));
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));

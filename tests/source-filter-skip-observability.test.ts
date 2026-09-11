@@ -14,7 +14,8 @@ import type { LatencyEntry } from "../clients/latency-logger.js";
 // assertions mock the module — same pattern as
 // `tests/clients/cache-observability.test.ts`.
 const latencyEntries = vi.hoisted(() => [] as LatencyEntry[]);
-vi.mock("../clients/latency-logger.js", () => ({
+vi.mock("../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (entry: LatencyEntry) => latencyEntries.push(entry),
 }));
 

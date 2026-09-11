@@ -22,7 +22,8 @@ vi.mock("../../clients/lsp/launch.js", () => ({
 }));
 
 // Suppress sync disk I/O from logLatency — prevents timeout under full-suite load
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: vi.fn(),
 	resetLatencyLog: vi.fn(),
 }));
