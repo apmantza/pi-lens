@@ -291,7 +291,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"handlers index.ts does and needs the same bounds.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStart:1304e7b3~e7e844f0": {
+	"clients/mcp/session.ts#runSessionStartImpl:1304e7b3~e7e844f0": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -300,16 +300,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"deadline and no signal, exactly like index.ts:2151.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStart:cdc1de9a~b8406198": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"MCP host parity (AC8): the standalone MCP server's " +
-			"session_start entry calls `handleSessionStart` with no " +
-			"deadline and no signal, exactly like index.ts:2151.",
-		owner: "#2523 slice 2",
-	},
-	"clients/mcp/session.ts#runSessionStart:fceb216b~fb5d3323": {
+	"clients/mcp/session.ts#runSessionStartImpl:fceb216b~fb5d3323": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -345,7 +336,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"`handleTurnEnd` sits beneath it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runTurnEndNow:e40e5ae4~d9c99f9e": {
+	"clients/mcp/session.ts#runTurnEndNowImpl:e40e5ae4~fdec1c2f": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
@@ -354,7 +345,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"queue, not the work it admits — #2523 says so explicitly.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runTurnEndNow:fceb216b~047d1dce": {
+	"clients/mcp/session.ts#runTurnEndNowImpl:fceb216b~047d1dce": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
@@ -390,18 +381,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 		reason:
 			"`resyncLspFile` after a deferred write: the LSP touch has its " +
 			"own wait bound, the resync above it does not.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-agent-end.ts#d74e6662~4d0fd5e9": {
-		family: "hook-await",
-		site: "agent_settled",
-		reason:
-			"The format phase (`runFormatPhase` per file, joined by " +
-			"`Promise.all`) — #2523 AC6's aggregate formatter budget lands " +
-			"here. `runFormattersWithConcurrency` is a sequential loop with " +
-			"per-item 30s timers, no aggregate cap and no signal in the " +
-			"race; the 3-wedged-formatter probe measured `still-blocked " +
-			"after 45011ms`.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-agent-end.ts#e36d39b8~05b260ce": {
@@ -1161,7 +1140,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#22725cc2~e70f3ef8": {
+	"clients/runtime-tool-call.ts#22725cc2~723fd306": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1279,15 +1258,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"wall budget for tool_call, so this await has no number to be " +
 			"measured against yet; recorded as the gap rather than assigned " +
 			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#310cbbae~e4b0261c": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Classified-mutation join and the second dispatch on the edit " +
-			"path; same leaf-bounded, aggregate-unbounded shape as the " +
-			"observed path above.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-tool-result.ts#39fdd082~e70743cd": {
@@ -1589,17 +1559,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"absence of a timeout and a signal.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#4846f0dd~4bafc6ce": {
-		family: "hook-await",
-		site: "tool_result_read_only",
-		reason:
-			"THE read-only offender #2523 AC5 names (index.ts:2381 in the " +
-			"issue's tree): `loadBootstrapClients()` is awaited for EVERY " +
-			"tool result — Read/Grep/Glob/Bash — with no timeout and no " +
-			"signal, before the mutation gate in runtime-tool-result.ts. " +
-			"AC5's red-first test is at 500ms.",
-		owner: "#2523 slice 2",
-	},
 	"index.ts#51210408~9af17d2e": {
 		family: "hook-await",
 		site: "off-hook",
@@ -1666,7 +1625,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#c70fadbc~59511e16": {
+	"index.ts#c70fadbc~d53e4145": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
@@ -1674,16 +1633,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(index.ts:3138). Its `getAutofixClients` closure is the " +
 			"`loadBootstrapClients()` #2523 names under agent_settled; " +
 			"runtime-agent-end.ts:347 is the consumer.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#cdc1de9a~5033c974": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart` itself: the entire session_start body " +
-			"under one await. Slice 2 bounds it at the registered handler " +
-			"with the 5000ms budget; wrapping it here as well would " +
-			"double-bound the same work.",
 		owner: "#2523 slice 2",
 	},
 	"index.ts#d628f09d~02fe26af": {
@@ -1730,16 +1679,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"is waiting for its answer, so no hook budget applies. Flagged " +
 			"only because the await scan covers whole files rather than " +
 			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#eb6fa337~da853dbd": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"`handleToolResult` itself: the whole tool_result body under " +
-			"one await. Slice 2 applies the split budget (500ms read-only / " +
-			"10000ms edit) at the registered handler, after the mutation " +
-			"classification decides which applies.",
 		owner: "#2523 slice 2",
 	},
 	// #2518 re-keyed this occurrence: the neighbourhood suffix hashes the
@@ -2039,17 +1978,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"hand-rolled timer arm, no abort arm. Slice 2's fold worklist.",
 		owner: "#2523 slice 2",
 	},
-	"race:clients/format-service.ts#FormatService:5dbd3dcf~30d03c7a": {
-		family: "hand-rolled-race",
-		site: "off-hook",
-		reason:
-			"#2523 AC6's target: `runFormattersWithConcurrency` is a " +
-			"sequential loop with a per-item 30s timer, no aggregate cap " +
-			"and no signal in the race (`_concurrency` is unused). The " +
-			"3-wedged-formatter probe measured `still-blocked after " +
-			"45011ms`.",
-		owner: "#2523 slice 2",
-	},
 	"race:clients/lsp-document-symbols.ts#getOpenDocumentSymbols:888067f6~68634f87":
 		{
 			family: "hand-rolled-race",
@@ -2194,7 +2122,7 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/dispatch/runners/utils/runner-helpers.ts": 37,
 	"clients/file-time.ts": 1,
 	"clients/file-utils.ts": 1,
-	"clients/format-service.ts": 5,
+	"clients/format-service.ts": 4,
 	// #2767: managed formatter resolution uses the installer's bounded probes;
 	// keep the measured count pinned until the formatter seam carries signals.
 	"clients/formatters.ts": 114,
@@ -2214,7 +2142,16 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// budget and up to three attempts, so the hook path got shorter, not longer.
 	// Like every other entry here neither can take a hook's signal until #2523
 	// AC4 threads it through the deps types.
-	"clients/installer/index.ts": 197,
+	// 197 → 198 (#2894): `verifyAstGrepProbePath` traded a hand-rolled
+	// `new Promise` around a raw `spawn` — which awaited nothing, and whose
+	// `timeout` killed only the direct child — for one `await probeToolAsync`.
+	// `getAllToolStatuses`'s version probe made the same trade and is await-
+	// neutral (its `await new Promise` became `await probeToolAsync`), so the
+	// module gains exactly one. The await it gains is the seam's, with the
+	// tree-kill teardown the raw spawn never had; like every other entry here
+	// it cannot take a hook's signal until #2523 AC4 threads it through the
+	// deps types.
+	"clients/installer/index.ts": 198,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,
@@ -2319,6 +2256,10 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"cancelled every startup scan with no retry). Two live bounds even then, " +
 		"because this call supplies the seam's own `bootstrapShutdownController` " +
 		"as `shutdownSignal`. The tool_call demand passes the ambient signal.",
+	"call:clients/format-service.ts#FormatService:6ec6083f~f49a0718":
+		"The formatter aggregate receives the edit pipeline's live signal. The " +
+		"signal may be absent only in direct unit callers; the edit wall budget " +
+		"and the per-formatter leaf timer remain active in that harness.",
 	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
 		"`undefined` is intentional: the unref'd timer runs after session_start " +
 		"returns, so no live turn signal belongs to this background refresh. The " +
@@ -2335,6 +2276,17 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
 		"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
 		"bound is live per server.",
+	"call:clients/mcp/session.ts#runSessionStart:8d9498e9~c78f4265":
+		"The public MCP session_start result fallback is also wall-bounded; " +
+		"its signal is explicitly absent because MCP has no host abort signal.",
+	"call:clients/mcp/session.ts#runSessionStartImpl:8d9498e9~c78f4265":
+		"MCP session_start lifecycle wrapper. MCP has no host abort signal, so " +
+		"the required signal key is explicitly undefined; the shared session_start " +
+		"wall budget remains live and the same handler owns deferred delivery.",
+	"call:clients/mcp/session.ts#runTurnEndNow:8d9498e9~67c7ff0d":
+		"MCP turn_end lifecycle wrapper. MCP has no host abort signal, so the " +
+		"required signal key is explicitly undefined; the shared turn_end wall " +
+		"budget remains live and the transaction retains late findings.",
 	"call:clients/observed-mutation.ts#withBounds:6ec6083f~67028b50":
 		"`withBounds(work, ms, signal, site)`'s third parameter, threaded from " +
 		"`ArmObservationArgs.signal` / `SettledSweepArgs.signal`. Optional in the " +
@@ -2345,6 +2297,21 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
+	"call:clients/runtime-agent-end.ts#fc644b89~93eae0ad":
+		"The deferred formatter drain receives AgentEndDeps.signal, or the " +
+		"ambient signal in a standalone harness; agent_settled bounds the wait.",
+	"call:clients/runtime-tool-result.ts#19412575~b4f8a98d":
+		"Observed tool analysis uses ToolResultDeps.signal and the edit budget; " +
+		"a missing signal is an explicit standalone-harness case.",
+	"call:clients/runtime-tool-result.ts#2b57f8b9~b4f8a98d":
+		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
+		"edit budget; a missing signal is an explicit harness case.",
+	"call:clients/runtime-tool-result.ts#b9faf573~b4f8a98d":
+		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
+		"budget; a missing signal is an explicit standalone-harness case.",
+	"call:clients/runtime-tool-result.ts#ensureToolResultClients:2b57f8b9~b4f8a98d":
+		"The tool_result signal is threaded into the fail-open bootstrap demand; " +
+		"the edit budget remains live when a caller has no signal.",
 	"call:clients/runtime-turn.ts#2b57f8b9~67c7ff0d":
 		"`deps.signal` is the live `turn_end` ctx.signal in the pi host; it is " +
 		"optional only for the standalone MCP adapter and unit harnesses. The " +
@@ -2356,6 +2323,19 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"optional on the MCP adapter and unit harness. One shared turn-end deadline " +
 		"bounds the entire drained-pair loop, so missing abort provenance cannot " +
 		"multiply the wall budget by the 50-pair cap.",
+	"call:clients/session-event-guard.ts#guardSessionEvent:04249a13~4951798b":
+		"The registered pi handler receives its live ctx.signal through the " +
+		"shared session-event wrapper. Its budget is selected from the one hook " +
+		"registry, including the read-only versus edit tool_result split.",
+	"call:index.ts#c06d5cf4~b4f8a98d":
+		"The tool_result edit bootstrap receives the live pi ctx.signal and the " +
+		"edit budget; read-only calls use only resident clients.",
+	"call:index.ts#c06d5cf4~c78f4265":
+		"The session_start handler receives the live pi ctx.signal; the shared " +
+		"session_start budget bounds the handler await.",
+	"call:index.ts#c06d5cf4~e2427e95":
+		"The tool_result handler receives the live pi ctx.signal and the selected " +
+		"read-only or edit budget; the nested handler bound is deliberate.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */

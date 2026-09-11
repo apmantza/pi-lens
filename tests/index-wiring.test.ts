@@ -13,6 +13,22 @@ const symbolSearchExecution = vi.hoisted(() => ({
 const deliveryObservations = vi.hoisted(() => ({
 	rows: [] as Array<{ bytes: number; truncated: boolean }>,
 }));
+/**
+ * #2884: which `index.ts` catch site the current test wants to see crash. Each
+ * seam below throws only for its own site and otherwise delegates to the real
+ * export, so every other test in this file drives the unmodified path.
+ */
+const handlerCrashInjection = vi.hoisted(() => ({
+	site: undefined as
+		| undefined
+		| "session_start"
+		| "session_before_fork"
+		| "observed_settled_sweep"
+		| "observed_ledger_refresh"
+		| "deferred_mutation_drain"
+		| "quiet_window"
+		| "message_end",
+}));
 
 vi.mock("../tools/activate-tools.js", async (importOriginal) => {
 	const actual =
@@ -64,6 +80,78 @@ vi.mock("../clients/cache-observability.js", async (importOriginal) => {
 		recordToolResultDelivery: (args: { bytes: number; truncated: boolean }) => {
 			deliveryObservations.rows.push(args);
 			actual.recordToolResultDelivery(args);
+		},
+		logCacheUsage: (...args: Parameters<typeof actual.logCacheUsage>) => {
+			if (handlerCrashInjection.site === "message_end")
+				throw new Error("probe: message_end boom");
+			return actual.logCacheUsage(...args);
+		},
+	};
+});
+
+vi.mock("../clients/widget-state.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/widget-state.js")>();
+	return {
+		...(await importOriginal()),
+		exportWidgetState: (
+			...args: Parameters<typeof actual.exportWidgetState>
+		) => {
+			if (handlerCrashInjection.site === "session_before_fork")
+				throw new Error("probe: session_before_fork boom");
+			return actual.exportWidgetState(...args);
+		},
+	};
+});
+
+vi.mock("../clients/observed-mutation.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/observed-mutation.js")>();
+	return {
+		...(await importOriginal()),
+		runObservedSettledSweep: async (
+			...args: Parameters<typeof actual.runObservedSettledSweep>
+		) => {
+			if (handlerCrashInjection.site === "observed_settled_sweep")
+				throw new Error("probe: observed_settled_sweep boom");
+			return actual.runObservedSettledSweep(...args);
+		},
+		refreshObservedMutationLedger: async (
+			...args: Parameters<typeof actual.refreshObservedMutationLedger>
+		) => {
+			if (handlerCrashInjection.site === "observed_ledger_refresh")
+				throw new Error("probe: observed_ledger_refresh boom");
+			return actual.refreshObservedMutationLedger(...args);
+		},
+	};
+});
+
+vi.mock("../clients/runtime-agent-end.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/runtime-agent-end.js")>();
+	return {
+		...(await importOriginal()),
+		handleAgentEnd: async (
+			...args: Parameters<typeof actual.handleAgentEnd>
+		) => {
+			if (handlerCrashInjection.site === "deferred_mutation_drain")
+				throw new Error("probe: deferred_mutation_drain boom");
+			return actual.handleAgentEnd(...args);
+		},
+	};
+});
+
+vi.mock("../clients/quiet-window.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/quiet-window.js")>();
+	return {
+		...(await importOriginal()),
+		runQuietWindow: async (
+			...args: Parameters<typeof actual.runQuietWindow>
+		) => {
+			if (handlerCrashInjection.site === "quiet_window")
+				throw new Error("probe: quiet_window boom");
+			return actual.runQuietWindow(...args);
 		},
 	};
 });
@@ -126,7 +214,10 @@ vi.mock("../clients/bootstrap.js", async () => {
 	}));
 });
 vi.mock("../clients/runtime-session.js", () => ({
-	handleSessionStart: async () => {},
+	handleSessionStart: async () => {
+		if (handlerCrashInjection.site === "session_start")
+			throw new Error("probe: session_start boom");
+	},
 }));
 
 // The contract index.ts wires into the host. If a registration is dropped or
@@ -694,7 +785,11 @@ describe("index.ts extension wiring", () => {
 					_resetSessionLifecycleForTests();
 					const pi = createPiMock();
 					extension(pi.asExtensionAPI());
-					const ctx = makeCtx({ cwd: tmp, sessionId: `cache-${reason}` });
+					const ctx = makeCtx({
+						cwd: tmp,
+						sessionId: `cache-${reason}`,
+						sessionFile: path.join(tmp, `${reason}-session.jsonl`),
+					});
 					await pi.emit("session_start", { reason: "startup" }, ctx);
 					const loader = pi.getTool("pi_lens_activate_tools") as {
 						execute: (...args: unknown[]) => Promise<unknown>;
@@ -731,6 +826,266 @@ describe("index.ts extension wiring", () => {
 			},
 		);
 
+		it("restores activation after a factory re-run for the same session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-factory-rebuild-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const sessionFile = path.join(tmp, "conversation.jsonl");
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "factory-rebuild",
+					sessionFile,
+				});
+				const first = createPiMock();
+				extension(first.asExtensionAPI());
+				await first.emit("session_start", { reason: "startup" }, ctx);
+				const loader = first.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"factory-rebuild",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					ctx,
+				);
+
+				const rebuilt = createPiMock();
+				extension(rebuilt.asExtensionAPI());
+				for (const name of rebuilt.tools.keys()) rebuilt.activeTools.add(name);
+				await rebuilt.emit("session_start", { reason: "reload" }, ctx);
+
+				expect(rebuilt.activeTools.has("ast_grep_search")).toBe(true);
+				expect(rebuilt.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("inherits activation from the parent session file on a fork", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-fork-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const parentFile = path.join(tmp, "parent.jsonl");
+				const childFile = path.join(tmp, "child.jsonl");
+				const parent = makeCtx({
+					cwd: tmp,
+					sessionId: "fork-parent",
+					sessionFile: parentFile,
+				});
+				const child = makeCtx({
+					cwd: tmp,
+					sessionId: "fork-child",
+					sessionFile: childFile,
+				});
+				await pi.emit("session_start", { reason: "startup" }, parent);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					parent,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "fork", targetSessionFile: childFile },
+					parent,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit(
+					"session_start",
+					{ reason: "fork", previousSessionFile: parentFile },
+					child,
+				);
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("keeps the departing conversation's posture when /new changes session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-new-retain-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const departing = makeCtx({
+					cwd: tmp,
+					sessionId: "new-departing",
+					sessionFile: path.join(tmp, "departing.jsonl"),
+				});
+				const replacement = makeCtx({
+					cwd: tmp,
+					sessionId: "new-replacement",
+					sessionFile: path.join(tmp, "replacement.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, departing);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					departing,
+				);
+
+				await pi.emit(
+					"session_shutdown",
+					{
+						type: "session_shutdown",
+						reason: "new",
+						targetSessionFile: path.join(tmp, "replacement.jsonl"),
+					},
+					departing,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit(
+					"session_start",
+					{
+						reason: "new",
+						previousSessionFile: path.join(tmp, "departing.jsonl"),
+					},
+					replacement,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{
+						type: "session_shutdown",
+						reason: "resume",
+						targetSessionFile: path.join(tmp, "departing.jsonl"),
+					},
+					replacement,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, departing);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("does not restore activation for a different session file on resume", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-identity-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const first = makeCtx({
+					cwd: tmp,
+					sessionId: "identity-a",
+					sessionFile: path.join(tmp, "a.jsonl"),
+				});
+				const second = makeCtx({
+					cwd: tmp,
+					sessionId: "identity-b",
+					sessionFile: path.join(tmp, "b.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, first);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					first,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "resume", targetSessionFile: path.join(tmp, "b.jsonl") },
+					first,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, second);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		it("clears remembered posture for the new conversation's current session file", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-fresh-file-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const current = makeCtx({
+					cwd: tmp,
+					sessionId: "fresh-current",
+					sessionFile: path.join(tmp, "current.jsonl"),
+				});
+				const departing = makeCtx({
+					cwd: tmp,
+					sessionId: "fresh-departing",
+					sessionFile: path.join(tmp, "departing.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, current);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					current,
+				);
+				await pi.emit(
+					"session_shutdown",
+					{ reason: "new", targetSessionFile: path.join(tmp, "current.jsonl") },
+					departing,
+				);
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "new" }, current);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
 		// A genuinely new conversation drops the activation memory: the rebuilt
 		// all-active set shrinks back to the bare baseline.
 		it("forgets the previous conversation's activations on a new session", async () => {
@@ -741,7 +1096,11 @@ describe("index.ts extension wiring", () => {
 				_resetSessionLifecycleForTests();
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
-				const ctx = makeCtx({ cwd: tmp, sessionId: "cache-new" });
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "cache-new",
+					sessionFile: path.join(tmp, "new-session.jsonl"),
+				});
 				await pi.emit("session_start", { reason: "startup" }, ctx);
 				const loader = pi.getTool("pi_lens_activate_tools") as {
 					execute: (...args: unknown[]) => Promise<unknown>;
@@ -759,6 +1118,54 @@ describe("index.ts extension wiring", () => {
 
 				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
 				expect(pi.activeTools.has("lens_diagnostics")).toBe(true);
+			} finally {
+				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = prevDataDir;
+				removeTempDirSync(tmp);
+			}
+		});
+
+		// Round 4: `session_shutdown` with reason "quit" performs no
+		// activation-memory mutation — real pi exits on quit, so a clear
+		// there is production-inert. Re-adding one reds this case: the same
+		// file resumes with its posture intact.
+		it("retains remembered posture across a quit shutdown", async () => {
+			const tmp = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-wiring-quit-"),
+			);
+			const prevDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(tmp, "data");
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				const ctx = makeCtx({
+					cwd: tmp,
+					sessionId: "cache-quit",
+					sessionFile: path.join(tmp, "quit-session.jsonl"),
+				});
+				await pi.emit("session_start", { reason: "startup" }, ctx);
+				const loader = pi.getTool("pi_lens_activate_tools") as {
+					execute: (...args: unknown[]) => Promise<unknown>;
+				};
+				await loader.execute(
+					"activate",
+					{ tools: ["ast_grep_search"] },
+					undefined,
+					undefined,
+					ctx,
+				);
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+
+				await pi.simulateSessionShutdownAndRebuild("quit", ctx);
+
+				// The host rebuilds all-active, as on every replacement; the
+				// same file resumes with its posture intact.
+				for (const name of pi.tools.keys()) pi.activeTools.add(name);
+				await pi.emit("session_start", { reason: "resume" }, ctx);
+
+				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
+				expect(pi.activeTools.has("ast_grep_replace")).toBe(false);
 			} finally {
 				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 				else process.env.PILENS_DATA_DIR = prevDataDir;
@@ -1345,5 +1752,243 @@ describe("stale extension ctx tolerance in event handlers (#1925)", () => {
 				(entry) => entry.kind === "extension-ctx-stale",
 			),
 		).toBeUndefined();
+	});
+});
+
+/**
+ * #2884 — a crashed hook handler must not be invisible under the test runner.
+ *
+ * Recurrence this guards: #2859. `index.ts` swallows a crashed handler into
+ * `dbg(...)` so a pi-lens bug can never take down the host's session, and `dbg`
+ * writes nothing under vitest — so fourteen `session_start` awaits in
+ * `tests/index-integration.test.ts` rejected into that catch, every assertion
+ * after them was vacuous, and the file stayed green. #2866 closed the hole for
+ * `session_start` alone; seven sibling catches still swallowed silently, and
+ * `turn_end`'s swallow had already hidden a partial `read-guard` mock in a live
+ * test. Each case below drives ONE real registration through `createPiMock`
+ * with a crash injected into the seam that catch site wraps, and asserts two
+ * independent effects: the crash reaches the caller under the runner, and
+ * production's swallow leaves one bounded `hook-handler-crash` ledger row that
+ * names the handler.
+ */
+describe("hook handler crash surfacing (#2884)", () => {
+	let tmp: string;
+
+	beforeEach(() => {
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-crash-surface-"));
+		handlerCrashInjection.site = undefined;
+		_resetSessionLifecycleForTests();
+		resetBusPublishForTests();
+		resetDegradationLedger();
+	});
+	afterEach(() => {
+		handlerCrashInjection.site = undefined;
+		_resetSessionLifecycleForTests();
+		resetBusPublishForTests();
+		resetDegradationLedger();
+		removeTempDirSync(tmp);
+	});
+
+	/** The bounded production record every swallowed crash must leave. */
+	function crashLedgerGroup() {
+		return getDegradationSummary().find(
+			(entry) => entry.kind === "hook-handler-crash",
+		);
+	}
+
+	function expectCrashRecorded(handler: string): void {
+		const group = crashLedgerGroup();
+		expect(
+			group,
+			`${handler} crashed without a hook-handler-crash ledger record`,
+		).toBeDefined();
+		expect(group?.latestReasons.map((reason) => reason.subject)).toContain(
+			handler,
+		);
+	}
+
+	/** A live ctx whose `signal` read throws something that is NOT a stale ctx. */
+	function makeCtxWhoseSignalCrashes(sessionId: string) {
+		const ctx = makeCtx({ cwd: tmp, sessionId });
+		Object.defineProperty(ctx, "signal", {
+			configurable: true,
+			get() {
+				throw new Error(`probe: ${sessionId} boom`);
+			},
+		});
+		return ctx;
+	}
+
+	it("surfaces a crashed session_start under the test runner and records it", async () => {
+		handlerCrashInjection.site = "session_start";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("session_start", makeSessionStartEvent(), makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: session_start boom");
+
+		expectCrashRecorded("session_start");
+	});
+
+	it("surfaces a crashed session_before_fork under the test runner and records it", async () => {
+		handlerCrashInjection.site = "session_before_fork";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("session_before_fork", {}, makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: session_before_fork boom");
+
+		expectCrashRecorded("session_before_fork");
+	});
+
+	it("surfaces a crashed observed_settled_sweep under the test runner and records it", async () => {
+		handlerCrashInjection.site = "observed_settled_sweep";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "sweep" })),
+		).rejects.toThrow("probe: observed_settled_sweep boom");
+
+		expectCrashRecorded("observed_settled_sweep");
+	});
+
+	it("surfaces a crashed observed_ledger_refresh under the test runner and records it", async () => {
+		handlerCrashInjection.site = "observed_ledger_refresh";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "refresh" })),
+		).rejects.toThrow("probe: observed_ledger_refresh boom");
+
+		expectCrashRecorded("observed_ledger_refresh");
+	});
+
+	it("surfaces a crashed agent_settled deferred_mutation_drain under the test runner and records it", async () => {
+		handlerCrashInjection.site = "deferred_mutation_drain";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "drain" })),
+		).rejects.toThrow("probe: deferred_mutation_drain boom");
+
+		expectCrashRecorded("agent_settled deferred_mutation_drain");
+	});
+
+	it("surfaces a crashed agent_end under the test runner and records it", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_end", { messages: [] }, makeCtxWhoseSignalCrashes("ae")),
+		).rejects.toThrow("probe: ae boom");
+
+		expectCrashRecorded("agent_end");
+	});
+
+	it("surfaces a crashed turn_end under the test runner and records it", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+		).rejects.toThrow("probe: te boom");
+
+		expectCrashRecorded("turn_end");
+	});
+
+	it("surfaces a crashed message_end under the test runner and records it", async () => {
+		// The ninth member, found by this PR's class sweep and absent from the
+		// issue's table: its catch says `handler error`, not `… crashed`, so the
+		// issue's grep never saw it.
+		handlerCrashInjection.site = "message_end";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("message_end", { message: {} }, makeCtx({ cwd: tmp })),
+		).rejects.toThrow("probe: message_end boom");
+
+		expectCrashRecorded("message_end");
+	});
+
+	it("records a crashed quiet_window while the fire-and-forget host survives", async () => {
+		handlerCrashInjection.site = "quiet_window";
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+
+		await expect(
+			pi.emit("agent_settled", {}, makeCtx({ cwd: tmp, sessionId: "quiet" })),
+		).resolves.toBeUndefined();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		expectCrashRecorded("quiet_window");
+	});
+
+	it("classifies a stale observed-ledger refresh without recording a handler crash", async () => {
+		const savedVitest = process.env.VITEST;
+		delete process.env.VITEST;
+		try {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			const staleCtx = makeCtx({ cwd: tmp, sessionId: "refresh-stale" });
+			Object.defineProperty(staleCtx, "signal", {
+				configurable: true,
+				get() {
+					// Keep the ctx live through dispatch, ambient-signal setup, and the
+					// observed sweep. The stale swap lands only at the refresh read.
+					if (new Error().stack?.includes("refreshObservedLedgerSafely"))
+						throw new Error(
+							"This extension ctx is stale after session replacement or reload",
+						);
+					return undefined;
+				},
+			});
+
+			await expect(
+				pi.emit("agent_settled", {}, staleCtx),
+			).resolves.toBeUndefined();
+
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "extension-ctx-stale" }),
+				]),
+			);
+			expect(crashLedgerGroup()).toBeUndefined();
+		} finally {
+			if (savedVitest === undefined) delete process.env.VITEST;
+			else process.env.VITEST = savedVitest;
+		}
+	});
+
+	it("keeps swallowing a crashed turn_end off the test runner, with one bounded record", async () => {
+		// The production direction, and the only one the `if (process.env.VITEST)`
+		// guard's `if (true)` mutation can red: with no runner present the host's
+		// turn must still resolve, and the crash must still be counted exactly
+		// once per handler per session however many turns crash.
+		const savedVitest = process.env.VITEST;
+		process.env.VITEST = undefined as unknown as string;
+		delete process.env.VITEST;
+		try {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+
+			await expect(
+				pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+			).resolves.toBeUndefined();
+			await expect(
+				pi.emit("turn_end", {}, makeCtxWhoseSignalCrashes("te")),
+			).resolves.toBeUndefined();
+		} finally {
+			if (savedVitest === undefined) delete process.env.VITEST;
+			else process.env.VITEST = savedVitest;
+		}
+
+		expectCrashRecorded("turn_end");
+		expect(crashLedgerGroup()?.count).toBe(1);
 	});
 });

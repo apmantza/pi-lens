@@ -326,7 +326,7 @@ export function makeCtx(
 	overrides: Partial<{
 		cwd: string;
 		sessionId: string;
-		sessionFile: string | undefined;
+		sessionFile?: string;
 		/**
 		 * #1334 S5: host project-trust decision. Omit entirely to simulate an
 		 * older host with no `isProjectTrusted` on the ctx — pi-lens must then

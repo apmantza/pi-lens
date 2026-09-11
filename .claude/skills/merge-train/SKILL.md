@@ -421,6 +421,11 @@ Each row cost a lane at least once; the prose above carries the record.
 | Pushing docs, config or data straight to master without preflight | `npm run preflight` on the exact tree first; three master reds on 2026-09-09 |
 | Nudging a capped small-model lane more than once | One continuation, then reassign to the strongest model (GLM lanes, 2026-09-09) |
 | Waiting on CI for a bot-authored PR (github-actions nightly refresh) | A GITHUB_TOKEN push fires no `pull_request` run: required checks stay ABSENT forever; close/reopen the PR to fire them (#2801, 2026-09-09) |
+| Leaving a design question to the fixer (where evidence comes from, which identity rule) | Decide it in the brief; #2900 oscillated three rounds (walker → findings → walker again) until round 4's brief fixed the evidence source (2026-09-10) |
+| Guessing a lane's branch name when writing a brief | Read `gh pr view N --json headRefName` in the same command that builds the brief; plegma refused two dispatches on invented refs (#2908, #2898; 2026-09-10) |
+| `git add -A -- . ':!<ignored file>'` in a chained command | The exclude pathspec on an IGNORED path makes `git add` exit 1 and the chain stops before the commit; use plain `git add -A` (ignored files never stage) and verify the index afterwards (2026-09-10, twice) |
+| Treating a `ci-verdict --wait` exit as a CI verdict without reading it | Exit 70 = GitHub API unreachable; every armed wait died at once during two outages on 2026-09-10 — poll `https://api.github.com/` until 200, then re-arm one wait per PR |
+| Merging a PR that arms a registry-membership guard without telling the other lanes | After #2924, every open PR that adds a formatter, LSP server or MCP tool needs a docs line in the same change; note it in the ledger and the next briefs (2026-09-10) |
 | Judging master from the local checkout | `git fetch origin` and read `origin/master`; #2693 r1 reported a catalog row missing that had merged an hour earlier, and the orchestrator's own branch that morning was cut from a master six commits behind |
 | Swapping reviewers between rounds | Same reviewer verifies; the probes and the mutation set are the continuity |
 | Trusting the fixer's "CI green" | Read ci-verdict on the exact head SHA yourself; absent required checks are not green |

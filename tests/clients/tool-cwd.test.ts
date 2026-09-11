@@ -309,6 +309,28 @@ describe("resolveToolCwd (#2777)", () => {
 		);
 	});
 
+	it("re-walks a negative marker result when a marker is created later", () => {
+		const project = path.join(home, "repo");
+		const nested = path.join(project, "packages", "app");
+		const file = path.join(nested, "src", "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+
+		expect(
+			toolCwd.resolveToolCwd("runner", "rust-clippy", file, {
+				cwd: project,
+			}),
+		).toBe(project);
+		fs.writeFileSync(path.join(nested, "Cargo.toml"), "[package]\n");
+
+		// A negative marker memo must not hide a project created during the
+		// session. The second resolution must reach the new package root.
+		expect(
+			toolCwd.resolveToolCwd("runner", "rust-clippy", file, {
+				cwd: project,
+			}),
+		).toBe(nested);
+	});
+
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {
 		const project = path.join(home, "repo");
 		const foreign = path.join(home, "tmp", "outside.ts");

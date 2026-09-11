@@ -33,6 +33,8 @@
  * `bootstrap-access.ts`.
  */
 
+import { agentBehaviorClient } from "../../clients/agent-behavior-client.js";
+
 /** The options `requestBootstrapClients` is called with in production. */
 interface BootstrapDemandOptions {
 	reason: string;
@@ -55,6 +57,8 @@ export interface BootstrapSeamMock {
 		request: () => Promise<unknown>;
 	};
 	degradedClient: () => unknown;
+	/** Process-wide behaviour history, available before bootstrap (#2523). */
+	getAgentBehaviorClient: () => unknown;
 	BOOTSTRAP_LOAD_TIMEOUT_MS: number;
 }
 
@@ -103,6 +107,11 @@ export function bootstrapSeamMock(
 			request: async () => clients,
 		}),
 		degradedClient: () => ({}),
+		// The real seam returns the process-wide singleton, which is not a
+		// bootstrap client and needs no load; the double returns the same
+		// singleton so the read-only tool_result path records exactly as in
+		// production (#2523 round 4 added the export; #2897 verify v4 F2).
+		getAgentBehaviorClient: () => agentBehaviorClient,
 		BOOTSTRAP_LOAD_TIMEOUT_MS: 10_000,
 	};
 }
