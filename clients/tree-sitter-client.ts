@@ -3944,7 +3944,7 @@ export class TreeSitterClient {
 					.replace(/`$/, "")
 					.replace(/^(?:\s|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$))*/, "");
 				if (
-					/^(?:SELECT[\s\S]*\bFROM\b|INSERT\s+INTO\b|UPDATE\s+[\s\S]*\bSET\b|DELETE\s+FROM\b|CREATE\s+(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER)\b|DROP\s+(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER)\b|ALTER\s+(?:TABLE|INDEX|VIEW|DATABASE)\b|WITH[\s\S]*\bSELECT\b|MERGE\s+INTO\b|TRUNCATE\s+TABLE\b|REPLACE\s+INTO\b)/i.test(
+					/^(?:SELECT[\s\S]*(?:\bFROM\b|\$\{)|INSERT\s+INTO\b|UPDATE\s+[\s\S]*\bSET\b|DELETE\s+FROM\b|CREATE\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|DROP\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|ALTER\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|GRANT\b|REVOKE\b|WITH[\s\S]*\bSELECT\b|MERGE\s+INTO\b|TRUNCATE\s+TABLE\b|REPLACE\s+INTO\b)/i.test(
 						rawPrefix,
 					)
 				)
@@ -3966,22 +3966,13 @@ export class TreeSitterClient {
 									packageName === pkg || packageName.startsWith(`${pkg}/`),
 							);
 							if (isKnown) {
-								const bindingText = node.text.slice(
-									0,
-									node.text.lastIndexOf("from"),
-								);
-								for (const match of bindingText.matchAll(/[A-Za-z_$][\w$]*/g)) {
-									if (match[0] !== "import" && match[0] !== "type")
-										names.add(match[0]);
-								}
 								const importStack = [node];
 								while (importStack.length > 0) {
 									const importNode = importStack.pop();
 									if (!importNode) continue;
 									if (
-										(importNode.type === "identifier" ||
-											importNode.type === "import_specifier") &&
-										importNode.text !== packageName
+										importNode.type === "identifier" ||
+										importNode.type === "import_specifier"
 									) {
 										names.add(importNode.text);
 									}
@@ -4027,10 +4018,6 @@ export class TreeSitterClient {
 							const fn = node.childForFieldName?.("function");
 							return fn ? resolvesKnownValue(fn, seen) : false;
 						}
-						if (node.type === "member_expression") {
-							const object = node.childForFieldName?.("object");
-							return object ? resolvesKnownValue(object, seen) : false;
-						}
 						return false;
 					};
 					let changed = true;
@@ -4060,10 +4047,6 @@ export class TreeSitterClient {
 					if (node.type === "call_expression") {
 						const fn = node.childForFieldName?.("function");
 						return fn ? resolvesToKnownClient(fn) : false;
-					}
-					if (node.type === "member_expression") {
-						const object = node.childForFieldName?.("object");
-						return object ? resolvesToKnownClient(object) : false;
 					}
 					return false;
 				};

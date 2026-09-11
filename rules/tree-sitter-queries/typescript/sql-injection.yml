@@ -1,7 +1,7 @@
 # SQL Injection Detection
 # Detects unsafe interpolation in SQL-like template literals.
 # The structural query keeps the common callee set, while the TypeScript-aware
-# post-filter requires a known DB-package import or a SQL-leading template.
+# post-filter requires a receiver bound to a known DB client or a SQL-leading template.
 id: sql-injection
 name: SQL Injection Risk
 severity: error

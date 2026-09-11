@@ -129,7 +129,8 @@ describe("tree-sitter security gap rules", () => {
 					"declare const unknownClient: { execute(query: string): void };",
 					"pg.query(`SELECT * FROM users WHERE id = ${userId}`);",
 					"mysql.execute(`UPDATE users SET name = '${name}'`);",
-					"new PrismaClient().$queryRaw(`SELECT * FROM users WHERE id = ${id}`);",
+					"const prisma = new PrismaClient();",
+					"prisma.$queryRaw`not prose ${id}`;",
 				].join("\n"),
 			);
 			const matches = await client.runQueryOnFile(
@@ -140,20 +141,88 @@ describe("tree-sitter security gap rules", () => {
 			expect(matches.length).toBe(3);
 		});
 
+		it("does not bind words from comments inside an import clause", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const commentFile = writeTempFile(
+				"ts",
+				[
+					'import { Pool, // the pool runner\n} from "pg";',
+					"const runner = makeShellRunner();",
+					"runner.run(`docker run ${image}`);",
+				].join("\n"),
+			);
+			const controlFile = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					"const runner = makeShellRunner();",
+					"runner.run(`docker run ${image}`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, commentFile, "typescript"),
+			).toHaveLength(0);
+			expect(
+				await client.runQueryOnFile(query, controlFile, "typescript"),
+			).toHaveLength(0);
+		});
+
+		it("does not bind a side-effect-only database import", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				'import "pg";\nconst runner = makeShellRunner();\nrunner.run(`docker run ${image}`);\n',
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(0);
+		});
+
+		it("does not inherit database status through members or returned values", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					'import { getPool } from "pg";',
+					"const pg = new Pool();",
+					"const awaitedPool = await pg;",
+					"const factoryPool = getPool();",
+					"const parseDate = pg.types.getTypeParser(1082);",
+					"const shell = pg.client.driver.spawn;",
+					"const urls = pg.defaults;",
+					"parseDate.run(`job ${name} --force`);",
+					"shell.exec(`docker run ${image}`);",
+					"urls.query(`?page=${page}`);",
+					"awaitedPool.query(`not prose ${awaitedValue}`);",
+					"factoryPool.query(`not prose ${factoryValue}`);",
+					"(await pg).query(`not prose ${directAwaitValue}`);",
+					"getPool().query(`not prose ${directCallValue}`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(3);
+		});
+
 		it("fires for a SQL-leading template with an unknown client", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("sql-injection");
 			const filePath = writeTempFile(
 				"ts",
 				"declare const unknownClient: { execute(query: string): void };\n" +
-					"unknownClient.execute(`  /* generated */ DELETE FROM users WHERE id = ${id}`);\n",
+					"unknownClient.execute(`  /* generated */ DELETE FROM users WHERE id = ${id}`);\n" +
+					"unknownClient.execute(`-- generated\nSELECT * FROM users WHERE id = ${id}`);\n",
 			);
 			const matches = await client.runQueryOnFile(
 				query,
 				filePath,
 				"typescript",
 			);
-			expect(matches).toHaveLength(1);
+			expect(matches).toHaveLength(2);
 		});
 
 		it("binds the package signal to the receiver and covers documented sinks", async () => {
@@ -235,7 +304,28 @@ describe("tree-sitter security gap rules", () => {
 				filePath,
 				"typescript",
 			);
-			expect(matches).toHaveLength(4);
+			expect(matches).toHaveLength(5);
+		});
+
+		it("recognizes SQL modifiers and administrative statements", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"run(`CREATE TEMPORARY TABLE staging_${suffix} (id int)`);",
+					"run(`CREATE UNIQUE INDEX idx_${name} ON users (email)`);",
+					"run(`DROP FUNCTION fn_${name}`);",
+					"run(`ALTER SEQUENCE seq_${name} RESTART`);",
+					"run(`GRANT SELECT ON users TO ${role}`);",
+					"run(`REVOKE SELECT ON users FROM ${role}`);",
+					"run(`SELECT ${column}`);",
+					"run(`CREATE TABLE staging`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(7);
 		});
 
 		it("does not treat comments or unrelated strings as SQL sink signals", async () => {
