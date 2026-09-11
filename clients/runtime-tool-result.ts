@@ -1413,27 +1413,29 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			) {
 				if (parsedSpans.length === 1) {
 					const span = parsedSpans[0];
-					// countFileLines intentionally preserves the split-based guard
-					// convention, where a trailing newline contributes an empty final
-					// element. The host's output line count does not include that
-					// element, so remove it from the span basis before taking the tail.
-					const hasTrailingNewline = nodeFs
-						.readFileSync(span.filePath, "utf8")
-						.endsWith("\n");
-					const spanLineCount = hasTrailingNewline
-						? Math.max(1, span.limit - 1)
-						: span.limit;
-					const shown = Math.min(truncation.outputLines, spanLineCount);
-					spans =
-						shown > 0
-							? [
-									{
-										...span,
-										offset: span.offset + spanLineCount - shown,
-										limit: shown,
-									},
-								]
-							: [];
+					if (span) {
+						// countFileLines intentionally preserves the split-based guard
+						// convention, where a trailing newline contributes an empty final
+						// element. The host's output line count does not include that
+						// element, so remove it from the span basis before taking the tail.
+						const hasTrailingNewline = nodeFs
+							.readFileSync(span.filePath, "utf8")
+							.endsWith("\n");
+						const spanLineCount = hasTrailingNewline
+							? Math.max(1, span.limit - 1)
+							: span.limit;
+						const shown = Math.min(truncation.outputLines, spanLineCount);
+						spans =
+							shown > 0
+								? [
+										{
+											...span,
+											offset: span.offset + spanLineCount - shown,
+											limit: shown,
+										},
+									]
+								: [];
+					}
 				} else if (parsedSpans.length > 1) {
 					recordDegradationOnce({
 						kind: "bash_view_clipped",
