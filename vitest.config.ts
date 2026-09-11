@@ -201,8 +201,10 @@ const timingSensitiveInclude = [
 	//   - lens-diagnostics-occupancy: diagnostics-run loop occupancy.
 	//   - workspace-diagnostics-occupancy: workspace-wide diagnostics fan-out.
 	//   - pipeline-snapshot-occupancy: snapshot assembly walks.
-	//   (performance-report-occupancy used to sit here; #2886 converted it
-	//   to a deterministic yield count, so it runs in the default project.)
+	//   (performance-report-occupancy sat here until #2886 round 2; its
+	//   occupancy row is a real-clock sampler assertion, so it now runs in
+	//   the fully serialized wall-clock-budget lane instead, beside its
+	//   deterministic yield-count row.)
 	//   - word-index-async-build: the async word-index build's yield behaviour.
 	//   - ruby-drive-dirs: not named "-occupancy", but runs two sampler-based
 	//     fail-then-pass screens over the Ruby drive-dir walk (#902 pattern).
@@ -354,6 +356,11 @@ export const wallClockBudgetInclude = [
 	// the fully serialized, dead-last phase.
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
 	"tests/clients/metrics-history-stderr.test.ts",
+	// #2886 round 2: the /lens-perf occupancy row keeps its real-clock
+	// sampler assertion (a yield count is O(input) and cannot see per-chunk
+	// block growth), so the file runs here, fully serialized (flake-shape
+	// admission).
+	"tests/clients/performance-report-occupancy.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	// #2622: adjacent read-guard stars previously produced exponential regex
@@ -545,8 +552,11 @@ export default defineConfig({
 					// index (~1.2s, retry: 2) and at cap 2 starved
 					// performance-report-occupancy's sampler on a loaded runner (107ms
 					// against a 75ms budget, 3/3 retries). #2254 converted that guard to
-					// a load-invariant clock-read count and moved it out of this lane, so
-					// the heavy neighbour is gone and the cap returns to 2.
+					// a load-invariant clock-read count and moved it out of this lane;
+					// #2886 round 2 moved performance-report-occupancy's re-admitted
+					// sampler row to the fully serialized wall-clock-budget lane, so
+					// the cap rests on the remaining members' own measurements (see
+					// the lens-diagnostics-occupancy note at this list's tail).
 					maxWorkers: 2,
 					// Its own phase, after both "default" and "grammar-heavy" drain
 					// (required anyway once maxWorkers differs from "default" — see
