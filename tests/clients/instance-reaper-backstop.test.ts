@@ -194,14 +194,23 @@ function sweepUntrackedOrphans(
 	return sweepUntrackedOrphansImpl(...args);
 }
 
-function lastBackstopRecord(): Record<string, unknown> | undefined {
+function lastBackstopRecord(
+	startIndex = sweepIndex,
+): Record<string, unknown> | undefined {
 	return h.latency
-		.slice(sweepIndex)
+		.slice(startIndex)
 		.find((entry) => entry.phase === "orphan_backstop_reaped");
 }
 
+function backstopMetadataForSweep(startIndex: number): Record<string, unknown> {
+	return (lastBackstopRecord(startIndex)?.metadata ?? {}) as Record<
+		string,
+		unknown
+	>;
+}
+
 function backstopMetadata(): Record<string, unknown> {
-	return (lastBackstopRecord()?.metadata ?? {}) as Record<string, unknown>;
+	return backstopMetadataForSweep(sweepIndex);
 }
 
 const ORPHAN_COMMAND = isWindows
@@ -434,6 +443,7 @@ describe("#1864 review F2: a grace-spared candidate is re-examined", () => {
 			...FAST,
 			graceRetryDelayMs: 5,
 		});
+		const directSweepStart = sweepIndex;
 
 		expect(outcome).toBe("clean");
 
@@ -444,11 +454,11 @@ describe("#1864 review F2: a grace-spared candidate is re-examined", () => {
 		// log, so a metadata lookup keyed on "the last row" instead of "the
 		// row THIS sweep call logged" deterministically reads the retry's
 		// metadata instead of the direct call's.
-		await new Promise((resolve) => setTimeout(resolve, 80));
+		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(h.state.scannerPids.length).toBeGreaterThanOrEqual(2);
 
-		expect(backstopMetadata().tooFresh).toBe(1);
-		expect(backstopMetadata().graceRetryInMs).toBe(5);
+		expect(backstopMetadataForSweep(directSweepStart).tooFresh).toBe(1);
+		expect(backstopMetadataForSweep(directSweepStart).graceRetryInMs).toBe(5);
 	});
 
 	it("does not arm a follow-up when nothing was spared", async () => {
