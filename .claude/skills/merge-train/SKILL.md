@@ -318,9 +318,11 @@ operator's private notes, so a different orchestrator can run the same train.
   green PR. But "does not gate" is not "carries no information", and filtering
   advisory rows out of your attention is a different mistake from filtering
   them out of the gate. `typos (advisory)` found a real defect in #2955's
-  round-12 diff — a comment reading "without reding the file" — which the
+  round-12 diff — a comment in which "reading" was misspelt — which the
   gating checks had no opinion about and which would otherwise have reached
-  master. Gate on the exit code; read the advisory failures on the exact head
+  master. (The misspelling is described rather than reproduced here: quoting
+  it verbatim makes this file itself red the typos lane, which is the same
+  detector-versus-prose problem the testing rules already name.) Gate on the exit code; read the advisory failures on the exact head
   before the merge and dispose of each one (fix as a trailing commit, or say
   why it is noise).
 - **Detection retrospective on every merged bug fix (2026-09-06).** The
