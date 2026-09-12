@@ -6,6 +6,10 @@ import type { BootstrapClients } from "../../../clients/bootstrap.js";
 import { snapshotAdvisoryProvenance } from "../../../clients/advisory-provenance.js";
 import { fetchFreshProjectDiagnostics } from "../../../clients/project-diagnostics/fresh-fetch.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
+import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
@@ -26,18 +30,19 @@ import {
 // a real tmp-dir fixture.
 
 let tmp: string;
-let previousDataDir: string | undefined;
+let previousPiLensHome: string | undefined;
 
 beforeEach(() => {
 	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fresh-fetch-"));
-	previousDataDir = process.env.PILENS_DATA_DIR;
-	process.env.PILENS_DATA_DIR = path.join(tmp, "pi-lens-data");
+	previousPiLensHome = process.env.PI_LENS_HOME;
+	process.env.PI_LENS_HOME = path.join(tmp, "pi-lens-home");
 	_resetStateCacheForTests();
+	resetDegradationLedger();
 });
 
 afterEach(() => {
-	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-	else process.env.PILENS_DATA_DIR = previousDataDir;
+	if (previousPiLensHome === undefined) delete process.env.PI_LENS_HOME;
+	else process.env.PI_LENS_HOME = previousPiLensHome;
 	_resetStateCacheForTests();
 	removeTempDirSync(tmp);
 });
@@ -274,6 +279,120 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 
 		expect(result.unsafeRoot).toBeUndefined();
 		expect(clients.knipClient.analyze).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs the reporter's home-cwd reproduction for an explicit project root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "repo");
+		fs.mkdirSync(project, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			fakeHome,
+			clients,
+			undefined,
+			{ homeDir: fakeHome, analysisRoot: path.join(project, "..", "repo") },
+		);
+
+		expect(result.unsafeRoot).toBeUndefined();
+		expect(result.analysisRootError).toBeUndefined();
+		expect(clients.knipClient.analyze).toHaveBeenCalledWith(
+			fs.realpathSync(project),
+			expect.anything(),
+		);
+	});
+
+	it("refuses an explicit analysis root AT or ABOVE home (#2053, #749)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		fs.mkdirSync(fakeHome, { recursive: true });
+
+		for (const analysisRoot of [fakeHome, path.join(fakeHome, "..")]) {
+			const result = await fetchFreshProjectDiagnostics(
+				cacheManager,
+				path.join(fakeHome, "session"),
+				clients,
+				undefined,
+				{ homeDir: fakeHome, analysisRoot },
+			);
+
+			expect(result.unsafeRoot).toBe(true);
+			expect(result.coldReasons?.knip).toMatch(/at or above/i);
+		}
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(cacheManager.writeCache).not.toHaveBeenCalled();
+	});
+
+	it("refuses a missing or non-directory explicit analysis root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const missing = path.join(tmp, "missing-project");
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			undefined,
+			{ homeDir: path.join(tmp, "home"), analysisRoot: missing },
+		);
+
+		expect(result.analysisRootError).toMatch(/unavailable/i);
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(
+			getDegradationSummary().some(
+				({ kind }) => kind === "lens-diagnostics-analysis-root-rejected",
+			),
+		).toBe(true);
+	});
+
+	it("rejects every explicit root that is not strictly below canonical home (#2977 F1)", async () => {
+		const cacheManager = makeCacheManager();
+		const fakeHome = path.join(tmp, "home", "user");
+		const inside = path.join(fakeHome, "repo");
+		const outside = path.join(tmp, "outside");
+		fs.mkdirSync(inside, { recursive: true });
+		fs.mkdirSync(outside, { recursive: true });
+		fs.symlinkSync(outside, path.join(fakeHome, "link-out"), "dir");
+
+		const cases = [
+			["ceiling", fakeHome, false],
+			["above", path.join(fakeHome, ".."), false],
+			[
+				"traversal",
+				path.join(fakeHome, "repo", "..", "..", "..", "outside"),
+				false,
+			],
+			["absolute outside", outside, false],
+			["symlink outside", path.join(fakeHome, "link-out"), false],
+			["relative", "repo", true],
+			["empty", "", false],
+			["non-existent", path.join(fakeHome, "missing"), false],
+		] as const;
+		for (const [, root, accepted] of cases) {
+			const caseClients = makeClients();
+			const result = await fetchFreshProjectDiagnostics(
+				cacheManager,
+				fakeHome,
+				caseClients,
+				undefined,
+				{ homeDir: fakeHome, analysisRoot: root },
+			);
+			expect(
+				result.unsafeRoot === true || result.analysisRootError !== undefined,
+			).toBe(!accepted);
+			expect(caseClients.knipClient.analyze).toHaveBeenCalledTimes(
+				accepted ? 1 : 0,
+			);
+		}
+		expect(cacheManager.writeCache).toHaveBeenCalled();
+		const summary = getDegradationSummary();
+		expect(
+			summary.some(
+				({ kind }) => kind === "lens-diagnostics-analysis-root-rejected",
+			),
+		).toBe(true);
 	});
 
 	it("reports jscpd cold when the tool isn't available, without writing cache", async () => {

@@ -505,6 +505,12 @@ export function createLensDiagnosticsTool(
 					description: "Include generated-name paths in full scans.",
 				}),
 			),
+			analysisRoot: Type.Optional(
+				Type.String({
+					description:
+						"Explicit project directory for heavyweight analyzers; it must exist and resolve strictly below the home directory.",
+				}),
+			),
 			severity: Type.Optional(
 				Type.String({
 					enum: [...LSP_SEVERITY_FILTERS],
@@ -696,6 +702,10 @@ export function createLensDiagnosticsTool(
 					pathsScope,
 					nextWriteIndex,
 					runtime: getRuntime?.(),
+					analysisRoot:
+						typeof params.analysisRoot === "string"
+							? params.analysisRoot
+							: undefined,
 				});
 			}
 			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
@@ -2070,8 +2080,13 @@ async function formatFullMode(
 		 * points a user at. Default false.
 		 */
 		includeGenerated?: boolean;
+		analysisRoot?: string;
 	} = {},
-): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
+): Promise<{
+	content: [{ type: "text"; text: string }];
+	isError?: boolean;
+	details: object;
+}> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
 	if (typeof runWorkspaceDiagnostics !== "function") {
 		return {
@@ -2117,6 +2132,7 @@ async function formatFullMode(
 		? loadBootstrapClients().then((clients) =>
 				fetchFreshProjectDiagnostics(cacheManager, cwd, clients, signal, {
 					runtime: options.runtime,
+					analysisRoot: options.analysisRoot,
 				}),
 			)
 		: Promise.resolve<FreshProjectDiagnosticsResult>({
@@ -2154,6 +2170,16 @@ async function formatFullMode(
 		}),
 		analyzersPromise,
 	]);
+	if (extracted.analysisRootError) {
+		return {
+			content: [{ type: "text" as const, text: extracted.analysisRootError }],
+			isError: true,
+			details: {
+				mode: "full",
+				analysisRootError: extracted.analysisRootError,
+			},
+		};
+	}
 	const aborted = signal?.aborted ?? false;
 	// #1640: before ANY consumer sees them — the footer reconcile, the widget
 	// merge, the rendered counts — demote TypeScript errors on files tsserver
@@ -2618,16 +2644,18 @@ async function formatFullMode(
 	// id's reason really does differ (not a git repo vs binary unavailable
 	// vs retry cooldown, ...).
 	const coldNote = extracted.unsafeRoot
-		? `\n\nheavyweight analyzers skipped: the working directory resolves at or above the home directory, so a fresh knip/jscpd/madge/gitleaks/govulncheck/trivy/dead-code scan would walk every unrelated tree under it. Re-run from inside a project directory. Absence of their findings is NOT a clean verdict.`
-		: !projectRunnersRequested && genuinelyColdIds.length > 0
-			? `\n\nnot run this call (quick mode): ${genuinelyColdIds.join(", ")}. ${NOT_REQUESTED_REASON}. Absence of their findings is NOT a clean verdict.`
-			: genuinelyColdIds.length > 0
-				? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
-						.map((id) => formatNotRunEntry(id, extracted.coldReasons))
-						.join(
-							", ",
-						)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
-				: "";
+		? `\n\nheavyweight analyzers skipped: the analysis root resolves at or above the home directory, so a fresh knip/jscpd/madge/gitleaks/govulncheck/trivy/dead-code scan would walk every unrelated tree under it. Supply a project directory below the home ceiling. Absence of their findings is NOT a clean verdict.`
+		: extracted.analysisRootError
+			? `\n\nheavyweight analyzers skipped: ${extracted.analysisRootError}. Supply an existing project directory below the home ceiling. Absence of their findings is NOT a clean verdict.`
+			: !projectRunnersRequested && genuinelyColdIds.length > 0
+				? `\n\nnot run this call (quick mode): ${genuinelyColdIds.join(", ")}. ${NOT_REQUESTED_REASON}. Absence of their findings is NOT a clean verdict.`
+				: genuinelyColdIds.length > 0
+					? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
+							.map((id) => formatNotRunEntry(id, extracted.coldReasons))
+							.join(
+								", ",
+							)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
+					: "";
 	// #1004: unlike every other analyzer above (knip/jscpd/madge/gitleaks/
 	// govulncheck/opengrep/trivy/dead-code all run a FRESH whole-project scan
 	// per the fresh-fetch.ts header, so "clean" there really does mean "the

@@ -270,6 +270,7 @@ export type DegradationKind =
 	/** A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
 	| "instance-registry-corrupt"
 	/** A didChange content mirror was recorded behind a newer document version. */
+	| "lens-diagnostics-analysis-root-rejected"
 	| "log-sink-rotate-failed"
 	| "log-sink-rotated"
 	| "log-sink-write-failure"
