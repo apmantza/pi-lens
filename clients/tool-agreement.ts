@@ -1,10 +1,23 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { hasGradleKtlintPlugin } from "./tool-policy.js";
+import { BoundedFifoMap } from "./bounded-cache.js";
+import { findNearestMarkerRoot } from "./path-utils.js";
+import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
+import { hasGradleKtlintPlugin, hasKtlintConfig } from "./tool-policy.js";
+
+export type ToolAgreementDeclineReason =
+	| "evidence-unreadable"
+	| "evidence-unparseable"
+	| "evidence-unsupported";
 
 export type ToolAgreement =
 	| { decision: "established" }
-	| { decision: "decline"; subject: string; reason: string };
+	| {
+			decision: "decline";
+			subject: string;
+			reason: string;
+			reasonCode: ToolAgreementDeclineReason;
+	  };
 
 const NODE_PACKAGES: Record<string, string> = {
 	biome: "@biomejs/biome",
@@ -13,24 +26,23 @@ const NODE_PACKAGES: Record<string, string> = {
 	stylelint: "stylelint",
 };
 
-function projectRoot(cwd: string): string | undefined {
-	let dir = path.resolve(cwd);
-	for (;;) {
-		if (fs.existsSync(path.join(dir, "package.json"))) return dir;
-		const parent = path.dirname(dir);
-		if (parent === dir) return undefined;
-		dir = parent;
-	}
-}
+type JsonRead =
+	| { kind: "missing" }
+	| { kind: "unreadable" }
+	| { kind: "unparseable" }
+	| { kind: "value"; value: Record<string, unknown> };
 
-function readJson(filePath: string): Record<string, unknown> | undefined {
+function readJson(filePath: string): JsonRead {
+	if (!fs.existsSync(filePath)) return { kind: "missing" };
 	try {
 		const value: unknown = JSON.parse(fs.readFileSync(filePath, "utf8"));
 		return value && typeof value === "object"
-			? (value as Record<string, unknown>)
-			: undefined;
-	} catch {
-		return undefined;
+			? { kind: "value", value: value as Record<string, unknown> }
+			: { kind: "unparseable" };
+	} catch (error) {
+		return {
+			kind: error instanceof SyntaxError ? "unparseable" : "unreadable",
+		};
 	}
 }
 
@@ -79,10 +91,27 @@ function nodeAgreement(tool: string, root: string): ToolAgreement | undefined {
 	const packageName = NODE_PACKAGES[tool];
 	if (!packageName) return undefined;
 	const pkg = readJson(path.join(root, "package.json"));
-	const range = pkg && declaredRange(pkg, packageName);
+	if (pkg.kind === "unreadable" || pkg.kind === "unparseable") {
+		return {
+			decision: "decline",
+			subject: `node:${tool}`,
+			reason: `the project package.json is ${pkg.kind}; tool agreement cannot be established`,
+			reasonCode: `evidence-${pkg.kind}`,
+		};
+	}
+	const range =
+		pkg.kind === "value" ? declaredRange(pkg.value, packageName) : undefined;
 	if (!range) return undefined;
 	const lock = readJson(path.join(root, "package-lock.json"));
-	const packages = lock?.packages;
+	if (lock.kind === "unreadable" || lock.kind === "unparseable") {
+		return {
+			decision: "decline",
+			subject: `node:${tool}`,
+			reason: `the project package-lock.json is ${lock.kind}; tool agreement cannot be established`,
+			reasonCode: `evidence-${lock.kind}`,
+		};
+	}
+	const packages = lock.kind === "value" ? lock.value.packages : undefined;
 	const entry =
 		packages && typeof packages === "object"
 			? (packages as Record<string, unknown>)[`node_modules/${packageName}`]
@@ -103,6 +132,7 @@ function nodeAgreement(tool: string, root: string): ToolAgreement | undefined {
 			decision: "decline",
 			subject: `node:${tool}`,
 			reason,
+			reasonCode: "evidence-unreadable",
 		};
 	}
 	return { decision: "established" };
@@ -114,18 +144,49 @@ export function establishToolAgreement(
 	tool: string,
 	cwd: string,
 ): ToolAgreement {
-	if (tool === "ktlint" && hasGradleKtlintPlugin(cwd)) {
-		return {
-			decision: "decline",
-			subject: "kotlin:gradle-ktlint",
-			reason:
-				"the project resolves ktlint through Gradle, so CLI agreement cannot be established from project data",
-		};
+	const key = `${getDegradationLedgerGeneration()}\0${path.resolve(cwd)}\0${tool}`;
+	const cached = agreementCache.get(key);
+	if (cached) return cached;
+	agreementResolutionCount += 1;
+	let agreement: ToolAgreement = { decision: "established" };
+	if (tool === "ktlint") {
+		const ownership = hasGradleKtlintPlugin(cwd);
+		if (ownership.kind === "owned" || hasKtlintConfig(cwd)) {
+			agreement = {
+				decision: "decline",
+				subject: "kotlin:gradle-ktlint",
+				reason:
+					"the project resolves ktlint through Gradle, so CLI agreement cannot be established from project data",
+				reasonCode: "evidence-unsupported",
+			};
+		} else if (ownership.kind === "indeterminate") {
+			agreement = {
+				decision: "decline",
+				subject: "kotlin:gradle-ktlint",
+				reason:
+					"Gradle ownership evidence is unreadable or exceeded its scan budget; tool agreement cannot be established",
+				reasonCode: "evidence-unreadable",
+			};
+		}
 	}
-	const root = projectRoot(cwd);
-	if (root) {
+	const root =
+		agreement.decision === "established"
+			? findNearestMarkerRoot(cwd, ["package.json"], {
+					boundaries: [".git", ".hg", ".svn"],
+				})
+			: null;
+	if (agreement.decision === "established" && root) {
 		const node = nodeAgreement(tool, root);
-		if (node) return node;
+		if (node) agreement = node;
 	}
-	return { decision: "established" };
+	agreementCache.set(key, agreement);
+	return agreement;
+}
+
+const agreementCache = new BoundedFifoMap<string, ToolAgreement>(512);
+let agreementResolutionCount = 0;
+
+/** Test-only counter for the bounded hot-path resolution. */
+export function _getAgreementResolutionCountForTests(): number {
+	return agreementResolutionCount;
 }

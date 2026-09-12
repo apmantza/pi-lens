@@ -10,6 +10,7 @@ import {
 	GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES,
 	hasGradleKtlintPlugin,
 } from "../../clients/tool-policy.js";
+import { _getAgreementResolutionCountForTests } from "../../clients/tool-agreement.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const { resolveToolCommandWithInstallFallback } = vi.hoisted(() => ({
@@ -126,11 +127,37 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
 	});
 
+	it("declines the real autofix path when package evidence is unreadable", async () => {
+		fs.writeFileSync(path.join(env.tmpDir, "package.json"), "{ broken");
+		filePath = path.join(env.tmpDir, "Example.ts");
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		const before = fs.readFileSync(filePath, "utf8");
+		const result = await runAutofix(
+			filePath,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			{
+				biomeClient: {
+					isSupportedFile: () => true,
+					ensureAvailable: async () => true,
+					fixFileAsync: async () => ({ success: true, fixed: 1 }),
+				} as never,
+				ruffClient: { isPythonFile: () => false } as never,
+				fixedThisTurn: new Set<string>(),
+			},
+		);
+		expect(fs.readFileSync(filePath, "utf8")).toBe(before);
+		expect(result.fixedCount).toBe(0);
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
+	});
+
 	it("records one agreement decline across 200 autofix files", async () => {
 		fs.writeFileSync(
 			path.join(env.tmpDir, "build.gradle.kts"),
 			'plugins { id("org.jlleitschuh.gradle.ktlint") version "14.2.0" }\n',
 		);
+		const resolutionsBefore = _getAgreementResolutionCountForTests();
 		for (let index = 0; index < 200; index += 1) {
 			const currentFile = path.join(env.tmpDir, `Example${index}.kt`);
 			fs.writeFileSync(currentFile, "fun main() {}\n");
@@ -146,6 +173,7 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 				},
 			);
 		}
+		expect(_getAgreementResolutionCountForTests() - resolutionsBefore).toBe(1);
 
 		expect(getDegradationSummary()).toEqual([
 			{
@@ -154,7 +182,7 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 				droppedCount: 0,
 				latestReasons: [
 					{
-						subject: "ktlint:gradle",
+						subject: "kotlin:gradle-ktlint",
 						reason: expect.stringContaining("cannot be established"),
 					},
 				],
@@ -291,6 +319,7 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 		] as const;
 
 		for (const testCase of cases) {
+			resetDegradationLedger();
 			fs.rmSync(env.tmpDir, { recursive: true, force: true });
 			fs.mkdirSync(env.tmpDir, { recursive: true });
 			filePath = path.join(env.tmpDir, "Example.kt");
@@ -387,6 +416,17 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 					{
 						subject: "ktlint:gradle-build-logic",
 						reason: expect.stringContaining("budget"),
+					},
+				],
+			},
+			{
+				kind: "autofix-agreement-unavailable",
+				count: 1,
+				droppedCount: 0,
+				latestReasons: [
+					{
+						subject: "kotlin:gradle-ktlint",
+						reason: expect.stringContaining("cannot be established"),
 					},
 				],
 			},

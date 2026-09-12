@@ -691,11 +691,13 @@ agreement before any tool-specific mutator runs. `runAutofix` consults it for
 the autofix registry, and `formatFile` consults it before formatter command
 resolution; the latter covers both `runPipeline`'s immediate-format phase and
 `handleAgentEnd`'s deferred-format loop. Lockfile-backed Node evidence may
-establish agreement; Gradle-managed ktlint and other unproven project
-declarations decline with bounded degradation records. Never infer a CLI
-version from a Gradle plugin or build file, and never add a per-tool reader
-inside a dispatch branch. The deletion test is that removing the seam
-concentrates agreement decisions back into every autonomous-write caller.
+establish agreement; unreadable, unparseable, or unsupported evidence declines
+with a typed reason and bounded degradation record. The seam caches one bounded
+root/evidence resolution per cwd, tool, and session generation, and its marker
+root stops at VCS boundaries. Never infer a CLI version from a Gradle plugin or
+build file, and never add a per-tool reader inside a dispatch branch. The
+deletion test is that removing the seam concentrates agreement decisions back
+into every autonomous-write caller.
 
 Model-facing tool configuration has one complete registry in
 `clients/tool-config.ts`. It includes every pi and MCP tool, drives schema,
@@ -1202,7 +1204,7 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
-**Kotlin autofix declines when project ownership is not independently provable (#3000/#3004).** `hasGradleKtlintPlugin` performs a lexical scan over the owning Gradle files, `buildSrc/`, `build-logic/`, and paths named by executable `includeBuild(...)` calls. It blanks comments and strings before accepting a plugin-id match, so prose and string literals do not establish ownership. The build-logic walk is bounded at `GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES`; exceeding that bound records `gradle-ktlint-scan-budget-exceeded` once per session and declines because the scan cannot establish ownership. Spotless-owned ktlint also declines because its resolved CLI version cannot be established without executing Gradle. The guard covers the synchronous autofix path only; formatter execution remains a separate seam until #3005's shared tool-agreement change.
+**Kotlin autofix declines when project ownership is not independently provable (#3000/#3004).** `hasGradleKtlintPlugin` performs a lexical scan over the owning Gradle files, `buildSrc/`, `build-logic/`, and paths named by executable `includeBuild(...)` calls. It blanks comments and strings before accepting a plugin-id match, so prose and string literals do not establish ownership. The build-logic walk is bounded at `GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES`; exceeding that bound records `gradle-ktlint-scan-budget-exceeded` once per session and declines because the scan cannot establish ownership. Spotless-owned ktlint also declines because its resolved CLI version cannot be established without executing Gradle. The shared agreement seam covers both synchronous autofix and formatter command resolution.
 
 **Pip-backed managed tools follow a private-install ladder (#2916).**
 `installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a
