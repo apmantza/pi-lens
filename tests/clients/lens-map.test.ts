@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -18,7 +17,10 @@ import type {
 	ReviewGraphEdge,
 	ReviewGraphNode,
 } from "../../clients/review-graph/types.js";
-import { removeTempDirSync } from "./test-utils.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 // aggregateGraphToFiles keys files via normalizeMapKey (same as the rest of the
 // review-graph stack) — on Windows that resolves a relative path like "a.ts"
@@ -254,7 +256,8 @@ describe("aggregateGraphToFiles", () => {
 	});
 
 	it("dedupes absolute multi-twin sets after native path normalization", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-map-twins-"));
+		const env = setupTestEnvironment("pi-lens-map-twins-");
+		const root = env.tmpDir;
 		try {
 			const source = path.join(root, "src.ts");
 			const sourceTwins = [
@@ -317,7 +320,7 @@ describe("aggregateGraphToFiles", () => {
 				{ from: idFor(source), to: idFor(dep), weight: 1 },
 			]);
 		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
+			env.cleanup();
 		}
 	});
 
@@ -805,21 +808,23 @@ describe("parseUntrackedIgnoredOutput", () => {
 
 describe("generateLensMap", () => {
 	let tmpDir: string;
+	let cleanup: () => Promise<void>;
 	let previousDataDir: string | undefined;
 
 	beforeEach(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-map-"));
+		const env = setupTestEnvironment("pi-lens-map-");
+		tmpDir = env.tmpDir;
+		cleanup = () => cleanupTestEnvironmentsDrained("pi-lens-map-");
 		previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(tmpDir, "data");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = previousDataDir;
-		// generateLensMap can still be flushing writes into the data dir when
-		// afterEach runs, which surfaces as ENOTEMPTY on Linux — the shared
-		// helper's retry+warn (#810) covers this instead of a local retry.
-		removeTempDirSync(tmpDir);
+		// generateLensMap has no separate persistence barrier. Keep this root
+		// tracked while the shared bounded macrotask drain catches deferred writes.
+		await cleanup();
 	});
 
 	it("writes a self-contained HTML file under the project data dir's reports/ folder", async () => {
