@@ -23,10 +23,23 @@
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	cleanupTestEnvironments,
+	createTempFile,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 const touchFileSpy = vi.hoisted(() => vi.fn());
 const logLatencySpy = vi.hoisted(() => vi.fn());
@@ -154,6 +167,21 @@ describe("quick-mode warmup one-shot retention (#1154)", () => {
 		vi.restoreAllMocks();
 		_resetSubagentModeForTests();
 	});
+
+	const cleanupWarmupOneshotTemps = async () => {
+		// Warmup persists the runtime snapshot after its latency record; drain
+		// that worker before the final macrotask sweep removes this family's roots.
+		await waitForProjectSnapshotPersistsForTests();
+		for (let tick = 0; tick < 3; tick++) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			cleanupTestEnvironments("pi-lens-warmup-oneshot-", {
+				untrack: tick === 2,
+			});
+		}
+	};
+
+	afterEach(cleanupWarmupOneshotTemps);
+	afterAll(cleanupWarmupOneshotTemps);
 
 	it("does NOT schedule/run the warmup in print mode (`-p`/`--print`) — the one-shot retention fix", async () => {
 		const env = setupTestEnvironment("pi-lens-warmup-oneshot-print-");
