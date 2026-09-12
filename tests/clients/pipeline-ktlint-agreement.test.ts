@@ -92,6 +92,173 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 		]);
 	});
 
+	it("declines when buildSrc convention logic applies the ktlint plugin", async () => {
+		const conventionPath = path.join(
+			env.tmpDir,
+			"buildSrc",
+			"src",
+			"main",
+			"kotlin",
+			"KotlinConvention.gradle.kts",
+		);
+		fs.mkdirSync(path.dirname(conventionPath), { recursive: true });
+		fs.writeFileSync(
+			conventionPath,
+			'plugins { id("org.jlleitschuh.gradle.ktlint") version "14.2.0" }\n',
+		);
+
+		const result = await runAutofix(
+			filePath,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			{
+				biomeClient: { isSupportedFile: () => false } as never,
+				ruffClient: { isPythonFile: () => false } as never,
+				fixedThisTurn: new Set<string>(),
+			},
+		);
+
+		expect(result.fixedCount).toBe(0);
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
+	});
+
+	it("applies the lexical ownership edge matrix through runAutofix", async () => {
+		const cases = [
+			{
+				name: "build.gradle.kts declaration",
+				setup: () =>
+					fs.writeFileSync(
+						path.join(env.tmpDir, "build.gradle.kts"),
+						'plugins { id("org.jlleitschuh.gradle.ktlint") }\n',
+					),
+				expectedFixedCount: 0,
+			},
+			{
+				name: "settings.gradle.kts declaration",
+				setup: () =>
+					fs.writeFileSync(
+						path.join(env.tmpDir, "settings.gradle.kts"),
+						'plugins { id("org.jlleitschuh.gradle.ktlint") }\n',
+					),
+				expectedFixedCount: 0,
+			},
+			{
+				name: "buildSrc convention plugin",
+				setup: () => {
+					const conventionPath = path.join(
+						env.tmpDir,
+						"buildSrc/src/main/kotlin/KotlinConvention.gradle.kts",
+					);
+					fs.mkdirSync(path.dirname(conventionPath), { recursive: true });
+					fs.writeFileSync(
+						conventionPath,
+						'plugins { id("org.jlleitschuh.gradle.ktlint") }\n',
+					);
+				},
+				expectedFixedCount: 0,
+			},
+			{
+				name: "included build convention plugin",
+				setup: () => {
+					const conventionPath = path.join(
+						env.tmpDir,
+						"conventions/src/main/kotlin/KotlinConvention.kt",
+					);
+					fs.mkdirSync(path.dirname(conventionPath), { recursive: true });
+					fs.writeFileSync(
+						path.join(env.tmpDir, "settings.gradle.kts"),
+						'includeBuild("conventions")\n',
+					);
+					fs.writeFileSync(
+						conventionPath,
+						'plugins { id("org.jlleitschuh.gradle.ktlint") }\n',
+					);
+				},
+				expectedFixedCount: 0,
+			},
+			{
+				name: "comment in build logic",
+				setup: () =>
+					fs.writeFileSync(
+						path.join(env.tmpDir, "buildSrc.gradle.kts"),
+						'// id("org.jlleitschuh.gradle.ktlint")\n',
+					),
+				expectedFixedCount: 1,
+			},
+			{
+				name: "string in build logic",
+				setup: () =>
+					fs.writeFileSync(
+						path.join(env.tmpDir, "build.gradle.kts"),
+						'val pluginName = "org.jlleitschuh.gradle.ktlint"\n',
+					),
+				expectedFixedCount: 1,
+			},
+			{
+				name: "plugin in a sibling module",
+				setup: () => {
+					const siblingPath = path.join(
+						env.tmpDir,
+						"module-a/build.gradle.kts",
+					);
+					fs.mkdirSync(path.dirname(siblingPath), { recursive: true });
+					fs.writeFileSync(
+						siblingPath,
+						'plugins { id("org.jlleitschuh.gradle.ktlint") }\n',
+					);
+					filePath = path.join(env.tmpDir, "module-b/Example.kt");
+					fs.mkdirSync(path.dirname(filePath), { recursive: true });
+					fs.writeFileSync(filePath, "fun main() { println(1) }\n");
+				},
+				expectedFixedCount: 1,
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			fs.rmSync(env.tmpDir, { recursive: true, force: true });
+			fs.mkdirSync(env.tmpDir, { recursive: true });
+			filePath = path.join(env.tmpDir, "Example.kt");
+			fs.writeFileSync(filePath, "fun main() { println(1) }\n");
+			testCase.setup();
+			resolveToolCommandWithInstallFallback.mockClear();
+			const result = await runAutofix(
+				filePath,
+				env.tmpDir,
+				() => undefined,
+				() => {},
+				{
+					biomeClient: { isSupportedFile: () => false } as never,
+					ruffClient: { isPythonFile: () => false } as never,
+					fixedThisTurn: new Set<string>(),
+				},
+			);
+			expect(result.fixedCount, testCase.name).toBe(
+				testCase.expectedFixedCount,
+			);
+		}
+	});
+
+	it("declines when Spotless owns ktlint", async () => {
+		fs.writeFileSync(
+			path.join(env.tmpDir, "build.gradle.kts"),
+			"spotless { kotlin { ktlint() } }\n",
+		);
+		const result = await runAutofix(
+			filePath,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			{
+				biomeClient: { isSupportedFile: () => false } as never,
+				ruffClient: { isPythonFile: () => false } as never,
+				fixedThisTurn: new Set<string>(),
+			},
+		);
+		expect(result.fixedCount).toBe(0);
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
+	});
+
 	it("keeps the existing ktlint autofix path for a project without Gradle ownership", async () => {
 		const result = await runAutofix(
 			filePath,

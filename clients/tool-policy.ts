@@ -2547,6 +2547,9 @@ const KOTLIN_GRADLE_FILES = [
 ];
 const GRADLE_KTLINT_PLUGIN_PATTERN =
 	/(?:id\s*\(\s*|id\s+|apply\s+plugin\s*:\s*)["']org\.jlleitschuh\.gradle\.ktlint["']/g;
+const GRADLE_BUILD_LOGIC_DIRS = ["buildSrc", "build-logic"];
+const GRADLE_BUILD_LOGIC_EXTENSIONS = [".gradle", ".gradle.kts", ".kt"];
+const GRADLE_INCLUDE_BUILD_PATTERN = /\bincludeBuild\s*\(\s*["']([^"']+)["']/g;
 
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
@@ -2790,26 +2793,77 @@ export function hasKtlintConfig(cwd: string): boolean {
  * ktlint CLI version and must never be used as one (#3000).
  */
 export function hasGradleKtlintPlugin(cwd: string): boolean {
+	const files = new Set<string>();
 	for (const dir of walkUpDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
-			if (!fs.existsSync(filePath)) continue;
+			if (fs.existsSync(filePath)) files.add(filePath);
+		}
+		for (const buildLogicDir of GRADLE_BUILD_LOGIC_DIRS) {
+			addGradleBuildLogicFiles(path.join(dir, buildLogicDir), files);
+		}
+		for (const settings of ["settings.gradle.kts", "settings.gradle"]) {
+			const settingsPath = path.join(dir, settings);
+			if (!fs.existsSync(settingsPath)) continue;
 			try {
-				const raw = fs.readFileSync(filePath, "utf-8");
+				const raw = fs.readFileSync(settingsPath, "utf-8");
 				const stripped = stripGradleCommentsAndStrings(raw);
-				GRADLE_KTLINT_PLUGIN_PATTERN.lastIndex = 0;
+				GRADLE_INCLUDE_BUILD_PATTERN.lastIndex = 0;
 				let match: RegExpExecArray | null;
-				while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
+				while ((match = GRADLE_INCLUDE_BUILD_PATTERN.exec(raw)) !== null) {
 					const code = stripped.slice(
 						match.index,
 						match.index + match[0].length,
 					);
-					if (!/^\s*$/.test(code)) return true;
+					const includedBuild = match[1];
+					if (includedBuild && /^\s*includeBuild\s*\(\s*/.test(code)) {
+						addGradleBuildLogicFiles(path.resolve(dir, includedBuild), files);
+					}
 				}
 			} catch {}
 		}
 	}
+	for (const filePath of files) {
+		try {
+			const raw = fs.readFileSync(filePath, "utf-8");
+			const stripped = stripGradleCommentsAndStrings(raw);
+			GRADLE_KTLINT_PLUGIN_PATTERN.lastIndex = 0;
+			let match: RegExpExecArray | null;
+			while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
+				const code = stripped.slice(match.index, match.index + match[0].length);
+				if (!/^\s*$/.test(code)) return true;
+			}
+		} catch {}
+	}
 	return false;
+}
+
+function addGradleBuildLogicFiles(root: string, files: Set<string>): void {
+	if (!fs.existsSync(root)) return;
+	const pending = [root];
+	while (pending.length > 0) {
+		const dir = pending.pop();
+		if (!dir) continue;
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const entryPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				pending.push(entryPath);
+			} else if (
+				entry.isFile() &&
+				GRADLE_BUILD_LOGIC_EXTENSIONS.some((extension) =>
+					entry.name.endsWith(extension),
+				)
+			) {
+				files.add(entryPath);
+			}
+		}
+	}
 }
 
 export function hasKtfmtConfig(cwd: string): boolean {

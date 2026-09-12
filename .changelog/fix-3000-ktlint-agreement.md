@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Decline ktlint autofix for Gradle-managed projects (refs #3000)** — when pi-lens cannot establish agreement with the project-managed CLI, it leaves the file unchanged and records one bounded session notice.
+- **Decline ktlint autofix when project agreement is unavailable (refs #3000)** — when pi-lens cannot establish agreement with a Gradle- or Spotless-managed CLI, including convention plugins in `buildSrc` or included builds, it leaves the file unchanged and records one bounded session notice.
