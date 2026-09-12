@@ -36,7 +36,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
 import {
-	cleanupTestEnvironments,
+	cleanupTestEnvironmentsDrained,
 	createTempFile,
 	setupTestEnvironment,
 } from "./test-utils.js";
@@ -171,13 +171,9 @@ describe("quick-mode warmup one-shot retention (#1154)", () => {
 	const cleanupWarmupOneshotTemps = async () => {
 		// Warmup persists the runtime snapshot after its latency record; drain
 		// that worker before the final macrotask sweep removes this family's roots.
-		await waitForProjectSnapshotPersistsForTests();
-		for (let tick = 0; tick < 3; tick++) {
-			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-warmup-oneshot-", {
-				untrack: tick === 2,
-			});
-		}
+		await cleanupTestEnvironmentsDrained("pi-lens-warmup-oneshot-", {
+			beforeDrain: waitForProjectSnapshotPersistsForTests,
+		});
 	};
 
 	afterEach(cleanupWarmupOneshotTemps);
