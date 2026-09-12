@@ -680,6 +680,18 @@ Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
 
+Autonomous source writes cross one tool-agreement seam (#3005):
+`clients/tool-agreement.ts` decides whether project evidence establishes
+agreement before any tool-specific mutator runs. `runAutofix` consults it for
+the autofix registry, and `formatFile` consults it before formatter command
+resolution; the latter covers both `runPipeline`'s immediate-format phase and
+`handleAgentEnd`'s deferred-format loop. Lockfile-backed Node evidence may
+establish agreement; Gradle-managed ktlint and other unproven project
+declarations decline with bounded degradation records. Never infer a CLI
+version from a Gradle plugin or build file, and never add a per-tool reader
+inside a dispatch branch. The deletion test is that removing the seam
+concentrates agreement decisions back into every autonomous-write caller.
+
 Model-facing tool configuration has one complete registry in
 `clients/tool-config.ts`. It includes every pi and MCP tool, drives schema,
 diagnostics, effective-config output, `pi-lens check`, and both registration

@@ -78,6 +78,7 @@ import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import type { LedgerHookKey } from "./hook-budgets.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { establishToolAgreement } from "./tool-agreement.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
@@ -822,6 +823,18 @@ export async function runAutofix(
 
 	for (const toolName of preferredAutofixTools) {
 		attemptedTools.push(toolName);
+		const agreement = establishToolAgreement(toolName, cwd);
+		if (agreement.decision === "decline") {
+			const reason = agreement.reason;
+			dbg(`autofix: ${toolName} declined (${reason})`);
+			recordDegradationOnce({
+				kind: "autofix-agreement-unavailable",
+				subject: agreement.subject,
+				reason,
+			});
+			continue;
+		}
+
 		if (toolName === "ruff") {
 			const ruffReady = ruffClient.isPythonFile(filePath)
 				? await ruffClient.ensureAvailable()
@@ -1268,6 +1281,8 @@ export async function runFormatPhase(
 		// out of `formatFailures` (which requeues). Record it once, distinctly.
 		for (const f of result.formatters) {
 			if (f.outcome !== "unavailable") continue;
+			if (f.error?.includes("project tool agreement could not be established"))
+				continue;
 			const reason = f.error ?? "formatter executable not found";
 			formatUnavailable.push({ formatter: f.name, reason });
 			recordDegradationOnce({

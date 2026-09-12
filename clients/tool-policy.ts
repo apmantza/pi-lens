@@ -2545,6 +2545,8 @@ const KOTLIN_GRADLE_FILES = [
 	"settings.gradle.kts",
 	"settings.gradle",
 ];
+const GRADLE_KTLINT_PLUGIN_PATTERN =
+	/(?:id\s*\(\s*|id\s+|apply\s+plugin\s*:\s*)["']org\.jlleitschuh\.gradle\.ktlint["']/g;
 
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
@@ -2780,6 +2782,38 @@ export function getSpotlessKotlinFormatter(
 
 export function hasKtlintConfig(cwd: string): boolean {
 	return getSpotlessKotlinFormatter(cwd) === "ktlint";
+}
+
+/**
+ * Whether Gradle build logic applies the ktlint Gradle plugin. The plugin
+ * establishes project ownership of ktlint, but its plugin version is not a
+ * ktlint CLI version and must never be used as one (#3000).
+ */
+export function hasGradleKtlintPlugin(cwd: string): boolean {
+	for (const dir of walkUpDirs(cwd)) {
+		for (const gradle of KOTLIN_GRADLE_FILES) {
+			const filePath = path.join(dir, gradle);
+			if (!fs.existsSync(filePath)) continue;
+			try {
+				const raw = fs.readFileSync(filePath, "utf-8");
+				const stripped = stripGradleCommentsAndStrings(raw);
+				GRADLE_KTLINT_PLUGIN_PATTERN.lastIndex = 0;
+				let match: RegExpExecArray | null;
+				while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
+					// The match must begin in executable Gradle code. The quoted plugin
+					// id is intentionally present in `raw`, so checking the whole match
+					// against the string-blanked source would reject every real plugin.
+					const quoteOffset = match[0].search(/["']/);
+					const code = stripped.slice(
+						match.index,
+						match.index + (quoteOffset < 0 ? match[0].length : quoteOffset),
+					);
+					if (!/^\s*$/.test(code)) return true;
+				}
+			} catch {}
+		}
+	}
+	return false;
 }
 
 export function hasKtfmtConfig(cwd: string): boolean {

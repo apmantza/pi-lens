@@ -19,13 +19,19 @@ async function loadFormatFile() {
 		oxfmt: mod.oxfmtFormatter,
 		formatter: mod.terragruntHclFormatter,
 		rubocop: mod.rubocopFormatter,
+		ktlint: mod.ktlintFormatter,
 	};
 }
 
 describe("formatFile", () => {
-	beforeEach(() => {
+	let getDegradationSummary: () => unknown;
+	let resetDegradationLedger: () => void;
+	beforeEach(async () => {
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
+		({ getDegradationSummary, resetDegradationLedger } =
+			await import("../../clients/degradation-ledger.js"));
+		resetDegradationLedger();
 	});
 
 	it.each(["prettier", "biome", "oxfmt"] as const)(
@@ -159,6 +165,68 @@ describe("formatFile", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.changed).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("declines a Gradle-managed ktlint before the formatter resolver runs", async () => {
+		const env = setupTestEnvironment("pi-lens-format-ktlint-agreement-");
+		try {
+			const filePath = path.join(env.tmpDir, "App.kt");
+			fs.writeFileSync(filePath, 'fun main() { println("hi") }\n');
+			fs.writeFileSync(
+				path.join(env.tmpDir, "build.gradle"),
+				'plugins { id "org.jlleitschuh.gradle.ktlint" version "12.1.1" }\n',
+			);
+
+			const { formatFile, ktlint } = await loadFormatFile();
+			const result = await formatFile(filePath, ktlint);
+
+			expect(result).toMatchObject({
+				success: true,
+				changed: false,
+				outcome: "unavailable",
+				error: expect.stringContaining("agreement could not be established"),
+			});
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records one agreement decline for 200 formatter-path files", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-format-ktlint-agreement-bounded-",
+		);
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "build.gradle"),
+				'plugins { id "org.jlleitschuh.gradle.ktlint" version "12.1.1" }\n',
+			);
+			const { formatFile, ktlint } = await loadFormatFile();
+			for (let index = 0; index < 200; index += 1) {
+				const filePath = path.join(env.tmpDir, `App${index}.kt`);
+				fs.writeFileSync(filePath, "fun main() {}\n");
+				await formatFile(filePath, ktlint);
+			}
+
+			const agreementRecords = (
+				getDegradationSummary() as Array<{ kind: string }>
+			).filter((record) => record.kind === "formatter-agreement-unavailable");
+			expect(agreementRecords).toEqual([
+				{
+					kind: "formatter-agreement-unavailable",
+					count: 1,
+					droppedCount: 0,
+					latestReasons: [
+						{
+							subject: "kotlin:gradle-ktlint",
+							reason: expect.stringContaining("cannot be established"),
+						},
+					],
+				},
+			]);
 		} finally {
 			env.cleanup();
 		}

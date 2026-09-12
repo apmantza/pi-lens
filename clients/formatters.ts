@@ -43,6 +43,8 @@ import {
 	VENV_BIN_DIRS,
 } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { establishToolAgreement } from "./tool-agreement.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
@@ -127,11 +129,14 @@ export const SKIP_FORMATTING = "skip-formatting" as const;
  * producer collapsed into an ordinary failed result).
  */
 export const FORMATTER_UNAVAILABLE = "formatter-unavailable" as const;
+export const FORMATTER_AGREEMENT_UNAVAILABLE =
+	"formatter-agreement-unavailable" as const;
 export type ResolvedFormatterCommand =
 	| string[]
 	| null
 	| typeof SKIP_FORMATTING
-	| typeof FORMATTER_UNAVAILABLE;
+	| typeof FORMATTER_UNAVAILABLE
+	| typeof FORMATTER_AGREEMENT_UNAVAILABLE;
 
 /**
  * #1940: what formatter selection actually did to answer one file.
@@ -2251,7 +2256,21 @@ async function resolveFormatterCommand(
 	formatter: FormatterInfo,
 	absolutePath: string,
 	cwd: string,
-): Promise<string[] | typeof SKIP_FORMATTING | typeof FORMATTER_UNAVAILABLE> {
+): Promise<
+	| string[]
+	| typeof SKIP_FORMATTING
+	| typeof FORMATTER_UNAVAILABLE
+	| typeof FORMATTER_AGREEMENT_UNAVAILABLE
+> {
+	const agreement = establishToolAgreement(formatter.name, cwd);
+	if (agreement.decision === "decline") {
+		recordDegradationOnce({
+			kind: "formatter-agreement-unavailable",
+			subject: agreement.subject,
+			reason: agreement.reason,
+		});
+		return FORMATTER_AGREEMENT_UNAVAILABLE;
+	}
 	const resolved = formatter.resolveCommand
 		? await formatter.resolveCommand(absolutePath, cwd)
 		: null;
@@ -2309,6 +2328,14 @@ export async function formatFile(
 				changed: false,
 				outcome: "unavailable",
 				error: `${formatter.name}: formatter executable not found`,
+			};
+		}
+		if (cmd === FORMATTER_AGREEMENT_UNAVAILABLE) {
+			return {
+				success: true,
+				changed: false,
+				outcome: "unavailable",
+				error: `${formatter.name}: project tool agreement could not be established`,
 			};
 		}
 		// Run formatter without blocking the event loop.
