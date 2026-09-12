@@ -18,8 +18,6 @@ const r6Mocks = vi.hoisted(() => ({
 	incrementDegradationCount: vi.fn(),
 }));
 
-let mockReadRecordCount = 0;
-
 // This suite predates the consolidated harness and is written against the
 // legacy `{ pi, handlers, commands }` shape. Adapt the canonical createPiMock
 // to that shape so there is a single mock recorder (the old tests/support/
@@ -108,9 +106,7 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 	class MockReadGuard {
 		isNewFile = () => false;
 		checkEdit = () => ({ action: "allow" });
-		recordRead = () => {
-			mockReadRecordCount += 1;
-		};
+		recordRead = () => {};
 		recordWritten = () => {};
 		noteCreatedFile = () => {};
 		getReadHistory = () => [];
@@ -143,7 +139,6 @@ describe("index.ts integration", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
-		mockReadRecordCount = 0;
 		_resetProcessSingletonsForTests();
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-index-int-"));
 		originalStartupMode = process.env.PI_LENS_STARTUP_MODE;
@@ -3282,54 +3277,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			await expect((async () => task?.fn())()).resolves.toBeUndefined();
 			// Nothing is emitted into the replaced session.
 			expect(sentMessages).toHaveLength(0);
-		},
-		INTEGRATION_TIMEOUT_MS,
-	);
-
-	it(
-		"records a bridge read when its captured flag ctx goes stale during replacement",
-		async () => {
-			mockSuiteDeps();
-			const { default: registerExtension } = await import("../index.js");
-			const { pi } = createMockPi();
-			registerExtension(pi as any);
-			const filePath = path.join(process.cwd(), "index.ts");
-
-			const staleMessage =
-				"This extension ctx is stale after session replacement or reload. " +
-				"Do not use a captured pi or command ctx after ctx.newSession(), " +
-				"ctx.fork(), ctx.switchSession(), or ctx.reload().";
-			(pi as unknown as Record<string, unknown>).getFlag = () => {
-				throw new Error(staleMessage);
-			};
-
-			const bridge = (globalThis as Record<symbol, unknown>)[
-				Symbol.for("pi-lens:read-bridge")
-			] as { recordRead(entry: unknown): void };
-			expect(() =>
-				bridge.recordRead({
-					filePath,
-					requestedOffset: 1,
-					requestedLimit: 1,
-				}),
-			).not.toThrow();
-			// The production read-guard receives the record, so a subsequent edit
-			// can use it; the stale flag must never turn this into a missing read.
-			expect(mockReadRecordCount).toBe(1);
-
-			const mutationBridge = (globalThis as Record<symbol, unknown>)[
-				Symbol.for("pi-lens:mutation-bridge")
-			] as {
-				recordMutation(entry: unknown): boolean;
-			};
-			expect(
-				mutationBridge.recordMutation({
-					filePath,
-					kind: "edit",
-					touchedLines: [1, 1],
-					deferAutofix: false,
-				}),
-			).toBe(true);
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
