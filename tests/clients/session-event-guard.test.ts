@@ -282,6 +282,11 @@ describe("wrapSessionEventHandlerWithResult (#1929)", () => {
 describe("isStaleExtensionCtxError (#1925)", () => {
 	it("matches the SDK's message and nothing else", () => {
 		expect(isStaleExtensionCtxError(new Error(STALE_CTX_MESSAGE))).toBe(true);
+		// #2992 recurrence: the bridge fallback must not swallow the narrower
+		// probe phrase, or a different host failure becomes a false degradation.
+		expect(
+			isStaleExtensionCtxError(new Error("stale after session replacement")),
+		).toBe(false);
 		expect(isStaleExtensionCtxError(new Error("some other failure"))).toBe(
 			false,
 		);
