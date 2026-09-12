@@ -31,7 +31,7 @@ import {
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
-	cleanupTestEnvironments,
+	cleanupTestEnvironmentsDrained,
 	createTempFile,
 	setupTestEnvironment,
 } from "./test-utils.js";
@@ -115,9 +115,9 @@ describe("warm-pipeline size-skip notify (#775)", () => {
 	let previousDataDir: string | undefined;
 
 	const cleanupWarmSkipNotifyTemps = async () => {
-		await waitForProjectSnapshotPersistsForTests();
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		cleanupTestEnvironments("pi-lens-warm-skip-notify-");
+		await cleanupTestEnvironmentsDrained("pi-lens-warm-skip-notify-", {
+			beforeDrain: waitForProjectSnapshotPersistsForTests,
+		});
 	};
 
 	afterEach(cleanupWarmSkipNotifyTemps);

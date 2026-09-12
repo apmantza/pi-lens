@@ -16,7 +16,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { setAmbientAbortSignal } from "../../clients/safe-spawn.js";
 import {
 	createTempFile,
-	cleanupTestEnvironments,
+	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
 } from "./test-utils.js";
 import {
@@ -59,14 +59,7 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
-		// The summary collector's persistence can enqueue one more filesystem
-		// turn after handleAgentEnd resolves. Drain several macrotasks before
-		// removing these fixtures; CI scheduling exposed the two summary roots
-		// when one tick was insufficient, while local runs usually settled sooner.
-		for (let tick = 0; tick < 3; tick++) {
-			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-agent-end-");
-		}
+		await cleanupTestEnvironmentsDrained("pi-lens-agent-end-");
 	};
 
 	afterEach(cleanupAgentEndTemps);

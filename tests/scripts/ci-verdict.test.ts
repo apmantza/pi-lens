@@ -1034,6 +1034,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"strictness (advisory)",
 		"host latest nightly (advisory)",
 		"greeting",
+		// #2993: stale verdict-label cleanup is metadata bookkeeping, not a
+		// change-correctness assertion, so token, API, or already-absent-label
+		// failures must never block a merge.
+		"Clear stale CI verdict labels",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
 		// above) -- the full categories+plugins+type-aware oxlint sweep

@@ -63,6 +63,25 @@ export function cleanupTestEnvironments(
 	}
 }
 
+/**
+ * Drain deferred fixture producers before the final cleanup pass. Keeping
+ * roots tracked until the last tick preserves the hygiene sweep's handle.
+ */
+export async function cleanupTestEnvironmentsDrained(
+	prefix: string,
+	options: { beforeDrain?: () => Promise<void> } = {},
+): Promise<void> {
+	await options.beforeDrain?.();
+	for (let tick = 0; tick < 3; tick++) {
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		if (tick === 2) {
+			// The final producer turn can be queued by the preceding drain.
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		cleanupTestEnvironments(prefix, { untrack: tick === 2 });
+	}
+}
+
 export function createTempFile(
 	baseDir: string,
 	relativePath: string,
