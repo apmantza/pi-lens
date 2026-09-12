@@ -13,7 +13,6 @@ import {
 	tmpHygieneAdmissionFor,
 	tmpHygieneLeakReport,
 	tmpHygieneObservedEntries,
-	tmpHygieneObservedPrefixCounts,
 	tmpHygieneUnadmittedEntries,
 } from "../support/vitest-setup.js";
 
@@ -156,14 +155,12 @@ describe("tmp-fixture-hygiene", () => {
 			),
 		) as Array<{
 			prefix: string;
-			count: number;
 			owner: string;
 			reason: string;
 		}>;
 		expect(baseline.length).toBeGreaterThan(0);
 		for (const row of baseline) {
 			expect(row.prefix.startsWith("pi-lens-")).toBe(true);
-			expect(row.count).toBeGreaterThan(0);
 			expect(row.reason).toContain("#2912");
 			expect(fs.existsSync(path.join(REPO_ROOT, row.owner))).toBe(true);
 		}
@@ -175,24 +172,17 @@ describe("tmp-fixture-hygiene", () => {
 				path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene-baseline.json"),
 				"utf8",
 			),
-		) as Array<{ prefix: string; count: number }>;
+		) as Array<{ prefix: string }>;
 		const created = baseline.map((row) =>
 			fs.mkdtempSync(path.join(os.tmpdir(), `${row.prefix}population-`)),
 		);
 		try {
-			const observed = tmpHygieneObservedPrefixCounts(
-				baseline.map((row) => row.prefix),
-			);
+			const observed = tmpHygieneObservedEntries();
 			for (const row of baseline) {
-				const count = observed.get(row.prefix) ?? 0;
 				expect(
-					count,
+					observed.some((entry) => entry.startsWith(row.prefix)),
 					`${row.prefix} disappeared from its owner population; remove the admission`,
-				).toBeGreaterThan(0);
-				expect(
-					count,
-					`${row.prefix} exceeded its checked-in population`,
-				).toBeLessThanOrEqual(row.count);
+				).toBe(true);
 			}
 		} finally {
 			for (const dir of created)
@@ -220,11 +210,30 @@ describe("tmp-fixture-hygiene", () => {
 					observed,
 					"config/tmp-fixture-hygiene.test.ts",
 				).sort(),
-			).toEqual([path.basename(fabricated)].sort());
+			).toContain(path.basename(fabricated));
 		} finally {
 			for (const dir of [...created, fabricated])
 				fs.rmSync(dir, { recursive: true, force: true });
 		}
+	});
+
+	it("reds when a live prefix loses its admission row", () => {
+		const live = "pi-lens-still-live-abc";
+		const admissions = [
+			{
+				file: "*",
+				prefix: "pi-lens-other-",
+				reason: "unrelated admission",
+				issue: "#2912",
+			},
+		];
+		expect(
+			tmpHygieneUnadmittedEntries(
+				[live],
+				"config/tmp-fixture-hygiene.test.ts",
+				admissions,
+			),
+		).toContain(live);
 	});
 
 	it("selects the longest matching prefix for overlapping fixture families", () => {

@@ -197,6 +197,12 @@ Admission matches directory names by prefix, selecting the longest matching
 prefix when families overlap; random `mkdtemp` suffixes never belong in the
 baseline key.
 
+The tmp-fixture baseline is a prefix-set ratchet, not a population-count
+ceiling. Runtime checks require each admitted prefix to remain live and reject
+every unadmitted prefix; worker placement and scheduling make per-prefix counts
+environment-dependent. Removing a still-live row is therefore a deliberate
+ratchet failure, while fixed producers should remove their rows.
+
 For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
 
 **`scripts/hooks/guard-bash.mjs` mechanically enforces four of the non-negotiables below** (#2699): `git stash` in any form, `git reset --soft origin/<branch>` / `--hard`, a HAND-typed `git worktree remove` with two force flags (the sanctioned removal path stays `node scripts/prune-agent-worktrees.mjs`, liveness-checked, or `git worktree unlock` + a single-force remove — the hook denies only the ad-hoc double force, never the script's own internal one, since the hook only ever sees what the Bash tool itself is asked to run), and an unpinned `node` probe that LOADS runtime code from `clients/`/`dist/` with no `PI_LENS_HOME`. Registered as a `PreToolUse` hook on the Bash tool in `.claude/settings.json` via `${CLAUDE_PROJECT_DIR}` (never a bare relative path — the hook's cwd follows Claude into a worktree that may predate the file), it denies with exit code 2 and a one-line reason on stderr before the tool runs, and never blocks on its own failure (malformed input degrades to allow). It is a net under the prose in CLAUDE.md and the playbooks, not a replacement for reading them — it catches the four rules a tokenizer can reliably classify, not the judgment calls the rest of this document asks for.

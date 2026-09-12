@@ -106,7 +106,6 @@ interface TmpLeakAdmission {
 }
 
 type TmpLeakBaseline = Omit<TmpLeakAdmission, "file" | "issue"> & {
-	count: number;
 	owner: string;
 };
 
@@ -235,22 +234,6 @@ export function tmpHygieneUnadmittedEntries(
 	return entries.filter(
 		(name) => !isAdmittedTmpLeak(testFile, name, admissions),
 	);
-}
-
-export function tmpHygieneObservedPrefixCounts(
-	prefixes: readonly string[],
-): Map<string, number> {
-	const entries = snapshotTmpPiLensEntries(
-		readTmpDirEntries(tmpHygieneRealTmp),
-	).filter((entry) => !tmpHygieneBefore.has(entry));
-	const counts = new Map<string, number>(prefixes.map((prefix) => [prefix, 0]));
-	for (const entry of entries) {
-		const owner = [...prefixes]
-			.filter((prefix) => entry.startsWith(prefix))
-			.sort((left, right) => right.length - left.length)[0];
-		if (owner) counts.set(owner, (counts.get(owner) ?? 0) + 1);
-	}
-	return counts;
 }
 
 export function tmpHygieneObservedEntries(): string[] {

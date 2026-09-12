@@ -59,8 +59,14 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		cleanupTestEnvironments("pi-lens-agent-end-");
+		// The summary collector's persistence can enqueue one more filesystem
+		// turn after handleAgentEnd resolves. Drain several macrotasks before
+		// removing these fixtures; CI scheduling exposed the two summary roots
+		// when one tick was insufficient, while local runs usually settled sooner.
+		for (let tick = 0; tick < 3; tick++) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			cleanupTestEnvironments("pi-lens-agent-end-");
+		}
 	};
 
 	afterEach(cleanupAgentEndTemps);
