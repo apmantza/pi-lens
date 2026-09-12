@@ -287,6 +287,67 @@ operator's private notes, so a different orchestrator can run the same train.
   from the auto-fix-mechanical rule in aromanarguello/roman-skills
   `final-review`; NOT borrowed from it: auto-fixing null checks, error
   handling or cleanup hooks, which change meaning.
+- **Reserve the catalog number at DISPATCH, not at write time (2026-09-12).**
+  AGENTS.md's defect-shape catalog is a contended global counter: every brief
+  says "append at the tail with the next free number", so two concurrent lanes
+  both read the same tail and both claim it. #2946 and #2953 collided on 49;
+  #2987 and #2988 are both still sitting on 49 with 50 and 51 already taken;
+  and the same mid-list edits produced markdownlint MD029 three times in one
+  day. The counter is the orchestrator's to allocate, not the fixer's to
+  discover. When a brief authorises a catalog entry, name the exact number in
+  the brief and record the reservation in the ledger beside the lane; when a
+  lane is dropped, release the number there too. A lane must never pick its
+  own. The same rule blocks the orchestrator: a docs change cannot claim N+1
+  while an open PR holds N, because the gap reds MD029 on its own branch
+  before the holder merges — stack it on that branch or hold it until the
+  holder lands.
+- **On a CROSS-REPOSITORY PR, `action_required` is not `absent` (2026-09-12).**
+  A fork PR's workflow runs sit unstarted until a maintainer approves them, and
+  `ci-verdict` correctly reports the required checks as absent and therefore
+  pending. Absent because CI has not registered yet and absent because nobody
+  approved the run look identical in the verdict table and are hours apart in
+  remedy. Before treating a fork PR as "CI still coming", read the runs
+  directly:
+  `gh api "repos/<owner>/<repo>/actions/runs?head_sha=<sha>" --jq '.workflow_runs[] | "\(.id)\t\(.name)\t\(.status)\t\(.conclusion)"'`
+  and approve each `action_required` run with
+  `gh api -X POST repos/<owner>/<repo>/actions/runs/<id>/approve`. #2983 sat
+  unapproved while the lane read it as a slow queue.
+- **Read the advisory rows before merging, even though they never gate
+  (2026-09-12).** The exit-code rule above is right and stays: never text-match
+  the verdict table for `failure`, because advisory rows print `failure` on a
+  green PR. But "does not gate" is not "carries no information", and filtering
+  advisory rows out of your attention is a different mistake from filtering
+  them out of the gate. `typos (advisory)` found a real defect in #2955's
+  round-12 diff — a comment in which "reading" was misspelt — which the
+  gating checks had no opinion about and which would otherwise have reached
+  master. (The misspelling is described rather than reproduced here: quoting
+  it verbatim makes this file itself red the typos lane, which is the same
+  detector-versus-prose problem the testing rules already name.) Gate on the exit code; read the advisory failures on the exact head
+  before the merge and dispose of each one (fix as a trailing commit, or say
+  why it is noise).
+- **`gh run rerun` replays the ORIGINAL merge commit; it does not pick up a
+  moved base (2026-09-12).** A pull-request CI run tests `refs/pull/N/merge`,
+  master merged into the branch. When master moves — say a fix for the very
+  failure that red the lane just landed — rerunning the failed job re-runs the
+  SAME merge commit, so the fix is not in the tree and the lane reds again
+  identically. The log's checkout line is the proof and is worth reading every
+  time: `HEAD is now at <sha> Merge <branch-sha> into <BASE-sha>`; if that base
+  is not current master, the run tells you nothing about current master. This
+  cost a false conclusion on 2026-09-12 — a lane red on `pi-lens-warmup-oneshot-*`
+  after its fix had merged looked like the fix not working, and the base was one
+  commit behind. Re-arm with
+  `gh api -X PUT repos/<o>/<r>/pulls/<N>/update-branch` (or a push), never a
+  rerun, whenever the reason to re-run is that the BASE changed. Same family as
+  the retarget rule above: the event that re-runs CI must be one that rebuilds
+  the merge ref.
+- **A nondeterministic gate makes a green a sample, not a proof
+  (2026-09-12).** The fixture-hygiene ratchet reds only when a leaky family
+  actually loses the race, so two PRs on the SAME base can disagree: on
+  2026-09-12 #2994 went green and #2997 red on identical master. Before merging
+  on a green whose base is stale, ask whether the gate that matters is
+  deterministic; if it is not, re-gate on a current base rather than bank the
+  sample. The merged result runs against master, not against the tree that
+  happened to pass.
 - **Detection retrospective on every merged bug fix (2026-09-06).** The
   catalog records the CODE lesson of a bug (a shape, a screen, a guard). Before
   a bug-labelled lane's ledger row closes, the orchestrator also records the

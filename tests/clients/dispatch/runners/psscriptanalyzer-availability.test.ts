@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../../../clients/dispatch/runners/utils/availability-policy.js";
 
 const {
@@ -84,6 +84,13 @@ const ok = (stdout = "") => ({ stdout, stderr: "", status: 0 });
 /** `Get-Module -ListAvailable` ran and found nothing: the module is absent. */
 const moduleMissing = { stdout: "", stderr: "", status: 1 };
 
+const fixtureRoots = new Set<string>();
+afterEach(() => {
+	for (const root of fixtureRoots)
+		fs.rmSync(root, { recursive: true, force: true });
+	fixtureRoots.clear();
+});
+
 /** The child never started. Windows' `spawn UNKNOWN`, the #533 class. */
 const spawnUnknownResult = {
 	stdout: "",
@@ -111,6 +118,7 @@ const decisions = () =>
 
 function ctx(): never {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-psa-"));
+	fixtureRoots.add(cwd);
 	const filePath = path.join(cwd, "script.ps1");
 	fs.writeFileSync(filePath, "Write-Output 'hi'\n");
 	return { cwd, filePath } as never;
