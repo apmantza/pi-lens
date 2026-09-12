@@ -78,6 +78,7 @@ import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import type { LedgerHookKey } from "./hook-budgets.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { checkKtlintVersionSkew } from "./ktlint-version-skew.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
@@ -576,9 +577,31 @@ async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryKtlintFix(filePath: string, cwd: string): Promise<number> {
+async function tryKtlintFix(
+	filePath: string,
+	cwd: string,
+	dbg: PipelineContext["dbg"],
+): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
 	if (!cmd) return 0;
+
+	// #3000 step 1: a ktlint that cannot prove it agrees with the project's
+	// Gradle-pinned version must not rewrite the file. Declining is the safe
+	// direction on a seam that writes autonomously — a skipped legitimate
+	// fix is an annoyance, a foreign ruleset applied to tracked source is
+	// the reported harm. One bounded ledger row per session (never per
+	// file); the per-file trace stays on the debug line.
+	const skew = await checkKtlintVersionSkew(cmd, cwd);
+	if (skew && skew.decision === "decline") {
+		dbg(`autofix: ktlint declined for ${filePath} (${skew.reason})`);
+		recordDegradationOnce({
+			kind: "autofix-version-skew",
+			subject: "ktlint",
+			reason: skew.reason,
+		});
+		return 0;
+	}
+	if (skew) dbg(`autofix: ktlint agreed for ${filePath} (${skew.reason})`);
 
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -917,7 +940,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ktlint") {
-			const ktlintFixed = await tryKtlintFix(filePath, cwd);
+			const ktlintFixed = await tryKtlintFix(filePath, cwd, dbg);
 			if (ktlintFixed > 0) {
 				fixedCount += ktlintFixed;
 				autofixTools.push(`ktlint:${ktlintFixed}`);

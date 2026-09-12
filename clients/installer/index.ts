@@ -2325,7 +2325,7 @@ export function parsePinnedVersion(packageName: string): string | undefined {
 }
 
 /** Extract the first semver-ish token (e.g. "3.5.10") from `--version` output. */
-function extractVersionToken(output: string): string | undefined {
+export function extractVersionToken(output: string): string | undefined {
 	return output.match(/\d+\.\d+\.\d+(?:[-+][\w.]+)?/)?.[0];
 }
 
