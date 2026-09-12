@@ -1,10 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	cleanupTestEnvironments,
-	setupTestEnvironment,
-} from "./clients/test-utils.js";
+import { removeTempDirSync } from "./clients/test-utils.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 describe("#2992 read bridge lifecycle", () => {
@@ -12,7 +9,11 @@ describe("#2992 read bridge lifecycle", () => {
 	let filePath: string;
 
 	beforeEach(() => {
-		probeHome = setupTestEnvironment("pi-lens-2992-home-").tmpDir;
+		const probeRoot = path.join(process.cwd(), ".probe-home");
+		fs.mkdirSync(probeRoot, { recursive: true });
+		probeHome = path.join(probeRoot, "pi-lens-2992-home");
+		removeTempDirSync(probeHome);
+		fs.mkdirSync(probeHome, { recursive: true });
 		process.env.PI_LENS_HOME = probeHome;
 		filePath = path.join(process.cwd(), "index-2992-probe.ts");
 		fs.writeFileSync(filePath, "export const guarded = true;\n");
@@ -22,9 +23,7 @@ describe("#2992 read bridge lifecycle", () => {
 		fs.rmSync(filePath, { force: true });
 		for (let tick = 0; tick < 3; tick++) {
 			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-2992-home-", {
-				untrack: tick === 2,
-			});
+			removeTempDirSync(probeHome);
 		}
 		vi.restoreAllMocks();
 	});
