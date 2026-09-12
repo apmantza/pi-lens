@@ -84,7 +84,7 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 				droppedCount: 0,
 				latestReasons: [
 					{
-						subject: "ktlint:gradle",
+						subject: "kotlin:gradle-ktlint",
 						reason: expect.stringContaining("cannot be established"),
 					},
 				],

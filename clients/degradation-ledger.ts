@@ -84,6 +84,7 @@ export type DegradationKind =
 	 * one. The installer keeps such an installation rather than deleting it.
 	 */
 	| "ast-grep-rules-dir-missing"
+	| "autofix-agreement-unavailable"
 	/** A git ls-files collection was truncated before parsing completed (#2075). */
 	| "aux-runner-findings-lost"
 	| "aux_wait_demoted"

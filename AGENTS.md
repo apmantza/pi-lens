@@ -680,6 +680,15 @@ Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
 group (see the placement rules in "Maintaining this file").
 
+Autofix crosses one tool-agreement seam (#3005): `clients/tool-agreement.ts`
+decides whether project evidence establishes agreement before any tool-specific
+mutator runs. Lockfile-backed Node evidence may establish it; Gradle-managed
+ktlint and other unproven project declarations decline with one bounded
+`autofix-agreement-unavailable` record. Never infer a CLI version from a Gradle
+plugin or build file, and never add a per-tool reader inside a dispatch branch.
+The deletion test is that removing the seam concentrates agreement decisions
+back into every caller.
+
 Model-facing tool configuration has one complete registry in
 `clients/tool-config.ts`. It includes every pi and MCP tool, drives schema,
 diagnostics, effective-config output, `pi-lens check`, and both registration
