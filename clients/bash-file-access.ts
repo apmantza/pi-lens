@@ -17,6 +17,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { isReadableSourceFile } from "./file-kinds.js";
+import { classifyMutatingTool } from "./mutating-tool.js";
 import { countFileLines } from "./read-guard-tool-lines.js";
 import type { SearchReadLocation } from "./search-read-registration.js";
 import { stripAnsi } from "./sanitize.js";
@@ -1073,4 +1074,35 @@ export function extractDeletedPathsFromCommand(
 	}
 
 	return Array.from(out);
+}
+
+/**
+ * One edit-class predicate for the `tool_result` path (#2939 F3).
+ *
+ * `index.ts` used to answer "is this an edit-class result" twice — once in
+ * the handler body (gated on `toolName === "bash"`) and once in the
+ * `budgetKey` callback (no tool gate) — and the copies disagreed on the
+ * first third-party case tried (`mcp__acme__shell` with `input.command`:
+ * wrapper said edit, handler said read-only). Both call sites now share
+ * this function, so the answer is written once — but the call sites
+ * themselves are not yet pinned (W4/M8, #2939), so a future tool-name gate
+ * re-introduced at one of them would still pass the suite.
+ *
+ * A result is edit-class when the mutation seam classifies it, or when its
+ * `input.command` names written files. The command half carries no tool-name
+ * gate on purpose: a shell that wrote files runs the same pipeline whatever
+ * its tool is named, and the edit budget must cover that work.
+ */
+export function isEditClassToolResult(
+	event: { toolName?: string; input?: { command?: unknown } },
+	cwd: string,
+): boolean {
+	if (classifyMutatingTool(event, { recognizeOnly: true }) !== undefined) {
+		return true;
+	}
+	const command = event?.input?.command;
+	return (
+		typeof command === "string" &&
+		extractWrittenPathsFromCommand(command, cwd).length > 0
+	);
 }

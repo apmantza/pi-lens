@@ -37,12 +37,49 @@ export function setupTestEnvironment(prefix = "pi-lens-test-"): {
 	cleanup: () => void;
 } {
 	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	activeTestEnvironments.add(tmpDir);
 	return {
 		tmpDir,
 		cleanup: () => {
 			removeTempDirSync(tmpDir);
+			// Keep the root tracked: deferred work can recreate it before the
+			// owning family's cleanup sweep runs.
 		},
 	};
+}
+
+const activeTestEnvironments = new Set<string>();
+
+export function cleanupTestEnvironments(
+	prefix: string,
+	options: { untrack?: boolean } = {},
+): void {
+	for (const tmpDir of activeTestEnvironments) {
+		if (!path.basename(tmpDir).startsWith(prefix)) continue;
+		removeTempDirSync(tmpDir);
+		if (options.untrack !== false && !fs.existsSync(tmpDir)) {
+			activeTestEnvironments.delete(tmpDir);
+		}
+	}
+}
+
+/**
+ * Drain deferred fixture producers before the final cleanup pass. Keeping
+ * roots tracked until the last tick preserves the hygiene sweep's handle.
+ */
+export async function cleanupTestEnvironmentsDrained(
+	prefix: string,
+	options: { beforeDrain?: () => Promise<void> } = {},
+): Promise<void> {
+	await options.beforeDrain?.();
+	for (let tick = 0; tick < 3; tick++) {
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		if (tick === 2) {
+			// The final producer turn can be queued by the preceding drain.
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		cleanupTestEnvironments(prefix, { untrack: tick === 2 });
+	}
 }
 
 export function createTempFile(
