@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
@@ -7,6 +7,7 @@ import {
 	loadProjectSnapshot,
 	saveProjectSnapshot,
 	saveRuntimeProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import {
 	buildReverseDependencyIndexFromGraph,
@@ -24,9 +25,27 @@ import type {
 	ReviewGraphNode,
 } from "../../clients/review-graph/types.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	cleanupTestEnvironments,
+	createTempFile,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 describe("reverse dependency index", () => {
+	const cleanupReverseDepsTemps = async () => {
+		// Snapshot persistence can enqueue filesystem work after a test resolves.
+		// Drain several macrotasks before removing this family's fixtures; clean
+		// after each tick so delayed work cannot recreate an earlier root.
+		await waitForProjectSnapshotPersistsForTests();
+		for (let tick = 0; tick < 3; tick++) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			cleanupTestEnvironments("pi-lens-reverse-deps-");
+		}
+	};
+
+	afterEach(cleanupReverseDepsTemps);
+	afterAll(cleanupReverseDepsTemps);
+
 	it(
 		"patches random single-file mutations equivalently to a full rebuild",
 		{
