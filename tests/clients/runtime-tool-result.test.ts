@@ -844,6 +844,10 @@ describe("bash grep searchReads registration", () => {
 			fs.writeFileSync(filePath, "const a = 1;\nconst b = 2;\nconst c = 3;\n");
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
+			const afterWriteSpy = vi.spyOn(
+				runtime.partialApplyRecords,
+				"noteAfterWriteHash",
+			);
 			readFileSyncSpy.mockClear();
 			await handleToolResult({
 				event: {
@@ -873,11 +877,11 @@ describe("bash grep searchReads registration", () => {
 			const rawHashReads = readFileSyncSpy.mock.calls.filter(
 				(args) => args.length === 1,
 			);
-			// Two raw-byte hashes total across three applied records: one post-write
-			// hash (shared by all three record() calls AND reused as the pipeline
-			// dedup key, finding 3) and one post-pipeline hash. record() never
-			// re-reads per edit.
-			expect(rawHashReads).toHaveLength(2);
+			// One raw-byte hash is enough when the pipeline reports no write: the
+			// post-write identity is also the state the pipeline analysed. This
+			// prevents #2499's parked-pipeline latch from quoting later disk bytes.
+			expect(rawHashReads).toHaveLength(1);
+			expect(afterWriteSpy).not.toHaveBeenCalled();
 			const records = [
 				runtime.partialApplyRecords.find(
 					filePath,

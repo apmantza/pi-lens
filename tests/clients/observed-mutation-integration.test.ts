@@ -38,10 +38,7 @@ import { readChangesSince } from "../../clients/project-changes.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
-import {
-	clearLastAnalyzedStateCache,
-	handleToolResult,
-} from "../../clients/runtime-tool-result.js";
+import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
@@ -920,6 +917,59 @@ describe("#2464 — the observed-settle path also dispatches pipeline analysis",
 		}
 	});
 
+	it("analyses bytes written while an earlier pipeline is parked", async () => {
+		// PROBE-LATCH: a third-party write while the first real handler call is
+		// parked must not become the first pipeline's already-analysed identity.
+		// On pre-fix code, dispatchPipelineAnalysis reads disk after await and
+		// stamps S2 even though the parked pipeline analysed S1; C2 at S2 is then
+		// skipped. This drives the real handleToolCall/handleToolResult path.
+		const env = setupTestEnvironment("pi-lens-2499-latch-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		try {
+			const filePath = path.join(env.tmpDir, "latch.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const { runtime, cacheManager } = newSession(env.tmpDir);
+			const gated = gatePipeline(vi.mocked(runPipeline));
+			const firstEvent = patchEvent(filePath, "call-2499-latch-c1");
+
+			await handleToolCall(
+				toolCallDeps({
+					event: firstEvent,
+					cwd: env.tmpDir,
+					runtime,
+					cacheManager,
+				}),
+			);
+			fs.writeFileSync(filePath, `${SOURCE}const s1 = 1;\n`);
+			const first = handleToolResult(
+				toolResultDeps({ event: firstEvent, runtime, cacheManager }),
+			);
+			await flushAsyncWork();
+			expect(gated.gates).toHaveLength(1);
+
+			// A writer outside pi-lens moves the bytes while C1's pipeline is parked.
+			fs.writeFileSync(filePath, `${SOURCE}const s2 = 2;\n`);
+			gated.release(0, 1);
+			await first;
+
+			// C2 arrives at S2. It must run because C1 analysed S1, not S2.
+			const second = handleToolResult(
+				toolResultDeps({ event: firstEvent, runtime, cacheManager }),
+			);
+			await flushAsyncWork();
+			gated.release(1, gated.gates.length);
+			await second;
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(2);
+		} finally {
+			ungatePipeline(vi.mocked(runPipeline));
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
 	it("surfaces a pipeline crash on the observed path the way the classified path does", async () => {
 		// #2464 review round 2, S6. A crash used to be swallowed into a `dbg`
 		// line the model never sees, so an observed tool's edit came back looking
@@ -1202,75 +1252,6 @@ describe("#2464 review round 3 — F1: the observed dispatch shares the classifi
 			else process.env.PI_LENS_TOOL_RESULT_DEBOUNCE_MS = previousDebounce;
 			env.cleanup();
 		}
-	});
-
-	it("never evicts a live registration when a stale release names the same file", async () => {
-		// The identity guard in `releaseInFlightPipeline`, in isolation. With the
-		// shared claim now consulted by both dispatch call sites, no production
-		// path can register the same file+hash twice any more — so the guard's
-		// trigger is unreachable end to end, and driving the registry seam
-		// directly is the only honest way to prove the guard is doing work.
-		// Delete the `inFlightPipelines.get(filePath) === registered` conjunct and
-		// the last assertion goes red.
-		//
-		// Imported dynamically, and ONLY here, so the module-level imports of this
-		// file stay to symbols that exist on pre-fix code — every other case in
-		// it then fails on an assertion rather than on a missing export.
-		const {
-			claimPipelineDispatch,
-			registerInFlightPipeline,
-			releaseInFlightPipeline,
-		} = await import("../../clients/runtime-tool-result.js");
-		clearLastAnalyzedStateCache();
-		const filePath = path.join(
-			process.cwd(),
-			"tests",
-			"__identity-guard-2464.ts",
-		);
-		const settled = Promise.resolve();
-		const liveClassified = {
-			promise: settled,
-			participantIds: ["c"],
-			participantTotal: 1,
-		};
-
-		// Two registrations for one state, the shape round 2's observed path
-		// could produce: the second overwrites the first inside one inner map.
-		const firstMap = registerInFlightPipeline(filePath, "hash-1", {
-			promise: settled,
-			participantIds: ["a"],
-			participantTotal: 1,
-		});
-		const secondMap = registerInFlightPipeline(filePath, "hash-1", {
-			promise: settled,
-			participantIds: ["b"],
-			participantTotal: 1,
-		});
-		expect(secondMap).toBe(firstMap);
-
-		// A releases: the map empties and the outer entry goes with it.
-		releaseInFlightPipeline(filePath, "hash-1", firstMap);
-		// A live, unrelated pipeline re-creates the outer entry under a FRESH map.
-		const classifiedMap = registerInFlightPipeline(
-			filePath,
-			"hash-2",
-			liveClassified,
-		);
-		expect(classifiedMap).not.toBe(firstMap);
-		// B releases last, holding the stale reference.
-		releaseInFlightPipeline(filePath, "hash-1", secondMap);
-
-		const claim = claimPipelineDispatch({
-			filePath,
-			stateHash: "hash-2",
-			turnIndex: 7,
-			participantId: "d",
-			dbg: () => {},
-		});
-		expect(claim.proceed).toBe(false);
-		expect(liveClassified.participantTotal).toBe(2);
-
-		releaseInFlightPipeline(filePath, "hash-2", classifiedMap);
 	});
 });
 

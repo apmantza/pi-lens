@@ -1195,6 +1195,15 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
+The in-flight pipeline registry and the same-turn analysed-state latch share
+one synchronous claim before dispatch. The latch records `initialStateHash`
+when `PipelineResult.fileModified` is false, because that is the state the
+pipeline analysed; it reads post-pipeline disk only when `fileModified` is
+true, because only then did the pipeline claim to analyse its own write. This
+identity rule covers both classified and observed callers and prevents a
+third-party write during the pipeline await from being marked analysed
+without a pipeline run (#2499).
+
 **Pip-backed managed tools follow a private-install ladder (#2916).**
 `installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a
 normal `--user` install. A refusal containing
