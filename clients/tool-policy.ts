@@ -2558,6 +2558,11 @@ const GRADLE_INCLUDE_BUILD_PATTERN = /\bincludeBuild\s*\(\s*["']([^"']+)["']/g;
  */
 export const GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES = 10_000;
 
+export type GradleKtlintOwnership =
+	| { kind: "owned" }
+	| { kind: "not-owned" }
+	| { kind: "indeterminate" };
+
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
 	ktlintConfig: boolean;
@@ -2799,9 +2804,9 @@ export function hasKtlintConfig(cwd: string): boolean {
  * establishes project ownership of ktlint, but its plugin version is not a
  * ktlint CLI version and must never be used as one (#3000).
  */
-export function hasGradleKtlintPlugin(cwd: string): boolean {
+export function hasGradleKtlintPlugin(cwd: string): GradleKtlintOwnership {
 	const files = new Set<string>();
-	const scan = { entries: 0, exceeded: false };
+	const scan = { entries: 0, exceeded: false, indeterminate: false };
 	for (const dir of walkUpDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
@@ -2840,7 +2845,9 @@ export function hasGradleKtlintPlugin(cwd: string): boolean {
 						}
 					}
 				}
-			} catch {}
+			} catch {
+				scan.indeterminate = true;
+			}
 		}
 	}
 	if (scan.exceeded) {
@@ -2851,8 +2858,9 @@ export function hasGradleKtlintPlugin(cwd: string): boolean {
 				`Gradle build-logic ownership scan exceeded its ${GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES}-entry budget; ` +
 				"ownership cannot be established, so ktlint autofix is declined",
 		});
-		return false;
+		return { kind: "indeterminate" };
 	}
+	if (scan.indeterminate) return { kind: "indeterminate" };
 	for (const filePath of files) {
 		try {
 			const raw = fs.readFileSync(filePath, "utf-8");
@@ -2861,17 +2869,19 @@ export function hasGradleKtlintPlugin(cwd: string): boolean {
 			let match: RegExpExecArray | null;
 			while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
 				const code = stripped.slice(match.index, match.index + match[0].length);
-				if (!/^\s*$/.test(code)) return true;
+				if (!/^\s*$/.test(code)) return { kind: "owned" };
 			}
-		} catch {}
+		} catch {
+			return { kind: "indeterminate" };
+		}
 	}
-	return false;
+	return { kind: "not-owned" };
 }
 
 function addGradleBuildLogicFiles(
 	root: string,
 	files: Set<string>,
-	scan: { entries: number },
+	scan: { entries: number; indeterminate: boolean },
 ): boolean {
 	if (!fs.existsSync(root)) return true;
 	const pending = [root];
@@ -2882,6 +2892,7 @@ function addGradleBuildLogicFiles(
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch {
+			scan.indeterminate = true;
 			continue;
 		}
 		for (const entry of entries) {

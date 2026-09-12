@@ -582,7 +582,9 @@ async function tryKtlintFix(
 	cwd: string,
 	dbg: PipelineContext["dbg"],
 ): Promise<number> {
-	if (hasGradleKtlintPlugin(cwd) || hasKtlintConfig(cwd)) {
+	const gradleOwnership = hasGradleKtlintPlugin(cwd);
+	if (gradleOwnership.kind === "indeterminate") return 0;
+	if (gradleOwnership.kind === "owned" || hasKtlintConfig(cwd)) {
 		const reason =
 			"this project resolves ktlint through Gradle or Spotless, so the version this run used " +
 			"cannot be established from the project — declining to autofix";

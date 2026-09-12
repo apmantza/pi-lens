@@ -55,7 +55,7 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 		["string", 'val name = "id(\\"org.jlleitschuh.gradle.ktlint\\")"\n'],
 	])("does not treat a %s as Gradle ownership", (_kind, source) => {
 		fs.writeFileSync(path.join(env.tmpDir, "build.gradle.kts"), source);
-		expect(hasGradleKtlintPlugin(env.tmpDir)).toBe(false);
+		expect(hasGradleKtlintPlugin(env.tmpDir).kind).toBe("not-owned");
 	});
 
 	it("declines before resolving or running ktlint for a Gradle-managed project", async () => {
@@ -175,7 +175,9 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 				fs.writeFileSync(path.join(noiseDir, `Noise${index}.kt`), "");
 			}
 
-			expect(hasGradleKtlintPlugin(env.tmpDir)).toBe(false);
+			expect(hasGradleKtlintPlugin(env.tmpDir).kind).toBe(
+				exceeded ? "indeterminate" : "not-owned",
+			);
 			expect(getDegradationSummary()).toEqual(
 				exceeded
 					? [
@@ -347,5 +349,47 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 
 		expect(detectFileChangedAfterCommand).toHaveBeenCalledOnce();
 		expect(result.fixedCount).toBe(1);
+	});
+
+	it("declines the ktlint write when the Gradle ownership scan exceeds its budget", async () => {
+		const noiseDir = path.join(env.tmpDir, "buildSrc", "noise");
+		fs.mkdirSync(noiseDir, { recursive: true });
+		for (
+			let index = 0;
+			index < GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES;
+			index += 1
+		) {
+			fs.writeFileSync(path.join(noiseDir, `Noise${index}.kt`), "");
+		}
+		const before = fs.readFileSync(filePath, "utf8");
+
+		const result = await runAutofix(
+			filePath,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			{
+				biomeClient: { isSupportedFile: () => false } as never,
+				ruffClient: { isPythonFile: () => false } as never,
+				fixedThisTurn: new Set<string>(),
+			},
+		);
+
+		expect(fs.readFileSync(filePath, "utf8")).toBe(before);
+		expect(result.fixedCount).toBe(0);
+		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
+		expect(getDegradationSummary()).toEqual([
+			{
+				kind: "gradle-ktlint-scan-budget-exceeded",
+				count: 1,
+				droppedCount: 0,
+				latestReasons: [
+					{
+						subject: "ktlint:gradle-build-logic",
+						reason: expect.stringContaining("budget"),
+					},
+				],
+			},
+		]);
 	});
 });
