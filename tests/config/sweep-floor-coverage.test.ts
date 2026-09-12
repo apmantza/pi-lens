@@ -74,6 +74,8 @@ function sweepShapeFiles(): string[] {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	"tests/config/github-token-write-gates.test.ts":
+		"workflow population governance sweep; its own detector is not a production registry sweep",
 	// #2725: two-direction set equality over every .d.mts/.mjs sibling pair; the
 	// failure list is the whole registry and there are no exemptions by design.
 	"tests/config/dmts-export-drift.test.ts":

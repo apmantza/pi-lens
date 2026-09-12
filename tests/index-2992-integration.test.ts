@@ -1,18 +1,31 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	cleanupTestEnvironments,
-	setupTestEnvironment,
-} from "./clients/test-utils.js";
+import { removeTempDirSync } from "./clients/test-utils.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
+import {
+	_settleRegistryMutationsForTests,
+	deregisterInstance,
+} from "../clients/instance-registry.js";
+
+const workerHome = process.env.PI_LENS_HOME;
 
 describe("#2992 read bridge lifecycle", () => {
 	let probeHome: string;
 	let filePath: string;
+	let previousHome: string | undefined;
+	let homeAtSetup: string | undefined;
+	let setupCount = 0;
 
 	beforeEach(() => {
-		probeHome = setupTestEnvironment("pi-lens-2992-home-").tmpDir;
+		homeAtSetup = process.env.PI_LENS_HOME;
+		previousHome = process.env.PI_LENS_HOME;
+		setupCount++;
+		const probeRoot = path.join(process.cwd(), ".probe-home");
+		fs.mkdirSync(probeRoot, { recursive: true });
+		probeHome = path.join(probeRoot, "pi-lens-2992-home");
+		removeTempDirSync(probeHome);
+		fs.mkdirSync(probeHome, { recursive: true });
 		process.env.PI_LENS_HOME = probeHome;
 		filePath = path.join(process.cwd(), "index-2992-probe.ts");
 		fs.writeFileSync(filePath, "export const guarded = true;\n");
@@ -22,10 +35,16 @@ describe("#2992 read bridge lifecycle", () => {
 		fs.rmSync(filePath, { force: true });
 		for (let tick = 0; tick < 3; tick++) {
 			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-2992-home-", {
-				untrack: tick === 2,
-			});
+			removeTempDirSync(probeHome);
 		}
+		// #2912 recurrence: session_start queues registerInstance without
+		// awaiting it. Drain and remove that test-owned PID entry before the
+		// home restore, or a reused Vitest worker leaks this root to the next
+		// file's PID-scoped registry assertion.
+		await _settleRegistryMutationsForTests();
+		deregisterInstance();
+		if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = previousHome;
 		vi.restoreAllMocks();
 	});
 
@@ -220,5 +239,12 @@ describe("#2992 read bridge lifecycle", () => {
 				deferAutofix: false,
 			}),
 		).toBe(false);
+	});
+
+	it("keeps the next test from inheriting PI_LENS_HOME (#2912)", () => {
+		// #2912 recurrence: a cross-test PI_LENS_HOME leak redirects the real
+		// instance registry and makes an unrelated worker observe an extra root.
+		expect(setupCount).toBeGreaterThan(1);
+		expect(homeAtSetup).toBe(workerHome);
 	});
 });

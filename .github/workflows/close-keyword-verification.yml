@@ -1,7 +1,9 @@
 name: Verify merged PR close keywords
 
 on:
-  pull_request:
+  # This job writes verification comments. Target workflows retain write
+  # access for merged fork PRs without executing the fork's workflow token.
+  pull_request_target:
     branches: [master]
     types: [closed]
 

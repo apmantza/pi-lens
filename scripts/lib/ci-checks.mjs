@@ -54,6 +54,10 @@ export const ADVISORY_CHECKS = new Set([
 	"taplo (advisory)",
 	"mutation (advisory)",
 	"complexity (advisory)",
+	// Stale verdict labels are bookkeeping only. Their cleanup asserts no
+	// property of the change, so API or token failures must never block a merge
+	// (#2993, including read-only fork pull_request tokens).
+	"Clear stale CI verdict labels",
 	// .github/workflows/greetings.yml's `greeting` job (the job KEY -- no
 	// `name:` override), posted by `actions/first-interaction` on
 	// `pull_request_target: types: [opened]` only. A cosmetic

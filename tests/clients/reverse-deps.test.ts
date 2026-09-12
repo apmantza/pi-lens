@@ -28,24 +28,16 @@ import type {
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	cleanupTestEnvironments,
+	cleanupTestEnvironmentsDrained,
 	createTempFile,
 	setupTestEnvironment,
 } from "./test-utils.js";
 
 describe("reverse dependency index", () => {
 	const cleanupReverseDepsTemps = async () => {
-		// Snapshot persistence can enqueue filesystem work after a test resolves.
-		// Drain several macrotasks before removing this family's fixtures; clean
-		// after each tick so delayed work cannot recreate an earlier root.
-		await waitForProjectSnapshotPersistsForTests();
-		for (let tick = 0; tick < 3; tick++) {
-			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-reverse-deps-", {
-				// Keep the root tracked across intermediate drains so deferred
-				// snapshot work can be removed if it recreates the root.
-				untrack: tick === 2,
-			});
-		}
+		await cleanupTestEnvironmentsDrained("pi-lens-reverse-deps-", {
+			beforeDrain: waitForProjectSnapshotPersistsForTests,
+		});
 	};
 
 	afterEach(cleanupReverseDepsTemps);

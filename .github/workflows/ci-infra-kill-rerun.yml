@@ -14,7 +14,13 @@ permissions: {}
 jobs:
   clear-stale-verdict-labels:
     name: Clear stale CI verdict labels
-    if: github.event_name == 'pull_request' && github.event.action == 'synchronize'
+    # Fork pull_request runs receive a read-only GITHUB_TOKEN. Stale labels on
+    # those PRs are acceptable because this bookkeeping check is advisory and
+    # no label state affects the correctness gate (#2993).
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'synchronize' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
