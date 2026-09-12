@@ -6,7 +6,10 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { runAutofix } from "../../clients/pipeline.js";
-import { hasGradleKtlintPlugin } from "../../clients/tool-policy.js";
+import {
+	GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES,
+	hasGradleKtlintPlugin,
+} from "../../clients/tool-policy.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const { resolveToolCommandWithInstallFallback } = vi.hoisted(() => ({
@@ -122,6 +125,76 @@ describe("runAutofix ktlint project agreement (#3000)", () => {
 		expect(result.fixedCount).toBe(0);
 		expect(resolveToolCommandWithInstallFallback).not.toHaveBeenCalled();
 	});
+
+	it("records one agreement decline across 200 autofix files", async () => {
+		fs.writeFileSync(
+			path.join(env.tmpDir, "build.gradle.kts"),
+			'plugins { id("org.jlleitschuh.gradle.ktlint") version "14.2.0" }\n',
+		);
+		for (let index = 0; index < 200; index += 1) {
+			const currentFile = path.join(env.tmpDir, `Example${index}.kt`);
+			fs.writeFileSync(currentFile, "fun main() {}\n");
+			await runAutofix(
+				currentFile,
+				env.tmpDir,
+				() => undefined,
+				() => {},
+				{
+					biomeClient: { isSupportedFile: () => false } as never,
+					ruffClient: { isPythonFile: () => false } as never,
+					fixedThisTurn: new Set<string>(),
+				},
+			);
+		}
+
+		expect(getDegradationSummary()).toEqual([
+			{
+				kind: "autofix-agreement-unavailable",
+				count: 1,
+				droppedCount: 0,
+				latestReasons: [
+					{
+						subject: "ktlint:gradle",
+						reason: expect.stringContaining("cannot be established"),
+					},
+				],
+			},
+		]);
+	});
+
+	it.each([
+		["at the limit", GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES - 1, false],
+		["one over", GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES, true],
+		["far over", GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES + 5_000, true],
+	])(
+		"declines with a distinct record when the Gradle scan is %s",
+		(_label, fileCount, exceeded) => {
+			const noiseDir = path.join(env.tmpDir, "buildSrc", "noise");
+			fs.mkdirSync(noiseDir, { recursive: true });
+			for (let index = 0; index < fileCount; index += 1) {
+				fs.writeFileSync(path.join(noiseDir, `Noise${index}.kt`), "");
+			}
+
+			expect(hasGradleKtlintPlugin(env.tmpDir)).toBe(false);
+			expect(getDegradationSummary()).toEqual(
+				exceeded
+					? [
+							{
+								kind: "gradle-ktlint-scan-budget-exceeded",
+								count: 1,
+								droppedCount: 0,
+								latestReasons: [
+									{
+										subject: "ktlint:gradle-build-logic",
+										reason: expect.stringContaining("budget"),
+									},
+								],
+							},
+						]
+					: [],
+			);
+		},
+	);
 
 	it("applies the lexical ownership edge matrix through runAutofix", async () => {
 		const cases = [

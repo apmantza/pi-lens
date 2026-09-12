@@ -1186,7 +1186,7 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 
 ### Dispatch, runners, formatters, and installer
 
-**Kotlin autofix declines when project ownership is not independently provable (#3000/#3004).** `hasGradleKtlintPlugin` performs a lexical scan over the owning Gradle files, `buildSrc/`, `build-logic/`, and paths named by executable `includeBuild(...)` calls. It blanks comments and strings before accepting a plugin-id match, so prose and string literals do not establish ownership. Spotless-owned ktlint also declines because its resolved CLI version cannot be established without executing Gradle. The guard covers the synchronous autofix path only; formatter execution remains a separate seam until #3005's shared tool-agreement change.
+**Kotlin autofix declines when project ownership is not independently provable (#3000/#3004).** `hasGradleKtlintPlugin` performs a lexical scan over the owning Gradle files, `buildSrc/`, `build-logic/`, and paths named by executable `includeBuild(...)` calls. It blanks comments and strings before accepting a plugin-id match, so prose and string literals do not establish ownership. The build-logic walk is bounded at `GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES`; exceeding that bound records `gradle-ktlint-scan-budget-exceeded` once per session and declines because the scan cannot establish ownership. Spotless-owned ktlint also declines because its resolved CLI version cannot be established without executing Gradle. The guard covers the synchronous autofix path only; formatter execution remains a separate seam until #3005's shared tool-agreement change.
 
 **Pip-backed managed tools follow a private-install ladder (#2916).**
 `installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a
