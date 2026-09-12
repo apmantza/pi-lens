@@ -119,7 +119,8 @@ vi.mock("../../clients/instance-registry.js", () => ({
 	readInstanceRegistry: async () => h.state.registry,
 }));
 
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (entry: Record<string, unknown>) => {
 		h.latency.push(entry);
 	},

@@ -35,7 +35,8 @@ vi.mock("../../clients/resource-sampler.js", () => ({
 	startSpawnUsageSampler: () => ({ stop: () => null }),
 }));
 
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: () => {},
 }));
 

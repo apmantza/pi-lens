@@ -10,44 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { repoRoot } from "../support/module-instance-scan.js";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
-
-const legacyBareFactoryExemptions = new Set([
-	// Dated 2026-08-27. These non-LSP mocks remain isolated to tests that do
-	// not load the full logger; convert them in the follow-up to #2281.
-	"tests/clients/advisory-provenance-finding-freshness.test.ts",
-	"tests/clients/advisory-provenance-finding-paths.test.ts",
-	"tests/clients/agent-nudge.test.ts",
-	"tests/clients/availability-classification-evidence.test.ts",
-	"tests/clients/biome-install-evidence.test.ts",
-	"tests/clients/cache-observability.test.ts",
-	"tests/clients/degradation-ledger.test.ts",
-	"tests/clients/diagnostic-line-freshness.test.ts",
-	"tests/clients/dotnet-root-markers.test.ts",
-	"tests/clients/formatter-degraded-selection.test.ts",
-	"tests/clients/formatter-probe-commands.test.ts",
-	"tests/clients/formatter-selection-outcome.test.ts",
-	"tests/clients/formatters-which-latch.test.ts",
-	"tests/clients/install-attempt-evidence.test.ts",
-	"tests/clients/install-retry-session-rearm.test.ts",
-	"tests/clients/instance-reaper-backstop.test.ts",
-	"tests/clients/pipeline-eslint-availability-latch.test.ts",
-	"tests/clients/runtime-context-provenance.test.ts",
-	"tests/clients/safe-spawn-cap-race.test.ts",
-	"tests/clients/safe-spawn-close-before-error-race.test.ts",
-	"tests/clients/safe-spawn-resource-usage.test.ts",
-	"tests/clients/safe-spawn-sync-throw.test.ts",
-	"tests/clients/session-start-observability.test.ts",
-	"tests/clients/tool-set-policy.test.ts",
-	"tests/clients/dispatch/runners/ast-grep-utils-block.test.ts",
-	"tests/clients/dispatch/runners/availability-latching.test.ts",
-	"tests/clients/dispatch/runners/cwd-probe-latching.test.ts",
-	"tests/clients/dispatch/runners/psscriptanalyzer-availability.test.ts",
-	"tests/clients/dispatch/runners/runner-helpers.test.ts",
-	"tests/config/module-instance-binding.test.ts",
-	"tests/source-filter-skip-observability.test.ts",
-	"tests/tools/lsp-navigation-workspace-attribution.test.ts",
-]);
+import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 
 function walkTestFiles(root: string): string[] {
 	if (!fs.existsSync(root)) return [];
@@ -88,15 +51,20 @@ function callEnd(source: string, openParen: number): number {
 
 function findLatencyMocks(file: string): LatencyMock[] {
 	const source = fs.readFileSync(file, "utf8");
+	const code = stripSource(source);
 	const mocks: LatencyMock[] = [];
-	const pattern = /vi\.mock\s*\(\s*(["'])([^"']*latency-logger[^"']*)\1\s*,/g;
-	for (const match of source.matchAll(pattern)) {
+	const pattern = /vi\.mock\s*\(/g;
+	for (const match of code.matchAll(pattern)) {
 		const start = match.index ?? 0;
+		const header = source
+			.slice(start)
+			.match(/^vi\.mock\s*\(\s*(["'])([^"']*latency-logger[^"']*)\1\s*,/);
+		if (!header) continue;
 		const openParen = source.indexOf("(", start);
 		const end = callEnd(source, openParen);
 		mocks.push({
 			relativePath: path.relative(repoRoot, file).replaceAll("\\", "/"),
-			factory: source.slice(match.index! + match[0].length, end),
+			factory: source.slice(start + header[0].length, end),
 		});
 	}
 	return mocks;
@@ -104,24 +72,17 @@ function findLatencyMocks(file: string): LatencyMock[] {
 
 describe("latency-logger mock shape (#2281)", () => {
 	it("derives every factory and requires a partial import", () => {
+		// Recurrence guard for #2272 and #2281: comments and strings must not
+		// excuse or trigger a code-only latency-logger mock scan.
 		const files = walkTestFiles(path.join(repoRoot, "tests"));
 		assertNonEmptyScan("latency-logger test file walk", files.length);
 		const mocks = files.flatMap(findLatencyMocks);
 		assertNonEmptyScan("latency-logger mock scan", mocks.length);
 		const bare = mocks.filter(
-			({ relativePath, factory }) =>
-				!factory.includes("importActual") &&
-				!factory.includes("importOriginal") &&
-				!legacyBareFactoryExemptions.has(relativePath),
-		);
-		const flagged = mocks.filter(
 			({ factory }) =>
 				!factory.includes("importActual") &&
 				!factory.includes("importOriginal"),
 		);
 		expect(bare).toEqual([]);
-		expect([...legacyBareFactoryExemptions].sort()).toEqual(
-			[...new Set(flagged.map(({ relativePath }) => relativePath))].sort(),
-		);
 	});
 });

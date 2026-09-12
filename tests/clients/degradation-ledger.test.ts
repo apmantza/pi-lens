@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logExtension } from "../../clients/extension-log.js";
 const logLatency = vi.hoisted(() => vi.fn());
 vi.mock("../../clients/extension-log.js", () => ({ logExtension: vi.fn() }));
-vi.mock("../../clients/latency-logger.js", () => ({ logLatency }));
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
+	logLatency,
+}));
 import {
 	DEGRADATION_ENTRIES_PER_KIND,
 	DEGRADATION_MAX_DISTINCT_KINDS,
