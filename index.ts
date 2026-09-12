@@ -65,6 +65,7 @@ import {
 	renderWidget,
 	scheduleStaleReconcile,
 	setRenderCallback,
+	wireWidgetDispositionSubscriber,
 } from "./clients/widget-state.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
 import type { PersistedReadGuardState } from "./clients/read-guard.js";
@@ -826,6 +827,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		getReadGuard: () => runtime.readGuard,
 		dbg,
 	});
+	wireWidgetDispositionSubscriber({ events: pi.events });
 	const astGrepClient = new AstGrepClient();
 
 	type LspStatusTheme = {
