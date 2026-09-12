@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
@@ -39,7 +40,11 @@ describe("reverse dependency index", () => {
 		await waitForProjectSnapshotPersistsForTests();
 		for (let tick = 0; tick < 3; tick++) {
 			await new Promise<void>((resolve) => setImmediate(resolve));
-			cleanupTestEnvironments("pi-lens-reverse-deps-");
+			cleanupTestEnvironments("pi-lens-reverse-deps-", {
+				// Keep the root tracked across intermediate drains so deferred
+				// snapshot work can be removed if it recreates the root.
+				untrack: tick === 2,
+			});
 		}
 	};
 
@@ -284,6 +289,24 @@ describe("reverse dependency index", () => {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;
 			env.cleanup();
+		}
+	});
+
+	it("retries a recreated reverse-deps root while tracking is retained", () => {
+		const env = setupTestEnvironment("pi-lens-reverse-deps-recreated-");
+		try {
+			cleanupTestEnvironments("pi-lens-reverse-deps-recreated-", {
+				// This models deferred work recreating the root after an early
+				// cleanup pass; the shipped defect untracked it at that point.
+				untrack: false,
+			});
+			fs.mkdirSync(env.tmpDir, { recursive: true });
+			cleanupTestEnvironments("pi-lens-reverse-deps-recreated-", {
+				untrack: false,
+			});
+			expect(fs.existsSync(env.tmpDir)).toBe(false);
+		} finally {
+			cleanupTestEnvironments("pi-lens-reverse-deps-recreated-");
 		}
 	});
 
