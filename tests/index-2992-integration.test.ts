@@ -21,7 +21,7 @@ describe("#2992 read bridge lifecycle", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("records through real bridges, authorizes edit, bounds rows, and recovers after reactivation", async () => {
+	it("records a stale read through the real bridge before authorizing an edit", async () => {
 		// #2992 recurrence: a stale host context must not turn a read into a
 		// false zero-read edit block. Keep the real ReadGuard and ledger; inject
 		// staleness only at the host getFlag boundary.
@@ -46,20 +46,11 @@ describe("#2992 read bridge lifecycle", () => {
 		const readBridge = (globalThis as Record<symbol, unknown>)[
 			Symbol.for("pi-lens:read-bridge")
 		] as { recordRead(entry: unknown): void };
-		const mutationBridge = (globalThis as Record<symbol, unknown>)[
-			Symbol.for("pi-lens:mutation-bridge")
-		] as { recordMutation(entry: unknown): boolean };
 		for (let i = 0; i < 100; i++) {
 			readBridge.recordRead({
 				filePath,
 				requestedOffset: 1,
 				requestedLimit: 1,
-			});
-			mutationBridge.recordMutation({
-				filePath,
-				kind: "edit",
-				touchedLines: [1, 1],
-				deferAutofix: false,
 			});
 		}
 
@@ -68,19 +59,18 @@ describe("#2992 read bridge lifecycle", () => {
 		const staleRows = getDegradationSummary().find(
 			(group) => group.kind === "extension-ctx-stale",
 		);
-		expect(staleRows?.count).toBe(2);
+		expect(staleRows?.count).toBe(1);
 		expect(staleRows?.latestReasons).toEqual(
 			expect.arrayContaining([
 				{
 					subject: "read-bridge",
 					reason: expect.stringContaining("stale extension ctx"),
 				},
-				{
-					subject: "mutation-bridge",
-					reason: expect.stringContaining("stale extension ctx"),
-				},
 			]),
 		);
+		// Keep the host flag live for the edit check. The read bridge's stale
+		// fallback is the only authorization source in this scenario.
+		(firstApi as unknown as Record<string, unknown>).getFlag = () => undefined;
 
 		const toolCall = first.getHandlers("tool_call")[0];
 		expect(
@@ -145,4 +135,82 @@ describe("#2992 read bridge lifecycle", () => {
 			fs.rmSync(recoveredPath, { force: true });
 		}
 	}, 45_000);
+
+	it("bounds repeated stale mutation-bridge records without authorizing a read", async () => {
+		const { default: registerExtension } = await import("../index.js");
+		const pi = createPiMock();
+		const api = pi.asExtensionAPI();
+		registerExtension(api);
+		await pi.emit(
+			"session_start",
+			{ reason: "new" },
+			makeCtx({ cwd: process.cwd(), sessionId: "mutation-session" }),
+		);
+		(api as unknown as Record<string, unknown>).getFlag = () => {
+			throw new Error(
+				"This extension ctx is stale after session replacement or reload. " +
+					"Do not use a captured pi or command ctx after ctx.newSession(), " +
+					"ctx.fork(), ctx.switchSession(), or ctx.reload().",
+			);
+		};
+
+		const mutationBridge = (globalThis as Record<symbol, unknown>)[
+			Symbol.for("pi-lens:mutation-bridge")
+		] as { recordMutation(entry: unknown): boolean };
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../clients/degradation-ledger.js");
+		resetDegradationLedger();
+		for (let i = 0; i < 100; i++) {
+			expect(
+				mutationBridge.recordMutation({
+					filePath,
+					kind: "edit",
+					touchedLines: [1, 1],
+					deferAutofix: false,
+				}),
+			).toBe(true);
+		}
+		const staleRows = getDegradationSummary().find(
+			(group) => group.kind === "extension-ctx-stale",
+		);
+		expect(staleRows?.count).toBe(1);
+		expect(staleRows?.latestReasons[0]?.subject).toBe("mutation-bridge");
+	});
+
+	it("rethrows a near-match stale failure at both bridge boundaries", async () => {
+		const { default: registerExtension } = await import("../index.js");
+		const pi = createPiMock();
+		const api = pi.asExtensionAPI();
+		registerExtension(api);
+		await pi.emit(
+			"session_start",
+			{ reason: "new" },
+			makeCtx({ cwd: process.cwd(), sessionId: "near-match-session" }),
+		);
+		(api as unknown as Record<string, unknown>).getFlag = () => {
+			throw new Error("stale after session replacement");
+		};
+		const readBridge = (globalThis as Record<symbol, unknown>)[
+			Symbol.for("pi-lens:read-bridge")
+		] as { recordRead(entry: unknown): void };
+		const mutationBridge = (globalThis as Record<symbol, unknown>)[
+			Symbol.for("pi-lens:mutation-bridge")
+		] as { recordMutation(entry: unknown): boolean };
+
+		expect(() =>
+			readBridge.recordRead({
+				filePath,
+				requestedOffset: 1,
+				requestedLimit: 1,
+			}),
+		).toThrow("stale after session replacement");
+		expect(
+			mutationBridge.recordMutation({
+				filePath,
+				kind: "edit",
+				touchedLines: [1, 1],
+				deferAutofix: false,
+			}),
+		).toBe(false);
+	});
 });
