@@ -5,6 +5,7 @@ import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { tokenizeShellCommand } from "./bash-file-access.js";
 import { logLatency } from "./latency-logger.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import {
 	advisoryFileHash,
 	advisoryPathKey,
@@ -1098,6 +1099,7 @@ export function evaluateGitGuard(
 	runtime: RuntimeCoordinator,
 	cacheManager: CacheManager,
 	cwd: string,
+	host: LensToolHost = "pi",
 ): GuardDecision {
 	if (runtime.gitGuardHasBlockers) {
 		logDecision(cwd, "blocked", "runtime_blockers", {
@@ -1108,7 +1110,7 @@ export function evaluateGitGuard(
 			: "";
 		return {
 			block: true,
-			reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.${detail}\nRun lens_diagnostics mode=all for full details, then commit again.`,
+			reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.${detail}\nRun ${resolveLensToolName("lens_diagnostics", host)} mode=all for full details, then commit again.`,
 		};
 	}
 	if (runtime.gitGuardCacheUnknownReason) {
@@ -1196,7 +1198,6 @@ export function evaluateGitGuard(
 	});
 	return {
 		block: true,
-		reason:
-			"🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.\nRun lens_diagnostics mode=all for full details, then commit again.",
+		reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.\nRun ${resolveLensToolName("lens_diagnostics", host)} mode=all for full details, then commit again.`,
 	};
 }

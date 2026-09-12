@@ -308,6 +308,15 @@ describe("git-guard", () => {
 			);
 			expect(result.block).toBe(true);
 			expect(result.reason).toContain("src/app.ts");
+			expect(result.reason).toContain("Run lens_diagnostics mode=all");
+			expect(
+				evaluateGitGuard(
+					runtime as any,
+					new CacheManager(false),
+					env.tmpDir,
+					"mcp",
+				).reason,
+			).toContain("Run pilens_diagnostics mode=all");
 		} finally {
 			env.cleanup();
 		}

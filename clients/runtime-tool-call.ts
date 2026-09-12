@@ -325,6 +325,7 @@ interface ToolCallEvent {
 
 interface ToolCallCtx {
 	cwd?: string;
+	host?: "pi" | "mcp";
 	/**
 	 * This turn's abort signal, when the host supplies one. #2430 races every
 	 * observational snapshot against it so an interrupted turn cancels the walk
@@ -653,6 +654,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			runtime,
 			cacheManager,
 			ctx.cwd ?? runtime.projectRoot,
+			ctx.host ?? "pi",
 		);
 		if (guard.block) {
 			return {
