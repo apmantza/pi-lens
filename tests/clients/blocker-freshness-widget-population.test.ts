@@ -16,6 +16,7 @@
  * cache-served-only row is invisible to `total`/`kept`/`revalidated` and the widget
  * store's `stale` flag is never set by the sweep.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -342,5 +343,58 @@ describe("blocker freshness sweep — widget-store population (#1790)", () => {
 			additionalEntries: entries,
 		});
 		expect(counts.total).toBe(5);
+	});
+	// Self-drift axis regression: a non-LSP inline entry is now drift-checked, so
+	// "is it eligible" no longer answers "may a widget row chain onto it". Here the
+	// inline tree-sitter entry demotes on its OWN file's drift while the widget's
+	// pure-LSP row is demoted by an IMPORT that drifted. Chaining would have let
+	// the inline entry's self-only check stand in for both and never consult the
+	// import — so these must stay two independently checked rows.
+	it("does not chain a widget row onto a self-only (non-LSP) inline entry (#1790 F5, self-drift axis)", async () => {
+		const dir = makeDir("pi-lens-fresh-widgetpop-selfaxis-");
+		const consumer = path.join(dir, "consumer.ts");
+		const dep = path.join(dir, "dep.ts");
+		fs.writeFileSync(dep, "export const x = 1;\n");
+		fs.writeFileSync(
+			consumer,
+			'import { x } from "./dep.js";\nexport const y = x;\n',
+		);
+
+		const runtime = new RuntimeCoordinator();
+		const recordedAtMs = runtime.recordInlineBlockers(
+			consumer,
+			"🔴 incomplete assertion",
+			1,
+			["tree-sitter"],
+		);
+		// The content baseline production attaches from the async caller (#2982).
+		const baselineBytes = fs.readFileSync(consumer);
+		runtime.setInlineBlockerContentBaseline(
+			consumer,
+			recordedAtMs,
+			baselineBytes.byteLength,
+			createHash("sha256").update(baselineBytes).digest("hex"),
+		);
+		recordCacheServedBlocking(consumer, "cached blocking finding", Date.now());
+		// Both axes drift: the blocker's own bytes (a real change, since the self
+		// axis is content-confirmed) AND the import it does not consult.
+		fs.writeFileSync(
+			consumer,
+			'import { x } from "./dep.js";\nexport const y = x + 1234567;\n',
+		);
+		driftIntoFuture(dep);
+		driftIntoFuture(consumer);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir, {
+			additionalEntries: widgetAdditionalEntries(),
+		});
+		// Two rows, both demoted on their own axis — not one row standing in for both.
+		expect(counts.total).toBe(2);
+		expect(counts.revalidated).toBe(2);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
+
+		const widgetDiags = getFileDiagnostics(consumer) ?? [];
+		expect(widgetDiags.some((d) => d.stale === true)).toBe(true);
+		expect(widgetDiags.some((d) => isBlocking(d))).toBe(false);
 	});
 });

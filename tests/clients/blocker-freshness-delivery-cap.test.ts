@@ -18,6 +18,7 @@
  *   3. After retirement, the record is gone from the store and never
  *      resurfaces.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -315,6 +316,146 @@ describe("dependency-drift delivery cap (#1950)", () => {
 				1,
 			);
 			expect(readTurnEndContent(cacheManager, env.tmpDir)).toBe(turn1Content);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+/**
+ * #2982 review, the blocking finding. Self-drift demotion must not inherit the
+ * dependency-drift delivery cap: that cap retires a record permanently after
+ * DEPENDENCY_DRIFT_MAX_DELIVERIES stale deliveries, and it was designed for
+ * recoverable LSP dependency drift. A self-drift record can carry ast-grep or
+ * tree-sitter security provenance, so walking one out of turn-end rendering
+ * because an advisory was shown three times is not a policy this gate applies.
+ *
+ * Drives the real `handleTurnEnd` across more turns than the cap.
+ */
+describe("self-drift is outside the delivery cap (#2982)", () => {
+	it("an mtime-only move with unchanged bytes never demotes at all", async () => {
+		const env = setupTestEnvironment("pi-lens-2982-touch-");
+		try {
+			const sessionId = "touch-session";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+
+			const target = path.join(env.tmpDir, "config.ts");
+			fs.writeFileSync(target, "const token = 'aaa';\n");
+			runtime.bumpFileSeq(target);
+			cacheManager.addModifiedRange(
+				target,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				sessionId,
+			);
+			const recordedAtMs = runtime.recordInlineBlockers(
+				target,
+				"🔴 hardcoded secret",
+				1,
+				["ast-grep"],
+			);
+			// The baseline production attaches from the async caller (#2982 round 2).
+			const baselineBytes = fs.readFileSync(target);
+			runtime.setInlineBlockerContentBaseline(
+				target,
+				recordedAtMs,
+				baselineBytes.byteLength,
+				createHash("sha256").update(baselineBytes).digest("hex"),
+			);
+			runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
+
+			// `touch`: mtime forward, every byte where it was.
+			const future = new Date(Date.now() + 60_000);
+			fs.utimesSync(target, future, future);
+
+			for (let turn = 1; turn <= DEPENDENCY_DRIFT_MAX_DELIVERIES + 2; turn++) {
+				await driveTurn(
+					runtime,
+					cacheManager,
+					target,
+					env.tmpDir,
+					sessionId,
+					turn,
+				);
+				const snapshot = runtime.getInlineBlockersSnapshot();
+				expect(snapshot).toHaveLength(1);
+				expect(snapshot[0]?.stale).toBe(false);
+			}
+			// Still authoritative, never demoted, never retired.
+			const content = readTurnEndContent(cacheManager, env.tmpDir);
+			expect(content).not.toContain("[stale — re-run to confirm]");
+			expect(runtime.gitGuardHasBlockers).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a real content change demotes but is never retired by the cap", async () => {
+		const env = setupTestEnvironment("pi-lens-2982-nocap-");
+		try {
+			const sessionId = "nocap-session";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+
+			const target = path.join(env.tmpDir, "config.ts");
+			fs.writeFileSync(target, "const token = 'aaa';\n");
+			runtime.bumpFileSeq(target);
+			cacheManager.addModifiedRange(
+				target,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				sessionId,
+			);
+			const recordedAtMs = runtime.recordInlineBlockers(
+				target,
+				"🔴 hardcoded secret",
+				1,
+				["ast-grep"],
+			);
+			// The baseline production attaches from the async caller (#2982 round 2).
+			const baselineBytes = fs.readFileSync(target);
+			runtime.setInlineBlockerContentBaseline(
+				target,
+				recordedAtMs,
+				baselineBytes.byteLength,
+				createHash("sha256").update(baselineBytes).digest("hex"),
+			);
+			runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
+
+			// A real byte change that leaves the secret in place.
+			fs.writeFileSync(target, "const token = 'aaa'; // moved\n");
+			const future = new Date(Date.now() + 60_000);
+			fs.utimesSync(target, future, future);
+
+			for (let turn = 1; turn <= DEPENDENCY_DRIFT_MAX_DELIVERIES + 2; turn++) {
+				await driveTurn(
+					runtime,
+					cacheManager,
+					target,
+					env.tmpDir,
+					sessionId,
+					turn,
+				);
+				const snapshot = runtime.getInlineBlockersSnapshot();
+				// The record survives every turn past the cap boundary.
+				expect(snapshot).toHaveLength(1);
+				expect(snapshot[0]?.stale).toBe(true);
+				expect(snapshot[0]?.staleReason).toBe("self-drift");
+				// The cap's counter is never advanced for this reason.
+				expect(snapshot[0]?.staleDeliveryCount ?? 0).toBe(0);
+			}
+
+			const content = readTurnEndContent(cacheManager, env.tmpDir);
+			expect(content).not.toContain("Not shown again after");
+			// And the commit gate still holds throughout.
+			expect(runtime.gitGuardHasBlockers).toBe(true);
 		} finally {
 			env.cleanup();
 		}

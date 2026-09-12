@@ -31,11 +31,68 @@
  * all runners, so an eslint, biome-check, or ast-grep security-rule (hardcoded
  * secret, CVE) finding can land here too. Only a language-server verdict is
  * actually invalidated by an IMPORT changing; an ast-grep secret match doesn't stop
- * being true because a file it imports was edited. The sweep therefore demotes an
- * entry only when its recorded `sources` (`InlineBlockerRecord.sources`) are ALL
- * `"lsp"` — a mixed or non-LSP-sourced blocker is left fully authoritative, the same
- * fail-closed shape `retireInlineBlockerOnConfirmedClean` already uses for
- * provenance it can't yet reason about.
+ * being true because a file it imports was edited.
+ *
+ * Self-drift axis (#1561 remainder). That reasoning covers the import axis and
+ * nothing else, but the original gate discarded BOTH axes for a non-LSP record:
+ * entries whose `sources` were not all `"lsp"` skipped the check entirely. A
+ * tree-sitter verdict about F's own syntax is emphatically invalidated by F's own
+ * bytes changing, and no other path could clear it —
+ * `retireInlineBlockerOnConfirmedClean` requires `coveredSources` to be a superset
+ * of the record's sources, `coveredSourcesForCheck` builds that set from the LSP
+ * server registry, and no registered server has id `"tree-sitter"`, so the retire
+ * could never fire however many clean checks ran. Live shape: a
+ * `ts-incomplete-assertion` blocker re-served every turn for the rest of a session
+ * against a file already proven clean by grep, LSP, and a passing test.
+ *
+ * So the sweep now runs over every entry that HAS recorded provenance, and picks
+ * the axis from the sources: all-`"lsp"` gets the own-file-plus-forward-imports
+ * walk, anything else (tree-sitter, ast-grep, mixed, or `"unknown"`) gets an
+ * own-file-only check. A record with NO recorded sources stays fail-closed and
+ * untouched, matching the test `retireInlineBlockerOnConfirmedClean` applies before
+ * it will retire.
+ *
+ * The self axis is CONTENT-CONFIRMED and RE-ARMING, and those two properties are
+ * why it carries its own `"self-drift"` reason rather than reusing
+ * `"dependency-drift"` (#2982 review).
+ *
+ * Content-confirmed: mtime moving is not evidence a byte moved. A `touch`, a
+ * `git checkout` restoring identical bytes, or a no-op formatter pass all move
+ * it. #2449 round 2 F7 settled this for `observed-mutation.ts` ("mtime-only
+ * drift has to be confirmed against content before anything is replayed"), and
+ * it binds harder here, where an unconfirmed demotion walks a finding out of the
+ * authoritative channel. `detectSelfDrift` applies that rule at both tiers:
+ * `size` first, then a sha256 of the bytes when size cannot separate a
+ * one-character edit from a `touch`. A same-LENGTH change is the common shape,
+ * not an exotic one (a renamed identifier of equal length, a flipped comparison,
+ * a changed digit), so a size-only tier would leave a genuinely changed record
+ * authoritative, which is #2982 arriving from the other side. The baseline is
+ * captured OFF the synchronous dispatch path by
+ * `RuntimeCoordinator.setInlineBlockerContentBaseline`, called from
+ * `runtime-tool-result.ts` under `bounded()`; `recordInlineBlockers` itself
+ * reads nothing. Every bound that expires, and every missing baseline, yields
+ * `unverifiable`, which changes no state in either direction and is counted so
+ * it is visible rather than silent.
+ *
+ * Re-arming: `setInlineBlockerSelfDriftStale` re-derives the verdict every turn
+ * and un-demotes a record whose bytes come back, exactly as
+ * `setInlineBlockerPastEofStale` does for a transient shrink-then-restore. That
+ * is what lets this axis stay OUT of the #1950 delivery cap. The cap retires a
+ * record permanently after `DEPENDENCY_DRIFT_MAX_DELIVERIES` stale deliveries,
+ * which suits recoverable LSP dependency drift; a self-drift record can carry
+ * ast-grep or tree-sitter security provenance, and retiring one because an
+ * advisory was shown three times would walk a hardcoded secret out of turn-end
+ * rendering with no dispatch to re-raise it. A record that heals on its own
+ * needs no bounded-noise retirement.
+ *
+ * Defect shape 24 is satisfied by composition, not by reusing a string: the new
+ * reason has per-writer semantics (re-arm, no cap), and like every sibling gate
+ * it never touches a demotion another gate made and never heals one it did not
+ * make. The commit gate is unaffected either way. `updateGitGuardStatus` counts
+ * `getInlineBlockersSnapshot().length` with no `stale` filter, so a demoted
+ * record still gates a commit; `tests/clients/blocker-freshness.test.ts` pins
+ * that, because it is what makes widening this sweep to security provenance
+ * safe at all.
  *
  * Resolution boundary (#1631 review F8): `extractForwardImportPaths` parses static
  * import/require syntax via tree-sitter. It does not, and cannot, resolve a
@@ -76,7 +133,10 @@
  * with this module is the one number both caps retire against,
  * `DEPENDENCY_DRIFT_MAX_DELIVERIES`, rather than inventing a second one.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -88,6 +148,18 @@ import { TreeSitterSymbolExtractor } from "./tree-sitter-symbol-extractor.js";
 
 /** See the module doc's "Delivery cap (#1950)" section above. */
 export const DEPENDENCY_DRIFT_MAX_DELIVERIES = 3;
+
+/**
+ * #2982: total bytes the self-drift axis may hash in ONE sweep.
+ *
+ * Each read is individually bounded by `bounded()`, but a turn with many
+ * non-LSP blockers would still issue many whole-file reads on a hook path, which
+ * is defect shape 9 (bounded on one axis, growing on another). Once a sweep has
+ * spent this budget the remaining same-size records are reported `unverifiable`
+ * and left exactly as they are, the same fail-closed direction as a read that
+ * times out.
+ */
+const SELF_DRIFT_HASH_BUDGET_BYTES = 8 * 1024 * 1024;
 
 /**
  * Per-turn result of the freshness sweep over the cached inline blockers.
@@ -119,6 +191,21 @@ export interface BlockerFreshnessCounts {
 	 * than folded silently into a clean-looking `kept`/`revalidated` count.
 	 */
 	truncatedImports: number;
+	/**
+	 * #2982: self-drift demotions UN-done this turn because the record's bytes
+	 * came back to their recorded size. The self axis re-arms
+	 * (`setInlineBlockerSelfDriftStale`), so this is a real state transition
+	 * and not reachable by the latching `"dependency-drift"` axis, whose
+	 * counts above can never include a heal.
+	 */
+	selfHealed: number;
+	/**
+	 * #2982: self-axis entries whose mtime moved but whose content tier could
+	 * not decide (no recorded size, or an unreadable file now). Those are left
+	 * authoritative rather than demoted on the mtime signal alone. Surfaced so
+	 * a rise in "we could not tell" is visible instead of folded into `kept`.
+	 */
+	selfUnverifiable: number;
 }
 
 /**
@@ -169,6 +256,14 @@ export interface BlockerFreshnessOptions {
 	 * inline-blockers-only behavior.
 	 */
 	additionalEntries?: WidgetSweepBlockerEntry[];
+	/**
+	 * #2982: the HOOK's abort signal, threaded from `TurnEndDeps.signal`, so the
+	 * self axis's filesystem work runs under `bounded()` rather than as an
+	 * unbounded await on a hook path. Optional because several callers (tests,
+	 * and any future non-hook driver) have none; `bounded()`'s own type admits
+	 * `undefined` for exactly that reason, and a wall-clock bound still applies.
+	 */
+	signal?: AbortSignal;
 }
 
 /**
@@ -335,6 +430,93 @@ async function statMtimeMs(filePath: string): Promise<number | undefined> {
 	}
 }
 
+/**
+ * #2982: the self axis's verdict about a record's OWN file.
+ *
+ * `"drift"` means the bytes are confirmed different from the recorded verdict's.
+ * `"unchanged"` means no drift was confirmed, which is the non-demoting
+ * direction and covers both "mtime never moved" and "mtime moved but the size
+ * tier matches". `"unverifiable"` means the tier had no baseline to compare
+ * and the record's state is left exactly as it is.
+ */
+type SelfDriftVerdict = "drift" | "unchanged" | "unverifiable";
+
+/**
+ * Confirm a self-axis record against content, not mtime alone.
+ *
+ * mtime moving is not evidence that content changed: a `touch`, a `git
+ * checkout` restoring identical bytes, a no-op formatter pass, or a `chmod`
+ * all move it while every byte stays put. #2449 round 2 F7 settled this for
+ * `observed-mutation.ts` ("a `touch` bumps it without a byte moving, so
+ * mtime-only drift has to be confirmed against content before anything is
+ * replayed"), and the same reasoning governs here, where an unconfirmed
+ * demotion would walk a finding out of the authoritative channel.
+ *
+ * Two tiers, in cost order. `size` decides most cases from the stat already
+ * taken. When the size matches, only a hash can separate a one-character edit
+ * from a `touch`, so the bytes are read and compared against the baseline
+ * `setInlineBlockerContentBaseline` attached off the dispatch path.
+ *
+ * Both tiers fail toward `"unverifiable"`, never toward `"drift"`: a bound that
+ * expires, a baseline that never landed, or a file past the per-sweep hash
+ * budget all leave the record exactly as it is. Demoting on a verdict the tier
+ * could not actually reach is the failure this function exists to prevent, and
+ * `bounded()` returning `undefined` on timeout makes that an easy mistake to
+ * write, so every bound's result is checked explicitly.
+ */
+async function detectSelfDrift(args: {
+	filePath: string;
+	recordedAtMs: number;
+	recordedSize: number | undefined;
+	recordedHash: string | undefined;
+	signal: AbortSignal | undefined;
+	/** Mutable per-sweep hash budget. See {@link SELF_DRIFT_HASH_BUDGET_BYTES}. */
+	budget: { bytesLeft: number };
+}): Promise<SelfDriftVerdict> {
+	const boundOptions = (label: string) =>
+		({
+			ms: HOOK_WALL_BUDGET_MS.turn_end,
+			signal: args.signal,
+			hook: "turn_end" as const,
+			label,
+		}) satisfies Parameters<typeof bounded>[1];
+
+	// EVERY bound that expires yields `undefined`, and every one of those maps to
+	// `unverifiable`, never to drift. A timed-out stat compared against the
+	// recorded size would read as a size change and demote the record, which is
+	// the exact failure this tier exists to prevent.
+	const stat = await bounded(
+		fs.promises.stat(args.filePath),
+		boundOptions("selfDriftStat"),
+	);
+	if (stat === undefined) return "unverifiable";
+	const freshness = freshnessFromMtime({
+		mtimeMs: stat.mtimeMs,
+		referenceMs: args.recordedAtMs,
+	});
+	if (freshness.verdict !== "stale") return "unchanged";
+	// mtime moved past the verdict. Confirm against content before calling it
+	// drift.
+	if (args.recordedSize === undefined) return "unverifiable";
+	if (stat.size !== args.recordedSize) return "drift";
+	// Same length. Only the hash can separate a one-character edit from a
+	// `touch`, and a same-length edit is the common shape, not an exotic one.
+	if (args.recordedHash === undefined) return "unverifiable";
+	// Defect shape 9: each read is individually bounded, but N blockers in one
+	// turn is an unbounded AGGREGATE read on a hook path. The per-sweep byte
+	// budget bounds the other axis; past it the record is unverifiable, not
+	// drifted.
+	if (stat.size > args.budget.bytesLeft) return "unverifiable";
+	const content = await bounded(
+		fs.promises.readFile(args.filePath),
+		boundOptions("selfDriftHash"),
+	);
+	if (content === undefined) return "unverifiable";
+	args.budget.bytesLeft -= content.byteLength;
+	const hash = createHash("sha256").update(content).digest("hex");
+	return hash === args.recordedHash ? "unchanged" : "drift";
+}
+
 /** Result of {@link collectForwardImportMtimes}. */
 export interface ForwardImportMtimes {
 	mtimes: Array<{ path: string; mtimeMs: number }>;
@@ -452,15 +634,37 @@ interface SweepPopulationEntry {
 	recordedAtMs: number | undefined;
 	sources: readonly string[] | undefined;
 	demote: () => boolean;
+	/**
+	 * #2982: which gate owns an existing demotion, so the loop can tell a
+	 * latched demotion it must not touch from this gate's own re-armable one,
+	 * which it re-evaluates every turn.
+	 */
+	staleReason: "dependency-drift" | "past-eof" | "self-drift" | undefined;
+	/** #2982: the content tier's baselines. See `InlineBlockerRecord.recordedSize`. */
+	recordedSize: number | undefined;
+	recordedHash: string | undefined;
+	/**
+	 * #2982: the re-arming self-drift setter for the origin store, or undefined
+	 * for a store that has none. Absent means the entry is not eligible for the
+	 * self axis at all and stays authoritative, which is the fail-closed
+	 * direction. Only the inline-blocker map supplies one; widget rows are
+	 * pure-LSP by construction and take the import axis.
+	 */
+	setSelfDrift?: (isSelfDrift: boolean) => boolean;
 }
 
 /**
  * Whether a population entry is eligible for the drift check at all — the same
  * three gates the main sweep loop applies (not already stale, has a timestamp
- * baseline, all-`"lsp"` sources). Factored out so the #1790 review F5 dedup
+ * baseline, HAS recorded provenance). Factored out so the #1790 review F5 dedup
  * decision below (chain vs. separate row) asks the IDENTICAL question the main
  * loop will ask, rather than a second hand-written approximation of it that
  * could drift from the real gates.
+ *
+ * The third gate reads "has provenance", not "is all-`lsp`": a non-LSP record is
+ * now eligible for the self-drift axis (own file only, no import walk). Widening
+ * it here and in the loop together is the point of the shared predicate — the
+ * loop still decides WHICH axis each eligible entry gets.
  */
 function isEligibleForDriftCheck(entry: {
 	stale: boolean;
@@ -469,11 +673,46 @@ function isEligibleForDriftCheck(entry: {
 }): boolean {
 	if (entry.stale) return false;
 	if (entry.recordedAtMs === undefined) return false;
+	return entry.sources !== undefined && entry.sources.length > 0;
+}
+
+/**
+ * All recorded sources are `"lsp"` — the record gets the full own-file PLUS
+ * forward-import walk. Anything else (tree-sitter, ast-grep, mixed, `"unknown"`)
+ * gets the self-only axis. One spelling, shared by the sweep loop and the
+ * chain decision below so the two can never disagree about which axis an entry
+ * is on.
+ */
+function isAllLspSourced(sources: readonly string[] | undefined): boolean {
 	return (
-		entry.sources !== undefined &&
-		entry.sources.length > 0 &&
-		entry.sources.every((source) => source === "lsp")
+		sources !== undefined &&
+		sources.length > 0 &&
+		sources.every((source) => source === "lsp")
 	);
+}
+
+/**
+ * Whether a duplicated widget row may be CHAINED onto this inline entry's single
+ * drift check instead of being given its own population row (#1790 review F5).
+ *
+ * Strictly stronger than {@link isEligibleForDriftCheck} since the self-drift
+ * axis landed, and deliberately so. A widget row from
+ * `getWidgetBlockingFilesForSweep` is pure-LSP by construction, so the check that
+ * speaks for it must walk forward imports. An inline entry on the self-only axis
+ * never consults imports, so chaining a widget row onto it would silently drop
+ * that row's import axis — the #1790 ghost, in a new disguise: the inline entry
+ * reports `kept`, the widget row is never independently checked, and its
+ * `isBlocking` stays true for a dependency that drifted.
+ *
+ * Such an inline entry is still drift-checked on its own axis. It just cannot
+ * answer another store's question.
+ */
+function canSubsumeLspWidgetRow(entry: {
+	stale: boolean;
+	recordedAtMs: number | undefined;
+	sources: readonly string[] | undefined;
+}): boolean {
+	return isEligibleForDriftCheck(entry) && isAllLspSourced(entry.sources);
 }
 
 /**
@@ -523,6 +762,8 @@ export async function sweepInlineBlockerFreshness(
 		revalidated: 0,
 		alreadyStale: 0,
 		truncatedImports: 0,
+		selfHealed: 0,
+		selfUnverifiable: 0,
 	};
 	const resolveForwardImports =
 		options?.resolveForwardImports ?? extractForwardImportPaths;
@@ -538,6 +779,9 @@ export async function sweepInlineBlockerFreshness(
 		stale?: boolean;
 		recordedAtMs?: number;
 		sources?: readonly string[];
+		staleReason?: "dependency-drift" | "past-eof" | "self-drift";
+		recordedSize?: number;
+		recordedHash?: string;
 	}>;
 	try {
 		inlineEntries = runtime.getInlineBlockersSnapshot();
@@ -550,8 +794,13 @@ export async function sweepInlineBlockerFreshness(
 		stale: entry.stale ?? false,
 		recordedAtMs: entry.recordedAtMs,
 		sources: entry.sources,
+		staleReason: entry.staleReason,
+		recordedSize: entry.recordedSize,
+		recordedHash: entry.recordedHash,
 		demote: () =>
 			runtime.markInlineBlockerStale(entry.filePath, "dependency-drift"),
+		setSelfDrift: (isSelfDrift: boolean) =>
+			runtime.setInlineBlockerSelfDriftStale(entry.filePath, isSelfDrift),
 	}));
 
 	// #1790 review F2: dedup key is `normalizeEphemeralMapKey`, not
@@ -574,16 +823,22 @@ export async function sweepInlineBlockerFreshness(
 		// drop, not a merge. The main loop below short-circuits BEFORE ever
 		// calling `demote()` for an already-stale entry (the one-way
 		// dependency-drift latch — a forever-ghost once it fires once), an
-		// unstamped legacy record, or a non-LSP/mixed-sources entry (e.g. an
-		// unrelated ast-grep finding on the same file). Any of those swallows a
-		// chained widget demote even though the widget row is pure-LSP by
-		// construction (`getWidgetBlockingFilesForSweep` only emits LSP-sourced
-		// rows) and carries its OWN baseline. Eligibility belongs to the STORE
-		// the row came from, not the file path two stores happen to share — so
-		// only chain when the inline entry would itself reach `demote()`;
-		// otherwise give the widget row its own population entry so its own
-		// gates and its own drift check decide its own fate.
-		if (inlineEntry && isEligibleForDriftCheck(inlineEntry)) {
+		// unstamped legacy record, or a record with no provenance at all. Any of
+		// those swallows a chained widget demote even though the widget row is
+		// pure-LSP by construction (`getWidgetBlockingFilesForSweep` only emits
+		// LSP-sourced rows) and carries its OWN baseline. Eligibility belongs to
+		// the STORE the row came from, not the file path two stores happen to
+		// share — so only chain when the inline entry would itself reach
+		// `demote()`; otherwise give the widget row its own population entry so
+		// its own gates and its own drift check decide its own fate.
+		//
+		// Since the self-drift axis landed, "would reach `demote()`" is no longer
+		// enough: a non-LSP inline entry IS drift-checked now, but only against
+		// its own file. It never consults imports, so it cannot speak for a
+		// pure-LSP widget row whose dependency drifted. `canSubsumeLspWidgetRow`
+		// carries that stronger test; the unrelated-ast-grep-finding case in the
+		// paragraph above is now excluded by the axis, not by ineligibility.
+		if (inlineEntry && canSubsumeLspWidgetRow(inlineEntry)) {
 			// #1790 review F1: a duplicated path is counted and drift-checked ONCE
 			// (via the inline entry above), but BOTH stores must record the
 			// verdict — `markInlineBlockerStale` only ever touches
@@ -607,14 +862,32 @@ export async function sweepInlineBlockerFreshness(
 			recordedAtMs: extra.recordedAtMs,
 			sources: ["lsp"],
 			demote: extra.demote,
+			// A widget row is pure-LSP by construction, so it takes the import
+			// axis and never reaches the self axis. No `setSelfDrift` (#2982):
+			// the widget store has no re-arming self-drift setter, and an entry
+			// without one is not eligible for that axis.
+			staleReason: undefined,
+			recordedSize: undefined,
+			recordedHash: undefined,
 		});
 	}
 
 	counts.total = population.length;
 
+	// One budget for the whole sweep (defect shape 9), consumed by the self
+	// axis's hash tier as it goes.
+	const hashBudget = { bytesLeft: SELF_DRIFT_HASH_BUDGET_BYTES };
+
 	for (const entry of population) {
 		try {
-			if (entry.stale) {
+			// #2982: a latched demotion belongs to the gate that made it and this
+			// loop leaves it alone. Its OWN self-drift demotion is re-armable, so
+			// it is re-derived every turn instead: bytes that come back must
+			// un-demote the record, which is what lets the self axis skip the
+			// #1950 delivery cap rather than retire a security finding for good.
+			const selfDriftDemoted =
+				entry.stale && entry.staleReason === "self-drift";
+			if (entry.stale && !selfDriftDemoted) {
 				counts.alreadyStale += 1;
 				continue;
 			}
@@ -625,15 +898,72 @@ export async function sweepInlineBlockerFreshness(
 				counts.kept += 1;
 				continue;
 			}
-			// #1631 review F4: fail-closed on non-LSP (or unknown) provenance. Import
-			// drift only invalidates a language-server verdict; a mixed or non-`"lsp"`
-			// `sources` list is kept at full authority rather than demoted.
-			const isLspSourced =
-				entry.sources !== undefined &&
-				entry.sources.length > 0 &&
-				entry.sources.every((source) => source === "lsp");
-			if (!isLspSourced) {
+			// #1631 review F4 kept every non-`"lsp"` record at full authority. Its
+			// stated reason is about the IMPORT axis only — "an ast-grep secret match
+			// doesn't stop being true because a file it imports was edited" — but the
+			// gate discarded the self axis with it. A record with NO provenance at all
+			// stays fail-closed here, the same test
+			// `retireInlineBlockerOnConfirmedClean` applies before it will retire.
+			const recordedSources =
+				entry.sources !== undefined && entry.sources.length > 0
+					? entry.sources
+					: undefined;
+			if (recordedSources === undefined) {
 				counts.kept += 1;
+				continue;
+			}
+			// Self-drift axis. When the record's OWN file changed since the verdict was
+			// taken, the verdict describes content that is no longer on disk — true
+			// whatever raised it. An all-`"lsp"` record keeps the full import walk; a
+			// tree-sitter, ast-grep, mixed, or `"unknown"`-tagged record is checked
+			// against its own file only. Demotion, not deletion (#1419): the entry is
+			// re-served in the advisory channel marked `[stale — re-run to confirm]`
+			// and retires through the existing #1950 delivery cap.
+			const isLspSourced = isAllLspSourced(recordedSources);
+			if (!isLspSourced) {
+				// The self axis. Content-confirmed, re-arming, and outside the
+				// #1950 delivery cap. A store with no re-arming setter is not
+				// eligible for it and stays authoritative (fail-closed).
+				if (!entry.setSelfDrift) {
+					counts.kept += 1;
+					continue;
+				}
+				// The outer bound too: an expired one yields `undefined`, and that
+				// means "could not decide", never "changed".
+				const verdict =
+					(await bounded(
+						detectSelfDrift({
+							filePath: entry.filePath,
+							recordedAtMs: entry.recordedAtMs,
+							recordedSize: entry.recordedSize,
+							recordedHash: entry.recordedHash,
+							signal: options?.signal,
+							budget: hashBudget,
+						}),
+						{
+							ms: HOOK_WALL_BUDGET_MS.turn_end,
+							signal: options?.signal,
+							hook: "turn_end",
+							label: "detectSelfDrift",
+						},
+					)) ?? "unverifiable";
+				if (verdict === "unverifiable") {
+					// Decide nothing. Leave the record in whatever state it holds.
+					counts.selfUnverifiable += 1;
+					if (selfDriftDemoted) counts.alreadyStale += 1;
+					else counts.kept += 1;
+					continue;
+				}
+				const shouldDemote = verdict === "drift";
+				const transitioned = entry.setSelfDrift(shouldDemote);
+				if (shouldDemote) {
+					if (transitioned) counts.revalidated += 1;
+					else counts.alreadyStale += 1;
+				} else if (transitioned) {
+					counts.selfHealed += 1;
+				} else {
+					counts.kept += 1;
+				}
 				continue;
 			}
 			const { drifted, truncated } = await detectDrift(

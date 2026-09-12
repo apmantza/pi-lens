@@ -970,6 +970,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// map — see blocker-freshness.ts's `WidgetSweepBlockerEntry` doc for why this
 	// is injected here rather than imported by blocker-freshness.ts itself.
 	const blockerFreshness = await sweepInlineBlockerFreshness(runtime, cwd, {
+		// #2982: the hook's own signal, so the self axis's filesystem work is
+		// bounded by the same abort everything else in this handler honours.
+		...(deps.signal === undefined ? {} : { signal: deps.signal }),
 		additionalEntries: getWidgetBlockingFilesForSweep().map((row) => ({
 			filePath: row.filePath,
 			recordedAtMs: row.recordedAtMs,
@@ -989,6 +992,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			revalidated: blockerFreshness.revalidated,
 			alreadyStale: blockerFreshness.alreadyStale,
 			truncatedImports: blockerFreshness.truncatedImports,
+			selfHealed: blockerFreshness.selfHealed,
+			selfUnverifiable: blockerFreshness.selfUnverifiable,
 		},
 	});
 
