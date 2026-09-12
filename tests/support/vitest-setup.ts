@@ -117,7 +117,7 @@ const TMP_LEAK_BASELINE = JSON.parse(
 	fs.readFileSync(tmpLeakBaselinePath, "utf8"),
 ) as TmpLeakBaseline[];
 
-// Fixtures that may outlive their test file without reding the file.
+// Fixtures that may outlive their test file without turning the file red.
 // Admission suppresses the red. Cleanup removes admitted entries unless an
 // explicit independent owner below still needs the live root.
 const TMP_LEAK_ADMISSIONS: TmpLeakAdmission[] = [
