@@ -19,6 +19,7 @@ async function loadFormatFile() {
 		oxfmt: mod.oxfmtFormatter,
 		formatter: mod.terragruntHclFormatter,
 		rubocop: mod.rubocopFormatter,
+		ktlint: mod.ktlintFormatter,
 	};
 }
 
@@ -159,6 +160,31 @@ describe("formatFile", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.changed).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("declines a Gradle-managed ktlint before the formatter resolver runs", async () => {
+		const env = setupTestEnvironment("pi-lens-format-ktlint-agreement-");
+		try {
+			const filePath = path.join(env.tmpDir, "App.kt");
+			fs.writeFileSync(filePath, 'fun main() { println("hi") }\n');
+			fs.writeFileSync(
+				path.join(env.tmpDir, "build.gradle"),
+				'plugins { id "org.jlleitschuh.gradle.ktlint" version "12.1.1" }\n',
+			);
+
+			const { formatFile, ktlint } = await loadFormatFile();
+			const result = await formatFile(filePath, ktlint);
+
+			expect(result).toMatchObject({
+				success: true,
+				changed: false,
+				outcome: "unavailable",
+				error: expect.stringContaining("agreement could not be established"),
+			});
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
 			env.cleanup();
 		}
