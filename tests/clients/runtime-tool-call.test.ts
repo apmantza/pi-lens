@@ -205,7 +205,7 @@ describe("handleToolCall", () => {
 		expect(recordRead).not.toHaveBeenCalled();
 	});
 
-	it("records a read-guard read for a full-file read and LSP-warms it", async () => {
+	it("registers the resolved native read path before the host returns it and LSP-warms it", async () => {
 		touchFileMock.mockClear();
 		const env = setupTestEnvironment("pi-lens-runtime-tool-call-read-");
 		try {

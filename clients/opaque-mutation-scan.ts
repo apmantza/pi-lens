@@ -103,6 +103,8 @@ export interface PendingOpaqueBaseline {
 
 export interface CaptureOptions {
 	budgetMs?: number;
+	/** Internal test seam for making an absent-evidence verdict reachable. */
+	forcedUnknownReason?: OpaqueUnknownReason;
 	/**
 	 * Read file contents and record sha1 hashes alongside mtime/size. Used on
 	 * the stat-diff path so the post-side diff can detect same-tick same-size
@@ -202,6 +204,9 @@ export async function captureFileStats(
 	root: string,
 	options: CaptureOptions = {},
 ): Promise<CaptureOutcome> {
+	if (options.forcedUnknownReason !== undefined) {
+		return { unknownReason: options.forcedUnknownReason, scannedCount: 0 };
+	}
 	const budgetMs = options.budgetMs ?? 50;
 	try {
 		const walk = await collectSourceFilesWithBudgetAsync(root, {
@@ -231,19 +236,41 @@ export function diffFileStats(
 	before: FileStatsSnapshot,
 	after: FileStatsSnapshot,
 ): string[] {
+	const contentChanged = new Set(diffFileContent(before, after));
 	const changed: string[] = [];
 	for (const [key, stat] of after) {
 		const prev = before.get(key);
 		// Content confirm: same mtime tick + same size but different bytes.
-		const contentConfirm =
-			prev?.hash !== undefined &&
-			stat.hash !== undefined &&
-			prev.hash !== stat.hash;
+		const contentConfirm = contentChanged.has(key);
 		if (
 			!prev ||
 			prev.mtimeMs !== stat.mtimeMs ||
 			prev.size !== stat.size ||
 			contentConfirm
+		) {
+			changed.push(key);
+		}
+	}
+	return changed;
+}
+
+/**
+ * Return paths confirmed different by hashes, plus files absent before and
+ * present after. A missing baseline entry is evidence of creation; a missing
+ * hash on an existing entry remains unknown.
+ */
+export function diffFileContent(
+	before: FileStatsSnapshot,
+	after: FileStatsSnapshot,
+): string[] {
+	const changed: string[] = [];
+	for (const [key, stat] of after) {
+		const previous = before.get(key);
+		if (
+			previous === undefined ||
+			(previous.hash !== undefined &&
+				stat.hash !== undefined &&
+				previous.hash !== stat.hash)
 		) {
 			changed.push(key);
 		}

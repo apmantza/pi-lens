@@ -6,10 +6,33 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+  pull_request:
+    types: [synchronize]
 
 permissions: {}
 
 jobs:
+  clear-stale-verdict-labels:
+    name: Clear stale CI verdict labels
+    # Fork pull_request runs receive a read-only GITHUB_TOKEN. Stale labels on
+    # those PRs are acceptable because this bookkeeping check is advisory and
+    # no label state affects the correctness gate (#2993).
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'synchronize' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Clear labels from the previous head
+        shell: bash
+        run: gh pr edit "$PR_NUMBER" --remove-label 'ci:infra' --remove-label 'ci:real'
+
   classify:
     name: Classify failed Unit tests
     # pull_request runs, PLUS master runs (#2668): CI (ci.yml) reaches

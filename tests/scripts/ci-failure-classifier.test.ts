@@ -135,6 +135,13 @@ describe("classifyFailureLog (#2103)", () => {
 		);
 	});
 
+	it("#2848 exit-137 log ignores quoted failure needles", () => {
+		const log =
+			fixture("infra-kill-2848.real.log") +
+			"\n✓ MCP smoke test: reports AssertionError: and FAIL as literal text\n";
+		expect(classifyFailureLog(log).kind).toBe("infra-kill");
+	});
+
 	it.each([
 		"2026-09-09T00:00:00.0000000Z  FAIL default tests/a.test.ts > broken\n",
 		"2026-09-09T00:00:00.0000000Z  Test Files  1 failed | 2 passed (3)\n",

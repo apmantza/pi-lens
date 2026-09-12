@@ -95,16 +95,22 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Through the SAME pinned npm the publish-npm job uses (#2940): a dry run
+      # on a different npm validates a tarball the release will never pack.
       - name: Install dependencies
         if: steps.meta.outputs.should_release == 'true'
-        run: npm install --no-audit --no-fund
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" install --no-audit --no-fund
 
       # No registry auth needed here: `npm publish --dry-run` never reaches the
       # actual publish call (npm skips it when --dry-run is set), so it neither
       # needs nor uses credentials — it only validates the tarball contents.
       - name: Dry-run publish (validates tarball)
         if: steps.meta.outputs.should_release == 'true'
-        run: npm publish --dry-run
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          npx -y "npm@${npm_pin}" publish --dry-run
 
       # The dry-run above runs prepare (tsc → dist/), so the compiled entry now
       # exists in the working tree. Load it to catch a broken/missing-dep entry
@@ -213,23 +219,34 @@ jobs:
       # release-time install keeps glibc/musl optional-binary metadata intact.
       # Keep this version in sync with the pin in ci.yml
       # (production-install-build job).
-      - name: Pin npm to a version with OIDC trusted-publishing support
-        run: |
-          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
-          npx -y "npm@${npm_pin}" --version
-
+      #
       # Required: the `prepare` script builds dist/ (tsc), which needs
       # node_modules. `npm install` runs prepare here, and `npm publish` runs it
       # again before packing. Without the install the build — and the publish —
-      # fails.
+      # fails. This is also the step that warms the npx cache for the pin.
       - name: Install dependencies
         run: |
           npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
           npx -y "npm@${npm_pin}" install --no-audit --no-fund
 
+      # The runtime half of the #2940 gate, immediately before the publish it
+      # guards (the static half is tests/config/release-npm-pin-gate.test.ts).
+      # If the npm that answers here is not the pin — a dropped `-y`, a bare
+      # `npm`, an npx resolution that fell back to the bundled 10.x — the
+      # release stops before the tag's package is pushed, instead of at the
+      # registry's E404 with the tag and GitHub release already created.
+      - name: Assert the publish toolchain is the pinned npm
+        run: |
+          npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
+          actual="$(npx -y "npm@${npm_pin}" --version)"
+          if [ "$actual" != "$npm_pin" ]; then
+            echo "toolchain check failed: npx resolved npm $actual, expected $npm_pin"
+            exit 1
+          fi
+
       # Publish through the PINNED npm, not the runner's bundled one: since
-      # 9183f39c6 the pin step only caches npm@<pin> via npx (it no longer
-      # installs it globally), so a bare `npm publish` ran Node 22's bundled
+      # 9183f39c6 this job only caches npm@<pin> via npx (it no longer installs
+      # it globally), so a bare `npm publish` ran Node 22's bundled
       # npm, which has no OIDC trusted-publishing support — the PUT went out
       # unauthenticated and the registry answered E404 (v4.1.6, 2026-09-10:
       # tag and GitHub release created, npm publish failed).
