@@ -62,6 +62,7 @@ export interface RunnerOptions {
 	pollCapMs: number;
 	gitRef?: string;
 	keep: boolean;
+	scratchRoot?: string;
 }
 
 export const BASELINE_TABLE_MARKER: string;
@@ -175,6 +176,9 @@ export function pinnedNpm(
  * QA'd as its last commit — a usage error (exit 4), not a candidate failure.
  */
 export function dirtyCheckoutRefusal(porcelain: string): string | null;
+export function removeScratchRoot(scratchRoot: string): void;
+export function noteActiveScratchRoot(scratchRoot: string): void;
+export function cleanupActiveScratchRoot(): void;
 
 /** Which of the two non-row failures a run hit, if either. */
 export function classifyRunFailure(observed: {

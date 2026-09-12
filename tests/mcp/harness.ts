@@ -12,6 +12,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	diagnosticsIpcPathForCwd,
+	ipcPathForCwd,
+} from "../../clients/mcp/ipc.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -138,8 +142,28 @@ export class McpHarness {
 	}
 
 	dispose(): void {
+		const endpoints = [
+			ipcPathForCwd(this.workspaceDir),
+			diagnosticsIpcPathForCwd(this.workspaceDir, this.child.pid ?? 0),
+		];
+		const cleanup = (): void => {
+			for (const endpoint of endpoints) {
+				try {
+					fs.rmSync(endpoint, { force: true });
+				} catch {
+					// Best effort: the server may never have bound (early exit).
+				}
+			}
+		};
 		this.child.stdin.end();
-		this.child.kill();
+		// The harness is teardown-only. Force the child down so its exit cleanup
+		// runs before Vitest can terminate this worker.
+		this.child.kill("SIGKILL");
+		// The server binds a stable per-workspace socket (clients/mcp/ipc.ts).
+		// Unlink before and after child exit: kill() is asynchronous, and the
+		// child can finish binding after the first cleanup (#2912).
+		cleanup();
+		this.child.once("exit", cleanup);
 		if (!this.workspaceDir || this.workspaceDir !== process.cwd()) {
 			fs.rmSync(this.workspaceDir, { recursive: true, force: true });
 		}

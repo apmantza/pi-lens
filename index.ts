@@ -580,16 +580,38 @@ const cacheManager = new CacheManager();
 // have it read the CURRENT activation's pi/flag closures through this
 // holder, refreshed on every activation — never a stale captured `pi`.
 let _readBridgeRegistered = false;
-let _readBridgeGetFlag:
+let _bridgeGetFlag:
 	| ((name: string) => boolean | string | undefined)
 	| undefined;
 // #2423: the mutation bridge is the write-side sibling of the read bridge and
 // follows its registration discipline exactly — mount once per process, refresh
 // the flag getter on every activation.
 let _mutationBridgeRegistered = false;
-let _mutationBridgeGetFlag:
-	| ((name: string) => boolean | string | undefined)
-	| undefined;
+
+/**
+ * Read a bridge flag without letting a session replacement obstruct the
+ * producer. The flag is advisory: if its captured ctx is stale, treating it
+ * as unset records the read/write instead of creating a false read-before-edit
+ * failure. This is the inverse of runtime-tool-result.ts's authorship rule,
+ * where absent evidence must never grant authority; both fail toward not
+ * obstructing the user at their respective seams.
+ */
+function getBridgeFlag(
+	getter: ((name: string) => boolean | string | undefined) | undefined,
+	bridge: "read" | "mutation",
+): boolean | string | undefined {
+	try {
+		return getter?.("no-read-guard");
+	} catch (err) {
+		if (!isStaleExtensionCtxError(err)) throw err;
+		recordDegradationOnce({
+			kind: "extension-ctx-stale",
+			subject: `${bridge}-bridge`,
+			reason: `${bridge}-bridge flag read met a stale extension ctx; treating the flag as unset`,
+		});
+		return undefined;
+	}
+}
 let _turnSummaryEmitRegistered = false;
 let _turnSummaryEmitCtx:
 	| {
@@ -955,7 +977,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// Read-bridge: refresh the flag getter on every factory activation so the
 	// live getLensFlag closure is always used (same pattern as _turnSummaryEmitCtx).
 	// Register the singleton once — subsequent activations only refresh the getter.
-	_readBridgeGetFlag = getLensFlag;
+	_bridgeGetFlag = getLensFlag;
 	if (!_readBridgeRegistered) {
 		_readBridgeRegistered = true;
 		registerReadBridge({
@@ -963,7 +985,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 			getTurnIndex: () => runtime.turnIndex,
 			peekWriteIndex: () => runtime.peekWriteIndex(),
 			isRecordable(filePath: string): boolean {
-				if (_readBridgeGetFlag?.("no-read-guard")) return false;
+				// Unknown during a replacement/reload records the read. The guard is
+				// the obstruction here, so failure must fall toward not blocking the
+				// user's later edit; recording while disabled is harmless.
+				if (getBridgeFlag(_bridgeGetFlag, "read")) return false;
 				return isRecordableProjectPath(filePath, runtime.projectRoot);
 			},
 		});
@@ -972,7 +997,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// Mutation bridge (#2423): same live-getter discipline as the read bridge.
 	// An in-process producer that writes a file outside pi-lens's tool-event
 	// path records it here, and the same bookkeeping runs.
-	_mutationBridgeGetFlag = getLensFlag;
 	if (!_mutationBridgeRegistered) {
 		_mutationBridgeRegistered = true;
 		registerMutationBridge({
@@ -998,7 +1022,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				return isRecordableProjectPath(filePath, runtime.projectRoot);
 			},
 			shouldStampReadGuard(): boolean {
-				return !_mutationBridgeGetFlag?.("no-read-guard");
+				return !getBridgeFlag(_bridgeGetFlag, "mutation");
 			},
 			dbg,
 		});
