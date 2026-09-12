@@ -325,6 +325,29 @@ operator's private notes, so a different orchestrator can run the same train.
   detector-versus-prose problem the testing rules already name.) Gate on the exit code; read the advisory failures on the exact head
   before the merge and dispose of each one (fix as a trailing commit, or say
   why it is noise).
+- **`gh run rerun` replays the ORIGINAL merge commit; it does not pick up a
+  moved base (2026-09-12).** A pull-request CI run tests `refs/pull/N/merge`,
+  master merged into the branch. When master moves — say a fix for the very
+  failure that red the lane just landed — rerunning the failed job re-runs the
+  SAME merge commit, so the fix is not in the tree and the lane reds again
+  identically. The log's checkout line is the proof and is worth reading every
+  time: `HEAD is now at <sha> Merge <branch-sha> into <BASE-sha>`; if that base
+  is not current master, the run tells you nothing about current master. This
+  cost a false conclusion on 2026-09-12 — a lane red on `pi-lens-warmup-oneshot-*`
+  after its fix had merged looked like the fix not working, and the base was one
+  commit behind. Re-arm with
+  `gh api -X PUT repos/<o>/<r>/pulls/<N>/update-branch` (or a push), never a
+  rerun, whenever the reason to re-run is that the BASE changed. Same family as
+  the retarget rule above: the event that re-runs CI must be one that rebuilds
+  the merge ref.
+- **A nondeterministic gate makes a green a sample, not a proof
+  (2026-09-12).** The fixture-hygiene ratchet reds only when a leaky family
+  actually loses the race, so two PRs on the SAME base can disagree: on
+  2026-09-12 #2994 went green and #2997 red on identical master. Before merging
+  on a green whose base is stale, ask whether the gate that matters is
+  deterministic; if it is not, re-gate on a current base rather than bank the
+  sample. The merged result runs against master, not against the tree that
+  happened to pass.
 - **Detection retrospective on every merged bug fix (2026-09-06).** The
   catalog records the CODE lesson of a bug (a shape, a screen, a guard). Before
   a bug-labelled lane's ledger row closes, the orchestrator also records the
