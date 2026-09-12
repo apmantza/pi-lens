@@ -1730,12 +1730,15 @@ package-manager/profile/package-root/session domains) require no cache layer.
 
 Tier-2 cache bounds (#1389) use the Tier-1 idle-timer/LRU shape where entries are rebuildable: reverse-dependency and topology entries clear their timers through one deletion helper, tree-sitter query caches use insertion-order LRU with query disposal. ReadGuard is the exception: its reads are behavior-gating state, so unconsumed reads are retained until edit or session end, subject to a high sanity cap that evicts oldest→needs-re-read; reads are never silently allowed post-eviction. Only consumed reads may be evicted at the compact file cap. Widget-state and Tier-3 cache bounds remain deferred.
 
-The marker walk in `clients/tool-cwd.ts` runs synchronously for each lookup. It
-does not memoize roots: a marker created during the session, a nearer marker,
-or a deleted marker is handled by the same full walk (#2894, #2922, #2777).
-Keep the home and depth ceilings when changing this seam; do not reintroduce a
-positive cache unless it skips filesystem work while preserving those
-freshness guarantees.
+The marker walk in `clients/tool-cwd.ts` runs synchronously for each lookup. Its
+marker vocabulary comes from `language-profile.ts` for runner fallback, while
+caller-owned marker lists remain explicit overrides; do not add a second
+runner-keyed vocabulary. A dispatch context may memoize only its `.git`
+fallback for that one synchronous file pass. The context is discarded after
+`dispatchForFile`, so a marker created between passes, a nearer marker, or a
+deleted marker is handled by a fresh walk (#2894, #2922, #2777, #2965, #2964).
+Keep the home and depth ceilings when changing this seam; a longer-lived
+positive cache is unsafe.
 
 ### Session lifecycle, telemetry, and observability
 

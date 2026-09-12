@@ -469,7 +469,7 @@ function importedResolverNames(root: SgNode): Set<string> {
 					for (const spec of child.children()) {
 						const text = spec.text();
 						const match = text.match(
-							/\b(resolve(?:Tool|Runner|Formatter)Cwd)\b/,
+							/\b(resolve(?:Tool|Runner|Formatter)Cwd(?:WithReason)?)\b/,
 						);
 						if (match) {
 							const alias = text.match(/\bas\s+([A-Za-z_$][\w$]*)/);
@@ -616,10 +616,8 @@ function returnsExpression(
 	}
 	return (
 		returns.length > 0 &&
-		returns.every(
-			(returned) =>
-				returned.kind() === "call_expression" &&
-				isResolveToolCwdCall(returned, resolverNames),
+		returns.every((returned) =>
+			isResolveToolCwdCall(returned, resolverNames),
 		) &&
 		returns.some((returned) => returned.id() === expr.id())
 	);
@@ -630,10 +628,15 @@ function isResolveToolCwdCall(
 	node: SgNode,
 	resolverNames: Set<string>,
 ): boolean {
-	if (node.kind() !== "call_expression") return false;
-	return resolverNames.has(
-		(node.field("function")?.text() ?? "").replace(/\s+/g, ""),
-	);
+	if (node.kind() === "call_expression") {
+		return resolverNames.has(
+			(node.field("function")?.text() ?? "").replace(/\s+/g, ""),
+		);
+	}
+	if (node.kind() !== "member_expression") return false;
+	if (node.field("property")?.text() !== "cwd") return false;
+	const object = node.field("object");
+	return object != null && isResolveToolCwdCall(object, resolverNames);
 }
 
 function resolvesFromToolCwd(
@@ -643,6 +646,12 @@ function resolvesFromToolCwd(
 	index: BindingIndex,
 ): boolean {
 	if (isResolveToolCwdCall(node, resolverNames)) return true;
+	if (node.kind() === "member_expression") {
+		const object = node.field("object");
+		return (
+			object != null && resolvesFromToolCwd(object, resolverNames, seen, index)
+		);
+	}
 	if (
 		node.kind() === "identifier" ||
 		node.kind() === "shorthand_property_identifier"

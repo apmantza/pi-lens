@@ -502,8 +502,9 @@ export function createCustomServer(
 					resolveToolCwd("lsp", id, file, {
 						cwd: process.cwd(),
 						...(config.rootMarkers ? { rootMarkers: config.rootMarkers } : {}),
-					})
-			: async (file) => resolveToolCwd("lsp", id, file, { cwd: process.cwd() }),
+					}).cwd
+			: async (file) =>
+					resolveToolCwd("lsp", id, file, { cwd: process.cwd() }).cwd,
 		async spawn(root) {
 			const proc = await launchLSP(config.command, config.args ?? ["--stdio"], {
 				cwd: root,

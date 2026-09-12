@@ -401,7 +401,6 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 		kinds: ["java", "kotlin"],
 		configFiles: ["pom.xml"],
 		command: "mvn",
-		spawnCwdMarkers: ["mvnw", "mvnw.cmd"],
 		args: (_testFile, _cwd) => ["test", "-q"],
 		parseJson: false,
 	},
@@ -1505,18 +1504,6 @@ export class TestRunnerClient {
 	 * caller is ever added that can pass an out-of-tree file, it needs this
 	 * decision made where that caller is, with a test that reaches it.
 	 */
-	private resolveSpawnCwd(
-		runner: string,
-		config: RunnerConfig,
-		testFile: string,
-		dispatchRoot: string,
-	): string {
-		return resolveToolCwd("runner", runner, testFile, {
-			cwd: path.resolve(dispatchRoot),
-			rootMarkers: config.spawnCwdMarkers ?? config.configFiles,
-		});
-	}
-
 	/**
 	 * Run tests for a specific file without blocking the event loop, so LSP
 	 * messages, other file writes, and all async operations continue while
@@ -1565,12 +1552,10 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const spawnCwd = this.resolveSpawnCwd(
-				runner,
-				config,
-				absoluteTestFile,
-				cwd,
-			);
+			const spawnCwd = resolveToolCwd("runner", runner, absoluteTestFile, {
+				cwd: path.resolve(cwd),
+				rootMarkers: config.spawnCwdMarkers ?? config.configFiles,
+			}).cwd;
 			const { command, args, env } = await this.resolveExec(
 				runner,
 				config,
