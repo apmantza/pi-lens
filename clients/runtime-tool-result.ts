@@ -4,11 +4,13 @@ import * as path from "node:path";
 import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
 import {
 	captureFileStats,
-	diffFileStats,
+	type CaptureOptions,
+	diffFileContent,
 	getOpaqueBaselineStore,
 	recoverOpaqueChangesViaGit,
 } from "./opaque-mutation-scan.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { detectFileKind } from "./file-kinds.js";
 import {
 	extractReadPathsFromCommand,
 	extractDeletedPathsFromCommand,
@@ -62,6 +64,7 @@ import {
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
 } from "./read-guard-logger.js";
+import { countFileLines } from "./read-guard-tool-lines.js";
 import type { PiLensFlagSource } from "./lens-config.js";
 import type { EditToolDetails } from "@earendil-works/pi-coding-agent";
 import type { LSPShutdownOptions } from "./lsp/client.js";
@@ -88,6 +91,7 @@ import { getActiveSessionId } from "./session-lifecycle.js";
 import { requestBootstrapClients } from "./bootstrap.js";
 import { bounded } from "./deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 
 const AUTHORITATIVE_CONTENT_MAX_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 
@@ -235,6 +239,10 @@ interface ToolResultDeps {
 	 * — a direct write, bounded by the per-file cap alone.
 	 */
 	_attachmentBudget?: { remaining: number };
+	/** Internal test seam for making missing observation evidence reachable. */
+	_opaqueCaptureOptions?: Pick<CaptureOptions, "forcedUnknownReason">;
+	/** Internal: synthetic dispatch inherits the parent's read-guard evidence. */
+	_readGuardAuthorship?: boolean;
 }
 
 function ensureToolResultClients(
@@ -795,6 +803,9 @@ async function dispatchPipelineAnalysis(args: {
 	 * round 2, S1) — a call site cannot be trusted to remember to do it.
 	 */
 	nativeAppliedPairs: Array<{ oldText: string; newText: string | undefined }>;
+	// The original bash result can reach this helper without authorship
+	// evidence; synthetic write results deliberately set this true.
+	allowReadGuardWrites: boolean;
 }): Promise<
 	| { crashed: false; result: PipelineResult }
 	| {
@@ -821,6 +832,7 @@ async function dispatchPipelineAnalysis(args: {
 		isPartialApplyResult,
 		toolResultStart,
 		nativeAppliedPairs,
+		allowReadGuardWrites,
 	} = args;
 	const {
 		event,
@@ -1049,7 +1061,7 @@ async function dispatchPipelineAnalysis(args: {
 	// The model's write/edit and pi-lens' own immediate format/autofix are now
 	// reflected on disk. Refresh read-guard staleness stamps so a follow-up edit
 	// is judged by read-range coverage, not by our own previous write.
-	if (!getFlag("no-read-guard")) {
+	if (!getFlag("no-read-guard") && allowReadGuardWrites) {
 		const changedForReadGuard = new Set([
 			path.resolve(filePath),
 			...(result.changedFiles ?? []).map((changedFile) =>
@@ -1082,6 +1094,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	const rawFilePath = (event.input as { path?: string }).path;
 	const workspaceRoot = runtime.projectRoot || process.cwd();
+	let bashAuthorshipConfirmed =
+		deps._readGuardAuthorship ?? event.toolName !== "bash";
 
 	// #1642: a gitignored worktree edit got re-attributed onto a
 	// same-relative-path file in the parent checkout because this handler
@@ -1214,7 +1228,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// THIS set, not raw recognized - otherwise a redirect target dropped
 		// by the isError filter would be subtracted from recovery AND
 		// excluded here, attributed nowhere.
-		const recognizedWritten =
+		let recognizedWritten =
 			event.isError !== true
 				? recognized.filter(
 						(wp) =>
@@ -1222,6 +1236,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 							!isPathIgnoredByProject(wp, workspaceRoot, false),
 					)
 				: [];
+		// Fence the mtime-based session-authored fallback before any async
+		// observation. Only later content evidence may clear this fence.
+		if (!getFlag("no-read-guard")) {
+			for (const recognizedPath of recognizedWritten)
+				deps.readGuard?.recordUnchanged?.(recognizedPath);
+		}
 		// #2000 phase 2: when the extractor recognizes NOTHING, the command is
 		// opaque-candidate — recover its actual changed set by diffing the pre
 		// snapshot taken at tool_call. Partial writes that landed before a
@@ -1229,6 +1249,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// them) — a deliberate divergence from the isError filter above, which
 		// exists for restore semantics where attribution would lie.
 		let opaquePaths: string[] = [];
+		let observedChangedKeys: Set<string> | undefined;
+		let recognizedAuthored: string[] = [];
 		// Recovery runs for EVERY bash command with a pending baseline - not
 		// only recognized-empty ones. A mixed command (`python x.py > out.ts`
 		// plus script-internal writes) previously skipped observation entirely
@@ -1266,12 +1288,18 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 							!isExternalOrVendorFile(p, scanRoot) &&
 							!isPathIgnoredByProject(p, scanRoot, false),
 					);
+					observedChangedKeys = new Set(opaquePaths);
 				} else if (recovery.verdict === "unknown") {
 					// #2060: deliberately WIDER than the old `recognized.length > 0`
 					// guard. A fully opaque command whose probe failed is the shape
 					// whose coverage is least knowable, and it used to record
 					// nothing at all.
 					unknownReason = recovery.unknownReason;
+				} else {
+					// A clean git verdict is complete evidence that no path
+					// changed; it is not missing evidence. Keep recognized writes
+					// out of authorship because git found no changed bytes.
+					observedChangedKeys = new Set();
 				}
 				// #2060: both counts are bounded (one record per tool_result, no
 				// per-path logging) and exist because filtering is invisible in
@@ -1297,9 +1325,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			} else if (pending.stats) {
 				const outcome = await captureFileStats(scanRoot, {
 					withHashes: true,
+					...deps._opaqueCaptureOptions,
 				});
 				if (outcome.snapshot && !outcome.unknownReason) {
-					opaquePaths = diffFileStats(pending.stats, outcome.snapshot);
+					opaquePaths = diffFileContent(pending.stats, outcome.snapshot);
+					observedChangedKeys = new Set(opaquePaths);
 				} else {
 					unknownReason =
 						outcome.unknownReason ??
@@ -1314,6 +1344,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					recognizedWritten.map((p) => normalizeMapKey(path.resolve(p))),
 				);
 				opaquePaths = opaquePaths.filter((p) => !survivingKeys.has(p));
+			}
+			if (observedChangedKeys) {
+				recognizedAuthored = recognizedWritten.filter((file) =>
+					observedChangedKeys!.has(normalizeMapKey(path.resolve(file))),
+				);
+				if (recognizedAuthored.length === 0) recognizedWritten = [];
+			} else if (unknownReason) {
+				recognizedAuthored = [];
+				// The bounded opaque_mutation_coverage_unknown record below remains
+				// the production proof that authorship evidence was unavailable.
 			}
 			if (unknownReason) {
 				logLatency({
@@ -1341,8 +1381,17 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// set must hold those exact strings - no re-resolution.
 		const opaqueSet = new Set(opaquePaths);
 		const written = [...recognizedWritten, ...opaquePaths];
+		const recognizedAuthoredSet = new Set(recognizedAuthored);
+		bashAuthorshipConfirmed =
+			recognizedAuthored.length > 0 || opaquePaths.length > 0;
 		for (const wp of written) {
-			if (!getFlag("no-read-guard")) deps.readGuard?.recordWritten(wp);
+			if (
+				!getFlag("no-read-guard") &&
+				(opaqueSet.has(wp) || recognizedAuthoredSet.has(wp))
+			)
+				deps.readGuard?.recordWritten(wp);
+			else if (!getFlag("no-read-guard") && recognizedWritten.includes(wp))
+				deps.readGuard?.recordUnchanged?.(wp);
 			const receipt = (runtime as Partial<RuntimeCoordinator>)
 				.recordMutationToolReceipt;
 			const autofixMode = receipt
@@ -1373,6 +1422,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				_autofixMode: autofixMode,
 				_attachmentBudget: syntheticAttachmentBudget,
 				_mutationSourceOverride: isOpaque ? "opaque-script" : undefined,
+				_readGuardAuthorship:
+					opaqueSet.has(wp) || recognizedAuthoredSet.has(wp),
 			});
 			if (syntheticResult) {
 				// #1590: forward verbatim. The synthetic call already charged the
@@ -1385,7 +1436,68 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			}
 		}
 		if (event.isError !== true && !getFlag("no-read-guard")) {
-			for (const span of extractReadPathsFromCommand(command, workspaceRoot)) {
+			const truncation = (
+				event.details as {
+					truncation?: {
+						truncated?: boolean;
+						totalLines?: number;
+						outputLines?: number;
+					};
+				}
+			)?.truncation;
+			const parsedSpans = extractReadPathsFromCommand(command, workspaceRoot);
+			let spans = parsedSpans;
+			if (
+				truncation?.truncated === true &&
+				typeof truncation.outputLines === "number"
+			) {
+				if (parsedSpans.length === 1) {
+					const span = parsedSpans[0];
+					if (span) {
+						// countFileLines intentionally preserves the split-based guard
+						// convention, where a trailing newline contributes an empty final
+						// element. The host's output line count does not include that
+						// element, so remove it from the span basis before taking the tail.
+						const hasTrailingNewline = nodeFs
+							.readFileSync(span.filePath, "utf8")
+							.endsWith("\n");
+						const spanLineCount = hasTrailingNewline
+							? Math.max(1, span.limit - 1)
+							: span.limit;
+						const shown = Math.min(truncation.outputLines, spanLineCount);
+						spans =
+							shown > 0
+								? [
+										{
+											...span,
+											offset: span.offset + spanLineCount - shown,
+											limit: shown,
+										},
+									]
+								: [];
+					}
+				} else if (parsedSpans.length > 1) {
+					recordDegradationOnce({
+						kind: "bash-view-clipped",
+						subject: "multi-span",
+						reason: "truncated bash view contained multiple spans",
+					});
+					spans = [];
+				}
+				if (
+					parsedSpans.length === 1 &&
+					spans.length === 1 &&
+					(spans[0]?.offset !== parsedSpans[0]?.offset ||
+						spans[0]?.limit !== parsedSpans[0]?.limit)
+				) {
+					recordDegradationOnce({
+						kind: "bash-view-clipped",
+						subject: parsedSpans[0]?.filePath ?? "unknown",
+						reason: "truncated bash view narrowed a single span",
+					});
+				}
+			}
+			for (const span of spans) {
 				if (isExternalOrVendorFile(span.filePath, workspaceRoot)) continue;
 				if (isPathIgnoredByProject(span.filePath, workspaceRoot, false))
 					continue;
@@ -1468,6 +1580,90 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				turnIndex: runtime.turnIndex,
 				writeIndex: runtime.peekWriteIndex(),
 			});
+		}
+	}
+
+	// Native read results are the authoritative read boundary. The tool_call
+	// input can request past EOF, and the host can cap bytes or lines before the
+	// result reaches the model. Register only the delivered range (#2802).
+	if (
+		deps.readGuard &&
+		event.toolName === "read" &&
+		event.isError !== true &&
+		filePath &&
+		!getFlag("no-read-guard") &&
+		!isExternalOrVendorFile(filePath, workspaceRoot)
+	) {
+		const deliveredFilePath =
+			attribution?.resolvedPath && nodeFs.existsSync(attribution.resolvedPath)
+				? attribution.resolvedPath
+				: filePath;
+		if (nodeFs.existsSync(deliveredFilePath)) {
+			const nativeReadToolCallId = resolveToolCallCorrelationId(event);
+			const input = event.input as { offset?: number; limit?: number };
+			const requestedOffset = input.offset ?? 1;
+			const requestedLimit = input.limit;
+			const truncation = (
+				event.details as
+					| {
+							truncation?: { outputLines?: number; truncated?: boolean };
+					  }
+					| undefined
+			)?.truncation;
+			const available = Math.max(
+				0,
+				countFileLines(deliveredFilePath) - requestedOffset + 1,
+			);
+			const deliveredLimit = Math.min(
+				available,
+				truncation?.outputLines ?? requestedLimit ?? available,
+			);
+			if (deliveredLimit > 0) {
+				if (truncation?.truncated === true && deliveredLimit < available) {
+					recordDegradationOnce({
+						kind: "native-read-clipped",
+						subject: deliveredFilePath,
+						reason: "native read result was clipped before delivery",
+					});
+				}
+				logReadGuardEvent({
+					event: "read_pattern",
+					sessionId: runtime.telemetrySessionId,
+					filePath: deliveredFilePath,
+					requestedOffset,
+					requestedLimit: requestedLimit ?? deliveredLimit,
+					effectiveOffset: requestedOffset,
+					effectiveLimit: deliveredLimit,
+					metadata: {
+						totalLines: countFileLines(deliveredFilePath),
+						isPartial: deliveredLimit < available,
+						fileKind: detectFileKind(deliveredFilePath) ?? "unknown",
+						fractionRead:
+							available > 0
+								? Math.round((deliveredLimit / available) * 100) / 100
+								: 1,
+						expandedByTs: false,
+					},
+				});
+				const deliveredRecord = {
+					filePath: deliveredFilePath,
+					requestedOffset,
+					requestedLimit: requestedLimit ?? deliveredLimit,
+					effectiveOffset: requestedOffset,
+					effectiveLimit: deliveredLimit,
+					expandedByLsp: false,
+					turnIndex: runtime.turnIndex,
+					writeIndex: runtime.peekWriteIndex(),
+					timestamp: Date.now(),
+				};
+				if (nativeReadToolCallId) {
+					deps.readGuard.recordRead(deliveredRecord, {
+						supersedes: { toolCallId: nativeReadToolCallId },
+					});
+				} else {
+					deps.readGuard.recordRead(deliveredRecord);
+				}
+			}
 		}
 	}
 
@@ -1726,6 +1922,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					participantTotal: 1,
 					toolResultStart,
 					nativeAppliedPairs: observedAppliedPairs,
+					allowReadGuardWrites: true,
 				});
 				if (observedDispatchOutcome.crashed) {
 					// #2464 review round 2, S6: parity with the classified chain — a
@@ -1867,7 +2064,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	// Refresh the read-guard's FileTime stamp so that the model's own write
 	// doesn't trigger a spurious "file_modified" block on the next edit.
-	deps.readGuard?.recordWritten(filePath);
+	if (bashAuthorshipConfirmed) deps.readGuard?.recordWritten(filePath);
 
 	// Keep cachedExports in sync after each write/edit so the pre-write STOP
 	// check doesn't fire on names that were removed from this file this session.
@@ -1903,7 +2100,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// tool_result is emitted after write/edit has already been applied.
 	// Asserting pre-write stamps here produces false positives on rapid edits.
 	sessionFileTime.read(filePath);
-	if (!getFlag("no-read-guard")) {
+	if (!getFlag("no-read-guard") && bashAuthorshipConfirmed) {
 		const readGuard = (
 			runtime as {
 				readGuard?: { recordWritten?: (writtenPath: string) => void };
@@ -2102,6 +2299,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			participantTotal,
 			toolResultStart,
 			nativeAppliedPairs,
+			allowReadGuardWrites: bashAuthorshipConfirmed,
 		}),
 		{
 			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,

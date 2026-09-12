@@ -15,13 +15,26 @@
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import {
 	buildProjectSnapshotFromRuntime,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	cleanupTestEnvironments,
+	createTempFile,
+	setupTestEnvironment,
+} from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/config.js", () => ({
@@ -100,6 +113,15 @@ function makeDeps(
 describe("warm-pipeline size-skip notify (#775)", () => {
 	let restoreStartupMode: () => void;
 	let previousDataDir: string | undefined;
+
+	const cleanupWarmSkipNotifyTemps = async () => {
+		await waitForProjectSnapshotPersistsForTests();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		cleanupTestEnvironments("pi-lens-warm-skip-notify-");
+	};
+
+	afterEach(cleanupWarmSkipNotifyTemps);
+	afterAll(cleanupWarmSkipNotifyTemps);
 
 	beforeEach(() => {
 		restoreStartupMode = setStartupMode("full");
