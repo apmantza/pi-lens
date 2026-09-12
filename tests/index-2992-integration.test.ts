@@ -4,11 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
+const workerHome = process.env.PI_LENS_HOME;
+
 describe("#2992 read bridge lifecycle", () => {
 	let probeHome: string;
 	let filePath: string;
+	let previousHome: string | undefined;
+	let homeAtSetup: string | undefined;
+	let setupCount = 0;
 
 	beforeEach(() => {
+		homeAtSetup = process.env.PI_LENS_HOME;
+		previousHome = process.env.PI_LENS_HOME;
+		setupCount++;
 		const probeRoot = path.join(process.cwd(), ".probe-home");
 		fs.mkdirSync(probeRoot, { recursive: true });
 		probeHome = path.join(probeRoot, "pi-lens-2992-home");
@@ -25,6 +33,8 @@ describe("#2992 read bridge lifecycle", () => {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			removeTempDirSync(probeHome);
 		}
+		if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = previousHome;
 		vi.restoreAllMocks();
 	});
 
@@ -219,5 +229,12 @@ describe("#2992 read bridge lifecycle", () => {
 				deferAutofix: false,
 			}),
 		).toBe(false);
+	});
+
+	it("keeps the next test from inheriting PI_LENS_HOME (#2912)", () => {
+		// #2912 recurrence: a cross-test PI_LENS_HOME leak redirects the real
+		// instance registry and makes an unrelated worker observe an extra root.
+		expect(setupCount).toBeGreaterThan(1);
+		expect(homeAtSetup).toBe(workerHome);
 	});
 });
