@@ -597,6 +597,9 @@ function pathLineReferences(text) {
 		file: match[1],
 		lineText: match[2],
 		line: Number(match[2].replace(/^~/, "").split("-", 1)[0]),
+		end: match[2].includes("-")
+			? Number(match[2].replace(/^~/, "").split("-", 2)[1])
+			: undefined,
 		index: match.index,
 	}));
 }
@@ -630,11 +633,19 @@ function lintCodeCitations(body, options = {}) {
 	const errors = [];
 	const rawLines = String(body ?? "").split(/\r?\n/);
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
-		visibleBody,
-	)) {
+	for (const {
+		file,
+		lineText,
+		line: lineNumber,
+		end,
+		index,
+	} of pathLineReferences(visibleBody)) {
 		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
 		const key = `${file}:${lineText}`;
+		if (end !== undefined && end < lineNumber) {
+			errors.push(`PR body citation ${key} has a malformed backwards range.`);
+			continue;
+		}
 		const source = headFileSource(file, options);
 		if (source === null) {
 			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);

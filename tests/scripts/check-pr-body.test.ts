@@ -1434,6 +1434,19 @@ describe("head-tree citations and test references", () => {
 		).toEqual({ valid: true, errors: [] });
 	});
 
+	it("rejects a backwards citation range with a malformed-range error", () => {
+		const result = lintPrBody(
+			`${body}\nEvidence: \`clients/citation.ts:2-1\``,
+			options,
+		);
+		expect(result).toEqual({
+			valid: false,
+			errors: [
+				"PR body citation clients/citation.ts:2-1 has a malformed backwards range.",
+			],
+		});
+	});
+
 	it("accepts approximate-line citations by their hinted line", () => {
 		expect(
 			lintPrBody(`${body}\nEvidence: \`clients/citation.ts:~1\``, options),
@@ -1657,6 +1670,14 @@ describe("head-tree citations and test references", () => {
 		expect(result.errors).toContain(
 			`PR body test reference is missing under tests/: ${table.match(/fabricated [^`]+/)?.[0]}`,
 		);
+	});
+
+	it("accepts a master claim inside a valid table", () => {
+		const result = lintPrBody(
+			`${body}\n| Evidence | Status |\n| --- | --- |\n| pre-existing and red on master | verified |`,
+			options,
+		);
+		expect(result).toEqual({ valid: true, errors: [] });
 	});
 
 	it("keeps valid tables column-aware with CRLF line endings", () => {
