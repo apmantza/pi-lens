@@ -93,6 +93,262 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBe(0);
 	});
 
+	describe("typescript sql-injection sink signal", () => {
+		it("silences child-process, task-runner, and custom execute false positives", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { exec, execFile } from "node:child_process";',
+					'import { run } from "task-runner";',
+					"declare function execute(query: string): void;",
+					"exec(`echo ${userInput}`);",
+					"execFile(`tool ${userInput}`);",
+					"run(`task ${userInput}`);",
+					"execute(`not a database command ${userInput}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+
+		it("fires for known DB-package imports", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import pg from "pg";',
+					'import mysql from "mysql2";',
+					'import { PrismaClient } from "@prisma/client";',
+					"declare const unknownClient: { execute(query: string): void };",
+					"pg.query(`SELECT * FROM users WHERE id = ${userId}`);",
+					"mysql.execute(`UPDATE users SET name = '${name}'`);",
+					"const prisma = new PrismaClient();",
+					"prisma.$queryRaw`not prose ${id}`;",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(3);
+		});
+
+		it("does not bind words from comments inside an import clause", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const commentFile = writeTempFile(
+				"ts",
+				[
+					'import { Pool, // the pool runner\n} from "pg";',
+					"const runner = makeShellRunner();",
+					"runner.run(`docker run ${image}`);",
+				].join("\n"),
+			);
+			const controlFile = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					"const runner = makeShellRunner();",
+					"runner.run(`docker run ${image}`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, commentFile, "typescript"),
+			).toHaveLength(0);
+			expect(
+				await client.runQueryOnFile(query, controlFile, "typescript"),
+			).toHaveLength(0);
+		});
+
+		it("does not bind a side-effect-only database import", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				'import "pg";\nconst runner = makeShellRunner();\nrunner.run(`docker run ${image}`);\n',
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(0);
+		});
+
+		it("does not inherit database status through members or returned values", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					'import { getPool } from "pg";',
+					"const pg = new Pool();",
+					"const awaitedPool = await pg;",
+					"const factoryPool = getPool();",
+					"const parseDate = pg.types.getTypeParser(1082);",
+					"const shell = pg.client.driver.spawn;",
+					"const urls = pg.defaults;",
+					"parseDate.run(`job ${name} --force`);",
+					"shell.exec(`docker run ${image}`);",
+					"urls.query(`?page=${page}`);",
+					"awaitedPool.query(`not prose ${awaitedValue}`);",
+					"factoryPool.query(`not prose ${factoryValue}`);",
+					"(await pg).query(`not prose ${directAwaitValue}`);",
+					"getPool().query(`not prose ${directCallValue}`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(3);
+		});
+
+		it("fires for a SQL-leading template with an unknown client", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				"declare const unknownClient: { execute(query: string): void };\n" +
+					"unknownClient.execute(`  /* generated */ DELETE FROM users WHERE id = ${id}`);\n" +
+					"unknownClient.execute(`-- generated\nSELECT * FROM users WHERE id = ${id}`);\n",
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(2);
+		});
+
+		it("binds the package signal to the receiver and covers documented sinks", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import mysql from "mysql2/promise";',
+					'import { Pool } from "pg";',
+					'import { PrismaClient } from "@prisma/client/edge";',
+					'import Database from "better-sqlite3";',
+					'import knex from "knex";',
+					"const prisma = new PrismaClient();",
+					"const db = new Database();",
+					"const pool = new Pool();",
+					"mysql.execute(`not prose ${value}`);",
+					"pool.query(`not prose ${value}`);",
+					"prisma.$queryRawUnsafe(`not prose ${value}`);",
+					"knex.raw(`not prose ${value}`);",
+					"db.prepare(`not prose ${value}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(5);
+		});
+
+		it("keeps imported database files quiet for unrelated command and HTTP templates", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					'import { Pool } from "pg";',
+					'import { exec } from "node:child_process";',
+					'import type { Knex } from "knex";',
+					"const pool = new Pool();",
+					"export function dump(dbName: string) {",
+					"  exec(`pg_dump ${dbName} > /tmp/out.sql`);",
+					"  run(`create app ${dbName}`);",
+					"  exec(`update ${dbName}`);",
+					"  http.execute(`DELETE /users/${dbName} HTTP/1.1`);",
+					"  fsq.run(`drop (${dbName}) from cache`);",
+					"}",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+
+		it("requires the SQL token after each supported leading verb", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"run(`select ${value}`);",
+					"run(`insert ${value}`);",
+					"run(`update ${value}`);",
+					"run(`delete ${value}`);",
+					"run(`create app ${value}`);",
+					"run(`drop (${value}) from cache`);",
+					"run(`MERGE INTO users USING ${value}`);",
+					"run(`TRUNCATE TABLE users WHERE id = ${value}`);",
+					"run(`REPLACE INTO users VALUES (${value})`);",
+					"run(`select * from users where id = ${value}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(5);
+		});
+
+		it("recognizes SQL modifiers and administrative statements", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"run(`CREATE TEMPORARY TABLE staging_${suffix} (id int)`);",
+					"run(`CREATE UNIQUE INDEX idx_${name} ON users (email)`);",
+					"run(`DROP FUNCTION fn_${name}`);",
+					"run(`ALTER SEQUENCE seq_${name} RESTART`);",
+					"run(`GRANT SELECT ON users TO ${role}`);",
+					"run(`REVOKE SELECT ON users FROM ${role}`);",
+					"run(`SELECT ${column}`);",
+					"run(`CREATE TABLE staging`);",
+				].join("\n"),
+			);
+			expect(
+				await client.runQueryOnFile(query, filePath, "typescript"),
+			).toHaveLength(7);
+		});
+
+		it("does not treat comments or unrelated strings as SQL sink signals", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("sql-injection");
+			const filePath = writeTempFile(
+				"ts",
+				[
+					"declare function execute(query: string): void;",
+					"// SELECT users should not make this helper a SQL sink",
+					'const label = "SELECT users";',
+					"execute(`not SQL: ${userInput}`);",
+				].join("\n"),
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches).toHaveLength(0);
+		});
+	});
+
 	it("does not match SQLAlchemy session.execute(stmt)", async () => {
 		const client = getSharedTreeSitterClient()!;
 		const query = await getQuery("python-sql-injection");

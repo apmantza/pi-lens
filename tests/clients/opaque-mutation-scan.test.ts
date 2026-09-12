@@ -73,6 +73,12 @@ afterEach(() => {
 });
 
 describe("captureFileStats", () => {
+	it("can force an unknown capture verdict for absent-evidence tests", async () => {
+		expect(
+			await captureFileStats(tmpDir, { forcedUnknownReason: "walk-failed" }),
+		).toMatchObject({ unknownReason: "walk-failed" });
+	});
+
 	it("snapshots existing project sources with normalized keys", async () => {
 		const file = path.join(tmpDir, "src", "a.ts");
 		fs.writeFileSync(file, "const x = 1;\n", "utf8");
@@ -117,6 +123,22 @@ describe("diffFileStats", () => {
 		expect(keys).toContain(normalizeMapKey(modifiedPath));
 		expect(keys).toContain(normalizeMapKey(addedPath));
 		expect(keys).not.toContain(normalizeMapKey(unchangedPath));
+	});
+
+	it("treats an absent baseline entry as created content", () => {
+		const addedPath = normalizeMapKey(path.join(tmpDir, "created.ts"));
+		const before = new Map();
+		const after = new Map([[addedPath, { mtimeMs: 1, size: 1 }]]);
+		expect(diffFileStats(before, after)).toEqual([addedPath]);
+	});
+
+	it("keeps touch and cp creation candidates in the recognized population", () => {
+		expect(
+			extractWrittenPathsFromCommand("touch newfile.ts", tmpDir),
+		).toContain(path.join(tmpDir, "newfile.ts"));
+		expect(
+			extractWrittenPathsFromCommand("cp src/a.ts newdest.ts", tmpDir),
+		).toContain(path.join(tmpDir, "newdest.ts"));
 	});
 });
 

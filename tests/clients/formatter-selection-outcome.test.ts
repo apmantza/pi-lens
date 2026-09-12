@@ -14,7 +14,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeTempDirSync } from "./test-utils.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
@@ -45,6 +46,11 @@ const foundResult = (binary: string) => ({
 });
 
 const finder = () => (process.platform === "win32" ? "where" : "which");
+const tempDirs: string[] = [];
+
+afterEach(() => {
+	while (tempDirs.length > 0) removeTempDirSync(tempDirs.pop() as string);
+});
 
 function pathLookups(verdicts: Record<string, "found" | "missing">) {
 	return async (cmd: string, args: string[]) => {
@@ -63,6 +69,7 @@ const selections = () =>
 
 function rubyProject(): { cwd: string; filePath: string } {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-outcome-rb-"));
+	tempDirs.push(cwd);
 	fs.writeFileSync(
 		path.join(cwd, ".rubocop.yml"),
 		"AllCops:\n  NewCops: enable\n",
@@ -75,6 +82,7 @@ function rubyProject(): { cwd: string; filePath: string } {
 
 function emptyRubyProject(): { cwd: string; filePath: string } {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-outcome-bare-"));
+	tempDirs.push(cwd);
 	const filePath = path.join(cwd, "bare.rb");
 	fs.writeFileSync(filePath, "puts 1\n");
 	return { cwd, filePath };
