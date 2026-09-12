@@ -3,6 +3,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
+import {
+	_settleRegistryMutationsForTests,
+	deregisterInstance,
+} from "../clients/instance-registry.js";
 
 const workerHome = process.env.PI_LENS_HOME;
 
@@ -33,6 +37,12 @@ describe("#2992 read bridge lifecycle", () => {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			removeTempDirSync(probeHome);
 		}
+		// #2912 recurrence: session_start queues registerInstance without
+		// awaiting it. Drain and remove that test-owned PID entry before the
+		// home restore, or a reused Vitest worker leaks this root to the next
+		// file's PID-scoped registry assertion.
+		await _settleRegistryMutationsForTests();
+		deregisterInstance();
 		if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 		else process.env.PI_LENS_HOME = previousHome;
 		vi.restoreAllMocks();
