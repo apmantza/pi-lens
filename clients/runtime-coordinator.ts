@@ -219,6 +219,16 @@ export interface InlineBlockerRecord {
 	 */
 	recordedSize?: number;
 	/**
+	 * #2982 review round 2: the sha256 of the file's bytes when the verdict was
+	 * recorded, the tier that decides what `recordedSize` cannot. A same-length
+	 * edit (a renamed identifier of equal length, a flipped comparison, a changed
+	 * digit) is the common shape, not an exotic one, so a size-only tier leaves a
+	 * genuinely changed record authoritative. Captured off the synchronous
+	 * dispatch path by `setInlineBlockerContentBaseline`; absent when that
+	 * capture did not land, which the sweep reads as `unverifiable`.
+	 */
+	recordedHash?: string;
+	/**
 	 * #1641: the 1-based cited lines of the diagnostics behind `summary`,
 	 * captured at write time (`dispatchResult.blockers[].line` in
 	 * `pipeline.ts`) rather than re-parsed from the rendered text — see
@@ -1025,29 +1035,56 @@ export class RuntimeCoordinator {
 		writeIndex?: number,
 		sources?: readonly string[],
 		lines?: readonly number[],
-	): void {
-		// #2982: stamp the size alongside the timestamp so the self-drift axis has
-		// a content tier to confirm against. One `statSync` on a path the dispatch
-		// just finished processing, and only for a file that actually HAS blockers,
-		// so this is per-blocking-dispatch, not per-edit or per-render. An
-		// unreadable file leaves the field absent, which the sweep reads as
-		// "cannot decide" and treats as no drift.
-		let recordedSize: number | undefined;
-		try {
-			recordedSize = fs.statSync(filePath).size;
-		} catch {
-			recordedSize = undefined;
-		}
+	): number {
+		// #2982: returned so the async caller can pin its off-path content-baseline
+		// capture to THIS verdict. A re-record between the two replaces the
+		// stamp, and `setInlineBlockerContentBaseline` then drops the late
+		// baseline rather than attaching it to a verdict it did not measure.
+		const recordedAtMs = Date.now();
 		this._pendingInlineBlockers.set(path.resolve(filePath), {
 			filePath,
 			summary,
 			writeIndex,
 			sources,
 			lines,
-			recordedAtMs: Date.now(),
+			recordedAtMs,
 			stale: false,
-			...(recordedSize === undefined ? {} : { recordedSize }),
 		});
+		return recordedAtMs;
+	}
+
+	/**
+	 * #2982 review round 2: attach the content baseline the self-drift axis
+	 * confirms against, captured OFF this synchronous path.
+	 *
+	 * `recordInlineBlockers` runs inside the dispatch handler and must not read
+	 * the file: a blocking read there spends a hook budget on I/O, and a network
+	 * filesystem makes that concrete. The async caller
+	 * (`runtime-tool-result.ts`, already inside `handleToolResult`) does the read
+	 * under `bounded()` and hands the result here. A record whose baseline never
+	 * arrives (read timed out, aborted, or failed) simply has none, and the sweep
+	 * reads that as `unverifiable` and changes no state.
+	 *
+	 * Ignores a baseline for a record that is no longer the one it was captured
+	 * for: a re-record between the capture and this call replaces the verdict,
+	 * and `recordedAtMs` is what tells them apart.
+	 */
+	setInlineBlockerContentBaseline(
+		filePath: string,
+		recordedAtMs: number,
+		size: number,
+		hash: string,
+	): boolean {
+		const key = path.resolve(filePath);
+		const existing = this._pendingInlineBlockers.get(key);
+		if (!existing) return false;
+		if (existing.recordedAtMs !== recordedAtMs) return false;
+		this._pendingInlineBlockers.set(key, {
+			...existing,
+			recordedSize: size,
+			recordedHash: hash,
+		});
+		return true;
 	}
 
 	clearInlineBlockers(filePath: string): void {
@@ -1135,10 +1172,16 @@ export class RuntimeCoordinator {
 		const currentlySelfDrift =
 			!!existing.stale && existing.staleReason === "self-drift";
 		if (currentlySelfDrift === isSelfDrift) return false;
+		// Omit the key rather than assigning `undefined` to it: under
+		// `exactOptionalPropertyTypes` those are different, and writing the
+		// `undefined` is a strictness spike the ratchet counts. Healing has to
+		// drop `staleReason` off the rebuilt record, so destructure it away
+		// instead of letting `...existing` carry the old value through.
+		const { staleReason: _cleared, ...rest } = existing;
 		this._pendingInlineBlockers.set(key, {
-			...existing,
+			...rest,
 			stale: isSelfDrift,
-			staleReason: isSelfDrift ? "self-drift" : undefined,
+			...(isSelfDrift ? { staleReason: "self-drift" as const } : {}),
 		});
 		return true;
 	}

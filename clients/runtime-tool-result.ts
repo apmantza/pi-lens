@@ -1066,6 +1066,40 @@ async function dispatchPipelineAnalysis(args: {
 	return { crashed: false, result };
 }
 
+/**
+ * #2982: the largest file whose bytes are hashed for an inline blocker's content
+ * baseline. A blocker on a generated or vendored megafile must not turn one
+ * dispatch into a multi-megabyte read; past this size the record simply gets no
+ * baseline and the sweep treats it as unverifiable, which is the same
+ * fail-closed direction as a read that times out.
+ */
+const INLINE_BLOCKER_BASELINE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * #2982: read one file's size and content hash for the self-drift baseline.
+ *
+ * Returns undefined rather than throwing for every failure a record can
+ * survive: the file being unreadable, gone, or larger than the cap. The caller
+ * treats a missing baseline as "cannot decide", so there is nothing here that
+ * needs to distinguish the reasons.
+ */
+async function readInlineBlockerContentBaseline(
+	filePath: string,
+): Promise<{ size: number; hash: string } | undefined> {
+	try {
+		const stat = await nodeFs.promises.stat(filePath);
+		if (!stat.isFile()) return undefined;
+		if (stat.size > INLINE_BLOCKER_BASELINE_MAX_BYTES) return undefined;
+		const content = await nodeFs.promises.readFile(filePath);
+		return {
+			size: content.byteLength,
+			hash: nodeCrypto.createHash("sha256").update(content).digest("hex"),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
 export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	content: Array<{ type: string; text?: string }>;
 	isError?: boolean;
@@ -2278,13 +2312,38 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// #1561: stamp the verdict with THIS dispatch's write token — the same
 		// counter `lsp_diagnostics`' reconciliation seam draws from — so a later
 		// confirmed-clean result can be ordered against it instead of racing it.
-		runtime.recordInlineBlockers(
+		const recordedAtMs = runtime.recordInlineBlockers(
 			filePath,
 			result.inlineBlockerSummary,
 			writeIndex,
 			result.inlineBlockerSources,
 			result.inlineBlockerLines,
 		);
+		// #2982 review round 2: capture the content baseline the self-drift axis
+		// confirms against. Here rather than inside `recordInlineBlockers` because
+		// that method is synchronous on the dispatch path and must not read the
+		// file; this caller is already async and already inside the hook's budget,
+		// so the read is bounded by the same signal everything else here uses. A
+		// bound that expires yields `undefined` and simply leaves the record
+		// without a baseline, which the sweep reads as "cannot decide".
+		const baselineBound = {
+			label: "inlineBlockerContentBaseline",
+			hook: "tool_result_edit" as const,
+			signal: deps.signal,
+			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+		};
+		const baseline = await bounded(
+			readInlineBlockerContentBaseline(filePath),
+			baselineBound,
+		);
+		if (baseline !== undefined) {
+			runtime.setInlineBlockerContentBaseline(
+				filePath,
+				recordedAtMs,
+				baseline.size,
+				baseline.hash,
+			);
+		}
 	} else {
 		runtime.clearInlineBlockers(filePath);
 	}

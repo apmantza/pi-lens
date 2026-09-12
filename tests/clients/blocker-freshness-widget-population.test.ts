@@ -16,6 +16,7 @@
  * cache-served-only row is invisible to `total`/`kept`/`revalidated` and the widget
  * store's `stale` flag is never set by the sweep.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -360,9 +361,20 @@ describe("blocker freshness sweep — widget-store population (#1790)", () => {
 		);
 
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(consumer, "🔴 incomplete assertion", 1, [
-			"tree-sitter",
-		]);
+		const recordedAtMs = runtime.recordInlineBlockers(
+			consumer,
+			"🔴 incomplete assertion",
+			1,
+			["tree-sitter"],
+		);
+		// The content baseline production attaches from the async caller (#2982).
+		const baselineBytes = fs.readFileSync(consumer);
+		runtime.setInlineBlockerContentBaseline(
+			consumer,
+			recordedAtMs,
+			baselineBytes.byteLength,
+			createHash("sha256").update(baselineBytes).digest("hex"),
+		);
 		recordCacheServedBlocking(consumer, "cached blocking finding", Date.now());
 		// Both axes drift: the blocker's own bytes (a real change, since the self
 		// axis is content-confirmed) AND the import it does not consult.

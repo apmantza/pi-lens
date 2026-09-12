@@ -18,6 +18,7 @@
  *   3. After retirement, the record is gone from the store and never
  *      resurfaces.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -351,9 +352,20 @@ describe("self-drift is outside the delivery cap (#2982)", () => {
 				env.tmpDir,
 				sessionId,
 			);
-			runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
-				"ast-grep",
-			]);
+			const recordedAtMs = runtime.recordInlineBlockers(
+				target,
+				"🔴 hardcoded secret",
+				1,
+				["ast-grep"],
+			);
+			// The baseline production attaches from the async caller (#2982 round 2).
+			const baselineBytes = fs.readFileSync(target);
+			runtime.setInlineBlockerContentBaseline(
+				target,
+				recordedAtMs,
+				baselineBytes.byteLength,
+				createHash("sha256").update(baselineBytes).digest("hex"),
+			);
 			runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
 
 			// `touch`: mtime forward, every byte where it was.
@@ -401,9 +413,20 @@ describe("self-drift is outside the delivery cap (#2982)", () => {
 				env.tmpDir,
 				sessionId,
 			);
-			runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
-				"ast-grep",
-			]);
+			const recordedAtMs = runtime.recordInlineBlockers(
+				target,
+				"🔴 hardcoded secret",
+				1,
+				["ast-grep"],
+			);
+			// The baseline production attaches from the async caller (#2982 round 2).
+			const baselineBytes = fs.readFileSync(target);
+			runtime.setInlineBlockerContentBaseline(
+				target,
+				recordedAtMs,
+				baselineBytes.byteLength,
+				createHash("sha256").update(baselineBytes).digest("hex"),
+			);
 			runtime.updateGitGuardStatus(true, "🔴 hardcoded secret");
 
 			// A real byte change that leaves the secret in place.

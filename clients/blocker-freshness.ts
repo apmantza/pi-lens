@@ -61,9 +61,18 @@
  * it. #2449 round 2 F7 settled this for `observed-mutation.ts` ("mtime-only
  * drift has to be confirmed against content before anything is replayed"), and
  * it binds harder here, where an unconfirmed demotion walks a finding out of the
- * authoritative channel. `detectSelfDrift` applies that rule's cheap first tier,
- * `size`; see its doc for why the hash tier is deferred and what a same-size
- * change costs.
+ * authoritative channel. `detectSelfDrift` applies that rule at both tiers:
+ * `size` first, then a sha256 of the bytes when size cannot separate a
+ * one-character edit from a `touch`. A same-LENGTH change is the common shape,
+ * not an exotic one (a renamed identifier of equal length, a flipped comparison,
+ * a changed digit), so a size-only tier would leave a genuinely changed record
+ * authoritative, which is #2982 arriving from the other side. The baseline is
+ * captured OFF the synchronous dispatch path by
+ * `RuntimeCoordinator.setInlineBlockerContentBaseline`, called from
+ * `runtime-tool-result.ts` under `bounded()`; `recordInlineBlockers` itself
+ * reads nothing. Every bound that expires, and every missing baseline, yields
+ * `unverifiable`, which changes no state in either direction and is counted so
+ * it is visible rather than silent.
  *
  * Re-arming: `setInlineBlockerSelfDriftStale` re-derives the verdict every turn
  * and un-demotes a record whose bytes come back, exactly as
@@ -124,7 +133,10 @@
  * with this module is the one number both caps retire against,
  * `DEPENDENCY_DRIFT_MAX_DELIVERIES`, rather than inventing a second one.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -136,6 +148,18 @@ import { TreeSitterSymbolExtractor } from "./tree-sitter-symbol-extractor.js";
 
 /** See the module doc's "Delivery cap (#1950)" section above. */
 export const DEPENDENCY_DRIFT_MAX_DELIVERIES = 3;
+
+/**
+ * #2982: total bytes the self-drift axis may hash in ONE sweep.
+ *
+ * Each read is individually bounded by `bounded()`, but a turn with many
+ * non-LSP blockers would still issue many whole-file reads on a hook path, which
+ * is defect shape 9 (bounded on one axis, growing on another). Once a sweep has
+ * spent this budget the remaining same-size records are reported `unverifiable`
+ * and left exactly as they are, the same fail-closed direction as a read that
+ * times out.
+ */
+const SELF_DRIFT_HASH_BUDGET_BYTES = 8 * 1024 * 1024;
 
 /**
  * Per-turn result of the freshness sweep over the cached inline blockers.
@@ -232,6 +256,14 @@ export interface BlockerFreshnessOptions {
 	 * inline-blockers-only behavior.
 	 */
 	additionalEntries?: WidgetSweepBlockerEntry[];
+	/**
+	 * #2982: the HOOK's abort signal, threaded from `TurnEndDeps.signal`, so the
+	 * self axis's filesystem work runs under `bounded()` rather than as an
+	 * unbounded await on a hook path. Optional because several callers (tests,
+	 * and any future non-hook driver) have none; `bounded()`'s own type admits
+	 * `undefined` for exactly that reason, and a wall-clock bound still applies.
+	 */
+	signal?: AbortSignal;
 }
 
 /**
@@ -420,34 +452,69 @@ type SelfDriftVerdict = "drift" | "unchanged" | "unverifiable";
  * replayed"), and the same reasoning governs here, where an unconfirmed
  * demotion would walk a finding out of the authoritative channel.
  *
- * This implements that rule's cheap FIRST tier only: `size`. The second tier,
- * a content hash, needs a hash baseline captured when the verdict was
- * recorded, and `recordInlineBlockers` is a synchronous call on the dispatch
- * path where a blocking read does not belong. A same-size content change
- * therefore reads `"unchanged"` and the record stays authoritative, which is
- * exactly the behavior before this axis existed, so the boundary costs nothing
- * beyond the status quo and errs toward keeping a finding rather than hiding
- * one. Widening to a hash belongs with a baseline captured off the hot path.
+ * Two tiers, in cost order. `size` decides most cases from the stat already
+ * taken. When the size matches, only a hash can separate a one-character edit
+ * from a `touch`, so the bytes are read and compared against the baseline
+ * `setInlineBlockerContentBaseline` attached off the dispatch path.
+ *
+ * Both tiers fail toward `"unverifiable"`, never toward `"drift"`: a bound that
+ * expires, a baseline that never landed, or a file past the per-sweep hash
+ * budget all leave the record exactly as it is. Demoting on a verdict the tier
+ * could not actually reach is the failure this function exists to prevent, and
+ * `bounded()` returning `undefined` on timeout makes that an easy mistake to
+ * write, so every bound's result is checked explicitly.
  */
-async function detectSelfDrift(
-	filePath: string,
-	recordedAtMs: number,
-	recordedSize: number | undefined,
-): Promise<SelfDriftVerdict> {
-	const mtimeMs = await statMtimeMs(filePath);
-	if (mtimeMs === undefined) return "unverifiable";
-	const freshness = freshnessFromMtime({ mtimeMs, referenceMs: recordedAtMs });
+async function detectSelfDrift(args: {
+	filePath: string;
+	recordedAtMs: number;
+	recordedSize: number | undefined;
+	recordedHash: string | undefined;
+	signal: AbortSignal | undefined;
+	/** Mutable per-sweep hash budget. See {@link SELF_DRIFT_HASH_BUDGET_BYTES}. */
+	budget: { bytesLeft: number };
+}): Promise<SelfDriftVerdict> {
+	const boundOptions = (label: string) =>
+		({
+			ms: HOOK_WALL_BUDGET_MS.turn_end,
+			signal: args.signal,
+			hook: "turn_end" as const,
+			label,
+		}) satisfies Parameters<typeof bounded>[1];
+
+	// EVERY bound that expires yields `undefined`, and every one of those maps to
+	// `unverifiable`, never to drift. A timed-out stat compared against the
+	// recorded size would read as a size change and demote the record, which is
+	// the exact failure this tier exists to prevent.
+	const stat = await bounded(
+		fs.promises.stat(args.filePath),
+		boundOptions("selfDriftStat"),
+	);
+	if (stat === undefined) return "unverifiable";
+	const freshness = freshnessFromMtime({
+		mtimeMs: stat.mtimeMs,
+		referenceMs: args.recordedAtMs,
+	});
 	if (freshness.verdict !== "stale") return "unchanged";
-	// mtime moved past the verdict. Confirm against the content tier before
-	// treating that as drift.
-	if (recordedSize === undefined) return "unverifiable";
-	let currentSize: number;
-	try {
-		currentSize = (await fs.promises.stat(filePath)).size;
-	} catch {
-		return "unverifiable";
-	}
-	return currentSize === recordedSize ? "unchanged" : "drift";
+	// mtime moved past the verdict. Confirm against content before calling it
+	// drift.
+	if (args.recordedSize === undefined) return "unverifiable";
+	if (stat.size !== args.recordedSize) return "drift";
+	// Same length. Only the hash can separate a one-character edit from a
+	// `touch`, and a same-length edit is the common shape, not an exotic one.
+	if (args.recordedHash === undefined) return "unverifiable";
+	// Defect shape 9: each read is individually bounded, but N blockers in one
+	// turn is an unbounded AGGREGATE read on a hook path. The per-sweep byte
+	// budget bounds the other axis; past it the record is unverifiable, not
+	// drifted.
+	if (stat.size > args.budget.bytesLeft) return "unverifiable";
+	const content = await bounded(
+		fs.promises.readFile(args.filePath),
+		boundOptions("selfDriftHash"),
+	);
+	if (content === undefined) return "unverifiable";
+	args.budget.bytesLeft -= content.byteLength;
+	const hash = createHash("sha256").update(content).digest("hex");
+	return hash === args.recordedHash ? "unchanged" : "drift";
 }
 
 /** Result of {@link collectForwardImportMtimes}. */
@@ -573,8 +640,9 @@ interface SweepPopulationEntry {
 	 * which it re-evaluates every turn.
 	 */
 	staleReason: "dependency-drift" | "past-eof" | "self-drift" | undefined;
-	/** #2982: the content tier's baseline. See `InlineBlockerRecord.recordedSize`. */
+	/** #2982: the content tier's baselines. See `InlineBlockerRecord.recordedSize`. */
 	recordedSize: number | undefined;
+	recordedHash: string | undefined;
 	/**
 	 * #2982: the re-arming self-drift setter for the origin store, or undefined
 	 * for a store that has none. Absent means the entry is not eligible for the
@@ -713,6 +781,7 @@ export async function sweepInlineBlockerFreshness(
 		sources?: readonly string[];
 		staleReason?: "dependency-drift" | "past-eof" | "self-drift";
 		recordedSize?: number;
+		recordedHash?: string;
 	}>;
 	try {
 		inlineEntries = runtime.getInlineBlockersSnapshot();
@@ -727,6 +796,7 @@ export async function sweepInlineBlockerFreshness(
 		sources: entry.sources,
 		staleReason: entry.staleReason,
 		recordedSize: entry.recordedSize,
+		recordedHash: entry.recordedHash,
 		demote: () =>
 			runtime.markInlineBlockerStale(entry.filePath, "dependency-drift"),
 		setSelfDrift: (isSelfDrift: boolean) =>
@@ -798,10 +868,15 @@ export async function sweepInlineBlockerFreshness(
 			// without one is not eligible for that axis.
 			staleReason: undefined,
 			recordedSize: undefined,
+			recordedHash: undefined,
 		});
 	}
 
 	counts.total = population.length;
+
+	// One budget for the whole sweep (defect shape 9), consumed by the self
+	// axis's hash tier as it goes.
+	const hashBudget = { bytesLeft: SELF_DRIFT_HASH_BUDGET_BYTES };
 
 	for (const entry of population) {
 		try {
@@ -853,11 +928,25 @@ export async function sweepInlineBlockerFreshness(
 					counts.kept += 1;
 					continue;
 				}
-				const verdict = await detectSelfDrift(
-					entry.filePath,
-					entry.recordedAtMs,
-					entry.recordedSize,
-				);
+				// The outer bound too: an expired one yields `undefined`, and that
+				// means "could not decide", never "changed".
+				const verdict =
+					(await bounded(
+						detectSelfDrift({
+							filePath: entry.filePath,
+							recordedAtMs: entry.recordedAtMs,
+							recordedSize: entry.recordedSize,
+							recordedHash: entry.recordedHash,
+							signal: options?.signal,
+							budget: hashBudget,
+						}),
+						{
+							ms: HOOK_WALL_BUDGET_MS.turn_end,
+							signal: options?.signal,
+							hook: "turn_end",
+							label: "detectSelfDrift",
+						},
+					)) ?? "unverifiable";
 				if (verdict === "unverifiable") {
 					// Decide nothing. Leave the record in whatever state it holds.
 					counts.selfUnverifiable += 1;

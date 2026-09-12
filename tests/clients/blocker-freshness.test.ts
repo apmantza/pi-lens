@@ -16,6 +16,7 @@
  * Red-first: every behavioral test here FAILS on the pre-fix code, where the sweep
  * does not exist / does not demote and the turn-end re-serves the blocker unchanged.
  */
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -393,6 +394,34 @@ describe("blocker freshness sweep — drift demotion (#1631)", () => {
  * #1950 delivery cap.
  */
 describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
+	/**
+	 * Record a verdict AND attach its content baseline, which is what production
+	 * does across two steps: `recordInlineBlockers` synchronously in the dispatch
+	 * handler, then `setInlineBlockerContentBaseline` from the async caller once
+	 * the bounded read lands (#2982 review round 2). A test that skips the second
+	 * step is testing the no-baseline path, not the demotion path.
+	 */
+	function recordWithBaseline(
+		runtime: RuntimeCoordinator,
+		filePath: string,
+		summary: string,
+		sources: string[],
+	): void {
+		const recordedAtMs = runtime.recordInlineBlockers(
+			filePath,
+			summary,
+			1,
+			sources,
+		);
+		const content = fs.readFileSync(filePath);
+		runtime.setInlineBlockerContentBaseline(
+			filePath,
+			recordedAtMs,
+			content.byteLength,
+			createHash("sha256").update(content).digest("hex"),
+		);
+	}
+
 	/** Record the verdict against `before`, then land a real byte change. */
 	function recordThenEdit(
 		runtime: RuntimeCoordinator,
@@ -403,7 +432,7 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		after: string,
 	): void {
 		fs.writeFileSync(filePath, before);
-		runtime.recordInlineBlockers(filePath, summary, 1, sources);
+		recordWithBaseline(runtime, filePath, summary, sources);
 		fs.writeFileSync(filePath, after);
 		driftIntoFuture(filePath);
 	}
@@ -464,6 +493,33 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
 	});
 
+	// #2982 review round 2, the blocking finding of that round. A same-length
+	// edit is the common shape, not an exotic one: a renamed identifier of equal
+	// length, a flipped comparison operator, a changed digit. The size tier
+	// cannot separate it from a `touch`, so the hash tier has to.
+	it("demotes on a same-LENGTH content change (one character swapped)", async () => {
+		const dir = makeDir("pi-lens-fresh-samesize-");
+		const target = path.join(dir, "config.ts");
+		const runtime = new RuntimeCoordinator();
+		recordThenEdit(
+			runtime,
+			target,
+			"🔴 L1 incomplete assertion",
+			["tree-sitter"],
+			"const limit = 10;\n",
+			"const limit = 99;\n",
+		);
+		const before = fs.statSync(target).size;
+		expect(before).toBe(18);
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir);
+		expect(counts.revalidated).toBe(1);
+		expect(counts.selfUnverifiable).toBe(0);
+		const entry = runtime.getInlineBlockersSnapshot()[0];
+		expect(entry?.stale).toBe(true);
+		expect(entry?.staleReason).toBe("self-drift");
+	});
+
 	// #2982 review, the blocking finding. mtime moving is not a byte moving. A
 	// `touch`, a checkout restoring identical bytes, or a no-op formatter pass
 	// must not walk a finding out of the authoritative channel.
@@ -473,9 +529,7 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		fs.writeFileSync(target, "const token = 'aaa';\n");
 
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(target, "🔴 hardcoded secret", 1, [
-			"ast-grep",
-		]);
+		recordWithBaseline(runtime, target, "🔴 hardcoded secret", ["ast-grep"]);
 		// `touch`: mtime forward, every byte where it was.
 		driftIntoFuture(target);
 
@@ -523,10 +577,9 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		fs.writeFileSync(target, "export const y = 1;\n");
 
 		const runtime = new RuntimeCoordinator();
+		// No `setInlineBlockerContentBaseline`: the bounded read never landed, so
+		// the record has no tier to compare against.
 		runtime.recordInlineBlockers(target, "🔴 blocker", 1, ["ast-grep"]);
-		// Strip the baseline the way a record predating this field would.
-		const rec = runtime.getInlineBlockersSnapshot()[0];
-		if (rec) delete (rec as { recordedSize?: number }).recordedSize;
 		fs.writeFileSync(target, "export const y = 987654321;\n");
 		driftIntoFuture(target);
 
@@ -549,7 +602,7 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		);
 
 		const runtime = new RuntimeCoordinator();
-		runtime.recordInlineBlockers(consumer, "🔴 tree-sitter blocker", 1, [
+		recordWithBaseline(runtime, consumer, "🔴 tree-sitter blocker", [
 			"tree-sitter",
 		]);
 		driftIntoFuture(dep);

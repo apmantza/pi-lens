@@ -1346,6 +1346,29 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"rather than a change.",
 		owner: "#2523 slice 2",
 	},
+	"clients/runtime-tool-result.ts#readInlineBlockerContentBaseline:706a86c7~6527736e":
+		{
+			family: "hook-await",
+			site: "tool_result_edit",
+			reason:
+				"Leaf of the #2982 content-baseline read. The whole helper is " +
+				"awaited through bounded() at its only call site " +
+				"(`call:clients/runtime-tool-result.ts#5ae758e7~9ba455ea`, " +
+				"`ToolResultDeps.signal` + tool_result_edit budget), so this leaf " +
+				"cannot outlive that bound; re-bounding it here would nest two " +
+				"races over one read. Size is additionally capped by " +
+				"INLINE_BLOCKER_BASELINE_MAX_BYTES before the read below runs.",
+			owner: "#2982",
+		},
+	"clients/runtime-tool-result.ts#readInlineBlockerContentBaseline:d0bc789a~4d539acd":
+		{
+			family: "hook-await",
+			site: "tool_result_edit",
+			reason:
+				"The read paired with the stat above, same single outer bound and " +
+				"the same 2 MiB size cap, which is checked before this line runs.",
+			owner: "#2982",
+		},
 	"clients/runtime-turn.ts#118c149d~fbb822b8": {
 		family: "hook-await",
 		site: "turn_end",
@@ -1436,7 +1459,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(#2523's `bounded but no abort race` list).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~b1a2c4cd": {
+	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~c3e1d7c1": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
@@ -2251,6 +2274,23 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"turn_end path and absent only in a unit harness. Deadline half is live " +
 		"either way, and is itself the per-trip minimum of the loop's remaining " +
 		"budget and the per-pull timeout.",
+	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e":
+		"`BlockerFreshnessOptions.signal`, threaded from `TurnEndDeps.signal` by " +
+		"`runtime-turn.ts`'s sweep call. Live on every turn_end path. Absent only " +
+		"in unit harnesses that drive the sweep directly, where the wall-clock " +
+		"half still applies; accepted because the self axis's failure direction " +
+		"is `unverifiable` (change nothing), never a demotion (#2982).",
+	"call:clients/blocker-freshness.ts#detectSelfDrift:a28359f5~13a328f9":
+		"Same `BlockerFreshnessOptions.signal` as the stat above. This is the " +
+		"hash tier's whole-file read, reached only when the size tier cannot " +
+		"separate a same-length edit from a `touch`; it is additionally capped by " +
+		"the per-sweep `SELF_DRIFT_HASH_BUDGET_BYTES` so the aggregate read is " +
+		"bounded on the count axis too (#2982, defect shape 9).",
+	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~b69fb70f":
+		"Same `BlockerFreshnessOptions.signal`. Wraps the whole per-entry " +
+		"`detectSelfDrift` call so an expiry maps to `unverifiable` at one place " +
+		"rather than leaving a half-finished verdict; the inner bounds above are " +
+		"the leaf budgets (#2982).",
 	"call:clients/bootstrap.ts#requestBootstrapClients:076f54d7~878c680d":
 		"`options.signal`, GENUINELY absent for the three session-start demands: " +
 		"`SessionBootstrapAccess.request` takes no signal on purpose (#1394 — a " +
@@ -2308,6 +2348,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",
+	"call:clients/runtime-tool-result.ts#5ae758e7~9ba455ea":
+		"`ToolResultDeps.signal`, the tool_result hook's own ctx signal, live on " +
+		"every dispatch path and absent only in unit harnesses. Bounds the " +
+		"content-baseline read that #2982 moved OFF the synchronous " +
+		"`recordInlineBlockers` path; an expiry simply leaves the record without " +
+		"a baseline, which the freshness sweep reads as `unverifiable`.",
 	"call:clients/runtime-tool-result.ts#b9faf573~b4f8a98d":
 		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
 		"budget; a missing signal is an explicit standalone-harness case.",
