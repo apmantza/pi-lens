@@ -113,6 +113,21 @@ issue into the brief. AGENTS.md's net-count rule binds the brief author; the
 fixer and reviewer only enforce what the brief scoped. #2530 shipped a fifth
 bound helper because the brief deferred the fold without a reason.
 
+## External reports (orchestrator)
+
+The contract lives in AGENTS.md, "Issue triage (standing rule)" — assess the
+report against the code before accepting or dispatching, ask the one or two
+facts that would change the design, **do not dispatch work that depends on an
+unanswered load-bearing question**, mirror the answer on the issue and point
+the worker there rather than at a paraphrase, and cite the reporter's reasoning
+as authority. Read it there; this section only points at it.
+
+The train-specific consequence: an external lane's first dispatch is often
+worth delaying by one exchange. On 2026-09-12 a fixer was dispatched on #3000
+between asking the question and receiving the answer, and the answer invalidated
+the brief's central premise — the correction cost a mid-flight `plegma_send` and
+rework that waiting ten minutes would have avoided entirely.
+
 ## Filing issues (orchestrator)
 
 Every `gh issue create` carries one TYPE label, at least one `area:*`, and
