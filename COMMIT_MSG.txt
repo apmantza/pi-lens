@@ -1,5 +1,0 @@
-ci: contain fork-capped metadata writes refs #2993
-
-Make stale verdict-label cleanup advisory and skip it for fork heads, where
-GITHUB_TOKEN is read-only. Move merged-PR close-keyword comments to the
-uncapped pull_request_target trigger, and add a workflow-wide governance scan.
