@@ -9,6 +9,21 @@ Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. a
 
 These tools (plus `ast_grep_outline`, `lsp_navigation`) are registered but inactive by default on hosts that support pi's dynamic tooling. If a call to one of them isn't recognized, activate it first: `pi_lens_activate_tools tools=["ast_grep_search", "ast_grep_replace"]`.
 
+On hosts that aggregate pi-lens behind a single `lens` tool, the `ast_grep_*` tools and `pi_lens_activate_tools` may not be registered at all. There, fall back to the `ast-grep` CLI (alias `sg`) — patterns, metavariables, and YAML rules are identical:
+
+```bash
+# search (≈ ast_grep_search)
+ast-grep run -p 'fetchMetrics($$$ARGS)' -l ts src/
+
+# rewrite (≈ ast_grep_replace; -U applies all)
+ast-grep run -p 'var $X' -r 'let $X' -l js src/ -U
+
+# full YAML rule (≈ the rule: parameter)
+ast-grep scan --rule my-rule.yml src/
+```
+
+Structural-intent parameters map to YAML constraints: `insideKind` → `inside: { kind: ..., stopBy: end }`, `hasKind`/`hasDescendantKind` → `has: { kind: ... }`, `follows` → `follows: { pattern: ... }`, `precedes` → `precedes: { pattern: ... }`.
+
 ## When to Use
 
 - Function calls, imports, class methods (structured code)

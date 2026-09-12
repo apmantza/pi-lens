@@ -606,16 +606,30 @@ export function resolveClassification(
 	if (!isPrNumber(target)) return null;
 	try {
 		const parsed = JSON.parse(
-			ghExec(["pr", "view", String(target), "--json", "labels"], { timeoutMs }),
+			ghExec(
+				["pr", "view", String(target), "--json", "headRefOid,labels,comments"],
+				{ timeoutMs },
+			),
 		);
-		const names = Array.isArray(parsed.labels)
-			? parsed.labels.map((label) => label?.name)
-			: [];
-		return names.includes("ci:infra")
-			? "infra-kill"
-			: names.includes("ci:real")
+		const currentSha = parsed.headRefOid;
+		if (typeof currentSha !== "string") return undefined;
+		const currentMarker = (
+			Array.isArray(parsed.comments) ? parsed.comments : []
+		)
+			.map((comment) => (typeof comment?.body === "string" ? comment.body : ""))
+			.map((body) =>
+				/ci-classifier:\s+(real|infra-kill|infra-net)[^\n]*<!--\s*ci-classifier:sha=([0-9a-fA-F]{7,40})\s/.exec(
+					body,
+				),
+			)
+			.reverse()
+			.find((match) => match?.[2] === currentSha);
+		const classification = currentMarker
+			? currentMarker[1] === "real"
 				? "real"
-				: null;
+				: "infra-kill"
+			: null;
+		return classification;
 	} catch {
 		return null;
 	}

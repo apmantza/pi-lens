@@ -7,6 +7,7 @@ import {
 	extractGrepSearchReadsFromOutput,
 	extractReadPathsFromCommand,
 	extractWrittenPathsFromCommand,
+	isEditClassToolResult,
 	parseGrepContextLines,
 	tokenizeShellCommand,
 	type ReadSpan,
@@ -515,6 +516,28 @@ describe("parseGrepContextLines", () => {
 // ── writes: agent authored the file (mirrors the Write tool) ────────────────
 
 describe("extractWrittenPathsFromCommand — bash writes", () => {
+	it("classifies a third-party shell result from its written paths", () => {
+		const f = pathIn("third-party.ts");
+		expect(
+			isEditClassToolResult(
+				{
+					toolName: "mcp__acme__shell",
+					input: { command: `echo x > ${f}` },
+				},
+				tmp,
+			),
+		).toBe(true);
+		expect(
+			isEditClassToolResult(
+				{
+					toolName: "mcp__acme__shell",
+					input: { command: `cat ${f}` },
+				},
+				tmp,
+			),
+		).toBe(false);
+	});
+
 	const cases: Array<[string, (f: string) => string]> = [
 		["redirect (>)", (f) => `echo "x" > ${f}`],
 		["redirect no space (>file)", (f) => `echo "x" >${f}`],

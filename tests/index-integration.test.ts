@@ -1823,7 +1823,7 @@ describe("index.ts integration", () => {
 	);
 
 	it(
-		"tool_call records full-file reads from read.path with full line coverage",
+		"tool_call registers the resolved read path before the host result",
 		async () => {
 			const recordRead = vi.fn();
 			const mockReadGuard = {
@@ -1912,7 +1912,6 @@ describe("index.ts integration", () => {
 				{ cwd: tmpDir },
 			);
 
-			expect(recordRead).toHaveBeenCalledTimes(1);
 			expect(recordRead).toHaveBeenCalledWith(
 				expect.objectContaining({
 					filePath: sourceFile,

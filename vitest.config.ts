@@ -7,6 +7,7 @@ import {
 
 // Applies to globalSetup as well as workers: ordinary tests never install tools.
 process.env.PI_LENS_DISABLE_TOOL_INSTALL ??= "1";
+process.env.PI_LENS_TMP_HYGIENE_RUN_ID ??= `${Date.now()}-${process.pid}`;
 
 // Background coding agents get worktrees under .claude/worktrees/ — vitest's
 // default exclude covers node_modules/.git/dist but NOT those, so a "full
@@ -456,6 +457,13 @@ export const wallClockBudgetInclude = [
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",
 ];
+
+// #2912: the tmp-fixture governance sweep compares the real process-wide
+// namespace before and after one file. Run it after every other project drains
+// so another worker cannot be mistaken for this file's owner.
+export const tmpFixtureHygieneInclude = [
+	"tests/config/tmp-fixture-hygiene.test.ts",
+];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
 // child process, and was seen timing out at vitest's 5000ms default under a
@@ -487,6 +495,7 @@ export default defineConfig({
 						...timingSensitiveInclude,
 						...lspSpawnHeavyInclude,
 						...wallClockBudgetInclude,
+						...tmpFixtureHygieneInclude,
 					],
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
@@ -623,6 +632,19 @@ export default defineConfig({
 					// project has drained.
 					maxWorkers: 1,
 					sequence: { groupOrder: 4 },
+					hookTimeout: 60_000,
+				},
+			},
+			{
+				test: {
+					name: "tmp-fixture-hygiene",
+					include: tmpFixtureHygieneInclude,
+					exclude: sharedExclude,
+					globalSetup: sharedGlobalSetup,
+					setupFiles: sharedSetupFiles,
+					execArgv: sharedExecArgv,
+					maxWorkers: 1,
+					sequence: { groupOrder: 6 },
 					hookTimeout: 60_000,
 				},
 			},

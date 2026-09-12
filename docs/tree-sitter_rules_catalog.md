@@ -218,7 +218,7 @@ Rule source: `rules/tree-sitter-queries/<language>/`.
 | `no-eval` | error | security | eval() detected — security risk, never use eval |
 | `no-jump-in-finally` | warning | bug | return/break/continue/throw in finally overrides the try/catch result and silently swallows exceptions |
 | `self-assignment` | error | reliability | '{{VAR}}' is assigned to itself |
-| `sql-injection` | warning | security | SQL injection risk — use parameterized queries, never interpolate into SQL |
+| `sql-injection` | error | security | SQL injection risk — use parameterized queries, never interpolate into SQL |
 | `switch-case-termination` | error | reliability | Switch case should end with break, return, throw, or continue |
 | `switch-non-case-labels-ts` | error | reliability | switch statements should not contain non-case labels |
 | `ts-command-injection` | error | security | Potential command injection sink — avoid child_process command execution with untrusted input |

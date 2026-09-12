@@ -74,6 +74,8 @@ function sweepShapeFiles(): string[] {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	"tests/config/github-token-write-gates.test.ts":
+		"workflow population governance sweep; its own detector is not a production registry sweep",
 	// #2725: two-direction set equality over every .d.mts/.mjs sibling pair; the
 	// failure list is the whole registry and there are no exemptions by design.
 	"tests/config/dmts-export-drift.test.ts":
@@ -86,6 +88,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"formatter marker parity assertion; formatter registry coverage is tested by formatter-policy-consistency",
 	"tests/clients/runtime-tool-result.test.ts":
 		"runtime seam behavior cases; filesystem counters verify re-detection, not a population sweep",
+	"tests/clients/sg-runner.test.ts":
+		"fault-injection cases enumerate one real temporary namespace seam; the test asserts cleanup for each setup operation, not a source population sweep",
 	"tests/clients/language-policy.test.ts":
 		"policy unit cases over synthetic language definitions, not a production walk",
 	"tests/clients/lsp/lsp-primary-reachability.test.ts":

@@ -73,8 +73,13 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 		// this file and roots would accumulate across them. Drain first: a
 		// previous test's fire-and-forget writes would otherwise land AFTER this
 		// deregistration and resurrect its roots inside this test.
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		await settleRegistryWrites();
 		deregisterInstance();
+		// The deregistration itself is queued. Drain it before creating the
+		// next roots, or a prior worker write can re-add an old root after the
+		// new session has started (#2130).
+		await settleRegistryWrites();
 		hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-host-root-"));
 		tempWorktree = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-worktree-"));
 	});

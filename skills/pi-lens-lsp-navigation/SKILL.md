@@ -7,6 +7,13 @@ description: Navigate code with IDE features and run proactive LSP diagnostics o
 
 Use `lsp_navigation` as **PRIMARY** for code intelligence. Use `lens_diagnostics` with `source=lsp` as **PRIMARY** for proactive type/error checks. Do NOT use grep/glob/ast-grep first for code intelligence.
 
+## Aggregate-tool hosts
+
+Some hosts expose pi-lens through a single aggregate tool — `lens(action=...)` — instead of registering the standalone names below. On those hosts:
+
+- Proactive checks: `lens({ action: "lsp_diagnostics", ... })` — same parameters as the table below; the cached-report entry point maps to `lens({ action: "diagnostics", ... })`.
+- If `lsp_navigation` is not among the aggregate's actions, do not call the standalone name: use the host's structural search funnel (`symbol_search` → `module_report` → `read_symbol`) or the `ast-grep` CLI for navigation instead.
+
 ## Diagnostics
 
 Use `lens_diagnostics` with `source=lsp` before builds/tests or after touching several files:

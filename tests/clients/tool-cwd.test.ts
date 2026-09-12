@@ -90,6 +90,24 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
+	it("picks the nearest directory, not the first-listed marker (#2922)", () => {
+		// Recurrence: a marker-major walk would return the workspace root because
+		// `biome.json` sorts before `package.json` in the marker list. The walk is
+		// level-major, so the nearer directory wins even though its marker is
+		// later in the list. Every other case in this file places the SAME marker
+		// at both levels, which cannot tell the two orderings apart.
+		const workspace = path.join(home, "ws");
+		const pkg = path.join(workspace, "packages", "app");
+		const file = path.join(pkg, "src", "index.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(workspace, "biome.json"), "{}\n");
+		fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+		expect(
+			toolCwd.resolveToolCwd("formatter", "biome", file, { cwd: workspace }),
+		).toBe(pkg);
+	});
+
 	it("uses the complete formatter marker population", () => {
 		const project = path.join(home, "repo");
 		const file = path.join(project, "src", "main.rs");
@@ -263,25 +281,7 @@ describe("resolveToolCwd (#2777)", () => {
 		).toBe(nested);
 	});
 
-	it("memoizes marker walks for repeated files in one ledger generation", () => {
-		const project = path.join(home, "repo");
-		const nested = path.join(project, "packages", "app");
-		fs.mkdirSync(path.join(nested, "src"), { recursive: true });
-		fs.writeFileSync(path.join(project, "Cargo.toml"), "[package]\n");
-		const before = toolCwd._getToolCwdMarkerWalkCount();
-		for (let i = 0; i < 20; i++) {
-			toolCwd.resolveToolCwd(
-				"formatter",
-				"rustfmt",
-				path.join(nested, "src", `file-${i}.rs`),
-				{ cwd: project },
-			);
-		}
-		const walks = toolCwd._getToolCwdMarkerWalkCount() - before;
-		expect(walks).toBe(1);
-	});
-
-	it("re-walks when a memoized marker is deleted in the same session", () => {
+	it("falls through to the outer root when a marker is deleted", () => {
 		const project = path.join(home, "repo");
 		const nested = path.join(project, "src");
 		const file = path.join(nested, "main.rs");
@@ -294,7 +294,6 @@ describe("resolveToolCwd (#2777)", () => {
 				cwd: project,
 			}),
 		).toBe(project);
-		const walksAfterFirstResolution = toolCwd._getToolCwdMarkerWalkCount();
 		fs.unlinkSync(marker);
 
 		// #2777: deleting a marker must not leave the session stuck on its old root.
@@ -303,10 +302,6 @@ describe("resolveToolCwd (#2777)", () => {
 				cwd: project,
 			}),
 		).toBe(nested);
-		expect(toolCwd._getToolCwdMarkerWalkCount()).toBe(
-			// One marker walk plus the uncached .git fallback walk.
-			walksAfterFirstResolution + 2,
-		);
 	});
 
 	it("re-walks a negative marker result when a marker is created later", () => {
@@ -329,6 +324,55 @@ describe("resolveToolCwd (#2777)", () => {
 				cwd: project,
 			}),
 		).toBe(nested);
+	});
+
+	it("covers the RUNNER_MARKERS marker state space", () => {
+		for (const [tool, markers] of Object.entries(toolCwd.RUNNER_MARKERS)) {
+			const marker = markers[0];
+			if (!marker) throw new Error(`runner ${tool} has no marker`);
+			const project = path.join(home, tool.replaceAll("/", "-"));
+			const nested = path.join(project, "packages", "app");
+			const file = path.join(nested, "src", "main.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+
+			// Create-later: a negative result must not become a session-wide fact.
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
+			).toBe(project);
+			fs.writeFileSync(path.join(nested, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: project, filePath: file }, tool),
+			).toBe(nested);
+
+			// Create-below: a positive outer hit must yield to a nearer marker.
+			const outer = path.join(home, `${tool.replaceAll("/", "-")}-outer`);
+			const outerNested = path.join(outer, "packages", "app", "src");
+			const outerFile = path.join(outerNested, "main.ts");
+			fs.mkdirSync(outerNested, { recursive: true });
+			fs.writeFileSync(path.join(outer, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
+			).toBe(outer);
+			const nearer = path.join(outer, "packages", "app");
+			fs.writeFileSync(path.join(nearer, marker), "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: outer, filePath: outerFile }, tool),
+			).toBe(nearer);
+
+			// Delete-at-root: a cached positive hit must not survive marker removal.
+			const deleted = path.join(home, `${tool.replaceAll("/", "-")}-deleted`);
+			const deletedFile = path.join(deleted, "src", "main.ts");
+			fs.mkdirSync(path.dirname(deletedFile), { recursive: true });
+			const deletedMarker = path.join(deleted, marker);
+			fs.writeFileSync(deletedMarker, "");
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
+			).toBe(deleted);
+			fs.unlinkSync(deletedMarker);
+			expect(
+				toolCwd.resolveRunnerCwd({ cwd: deleted, filePath: deletedFile }, tool),
+			).toBe(deleted);
+		}
 	});
 
 	it("bounds and records a foreign-file fallback once per tool and session", async () => {

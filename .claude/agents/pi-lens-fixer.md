@@ -347,6 +347,24 @@ Before `npm install` or `npm ci` in an agent worktree, export
 loader log honors that home, but an explicit `PI_LENS_INSTALL_LOG` pin remains
 the clearest choice for tests that inspect the record.
 
+## Never `git add -A` (2026-09-12)
+
+Your deliverables — `PR_BODY.md`, `COMMIT_MSG.txt`, any report the brief asks
+for — are written at the WORKSPACE ROOT, which in a worktree delegation is also
+the REPO ROOT. They are gitignored, so `git add -A` tracks a gitignored file and
+reds `tests/config/gitignore-tracked-shadow.test.ts` with
+`expected [ 'PR_BODY.md' ] to deeply equal []`. Three separate lanes did this in
+one day and each cost the orchestrator a trailing commit to untrack.
+
+Stage the source files your change actually touches, by name. Before you commit,
+run `git status --porcelain` and read it: anything you cannot name a reason for
+does not belong in the commit. After committing,
+`git ls-files | grep -E 'PR_BODY|COMMIT_MSG'` must print nothing.
+
+The same care applies to build output, `.probe-home/`, and any scratch fixture
+you created while measuring — a fix round's diff is the change, not the residue
+of making it.
+
 ## Before you call it done
 
 Interrogate your own diff from first principles before reporting; re-climb

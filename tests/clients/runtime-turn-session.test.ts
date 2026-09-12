@@ -1337,6 +1337,9 @@ describe("context injection framing", () => {
 			expect(text).toContain(tool);
 		}
 
+		// Aggregate hosts reach the same entry point as lens(action=diagnostics).
+		expect(text).toMatch(/aggregate hosts: lens\(action=diagnostics\)/);
+
 		// Stay lean: the orientation is a nudge, not re-documentation of every arg.
 		expect(text.length).toBeLessThan(750);
 	});

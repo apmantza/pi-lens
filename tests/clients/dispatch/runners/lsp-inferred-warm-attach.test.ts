@@ -11,8 +11,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
+import { removeTempDirSync } from "../../test-utils.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -66,6 +67,10 @@ describe("LSP dispatch runner — warm attach skips the membership probe (#1645 
 		cwd = fs.realpathSync(
 			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-warm-attach-")),
 		);
+	});
+
+	afterEach(() => {
+		removeTempDirSync(cwd);
 	});
 
 	it("never probes project membership on the warm-attach path", async () => {

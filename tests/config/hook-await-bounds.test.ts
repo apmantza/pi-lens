@@ -2327,7 +2327,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"multiply the wall budget by the 50-pair cap.",
 	"call:clients/session-event-guard.ts#guardSessionEvent:04249a13~4951798b":
 		"The registered pi handler receives its live ctx.signal through the " +
-		"shared session-event wrapper. Its budget is selected from the one hook " +
+		"shared session-event wrapper. The agent_settled handler installs its " +
+		"own ambient abort signal before the signal-less outer bound, so aborted " +
+		"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
 		"registry, including the read-only versus edit tool_result split.",
 	"call:index.ts#c06d5cf4~b4f8a98d":
 		"The tool_result edit bootstrap receives the live pi ctx.signal and the " +

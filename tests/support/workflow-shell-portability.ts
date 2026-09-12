@@ -142,8 +142,13 @@ function needlePattern(needle: string): RegExp {
 	return new RegExp(`\\b${needle}\\b`);
 }
 
-/** Lex executable shell text. Single-quoted prose and quoted heredocs are opaque. */
-function lexShell(source: string): string {
+/**
+ * Lex executable shell text. Single-quoted prose and quoted heredocs are
+ * opaque. Exported for the #2940 pinned-npm gate, which needs the same
+ * "comments and string bodies are not commands" lexing over the release
+ * workflow's runs.
+ */
+export function lexShell(source: string): string {
 	const chars = source.split("");
 	let quote: "'" | '"' | undefined;
 	let comment = false;

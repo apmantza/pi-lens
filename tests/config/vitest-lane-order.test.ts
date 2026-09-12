@@ -29,6 +29,7 @@ describe("Vitest lane registries (#2671)", () => {
 			"timingSensitiveInclude",
 			"lspSpawnHeavyInclude",
 			"wallClockBudgetInclude",
+			"tmpFixtureHygieneInclude",
 		]) {
 			assertSortedRegistry(name, laneEntries(name));
 		}

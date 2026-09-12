@@ -1,14 +1,34 @@
 export declare function detectFlattenedBody(body?: string): boolean;
+export declare function blankCommentsAndStrings(source: string): {
+	text: string;
+	strings: Array<{
+		start: number;
+		end: number;
+		quote: "'" | '"' | "`";
+		text: string;
+		prefix: string;
+	}>;
+};
 export declare function repairFlattenedBody(body?: string): string;
 export declare function detectEscapedNewlineBody(body?: string): boolean;
 export declare function repairEscapedNewlineBody(body?: string): string;
+export declare function splitMarkdownUnits(
+	body?: string,
+): Array<{ kind: string; text: string }>;
 export declare function normalizePrBodyForChecking(
 	body?: string,
 	pullRequestNumber?: number,
 ): { body: string; normalized: boolean };
 export declare function lintPrBody(
 	body?: string,
-	options?: { requireTestAssessment?: boolean; diff?: string },
+	options?: {
+		requireTestAssessment?: boolean;
+		diff?: string;
+		cwd?: string;
+		git?: (args: string[], options?: Record<string, unknown>) => string;
+		workingTree?: boolean;
+		headFiles?: Map<string, string>;
+	},
 ): {
 	valid: boolean;
 	errors: string[];
