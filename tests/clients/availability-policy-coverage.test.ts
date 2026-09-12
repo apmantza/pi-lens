@@ -103,7 +103,11 @@ const KNOWN_CONSUMERS = [
  * consumer. They are the gate's own regression suite: widening the vocabulary
  * without a fixture is how the gate silently narrows again.
  */
-const EVASIONS: ReadonlyArray<{ name: string; source: string }> = [
+const EVASIONS: ReadonlyArray<{
+	name: string;
+	source: string;
+	expectedGoverned?: boolean;
+}> = [
 	{
 		// A verification round found this one escaping, and the cause was a bug
 		// rather than a scoping choice: memo writes resolve against the DECLARED
@@ -399,6 +403,93 @@ const EVASIONS: ReadonlyArray<{ name: string; source: string }> = [
 		`,
 	},
 	{
+		// #1582 residual 1. Type aliases are outside this text-anchored
+		// analyser's resolution boundary, so a legitimate handle reads as
+		// unrouted. It should flip to true if alias indirection is supported;
+		// either direction must remain pinned so the blind spot cannot drift.
+		name: "a routed handle hidden behind a type alias",
+		expectedGoverned: false,
+		source: `
+			import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+			import { safeSpawnAsync } from "./safe-spawn.js";
+			function makeToolProbe(cmd: string) {
+				return createCwdCachedProbe(
+					(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+					{ tool: "newtool" },
+				);
+			}
+			type ToolHandle = ReturnType<typeof makeToolProbe>;
+			const toolAvailableByCwd = new Map<string, ToolHandle>();
+			export function getToolProbe(cmd: string) {
+				return (cwd: string) => {
+					const hit = toolAvailableByCwd.get(cwd);
+					if (hit) return hit;
+					const probed = makeToolProbe(cmd)(cwd);
+					toolAvailableByCwd.set(cwd, probed);
+					return probed;
+				};
+			}
+		`,
+	},
+	{
+		// #1582 residual 2. A decoy un-nested ReturnType mention in a
+		// branded intersection makes the text-anchored type arm report a
+		// boolean memo as governed. It should flip to false if the arm is
+		// narrowed to the memo's actual type; pin the current false positive.
+		name: "a decoy type-arm mention in a branded intersection",
+		expectedGoverned: true,
+		source: `
+			import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+			import { safeSpawnAsync } from "./safe-spawn.js";
+			function makeToolProbe(cmd: string) {
+				return createCwdCachedProbe(
+					(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+					{ tool: "newtool" },
+				);
+			}
+			const toolAvailableByCwd = new Map<
+				string,
+				boolean & { __handle?: ReturnType<typeof makeToolProbe> }
+			>();
+			export async function getToolProbe(cmd: string, cwd: string): Promise<boolean> {
+				const hit = toolAvailableByCwd.get(cwd);
+				if (hit !== undefined) return hit;
+				const verdict = await makeToolProbe(cmd)(cwd);
+				toolAvailableByCwd.set(cwd, verdict);
+				return verdict;
+			}
+		`,
+	},
+	{
+		// #1582 residual 3. isDirectCall baseName-splits on dots, so a
+		// member call on a local object can spoof the direct-call arm. It
+		// should flip to false if the full callee path is checked.
+		name: "a member-call spoof of the direct-call arm",
+		expectedGoverned: true,
+		source: `
+			import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+			import { safeSpawnAsync } from "./safe-spawn.js";
+			function makeToolProbe(cmd: string) {
+				return createCwdCachedProbe(
+					(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+					{ tool: "newtool" },
+				);
+			}
+			const shims = { createCwdCachedProbe: (x: string) => x };
+			const toolAvailableByCwd = new Map<string, ReturnType<typeof makeToolProbe>>();
+			const wrapped = shims.createCwdCachedProbe("newtool");
+			export function getToolProbe(cmd: string) {
+				return (cwd: string) => {
+					const hit = toolAvailableByCwd.get(cwd);
+					if (hit) return hit;
+					const probed = makeToolProbe(cmd)(cwd);
+					toolAvailableByCwd.set(cwd, probed);
+					return probed;
+				};
+			}
+		`,
+	},
+	{
 		// #1566 (NE1). The whitelist's handle-name check was a bare `\bname\b`
 		// substring test over the memo's declared type, so a type that merely
 		// MENTIONS the wrapper's name still passed even after unwrapping it all
@@ -562,10 +653,11 @@ describe("availability policy coverage (#1476)", () => {
 					units.map((unit) => unit.unit),
 					"the analysis did not recognise this as an availability consumer",
 				).not.toEqual([]);
+				const expectedGoverned = evasion.expectedGoverned ?? false;
 				expect(
-					units.filter((unit) => unit.governed),
-					"an unrouted latch was reported as routed through the policy",
-				).toEqual([]);
+					units.filter((unit) => unit.governed).map((unit) => unit.unit),
+					"the known blind verdict changed; update this pin only with a deliberate analyser improvement",
+				).toEqual(expectedGoverned ? units.map((unit) => unit.unit) : []);
 			});
 		}
 	});
