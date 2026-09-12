@@ -554,6 +554,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 50. **A permissive syntax heuristic routes malformed or exceptional references around the strict validator.** *Screen:* every skip, normalization, and range reduction carries a tested discriminator; reject malformed forms before classification, and pair every independent filter with accept and reject tests. *e.g.* #2904's four instances in #2945's regex-literal harvest, #2945's stale cwd-keyed corpus cache, #2946's malformed-separator token discard, and this round's backwards citation range all let exceptional input evade validation. The valid-table master-claim filter in #2904 is the contract-layer sibling: its accept/reject twin prevents the earlier converged path from silently returning. *Detect:* mutate each permissive branch, skip, normalization, or filter and require the named discriminator test to red.
 
+51. **A bookkeeping write wired into a fork-capped gating workflow.** *Screen:* every `GITHUB_TOKEN` write on a `pull_request` trigger is fork-guarded or advisory-listed; metadata upkeep never gates change correctness, and write-required checks use an uncapped trigger. (#2993)
+
 The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
 
 For process singletons that own live child processes, an incompatible cell must
