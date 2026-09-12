@@ -29,6 +29,12 @@ import type {
 export interface FailedProjectAnalyzer {
 	id: string;
 	summary: string;
+	reason?:
+		| "not-installed"
+		| "spawn-failed"
+		| "no-report"
+		| "refused"
+		| "crashed";
 }
 
 /**

@@ -1269,25 +1269,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"observed path above.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-result.ts#57d3f8bf~32875b26": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-result.ts#734a21b6~69a83146": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#8c164eee~caedcf66": {
 		family: "hook-await",
 		site: "tool_result_edit",
 		reason:
@@ -2308,6 +2290,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",
+	"call:clients/runtime-tool-result.ts#464d2ad3~b4f8a98d":
+		"Observed duplicate-claim joins use the same ToolResultDeps.signal and " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
+	"call:clients/runtime-tool-result.ts#8f7626bd~b4f8a98d":
+		"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
 	"call:clients/runtime-tool-result.ts#b9faf573~b4f8a98d":
 		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
 		"budget; a missing signal is an explicit standalone-harness case.",
@@ -2327,7 +2315,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"multiply the wall budget by the 50-pair cap.",
 	"call:clients/session-event-guard.ts#guardSessionEvent:04249a13~4951798b":
 		"The registered pi handler receives its live ctx.signal through the " +
-		"shared session-event wrapper. Its budget is selected from the one hook " +
+		"shared session-event wrapper. The agent_settled handler installs its " +
+		"own ambient abort signal before the signal-less outer bound, so aborted " +
+		"work requeues before release (#2939 F6). Its budget is selected from the one hook " +
 		"registry, including the read-only versus edit tool_result split.",
 	"call:index.ts#c06d5cf4~b4f8a98d":
 		"The tool_result edit bootstrap receives the live pi ctx.signal and the " +

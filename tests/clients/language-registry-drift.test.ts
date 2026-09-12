@@ -17,6 +17,7 @@ import {
 } from "../../scripts/gen-language-snapshot.mjs";
 import {
 	detectFileKind,
+	getFileKindsForExtension,
 	type FileKind,
 	KIND_EXTENSIONS,
 	SPECIAL_FILENAMES,
@@ -40,6 +41,7 @@ import {
 } from "../../clients/language-registry.js";
 import { symbolSearchFileMatchesLang } from "../../clients/lens-engine.js";
 import { LANGUAGE_EXTENSIONS } from "../../clients/lsp/language.js";
+import { getServersForFile } from "../../clients/lsp/server.js";
 import { tsLangForFile } from "../../clients/module-report.js";
 import { TREE_SITTER_EXT_TO_LANG } from "../../clients/project-diagnostics/scanner.js";
 import { readExpansionLanguage } from "../../clients/read-expansion.js";
@@ -215,6 +217,19 @@ describe("language registry invariants", () => {
 		// last resort, mapped through the kind they classify into.
 		expect(resolveLanguage("infra/Dockerfile.dev")?.id).toBe("dockerfile");
 		expect(resolveLanguage("src/App.tsx")?.id).toBe("typescriptreact");
+	});
+
+	it("routes .cuh through every C++ production projection (#2986)", () => {
+		// #2986 recurrence guard: NVIDIA/HIP header convention `.cuh` is absent
+		// from clang's driver table, but must still reach clangd, cpp grammar, and
+		// cxx consumers as the surrounding `.cu` and `.hip` files do.
+		const file = "fixture/kernel.cuh";
+		const language = resolveLanguage(file);
+		expect(language?.id).toBe("cpp");
+		expect(language?.lspId ?? language?.id).toBe("cpp");
+		expect(EXTENSION_TO_GRAMMAR[".cuh"]).toBe("cpp");
+		expect(getFileKindsForExtension(".cuh")).toEqual(["cxx"]);
+		expect(getServersForFile(file).map((server) => server.id)).toContain("cpp");
 	});
 
 	it("agrees with detectFileKind on every extension it owns", () => {
@@ -570,7 +585,7 @@ describe("SCAN_LANGUAGE_PRIORITY (#2434 fold)", () => {
 	 * `.tsx` together) now scans as whichever id is tried first, not the old
 	 * combined set — the one enumerated "Changed" row from the split.
 	 *
-	 * Four rows are a single id whose registry extension set is a SUPERSET of
+	 * Five rows are a single id whose registry extension set is a SUPERSET of
 	 * the old value: the registry entry is shared with every other consumer
 	 * (grammar routing, LSP id, `resolveLanguage`), so narrowing it here to
 	 * match the old table would mean re-forking a table #2424 just merged.
@@ -609,6 +624,8 @@ describe("SCAN_LANGUAGE_PRIORITY (#2434 fold)", () => {
 				".cp",
 				".cppm",
 				".cu",
+				// Deliberate CUDA/HIP community-header divergence from clang (#2986).
+				".cuh",
 				".cxxm",
 				".hh",
 				".hip",

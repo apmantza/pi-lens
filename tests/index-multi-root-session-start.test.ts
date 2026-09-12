@@ -63,24 +63,43 @@ async function rootsForThisPid(): Promise<string[]> {
 	return entry ? getInstanceRoots(entry) : [];
 }
 
+const testRegistryHome = path.join(
+	process.cwd(),
+	".probe-home",
+	"index-multi-root-session-start",
+);
+const workerHome = process.env.PI_LENS_HOME;
+
 describe("session_start keys on the project root (#2129 wiring)", () => {
 	let hostRoot: string;
 	let tempWorktree: string;
+	let previousHome: string | undefined;
 
 	beforeEach(async () => {
+		previousHome = process.env.PI_LENS_HOME;
+		fs.mkdirSync(path.dirname(testRegistryHome), { recursive: true });
+		removeTempDirSync(testRegistryHome);
+		fs.mkdirSync(testRegistryHome, { recursive: true });
+		process.env.PI_LENS_HOME = testRegistryHome;
 		_resetSessionLifecycleForTests();
-		// The registry entry is keyed by pid, so it survives between tests in
-		// this file and roots would accumulate across them. Drain first: a
-		// previous test's fire-and-forget writes would otherwise land AFTER this
-		// deregistration and resurrect its roots inside this test.
+		// The registry entry is keyed by pid. Drain first: a previous test's
+		// fire-and-forget writes would otherwise land AFTER this deregistration
+		// and resurrect its roots inside this test.
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		await settleRegistryWrites();
 		deregisterInstance();
+		await settleRegistryWrites();
 		hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-host-root-"));
 		tempWorktree = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-worktree-"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		_resetSessionLifecycleForTests();
+		await settleRegistryWrites();
+		deregisterInstance();
+		await settleRegistryWrites();
+		if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = previousHome;
 		removeTempDirSync(hostRoot);
 		removeTempDirSync(tempWorktree);
 	});
@@ -168,6 +187,26 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 		);
 
 		expect(await rootsForThisPid()).toHaveLength(2);
+	}, 30_000);
+
+	it("does not count a root from the worker registry (#2130)", async () => {
+		if (!workerHome) throw new Error("Vitest did not provide PI_LENS_HOME");
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = workerHome;
+		try {
+			await registerInstance("/foreign-worker-root");
+			await settleRegistryWrites();
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			expect(await rootsForThisPid()).toEqual([]);
+		} finally {
+			process.env.PI_LENS_HOME = workerHome;
+			await settleRegistryWrites();
+			deregisterInstance();
+			await settleRegistryWrites();
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+		}
 	}, 30_000);
 
 	it("a declined temp root still registers itself in instances.json (#2130)", async () => {
