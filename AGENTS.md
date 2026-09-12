@@ -90,6 +90,12 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 `lens_diagnostics` severity is a threshold on both `source=session` and `source=lsp`: `error` includes errors, `warning` includes errors and warnings, `information` includes errors, warnings, and information, and `hint`/`all`/unset include every known tier. Named filters remain strict for unknown record tiers; an unknown requested value preserves the tolerant catch-all for MCP callers because arguments are not runtime-schema-validated. (#2875 round 4 N1/N2)
 
+PR-body claim units are Markdown-aware: `scripts/check-pr-body.mjs` treats
+headings, table rows, list items, and fenced blocks as atomic units, and splits
+ordinary paragraphs at sentence-ending punctuation while preserving code spans,
+decimals, versions, paths, abbreviations, and ellipses. Citation evidence uses
+the bounded ±20-line source window for runtime and test paths.
+
 - **Every new config key or env flag needs a demonstrated forcing function.** A
   knob added "for flexibility" is public API the moment it ships (schema
   stability policy #2418, written down in `docs/public-api-stability.md` and
@@ -530,6 +536,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 48. **Check-then-act on a shared durable directory.** *Screen:* a first-use migration or lazy create of a per-project directory (`existsSync` → `renameSync`/`mkdirSync`) is idempotent under two concurrent starters: the loser re-stats after `ENOENT`/`EEXIST`, returns the directory that now exists, and never returns a path that does not; canonicalise the identity ONCE (one realpath-or-resolve value feeds both the readable slug and the hash) so a symlinked root and a transient realpath failure land in the same directory; record once per session, never per event. Use the shared guarded `realpathOrResolve` helper when a scanner needs the same canonical root for its process and its coverage evidence. *e.g.* #2929 round 1: two real processes on a barrier, 80 iterations → 74 disagreeing directories, 74 sessions writing state into a directory that no longer existed. *Detect:* `existsSync(x)` followed by a rename/mkdir of `x` with no retry-after-race branch; a slug computed from `path.resolve` beside a hash computed from `realpathSync`.
 
 49. **A Markdown shape classifier that separates structure from visibility.** *Screen:* a pipe block enters table mode only after a separator with matching cell count and valid dash cells; malformed table-like markup remains ordinary visible Markdown, while valid tables retain their column-specific visibility rules. Test missing, empty, malformed, and CRLF separators through the real body linter. *e.g.* #2946: a fabricated title in a pipe block without a valid separator was discarded instead of rejected. *Detect:* compare the predicate that declares a table with the predicate that enables reference scanning; if they disagree, mutate the malformed state and require a red.
+
+50. **A permissive syntax heuristic routes malformed or exceptional references around the strict validator.** *Screen:* every skip, normalization, and range reduction carries a tested discriminator; reject malformed forms before classification, and pair every independent filter with accept and reject tests. *e.g.* #2904's four instances in #2945's regex-literal harvest, #2945's stale cwd-keyed corpus cache, #2946's malformed-separator token discard, and this round's backwards citation range all let exceptional input evade validation. The valid-table master-claim filter in #2904 is the contract-layer sibling: its accept/reject twin prevents the earlier converged path from silently returning. *Detect:* mutate each permissive branch, skip, normalization, or filter and require the named discriminator test to red.
 
 The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
 

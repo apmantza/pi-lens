@@ -517,21 +517,32 @@ function markdownBlocks(body) {
 	}));
 }
 
+function codeSpanMasked(text) {
+	return String(text).replace(/(`+)([\s\S]*?)\1/g, (span) =>
+		" ".repeat(span.length),
+	);
+}
+
+function endsSentence(text, index) {
+	const char = text[index];
+	if (!".!?".includes(char) || !/\s/.test(text[index + 1] ?? "")) return false;
+	if (char === ".") {
+		if (text[index - 1] === "." || text[index + 1] === ".") return false;
+		if (/\d\.\d/.test(text.slice(Math.max(0, index - 1), index + 2)))
+			return false;
+		const word = text.slice(0, index).match(/[A-Za-z]+$/)?.[0] ?? "";
+		const token = text.slice(text.lastIndexOf(" ", index - 1) + 1, index);
+		if (word.length <= 3 && !/[/:]/.test(token)) return false;
+	}
+	return true;
+}
+
 function splitMarkdownSentences(text) {
 	const sentences = [];
 	let start = 0;
-	let codeTicks = 0;
+	const masked = codeSpanMasked(text);
 	for (let index = 0; index < text.length; index += 1) {
-		if (text[index] === "`") {
-			let end = index;
-			while (text[end] === "`") end += 1;
-			const count = end - index;
-			if (!codeTicks) codeTicks = count;
-			else if (count === codeTicks) codeTicks = 0;
-			index = end - 1;
-			continue;
-		}
-		if (!codeTicks && /[.!?]/.test(text[index])) {
+		if (endsSentence(masked, index)) {
 			sentences.push({ text: text.slice(start, index + 1), start });
 			start = index + 1;
 		}
@@ -539,6 +550,31 @@ function splitMarkdownSentences(text) {
 	if (text.slice(start).trim())
 		sentences.push({ text: text.slice(start), start });
 	return sentences;
+}
+
+export function splitMarkdownUnits(body = "") {
+	const units = [];
+	for (const block of markdownBlocks(body)) {
+		if (block.fence) {
+			units.push({ kind: "fence", text: block.text });
+			continue;
+		}
+		if (/^\s*#{1,6}\s/.test(block.lines[0])) {
+			units.push({ kind: "heading", text: block.text });
+			continue;
+		}
+		if (/^\s*[-*+]\s+/.test(block.lines[0])) {
+			units.push({ kind: "list", text: block.text });
+			continue;
+		}
+		if (block.table) {
+			for (const line of block.lines) units.push({ kind: "table", text: line });
+			continue;
+		}
+		for (const sentence of splitMarkdownSentences(block.text))
+			units.push({ kind: "sentence", text: sentence.text.trim() });
+	}
+	return units;
 }
 
 function bodyLinesOutsideFences(body) {
@@ -561,6 +597,9 @@ function pathLineReferences(text) {
 		file: match[1],
 		lineText: match[2],
 		line: Number(match[2].replace(/^~/, "").split("-", 1)[0]),
+		end: match[2].includes("-")
+			? Number(match[2].replace(/^~/, "").split("-", 2)[1])
+			: undefined,
 		index: match.index,
 	}));
 }
@@ -594,11 +633,19 @@ function lintCodeCitations(body, options = {}) {
 	const errors = [];
 	const rawLines = String(body ?? "").split(/\r?\n/);
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	for (const { file, lineText, line: lineNumber, index } of pathLineReferences(
-		visibleBody,
-	)) {
+	for (const {
+		file,
+		lineText,
+		line: lineNumber,
+		end,
+		index,
+	} of pathLineReferences(visibleBody)) {
 		const bodyLine = visibleBody.slice(0, index).split(/\r?\n/).length - 1;
 		const key = `${file}:${lineText}`;
+		if (end !== undefined && end < lineNumber) {
+			errors.push(`PR body citation ${key} has a malformed backwards range.`);
+			continue;
+		}
 		const source = headFileSource(file, options);
 		if (source === null) {
 			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
@@ -706,28 +753,21 @@ function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 
 function lintMasterClaims(body) {
 	const errors = [];
-	const blocks = markdownBlocks(body);
-	for (let blockIndex = 0; blockIndex < blocks.length; blockIndex += 1) {
-		const block = blocks[blockIndex];
-		if (block.fence || block.table) continue;
-		for (const sentence of splitMarkdownSentences(block.text)) {
-			if (
-				!MASTER_CLAIM.test(sentence.text) ||
-				/reviewer\s+(?:wrote|said)/i.test(sentence.text)
-			)
-				continue;
-			const next = blocks[blockIndex + 1];
-			const hasTranscript =
-				next?.fence &&
-				/origin\/master/i.test(next.text) &&
-				/^(?:text|console|shell|sh|bash|output)\b/i.test(
-					next.lines[0]?.replace(/^\s*```+/, "") ?? "",
-				);
-			if (!hasTranscript)
-				errors.push(
-					`PR body master/environment claim lacks an origin/master transcript: ${sentence.text.trim()}`,
-				);
-		}
+	const units = splitMarkdownUnits(body);
+	for (let index = 0; index < units.length; index += 1) {
+		const unit = units[index];
+		if (
+			unit.kind === "fence" ||
+			unit.kind === "table" ||
+			!MASTER_CLAIM.test(unit.text) ||
+			/reviewer\s+(?:wrote|said)/i.test(unit.text)
+		)
+			continue;
+		const next = units[index + 1];
+		if (next?.kind === "fence" && /origin\/master/i.test(next.text)) continue;
+		errors.push(
+			`PR body master/environment claim lacks an origin/master transcript: ${unit.text.trim()}`,
+		);
 	}
 	return errors;
 }
