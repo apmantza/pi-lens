@@ -13,6 +13,10 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { classifyMutatingTool } from "../../clients/mutating-tool.js";
 import {
 	MUTATION_BRIDGE_KEY,
@@ -158,6 +162,7 @@ if (!(MUTATION_BRIDGE_KEY in (globalThis as object))) {
 beforeEach(() => {
 	resetObservedMutationNet();
 	resetMutationAttribution();
+	resetDegradationLedger();
 });
 
 function patchEvent(
@@ -1271,6 +1276,8 @@ describe("#2464 review round 3 — F1: the observed dispatch shares the classifi
 
 describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED path", () => {
 	it("never dispatches the directory an unknown directory-target tool named", async () => {
+		// Recurrence: #2500 dropped every recorded file when the tool named a
+		// directory, leaving genuinely rewritten files linted-never.
 		// `collectObservationUniverse` explicitly supports a DIRECTORY target (its
 		// own entries, non-recursively), so a codemod armed on a directory is a
 		// real production shape, not a contrived one. The membership guard is what
@@ -1312,7 +1319,52 @@ describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED 
 			// `runPipeline` on a directory is meaningless — every runner it fans out
 			// to reads the path as a file.
 			expect(dispatchedPaths).not.toContain(targetDir);
-			expect(dispatchedPaths).toEqual([]);
+			expect(dispatchedPaths).toEqual([insideDir]);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("records observed paths dropped by the bounded directory dispatch", async () => {
+		// Recurrence: an unbounded directory fan-out could monopolize the edit hook;
+		// a bounded fan-out must retain the exact dropped count for diagnosis.
+		const env = setupTestEnvironment("pi-lens-2500-dispatch-cap-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const targetDir = path.join(env.tmpDir, "codemod-target");
+			fs.mkdirSync(targetDir, { recursive: true });
+			const files = Array.from({ length: 33 }, (_, index) => {
+				const filePath = path.join(targetDir, `touched-${index}.ts`);
+				fs.writeFileSync(filePath, SOURCE);
+				return filePath;
+			});
+			const { runtime, cacheManager } = newSession(env.tmpDir);
+			const { runPipeline } = await import("../../clients/pipeline.js");
+			vi.mocked(runPipeline).mockClear();
+			const event = {
+				toolName: "dir_codemod_cap",
+				toolCallId: "call-2500-cap",
+				input: { path: targetDir, rule: "rename" },
+				content: [{ type: "text", text: "rewrote 33 files" }],
+			};
+			await handleToolCall(
+				toolCallDeps({ event, cwd: env.tmpDir, runtime, cacheManager }),
+			);
+			for (const filePath of files)
+				fs.writeFileSync(filePath, `${SOURCE}const d = 4;\n`);
+			await handleToolResult(toolResultDeps({ event, runtime, cacheManager }));
+
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(32);
+			const cap = getDegradationSummary().find(
+				(group) => group.kind === "observed-mutation-dispatch-cap",
+			);
+			expect(cap).toBeDefined();
+			expect(cap?.latestReasons[0]?.reason).toContain(
+				"1 path(s) not dispatched",
+			);
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;

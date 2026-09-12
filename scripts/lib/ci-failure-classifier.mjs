@@ -93,7 +93,7 @@ const FAIL_LINE = /^\s*FAIL\s+\S+\s+(\S+\.test\.tsx?)\s*>\s*(.+)$/gm;
 const BARE_FAIL_LINE = /^\s*FAIL\b.*?(\S+\.test\.tsx?)(?=\s|$)/m;
 // (real log, same run) "AssertionError: expected false to be true //
 // Object.is equality"
-const ASSERTION_LINE = /AssertionError:\s*(.+)/;
+const ASSERTION_LINE = /^\s*AssertionError:\s*(.+)$/m;
 // vitest prints this inline, AS EACH FILE FINISHES, before the end-of-run
 // "Failed Tests" summary block ever gets a chance to print (real log, run
 // 32913518938, job 98012237782, line 536): " ❯  default
@@ -118,13 +118,13 @@ const INLINE_TEST_FAIL_MARKER = /^\s*×\s+(.+?)\s*\d*m?s?\s*$/m;
 // failure evidence even when an infrastructure-looking line appears later.
 // Keep these explicit: the classifier must not let a new infra needle outrank
 // a genuine assertion or compile failure.
-const TEST_FILES_FAILED = /\bTest Files\s+\d+\s+failed\b/i;
+const TEST_FILES_FAILED = /^\s*Test Files\s+\d+\s+failed\b/im;
 const TYPESCRIPT_ERROR =
 	/^\s*\S+\.tsx?\(\d+,\d+\): error TS\d+:|^\s*\S+\.tsx?:\d+:\d+ - error TS\d+:/m;
 // The run's own final tally line (real log, same run): " Tests  1 failed |
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.
-const OVERALL_TESTS_FAILED = /\bTests\s+(\d+)\s+failed\b/;
+const OVERALL_TESTS_FAILED = /^\s*Tests\s+(\d+)\s+failed\b/m;
 // #2839: vitest's timeout failure text (real log, run 34389495533 attempt 1,
 // job 102594125043, PR #2834): "Error: Test timed out in 5000ms." Vitest's
 // runner uses the same template for hooks: "Error: Hook timed out in 300ms."
@@ -472,11 +472,13 @@ export function classifyFailureLog(rawLog) {
 	}
 
 	const realSignal = findRealFailureSignal(log);
+	// Keep exit-137/SIGKILL infra unless a line-shaped test failure signal is
+	// present. Incidental prose, test names, mem-watch explanations, and long
+	// MCP smoke output must not turn the #2848 kill into `ci:real`.
+	if (killClassification && !realSignal) return killClassification;
 	if (realSignal) {
 		return { kind: "real", detail: realSignal.detail };
 	}
-
-	if (killClassification) return killClassification;
 
 	const networkEvidence = findNetworkUnreachableEvidence(log);
 	if (networkEvidence) {
