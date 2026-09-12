@@ -2082,7 +2082,11 @@ async function formatFullMode(
 		includeGenerated?: boolean;
 		analysisRoot?: string;
 	} = {},
-): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
+): Promise<{
+	content: [{ type: "text"; text: string }];
+	isError?: boolean;
+	details: object;
+}> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
 	if (typeof runWorkspaceDiagnostics !== "function") {
 		return {
@@ -2166,6 +2170,16 @@ async function formatFullMode(
 		}),
 		analyzersPromise,
 	]);
+	if (extracted.analysisRootError) {
+		return {
+			content: [{ type: "text" as const, text: extracted.analysisRootError }],
+			isError: true,
+			details: {
+				mode: "full",
+				analysisRootError: extracted.analysisRootError,
+			},
+		};
+	}
 	const aborted = signal?.aborted ?? false;
 	// #1640: before ANY consumer sees them — the footer reconcile, the widget
 	// merge, the rendered counts — demote TypeScript errors on files tsserver

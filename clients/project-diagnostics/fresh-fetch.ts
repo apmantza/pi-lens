@@ -82,6 +82,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { BootstrapClients } from "../bootstrap.js";
 import type { CacheManager } from "../cache-manager.js";
@@ -89,6 +90,8 @@ import type { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { applyDispositionsMultiFile } from "../diagnostic-dispositions.js";
 import { getKnipIgnorePatterns } from "../file-utils.js";
 import { isAtOrAboveHomeDir, realpathOrResolve } from "../path-utils.js";
+import { isSameOrWithin } from "../lsp/server.js";
+import { incrementDegradationCount } from "../degradation-ledger.js";
 import { GitleaksClient } from "../gitleaks-client.js";
 import { GovulncheckClient } from "../govulncheck-client.js";
 import {
@@ -261,6 +264,11 @@ export async function fetchFreshProjectDiagnostics(
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			const reason = `the explicit analysis root ${requestedRoot} is unavailable or ${detail}`;
+			incrementDegradationCount({
+				kind: "lens-diagnostics-analysis-root-rejected",
+				subject: requestedRoot,
+				reason,
+			});
 			return {
 				diagnostics: [],
 				runners: [],
@@ -287,7 +295,24 @@ export async function fetchFreshProjectDiagnostics(
 	// REPORTED results, it never narrows what these analyzers walk.
 	const unsafeRootReason =
 		"the analysis root resolves at or above the home directory; heavyweight analyzers refuse to walk from there (#747)";
-	if (isAtOrAboveHomeDir(analysisRoot, options.homeDir)) {
+	const homeRoot = realpathOrResolve(options.homeDir ?? os.homedir());
+	const unsafeExplicitRoot =
+		options.analysisRoot !== undefined &&
+		(!isSameOrWithin(homeRoot, analysisRoot) ||
+			isSameOrWithin(analysisRoot, homeRoot));
+	if (
+		(options.analysisRoot === undefined &&
+			isAtOrAboveHomeDir(analysisRoot, options.homeDir)) ||
+		unsafeExplicitRoot
+	) {
+		incrementDegradationCount({
+			kind: "lens-diagnostics-analysis-root-rejected",
+			subject: analysisRoot,
+			reason:
+				options.analysisRoot === undefined
+					? unsafeRootReason
+					: "explicit analysis root must be strictly contained by the canonical home directory",
+		});
 		return {
 			diagnostics: [],
 			runners: [],

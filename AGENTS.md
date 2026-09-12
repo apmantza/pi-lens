@@ -4081,6 +4081,8 @@ Eleven screens. The first six were distilled from nine adversarially reviewed PR
 
 13. **A detector pinned only in the accept direction.** *Screen:* every test that shows a scanner/sweep/classifier ACCEPTING a shape has a twin that shows it REJECTING the nearest wrong shape (the same syntax spreading a different module; the same call with a stripped argument; a comment between the tokens). A detector with only accept tests can be rewritten to accept everything and stay green. *e.g.* #2930 round 1 added six accept-direction tests for `importOriginal<T>()` pass-throughs; the reject twin would have caught a factory spreading a DIFFERENT module (F1) and a scope-less alias launder (F3). *Detect:* a detector test file whose `it(` titles all read "accepts/recognises/treats … as" with no "rejects/flags/still reports".
 
+14. **A canonical root guard that checks only the ceiling, not containment below it.** *Screen:* after resolving symlinks and traversal, an explicit analysis root must be strictly inside canonical home: reuse `isSameOrWithin`, reject the home directory, ancestors, siblings, absolute escapes, and symlink escapes, and record the rejection. Keep the decision at the root-validation seam so analyzers and the tool report the same reason. *e.g.* #2977 round 2: `isAtOrAboveHomeDir(analysisRoot, home)` rejected home and ancestors but allowed a sibling outside home. *Detect:* an explicit-root guard using only `isAtOrAboveHomeDir`, a string prefix, or a host-default `path.relative`; mutate the containment branch and require the real `lens_diagnostics` escape matrix to turn red.
+
 ### Test assessment and removal (value discipline)
 
 The screens above catch tests that are broken; this section addresses tests

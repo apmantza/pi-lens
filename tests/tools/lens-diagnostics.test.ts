@@ -676,6 +676,28 @@ describe("lens_diagnostics schema", () => {
 		);
 	});
 
+	it("rejects an invalid explicit analysis root as a failed tool call (#2977 F2)", async () => {
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: [],
+			cold: [],
+			timings: {},
+			failed: [],
+			analysisRootError: "explicit analysis root is unavailable",
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{
+				mode: "full",
+				refreshRunners: "all",
+				analysisRoot: "/missing",
+			},
+		);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		expect(result.content[0].text).toMatch(/unavailable/);
+	});
+
 	it("defaults to delta mode when no params supplied", async () => {
 		const cm = makeCacheManager({});
 		const tool = createLensDiagnosticsTool(cm as any, () => "/proj");
