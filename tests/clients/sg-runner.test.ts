@@ -16,6 +16,29 @@ const { safeSpawnAsync, safeSpawn, getSgCommand, ensureTool } = vi.hoisted(
 		ensureTool: vi.fn(),
 	}),
 );
+const fsFault = vi.hoisted(() => ({
+	kind: "",
+	writeCall: 0,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		mkdirSync: (...args: any[]) => {
+			if (fsFault.kind === "mkdir") throw new Error("mkdir fault");
+			return (actual.mkdirSync as any)(...args);
+		},
+		writeFileSync: (...args: any[]) => {
+			fsFault.writeCall += 1;
+			if (fsFault.kind === "config write" && fsFault.writeCall === 1)
+				throw new Error("config write fault");
+			if (fsFault.kind === "rule write" && fsFault.writeCall === 2)
+				throw new Error("rule write fault");
+			return (actual.writeFileSync as any)(...args);
+		},
+	};
+});
 
 // `importOriginal`, not a bare stub: the cap-kill tests build the REAL
 // truncation result, and that needs safe-spawn's own `SpawnFailureError`.
@@ -246,6 +269,37 @@ describe("SgRunner", () => {
 	});
 
 	describe("tempScanAsync()", () => {
+		it("removes the allocated scan root when mkdir or either config write fails", async () => {
+			for (const label of ["mkdir", "config write", "rule write"] as const) {
+				const before = new Set(
+					fs
+						.readdirSync(os.tmpdir())
+						.filter((name) => name.startsWith("pi-lens-temp-fault-")),
+				);
+				fsFault.kind = label;
+				fsFault.writeCall = 0;
+				try {
+					const { SgRunner } = await import("../../clients/sg-runner.js");
+					await expect(
+						new SgRunner().tempScanDetailedAsync(
+							os.tmpdir(),
+							"fault",
+							"id: fault\nrule: { kind: function_declaration }\n",
+						),
+					).rejects.toThrow(`${label} fault`);
+				} finally {
+					fsFault.kind = "";
+				}
+				const after = fs
+					.readdirSync(os.tmpdir())
+					.filter(
+						(name) =>
+							name.startsWith("pi-lens-temp-fault-") && !before.has(name),
+					);
+				expect(after, `${label} left a generated scan directory`).toEqual([]);
+			}
+		});
+
 		it("passes centralized gitignore globs to ast-grep scan", async () => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-ignore-"));
 			try {

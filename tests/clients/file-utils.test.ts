@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CACHE_VERSION, RuleCache } from "../../clients/cache/rule-cache.js";
+import { removeTempDirSync } from "./test-utils.js";
 import {
 	getGlobalPiLensDir,
 	getProjectDataDir,
@@ -11,8 +12,10 @@ import { appendToWorklog, readWorklog } from "../../clients/fix-worklog.js";
 
 const originalDataDir = process.env.PILENS_DATA_DIR;
 const originalHome = process.env.PI_LENS_HOME;
+const tempDirs: string[] = [];
 
 afterEach(() => {
+	while (tempDirs.length > 0) removeTempDirSync(tempDirs.pop() as string);
 	if (originalDataDir === undefined) {
 		delete process.env.PILENS_DATA_DIR;
 	} else {
@@ -49,6 +52,7 @@ describe("getProjectDataDir", () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-legacy-project-"),
 		);
+		tempDirs.push(cwd);
 		const legacyDir = path.join(cwd, ".pi-lens");
 		fs.mkdirSync(legacyDir, { recursive: true });
 
@@ -69,9 +73,12 @@ describe("getProjectDataDir", () => {
 
 	it("project-data writers do not create a .pi-lens folder inside the project", () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-project-data-"));
+		tempDirs.push(cwd);
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 
 		appendToWorklog(
 			cwd,
@@ -102,9 +109,11 @@ describe("getProjectDataDir", () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-worklog-redact-"),
 		);
+		tempDirs.push(cwd);
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 		const token = `ghp_${"a".repeat(36)}`;
 
 		appendToWorklog(
@@ -144,9 +153,11 @@ describe("getProjectDataDir", () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-worklog-model-"),
 		);
+		tempDirs.push(cwd);
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 
 		appendToWorklog(
 			cwd,
@@ -178,9 +189,11 @@ describe("getProjectDataDir", () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-worklog-blank-"),
 		);
+		tempDirs.push(cwd);
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 
 		appendToWorklog(
 			cwd,
@@ -216,9 +229,11 @@ describe("getProjectDataDir", () => {
 
 	it("parses old-shape entries that predate the model/provider fields", () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-worklog-old-"));
+		tempDirs.push(cwd);
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 		fs.mkdirSync(getProjectDataDir(cwd), { recursive: true });
 		const oldEntry = {
 			timestamp: new Date().toISOString(),
@@ -245,10 +260,12 @@ describe("getProjectDataDir", () => {
 
 	it("stores rule cache under the configured data directory", () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-rule-cache-"));
+		tempDirs.push(cwd);
 		const prev = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-data-"),
 		);
+		tempDirs.push(process.env.PILENS_DATA_DIR);
 		try {
 			const cache = new RuleCache("typescript", cwd);
 
@@ -282,6 +299,7 @@ describe("getGlobalPiLensDir (#525 hermeticity)", () => {
 		const override = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-home-"),
 		);
+		tempDirs.push(override);
 		process.env.PI_LENS_HOME = override;
 
 		expect(getGlobalPiLensDir()).toBe(path.resolve(override));
@@ -291,6 +309,7 @@ describe("getGlobalPiLensDir (#525 hermeticity)", () => {
 		const override = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-global-home-ws-"),
 		);
+		tempDirs.push(override);
 		process.env.PI_LENS_HOME = `  ${override}  `;
 
 		expect(getGlobalPiLensDir()).toBe(path.resolve(override));

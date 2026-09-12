@@ -90,6 +90,12 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 `lens_diagnostics` severity is a threshold on both `source=session` and `source=lsp`: `error` includes errors, `warning` includes errors and warnings, `information` includes errors, warnings, and information, and `hint`/`all`/unset include every known tier. Named filters remain strict for unknown record tiers; an unknown requested value preserves the tolerant catch-all for MCP callers because arguments are not runtime-schema-validated. (#2875 round 4 N1/N2)
 
+PR-body claim units are Markdown-aware: `scripts/check-pr-body.mjs` treats
+headings, table rows, list items, and fenced blocks as atomic units, and splits
+ordinary paragraphs at sentence-ending punctuation while preserving code spans,
+decimals, versions, paths, abbreviations, and ellipses. Citation evidence uses
+the bounded ±20-line source window for runtime and test paths.
+
 - **Every new config key or env flag needs a demonstrated forcing function.** A
   knob added "for flexibility" is public API the moment it ships (schema
   stability policy #2418, written down in `docs/public-api-stability.md` and
@@ -188,9 +194,26 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 
 ## Contributing
 
+Tmp-fixture hygiene uses a checked-in prefix baseline only for producers that
+still need migration. Each row names its owner, observed population, and
+reason; the config sweep fails for an unlisted prefix, and removing a row
+while its producer still leaks also fails. Fixed producers clean up at the
+shared helper seam so the baseline shrinks instead of accumulating exceptions.
+Admission matches directory names by prefix, selecting the longest matching
+prefix when families overlap; random `mkdtemp` suffixes never belong in the
+baseline key.
+
+The tmp-fixture baseline is a prefix-set ratchet, not a population-count
+ceiling. Runtime checks require each admitted prefix to remain live and reject
+every unadmitted prefix; worker placement and scheduling make per-prefix counts
+environment-dependent. Removing a still-live row is therefore a deliberate
+ratchet failure, while fixed producers should remove their rows.
+
 For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
 
 **`scripts/hooks/guard-bash.mjs` mechanically enforces four of the non-negotiables below** (#2699): `git stash` in any form, `git reset --soft origin/<branch>` / `--hard`, a HAND-typed `git worktree remove` with two force flags (the sanctioned removal path stays `node scripts/prune-agent-worktrees.mjs`, liveness-checked, or `git worktree unlock` + a single-force remove — the hook denies only the ad-hoc double force, never the script's own internal one, since the hook only ever sees what the Bash tool itself is asked to run), and an unpinned `node` probe that LOADS runtime code from `clients/`/`dist/` with no `PI_LENS_HOME`. Registered as a `PreToolUse` hook on the Bash tool in `.claude/settings.json` via `${CLAUDE_PROJECT_DIR}` (never a bare relative path — the hook's cwd follows Claude into a worktree that may predate the file), it denies with exit code 2 and a one-line reason on stderr before the tool runs, and never blocks on its own failure (malformed input degrades to allow). It is a net under the prose in CLAUDE.md and the playbooks, not a replacement for reading them — it catches the four rules a tokenizer can reliably classify, not the judgment calls the rest of this document asks for.
+
+**A change to a workflow's package-manager pin mechanism touches EVERY `npm` invocation in that workflow, not just the step being edited** (#2940). 9183f39c6 replaced `release.yml`'s `npm install -g npm@<pin>` with `npx -y "npm@${npm_pin}"` and converted the install step, but left `npm publish` bare — so the publish job silently reverted to the runner's bundled npm, which has no OIDC trusted-publishing support. Nothing failed until the v4.1.6 release run created the tag and the GitHub release and then took an E404 from the registry. When the pin mechanism moves, grep the whole workflow for `npm ` and convert every invocation in the same change; `tests/config/release-npm-pin-gate.test.ts` now reds on a bare one in `release.yml`'s `prepare`/`publish-npm` jobs, and the `publish-toolchain-pinned` release-QA row runs the pinned invocation before a tag exists.
 
 ### Role contracts for delegated work
 
@@ -526,6 +549,12 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 47. **A detector whose corpus includes its own fixtures.** *Screen:* a scanner that greps `tests/` (or any tree) for "does this id/needle exist" excludes its own fixture directory and its own test file BY CONSTRUCTION (a path filter in the corpus builder, pinned by a test), and matches whole tokens; otherwise the red-first fixture that proves the detector whitelists exactly the fabricated needles it exists to reject. *e.g.* #2913 round 3 committed `tests/fixtures/ci-pr-bodies/issue-2877-round-3.md` and `git grep -F` found its eleven fabricated ids there, so both shipping readers ACCEPTED the fixture body while the test passed only through an injected corpus. *Detect:* a fixture under the scanned root that contains the needles the scanner must reject; a substring grep (`-F` without `-w`) for identifiers.
 
 48. **Check-then-act on a shared durable directory.** *Screen:* a first-use migration or lazy create of a per-project directory (`existsSync` → `renameSync`/`mkdirSync`) is idempotent under two concurrent starters: the loser re-stats after `ENOENT`/`EEXIST`, returns the directory that now exists, and never returns a path that does not; canonicalise the identity ONCE (one realpath-or-resolve value feeds both the readable slug and the hash) so a symlinked root and a transient realpath failure land in the same directory; record once per session, never per event. Use the shared guarded `realpathOrResolve` helper when a scanner needs the same canonical root for its process and its coverage evidence. *e.g.* #2929 round 1: two real processes on a barrier, 80 iterations → 74 disagreeing directories, 74 sessions writing state into a directory that no longer existed. *Detect:* `existsSync(x)` followed by a rename/mkdir of `x` with no retry-after-race branch; a slug computed from `path.resolve` beside a hash computed from `realpathSync`.
+
+49. **A Markdown shape classifier that separates structure from visibility.** *Screen:* a pipe block enters table mode only after a separator with matching cell count and valid dash cells; malformed table-like markup remains ordinary visible Markdown, while valid tables retain their column-specific visibility rules. Test missing, empty, malformed, and CRLF separators through the real body linter. *e.g.* #2946: a fabricated title in a pipe block without a valid separator was discarded instead of rejected. *Detect:* compare the predicate that declares a table with the predicate that enables reference scanning; if they disagree, mutate the malformed state and require a red.
+
+50. **A permissive syntax heuristic routes malformed or exceptional references around the strict validator.** *Screen:* every skip, normalization, and range reduction carries a tested discriminator; reject malformed forms before classification, and pair every independent filter with accept and reject tests. *e.g.* #2904's four instances in #2945's regex-literal harvest, #2945's stale cwd-keyed corpus cache, #2946's malformed-separator token discard, and this round's backwards citation range all let exceptional input evade validation. The valid-table master-claim filter in #2904 is the contract-layer sibling: its accept/reject twin prevents the earlier converged path from silently returning. *Detect:* mutate each permissive branch, skip, normalization, or filter and require the named discriminator test to red.
+
+The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
 
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
@@ -3376,8 +3405,8 @@ Runs in the `tool_call` handler (`handleToolCall`, `clients/runtime-tool-call.ts
 
 The guard tracks more than the Read/Write/Edit tools. All of these register so a follow-up edit isn't falsely blocked:
 
-- **bash file VIEWS** (`clients/bash-file-access.ts` → `extractReadPathsFromCommand`): `cat`/`less`/`more`/`bat`/`nl` (full file), `head -N`/`tail -N` (the shown N lines), `sed -n 'A,Bp'` (lines A–B). Registered at tool_call via `recordRead` with the **exact line range** (the guard enforces ranges). `ls`/`find` are NOT views (name-only, reveal no editable content) — never registered, and registering them would falsely mark a file "read". `grep` is not a contiguous view but IS registered via the search path below.
-- **bash WRITES** (`extractWrittenPathsFromCommand`): `>`/`>>`/`N>`, `tee`, `sed -i`, `cp`/`mv` dest, `touch`. The agent authored the file, so — exactly like the Write tool — `noteCreatedFile` at tool_call + `recordWritten` at tool_result.
+- **bash file VIEWS** (`clients/bash-file-access.ts` → `extractReadPathsFromCommand`): `cat`/`less`/`more`/`bat`/`nl` (full file), `head -N`/`tail -N` (the shown N lines), `sed -n 'A,Bp'` (lines A–B). Registered at tool_result via `recordRead` with the **delivered line range** (the guard enforces ranges). `ls`/`find` are NOT views (name-only, reveal no editable content) — never registered, and registering them would falsely mark a file "read". `grep` is not a contiguous view but IS registered via the search path below. Native reads register a provisional resolved path at tool_call, then supersede its range at tool_result with the delivered range.
+- **bash WRITES** (`extractWrittenPathsFromCommand`): `>`/`>>`/`N>`, `tee`, `sed -i`, `cp`/`mv` dest, `touch`. The agent authored the file only after complete post-command evidence confirms a change, so recognized paths use the evidence fence and `recordWritten` at tool_result; creation is detected when the post snapshot contains a path absent from the pre snapshot. Missing evidence cannot authorize authorship: synthetic write dispatch inherits the parent evidence decision explicitly, while preserving authoritative-content, attachment-budget, and write-then-edit behavior.
 - **search tools** (`clients/search-read-registration.ts` → `registerSearchReads`, ±2-line context margin): a tool exposes the lines it revealed via `details.searchReads: {file, startLine(1-based), endLine}[]`; `handleToolResult` consumes that for **any** tool and registers reads of only those lines (never the whole file). Populated by `ast_grep_search` (#169, done) and bash `grep -n`/`egrep`/`fgrep` (output parsed via `extractGrepSearchReadsFromOutput`). `ast_grep_search` also returns `details.matchLocations[]` with ready `readSlice` handles; keep those handles in sync with any formatter changes. `lsp_navigation` already populates `searchReads` for the location-revealing operations (definition/typeDefinition/declaration/references/implementation/workspaceSymbol/incoming+outgoingCalls via `collectSearchReadsForOperation`); `documentSymbol` deliberately does NOT (shape, not body — same rule as `module_report`). **Still remaining:** the pi built-in `grep`/`glob` tool (reveals an editable span — wire it for parity; `ls`/`glob`/`find` stay excluded as name-only). New producers only need to populate `details.searchReads` — no hook change.
 
 **MUTATION-CLASSIFICATION SEAM (#2423):** `classifyMutatingTool`
@@ -3948,7 +3977,7 @@ Rules live in `rules/tree-sitter-queries/<language>/`. Disabled rules are in `ru
 
 Mixing different capture names in one `[...]` block causes tree-sitter to silently return zero matches (no compile error). Similarly, field values cannot be alternative groups: `right: [(identifier) (call_expression)]` is invalid — expand into separate alternatives or separate blocks.
 
-**Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
+**Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `ts_sql_injection_sink` (requires a receiver bound to a known DB client or a SQL-leading template), and `check_secret_pattern` (variable name must match secret-sounding pattern). Keep detector guards code-based: comments or unrelated strings must not satisfy a sink signal, and every guard test names the recurrence it prevents.
 
 ## Experimental git guard (#1063)
 
@@ -4015,6 +4044,12 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **Adding an LSP server → add a smoke fixture, or the drift guard fails.** Registering a server in `LSP_SERVERS` does NOT automatically smoke-test it: the runner-level `smoke-fixture-coverage.test.ts` blanket-exempts the single `lsp` runner. `tests/clients/lsp/lsp-fixture-coverage.test.ts` is the SERVER-level guard — it fails unless every non-auxiliary server routes to an `LSP_FIXTURES` entry in `scripts/smoke-tools.mjs` (a fixture file whose extension resolves to it) and every auxiliary server is attached via a fixture's `auxiliaryServerIds`. Only the share-an-extension ALTERNATES (deno/python-jedi/omnisharp/expert) are exempt. The nightly `tool-smoke.yml` runs `--lsp --install` over the WHOLE list, so a self-contained github/npm server is then covered automatically (toolchain-gated ones — pwsh/.NET/go/rust — need the runner to provision the toolchain). `LspFixture` is typed in `scripts/smoke-tools.d.mts`.
 
 ### Test infrastructure — reuse before you write (2026-09-06)
+
+The shared `tests/support/vitest-setup.ts` records one run-wide baseline of real `os.tmpdir()` entries and reports each worker's additions without deleting sibling-owned paths. `tests/config/tmp-fixture-hygiene.test.ts` runs in its own serialized Vitest project, owns the final sweep, and removes newly-created unadmitted `pi-lens-*` fixtures after its assertion. Proven per-family cleanup drains deferred work before sweeping its named prefixes. The MCP test harness removes IPC endpoints both at disposal and after child exit because `kill()` is asynchronous. Keep `PI_LENS_HOME` pinned to a worktree-local path when running tests; the ast-grep baseline directory is the sole admitted process-owned exception and is bounded by `clients/sgconfig.ts`.
+
+The generic process-wide fixture sweep was attempted twice and reverted after it broke broad suite populations. Keep cleanup at the shared helper or proven per-family seams; admit unresolved prefixes in `tests/config/tmp-fixture-hygiene-baseline.json` as shrink-only ratchets with a producer owner, reason, and issue. Independently-created roots keep their own cleanup.
+
+A process-wide `afterEach` cannot safely own the temporary namespace (#2912). Vitest workers run separate module instances while `/tmp` is shared, so a worker sees names but not the producer or lifecycle owner. A worker-wide sweep either deletes a sibling's active root or leaves an asynchronous write that arrives after the sweep. The three attempted scoping rules each chose a different incomplete ownership signal, and all three fail at broad scale. This is a structural non-goal for global hooks: future cleanup must use an explicit owner or a per-family seam.
 
 `tests/support/` holds 56 modules; these are the sanctioned seams, listed by NEED. Minimalism-ladder step 2 applies to tests exactly as to `clients/`: check this list before writing a helper, and a new `tests/support` helper with a same-shape sibling is held to the sibling sweep and the net-count rule. The 2026-09-06 record: #2585 r1 renamed 28 call sites instead of using the factory's documented override; #2617 r1 hand-rolled its own scan set (missed `scripts/`) and floor (1 of 1526 files).
 
@@ -4322,6 +4357,24 @@ Process-table resource samples preserve query outcome. `clients/child-unref.ts`
 those failures, so consumers leave usage unknown rather than fabricating zero
 samples, and records one bounded `resource-sampler-query-failed` degradation
 per query subject. (#1863)
+
+The spawn sampler is bounded on all three axes, and a new poller owes the same
+three. `startSpawnUsageSampler` polls a child through the process-table seam,
+and ONE Windows tick is two `powershell.exe` CIM queries plus a `taskkill.exe`
+whenever a query blows `RESOURCE_SAMPLE_QUERY_TIMEOUT_MS` — so an unguarded
+interval is a process multiplier, not a timer. #2968 (external report) measured
+234 live `powershell.exe`/`taskkill.exe` (~10GB) behind four children that hung
+for 5-6h. The bounds: no tick starts while the previous one is in flight
+(CONCURRENCY); past `SPAWN_SAMPLE_FULL_RATE_TICKS` the delay doubles to
+`SPAWN_SAMPLE_MAX_INTERVAL_MULTIPLIER` x the base (RATE — the 750ms interval
+exists to catch SHORT-LIVED children); polling ends at a hard cap that
+`safe-spawn.ts` derives from this spawn's own deadline plus its teardown grace
+(LIFETIME), because every stop path a spawn has — `exit`, `close`, `error` —
+requires the child to settle, and a hung child settles nothing. A capped
+sampler still returns what it gathered. Skipped ticks and the cap are counted
+on the ledger (`resource-sampler-tick-overlapped`,
+`resource-sampler-lifetime-capped`): a sampler that has silently stopped
+sampling is #1863's shape one level up. (#2968)
 
 File-operation rename filters match only the decoded URI path, never a basename
 fallback. Unsupported wire URI schemes fail closed; entity-kind probes are
