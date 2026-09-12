@@ -14,7 +14,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeTempDirSync } from "./test-utils.js";
 import {
 	classifyProbeFailure,
 	describeProbeEvidence,
@@ -82,6 +83,12 @@ const decisions = () =>
 		.filter((entry) => entry?.phase === "availability_decision")
 		.map((entry) => entry.metadata);
 
+const tempDirs: string[] = [];
+
+afterEach(() => {
+	while (tempDirs.length > 0) removeTempDirSync(tempDirs.pop() as string);
+});
+
 class FakeScanClient extends SecurityScanClient<string[]> {
 	constructor() {
 		super("faketool");
@@ -124,6 +131,7 @@ describe("probe evidence (#1500)", () => {
 describe("decision records say how they were classified (#1500)", () => {
 	it("marks a derived verdict as probe-classified and shows the evidence", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-evidence-"));
+		tempDirs.push(cwd);
 		safeSpawnAsync.mockResolvedValue(timeoutResult);
 		const checker = createAvailabilityChecker("faketool");
 
