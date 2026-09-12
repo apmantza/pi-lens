@@ -1281,6 +1281,8 @@ export async function runFormatPhase(
 		// out of `formatFailures` (which requeues). Record it once, distinctly.
 		for (const f of result.formatters) {
 			if (f.outcome !== "unavailable") continue;
+			if (f.error?.includes("project tool agreement could not be established"))
+				continue;
 			const reason = f.error ?? "formatter executable not found";
 			formatUnavailable.push({ formatter: f.name, reason });
 			recordDegradationOnce({

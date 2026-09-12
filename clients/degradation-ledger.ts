@@ -200,6 +200,8 @@ export type DegradationKind =
 	 * every call, so only the FIRST occurrence per (verdict, cwd) also writes a
 	 * record; the count here is the exact total.
 	 */
+	/** A formatter write was declined because project/tool agreement was not provable. */
+	| "formatter-agreement-unavailable"
 	| "formatter-failure"
 	/**
 	 * #2477 round 2: `recordEntitySnapshotDiff` (`clients/review-graph/service.ts`)

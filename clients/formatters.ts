@@ -44,6 +44,7 @@ import {
 } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { establishToolAgreement } from "./tool-agreement.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-installer.js";
@@ -2263,6 +2264,11 @@ async function resolveFormatterCommand(
 > {
 	const agreement = establishToolAgreement(formatter.name, cwd);
 	if (agreement.decision === "decline") {
+		recordDegradationOnce({
+			kind: "formatter-agreement-unavailable",
+			subject: agreement.subject,
+			reason: agreement.reason,
+		});
 		return FORMATTER_AGREEMENT_UNAVAILABLE;
 	}
 	const resolved = formatter.resolveCommand

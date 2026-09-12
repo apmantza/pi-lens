@@ -95,10 +95,14 @@ function nodeAgreement(tool: string, root: string): ToolAgreement | undefined {
 		typeof version !== "string" ||
 		!exactOrSimpleRangeMatches(range, version)
 	) {
+		const reason =
+			typeof version === "string"
+				? `the project declares ${packageName}@${range} in package.json, but the lockfile resolves ${packageName}@${version} in package-lock.json; agreement disagrees`
+				: `the project declares ${packageName}@${range} in package.json, but package-lock.json does not establish its resolved version`;
 		return {
 			decision: "decline",
 			subject: `node:${tool}`,
-			reason: `the project declares ${packageName} but its lockfile cannot establish a compatible resolved version`,
+			reason,
 		};
 	}
 	return { decision: "established" };

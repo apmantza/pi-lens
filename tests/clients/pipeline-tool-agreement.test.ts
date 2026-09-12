@@ -110,4 +110,35 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 			}),
 		]);
 	});
+
+	it("names the project declaration and resolved lockfile version when they disagree", async () => {
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { stylelint: "^16.0.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/stylelint": { version: "15.11.0" } },
+			}),
+		);
+		const file = path.join(env.tmpDir, "style.css");
+		fs.writeFileSync(file, "a { color: red; }\n");
+
+		await runAutofix(
+			file,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			deps(),
+		);
+
+		expect(getDegradationSummary()[0]?.latestReasons[0]?.reason).toEqual(
+			expect.stringContaining("stylelint@^16.0.0"),
+		);
+		expect(getDegradationSummary()[0]?.latestReasons[0]?.reason).toEqual(
+			expect.stringContaining("stylelint@15.11.0"),
+		);
+	});
 });

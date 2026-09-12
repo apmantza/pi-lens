@@ -2800,9 +2800,13 @@ export function hasGradleKtlintPlugin(cwd: string): boolean {
 				GRADLE_KTLINT_PLUGIN_PATTERN.lastIndex = 0;
 				let match: RegExpExecArray | null;
 				while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
+					// The match must begin in executable Gradle code. The quoted plugin
+					// id is intentionally present in `raw`, so checking the whole match
+					// against the string-blanked source would reject every real plugin.
+					const quoteOffset = match[0].search(/["']/);
 					const code = stripped.slice(
 						match.index,
-						match.index + match[0].length,
+						match.index + (quoteOffset < 0 ? match[0].length : quoteOffset),
 					);
 					if (!/^\s*$/.test(code)) return true;
 				}
