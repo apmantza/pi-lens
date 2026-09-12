@@ -417,6 +417,7 @@ function freshenAllExcept(
 }
 
 let originalPath: string | undefined;
+let fakeBin: string | undefined;
 let restoreDisableToolInstall: () => void;
 
 beforeEach(() => {
@@ -434,7 +435,7 @@ beforeEach(() => {
 	stubSpawn();
 	// `installMavenTool` gates on a JRE via a PATH walk, so give it one.
 	originalPath = process.env.PATH;
-	const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1747-java-"));
+	fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1747-java-"));
 	for (const name of ["java", "java.exe"]) {
 		fs.writeFileSync(path.join(fakeBin, name), "x");
 	}
@@ -453,6 +454,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	if (fakeBin) fs.rmSync(fakeBin, { recursive: true, force: true });
+	fakeBin = undefined;
 	if (originalPath !== undefined) process.env.PATH = originalPath;
 	restoreDisableToolInstall();
 	delete process.env.PI_LENS_INSTALL_LOCK_TIMEOUT_MS;

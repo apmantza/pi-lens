@@ -18,11 +18,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stopMock = vi.fn();
 const startSpawnUsageSamplerMock = vi.fn(
-	(_pid: number | undefined, _intervalMs?: number) => ({ stop: stopMock }),
+	(
+		_pid: number | undefined,
+		_intervalMs?: number,
+		_lifetimeCapMs?: number,
+	) => ({
+		stop: stopMock,
+	}),
 );
 vi.mock("../../clients/resource-sampler.js", () => ({
-	startSpawnUsageSampler: (pid: number | undefined, intervalMs?: number) =>
-		startSpawnUsageSamplerMock(pid, intervalMs),
+	startSpawnUsageSampler: (
+		pid: number | undefined,
+		intervalMs?: number,
+		lifetimeCapMs?: number,
+	) => startSpawnUsageSamplerMock(pid, intervalMs, lifetimeCapMs),
 }));
 
 const logLatencyMock = vi.fn();
@@ -47,13 +56,31 @@ describe("safeSpawnAsync resource-usage bracketing (#620)", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("starts the sampler right after spawn, with the child's pid", async () => {
+	it("starts the sampler right after spawn, with the child's pid and a cap from THIS spawn's deadline (#2968)", async () => {
+		// #2968 recurrence: the sampler's only stop was the child's own settle,
+		// so a child that never exits (a hung `.cmd` shim that survives
+		// `taskkill /F /T`) polled for hours — 234 live powershell/taskkill
+		// processes in the report. The polling bound has to come from the
+		// deadline safe-spawn actually computed for THIS spawn, not from a
+		// constant that knows nothing about the caller's timeout.
+		//
+		// The cap assertion rides on this spawn rather than its own: every real
+		// child in this file is one more `real-process-spawn` hit against
+		// tests/support/flake-shape-baseline.json, and a fix does not widen that
+		// baseline for a test it wrote.
 		stopMock.mockReturnValue(null);
-		const result = await safeSpawnAsync(NODE, EXIT_OK);
+		const result = await safeSpawnAsync(NODE, EXIT_OK, { timeout: 12_000 });
 
 		expect(startSpawnUsageSamplerMock).toHaveBeenCalledTimes(1);
-		const [pidArg] = startSpawnUsageSamplerMock.mock.calls[0];
+		const [pidArg, intervalMsArg, lifetimeCapMsArg] =
+			startSpawnUsageSamplerMock.mock.calls[0];
 		expect(typeof pidArg).toBe("number");
+		// The cadence stays the sampler's own default; only the deadline is
+		// safe-spawn's to supply.
+		expect(intervalMsArg).toBeUndefined();
+		// 12s timeout + the 5s teardown grace (SIGTERM, its 1s SIGKILL
+		// escalation, then at most 2s of pipe-idle wait).
+		expect(lifetimeCapMsArg).toBe(17_000);
 		expect(result.status).toBe(0);
 	});
 

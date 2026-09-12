@@ -274,16 +274,16 @@ function guardSessionEvent<E, C, R>(
 				// The signal read moved out of each handler's own try/catch and
 				// into the guard (#2523 hook budgets), so a ctx whose `signal`
 				// accessor throws for a NON-stale reason is a crashed handler and
-				// must leave the same record — and the same test-runner rethrow —
-				// the handler's catch used to (#2884). In production
-				// `surfaceHandlerCrash` swallows and the event resolves to its no-op
-				// value, exactly as the handler's own catch + finally did.
-				surfaceHandlerCrash(eventName, err, {
-					...(options.dbg === undefined ? {} : { dbg: options.dbg }),
-					...(options.rethrow === undefined
-						? {}
-						: { rethrow: options.rethrow }),
-				});
+				// must leave the same record the handler's own catch used to (#2884).
+				// This preserves the old catch behavior for lifecycle handlers. The
+				// `tool_result` and `context` handlers never caught this signal read,
+				// so their non-stale accessor errors are surfaced as a swallowed
+				// handler crash instead (#2939 F5). `rethrow` is intentionally not
+				// forwarded: wrappers do not pass it, and only `surfaceHandlerCrash`
+				// honors that option (#2939 F4).
+				const crashOptions: SessionEventGuardOptions = {};
+				if (options.dbg !== undefined) crashOptions.dbg = options.dbg;
+				surfaceHandlerCrash(eventName, err, crashOptions);
 				return Promise.resolve(onStaleResult(event)) as R;
 			}
 			const result = runWithTurnContext(stableSessionId(ctx), () =>
