@@ -194,6 +194,21 @@ the bounded ±20-line source window for runtime and test paths.
 
 ## Contributing
 
+Tmp-fixture hygiene uses a checked-in prefix baseline only for producers that
+still need migration. Each row names its owner, observed population, and
+reason; the config sweep fails for an unlisted prefix, and removing a row
+while its producer still leaks also fails. Fixed producers clean up at the
+shared helper seam so the baseline shrinks instead of accumulating exceptions.
+Admission matches directory names by prefix, selecting the longest matching
+prefix when families overlap; random `mkdtemp` suffixes never belong in the
+baseline key.
+
+The tmp-fixture baseline is a prefix-set ratchet, not a population-count
+ceiling. Runtime checks require each admitted prefix to remain live and reject
+every unadmitted prefix; worker placement and scheduling make per-prefix counts
+environment-dependent. Removing a still-live row is therefore a deliberate
+ratchet failure, while fixed producers should remove their rows.
+
 For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
 
 **`scripts/hooks/guard-bash.mjs` mechanically enforces four of the non-negotiables below** (#2699): `git stash` in any form, `git reset --soft origin/<branch>` / `--hard`, a HAND-typed `git worktree remove` with two force flags (the sanctioned removal path stays `node scripts/prune-agent-worktrees.mjs`, liveness-checked, or `git worktree unlock` + a single-force remove — the hook denies only the ad-hoc double force, never the script's own internal one, since the hook only ever sees what the Bash tool itself is asked to run), and an unpinned `node` probe that LOADS runtime code from `clients/`/`dist/` with no `PI_LENS_HOME`. Registered as a `PreToolUse` hook on the Bash tool in `.claude/settings.json` via `${CLAUDE_PROJECT_DIR}` (never a bare relative path — the hook's cwd follows Claude into a worktree that may predate the file), it denies with exit code 2 and a one-line reason on stderr before the tool runs, and never blocks on its own failure (malformed input degrades to allow). It is a net under the prose in CLAUDE.md and the playbooks, not a replacement for reading them — it catches the four rules a tokenizer can reliably classify, not the judgment calls the rest of this document asks for.
@@ -4025,6 +4040,12 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **Adding an LSP server → add a smoke fixture, or the drift guard fails.** Registering a server in `LSP_SERVERS` does NOT automatically smoke-test it: the runner-level `smoke-fixture-coverage.test.ts` blanket-exempts the single `lsp` runner. `tests/clients/lsp/lsp-fixture-coverage.test.ts` is the SERVER-level guard — it fails unless every non-auxiliary server routes to an `LSP_FIXTURES` entry in `scripts/smoke-tools.mjs` (a fixture file whose extension resolves to it) and every auxiliary server is attached via a fixture's `auxiliaryServerIds`. Only the share-an-extension ALTERNATES (deno/python-jedi/omnisharp/expert) are exempt. The nightly `tool-smoke.yml` runs `--lsp --install` over the WHOLE list, so a self-contained github/npm server is then covered automatically (toolchain-gated ones — pwsh/.NET/go/rust — need the runner to provision the toolchain). `LspFixture` is typed in `scripts/smoke-tools.d.mts`.
 
 ### Test infrastructure — reuse before you write (2026-09-06)
+
+The shared `tests/support/vitest-setup.ts` records one run-wide baseline of real `os.tmpdir()` entries and reports each worker's additions without deleting sibling-owned paths. `tests/config/tmp-fixture-hygiene.test.ts` runs in its own serialized Vitest project, owns the final sweep, and removes newly-created unadmitted `pi-lens-*` fixtures after its assertion. Proven per-family cleanup drains deferred work before sweeping its named prefixes. The MCP test harness removes IPC endpoints both at disposal and after child exit because `kill()` is asynchronous. Keep `PI_LENS_HOME` pinned to a worktree-local path when running tests; the ast-grep baseline directory is the sole admitted process-owned exception and is bounded by `clients/sgconfig.ts`.
+
+The generic process-wide fixture sweep was attempted twice and reverted after it broke broad suite populations. Keep cleanup at the shared helper or proven per-family seams; admit unresolved prefixes in `tests/config/tmp-fixture-hygiene-baseline.json` as shrink-only ratchets with a producer owner, reason, and issue. Independently-created roots keep their own cleanup.
+
+A process-wide `afterEach` cannot safely own the temporary namespace (#2912). Vitest workers run separate module instances while `/tmp` is shared, so a worker sees names but not the producer or lifecycle owner. A worker-wide sweep either deletes a sibling's active root or leaves an asynchronous write that arrives after the sweep. The three attempted scoping rules each chose a different incomplete ownership signal, and all three fail at broad scale. This is a structural non-goal for global hooks: future cleanup must use an explicit owner or a per-family seam.
 
 `tests/support/` holds 56 modules; these are the sanctioned seams, listed by NEED. Minimalism-ladder step 2 applies to tests exactly as to `clients/`: check this list before writing a helper, and a new `tests/support` helper with a same-shape sibling is held to the sibling sweep and the net-count rule. The 2026-09-06 record: #2585 r1 renamed 28 call sites instead of using the factory's documented override; #2617 r1 hand-rolled its own scan set (missed `scripts/`) and floor (1 of 1526 files).
 

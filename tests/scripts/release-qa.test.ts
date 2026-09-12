@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — three spawns, each pinning something no
+// flake-shape: real-process-spawn — four spawns, each pinning something no
 // in-process double can reach. (1) `npm pack` of a two-line fixture package
 // whose `prepare` writes through `os.homedir()`: the F1 defect was npm
 // IGNORING the env it was handed, so an assertion on scratchEnv()'s OUTPUT
@@ -35,7 +35,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as os from "node:os";
 import {
 	BASELINE_COLUMNS,
@@ -54,6 +54,7 @@ import {
 	parseSupplyArgs,
 	PINNED_ENV_KEYS,
 	pollToTerminal,
+	removeScratchRoot,
 	rowReportShows,
 	rowProbeRequest,
 	runToolSmokeInstallProbe,
@@ -1386,7 +1387,9 @@ describe("release-QA dirty-checkout refusal (#2619 review F1)", () => {
 		// real script out of a throwaway tree with a dirty git repo at its root
 		// exercises the call site itself. No pi, no network: the refusal fires
 		// before the scratch root is created.
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-qa-dirty-"));
+		const root = fs.mkdtempSync(
+			path.join(REPO_ROOT, ".probe-home", "release-qa-dirty-"),
+		);
 		try {
 			fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
 			for (const rel of [
@@ -1452,6 +1455,71 @@ describe("release-QA argument parsing (#2606)", () => {
 		expect(() => parseArgs(["--git-ref"])).toThrow(
 			/--git-ref requires a value/,
 		);
+	});
+
+	it("accepts an explicit scratch root and the existing keep flag independently", () => {
+		const opts = parseArgs(["--scratch-root", "/tmp/qa", "--keep"]);
+		expect(opts.scratchRoot).toBe("/tmp/qa");
+		expect(opts.keep).toBe(true);
+	});
+
+	it("removes an owned scratch root through the real filesystem helper", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-release-qa-test-"),
+		);
+		fs.writeFileSync(path.join(root, "marker"), "owned");
+		removeScratchRoot(root);
+		expect(fs.existsSync(root)).toBe(false);
+	});
+
+	it("removes an owned explicit scratch root on SIGTERM", async () => {
+		const parent = fs.mkdtempSync(
+			path.join(REPO_ROOT, ".probe-home", "release-qa-signal-"),
+		);
+		const scratchRoot = path.join(parent, "owned-scratch");
+		const fakePi = path.join(parent, "fake-pi.mjs");
+		fs.writeFileSync(fakePi, "#!/usr/bin/env node\nprocess.stdin.resume();\n");
+		fs.chmodSync(fakePi, 0o755);
+		try {
+			const child = spawn(
+				process.execPath,
+				[
+					path.join(REPO_ROOT, "scripts/release-qa.mjs"),
+					"--pi",
+					fakePi,
+					"--scratch-root",
+					scratchRoot,
+					"--from",
+					"npm:pi-lens@0.0.0",
+					"--poll-cap-ms",
+					"1000",
+				],
+				{ cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+			);
+			const result = await new Promise<{
+				code: number | null;
+				signal: NodeJS.Signals | null;
+				stderr: string;
+			}>((resolve) => {
+				let signalled = false;
+				let stderr = "";
+				child.stderr.on("data", (chunk: Buffer) => {
+					stderr += chunk.toString();
+				});
+				child.stdout.on("data", (chunk: Buffer) => {
+					if (signalled || !chunk.toString().includes("scratch root:")) return;
+					signalled = true;
+					child.kill("SIGTERM");
+				});
+				child.once("close", (code, signal) =>
+					resolve({ code, signal, stderr }),
+				);
+			});
+			expect(result, result.stderr).toMatchObject({ code: 143, signal: null });
+			expect(fs.existsSync(scratchRoot)).toBe(false);
+		} finally {
+			fs.rmSync(parent, { recursive: true, force: true });
+		}
 	});
 });
 // flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
