@@ -2,4 +2,4 @@
 section: Fixed
 ---
 
-- **Restore the probe home environment after the #2992 integration tests (refs #2912)** — prevent later tests from inheriting the stable probe registry path.
+- **Isolate registry consumers and restore probe-home state (refs #2912)** — prevent later tests from inheriting the #2992 probe registry and keep PID-scoped root assertions independent of worker history.
