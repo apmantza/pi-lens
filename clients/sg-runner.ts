@@ -858,12 +858,17 @@ export class SgRunner {
 		const sessionDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), `pi-lens-temp-${ruleId}-`),
 		);
-		const rulesSubdir = path.join(sessionDir, "rules");
-		const configFile = path.join(sessionDir, ".sgconfig.yml");
-		fs.mkdirSync(rulesSubdir, { recursive: true });
-		fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
-		fs.writeFileSync(path.join(rulesSubdir, `${ruleId}.yml`), ruleYaml);
-		return { sessionDir, configFile };
+		try {
+			const rulesSubdir = path.join(sessionDir, "rules");
+			const configFile = path.join(sessionDir, ".sgconfig.yml");
+			fs.mkdirSync(rulesSubdir, { recursive: true });
+			fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
+			fs.writeFileSync(path.join(rulesSubdir, `${ruleId}.yml`), ruleYaml);
+			return { sessionDir, configFile };
+		} catch (error) {
+			this.cleanupTempScan(sessionDir);
+			throw error;
+		}
 	}
 
 	private cleanupTempScan(sessionDir: string): void {

@@ -49,7 +49,7 @@ process.env.PI_LENS_CONFIG_PATH = "/nonexistent-pi-lens-tests/config.json";
 // back to the real homedir.
 // Tmp-fixture hygiene (#2912): keep the real TMPDIR so the final governance
 // owner observes the same namespace as production. Workers report additions;
-// the serialized owner removes unadmitted entries after its assertion.
+// the serialized owner removes entries after its assertion.
 const tmpHygieneRealTmp = os.tmpdir();
 const tmpHygieneBaselinePath = path.join(
 	process.cwd(),
@@ -119,8 +119,8 @@ const TMP_LEAK_BASELINE = JSON.parse(
 ) as TmpLeakBaseline[];
 
 // Fixtures that may outlive their test file without reding the file.
-// An admitted entry is STILL removed by the afterAll below; admission only
-// suppresses the red, never the hygiene.
+// Admission suppresses the red. Cleanup removes admitted entries unless an
+// explicit independent owner below still needs the live root.
 const TMP_LEAK_ADMISSIONS: TmpLeakAdmission[] = [
 	...TMP_LEAK_BASELINE.map(({ prefix, reason }) => ({
 		file: "*",
@@ -237,6 +237,28 @@ export function tmpHygieneUnadmittedEntries(
 	);
 }
 
+export function tmpHygieneObservedPrefixCounts(
+	prefixes: readonly string[],
+): Map<string, number> {
+	const entries = snapshotTmpPiLensEntries(
+		readTmpDirEntries(tmpHygieneRealTmp),
+	).filter((entry) => !tmpHygieneBefore.has(entry));
+	const counts = new Map<string, number>(prefixes.map((prefix) => [prefix, 0]));
+	for (const entry of entries) {
+		const owner = [...prefixes]
+			.filter((prefix) => entry.startsWith(prefix))
+			.sort((left, right) => right.length - left.length)[0];
+		if (owner) counts.set(owner, (counts.get(owner) ?? 0) + 1);
+	}
+	return counts;
+}
+
+export function tmpHygieneObservedEntries(): string[] {
+	return snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp)).filter(
+		(entry) => !tmpHygieneBefore.has(entry),
+	);
+}
+
 export function tmpHygieneLeakReport(): {
 	testFile: string;
 	leftovers: string[];
@@ -279,7 +301,10 @@ export function cleanupTmpHygiene(): void {
 	const after = snapshotTmpPiLensEntries(readTmpDirEntries(tmpHygieneRealTmp));
 	for (const name of after) {
 		if (tmpHygieneBefore.has(name)) continue;
-		if (isAdmittedTmpLeak("config/tmp-fixture-hygiene.test.ts", name)) continue;
+		if (
+			TMP_HYGIENE_INDEPENDENT_OWNERS.some((prefix) => name.startsWith(prefix))
+		)
+			continue;
 		removeTempDirSync(path.join(tmpHygieneRealTmp, name));
 	}
 	try {
@@ -288,6 +313,21 @@ export function cleanupTmpHygiene(): void {
 		// A stale ignored baseline is harmless; the next run uses a new id.
 	}
 }
+
+// These roots belong to a separate live process or shared owner. Every other
+// admitted prefix is removed after the governance assertion, so admissions
+// cannot become a permanent inode leak.
+const TMP_HYGIENE_INDEPENDENT_OWNERS = [
+	"pi-lens-ast-grep",
+	"pi-lens-scratch",
+	"pi-lens-master-",
+	"pi-lens-round2-",
+	"pi-lens-test-home-",
+	"pi-lens-mcp-",
+	"pi-lens-result-contract-",
+	"pi-lens-wiring-fork-",
+	"pi-lens-lockfile-complete-",
+];
 
 // Hand this worker the suite-wide tool template's probe cache (built once by
 // prewarm-tool-home.ts globalSetup). ensureTool's probe-cache fast path then

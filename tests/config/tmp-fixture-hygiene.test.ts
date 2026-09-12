@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
@@ -11,6 +12,8 @@ import {
 	cleanupTmpHygiene,
 	tmpHygieneAdmissionFor,
 	tmpHygieneLeakReport,
+	tmpHygieneObservedEntries,
+	tmpHygieneObservedPrefixCounts,
 	tmpHygieneUnadmittedEntries,
 } from "../support/vitest-setup.js";
 
@@ -166,34 +169,62 @@ describe("tmp-fixture-hygiene", () => {
 		}
 	});
 
-	it("reds new prefixes and removal of a still-leaking admitted prefix", () => {
+	it("keeps every live baseline prefix within its checked-in owner population", () => {
+		const baseline = JSON.parse(
+			fs.readFileSync(
+				path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene-baseline.json"),
+				"utf8",
+			),
+		) as Array<{ prefix: string; count: number }>;
+		const created = baseline.map((row) =>
+			fs.mkdtempSync(path.join(os.tmpdir(), `${row.prefix}population-`)),
+		);
+		try {
+			const observed = tmpHygieneObservedPrefixCounts(
+				baseline.map((row) => row.prefix),
+			);
+			for (const row of baseline) {
+				const count = observed.get(row.prefix) ?? 0;
+				expect(
+					count,
+					`${row.prefix} disappeared from its owner population; remove the admission`,
+				).toBeGreaterThan(0);
+				expect(
+					count,
+					`${row.prefix} exceeded its checked-in population`,
+				).toBeLessThanOrEqual(row.count);
+			}
+		} finally {
+			for (const dir of created)
+				fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reds new prefixes and removal of an admitted prefix from the real namespace", () => {
 		const baseline = JSON.parse(
 			fs.readFileSync(
 				path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene-baseline.json"),
 				"utf8",
 			),
 		) as Array<{ prefix: string }>;
-		const fabricated = "pi-lens-fabricated-new-prefix-X";
-		expect(
-			tmpHygieneUnadmittedEntries(
-				[fabricated],
-				"config/tmp-fixture-hygiene.test.ts",
-			),
-		).toEqual([fabricated]);
-		const removed = baseline.slice(1);
-		const stillLive = baseline[0].prefix + "still-live";
-		expect(
-			tmpHygieneUnadmittedEntries(
-				[stillLive],
-				"config/tmp-fixture-hygiene.test.ts",
-				removed.map((row) => ({
-					file: "*",
-					prefix: row.prefix,
-					reason: "test",
-					issue: "#2912",
-				})),
-			),
-		).toEqual([stillLive]);
+		const created = baseline.map((row) =>
+			fs.mkdtempSync(path.join(os.tmpdir(), `${row.prefix}governance-`)),
+		);
+		const fabricated = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-fabricated-new-prefix-X-"),
+		);
+		try {
+			const observed = tmpHygieneObservedEntries();
+			expect(
+				tmpHygieneUnadmittedEntries(
+					observed,
+					"config/tmp-fixture-hygiene.test.ts",
+				).sort(),
+			).toEqual([path.basename(fabricated)].sort());
+		} finally {
+			for (const dir of [...created, fabricated])
+				fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("selects the longest matching prefix for overlapping fixture families", () => {
