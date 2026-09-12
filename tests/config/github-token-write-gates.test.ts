@@ -44,8 +44,13 @@ function writesWithToken(jobText: string): boolean {
 		/\bgh\s+api\b[\s\S]*?(?:-X|--method)\s+(?:POST|PATCH|PUT|DELETE)\b/.test(
 			jobText,
 		) ||
-		/\bcurl\b[\s\S]*?--request\s+(?:POST|PATCH|PUT|DELETE)\b/.test(jobText) ||
-		/\bcheck-close-keywords\.mjs\s+--verify-merged\b/.test(jobText)
+		/\bcurl\b[\s\S]*?(?:--request|-X)\s+(?:POST|PATCH|PUT|DELETE)\b/.test(
+			jobText,
+		) ||
+		/\bcheck-close-keywords\.mjs\s+--verify-merged\b/.test(jobText) ||
+		/\buses:\s*actions\/github-script@[^\s]+[\s\S]*?\bgithub\.rest\.(?:issues|pulls)\.(?:create|createComment|update|updateComment|delete|deleteComment|addLabels|removeLabel|addAssignees|removeAssignees|setLabels)\b/.test(
+			jobText,
+		)
 	);
 }
 
@@ -94,6 +99,33 @@ describe("fork-capped workflow token writes (#2993)", () => {
 		expect(writesWithToken(jobSource(source, "dangerous"))).toBe(true);
 		expect(job.if).not.toContain("head.repo.full_name == github.repository");
 		expect(isAdvisoryCheck(job.name)).toBe(false);
+	});
+
+	it("detects github-script REST writes after source blanking", () => {
+		const source = `  mutator:
+    name: Mutator
+    uses: actions/github-script@v7
+    with:
+      script: |
+        await github.rest.issues.createComment({ issue_number: 1 });`;
+		expect(writesWithToken(jobSource(source, "mutator"))).toBe(true);
+	});
+
+	it("does not classify github-script REST reads as writes", () => {
+		const source = `  reader:
+    name: Reader
+    uses: actions/github-script@v7
+    with:
+      script: |
+        await github.rest.issues.get({ issue_number: 1 });`;
+		expect(writesWithToken(jobSource(source, "reader"))).toBe(false);
+	});
+
+	it("detects curl short-form write methods", () => {
+		const source = `  mutator:
+    name: Mutator
+    run: curl -X PATCH https://api.github.com/repos/example/repo/issues/1`;
+		expect(writesWithToken(jobSource(source, "mutator"))).toBe(true);
 	});
 
 	it("keeps greeting outside the fork-capped population", () => {
