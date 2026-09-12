@@ -85,6 +85,7 @@ import {
 	getRubocopCommand,
 	hasBiomeConfig,
 	hasDetektConfig,
+	hasGradleKtlintPlugin,
 	hasEslintConfig,
 	hasGolangciConfig,
 	hasKtfmtConfig,
@@ -576,7 +577,25 @@ async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryKtlintFix(filePath: string, cwd: string): Promise<number> {
+async function tryKtlintFix(
+	filePath: string,
+	cwd: string,
+	dbg: PipelineContext["dbg"],
+): Promise<number> {
+	const gradleOwnership = hasGradleKtlintPlugin(cwd);
+	if (gradleOwnership.kind === "indeterminate") return 0;
+	if (gradleOwnership.kind === "owned" || hasKtlintConfig(cwd)) {
+		const reason =
+			"this project resolves ktlint through Gradle or Spotless, so the version this run used " +
+			"cannot be established from the project — declining to autofix";
+		dbg(`autofix: ktlint declined for ${filePath} (${reason})`);
+		recordDegradationOnce({
+			kind: "autofix-agreement-unavailable",
+			subject: "ktlint:gradle",
+			reason,
+		});
+		return 0;
+	}
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
 	if (!cmd) return 0;
 
@@ -917,7 +936,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ktlint") {
-			const ktlintFixed = await tryKtlintFix(filePath, cwd);
+			const ktlintFixed = await tryKtlintFix(filePath, cwd, dbg);
 			if (ktlintFixed > 0) {
 				fixedCount += ktlintFixed;
 				autofixTools.push(`ktlint:${ktlintFixed}`);

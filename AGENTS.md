@@ -558,6 +558,7 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 51. **A bookkeeping write wired into a fork-capped gating workflow.** *Screen:* every `GITHUB_TOKEN` write on a `pull_request` trigger is fork-guarded or advisory-listed; metadata upkeep never gates change correctness, and write-required checks use an uncapped trigger. (#2993)
 
+52. **A lexical ownership scan searches only the usual declaration file.** *Screen:* when a build tool can be applied through convention logic, scan the conventional build-logic roots and included builds with the same comment-and-string blanker; pair code matches with comment, string, sibling-module, and settings/build-file rejects. *e.g.* #3004's ktlint agreement guard initially scanned only four Gradle files and missed `buildSrc` convention plugins. *Detect:* a `buildSrc` or included-build fixture driven through `runAutofix`, plus a compile-valid mutation that removes the build-logic search and reds that fixture.
 The PR-body test corpus may cache only HEAD-tree builds keyed by `cwd` plus the immutable `git rev-parse HEAD` result, with a fixed process-lifetime bound. Working-tree builds remain uncached because their files have no immutable identity.
 
 For process singletons that own live child processes, an incompatible cell must
@@ -1188,6 +1189,8 @@ and only `lsp_server_spawned` answers "how many servers did we start".
 (#1934, #2064)
 
 ### Dispatch, runners, formatters, and installer
+
+**Kotlin autofix declines when project ownership is not independently provable (#3000/#3004).** `hasGradleKtlintPlugin` performs a lexical scan over the owning Gradle files, `buildSrc/`, `build-logic/`, and paths named by executable `includeBuild(...)` calls. It blanks comments and strings before accepting a plugin-id match, so prose and string literals do not establish ownership. The build-logic walk is bounded at `GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES`; exceeding that bound records `gradle-ktlint-scan-budget-exceeded` once per session and declines because the scan cannot establish ownership. Spotless-owned ktlint also declines because its resolved CLI version cannot be established without executing Gradle. The guard covers the synchronous autofix path only; formatter execution remains a separate seam until #3005's shared tool-agreement change.
 
 **Pip-backed managed tools follow a private-install ladder (#2916).**
 `installPipTool` prefers `pipx`, then `<PI_LENS_HOME>/pip-tools`, then a

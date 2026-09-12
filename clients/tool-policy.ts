@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { TERRAGRUNT_FILENAMES } from "./file-kinds.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
 import {
@@ -2545,6 +2546,22 @@ const KOTLIN_GRADLE_FILES = [
 	"settings.gradle.kts",
 	"settings.gradle",
 ];
+const GRADLE_KTLINT_PLUGIN_PATTERN =
+	/(?:id\s*\(\s*|id\s+|apply\s+plugin\s*:\s*)["']org\.jlleitschuh\.gradle\.ktlint["']/g;
+const GRADLE_BUILD_LOGIC_DIRS = ["buildSrc", "build-logic"];
+const GRADLE_BUILD_LOGIC_EXTENSIONS = [".gradle", ".gradle.kts", ".kt"];
+const GRADLE_INCLUDE_BUILD_PATTERN = /\bincludeBuild\s*\(\s*["']([^"']+)["']/g;
+/**
+ * Bound the synchronous ownership probe so a large convention tree cannot
+ * stall every autofix. Exceeding it is an unknown ownership result, not proof
+ * of no owner, and callers must decline the write (#3004).
+ */
+export const GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES = 10_000;
+
+export type GradleKtlintOwnership =
+	| { kind: "owned" }
+	| { kind: "not-owned" }
+	| { kind: "indeterminate" };
 
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
@@ -2780,6 +2797,121 @@ export function getSpotlessKotlinFormatter(
 
 export function hasKtlintConfig(cwd: string): boolean {
 	return getSpotlessKotlinFormatter(cwd) === "ktlint";
+}
+
+/**
+ * Whether Gradle build logic applies the ktlint Gradle plugin. The plugin
+ * establishes project ownership of ktlint, but its plugin version is not a
+ * ktlint CLI version and must never be used as one (#3000).
+ */
+export function hasGradleKtlintPlugin(cwd: string): GradleKtlintOwnership {
+	const files = new Set<string>();
+	const scan = { entries: 0, exceeded: false, indeterminate: false };
+	for (const dir of walkUpDirs(cwd)) {
+		for (const gradle of KOTLIN_GRADLE_FILES) {
+			const filePath = path.join(dir, gradle);
+			if (fs.existsSync(filePath)) files.add(filePath);
+		}
+		for (const buildLogicDir of GRADLE_BUILD_LOGIC_DIRS) {
+			if (
+				!addGradleBuildLogicFiles(path.join(dir, buildLogicDir), files, scan)
+			) {
+				scan.exceeded = true;
+			}
+		}
+		for (const settings of ["settings.gradle.kts", "settings.gradle"]) {
+			const settingsPath = path.join(dir, settings);
+			if (!fs.existsSync(settingsPath)) continue;
+			try {
+				const raw = fs.readFileSync(settingsPath, "utf-8");
+				const stripped = stripGradleCommentsAndStrings(raw);
+				GRADLE_INCLUDE_BUILD_PATTERN.lastIndex = 0;
+				let match: RegExpExecArray | null;
+				while ((match = GRADLE_INCLUDE_BUILD_PATTERN.exec(raw)) !== null) {
+					const code = stripped.slice(
+						match.index,
+						match.index + match[0].length,
+					);
+					const includedBuild = match[1];
+					if (includedBuild && /^\s*includeBuild\s*\(\s*/.test(code)) {
+						if (
+							!addGradleBuildLogicFiles(
+								path.resolve(dir, includedBuild),
+								files,
+								scan,
+							)
+						) {
+							scan.exceeded = true;
+						}
+					}
+				}
+			} catch {
+				scan.indeterminate = true;
+			}
+		}
+	}
+	if (scan.exceeded) {
+		recordDegradationOnce({
+			kind: "gradle-ktlint-scan-budget-exceeded",
+			subject: "ktlint:gradle-build-logic",
+			reason:
+				`Gradle build-logic ownership scan exceeded its ${GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES}-entry budget; ` +
+				"ownership cannot be established, so ktlint autofix is declined",
+		});
+		return { kind: "indeterminate" };
+	}
+	if (scan.indeterminate) return { kind: "indeterminate" };
+	for (const filePath of files) {
+		try {
+			const raw = fs.readFileSync(filePath, "utf-8");
+			const stripped = stripGradleCommentsAndStrings(raw);
+			GRADLE_KTLINT_PLUGIN_PATTERN.lastIndex = 0;
+			let match: RegExpExecArray | null;
+			while ((match = GRADLE_KTLINT_PLUGIN_PATTERN.exec(raw)) !== null) {
+				const code = stripped.slice(match.index, match.index + match[0].length);
+				if (!/^\s*$/.test(code)) return { kind: "owned" };
+			}
+		} catch {
+			return { kind: "indeterminate" };
+		}
+	}
+	return { kind: "not-owned" };
+}
+
+function addGradleBuildLogicFiles(
+	root: string,
+	files: Set<string>,
+	scan: { entries: number; indeterminate: boolean },
+): boolean {
+	if (!fs.existsSync(root)) return true;
+	const pending = [root];
+	while (pending.length > 0) {
+		const dir = pending.pop();
+		if (!dir) continue;
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			scan.indeterminate = true;
+			continue;
+		}
+		for (const entry of entries) {
+			scan.entries += 1;
+			if (scan.entries > GRADLE_BUILD_LOGIC_SCAN_MAX_ENTRIES) return false;
+			const entryPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				pending.push(entryPath);
+			} else if (
+				entry.isFile() &&
+				GRADLE_BUILD_LOGIC_EXTENSIONS.some((extension) =>
+					entry.name.endsWith(extension),
+				)
+			) {
+				files.add(entryPath);
+			}
+		}
+	}
+	return true;
 }
 
 export function hasKtfmtConfig(cwd: string): boolean {
