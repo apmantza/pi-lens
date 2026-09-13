@@ -64,27 +64,46 @@ function declaredRange(
 	return undefined;
 }
 
-function exactOrSimpleRangeMatches(range: string, version: string): boolean {
+function parseCoreVersion(
+	version: string,
+): [number, number, number] | undefined {
+	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+	if (!match) return undefined;
+	const parts = match.slice(1).map(Number);
+	if (parts.some((part) => !Number.isSafeInteger(part))) return undefined;
+	return parts as [number, number, number];
+}
+
+function exactOrSimpleRangeMatches(
+	range: string,
+	version: string,
+): { matches: boolean; unsupported: boolean } {
 	const clean = range.trim().replace(/^v/, "");
-	if (/^\d+\.\d+\.\d+$/.test(clean)) return clean === version;
+	const actual = parseCoreVersion(version);
+	if (!actual) return { matches: false, unsupported: version.includes("+") };
+	if (/^\d+\.\d+\.\d+$/.test(clean))
+		return { matches: clean === version, unsupported: false };
 	const caret = clean.match(/^\^(\d+)\.(\d+)\.(\d+)$/);
 	if (caret) {
 		const [major, minor, patch] = caret.slice(1).map(Number);
-		const actual = version.split(".").map(Number);
-		return (
-			actual[0] === major &&
-			(major !== 0 || actual[1] === minor) &&
-			(major !== 0 || minor !== 0 || actual[2] === patch) &&
-			(actual[1] > minor || (actual[1] === minor && actual[2] >= patch))
-		);
+		return {
+			matches:
+				actual[0] === major &&
+				(major !== 0 || actual[1] === minor) &&
+				(major !== 0 || minor !== 0 || actual[2] === patch) &&
+				(actual[1] > minor || (actual[1] === minor && actual[2] >= patch)),
+			unsupported: false,
+		};
 	}
 	const tilde = clean.match(/^~(\d+)\.(\d+)\.(\d+)$/);
 	if (tilde) {
 		const [major, minor, patch] = tilde.slice(1).map(Number);
-		const actual = version.split(".").map(Number);
-		return actual[0] === major && actual[1] === minor && actual[2] >= patch;
+		return {
+			matches: actual[0] === major && actual[1] === minor && actual[2] >= patch,
+			unsupported: false,
+		};
 	}
-	return false;
+	return { matches: false, unsupported: true };
 }
 
 function nodeAgreement(tool: string, root: string): ToolAgreement | undefined {
@@ -120,19 +139,28 @@ function nodeAgreement(tool: string, root: string): ToolAgreement | undefined {
 		entry && typeof entry === "object"
 			? (entry as Record<string, unknown>).version
 			: undefined;
-	if (
-		typeof version !== "string" ||
-		!exactOrSimpleRangeMatches(range, version)
-	) {
+	const comparison =
+		typeof version === "string"
+			? exactOrSimpleRangeMatches(range, version)
+			: { matches: false, unsupported: false };
+	if (typeof version !== "string" || !comparison.matches) {
+		const reasonCode =
+			typeof version === "string" && comparison.unsupported
+				? "evidence-unsupported"
+				: typeof version === "string" && version.includes("+")
+					? "evidence-unsupported"
+					: "evidence-unparseable";
 		const reason =
-			typeof version === "string"
-				? `the project declares ${packageName}@${range} in package.json, but the lockfile resolves ${packageName}@${version} in package-lock.json; agreement disagrees`
-				: `the project declares ${packageName}@${range} in package.json, but package-lock.json does not establish its resolved version`;
+			typeof version === "string" && comparison.unsupported
+				? `the project declares ${packageName}@${range}, but the lockfile shape ${packageName}@${version} or its range is unsupported; tool agreement cannot be established`
+				: typeof version === "string" && parseCoreVersion(version)
+					? `the project declares ${packageName}@${range} in package.json, but the lockfile resolves ${packageName}@${version} in package-lock.json; agreement disagrees`
+					: `the project declares ${packageName}@${range} in package.json, but package-lock.json does not establish its resolved version; tool agreement cannot be established`;
 		return {
 			decision: "decline",
 			subject: `node:${tool}`,
 			reason,
-			reasonCode: "evidence-unreadable",
+			reasonCode,
 		};
 	}
 	return { decision: "established" };

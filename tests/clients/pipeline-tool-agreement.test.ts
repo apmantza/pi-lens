@@ -141,4 +141,68 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 			expect.stringContaining("stylelint@15.11.0"),
 		);
 	});
+
+	it.each([
+		["empty resolved version", ""],
+		["latest resolved version", "latest"],
+		["wildcard resolved version", "*"],
+		["overflowing resolved version", "999999999999999999999.0.0"],
+	])(
+		"declines an unparseable lockfile version: %s",
+		async (_label, version) => {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { stylelint: "^16.0.0" } }),
+			);
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package-lock.json"),
+				JSON.stringify({ packages: { "node_modules/stylelint": { version } } }),
+			);
+			const result = await runAutofix(
+				path.join(env.tmpDir, "style.css"),
+				env.tmpDir,
+				() => undefined,
+				() => {},
+				deps(),
+			);
+
+			expect(result.fixedCount).toBe(0);
+			expect(getDegradationSummary()[0]?.latestReasons[0]?.reason).toContain(
+				"cannot be established",
+			);
+		},
+	);
+
+	it.each([
+		["unsupported range", ">=16.0.0"],
+		["build metadata", "16.4.0+build.7"],
+	])(
+		"declines a legal but unsupported agreement shape: %s",
+		async (_label, rangeOrVersion) => {
+			const range = rangeOrVersion.startsWith(">") ? rangeOrVersion : "^16.0.0";
+			const version = rangeOrVersion.startsWith(">")
+				? "16.4.0"
+				: rangeOrVersion;
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { stylelint: range } }),
+			);
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package-lock.json"),
+				JSON.stringify({ packages: { "node_modules/stylelint": { version } } }),
+			);
+
+			await runAutofix(
+				path.join(env.tmpDir, "style.css"),
+				env.tmpDir,
+				() => undefined,
+				() => {},
+				deps(),
+			);
+
+			expect(getDegradationSummary()[0]?.latestReasons[0]?.reason).toContain(
+				"unsupported",
+			);
+		},
+	);
 });

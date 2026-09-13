@@ -195,6 +195,37 @@ describe("formatFile", () => {
 		}
 	});
 
+	it("declines a Node formatter when the lockfile disagrees with its pin", async () => {
+		const env = setupTestEnvironment("pi-lens-format-node-agreement-");
+		try {
+			const filePath = path.join(env.tmpDir, "app.ts");
+			fs.writeFileSync(filePath, "a { color: red; }\n");
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { "@biomejs/biome": "^1.0.0" } }),
+			);
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package-lock.json"),
+				JSON.stringify({
+					packages: { "node_modules/@biomejs/biome": { version: "0.0.0" } },
+				}),
+			);
+
+			const { formatFile, biome } = await loadFormatFile();
+			const result = await formatFile(filePath, biome);
+
+			expect(result).toMatchObject({
+				success: true,
+				changed: false,
+				outcome: "unavailable",
+				error: expect.stringContaining("agreement could not be established"),
+			});
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("records one agreement decline for 200 formatter-path files", async () => {
 		const env = setupTestEnvironment(
 			"pi-lens-format-ktlint-agreement-bounded-",

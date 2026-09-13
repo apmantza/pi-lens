@@ -698,7 +698,11 @@ the autofix registry, and `formatFile` consults it before formatter command
 resolution; the latter covers both `runPipeline`'s immediate-format phase and
 `handleAgentEnd`'s deferred-format loop. Lockfile-backed Node evidence may
 establish agreement; unreadable, unparseable, or unsupported evidence declines
-with a typed reason and bounded degradation record. The seam caches one bounded
+with a typed reason and bounded degradation record. The deferred
+`applyConservativeActionableWarningFixes` LSP quickfix writer is also autonomous
+and must consult the seam before `applyWorkspaceEdit`. A legal but unsupported
+range or version shape declines as unsupported; a version that cannot parse
+declines as unparseable. The seam caches one bounded
 root/evidence resolution per cwd, tool, and session generation, and its marker
 root stops at VCS boundaries. Never infer a CLI version from a Gradle plugin or
 build file, and never add a per-tool reader inside a dispatch branch. The

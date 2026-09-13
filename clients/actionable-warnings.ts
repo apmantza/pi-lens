@@ -35,6 +35,7 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logActionableWarningsEvent } from "./actionable-warnings-logger.js";
 import { displayProjectDataPath, getProjectDataDir } from "./file-utils.js";
 import { commitDurableStore } from "./durable-store.js";
+import { establishToolAgreement } from "./tool-agreement.js";
 
 export interface ActionableWarningAction {
 	title: string;
@@ -2016,6 +2017,19 @@ export async function applyConservativeActionableWarningFixes(args: {
 				continue;
 			}
 			summary.considered++;
+			const agreement = establishToolAgreement(warning.tool, args.cwd);
+			if (agreement.decision === "decline") {
+				recordDegradationOnce({
+					kind: "autofix-agreement-unavailable",
+					subject: agreement.subject,
+					reason: agreement.reason,
+				});
+				summary.skipped.push({
+					id: warning.id,
+					reason: "tool_agreement_unavailable",
+				});
+				continue;
+			}
 			if (!warning.line || !warning.column) {
 				summary.skipped.push({ id: warning.id, reason: "missing_position" });
 				continue;
