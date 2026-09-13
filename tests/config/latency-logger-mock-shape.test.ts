@@ -74,10 +74,15 @@ describe("latency-logger mock shape (#2281)", () => {
 	it("derives every factory and requires a partial import", () => {
 		// Recurrence guard for #2272 and #2281: comments and strings must not
 		// excuse or trigger a code-only latency-logger mock scan.
+		// Floors against 1,098 `.test.ts` files and ~114 latency-mocking files
+		// at authoring time: well below live counts so normal growth never
+		// trips them, but a silently dropped directory does. The population is
+		// `tests/` source, which routine processes (e.g. the 4.1.4
+		// `.changelog/` roll) never delete.
 		const files = walkTestFiles(path.join(repoRoot, "tests"));
-		assertNonEmptyScan("latency-logger test file walk", files.length);
+		assertNonEmptyScan("latency-logger test file walk", files.length, 900);
 		const mocks = files.flatMap(findLatencyMocks);
-		assertNonEmptyScan("latency-logger mock scan", mocks.length);
+		assertNonEmptyScan("latency-logger mock scan", mocks.length, 80);
 		const bare = mocks.filter(
 			({ factory }) =>
 				!factory.includes("importActual") &&

@@ -4,6 +4,15 @@
  *
  * The sweep uses transitive importer-use reachability over the test's
  * non-mocked production imports. The admission contains 358 findings.
+ *
+ * The latency surface (`scanLatencyLoggerSurface`) selects through
+ * `isLatencyLoggerSpecifier` (the single source in
+ * `tests/support/vi-mock-export-gate.ts`), never an inline predicate, so the
+ * discriminator lives in one directly-tested place (#2959 round 1 HIGH).
+ * Latency pins additionally require two-part admission (an `ADMITTED` reason
+ * naming an issue plus a `// latency-logger-mock:` header in the file, the
+ * `lsp-service-double-sweep` shape reused) so a baseline data edit alone
+ * admits nothing (AGENTS.md shape 38).
  */
 
 import * as fs from "node:fs";
@@ -15,7 +24,10 @@ import {
 	relativePosix,
 } from "../support/sweep-kit.js";
 import {
+	findLatencyLoggerGapsForFile,
 	findViMockExportGaps,
+	isLatencyLoggerSpecifier,
+	latencyAdmissionHeader,
 	type ViMockExportFinding,
 } from "../support/vi-mock-export-gate.js";
 
@@ -33,7 +45,12 @@ function scan(): ViMockExportFinding[] {
 		extensions: [".ts"],
 		exclude: (relative) => relative.startsWith("fixtures/"),
 	});
-	assertNonEmptyScan("#2281 vi.mock export sweep", files.length, 200);
+	// Floor 900 against 1,152 non-fixture `tests/**/*.ts` at authoring time:
+	// well below the live count so normal file growth/removal never trips it,
+	// but a silently dropped directory does. The population is `tests/` source,
+	// which routine processes (e.g. the 4.1.4 `.changelog/` roll that consumed
+	// 151 fragments) never delete, so the floor cannot be swept away with it.
+	assertNonEmptyScan("#2281 vi.mock export sweep", files.length, 900);
 	return files.flatMap((file) =>
 		findViMockExportGaps(file, fs.readFileSync(file, "utf8")),
 	);
@@ -44,12 +61,87 @@ function scanLatencyLoggerSurface(): ViMockExportFinding[] {
 		extensions: [".ts"],
 		exclude: (relative) => relative.startsWith("fixtures/"),
 	});
-	assertNonEmptyScan("#2281 latency-logger mock surface", files.length, 200);
-	return files
-		.flatMap((file) =>
-			findViMockExportGaps(file, fs.readFileSync(file, "utf8"), "all"),
-		)
-		.filter((finding) => finding.specifier.endsWith("latency-logger.js"));
+	// Same 1,152-file population and 900 floor as `scan()` above; see that
+	// comment for calibration. Selection lives in
+	// `findLatencyLoggerGapsForFile` (which itself consumes
+	// `isLatencyLoggerSpecifier`), tested in both directions below — the sweep
+	// holds no inline predicate to delete.
+	assertNonEmptyScan("#2281 latency-logger mock surface", files.length, 900);
+	return files.flatMap((file) =>
+		findLatencyLoggerGapsForFile(file, fs.readFileSync(file, "utf8")),
+	);
+}
+
+/**
+ * Two-part admission for latency pins (shape 38, reused from
+ * `lsp-service-double-sweep`). A baseline key ending in `latency-logger.js`
+ * admits only with an `ADMITTED` reason naming an issue AND a
+ * `// latency-logger-mock: <reason>` header in the file itself. Empty in
+ * steady state: every live latency hit is a `new-file` red until all three
+ * parts land together.
+ */
+const LATENCY_ADMITTED: Readonly<Record<string, string>> = {};
+
+const MIN_LATENCY_REASON = 15;
+
+export function auditLatencyAdmissions(
+	baseline: Readonly<Record<string, number>>,
+	admitted: Readonly<Record<string, string>>,
+	readSource: (file: string) => string | undefined,
+): string[] {
+	const problems: string[] = [];
+	const latencyKeys = Object.keys(baseline).filter((entry) =>
+		entry.includes("latency-logger.js"),
+	);
+	for (const entry of latencyKeys) {
+		const file = entry.split(":")[0];
+		const reason = admitted[entry];
+		if (reason === undefined) {
+			problems.push(
+				`${entry}: pinned latency mock but never admitted. A pin is not a data edit: add an ADMITTED entry naming the issue that tracks it, AND a \`// latency-logger-mock: <reason>\` header in the file itself (AGENTS.md shape 38).`,
+			);
+			continue;
+		}
+		if (reason.trim().length < MIN_LATENCY_REASON) {
+			problems.push(
+				`${entry}: ADMITTED reason is under ${MIN_LATENCY_REASON} characters — say why this mock cannot use the pass-through`,
+			);
+		} else if (!/#\d+/.test(reason)) {
+			problems.push(
+				`${entry}: ADMITTED reason names no issue — an admission must point at tracked work (#NNN)`,
+			);
+		}
+		const source = readSource(file);
+		if (source === undefined) {
+			problems.push(`${entry}: admitted but the file does not exist`);
+			continue;
+		}
+		const header = latencyAdmissionHeader(source);
+		if (!header) {
+			problems.push(
+				`${entry}: admitted in ADMITTED but carries no \`// latency-logger-mock: <reason>\` header. Both parts are required (AGENTS.md shape 38).`,
+			);
+		} else if (header.length < MIN_LATENCY_REASON) {
+			problems.push(
+				`${entry}: its \`// latency-logger-mock:\` header reason is under ${MIN_LATENCY_REASON} characters — a marker is not a reason`,
+			);
+		}
+	}
+	for (const entry of Object.keys(admitted)) {
+		if (!(entry in baseline)) {
+			problems.push(
+				`${entry}: ADMITTED names a latency file with no pin — delete the dead admission`,
+			);
+		}
+	}
+	return problems.sort();
+}
+
+function readRepoSource(file: string): string | undefined {
+	const absolute = path.join(REPO_ROOT, file);
+	return fs.existsSync(absolute)
+		? fs.readFileSync(absolute, "utf8")
+		: undefined;
 }
 
 function key(finding: ViMockExportFinding): string {
@@ -104,6 +196,170 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		// stay green until an untested production call reaches a newly added export.
 		expect(scanLatencyLoggerSurface()).toEqual([]);
 	}, 60_000);
+
+	it("every latency pin carries a reason and the file carries its header", () => {
+		// Shape 38: a latency baseline pin without two-part admission reds.
+		// Steady state has zero latency pins, so this pins the empty state.
+		expect(
+			auditLatencyAdmissions(BASELINE, LATENCY_ADMITTED, readRepoSource),
+		).toEqual([]);
+	});
+
+	it("selects only latency-logger specifiers", () => {
+		// Shape 13 accept AND reject for the #2959 HIGH discriminator: the
+		// selector is the single source the sweep consumes, tested directly.
+		expect(isLatencyLoggerSpecifier("../../clients/latency-logger.js")).toBe(
+			true,
+		);
+		expect(isLatencyLoggerSpecifier("./latency-logger.js")).toBe(true);
+		expect(isLatencyLoggerSpecifier("../../clients/safe-spawn.js")).toBe(false);
+		expect(isLatencyLoggerSpecifier("./module.js")).toBe(false);
+	});
+
+	it("finds a synthetic latency-logger gap through the latency pipeline", () => {
+		// #2959 HIGH positive control: the latency pipeline (not just the
+		// generic detector) must red on a bad latency mock, so deleting the
+		// discriminator in `vi-mock-export-gate.ts` reds here. Specifier is
+		// exactly `latency-logger.js`.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(
+				path.join(root, "latency-logger.ts"),
+				"export const a = 1;\nexport const b = 2;\n",
+			);
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./latency-logger.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./latency-logger.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findLatencyLoggerGapsForFile(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("passes a latency pass-through through the latency pipeline", () => {
+		// Accept twin of the latency reject above: a complete pass-through
+		// must not flag, or the positive control would prove only that the
+		// pipeline flags everything.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(
+				path.join(root, "latency-logger.ts"),
+				"export const b = 1;\n",
+			);
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./latency-logger.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.mock("./latency-logger.js", async (importOriginal) => ({ ...(await importOriginal()), a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findLatencyLoggerGapsForFile(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags an out-of-line const factory with an omitted export", () => {
+		// #2959 MEDIUM spelling 1 (the review's): the factory binding lives
+		// outside the `vi.mock` call and must resolve to its body, not pass.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nconst factory = () => ({ a: 1 });\nvi.mock("./module.js", factory);\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags an imported factory the file cannot resolve", () => {
+		// #2959 MEDIUM spelling 2 (ours, not the review's): a re-exported or
+		// imported factory has no local body to prove complete, so the guard
+		// fails closed. Same semantic rule as the const binding above — "prove
+		// complete or flag" — not a second enumerated spelling.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			fs.writeFileSync(
+				path.join(root, "factory.ts"),
+				"export const factory = () => ({ a: 1 });\n",
+			);
+			const source =
+				'import "./importer.js";\nimport { factory } from "./factory.js";\nvi.mock("./module.js", factory);\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("passes an out-of-line pass-through factory", () => {
+		// Accept twin for the out-of-line rejects: a resolvable complete
+		// pass-through must not flag, proving resolution checks the body
+		// rather than flagging every identifier factory.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nconst factory = async (importOriginal) => ({ ...(await importOriginal()), a: 1 });\nvi.mock("./module.js", factory);\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a bracket-access mock with an omitted export", () => {
+		// Own evasion attempt, third spelling: `vi["mock"]` is the same seam
+		// as `vi.mock` with different surface spelling. The detector reads the
+		// member-expression fields, never the callee text, so both red.
+		const root = fs.mkdtempSync(path.join(REPO_ROOT, ".probe-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export { b };\n',
+			);
+			const source =
+				'import "./importer.js";\nvi["mock"]("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 
 	it("flags an export used by a production importer", () => {
 		// Regression #2782: importer-use mode must not miss an indirect named import.
@@ -963,4 +1219,114 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		},
 		60_000,
 	);
+});
+
+describe("#2281 latency admission gate — the state space", () => {
+	const NEW =
+		'tests/clients/fresh-latency.test.ts:../../clients/latency-logger.js:["logLatency"]';
+	const GOOD_REASON = "bare mock required, tracked in #2281";
+	const header = (reason: string) =>
+		`// latency-logger-mock: ${reason}\nconst x = 1;\n`;
+	const noSource = () => undefined;
+	const withHeader = (reason: string) => () => header(reason);
+
+	it("a bare latency pin with no admission reds", () => {
+		const problems = auditLatencyAdmissions(
+			{ [NEW]: 1 },
+			{},
+			withHeader(GOOD_REASON),
+		);
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toContain("never admitted");
+	});
+
+	it("an ADMITTED entry without the file header reds", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				() => "const x = 1;\n",
+			),
+		).toEqual([expect.stringContaining("carries no `// latency-logger-mock:")]);
+	});
+
+	it("both parts present with a real reason passes", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				withHeader(GOOD_REASON),
+			),
+		).toEqual([]);
+	});
+
+	it("an empty ADMITTED reason reds", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: "   " },
+				withHeader(GOOD_REASON),
+			),
+		).toEqual([expect.stringContaining("under 15 characters")]);
+	});
+
+	it("an ADMITTED reason naming no issue reds", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: "this one is special, honestly" },
+				withHeader(GOOD_REASON),
+			),
+		).toEqual([expect.stringContaining("names no issue")]);
+	});
+
+	it("a header reason too short to be real reds", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				withHeader("todo"),
+			),
+		).toEqual([expect.stringContaining("a marker is not a reason")]);
+	});
+
+	it("an ADMITTED entry with no pin reds as a dead admission", () => {
+		expect(
+			auditLatencyAdmissions({}, { [NEW]: GOOD_REASON }, noSource),
+		).toEqual([expect.stringContaining("no pin — delete the dead admission")]);
+	});
+
+	it("a latency header inside a string is not a header", () => {
+		// Same comment/string discriminator as the `lsp-double` gate: a marker
+		// inside a literal must not admit a file.
+		expect(
+			auditLatencyAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				() => 'const text = "// latency-logger-mock: tracked in #2281";\n',
+			),
+		).toEqual([expect.stringContaining("carries no `// latency-logger-mock:")]);
+		expect(latencyAdmissionHeader(header(GOOD_REASON))).toBe(GOOD_REASON);
+		expect(
+			latencyAdmissionHeader(
+				'const text = "// latency-logger-mock: tracked in #2281";\n',
+			),
+		).toBeUndefined();
+	});
+
+	it("a non-latency pin needs no latency admission", () => {
+		expect(
+			auditLatencyAdmissions(
+				{ ['tests/clients/x.test.ts:../../clients/safe-spawn.js:["a"]']: 1 },
+				{},
+				noSource,
+			),
+		).toEqual([]);
+	});
+
+	it("admits a vanished file only as a problem", () => {
+		expect(
+			auditLatencyAdmissions({ [NEW]: 1 }, { [NEW]: GOOD_REASON }, noSource),
+		).toEqual([expect.stringContaining("the file does not exist")]);
+	});
 });
