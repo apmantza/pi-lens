@@ -134,7 +134,7 @@ export async function resolveLspServerCwd(
 		return resolveToolCwd("lsp", server.id, filePath, {
 			cwd: path.dirname(path.resolve(filePath)),
 			rootMarkers,
-		});
+		}).cwd;
 	}
 	const boundedServerRoot = enforceLspRootCeiling(
 		serverRoot,
@@ -145,7 +145,7 @@ export async function resolveLspServerCwd(
 		cwd: sessionCwd,
 		rootMarkers,
 		serverRoot: boundedServerRoot,
-	});
+	}).cwd;
 }
 
 const FIXTURE_ROOT_SEGMENTS = new Set(["__fixtures__", "testdata"]);

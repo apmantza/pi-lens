@@ -150,6 +150,48 @@ describe("analyze-pi-lens-logs.mjs", () => {
 				filePath: "/proj/b/x.ts",
 				durationMs: 3000,
 			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/a",
+				durationMs: 0,
+				metadata: { sessionId: "session-a", stale: true },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/a",
+				durationMs: 0,
+				metadata: { sessionId: "session-a", stale: false },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/unknown",
+				durationMs: 0,
+				metadata: {
+					sessionId: "all-unknown",
+					verdictCount: 0,
+					staleCount: 0,
+					unknownCount: 40,
+				},
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "test_runner_verdict_delivery",
+				filePath: "/proj/fresh",
+				durationMs: 0,
+				metadata: {
+					sessionId: "all-fresh",
+					verdictCount: 40,
+					staleCount: 0,
+					unknownCount: 0,
+				},
+			},
 		]
 			.map((e) => JSON.stringify(e))
 			.join("\n");
@@ -319,6 +361,35 @@ describe("analyze-pi-lens-logs.mjs", () => {
 		expect(report.latency.runnerBlockingFindings).toEqual({
 			lsp: 1,
 			"biome-check-json": 1,
+		});
+	});
+
+	it("reports stale test-runner verdict rate per session", () => {
+		expect(report.latency.testRunnerVerdicts["session-a"]).toEqual({
+			total: 2,
+			stale: 1,
+			unknown: 0,
+			denominator: 2,
+			rate: 0.5,
+		});
+	});
+
+	it("distinguishes all-unknown verdicts from all-fresh verdicts", () => {
+		// Regression for the analyzer dropping producer-emitted unknownCount and
+		// making an unestablished population look like an all-fresh population.
+		expect(report.latency.testRunnerVerdicts["all-unknown"]).toEqual({
+			total: 0,
+			stale: 0,
+			unknown: 40,
+			denominator: 0,
+			rate: 0,
+		});
+		expect(report.latency.testRunnerVerdicts["all-fresh"]).toEqual({
+			total: 40,
+			stale: 0,
+			unknown: 0,
+			denominator: 40,
+			rate: 0,
 		});
 	});
 

@@ -917,7 +917,7 @@ export function resolveFormatterCwd(
 		// ceiling prevents it from escaping the user's workspace.
 		cwd: path.parse(path.resolve(absolutePath)).root,
 		homeDir,
-	});
+	}).cwd;
 }
 
 /**
@@ -2306,7 +2306,12 @@ export async function formatFile(
 	try {
 		const absolutePath = path.resolve(filePath);
 		const cwd = path.dirname(absolutePath);
-		const formatterCwd = resolveFormatterCwd(absolutePath, formatter.name);
+		const formatterCwd = resolveToolCwd(
+			"formatter",
+			formatter.name,
+			absolutePath,
+			{ cwd: path.parse(absolutePath).root },
+		).cwd;
 		const contentBefore = await fs.readFile(absolutePath, "utf-8");
 
 		// Resolve command: prefer local (venv/vendor/node_modules) over global.

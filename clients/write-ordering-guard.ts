@@ -47,6 +47,14 @@ export class WriteOrderingGuard<K, T extends number = number> {
 		return true;
 	}
 
+	/** Allocate the next ordered position for a writer admitted without a token. */
+	nextToken(key: K): T {
+		const last = this.lastSeen.get(key);
+		const next = ((last ?? (0 as T)) as number) + 1;
+		this.lastSeen.set(key, next as T);
+		return next as T;
+	}
+
 	/** Drop tracked ordering state for `key` (e.g. on cache eviction). */
 	delete(key: K): void {
 		this.lastSeen.delete(key);

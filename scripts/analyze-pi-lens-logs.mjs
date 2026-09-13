@@ -195,6 +195,7 @@ function createState(files) {
 		projects: counter(),
 		smellTotals: counter(),
 		latency: {
+			testRunnerVerdicts: new Map(),
 			runnerStatus: counter(),
 			runnerFailureKinds: counter(),
 			runnerBlockingFindings: counter(),
@@ -381,6 +382,22 @@ async function analyzeLatency(files, state) {
 				const phase = entry.phase ?? "unknown";
 				state.latency.phaseCounts.inc(phase);
 				if (phase.endsWith("_timeout")) state.latency.phaseTimeouts.inc(phase);
+				if (phase === "test_runner_verdict_delivery") {
+					const sessionId = entry.metadata?.sessionId ?? "unknown";
+					const summary = state.latency.testRunnerVerdicts.get(sessionId) ?? {
+						total: 0,
+						stale: 0,
+						unknown: 0,
+					};
+					const verdictCount = entry.metadata?.verdictCount;
+					const staleCount = entry.metadata?.staleCount;
+					const unknownCount = entry.metadata?.unknownCount;
+					summary.total += typeof verdictCount === "number" ? verdictCount : 1;
+					if (typeof staleCount === "number") summary.stale += staleCount;
+					else if (entry.metadata?.stale === true) summary.stale += 1;
+					if (typeof unknownCount === "number") summary.unknown += unknownCount;
+					state.latency.testRunnerVerdicts.set(sessionId, summary);
+				}
 				if (phase === "config_resolved") {
 					// #2526. Counted here rather than derived from phaseCounts so the
 					// legacy/record cross-check reads the same row it counts.
@@ -1481,6 +1498,18 @@ function buildReport(state) {
 			shownInlineShownAgentUnresolved: state.diagnostics.shownInline.toJSON(),
 		},
 		latency: {
+			testRunnerVerdicts: Object.fromEntries(
+				[...state.latency.testRunnerVerdicts.entries()].map(
+					([sessionId, summary]) => [
+						sessionId,
+						{
+							...summary,
+							denominator: summary.total,
+							rate: summary.total ? summary.stale / summary.total : 0,
+						},
+					],
+				),
+			),
 			runnerStatus: state.latency.runnerStatus.top(limit * 2),
 			runnerFailureKinds: state.latency.runnerFailureKinds.top(limit * 2),
 			runnerBlockingFindings: state.latency.runnerBlockingFindings.toJSON(),
@@ -1672,6 +1701,17 @@ function printReport(report) {
 		report.latency.runnerFailureKinds,
 		(x) => `${x.count.toString().padStart(5)}  ${x.key}`,
 	);
+	const verdictSessions = Object.entries(
+		report.latency.testRunnerVerdicts ?? {},
+	);
+	if (verdictSessions.length) {
+		console.log("\nTest-runner stale verdicts per session");
+		for (const [sessionId, summary] of verdictSessions) {
+			console.log(
+				`  ${sessionId}: ${summary.stale}/${summary.total} stale (${(summary.rate * 100).toFixed(1)}%)`,
+			);
+		}
+	}
 
 	const a = report.actionable;
 	if (a.reports || a.advisoriesInjected) {

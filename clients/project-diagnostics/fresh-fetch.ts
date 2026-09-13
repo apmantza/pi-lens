@@ -151,6 +151,11 @@ export interface FreshProjectDiagnosticsResult {
 	 * their own distinct "stopped mid-scan" reason at the render layer.
 	 */
 	coldReasons?: Record<string, string>;
+	/** Extractor ids that ran but have incomplete coverage. Findings remain
+	 * visible, but their result must not be presented as a complete scan. */
+	partial?: string[];
+	/** Specific reason for each incomplete-coverage result. */
+	partialReasons?: Record<string, string>;
 	/**
 	 * #1623: ms-old each id's data was when this call read it, keyed by
 	 * extractor id — present only for lanes that are a cache-read BY DESIGN
@@ -360,6 +365,8 @@ export async function fetchFreshProjectDiagnostics(
 	// #1623: the specific reason each `cold` id was skipped, captured at the
 	// gate that decided it — see FreshProjectDiagnosticsResult.coldReasons.
 	const coldReasons: Record<string, string> = {};
+	const partial: string[] = [];
+	const partialReasons: Record<string, string> = {};
 	const failed: FailedProjectAnalyzer[] = [];
 	const timings: Record<string, number> = {};
 	// #1623: ms-old each id's data was when this call read it, for lanes that
@@ -386,6 +393,11 @@ export async function fetchFreshProjectDiagnostics(
 	function markCold(id: string, reason: string): void {
 		pushUnique(cold, id);
 		coldReasons[id] = reason;
+	}
+
+	function markPartial(id: string, reason: string): void {
+		pushUnique(partial, id);
+		partialReasons[id] = reason;
 	}
 
 	/**
@@ -686,6 +698,41 @@ export async function fetchFreshProjectDiagnostics(
 				recordFailed("opengrep", result);
 				return;
 			}
+			if (result.analyzed !== true) {
+				// A usable partial report with no scanned paths carries findings but
+				// no retirement authority. Keep those findings visible and mark the
+				// producer partial so the renderer does not call it cold/not-run.
+				const reason =
+					result.summary ??
+					result.reason ??
+					"opengrep did not analyse this root";
+				if (result.partial) markPartial("opengrep", reason);
+				else markCold("opengrep", reason);
+				record(
+					"opengrep",
+					opengrepResultToProjectDiagnostics(analysisRoot, result),
+					Date.now() - startMs,
+					false,
+					result,
+				);
+				return;
+			}
+			if (result.partial) {
+				markPartial(
+					"opengrep",
+					result.summary ??
+						result.reason ??
+						"opengrep scan coverage is incomplete",
+				);
+				record(
+					"opengrep",
+					opengrepResultToProjectDiagnostics(analysisRoot, result),
+					Date.now() - startMs,
+					true,
+					result,
+				);
+				return;
+			}
 			cacheManager.writeCache("opengrep", result, analysisRoot, {
 				scanDurationMs: Date.now() - startMs,
 			});
@@ -874,6 +921,8 @@ export async function fetchFreshProjectDiagnostics(
 			authoritativeCoverage,
 			cold,
 			coldReasons,
+			partial,
+			partialReasons,
 			failed,
 			timings,
 			cachedAgeMs,
@@ -892,6 +941,8 @@ export async function fetchFreshProjectDiagnostics(
 		authoritativeCoverage,
 		cold,
 		coldReasons,
+		partial,
+		partialReasons,
 		failed,
 		timings,
 		cachedAgeMs,

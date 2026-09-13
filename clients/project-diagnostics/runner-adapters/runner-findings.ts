@@ -41,6 +41,8 @@ import {
 export interface DeferredTestTarget {
 	/** Absolute path to the test file that did not get to run. */
 	testFile: string;
+	/** Source file whose sequence was captured for the deferred run. */
+	sourceFile?: string;
 	/** `RUNNERS` key, re-resolved to a `RunnerConfig` on the next turn. */
 	runner: string;
 	/**
@@ -71,6 +73,8 @@ export interface TestRunnerFindingsCache {
 	content: string;
 	stale?: boolean;
 	results?: TestResult[];
+	/** Sequence captured for each verdict's source file at dispatch time. */
+	verdicts?: TestRunnerVerdict[];
 	testRunGeneration?: number;
 	launchedFrom?: AdvisoryProvenance;
 	publishedAgainst?: AdvisoryProvenance;
@@ -117,6 +121,19 @@ export interface TestRunnerFindingsCache {
 		eligibleAt: number;
 	};
 }
+
+export interface TestRunnerVerdict {
+	file: string;
+	sourceFile: string;
+	fileSeq?: TestRunnerFileSequence;
+}
+
+export type TestRunnerFileSequence =
+	| { state: "known"; value: number }
+	| {
+			state: "unknown";
+			reason: "legacy-cache-record" | "sequence-unavailable";
+	  };
 
 function failureMessage(failure: TestFailure): string {
 	const firstLine = failure.message.split("\n")[0]?.slice(0, 300) ?? "";

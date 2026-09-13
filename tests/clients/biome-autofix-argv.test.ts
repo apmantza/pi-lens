@@ -68,6 +68,8 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 	});
 
 	it("autofix resolves the same nested package root as the runner seam", async () => {
+		// Recurrence: folding RUNNER_MARKERS into the language table dropped
+		// Biome's biome.json marker and sent autofix back to the workspace root.
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-biome-nested-"),
 		);

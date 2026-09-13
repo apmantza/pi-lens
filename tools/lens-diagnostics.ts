@@ -317,6 +317,7 @@ export function createLensDiagnosticsTool(
 			totalWarnings?: number;
 			totalAdvisories?: number;
 			coldRunners?: string[];
+			partialRunners?: string[];
 			failedAnalyzers?: { id: string; summary: string }[];
 			source?: string;
 			totalDiagnostics?: number;
@@ -2624,6 +2625,7 @@ async function formatFullMode(
 	// isn't (a re-run may well complete for that analyzer).
 	const abortedIds = new Set(extracted.abortedIds ?? []);
 	const genuinelyColdIds = extracted.cold.filter((id) => !abortedIds.has(id));
+	const partialIds = extracted.partial ?? [];
 	// #747: an unsafe analysis root (cwd at/above $HOME) skips ALL heavyweight
 	// analyzers before anything spawns — rendering that as the per-analyzer
 	// "not applicable / unavailable" list would send the caller chasing seven
@@ -2657,6 +2659,17 @@ async function formatFullMode(
 								", ",
 							)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
 					: "";
+	const partialNote =
+		partialIds.length > 0
+			? `\n\n⚠ partial coverage (findings included): ${partialIds
+					.map(
+						(id) =>
+							`${id} — ${extracted.partialReasons?.[id] ?? "coverage is incomplete"}`,
+					)
+					.join(
+						", ",
+					)}. Coverage is incomplete, so absence of findings is NOT a clean verdict.`
+			: "";
 	// #1004: unlike every other analyzer above (knip/jscpd/madge/gitleaks/
 	// govulncheck/opengrep/trivy/dead-code all run a FRESH whole-project scan
 	// per the fresh-fetch.ts header, so "clean" there really does mean "the
@@ -2801,6 +2814,7 @@ async function formatFullMode(
 		details: {
 			...result.details,
 			coldRunners: extracted.cold,
+			partialRunners: partialIds,
 			// #1623: the specific reason each cold id was skipped (single source
 			// of truth: extractors.ts's `formatNotRunEntry` renders the same map
 			// into the text note above) — lets a caller check WHY without parsing
@@ -2889,6 +2903,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						auxiliaryCoverageNote +
 						lspPrimaryVsAuxiliaryNote +
+						partialNote +
 						coldNote +
 						testRunnerEditScopedNote +
 						failedNote +
@@ -2909,6 +2924,7 @@ async function formatFullMode(
 	if (
 		missingNote ||
 		coldNote ||
+		partialNote ||
 		testRunnerEditScopedNote ||
 		failedNote ||
 		dispositionSuppressedNote ||
@@ -2932,6 +2948,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						auxiliaryCoverageNote +
 						lspPrimaryVsAuxiliaryNote +
+						partialNote +
 						coldNote +
 						testRunnerEditScopedNote +
 						failedNote +

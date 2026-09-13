@@ -10,8 +10,12 @@
 
 import type { CacheManager } from "./cache-manager.js";
 import { emitBounded } from "./bounded-telemetry.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
+import { logLatency } from "./latency-logger.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { consumeTestFindings, peekTestFindings } from "./runtime-context.js";
+import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
+import type { TestRunnerFileSequence } from "./project-diagnostics/runner-adapters/runner-findings.js";
 
 const MAX_PENDING_DELIVERIES = 32;
 
@@ -28,6 +32,53 @@ interface PendingDelivery {
 }
 
 const pending = new Map<string, PendingDelivery>();
+
+function logDeliveredVerdicts(
+	cacheManager: CacheManager,
+	cwd: string,
+	runtime: RuntimeCoordinator,
+	delivery: PendingDelivery,
+): void {
+	const verdicts = cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		cwd,
+	)?.data?.verdicts;
+	let knownCount = 0;
+	let staleCount = 0;
+	let unknownCount = 0;
+	for (const verdict of verdicts ?? []) {
+		const evidence: TestRunnerFileSequence = verdict.fileSeq ?? {
+			state: "unknown",
+			reason: "legacy-cache-record",
+		};
+		if (evidence.state === "unknown") {
+			unknownCount += 1;
+			recordDegradationOnce({
+				kind: "test-runner-delivery",
+				subject: `${delivery.sessionId}:${verdict.sourceFile}`,
+				reason: `missing file sequence evidence (${evidence.reason})`,
+			});
+			continue;
+		}
+		knownCount += 1;
+		const currentFileSeq = runtime.getFileSeq(verdict.sourceFile);
+		if (currentFileSeq > evidence.value) staleCount += 1;
+	}
+	if (knownCount === 0 && unknownCount === 0) return;
+	logLatency({
+		type: "phase",
+		phase: "test_runner_verdict_delivery",
+		filePath: cwd,
+		durationMs: 0,
+		metadata: {
+			sessionId: delivery.sessionId,
+			generation: delivery.generation,
+			verdictCount: knownCount,
+			staleCount,
+			unknownCount,
+		},
+	});
+}
 
 export interface TestRunnerDeliveryOwner {
 	ownerId: string;
@@ -315,6 +366,7 @@ export function consumeStagedTestRunnerFindings(args: {
 		record(deliveryKey, "superseded", delivery, { currentGeneration });
 		return undefined;
 	}
+	logDeliveredVerdicts(args.cacheManager, args.cwd, args.runtime, delivery);
 	const findings = consumeTestFindings(
 		args.cacheManager,
 		args.cwd,

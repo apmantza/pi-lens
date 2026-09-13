@@ -28,7 +28,10 @@ import {
 	type CodeQualityWarningRecord,
 } from "./code-quality-warnings.js";
 import type { BiomeClient } from "./biome-client.js";
-import { recordDiagnostics } from "./widget-state.js";
+import {
+	admitWidgetDiagnosticsWrite,
+	recordDiagnostics,
+} from "./widget-state.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
@@ -1399,6 +1402,7 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
 	const { filePath, cwd, toolName, getFlag, getFlagSource, dbg } = ctx;
 	const { getFormatService } = deps;
+	admitWidgetDiagnosticsWrite(filePath, ctx.telemetry?.writeIndex);
 
 	const phase = createPhaseTracker(toolName, filePath);
 	const pipelineStart = Date.now();

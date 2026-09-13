@@ -71,6 +71,8 @@ const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 
 const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	jsts: [
+		"biome.json",
+		"biome.jsonc",
 		"package.json",
 		"tsconfig.json",
 		"jsconfig.json",
@@ -119,6 +121,31 @@ const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	csharp: DOTNET_CSHARP_ROOT_MARKERS,
 	fsharp: DOTNET_FSHARP_ROOT_MARKERS,
 };
+
+// Tool-owned configuration belongs beside the shared language vocabulary, but
+// not in ROOT_MARKERS_BY_KIND: these files are discovered by the tool, not by
+// the language root detector. Keeping them here lets runner cwd resolution
+// consume one canonical vocabulary without restoring a second seam-local map.
+const TOOL_MARKERS_BY_RUNNER: Readonly<Record<string, readonly string[]>> = {
+	ruff: ["ruff.toml", ".ruff.toml"],
+	oxlint: [".oxlintrc.json", "oxlint.config.js"],
+	"spellcheck/typos": ["_typos.toml", "typos.toml"],
+	yamllint: ["yamllint.yaml", "yamllint.yml"],
+	prettier: [".prettierignore"],
+};
+
+/** Return the one shared marker vocabulary used to anchor this file kind. */
+export function rootMarkersForFile(
+	filePath: string,
+	runner?: string,
+): readonly string[] {
+	const kind = detectFileKind(path.resolve(filePath));
+	const languageMarkers = kind ? (ROOT_MARKERS_BY_KIND[kind] ?? []) : [];
+	const toolMarkers = runner ? (TOOL_MARKERS_BY_RUNNER[runner] ?? []) : [];
+	return toolMarkers.length
+		? [...new Set([...languageMarkers, ...toolMarkers])]
+		: languageMarkers;
+}
 
 function hasProjectMarker(projectRoot: string, marker: string): boolean {
 	if (!marker.includes("*"))
@@ -239,7 +266,7 @@ export function resolveLanguageRootForFile(
 	const kind = detectFileKind(absoluteFilePath);
 	if (!kind) return path.resolve(workspaceRoot);
 
-	const markers = ROOT_MARKERS_BY_KIND[kind];
+	const markers = rootMarkersForFile(absoluteFilePath);
 	if (!markers || markers.length === 0) {
 		return path.resolve(workspaceRoot);
 	}

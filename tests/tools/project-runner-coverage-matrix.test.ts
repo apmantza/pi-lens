@@ -77,6 +77,28 @@ describe("project runner coverage state space (#2887)", () => {
 			),
 		).toBe("retire");
 	});
+	// Recurrence: a cold producer must not use the completed-empty fallback.
+	it("coverage state: partial cold producer keeps retained finding", () => {
+		expect(
+			runnerRetirementDecision(
+				diagnostic("opengrep"),
+				"/proj/retained.py",
+				new Set(),
+				undefined,
+			),
+		).toBe("keep");
+	});
+
+	it("coverage state: complete empty scan retires by runner identity", () => {
+		expect(
+			runnerRetirementDecision(
+				diagnostic("opengrep"),
+				"/proj/retained.py",
+				new Set(["opengrep"]),
+				covered("opengrep"),
+			),
+		).toBe("retire");
+	});
 	it("coverage state: no evidence ok fresh uses id gate", () => {
 		expect(
 			runnerRetirementDecision(

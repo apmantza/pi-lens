@@ -2766,6 +2766,45 @@ describe("lens_diagnostics mode=full", () => {
 		).toContain("knip");
 	});
 
+	// Recurrence: a real Opengrep partial report can carry findings without a
+	// complete scanned-path set; the renderer must not call that result cold.
+	it("mode=full renders partial Opengrep findings with incomplete coverage", async () => {
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [
+				{
+					filePath: "/proj/src/a.py",
+					line: 1,
+					column: 1,
+					severity: "warning",
+					semantic: "warning",
+					tool: "opengrep",
+					runner: "opengrep",
+					rule: "opengrep:danger",
+					message: "partial finding",
+					source: "project-scan",
+				},
+			],
+			runners: ["opengrep"],
+			analyzed: [],
+			cold: [],
+			partial: ["opengrep"],
+			partialReasons: { opengrep: "invalid UTF-8" },
+			timings: { opengrep: 4 },
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("partial finding");
+		expect(text).toContain("partial coverage (findings included): opengrep");
+		expect(text).toContain("Coverage is incomplete");
+		expect(text).not.toContain("opengrep — not run");
+		expect(
+			(result.details as { partialRunners?: string[] }).partialRunners,
+		).toEqual(["opengrep"]);
+	});
+
 	it("mode=full renders failed analyzers as unknown, not clean (#925)", async () => {
 		const lspService = {
 			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),

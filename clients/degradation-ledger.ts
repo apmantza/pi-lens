@@ -10,6 +10,7 @@ import {
 import { logLatency } from "./latency-logger.js";
 import {
 	getSinkRotations,
+	getSinkOptionConflicts,
 	getSinkWriteFailures,
 	resetSinkRotations,
 	resetSinkWriteFailures,
@@ -274,6 +275,8 @@ export type DegradationKind =
 	| "instance-registry-corrupt"
 	/** A didChange content mirror was recorded behind a newer document version. */
 	| "lens-diagnostics-analysis-root-rejected"
+	/** Cross-graph rotation options disagreed; the first writer retained ownership. */
+	| "log-sink-option-conflict"
 	| "log-sink-rotate-failed"
 	| "log-sink-rotated"
 	| "log-sink-write-failure"
@@ -938,6 +941,7 @@ export type DegradationKind =
 	 * `skills/` path; see `clients/skills-resolver.ts`.
 	 */
 	| "web-tree-sitter-load-failed"
+	| "widget-disposition-reconcile-fallback"
 	/**
 	 * #2636 (the #2626 class sweep's ast-grep leg): `AstGrepClient`'s
 	 * `ruleDir` fell back to `resolvePackagePath(import.meta.url, "rules")`
@@ -1217,6 +1221,20 @@ export function getDegradationSummary(): DegradationGroup[] {
 				subject: truncateForLedger(sink.file),
 				reason: truncateForLedger(
 					`${sink.failureCount} failed rotation attempt(s); this sink is growing past its byte bound`,
+				),
+			})),
+		});
+	}
+	const optionConflicts = getSinkOptionConflicts();
+	if (optionConflicts.length > 0) {
+		summary.push({
+			kind: "log-sink-option-conflict",
+			count: optionConflicts.length,
+			droppedCount: 0,
+			latestReasons: optionConflicts.map((sink) => ({
+				subject: truncateForLedger(sink.file),
+				reason: truncateForLedger(
+					"shared writer rotation options differed across module graphs; first writer retained ownership",
 				),
 			})),
 		});

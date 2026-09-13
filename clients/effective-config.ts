@@ -602,7 +602,7 @@ async function fileView(
 			resolveToolCwd("runner", id, absolute, {
 				cwd: workspaceCwd,
 				suppressTelemetry: true,
-			}),
+			}).cwd,
 			homeDir,
 		),
 	}));

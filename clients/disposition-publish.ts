@@ -47,6 +47,7 @@ export interface PilensDispositionPayload {
 	line?: number;
 	anchor: string;
 	reason?: string;
+	message?: string;
 }
 
 const liveEmitter = createLiveBusEmitter();
@@ -89,6 +90,7 @@ export interface PublishDispositionArgs {
 	line?: number;
 	anchor: string;
 	reason?: string;
+	message?: string;
 	dbg?: (msg: string) => void;
 }
 
@@ -138,6 +140,7 @@ export function publishDisposition(args: PublishDispositionArgs): void {
 			line: args.line,
 			anchor: args.anchor,
 			reason: args.reason,
+			message: args.message,
 		};
 		busEmit(BUS_DISPOSITION_EVENT, payload);
 		hasLoggedFailure = false;
