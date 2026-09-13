@@ -82,6 +82,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { BootstrapClients } from "../bootstrap.js";
 import type { CacheManager } from "../cache-manager.js";
@@ -89,6 +90,8 @@ import type { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { applyDispositionsMultiFile } from "../diagnostic-dispositions.js";
 import { getKnipIgnorePatterns } from "../file-utils.js";
 import { isAtOrAboveHomeDir, realpathOrResolve } from "../path-utils.js";
+import { isSameOrWithin } from "../lsp/server.js";
+import { incrementDegradationCount } from "../degradation-ledger.js";
 import { GitleaksClient } from "../gitleaks-client.js";
 import { GovulncheckClient } from "../govulncheck-client.js";
 import {
@@ -111,6 +114,8 @@ import type { ProjectDiagnostic } from "./types.js";
 import type { FailedProjectAnalyzer } from "./extractors.js";
 
 export interface FreshProjectDiagnosticsResult {
+	/** The single validation result shared by all explicit-root consumers. */
+	analysisRootValidation?: AnalysisRootValidation;
 	diagnostics: ProjectDiagnostic[];
 	/** Extractor ids that actually contributed findings this run. */
 	runners: string[];
@@ -172,6 +177,8 @@ export interface FreshProjectDiagnosticsResult {
 	 *  nothing was spawned. Kept separate from the per-analyzer skip reasons so
 	 *  a caller can render "unsafe root" instead of "not applicable". */
 	unsafeRoot?: boolean;
+	/** True when an explicit analysis root was missing or was not a directory. */
+	analysisRootError?: string;
 	/**
 	 * Count of findings dropped by an agent/user disposition (false-positive
 	 * or suppress mark — #1617) before landing in `diagnostics`. Every
@@ -192,6 +199,11 @@ export interface FreshProjectDiagnosticsResult {
 	 */
 	dispositionSuppressedByLane?: Record<string, number>;
 }
+
+export type AnalysisRootValidation =
+	| { state: "safe"; root: string }
+	| { state: "unsafe"; root: string; reason: string }
+	| { state: "undecided"; root?: string; reason: string };
 
 export interface ProjectRunnerCoverage {
 	runnerId: string;
@@ -239,9 +251,53 @@ export async function fetchFreshProjectDiagnostics(
 	cwd: string,
 	clients: BootstrapClients,
 	signal?: AbortSignal,
-	options: { homeDir?: string; runtime?: RuntimeCoordinator } = {},
+	options: {
+		homeDir?: string;
+		runtime?: RuntimeCoordinator;
+		analysisRoot?: string;
+	} = {},
 ): Promise<FreshProjectDiagnosticsResult> {
-	const analysisRoot = realpathOrResolve(cwd);
+	const requestedRoot =
+		options.analysisRoot === undefined
+			? cwd
+			: path.resolve(cwd, options.analysisRoot);
+	let analysisRoot: string;
+	let analysisRootValidation: AnalysisRootValidation;
+	if (options.analysisRoot !== undefined) {
+		try {
+			if (!fs.statSync(requestedRoot).isDirectory()) {
+				throw new Error("is not a directory");
+			}
+			analysisRoot = fs.realpathSync(requestedRoot);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			const reason = `the explicit analysis root ${requestedRoot} is unavailable or ${detail}`;
+			analysisRootValidation = {
+				state: "undecided",
+				root: requestedRoot,
+				reason,
+			};
+			incrementDegradationCount({
+				kind: "lens-diagnostics-analysis-root-rejected",
+				subject: requestedRoot,
+				reason,
+			});
+			return {
+				analysisRootValidation,
+				diagnostics: [],
+				runners: [],
+				analyzed: [],
+				authoritativeCoverage: [],
+				cold: [...ANALYZER_IDS],
+				coldReasons: Object.fromEntries(ANALYZER_IDS.map((id) => [id, reason])),
+				failed: [],
+				timings: {},
+				analysisRootError: reason,
+			};
+		}
+	} else {
+		analysisRoot = realpathOrResolve(cwd);
+	}
 	// #747: refuse to spawn any heavyweight analyzer when the analysis root is
 	// at — or above — the home directory (the #250/#253 escape class). Every
 	// analyzer here treats `analysisRoot` as a whole tree to walk; from $HOME
@@ -252,9 +308,37 @@ export async function fetchFreshProjectDiagnostics(
 	// substitute root to fall back to — the caller's `paths` scope only filters
 	// REPORTED results, it never narrows what these analyzers walk.
 	const unsafeRootReason =
-		"the working directory resolves at or above the home directory; heavyweight analyzers refuse to walk from there (#747)";
-	if (isAtOrAboveHomeDir(analysisRoot, options.homeDir)) {
+		"the analysis root resolves at or above the home directory; heavyweight analyzers refuse to walk from there (#747)";
+	const homeRoot = realpathOrResolve(options.homeDir ?? os.homedir());
+	if (options.analysisRoot !== undefined) {
+		const unsafeExplicitRoot =
+			!isSameOrWithin(homeRoot, analysisRoot) ||
+			isSameOrWithin(analysisRoot, homeRoot);
+		analysisRootValidation = unsafeExplicitRoot
+			? {
+					state: "unsafe",
+					root: analysisRoot,
+					reason:
+						"explicit analysis root must be strictly contained by the canonical home directory",
+				}
+			: { state: "safe", root: analysisRoot };
+	} else if (isAtOrAboveHomeDir(analysisRoot, options.homeDir)) {
+		analysisRootValidation = {
+			state: "unsafe",
+			root: analysisRoot,
+			reason: unsafeRootReason,
+		};
+	} else {
+		analysisRootValidation = { state: "safe", root: analysisRoot };
+	}
+	if (analysisRootValidation.state !== "safe") {
+		incrementDegradationCount({
+			kind: "lens-diagnostics-analysis-root-rejected",
+			subject: analysisRoot,
+			reason: analysisRootValidation.reason,
+		});
 		return {
+			analysisRootValidation,
 			diagnostics: [],
 			runners: [],
 			analyzed: [],
@@ -265,7 +349,7 @@ export async function fetchFreshProjectDiagnostics(
 			),
 			failed: [],
 			timings: {},
-			unsafeRoot: true,
+			unsafeRoot: analysisRootValidation.state === "unsafe",
 		};
 	}
 	const diagnostics: ProjectDiagnostic[] = [];
@@ -783,6 +867,7 @@ export async function fetchFreshProjectDiagnostics(
 		const abortedIds = ANALYZER_IDS.filter((id) => !settledIds.has(id));
 		for (const id of abortedIds) pushUnique(cold, id);
 		return {
+			analysisRootValidation,
 			diagnostics,
 			runners,
 			analyzed,
@@ -800,6 +885,7 @@ export async function fetchFreshProjectDiagnostics(
 	}
 
 	return {
+		analysisRootValidation,
 		diagnostics,
 		runners,
 		analyzed,

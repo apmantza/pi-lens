@@ -1269,25 +1269,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"observed path above.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-result.ts#57d3f8bf~32875b26": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-result.ts#734a21b6~69a83146": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#8c164eee~caedcf66": {
 		family: "hook-await",
 		site: "tool_result_edit",
 		reason:
@@ -2308,6 +2290,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",
+	"call:clients/runtime-tool-result.ts#464d2ad3~b4f8a98d":
+		"Observed duplicate-claim joins use the same ToolResultDeps.signal and " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
+	"call:clients/runtime-tool-result.ts#8f7626bd~b4f8a98d":
+		"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
 	"call:clients/runtime-tool-result.ts#b9faf573~b4f8a98d":
 		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
 		"budget; a missing signal is an explicit standalone-harness case.",

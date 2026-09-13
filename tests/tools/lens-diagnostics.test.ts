@@ -654,6 +654,48 @@ describe("lens_diagnostics schema", () => {
 		expect(props.mode).toBeDefined();
 		expect(props.severity).toBeDefined();
 		expect(props.refreshRunners).toBeDefined();
+		expect(props.analysisRoot).toBeDefined();
+	});
+
+	it("passes an explicit analysis root through mode=full (#2053)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "all",
+			analysisRoot: "/home/me/repo",
+		});
+
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).toHaveBeenCalledWith(
+			expect.anything(),
+			"/proj",
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ analysisRoot: "/home/me/repo" }),
+		);
+	});
+
+	it("rejects an invalid explicit analysis root as a failed tool call (#2977 F2)", async () => {
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: [],
+			cold: [],
+			timings: {},
+			failed: [],
+			analysisRootError: "explicit analysis root is unavailable",
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{
+				mode: "full",
+				refreshRunners: "all",
+				analysisRoot: "/missing",
+			},
+		);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		expect(result.content[0].text).toMatch(/unavailable/);
 	});
 
 	it("defaults to delta mode when no params supplied", async () => {

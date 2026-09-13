@@ -166,6 +166,9 @@
 				"includeGenerated": {
 					"type": "boolean"
 				},
+				"analysisRoot": {
+					"type": "string"
+				},
 				"severity": {
 					"type": "string",
 					"enum": [
@@ -517,6 +520,9 @@
 				},
 				"includeGenerated": {
 					"type": "boolean"
+				},
+				"analysisRoot": {
+					"type": "string"
 				},
 				"severity": {
 					"type": "string",

@@ -85,6 +85,9 @@ export const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 		".cu",
 		// HIP
 		".hip",
+		// CUDA/HIP header convention; clang's driver table omits `.cuh`, but
+		// projects use it for C++ headers that must remain in the cxx kind (#2986).
+		".cuh",
 		// Objective-C
 		".m",
 		".mm",
