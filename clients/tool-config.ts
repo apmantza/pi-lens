@@ -1,6 +1,7 @@
 /** Shared resolver for model-facing tool availability (#2800). */
 
 import { readFlagConfigValue } from "./lens-flag-registry.js";
+import { escapeRegExp } from "./string-utils.js";
 
 /** The complete model-facing tool population on pi and MCP. */
 export const TOOL_REGISTRY = [
@@ -151,6 +152,74 @@ export const LENS_TOOL_NAMES = TOOL_REGISTRY.map(
 ) as readonly string[];
 
 export type ToolRegistryEntry = (typeof TOOL_REGISTRY)[number];
+
+export type LensToolHost = "pi" | "mcp";
+
+/**
+ * Registry tools with a pi name but no MCP name are pi-only BY DECLARATION
+ * here, never by omission (#2535 F3). A missing entry used to degrade
+ * silently into the pi name on MCP, sending the agent to a dead call — the
+ * guard in tests/clients/adapter-aware-tool-names.test.ts fails on any
+ * pi-only row absent from this map, and `resolveLensToolName` resolves a
+ * known-but-unmapped host to `undefined` so callers omit instead of naming.
+ */
+export const PI_ONLY_TOOL_REASONS: Record<string, string> = {
+	ast_grep_outline:
+		"pi situational tool with no MCP mirror; MCP parity deferred like read_enclosing was.",
+	lens_diagnostic_mark:
+		"pi-lens-internal disposition tool; MCP has no equivalent surface (needs its own engine seam and tool route).",
+	pi_lens_activate_tools:
+		"pi dynamic-tooling loader; MCP lists every tool statically, so there is nothing to activate.",
+};
+
+/**
+ * Resolve the name an agent can call on the delivery host. Unknown names
+ * pass through unchanged (no registry identity). A known tool WITHOUT a
+ * mapping on the requested host resolves to `undefined` — the caller must
+ * omit or rephrase, never print a name the host cannot resolve.
+ */
+export function resolveLensToolName(
+	name: string,
+	host: LensToolHost = "pi",
+): string | undefined {
+	const entry = TOOL_REGISTRY.find(
+		(tool) =>
+			tool.name === name || tool.piName === name || tool.mcpName === name,
+	);
+	if (!entry) return name;
+	if (host === "mcp") return entry.mcpName;
+	return entry.piName;
+}
+
+/**
+ * Render already-written advisory text for the delivery host (#2535). The pi
+ * host reads it back unchanged. For MCP, every whole-word pi tool name with
+ * an MCP mapping becomes its callable MCP name (driven by TOOL_REGISTRY,
+ * longest first — never a hand-maintained second map), and the pi-only
+ * activation clause is rephrased since MCP lists every tool statically.
+ * A pi-only name with no MCP surface never survives translation: it is
+ * either rephrased here or caught by the adapter-aware guard.
+ */
+export function translateGuidanceToolNames(
+	content: string,
+	host: LensToolHost,
+): string {
+	if (host === "pi") return content;
+	let text = content;
+	const byLength = [...TOOL_REGISTRY].sort(
+		(a, b) => (b.piName?.length ?? 0) - (a.piName?.length ?? 0),
+	);
+	for (const entry of byLength) {
+		if (typeof entry.piName !== "string" || typeof entry.mcpName !== "string") {
+			continue;
+		}
+		text = text.replace(
+			new RegExp(`\\b${escapeRegExp(entry.piName)}\\b`, "g"),
+			entry.mcpName,
+		);
+	}
+	return text.replace("activate via pi_lens_activate_tools", "call directly");
+}
 
 export function toolRegistryEntryForPi(
 	name: string,

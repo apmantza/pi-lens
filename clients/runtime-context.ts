@@ -8,6 +8,10 @@ import {
 } from "./advisory-provenance.js";
 import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
 import { logLatency } from "./latency-logger.js";
+import {
+	translateGuidanceToolNames,
+	type LensToolHost,
+} from "./tool-config.js";
 
 // Exported so the Stop-hook bin strips exactly what these bridges prepend.
 export const AUTOMATION_FRAMING =
@@ -295,6 +299,7 @@ export function acknowledgeTestFindings(
 export function consumeSessionStartGuidance(
 	cacheManager: CacheManager,
 	cwd: string,
+	host: LensToolHost = "pi",
 ): ContextResult | undefined {
 	const guidance = cacheManager.readCache<{ content: string }>(
 		"session-start-guidance",
@@ -315,7 +320,10 @@ export function consumeSessionStartGuidance(
 		messages: [
 			{
 				role: "user",
-				content: `[pi-lens automated context — not a user request]\n\n${guidance.data.content}`,
+				// #2535: the stored guidance names pi tools; MCP agents receive
+				// the registry-translated rendering. The stored record keeps
+				// its shape — resolution happens here, at delivery.
+				content: `[pi-lens automated context — not a user request]\n\n${translateGuidanceToolNames(guidance.data.content, host)}`,
 			},
 		],
 	};

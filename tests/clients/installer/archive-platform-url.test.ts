@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveArchiveUrl, TOOLS } from "../../../clients/installer/index.js";
+import {
+	resolveArchiveKind,
+	resolveArchiveUrl,
+	TOOLS,
+} from "../../../clients/installer/index.js";
 
 // Use the real installer module, not any mock another test file registered.
 vi.unmock("../../../clients/installer/index.js");
@@ -75,6 +79,8 @@ describe("resolveArchiveUrl (#241 platform-matched archives)", () => {
 			expect(lua?.installStrategy).toBe("archive");
 			expect(lua?.archive?.launcher).toBeUndefined();
 			expect(lua?.archive?.treeMarker).toBe("bin");
+			expect(resolveArchiveKind(lua!.archive!, "linux", "x64")).toBe("tgz");
+			expect(resolveArchiveKind(lua!.archive!, "win32", "x64")).toBe("zip");
 			// Unlike clangd, LuaLS releases have no wrapping version dir.
 			expect(lua?.archive?.stripComponents).toBe(0);
 		});
@@ -100,6 +106,16 @@ describe("resolveArchiveUrl (#241 platform-matched archives)", () => {
 			expect(
 				resolveArchiveUrl(lua!.archive!, "freebsd", "x64"),
 			).toBeUndefined();
+		});
+	});
+
+	describe("PowerShell Editor Services tool def (#3020)", () => {
+		it("registers a Windows ZIP tree bundle", () => {
+			const tool = TOOLS.find((t) => t.id === "powershell-editor-services");
+			expect(tool?.archive?.kind).toBe("zip");
+			expect(tool?.archive?.treeMarker).toBe(
+				"PowerShellEditorServices/Start-EditorServices.ps1",
+			);
 		});
 	});
 });

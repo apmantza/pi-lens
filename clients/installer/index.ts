@@ -311,8 +311,8 @@ export interface ArchiveSpec {
 	 *   arch:     "x64" | "arm64" | ...
 	 */
 	url: string | ((platform: string, arch: string) => string | undefined);
-	/** Archive kind — both extracted via `tar` (Windows bsdtar handles zip too). */
-	kind: "tgz" | "zip";
+	/** Archive kind, or a platform/arch resolver for releases that vary by OS. */
+	kind: "tgz" | "zip" | ((platform: string, arch: string) => "tgz" | "zip");
 	/**
 	 * Launcher path relative to the archive's top-level dir (which is stripped on
 	 * extraction), e.g. "bin/spotbugs". On win32 the installer resolves the
@@ -1252,7 +1252,7 @@ export const TOOLS: ToolDefinition[] = [
 						: `${base}/lua-language-server-${version}-win32-x64.zip`;
 				return undefined;
 			},
-			kind: "zip",
+			kind: (platform) => (platform === "win32" ? "zip" : "tgz"),
 			stripComponents: 0,
 			treeMarker: "bin",
 		},
@@ -4681,10 +4681,49 @@ async function installMavenTool(
  */
 export function resolveArchiveUrl(
 	spec: ArchiveSpec,
-	platform: string = process.platform,
+	platform: string = installerPlatform(),
 	arch: string = process.arch,
 ): string | undefined {
 	return typeof spec.url === "function" ? spec.url(platform, arch) : spec.url;
+}
+
+/** Resolve the archive format independently from the extractor implementation. */
+export function resolveArchiveKind(
+	spec: ArchiveSpec,
+	platform: string = installerPlatform(),
+	arch: string = process.arch,
+): "tgz" | "zip" {
+	return typeof spec.kind === "function"
+		? spec.kind(platform, arch)
+		: spec.kind;
+}
+
+function recordArchiveExtractionDegradation(
+	toolId: string,
+	format: "tgz" | "zip",
+	reason: string,
+): void {
+	recordDegradationOnce({
+		kind: "managed-tool-install",
+		subject: `${toolId}:${format}`,
+		reason: `archive extraction ${reason}`,
+	});
+}
+
+async function stripExtractedArchiveRoot(
+	dir: string,
+	components: number,
+): Promise<boolean> {
+	for (let i = 0; i < components; i++) {
+		const entries = await fs.readdir(dir, { withFileTypes: true });
+		const [entry] = entries;
+		if (entries.length !== 1 || !entry?.isDirectory()) return false;
+		const root = path.join(dir, entry.name);
+		for (const child of await fs.readdir(root))
+			await fs.rename(path.join(root, child), path.join(dir, child));
+		await fs.rm(root, { recursive: true, force: true });
+	}
+	return true;
 }
 
 /**
@@ -4766,9 +4805,11 @@ async function installArchiveTool(
 	const spec = tool.archive;
 	if (!spec) return undefined;
 	const binaryName = tool.binaryName ?? tool.id;
-	const isWindows = process.platform === "win32";
+	const platform = installerPlatform();
+	const isWindows = platform === "win32";
+	const archiveKind = resolveArchiveKind(spec, platform, process.arch);
 
-	const url = resolveArchiveUrl(spec);
+	const url = resolveArchiveUrl(spec, platform, process.arch);
 	if (!url) {
 		logSessionStart(
 			`archive-install ${tool.id}: no archive for ${process.platform}/${process.arch} — unsupported, skipping`,
@@ -4804,7 +4845,7 @@ async function installArchiveTool(
 	// installed copy is now untouched until the replacement is proven good.
 	const extractName = tool.id;
 	const tmpExtractName = `${extractName}.refresh-tmp`;
-	const archiveName = `${tool.id}.download.${spec.kind === "zip" ? "zip" : "tgz"}`;
+	const archiveName = `${tool.id}.download.${archiveKind === "zip" ? "zip" : "tgz"}`;
 	const extractDir = path.join(TOOLS_DIR, extractName);
 	const tmpExtractDir = path.join(TOOLS_DIR, tmpExtractName);
 	const tmpArchive = path.join(TOOLS_DIR, archiveName);
@@ -4823,35 +4864,78 @@ async function installArchiveTool(
 		// dir — stripping would flatten/merge its sibling module folders — so the
 		// flag is omitted. bsdtar handles both .tgz and .zip with -xf.
 		const stripComponents = spec.stripComponents ?? 1;
-		const tarArgs = [
-			spec.kind === "tgz" ? "-xzf" : "-xf",
-			archiveName,
-			"-C",
-			tmpExtractName,
-			...(stripComponents > 0 ? [`--strip-components=${stripComponents}`] : []),
-		];
+		const extractionArgs =
+			archiveKind === "zip" && isWindows
+				? [
+						"-NoProfile",
+						"-Command",
+						`Expand-Archive -LiteralPath '${archiveName}' -DestinationPath '${tmpExtractName}' -Force`,
+					]
+				: archiveKind === "zip"
+					? ["-q", "-o", archiveName, "-d", tmpExtractName]
+					: [
+							"-xzf",
+							archiveName,
+							"-C",
+							tmpExtractName,
+							...(stripComponents > 0
+								? [`--strip-components=${stripComponents}`]
+								: []),
+						];
 		// Resolve `tar` to an absolute path on Windows (System32\tar.exe is the
 		// bsdtar shipped with Windows 10+) so extraction can't be hijacked via a
 		// writable PATH entry — same hardening as the taskkill spawn. On POSIX `tar`
 		// is a trusted coreutil whose absolute path varies by distro, so it stays
 		// bare (consistent with every other tool spawn).
-		const tarBin = isWindows
-			? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
-			: "tar";
-		const extractResult = await safeSpawnAsync(tarBin, tarArgs, {
+		const extractor =
+			archiveKind === "zip" && isWindows
+				? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+				: archiveKind === "zip"
+					? "unzip"
+					: isWindows
+						? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+						: "tar";
+		const extractionResult = await safeSpawnAsync(extractor, extractionArgs, {
 			cwd: TOOLS_DIR,
 			timeout: 120_000,
 			ignoreAmbientSignal: true,
 			lifetimeCoupled: true,
 		});
 		const extracted = {
-			ok: extractResult.status === 0,
-			stderr: extractResult.error?.message ?? extractResult.stderr,
+			ok: extractionResult.status === 0,
+			reason:
+				extractionResult.spawnFailure?.kind === "tool-not-found"
+					? "extractor-unavailable"
+					: extractionResult.spawnFailure
+						? "extractor-error"
+						: "extractor-exit",
 		};
 		await fs.rm(tmpArchive, { force: true });
 		if (!extracted.ok) {
+			recordArchiveExtractionDegradation(
+				tool.id,
+				archiveKind,
+				extracted.reason,
+			);
 			logSessionStart(
-				`archive-install ${tool.id}: extraction failed: ${extracted.stderr} — keeping installed version`,
+				`archive-install ${tool.id}: ${archiveKind} extraction failed (${extracted.reason}) — keeping installed version`,
+			);
+			await fs
+				.rm(tmpExtractDir, { recursive: true, force: true })
+				.catch(() => {});
+			return undefined;
+		}
+		if (
+			archiveKind === "zip" &&
+			!(await stripExtractedArchiveRoot(tmpExtractDir, stripComponents))
+		) {
+			recordArchiveExtractionDegradation(
+				tool.id,
+				archiveKind,
+				"layout-invalid",
+			);
+			logSessionStart(
+				`archive-install ${tool.id}: ${archiveKind} layout invalid — keeping installed version`,
 			);
 			await fs
 				.rm(tmpExtractDir, { recursive: true, force: true })
@@ -4870,8 +4954,13 @@ async function installArchiveTool(
 			try {
 				await fs.access(tmpMarker);
 			} catch {
+				recordArchiveExtractionDegradation(
+					tool.id,
+					archiveKind,
+					"marker-missing",
+				);
 				logSessionStart(
-					`archive-install ${tool.id}: tree marker not found at ${tmpMarker} after extraction — keeping installed version`,
+					`archive-install ${tool.id}: ${archiveKind} marker missing after extraction — keeping installed version`,
 				);
 				await fs
 					.rm(tmpExtractDir, { recursive: true, force: true })
@@ -4896,8 +4985,13 @@ async function installArchiveTool(
 		try {
 			await fs.access(tmpResolvedInner);
 		} catch {
+			recordArchiveExtractionDegradation(
+				tool.id,
+				archiveKind,
+				"launcher-missing",
+			);
 			logSessionStart(
-				`archive-install ${tool.id}: launcher not found at ${tmpResolvedInner} after extraction — keeping installed version`,
+				`archive-install ${tool.id}: ${archiveKind} launcher missing after extraction — keeping installed version`,
 			);
 			await fs
 				.rm(tmpExtractDir, { recursive: true, force: true })

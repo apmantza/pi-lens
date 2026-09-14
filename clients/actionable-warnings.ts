@@ -36,6 +36,7 @@ import { logActionableWarningsEvent } from "./actionable-warnings-logger.js";
 import { displayProjectDataPath, getProjectDataDir } from "./file-utils.js";
 import { commitDurableStore } from "./durable-store.js";
 import { establishToolAgreement } from "./tool-agreement.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 
 export interface ActionableWarningAction {
 	title: string;
@@ -2140,6 +2141,7 @@ export async function applyConservativeActionableWarningFixes(args: {
 export function formatActionableWarningsAdvisory(
 	report: ActionableWarningsReport,
 	cwd: string,
+	host: LensToolHost = "pi",
 ): string | undefined {
 	if (report.summary.unsuppressed === 0) return undefined;
 	const files = report.files.filter((file) =>
@@ -2178,10 +2180,17 @@ export function formatActionableWarningsAdvisory(
 		"cache",
 		"actionable-warnings.json",
 	);
+	// #2535 F3: a known tool with no mapping on this host resolves to
+	// undefined — omit the instruction rather than naming a dead tool.
+	// `lens_diagnostics` is pinned available on both hosts, so this is
+	// defensive only.
+	const diagnosticsTool = resolveLensToolName("lens_diagnostics", host);
 	return [
 		`🟡 Fixable warnings introduced this turn: ${report.summary.unsuppressed}.${safe}`,
 		tierLine,
-		"Use lens_diagnostics with mode=delta to inspect these warnings.",
+		diagnosticsTool
+			? `Use ${diagnosticsTool} with mode=delta to inspect these warnings.`
+			: undefined,
 		fileList ? `Files:\n${fileList}${more}` : undefined,
 		"If continuing in these files, resolve warnings that are safe and relevant. Do not apply broad refactors unless requested.",
 		`Raw report (only if you need the JSON): ${reportPath}`,

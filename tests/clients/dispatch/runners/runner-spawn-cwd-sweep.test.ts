@@ -597,7 +597,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
 	],
 	[
-		"clients/installer/index.ts#installArchiveTool:ba060684~a938e107",
+		"clients/installer/index.ts#installArchiveTool:fb1fa312~a938e107",
 		"cwd is TOOLS_DIR, the managed-tool install directory this archive is being extracted into",
 	],
 	[

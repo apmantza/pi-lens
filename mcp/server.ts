@@ -1214,7 +1214,8 @@ async function callTool(
 		if (truncationNotice) summaryLines.push(truncationNotice);
 		// #1107 phase 2: same "reached the seam but nothing rendered it" gap as
 		// #784's scanTruncationNotice, for the generated-name skip counters.
-		const skipNotice = generatedSkipNotice(snapshot);
+		// #2535: render the MCP-callable tool names on this route.
+		const skipNotice = generatedSkipNotice(snapshot, "mcp");
 		if (skipNotice) summaryLines.push(skipNotice);
 		return toolText(summaryLines.join("\n"), {
 			filesScanned: snapshot.filesScanned,
@@ -1695,7 +1696,8 @@ async function callTool(
 			args,
 			new AbortController().signal,
 			undefined,
-			{ cwd },
+			// #2535: the shared tool renders host-callable advisory names.
+			{ cwd, host: "mcp" },
 		)) as { content: { type: "text"; text: string }[]; isError?: boolean };
 		return out;
 	}

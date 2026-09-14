@@ -4,6 +4,7 @@ import {
 	TOOLS,
 	getRefreshableManagedTools,
 	getToolVerificationTimeout,
+	resolveArchiveKind,
 } from "../../../clients/installer/index.js";
 
 // Use the real installer module, not any mock another test file registered.
@@ -234,7 +235,9 @@ describe("TOOLS registry consistency", () => {
 				} else {
 					expect(spec.url, `${t.id} archive url`).toMatch(/^https:\/\//);
 				}
-				expect(["tgz", "zip"], `${t.id} archive kind`).toContain(spec.kind);
+				expect(["tgz", "zip"], `${t.id} archive kind`).toContain(
+					resolveArchiveKind(spec, "linux", "x64"),
+				);
 				if (spec.launcher !== undefined) {
 					// Launcher-style archive (a single binary/shim inside the tree).
 					expect(spec.launcher, `${t.id} launcher`).toMatch(relPath);

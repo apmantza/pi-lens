@@ -1437,13 +1437,16 @@ describe("archive tree-bundle refresh updates the probe cache", () => {
 				body: Buffer.from("fake-zip-bytes"),
 			}),
 		});
-		// Simulate `tar` genuinely writing the tree marker into whatever `-C`
-		// target the code extracted into — decoupled from any tmp-dir naming
-		// convention, so this exercises the real extract → verify → swap path.
+		// Simulate the archive extractor genuinely writing the tree marker into
+		// whatever `-C` (tar) or `-d` (unzip) target it received. Keep this decoupled
+		// from any tmp-dir naming convention so the fixture follows both extractor
+		// shapes through the real extract → verify → swap path.
 		spawnMock.mockImplementation(async (_command: string, args: string[]) => {
-			const cIndex = (args ?? []).indexOf("-C");
-			if (cIndex !== -1) {
-				const targetDir = args[cIndex + 1];
+			const targetIndex = (args ?? []).findIndex(
+				(arg) => arg === "-C" || arg === "-d",
+			);
+			if (targetIndex !== -1) {
+				const targetDir = args[targetIndex + 1];
 				const written = path.join(TOOLS_DIR, targetDir, ...treeMarkerRel);
 				fs.mkdirSync(path.dirname(written), { recursive: true });
 				fs.writeFileSync(written, "# fresh bootstrap");

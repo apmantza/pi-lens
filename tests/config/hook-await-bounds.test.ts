@@ -2135,7 +2135,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// tree-kill teardown the raw spawn never had; like every other entry here
 	// it cannot take a hook's signal until #2523 AC4 threads it through the
 	// deps types.
-	"clients/installer/index.ts": 212,
+	// #3020 adds six unbounded helper awaits for ZIP wrapper-root stripping and
+	// archive extraction cleanup. They remain on the existing intentionally
+	// unbounded worklist until #2523 AC4 threads hook signals through installer
+	// dependencies; this records the measured increase rather than hiding it.
+	"clients/installer/index.ts": 218,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,

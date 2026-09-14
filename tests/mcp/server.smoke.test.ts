@@ -391,6 +391,65 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		}
 	}, 60_000);
 
+	it("pilens_project_scan generated-skip notice names MCP tools (#2535 F1)", async () => {
+		// A `generated/` directory is pruned without a content probe, so
+		// generatedDirSkips fires deterministically and the skip notice must
+		// name the tools an MCP agent can actually call.
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-genskip-"));
+		fs.mkdirSync(path.join(cwd, "packages", "a", "src"), { recursive: true });
+		fs.mkdirSync(path.join(cwd, "packages", "a", "generated"), {
+			recursive: true,
+		});
+		fs.writeFileSync(
+			path.join(cwd, "package.json"),
+			JSON.stringify({
+				name: "genskip",
+				private: true,
+				workspaces: ["packages/a"],
+			}),
+		);
+		fs.writeFileSync(
+			path.join(cwd, "packages", "a", "package.json"),
+			JSON.stringify({ name: "@scope/a", version: "0.0.0" }),
+		);
+		fs.writeFileSync(
+			path.join(cwd, "packages", "a", "src", "index.ts"),
+			"export const v = 1;\n",
+		);
+		fs.writeFileSync(
+			path.join(cwd, "packages", "a", "generated", "one.ts"),
+			"export const one = 1;\n",
+		);
+		const isolated = new McpHarness({ cwd });
+		try {
+			await isolated.request(50, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "genskip-test", version: "0" },
+			});
+			const response = await isolated.request(51, "tools/call", {
+				name: "pilens_project_scan",
+				arguments: { cwd },
+			});
+			const result = response.result as {
+				isError?: boolean;
+				content: { text: string }[];
+			};
+			expect(result.isError).toBeFalsy();
+			const text = result.content[0].text;
+			// The notice fired (not a vacuous pass over a silent scan).
+			expect(text).toContain("excluded by generated-name heuristics");
+			expect(text).toContain("pilens_project_scan");
+			expect(text).toContain("pilens_diagnostics");
+			// Reject twin: the bare pi name must not appear — the lookbehind
+			// excludes the "pilens_" prefix both names above carry.
+			expect(text).not.toMatch(/(?<![A-Za-z0-9_])lens_diagnostics/);
+		} finally {
+			isolated.dispose();
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}, 60_000);
+
 	it("answers tools/call pilens_analyze (warm) with a real dispatch result", async () => {
 		// no-lsp keeps it fast (skips the cold LSP spawn) while still running the
 		// real tree-sitter/ast-grep/oxlint pipeline on a clean repo file.

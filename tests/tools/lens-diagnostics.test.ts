@@ -2935,6 +2935,29 @@ describe("lens_diagnostics mode=full", () => {
 		expect(freshFetchMocks.fetchFreshProjectDiagnostics).not.toHaveBeenCalled();
 	});
 
+	// #2535 F1: the same quick-mode note on the MCP host must name the MCP
+	// tool. Drives the real execute with a mocked LSP service (no sweep).
+	it("mode=full without refreshRunners names the MCP tool on the MCP host (#2535)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const tool = makeTool({}, lspService);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full" },
+			new AbortController().signal,
+			null,
+			{ cwd: "/proj", host: "mcp" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("not run this call (quick mode)");
+		expect(text).toContain("pilens_diagnostics mode=full");
+		// Reject twin: the bare pi name must not appear — the lookbehind
+		// excludes the pilens_ prefix.
+		expect(text).not.toMatch(/(?<![A-Za-z0-9_])lens_diagnostics/);
+	});
+
 	it("mode=full refreshRunners=cached triggers the analyzer fresh-fetch for the resolved cwd (#585)", async () => {
 		mockSummaries.length = 0;
 		const lspService = {

@@ -75,6 +75,7 @@ on:
   # every pre-existing job) -- the full os x pm x pi-install matrices stay
   # push/nightly/dispatch-only, unchanged from before this lane existed.
   pull_request:
+    branches: [master]
     paths: *install-smoke-paths
 
 # A merge made with GITHUB_TOKEN suppresses its push event. Replayed
@@ -364,7 +365,7 @@ jobs:
               # (GITHUB_PATH only affects later steps), so export it here too.
               export PNPM_HOME="$HOME/.pnpm-global"; mkdir -p "$PNPM_HOME"
               export PATH="$PNPM_HOME:$PATH"
-              pnpm config set global-bin-dir "$PNPM_HOME"
+              pnpm config set --global global-bin-dir "$PNPM_HOME"
               # --ignore-scripts: pi's own lifecycle scripts aren't needed for
               # this smoke test (same as the npm-global case above).
               pnpm add -g --ignore-scripts "$PKG" || echo "::notice::pnpm add -g exit $? (blocked scripts?)"
@@ -523,7 +524,23 @@ jobs:
           # pi-lens-ignore: zizmor:adhoc-packages
           npm install -g --ignore-scripts pnpm@11.15.1
           mise reshim
+          # pnpm reads packageManager from the current project. Probe its
+          # version outside the checkout so this diagnostic cannot fail on
+          # the repository's npm declaration before global config is set.
+          cd "$RUNNER_TEMP"
           pnpm --version
+
+      - name: Configure pnpm global bin dir
+        shell: bash
+        run: |
+          set -uxo pipefail
+          # Keep pnpm's global setup outside the checkout's npm project config.
+          export PNPM_HOME="$HOME/.pnpm-global"
+          mkdir -p "$PNPM_HOME"
+          export PATH="$PNPM_HOME:$PATH"
+          pnpm config set --global global-bin-dir "$PNPM_HOME"
+          echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
 
       - name: Install pi (${{ matrix.pi_via }})
         shell: bash
