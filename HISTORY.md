@@ -23,7 +23,7 @@ rationale and is not an active instruction source.
 <details>
 <summary>Pre-trim snapshot</summary>
 
-# pi-lens — agent context
+### pi-lens — agent context
 
 ## How to read this file
 
@@ -4260,7 +4260,7 @@ archived text is historical and is not an active instruction source.
 <details>
 <summary>Pre-trim fixer contract</summary>
 
-# Fixer contract
+### Fixer contract
 
 Deliver a root-caused fix with red proof and a reviewable handoff.
 
@@ -4367,7 +4367,7 @@ archived text is historical and is not an active instruction source.
 <details>
 <summary>Pre-trim reviewer contract</summary>
 
-# Reviewer contract
+### Reviewer contract
 
 Reviewers run the relevant scenario as a probe and may add a throwaway scenario directory to reproduce a finding through the real host; quote the RPC event or tool result.
 
@@ -4446,7 +4446,7 @@ archived text is historical and is not an active instruction source.
 <details>
 <summary>Pre-trim investigator contract</summary>
 
-# Investigator contract
+### Investigator contract
 
 Grep the `turnId` first when correlating rows across telemetry sinks.
 Premise-first reproductions of dogfood reports go through the harness with a fixture built from the reporter's shape, before any seam is named.
