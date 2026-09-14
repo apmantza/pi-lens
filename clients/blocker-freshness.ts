@@ -460,10 +460,17 @@ type SelfDriftUnverifiableReason =
  * replayed"), and the same reasoning governs here, where an unconfirmed
  * demotion would walk a finding out of the authoritative channel.
  *
- * Two tiers, in cost order. `size` decides most cases from the stat already
- * taken. When the size matches, only a hash can separate a one-character edit
- * from a `touch`, so the bytes are read and compared against the baseline
- * carried by the pipeline.
+ * Three gates, in cost order. `size` decides most cases from the stat already
+ * taken, and it runs BEFORE the mtime gate: an out-of-band write (a formatter,
+ * a checkout) can land at-or-before the `recordedAtMs` baseline, so mtime alone
+ * is blind to the own-file drift this axis exists to catch — the size gate fires
+ * regardless of the mtime relationship. When the size matches, the mtime gate is
+ * a fast path that skips the expensive hash tier (size same AND mtime never
+ * moved → the file almost certainly did not change, so we do not read and hash
+ * every unchanged file on the hook path). Only when the size matches AND the
+ * mtime moved does the hash separate a one-character edit from a `touch`,
+ * reading the bytes and comparing against the baseline
+ * `setInlineBlockerContentBaseline` attached off the dispatch path.
  *
  * Both tiers fail toward `"unverifiable"`, never toward `"drift"`: a bound that
  * expires, a baseline that never landed, or a file past the per-sweep hash
@@ -502,18 +509,26 @@ async function detectSelfDrift(args: {
 	);
 	if (stat === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "stat-unavailable" };
+	// Size gate FIRST, before the mtime gate. mtime is a blind signal for the
+	// out-of-band-rewrite case: an external write (a formatter, a checkout) can
+	// land at-or-before the `recordedAtMs` baseline, so `freshnessFromMtime`
+	// reports the own file unchanged even though its bytes differ. Size is cheap
+	// content confirmation from the same stat, and it fires regardless of the
+	// mtime relationship — the all-LSP own-file case the mtime gate alone misses.
+	if (args.recordedSize === undefined)
+		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
+	if (stat.size !== args.recordedSize) return { verdict: "drift" };
+	// Size matches. The mtime gate is now a fast path that skips the expensive
+	// hash tier: size same AND mtime never moved past the baseline → the file
+	// almost certainly did not change, so we do not read and hash it.
 	const freshness = freshnessFromMtime({
 		mtimeMs: stat.mtimeMs,
 		referenceMs: args.recordedAtMs,
 	});
 	if (freshness.verdict !== "stale") return { verdict: "unchanged" };
-	// mtime moved past the verdict. Confirm against content before calling it
-	// drift.
-	if (args.recordedSize === undefined)
-		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
-	if (stat.size !== args.recordedSize) return { verdict: "drift" };
-	// Same length. Only the hash can separate a one-character edit from a
-	// `touch`, and a same-length edit is the common shape, not an exotic one.
+	// Same length AND mtime moved. Only the hash can separate a one-character
+	// edit from a `touch`, and a same-length edit is the common shape, not an
+	// exotic one.
 	if (args.recordedHash === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	// Defect shape 9: each read is individually bounded, but N blockers in one
@@ -619,13 +634,17 @@ async function detectDrift(
 	recordedAtMs: number,
 	resolveForwardImports: ForwardImportResolver,
 	turnIndex: number | undefined,
+	/** Skip the own-file mtime tier after content confirms it is unchanged. */
+	skipOwnFile = false,
 ): Promise<DriftResult> {
 	const drifted: string[] = [];
-	const ownFreshness = freshnessFromMtime({
-		mtimeMs: await statMtimeMs(filePath),
-		referenceMs: recordedAtMs,
-	});
-	if (ownFreshness.verdict === "stale") drifted.push(filePath);
+	if (!skipOwnFile) {
+		const ownFreshness = freshnessFromMtime({
+			mtimeMs: await statMtimeMs(filePath),
+			referenceMs: recordedAtMs,
+		});
+		if (ownFreshness.verdict === "stale") drifted.push(filePath);
+	}
 	const { mtimes, truncated } = await collectForwardImportMtimes(
 		cwd,
 		filePath,
@@ -937,22 +956,21 @@ export async function sweepInlineBlockerFreshness(
 				counts.kept += 1;
 				continue;
 			}
-			// Self-drift axis. When the record's OWN file changed since the verdict was
-			// taken, the verdict describes content that is no longer on disk — true
-			// whatever raised it. An all-`"lsp"` record keeps the full import walk; a
-			// tree-sitter, ast-grep, mixed, or `"unknown"`-tagged record is checked
-			// against its own file only. Demotion, not deletion (#1419): the entry is
-			// re-served in the advisory channel marked `[stale — re-run to confirm]`
-			// and retires through the existing #1950 delivery cap.
-			const isLspSourced = isAllLspSourced(recordedSources);
-			if (!isLspSourced) {
-				// The self axis. Content-confirmed, re-arming, and outside the
-				// #1950 delivery cap. A store with no re-arming setter is not
-				// eligible for it and stays authoritative (fail-closed).
-				if (!entry.setSelfDrift) {
-					counts.kept += 1;
-					continue;
-				}
+			// #2982 remainder: the record's OWN file is checked via the content-
+			// confirmed self-drift axis (size → hash, re-arming) for records that
+			// have a re-arming setter — shared by the non-LSP self axis below and
+			// the all-LSP axis. The mtime-only own-file check in `detectDrift` is
+			// blind to the out-of-band-rewrite case (an external write can land at-
+			// or-before the `recordedAtMs` baseline), so the content axis owns the
+			// own-file verdict when it can decide. One bounded() call site for both
+			// axes — the #2523 registry requires a single occurrence, so the two
+			// branches must not each wrap the identical call. Demotion, not deletion
+			// (#1419): a demoted entry is re-served in the advisory channel marked
+			// `[stale — re-run to confirm]` and retires through the existing #1950
+			// delivery cap.
+			const setSelfDrift = entry.setSelfDrift;
+			let ownVerdict: SelfDriftVerdict | undefined;
+			if (setSelfDrift) {
 				// The outer bound too: an expired one yields `undefined`, and that
 				// means "could not decide", never "changed".
 				const hashBudgetWasExhausted = hashBudget.exhausted;
@@ -975,8 +993,8 @@ export async function sweepInlineBlockerFreshness(
 					verdict: "unverifiable" as const,
 					unverifiableReason: "bound-expired" as const,
 				};
-				const verdict = selfDrift.verdict;
-				if (verdict === "unverifiable") {
+				ownVerdict = selfDrift.verdict;
+				if (ownVerdict === "unverifiable") {
 					// Decide nothing. Leave the record in whatever state it holds.
 					counts.selfUnverifiable += 1;
 					const reason =
@@ -996,12 +1014,24 @@ export async function sweepInlineBlockerFreshness(
 							reason: "the aggregate self-drift hash budget was exhausted",
 						});
 					}
+				}
+			}
+			const isLspSourced = isAllLspSourced(recordedSources);
+			if (!isLspSourced) {
+				// The self axis. Content-confirmed, re-arming, and outside the
+				// #1950 delivery cap. A store with no re-arming setter is not
+				// eligible for it and stays authoritative (fail-closed).
+				if (!setSelfDrift || ownVerdict === undefined) {
+					counts.kept += 1;
+					continue;
+				}
+				if (ownVerdict === "unverifiable") {
 					if (selfDriftDemoted) counts.alreadyStale += 1;
 					else counts.kept += 1;
 					continue;
 				}
-				const shouldDemote = verdict === "drift";
-				const transitioned = entry.setSelfDrift(shouldDemote);
+				const shouldDemote = ownVerdict === "drift";
+				const transitioned = setSelfDrift(shouldDemote);
 				if (shouldDemote) {
 					if (transitioned) counts.revalidated += 1;
 					else counts.alreadyStale += 1;
@@ -1012,12 +1042,54 @@ export async function sweepInlineBlockerFreshness(
 				}
 				continue;
 			}
+			// The LSP axis (#1618). The own file is checked by the content axis
+			// above when a baseline was captured; without one it falls back to the
+			// mtime check (the pre-#2982 behavior, fail-open). The forward-import
+			// walk stays on the one-way dependency-drift axis.
+			let contentDecidedOwnFile = false;
+			if (
+				setSelfDrift !== undefined &&
+				ownVerdict !== undefined &&
+				entry.recordedSize !== undefined
+			) {
+				if (ownVerdict === "drift") {
+					const transitioned = setSelfDrift(true);
+					if (transitioned) counts.revalidated += 1;
+					else counts.alreadyStale += 1;
+					// Own file drifted; the record is out of the authoritative
+					// channel, so the import walk is moot this turn.
+					continue;
+				}
+				if (ownVerdict === "unchanged") {
+					// Content confirms the own file is unchanged: skip the mtime check
+					// below (a `touch` must not demote a still-valid record), and
+					// un-demote a record self-drifted last turn.
+					contentDecidedOwnFile = true;
+					const transitioned = setSelfDrift(false);
+					if (transitioned) counts.selfHealed += 1;
+				} else {
+					// "unverifiable": the content axis could not decide (a stat that
+					// failed, or a size that matched but whose hash never landed). Fall
+					// back to the mtime check below.
+					if (selfDriftDemoted) {
+						counts.alreadyStale += 1;
+						continue;
+					}
+				}
+			}
+			// Forward-import walk (one-way dependency-drift). Skip the own file ONLY
+			// when the content axis decided it "unchanged" — the one case where the
+			// mtime check would wrongly demote on a `touch`. A widget row (no setter)
+			// and an inline entry without a baseline never reach the content axis, so
+			// they still get the mtime own-file check (fail-open).
+			const skipOwnFile = contentDecidedOwnFile;
 			const { drifted, truncated } = await detectDrift(
 				cwd,
 				entry.filePath,
 				entry.recordedAtMs,
 				resolveForwardImports,
 				turnIndex,
+				skipOwnFile,
 			);
 			if (truncated) counts.truncatedImports += 1;
 			if (drifted.length > 0) {
