@@ -2245,7 +2245,7 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"separate a same-length edit from a `touch`; it is additionally capped by " +
 		"the per-sweep hash budget so the aggregate read is " +
 		"bounded on the count axis too (#2982, defect shape 9).",
-	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~b69fb70f":
+	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~3ca0bfa4":
 		"Same `BlockerFreshnessOptions.signal`. Wraps the whole per-entry " +
 		"`detectSelfDrift` call so an expiry maps to `unverifiable` at one place " +
 		"rather than leaving a half-finished verdict; the inner bounds above are " +

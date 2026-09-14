@@ -465,11 +465,13 @@ type SelfDriftUnverifiableReason =
  * a checkout) can land at-or-before the `recordedAtMs` baseline, so mtime alone
  * is blind to the own-file drift this axis exists to catch — the size gate fires
  * regardless of the mtime relationship. When the size matches, the mtime gate is
- * a fast path that skips the expensive hash tier (size same AND mtime never
- * moved → the file almost certainly did not change, so we do not read and hash
- * every unchanged file on the hook path). Only when the size matches AND the
- * mtime moved does the hash separate a one-character edit from a `touch`,
- * reading the bytes and comparing against the baseline
+ * a fast path that skips the expensive hash tier for non-LSP records (size same
+ * AND mtime never moved → the file almost certainly did not change, so we do
+ * not read and hash every unchanged file on the hook path). All-LSP records
+ * with an available hash baseline force the hash tier after the size check, so
+ * a same-size rewrite at-or-before the baseline cannot remain authoritative.
+ * When hashing is not forced and mtime moved, the hash separates a one-character
+ * edit from a `touch`, reading the bytes and comparing against the baseline
  * `setInlineBlockerContentBaseline` attached off the dispatch path.
  *
  * Both tiers fail toward `"unverifiable"`, never toward `"drift"`: a bound that
@@ -484,6 +486,8 @@ async function detectSelfDrift(args: {
 	recordedAtMs: number;
 	recordedSize: number | undefined;
 	recordedHash: string | undefined;
+	/** All-LSP records with a hash baseline must confirm equal-size bytes. */
+	forceContent: boolean;
 	signal: AbortSignal | undefined;
 	/** Mutable per-sweep hash budget. See {@link SELF_DRIFT_HASH_BUDGET_BYTES}. */
 	budget: { bytesLeft: number; exhausted: boolean };
@@ -518,17 +522,19 @@ async function detectSelfDrift(args: {
 	if (args.recordedSize === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	if (stat.size !== args.recordedSize) return { verdict: "drift" };
-	// Size matches. The mtime gate is now a fast path that skips the expensive
-	// hash tier: size same AND mtime never moved past the baseline → the file
-	// almost certainly did not change, so we do not read and hash it.
+	// Size matches. Non-LSP records retain the mtime fast path. All-LSP records
+	// with a hash baseline force content confirmation because a same-size rewrite
+	// can land at-or-before the baseline.
 	const freshness = freshnessFromMtime({
 		mtimeMs: stat.mtimeMs,
 		referenceMs: args.recordedAtMs,
 	});
-	if (freshness.verdict !== "stale") return { verdict: "unchanged" };
+	if (!args.forceContent && freshness.verdict !== "stale")
+		return { verdict: "unchanged" };
 	// Same length AND mtime moved. Only the hash can separate a one-character
 	// edit from a `touch`, and a same-length edit is the common shape, not an
-	// exotic one.
+	// exotic one. Forced all-LSP confirmation reaches this tier even when mtime
+	// did not move.
 	if (args.recordedHash === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	// Defect shape 9: each read is individually bounded, but N blockers in one
@@ -969,6 +975,7 @@ export async function sweepInlineBlockerFreshness(
 			// `[stale — re-run to confirm]` and retires through the existing #1950
 			// delivery cap.
 			const setSelfDrift = entry.setSelfDrift;
+			const isLspSourced = isAllLspSourced(recordedSources);
 			let ownVerdict: SelfDriftVerdict | undefined;
 			if (setSelfDrift) {
 				// The outer bound too: an expired one yields `undefined`, and that
@@ -980,6 +987,10 @@ export async function sweepInlineBlockerFreshness(
 						recordedAtMs: entry.recordedAtMs,
 						recordedSize: entry.recordedSize,
 						recordedHash: entry.recordedHash,
+						forceContent:
+							isLspSourced &&
+							entry.recordedSize !== undefined &&
+							entry.recordedHash !== undefined,
 						signal: options?.signal,
 						budget: hashBudget,
 					}),
@@ -1016,7 +1027,6 @@ export async function sweepInlineBlockerFreshness(
 					}
 				}
 			}
-			const isLspSourced = isAllLspSourced(recordedSources);
 			if (!isLspSourced) {
 				// The self axis. Content-confirmed, re-arming, and outside the
 				// #1950 delivery cap. A store with no re-arming setter is not

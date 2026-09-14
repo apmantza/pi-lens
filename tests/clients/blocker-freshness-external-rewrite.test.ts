@@ -127,13 +127,10 @@ describe("all-LSP own-file freshness via the content axis (#2982 remainder)", ()
 		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
 	});
 
-	// The boundary of the mtime fast path (#2983's design, inherited by the all-LSP
-	// axis): when the size matches AND the mtime never moved past the baseline, the
-	// axis reads the file unchanged and skips the hash tier. A same-length rewrite
-	// that also lands at-or-before the baseline therefore cannot be confirmed — it
-	// is a fail-open keep, not a demotion. The size-changing shape (the common
-	// reformatter case) is caught by the size gate before this boundary is reached.
-	it("keeps a same-length own-file rewrite that lands at-or-before the baseline (mtime fast-path boundary)", async () => {
+	// HIGH F1: an all-LSP baseline must force content confirmation even when mtime
+	// did not move. This is red on the pre-fix mtime fast path, which keeps the
+	// changed bytes authoritative.
+	it("demotes a same-length all-LSP rewrite that lands at-or-before the baseline", async () => {
 		const dir = makeDir("pi-lens-alllsp-sameatbase-");
 		const target = path.join(dir, "consumer.ts");
 		const runtime = new RuntimeCoordinator();
@@ -148,11 +145,8 @@ describe("all-LSP own-file freshness via the content axis (#2982 remainder)", ()
 		pinMtimeToBaseline(target, recordedAtMs);
 
 		const counts = await sweepInlineBlockerFreshness(runtime, dir);
-		// The size gate matches and the mtime fast path reads the file unchanged, so
-		// the content axis does not demote. This is the fail-open boundary: the axis
-		// cannot confirm a same-length change whose mtime did not move.
-		expect(counts.revalidated).toBe(0);
-		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(false);
+		expect(counts.revalidated).toBe(1);
+		expect(runtime.getInlineBlockersSnapshot()[0]?.stale).toBe(true);
 	});
 
 	// No baseline (the bounded read never landed): the content axis cannot decide,
