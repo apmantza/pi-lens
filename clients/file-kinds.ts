@@ -248,12 +248,28 @@ export const SPECIAL_FILENAMES: Array<{ pattern: RegExp; kind: FileKind }> = [
 // --- Detection Functions ---
 
 /**
+ * Helm renders YAML-looking files as Go templates before they become YAML.
+ * Keep this path convention here rather than teaching every YAML consumer
+ * about Helm's source layout.
+ */
+export function isHelmYamlTemplatePath(filePath: string): boolean {
+	return (
+		/[\\/]templates[\\/]/i.test(filePath) &&
+		/\.ya?ml$/i.test(filePath)
+	);
+}
+
+/**
  * Detect the file kind from a file path.
  * Returns the semantic file kind or undefined if unknown.
  */
 export function detectFileKind(filePath: string): FileKind | undefined {
 	if (!filePath || typeof filePath !== "string") {
 		return undefined;
+	}
+
+	if (isHelmYamlTemplatePath(filePath)) {
+		return "helm-template";
 	}
 
 	// Check special filenames first
