@@ -253,10 +253,7 @@ export const SPECIAL_FILENAMES: Array<{ pattern: RegExp; kind: FileKind }> = [
  * about Helm's source layout.
  */
 export function isHelmYamlTemplatePath(filePath: string): boolean {
-	return (
-		/[\\/]templates[\\/]/i.test(filePath) &&
-		/\.ya?ml$/i.test(filePath)
-	);
+	return /[\\/]templates[\\/]/i.test(filePath) && /\.ya?ml$/i.test(filePath);
 }
 
 /**

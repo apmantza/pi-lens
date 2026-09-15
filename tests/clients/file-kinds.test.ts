@@ -29,9 +29,9 @@ describe("detectFileKind — Helm templates", () => {
 		expect(detectFileKind("/repo/chart/templates/deployment.yaml")).toBe(
 			"helm-template",
 		);
-		expect(detectFileKind("C:\\repo\\chart\\templates\\nested\\route.YML")).toBe(
-			"helm-template",
-		);
+		expect(
+			detectFileKind("C:\\repo\\chart\\templates\\nested\\route.YML"),
+		).toBe("helm-template");
 	});
 
 	it("does not reclassify ordinary YAML outside templates", () => {
