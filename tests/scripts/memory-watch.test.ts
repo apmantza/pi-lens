@@ -342,6 +342,7 @@ describe("cgroup sample reading (#2042 2026-09-15)", () => {
 			memCurrentMb: null,
 			memPeakMb: null,
 			pidsCurrent: null,
+			pidsMax: null,
 			memPressureSomeTotal: null,
 			cpuPressureSomeTotal: null,
 		});
@@ -370,13 +371,16 @@ describe("sample line formatting (#2042 2026-09-15, round 2)", () => {
 				memCurrentMb: 3102,
 				memPeakMb: 9226,
 				pidsCurrent: 41,
+				pidsMax: "max",
 				memPressureSomeTotal: 123,
 				cpuPressureSomeTotal: null,
 			},
+			{ pidMax: 4194304, nsLastPid: 2471, fileNrAllocated: 3808 },
 		);
 		expect(line).toBe(
 			"[mem-sample] 19:02:48.203 availableMb=4077 totalMb=15990 memCurrentMb=3102 memPeakMb=9226 " +
-				"pids=41 memPressureSomeTotal=123 cpuPressureSomeTotal=?",
+				"pids=41 pidsMax=max memPressureSomeTotal=123 cpuPressureSomeTotal=? " +
+				"pidMax=4194304 nsLastPid=2471 fileNrAllocated=3808",
 		);
 	});
 });

@@ -250,14 +250,60 @@ export function readCgroupSample(cgroupDir) {
 			return null;
 		}
 	};
+	const readRaw = (name) => {
+		if (!cgroupDir) return null;
+		try {
+			return fs.readFileSync(path.join(cgroupDir, name), "utf8").trim();
+		} catch {
+			return null;
+		}
+	};
 	const current = readNum("memory.current");
 	const peak = readNum("memory.peak");
 	return {
 		memCurrentMb: current === null ? null : Math.round(current / MB),
 		memPeakMb: peak === null ? null : Math.round(peak / MB),
 		pidsCurrent: readNum("pids.current"),
+		// #2042 H3 (fork-count exhaustion): the ceiling `pids.current` is
+		// measured against. cgroup v2 writes the literal string "max" when the
+		// controller is uncapped, which is not a number -- kept raw so the
+		// record never silently turns "uncapped" into a null that reads like an
+		// unreadable file.
+		pidsMax: readRaw("pids.max"),
 		memPressureSomeTotal: readPressureTotal("memory.pressure"),
 		cpuPressureSomeTotal: readPressureTotal("cpu.pressure"),
+	};
+}
+
+/**
+ * Host-wide process-table and file-descriptor counters (#2042 H3). These are
+ * NOT per-cgroup: `/proc/sys/kernel/ns_last_pid` is the last pid the kernel
+ * handed out in this pid namespace, so it only ever climbs until it wraps at
+ * `pid_max` -- wraparound is the only way a pid can be recycled inside one
+ * job, which is the precondition H4's stale-pid kill needs. `/proc/sys/fs/
+ * file-nr` is "allocated free max"; only the first number moves.
+ *
+ * Every field is independently best-effort, like `readCgroupSample`: an
+ * unreadable file yields null for that field alone and never throws.
+ *
+ * @param {string} [procRoot]
+ * @returns {{ pidMax: number|null, nsLastPid: number|null, fileNrAllocated: number|null }}
+ */
+export function readHostProcSample(procRoot = "/proc") {
+	const readNum = (rel) => {
+		try {
+			const n = Number(
+				fs.readFileSync(path.join(procRoot, rel), "utf8").trim().split(/\s+/)[0],
+			);
+			return Number.isFinite(n) ? n : null;
+		} catch {
+			return null;
+		}
+	};
+	return {
+		pidMax: readNum("sys/kernel/pid_max"),
+		nsLastPid: readNum("sys/kernel/ns_last_pid"),
+		fileNrAllocated: readNum("sys/fs/file-nr"),
 	};
 }
 
@@ -287,13 +333,20 @@ export function readCgroupSample(cgroupDir) {
  * @param {ReturnType<typeof readCgroupSample>} cgroupSample
  * @returns {string}
  */
-export function formatSampleLine(atMs, hostSample, cgroupSample) {
+export function formatSampleLine(
+	atMs,
+	hostSample,
+	cgroupSample,
+	hostProcSample = {},
+) {
 	const n = (v) => (v === null || v === undefined ? "?" : v);
 	return (
 		`[mem-sample] ${atMs} availableMb=${hostSample.availableMb} totalMb=${hostSample.totalMb} ` +
 		`memCurrentMb=${n(cgroupSample.memCurrentMb)} memPeakMb=${n(cgroupSample.memPeakMb)} ` +
-		`pids=${n(cgroupSample.pidsCurrent)} ` +
+		`pids=${n(cgroupSample.pidsCurrent)} pidsMax=${n(cgroupSample.pidsMax)} ` +
 		`memPressureSomeTotal=${n(cgroupSample.memPressureSomeTotal)} ` +
-		`cpuPressureSomeTotal=${n(cgroupSample.cpuPressureSomeTotal)}`
+		`cpuPressureSomeTotal=${n(cgroupSample.cpuPressureSomeTotal)} ` +
+		`pidMax=${n(hostProcSample.pidMax)} nsLastPid=${n(hostProcSample.nsLastPid)} ` +
+		`fileNrAllocated=${n(hostProcSample.fileNrAllocated)}`
 	);
 }

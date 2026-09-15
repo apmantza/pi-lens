@@ -1,0 +1,166 @@
+# THROWAWAY probe workflow for #2042. Never merge to master.
+#
+# Question: is the exit-137 SIGKILL that stops the `default` lane POSITIONAL
+# (tied to the file at ~index 294 of the lane's completion order -- five of six
+# recorded kills stop on `tests/clients/lsp/launch.test.ts`) or TEMPORAL (a
+# ~150 s wall-clock sender)? The two hypotheses are collinear in every run
+# recorded so far, because the lane's file order is fixed: green#294 is BOTH
+# the 294th file AND the file running at ~150 s.
+#
+# The probe breaks the collinearity by shuffling the file order with a pinned
+# seed, so green#294's file runs at a different clock time, and by running an
+# unshuffled control arm on the same commit at the same hour so a null result
+# can be told apart from "the kill simply did not reproduce today".
+#
+# Three arms x 3 attempts. Replaying vitest's own `shuffle(files, seed)`
+# (RandomSequencer) over the discovered file list predicts where
+# `tests/clients/lsp/launch.test.ts` lands:
+#   seed=1   -> ~position 220 of 1014 (the seed the diagnosis prescribed)
+#   seed=5   -> ~position 805 of 1014 (an independent replication at a very
+#               different clock offset, and more attempts against a kill rate
+#               that was 30% of jobs before #3062 and is lower now)
+#   control  -> unshuffled: the file stays at ~294 / ~150 s
+# If the kills follow the FILE to 220 and 805, the cause is file-identity. If
+# they stay at ~294 completed files / ~150 s whatever is running there, the
+# cause is the clock or the fork count, which this probe does not separate
+# (both scale with the same ~3 files/s pace).
+#
+# `on.push` for this branch only: ci.yml has no `workflow_dispatch`, and
+# GitHub only offers `workflow_dispatch` for workflows already present on the
+# default branch, so a dispatch trigger added here would never be selectable.
+# No `concurrency` block on purpose: ci.yml's is `cancel-in-progress`, which
+# would cancel earlier probe attempts on the next push.
+name: Probe 2042 positional
+
+on:
+  push:
+    branches: [probe/2042-positional]
+
+jobs:
+  probe:
+    name: Probe (${{ matrix.arm }} ${{ matrix.attempt }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: seed1
+            attempt: 1
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
+          - arm: seed1
+            attempt: 2
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
+          - arm: seed1
+            attempt: 3
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
+          - arm: seed5
+            attempt: 1
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: seed5
+            attempt: 2
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: seed5
+            attempt: 3
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: control
+            attempt: 1
+            vitest_args: --project default
+          - arm: control
+            attempt: 2
+            vitest_args: --project default
+          - arm: control
+            attempt: 3
+            vitest_args: --project default
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Verify ast-grep CLI is on PATH
+        run: npx ast-grep --version
+
+      - name: Build
+        run: npm run build
+
+      - name: Runner capacity
+        run: |
+          echo "nproc=$(nproc)"
+          free -m
+          echo "pid_max=$(cat /proc/sys/kernel/pid_max)"
+          echo "ns_last_pid=$(cat /proc/sys/kernel/ns_last_pid)"
+          echo "file-nr=$(cat /proc/sys/fs/file-nr)"
+
+      # Same wrapper, same env, same process tree (npm -> with-test-lock ->
+      # vitest) as ci.yml's "Run tests" step -- the victim of the recorded
+      # kills is usually `npm` itself, so the tree shape is part of the
+      # phenomenon and is deliberately unchanged. The ONLY difference is the
+      # vitest argv appended by the matrix.
+      - name: Run tests
+        env:
+          PI_LENS_TEST_TIMEOUT_SCALE: '3'
+          PI_LENS_TEST_NO_LOCK: '1'
+          PI_LENS_MEM_WATCH_INTERVAL_MS: '200'
+          PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+          VITEST_ARGS: ${{ matrix.vitest_args }}
+        run: |
+          echo "arm=${{ matrix.arm }} attempt=${{ matrix.attempt }} args=$VITEST_ARGS"
+          # shellcheck disable=SC2086
+          node scripts/with-memory-watch.mjs -- npm test -- $VITEST_ARGS
+
+      - name: Memory sample tail
+        if: always()
+        env:
+          PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+        run: |
+          f="$PI_LENS_MEM_WATCH_SAMPLE_FILE"
+          if [ -r "$f" ]; then
+            total=$(wc -l < "$f")
+            echo "--- mem-sample tail (last 300 of ${total} lines) ---"
+            tail -n 300 "$f"
+          else
+            echo "(no sample file at $f - the wrapper wrote nothing before the job ended)"
+          fi
+
+      # The recorded gap this closes: `tail -n 300` at 200 ms is the last 60 s,
+      # and a green run is ~3,400 samples, so the samples covering the kill
+      # position in a SURVIVING run were written and then discarded unprinted.
+      # Uploading the whole file is what makes a red and a green comparable at
+      # the same progress point.
+      - name: Upload full memory sample file
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mem-samples-${{ matrix.arm }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Kernel kill evidence
+        if: failure()
+        run: |
+          set +e
+          echo "--- kernel OOM/kill records ---"
+          dm=$(sudo dmesg -T 2>/dev/null)
+          if [ -z "$dm" ]; then
+            echo "(dmesg unavailable or empty - no evidence either way)"
+          else
+            printf '%s\n' "$dm" |
+              grep -iE 'out of memory|oom-kill|oom_reaper|killed process' |
+              tail -40
+          fi
+          echo "--- memory now ---"
+          free -m
+          echo "--- pid/file counters now ---"
+          cat /proc/sys/kernel/ns_last_pid
+          cat /proc/sys/fs/file-nr
+          exit 0

@@ -45,9 +45,18 @@ export interface CgroupSample {
 	memCurrentMb: number | null;
 	memPeakMb: number | null;
 	pidsCurrent: number | null;
+	pidsMax: string | null;
 	memPressureSomeTotal: number | null;
 	cpuPressureSomeTotal: number | null;
 }
+
+export interface HostProcSample {
+	pidMax: number | null;
+	nsLastPid: number | null;
+	fileNrAllocated: number | null;
+}
+
+export declare function readHostProcSample(procRoot?: string): HostProcSample;
 
 export declare function readCgroupSample(
 	cgroupDir: string | null,
@@ -57,4 +66,5 @@ export declare function formatSampleLine(
 	atMs: string,
 	hostSample: { availableMb: number; totalMb: number },
 	cgroupSample: CgroupSample,
+	hostProcSample?: Partial<HostProcSample>,
 ): string;

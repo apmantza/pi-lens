@@ -49,6 +49,7 @@ import {
 	formatSampleLine,
 	formatVerdict,
 	readCgroupSample,
+	readHostProcSample,
 	readMemory,
 	resolveCgroupDir,
 	shouldPrint,
@@ -146,7 +147,7 @@ const timer = setInterval(() => {
 	try {
 		fs.appendFileSync(
 			sampleFile,
-			`${formatSampleLine(atMs, sample, readCgroupSample(cgroupDir))}\n`,
+			`${formatSampleLine(atMs, sample, readCgroupSample(cgroupDir), readHostProcSample())}\n`,
 		);
 	} catch {
 		// Best-effort: a disk-full or permissions failure here must never take
