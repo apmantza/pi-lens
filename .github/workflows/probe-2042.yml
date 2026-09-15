@@ -46,33 +46,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arm: seed1
+          - arm: full
             attempt: 1
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
-          - arm: seed1
+            vitest_args: ''
+          - arm: full
             attempt: 2
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
-          - arm: seed1
+            vitest_args: ''
+          - arm: full
             attempt: 3
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=1
+            vitest_args: ''
+          - arm: full
+            attempt: 4
+            vitest_args: ''
+          - arm: full
+            attempt: 5
+            vitest_args: ''
+          - arm: full
+            attempt: 6
+            vitest_args: ''
           - arm: seed5
-            attempt: 1
+            attempt: 4
             vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
           - arm: seed5
-            attempt: 2
+            attempt: 5
             vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
           - arm: seed5
-            attempt: 3
+            attempt: 6
             vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: control
-            attempt: 1
-            vitest_args: --project default
-          - arm: control
-            attempt: 2
-            vitest_args: --project default
-          - arm: control
-            attempt: 3
-            vitest_args: --project default
+          - arm: seed5
+            attempt: 7
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: seed5
+            attempt: 8
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: seed5
+            attempt: 9
+            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -113,7 +122,7 @@ jobs:
           PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
           VITEST_ARGS: ${{ matrix.vitest_args }}
         run: |
-          echo "arm=${{ matrix.arm }} attempt=${{ matrix.attempt }} args=$VITEST_ARGS"
+          echo "arm=${{ matrix.arm }} attempt=${{ matrix.attempt }} args=[$VITEST_ARGS]"
           # shellcheck disable=SC2086
           node scripts/with-memory-watch.mjs -- npm test -- $VITEST_ARGS
 
