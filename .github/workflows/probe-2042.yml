@@ -47,41 +47,29 @@ jobs:
       matrix:
         include:
           - arm: full
-            attempt: 1
+            attempt: 11
             vitest_args: ''
           - arm: full
-            attempt: 2
+            attempt: 12
             vitest_args: ''
           - arm: full
-            attempt: 3
+            attempt: 13
             vitest_args: ''
           - arm: full
-            attempt: 4
+            attempt: 14
             vitest_args: ''
           - arm: full
-            attempt: 5
+            attempt: 15
             vitest_args: ''
           - arm: full
-            attempt: 6
+            attempt: 16
             vitest_args: ''
-          - arm: seed5
-            attempt: 4
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: seed5
-            attempt: 5
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: seed5
-            attempt: 6
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: seed5
-            attempt: 7
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: seed5
-            attempt: 8
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
-          - arm: seed5
-            attempt: 9
-            vitest_args: --project default --sequence.shuffle.files --sequence.seed=5
+          - arm: solo
+            attempt: 11
+            vitest_args: --project default tests/clients/lsp/launch.test.ts
+          - arm: solo
+            attempt: 12
+            vitest_args: --project default tests/clients/lsp/launch.test.ts
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -120,11 +108,35 @@ jobs:
           PI_LENS_TEST_NO_LOCK: '1'
           PI_LENS_MEM_WATCH_INTERVAL_MS: '200'
           PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+          PI_LENS_PROBE_KILL_LOG: ${{ runner.temp }}/pi-lens-kill-calls.log
           VITEST_ARGS: ${{ matrix.vitest_args }}
         run: |
           echo "arm=${{ matrix.arm }} attempt=${{ matrix.attempt }} args=[$VITEST_ARGS]"
           # shellcheck disable=SC2086
           node scripts/with-memory-watch.mjs -- npm test -- $VITEST_ARGS
+
+      # Every real `process.kill` a fork made, with the /proc identity of the
+      # process it was about to signal, read at call time.
+      - name: Kill-call record
+        if: always()
+        run: |
+          f="${{ runner.temp }}/pi-lens-kill-calls.log"
+          if [ -r "$f" ]; then
+            echo "--- kill calls at a fabricated pid (|target| < 200000) ---"
+            grep -E '"target":-?[0-9]{1,5},' "$f" | head -40 || true
+            echo "--- total kill calls: $(wc -l < "$f") ---"
+          else
+            echo "(no kill-call record at $f)"
+          fi
+
+      - name: Upload kill-call record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kill-calls-${{ matrix.arm }}-${{ matrix.attempt }}
+          path: ${{ runner.temp }}/pi-lens-kill-calls.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Memory sample tail
         if: always()

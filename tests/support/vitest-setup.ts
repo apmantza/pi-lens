@@ -12,6 +12,72 @@ import { removeTempDirSync } from "../clients/test-utils.js";
 // assertions, so default the debounce to 0 (synchronous write, the pre-#260
 // behaviour). Tests that exercise the throttle override this in their own body
 // and call `flushReviewGraphPersistsForTests()`.
+// ---------------------------------------------------------------------------
+// PROBE ONLY (#2042, throwaway branch probe/2042-positional). NOT FOR MASTER.
+//
+// The exit-137 kill lands 56-180 ms after one test file's `✓`, and the reorder
+// probe proved it follows the FILE, not the clock. This records every real
+// `process.kill` call a fork makes -- pid, signal, and stack -- so the sender
+// is named WITHOUT needing the kill to land: a call to a fabricated pid is
+// logged whether or not that pid happens to be live on this runner.
+// Forwards the call unchanged; a later `vi.spyOn(process, "kill")` simply
+// replaces this wrapper for that file, which is fine.
+const probeKillLog = process.env.PI_LENS_PROBE_KILL_LOG;
+if (probeKillLog) {
+	const realKill = process.kill.bind(process);
+	process.kill = ((pid: number, signal?: string | number) => {
+		let testPath: string | null = null;
+		try {
+			testPath = (expect.getState().testPath as string | undefined) ?? null;
+		} catch {
+			// outside a test (module scope / teardown)
+		}
+		// Who actually owns the pid this call is about to signal? Read it HERE,
+		// at call time: after the signal lands the process is gone and no later
+		// `ps` can answer. This is the whole point of the probe on CI.
+		let victim: Record<string, string | null> | null = null;
+		try {
+			const target = Math.abs(pid);
+			if (target > 0 && target < 200000) {
+				const status = fs.readFileSync(`/proc/${target}/status`, "utf8");
+				victim = {
+					name: /^Name:\s*(.*)$/m.exec(status)?.[1] ?? null,
+					ppid: /^PPid:\s*(\d+)$/m.exec(status)?.[1] ?? null,
+					cmdline: fs
+						.readFileSync(`/proc/${target}/cmdline`, "utf8")
+						.replace(/\0/g, " ")
+						.trim()
+						.slice(0, 200),
+				};
+			}
+		} catch {
+			victim = null; // no such process: the signal will be a no-op
+		}
+		try {
+			fs.appendFileSync(
+				probeKillLog,
+				`${JSON.stringify({
+					at: new Date().toISOString(),
+					self: process.pid,
+					worker: process.env.VITEST_WORKER_ID ?? null,
+					testPath,
+					target: pid,
+					signal: signal ?? null,
+					victim,
+					stack: new Error("probe-kill").stack,
+				})}\n`,
+			);
+		} catch {
+			// best-effort probe record
+		}
+		// Enumeration mode: record the call and DO NOT deliver it. A sweep of
+		// the whole lane on a dev box must not actually SIGKILL whatever real
+		// process happens to own a fabricated pid.
+		if (process.env.PI_LENS_PROBE_KILL_BLOCK === "1") return true;
+		return realKill(pid, signal as NodeJS.Signals);
+	}) as typeof process.kill;
+}
+
 process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS = "0";
 process.env.PI_LENS_DISABLE_TOOL_INSTALL = "1";
 
