@@ -24,6 +24,7 @@ import {
 	cmakeFormatFormatter,
 	cljfmtFormatter,
 	clearFormatterRuntimeState,
+	formatFile,
 	getFormattersForFile,
 	googleJavaFormatFormatter,
 	invalidateFormatterCacheForPath,
@@ -38,7 +39,9 @@ import {
 	shfmtFormatter,
 	ALL_FORMATTERS,
 	styluaFormatter,
+	ktlintFormatter,
 } from "../../clients/formatters.js";
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { FORMATTER_MARKERS } from "../../clients/tool-cwd.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { _getSpotlessGradleReadCountForTests } from "../../clients/tool-policy.js";
@@ -127,7 +130,20 @@ beforeEach(() => {
 
 afterEach(() => {
 	clearFormatterRuntimeState();
+	resetDegradationLedger();
 	cleanup();
+});
+
+it("formatFile declines before spawning when agreement evidence is unreadable (#3007)", async () => {
+	fs.writeFileSync(path.join(tmpDir, "package.json"), "{ broken");
+	const filePath = fileIn(tmpDir, "Example.kt");
+	fs.writeFileSync(filePath, "fun main() {}\n");
+	const result = await formatFile(filePath, ktlintFormatter);
+	expect(result).toMatchObject({
+		success: true,
+		changed: false,
+		outcome: "unavailable",
+	});
 });
 
 // ---------------------------------------------------------------------------

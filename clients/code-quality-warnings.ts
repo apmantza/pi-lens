@@ -6,6 +6,7 @@ import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { displayProjectDataPath, getProjectDataDir } from "./file-utils.js";
 import { normalizeMessage, stableFindingId } from "./finding-identity.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 
 export interface CodeQualityWarningRecord {
 	id: string;
@@ -372,6 +373,7 @@ export function appendCodeQualityWarningsHistory(
 export function formatCodeQualityWarningsAdvisory(
 	report: CodeQualityWarningsReport,
 	cwd: string,
+	host: LensToolHost = "pi",
 ): string | undefined {
 	if (report.summary.warnings === 0) return undefined;
 	const topRules = report.summary.topRules
@@ -394,6 +396,9 @@ export function formatCodeQualityWarningsAdvisory(
 					.filter(Boolean)
 					.join(", ")
 			: "";
+	// #2535 F3: a known tool with no mapping on this host resolves to
+	// undefined — omit the instruction rather than naming a dead tool.
+	const diagnosticsTool = resolveLensToolName("lens_diagnostics", host);
 	return [
 		`Code-quality warnings introduced/touched this turn: ${report.summary.warnings} across ${report.summary.files} file(s).`,
 		tiers
@@ -402,7 +407,11 @@ export function formatCodeQualityWarningsAdvisory(
 		topRules ? `Top rules: ${topRules}` : undefined,
 		// #2521: tool route first (`mode=delta` covers the code-quality cache
 		// as well as the actionable one), resolved path second.
-		"Use lens_diagnostics with mode=delta to inspect these warnings.",
+		// #2535 F3: omit when unmapped on this host, never name a dead tool
+		// (pinned available on both hosts; defensive only).
+		diagnosticsTool
+			? `Use ${diagnosticsTool} with mode=delta to inspect these warnings.`
+			: undefined,
 		"No action required unless you are already refactoring these areas.",
 		`Raw report (only if you need the JSON): ${displayProjectDataPath(
 			cwd,

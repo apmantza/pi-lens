@@ -305,6 +305,19 @@ describe("runtime-agent-end deferred formatting", () => {
 				"let value=1\n",
 			);
 			fs.writeFileSync(path.join(env.tmpDir, "biome.json"), "{}\n");
+			// The shared agreement gate requires independent lockfile evidence for
+			// the Biome autonomous writer; the config file alone must not authorize
+			// a deferred mutation.
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { "@biomejs/biome": "^1.0.0" } }),
+			);
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package-lock.json"),
+				JSON.stringify({
+					packages: { "node_modules/@biomejs/biome": { version: "1.0.0" } },
+				}),
+			);
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
 			runtime.deferMutation(

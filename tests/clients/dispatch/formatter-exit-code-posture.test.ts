@@ -37,6 +37,80 @@ async function loadFormatters() {
 	return await import("../../../clients/formatters.js");
 }
 
+function writeFormatterAgreementEvidence(tmpDir: string): void {
+	const nodeTools = {
+		"@biomejs/biome": "1.0.0",
+		prettier: "3.0.0",
+		oxfmt: "0.66.0",
+	};
+	fs.writeFileSync(
+		path.join(tmpDir, "package.json"),
+		JSON.stringify({
+			devDependencies: Object.fromEntries(
+				Object.entries(nodeTools).map(([name, version]) => [
+					name,
+					`^${version}`,
+				]),
+			),
+		}),
+	);
+	fs.writeFileSync(
+		path.join(tmpDir, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: Object.fromEntries(
+				Object.entries(nodeTools).map(([name, version]) => [
+					`node_modules/${name}`,
+					{ version },
+				]),
+			),
+		}),
+	);
+	for (const file of [
+		"pyproject.toml",
+		"requirements.txt",
+		"Gemfile",
+		"Cargo.toml",
+		"go.mod",
+		"build.zig",
+		"pubspec.yaml",
+		".editorconfig",
+		".ocamlformat",
+		".clang-format",
+		"gleam.toml",
+		".terraform.lock.hcl",
+		".php-cs-fixer.php",
+		".csharpierrc",
+		".fantomasignore",
+		".swiftformat",
+		"stylua.toml",
+		".ormolu",
+		"taplo.toml",
+		".google-java-format",
+		".cljfmt.edn",
+		".cmake-format",
+		"PSScriptAnalyzerSettings.psd1",
+		".formatter.exs",
+		".ktfmt",
+		"terragrunt.hcl",
+	]) {
+		const content =
+			file === "pyproject.toml"
+				? "[tool.black]\n[tool.ruff]\n"
+				: file === "requirements.txt"
+					? "sqlfluff\n"
+					: file === "Gemfile"
+						? 'gem "rubocop"\ngem "standard"\n'
+						: file === "Cargo.toml"
+							? '[package]\nname = "probe"\nversion = "0.1.0"\n'
+							: file === "go.mod"
+								? "module example.com/probe\n"
+								: "\n";
+		fs.writeFileSync(path.join(tmpDir, file), content);
+	}
+	fs.mkdirSync(path.join(tmpDir, "cue.mod"));
+}
+
 /**
  * The ONLY formatters allowed a benign nonzero exit: lint-autofixers, which
  * report remaining offenses through the exit status AFTER a successful rewrite.
@@ -132,6 +206,10 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 	it("a nonzero exit from gofmt is a failure, not a clean no-op", async () => {
 		const env = setupTestEnvironment("pi-lens-exit-posture-");
 		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/probe\n",
+			);
 			const filePath = path.join(env.tmpDir, "main.go");
 			fs.writeFileSync(filePath, "package main\nfunc main( {\n");
 			safeSpawnAsync.mockResolvedValue({
@@ -159,6 +237,7 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 		const { ALL_FORMATTERS, formatFile } = await loadFormatters();
 		const env = setupTestEnvironment("pi-lens-exit-posture-all-");
 		try {
+			writeFormatterAgreementEvidence(env.tmpDir);
 			for (const definition of ALL_FORMATTERS) {
 				const ext = definition.extensions[0] ?? "";
 				const name = definition.filenames?.[0] ?? `probe${ext}`;
@@ -175,6 +254,12 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 					resolveCommand: undefined,
 				});
 
+				if (result.outcome === "unavailable") {
+					// nixfmt has no honest project marker and is intentionally declined
+					// by #3005's conservative agreement policy.
+					expect(definition.name).toBe("nixfmt");
+					continue;
+				}
 				if (definition.lenientExitCode) {
 					expect(
 						result.success,
@@ -185,7 +270,7 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 						result,
 						`${definition.name}: a nonzero exit must not read as a clean unchanged file`,
 					).not.toEqual({ success: true, changed: false });
-					expect(result.success).toBe(false);
+					expect(result.success, definition.name).toBe(false);
 				}
 			}
 		} finally {
@@ -200,6 +285,10 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 	it("surfaces a real diagnostic, not biome's stderr banner", async () => {
 		const env = setupTestEnvironment("pi-lens-exit-msg-");
 		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/probe\n",
+			);
 			const filePath = path.join(env.tmpDir, "main.go");
 			fs.writeFileSync(filePath, "package main\n");
 			safeSpawnAsync.mockResolvedValue({
@@ -224,6 +313,10 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 	it("falls back to stdout when stderr carries nothing useful", async () => {
 		const env = setupTestEnvironment("pi-lens-exit-msg-stdout-");
 		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/probe\n",
+			);
 			const filePath = path.join(env.tmpDir, "main.go");
 			fs.writeFileSync(filePath, "package main\n");
 			safeSpawnAsync.mockResolvedValue({
@@ -271,6 +364,10 @@ describe("formatFile is strict by default at the seam (#1337)", () => {
 	it("still reports a clean unchanged file when the exit is zero", async () => {
 		const env = setupTestEnvironment("pi-lens-exit-posture-ok-");
 		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/probe\n",
+			);
 			const filePath = path.join(env.tmpDir, "main.go");
 			fs.writeFileSync(filePath, "package main\n");
 			safeSpawnAsync.mockResolvedValue({ status: 0, stdout: "", stderr: "" });

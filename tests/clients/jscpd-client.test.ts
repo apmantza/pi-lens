@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { gatedPromise } from "../support/fault-injection.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 const ensureTool = vi.fn();
 const findNodeToolBinary = vi.fn();
@@ -61,7 +64,7 @@ describe("jscpd-client", () => {
 	it("uses the managed executable after PATH installation", async () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-managed-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-managed-");
 		// Must be fully qualified under the HOST's semantics (`isFullyQualified`
 		// in clients/path-utils.ts), not just POSIX-absolute — on win32 a
 		// leading "/" alone is ambient-drive-relative, not fully qualified, so
@@ -96,7 +99,7 @@ describe("jscpd-client", () => {
 				managed,
 			);
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -128,7 +131,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			const srcFile = path.join(tmpDir, "src", "feature", "index.ts");
 			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -164,7 +167,7 @@ describe("jscpd-client", () => {
 			expect(ignorePattern).toContain("**/.cache/**");
 			expect(ignorePattern).toContain("**/*.js");
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -176,7 +179,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-crash-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-crash-");
 		try {
 			const srcFile = path.join(tmpDir, "src", "feature", "index.ts");
 			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -205,7 +208,7 @@ describe("jscpd-client", () => {
 			expect(result.success).toBe(false);
 			expect(result.clones).toHaveLength(0);
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -213,7 +216,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			const excludedFile = path.join(tmpDir, "node_modules", "pkg", "index.ts");
 			fs.mkdirSync(path.dirname(excludedFile), { recursive: true });
@@ -240,7 +243,7 @@ describe("jscpd-client", () => {
 			expect(result.clones).toEqual([]);
 			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -248,7 +251,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			fs.writeFileSync(path.join(tmpDir, "README.md"), "hello\n");
 
@@ -273,7 +276,7 @@ describe("jscpd-client", () => {
 			expect(result.clones).toEqual([]);
 			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -283,7 +286,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			const srcFile = path.join(tmpDir, "src", "index.ts");
 			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -311,7 +314,7 @@ describe("jscpd-client", () => {
 			expect(result.clones).toEqual([]);
 			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -333,7 +336,7 @@ describe("jscpd-client", () => {
 			const { JscpdClient } = await import("../../clients/jscpd-client.js");
 			const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+			const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 			try {
 				const srcFile = path.join(tmpDir, "src", lang.file);
 				fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -357,7 +360,7 @@ describe("jscpd-client", () => {
 				// without ever invoking jscpd. Confirm the spawn now happens.
 				expect(safeSpawnMod.safeSpawnAsync).toHaveBeenCalled();
 			} finally {
-				cleanup();
+				await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 			}
 		});
 	}
@@ -366,7 +369,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			// Three deliberately unsupported extensions — extension regex must
 			// keep these out so we never spawn jscpd on a project it can't
@@ -394,7 +397,7 @@ describe("jscpd-client", () => {
 			expect(result.clones).toEqual([]);
 			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -402,7 +405,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			const tsFile = path.join(tmpDir, "src", "feature.ts");
 			fs.mkdirSync(path.dirname(tsFile), { recursive: true });
@@ -436,7 +439,7 @@ describe("jscpd-client", () => {
 			expect(patterns).toContain("**/*.js");
 			expect(patterns).toContain("**/*.jsx");
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -448,7 +451,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-config-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-config-");
 		try {
 			const srcFile = path.join(tmpDir, "src", "feature.ts");
 			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -482,7 +485,7 @@ describe("jscpd-client", () => {
 			expect(args).not.toContain("--min-tokens");
 			expect(args).not.toContain("--ignore");
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -490,7 +493,7 @@ describe("jscpd-client", () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
 		try {
 			const srcFile = path.join(tmpDir, "src", "lib.js");
 			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
@@ -517,7 +520,7 @@ describe("jscpd-client", () => {
 			expect(patterns).not.toContain("**/*.js");
 			expect(patterns).not.toContain("**/*.jsx");
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 });
@@ -549,7 +552,7 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 
 	it("a late-settling scan does not evict its mid-flight successor", async () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-aba-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-aba-");
 		try {
 			const client = new JscpdClient(false);
 			const internals = client as unknown as Internals;
@@ -587,7 +590,7 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 
 			successor.resolve({});
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 
@@ -596,7 +599,7 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 	// permanently `false` (never releases) reds here.
 	it("a normally-settling scan still cleans up its own entry", async () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
-		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-clean-");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-clean-");
 		try {
 			const client = new JscpdClient(false);
 			const internals = client as unknown as Internals;
@@ -608,7 +611,7 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 			await tick();
 			expect(internals.inFlight.size).toBe(0);
 		} finally {
-			cleanup();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 });

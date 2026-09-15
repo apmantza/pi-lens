@@ -20,7 +20,8 @@ const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	logLatencySpy: vi.fn(),
 }));
 vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));
@@ -45,6 +46,19 @@ describe("eslint autofix availability latch (#1494)", () => {
 		logLatencySpy.mockReset();
 		env = setupTestEnvironment("pi-lens-eslint-latch-");
 		fs.writeFileSync(path.join(env.tmpDir, ".eslintrc.json"), "{}\n");
+		// #3005 fixture recurrence: availability-latch assertions must reach the
+		// real probe, not be declined for absent Node tool agreement first.
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { eslint: "^10.5.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/eslint": { version: "10.5.0" } },
+			}),
+		);
 		filePath = path.join(env.tmpDir, "messy.js");
 		fs.writeFileSync(filePath, "const x = 1\nconsole.log(x)\n");
 		vi.useFakeTimers({ toFake: ["Date"] });

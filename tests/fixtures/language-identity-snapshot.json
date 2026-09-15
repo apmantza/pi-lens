@@ -280,6 +280,16 @@
 			"reviewGraphGrammar": "cue",
 			"moduleReportGrammar": "cue"
 		},
+		".cuh": {
+			"kind": "cxx",
+			"kindLanguageId": "cpp",
+			"lspId": "cpp",
+			"treeSitterGrammar": "cpp",
+			"scannerGrammar": "cpp",
+			"readExpansionLang": "cpp",
+			"reviewGraphGrammar": "cpp",
+			"moduleReportGrammar": "cpp"
+		},
 		".cxx": {
 			"kind": "cxx",
 			"kindLanguageId": "cpp",

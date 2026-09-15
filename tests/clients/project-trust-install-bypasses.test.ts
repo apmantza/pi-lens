@@ -53,9 +53,22 @@ describe("central project-trust install gate (#1334 review)", () => {
 		try {
 			const file = path.join(env.tmpDir, "x.ts");
 			fs.writeFileSync(file, "const x = 1;\n");
+			// #3005 fixture recurrence: reach the trust gate with established
+			// formatter agreement; absent evidence is a separate unavailable path.
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ devDependencies: { prettier: "^3.0.0" } }),
+			);
+			fs.writeFileSync(
+				path.join(env.tmpDir, "package-lock.json"),
+				JSON.stringify({
+					lockfileVersion: 3,
+					packages: { "": {}, "node_modules/prettier": { version: "3.0.0" } },
+				}),
+			);
 			const { formatFile } = await import("../../clients/formatters.js");
 			const formatter = {
-				name: "npx-test",
+				name: "prettier",
 				command: ["npx", "pkg", "$FILE"],
 				extensions: [".ts"],
 				async detect() {

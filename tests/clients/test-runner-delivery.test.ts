@@ -1,8 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const logLatency = vi.hoisted(() => vi.fn());
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/latency-logger.js")>()),
+	logLatency,
+}));
 import { snapshotAdvisoryProvenance } from "../../clients/advisory-provenance.js";
 import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import {
 	_resetTestRunnerDeliveryForTests,
 	consumeStagedTestRunnerFindings,
@@ -15,7 +25,11 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("automatic test-runner delivery (#2366)", () => {
-	afterEach(() => _resetTestRunnerDeliveryForTests());
+	afterEach(() => {
+		_resetTestRunnerDeliveryForTests();
+		resetDegradationLedger();
+		logLatency.mockReset();
+	});
 
 	function setup() {
 		const env = setupTestEnvironment("pi-lens-test-delivery-");
@@ -90,6 +104,130 @@ describe("automatic test-runner delivery (#2366)", () => {
 					env.tmpDir,
 				)?.data.deliveryEligible,
 			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records the run-for and delivery file sequences for each delivered verdict (#2542)", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const sourceFile = path.join(env.tmpDir, "src/app.ts");
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			cache.writeCache(
+				"test-runner-findings",
+				{
+					content: "FAIL app.test.ts",
+					testRunGeneration: 1,
+					verdicts: [
+						{
+							file: "app.test.ts",
+							sourceFile,
+							fileSeq: { state: "known", value: 1 },
+						},
+					],
+				},
+				env.tmpDir,
+			);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+
+			expect(logLatency).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "test_runner_verdict_delivery",
+					metadata: expect.objectContaining({
+						sessionId: "session-a",
+						verdictCount: 1,
+						staleCount: 1,
+						unknownCount: 0,
+					}),
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("legacy verdict without file sequence is delivered as unknown through the real idle path", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const sourceFile = path.join(env.tmpDir, "src/legacy.ts");
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			cache.writeCache(
+				"test-runner-findings",
+				{
+					content: "FAIL legacy.test.ts",
+					testRunGeneration: 1,
+					verdicts: [
+						{ file: "legacy.test.ts", sourceFile },
+						{ file: "legacy.test.ts", sourceFile },
+					],
+				} as never,
+				env.tmpDir,
+			);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 2,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			const findings = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+
+			expect(findings?.messages).toHaveLength(1);
+			expect(logLatency).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "test_runner_verdict_delivery",
+					metadata: expect.objectContaining({
+						verdictCount: 0,
+						staleCount: 0,
+						unknownCount: 2,
+					}),
+				}),
+			);
+			const ledger = getDegradationSummary().find(
+				(group) => group.kind === "test-runner-delivery",
+			);
+			expect(ledger?.count).toBe(1);
+			expect(ledger?.latestReasons).toHaveLength(1);
 		} finally {
 			env.cleanup();
 		}

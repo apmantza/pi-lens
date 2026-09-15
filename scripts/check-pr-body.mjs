@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
@@ -423,7 +423,12 @@ function testCorpus(options = {}) {
 			files = [];
 		}
 	}
-	const paths = new Set(files);
+	const paths = new Set(
+		// #3013 (defect shape 47): PR-body fixtures live under the scanned
+		// tests/ root, so without this filter the corpus would resolve a
+		// fixture's own fabricated ids and accept the body under test.
+		files.filter((file) => !file.startsWith("tests/fixtures/ci-pr-bodies/")),
+	);
 	const titles = new Set();
 	for (const file of files) {
 		if (
@@ -670,28 +675,115 @@ function lintCodeCitations(body, options = {}) {
 	return errors;
 }
 
+// Positive test-reference recognition (#3013): prose outside a test column
+// only names a test through a recognisable form — an it("…") call, a
+// concrete tests/ path, or a short id. A backticked shell invocation is
+// never a test title. The discriminator is semantic (catalog shape 34): a
+// leading argv-like word plus invocation evidence (a flag, a quoted word,
+// an assignment, or a shell metacharacter) reads as a command, not a title.
+// This replaces the four-prefix command allowlist, which missed the next
+// spelling every time. A bare `argv path…` span stays a citation, so a
+// missing tests/ path there still reds.
+function isArgvLike(word) {
+	return (
+		/^(?:\.{1,2}\/)?[A-Za-z0-9_.$~][A-Za-z0-9_.+:@$-]*$/.test(word) ||
+		/^[A-Za-z_][A-Za-z0-9_]*=[^\s]*$/.test(word)
+	);
+}
+
+function isInvocationEvidence(word) {
+	return (
+		word.startsWith("-") ||
+		/^\/[A-Za-z]/.test(word) ||
+		/^(['"]).*\1$/.test(word) ||
+		/^[A-Za-z_][A-Za-z0-9_]*=/.test(word) ||
+		/[=|$><;&*?`]/.test(word)
+	);
+}
+
+function isCommandLikeSpan(value) {
+	const words = String(value ?? "")
+		.split(/\s+/)
+		.filter(Boolean);
+	return (
+		words.length >= 2 &&
+		isArgvLike(words[0]) &&
+		words.slice(1).some(isInvocationEvidence)
+	);
+}
+
+// A tests/ token that cannot name a file (a glob, a brace expansion, or a
+// quoted/bracketed paste) is never a file reference (#3013).
+function isConcreteTestPathToken(token) {
+	return !/[{}[\]*?"'()<>|&;`]/.test(token);
+}
+
+function extractTestPathTokens(value) {
+	const tokens = [];
+	for (const raw of String(value ?? "").split(/\s+/)) {
+		const token = raw
+			.replace(/^(['"([{<]+)/, "")
+			.replace(/([.,;:!?)\]}'"]+)$/, "");
+		if (token.startsWith("tests/")) tokens.push(token);
+	}
+	return tokens;
+}
+
 function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 	const references = [];
 	const visibleBody = bodyLinesOutsideFences(body).join("\n");
-	const addToken = (raw, allowFreeText, allowCommand = false) => {
-		const token = raw.trim();
-		if (
-			!allowCommand &&
-			/^(?:npx\s+tsc\b|npm\s+run\s+(?:preflight|build|test)\b|python3\s+-m\s+pip\b)/i.test(
-				token,
+	const isExistingDirectory = (pathToken) => {
+		try {
+			return statSync(
+				resolve(options.cwd ?? process.cwd(), pathToken),
+			).isDirectory();
+		} catch {
+			return false;
+		}
+	};
+	const pushMissingPathTokens = (value) => {
+		for (const pathToken of extractTestPathTokens(value)) {
+			// A trailing slash names a suite directory, never a file.
+			if (pathToken.endsWith("/")) continue;
+			if (!isConcreteTestPathToken(pathToken)) continue;
+			if (
+				corpus.paths.has(pathToken) ||
+				corpus.titles.has(pathToken) ||
+				corpus.paths.has(pathToken.match(/^(tests\/[^:]+):\d+$/)?.[1] ?? "")
 			)
-		)
-			return;
+				continue;
+			// A slash-less directory (tests/config) names a suite too.
+			if (isExistingDirectory(pathToken)) continue;
+			references.push(pathToken);
+		}
+	};
+	const addToken = (raw, strict = false, testColumn = false) => {
+		const token = raw.trim();
 		const wrapped = /^it\(\s*(["'])(.*?)\1\s*\)(?:\s*\([^)]*\))?$/.exec(token);
 		const value = wrapped
 			? wrapped[2].replace(/\s*\([^)]*\)\s*$/, "").trim()
 			: token;
-		const shortOrPath =
-			/^[A-Z]\d{2}$/.test(value) ||
-			/^tests\/[^\s`]+$/.test(value) ||
-			value.startsWith("tests/");
-		if (shortOrPath || (allowFreeText && (wrapped || /\s/.test(value))))
+		// Short IDs are references only in an explicitly named test column.
+		// A bare ID in prose is not evidence of a test and must remain inert.
+		if ((/^[A-Z]\d+$/.test(value) && testColumn) || wrapped) {
 			references.push(value);
+			return;
+		}
+		if (strict) {
+			// Test-column placement recognises the reference, so even a
+			// command-shaped span is checked, exactly as before. Pipe lines
+			// outside a valid table share this strictness: without the
+			// separator that makes columns meaningful, a broken separator
+			// must not hide a fabricated reference.
+			if (/\s/.test(value) || value.startsWith("tests/"))
+				references.push(value);
+			return;
+		}
+		if (isCommandLikeSpan(value)) return;
+		// Prose, bullets, and non-test cells: positive recognition only —
+		// anything without a concrete tests/ path is not a test reference
+		// and is never asserted to exist.
+		pushMissingPathTokens(value);
 	};
 	const lines = visibleBody.split(/\r?\n/);
 	let tableHeaders = null;
@@ -725,15 +817,20 @@ function lintTestReferences(body, options = {}, corpus = testCorpus(options)) {
 				? line.slice(0, match.index).split("|").length - 1
 				: -1;
 			const inTestColumn = Boolean(
+				// Word-boundary match (#3013): a bare "id" substring qualified
+				// every "Evidence" column as a test column, so claim-matrix
+				// evidence cells holding commands and code read as missing test
+				// references. A column names tests only when it says so as a
+				// word ("Test", "Test id", "Case").
 				inTable &&
-				/test|probe|case|witness|id/i.test(tableHeaders[cellIndex] ?? ""),
+				/\b(?:test|probe|case|witness|id)\b/i.test(
+					tableHeaders[cellIndex] ?? "",
+				),
 			);
-			addToken(match[1], inTestColumn || isBullet || !inTable, inTestColumn);
+			addToken(match[1], inTestColumn || (table && !inTable), inTestColumn);
 		}
 		for (const match of line.matchAll(/\bit\(\s*(["'])(.*?)\1\s*\)/g))
-			if (isBullet || !inTable) addToken(match[0], true);
-		for (const match of line.matchAll(/(?:^|[\s:(])(["'])([^"'\n]{3,})\1/g))
-			if (isBullet || !inTable) addToken(match[2], true);
+			if (isBullet || !inTable) addToken(match[0]);
 	}
 	const exists = (reference) => {
 		const path = reference.match(/^(tests\/[^:]+):\d+$/)?.[1];

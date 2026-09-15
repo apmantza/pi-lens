@@ -654,6 +654,48 @@ describe("lens_diagnostics schema", () => {
 		expect(props.mode).toBeDefined();
 		expect(props.severity).toBeDefined();
 		expect(props.refreshRunners).toBeDefined();
+		expect(props.analysisRoot).toBeDefined();
+	});
+
+	it("passes an explicit analysis root through mode=full (#2053)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "all",
+			analysisRoot: "/home/me/repo",
+		});
+
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).toHaveBeenCalledWith(
+			expect.anything(),
+			"/proj",
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ analysisRoot: "/home/me/repo" }),
+		);
+	});
+
+	it("rejects an invalid explicit analysis root as a failed tool call (#2977 F2)", async () => {
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			analyzed: [],
+			cold: [],
+			timings: {},
+			failed: [],
+			analysisRootError: "explicit analysis root is unavailable",
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{
+				mode: "full",
+				refreshRunners: "all",
+				analysisRoot: "/missing",
+			},
+		);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		expect(result.content[0].text).toMatch(/unavailable/);
 	});
 
 	it("defaults to delta mode when no params supplied", async () => {
@@ -2724,6 +2766,45 @@ describe("lens_diagnostics mode=full", () => {
 		).toContain("knip");
 	});
 
+	// Recurrence: a real Opengrep partial report can carry findings without a
+	// complete scanned-path set; the renderer must not call that result cold.
+	it("mode=full renders partial Opengrep findings with incomplete coverage", async () => {
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [
+				{
+					filePath: "/proj/src/a.py",
+					line: 1,
+					column: 1,
+					severity: "warning",
+					semantic: "warning",
+					tool: "opengrep",
+					runner: "opengrep",
+					rule: "opengrep:danger",
+					message: "partial finding",
+					source: "project-scan",
+				},
+			],
+			runners: ["opengrep"],
+			analyzed: [],
+			cold: [],
+			partial: ["opengrep"],
+			partialReasons: { opengrep: "invalid UTF-8" },
+			timings: { opengrep: 4 },
+		});
+		const result = await run(
+			makeTool({}, { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) }),
+			{ mode: "full", refreshRunners: "cached" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("partial finding");
+		expect(text).toContain("partial coverage (findings included): opengrep");
+		expect(text).toContain("Coverage is incomplete");
+		expect(text).not.toContain("opengrep — not run");
+		expect(
+			(result.details as { partialRunners?: string[] }).partialRunners,
+		).toEqual(["opengrep"]);
+	});
+
 	it("mode=full renders failed analyzers as unknown, not clean (#925)", async () => {
 		const lspService = {
 			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
@@ -2852,6 +2933,29 @@ describe("lens_diagnostics mode=full", () => {
 		// the heavyweight analyzers must still never run — only the rendering
 		// of that skip changed, not the (deliberately cheap) behavior itself.
 		expect(freshFetchMocks.fetchFreshProjectDiagnostics).not.toHaveBeenCalled();
+	});
+
+	// #2535 F1: the same quick-mode note on the MCP host must name the MCP
+	// tool. Drives the real execute with a mocked LSP service (no sweep).
+	it("mode=full without refreshRunners names the MCP tool on the MCP host (#2535)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const tool = makeTool({}, lspService);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full" },
+			new AbortController().signal,
+			null,
+			{ cwd: "/proj", host: "mcp" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("not run this call (quick mode)");
+		expect(text).toContain("pilens_diagnostics mode=full");
+		// Reject twin: the bare pi name must not appear — the lookbehind
+		// excludes the pilens_ prefix.
+		expect(text).not.toMatch(/(?<![A-Za-z0-9_])lens_diagnostics/);
 	});
 
 	it("mode=full refreshRunners=cached triggers the analyzer fresh-fetch for the resolved cwd (#585)", async () => {

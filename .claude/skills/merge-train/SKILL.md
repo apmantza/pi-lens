@@ -113,6 +113,21 @@ issue into the brief. AGENTS.md's net-count rule binds the brief author; the
 fixer and reviewer only enforce what the brief scoped. #2530 shipped a fifth
 bound helper because the brief deferred the fold without a reason.
 
+## External reports (orchestrator)
+
+The contract lives in AGENTS.md, "Issue triage (standing rule)" — assess the
+report against the code before accepting or dispatching, ask the one or two
+facts that would change the design, **do not dispatch work that depends on an
+unanswered load-bearing question**, mirror the answer on the issue and point
+the worker there rather than at a paraphrase, and cite the reporter's reasoning
+as authority. Read it there; this section only points at it.
+
+The train-specific consequence: an external lane's first dispatch is often
+worth delaying by one exchange. On 2026-09-12 a fixer was dispatched on #3000
+between asking the question and receiving the answer, and the answer invalidated
+the brief's central premise — the correction cost a mid-flight `plegma_send` and
+rework that waiting ten minutes would have avoided entirely.
+
 ## Filing issues (orchestrator)
 
 Every `gh issue create` carries one TYPE label, at least one `area:*`, and
@@ -287,20 +302,14 @@ operator's private notes, so a different orchestrator can run the same train.
   from the auto-fix-mechanical rule in aromanarguello/roman-skills
   `final-review`; NOT borrowed from it: auto-fixing null checks, error
   handling or cleanup hooks, which change meaning.
-- **Reserve the catalog number at DISPATCH, not at write time (2026-09-12).**
-  AGENTS.md's defect-shape catalog is a contended global counter: every brief
-  says "append at the tail with the next free number", so two concurrent lanes
-  both read the same tail and both claim it. #2946 and #2953 collided on 49;
-  #2987 and #2988 are both still sitting on 49 with 50 and 51 already taken;
-  and the same mid-list edits produced markdownlint MD029 three times in one
-  day. The counter is the orchestrator's to allocate, not the fixer's to
-  discover. When a brief authorises a catalog entry, name the exact number in
-  the brief and record the reservation in the ledger beside the lane; when a
-  lane is dropped, release the number there too. A lane must never pick its
-  own. The same rule blocks the orchestrator: a docs change cannot claim N+1
-  while an open PR holds N, because the gap reds MD029 on its own branch
-  before the holder merges — stack it on that branch or hold it until the
-  holder lands.
+- **Allocate the catalog number at MERGE, not at dispatch (2026-09-15).**
+  AGENTS.md's defect-shape catalog is a markdownlint MD029 ordered list: the
+  number is the list position, so dispatch-time reservations create a gap on
+  branches whose holder has not merged. The orchestrator owns allocation; a
+  lane may draft a shape but must not claim a number. At merge, insert or
+  renumber the shape at the next valid sequential position and recheck the
+  whole catalog. This prevents concurrent lanes from colliding without
+  shipping a gap.
 - **On a CROSS-REPOSITORY PR, `action_required` is not `absent` (2026-09-12).**
   A fork PR's workflow runs sit unstarted until a maintainer approves them, and
   `ci-verdict` correctly reports the required checks as absent and therefore

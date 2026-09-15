@@ -479,6 +479,140 @@ const EVASIONS: ReadonlyArray<{ name: string; source: string }> = [
 	},
 ];
 
+/**
+ * #1582 residual corpus. These are characterization records, not verdict
+ * contracts: the analyser exposes no independent unknown/decline result, so
+ * pinning `governed` here would make a later repair red again (round-1
+ * inversion). Each entry carries the reason it is recorded and the evidence
+ * text that names the mechanism, and the population guard below pins the
+ * roster. The member-call spoof lives outside this list as a differential
+ * pair because its old boolean-latch spelling did not isolate the mechanism.
+ */
+const RESIDUALS: ReadonlyArray<{
+	name: string;
+	reason: string;
+	evidence: string;
+	source: string;
+}> = [
+	{
+		// #1582 residual 1. Type aliases are outside this text-anchored
+		// analyser's resolution boundary, so a legitimate handle is declined.
+		// Recurrence: unresolved type aliases.
+		name: "a routed handle hidden behind a type alias",
+		reason:
+			"unresolved type alias: Map<string, ToolHandle> never spells a factory name",
+		evidence: "type ToolHandle = ReturnType<typeof makeToolProbe>",
+		source: `
+			import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+			import { safeSpawnAsync } from "./safe-spawn.js";
+			function makeToolProbe(cmd: string) {
+				return createCwdCachedProbe(
+					(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+					{ tool: "newtool" },
+				);
+			}
+			type ToolHandle = ReturnType<typeof makeToolProbe>;
+			const toolAvailableByCwd = new Map<string, ToolHandle>();
+			export function getToolProbe(cmd: string) {
+				return (cwd: string) => {
+					const hit = toolAvailableByCwd.get(cwd);
+					if (hit) return hit;
+					const probed = makeToolProbe(cmd)(cwd);
+					toolAvailableByCwd.set(cwd, probed);
+					return probed;
+				};
+			}
+		`,
+	},
+	{
+		// #1582 residual 2. A decoy un-nested ReturnType mention in a
+		// branded intersection makes the text-anchored type arm claim coverage
+		// for a boolean memo. Recurrence: decoy type-text matching.
+		name: "a decoy type-arm mention in a branded intersection",
+		reason:
+			"decoy type-text: the memo holds boolean but mentions a handle name",
+		evidence: "boolean & { __handle?: ReturnType<typeof makeToolProbe> }",
+		source: `
+			import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+			import { safeSpawnAsync } from "./safe-spawn.js";
+			function makeToolProbe(cmd: string) {
+				return createCwdCachedProbe(
+					(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+					{ tool: "newtool" },
+				);
+			}
+			const toolAvailableByCwd = new Map<
+				string,
+				boolean & { __handle?: ReturnType<typeof makeToolProbe> }
+			>();
+			export async function getToolProbe(cmd: string, cwd: string): Promise<boolean> {
+				const hit = toolAvailableByCwd.get(cwd);
+				if (hit !== undefined) return hit;
+				const verdict = await makeToolProbe(cmd)(cwd);
+				toolAvailableByCwd.set(cwd, verdict);
+				return verdict;
+			}
+		`,
+	},
+];
+
+/**
+ * #1582 residual 3, differential pair. `isDirectCall` baseName-splits on
+ * dots, so a member call on a local object can spoof the direct-call arm.
+ * Recurrence: dotted-callee base-name matching.
+ *
+ * The unit below delegates its spawn to the routed `makeToolProbe` helper
+ * and parks its verdict in a memo whose declared value IS the local member
+ * call, so the analyser's verdict depends on that line: it reads governed
+ * (the known false positive) while the boolean-memo twin reads ungoverned.
+ * A full-callee-path repair flips the first to ungoverned; update this pin
+ * deliberately with that repair rather than treating the red as a surprise.
+ */
+const MEMBER_SPOOF_SOURCE = `
+	import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+	import { safeSpawnAsync } from "./safe-spawn.js";
+	const shims = {
+		createCwdCachedProbe: (_x: string) => new Map<string, Promise<boolean>>(),
+	};
+	function makeToolProbe(cmd: string) {
+		return createCwdCachedProbe(
+			(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+			{ tool: "newtool" },
+		);
+	}
+	const toolAvailableByCwd = shims.createCwdCachedProbe("newtool");
+	export function getToolProbe(cmd: string) {
+		return (cwd: string) => {
+			const hit = toolAvailableByCwd.get(cwd);
+			if (hit) return hit;
+			const probed = makeToolProbe(cmd)(cwd);
+			toolAvailableByCwd.set(cwd, probed);
+			return probed;
+		};
+	}
+`;
+const MEMBER_SPOOF_EVIDENCE = 'shims.createCwdCachedProbe("newtool")';
+const MEMBER_SPOOF_PLAIN_TWIN = `
+	import { createCwdCachedProbe } from "./dispatch/runners/utils/runner-helpers.js";
+	import { safeSpawnAsync } from "./safe-spawn.js";
+	function makeToolProbe(cmd: string) {
+		return createCwdCachedProbe(
+			(cwd) => safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd }),
+			{ tool: "newtool" },
+		);
+	}
+	const toolAvailableByCwd = new Map<string, Promise<boolean>>();
+	export function getToolProbe(cmd: string) {
+		return (cwd: string) => {
+			const hit = toolAvailableByCwd.get(cwd);
+			if (hit) return hit;
+			const probed = makeToolProbe(cmd)(cwd);
+			toolAvailableByCwd.set(cwd, probed);
+			return probed;
+		};
+	}
+`;
+
 /** The positive control: the same client, migrated. It must pass. */
 const COMPLIANT = `
 	import { safeSpawnAsync } from "./safe-spawn.js";
@@ -568,6 +702,63 @@ describe("availability policy coverage (#1476)", () => {
 				).toEqual([]);
 			});
 		}
+	});
+
+	describe("the #1582 residual corpus is recorded", () => {
+		it("the roster is pinned: two characterization records plus the differential spoof pair", () => {
+			expect(RESIDUALS.map((entry) => entry.name).sort()).toEqual(
+				[
+					"a decoy type-arm mention in a branded intersection",
+					"a routed handle hidden behind a type alias",
+				].sort(),
+			);
+			for (const entry of RESIDUALS) {
+				expect(entry.reason.trim().length).toBeGreaterThan(0);
+				expect(entry.evidence.trim().length).toBeGreaterThan(0);
+				expect(entry.source).toContain(entry.evidence);
+			}
+			expect(MEMBER_SPOOF_SOURCE).toContain(MEMBER_SPOOF_EVIDENCE);
+		});
+
+		for (const residual of RESIDUALS) {
+			it(residual.name, async () => {
+				const units = await analyzeAvailabilityUnits(
+					residual.source,
+					"clients/new-tool-client.ts",
+				);
+				expect(
+					units.map((unit) => unit.unit),
+					"the analysis did not recognise this residual as an availability consumer",
+				).not.toEqual([]);
+				// Characterization only: no `governed` assertion. The analyser
+				// exposes no independent unknown/decline result, so pinning the
+				// verdict here would make a later repair red again.
+			});
+		}
+
+		it("a member-call spoof of the direct-call arm reads governed while its boolean twin does not", async () => {
+			const spoofed = await analyzeAvailabilityUnits(
+				MEMBER_SPOOF_SOURCE,
+				"clients/new-tool-client.ts",
+			);
+			expect(
+				spoofed.map((unit) => unit.unit),
+				"the analysis did not recognise the spoof as an availability consumer",
+			).toEqual(["getToolProbe"]);
+			// Known false positive: the memo holds a local member call, not a
+			// policy handle. A full-callee-path repair flips this to false;
+			// update this pin deliberately with that repair.
+			expect(spoofed[0]?.governed).toBe(true);
+			const plain = await analyzeAvailabilityUnits(
+				MEMBER_SPOOF_PLAIN_TWIN,
+				"clients/new-tool-client.ts",
+			);
+			expect(
+				plain.map((unit) => unit.unit),
+				"the analysis did not recognise the twin as an availability consumer",
+			).toEqual(["getToolProbe"]);
+			expect(plain[0]?.governed).toBe(false);
+		});
 	});
 
 	it("flags a second hand-rolled latch beside a compliant one", async () => {

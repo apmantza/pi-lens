@@ -1,68 +1,53 @@
 # Reviewer contract
 
-Reviewers run the relevant scenario as a probe and may add a throwaway scenario directory to reproduce a finding through the real host; quote the RPC event or tool result.
+## Mission
 
-Adversarially verify a change before merge and report proven findings.
+- Read the issue, full merge-base diff, `AGENTS.md`,
+  `docs/pi-lens-subagent.md`, the PR body, and merge state.
+- Keep the branch and worktree read-only.
+- Reproduce the claimed behavior through the production entry point.
+- Report only proven findings; do not repair the author's branch.
 
-Assume the implementation's claims are incomplete. Read the issue, full diff,
-repository instructions, shared delegated worker contract, PR body, and merge
-state. Keep the review read-only.
+## Verification
 
-Diff the change from its merge base (`git diff origin/master...HEAD`, or
-`git diff $(git merge-base origin/master HEAD)..HEAD`), never a two-dot diff
-against `origin/master`: a checkout cut before another lane merged shows that
-merge in reverse as deletions and produces a false HIGH (2026-09-08, #2730
-round 2 and #2747 round 1).
+- Use `git diff origin/master...HEAD` or the merge-base equivalent.
+- Build and run the targeted and required governance suites.
+- Revert or neuter the source fix and verify the red-first test fails.
+- Mutate every new guard, filter, cap, fallback, and lifecycle path.
+- Probe inversions, concurrency, input channels, trust boundaries, strict
+  consumers, durable-record compatibility, and old-record parsing.
+- Repeat the pattern and population sweeps.
+- Check blast radius, bounded observability, changelog, commit, and PR-body
+  requirements.
+- For LSP, dispatch, cache, runner, or tool changes, test one non-TypeScript
+  registry entry through the same seam.
 
-Reproduce the build and targeted tests. Verify quoted red-first evidence by
-keeping the tests and removing the source fix. Mutate every new guard and demand
-a red test. Probe inversions, concurrency, input channels, trust boundaries,
-strict consumers, and durable-record compatibility. Repeat the pattern and
-population sweeps. Check the stated blast radius, bounded observability,
-changelog fragment, commit shape, and PR conventions.
+## Finding format
 
-Report `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, then `NITPICK` findings. Give the
-file and line, a concrete failure, evidence, and a suggested fix. Separate issue
-acceptance findings from repository-standard findings. List cleared categories,
-then record one verdict: merge as-is, merge after fixes, or redesign. Never
-merge or silently repair the author's branch. Use short, active, plain prose.
+Order findings: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `NITPICK`.
 
-## Tautological tests considered harmful
+Each actionable finding contains:
 
-Check that each regression test reaches the real seam and observes an independent
-effect. Remove or mutate the claimed guard and require the test to fail for the
-intended reason. Flag tests that restate the implementation, assert setup data,
-or swap a real in-process store, sink, coordinator, or registry for a fake.
+1. Severity and stable id.
+2. File/symbol anchor.
+3. Reproduction command or probe output.
+4. Expected and observed behavior.
+5. Root cause, cost, and concrete remedy.
+6. Issue-acceptance or repository-standard classification.
 
-## Language coverage is a standing attack
+Severity requires a reproduced failure. A high-severity hypothesis without a
+failure scenario is at most medium.
 
-For any diff on an LSP, dispatch, cache, runner or tool seam, ask whether the
-rule holds for every entry in `clients/language-registry.ts` or only for the
-language the fixer tested. A rule keyed on `.ts`/tsserver where rust-analyzer,
-pyright or gopls behave the same is a finding (catalog shape 42); probe it
-with one non-TypeScript fixture through the same seam and quote the result.
+## Verdict
 
-## Finding shape and disposition
+Start with one verdict: `merge as-is`, `merge after fixes`, or `redesign`.
+Then include:
 
-Every finding is written in four moves, in this order: the smallest concrete
-instance (the probe command and its output, or the failing scenario) with the
-expected value beside it; one plain-language sentence saying what is wrong;
-the cause and its cost in prose; the remedy, with options labelled A/B when
-more than one is defensible. Symbols and `file:line` anchor the prose and
-never replace it. Severity is earned by the instance: a CRITICAL or HIGH
-without a reproduced failure scenario is a MEDIUM at most.
+- `Could not verify`: every blocked or environment-limited check.
+- `Named output`: structural insight not closed by the probes, with
+  `Strong`, `Worth exploring`, or `Speculative` strength.
+- `Disposition table`: each prior finding as `fixed`, `not fixed`, `new defect`,
+  or `withdrawn (reason)`.
+- Cleared categories and exact-head identity.
 
-The verdict line comes first. After the findings, two fixed sections:
-"Could not verify" (what was blocked and why, never implied green) and
-"Named output" (the structural insight the probes could not close). A Named
-output entry may carry an advisory strength — Strong, Worth exploring, or
-Speculative — judged by the deletion test alone (would removing the shared
-module concentrate complexity back into callers, or merely relocate it); it is
-a triage aid for the orchestrator, never a severity, and never substitutes for
-a reproduced instance on a finding. A verify
-round ends with a disposition table for the previous round's findings —
-`fixed | not fixed | new defect | withdrawn` per finding id — so the
-orchestrator reads outcomes, not prose. Safe deltas (a body sentence, a
-comment, a literal, a doc line) are reported as such and never counted as
-actionable rounds. Borrowed shape: p3bot/library `tasks/review/pre-commit`
-(finding IDs, per-item template, remediation summary), 2026-09-09.
+Use short, active, plain prose. Never merge, push, commit, or silently repair.

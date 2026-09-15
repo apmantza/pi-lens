@@ -918,6 +918,8 @@ export interface SettleObservationArgs {
 export interface SettleObservationResult {
 	settled: boolean;
 	changedPaths: string[];
+	/** Entries whose stats moved or remained equal without enough hash evidence. */
+	unverifiablePaths: string[];
 	replayed: number;
 	/** Entries actually re-captured. Short of the baseline means a cut capture. */
 	scanned: number;
@@ -964,6 +966,7 @@ export async function settleObservedMutation(
 		return {
 			settled: false,
 			changedPaths: [],
+			unverifiablePaths: [],
 			replayed: 0,
 			scanned: 0,
 			stoppedEarly: false,
@@ -977,6 +980,7 @@ export async function settleObservedMutation(
 		return {
 			settled: false,
 			changedPaths: [],
+			unverifiablePaths: [],
 			replayed: 0,
 			scanned: 0,
 			stoppedEarly: false,
@@ -991,6 +995,7 @@ export async function settleObservedMutation(
 		return {
 			settled: false,
 			changedPaths: [],
+			unverifiablePaths: [],
 			replayed: 0,
 			scanned: 0,
 			stoppedEarly: false,
@@ -1025,6 +1030,7 @@ export async function settleObservedMutation(
 		return {
 			settled: false,
 			changedPaths: [],
+			unverifiablePaths: [],
 			replayed: 0,
 			scanned: 0,
 			stoppedEarly: true,
@@ -1034,7 +1040,11 @@ export async function settleObservedMutation(
 	const captured = capture.value;
 
 	seedLedger(captured.snapshot);
-	const changed = diffFileStats(pending.stats, captured.snapshot).filter(
+	const diff = diffObservedStats(pending.stats, captured.snapshot);
+	const changed = diff.changed.filter(
+		(candidate) => args.isRecordable?.(candidate) !== false,
+	);
+	const unverifiablePaths = diff.unverifiable.filter(
 		(candidate) => args.isRecordable?.(candidate) !== false,
 	);
 	// Two different ways the observation can fall short of what the tool named:
@@ -1047,16 +1057,30 @@ export async function settleObservedMutation(
 		: captured.stoppedEarly
 			? "capture-cut-short"
 			: undefined;
+	if (unverifiablePaths.length > 0) {
+		// Hashless evidence is a bounded coverage gap, not a mutation. Keep it
+		// visible through the existing degradation record without replaying it.
+		noteObservedUnverifiable(args.toolName);
+		logLatency({
+			type: "phase",
+			toolName: args.toolName,
+			phase: "observed_mutation_coverage_unknown",
+			filePath: unverifiablePaths.slice(0, 5).join(","),
+			durationMs: Date.now() - started,
+			result: `unverifiable:${unverifiablePaths.length}`,
+		});
+	}
 	if (changed.length === 0) {
 		// An INCOMPLETE observation is not evidence of cleanliness — it is
 		// evidence we stopped looking. Advancing the clean latch on it would
 		// teach pi-lens to stop watching a tool it never finished watching, and
 		// with a directory wider than the cap that is every single call.
 		if (truncated) noteObservedUnverifiable(args.toolName);
-		else noteObservedClean(args.toolName);
+		else if (unverifiablePaths.length === 0) noteObservedClean(args.toolName);
 		return {
 			settled: true,
 			changedPaths: [],
+			unverifiablePaths,
 			replayed: 0,
 			scanned: captured.snapshot.size,
 			stoppedEarly: truncated,
@@ -1122,11 +1146,33 @@ export async function settleObservedMutation(
 	return {
 		settled: true,
 		changedPaths: changed,
+		unverifiablePaths,
 		replayed,
 		scanned: captured.snapshot.size,
 		stoppedEarly: truncated,
 		reason: cutReason,
 	};
+}
+
+/**
+ * The observational net asks whether to look harder. An absent content hash
+ * therefore remains unverifiable even when cheap stat fields report a change.
+ * #2984: stat-only evidence must not grant ownership or replay a mutation.
+ */
+function diffObservedStats(
+	before: FileStatsSnapshot,
+	after: FileStatsSnapshot,
+): { changed: string[]; unverifiable: string[] } {
+	const changed = new Set(diffFileStats(before, after));
+	const unverifiable = new Set<string>();
+	for (const [key, stat] of after) {
+		const previous = before.get(key);
+		if (previous && (previous.hash === undefined || stat.hash === undefined)) {
+			changed.delete(key);
+			unverifiable.add(key);
+		}
+	}
+	return { changed: [...changed], unverifiable: [...unverifiable] };
 }
 
 export interface SettledSweepArgs {

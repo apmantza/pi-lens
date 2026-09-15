@@ -134,6 +134,24 @@ interface DispositionStateFile {
 // below goes through `deferredKey`, which folds the resolved cwd into the Set
 // key, so the two projects can no longer collide.
 const deferredThisSession = new Set<string>();
+let widgetDispositionReconciler:
+	| ((
+			cwd: string,
+			target: DispositionMarkTarget,
+			disposition: Disposition,
+	  ) => void)
+	| null = null;
+
+/** Register the widget's mirror of the durable disposition state. */
+export function registerWidgetDispositionReconciler(
+	reconciler: (
+		cwd: string,
+		target: DispositionMarkTarget,
+		disposition: Disposition,
+	) => void,
+): void {
+	widgetDispositionReconciler = reconciler;
+}
 
 function deferredKey(cwd: string, anchor: string): string {
 	return `${normalizeMapKey(cwd)}::${anchor}`;
@@ -497,6 +515,7 @@ function emitMarkTelemetry(
 		publishDisposition({
 			cwd,
 			filePath: target.filePath,
+			message: target.message,
 			disposition,
 			tool: target.tool,
 			rule: target.rule,
@@ -537,6 +556,7 @@ export function markDisposition(
 	const existing = readState(cwd).dispositions?.[anchor];
 	if (disposition === "defer") {
 		deferredThisSession.add(deferredKey(cwd, anchor));
+		widgetDispositionReconciler?.(cwd, target, disposition);
 		emitMarkTelemetry(
 			cwd,
 			target,
@@ -567,6 +587,9 @@ export function markDisposition(
 		lineText,
 	};
 	commitDisposition(cwd, anchor, entry);
+	// The durable commit is the guard for this mirror: a failed commit must not
+	// make the in-memory widget claim that a mark exists.
+	widgetDispositionReconciler?.(cwd, target, disposition);
 	emitMarkTelemetry(
 		cwd,
 		target,

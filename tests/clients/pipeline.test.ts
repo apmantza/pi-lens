@@ -8,6 +8,7 @@
  * - dispatchLintWithResult
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +40,33 @@ import {
 	wireDiagnosticsBusEmitter,
 } from "../../clients/diagnostics-publish.js";
 
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/safe-spawn.js")>();
+	return {
+		...actual,
+		safeSpawnAsync: vi.fn(
+			async (
+				command: string,
+				args: readonly string[],
+				options?: Parameters<typeof actual.safeSpawnAsync>[2],
+			) => {
+				if (command === "cargo" && args[0] === "--version") {
+					return { stdout: "cargo 1.82.0", stderr: "", status: 0 };
+				}
+				if (command === "cargo" && args[0] === "clippy") {
+					fs.writeFileSync(
+						path.join(options?.cwd ?? "", "src", "helper.rs"),
+						"pub fn helper() { 1 + 1; }\n",
+					);
+					return { stdout: "", stderr: "", status: 0 };
+				}
+				return actual.safeSpawnAsync(command, [...args], options);
+			},
+		),
+	};
+});
+
 // Mock the dispatch integration to avoid side effects
 vi.mock("../../clients/dispatch/integration.js", () => ({
 	dispatchLintWithResult: vi.fn(),
@@ -62,6 +90,22 @@ describe("Pipeline", () => {
 		resetDegradationLedger();
 		const env = setupTestEnvironment();
 		tmpDir = env.tmpDir;
+		// #3005 fixture recurrence: autonomous Biome writers require independent
+		// project agreement evidence, even when the client itself is a test double.
+		fs.writeFileSync(
+			path.join(tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { "@biomejs/biome": "^2.4.10" } }),
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {},
+					"node_modules/@biomejs/biome": { version: "2.4.10" },
+				},
+			}),
+		);
 		mockLSPService = makeLspServiceDouble({
 			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
@@ -120,6 +164,51 @@ describe("Pipeline", () => {
 			...overrides,
 		};
 	}
+
+	it("leaves the post-write identity absent when autofix changes only a side-effect file", async () => {
+		// Regression #2499 F1: `fileModified` aggregates side-effect writes, but
+		// `postWriteStateHash` must identify only bytes owned by this pipeline for
+		// the target file. The real runPipeline and Rust autofix path are used; the
+		// subprocess boundary supplies the deterministic side-effect write.
+		const crateDir = path.join(tmpDir, "crate");
+		const srcDir = path.join(crateDir, "src");
+		fs.mkdirSync(srcDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(crateDir, "Cargo.toml"),
+			'[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n',
+		);
+		const filePath = path.join(srcDir, "main.rs");
+		fs.writeFileSync(filePath, "mod helper;\nfn main() {}\n");
+		fs.writeFileSync(path.join(srcDir, "helper.rs"), "pub fn helper() {}\n");
+		// #3005 fixture recurrence: rust-clippy's project-config agreement is
+		// anchored at the pipeline cwd, while Cargo's real fixture is nested.
+		fs.writeFileSync(
+			path.join(tmpDir, "Cargo.toml"),
+			'[workspace]\nmembers = ["crate"]\n',
+		);
+		vi.mocked(dispatchLintWithResult).mockResolvedValue({
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "",
+			blockerOutput: "",
+			hasBlockers: false,
+		});
+
+		const targetBefore = fs.readFileSync(filePath, "utf-8");
+		const result = await runPipeline(
+			createMockContext(filePath),
+			createMockDeps({ getFormatService: () => ({}) as any }),
+		);
+
+		expect(result.fileModified).toBe(true);
+		expect(result.changedFiles).toEqual([path.join(srcDir, "helper.rs")]);
+		expect(fs.readFileSync(filePath, "utf-8")).toBe(targetBefore);
+		expect(result.postWriteStateHash).toBeUndefined();
+	});
 
 	it("project config disables format and autofix while preserving diagnostics", async () => {
 		fs.writeFileSync(
@@ -218,6 +307,50 @@ describe("Pipeline", () => {
 		);
 	});
 
+	it("binds blocker content to the pre-dispatch analysis bytes", async () => {
+		const filePath = createTempFile(
+			tmpDir,
+			"blocker-baseline.ts",
+			"const x = 1;\n",
+		);
+		const diagnostic = {
+			id: "blocker",
+			message: "bad code",
+			filePath,
+			severity: "error" as const,
+			source: "test",
+			tool: "ast-grep",
+			semantic: "blocking" as const,
+			line: 1,
+			column: 1,
+		};
+		vi.mocked(dispatchLintWithResult).mockImplementationOnce(async () => {
+			// Model a writer that runs while the analysis promise is suspended.
+			fs.writeFileSync(filePath, "const x = 2;\n");
+			return {
+				diagnostics: [diagnostic],
+				blockers: [diagnostic],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "blocked",
+				blockerOutput: "blocked",
+				hasBlockers: true,
+			};
+		});
+
+		const result = await runPipeline(
+			createMockContext(filePath),
+			createMockDeps(),
+		);
+
+		expect(result.inlineBlockerFileContent).toEqual({
+			size: Buffer.byteLength("const x = 1;\n"),
+			sha256: createHash("sha256").update("const x = 1;\n").digest("hex"),
+		});
+	});
+
 	describe("Format phase", () => {
 		it("defers format by default", async () => {
 			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
@@ -288,6 +421,26 @@ describe("Pipeline", () => {
 				}
 				return result;
 			};
+			vi.mocked(dispatchLintWithResult).mockImplementationOnce(async () => {
+				// A third-party writer can change the file while dispatch awaits. The
+				// pipeline identity must remain the formatter's earlier bytes.
+				fs.writeFileSync(filePath, "third-party write\n");
+				return {
+					diagnostics: [],
+					blockers: [],
+					warnings: [],
+					baselineWarningCount: 0,
+					fixed: [],
+					resolvedCount: 0,
+					output: "",
+					blockerOutput: "",
+					hasBlockers: false,
+				};
+			});
+			const formatterStateHash = (await import("node:crypto"))
+				.createHash("sha256")
+				.update("const x = 1;\n")
+				.digest("hex");
 
 			const result = await runPipeline(
 				createMockContext(filePath, {
@@ -317,6 +470,7 @@ describe("Pipeline", () => {
 			// "modified".
 			expect(result.output).not.toContain("clean");
 			expect(result.output).toBe("");
+			expect(result.postWriteStateHash).toBe(formatterStateHash);
 		});
 
 		it("surfaces formatter failures instead of plain clean output", async () => {

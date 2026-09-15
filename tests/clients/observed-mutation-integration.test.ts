@@ -13,6 +13,10 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { classifyMutatingTool } from "../../clients/mutating-tool.js";
 import {
 	MUTATION_BRIDGE_KEY,
@@ -34,10 +38,7 @@ import { readChangesSince } from "../../clients/project-changes.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
-import {
-	clearLastAnalyzedStateCache,
-	handleToolResult,
-} from "../../clients/runtime-tool-result.js";
+import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
@@ -158,6 +159,7 @@ if (!(MUTATION_BRIDGE_KEY in (globalThis as object))) {
 beforeEach(() => {
 	resetObservedMutationNet();
 	resetMutationAttribution();
+	resetDegradationLedger();
 });
 
 function patchEvent(
@@ -825,11 +827,16 @@ describe("#2464 — the observed-settle path also dispatches pipeline analysis",
 			// after-write stamp is gated on the bytes actually having moved.
 			const formattingPipeline = (async () => {
 				fs.appendFileSync(filePath, "\n// formatted\n");
+				const postWriteStateHash = (await import("node:crypto"))
+					.createHash("sha256")
+					.update(fs.readFileSync(filePath))
+					.digest("hex");
 				return {
 					output: "",
 					hasBlockers: false,
 					isError: false,
 					fileModified: true,
+					postWriteStateHash,
 					changedFiles: [filePath],
 				};
 			}) as never;
@@ -1198,79 +1205,12 @@ describe("#2464 review round 3 — F1: the observed dispatch shares the classifi
 			env.cleanup();
 		}
 	});
-
-	it("never evicts a live registration when a stale release names the same file", async () => {
-		// The identity guard in `releaseInFlightPipeline`, in isolation. With the
-		// shared claim now consulted by both dispatch call sites, no production
-		// path can register the same file+hash twice any more — so the guard's
-		// trigger is unreachable end to end, and driving the registry seam
-		// directly is the only honest way to prove the guard is doing work.
-		// Delete the `inFlightPipelines.get(filePath) === registered` conjunct and
-		// the last assertion goes red.
-		//
-		// Imported dynamically, and ONLY here, so the module-level imports of this
-		// file stay to symbols that exist on pre-fix code — every other case in
-		// it then fails on an assertion rather than on a missing export.
-		const {
-			claimPipelineDispatch,
-			registerInFlightPipeline,
-			releaseInFlightPipeline,
-		} = await import("../../clients/runtime-tool-result.js");
-		clearLastAnalyzedStateCache();
-		const filePath = path.join(
-			process.cwd(),
-			"tests",
-			"__identity-guard-2464.ts",
-		);
-		const settled = Promise.resolve();
-		const liveClassified = {
-			promise: settled,
-			participantIds: ["c"],
-			participantTotal: 1,
-		};
-
-		// Two registrations for one state, the shape round 2's observed path
-		// could produce: the second overwrites the first inside one inner map.
-		const firstMap = registerInFlightPipeline(filePath, "hash-1", {
-			promise: settled,
-			participantIds: ["a"],
-			participantTotal: 1,
-		});
-		const secondMap = registerInFlightPipeline(filePath, "hash-1", {
-			promise: settled,
-			participantIds: ["b"],
-			participantTotal: 1,
-		});
-		expect(secondMap).toBe(firstMap);
-
-		// A releases: the map empties and the outer entry goes with it.
-		releaseInFlightPipeline(filePath, "hash-1", firstMap);
-		// A live, unrelated pipeline re-creates the outer entry under a FRESH map.
-		const classifiedMap = registerInFlightPipeline(
-			filePath,
-			"hash-2",
-			liveClassified,
-		);
-		expect(classifiedMap).not.toBe(firstMap);
-		// B releases last, holding the stale reference.
-		releaseInFlightPipeline(filePath, "hash-1", secondMap);
-
-		const claim = claimPipelineDispatch({
-			filePath,
-			stateHash: "hash-2",
-			turnIndex: 7,
-			participantId: "d",
-			dbg: () => {},
-		});
-		expect(claim.proceed).toBe(false);
-		expect(liveClassified.participantTotal).toBe(2);
-
-		releaseInFlightPipeline(filePath, "hash-2", classifiedMap);
-	});
 });
 
 describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED path", () => {
 	it("never dispatches the directory an unknown directory-target tool named", async () => {
+		// Recurrence: #2500 dropped every recorded file when the tool named a
+		// directory, leaving genuinely rewritten files linted-never.
 		// `collectObservationUniverse` explicitly supports a DIRECTORY target (its
 		// own entries, non-recursively), so a codemod armed on a directory is a
 		// real production shape, not a contrived one. The membership guard is what
@@ -1312,7 +1252,52 @@ describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED 
 			// `runPipeline` on a directory is meaningless — every runner it fans out
 			// to reads the path as a file.
 			expect(dispatchedPaths).not.toContain(targetDir);
-			expect(dispatchedPaths).toEqual([]);
+			expect(dispatchedPaths).toEqual([insideDir]);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("records observed paths dropped by the bounded directory dispatch", async () => {
+		// Recurrence: an unbounded directory fan-out could monopolize the edit hook;
+		// a bounded fan-out must retain the exact dropped count for diagnosis.
+		const env = setupTestEnvironment("pi-lens-2500-dispatch-cap-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const targetDir = path.join(env.tmpDir, "codemod-target");
+			fs.mkdirSync(targetDir, { recursive: true });
+			const files = Array.from({ length: 33 }, (_, index) => {
+				const filePath = path.join(targetDir, `touched-${index}.ts`);
+				fs.writeFileSync(filePath, SOURCE);
+				return filePath;
+			});
+			const { runtime, cacheManager } = newSession(env.tmpDir);
+			const { runPipeline } = await import("../../clients/pipeline.js");
+			vi.mocked(runPipeline).mockClear();
+			const event = {
+				toolName: "dir_codemod_cap",
+				toolCallId: "call-2500-cap",
+				input: { path: targetDir, rule: "rename" },
+				content: [{ type: "text", text: "rewrote 33 files" }],
+			};
+			await handleToolCall(
+				toolCallDeps({ event, cwd: env.tmpDir, runtime, cacheManager }),
+			);
+			for (const filePath of files)
+				fs.writeFileSync(filePath, `${SOURCE}const d = 4;\n`);
+			await handleToolResult(toolResultDeps({ event, runtime, cacheManager }));
+
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(32);
+			const cap = getDegradationSummary().find(
+				(group) => group.kind === "observed-mutation-dispatch-cap",
+			);
+			expect(cap).toBeDefined();
+			expect(cap?.latestReasons[0]?.reason).toContain(
+				"1 path(s) not dispatched",
+			);
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;

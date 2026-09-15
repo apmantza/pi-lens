@@ -111,7 +111,19 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 		fs.mkdirSync(projectDir, { recursive: true });
 		const filePath = path.join(projectDir, "a.ts");
 		fs.writeFileSync(filePath, "const x=1\n");
-
+		// #3005 fixture recurrence: prove the project elected oxfmt before
+		// testing that a HOME-level executable is still outside its project root.
+		fs.writeFileSync(
+			path.join(fakeHome, "package.json"),
+			JSON.stringify({ devDependencies: { oxfmt: "0.66.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(fakeHome, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/oxfmt": { version: "0.66.0" } },
+			}),
+		);
 		const homeBinDir = path.join(fakeHome, "node_modules", ".bin");
 		fs.mkdirSync(homeBinDir, { recursive: true });
 		fs.writeFileSync(path.join(homeBinDir, "oxfmt.cmd"), "@ECHO off\r\n");
@@ -171,6 +183,19 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 		fs.mkdirSync(projectDir, { recursive: true });
 		const filePath = path.join(projectDir, "a.ts");
 		fs.writeFileSync(filePath, "const x=1\n");
+		// #3005 fixture recurrence: the HOME-ceiling assertion must reach the
+		// resolver with matching oxfmt declaration and lockfile evidence.
+		fs.writeFileSync(
+			path.join(realHome, "package.json"),
+			JSON.stringify({ devDependencies: { oxfmt: "0.66.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(realHome, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/oxfmt": { version: "0.66.0" } },
+			}),
+		);
 
 		const homeBinDir = path.join(realHome, "node_modules", ".bin");
 		fs.mkdirSync(homeBinDir, { recursive: true });
@@ -248,6 +273,12 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 		try {
 			const filePath = path.join(env.tmpDir, "a.py");
 			fs.writeFileSync(filePath, "x=1\n");
+			// #3005 fixture recurrence: the static-fallback ENOENT belt is reached
+			// only with explicit Black project evidence.
+			fs.writeFileSync(
+				path.join(env.tmpDir, "pyproject.toml"),
+				"[tool.black]\nline-length = 88\n",
+			);
 
 			// black only probes a venv; with none it returns null and legitimately
 			// falls back to the bare static `black`. When that binary is missing,

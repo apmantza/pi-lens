@@ -180,7 +180,10 @@ describe("install-smoke.yml job event gates (#2613 review T1)", () => {
 // not even the PR-gating lane #2613 exists to run on exactly such a PR.
 describe("install-smoke.yml paths: filter names every critical-path script (#2613 review F3)", () => {
 	const workflow = loadWorkflow() as unknown as {
-		on?: { push?: { paths?: unknown }; pull_request?: { paths?: unknown } };
+		on?: {
+			push?: { paths?: unknown };
+			pull_request?: { branches?: unknown; paths?: unknown };
+		};
 	};
 	const pushPaths = workflow.on?.push?.paths;
 	const pullRequestPaths = workflow.on?.pull_request?.paths;
@@ -197,6 +200,22 @@ describe("install-smoke.yml paths: filter names every critical-path script (#261
 	it("push: and pull_request: share the exact same paths list (the YAML anchor/alias)", () => {
 		expect(Array.isArray(pushPaths)).toBe(true);
 		expect(pullRequestPaths).toEqual(pushPaths);
+	});
+
+	it("pull_request: is restricted to the master base branch", () => {
+		expect(workflow.on?.pull_request?.branches).toEqual(["master"]);
+	});
+
+	// Mutation-proof for CONTRACT-01: removing the PR branch binding must red
+	// this parsed workflow contract even when the shared path filter remains.
+	it("mutation-proof: removing pull_request.branches reds the contract", () => {
+		const source = readFileSync(resolve(REPO_ROOT, WORKFLOW_PATH), "utf8");
+		const mutatedSource = source.replace(
+			/  pull_request:\n    branches: \[master\]\n/,
+			"  pull_request:\n",
+		);
+		const mutatedWorkflow = loadWorkflow(mutatedSource) as typeof workflow;
+		expect(mutatedWorkflow.on?.pull_request?.branches).not.toEqual(["master"]);
 	});
 
 	it.each(REQUIRED_PATHS)("names %s", (p) => {

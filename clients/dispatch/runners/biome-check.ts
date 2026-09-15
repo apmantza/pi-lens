@@ -265,7 +265,12 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 		// Defer to ESLint/oxlint if the project has explicitly configured one —
 		// biome runs as the default linter only when no alternative is present.
 		if (!policy.hasBiomeConfig && policy.hasExplicitNonBiomeLinter) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return {
+				status: "skipped",
+				diagnostics: [],
+				semantic: "none",
+				skipReason: "configured-non-biome-linter",
+			};
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "biome");

@@ -194,8 +194,40 @@ export interface InlineBlockerRecord {
 	 * for this session (cleared only by a fresh dispatch or confirmed-clean
 	 * retire); `"past-eof"` (#1641/`blocker-past-eof.ts`) RE-ARMS every turn
 	 * end, since a transient shrink-then-restore of the file must un-demote it.
+	 * `"self-drift"` (#2982) also RE-ARMS, for the same reason in a different
+	 * axis: the record's own bytes changed after the verdict, and bytes that
+	 * change back must un-demote it. It is deliberately NOT
+	 * `"dependency-drift"` — that reason routes through the #1950 delivery cap
+	 * in `runtime-turn.ts`, which retires a record permanently after three
+	 * stale deliveries. That cap was designed for recoverable LSP dependency
+	 * drift; a self-drift record can carry ast-grep or tree-sitter security
+	 * provenance, and walking such a finding out of turn-end rendering because
+	 * an advisory was shown three times is not a policy this gate may apply.
+	 * A re-arming reason needs no cap: it heals on its own when the bytes do.
 	 */
-	staleReason?: "dependency-drift" | "past-eof";
+	staleReason?: "dependency-drift" | "past-eof" | "self-drift";
+	/**
+	 * #2982: the file's size in bytes when the verdict was recorded, the cheap
+	 * first tier of the content confirmation the self-drift axis applies
+	 * before demoting. mtime moving is not evidence that content changed — a
+	 * `touch`, a `git checkout` restoring identical bytes, or a no-op
+	 * formatter pass all move it — and #2449 round 2 F7 already settled that
+	 * question for `observed-mutation.ts`: "mtime-only drift has to be
+	 * confirmed against content before anything is replayed". Absent (an
+	 * unreadable file at record time) means the tier cannot decide, and the
+	 * sweep then leaves the record authoritative.
+	 */
+	recordedSize?: number;
+	/**
+	 * #2982 review round 2: the sha256 of the file's bytes when the verdict was
+	 * recorded, the tier that decides what `recordedSize` cannot. A same-length
+	 * edit (a renamed identifier of equal length, a flipped comparison, a changed
+	 * digit) is the common shape, not an exotic one, so a size-only tier leaves a
+	 * genuinely changed record authoritative. Captured off the synchronous
+	 * dispatch path by the pipeline result; absent when that result could not
+	 * provide a bounded baseline, which the sweep reads as `unverifiable`.
+	 */
+	recordedHash?: string;
 	/**
 	 * #1641: the 1-based cited lines of the diagnostics behind `summary`,
 	 * captured at write time (`dispatchResult.blockers[].line` in
@@ -1003,16 +1035,25 @@ export class RuntimeCoordinator {
 		writeIndex?: number,
 		sources?: readonly string[],
 		lines?: readonly number[],
-	): void {
+		contentBaseline?: { size: number; sha256: string },
+	): number {
+		const recordedAtMs = Date.now();
 		this._pendingInlineBlockers.set(path.resolve(filePath), {
 			filePath,
 			summary,
 			writeIndex,
 			sources,
 			lines,
-			recordedAtMs: Date.now(),
+			recordedAtMs,
 			stale: false,
+			...(contentBaseline
+				? {
+						recordedSize: contentBaseline.size,
+						recordedHash: contentBaseline.sha256,
+					}
+				: {}),
 		});
+		return recordedAtMs;
 	}
 
 	clearInlineBlockers(filePath: string): void {
@@ -1067,6 +1108,49 @@ export class RuntimeCoordinator {
 			...existing,
 			stale: isPastEof,
 			staleReason: isPastEof ? "past-eof" : undefined,
+		});
+		return true;
+	}
+
+	/**
+	 * #2982: re-derive the self-drift demotion for one inline-blocker record.
+	 *
+	 * Modelled on {@link setInlineBlockerPastEofStale}, not on
+	 * {@link markInlineBlockerStale}: it RE-ARMS rather than latching, so a
+	 * file whose bytes drift and then come back (a checkout, a revert, an
+	 * editor writing the original content) un-demotes on the next sweep
+	 * instead of staying demoted for the session. That re-arm is what lets
+	 * this axis skip the #1950 delivery cap entirely — a record that can heal
+	 * needs no bounded-noise retirement, and applying the cap here would walk
+	 * an ast-grep or tree-sitter security finding out of turn-end rendering
+	 * permanently (#2982 review).
+	 *
+	 * Composes with the sibling gates the same way they compose with each
+	 * other: it never touches a record another gate demoted, and never heals a
+	 * demotion it did not make. Returns true only on an actual transition, so
+	 * the caller counts exactly one edge.
+	 */
+	setInlineBlockerSelfDriftStale(
+		filePath: string,
+		isSelfDrift: boolean,
+	): boolean {
+		const key = path.resolve(filePath);
+		const existing = this._pendingInlineBlockers.get(key);
+		if (!existing) return false;
+		if (existing.stale && existing.staleReason !== "self-drift") return false;
+		const currentlySelfDrift =
+			!!existing.stale && existing.staleReason === "self-drift";
+		if (currentlySelfDrift === isSelfDrift) return false;
+		// Omit the key rather than assigning `undefined` to it: under
+		// `exactOptionalPropertyTypes` those are different, and writing the
+		// `undefined` is a strictness spike the ratchet counts. Healing has to
+		// drop `staleReason` off the rebuilt record, so destructure it away
+		// instead of letting `...existing` carry the old value through.
+		const { staleReason: _cleared, ...rest } = existing;
+		this._pendingInlineBlockers.set(key, {
+			...rest,
+			stale: isSelfDrift,
+			...(isSelfDrift ? { staleReason: "self-drift" as const } : {}),
 		});
 		return true;
 	}

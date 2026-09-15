@@ -1,0 +1,14 @@
+{
+	"source": "origin/master:clients/tool-cwd.ts at d649ca0c8",
+	"reason": "Historical baseline for the runner marker vocabulary removed by #2965; keep the verification set independent from the surviving registry.",
+	"markers": {
+		"yamllint": [".yamllint", "yamllint.yaml", "yamllint.yml", "pyproject.toml"],
+		"ruff": ["pyproject.toml", "ruff.toml", ".ruff.toml"],
+		"spellcheck/typos": ["_typos.toml", "typos.toml"],
+		"biome": ["biome.json", "biome.jsonc", "package.json"],
+		"oxlint": [".oxlintrc.json", "oxlint.config.js", "package.json"],
+		"sqlfluff": [".sqlfluff", "pyproject.toml", "setup.cfg"],
+		"prettier": [".prettierignore", "package.json"],
+		"rust-clippy": ["Cargo.toml"]
+	}
+}

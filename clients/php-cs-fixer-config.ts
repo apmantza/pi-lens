@@ -116,7 +116,7 @@ export function resolvePhpCsFixerConfig(filePath: string): string | undefined {
 	const startDir = resolveToolCwd("formatter", "php-cs-fixer", absolute, {
 		cwd: path.parse(absolute).root,
 		allowHomeMarker: true,
-	});
+	}).cwd;
 	return PHP_CS_FIXER_CONFIG_NAMES.map((name) =>
 		path.join(startDir, name),
 	).find(existsSync);

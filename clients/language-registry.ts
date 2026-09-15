@@ -264,7 +264,9 @@ export const LANGUAGES: readonly LanguageEntry[] = [
 		id: "cpp",
 		kind: "cxx",
 		// The clang extension table (file-kinds.ts KIND_EXTENSIONS.cxx) minus the
-		// C header/source pair, which the `c` entry owns.
+		// C header/source pair, which the `c` entry owns. `.cuh` deliberately
+		// diverges from clang's table: CUDA/HIP projects use it for C++ headers,
+		// so it must reach the same cpp grammar and clangd path as `.cu`/`.hip`.
 		extensions: [
 			".c++",
 			".c++m",
@@ -275,6 +277,7 @@ export const LANGUAGES: readonly LanguageEntry[] = [
 			".cpp",
 			".cppm",
 			".cu",
+			".cuh",
 			".cxx",
 			".cxxm",
 			".hh",
@@ -299,6 +302,7 @@ export const LANGUAGES: readonly LanguageEntry[] = [
 			".cc",
 			".cpp",
 			".cu",
+			".cuh",
 			".cxx",
 			".hh",
 			".hip",

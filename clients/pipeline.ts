@@ -12,7 +12,9 @@
  *   7. Cascade diagnostics (other files with errors, LSP only)
  */
 
+import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
+import * as nodeCrypto from "node:crypto";
 import * as path from "node:path";
 import type { PiLensFlagSource } from "./lens-config.js";
 import {
@@ -28,7 +30,10 @@ import {
 	type CodeQualityWarningRecord,
 } from "./code-quality-warnings.js";
 import type { BiomeClient } from "./biome-client.js";
-import { recordDiagnostics } from "./widget-state.js";
+import {
+	admitWidgetDiagnosticsWrite,
+	recordDiagnostics,
+} from "./widget-state.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
@@ -78,6 +83,7 @@ import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import type { LedgerHookKey } from "./hook-budgets.js";
 import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { establishToolAgreement } from "./tool-agreement.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
@@ -331,6 +337,8 @@ export interface PipelineResult {
 	isError: boolean;
 	/** True if file was modified by format/autofix */
 	fileModified: boolean;
+	/** Hash captured after this pipeline's own writes, before analysis awaits. */
+	postWriteStateHash?: string;
 	/** Files modified by pi-lens format/autofix, including side-effect files. */
 	changedFiles?: string[];
 	/** Blocking-only formatted output for turn_end re-surfacing if agent didn't fix */
@@ -354,6 +362,8 @@ export interface PipelineResult {
 	 * e.g. a whole-file secret finding).
 	 */
 	inlineBlockerLines?: number[];
+	/** Content baseline captured from the pipeline read used to render blockers. */
+	inlineBlockerFileContent?: { size: number; sha256: string };
 	/** Fixable warning diagnostics introduced by this pipeline run. */
 	actionableWarnings?: ActionableWarningRecord[];
 	/** Non-fixable code-quality warnings introduced/touched by this pipeline run. */
@@ -822,6 +832,18 @@ export async function runAutofix(
 
 	for (const toolName of preferredAutofixTools) {
 		attemptedTools.push(toolName);
+		const agreement = establishToolAgreement(toolName, cwd);
+		if (agreement.decision === "decline") {
+			const reason = agreement.reason;
+			dbg(`autofix: ${toolName} declined (${reason})`);
+			recordDegradationOnce({
+				kind: "autofix-agreement-unavailable",
+				subject: agreement.subject,
+				reason,
+			});
+			continue;
+		}
+
 		if (toolName === "ruff") {
 			const ruffReady = ruffClient.isPythonFile(filePath)
 				? await ruffClient.ensureAvailable()
@@ -1268,6 +1290,8 @@ export async function runFormatPhase(
 		// out of `formatFailures` (which requeues). Record it once, distinctly.
 		for (const f of result.formatters) {
 			if (f.outcome !== "unavailable") continue;
+			if (f.error?.includes("project tool agreement could not be established"))
+				continue;
 			const reason = f.error ?? "formatter executable not found";
 			formatUnavailable.push({ formatter: f.name, reason });
 			recordDegradationOnce({
@@ -1384,6 +1408,7 @@ export async function runPipeline(
 ): Promise<PipelineResult> {
 	const { filePath, cwd, toolName, getFlag, getFlagSource, dbg } = ctx;
 	const { getFormatService } = deps;
+	admitWidgetDiagnosticsWrite(filePath, ctx.telemetry?.writeIndex);
 
 	const phase = createPhaseTracker(toolName, filePath);
 	const pipelineStart = Date.now();
@@ -1506,6 +1531,31 @@ export async function runPipeline(
 		skipReason: autofixSkipReason,
 	});
 
+	// Capture the target's bytes immediately after pi-lens writes and before any
+	// awaitable LSP or dispatch work. `fileModified` also covers side-effect
+	// files, so target membership is the discriminator for pipeline ownership
+	// (#2499).
+	const fileModified = formatChanged || fixedCount > 0;
+	const targetFileModified = piChangedFiles.has(path.resolve(filePath));
+	const postWriteStateHash =
+		fileModified && targetFileModified
+			? (() => {
+					try {
+						return nodeCrypto
+							.createHash("sha256")
+							.update(nodeFs.readFileSync(filePath))
+							.digest("hex");
+					} catch (error) {
+						recordDegradationOnce({
+							kind: "pipeline-post-write-hash-unavailable",
+							subject: filePath,
+							reason: error instanceof Error ? error.message : String(error),
+						});
+						return undefined;
+					}
+				})()
+			: undefined;
+
 	// --- 4. LSP file sync ---
 	// Sync once with final post-format/post-fix content so dispatch and cascade
 	// diagnostics do not observe stale pre-format text.
@@ -1526,6 +1576,21 @@ export async function runPipeline(
 	};
 	const { dispatchLintWithResult, computeCascadeForFile } =
 		await loadDispatchIntegration();
+	// Capture the bytes the pipeline presents to analysis before the dispatch
+	// promise can yield to another writer. The blocker evidence below belongs to
+	// this analysis input, not to whatever happens to be on disk when the whole
+	// pipeline returns.
+	const inlineBlockerFileContent = fileContent
+		? (() => {
+				const content = Buffer.from(fileContent, "utf8");
+				return content.byteLength <= 2 * 1024 * 1024
+					? {
+							size: content.byteLength,
+							sha256: createHash("sha256").update(content).digest("hex"),
+						}
+					: undefined;
+			})()
+		: undefined;
 	const dispatchResult = await dispatchLintWithResult(
 		filePath,
 		cwd,
@@ -1749,7 +1814,6 @@ export async function runPipeline(
 
 	phase.end("total", { hasOutput: !!output });
 
-	const fileModified = formatChanged || fixedCount > 0;
 	const changedFiles = [...piChangedFiles];
 	emitLensAnalysisComplete({
 		cwd,
@@ -1776,6 +1840,7 @@ export async function runPipeline(
 		cascadePromise,
 		isError: false,
 		fileModified,
+		postWriteStateHash,
 		changedFiles,
 		inlineBlockerSummary: dispatchResult.hasBlockers
 			? dispatchResult.blockerOutput.trim() || undefined
@@ -1846,5 +1911,8 @@ export async function runPipeline(
 						source: "autofix",
 					}
 				: undefined,
+		inlineBlockerFileContent: dispatchResult.hasBlockers
+			? inlineBlockerFileContent
+			: undefined,
 	};
 }

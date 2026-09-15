@@ -122,6 +122,58 @@ describe("#2430 item 1 — arm, diff, replay", () => {
 		}
 	});
 
+	it("does not replay a size-only mutation when the hash budget omits both hashes", async () => {
+		// #2984 recurrence: stat-only evidence must not cross the observation
+		// replay or attribution boundary.
+		const env = setupTestEnvironment("pi-lens-2984-size-only-");
+		try {
+			const filePath = path.join(env.tmpDir, "large.ts");
+			const before = Buffer.alloc(
+				OBSERVED_SWEEP_HASH_BUDGET_BYTES + 1024,
+				0x61,
+			);
+			fs.writeFileSync(filePath, before);
+			const armed = await armObservedMutation(armArgs(filePath, env.tmpDir));
+			expect(armed.armed).toBe(true);
+
+			fs.writeFileSync(filePath, Buffer.concat([before, Buffer.from("b")]));
+			const sink = recorder();
+			const settled = await settleObservedMutation({
+				toolCallId: "call-observed-1",
+				toolName: "patch_file",
+				sessionGeneration: 1,
+				turnIndex: 1,
+				record: sink.record,
+			});
+
+			expect(settled.changedPaths).toEqual([]);
+			expect(settled.unverifiablePaths).toHaveLength(1);
+			expect(settled.replayed).toBe(0);
+			expect(sink.entries).toEqual([]);
+			expect(lookupLearnedMutatingTool("patch_file")).toBeUndefined();
+
+			for (const toolCallId of ["call-observed-2", "call-observed-3"]) {
+				const next = await armObservedMutation(
+					armArgs(filePath, env.tmpDir, { toolCallId }),
+				);
+				expect(next.armed).toBe(true);
+				const repeat = await settleObservedMutation({
+					toolCallId,
+					toolName: "patch_file",
+					sessionGeneration: 1,
+					turnIndex: 1,
+					record: recorder().record,
+				});
+				expect(repeat.unverifiablePaths).toHaveLength(1);
+				expect(repeat.replayed).toBe(0);
+			}
+			// Hashless observations must not spend the clean latch.
+			expect(shouldArmObservationForTool("patch_file")).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("keeps watching a provisionally attributed tool, and stops once the attribution is durable", async () => {
 		// #2449 review round 2, F4/F2. ONE observation attributes the tool for
 		// this session but does not make the claim durable, and the only thing

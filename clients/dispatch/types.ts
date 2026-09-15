@@ -143,7 +143,10 @@ export interface RunnerDefinition {
 }
 
 /** Closed telemetry taxonomy for expected runner skips. */
-export const RUNNER_SKIP_REASONS = ["no-files-matched"] as const;
+export const RUNNER_SKIP_REASONS = [
+	"no-files-matched",
+	"configured-non-biome-linter",
+] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
 
 /** Runtime guard for untyped/plugin-provided runner results. */
@@ -238,6 +241,8 @@ export interface DispatchContext {
 	 * attributed. Blank/absent outside a live agent turn (e.g. project scans). */
 	readonly telemetryModel?: string;
 	readonly telemetryProvider?: string;
+	/** Pass-scoped filesystem memo for the shared tool-cwd seam. */
+	readonly toolCwdMemo?: { gitRoot?: string | null };
 
 	hasTool(command: string): Promise<boolean>;
 	/** Log an advisory to the dispatch sink; `level` defaults to `error`. */

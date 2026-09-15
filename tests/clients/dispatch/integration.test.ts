@@ -5,6 +5,8 @@
  * with mocked dispatcher to avoid real tool spawning.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -74,6 +76,57 @@ describe("Dispatch Integration", () => {
 	});
 
 	describe("dispatchLintWithResult", () => {
+		it("classifies Helm YAML only when dispatch can discover a chart root", async () => {
+			const root = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-dispatch-helm-"),
+			);
+			try {
+				const ordinary = path.join(root, "service", "templates", "route.yaml");
+				const nested = path.join(
+					root,
+					"service",
+					"templates",
+					"nested",
+					"route.yml",
+				);
+				const chart = path.join(root, "chart");
+				const chartFile = path.join(chart, "templates", "deployment.yaml");
+				const literalBackslash = path.join(chart, "templates\\deployment.yaml");
+				fs.mkdirSync(path.dirname(ordinary), { recursive: true });
+				fs.mkdirSync(path.dirname(nested), { recursive: true });
+				fs.mkdirSync(path.dirname(chartFile), { recursive: true });
+				fs.writeFileSync(ordinary, "kind: Service\n");
+				fs.writeFileSync(nested, "kind: Route\n");
+				fs.writeFileSync(path.join(chart, "Chart.yaml"), "apiVersion: v2\n");
+				fs.writeFileSync(chartFile, "kind: Deployment\n");
+				fs.writeFileSync(literalBackslash, "kind: Deployment\n");
+				const relativeChartFile = path.relative(root, chartFile);
+
+				for (const file of [
+					ordinary,
+					nested,
+					chartFile,
+					relativeChartFile,
+					literalBackslash,
+				]) {
+					await dispatchLintWithResult(file, root, { getFlag: () => false });
+				}
+
+				const kinds = vi
+					.mocked(dispatchForFile)
+					.mock.calls.map(([context]) => context.kind);
+				expect(kinds).toEqual([
+					"yaml",
+					"yaml",
+					"helm-template",
+					"helm-template",
+					"yaml",
+				]);
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+
 		it("returns empty result for unsupported file kind", async () => {
 			const result = await dispatchLintWithResult("data.csv", "/project", {
 				getFlag: () => false,

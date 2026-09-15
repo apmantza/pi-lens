@@ -144,7 +144,7 @@
 		"clients/installer/installer-lifecycle.integration.test.ts": 1,
 		"clients/installer/posix-group-kill.test.ts": 2,
 		"clients/installer/verify-binary-semantics.test.ts": 1,
-		"clients/instance-reaper-backstop.test.ts": 4,
+		"clients/instance-reaper-backstop.test.ts": 3,
 		"clients/instance-registry-multi-root.test.ts": 2,
 		"clients/instance-registry.test.ts": 4,
 		"clients/latency-logger.test.ts": 1,

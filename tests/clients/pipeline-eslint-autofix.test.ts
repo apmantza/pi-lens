@@ -26,6 +26,17 @@ describe("runAutofix — eslint single-spawn --fix (#453)", () => {
 		env = setupTestEnvironment("pi-lens-eslint-autofix-");
 		// eslint is config-first: only selected when a config is present.
 		fs.writeFileSync(path.join(env.tmpDir, ".eslintrc.json"), "{}\n");
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { eslint: "^10.5.0" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: { "": {}, "node_modules/eslint": { version: "10.5.0" } },
+			}),
+		);
 		filePath = path.join(env.tmpDir, "messy.js");
 		fs.writeFileSync(filePath, "const x = 1\nconsole.log(x)\n");
 	});

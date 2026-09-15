@@ -128,7 +128,7 @@ export class RuffClient {
 			// nested `pyproject.toml` whenever the caller passed a workspace root.
 			const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, {
 				...(cwd !== undefined && { cwd }),
-			});
+			}).cwd;
 			// Shared config-args seam (#1247): the lint runner consumes the same
 			// builder, so `check --fix` can never drift to ruff's default rule
 			// set when the project lacks its own config and the package-owned

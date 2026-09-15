@@ -1269,25 +1269,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"observed path above.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-result.ts#57d3f8bf~32875b26": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-result.ts#734a21b6~69a83146": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#8c164eee~caedcf66": {
 		family: "hook-await",
 		site: "tool_result_edit",
 		reason:
@@ -1427,16 +1409,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"their spawns.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:f02aaccc~a59ea951": {
+	"clients/runtime-turn.ts#f02aaccc~a59ea951": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`runtime.settleCascadeRuns` — bounded at 5000ms with no abort " +
-			"arm, and 5000ms alone exceeds the 3000ms turn_end budget " +
-			"(#2523's `bounded but no abort race` list).",
+			"`runtime.settleCascadeRuns` owns its internal 5000ms settle cap; " +
+			"the outer turn_end handler remains bounded by its existing admission " +
+			"seam (#2523 slice 2).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~b1a2c4cd": {
+	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~c3e1d7c1": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
@@ -2153,7 +2135,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// tree-kill teardown the raw spawn never had; like every other entry here
 	// it cannot take a hook's signal until #2523 AC4 threads it through the
 	// deps types.
-	"clients/installer/index.ts": 212,
+	// #3020 adds six unbounded helper awaits for ZIP wrapper-root stripping and
+	// archive extraction cleanup. They remain on the existing intentionally
+	// unbounded worklist until #2523 AC4 threads hook signals through installer
+	// dependencies; this records the measured increase rather than hiding it.
+	"clients/installer/index.ts": 218,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,
@@ -2251,6 +2237,23 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"turn_end path and absent only in a unit harness. Deadline half is live " +
 		"either way, and is itself the per-trip minimum of the loop's remaining " +
 		"budget and the per-pull timeout.",
+	"call:clients/blocker-freshness.ts#detectSelfDrift:31ccd4b2~6f51ea0e":
+		"`BlockerFreshnessOptions.signal`, threaded from `TurnEndDeps.signal` by " +
+		"`runtime-turn.ts`'s sweep call. Live on every turn_end path. Absent only " +
+		"in unit harnesses that drive the sweep directly, where the wall-clock " +
+		"half still applies; accepted because the self axis's failure direction " +
+		"is `unverifiable` (change nothing), never a demotion (#2982).",
+	"call:clients/blocker-freshness.ts#detectSelfDrift:a28359f5~facb5902":
+		"Same `BlockerFreshnessOptions.signal` as the stat above. This is the " +
+		"hash tier's whole-file read, reached only when the size tier cannot " +
+		"separate a same-length edit from a `touch`; it is additionally capped by " +
+		"the per-sweep hash budget so the aggregate read is " +
+		"bounded on the count axis too (#2982, defect shape 9).",
+	"call:clients/blocker-freshness.ts#sweepInlineBlockerFreshness:b262cffc~b69fb70f":
+		"Same `BlockerFreshnessOptions.signal`. Wraps the whole per-entry " +
+		"`detectSelfDrift` call so an expiry maps to `unverifiable` at one place " +
+		"rather than leaving a half-finished verdict; the inner bounds above are " +
+		"the leaf budgets (#2982).",
 	"call:clients/bootstrap.ts#requestBootstrapClients:076f54d7~878c680d":
 		"`options.signal`, GENUINELY absent for the three session-start demands: " +
 		"`SessionBootstrapAccess.request` takes no signal on purpose (#1394 — a " +
@@ -2308,6 +2311,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",
+	"call:clients/runtime-tool-result.ts#464d2ad3~b4f8a98d":
+		"Observed duplicate-claim joins use the same ToolResultDeps.signal and " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
+	"call:clients/runtime-tool-result.ts#8f7626bd~b4f8a98d":
+		"Each observed changed-file analysis uses ToolResultDeps.signal and the " +
+		"edit budget; the local alias keeps this call site distinct for the sweep.",
 	"call:clients/runtime-tool-result.ts#b9faf573~b4f8a98d":
 		"Classified pipeline analysis uses ToolResultDeps.signal and the edit " +
 		"budget; a missing signal is an explicit standalone-harness case.",

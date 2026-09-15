@@ -252,7 +252,7 @@ describe("actionable-warning-state.json migration — LSP two-turn probe (review
 		const legacyId = legacyActionableWarningIdForTest({
 			cwd: tmpDir,
 			filePath,
-			tool: "lsp",
+			tool: "ts",
 			source: "ts",
 			code: "6133",
 			message: diag.message,
@@ -276,7 +276,7 @@ describe("actionable-warning-state.json migration — LSP two-turn probe (review
 
 		const findLspWarning = (report: {
 			files: Array<{ warnings: Array<{ tool: string; suppressed: boolean }> }>;
-		}) => report.files.flatMap((f) => f.warnings).find((w) => w.tool === "lsp");
+		}) => report.files.flatMap((f) => f.warnings).find((w) => w.tool === "ts");
 
 		const turn1 = await buildReport();
 		const turn1Warning = findLspWarning(turn1);

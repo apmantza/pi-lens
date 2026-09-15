@@ -39,7 +39,7 @@ const expected = {
 		],
 	},
 	lens_diagnostics: {
-		total: 1800,
+		total: 1964,
 		maximum: 2594,
 		keys: [
 			"source",
@@ -53,6 +53,7 @@ const expected = {
 			"maxProjectFiles",
 			"maxLspFiles",
 			"includeGenerated",
+			"analysisRoot",
 			"severity",
 			"paths",
 		],

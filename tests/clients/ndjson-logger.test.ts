@@ -32,12 +32,17 @@ import {
 	resetSinkRotations,
 	resetSinkWriteFailures,
 } from "../../clients/ndjson-logger.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 let tmpDir: string;
 let logFile: string;
 
 beforeEach(() => {
+	resetDegradationLedger();
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ndjson-logger-"));
 	logFile = path.join(tmpDir, "test.log");
 });
@@ -548,20 +553,72 @@ describe("createNdjsonLogger", () => {
 		}
 	});
 
-	it("rejects incompatible options for one canonical path", () => {
-		createNdjsonLogger({ filePath: logFile, maxBytes: 40 });
-		const samePath = path.join(tmpDir, ".", "test.log");
+	it("adopts bounds when an older graph registered an unbounded writer", async () => {
+		// Prevents the reload regression where pre-#2505 state aborts extension loading
+		// instead of adopting the current graph's size bound.
+		const backupPath = `${logFile}.1`;
+		createNdjsonLogger({ filePath: logFile });
+		const logger = createNdjsonLogger({
+			filePath: path.join(tmpDir, ".", "test.log"),
+			maxBytes: 40,
+			backupPath,
+		});
+		logger.log({ payload: "x".repeat(30) });
+		await logger.flush();
+		logger.log({ payload: "y".repeat(30) });
+		await logger.flush();
 
-		expect(() =>
-			createNdjsonLogger({ filePath: samePath, maxBytes: 80 }),
-		).toThrow(/incompatible options.*maxBytes\/backupPath/);
-		expect(() =>
+		expect(fs.existsSync(backupPath)).toBe(true);
+		expect(getDegradationSummary()).toContainEqual({
+			kind: "log-sink-option-conflict",
+			count: 1,
+			droppedCount: 0,
+			latestReasons: [expect.objectContaining({ subject: logFile })],
+		});
+	});
+
+	it("keeps the first bounded policy when a later graph disagrees", () => {
+		// Prevents a reload from replacing the first writer's ownership or aborting the host.
+		const firstBackup = `${logFile}.first`;
+		const first = createNdjsonLogger({
+			filePath: logFile,
+			maxBytes: 40,
+			backupPath: firstBackup,
+		});
+		first.log({ payload: "a".repeat(30) });
+		const second = createNdjsonLogger({
+			filePath: path.join(tmpDir, ".", "test.log"),
+			maxBytes: 80,
+			backupPath: `${logFile}.second`,
+		});
+		second.log({ payload: "x".repeat(30) });
+		second.flushSync();
+
+		expect(fs.existsSync(firstBackup)).toBe(true);
+		expect(fs.existsSync(`${logFile}.second`)).toBe(false);
+		expect(getDegradationSummary()).toContainEqual(
+			expect.objectContaining({ kind: "log-sink-option-conflict", count: 1 }),
+		);
+	});
+
+	it("bounds option-conflict telemetry across repeated registrations", () => {
+		// Prevents a repeated reload from turning one policy mismatch into log/health spam.
+		createNdjsonLogger({
+			filePath: logFile,
+			maxBytes: 40,
+			backupPath: `${logFile}.1`,
+		});
+		for (let i = 0; i < 10; i++) {
 			createNdjsonLogger({
-				filePath: samePath,
-				maxBytes: 40,
-				backupPath: path.join(tmpDir, "custom.backup"),
-			}),
-		).toThrow(/incompatible options.*maxBytes\/backupPath/);
+				filePath: path.join(tmpDir, ".", "test.log"),
+				maxBytes: 80,
+				backupPath: `${logFile}.2`,
+			});
+		}
+
+		expect(getDegradationSummary()).toContainEqual(
+			expect.objectContaining({ kind: "log-sink-option-conflict", count: 1 }),
+		);
 	});
 
 	it("keeps distinct paths isolated", async () => {

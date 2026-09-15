@@ -367,6 +367,8 @@ describe("workspace-topology sweep — registered-or-fail coverage", () => {
 				"per-run `.tflint.hcl` discovery through findNearestDirWithAnyBasename — the result feeds one arg set and holds no module-level memo; the walk itself is cached inside workspace-topology's own walkCache, which resetWorkspaceTopology clears.",
 			"dispatch/runners/helm-lint.ts":
 				"per-edit Chart.yaml discovery through findNearestDirWithMarker — resolved to a chartRoot used once, no downstream memo; the walked index clears with resetWorkspaceTopology.",
+			"file-kinds.ts":
+				"per-call Chart.yaml discovery through findNearestDirWithMarker; no downstream memo; the workspace-topology walk cache is reset by its owner.",
 			"dispatch/runners/helm-render.ts":
 				"per-edit Chart.yaml discovery through findNearestDirWithMarker — same stateless-per-call shape as helm-lint; only an in-flight dedupe map rides chartRoot and it is cleared in finally.",
 			"runtime-session.ts":

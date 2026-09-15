@@ -133,7 +133,10 @@ describe("oxlint runner", () => {
 	});
 
 	it("keeps expected runner skip reasons on a closed type/runtime taxonomy", () => {
-		expect(RUNNER_SKIP_REASONS).toEqual(["no-files-matched"]);
+		expect(RUNNER_SKIP_REASONS).toEqual([
+			"no-files-matched",
+			"configured-non-biome-linter",
+		]);
 		const valid: RunnerResult = {
 			status: "skipped",
 			diagnostics: [],

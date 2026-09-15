@@ -37,7 +37,8 @@ const {
 	findCargoPathAsync: vi.fn(async () => "cargo"),
 }));
 
-vi.mock("../../../../clients/latency-logger.js", () => ({
+vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));

@@ -5,6 +5,14 @@
  * but a test's object-literal mock silently dropped it. This detector only
  * accepts direct object-literal factory returns and treats an
  * `importActual`/`importOriginal` spread for the same specifier as complete.
+ *
+ * Out-of-line factories (`const factory = () => ({...}); vi.mock(m, factory)`)
+ * resolve to their local definition and are checked with the same body rule;
+ * a factory that cannot be resolved locally (imported, member access, call
+ * result) fails closed as an unresolved finding rather than passing silently
+ * (#2959 round 1 MEDIUM, shape 34). The latency target selector below is the
+ * single source for the #2281 latency surface; the sweep consumes it so the
+ * discriminator lives in one tested place.
  */
 
 import * as fs from "node:fs";
@@ -13,6 +21,7 @@ import { Lang, parse } from "@ast-grep/napi";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 import { bareIdentifier } from "./lsp-double-gate.js";
 import { namedParts, unwrapParens } from "./spawn-cwd-scan.js";
+import { firstCommentMatch } from "./sweep-kit.js";
 
 export interface ViMockExportFinding {
 	file: string;
@@ -37,6 +46,32 @@ function unquote(text: string): string | undefined {
 	} catch {
 		return text.slice(1, -1);
 	}
+}
+
+/**
+ * Semantic `vi.mock` call check: the object must be `vi` and the property
+ * must name `mock`, whether written dot (`vi.mock`), bracket
+ * (`vi["mock"]` — a `subscript_expression`, not a `member_expression`), or
+ * spaced (`vi . mock`). Checking `callee.text() === "vi.mock"` enumerates one
+ * surface spelling and misses the others (shape 34); structural fields do
+ * not.
+ */
+function isViMockCall(callee: SgNode | undefined | null): boolean {
+	if (!callee) return false;
+	if (callee.kind() === "member_expression") {
+		if (callee.field("object")?.text() !== "vi") return false;
+		const property = callee.field("property");
+		if (!property) return false;
+		if (property.kind() === "property_identifier")
+			return property.text() === "mock";
+		return unquote(property.text()) === "mock";
+	}
+	if (callee.kind() === "subscript_expression") {
+		const named = callee.children().filter((child) => child.isNamed());
+		if (named.length < 2 || named[0].text() !== "vi") return false;
+		return unquote(named[1].text()) === "mock";
+	}
+	return false;
 }
 
 function objectReturns(factory: SgNode): SgNode | undefined {
@@ -217,6 +252,67 @@ function isSameModulePassThrough(
 
 function isSkippedSpecifier(specifier: string): boolean {
 	return specifier.startsWith("node:") || /(?:\.mjs|\.d\.mts)$/.test(specifier);
+}
+
+/**
+ * The #2281 latency target selector — the single source the sweep consumes.
+ * A specifier selects the latency surface exactly when it ends with
+ * `latency-logger.js`, regardless of how deep the relative path is. Tested in
+ * both directions; the sweep must not re-derive this predicate inline.
+ */
+export function isLatencyLoggerSpecifier(specifier: string): boolean {
+	return specifier.endsWith("latency-logger.js");
+}
+
+const LATENCY_ADMISSION_HEADER =
+	/^[ \t]*\/\/[ \t]*latency-logger-mock:[ \t]*(.+)$/gm;
+
+/**
+ * A real `// latency-logger-mock: <reason>` comment, never a string literal.
+ * Reuses `firstCommentMatch` (the same comment-vs-string discriminator the
+ * `lsp-double` header uses) instead of a second raw-text match.
+ */
+export function latencyAdmissionHeader(source: string): string | undefined {
+	return firstCommentMatch(source, LATENCY_ADMISSION_HEADER)?.[1].trim();
+}
+
+/**
+ * Resolve an out-of-line `vi.mock` factory to the function that defines its
+ * body. Inline arrows/functions return as-is; an identifier resolves to its
+ * local `const`/`let`/`var` arrow/function value or to a top-level
+ * `function` declaration. Anything else (imported binding, member access,
+ * call result) returns `undefined` so the caller fails closed. This is the
+ * semantic rule behind the #2959 round-1 MEDIUM fix: the question is "can the
+ * returned property set be proven complete", never "which spelling defined
+ * it".
+ */
+function resolveFactoryNode(factory: SgNode, root: SgNode): SgNode | undefined {
+	if (
+		factory.kind() === "arrow_function" ||
+		factory.kind() === "function_expression" ||
+		factory.kind() === "function_declaration"
+	)
+		return factory;
+	if (factory.kind() !== "identifier") return undefined;
+	const name = factory.text();
+	for (const declarator of root.findAll({
+		rule: { kind: "variable_declarator" },
+	})) {
+		const declName = declarator.field("name");
+		const value = declarator.field("value");
+		if (declName?.kind() === "identifier" && declName.text() === name) {
+			if (
+				value?.kind() === "arrow_function" ||
+				value?.kind() === "function_expression"
+			)
+				return value;
+			return undefined;
+		}
+	}
+	for (const fn of root.findAll({ rule: { kind: "function_declaration" } })) {
+		if (fn.field("name")?.text() === name) return fn;
+	}
+	return undefined;
 }
 
 function propertyNames(object: SgNode): Set<string> {
@@ -416,8 +512,7 @@ function requiredValues(
 	const mockedSpecifiers = new Set<string>();
 	for (const call of testRoot.findAll({ rule: { kind: "call_expression" } })) {
 		const callee = call.field("function");
-		if (callee?.kind() !== "member_expression" || callee.text() !== "vi.mock")
-			continue;
+		if (!isViMockCall(callee)) continue;
 		const mocked = call.field("arguments")?.namedChildren()[0];
 		const mockedSpecifier = mocked ? unquote(mocked.text()) : undefined;
 		if (mockedSpecifier) mockedSpecifiers.add(mockedSpecifier);
@@ -464,19 +559,30 @@ export function findViMockExportGaps(
 	const findings: ViMockExportFinding[] = [];
 	for (const call of root.findAll({ rule: { kind: "call_expression" } })) {
 		const callee = call.field("function");
-		if (callee?.kind() !== "member_expression" || callee.text() !== "vi.mock")
-			continue;
+		if (!isViMockCall(callee)) continue;
 		const args = call.field("arguments")?.namedChildren() ?? [];
 		const specifier = args[0] ? unquote(args[0].text()) : undefined;
-		const factory = args[1];
-		if (
-			!specifier ||
-			isSkippedSpecifier(specifier) ||
-			!factory ||
-			(factory.kind() !== "arrow_function" &&
-				factory.kind() !== "function_expression")
-		)
+		const rawFactory = args[1];
+		if (!specifier || isSkippedSpecifier(specifier) || !rawFactory) continue;
+		const factory = resolveFactoryNode(rawFactory, root);
+		if (!factory) {
+			const productionFile = resolveProduction(file, specifier);
+			if (!productionFile) continue;
+			const required =
+				mode === "all"
+					? exportedValues(fs.readFileSync(productionFile, "utf8"))
+					: requiredValues(file, source, specifier, options);
+			if (required.size === 0) continue;
+			findings.push({
+				file,
+				line: call.range().start.line + 1,
+				specifier,
+				productionFile,
+				missing: [...required].sort(),
+				factoryProperties: [],
+			});
 			continue;
+		}
 		const object = objectReturns(factory);
 		if (!object || isSameModulePassThrough(object, factory, specifier))
 			continue;
@@ -502,4 +608,18 @@ export function findViMockExportGaps(
 		}
 	}
 	return findings;
+}
+
+/**
+ * The latency pipeline the sweep consumes: every `all`-mode gap whose
+ * specifier selects the latency surface. The sweep calls this (never an
+ * inline `endsWith` filter) so the discriminator lives in one tested place.
+ */
+export function findLatencyLoggerGapsForFile(
+	file: string,
+	source: string,
+): ViMockExportFinding[] {
+	return findViMockExportGaps(file, source, "all").filter((finding) =>
+		isLatencyLoggerSpecifier(finding.specifier),
+	);
 }

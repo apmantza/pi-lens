@@ -119,7 +119,8 @@ vi.mock("../../clients/instance-registry.js", () => ({
 	readInstanceRegistry: async () => h.state.registry,
 }));
 
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (entry: Record<string, unknown>) => {
 		h.latency.push(entry);
 	},
@@ -194,14 +195,23 @@ function sweepUntrackedOrphans(
 	return sweepUntrackedOrphansImpl(...args);
 }
 
-function lastBackstopRecord(): Record<string, unknown> | undefined {
+function lastBackstopRecord(
+	startIndex = sweepIndex,
+): Record<string, unknown> | undefined {
 	return h.latency
-		.slice(sweepIndex)
+		.slice(startIndex)
 		.find((entry) => entry.phase === "orphan_backstop_reaped");
 }
 
+function backstopMetadataForSweep(startIndex: number): Record<string, unknown> {
+	return (lastBackstopRecord(startIndex)?.metadata ?? {}) as Record<
+		string,
+		unknown
+	>;
+}
+
 function backstopMetadata(): Record<string, unknown> {
-	return (lastBackstopRecord()?.metadata ?? {}) as Record<string, unknown>;
+	return backstopMetadataForSweep(sweepIndex);
 }
 
 const ORPHAN_COMMAND = isWindows
@@ -429,26 +439,49 @@ describe("#1864 review F2: a grace-spared candidate is re-examined", () => {
 
 	it("arms one follow-up sweep when the grace spared a candidate", async () => {
 		h.state.stdout = FRESH_ROW();
+		h.latency.push({
+			phase: "orphan_backstop_reaped",
+			metadata: { tooFresh: 99, graceRetryInMs: 99 },
+		});
+		let completions = 0;
+		let scheduledRetries = 0;
+		let resolveRetry: ((outcome: string) => void) | undefined;
+		const retryCompleted = new Promise<string>((resolve) => {
+			resolveRetry = resolve;
+		});
 
 		const outcome = await sweepUntrackedOrphans({
 			...FAST,
 			graceRetryDelayMs: 5,
+			onComplete: (completedOutcome) => {
+				completions += 1;
+				if (completions === 2) resolveRetry?.(completedOutcome);
+			},
+			onGraceRetryScheduled: () => {
+				scheduledRetries += 1;
+			},
 		});
+		const directSweepStart = sweepIndex;
 
 		expect(outcome).toBe("clean");
 
-		// The retry actually runs, and it is NOT blocked by the stamp the first
-		// sweep just wrote. Waiting for it here is also the #2669 regression:
-		// by the time this resolves, the retry's own `orphan_backstop_reaped`
-		// row (it never carries `graceRetryInMs`) is the newest row in the
-		// log, so a metadata lookup keyed on "the last row" instead of "the
-		// row THIS sweep call logged" deterministically reads the retry's
-		// metadata instead of the direct call's.
-		await new Promise((resolve) => setTimeout(resolve, 80));
+		// Await the retry's completion signal instead of racing its unref'd timer.
+		const retryOutcome = await Promise.race([
+			retryCompleted,
+			new Promise<string>((_, reject) =>
+				setTimeout(
+					() => reject(new Error("grace retry did not complete")),
+					100,
+				),
+			),
+		]);
+		expect(retryOutcome).toBe("clean");
+		expect(completions).toBe(2);
+		expect(scheduledRetries).toBe(1);
 		expect(h.state.scannerPids.length).toBeGreaterThanOrEqual(2);
 
-		expect(backstopMetadata().tooFresh).toBe(1);
-		expect(backstopMetadata().graceRetryInMs).toBe(5);
+		expect(backstopMetadataForSweep(directSweepStart).tooFresh).toBe(1);
+		expect(backstopMetadataForSweep(directSweepStart).graceRetryInMs).toBe(5);
 	});
 
 	it("does not arm a follow-up when nothing was spared", async () => {
@@ -467,18 +500,27 @@ describe("#1864 review F2: a grace-spared candidate is re-examined", () => {
 
 	it("bounds the chain at one: the retry never arms another retry", async () => {
 		h.state.stdout = FRESH_ROW();
+		let completions = 0;
+		let scheduledRetries = 0;
 
 		// This IS the follow-up sweep — same options the re-arm passes itself.
 		const outcome = await sweepUntrackedOrphans({
 			...FAST,
 			graceRetryDelayMs: 5,
 			allowGraceRetry: false,
+			onComplete: () => {
+				completions += 1;
+			},
+			onGraceRetryScheduled: () => {
+				scheduledRetries += 1;
+			},
 		});
 
 		expect(outcome).toBe("clean");
 		expect(backstopMetadata().tooFresh).toBe(1);
 		expect(backstopMetadata().graceRetryInMs).toBeUndefined();
-		await new Promise((resolve) => setTimeout(resolve, 80));
+		expect(completions).toBe(1);
+		expect(scheduledRetries).toBe(0);
 		expect(h.state.scannerPids).toHaveLength(1);
 	});
 });

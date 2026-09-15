@@ -6,6 +6,10 @@ import type { BootstrapClients } from "../../../clients/bootstrap.js";
 import { snapshotAdvisoryProvenance } from "../../../clients/advisory-provenance.js";
 import { fetchFreshProjectDiagnostics } from "../../../clients/project-diagnostics/fresh-fetch.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
+import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
@@ -26,18 +30,19 @@ import {
 // a real tmp-dir fixture.
 
 let tmp: string;
-let previousDataDir: string | undefined;
+let previousPiLensHome: string | undefined;
 
 beforeEach(() => {
 	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fresh-fetch-"));
-	previousDataDir = process.env.PILENS_DATA_DIR;
-	process.env.PILENS_DATA_DIR = path.join(tmp, "pi-lens-data");
+	previousPiLensHome = process.env.PI_LENS_HOME;
+	process.env.PI_LENS_HOME = path.join(tmp, "pi-lens-home");
 	_resetStateCacheForTests();
+	resetDegradationLedger();
 });
 
 afterEach(() => {
-	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
-	else process.env.PILENS_DATA_DIR = previousDataDir;
+	if (previousPiLensHome === undefined) delete process.env.PI_LENS_HOME;
+	else process.env.PI_LENS_HOME = previousPiLensHome;
 	_resetStateCacheForTests();
 	removeTempDirSync(tmp);
 });
@@ -274,6 +279,152 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 
 		expect(result.unsafeRoot).toBeUndefined();
 		expect(clients.knipClient.analyze).toHaveBeenCalledTimes(1);
+	});
+
+	it("runs the reporter's home-cwd reproduction for an explicit project root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "repo");
+		fs.mkdirSync(project, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			fakeHome,
+			clients,
+			undefined,
+			{ homeDir: fakeHome, analysisRoot: path.join(project, "..", "repo") },
+		);
+
+		expect(result.unsafeRoot).toBeUndefined();
+		expect(result.analysisRootError).toBeUndefined();
+		expect(clients.knipClient.analyze).toHaveBeenCalledWith(
+			fs.realpathSync(project),
+			expect.anything(),
+		);
+	});
+
+	it("shares one validated explicit root with every heavyweight consumer (#2977)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients({ jscpdAvailable: true, madgeAvailable: true });
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "repo");
+		fs.mkdirSync(project, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			fakeHome,
+			clients,
+			undefined,
+			{ homeDir: fakeHome, analysisRoot: "repo" },
+		);
+
+		const validated = result.analysisRootValidation;
+		expect(validated).toEqual({
+			state: "safe",
+			root: fs.realpathSync(project),
+		});
+		for (const consumer of [
+			clients.knipClient.analyze,
+			clients.jscpdClient.scan,
+			clients.depChecker.scanProject,
+		]) {
+			expect(consumer).toHaveBeenCalled();
+			const calls = (consumer as unknown as { mock: { calls: unknown[][] } })
+				.mock.calls;
+			expect(calls[0]?.[0]).toBe(fs.realpathSync(project));
+		}
+	});
+
+	it("refuses an explicit analysis root AT or ABOVE home (#2053, #749)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		fs.mkdirSync(fakeHome, { recursive: true });
+
+		for (const analysisRoot of [fakeHome, path.join(fakeHome, "..")]) {
+			const result = await fetchFreshProjectDiagnostics(
+				cacheManager,
+				path.join(fakeHome, "session"),
+				clients,
+				undefined,
+				{ homeDir: fakeHome, analysisRoot },
+			);
+
+			expect(result.unsafeRoot).toBe(true);
+			expect(result.coldReasons?.knip).toMatch(/at or above/i);
+		}
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(cacheManager.writeCache).not.toHaveBeenCalled();
+	});
+
+	it("refuses a missing or non-directory explicit analysis root (#2053)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const missing = path.join(tmp, "missing-project");
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			undefined,
+			{ homeDir: path.join(tmp, "home"), analysisRoot: missing },
+		);
+
+		expect(result.analysisRootError).toMatch(/unavailable/i);
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(
+			getDegradationSummary().some(
+				({ kind }) => kind === "lens-diagnostics-analysis-root-rejected",
+			),
+		).toBe(true);
+	});
+
+	it("rejects every explicit root that is not strictly below canonical home (#2977 F1)", async () => {
+		const cacheManager = makeCacheManager();
+		const fakeHome = path.join(tmp, "home", "user");
+		const inside = path.join(fakeHome, "repo");
+		const outside = path.join(tmp, "outside");
+		fs.mkdirSync(inside, { recursive: true });
+		fs.mkdirSync(outside, { recursive: true });
+		fs.symlinkSync(outside, path.join(fakeHome, "link-out"), "dir");
+
+		const cases = [
+			["ceiling", fakeHome, false],
+			["above", path.join(fakeHome, ".."), false],
+			[
+				"traversal",
+				path.join(fakeHome, "repo", "..", "..", "..", "outside"),
+				false,
+			],
+			["absolute outside", outside, false],
+			["symlink outside", path.join(fakeHome, "link-out"), false],
+			["relative", "repo", true],
+			["empty", "", false],
+			["non-existent", path.join(fakeHome, "missing"), false],
+		] as const;
+		for (const [, root, accepted] of cases) {
+			const caseClients = makeClients();
+			const result = await fetchFreshProjectDiagnostics(
+				cacheManager,
+				fakeHome,
+				caseClients,
+				undefined,
+				{ homeDir: fakeHome, analysisRoot: root },
+			);
+			expect(
+				result.unsafeRoot === true || result.analysisRootError !== undefined,
+			).toBe(!accepted);
+			expect(caseClients.knipClient.analyze).toHaveBeenCalledTimes(
+				accepted ? 1 : 0,
+			);
+		}
+		expect(cacheManager.writeCache).toHaveBeenCalled();
+		const summary = getDegradationSummary();
+		expect(
+			summary.some(
+				({ kind }) => kind === "lens-diagnostics-analysis-root-rejected",
+			),
+		).toBe(true);
 	});
 
 	it("reports jscpd cold when the tool isn't available, without writing cache", async () => {
@@ -829,6 +980,7 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		(clients.opengrepClient.scan as ReturnType<typeof vi.fn>).mockResolvedValue(
 			{
 				success: true,
+				analyzed: true,
 				scannedAt: "now",
 				findings: [
 					{
@@ -1195,6 +1347,82 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		);
 		expect(result.analyzed).toContain("opengrep");
 		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
+	// Recurrence: a successful partial report used to enter `analyzed` without
+	// paths, then render as cold/not-run despite carrying findings.
+	it("keeps a partial opengrep scan distinct from cold", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep's warning-level partial report shape.
+				fs.writeFileSync(
+					report,
+					'{"results":[],"errors":[{"level":"warn","message":"invalid UTF-8"}],"paths":{"scanned":[]}}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			clients,
+		);
+		expect(result.analyzed).not.toContain("opengrep");
+		expect(result.partial).toContain("opengrep");
+		expect(result.cold).not.toContain("opengrep");
+		expect(result.partialReasons?.opengrep).toBe("invalid UTF-8");
+		expect(result.authoritativeCoverage).toEqual([]);
+	});
+
+	// Recurrence: a warning-level report with findings and scanned paths used to
+	// be cached as complete when the fresh-fetch partial branch was bypassed.
+	it("keeps findings visible and skips cache for a partial scanned report", async () => {
+		const client = new OpengrepClient();
+		client.ensureAvailable = vi.fn().mockResolvedValue(true);
+		vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
+			async (_command, args: string[]) => {
+				const report = args[args.indexOf("--json-output") + 1];
+				// Captured from opengrep 1.25.0 --json with one finding and one
+				// warning-level skipped-file error.
+				fs.writeFileSync(
+					report,
+					'{"results":[{"check_id":"python.lang.security.audit.subprocess-shell-true","path":"a.py","start":{"line":7,"col":3},"end":{"line":7,"col":20},"extra":{"message":"shell=True is dangerous","severity":"ERROR","metadata":{"cwe":["CWE-78: OS Command Injection"]}}}],"errors":[{"level":"warn","message":"skipped 1 file"}],"paths":{"scanned":["a.py"]}}',
+				);
+				return { status: 0, stdout: "", stderr: "" };
+			},
+		);
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		(clients as unknown as { opengrepClient: OpengrepClient }).opengrepClient =
+			client;
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+		);
+
+		expect(result.partial).toContain("opengrep");
+		expect(result.partialReasons?.opengrep).toBe("skipped 1 file");
+		expect(result.diagnostics).toContainEqual(
+			expect.objectContaining({
+				runner: "opengrep",
+				filePath: path.resolve(tmp, "a.py"),
+				message: "shell=True is dangerous (CWE-78: OS Command Injection)",
+			}),
+		);
+		expect(cacheManager.writeCache).not.toHaveBeenCalledWith(
+			"opengrep",
+			expect.anything(),
+			path.resolve(tmp),
+			expect.anything(),
+		);
 	});
 
 	it("does not cache a dead-code result that did not analyse the root (#2887)", async () => {

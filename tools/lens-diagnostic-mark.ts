@@ -54,6 +54,7 @@ import {
 	getFileDiagnostics,
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
+import { resolveLensToolName } from "../clients/tool-config.js";
 
 const DISPOSITIONS = [
 	"false-positive",
@@ -222,8 +223,12 @@ export function createLensDiagnosticMarkTool(
 		label: "Mark Diagnostic",
 		description:
 			"Record a disposition for a diagnostic. Exact reported identity is required; suppress re-anchors against live diagnostics and writes an inline ignore comment, apply multiple suppressions bottom-up, and defer is session-only. Example: mark a false positive with its reported file, line, rule, and message.",
-		promptSnippet:
-			"Use lens_diagnostic_mark to dismiss a false-positive, suppress a won't-fix, defer, or flag a finding to fix later",
+		// #2535 F3: this snippet registers on pi only (`lens_diagnostic_mark`
+		// is declared pi-only in PI_ONLY_TOOL_REASONS — MCP has no such
+		// tool), so the host is pinned, not defaulted. The fallback restates
+		// the same pi canonical and can only fire if the registry regresses,
+		// which the adapter-aware guard reds on first.
+		promptSnippet: `Use ${resolveLensToolName("lens_diagnostic_mark", "pi") ?? "lens_diagnostic_mark"} to dismiss a false-positive, suppress a won't-fix, defer, or flag a finding to fix later`,
 		parameters: Type.Object({
 			filePath: Type.String({
 				description:

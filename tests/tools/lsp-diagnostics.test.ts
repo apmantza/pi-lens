@@ -289,6 +289,8 @@ describe("lsp_diagnostics tool", () => {
 	});
 
 	it("short-circuits the batch fan-out when the signal is already aborted (#343)", async () => {
+		// #2499 / PR #2957: the shared results overload must preserve the retired
+		// local pool's contract: unstarted files are absent, not undefined entries.
 		const tool = createLspDiagnosticsTool();
 		const controller = new AbortController();
 		controller.abort();

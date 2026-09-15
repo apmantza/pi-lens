@@ -33,6 +33,7 @@ import { normalizeMapKey } from "./path-utils.js";
 import { scanProjectDiagnostics } from "./project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "./project-diagnostics/types.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import type { ReviewGraph } from "./review-graph/types.js";
 import {
 	getTreeSitterRuntimeStatus,
@@ -198,6 +199,7 @@ export function generatedSkipNotice(
 		ProjectDiagnosticsSnapshot,
 		"generatedNameOnlySkips" | "generatedDirSkips"
 	>,
+	host: LensToolHost = "pi",
 ): string | undefined {
 	const files = snapshot.generatedNameOnlySkips ?? 0;
 	const dirs = snapshot.generatedDirSkips ?? 0;
@@ -205,12 +207,20 @@ export function generatedSkipNotice(
 	const parts: string[] = [];
 	if (files > 0) parts.push(`${files} file(s)`);
 	if (dirs > 0) parts.push(`${dirs} director${dirs === 1 ? "y" : "ies"}`);
+	// #2535 F1: name the tools THIS host can call. pi has no project-scan
+	// surface, so it names only its diagnostics tool; MCP names both. A
+	// known-but-unmapped host resolves to undefined and is left out, never
+	// printed as a name the host cannot resolve.
+	const targets = [
+		resolveLensToolName("project_scan", host),
+		resolveLensToolName("lens_diagnostics", host),
+	].filter((tool): tool is string => tool !== undefined);
+	const scanRef = targets.length > 0 ? ` to ${targets.join(" / ")}` : "";
 	return (
 		`ℹ ${parts.join(" and ")} excluded by generated-name heuristics with no ` +
 		"confirming evidence — a real hand-written file/directory whose name " +
 		"looks generated (e.g. `gen.ts`, `generated/`) can be excluded too; " +
-		"pass includeGenerated: true to pilens_project_scan / lens_diagnostics " +
-		"to scan without this filter if you suspect a false skip."
+		`pass includeGenerated: true${scanRef} to scan without this filter if you suspect a false skip.`
 	);
 }
 

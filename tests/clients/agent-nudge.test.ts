@@ -17,7 +17,8 @@ vi.mock("../../clients/read-guard-logger.js", () => ({
 }));
 
 const logLatency = vi.fn();
-vi.mock("../../clients/latency-logger.js", () => ({
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
+	...(await importOriginal()),
 	logLatency: (...args: unknown[]) => logLatency(...args),
 }));
 

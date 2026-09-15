@@ -80,6 +80,22 @@ function fixingBiome(content: (filePath: string) => string): BiomeClient {
 }
 
 function toolDeps(runtime: RuntimeCoordinator, biomeClient: BiomeClient) {
+	// #3005 fixture recurrence: the real pipeline must reach the Biome writer
+	// before attachment-budget behavior is observed.
+	fs.writeFileSync(
+		path.join(runtime.projectRoot, "package.json"),
+		JSON.stringify({ devDependencies: { "@biomejs/biome": "^2.4.10" } }),
+	);
+	fs.writeFileSync(
+		path.join(runtime.projectRoot, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: {
+				"": {},
+				"node_modules/@biomejs/biome": { version: "2.4.10" },
+			},
+		}),
+	);
 	return {
 		getFlag: (name: string) => name === "no-lsp",
 		dbg: () => {},
@@ -277,6 +293,46 @@ describe("#1590 post-autofix instruction has one author", () => {
 			expect(decisionRows()).toHaveLength(1);
 			expect(decisionRows()[0].decision).toBe("none");
 			expect(decisionRows()[0].path).toContain(path.basename(filePath));
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records the real autofix bytes in the after-write record (#2499 F2)", async () => {
+		const env = setupTestEnvironment("pi-lens-2499-after-write-");
+		try {
+			const filePath = createTempFile(env.tmpDir, "sample.ts", "const a=1;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const noteAfterWriteHash = vi.spyOn(
+				runtime.partialApplyRecords,
+				"noteAfterWriteHash",
+			);
+
+			await handleToolResult({
+				...toolDeps(
+					runtime,
+					fixingBiome(() => "const a = 1;\n"),
+				),
+				_bypassDebounce: true,
+				_autofixMode: "immediate",
+				event: {
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [{ oldText: "const a=1;", newText: "const a=1;" }],
+					},
+					content: [],
+				},
+			} as never);
+
+			expect(noteAfterWriteHash).toHaveBeenCalledOnce();
+			expect(noteAfterWriteHash.mock.calls[0]?.[3]).toBe(
+				(await import("node:crypto"))
+					.createHash("sha256")
+					.update(fs.readFileSync(filePath))
+					.digest("hex"),
+			);
 		} finally {
 			env.cleanup();
 		}

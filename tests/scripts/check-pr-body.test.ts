@@ -324,23 +324,41 @@ describe("test-reference shape and placement", () => {
 		expect(result.errors.join(" ")).toContain(value);
 	};
 
-	it("checks short ids in prose, bullets, and every table column", () => {
-		for (const extra of [
-			"The witness is `Z99`.",
-			"- The witness is `Z99`.",
-			"| Notes | Test |\n| --- | --- |\n| `Z99` | real |",
-			"| Notes | Test |\n| --- | --- |\n| real | `Z99` |",
-		])
-			missing(clean(extra), "Z99");
+	it("checks short ids only in the test column", () => {
+		missing(clean("| Notes | Test |\n| --- | --- |\n| real | `Z99` |"), "Z99");
+		expect(clean("The witness is `Z99`.").valid).toBe(true);
+		expect(clean("- The witness is `Z99`.").valid).toBe(true);
+		expect(
+			clean("| Notes | Test |\n| --- | --- |\n| `Z99` | real |").valid,
+		).toBe(true);
 	});
 
-	it("accepts short ids in the same placements when they are real", () => {
-		for (const extra of [
-			"The witness is `A01`.",
-			"- The witness is `A01`.",
-			"| Notes | Test |\n| --- | --- |\n| `A01` | real |",
-		])
-			expect(clean(extra).errors.join(" ")).not.toContain("A01");
+	it("accepts short ids in a test column when they resolve to test titles", () => {
+		const fixtureCwd = mkdtempSync(
+			join(repositoryRoot, ".tmp-pr-body-short-id-"),
+		);
+		try {
+			mkdirSync(join(fixtureCwd, "tests"), { recursive: true });
+			const source = [
+				'it("F1", () => {});',
+				'it("V3", () => {});',
+				'it("F12", () => {});',
+			].join("\n");
+			writeFileSync(join(fixtureCwd, "tests", "short-ids.test.ts"), source);
+			const git = (args: string[]) => {
+				if (args[0] === "rev-parse") return "fixture-head\n";
+				if (args[0] === "ls-files") return "tests/short-ids.test.ts\n";
+				if (args[0] === "show") return source;
+				throw new Error(`unexpected git command: ${args.join(" ")}`);
+			};
+			const result = lintPrBody(
+				`${body}\n| Case | Test |\n| --- | --- |\n| A | \`F1\` |\n| B | \`V3\` |\n| C | \`F12\` |`,
+				{ cwd: fixtureCwd, git },
+			);
+			expect(result).toEqual({ valid: true, errors: [] });
+		} finally {
+			rmSync(fixtureCwd, { recursive: true, force: true });
+		}
 	});
 
 	it("checks paths and path-line citations everywhere, including directories", () => {
@@ -352,13 +370,22 @@ describe("test-reference shape and placement", () => {
 			missing(clean(extra), extra.match(/`([^`]+)`/)?.[1] ?? "tests/");
 	});
 
-	it("checks free-text titles in prose, bullets, and test columns", () => {
+	it("checks it-form titles in prose, bullets, and test columns", () => {
 		for (const extra of [
 			"The fabricated test is it('fabricated title').",
-			"- The fabricated test is 'fabricated title'.",
+			"- The fabricated test is it('fabricated title').",
 			"| Notes | Test |\n| --- | --- |\n| text | `fabricated title` |",
 		])
 			missing(clean(extra), "fabricated title");
+	});
+
+	// #3013 (positive recognition): a bare-quoted phrase in prose is quoted
+	// output or quoted source, never a test citation. Only the it() call
+	// form recognises a title outside a test column.
+	it("does not treat bare-quoted prose as a test reference", () => {
+		expect(
+			clean(`- The output was "a timer that outlives its one-shot settle".`),
+		).toEqual({ valid: true, errors: [] });
 	});
 
 	it("ignores free-text titles under Notes and header cells", () => {
@@ -397,7 +424,7 @@ describe("test-reference shape and placement", () => {
 		).toEqual({ valid: true, errors: [] });
 	});
 
-	it("rejects all eleven historical fabricated ids through both readers", () => {
+	it("keeps historical short ids scoped to named test columns", () => {
 		const fixture = readFileSync(
 			join(
 				repositoryRoot,
@@ -428,15 +455,267 @@ describe("test-reference shape and placement", () => {
 			);
 			const direct = lintPrBody(fixture).errors.join(" ");
 			const local = lintLocalPrBody(fixture, fixtureRepo).errors.join(" ");
-			for (let index = 1; index <= 11; index += 1) {
-				const id = `Z${String(index).padStart(2, "0")}`;
+			for (const id of ["Z10", "P01", "P30"]) {
 				expect(direct).toContain(id);
 				expect(local).toContain(id);
+			}
+			for (const id of [
+				"Z01",
+				"Z02",
+				"Z03",
+				"Z04",
+				"Z05",
+				"Z06",
+				"Z07",
+				"Z08",
+				"Z09",
+			]) {
+				expect(direct).not.toContain(id);
+				expect(local).not.toContain(id);
 			}
 		} finally {
 			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
 	});
+});
+
+describe("test-reference positive recognition (#3013)", () => {
+	const clean = (extra: string) => lintPrBody(`${body}\n${extra}`);
+	const testErrors = (result: ReturnType<typeof lintPrBody>) =>
+		result.errors.filter((error) => error.includes("test reference"));
+
+	// Class 1 is catalog shape 34 (a guard that enumerates surface
+	// spellings): the discriminator reads the token's shape — a leading
+	// argv-like word plus invocation evidence — instead of extending the
+	// deleted four-prefix allowlist. Every accept case embeds a fabricated
+	// tests/ path, so only the command guard saves it; the first is the
+	// issue's own rg spelling, the rest are spellings it never names.
+	it.each([
+		"rg -l 'lens-map|generateLensMap' tests/",
+		"vitest run tests/3013-missing-command-arg.test.ts --reporter=verbose",
+		"pytest tests/3013-missing-pytest-arg.test.ts -q",
+		"git diff HEAD -- tests/3013-missing-diff-arg.test.ts",
+	])("does not read a shell invocation as a test reference: %s", (command) => {
+		expect(clean(`Ran \`${command}\` with exit code 0.`)).toEqual({
+			valid: true,
+			errors: [],
+		});
+	});
+
+	// Shape 13 reject twins: the same invocation still reds when placement
+	// recognises it (a test column), and the bare path it embeds still reds
+	// in prose. Together they prove the accept above is the command guard's
+	// doing, not a dead exemption.
+	it("still checks a command-shaped span in a test column", () => {
+		expect(
+			clean(
+				"| Test |\n| --- |\n| `vitest run tests/3013-missing-command-arg.test.ts --reporter=verbose` |",
+			),
+		).toEqual({
+			valid: false,
+			errors: [
+				"PR body test reference is missing under tests/: vitest run tests/3013-missing-command-arg.test.ts --reporter=verbose",
+			],
+		});
+	});
+
+	it("still checks the bare path a command would embed", () => {
+		expect(
+			clean("Ran `tests/3013-missing-command-arg.test.ts` with exit code 0."),
+		).toEqual({
+			valid: false,
+			errors: [
+				"PR body test reference is missing under tests/: tests/3013-missing-command-arg.test.ts",
+			],
+		});
+	});
+
+	// Class 3: a trailing slash names a suite directory, never a file. The
+	// slash-less tests/config is accepted through the on-disk directory, not
+	// the file corpus.
+	it.each(["tests/config/", "tests/config"])(
+		"does not require a directory path to exist as a file: %s",
+		(path) => {
+			expect(clean(`Ran the suite in \`${path}\` with exit code 0.`)).toEqual({
+				valid: true,
+				errors: [],
+			});
+		},
+	);
+
+	// A trailing slash is never a file reference, even when the directory
+	// does not exist (yet). This is the half of the directory rule the
+	// on-disk check cannot cover, so it gets its own test and mutation.
+	it("does not require a not-yet-existing suite directory", () => {
+		expect(
+			clean("Ran the suite in `tests/3013-no-such-suite/` with exit code 0."),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	// Class 2 (positive recognition): prose outside a test column only names
+	// a test through it("…"), a concrete tests/ path, or a short id. Quoted
+	// tool output, quoted source lines, and plain commands are none of
+	// those, so they are never asserted to exist.
+	it.each([
+		"git rev-parse HEAD",
+		"git fetch origin master",
+		"npm run fmt:check",
+		"npm run lint",
+		"node scripts/ci-verdict.mjs 2971",
+		"comm -23 a b",
+		"taskkill /F /T",
+		"npx oxfmt",
+		"sed -i",
+		"gh pr edit",
+		"tsc --noEmit",
+		"grep -rn",
+		"reduces but does not eliminate residual recreation",
+		"[tmp-hygiene] leaked 1 top-level entries: pi-lens-map-5jd2...",
+		"leaked 1 top-level entries: pi-lens-map-YHCjRq",
+		"keep the real TMPDIR so the final governance ...",
+		"Test Files 9 passed (9)",
+		"16 passed (16) / 163 passed",
+		"process.env.PI_LENS_HOME = testRegistryHome",
+		"cleanupTestEnvironmentsDrained(prefix, { beforeDrain })",
+		'forcedUnknownReason: "walk-failed"',
+		"expected [ '/foreign-worker-root' ] to deeply equal []",
+		"return undefined",
+		"void tick()",
+		"setInterval(() => { void tick(); }, 750)",
+		"if (!dispatchOutcome) return",
+		"wasWrittenThisSession === false",
+		'pending.strategy === "git"',
+		'kind: "resource-sampler-tick-overlapped"',
+		"a timer that outlives its one-shot settle",
+		"a resource bounded on one axis while it grows on another",
+		"Refs #2968",
+		"(closes #NNN)",
+		"+ incrementDegradationCount",
+		"timeout + 5s",
+		"All matched files use the correct format.",
+		"Issue triage (standing rule)",
+		'ktlint = "14.2.0"',
+		"read the declared version",
+		"does not gate",
+		'recordDegradationOnce({ kind: "sgconfig-baseline-cap-evict" })',
+		"sampleProcesses([host, ...lspChildren])",
+		'fields: ["pid","ppid"]',
+		"onTimeout: terminateScannerChild",
+		'logLatency({phase: "spawn_resource_usage"})',
+		"pid, ppid, rssBytes, cpuKernel100ns, cpuUser100ns, startedAt",
+		"changelog fragments OK (15 entries in .changelog/)",
+		"GH_REPO=${{ github.repository }}",
+	])("does not read prose as a test reference: %s", (phrase) => {
+		expect(clean(`Noted \`${phrase}\` while reviewing.`)).toEqual({
+			valid: true,
+			errors: [],
+		});
+	});
+
+	// A glob or brace expansion names a set, never a file.
+	it.each([
+		"tests/config/*.test.ts",
+		"tests/clients/safe-spawn-{cap-race,close-before-error-race}.test.ts",
+	])("does not require a glob to exist as a file: %s", (pattern) => {
+		expect(clean(`Ran \`${pattern}\` with exit code 0.`)).toEqual({
+			valid: true,
+			errors: [],
+		});
+	});
+
+	// Per-token precision: one span can name two files, and only the missing
+	// one is reported. toEqual (not toContain) is the red-first proof:
+	// pre-fix code reports the whole span as one reference.
+	it("reports only the missing token of a multi-path span", () => {
+		expect(
+			clean(
+				"Ran `tests/scripts/check-pr-body.test.ts tests/3013-missing-multi.test.ts`.",
+			),
+		).toEqual({
+			valid: false,
+			errors: [
+				"PR body test reference is missing under tests/: tests/3013-missing-multi.test.ts",
+			],
+		});
+	});
+
+	it("checks a tests/ path past the first word of a span", () => {
+		expect(
+			clean("See `see tests/3013-missing-prose.test.ts for details`."),
+		).toEqual({
+			valid: false,
+			errors: [
+				"PR body test reference is missing under tests/: tests/3013-missing-prose.test.ts",
+			],
+		});
+	});
+
+	it("accepts a multi-path span when every token exists", () => {
+		expect(
+			clean(
+				"Ran `tests/index-2992-integration.test.ts tests/index-multi-root-session-start.test.ts`.",
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	// Shape 47: the detector's corpus must exclude its own fixtures by
+	// construction (a path filter in the corpus builder). The tracked
+	// listing below proves the exclusion even before these fixtures merge:
+	// the fake fixture is reported missing although the injected corpus
+	// claims it is tracked.
+	it("excludes PR-body fixtures from the corpus even when tracked", () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-lens-pr-body-corpus-"));
+		try {
+			mkdirSync(join(root, "tests", "fixtures", "ci-pr-bodies"), {
+				recursive: true,
+			});
+			writeFileSync(
+				join(root, "tests", "real.test.ts"),
+				'it("real corpus title", () => {});\n',
+			);
+			writeFileSync(
+				join(root, "tests", "fixtures", "ci-pr-bodies", "pr-0000.md"),
+				"fixture\n",
+			);
+			const git = (args: string[]) =>
+				args[0] === "ls-files"
+					? "tests/real.test.ts\ntests/fixtures/ci-pr-bodies/pr-0000.md\n"
+					: "";
+			expect(
+				lintPrBody(`${body}\nSee \`tests/real.test.ts\`.`, {
+					cwd: root,
+					git,
+				}),
+			).toEqual({ valid: true, errors: [] });
+			expect(
+				lintPrBody(`${body}\nSee \`tests/fixtures/ci-pr-bodies/pr-0000.md\`.`, {
+					cwd: root,
+					git,
+				}),
+			).toEqual({
+				valid: false,
+				errors: [
+					"PR body test reference is missing under tests/: tests/fixtures/ci-pr-bodies/pr-0000.md",
+				],
+			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	// End-to-end proof: three real merged bodies that fail pre-fix pass
+	// post-fix. Only test-reference errors are asserted — the citation and
+	// master-claim surfaces belong to #2904 and are unaffected.
+	it.each(["pr-3008.md", "pr-2979.md", "pr-3006.md"])(
+		"passes the fixed checker on real merged body %s",
+		(file) => {
+			const fixture = readFileSync(
+				join(repositoryRoot, "tests", "fixtures", "ci-pr-bodies", file),
+				"utf8",
+			);
+			expect(testErrors(lintPrBody(fixture))).toEqual([]);
+		},
+	);
 });
 
 const escapedNewlineFlattenedBody =
@@ -1549,8 +1828,11 @@ describe("head-tree citations and test references", () => {
 	});
 
 	it("rejects fabricated it titles and table identifiers", () => {
+		// #3013: the identifier cell sits under a "Test" header because a
+		// bare "Evidence" header no longer qualifies as a test column (its
+		// "id" substring misclassified claim-matrix evidence cells).
 		const result = lintPrBody(
-			`${body}\nThe check uses it("fabricated test title").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`fabricated table test identifier\` |`,
+			`${body}\nThe check uses it("fabricated test title").\n\n| Case | Test |\n| --- | --- |\n| A | \`fabricated table test identifier\` |`,
 			options,
 		);
 		expect(result.errors.join(" ")).toContain("fabricated test title");
@@ -1569,7 +1851,7 @@ describe("head-tree citations and test references", () => {
 
 	it("accepts real test references and an origin/master transcript", () => {
 		const result = lintPrBody(
-			`${body}\nThe real title is it("contains every label this repo's rules require to exist").\n\n| Case | Evidence |\n| --- | --- |\n| A | \`contains every label this repo's rules require to exist\` |\n\nThis is pre-existing.\n\`\`\`text\n$ git log origin/master\n\`\`\``,
+			`${body}\nThe real title is it("contains every label this repo's rules require to exist").\n\n| Case | Test |\n| --- | --- |\n| A | \`contains every label this repo's rules require to exist\` |\n\nThis is pre-existing.\n\`\`\`text\n$ git log origin/master\n\`\`\``,
 			options,
 		);
 		expect(result).toEqual({ valid: true, errors: [] });
@@ -1750,6 +2032,16 @@ describe("head-tree citations and test references", () => {
 			options,
 		);
 		expect(result.errors.join(" ")).toContain("B01");
+	});
+
+	it("rejects missing one-digit short ids in a test column", () => {
+		for (const id of ["F1", "V3"]) {
+			const result = lintPrBody(
+				`${body}\n| Case | Test |\n| --- | --- |\n| A | \`${id}\` |`,
+				options,
+			);
+			expect(result.errors.join(" ")).toContain(id);
+		}
 	});
 
 	it("harvests titles after regex literals without confusing division", () => {

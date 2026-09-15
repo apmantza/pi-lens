@@ -78,6 +78,10 @@ import {
 } from "../clients/project-diagnostics/fresh-fetch.js";
 import { loadBootstrapClients } from "../clients/bootstrap.js";
 import {
+	resolveLensToolName,
+	type LensToolHost,
+} from "../clients/tool-config.js";
+import {
 	generatedSkipNotice,
 	scanTruncationNotice,
 } from "../clients/lens-engine.js";
@@ -138,10 +142,15 @@ const MAX_PATHS_ENTRIES = MAX_BATCH_FILES;
 // trivy, govulncheck, dead-code, knip, jscpd, madge, opengrep, test-runner)
 // when mode=full is called without refreshRunners=cheap/all/cached — the
 // "quick mode" gate that skips the expensive fresh-fetch entirely (see
-// `formatFullMode`'s `analyzersPromise`). One shared string so it renders
-// identically everywhere it's used.
-const NOT_REQUESTED_REASON =
-	"refreshRunners not requested this call (quick mode) — pass refreshRunners=cheap/all/cached to lens_diagnostics mode=full to run it";
+// `formatFullMode`'s `analyzersPromise`). One shared function so it renders
+// identically everywhere it's used, naming the tool THIS host can call
+// (#2535 F1 — the shared const named the pi tool on MCP too).
+function notRequestedReason(host: LensToolHost): string {
+	return (
+		"refreshRunners not requested this call (quick mode) — pass " +
+		`refreshRunners=cheap/all/cached to ${resolveLensToolName("lens_diagnostics", host) ?? "diagnostics"} mode=full to run it`
+	);
+}
 
 type LSPServiceLike = ReturnType<typeof getLSPService> & {
 	runWorkspaceDiagnostics?: (
@@ -317,6 +326,7 @@ export function createLensDiagnosticsTool(
 			totalWarnings?: number;
 			totalAdvisories?: number;
 			coldRunners?: string[];
+			partialRunners?: string[];
 			failedAnalyzers?: { id: string; summary: string }[];
 			source?: string;
 			totalDiagnostics?: number;
@@ -505,6 +515,12 @@ export function createLensDiagnosticsTool(
 					description: "Include generated-name paths in full scans.",
 				}),
 			),
+			analysisRoot: Type.Optional(
+				Type.String({
+					description:
+						"Explicit project directory for heavyweight analyzers; it must exist and resolve strictly below the home directory.",
+				}),
+			),
 			severity: Type.Optional(
 				Type.String({
 					enum: [...LSP_SEVERITY_FILTERS],
@@ -524,7 +540,7 @@ export function createLensDiagnosticsTool(
 			params: Record<string, unknown>,
 			signal: AbortSignal | undefined,
 			onUpdate: unknown,
-			ctx: { cwd?: string; signal?: AbortSignal },
+			ctx: { cwd?: string; signal?: AbortSignal; host?: LensToolHost },
 		) {
 			const requestedSource = params.source as string | undefined;
 			const requestedScope = params.scope as string | undefined;
@@ -696,6 +712,11 @@ export function createLensDiagnosticsTool(
 					pathsScope,
 					nextWriteIndex,
 					runtime: getRuntime?.(),
+					analysisRoot:
+						typeof params.analysisRoot === "string"
+							? params.analysisRoot
+							: undefined,
+					host: ctx.host ?? "pi",
 				});
 			}
 			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
@@ -2070,8 +2091,15 @@ async function formatFullMode(
 		 * points a user at. Default false.
 		 */
 		includeGenerated?: boolean;
+		analysisRoot?: string;
+		/** Delivery adapter whose callable tool names appear in advisories. */
+		host?: LensToolHost;
 	} = {},
-): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
+): Promise<{
+	content: [{ type: "text"; text: string }];
+	isError?: boolean;
+	details: object;
+}> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
 	if (typeof runWorkspaceDiagnostics !== "function") {
 		return {
@@ -2085,6 +2113,9 @@ async function formatFullMode(
 		};
 	}
 	const { signal, pathsScope, nextWriteIndex } = options;
+	// #2535: advisories name the delivery host's callable tools; pi callers
+	// omit host and keep the pi spelling.
+	const host = options.host ?? "pi";
 	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// `paths` (#461): route the active scans at exactly the requested files
 	// instead of walking the whole project. Three cases:
@@ -2117,6 +2148,7 @@ async function formatFullMode(
 		? loadBootstrapClients().then((clients) =>
 				fetchFreshProjectDiagnostics(cacheManager, cwd, clients, signal, {
 					runtime: options.runtime,
+					analysisRoot: options.analysisRoot,
 				}),
 			)
 		: Promise.resolve<FreshProjectDiagnosticsResult>({
@@ -2134,7 +2166,7 @@ async function formatFullMode(
 				// hand-listing ids here.
 				cold: [...ANALYZER_IDS],
 				coldReasons: Object.fromEntries(
-					ANALYZER_IDS.map((id) => [id, NOT_REQUESTED_REASON]),
+					ANALYZER_IDS.map((id) => [id, notRequestedReason(host)]),
 				),
 				failed: [],
 				timings: {},
@@ -2154,6 +2186,17 @@ async function formatFullMode(
 		}),
 		analyzersPromise,
 	]);
+	if (extracted.analysisRootError) {
+		return {
+			content: [{ type: "text" as const, text: extracted.analysisRootError }],
+			isError: true,
+			details: {
+				mode: "full",
+				analysisRootError: extracted.analysisRootError,
+				analysisRootValidation: extracted.analysisRootValidation,
+			},
+		};
+	}
 	const aborted = signal?.aborted ?? false;
 	// #1640: before ANY consumer sees them — the footer reconcile, the widget
 	// merge, the rendered counts — demote TypeScript errors on files tsserver
@@ -2597,6 +2640,7 @@ async function formatFullMode(
 	// isn't (a re-run may well complete for that analyzer).
 	const abortedIds = new Set(extracted.abortedIds ?? []);
 	const genuinelyColdIds = extracted.cold.filter((id) => !abortedIds.has(id));
+	const partialIds = extracted.partial ?? [];
 	// #747: an unsafe analysis root (cwd at/above $HOME) skips ALL heavyweight
 	// analyzers before anything spawns — rendering that as the per-analyzer
 	// "not applicable / unavailable" list would send the caller chasing seven
@@ -2608,7 +2652,7 @@ async function formatFullMode(
 	// shape). Single formatter (extractors.ts) so this note's wording can't
 	// drift from any other caller that renders the same `cold` list.
 	// #1623 fix-round F5: the "not requested" (quick-mode) batch shares ONE
-	// reason (`NOT_REQUESTED_REASON`) across every id — `formatNotRunEntry`
+	// reason (`notRequestedReason`) across every id — `formatNotRunEntry`
 	// repeating that same ~130-char sentence per id makes the note nearly
 	// unreadable, and the "not applicable / unavailable this run" header
 	// below is a dishonest label for it: these lanes ARE applicable and
@@ -2618,16 +2662,29 @@ async function formatFullMode(
 	// id's reason really does differ (not a git repo vs binary unavailable
 	// vs retry cooldown, ...).
 	const coldNote = extracted.unsafeRoot
-		? `\n\nheavyweight analyzers skipped: the working directory resolves at or above the home directory, so a fresh knip/jscpd/madge/gitleaks/govulncheck/trivy/dead-code scan would walk every unrelated tree under it. Re-run from inside a project directory. Absence of their findings is NOT a clean verdict.`
-		: !projectRunnersRequested && genuinelyColdIds.length > 0
-			? `\n\nnot run this call (quick mode): ${genuinelyColdIds.join(", ")}. ${NOT_REQUESTED_REASON}. Absence of their findings is NOT a clean verdict.`
-			: genuinelyColdIds.length > 0
-				? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
-						.map((id) => formatNotRunEntry(id, extracted.coldReasons))
-						.join(
-							", ",
-						)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
-				: "";
+		? `\n\nheavyweight analyzers skipped: the analysis root resolves at or above the home directory, so a fresh knip/jscpd/madge/gitleaks/govulncheck/trivy/dead-code scan would walk every unrelated tree under it. Supply a project directory below the home ceiling. Absence of their findings is NOT a clean verdict.`
+		: extracted.analysisRootError
+			? `\n\nheavyweight analyzers skipped: ${extracted.analysisRootError}. Supply an existing project directory below the home ceiling. Absence of their findings is NOT a clean verdict.`
+			: !projectRunnersRequested && genuinelyColdIds.length > 0
+				? `\n\nnot run this call (quick mode): ${genuinelyColdIds.join(", ")}. ${notRequestedReason(host)}. Absence of their findings is NOT a clean verdict.`
+				: genuinelyColdIds.length > 0
+					? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
+							.map((id) => formatNotRunEntry(id, extracted.coldReasons))
+							.join(
+								", ",
+							)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
+					: "";
+	const partialNote =
+		partialIds.length > 0
+			? `\n\n⚠ partial coverage (findings included): ${partialIds
+					.map(
+						(id) =>
+							`${id} — ${extracted.partialReasons?.[id] ?? "coverage is incomplete"}`,
+					)
+					.join(
+						", ",
+					)}. Coverage is incomplete, so absence of findings is NOT a clean verdict.`
+			: "";
 	// #1004: unlike every other analyzer above (knip/jscpd/madge/gitleaks/
 	// govulncheck/opengrep/trivy/dead-code all run a FRESH whole-project scan
 	// per the fresh-fetch.ts header, so "clean" there really does mean "the
@@ -2697,7 +2754,7 @@ async function formatFullMode(
 	// #1107 phase 2: same "reached the seam, nothing rendered it" gap as #784
 	// above, for the generated-name/dir skip counters.
 	const generatedSkipNoticeText = projectSnapshot
-		? generatedSkipNotice(projectSnapshot)
+		? generatedSkipNotice(projectSnapshot, host)
 		: undefined;
 	const generatedSkipNote = generatedSkipNoticeText
 		? `\n\n${generatedSkipNoticeText}`
@@ -2718,7 +2775,7 @@ async function formatFullMode(
 		? Date.parse(rawProjectSnapshot.scannedAt)
 		: undefined;
 	const cheapScanStatusNote = !projectRunnersRequested
-		? `\n\ncheap project scan (tree-sitter/fact-rules/ast-grep): not run this call (${NOT_REQUESTED_REASON}).`
+		? `\n\ncheap project scan (tree-sitter/fact-rules/ast-grep): not run this call (${notRequestedReason(host)}).`
 		: options.refreshRunners === "cached"
 			? cheapScanScannedAtMs !== undefined &&
 				Number.isFinite(cheapScanScannedAtMs)
@@ -2772,6 +2829,7 @@ async function formatFullMode(
 		details: {
 			...result.details,
 			coldRunners: extracted.cold,
+			partialRunners: partialIds,
 			// #1623: the specific reason each cold id was skipped (single source
 			// of truth: extractors.ts's `formatNotRunEntry` renders the same map
 			// into the text note above) — lets a caller check WHY without parsing
@@ -2790,7 +2848,12 @@ async function formatFullMode(
 			// #747: true when the fresh fetch refused an at-or-above-$HOME root —
 			// lets a caller distinguish "skipped for safety" from per-analyzer
 			// cold reasons without parsing the text note.
-			analyzersUnsafeRoot: extracted.unsafeRoot ?? false,
+			// This is the fetch seam's explicit-root policy. The cwd walk below is
+			// intentionally separate: it answers a different root question.
+			analyzersUnsafeRoot:
+				extracted.analysisRootValidation?.state === "unsafe" ||
+				extracted.unsafeRoot === true,
+			analysisRootValidation: extracted.analysisRootValidation,
 			// #747: true when the cwd resolved at/above $HOME so the cheap project
 			// scan and the LSP workspace sweep both refused to walk — lets a caller
 			// distinguish "walked nothing for safety" from a genuinely clean sweep.
@@ -2855,6 +2918,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						auxiliaryCoverageNote +
 						lspPrimaryVsAuxiliaryNote +
+						partialNote +
 						coldNote +
 						testRunnerEditScopedNote +
 						failedNote +
@@ -2875,6 +2939,7 @@ async function formatFullMode(
 	if (
 		missingNote ||
 		coldNote ||
+		partialNote ||
 		testRunnerEditScopedNote ||
 		failedNote ||
 		dispositionSuppressedNote ||
@@ -2898,6 +2963,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						auxiliaryCoverageNote +
 						lspPrimaryVsAuxiliaryNote +
+						partialNote +
 						coldNote +
 						testRunnerEditScopedNote +
 						failedNote +

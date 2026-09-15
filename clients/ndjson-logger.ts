@@ -148,6 +148,8 @@ interface NdjsonWriterState {
 	 * ledger instead of failing silently.
 	 */
 	rotationRetryAfterMs: number;
+	/** Whether this shared writer has seen a rotation-policy conflict this session. */
+	optionConflictRecorded: boolean;
 }
 
 const NDJSON_GLOBAL_STATE_SCHEMA = "pi-lens.ndjson-logger.state";
@@ -356,7 +358,21 @@ export function resetSinkRotations(): void {
 		state.rotationCount = 0;
 		state.rotationFailures = 0;
 		state.rotationRetryAfterMs = 0;
+		state.optionConflictRecorded = false;
 	}
+}
+
+export interface SinkOptionConflictSummary {
+	/** Canonicalized absolute path whose rotation policy differed across graphs. */
+	file: string;
+}
+
+/** Pure read-time view for the degradation ledger; never logs through this sink. */
+export function getSinkOptionConflicts(): SinkOptionConflictSummary[] {
+	if (!ndjsonGlobalState) return [];
+	return [...ndjsonGlobalState.writers.values()]
+		.filter((state) => state.optionConflictRecorded)
+		.map((state) => ({ file: state.file }));
 }
 
 function requireCurrentGlobalState(): NdjsonGlobalState {
@@ -381,19 +397,6 @@ function registerWriter(state: NdjsonWriterState): void {
 
 function normalizeLogPath(file: string): string {
 	return normalizeFilePath(path.resolve(file));
-}
-
-function assertCompatibleWriterOptions(
-	existing: NdjsonWriterState,
-	maxBytes?: number,
-	backupPath?: string,
-): void {
-	if (existing.maxBytes === maxBytes && existing.backupPath === backupPath)
-		return;
-	throw new Error(
-		`createNdjsonLogger: incompatible options for shared path ${existing.file}; ` +
-			`the first writer's maxBytes/backupPath must be reused`,
-	);
 }
 
 function writeQueueItemSync(state: NdjsonWriterState, item: QueueItem): void {
@@ -480,7 +483,6 @@ function createWriterState(
 	if (existing) {
 		// A partially initialized global state from another graph still needs to
 		// be enrolled, but it must never get a second queue or exit flusher.
-		assertCompatibleWriterOptions(existing, maxBytes, backupPath);
 		if (!exitFlushers.has(existing.exitFlusher)) registerWriter(existing);
 		// A state adopted from a pre-#1970 module graph predates this field.
 		if (typeof existing.writeFailures !== "number") existing.writeFailures = 0;
@@ -497,6 +499,21 @@ function createWriterState(
 			existing.rotationFailures = 0;
 		if (typeof existing.rotationRetryAfterMs !== "number")
 			existing.rotationRetryAfterMs = 0;
+		if (typeof existing.optionConflictRecorded !== "boolean")
+			existing.optionConflictRecorded = false;
+		const optionsDiffer =
+			existing.maxBytes !== maxBytes || existing.backupPath !== backupPath;
+		if (optionsDiffer) {
+			// A pre-#2505 graph can leave this writer unbounded. Adopt the incoming
+			// bound so reload restores rotation instead of preserving an unsafe gap.
+			if (existing.maxBytes === undefined && maxBytes !== undefined)
+				existing.maxBytes = maxBytes;
+			if (existing.backupPath === undefined && backupPath !== undefined)
+				existing.backupPath = backupPath;
+			// A rotation-policy disagreement must never abort extension loading.
+			// The ledger folds this bounded, per-path fact into health at read time.
+			existing.optionConflictRecorded = true;
+		}
 		return existing;
 	}
 
@@ -517,6 +534,7 @@ function createWriterState(
 	state.rotationCount = 0;
 	state.rotationFailures = 0;
 	state.rotationRetryAfterMs = 0;
+	state.optionConflictRecorded = false;
 	globalState.writers.set(file, state);
 	registerWriter(state);
 	return state;

@@ -158,9 +158,14 @@ describe("runTurnEnd", () => {
 		// The file was written into turn state for the handler to pick up.
 		const deps = handleTurnEnd.mock.calls[0][0] as {
 			cacheManager: { readTurnState: (cwd: string) => { files: object } };
+			host?: unknown;
 		};
 		const turnState = deps.cacheManager.readTurnState(tmpDir);
 		expect(Object.keys(turnState.files).length).toBe(1);
+		// #2535 F2: the MCP route must forward host:"mcp" into the real
+		// handleTurnEnd seam, or every MCP turn-end advisory names the pi
+		// tool. Removing the production discriminator must red this.
+		expect(deps.host).toBe("mcp");
 		// MCP delivery must classify provenance with the same live runtime as the
 		// in-process context hook; omitting this argument made legacy/stale data
 		// look current on one transport only.
@@ -182,6 +187,21 @@ describe("runTurnEnd", () => {
 		]);
 		expect(outcome.filesRegistered).toBe(0);
 		expect(handleTurnEnd).toHaveBeenCalledTimes(1);
+	});
+
+	// #2535 F2: both MCP entry points share runTurnEndNowImpl, so both must
+	// carry host:"mcp" into handleTurnEnd — the Stop-hook IPC route included.
+	it("forwards host mcp on the tool and the Stop-hook IPC routes", async () => {
+		await runTurnEnd(tmpDir, []);
+		// The IPC route serves a cached peek without a fresh pass; empty the
+		// peek so this leg runs the real forwarding seam too.
+		runtimeContext.peekTurnEndFindings.mockReturnValueOnce({ messages: [] });
+		runtimeContext.peekTestFindings.mockReturnValueOnce({ messages: [] });
+		await runTurnEndForIpc(tmpDir);
+		expect(handleTurnEnd).toHaveBeenCalledTimes(2);
+		for (const call of handleTurnEnd.mock.calls) {
+			expect((call[0] as { host?: unknown }).host).toBe("mcp");
+		}
 	});
 
 	it("keeps findings available when the Stop client times out (#1218)", async () => {

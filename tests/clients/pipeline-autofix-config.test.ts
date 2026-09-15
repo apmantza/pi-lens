@@ -46,6 +46,21 @@ describe("runAutofix markdownlint config seam (#1247)", () => {
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-autofix-md-"));
+		// Keep the fixture aligned with the resolver's real package identity.
+		fs.writeFileSync(
+			path.join(tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { "markdownlint-cli2": "^0.23.2" } }),
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {},
+					"node_modules/markdownlint-cli2": { version: "0.23.2" },
+				},
+			}),
+		);
 		vi.mocked(detectFileChangedAfterCommand).mockClear();
 		vi.mocked(detectFileChangedAfterCommand).mockResolvedValue(0);
 	});
