@@ -78,6 +78,19 @@ function plantLocalOxfmt(projectDir: string): void {
 }
 
 function writeProject(projectDir: string): void {
+	// #3005 fixture recurrence: real formatter behavior must be tested after
+	// independent project agreement, not short-circuited as unavailable.
+	fs.writeFileSync(
+		path.join(projectDir, "package.json"),
+		JSON.stringify({ devDependencies: { oxfmt: "0.66.0" } }),
+	);
+	fs.writeFileSync(
+		path.join(projectDir, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: { "": {}, "node_modules/oxfmt": { version: "0.66.0" } },
+		}),
+	);
 	fs.writeFileSync(
 		path.join(projectDir, ".oxfmtrc.json"),
 		JSON.stringify({ useTabs: true, ignorePatterns: ["**/*.md"] }),

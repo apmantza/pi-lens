@@ -90,6 +90,22 @@ describe("Pipeline", () => {
 		resetDegradationLedger();
 		const env = setupTestEnvironment();
 		tmpDir = env.tmpDir;
+		// #3005 fixture recurrence: autonomous Biome writers require independent
+		// project agreement evidence, even when the client itself is a test double.
+		fs.writeFileSync(
+			path.join(tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { "@biomejs/biome": "^2.4.10" } }),
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {},
+					"node_modules/@biomejs/biome": { version: "2.4.10" },
+				},
+			}),
+		);
 		mockLSPService = makeLspServiceDouble({
 			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
@@ -164,6 +180,12 @@ describe("Pipeline", () => {
 		const filePath = path.join(srcDir, "main.rs");
 		fs.writeFileSync(filePath, "mod helper;\nfn main() {}\n");
 		fs.writeFileSync(path.join(srcDir, "helper.rs"), "pub fn helper() {}\n");
+		// #3005 fixture recurrence: rust-clippy's project-config agreement is
+		// anchored at the pipeline cwd, while Cargo's real fixture is nested.
+		fs.writeFileSync(
+			path.join(tmpDir, "Cargo.toml"),
+			'[workspace]\nmembers = ["crate"]\n',
+		);
 		vi.mocked(dispatchLintWithResult).mockResolvedValue({
 			diagnostics: [],
 			blockers: [],

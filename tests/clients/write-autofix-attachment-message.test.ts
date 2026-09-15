@@ -80,6 +80,22 @@ function fixingBiome(content: (filePath: string) => string): BiomeClient {
 }
 
 function toolDeps(runtime: RuntimeCoordinator, biomeClient: BiomeClient) {
+	// #3005 fixture recurrence: the real pipeline must reach the Biome writer
+	// before attachment-budget behavior is observed.
+	fs.writeFileSync(
+		path.join(runtime.projectRoot, "package.json"),
+		JSON.stringify({ devDependencies: { "@biomejs/biome": "^2.4.10" } }),
+	);
+	fs.writeFileSync(
+		path.join(runtime.projectRoot, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: {
+				"": {},
+				"node_modules/@biomejs/biome": { version: "2.4.10" },
+			},
+		}),
+	);
 	return {
 		getFlag: (name: string) => name === "no-lsp",
 		dbg: () => {},
