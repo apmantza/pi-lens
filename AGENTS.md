@@ -222,6 +222,16 @@ and PR language; detailed historical examples are in `HISTORY.md`.
     not a bound without a finite key-space argument. The bounded-container
     sweep scans `clients/`, `tools/`, `mcp/`, and `index.ts` with AST evidence
     and retains non-zero population and flagged floors.
+47. **Retry or drain loop consumes its own work list:** a bounded retry or
+    drain loop must not remove its tracked item from the collection it iterates
+    on the first successful pass. Later attempts must observe the resource's
+    actual absence before untracking it; tests cover a resource recreated
+    between attempts.
+48. **Fallback direction chosen without naming the user-facing obstruction:**
+    "fail closed" is not a universal justification. For each fallback, catch,
+    or default, name the concrete failure that reaches the user and choose the
+    direction from that harm; test unreadable, absent, and thrown lookup states
+    where the seam supports both directions.
 
 ## Standing invariants
 
