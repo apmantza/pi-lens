@@ -3,9 +3,36 @@ import * as path from "node:path";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { findNearestMarkerRoot } from "./path-utils.js";
 import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
-import { hasGradleKtlintPlugin, hasKtlintConfig } from "./tool-policy.js";
+import {
+	hasBlackConfig,
+	hasClangFormatConfig,
+	hasCljfmtConfig,
+	hasCmakeFormatConfig,
+	hasCsharpierConfig,
+	hasDetektConfig,
+	hasFantomasConfig,
+	hasGoogleJavaFormatConfig,
+	hasGradleKtlintPlugin,
+	hasGolangciConfig,
+	hasKtfmtConfig,
+	hasKtlintConfig,
+	hasMarkdownlintConfig,
+	hasMixFormatConfig,
+	hasOcamlformatConfig,
+	hasOrmoluConfig,
+	hasPhpCsFixerConfig,
+	hasRubocopConfig,
+	hasRuffConfig,
+	hasSqlfluffConfig,
+	hasStandardrbConfig,
+	hasStyluaConfig,
+	hasSwiftformatConfig,
+	hasTaploConfig,
+	hasTerraformConfig,
+} from "./tool-policy.js";
 
 export type ToolAgreementDeclineReason =
+	| "evidence-absent"
 	| "evidence-unreadable"
 	| "evidence-unparseable"
 	| "evidence-unsupported";
@@ -22,9 +49,233 @@ export type ToolAgreement =
 const NODE_PACKAGES: Record<string, string> = {
 	biome: "@biomejs/biome",
 	eslint: "eslint",
+	markdownlint: "markdownlint-cli2",
+	oxfmt: "oxfmt",
 	oxlint: "oxlint",
+	prettier: "prettier",
 	stylelint: "stylelint",
 };
+
+export type ToolAgreementEvidenceBucket =
+	| "node-lockfile"
+	| "project-config"
+	| "standalone-cli";
+type EvidenceCheck = (cwd: string) => boolean;
+
+/**
+ * The complete autonomous writer population. Keep this table declarative: a
+ * caller may ask about an LSP warning tool that is not in the autofix or
+ * formatter tables, and that must take the unknown-tool default below rather
+ * than accidentally becoming established (#3005).
+ *
+ * Config evidence is deliberately presence-based. The existing policy
+ * detectors own each format's syntax and scope; agreement only answers the
+ * narrower question of whether this project elected the tool. Node tools use
+ * the stronger lockfile identity check in `nodeAgreement`.
+ */
+export const TOOL_AGREEMENT_POLICIES: Readonly<
+	Record<
+		string,
+		{
+			bucket: ToolAgreementEvidenceBucket;
+			withoutEvidence: "decline";
+			check?: EvidenceCheck;
+		}
+	>
+> = {
+	biome: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	eslint: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	markdownlint: {
+		bucket: "node-lockfile",
+		withoutEvidence: "decline",
+		check: hasMarkdownlintConfig,
+	},
+	oxfmt: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	oxlint: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	prettier: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	stylelint: { bucket: "node-lockfile", withoutEvidence: "decline" },
+	ruff: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasRuffConfig,
+	},
+	black: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasBlackConfig,
+	},
+	sqlfluff: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasSqlfluffConfig,
+	},
+	rubocop: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasRubocopConfig,
+	},
+	standardrb: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasStandardrbConfig,
+	},
+	ktlint: { bucket: "standalone-cli", withoutEvidence: "decline" },
+	ktfmt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasKtfmtConfig,
+	},
+	"rust-clippy": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["Cargo.toml"]),
+	},
+	"dart-analyze": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["pubspec.yaml"]),
+	},
+	"golangci-lint": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasGolangciConfig,
+	},
+	detekt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasDetektConfig,
+	},
+	gofmt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["go.mod"]),
+	},
+	rustfmt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["Cargo.toml"]),
+	},
+	zig: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["build.zig"]),
+	},
+	dart: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["pubspec.yaml"]),
+	},
+	shfmt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, [".editorconfig"]),
+	},
+	// nixfmt has no honest project marker. It remains in the population and is
+	// declined by the conservative absent-evidence path below.
+	nixfmt: { bucket: "project-config", withoutEvidence: "decline" },
+	mix: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasMixFormatConfig,
+	},
+	ocamlformat: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasOcamlformatConfig,
+	},
+	"clang-format": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasClangFormatConfig,
+	},
+	gleam: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["gleam.toml"]),
+	},
+	terraform: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasTerraformConfig,
+	},
+	"terragrunt-hcl": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["terragrunt.hcl", "terragrunt.hcl.json"]),
+	},
+	"php-cs-fixer": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasPhpCsFixerConfig,
+	},
+	csharpier: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasCsharpierConfig,
+	},
+	fantomas: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasFantomasConfig,
+	},
+	swiftformat: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasSwiftformatConfig,
+	},
+	stylua: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasStyluaConfig,
+	},
+	ormolu: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasOrmoluConfig,
+	},
+	taplo: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasTaploConfig,
+	},
+	"google-java-format": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasGoogleJavaFormatConfig,
+	},
+	cljfmt: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasCljfmtConfig,
+	},
+	"cmake-format": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: hasCmakeFormatConfig,
+	},
+	"psscriptanalyzer-format": {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) =>
+			hasMarker(cwd, [
+				"PSScriptAnalyzerSettings.psd1",
+				"ScriptAnalyzerSettings.psd1",
+			]),
+	},
+	cue: {
+		bucket: "project-config",
+		withoutEvidence: "decline",
+		check: (cwd) => hasMarker(cwd, ["cue.mod"]),
+	},
+};
+
+function hasMarker(cwd: string, markers: readonly string[]): boolean {
+	return (
+		findNearestMarkerRoot(cwd, markers, {
+			boundaries: [".git", ".hg", ".svn"],
+		}) !== null
+	);
+}
 
 type JsonRead =
 	| { kind: "missing" }
@@ -176,6 +427,18 @@ export function establishToolAgreement(
 	const cached = agreementCache.get(key);
 	if (cached) return cached;
 	agreementResolutionCount += 1;
+	const policy = TOOL_AGREEMENT_POLICIES[tool];
+	if (!policy) {
+		const agreement: ToolAgreement = {
+			decision: "decline",
+			subject: `tool:${tool}`,
+			reason:
+				"the autonomous writer is not registered with a project-evidence policy; tool agreement cannot be established",
+			reasonCode: "evidence-unsupported",
+		};
+		agreementCache.set(key, agreement);
+		return agreement;
+	}
 	let agreement: ToolAgreement = { decision: "established" };
 	if (tool === "ktlint") {
 		const ownership = hasGradleKtlintPlugin(cwd);
@@ -197,15 +460,43 @@ export function establishToolAgreement(
 			};
 		}
 	}
-	const root =
-		agreement.decision === "established"
-			? findNearestMarkerRoot(cwd, ["package.json"], {
-					boundaries: [".git", ".hg", ".svn"],
-				})
-			: null;
-	if (agreement.decision === "established" && root) {
-		const node = nodeAgreement(tool, root);
-		if (node) agreement = node;
+	if (
+		agreement.decision === "established" &&
+		policy.bucket === "node-lockfile"
+	) {
+		const root = findNearestMarkerRoot(cwd, ["package.json"], {
+			boundaries: [".git", ".hg", ".svn"],
+		});
+		const node = root ? nodeAgreement(tool, root) : undefined;
+		agreement = node ?? {
+			decision: "decline",
+			subject: `node:${tool}`,
+			reason:
+				"the project has no package declaration and lockfile evidence for this tool",
+			reasonCode: "evidence-absent",
+		};
+	} else if (
+		agreement.decision === "established" &&
+		policy.bucket === "project-config" &&
+		(!policy.check || !policy.check(cwd))
+	) {
+		agreement = {
+			decision: "decline",
+			subject: `project:${tool}`,
+			reason:
+				"the project has no readable configuration or manifest evidence selecting this tool",
+			reasonCode: "evidence-absent",
+		};
+	}
+	/* Keep the branch below as a final assertion that no policy can bypass the
+	 * registry. It also makes future bucket additions fail closed at runtime. */
+	if (agreement.decision === "established" && !policy.bucket) {
+		agreement = {
+			decision: "decline",
+			subject: `tool:${tool}`,
+			reason: "the tool evidence bucket is unsupported",
+			reasonCode: "evidence-unsupported",
+		};
 	}
 	agreementCache.set(key, agreement);
 	return agreement;

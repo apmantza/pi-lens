@@ -23,6 +23,25 @@ async function loadFormatFile() {
 	};
 }
 
+function writeNodeAgreementEvidence(
+	env: { tmpDir: string },
+	tool: "prettier" | "biome" | "oxfmt",
+): void {
+	const packageName = tool === "biome" ? "@biomejs/biome" : tool;
+	const version = tool === "oxfmt" ? "0.66.0" : "3.0.0";
+	fs.writeFileSync(
+		path.join(env.tmpDir, "package.json"),
+		JSON.stringify({ devDependencies: { [packageName]: `^${version}` } }),
+	);
+	fs.writeFileSync(
+		path.join(env.tmpDir, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: { [`node_modules/${packageName}`]: { version } },
+		}),
+	);
+}
+
 describe("formatFile", () => {
 	let getDegradationSummary: () => unknown;
 	let resetDegradationLedger: () => void;
@@ -39,6 +58,7 @@ describe("formatFile", () => {
 		async (name) => {
 			const env = setupTestEnvironment(`pi-lens-format-${name}-`);
 			try {
+				writeNodeAgreementEvidence(env, name);
 				const nestedDir = path.join(env.tmpDir, "sub", "deep");
 				const filePath = path.join(nestedDir, "app.ts");
 				fs.mkdirSync(nestedDir, { recursive: true });
@@ -149,6 +169,7 @@ describe("formatFile", () => {
 	it("keeps a nonzero exit non-fatal for lint-autofix formatters", async () => {
 		const env = setupTestEnvironment("pi-lens-format-file-");
 		try {
+			fs.writeFileSync(path.join(env.tmpDir, "Gemfile"), 'gem "rubocop"\n');
 			const filePath = path.join(env.tmpDir, "app.rb");
 			fs.writeFileSync(filePath, "puts  'hi'\n");
 			safeSpawnAsync.mockImplementation(async () => {
@@ -295,6 +316,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	it("does not spawn any command when the resolver refuses to format", async () => {
 		const env = setupTestEnvironment("pi-lens-format-skip-");
 		try {
+			writeNodeAgreementEvidence(env, "prettier");
 			// Minified single line: no detectable indentation, and no prettier
 			// config anywhere under the temp dir.
 			const filePath = path.join(env.tmpDir, "bundle.js");
@@ -320,6 +342,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	it("lenient formatter: documented benign status (1) still succeeds", async () => {
 		const env = setupTestEnvironment("pi-lens-format-file-");
 		try {
+			fs.writeFileSync(path.join(env.tmpDir, "Gemfile"), 'gem "rubocop"\n');
 			const filePath = path.join(env.tmpDir, "a.rb");
 			fs.writeFileSync(filePath, "x = 1\n");
 			safeSpawnAsync.mockResolvedValue({ status: 1, stdout: "", stderr: "" });
@@ -336,6 +359,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	it("lenient formatter: undocumented status (2, bad flag/crash) fails", async () => {
 		const env = setupTestEnvironment("pi-lens-format-file-");
 		try {
+			fs.writeFileSync(path.join(env.tmpDir, "Gemfile"), 'gem "rubocop"\n');
 			const filePath = path.join(env.tmpDir, "a.rb");
 			fs.writeFileSync(filePath, "x = 1\n");
 			safeSpawnAsync.mockResolvedValue({
@@ -357,6 +381,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	it("does not let an unavailable primary reach the npx fallback when gated", async () => {
 		const env = setupTestEnvironment("pi-lens-format-npx-gated-");
 		try {
+			writeNodeAgreementEvidence(env, "prettier");
 			const filePath = path.join(env.tmpDir, "bundle.js");
 			fs.writeFileSync(filePath, "const a=1;const b=2;const c=a+b;\n");
 			const mod = await import("../../clients/formatters.js");
@@ -385,6 +410,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	it("uses the npx fallback when the primary is unavailable and the file is not gated", async () => {
 		const env = setupTestEnvironment("pi-lens-format-npx-available-");
 		try {
+			writeNodeAgreementEvidence(env, "prettier");
 			const filePath = path.join(env.tmpDir, "formatted.js");
 			fs.writeFileSync(filePath, "const value = 1;\n");
 			fs.writeFileSync(path.join(env.tmpDir, ".gitignore"), "ignored.md\n");

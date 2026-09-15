@@ -6,6 +6,12 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { runAutofix } from "../../clients/pipeline.js";
+import {
+	_getAgreementResolutionCountForTests,
+	establishToolAgreement,
+	TOOL_AGREEMENT_POLICIES,
+} from "../../clients/tool-agreement.js";
+import { listSafePipelineAutofixTools } from "../../clients/tool-policy.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const { resolveToolCommandWithInstallFallback } = vi.hoisted(() => ({
@@ -73,6 +79,51 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 
 		expect(result.fixedCount).toBe(1);
 		expect(detectFileChangedAfterCommand).toHaveBeenCalledOnce();
+		expect(getDegradationSummary()).toEqual([]);
+	});
+
+	it("establishes markdownlint agreement with markdownlint-cli2 before writing", async () => {
+		// Regression for TA-003: the pipeline tool id is markdownlint, but the
+		// resolver and installer identify its package as markdownlint-cli2. The
+		// independent before/after seam must be reached only after that identity
+		// is established, so a wrong package mapping makes this test red.
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package.json"),
+			JSON.stringify({ devDependencies: { "markdownlint-cli2": "^0.23.2" } }),
+		);
+		fs.writeFileSync(
+			path.join(env.tmpDir, "package-lock.json"),
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {},
+					"node_modules/markdownlint-cli2": { version: "0.23.2" },
+				},
+			}),
+		);
+		const file = path.join(env.tmpDir, "README.md");
+		fs.writeFileSync(file, "# Title\n");
+		resolveToolCommandWithInstallFallback.mockResolvedValue(
+			"markdownlint-cli2",
+		);
+
+		const result = await runAutofix(
+			file,
+			env.tmpDir,
+			() => undefined,
+			() => {},
+			deps(),
+		);
+
+		expect(result.fixedCount).toBe(1);
+		expect(detectFileChangedAfterCommand).toHaveBeenCalledOnce();
+		expect(detectFileChangedAfterCommand).toHaveBeenCalledWith(
+			file,
+			"markdownlint-cli2",
+			expect.arrayContaining(["--fix", file]),
+			env.tmpDir,
+			[1],
+		);
 		expect(getDegradationSummary()).toEqual([]);
 	});
 
@@ -205,4 +256,43 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 			);
 		},
 	);
+
+	it("declines absent evidence and caches an unknown warning tool decision", () => {
+		const before = _getAgreementResolutionCountForTests();
+		const first = establishToolAgreement(
+			"unregistered-warning-tool",
+			env.tmpDir,
+		);
+		const second = establishToolAgreement(
+			"unregistered-warning-tool",
+			env.tmpDir,
+		);
+
+		expect(first).toMatchObject({
+			decision: "decline",
+			subject: "tool:unregistered-warning-tool",
+			reasonCode: "evidence-unsupported",
+		});
+		expect(second).toEqual(first);
+		expect(_getAgreementResolutionCountForTests()).toBe(before + 1);
+	});
+
+	it("declines a registered tool when project evidence is absent", () => {
+		expect(establishToolAgreement("rust-clippy", env.tmpDir)).toMatchObject({
+			decision: "decline",
+			subject: "project:rust-clippy",
+			reasonCode: "evidence-absent",
+		});
+	});
+
+	it("keeps every safe pipeline autofix tool in the conservative agreement registry", () => {
+		// Population guard for TA-003 and future policy drift: this is the full
+		// autonomous pipeline-writer population, not only the formatter registry.
+		for (const tool of listSafePipelineAutofixTools()) {
+			expect(
+				TOOL_AGREEMENT_POLICIES[tool],
+				`${tool} must have an evidence policy before it can write files`,
+			).toMatchObject({ withoutEvidence: "decline" });
+		}
+	});
 });

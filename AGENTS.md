@@ -313,6 +313,12 @@ and PR language; detailed historical examples are in `HISTORY.md`.
 - Analyzer and runner fallback filters must match the substituted surface's
   contract. Empty output distinguishes clean, skipped, unavailable, errored,
   inconclusive, and partial states.
+- Every autonomous writer (pipeline autofix, immediate/deferred formatter, and
+  actionable-warning quickfix) resolves through `clients/tool-agreement.ts`.
+  Its declarative population assigns one evidence bucket and declines absent,
+  unreadable, unparseable, unsupported, or unregistered evidence; callers emit
+  bounded degradation records. Ktlint's standalone-CLI exception still
+  declines Gradle-owned projects without guessing a CLI version.
 - `clients/dispatch/runners/runner-spawn-cwd-sweep.test.ts` is the population
   guard for child cwd derivation. Add a reasoned migration row instead of a
   pin-only update.

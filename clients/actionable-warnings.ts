@@ -493,11 +493,16 @@ function recordFromLspDiagnostic(
 ): ActionableWarningRecord {
 	const line = diag.range.start.line + 1;
 	const column = diag.range.start.character + 1;
+	// Keep agreement keyed to the producer that supplied the diagnostic. The
+	// generic `lsp` label is only a last-resort identity: treating it as a
+	// registered writer would establish every LSP quickfix without evidence.
+	const producer =
+		diag.source && diag.source !== "lsp" ? diag.source : diag.serverId;
 	const source = diag.source ?? "lsp";
 	const code = diag.code === undefined ? undefined : String(diag.code);
 	const identityArgs = {
 		filePath,
-		tool: "lsp",
+		tool: producer ?? "lsp",
 		source,
 		code,
 		message: diag.message,
@@ -512,7 +517,7 @@ function recordFromLspDiagnostic(
 		line,
 		column,
 		severity: "warning",
-		tool: "lsp",
+		tool: producer ?? "lsp",
 		source,
 		code,
 		rule: code ? `${source}:${code}` : source,
