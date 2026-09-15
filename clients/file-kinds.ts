@@ -5,7 +5,10 @@
  * Maps file extensions and paths to semantic file kinds.
  */
 
-import { basename, extname } from "node:path";
+import { basename, extname, win32 } from "node:path";
+import * as path from "node:path";
+import { isWindowsPath } from "./path-utils.js";
+import { findNearestDirWithMarker } from "./workspace-topology.js";
 
 // --- Types ---
 
@@ -249,11 +252,22 @@ export const SPECIAL_FILENAMES: Array<{ pattern: RegExp; kind: FileKind }> = [
 
 /**
  * Helm renders YAML-looking files as Go templates before they become YAML.
- * Keep this path convention here rather than teaching every YAML consumer
- * about Helm's source layout.
+ * Require the shared chart-root marker before promoting a YAML template, so
+ * ordinary repositories can use a `templates/` directory without entering
+ * Helm dispatch. `.tpl` remains extension-classified below.
  */
 export function isHelmYamlTemplatePath(filePath: string): boolean {
-	return /[\\/]templates[\\/]/i.test(filePath) && /\.ya?ml$/i.test(filePath);
+	const templatesSegment = isWindowsPath(filePath)
+		? /[\\/]templates[\\/]/i
+		: /\/templates\//i;
+	if (!templatesSegment.test(filePath) || !/\.ya?ml$/i.test(filePath)) {
+		return false;
+	}
+
+	const pathApi = isWindowsPath(filePath) ? win32 : path;
+	return Boolean(
+		findNearestDirWithMarker(pathApi.dirname(filePath), "chartYamlPath"),
+	);
 }
 
 /**

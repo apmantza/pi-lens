@@ -36,6 +36,7 @@ import { logLatency, phaseFinished, phaseStarted } from "../latency-logger.js";
 import { isSpawnableCommand } from "../installer/index.js";
 import {
 	isAbsoluteFilePath,
+	isWindowsPath,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
 } from "../path-utils.js";
@@ -332,7 +333,14 @@ export function createDispatchContext(
 		resolveLanguageRootForFile(absoluteFilePath, cwd),
 	);
 	const normalizedFilePath = normalizeMapKey(absoluteFilePath);
-	const kind = detectFileKind(normalizedFilePath);
+	// `resolveRunnerPath` intentionally normalizes map keys, which folds a
+	// literal POSIX backslash into a separator. Preserve that one proven
+	// classifier distinction while still resolving relative inputs from `cwd`.
+	const kindFilePath =
+		!isWindowsPath(filePath) && filePath.includes("\\")
+			? path.resolve(cwd, filePath)
+			: absoluteFilePath;
+	const kind = detectFileKind(kindFilePath);
 	const contentPrefix = readFilePrefix(normalizedFilePath);
 	const fileRole = detectFileRole(normalizedFilePath, contentPrefix);
 	// Captured once here so the generated short-circuit below can emit a
