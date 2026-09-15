@@ -21,6 +21,9 @@
   requirements.
 - For LSP, dispatch, cache, runner, or tool changes, test one non-TypeScript
   registry entry through the same seam.
+- On a net-count fold, mutate every predicate the deleted sibling used to
+  back; the fold's own tests were written when two guards existed (#3064 F1,
+  #3065 F3, #3066 F3, #3068 F2).
 
 ## Finding format
 
@@ -44,8 +47,7 @@ Start with one verdict: `merge as-is`, `merge after fixes`, or `redesign`.
 Then include:
 
 - `Could not verify`: every blocked or environment-limited check.
-- `Named output`: structural insight not closed by the probes, with
-  `Strong`, `Worth exploring`, or `Speculative` strength.
+- `Named output`: structural insight not closed by the probes.
 - `Disposition table`: each prior finding as `fixed`, `not fixed`, `new defect`,
   or `withdrawn (reason)`.
 - Cleared categories and exact-head identity.

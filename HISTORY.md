@@ -33,6 +33,26 @@ is the check, not the sentence. The inspiration was an external retro skill
 red-transcript requirement on the check itself and a single home for rules.
 
 
+## 2026-09-16 — first retro under `docs/pi-lens-retro.md`
+
+Run over the 2026-09-15/16 orchestration session (16 PRs merged, 14 issues
+closed, 2 master reds, 2 refuted claims). Fifteen findings, one refutation.
+Mechanical deliverables: the infra-kill auto-rerun gate now covers a second
+kill; a sweep reds any workflow job that only runs off `pull_request`; the bash
+guard denies `TMPDIR=<…>/.probe-home`; the git-fixture gate rejects raw
+commit-ish spawns under `tests/`; three more were built inside the session
+itself (#3061 cgroup probe, #3062 peak-RSS gate, #3066 shared-home detector).
+Filed: #3073 (branch protection, human decision), #3074, #3075, #3076,
+plegma #436. Judgement lines added: reviewer fold rule, sweep-brief routing.
+Steering audit deleted five lines that had an occasion and changed no
+decision: the fixer contract's preflight-table line (0 of 13 bodies), its
+non-TypeScript twin of the reviewer line (0 hits over four dispatch PRs), its
+copy of the interleaving-kit sentence (AGENTS.md is the source), the
+orchestration "run the warden" clause (0 warden runs across 16 merges), and the
+reviewer's three-value strength vocabulary (0 labels on 2 named outputs).
+Refuted: "close keywords in PR titles are ungated" —
+`lintCloseKeywordPlacement` already gates it and redded #3044.
+
 ## Archived pre-trim agent context (2026-09-14)
 
 The detailed incident narratives, closed decisions, and subsystem evidence below

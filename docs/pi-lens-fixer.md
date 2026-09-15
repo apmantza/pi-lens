@@ -19,8 +19,6 @@
 - Sweep the whole codebase for the defect shape and every enumerable member.
 - Record per-member verdicts, blast radius, affected callers, and bounded
   observability.
-- State language coverage from `clients/language-registry.ts`; include one
-  non-TypeScript case for language-neutral seams.
 
 ## Required checks
 
@@ -30,8 +28,6 @@
 - Add `tests/config/` and spawn-heavy lanes for real child or LSP tests.
 - Reproduce CI-only failures in the CI command shape.
 - Use the exact npm pin in `package.json` for lockfile changes.
-- Use fake clocks and `tests/clients/interleaving-kit.ts` before real waits.
-- Run `npm run preflight` last and paste its table into `PR_BODY.md`.
 - Add one `.changelog/<slug>.md` fragment for code changes. Never edit
   `CHANGELOG.md`.
 - Run release-QA end to end when a release-QA row changes.

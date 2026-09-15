@@ -94,8 +94,9 @@ run against the merged tree and the exact final head. The warden is read-only;
 Git and GitHub authority stays with the orchestrator.
 
 After every worker completion, push, review verdict, CI verdict, merge, or
-status request, run the warden and trigger the next named owner in the same
-orchestration pass. Keep a durable handoff on the PR or shared ledger with the
+status request, trigger the next named owner in the same orchestration pass.
+A brief that adds or edits a `tests/support/sweep-kit.ts` registered-or-fail
+sweep is not contained work; route it to the strongest available fixer. Keep a durable handoff on the PR or shared ledger with the
 exact head, verdict, dispositions, and next owner.
 
 Plegma reads are token-budgeted (#417). Do not call `plegma result` merely to
