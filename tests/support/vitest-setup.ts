@@ -4,8 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, expect } from "vitest";
 import { installGitFixtureEnv } from "./git-fixture-env.js";
+import { installKillGuard, killGuardReport } from "./kill-guard.js";
 import { reportPeakRss } from "./worker-peak-rss.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
+
+// #2042: before anything else in the worker, so the guard is already in place
+// when a test's own `process.once("exit")` handler fires at fork teardown.
+installKillGuard();
 
 // The review-graph persist is debounced in production (#260 circuit-breaker) so
 // a burst of edits collapses to one write. In tests that would race disk-snapshot
@@ -279,6 +284,13 @@ afterAll(() => {
 		console.warn(
 			`[tmp-hygiene] observed ${leakedCount} unadmitted entry(s) from ${tmpHygieneRealTmp}; the serialized governance owner cleans them`,
 		);
+});
+
+// #2042: fail the FILE that handed a pid it does not own to production kill or
+// spawn code, naming the pid and the stack. See tests/support/kill-guard.ts.
+afterAll(() => {
+	const report = killGuardReport();
+	if (report) throw new Error(report);
 });
 
 export function cleanupTmpHygiene(): void {

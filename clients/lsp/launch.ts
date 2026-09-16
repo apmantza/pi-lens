@@ -22,7 +22,11 @@ import { getGlobalPiLensLogDir } from "../probe-home-state.js";
 import { isFullyQualified } from "../path-utils.js";
 import { findGlobalBinary } from "../package-manager.js";
 import { redactSecrets } from "../redact/secrets.js";
-import { classifySpawnFailure, SpawnFailureError } from "../safe-spawn.js";
+import {
+	classifySpawnFailure,
+	isOwnLiveChild,
+	SpawnFailureError,
+} from "../safe-spawn.js";
 import { getRubyVersionDirNamesAsync } from "./ruby-drive-dirs.js";
 
 export interface LSPProcess {
@@ -802,7 +806,7 @@ export async function stopLSP(handle: LSPProcess): Promise<void> {
 		handle.process.once("error", done);
 
 		const killWindowsTree = (): boolean => {
-			if (!isWindows || handle.pid <= 0) return false;
+			if (!isWindows) return false;
 			// If our child has already exited, its PID is dead and the OS may have
 			// RECYCLED it to an unrelated process. `taskkill /F /T` on a recycled PID
 			// force-kills that process AND its whole tree — in the test suite this
@@ -812,10 +816,12 @@ export async function stopLSP(handle: LSPProcess): Promise<void> {
 			// tree-kill a PID we no longer own — fall back to handle.process.kill(),
 			// which on Windows signals via the retained process HANDLE (not the raw
 			// PID), so it's a safe no-op on an already-exited child.
-			if (
-				handle.process.exitCode !== null ||
-				handle.process.signalCode !== null
-			)
+			//
+			// #2042 folded the sign check and this exited check into the one
+			// ownership predicate every kill-by-raw-pid now shares; the handle
+			// arm below IS this paragraph, and on Windows it is the only
+			// ownership evidence available (there is no /proc to read).
+			if (!isOwnLiveChild(handle.pid, "lsp-stop-windows-tree", handle.process))
 				return false;
 			try {
 				// Absolute path avoids PATH-resolution substitution on Windows.

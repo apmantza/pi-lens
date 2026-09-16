@@ -351,6 +351,10 @@ export const wallClockBudgetInclude = [
 	// real LSP child inside itself, so it wants the same quiet, serialized phase
 	// its lsp-spawn-heavy siblings get.
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts",
+	// #2042/#3091 F2: a real, live direct child is the only pid whose /proc PPid
+	// is this process, so the Linux ownership arm of the kill-by-pid predicate
+	// cannot be observed through any double (flake-shape admission).
+	"tests/clients/lsp/kill-process-tree-real-child.test.ts",
 	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
 	// #2765 round 3: fake timers exercise the live hook remainder after delayed

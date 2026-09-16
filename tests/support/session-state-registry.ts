@@ -1682,7 +1682,17 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// own, is not a candidate on its own account — the pre-#2455 status quo,
 	// and MISS 3 in SWEEP_HEURISTIC_LIMITS.
 	"rust-client.ts": 1,
-	"safe-spawn.ts": 3,
+	// #2042/#3091 F1: rose to 4 with `verifiedOwnPids`, the FIFO-bounded memo of
+	// pids this PROCESS has proved, from the kernel, to be its own live
+	// children. Deliberately NOT reset at session_start, and a reset would be a
+	// regression rather than hygiene: the facts it holds are about the OS
+	// process tree, not the session — an LSP server spawned last session and
+	// still running is still this process's child — and dropping a verdict is
+	// exactly what re-breaks #2026's host-exit group kill for a leader that has
+	// since died. It cannot grow (BoundedFifoMap, 512 entries, FIFO eviction)
+	// and a stale entry cannot mislead: a pid alive under a different parent is
+	// refused by the /proc read before the memo is ever consulted.
+	"safe-spawn.ts": 4,
 	// #2146 moved the four registration fields onto the process singleton, so the
 	// scan sees no module-scope container here either.
 	"session-lifecycle.ts": 0,

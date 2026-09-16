@@ -39,7 +39,7 @@ import {
 	newLspMutationCorrelationId,
 } from "../lsp-mutation.js";
 import { getProcessSingleton } from "../process-singletons.js";
-import { getAmbientAbortSignal } from "../safe-spawn.js";
+import { getAmbientAbortSignal, isOwnLiveChild } from "../safe-spawn.js";
 import { raceToCompletion } from "./aggregation.js";
 import {
 	hashDiagnosticContent,
@@ -1344,7 +1344,20 @@ export async function killProcessTree(
 	}
 
 	const killPosixProcessGroup = (signal: NodeJS.Signals): boolean => {
-		if (pid <= 0) return false;
+		// #2042: one ownership predicate for every kill-by-raw-pid, replacing
+		// the `pid <= 0` sign check that let a test double's invented pid
+		// through. A pid we do not own falls back to `killDirectChild` below,
+		// which signals through the retained handle and can only ever reach
+		// our own child.
+		//
+		// #3091 F1: `proc` is deliberately NOT passed. The handle arm means
+		// "already exited ⇒ refuse", and this group kill must still fire when
+		// the direct child is dead — the early return at :1269 is skipped under
+		// `options.processExiting`, and a POSIX group outlives its leader, so
+		// the group signal is the only thing that reaps surviving grandchildren
+		// at host exit (#2026). Ownership here comes from the kernel and, once
+		// the leader is gone, from the verdict recorded while it was alive.
+		if (!isOwnLiveChild(pid, "lsp-stop-posix-group")) return false;
 		try {
 			process.kill(-pid, signal);
 			return true;

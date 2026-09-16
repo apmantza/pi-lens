@@ -22,6 +22,7 @@
 		"clients/knip-cache-consumer-staleness.test.ts": 2,
 		"clients/lsp/fake-lsp-server-parent-watchdog.test.ts": 1,
 		"clients/lsp/headless-tool-call-keepalive.test.ts": 1,
+		"clients/lsp/kill-process-tree-real-child.test.ts": 1,
 		"clients/lsp/launch-stderr-guard.test.ts": 2,
 		"clients/lsp/typescript-classic-repair.integration.test.ts": 2,
 		"clients/lsp/typescript-native-vitest.integration.test.ts": 1,

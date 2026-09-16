@@ -243,6 +243,22 @@ and PR language; detailed historical examples are in `HISTORY.md`.
     interior picked as `indent-retarget.ts`'s extrapolation base unit (#3052).
     Name which lines carry structure and exclude the rest before counting;
     decline rather than pin a style when only ambiguous runs remain.
+50. **Test double's fabricated identifier reaching code that acts on it:** a
+    pid, fd, port, lock path or handle invented by a mock is handed to
+    PRODUCTION code that registers, signals, writes or deletes by that
+    identifier, and the identifier is real to the OS even though the object is
+    not. `tests/clients/lsp/launch.test.ts`'s `spawn: () => new
+    MockChildProcess(2468)` reached `safeSpawnAsync`, which registered 2468 for
+    lifetime cleanup; at fork teardown the suite SIGKILLed pid 2468, which on
+    ~10 % of runners was one of the CI job's own processes (#2042, five weeks
+    of unexplained exit 137; fixed in #3091). A sign or range check is not the
+    guard — the value is plausible; OWNERSHIP is. Verify the identifier against
+    the OS at the moment it is admitted (`/proc/<pid>/status` PPid), refuse and
+    record what fails, and keep the verdict for the lifetime of the resource
+    rather than re-deriving it after the resource is gone. The class is
+    mechanised for pids by `tests/support/kill-guard.ts`, which fails any test
+    file that hands an unowned pid to a production kill or spawn seam; the
+    other identifier kinds have no detector yet, so screen them by hand.
 
 ## Standing invariants
 

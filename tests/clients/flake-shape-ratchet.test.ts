@@ -218,6 +218,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real child's exit code is the observation; no in-process double can watch an event loop decide to drain",
 	},
+	"real-process-spawn:clients/lsp/kill-process-tree-real-child.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real, live direct child is the only pid whose /proc PPid is this process, so the Linux ownership arm of the kill-by-pid predicate cannot be observed through any double",
+	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
 		reason:
