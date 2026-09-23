@@ -108,20 +108,20 @@ classification standing.
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci |
 | csharp | csharp-ls | pull | — | n/a (pull) | 1 | ci |
 | typescript | typescript-language-server | push-only | silent | direct | 3 | dev+ci |
-| python | pyright | push-only | publishes-versioned | TBD | 2 | dev+ci |
-| jedi | jedi-language-server (alt of python) | push-only | publishes-versioned | TBD | 2 | ci |
-| yaml | yaml-language-server | push-only | publishes-unversioned | TBD | 2* | dev+ci |
-| shell | bash-language-server | push-only | publishes-versioned | TBD | 2 | dev+ci |
-| dockerfile | docker-langserver | push-only | publishes-unversioned | TBD | 2* | dev+ci |
-| toml | taplo | push-only | publishes-unversioned | TBD | 2* | dev+ci |
+| python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci |
+| jedi | jedi-language-server (alt of python) | push-only | publishes-versioned | direct | 2 | ci |
+| yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci |
+| dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | terraform | terraform-ls | push-only | TBD | TBD | 2/3? | dev+ci |
-| prisma | @prisma/language-server | push-only | publishes-unversioned | TBD | 2* | dev+ci |
+| prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | php | intelephense | push-only | publishes-unversioned | empty-first | 2* | dev+ci |
-| zig | zls | push-only | publishes-unversioned | TBD | 2* | dev+ci |
-| vue | @vue/language-server | push-only | TBD | TBD | 2/3? | dev+ci |
-| dart | dart language-server | push-only | publishes-unversioned | TBD | 2* | ci |
-| gleam | gleam lsp | push-only | publishes-unversioned | TBD | 2* | ci |
-| clojure | clojure-lsp | push-only | publishes-unversioned | TBD | 2* | ci |
+| zig | zls | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| vue | @vue/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| dart | dart language-server | push-only | publishes-unversioned | direct | 2* | ci |
+| gleam | gleam lsp | push-only | publishes-unversioned | direct | 2* | ci |
+| clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci |
 | opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | ast-grep | ast-grep (aux) | push-only | publishes-versioned | direct | 2 | dev+ci |
 
@@ -207,4 +207,6 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
+- **[marked-not-silent]** wait-policy/strategies.ts marks "cue" silentOnClean:true but this run observed publishes-versioned — the marker may be stale (too pessimistic; cascade is skipping a wait the server would have resolved with a real publish)
+- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "lua" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
 - **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "markdown" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
