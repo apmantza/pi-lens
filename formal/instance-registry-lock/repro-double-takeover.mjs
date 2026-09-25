@@ -29,25 +29,21 @@ let held = false;
 fs.renameSync = (from, to) => {
 	if (!held && from === lock) {
 		held = true;
-		const child =
-			`import(${JSON.stringify(lockModule)}).then(({ withInstanceRegistryLockSync }) => {
-			const r = withInstanceRegistryLockSync(${JSON.stringify(target)}, () => {
-				require("node:fs").writeFileSync(${JSON.stringify(inCs)}, String(process.pid));
-				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
-				require("node:fs").writeFileSync(${JSON.stringify(left)}, "");
-				return "p2 ran";
-			});
-			console.log("p2:", r);
-		});`.replace(/require\("node:fs"\)/g, "globalThis.__fs");
-		spawn(
-			process.execPath,
-			[
-				"--input-type=module",
-				"-e",
-				`import fs from "node:fs"; globalThis.__fs = fs; ${child}`,
-			],
-			{ stdio: "inherit" },
-		);
+		// p2: a real process that takes over p1's lock and stays inside for 1 s.
+		const child = `
+import fs from "node:fs";
+const { withInstanceRegistryLockSync } = await import(${JSON.stringify(lockModule)});
+const result = withInstanceRegistryLockSync(${JSON.stringify(target)}, () => {
+	fs.writeFileSync(${JSON.stringify(inCs)}, String(process.pid));
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+	fs.writeFileSync(${JSON.stringify(left)}, "");
+	return "p2 ran";
+});
+console.log("p2:", result);
+`;
+		spawn(process.execPath, ["--input-type=module", "-e", child], {
+			stdio: "inherit",
+		});
 		const until = Date.now() + 5000;
 		while (!fs.existsSync(inCs) && Date.now() < until) sleep(5);
 		console.log(
