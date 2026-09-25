@@ -1,0 +1,98 @@
+# Pid-file lock models (#3447)
+
+TLA+ models of the path-based pid-file locks, and one candidate redesign. The
+`TLA+ models` CI job model-checks every config here with TLC and compares the
+verdict with the config's first line, so a config that documents a known bug
+expects the violation:
+
+```text
+\* expect: violated MutualExclusion
+\* module: FileLock
+```
+
+When a fix lands, its config changes to `\* expect: pass` in the same PR. Run
+the check locally with `node scripts/check-tla-models.mjs`: it downloads the
+pinned `tla2tools.jar` to `.cache/` and verifies its sha256. It needs Java.
+
+## Models
+
+**`FileLock.tla`** covers both locks that create a pid file with `wx`:
+- `clients/instance-registry-lock.ts` (`Registry*.cfg`), guarding the
+  registry read-modify-write in `clients/instance-registry.ts`;
+- `acquireBoundedPidFileLock` in `clients/bounded-pid-file-lock.ts`
+  (`Bounded*.cfg`), guarding `commitDurableStore`.
+
+Each acquisition creates a new file. The exclusive create and the pid write
+are separate steps unless `AtomicCreate`. Stale takeover and release act on
+whatever file the path names at that moment.
+
+**`GenerationLock.tla`** is the candidate redesign from #3476. The lock is a
+series of files `lock.1`, `lock.2`, … Every acquisition, including a stale
+takeover, is an exclusive create of the next generation, so nothing is removed
+by path.
+
+## Invariants
+
+- `MutualExclusion`: at most one live process is inside the critical section.
+- `NoLostRegistration`: an update the writer saw committed is still there.
+- `NoOrphanLock`: a fresh lock belongs to a live owner that will release it.
+
+## Results
+
+| Config | Faults | Verdict |
+|---|---|---|
+| `RegistryNoFault.cfg` | none | pass |
+| `RegistryCrash.cfg` | one writer dies | `MutualExclusion` violated (#3476) |
+| `RegistryExpiry.cfg` | a holder outlives 5 s | `MutualExclusion` violated (the lease) |
+| `RegistryCrashFix.cfg` | crash, identity-checked takeover | `NoOrphanLock` violated |
+| `RegistryCrashFix4.cfg` | the same, four writers | `MutualExclusion` violated |
+| `BoundedNoFault.cfg` | none | `MutualExclusion` violated (#3475) |
+| `BoundedLinkedNoFault.cfg` | none, lock linked from a written temp file | pass |
+| `BoundedLinkedCrash.cfg` | the same, one writer dies | `MutualExclusion` violated (#3476) |
+| `GenerationNoFault.cfg` | none | pass |
+| `GenerationCrash.cfg` | one writer dies, two rounds each | pass |
+| `GenerationCrash4.cfg` | four writers, two die | pass |
+| `GenerationNoRecheck.cfg` | crash, no second listing | `MutualExclusion` violated |
+| `GenerationExpiry.cfg` | a holder outlives the threshold | `MutualExclusion` violated (the lease) |
+
+Three results matter most:
+
+- **The registry lock** holds without faults, including the window where its
+  file exists but has no pid yet (#3450). With a crash, two takers of the dead
+  owner's lock can each remove what the path names, and both enter.
+- **The bounded lock** fails with no crash at all: an empty file parses to
+  `NaN`, which reads as a dead owner, so a contender unlinks a live lock.
+  Linking a fully written temp file into place fixes that case.
+- **The identity-checked takeover** (restore the displaced file if it was not
+  the judged one) only narrows the crash race, and it is the quarantine lock's
+  current shape. The generation lock closes it in the model. The post-create
+  listing is required: without it, a stale listing re-creates a name cleanup
+  removed.
+
+The model is not passing vacuously: letting the `wx` create succeed on an
+occupied path makes `RegistryNoFault.cfg` violate `MutualExclusion`.
+
+## Repros on the real code
+
+Run from the repository root after `npm run build`. Each script delays one
+step to force the interleaving TLC found; neither changes the lock's logic.
+
+```text
+$ node formal/file-locks/repro-registry-double-takeover.mjs
+p3: p2 is in its critical section; lock now reads "23804 1790370894347" (p2 pid)
+p3: in critical section (pid 23796); p2 still inside: true
+p3: MUTUAL EXCLUSION VIOLATED
+
+$ node formal/file-locks/repro-bounded-empty-window.mjs
+B: A's lock exists, content: ""
+B: acquired
+B: A entered while B held the lock: MUTUAL EXCLUSION VIOLATED
+```
+
+## Scope
+
+Not modelled:
+- backoff timing (any retry may give up, as the wait deadline does);
+- pid reuse;
+- the quarantine lock itself, whose restore has the shape of
+  `RegistryCrashFix.cfg`.

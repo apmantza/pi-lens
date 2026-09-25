@@ -1,4 +1,4 @@
-// Replays TLC's Crash.cfg counterexample against the real lock code.
+// Replays RegistryCrash.cfg's counterexample against the real registry lock.
 // p1: a writer that died holding the lock (dead pid, fresh mtime).
 // p3: this process. Its takeover judges p1's lock stale; its renameSync is
 //     held until p2 has taken over the same lock and entered the critical section.

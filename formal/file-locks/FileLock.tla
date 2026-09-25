@@ -1,13 +1,17 @@
----------------------------- MODULE InstanceRegistryLock ----------------------------
+---------------------------- MODULE FileLock ----------------------------
 (***************************************************************************)
-(* Model of clients/instance-registry-lock.ts guarding the read-modify-    *)
-(* write in clients/instance-registry.ts (writeRegistryWithRetry), #3447.   *)
+(* Path-based pid-file locks guarding a read-modify-write, #3447.          *)
+(*                                                                         *)
+(* Two locks share this shape:                                             *)
+(*  - clients/instance-registry-lock.ts (Registry*.cfg), guarding the      *)
+(*    registry write in clients/instance-registry.ts;                      *)
+(*  - acquireBoundedPidFileLock in clients/bounded-pid-file-lock.ts        *)
+(*    (Bounded*.cfg), guarding commitDurableStore.                         *)
 (*                                                                         *)
 (* The lock path names at most one inode. Each acquisition creates a new   *)
-(* inode (`writeFile(lock, ..., {flag: "wx"})`: open O_EXCL, then write the *)
-(* pid), so "created" and "pid written" are separate steps. Rename and     *)
-(* unlink act on whatever inode the path names at that moment, which is    *)
-(* the point of the model: path operations carry no identity check.        *)
+(* inode: an exclusive create, then the pid written, as two steps unless   *)
+(* AtomicCreate. Takeover and release act on whatever inode the path names *)
+(* at that moment: path operations carry no identity check.                *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -17,7 +21,9 @@ CONSTANTS
     AllowExpiry,    \* TRUE: a lock may outlive LOCK_STALE_MS (a live holder descheduled > 5 s)
     MaxInodes,      \* bound on acquisitions, to keep the state space finite
     Retries,        \* REGISTRY_WRITE_RETRIES
-    IdentityCheck   \* candidate fix: a taker restores a lock it did not judge stale
+    IdentityCheck,  \* candidate fix: a taker restores a lock it did not judge stale
+    EmptyIsDead,    \* an empty lock parses to no live pid (bounded-pid-file-lock.ts)
+    AtomicCreate    \* candidate fix: link a fully written temp file into place
 
 NoInode == 0
 
@@ -58,10 +64,10 @@ TryCreate(p) ==
     /\ pc[p] = "try"
     /\ IF lockAt = NoInode
          THEN /\ Len(inodes) < MaxInodes
-              /\ inodes' = Append(inodes, [owner |-> p, written |-> FALSE, expired |-> FALSE])
+              /\ inodes' = Append(inodes, [owner |-> p, written |-> AtomicCreate, expired |-> FALSE])
               /\ lockAt' = Len(inodes) + 1
               /\ mine' = [mine EXCEPT ![p] = Len(inodes) + 1]
-              /\ pc' = [pc EXCEPT ![p] = "write"]
+              /\ pc' = [pc EXCEPT ![p] = IF AtomicCreate THEN "cs_read" ELSE "write"]
          ELSE /\ pc' = [pc EXCEPT ![p] = "judge"]
               /\ UNCHANGED <<inodes, lockAt, mine, displaced>>
     /\ UNCHANGED <<alive, judged, reg, snap, tries, committed, crashes, displaced>>
@@ -80,11 +86,13 @@ WritePid(p) ==
     /\ UNCHANGED <<alive, lockAt, mine, judged, reg, snap, tries, committed, crashes, displaced>>
 
 \* staleLock: mtime older than LOCK_STALE_MS, or a parsed pid that is not alive.
-\* An empty (unwritten) lock parses to no pid, so only age makes it stale.
+\* The registry lock reads an empty (unwritten) lock as no pid, so only age
+\* makes it stale. The bounded lock parses it to NaN, which is "not live".
 IsStale(i) ==
     /\ i /= NoInode
     /\ \/ inodes[i].expired
        \/ inodes[i].written /\ ~alive[inodes[i].owner]
+       \/ EmptyIsDead /\ ~inodes[i].written
 
 Judge(p) ==
     /\ pc[p] = "judge"
