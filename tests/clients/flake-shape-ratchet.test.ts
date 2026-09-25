@@ -426,6 +426,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
 	},
+	// #3451: the hook's format step is a shell pipeline (git diff | xargs
+	// oxfmt); the bug was xargs turning oxfmt's exit 2 into 123 at the process
+	// boundary, which only the real hook run shows.
+	"real-process-spawn:scripts/pre-commit-hook.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real hook pipes git through xargs into the pinned oxfmt; the exit-123 refusal is a process-boundary fact",
+	},
 	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
 		detector: "real-process-spawn",
 		reason:

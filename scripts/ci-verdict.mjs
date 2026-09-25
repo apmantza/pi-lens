@@ -72,7 +72,11 @@
  *   70 -- transport/unexpected error (gh not on PATH, a `gh` call timed out
  *         or failed, malformed JSON, ...) -- sysexits EX_SOFTWARE, never
  *         confused with exit 1 ("CI failed"): a script that could not even
- *         ask GitHub is not the same fact as GitHub answering "red"
+ *         ask GitHub is not the same fact as GitHub answering "red". Under
+ *         `--wait`, a TRANSIENT check-runs failure (network, 5xx, a `gh`
+ *         call that hit its own timeout) backs off and keeps waiting
+ *         instead (#2935); exit 70 then means the budget ran out while
+ *         GitHub was still unreachable
  *
  * Absent is not automatically DIRTY (#2539 round 2, F1): the common cause of
  * an absent required check is CI not yet registered on a fresh push or a
@@ -185,6 +189,33 @@ export const DEFAULT_GH_TIMEOUT_MS = 60_000;
 // healthy `gh` call of the time it actually needs (measured ~950ms for a
 // check-runs read) before the call itself ever gets a chance to answer.
 export const MIN_GH_TIMEOUT_MS = 5_000;
+
+// #2935: under `--wait`, a transient `gh` failure on the check-runs read backs
+// off from this delay, doubling up to the cap, instead of exiting 70. Two
+// GitHub API outages on 2026-09-10 killed seven armed waits at once.
+export const TRANSIENT_BACKOFF_INITIAL_SECONDS = 30;
+export const TRANSIENT_BACKOFF_MAX_SECONDS = 5 * 60;
+
+// `gh`'s own spellings of an unreachable or failing GitHub: the connect
+// error it printed during the #2935 outages, Go's net/http transport errors,
+// and a 5xx status. Auth/repo errors (401/403/404, `gh auth login`) never
+// match, so they keep the immediate exit 70.
+const TRANSIENT_GH_STDERR =
+	/error connecting to|connection (?:reset|refused)|i\/o timeout|TLS handshake timeout|unexpected EOF|no such host|HTTP 5\d\d\b/i;
+
+/**
+ * True when a thrown `gh` failure is worth waiting out (#2935): a network or
+ * 5xx error in its stderr, or the call hitting its own `timeout` (a hung `gh`
+ * during an outage). Everything else -- `gh` missing, malformed JSON, an
+ * auth or repo error -- is not, so a `--wait` can't park on a failure that
+ * retrying never fixes.
+ */
+export function isTransientGhError(error) {
+	if (!(error instanceof Error)) return false;
+	if (error.code === "ETIMEDOUT") return true;
+	const stderr = error.stderr == null ? "" : String(error.stderr);
+	return TRANSIENT_GH_STDERR.test(stderr);
+}
 
 /**
  * True for a bare PR number ("2539"); false for anything sha-shaped
@@ -481,6 +512,12 @@ export function resolveGhTimeoutMs(remainingMs) {
  * can derive that call's own timeout via `resolveGhTimeoutMs` (F4).
  * `mergeable` threads straight through to `computeVerdict` (F1).
  *
+ * #2935: under a `--wait` budget, a `fetchPayload` failure that
+ * `isTransientGhError` accepts is not fatal: the loop sleeps (30 s, doubling
+ * to 5 min, never past the deadline), reports one `onRetry` line, and reads
+ * again. The failure is rethrown -- exit 70 -- once the deadline has passed,
+ * or at once for a one-shot read or a non-transient error.
+ *
  * @returns {Promise<{ verdict: ReturnType<typeof computeVerdict>, polls: number }>}
  */
 export async function pollVerdict({
@@ -492,18 +529,37 @@ export async function pollVerdict({
 	rerunState = null,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
+	onRetry = () => {},
 }) {
 	const capSeconds = resolveWaitCapSeconds(waitSeconds);
 	const deadline = now() + capSeconds * 1000;
 	let verdict;
 	let polls = 0;
+	let backoffSeconds = TRANSIENT_BACKOFF_INITIAL_SECONDS;
 	for (;;) {
 		const remainingMs =
 			capSeconds > 0 ? Math.max(0, deadline - now()) : undefined;
+		let payload;
+		try {
+			payload = await fetchPayload(remainingMs);
+		} catch (error) {
+			if (!remainingMs || !isTransientGhError(error)) throw error;
+			const delayMs = Math.min(backoffSeconds * 1000, remainingMs);
+			onRetry(
+				`transient gh error, retrying in ${Math.ceil(delayMs / 1000)}s (${Math.ceil(remainingMs / 1000)}s of --wait left): ${firstLine(error)}`,
+			);
+			await sleepImpl(delayMs);
+			backoffSeconds = Math.min(
+				backoffSeconds * 2,
+				TRANSIENT_BACKOFF_MAX_SECONDS,
+			);
+			continue;
+		}
+		backoffSeconds = TRANSIENT_BACKOFF_INITIAL_SECONDS;
 		const currentRerunState =
 			typeof rerunState === "function" ? rerunState() : rerunState;
 		verdict = computeVerdict(
-			await fetchPayload(remainingMs),
+			payload,
 			requiredChecks,
 			mergeable,
 			classification,
@@ -515,6 +571,11 @@ export async function pollVerdict({
 		await sleepImpl(POLL_INTERVAL_SECONDS * 1000);
 	}
 	return { verdict, polls };
+}
+
+function firstLine(error) {
+	const stderr = error?.stderr == null ? "" : String(error.stderr).trim();
+	return (stderr || String(error?.message ?? error)).split("\n")[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +839,8 @@ export async function run({
 	ghExec = gh,
 	stdout = console.log,
 	stderr = console.error,
+	sleepImpl,
+	now,
 } = {}) {
 	const { target, waitSeconds } = parseArgs(argv);
 	if (!target) {
@@ -836,6 +899,9 @@ export async function run({
 			requiredChecks,
 			classification: ciClassification,
 			rerunState,
+			onRetry: stderr,
+			...(sleepImpl ? { sleepImpl } : {}),
+			...(now ? { now } : {}),
 		});
 
 		stdout(

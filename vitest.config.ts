@@ -467,6 +467,9 @@ export const wallClockBudgetInclude = [
 	// #2613 review S3a: the retry wrapper's real exit code and distinct
 	// `::error::infra:` label on exhaustion are the subject under test.
 	"tests/scripts/npm-retry.test.ts",
+	// #3451: runs the real pre-commit hook through git and xargs (flake-shape
+	// admission).
+	"tests/scripts/pre-commit-hook.test.ts",
 	"tests/scripts/prune-agent-worktrees.test.ts",
 	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
 	// under scratchEnv() and reads back what that child resolved. The defect it

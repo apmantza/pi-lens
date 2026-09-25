@@ -29,7 +29,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max leg over last 10 successful master runs (30 matrix legs,
-    # windows-latest slowest): 452s (7m32s); sized at ~2x + margin.
+    # macos-latest slowest): 452s (7m32s); sized at ~2x + margin.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

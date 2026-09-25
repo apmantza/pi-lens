@@ -256,7 +256,9 @@ describe(".husky hooks — PI_LENS_SKIP_HOOKS accepts any non-empty value (F8)",
 		expect(hook).toContain(
 			"git diff --cached --name-only --diff-filter=ACMR -z",
 		);
-		expect(hook).toContain("npx --no-install oxfmt --check");
+		expect(hook).toContain(
+			"npx --no-install oxfmt --check --no-error-on-unmatched-pattern",
+		);
 		expect(hook).not.toContain("npm install oxfmt --no-save");
 	});
 

@@ -157,6 +157,10 @@
 		// utilities (Windows `netstat`, POSIX `ss`) — system binaries, never
 		// npm-installable, so there is no dependency that could ever provide
 		// them.
+		// tests/scripts/with-memory-watch.test.ts (#3141) builds real kernel
+		// FIFOs with the POSIX `mkfifo` utility -- a system binary, never
+		// npm-installable.
+		"mkfifo",
 		"netstat",
 		"ss"
 	]

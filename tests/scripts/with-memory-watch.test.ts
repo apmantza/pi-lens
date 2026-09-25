@@ -1,4 +1,8 @@
-import { type ChildProcessByStdio, spawn } from "node:child_process";
+import {
+	type ChildProcessByStdio,
+	execFileSync,
+	spawn,
+} from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -480,6 +484,210 @@ describe("with-memory-watch verdict durability (#2042)", () => {
 		}
 	}, 15_000);
 });
+
+/**
+ * #3141: once the wrapped command has exited, its libuv teardown restores the
+ * blocking flag on the stdout/stderr description it shared via `stdio:
+ * "inherit"`, so the wrapper's next `writeSync` to a full pipe blocks outright
+ * and the note's 400 ms cap never gets a turn. Two probes from the #3129
+ * round-2 verify, both hanging on master:
+ *
+ * - the child exits while the note retry is still parked (child exits at
+ *   300 ms, stdout reader dies at 150 ms, stderr never read);
+ * - no periodic line (`LOW_MB=1`, the healthy-memory CI shape), so the verdict
+ *   line at child exit is the first write after stdout dies.
+ *
+ * The wrapper's stdout/stderr here are real FIFOs, the shape a CI runner gives
+ * the Unit tests step. `spawn`'s own `stdio: "pipe"` hands the wrapper UNIX
+ * SOCKETS instead, which the fix does not cover (see the wrapper's
+ * `ownWriteFd` comment), so the helper above cannot stage this. POSIX only:
+ * `mkfifo` and `/proc` reopening are Linux mechanics, and the authoritative
+ * Unit tests lane is ubuntu.
+ */
+// Flake-shape note (real-process-spawn, covered by this file's admission):
+// `mkfifo` builds the real kernel FIFO the wrapper writes into; the defect is
+// a kernel fd-flag reset no double has.
+describe.skipIf(process.platform === "win32")(
+	"with-memory-watch writes through its own pipe description (#3141)",
+	() => {
+		async function runOverFifos(
+			exitMs: number,
+			lowMb: string,
+		): Promise<{ code: number | null; timedOut: boolean }> {
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-mem-watch-test-"),
+			);
+			const outFifo = path.join(dir, "out");
+			const errFifo = path.join(dir, "err");
+			execFileSync("mkfifo", [outFifo, errFifo]);
+			// Read ends first (non-blocking), so opening the write ends cannot park.
+			const outRead = fs.openSync(
+				outFifo,
+				fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+			);
+			const errRead = fs.openSync(
+				errFifo,
+				fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+			);
+			const outWrite = fs.openSync(outFifo, "w");
+			const errWrite = fs.openSync(errFifo, "w");
+			const grandchildScript =
+				"const iv=setInterval(()=>{process.stderr.write('x'.repeat(65536));},2);" +
+				`setTimeout(()=>{clearInterval(iv);process.exit(7);},${exitMs});`;
+			try {
+				return await new Promise((resolve, reject) => {
+					const child = spawn(
+						process.execPath,
+						[wrapper, "--", nodeCmd, "-e", grandchildScript],
+						{
+							cwd: repoRoot,
+							stdio: ["ignore", outWrite, errWrite],
+							env: {
+								...process.env,
+								PI_LENS_MEM_WATCH_INTERVAL_MS: "20",
+								PI_LENS_MEM_WATCH_LOW_MB: lowMb,
+								PI_LENS_MEM_WATCH_SAMPLE_FILE: path.join(dir, "samples.log"),
+							},
+						},
+					);
+					fs.closeSync(outWrite);
+					fs.closeSync(errWrite);
+					// The stdout reader dies; the stderr reader never reads.
+					setTimeout(() => fs.closeSync(outRead), 150);
+					const deadline = setTimeout(() => {
+						child.kill("SIGKILL");
+						resolve({ code: null, timedOut: true });
+					}, 8_000);
+					child.on("error", reject);
+					child.on("close", (code) => {
+						clearTimeout(deadline);
+						resolve({ code, timedOut: false });
+					});
+				});
+			} finally {
+				fs.closeSync(errRead);
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}
+
+		it("keeps writing through the inherited fd when stdout is a regular file", async () => {
+			// Reopening a regular file would open a second, independent offset:
+			// the wrapper's lines and the child's would overwrite each other.
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-mem-watch-test-"),
+			);
+			const outFile = path.join(dir, "out.log");
+			const out = fs.openSync(outFile, "w");
+			try {
+				const code = await new Promise<number | null>((resolve, reject) => {
+					const child = spawn(
+						process.execPath,
+						[
+							wrapper,
+							"--",
+							nodeCmd,
+							"-e",
+							"for(let i=0;i<50;i++)console.log('child-line-'+i);",
+						],
+						{
+							cwd: repoRoot,
+							stdio: ["ignore", out, "ignore"],
+							env: {
+								...process.env,
+								PI_LENS_MEM_WATCH_SAMPLE_FILE: path.join(dir, "samples.log"),
+							},
+						},
+					);
+					fs.closeSync(out);
+					child.on("error", reject);
+					child.on("close", resolve);
+				});
+				expect(code).toBe(0);
+				const text = fs.readFileSync(outFile, "utf8");
+				expect(text.startsWith("[mem-watch] host ")).toBe(true);
+				expect(text).toContain("child-line-0\nchild-line-1\n");
+				expect(text).toContain("child-line-49\n");
+				expect(text).toMatch(/\[mem-watch\] done\. exitCode=0 /);
+			} finally {
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}, 15_000);
+
+		it("still delivers the verdict through a slow pipe reader (#2093 on the private description)", async () => {
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-mem-watch-test-"),
+			);
+			const outFifo = path.join(dir, "out");
+			execFileSync("mkfifo", [outFifo]);
+			// A non-blocking read end lets the write end open without parking; a
+			// blocking read end then opens at once (a writer exists) and backs the
+			// stream, and the placeholder closes.
+			const placeholder = fs.openSync(
+				outFifo,
+				fs.constants.O_RDONLY | fs.constants.O_NONBLOCK,
+			);
+			const outWrite = fs.openSync(outFifo, "w");
+			const reader = fs.createReadStream("", {
+				fd: fs.openSync(outFifo, "r"),
+				encoding: "utf8",
+			});
+			fs.closeSync(placeholder);
+			let text = "";
+			reader.on("data", (chunk) => {
+				text += chunk;
+				reader.pause();
+				setTimeout(() => reader.resume(), 20);
+			});
+			try {
+				const code = await new Promise<number | null>((resolve, reject) => {
+					const child = spawn(
+						process.execPath,
+						[
+							wrapper,
+							"--",
+							nodeCmd,
+							"-e",
+							"process.stdout.write('y'.repeat(1<<20));",
+						],
+						{
+							cwd: repoRoot,
+							stdio: ["ignore", outWrite, "ignore"],
+							env: {
+								...process.env,
+								PI_LENS_MEM_WATCH_SAMPLE_FILE: path.join(dir, "samples.log"),
+							},
+						},
+					);
+					fs.closeSync(outWrite);
+					child.on("error", reject);
+					child.on("close", resolve);
+				});
+				await new Promise((resolve) => reader.on("close", resolve));
+				expect(code).toBe(0);
+				expect(text).toMatch(/\[mem-watch\] done\. exitCode=0 /);
+			} finally {
+				reader.destroy();
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}, 30_000);
+
+		it("forwards the exit code when the child exits while the note retry is parked", async () => {
+			const run = await runOverFifos(300, "999999999");
+			expect(run.timedOut, "wrapper did not exit within 8s -- hung").toBe(
+				false,
+			);
+			expect(run.code).toBe(7);
+		}, 15_000);
+
+		it("forwards the exit code when the verdict is the first write after stdout dies", async () => {
+			const run = await runOverFifos(600, "1");
+			expect(run.timedOut, "wrapper did not exit within 8s -- hung").toBe(
+				false,
+			);
+			expect(run.code).toBe(7);
+		}, 15_000);
+	},
+);
 
 /**
  * Round-2 review N1. Both fields the verdict reads are set by the WRAPPER, and

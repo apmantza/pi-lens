@@ -9,6 +9,10 @@ export declare const POLL_INTERVAL_SECONDS: number;
 export declare const HARD_CAP_SECONDS: number;
 export declare const DEFAULT_GH_TIMEOUT_MS: number;
 export declare const MIN_GH_TIMEOUT_MS: number;
+export declare const TRANSIENT_BACKOFF_INITIAL_SECONDS: number;
+export declare const TRANSIENT_BACKOFF_MAX_SECONDS: number;
+
+export declare function isTransientGhError(error: unknown): boolean;
 
 export declare function isPrNumber(arg: unknown): boolean;
 
@@ -92,6 +96,7 @@ export declare function pollVerdict(args: {
 		| null;
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
+	onRetry?: (line: string) => void;
 }): Promise<{ verdict: Verdict; polls: number }>;
 
 export type GhExec = (
@@ -155,4 +160,6 @@ export declare function run(args?: {
 	ghExec?: GhExec;
 	stdout?: (line: string) => void;
 	stderr?: (line: string) => void;
+	sleepImpl?: (ms: number) => Promise<void>;
+	now?: () => number;
 }): Promise<number>;

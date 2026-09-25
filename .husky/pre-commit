@@ -10,6 +10,11 @@ if git diff --cached --name-only | grep -qE '(^|/)(PR_BODY\.md|COMMIT_MSG\.txt|R
   exit 1
 fi
 
+# --no-error-on-unmatched-pattern (#3451): a staged set of only
+# formatter-ignored files (a release roll: CHANGELOG.md, package.json,
+# package-lock.json) leaves oxfmt no target; without the flag it exits 2,
+# xargs reports 123, and the commit is refused. oxfmt applies its own
+# .oxfmtrc.json ignore list, so the hook keeps no second copy of it.
 npm run check:lockfile && npm run changelog:check && npm run lint && \
   git diff --cached --name-only --diff-filter=ACMR -z | \
-  xargs -0 -r npx --no-install oxfmt --check
+  xargs -0 -r npx --no-install oxfmt --check --no-error-on-unmatched-pattern

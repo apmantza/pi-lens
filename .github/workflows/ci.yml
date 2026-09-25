@@ -816,7 +816,9 @@ jobs:
     # for this single-step job.
     timeout-minutes: 10
     permissions:
-      issues: write
+      # #3151: the comment target is a pull request; `issues: write` alone
+      # was refused with 403 "Resource not accessible by integration".
+      pull-requests: write
     steps:
       - name: Record exact-SHA terminal state
         env:

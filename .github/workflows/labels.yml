@@ -49,12 +49,13 @@ jobs:
     needs: [validate-merge-train-dispatch, sync]
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default. No successful
-    # run found -- this job has run and failed 3/3 times (always failure, never
-    # success) across the visible history -- defaulted to the floor of 10 min
-    # for this single-step job.
+    # run found -- its 3 runs all failed on a 403 from the comment POST, fixed
+    # in #3151 -- defaulted to the floor of 10 min for this single-step job.
     timeout-minutes: 10
     permissions:
-      issues: write
+      # #3151: the comment target is a pull request; `issues: write` alone
+      # was refused with 403 "Resource not accessible by integration".
+      pull-requests: write
     steps:
       - name: Record exact-SHA terminal state
         env:

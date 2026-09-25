@@ -98,6 +98,44 @@ const retryPark = new Int32Array(new SharedArrayBuffer(4));
 let writeFailureNoted = false;
 
 /**
+ * #3141: the EAGAIN retry above only bounds a write while the shared
+ * description is non-blocking, and the child decides that, not this
+ * wrapper. Once the wrapped command has exited, its libuv teardown restores
+ * the blocking flag on the description it shared via `stdio: "inherit"`, so
+ * the next `writeSync` to a full pipe blocks outright -- no deadline between
+ * retries can preempt a syscall that never returns. The verdict line at child
+ * exit is exactly that write, so master hung 3/3 with stdout dead and stderr
+ * full (#3129 round-2 verify).
+ *
+ * The wrapper therefore writes through its OWN open file description: when
+ * fd 1 or 2 is a pipe, `/proc/self/fd/<n>` is reopened with O_NONBLOCK. That
+ * is a new description on the same pipe (Linux reopens a pipe through its
+ * /proc link), so its flags are private to this process, and every write
+ * either lands, fails with EAGAIN (and parks, bounded or not, in `emit()`),
+ * or fails with EPIPE. Bytes still enter the same pipe buffer in write order,
+ * so interleaving with the child's output is unchanged.
+ *
+ * Only pipes: reopening a regular file would start a second, independent
+ * offset that overwrites the child's output, and a TTY never parks a write
+ * the way a full pipe does. Everything else -- and any platform without
+ * /proc, or a reopen that fails (ENXIO when the reader is already gone) --
+ * keeps writing to the inherited fd, as before. Cost: up to two extra fds,
+ * opened once at startup.
+ */
+function ownWriteFd(fd) {
+	try {
+		if (!fs.fstatSync(fd).isFIFO()) return fd;
+		return fs.openSync(
+			`/proc/self/fd/${fd}`,
+			fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+		);
+	} catch {
+		return fd;
+	}
+}
+const writeFds = { 1: ownWriteFd(1), 2: ownWriteFd(2) };
+
+/**
  * #3110 round 2 review F1: routing the once-only note through `emit()`
  * inherits its UNBOUNDED EAGAIN park (the paragraph above -- correct for the
  * verdict line, which #2093 requires never drop). The note is a different
@@ -167,7 +205,7 @@ function emit(line, fd = 1, maxWaitMs = Number.POSITIVE_INFINITY) {
 	const deadline = Date.now() + maxWaitMs;
 	for (;;) {
 		try {
-			fs.writeSync(fd, line);
+			fs.writeSync(writeFds[fd] ?? fd, line);
 			return;
 		} catch (error) {
 			// A `writeSync` that throws wrote nothing (the syscall returned -1),

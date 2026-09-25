@@ -1,11 +1,7 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
-import {
-	ADVISORY_CHECKS,
-	isAdvisoryCheck,
-} from "../../scripts/lib/ci-checks.mjs";
 import {
 	computeVerdict,
 	DEFAULT_GH_TIMEOUT_MS,
@@ -19,18 +15,23 @@ import {
 	formatVerdictTable,
 	HARD_CAP_SECONDS,
 	isPrNumber,
+	isTransientGhError,
 	MIN_GH_TIMEOUT_MS,
+	POLL_INTERVAL_SECONDS,
 	parseArgs,
 	pollVerdict,
-	POLL_INTERVAL_SECONDS,
+	resolveClassification,
 	resolveGhTimeoutMs,
 	resolveHeadSha,
-	resolveClassification,
 	resolveRepository,
 	resolveRequiredCheckNames,
 	resolveWaitCapSeconds,
 	run,
 } from "../../scripts/ci-verdict.mjs";
+import {
+	ADVISORY_CHECKS,
+	isAdvisoryCheck,
+} from "../../scripts/lib/ci-checks.mjs";
 
 function checkRun({
 	name,
@@ -1873,5 +1874,255 @@ describe("parseArgs", () => {
 
 	it("returns a null target when no positional argument is given", () => {
 		expect(parseArgs([])).toEqual({ target: null, waitSeconds: null });
+	});
+});
+
+// #2935: a GitHub API outage used to kill every armed `--wait` at once with
+// exit 70. A transient `gh` failure (network, 5xx, a gh call that hit its own
+// timeout) now backs off and keeps waiting inside the remaining budget; an
+// auth/repo error still exits 70 on the spot.
+describe("run --wait — transient gh errors back off instead of exiting 70 (#2935)", () => {
+	function ghError(stderr: string, extra: Record<string, unknown> = {}) {
+		return Object.assign(new Error(`Command failed: gh api\n${stderr}`), {
+			status: 1,
+			stderr,
+			...extra,
+		});
+	}
+
+	// A fake `gh` whose check-runs read throws `failures` in order, then
+	// answers green. Every other call answers normally.
+	function flakyGh(failures: Error[]) {
+		let checkRunsCalls = 0;
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					labels: [],
+					comments: [],
+				});
+			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
+			checkRunsCalls += 1;
+			const failure = failures[checkRunsCalls - 1];
+			if (failure) throw failure;
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		return { ghExec, checkRunsCalls: () => checkRunsCalls };
+	}
+
+	function fakeClock() {
+		let clock = 0;
+		const sleeps: number[] = [];
+		return {
+			now: () => clock,
+			sleepImpl: async (ms: number) => {
+				sleeps.push(ms);
+				clock += ms;
+			},
+			sleeps,
+		};
+	}
+
+	const CONNECT =
+		"error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com";
+
+	it("fails N times, then succeeds: exit 0, one line per retry, 30 s doubling", async () => {
+		const { ghExec, checkRunsCalls } = flakyGh([
+			ghError(CONNECT),
+			ghError("HTTP 502: Bad Gateway (https://api.github.com/repos/acme/repo)"),
+			ghError(CONNECT),
+		]);
+		const clock = fakeClock();
+		const stderrLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2935", "--wait", "600"],
+			ghExec,
+			stdout: () => {},
+			stderr: (line: string) => stderrLines.push(line),
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(checkRunsCalls()).toBe(4);
+		expect(clock.sleeps).toEqual([30_000, 60_000, 120_000]);
+		const retryLines = stderrLines.filter((line) => /transient/.test(line));
+		expect(retryLines).toHaveLength(3);
+		expect(retryLines[0]).toMatch(/retrying in 30s/);
+	});
+
+	it("resets the backoff after a successful read", async () => {
+		const PENDING = JSON.stringify({
+			check_runs: [
+				checkRun({
+					name: "Unit tests",
+					status: "in_progress",
+					conclusion: null,
+					id: 1,
+				}),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+			],
+		});
+		const answers: Array<Error | string> = [
+			ghError(CONNECT),
+			ghError(CONNECT),
+			PENDING,
+			ghError(CONNECT),
+			JSON.stringify(BOTH_SUCCESS),
+		];
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
+			const answer = answers.shift();
+			if (answer instanceof Error) throw answer;
+			return answer as string;
+		};
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935", "--wait", "600"],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		// 30, 60 (backoff), 30 (poll interval), then 30 again, not 120.
+		expect(clock.sleeps).toEqual([
+			30_000,
+			60_000,
+			POLL_INTERVAL_SECONDS * 1000,
+			30_000,
+		]);
+	});
+
+	it("caps the backoff at 5 minutes", async () => {
+		const { ghExec } = flakyGh(
+			Array.from({ length: 5 }, () => ghError(CONNECT)),
+		);
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935", "--wait", String(HARD_CAP_SECONDS)],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(clock.sleeps).toEqual([30_000, 60_000, 120_000, 240_000, 300_000]);
+	});
+
+	it("exits 70 only once the budget is exhausted while still unreachable, never sleeping past it", async () => {
+		const { ghExec, checkRunsCalls } = flakyGh(
+			Array.from({ length: 100 }, () => ghError(CONNECT)),
+		);
+		const clock = fakeClock();
+		const stderrLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2935", "--wait", "100"],
+			ghExec,
+			stdout: () => {},
+			stderr: (line: string) => stderrLines.push(line),
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_TRANSPORT);
+		// 30 + 60, then only the 10 s left, then one last read at the deadline.
+		expect(clock.sleeps).toEqual([30_000, 60_000, 10_000]);
+		expect(checkRunsCalls()).toBe(4);
+		expect(stderrLines.at(-1)).toMatch(/error connecting to api\.github\.com/);
+	});
+
+	it("keeps the immediate exit 70 for an auth or repo error inside --wait", async () => {
+		for (const stderr of [
+			"HTTP 401: Bad credentials (https://api.github.com/repos/acme/repo)",
+			"HTTP 404: Not Found (https://api.github.com/repos/acme/repo/commits/c0ffee/check-runs)",
+			"To get started with GitHub CLI, please run:  gh auth login",
+		]) {
+			const { ghExec, checkRunsCalls } = flakyGh([ghError(stderr)]);
+			const clock = fakeClock();
+			const exitCode = await run({
+				argv: ["2935", "--wait", "600"],
+				ghExec,
+				stdout: () => {},
+				stderr: () => {},
+				now: clock.now,
+				sleepImpl: clock.sleepImpl,
+			});
+			expect(exitCode, stderr).toBe(EXIT_TRANSPORT);
+			expect(checkRunsCalls(), stderr).toBe(1);
+			expect(clock.sleeps, stderr).toEqual([]);
+		}
+	});
+
+	it("a one-shot read (no --wait) still exits 70 on a transient error", async () => {
+		const { ghExec, checkRunsCalls } = flakyGh([ghError(CONNECT)]);
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935"],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_TRANSPORT);
+		expect(checkRunsCalls()).toBe(1);
+		expect(clock.sleeps).toEqual([]);
+	});
+});
+
+describe("isTransientGhError (#2935)", () => {
+	const withStderr = (stderr: string, extra: Record<string, unknown> = {}) =>
+		Object.assign(new Error("Command failed: gh"), { stderr, ...extra });
+
+	it.each([
+		["connect failure", withStderr("error connecting to api.github.com")],
+		["HTTP 500", withStderr("HTTP 500: Internal Server Error")],
+		["HTTP 502", withStderr("HTTP 502: Bad Gateway")],
+		["HTTP 503", withStderr("HTTP 503: Service Unavailable")],
+		["HTTP 504", withStderr("HTTP 504: Gateway Timeout")],
+		[
+			"connection reset",
+			withStderr("read tcp 1.2.3.4:5: connection reset by peer"),
+		],
+		["i/o timeout", withStderr("dial tcp: i/o timeout")],
+		["TLS handshake timeout", withStderr("net/http: TLS handshake timeout")],
+		[
+			"gh hit its own timeout",
+			withStderr("", { code: "ETIMEDOUT", signal: "SIGTERM" }),
+		],
+		[
+			"stderr as a Buffer",
+			withStderr(Buffer.from("HTTP 503: x") as unknown as string),
+		],
+	])("%s is transient", (_label, error) => {
+		expect(isTransientGhError(error)).toBe(true);
+	});
+
+	it.each([
+		["HTTP 401", withStderr("HTTP 401: Bad credentials")],
+		[
+			"HTTP 403",
+			withStderr("HTTP 403: Resource not accessible by integration"),
+		],
+		["HTTP 404", withStderr("HTTP 404: Not Found")],
+		["gh auth login", withStderr("please run:  gh auth login")],
+		[
+			"gh not on PATH",
+			Object.assign(new Error("spawnSync gh ENOENT"), { code: "ENOENT" }),
+		],
+		[
+			"malformed JSON",
+			new SyntaxError("Unexpected token < in JSON at position 0"),
+		],
+		["a non-Error value", "boom"],
+		["undefined", undefined],
+	])("%s is not transient", (_label, error) => {
+		expect(isTransientGhError(error)).toBe(false);
 	});
 });
