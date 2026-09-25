@@ -46,9 +46,9 @@ by path.
 | `RegistryExpiry.cfg` | a holder outlives 5 s | `MutualExclusion` violated (the lease) |
 | `RegistryCrashFix.cfg` | crash, identity-checked takeover | `NoOrphanLock` violated |
 | `RegistryCrashFix4.cfg` | the same, four writers | `MutualExclusion` violated |
-| `BoundedNoFault.cfg` | none | `MutualExclusion` violated (#3475) |
-| `BoundedLinkedNoFault.cfg` | none, lock linked from a written temp file | pass |
-| `BoundedLinkedCrash.cfg` | the same, one writer dies | `MutualExclusion` violated (#3476) |
+| `BoundedNoFault.cfg` | none | pass (fixed in #3475; `MutualExclusion` violated before) |
+| `BoundedLinkedNoFault.cfg` | none, lock linked from a written temp file | pass (the alternative #3475 considered) |
+| `BoundedCrash.cfg` | one writer dies | `MutualExclusion` violated (#3476) |
 | `GenerationNoFault.cfg` | none | pass |
 | `GenerationCrash.cfg` | one writer dies, two rounds each | pass |
 | `GenerationCrash4.cfg` | four writers, two die | pass |
@@ -60,9 +60,12 @@ Three results matter most:
 - **The registry lock** holds without faults, including the window where its
   file exists but has no pid yet (#3450). With a crash, two takers of the dead
   owner's lock can each remove what the path names, and both enter.
-- **The bounded lock** fails with no crash at all: an empty file parses to
-  `NaN`, which reads as a dead owner, so a contender unlinks a live lock.
-  Linking a fully written temp file into place fixes that case.
+- **The bounded lock** failed with no crash at all: an empty file parsed to
+  `NaN`, which read as a dead owner, so a contender unlinked a live lock.
+  #3475 fixed it: a lock with no parseable pid is live until its mtime is
+  5 s old, as the registry lock already read it. Linking a fully written
+  temp file into place also passes, but hard links fail on FAT/exFAT and
+  some network shares.
 - **The identity-checked takeover** (restore the displaced file if it was not
   the judged one) only narrows the crash race, and it is the quarantine lock's
   current shape. The generation lock closes it in the model. The post-create
@@ -83,10 +86,15 @@ p3: p2 is in its critical section; lock now reads "23804 1790370894347" (p2 pid)
 p3: in critical section (pid 23796); p2 still inside: true
 p3: MUTUAL EXCLUSION VIOLATED
 
-$ node formal/file-locks/repro-bounded-empty-window.mjs
+$ node formal/file-locks/repro-bounded-empty-window.mjs   # before #3475
 B: A's lock exists, content: ""
 B: acquired
 B: A entered while B held the lock: MUTUAL EXCLUSION VIOLATED
+
+$ node formal/file-locks/repro-bounded-empty-window.mjs   # after #3475
+B: A's lock exists, content: ""
+B: acquired
+B: exclusive
 ```
 
 ## Scope
