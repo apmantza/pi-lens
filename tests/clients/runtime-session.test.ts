@@ -29,9 +29,17 @@ import {
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { _resetSlowFsForTests } from "../../clients/slow-fs.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createTempFile,
+	setupTestEnvironment,
+	useTrackedTempDirs,
+} from "./test-utils.js";
 import { waitFor as waitForCondition } from "./interleaving-kit.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+
+// `handleSessionStart` queues project-snapshot body writes that can recreate a
+// fixture root after its `env.cleanup()`; the drain lets them land first.
+useTrackedTempDirs("pi-lens-session-snapshot-");
 
 /** A pid guaranteed dead on this machine, for orphan-staging-file tests
  *  (mirrors tests/clients/atomic-write-stage-gc.test.ts's helper). */
