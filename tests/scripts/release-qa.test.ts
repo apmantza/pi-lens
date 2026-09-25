@@ -33,12 +33,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import * as os from "node:os";
 import {
 	BASELINE_COLUMNS,
+	classifyGlobalConfigLocation,
 	classifyRowOutcome,
 	classifySelftestOutput,
 	classifyRunFailure,
@@ -69,7 +70,14 @@ import {
 	renderReport,
 	shipVerdict,
 	verdictExitCode,
+	GLOBAL_CONFIG_LOCATION_SERVER,
 } from "../../scripts/release-qa.mjs";
+import { effectiveConfig } from "../../clients/effective-config.js";
+import { renderToolText } from "../../tools/render-compact.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../clients/test-utils.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -1291,6 +1299,129 @@ describe("release-QA verdict state space (#2619 review round 3)", () => {
 			classifySelftestOutput(0, '  [FAIL] pi.skills "../../skills"\n').status,
 		).toBe("fail");
 		expect(classifySelftestOutput(1, good).status).toBe("fail");
+	});
+});
+
+describe("release-QA global-config-location witnesses application (#3446 F1)", () => {
+	afterEach(async () => {
+		await cleanupTestEnvironmentsDrained("pi-lens-rqa-global-config-");
+	});
+
+	/**
+	 * The row's real input: the resolver's view for `a.ts` in the fixture
+	 * project, with the global file at `globalConfig`, rendered the way
+	 * `pilens_effective_config` renders it. `PI_LENS_CONFIG_PATH` selects the
+	 * file, so no ambient `~/.pi-lens/config.json` can shadow it; it is the
+	 * global tier either way.
+	 */
+	async function answerFor(
+		globalConfig: unknown,
+		projectConfig: unknown = { lsp: { enabled: true } },
+	) {
+		const root = setupTestEnvironment("pi-lens-rqa-global-config-").tmpDir;
+		const projectDir = path.join(root, "project");
+		fs.mkdirSync(projectDir, { recursive: true });
+		fs.writeFileSync(path.join(projectDir, "a.ts"), "export const a = 1;\n");
+		// Defaults to the project fixture the runner writes (`setUpFixture`).
+		fs.writeFileSync(
+			path.join(projectDir, ".pi-lens.json"),
+			`${JSON.stringify(projectConfig)}\n`,
+		);
+		const agentConfigPath = path.join(
+			root,
+			"agent",
+			"extensions",
+			"pi-lens.json",
+		);
+		fs.mkdirSync(path.dirname(agentConfigPath), { recursive: true });
+		fs.writeFileSync(agentConfigPath, `${JSON.stringify(globalConfig)}\n`);
+		const previous = process.env.PI_LENS_CONFIG_PATH;
+		process.env.PI_LENS_CONFIG_PATH = agentConfigPath;
+		try {
+			const view = await effectiveConfig({
+				cwd: projectDir,
+				file: "a.ts",
+				// A row-private HOME beside the project and agent dir, as
+				// `rowHomeEnv` lays it out: neither path renders home-relative.
+				homeDir: path.join(root, "home"),
+			});
+			const { content } = renderToolText("Config: …", view);
+			return { text: content[0].text, agentConfigPath, view };
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_CONFIG_PATH;
+			else process.env.PI_LENS_CONFIG_PATH = previous;
+		}
+	}
+
+	it("passes when the global file's setting decides the server", async () => {
+		const { text, agentConfigPath, view } = await answerFor({
+			lsp: { disabledServers: [GLOBAL_CONFIG_LOCATION_SERVER] },
+		});
+		expect(view.provenanceCounts.global).toBeGreaterThanOrEqual(1);
+		const judged = classifyGlobalConfigLocation(text, agentConfigPath);
+		expect(judged).toMatchObject({ status: "pass" });
+		expect(judged.shows).toContain(agentConfigPath);
+	});
+
+	it("fails the no-op-key mutation the location-only row passed", async () => {
+		const { text, agentConfigPath } = await answerFor({ noSuchSetting: true });
+		// The old row's whole criterion: the file is named. It still holds here.
+		expect(text).toContain(agentConfigPath);
+		expect(classifyGlobalConfigLocation(text, agentConfigPath).status).toBe(
+			"fail",
+		);
+	});
+
+	it("fails the old fixture, whose only key the project fixture also sets", async () => {
+		const { text, agentConfigPath } = await answerFor({
+			lsp: { enabled: true },
+		});
+		expect(classifyGlobalConfigLocation(text, agentConfigPath).status).toBe(
+			"fail",
+		);
+	});
+
+	it("fails when the project tier, not the global file, disables the server", async () => {
+		const { text, agentConfigPath } = await answerFor(
+			{ noSuchSetting: true },
+			{ lsp: { disabledServers: [GLOBAL_CONFIG_LOCATION_SERVER] } },
+		);
+		expect(classifyGlobalConfigLocation(text, agentConfigPath).status).toBe(
+			"fail",
+		);
+	});
+
+	// The real resolver never produces these two views; each isolates one check.
+	it.each([
+		[
+			"no global leaf counted",
+			(view: any) => {
+				view.provenanceCounts.global = 0;
+			},
+		],
+		[
+			"a different global file decided",
+			(view: any) => {
+				for (const server of view.file.servers)
+					if (server.decidedBy) server.decidedBy.file = "/elsewhere.json";
+			},
+		],
+	])("fails a view with %s", async (_label, tamper) => {
+		const { view, agentConfigPath } = await answerFor({
+			lsp: { disabledServers: [GLOBAL_CONFIG_LOCATION_SERVER] },
+		});
+		const tampered = JSON.parse(JSON.stringify(view));
+		tamper(tampered);
+		const { content } = renderToolText("Config: …", tampered);
+		expect(
+			classifyGlobalConfigLocation(content[0].text, agentConfigPath).status,
+		).toBe("fail");
+	});
+
+	it("fails an answer with no structured view", () => {
+		expect(
+			classifyGlobalConfigLocation("Config: 1 file(s) contributing", "/x.json"),
+		).toMatchObject({ status: "fail" });
 	});
 });
 

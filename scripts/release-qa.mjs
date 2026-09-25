@@ -535,6 +535,60 @@ export function rowProbeRequest(run) {
 }
 
 /**
+ * The server the `global-config-location` row disables from the agent-dir
+ * global file (#3446 F1). The fixture project never names it, so only the
+ * global tier can supply the setting.
+ */
+export const GLOBAL_CONFIG_LOCATION_SERVER = "typescript";
+
+/**
+ * Judge the `global-config-location` row from a `pilens_effective_config`
+ * answer for `a.ts` (#3446 F1). Reading the file is not enough: the row passes
+ * only when the global tier decided at least one leaf AND the file's setting
+ * decided the server it names. The view is the fenced JSON the tool appends to
+ * its text.
+ *
+ * @param {string} text
+ * @param {string} agentConfigPath
+ * @returns {{ status: "pass" | "fail", shows: string }}
+ */
+export function classifyGlobalConfigLocation(text, agentConfigPath) {
+	const fences = [...String(text).matchAll(/```json\n([\s\S]*?)\n```/g)];
+	let view;
+	try {
+		view = fences.length > 0 ? JSON.parse(fences.at(-1)[1]) : undefined;
+	} catch {
+		view = undefined;
+	}
+	if (!view || typeof view !== "object") {
+		return {
+			status: "fail",
+			shows: "no structured effective-config view in the answer",
+		};
+	}
+	const globalLeaves = Number(view.provenanceCounts?.global ?? 0);
+	const server = (view.file?.servers ?? []).find(
+		(candidate) => candidate?.id === GLOBAL_CONFIG_LOCATION_SERVER,
+	);
+	// Decided BY the agent-dir file is the proof its value applied: that path is
+	// only ever the global tier, so the tier needs no separate check.
+	const decided = server?.decidedBy;
+	if (globalLeaves >= 1 && decided?.file === agentConfigPath) {
+		return {
+			status: "pass",
+			shows: `global tier decided ${globalLeaves} leaf/leaves; ${GLOBAL_CONFIG_LOCATION_SERVER} disabled by ${agentConfigPath} (${decided.key})`,
+		};
+	}
+	const serverState = server
+		? `${server.selected ? "selected" : "not selected"}, reason ${server.reason}, decided by ${decided ? `${decided.tier} ${decided.file ?? "(no file)"}` : "nothing"}`
+		: "absent from the file view";
+	return {
+		status: "fail",
+		shows: `global value not applied: provenanceCounts.global=${globalLeaves}; ${GLOBAL_CONFIG_LOCATION_SERVER} ${serverState}`,
+	};
+}
+
+/**
  * The `install-selftest` row's verdict, as a pure function of the packaged
  * selftest's exit code and stdout (#2619 review N6).
  *
@@ -1609,10 +1663,11 @@ function rowHomeEnv(ctx, name, extra = {}) {
 }
 
 /**
- * Open and initialize a throwaway MCP stdio session against the installed
- * candidate under a row-private environment; the caller closes it. Mirrors the
- * shared session handshake in `main()`, and the initialize failure is thrown
- * (never a PASS) so an unreachable server reads FAIL.
+ * Open and initialize an MCP stdio session against the installed candidate;
+ * the caller closes it. The one `initialize` handshake in this script: `main()`
+ * opens the shared session through it and rows open row-private ones. The
+ * initialize failure closes the session and is thrown (never a PASS), so an
+ * unreachable server reads FAIL.
  */
 async function openScopedMcpSession(serverJs, cwd, env) {
 	const session = new McpSession(serverJs, cwd, env);
@@ -1896,12 +1951,12 @@ const ROW_PROBES = {
 	"global-config-location": async (ctx) => {
 		// #2457: with `PI_CODING_AGENT_DIR` set and the agent-dir file present
 		// while the legacy default is absent, the resolution must select
-		// `pi-coding-agent-dir` and load THAT file. The witness is the
-		// provenance document naming the path, which is only there if the file
-		// was collected.
+		// `pi-coding-agent-dir` and load THAT file. #3446 F1: naming the file
+		// is not enough, so it carries a setting only the global tier supplies,
+		// and the row asserts that setting was applied.
 		const agentDir = path.join(ctx.scratchRoot, "global-config-location-agent");
 		const agentConfigPath = writeAgentDirGlobalConfig(agentDir, {
-			lsp: { enabled: true },
+			lsp: { disabledServers: [GLOBAL_CONFIG_LOCATION_SERVER] },
 		});
 		const { env } = rowHomeEnv(ctx, "global-config-location", {
 			PI_CODING_AGENT_DIR: agentDir,
@@ -1916,14 +1971,11 @@ const ROW_PROBES = {
 			const result = await session.callToolText("pilens_effective_config", {
 				file: "a.ts",
 			});
-			const named = result.text.includes(agentConfigPath);
-			const shows = named
-				? `effective config names the agent-dir global file ${agentConfigPath} as contributing`
-				: `agent-dir global file not named in the provenance: ${result.text.slice(0, 200)}`;
+			const judged = classifyGlobalConfigLocation(result.text, agentConfigPath);
 			return {
-				status: result.ok && named ? "pass" : "fail",
-				detail: shows,
-				shows,
+				status: result.ok ? judged.status : "fail",
+				detail: judged.shows,
+				shows: judged.shows,
 				witness: { ext: "txt", content: result.text },
 			};
 		} finally {
@@ -2342,18 +2394,7 @@ async function main() {
 	if (!blocked && !candidateFailure) {
 		const serverJs = path.join(installedPkgDir, "dist", "mcp", "server.js");
 		try {
-			mcp = new McpSession(serverJs, projectDir, env);
-			const init = await mcp.request(
-				"initialize",
-				{
-					protocolVersion: "2024-11-05",
-					capabilities: {},
-					clientInfo: { name: "release-qa", version: "1" },
-				},
-				60_000,
-			);
-			if (init.error) throw new Error(init.error.message);
-			mcp.notify("notifications/initialized", {});
+			mcp = await openScopedMcpSession(serverJs, projectDir, env);
 			const listed = await mcp.request("tools/list", {}, 60_000);
 			mcpTools = listed.error
 				? { ok: false, reason: listed.error.message }

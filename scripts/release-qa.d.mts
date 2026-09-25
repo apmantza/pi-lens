@@ -215,6 +215,15 @@ export function rowReportShows(
 	probeShows: string | undefined,
 ): string;
 
+/** The server the global-config-location row disables from the global file. */
+export const GLOBAL_CONFIG_LOCATION_SERVER: string;
+
+/** The global-config-location row's verdict from a `pilens_effective_config` answer. */
+export function classifyGlobalConfigLocation(
+	text: string,
+	agentConfigPath: string,
+): { status: "pass" | "fail"; shows: string };
+
 /** The install-selftest row's verdict from the packaged selftest's exit + stdout. */
 export function classifySelftestOutput(
 	code: number,

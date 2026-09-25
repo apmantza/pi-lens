@@ -34,42 +34,92 @@ const PRODUCTION_ROOTS = "clients|tools|mcp|scripts|commands|index\\.ts";
 const WALK_HELPERS =
 	"listSourceFiles|clientSourceFiles|collectTestFiles|globSync|glob|fastGlob|readdirSync|readdir";
 
-const SHAPES: Record<string, RegExp> = {
-	// A walk helper called with a production-root path literal.
-	productionWalk: new RegExp(
-		`\\b(?:${WALK_HELPERS})\\s*\\([^;{}]*?["'][^"']*(?:${PRODUCTION_ROOTS})[^"']*["']`,
-		"g",
-	),
-	// A helper that only ever walks production source.
-	namedProductionWalk:
-		/\b(?:clientSourceFiles|shippedSourceFiles|hookPathFiles|hookHelperModules)\s*\(/g,
-	// A direct production-file read (targeted ratchets such as degradation-kind).
-	productionRead: new RegExp(
-		`\\b(?:readFile|readFileSync|readJson)\\s*\\([^;{}]*?["'][^"']*(?:${PRODUCTION_ROOTS})/[^"']*["']`,
-		"g",
-	),
-	// A git population read (tracked files) rather than a filesystem walk.
-	gitPopulationRead:
-		/gitExecFileSync\s*\([^;]*?["'](?:ls-files|diff|ls-tree)["']/g,
-	// The production TypeScript strictness ratchet.
-	strictnessRatchet: /(?:strictness-report\.mjs|\brunCheck\s*\()/g,
-	// A named root list (SCAN_ROOTS, DIRS, …) paired with a walk.
-	rootListWalk:
-		/\b(?:SCAN_ROOTS|PRODUCTION_ROOTS|productionRoots|SCAN_DIRS|SOURCE_ROOTS|DIRS)\b/g,
-	// A walk over the tests tree, gated by a population floor.
-	testsPopulationFloor: /listSourceFiles\s*\(\s*TESTS_ROOT/g,
-	// An inline production-root array iterated with a walk helper.
-	inlineRootLoop: new RegExp(
-		`for\\s*\\([^)]*\\bof\\s*\\[[^\\]]*["'](?:clients|tools|mcp)["'][^\\]]*\\][\\s\\S]{0,800}?\\b(?:${WALK_HELPERS})\\s*\\(`,
-		"g",
-	),
-	// A `.d.mts`/`.mjs` sibling-pair walk.
-	dmtsSiblingPair: /endsWith\s*\(\s*["'][^"']*\.d\.mts/g,
-};
+// Modules whose exports walk a tree, and the export names that do.
+const WALK_MODULES = "fast-glob|glob|node:fs|fs|node:fs/promises|fs/promises";
+const WALK_EXPORTS = new Set([
+	"glob",
+	"globSync",
+	"sync",
+	"async",
+	"stream",
+	"readdir",
+	"readdirSync",
+]);
+const IDENT = "[A-Za-z_$][\\w$]*";
+const DEFAULT_IMPORT = new RegExp(
+	`\\bimport\\s+(?:\\*\\s+as\\s+)?(${IDENT})\\s+from\\s*["'](fast-glob|glob)["']`,
+	"g",
+);
+const NAMED_IMPORT = new RegExp(
+	`\\bimport\\s*\\{([^}]*)\\}\\s*from\\s*["'](?:${WALK_MODULES})["']`,
+	"g",
+);
+
+// The local names this file binds to a walk helper (#3448): `fg` for
+// `import fg from "fast-glob"`, `g` for `import { glob as g } from "glob"`.
+// Only an import that is code binds a name; one in a comment does not.
+function walkHelperAliases(source: string): string[] {
+	const aliases = new Set<string>();
+	for (const match of codeMatches(source, DEFAULT_IMPORT)) {
+		// A default or namespace binding is callable itself and through its
+		// walking members (`fg.sync(...)`).
+		aliases.add(
+			`${match[1].replaceAll("$", "\\$")}(?:\\.(?:${[...WALK_EXPORTS].join("|")}))?`,
+		);
+	}
+	for (const match of codeMatches(source, NAMED_IMPORT)) {
+		for (const specifier of match[1].split(",")) {
+			const [imported, local = imported] = specifier
+				.trim()
+				.replace(/^type\s+/, "")
+				.split(/\s+as\s+/);
+			if (imported && WALK_EXPORTS.has(imported) && local)
+				aliases.add(local.replaceAll("$", "\\$"));
+		}
+	}
+	return [...aliases];
+}
+
+function shapesFor(walkHelpers: string): Record<string, RegExp> {
+	return {
+		// A walk helper called with a production-root path literal.
+		productionWalk: new RegExp(
+			`\\b(?:${walkHelpers})\\s*\\([^;{}]*?["'][^"']*(?:${PRODUCTION_ROOTS})[^"']*["']`,
+			"g",
+		),
+		// A helper that only ever walks production source.
+		namedProductionWalk:
+			/\b(?:clientSourceFiles|shippedSourceFiles|hookPathFiles|hookHelperModules)\s*\(/g,
+		// A direct production-file read (targeted ratchets such as degradation-kind).
+		productionRead: new RegExp(
+			`\\b(?:readFile|readFileSync|readJson)\\s*\\([^;{}]*?["'][^"']*(?:${PRODUCTION_ROOTS})/[^"']*["']`,
+			"g",
+		),
+		// A git population read (tracked files) rather than a filesystem walk.
+		gitPopulationRead:
+			/gitExecFileSync\s*\([^;]*?["'](?:ls-files|diff|ls-tree)["']/g,
+		// The production TypeScript strictness ratchet.
+		strictnessRatchet: /(?:strictness-report\.mjs|\brunCheck\s*\()/g,
+		// A named root list (SCAN_ROOTS, DIRS, …) paired with a walk.
+		rootListWalk:
+			/\b(?:SCAN_ROOTS|PRODUCTION_ROOTS|productionRoots|SCAN_DIRS|SOURCE_ROOTS|DIRS)\b/g,
+		// A walk over the tests tree, gated by a population floor.
+		testsPopulationFloor: /listSourceFiles\s*\(\s*TESTS_ROOT/g,
+		// An inline production-root array iterated with a walk helper.
+		inlineRootLoop: new RegExp(
+			`for\\s*\\([^)]*\\bof\\s*\\[[^\\]]*["'](?:clients|tools|mcp)["'][^\\]]*\\][\\s\\S]{0,800}?\\b(?:${walkHelpers})\\s*\\(`,
+			"g",
+		),
+		// A `.d.mts`/`.mjs` sibling-pair walk.
+		dmtsSiblingPair: /endsWith\s*\(\s*["'][^"']*\.d\.mts/g,
+	};
+}
 
 const FLOOR =
 	/\b(?:assertNonEmptyScan|auditRegistry|assertSortedRegistry)\s*\(/g;
-const ANY_WALK = new RegExp(`\\b(?:${WALK_HELPERS})\\s*\\(`, "g");
+function anyWalkFor(walkHelpers: string): RegExp {
+	return new RegExp(`\\b(?:${walkHelpers})\\s*\\(`, "g");
+}
 
 // The single blanking seam the mutation test removes: replace `codeMatches`
 // with a raw `.test()` and the comment-only case below flips red.
@@ -78,6 +128,9 @@ function codeHas(source: string, pattern: RegExp): boolean {
 }
 
 export function isTreeScannerCandidate(source: string): boolean {
+	const walkHelpers = [WALK_HELPERS, ...walkHelperAliases(source)].join("|");
+	const SHAPES = shapesFor(walkHelpers);
+	const ANY_WALK = anyWalkFor(walkHelpers);
 	return (
 		codeHas(source, SHAPES.productionWalk) ||
 		codeHas(source, SHAPES.namedProductionWalk) ||
@@ -205,11 +258,11 @@ describe("targeted advisory workflow contract (#3215)", () => {
 				(file) => !Object.hasOwn(TREE_SCANNER_EXEMPTIONS, file),
 			);
 
-			// Mechanical equality in both directions: an unregistered scanner spelled
-			// with a registered call name reds, and a registry entry that is no
-			// longer a scanner reds. Named limit (#3448): the census matches call-name
-			// spellings over blanked source, so an import alias (`fg("clients/**")`
-			// for fast-glob) is not seen until the binding is resolved.
+			// Mechanical equality in both directions: an unregistered scanner reds,
+			// including one that calls a walk helper through an import alias
+			// (`fg("clients/**")`, #3448), and a registry entry that is no longer a
+			// scanner reds. Not seen: a helper renamed through a dynamic `import()`
+			// or `require`, which no test in this tree uses.
 			expect(expectedRegistry).toEqual(
 				[...TREE_SCANNING_GOVERNANCE_TESTS].sort(),
 			);
@@ -321,6 +374,39 @@ describe("tree-scanner census — prose is never code (#3426 H3432-2)", () => {
 
 	it("does NOT claim a non-scanning unit test", () => {
 		expect(isTreeScannerCandidate("expect(2 + 2).toBe(4);")).toBe(false);
+	});
+});
+
+// #3448: the census resolves each file's walk-helper import bindings before
+// matching, so a renamed helper is still a scanner.
+describe("tree-scanner census — import aliases are resolved (#3448)", () => {
+	it.each([
+		['import fg from "fast-glob";\nconst files = fg("clients/**/*.ts");'],
+		['import fg from "fast-glob";\nconst files = fg.sync("clients/**/*.ts");'],
+		['import * as fg from "fast-glob";\nconst files = fg.glob("tools/**");'],
+		['import { glob as g } from "glob";\nconst files = await g("mcp/**");'],
+		['import { sync } from "fast-glob";\nconst files = sync("clients/**");'],
+		[
+			'import { readdirSync as rd } from "node:fs";\nconst files = rd("clients");',
+		],
+	])("detects an aliased production walk: %s", (source) => {
+		expect(isTreeScannerCandidate(source)).toBe(true);
+	});
+
+	it("does NOT bind an alias from an import named only in a comment", () => {
+		expect(
+			isTreeScannerCandidate(
+				'// import fg from "fast-glob";\nconst files = fg("clients/**");',
+			),
+		).toBe(false);
+	});
+
+	it("does NOT bind an alias from an unrelated module", () => {
+		expect(
+			isTreeScannerCandidate(
+				'import fg from "./fixtures.js";\nconst files = fg("clients/**");',
+			),
+		).toBe(false);
 	});
 });
 

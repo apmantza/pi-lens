@@ -1,8 +1,16 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
-import { METADATA_FILENAME } from "../../scripts/test-history-rollup.mjs";
+import {
+	METADATA_FILENAME,
+	rowsFromArtifacts,
+} from "../../scripts/test-history-rollup.mjs";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../clients/test-utils.js";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const load = (file: string) =>
@@ -77,6 +85,47 @@ describe("#3215 durable test-history workflow contract", () => {
 			"vitest-results.json",
 			METADATA_FILENAME,
 		]);
+	});
+
+	// #3447: a re-run keeps its run id, so the attempt is what tells a failure
+	// and its passing re-run apart in the journal. Runs the step's own
+	// `node -e` program in process (no child spawn) under the env GitHub sets,
+	// then hands what it wrote to the real consumer.
+	it("records the run attempt the rollup keys re-runs by", async () => {
+		const metadata = step(
+			".github/workflows/ci.yml",
+			"test",
+			"Write test-history artifact metadata",
+		);
+		const program = /^node -e "([\s\S]*)"$/.exec(String(metadata.run).trim());
+		if (!program) throw new Error("metadata step is not a `node -e` program");
+		const temp = setupTestEnvironment("pi-lens-history-metadata-").tmpDir;
+		try {
+			const env = {
+				RUNNER_TEMP: temp,
+				HEAD_SHA: "c".repeat(40),
+				GITHUB_RUN_ID: "36132594277",
+				GITHUB_RUN_ATTEMPT: "2",
+			};
+			new Function("require", "process", program[1].replaceAll('\\"', '"'))(
+				createRequire(import.meta.url),
+				{ env },
+			);
+			fs.writeFileSync(
+				path.join(temp, "vitest-results.json"),
+				JSON.stringify({
+					testResults: [{ name: "tests/x.test.ts", status: "passed" }],
+				}),
+			);
+			const [row] = rowsFromArtifacts([temp]);
+			expect(row).toMatchObject({
+				headSha: env.HEAD_SHA,
+				runId: env.GITHUB_RUN_ID,
+				runAttempt: "2",
+			});
+		} finally {
+			await cleanupTestEnvironmentsDrained("pi-lens-history-metadata-");
+		}
 	});
 
 	// The additive `JSON report written to ...` line is CI-only: the local

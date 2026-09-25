@@ -3,8 +3,11 @@
  * Listener for the durable CI test journal (refs #3215).
  *
  * The journal is deliberately a file on the `data/test-history` branch, not a
- * service. It keeps one row per (headSha, file, lane), never one row per test
- * case, and prunes rows older than 90 days. The bounded-read F2 incident
+ * service. It keeps one row per (headSha, file, lane, run, attempt), never one
+ * row per test case, and prunes rows older than 90 days. The run and attempt
+ * are in the key (#3447) because a re-run keeps its run id: a failure and its
+ * passing re-run on one head are the flake evidence, and a head-only key kept
+ * one of the two and erased the other the next night. The bounded-read F2 incident
  * (#3326, 2026-09-23) was judged flaky by reading seven logs by hand; this
  * rollup makes that same-head evidence durable.
  */
@@ -125,6 +128,12 @@ export function rowsFromArtifacts(inputs) {
 		const headSha = metadata.headSha;
 		const runId = String(metadata.runId ?? "");
 		const lane = metadata.lane ?? "linux";
+		// Absent on artifacts written before #3447; their rows keep the key
+		// they were first stored under.
+		const runAttempt =
+			metadata.runAttempt === undefined
+				? undefined
+				: String(metadata.runAttempt);
 		const recordedAt = metadata.recordedAt ?? new Date().toISOString();
 		if (!isValidHeadSha(headSha))
 			throw new Error("headSha must be a 40-hex SHA");
@@ -137,6 +146,7 @@ export function rowsFromArtifacts(inputs) {
 			outcome: outcomeFor(result),
 			durationMs: durationFor(result),
 			lane,
+			...(runAttempt === undefined ? {} : { runAttempt }),
 			recordedAt,
 		}));
 	});
@@ -158,7 +168,7 @@ function readRows(file) {
 }
 
 function key(row) {
-	return `${row.headSha}\0${row.file}\0${row.lane}`;
+	return `${row.headSha}\0${row.file}\0${row.lane}\0${row.runId}\0${row.runAttempt ?? ""}`;
 }
 
 export function rollupTestHistory({

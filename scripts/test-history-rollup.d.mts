@@ -7,6 +7,8 @@ export function rowsFromArtifacts(inputs: string[]): Array<{
 	outcome: string;
 	durationMs: number;
 	lane: string;
+	/** Absent on artifacts written before #3447. */
+	runAttempt?: string;
 	recordedAt: string;
 }>;
 export function rollupTestHistory(options: {
