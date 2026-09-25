@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // map, #2634).
 import { scratchEnv } from "../scripts/release-qa.mjs";
 import { packedLayoutViolations } from "../scripts/lib/packed-layout.mjs";
+import { assertNonEmptyScan } from "./support/sweep-kit.js";
 import {
 	restore as restorePackBackup,
 	stripForPack,
@@ -306,6 +307,9 @@ describe("published manifest carries no devDependencies", () => {
 		)
 			.map((entry) => entry.split(path.sep).join("/"))
 			.filter((entry) => fs.statSync(path.join(pkgRoot, entry)).isFile());
+		// Dead-sweep floor (AGENTS.md shape 10): 1184 files packed on 2026-09-25;
+		// half, rounded down.
+		assertNonEmptyScan("packed files", packedPaths.length, 592);
 		expect(
 			packedLayoutViolations(packedPaths, (entry) =>
 				fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
