@@ -5,6 +5,26 @@ import path from "node:path";
 
 const waitArray = new Int32Array(new SharedArrayBuffer(4));
 
+/**
+ * How long a bounded lock with no readable pid stays live (#3475).
+ *
+ * `openSync(lockPath, "wx")` and the token write are separate steps, so a
+ * contender can read a lock whose creator is alive but has not written its
+ * token yet. Reading that empty file as a dead owner unlinked a live lock. A
+ * lock with no parseable pid is therefore live until its mtime is this old,
+ * which only a creator that died (or whose write threw) between the two steps
+ * leaves behind. The same bound as the registry lock's LOCK_STALE_MS.
+ */
+const UNREADABLE_LOCK_STALE_MS = 5_000;
+
+/** A contender's verdict on an existing bounded lock. */
+function boundedLockIsStale(lockPath: string): boolean {
+	const [pidText] = fs.readFileSync(lockPath, "utf8").split(":", 1);
+	const pid = Number.parseInt(pidText ?? "", 10);
+	if (Number.isSafeInteger(pid) && pid > 0) return !ownerPidIsLive(pid);
+	return Date.now() - fs.statSync(lockPath).mtimeMs > UNREADABLE_LOCK_STALE_MS;
+}
+
 function ownerPidIsLive(pid: number): boolean {
 	if (!Number.isSafeInteger(pid) || pid <= 0) return false;
 	try {
@@ -267,8 +287,7 @@ export function acquireBoundedPidFileLock(
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			try {
-				const [pidText] = fs.readFileSync(lockPath, "utf8").split(":", 1);
-				if (!ownerPidIsLive(Number.parseInt(pidText ?? "", 10))) {
+				if (boundedLockIsStale(lockPath)) {
 					fs.unlinkSync(lockPath);
 					continue;
 				}

@@ -200,3 +200,6 @@ tests/native-ts7-live-*/
 
 # Probe hygiene home for tests and scripts (AGENTS.md "Probe hygiene"); never tracked.
 .probe-home/
+
+# TLA+ tools jar fetched by scripts/check-tla-models.mjs (#3447)
+/.cache/
