@@ -146,8 +146,9 @@ jobs:
     name: TLA+ models
     needs: validate-merge-train-dispatch
     runs-on: ubuntu-latest
-    # refs #3447: TLC over formal/*/*.cfg. Measured locally: 30s for 13
-    # configs on 4 cores; timeout = floor of 10 min.
+    # refs #3447: TLC over formal/*/*.cfg. Measured locally: 166s for 74
+    # configs on 4 cores (the largest, lsp-server-content's two-writer
+    # configs, about 19s each); timeout = floor of 10 min.
     timeout-minutes: 10
     permissions:
       contents: read
