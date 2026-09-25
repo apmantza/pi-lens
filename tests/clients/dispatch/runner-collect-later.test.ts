@@ -1,7 +1,6 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
 	classifyObservedRunner,
 	COLLECT_LATER_THRESHOLD_MS,
@@ -25,10 +24,18 @@ import {
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../test-utils.js";
 
 describe("observed runner collect-later tier (#2116)", () => {
-	const projectRoot = mkdtempSync(join(tmpdir(), "pi-lens-runner-tier-"));
+	const projectRoot = setupTestEnvironment("pi-lens-runner-tier-").tmpDir;
 	const filePath = join(projectRoot, "fixture.ts");
+
+	afterAll(async () => {
+		await cleanupTestEnvironmentsDrained("pi-lens-runner-tier-");
+	});
 
 	beforeEach(() => {
 		resetObservedRunnerLatency();

@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LANGUAGES } from "../../clients/language-registry.js";
@@ -10,6 +9,7 @@ import {
 	type LSPServerInfo,
 } from "../../clients/lsp/server.js";
 import { LSPService } from "../../clients/lsp/index.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 let home: string;
 let toolCwd: typeof import("../../clients/tool-cwd.js");
@@ -17,8 +17,11 @@ let ledger: typeof import("../../clients/degradation-ledger.js");
 let log: typeof import("../../clients/extension-log.js");
 let pathUtils: typeof import("../../clients/path-utils.js");
 
+let previousHome: string | undefined;
+
 beforeEach(async () => {
-	home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-tool-cwd-"));
+	home = setupTestEnvironment("pi-lens-tool-cwd-").tmpDir;
+	previousHome = process.env.PI_LENS_HOME;
 	process.env.PI_LENS_HOME = home;
 	process.env.PI_LENS_TEST_MODE = "0";
 	vi.resetModules();
@@ -29,8 +32,13 @@ beforeEach(async () => {
 	ledger.resetDegradationLedger();
 });
 
+// Log writes under this home are queued; the drain lets them land before the
+// home is removed.
+useTrackedTempDirs("pi-lens-tool-cwd-");
+
 afterEach(() => {
-	fs.rmSync(home, { recursive: true, force: true });
+	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+	else process.env.PI_LENS_HOME = previousHome;
 	delete process.env.PI_LENS_TEST_MODE;
 });
 

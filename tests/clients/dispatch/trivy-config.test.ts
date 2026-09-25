@@ -10,6 +10,7 @@ import {
 } from "../../../clients/dispatch/runners/trivy-config.js";
 import type { Diagnostic } from "../../../clients/dispatch/types.js";
 import { makeRunnerCtx } from "../../support/runner-ctx.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "../test-utils.js";
 
 // ── appliesTo — Terraform is in scope, Terragrunt is deliberately excluded ────
 
@@ -204,10 +205,11 @@ describe("trivy-config run() — CloudFormation content gate", () => {
 		resolveSeverityFloor.mockReset();
 		isTrivyEnabled.mockReturnValue(true);
 		resolveSeverityFloor.mockReturnValue(["HIGH", "CRITICAL"]);
-		cfnCwd = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-trivy-config-cfn-test-"),
-		);
+		cfnCwd = setupTestEnvironment("pi-lens-trivy-config-cfn-test-").tmpDir;
 	});
+
+	// trivy is mocked, so nothing but this describe owns these roots.
+	useTrackedTempDirs("pi-lens-trivy-config-cfn-test-");
 
 	it("scans a CloudFormation yaml template", async () => {
 		safeSpawnAsync.mockResolvedValue({

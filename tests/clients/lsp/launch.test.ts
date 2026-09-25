@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { removeTempDirSync } from "../test-utils.js";
+import {
+	removeTempDirSync,
+	setupTestEnvironment,
+	useTrackedTempDirs,
+} from "../test-utils.js";
 
 // These launch tests use fake timers and don't exercise Windows Ruby drive-root
 // discovery. Stub the #1137 drive-root readers so `buildAugmentedPath`'s async
@@ -37,6 +41,8 @@ describe("lsp launch", () => {
 		vi.resetModules();
 		vi.clearAllMocks();
 	});
+	// Spawns are mocked, so nothing but this file owns the fixture roots.
+	useTrackedTempDirs("pi-lens-shim-", "pi-lens-ps1-", "pi-lens-launch-");
 
 	it.runIf(process.platform !== "win32")(
 		"spawns LSP servers in their own process group on POSIX",
@@ -169,7 +175,7 @@ describe("lsp launch", () => {
 	it.runIf(process.platform === "win32")(
 		"resolves bare commands through where before spawning",
 		async () => {
-			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-launch-"));
+			const tempDir = setupTestEnvironment("pi-lens-launch-").tmpDir;
 			const resolvedBinary = path.join(tempDir, "taplo.exe");
 			fs.writeFileSync(resolvedBinary, "");
 			vi.doMock("node:child_process", () => {
@@ -195,7 +201,7 @@ describe("lsp launch", () => {
 
 	describe("isCmdShimValid", () => {
 		it("returns true when the shim target exists", async () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shim-"));
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shimDir = path.join(dir, "bin");
 			fs.mkdirSync(shimDir, { recursive: true });
 			const shim = path.join(shimDir, "test.cmd");
@@ -209,7 +215,7 @@ describe("lsp launch", () => {
 		});
 
 		it("returns false when the shim target is missing", async () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shim-"));
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shimDir = path.join(dir, "bin");
 			fs.mkdirSync(shimDir, { recursive: true });
 			const shim = path.join(shimDir, "test.cmd");
@@ -220,7 +226,7 @@ describe("lsp launch", () => {
 		});
 
 		it("returns true for non-npm shims", async () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shim-"));
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shimDir = path.join(dir, "bin");
 			fs.mkdirSync(shimDir, { recursive: true });
 			const shim = path.join(shimDir, "test.cmd");
@@ -238,7 +244,7 @@ describe("lsp launch", () => {
 		});
 
 		it("handles .mjs targets", async () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shim-"));
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shimDir = path.join(dir, "bin");
 			fs.mkdirSync(shimDir, { recursive: true });
 			const shim = path.join(shimDir, "test.cmd");
@@ -256,7 +262,7 @@ describe("lsp launch", () => {
 	it.runIf(process.platform === "win32")(
 		"rejects immediately for an invalid .cmd shim without spawning",
 		async () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shim-"));
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shimDir = path.join(dir, "bin");
 			fs.mkdirSync(shimDir, { recursive: true });
 			const shim = path.join(shimDir, "test.cmd");
@@ -285,7 +291,7 @@ describe("lsp launch", () => {
 		"bypasses .ps1 to .cmd sibling on Windows",
 		async () => {
 			vi.useFakeTimers();
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ps1-"));
+			const dir = setupTestEnvironment("pi-lens-ps1-").tmpDir;
 			const ps1 = path.join(dir, "test.ps1");
 			const cmd = path.join(dir, "test.cmd");
 			fs.writeFileSync(ps1, `"$basedir/../pkg/bin/cli.js" "$@"`);
@@ -317,7 +323,7 @@ describe("lsp launch", () => {
 		"bypasses .ps1 to direct node execution when .cmd sibling is missing",
 		async () => {
 			vi.useFakeTimers();
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ps1-"));
+			const dir = setupTestEnvironment("pi-lens-ps1-").tmpDir;
 			const ps1 = path.join(dir, "test.ps1");
 			const jsTarget = path.join(dir, "..", "pkg", "bin", "cli.js");
 			fs.mkdirSync(path.dirname(jsTarget), { recursive: true });

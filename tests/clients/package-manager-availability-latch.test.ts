@@ -16,6 +16,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 
@@ -60,11 +61,11 @@ function advancePastCooldown(): void {
 
 /** Empty project: no lockfile, no `packageManager` field — nothing declared. */
 async function emptyProjectDir(): Promise<string> {
-	const os = await import("node:os");
-	const fs = await import("node:fs");
-	const path = await import("node:path");
-	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pm-latch-"));
+	return setupTestEnvironment("pi-lens-pm-latch-").tmpDir;
 }
+
+// Every probe is mocked, so nothing but this file owns these roots.
+useTrackedTempDirs("pi-lens-pm-latch-");
 
 beforeEach(() => {
 	vi.resetAllMocks();
