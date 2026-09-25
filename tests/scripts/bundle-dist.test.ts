@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildEsbuildExecInvocation } from "../../scripts/bundle-dist.mjs";
+import {
+	buildEsbuildExecInvocation,
+	buildSplitEsbuildExecInvocation,
+	SPLIT_ENTRIES,
+} from "../../scripts/bundle-dist.mjs";
 import { createIsolatedExecPrefix } from "../../scripts/lib/exec-isolation.mjs";
 
 // #2590: `npm exec --package esbuild@<ESBUILD_VERSION>` resolves against the
@@ -96,6 +100,44 @@ describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 			expect(packageIndex).toBeGreaterThanOrEqual(0);
 			expect(argv[packageIndex + 1]).toMatch(/^esbuild@\d+\.\d+\.\d+$/);
 			expect(argv).toContain("esbuild");
+		} finally {
+			fs.rmSync(execPrefix, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("buildSplitEsbuildExecInvocation (#3219)", () => {
+	const root = path.resolve(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+	);
+
+	it("bundles every split entry with the index bundle's isolation, externals and banner", () => {
+		const execPrefix = createIsolatedExecPrefix();
+		try {
+			const split = buildSplitEsbuildExecInvocation({
+				npmCli: "/fake/npm-cli.js",
+				execPrefix,
+			});
+			const index = buildEsbuildExecInvocation({
+				npmCli: "/fake/npm-cli.js",
+				execPrefix,
+			});
+			expect(split.options.cwd).toBe(root);
+			expect(split.argv[split.argv.indexOf("--prefix") + 1]).toBe(execPrefix);
+			for (const [out, input] of SPLIT_ENTRIES)
+				expect(split.argv).toContain(`${out}=${path.join(root, input)}`);
+			expect(split.argv).toContain("--splitting");
+			// Chunks at the dist/ ROOT, beside index.js: shared code's
+			// import.meta.url then resolves where the single-file bundle's does.
+			expect(split.argv).toContain("--chunk-names=chunk-[hash]");
+			expect(split.argv.filter((a) => a.startsWith("--external:"))).toEqual(
+				index.argv.filter((a) => a.startsWith("--external:")),
+			);
+			expect(split.argv.find((a) => a.startsWith("--banner:js="))).toContain(
+				"__pilensCreateRequire",
+			);
 		} finally {
 			fs.rmSync(execPrefix, { recursive: true, force: true });
 		}

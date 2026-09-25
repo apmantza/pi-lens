@@ -66,9 +66,10 @@ describe("published package entry points (dist mode, #182)", () => {
 		}
 	});
 
-	it("ships dist/ and never TypeScript source in the npm tarball", () => {
+	it("ships the bundled dist entries and never TypeScript source in the npm tarball", () => {
 		const files = pkg.files ?? [];
-		expect(files).toContain("dist/");
+		// #3219: the bundled entries, never the whole dist/ tree.
+		expect(files).toContain("dist/index.js");
 		for (const f of files) {
 			// A .ts entry (or a clients/commands/tools source glob) would put pi
 			// back on the jiti transpile-on-startup path.

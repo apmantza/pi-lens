@@ -204,6 +204,8 @@ const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"walks the tests/ tree, not the production source population; out of the production tree-scanner registry",
 	"tests/host-sdk-type-only.test.ts":
 		"governance sweep over a specific production module or target that import resolution already selects; not a broad production-population scanner",
+	"tests/packaging-pack-manifest.test.ts":
+		"walks the unpacked `npm pack` tarball (the published file set, #3219), not a tracked-source population; its real pack runs in the Unit tests lane",
 	"tests/real-harness/fixture-shape.test.ts":
 		"enumerates a production path for behavior/fixture assertions, not a production population scan",
 	"tests/scripts/pre-push-targeted-tests.test.ts":

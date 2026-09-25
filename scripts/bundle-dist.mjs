@@ -57,6 +57,7 @@
  */
 import { execFileSync } from "node:child_process";
 import {
+	cpSync,
 	existsSync,
 	readFileSync,
 	renameSync,
@@ -76,6 +77,46 @@ const ESBUILD_VERSION = "0.28.1";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distEntry = path.join(root, "dist", "index.js");
 const tmpOut = path.join(root, "dist", "index.bundled.mjs");
+const splitOutDir = path.join(root, "dist", ".bundle-split");
+
+/**
+ * #3219: every OTHER runtime entry the package ships, as esbuild
+ * `out=in` pairs (output path relative to dist/, input tsc emit). Before
+ * #3219 these ran from the unbundled tsc tree, so the tarball carried
+ * dist/clients/** and dist/tools/** (~8 MB, the same code as the bundle) just
+ * for them. The three bins, the MCP fresh-analysis worker that mcp/server.js
+ * spawns by path (`<server dir>/worker.js`), the two persist worker threads
+ * the extension starts with `new Worker(path)`, and the installer registry
+ * the shipped self-test probes.
+ *
+ * Chunk layout, measured on this build: these share esbuild chunks
+ * (4.13 MB, 126 files) and dist/index.js stays ONE self-contained file
+ * (4.97 MB) exactly as before. Splitting index.js into the same chunks would
+ * save another ~4 MB (4.93 MB for all seven) but would make pi load ~130
+ * files through its loader at session start, and scripts/warm-loader-cache.mjs
+ * warms only dist/index.js. Chunks are written at the dist/ ROOT
+ * (`chunk-<hash>.js`), beside index.js, so `import.meta.url` inside shared
+ * code resolves to the same directory it does in the single-file bundle.
+ */
+export const SPLIT_ENTRIES = [
+	["mcp/cli", "dist/mcp/cli.js"],
+	["mcp/server", "dist/mcp/server.js"],
+	["mcp/analyze-cli", "dist/mcp/analyze-cli.js"],
+	["mcp/worker", "dist/mcp/worker.js"],
+	[
+		"workers/project-snapshot-persist-worker",
+		"dist/clients/project-snapshot-persist-worker.js",
+	],
+	[
+		"workers/review-graph-persist-worker",
+		"dist/clients/review-graph/persist-worker.js",
+	],
+	// The installer registry (TOOLS, ensureTool, …) as a bundled module with
+	// its exports kept, for scripts/install-selftest.mjs and the release-QA
+	// install smoke (smoke-tools.mjs --installer-root), which read it from an
+	// INSTALLED package where dist/clients/ no longer exists.
+	["probes/installer", "dist/clients/installer/index.js"],
+];
 
 // Packages the bundle must NOT inline: host-provided ones resolve from pi's
 // embedded runtime; native/wasm ones are dynamic-imported by absolute path.
@@ -135,6 +176,66 @@ export function buildEsbuildExecInvocation({ npmCli: npmCliPath, execPrefix }) {
 	});
 }
 
+/**
+ * #3219: the esbuild invocation for {@link SPLIT_ENTRIES}. Same isolation,
+ * externals and require banner as the index bundle; `--splitting` writes the
+ * shared code once as `chunk-<hash>.js`. Output goes to a staging directory
+ * because esbuild refuses to overwrite its own inputs (the bins are bundled
+ * over their tsc emit).
+ *
+ * @param {{ npmCli: string, execPrefix: string }} args
+ */
+export function buildSplitEsbuildExecInvocation({
+	npmCli: npmCliPath,
+	execPrefix,
+}) {
+	return buildIsolatedExecInvocation({
+		npmCli: npmCliPath,
+		execPrefix,
+		cwd: root,
+		packageSpec: `esbuild@${ESBUILD_VERSION}`,
+		execArgv: [
+			"esbuild",
+			...SPLIT_ENTRIES.map(
+				([out, input]) => `${out}=${path.join(root, input)}`,
+			),
+			"--bundle",
+			"--platform=node",
+			"--format=esm",
+			"--splitting",
+			"--chunk-names=chunk-[hash]",
+			...EXTERNAL.map((name) => `--external:${name}`),
+			`--banner:js=${REQUIRE_BANNER}`,
+			`--outdir=${splitOutDir}`,
+		],
+	});
+}
+
+/** Run one isolated esbuild invocation; returns false (after logging) on failure. */
+function runEsbuild(build) {
+	// mkdtempSync runs inside the try so a TMPDIR failure surfaces through the
+	// existing "[bundle] esbuild failed: …" message rather than an uncaught
+	// stack trace (#2594 review F3). No retry/fallback: there is no recorded
+	// recurrence of mkdtemp failing here, so none is built for it.
+	let execPrefix;
+	try {
+		execPrefix = createIsolatedExecPrefix();
+		const { command, argv, options } = build({ npmCli, execPrefix });
+		execFileSync(command, argv, options);
+		return true;
+	} catch (err) {
+		console.error(`[bundle] esbuild failed: ${err?.message ?? err}`);
+		return false;
+	} finally {
+		// Tidiness, not correctness: npm's own package cache lives under npm's
+		// cache dir, not this directory, so nothing load-bearing is left behind
+		// here either way — but don't leak temp directories on every build.
+		if (execPrefix) {
+			rmSync(execPrefix, { recursive: true, force: true });
+		}
+	}
+}
+
 export function main() {
 	if (!existsSync(distEntry)) {
 		console.error(
@@ -168,33 +269,20 @@ export function main() {
 		process.exit(1);
 	}
 
-	// mkdtempSync runs inside the try so a TMPDIR failure surfaces through the
-	// existing "[bundle] esbuild failed: …" message rather than an uncaught
-	// stack trace (#2594 review F3). No retry/fallback: there is no recorded
-	// recurrence of mkdtemp failing here, so none is built for it.
-	let execPrefix;
-	let bundleFailed = false;
-	try {
-		execPrefix = createIsolatedExecPrefix();
-		const { command, argv, options } = buildEsbuildExecInvocation({
-			npmCli,
-			execPrefix,
-		});
-		execFileSync(command, argv, options);
-	} catch (err) {
-		console.error(`[bundle] esbuild failed: ${err?.message ?? err}`);
-		bundleFailed = true;
-	} finally {
-		// Tidiness, not correctness: npm's own package cache lives under npm's
-		// cache dir, not this directory, so nothing load-bearing is left behind
-		// here either way — but don't leak temp directories on every build.
-		if (execPrefix) {
-			rmSync(execPrefix, { recursive: true, force: true });
-		}
+	// #3219: the split entries first. They read the tsc emit of the bins and
+	// workers, so this must run before anything overwrites dist/mcp/*.js; a
+	// previous partial run is detected by dist/workers/ and not re-bundled.
+	if (!existsSync(path.join(root, "dist", "workers"))) {
+		rmSync(splitOutDir, { recursive: true, force: true });
+		if (!runEsbuild(buildSplitEsbuildExecInvocation)) process.exit(1);
+		cpSync(splitOutDir, path.join(root, "dist"), { recursive: true });
+		rmSync(splitOutDir, { recursive: true, force: true });
+		console.error(
+			`[bundle] wrote ${SPLIT_ENTRIES.length} split entries and their shared chunks`,
+		);
 	}
-	if (bundleFailed) {
-		process.exit(1);
-	}
+
+	if (!runEsbuild(buildEsbuildExecInvocation)) process.exit(1);
 
 	// Prepend the require banner, then replace the tsc-emitted entry in place.
 	writeFileSync(tmpOut, `${REQUIRE_BANNER}\n${readFileSync(tmpOut, "utf8")}`);

@@ -2556,11 +2556,14 @@ function resolvePersistWorkerPath(): string | undefined {
 	// the bundled dist/index.js a sibling ./persist-worker.js resolves beside
 	// the BUNDLE where nothing exists (#950 review F1 — the worker silently
 	// never ran in production). Try the compiled-sibling layout first (source
-	// checkout / unbundled dist/clients tree), then the dist-tree path
-	// relative to the bundle entry.
+	// checkout / tsc emit), then the bundled worker entry (#3219:
+	// dist/workers/, never the unbundled dist/clients tree, which the package
+	// no longer ships) — from dist/index.js or a dist/ chunk, then from a bin
+	// under dist/mcp/.
 	const candidates = [
 		new URL("./persist-worker.js", import.meta.url),
-		new URL("./clients/review-graph/persist-worker.js", import.meta.url),
+		new URL("./workers/review-graph-persist-worker.js", import.meta.url),
+		new URL("../workers/review-graph-persist-worker.js", import.meta.url),
 	];
 	for (const url of candidates) {
 		try {
