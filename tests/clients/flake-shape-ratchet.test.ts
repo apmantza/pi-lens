@@ -4,7 +4,7 @@
  * Three deflake PRs in two days (#2531 alone fixed three shared-slot races)
  * and nothing counted the contention surface those PRs kept fixing, so the
  * set only grew. This ratchet counts it: `tests/support/flake-shape-scan.ts`
- * runs four detectors over every `tests/**\/*.test.ts` file —
+ * runs five detectors over every `tests/**\/*.test.ts` file —
  *
  * 1. `real-process-spawn` — a real child process (`child_process` import,
  *    `execFileSync`/`spawnSync`/`execSync`, a support spawn-helper call, or a
@@ -14,6 +14,10 @@
  * 3. `raw-timer-wait` — a raw `setTimeout`/`setInterval` wait outside a
  *    `vi.useFakeTimers()` scope.
  * 4. `ungoverned-wait-for` — a `vi.waitFor` call outside a fake-timer scope.
+ * 5. `never-settling-wait` — a `new Promise` with an empty executor outside a
+ *    fake-timer scope (#2885): only a real timer, often a production helper's
+ *    budget the other detectors cannot read, ends an await on it. Minted with
+ *    37 files / 73 hits.
  *
  * `FLAKE_SHAPE_BASELINE` (`tests/support/flake-shape-baseline.json`) is
  * today's population, content-keyed as `file → count` per detector — the
@@ -65,6 +69,7 @@ import {
 	DETECTORS,
 	repoRoot,
 	scanElapsedTimeAssertion,
+	scanNeverSettlingWait,
 	scanRawTimerWait,
 	scanRealProcessSpawn,
 	scanUngovernedWaitFor,
@@ -800,6 +805,7 @@ describe("flake-shape ratchet — the compare function", () => {
 			"elapsed-time-assertion": {},
 			"raw-timer-wait": { [file]: 5 },
 			"ungoverned-wait-for": {},
+			"never-settling-wait": {},
 		};
 
 		// Drops to 2 (an improvement — but the ceiling is now stale at 5).
@@ -1377,7 +1383,7 @@ describe("flake-shape scan — ungoverned-wait-for", () => {
 });
 
 describe("flake-shape scan — mutation-proof self-test", () => {
-	it("has exactly the three declared detectors, each catching its own canonical fixture", () => {
+	it("has exactly the declared detectors, each catching its own canonical fixture", () => {
 		const canonicalFixtures: Record<DetectorName, string> = {
 			"real-process-spawn": 'execFileSync("npx", ["vitest", "run"]);\n',
 			"elapsed-time-assertion":
@@ -1385,6 +1391,8 @@ describe("flake-shape scan — mutation-proof self-test", () => {
 			"raw-timer-wait": "setTimeout(() => {}, 10);\n",
 			"ungoverned-wait-for":
 				"await vi.waitFor(() => expect(ready).toBe(true));\n",
+			"never-settling-wait":
+				"await expect(run(() => new Promise(() => {}))).rejects.toThrow();\n",
 		};
 		expect(Object.keys(canonicalFixtures).sort()).toEqual(
 			[...DETECTOR_NAMES].sort(),
@@ -1400,6 +1408,55 @@ describe("flake-shape scan — mutation-proof self-test", () => {
 				`detector "${name}" must flag its own canonical fixture`,
 			).toBeGreaterThan(0);
 		}
+	});
+});
+
+describe("flake-shape scan — never-settling-wait (#2885)", () => {
+	const hitsIn = (body: string) =>
+		scanNeverSettlingWait(
+			"fixture.test.ts",
+			`it("x", async () => {\n${body}\n});\n`,
+		);
+
+	it.each([
+		["an empty arrow executor", "await run(() => new Promise(() => {}));"],
+		[
+			"a typed executor with an unused param",
+			"await run(() => new Promise<never>((_resolve) => {}));",
+		],
+		[
+			"a comment-only executor body",
+			"await run(() => new Promise<void>(() => {\n// never resolves\n}));",
+		],
+		["a function executor", "await run(() => new Promise(function () {}));"],
+		[
+			"an undefined expression body",
+			"await run(() => new Promise(() => undefined));",
+		],
+	])("ATTACK: flags %s", (_name, body) => {
+		expect(hitsIn(body)).toHaveLength(1);
+	});
+
+	it("does not flag an executor that can settle", () => {
+		expect(
+			hitsIn("await new Promise<void>((resolve) => queueMicrotask(resolve));"),
+		).toEqual([]);
+	});
+
+	it("does not flag a never-settling promise under fake timers", () => {
+		expect(
+			hitsIn(
+				"vi.useFakeTimers();\nconst p = run(() => new Promise(() => {}));\nawait vi.advanceTimersByTimeAsync(5000);",
+			),
+		).toEqual([]);
+	});
+
+	it("does not flag the shape named in a comment or a string", () => {
+		expect(
+			hitsIn(
+				'// new Promise(() => {}) would hang\nconst s = "new Promise(() => {})";',
+			),
+		).toEqual([]);
 	});
 });
 

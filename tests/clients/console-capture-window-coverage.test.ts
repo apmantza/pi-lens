@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { matchingCloseIndex } from "../support/sweep-kit.js";
 
 const TYPES_FILE = path.resolve(
 	"node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts",
@@ -40,17 +41,11 @@ function extractInterfaceBody(source: string, interfaceName: string): string {
 			`could not find "interface ${interfaceName} {" in ${TYPES_FILE}`,
 		);
 	}
-	let i = markerStart + marker.length;
-	let depth = 1;
-	const bodyStart = i;
-	while (depth > 0 && i < source.length) {
-		if (source[i] === "{") depth++;
-		else if (source[i] === "}") depth--;
-		i++;
-	}
-	if (depth !== 0)
+	const openBrace = markerStart + marker.length - 1;
+	const close = matchingCloseIndex(source, openBrace, "{", "}");
+	if (close === -1)
 		throw new Error("unbalanced braces while scanning interface body");
-	return source.slice(bodyStart, i - 1);
+	return source.slice(openBrace + 1, close);
 }
 
 /**

@@ -29,6 +29,7 @@ import {
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { matchingCloseIndex } from "../support/sweep-kit.js";
 
 const touchFileMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../clients/lsp/index.js", () => ({
@@ -807,12 +808,8 @@ describe("#1655 review F3 — the bash-side path source, pinned by use", () => {
 			from = hit + 1;
 			const open = source.indexOf("{", source.indexOf(")", hit));
 			if (open === -1) continue;
-			let depth = 0;
-			let index = open;
-			for (; index < source.length; index++) {
-				if (source[index] === "{") depth++;
-				else if (source[index] === "}" && --depth === 0) break;
-			}
+			const close = matchingCloseIndex(source, open, "{", "}");
+			const index = close === -1 ? source.length : close;
 			blocks.push(source.slice(open, index + 1));
 		}
 		return blocks;
@@ -875,12 +872,13 @@ describe("#1655 review F3 — the bash-side path source, pinned by use", () => {
 		let match: RegExpExecArray | null = callSite.exec(block);
 		for (; match !== null; match = callSite.exec(block)) {
 			if (NOT_CALLS.has(match[1])) continue;
-			let depth = 0;
-			let index = match.index + match[0].length - 1;
-			for (; index < block.length; index++) {
-				if (block[index] === "(") depth++;
-				else if (block[index] === ")" && --depth === 0) break;
-			}
+			const close = matchingCloseIndex(
+				block,
+				match.index + match[0].length - 1,
+				"(",
+				")",
+			);
+			const index = close === -1 ? block.length : close;
 			const args = block.slice(match.index + match[0].length, index);
 			if (/\bcommand\b/.test(ownArgsOnly(args))) callees.add(match[1]);
 		}
