@@ -423,6 +423,41 @@ describe("prepare chain keeps load-bearing steps load-bearing (#1926)", () => {
 		fs.rmSync(path.dirname(logFile), { recursive: true, force: true });
 	});
 
+	it("an inheriting child writes the worker's scratch install log, never the real one (#2651)", () => {
+		// vitest-setup pins PI_LENS_INSTALL_LOG under the per-worker home, so a
+		// child spawned with plain `...process.env` -- no per-call-site `env:`
+		// pin -- cannot reach ~/.pi-lens/install.log (the #2634 class), even
+		// when the developer's shell exports its own PI_LENS_INSTALL_LOG.
+		const home = process.env.PI_LENS_HOME as string;
+		expect(process.env.PI_LENS_INSTALL_LOG).toBe(
+			path.join(home, "install.log"),
+		);
+		const realLog = path.join(os.homedir(), ".pi-lens", "install.log");
+		const realBefore = fs.existsSync(realLog)
+			? fs.readFileSync(realLog, "utf8")
+			: undefined;
+		execFileSync(
+			process.execPath,
+			[path.join(root, "scripts", "warm-loader-cache.mjs")],
+			{
+				env: { ...process.env, PI_LENS_SKIP_WARM_CACHE: "1" },
+				stdio: "ignore",
+				timeout: 60_000,
+			},
+		);
+		const written = JSON.parse(
+			fs
+				.readFileSync(process.env.PI_LENS_INSTALL_LOG as string, "utf8")
+				.trim()
+				.split("\n")
+				.at(-1) as string,
+		);
+		expect(written.status).toBe("skipped");
+		expect(
+			fs.existsSync(realLog) ? fs.readFileSync(realLog, "utf8") : undefined,
+		).toBe(realBefore);
+	});
+
 	it("ships both warm modules in the tarball", () => {
 		const files = pkg.files ?? [];
 		expect(files).toContain("scripts/warm-loader-cache.mjs");

@@ -292,6 +292,14 @@ try {
 	}
 }
 process.env.PI_LENS_HOME = tmpHygieneHome;
+// #2651: scripts/warm-loader-cache.mjs appends to PI_LENS_INSTALL_LOG before
+// it falls back to PI_LENS_HOME/install.log, so an ambient value (a
+// developer's shell pointing it at the real ~/.pi-lens/install.log) would
+// reach every child a test spawns with `...process.env` -- the #2634 class.
+// Pinned here once, for every worker and every inheriting child, instead of
+// one `env:` pin per call site. A test that exercises the fallback deletes it
+// from the child's env explicitly.
+process.env.PI_LENS_INSTALL_LOG = path.join(tmpHygieneHome, "install.log");
 
 // Hermeticity, same class as PI_LENS_CONFIG_PATH above: the global-config-
 // location PR (refs #2457) reads the host's config dir in the resolution's
