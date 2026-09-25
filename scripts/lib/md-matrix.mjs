@@ -82,6 +82,18 @@ export function sortedStrings(values) {
  * The caller supplies the measured date/platform so this remains pure and easy
  * to test with two differently ordered inventories.
  */
+/**
+ * #3407: the save column. `none` renders as the table's "not advertised" dot;
+ * a snapshot without the field (a client predating the accessor) is `?`, never
+ * a dot, because "unknown" must not read as "declares no save".
+ */
+function saveCell(textDocumentSave) {
+	if (textDocumentSave === "save" || textDocumentSave === "save+text")
+		return textDocumentSave;
+	if (textDocumentSave === "none") return "·";
+	return "?";
+}
+
 export function renderServerCapabilitiesDoc({
 	rows,
 	unavailable,
@@ -107,16 +119,16 @@ export function renderServerCapabilitiesDoc({
 		"",
 		"## Diagnostic mode + navigation/edit operations",
 		"",
-		`Legend: ✓ advertised, · not. **mode** = document diagnostics (\`pull\` = \`textDocument/diagnostic\`, else push-only); **ws-pull** = advertises \`workspace/diagnostic\` (one project-wide pull — the #387 Item 2 fast path). ${sortedOps.map(([k, a]) => `**${a}**=${k}`).join(", ")}; **cmds** = executeCommand allowlist size.`,
+		`Legend: ✓ advertised, · not. **mode** = document diagnostics (\`pull\` = \`textDocument/diagnostic\`, else push-only); **ws-pull** = advertises \`workspace/diagnostic\` (one project-wide pull — the #387 Item 2 fast path); **save** = \`textDocumentSync.save\` (#3407): \`save\` gets \`textDocument/didSave\`, \`save+text\` gets it with the document text (\`includeText\`), · declares none, ? not captured. ${sortedOps.map(([k, a]) => `**${a}**=${k}`).join(", ")}; **cmds** = executeCommand allowlist size.`,
 		"",
-		`| server | mode | ws-pull | ${sortedOps.map(([, a]) => a).join(" | ")} | cmds |`,
-		`|---|---|---|${sortedOps.map(() => "---").join("|")}|---|`,
+		`| server | mode | ws-pull | save | ${sortedOps.map(([, a]) => a).join(" | ")} | cmds |`,
+		`|---|---|---|---|${sortedOps.map(() => "---").join("|")}|---|`,
 	];
 	for (const s of sortedRows) {
 		const operationSupport = s.operationSupport ?? {};
 		const opsText = sortedOps.map(([k]) => yn(operationSupport[k])).join(" | ");
 		lines.push(
-			`| ${s.serverId} | ${s.workspaceDiagnosticsSupport?.mode ?? "?"} | ${yn(s.workspaceDiagnosticsSupport?.workspaceDiagnostics)} | ${opsText} | ${sortedStrings(s.advertisedCommands).length} |`,
+			`| ${s.serverId} | ${s.workspaceDiagnosticsSupport?.mode ?? "?"} | ${yn(s.workspaceDiagnosticsSupport?.workspaceDiagnostics)} | ${saveCell(s.textDocumentSave)} | ${opsText} | ${sortedStrings(s.advertisedCommands).length} |`,
 		);
 	}
 	lines.push(
@@ -270,7 +282,7 @@ export function replaceTable(text, headerMarker, header, sep, rows) {
  * @param {string[]} priorHeader     the prior doc's header
  * @param {string[]} newHeader       this run's header (may differ in columns)
  * @param {string} keyCol            header name of the unique row key (e.g. "server")
- * @param {string} [placeholder]     fill value for columns the prior row lacked
+ * @param {string | ((column: string) => string)} [placeholder]  fill value for columns the prior row lacked (a function picks it per column, #3407)
  * @returns {string[][]}             priorRows reshaped onto newHeader
  */
 export function reshapeRowsByName(
@@ -286,7 +298,7 @@ export function reshapeRowsByName(
 			const pi = priorIdx(h);
 			if (pi >= 0 && cells[pi] !== undefined) return cells[pi];
 			if (h === keyCol) return cells[priorIdx(keyCol)] ?? "";
-			return placeholder;
+			return typeof placeholder === "function" ? placeholder(h) : placeholder;
 		}),
 	);
 }
@@ -439,11 +451,15 @@ export function mergeServerCapabilitiesDoc(priorText, freshText) {
 	const notCapturedPriorRows = priorTbl.rows.filter(
 		(c) => !capturedKeys.has(c[priorKeyIdx]),
 	);
+	// #3407: a prior row carried into a column it predates is unmeasured there.
+	// For the save column that is `?`, not the `·` ("declares none") every
+	// boolean column uses.
 	const reshaped = reshapeRowsByName(
 		notCapturedPriorRows,
 		priorTbl.header,
 		newTbl.header,
 		"server",
+		(column) => (column === "save" ? "?" : "·"),
 	);
 	const mergedRows = [...newTbl.rows, ...reshaped].sort((a, b) =>
 		compareStableStrings(a[keyIdx], b[keyIdx]),

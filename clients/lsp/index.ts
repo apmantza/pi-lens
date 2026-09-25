@@ -115,6 +115,20 @@ import {
 } from "./wait-policy/index.js";
 export type { LSPCapabilitySnapshot } from "./wait-policy/index.js";
 
+/**
+ * #3407: the capability inventory's view of `textDocumentSync.save`. Undefined
+ * only for a client without the accessor (a test double), never for "declared
+ * no save", which is `none`.
+ */
+function textDocumentSaveOf(client: {
+	getSaveOptions?: () => { includeText: boolean } | undefined;
+}): LSPCapabilitySnapshot["textDocumentSave"] {
+	if (typeof client.getSaveOptions !== "function") return undefined;
+	const save = client.getSaveOptions();
+	if (!save) return "none";
+	return save.includeText ? "save+text" : "save";
+}
+
 const WORKSPACE_ATTRIBUTION_CLIENT_CAP = 16;
 const AUX_WAIT_DEMOTION_THRESHOLD = 5;
 const AUX_WAIT_DEMOTION_RATIO = 0.9;
@@ -7986,6 +8000,7 @@ export class LSPService {
 					),
 					advertisedCommands: client.getAdvertisedCommands(),
 					rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
+					textDocumentSave: textDocumentSaveOf(client),
 					launchVariant: client.getLaunchVariant?.(),
 				});
 			}
@@ -8006,6 +8021,7 @@ export class LSPService {
 				diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(serverId),
 				advertisedCommands: client.getAdvertisedCommands(),
 				rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
+				textDocumentSave: textDocumentSaveOf(client),
 				launchVariant: client.getLaunchVariant?.(),
 			});
 		}

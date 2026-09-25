@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	aggregateDriftRows,
 	checkCleanSignalDrift,
 	classifyCleanBehavior,
 	classifyFirstPublish,
@@ -478,5 +479,96 @@ describe("classifyFirstPublish (#3310)", () => {
 		// looked the marker up under `markdown`, found nothing, and reported the
 		// MARKED marksman as silent-not-marked on every run that reached it.
 		expect(strategyKeyForLang("markdown")).toBe("marksman");
+	});
+});
+
+describe("drift keyed by server, not fixture (#3444)", () => {
+	// Sep 25 nightly, run 36126801198, verbatim from the probe's matrix:
+	//   ast-grep           push-only   publishes-unversioned  unknown       2*
+	//   ast-grep-baseline  push-only   silent                 empty-only    3
+	// Both fixtures run `id: "ast-grep"`; the strategy table has no ast-grep
+	// silentOnClean marker, so the runtime waits the full lane for it.
+	const sep25 = [
+		{
+			lang: "ast-grep",
+			behavior: "publishes-unversioned",
+			firstPublish: "unknown",
+		},
+		{
+			lang: "ast-grep-baseline",
+			behavior: "silent",
+			firstPublish: "empty-only",
+		},
+	];
+	const noMarker = () => undefined;
+
+	it("reports no drift for the Sep 25 probe output", () => {
+		expect(findCleanSignalDrift(sep25, noMarker)).toEqual([]);
+	});
+
+	it("keys the baseline fixture to the ast-grep strategy", () => {
+		expect(strategyKeyForLang("ast-grep-baseline")).toBe("ast-grep");
+	});
+
+	it("drops a silent row whose dirty phase never carried a diagnostic", () => {
+		expect(
+			findCleanSignalDrift([sep25[1]], (lang) =>
+				lang === "ast-grep" ? undefined : true,
+			),
+		).toEqual([]);
+		expect(checkCleanSignalDrift(sep25[1], undefined).kind).toBe(
+			"not-comparable",
+		);
+	});
+
+	it("still reports a silent row the dirty phase proved alive", () => {
+		const [warning] = findCleanSignalDrift(
+			[{ ...sep25[1], firstPublish: "direct" }],
+			noMarker,
+		);
+		expect(warning).toMatchObject({
+			lang: "ast-grep",
+			kind: "silent-not-marked",
+		});
+	});
+
+	it("keeps a clean fixture's silence comparable though its dirty phase is empty", () => {
+		const [warning] = findCleanSignalDrift(
+			[
+				{
+					lang: "python",
+					behavior: "silent",
+					firstPublish: "empty-only",
+					cleanFixture: true,
+				},
+			],
+			noMarker,
+		);
+		expect(warning?.kind).toBe("silent-not-marked");
+	});
+
+	it("judges two fixtures of one server together: any clean publish disproves silence", () => {
+		const rows = [
+			{
+				lang: "ast-grep",
+				behavior: "publishes-unversioned",
+				firstPublish: "direct",
+			},
+			{ lang: "ast-grep-baseline", behavior: "silent", firstPublish: "direct" },
+		];
+		expect(findCleanSignalDrift(rows, noMarker)).toEqual([]);
+		const marked = findCleanSignalDrift(rows, () => true);
+		expect(marked).toHaveLength(1);
+		expect(marked[0]).toMatchObject({
+			lang: "ast-grep",
+			kind: "marked-not-silent",
+		});
+		expect(aggregateDriftRows(rows)).toEqual([
+			expect.objectContaining({
+				lang: "ast-grep",
+				behavior: "publishes-unversioned",
+				fixtures: ["ast-grep", "ast-grep-baseline"],
+			}),
+		]);
 	});
 });
