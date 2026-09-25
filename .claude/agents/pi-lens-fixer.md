@@ -214,6 +214,10 @@ the cost of not doing so.
    `Test assessment` whenever `tests/` is touched). Free-form bodies fail the
    `PR body (advisory)` check (`scripts/check-pr-body.mjs`); a red on that
    check is a fix-before-review item, not advisory to you.
+   Every code fact in the body is a `` `path:line` `` citation the check
+   verifies: the file must be in the committed tree (never an untracked or
+   git-ignored path, which CI cannot read), and a fenced quote after it must
+   match within ±20 lines. Prose about code with no citation is unverified.
 8. After the push: verify that every gating check actually EXECUTES on your
    exact head SHA with ONE REST read —
    `node scripts/ci-verdict.mjs <pr-number|sha>` (#2539; does the same

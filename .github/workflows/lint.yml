@@ -167,6 +167,8 @@ jobs:
     timeout-minutes: 5
     # Advisory to start: this job is not in required-checks branch protection.
     # A finding stays visible as a red check without blocking a merge.
+    # Promotion bound (#2904): it stays advisory until it has been green on ten
+    # consecutive merged PRs; only then is it a candidate for required checks.
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

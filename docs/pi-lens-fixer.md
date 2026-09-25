@@ -102,6 +102,10 @@ the cost of not doing so.
   `---` / blank / one `- ` bullet. (Four of six Luna PRs on 2026-09-23
   redded the PR-body and changelog gates on the first head; the fixes were
   all mechanical.)
+- Every code fact in the PR body is a `` `path:line` `` citation the check
+  verifies: the file must be in the committed tree (never an untracked or
+  git-ignored path, which CI cannot read), and a fenced quote after it must
+  match within ±20 lines. Prose about code with no citation is unverified.
 - The hand-back carries the commit SHA; a dirty tree is an incomplete
   round.
 - Include every red, mutation result, skipped check, and environment block.

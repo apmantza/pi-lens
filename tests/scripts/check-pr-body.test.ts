@@ -478,6 +478,32 @@ describe("test-reference shape and placement", () => {
 			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
 	});
+
+	it("rejects a local citation of a git-ignored path CI can never resolve (#2904)", () => {
+		const fixtureRepo = mkdtempSync(join(repositoryRoot, ".tmp-pr-body-git-"));
+		try {
+			mkdirSync(join(fixtureRepo, "src"));
+			mkdirSync(join(fixtureRepo, "vendor"));
+			writeFileSync(join(fixtureRepo, ".gitignore"), "vendor/\n");
+			writeFileSync(join(fixtureRepo, "src", "tracked.js"), "tracked\n");
+			writeFileSync(join(fixtureRepo, "vendor", "lib.js"), "ignored\n");
+			// `git check-ignore` reads .gitignore from the work tree; no commit is
+			// needed, so the fixture costs one spawn.
+			gitExecFileSync(["init", "-q"], { cwd: fixtureRepo });
+			const citing = (file: string) =>
+				lintLocalPrBody(
+					`${body}\nThe helper is at \`${file}:1\`.`,
+					fixtureRepo,
+					() => "",
+				).errors.filter((error) => error.includes("citation"));
+			expect(citing("vendor/lib.js")).toEqual([
+				"PR body citation vendor/lib.js:1 names a git-ignored path; CI resolves citations with `git show HEAD:<file>`, so it can never pass there.",
+			]);
+			expect(citing("src/tracked.js")).toEqual([]);
+		} finally {
+			rmSync(fixtureRepo, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("test-reference positive recognition (#3013)", () => {
