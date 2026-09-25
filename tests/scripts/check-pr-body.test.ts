@@ -487,22 +487,9 @@ describe("test-reference shape and placement", () => {
 			writeFileSync(join(fixtureRepo, ".gitignore"), "vendor/\n");
 			writeFileSync(join(fixtureRepo, "src", "tracked.js"), "tracked\n");
 			writeFileSync(join(fixtureRepo, "vendor", "lib.js"), "ignored\n");
+			// `git check-ignore` reads .gitignore from the work tree; no commit is
+			// needed, so the fixture costs one spawn.
 			gitExecFileSync(["init", "-q"], { cwd: fixtureRepo });
-			gitExecFileSync(["add", ".gitignore", "src/tracked.js"], {
-				cwd: fixtureRepo,
-			});
-			gitExecFileSync(
-				[
-					"-c",
-					"user.email=pi-lens-test@example.com",
-					"-c",
-					"user.name=pi-lens-test",
-					"commit",
-					"-qm",
-					"fixture",
-				],
-				{ cwd: fixtureRepo },
-			);
 			const citing = (file: string) =>
 				lintLocalPrBody(
 					`${body}\nThe helper is at \`${file}:1\`.`,
