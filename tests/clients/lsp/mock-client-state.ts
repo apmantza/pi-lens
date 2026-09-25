@@ -76,6 +76,7 @@ export function createMockState(
 		publicationStoreCountsByPath: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
+		sentReadStamps: new Map(),
 		diagnosticDocVersions: new Map(),
 		documentContentHashes: new Map(),
 		incrementalTextRetainedEntries: 0,

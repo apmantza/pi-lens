@@ -28,9 +28,11 @@ Issues: #3480 (the debounce fingerprint), #3481 (the stale cascade touch).
   - after the write lands, `markTouched` (~5173) runs, and then
     `recordFullyCoveredSync(startedAt)` (~5199). A touch that skips the
     notify records nothing: the record call is inside `if (!notifySkipped)`.
-- **The notify queue** (`client.ts` `enqueueDocumentNotify` ~4199):
+- **The notify queue** (`client.ts` `enqueueDocumentNotify`):
   - the last enqueued entry replaces the unstarted one, and its waiters are
-    carried to the replacement;
+    carried to the replacement (before #3481; since #3481 a stamped entry
+    replaces a stamped one only when it was read no earlier, and the runner
+    drops an entry read before what it last sent for the path);
   - the first entry starts on a microtask;
   - the `for(;;)` loop takes the next entry in the same tick as the previous
     one settles;
@@ -60,10 +62,10 @@ equal.
 |---|---|---|---|---|
 | `SingleWrite` | pass | pass | 799 | 1.2 |
 | `CascadeResized` | pass | pass | 290,959 | 5.1 |
-| `CascadeEqualLength` | violated ServerMatchesDisk | violated | 40,995 | 2.2 |
-| `CascadeSendOrder` | violated SendsMonotone | violated | 2,597 | 1.4 |
+| `CascadeEqualLength` | pass (after #3481) | pass | 280,401 | 13.1 |
+| `CascadeSendOrder` | pass (after #3481) | pass | 288,187 | 10.0 |
 | `TwoWritesResized` | pass | pass | 1,712,166 | 18.1 |
-| `TwoWritesEqualLength` | violated ServerMatchesDisk | violated | 201,988 | 4.1 |
+| `TwoWritesEqualLength` | pass (after #3481) | pass | 1,596,714 | 29.2 |
 | `DebounceLossyFp` | pass (after #3480) | pass | 1,256 | 1.2 |
 | `DebounceFullFp` | pass | pass | 1,256 | 1.3 |
 | `FixCascadeEqualLength` | pass | pass | 305,808 | 5.4 |
@@ -76,7 +78,9 @@ equal.
 
 ## Traces
 
-**`CascadeEqualLength`: a stale cascade touch lands last.**
+**`CascadeEqualLength`: a stale cascade touch lands last** (before #3481,
+with `FixCoalesce = FixDrop = FALSE`: violated in 40,995 states, and
+`CascadeSendOrder` violated `SendsMonotone` in 2,597).
 
 1. The cascade reads N (content A).
 2. The agent writes B, which has the same length as A.
@@ -86,21 +90,23 @@ equal.
 5. Both touches land. The record ends as `(size(A), fp(A), syncedAt > mtime(B))`.
 
 The size is unchanged and the mtime is older than `syncedAt`, so no sweep
-ever flags the file. The server keeps A and the disk has B.
+ever flagged the file. The server kept A and the disk had B.
 
 `CascadeResized` is the same interleaving with an edit that changes the
 length. The size half of the key flags it, and the sweep resyncs. That
 config passes only because of the size half:
 `MutCascadeResizedMtimeKey` (mtime-only key) turns it red.
 
-**`TwoWritesEqualLength`** has the same shape with two same-turn pipelines.
+**`TwoWritesEqualLength`** (before #3481: violated in 201,988 states) had the
+same shape with two same-turn pipelines.
 
 1. Pipeline 1 reads B.
 2. The agent writes C.
 3. Pipeline 2 reads C and sends it.
 4. Pipeline 1's entry (B) is sent after C.
 
-The last send wins, not the most recent read.
+The last send won, not the most recent read. #3481 shipped the fix below,
+and the three configs now set `FixCoalesce = FixDrop = TRUE` and pass.
 
 **`DebounceLossyFp`** (before #3480, `LossyFp = TRUE`: violated in 60
 states) happened with no concurrency at all.
@@ -157,11 +163,13 @@ a reverse-dependency index fixture and a way to hold its
 `getCapabilitySnapshots` await, and that was not worth building for this
 check.
 
-## Candidate fix: last-READ-wins queue
+## The fix: last-READ-wins queue (#3481)
 
-Each touch carries a read stamp: when the caller read the bytes. That could
-be a per-path monotonic counter, or the mtime the caller observed, passed
-down through `touchFile` options. The fix has two parts:
+Each touch carries a read stamp: when the caller read the bytes. The code
+uses `performance.now()` taken just before the read, passed down as the
+`touchFile` option `readStamp`; the post-write pipeline and the cascade set
+it. An unstamped touch coalesces as before (last enqueued wins) and never
+moves the last-sent stamp. The fix has two parts:
 
 1. **Coalesce by read order.** An unstarted entry is replaced only by one
    that was read no earlier (`FixCoalesce`).
@@ -176,6 +184,13 @@ part breaks the fix:
   flight is still sent.
 - `MutFixNoCoalesce` is red: with an earlier notify in flight, stale A
   replaces pending B, and B is never sent.
+
+One detail the model does not carry: a touch whose content was kept out or
+dropped resolves `false` from `notify.open`, and `touchFile` then records
+neither the debounce entry nor the drift record for it. The model's `Finish`
+still stamps the record with the stale content; the code keeps the record on
+the content the server holds, so a quick revert to the stale bytes is sent
+rather than skipped as a repeat.
 
 The lossy debounce has a separate fix, shipped in #3480: a full-content
 fingerprint for `shouldSkipNotify`, and for the drift record's confirmation

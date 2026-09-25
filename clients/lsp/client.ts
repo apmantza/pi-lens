@@ -342,8 +342,14 @@ export interface LSPClientInfo {
 			 * reads, cascade neighbours, desync repairs and bulk sweeps do not.
 			 */
 			saved?: boolean,
-		): Promise<void>;
-		change(filePath: string, content: string): Promise<void>;
+			/**
+			 * #3481: `performance.now()` taken before the caller read `content`.
+			 * The per-path queue then sends the latest READ, not the latest
+			 * enqueued, and resolves `false` when a later read superseded this one.
+			 */
+			readStamp?: number,
+		): Promise<boolean | void>;
+		change(filePath: string, content: string): Promise<boolean | void>;
 		/**
 		 * #1668: queue a `workspace/didChangeWatchedFiles` entry for a disk
 		 * change this client did not learn about through didOpen/didChange —
@@ -601,10 +607,18 @@ export interface LSPClientInfo {
 interface PendingDocumentNotify {
 	run: (coalescedCount: number, saved: boolean) => Promise<void>;
 	waiters: Array<{
-		resolve: () => void;
+		/** `false`: a later read superseded this caller's content, so it was not sent (#3481). */
+		resolve: (sent: boolean) => void;
 		reject: (error: unknown) => void;
+		/** #3481: kept out by a pending entry that was read later. */
+		stale?: boolean;
 	}>;
 	coalescedCount: number;
+	/**
+	 * #3481: when the caller read the content (`performance.now()` taken
+	 * before the read). Undefined for a caller that does not say.
+	 */
+	readStamp?: number | undefined;
 	/**
 	 * #3405: sticky across coalescing. A superseded entry's save intent carries
 	 * onto its replacement — otherwise the post-write sync's save is silently
@@ -972,6 +986,13 @@ export interface LSPClientState {
 	readonly documentVersions: Map<string, number>;
 	/** #2113/#2357: latest-pending same-path document sends; different paths stay parallel. */
 	readonly notifyChangeQueues: Map<string, DocumentNotifyQueue>;
+	/**
+	 * #3481: read stamp of the entry the notify queue last ran for a path. It
+	 * outlives the queue object, so a stale entry that arrives after a newer
+	 * one was sent and its queue retired is still dropped. An unstamped send
+	 * leaves it unchanged; it is cleared with the document on close.
+	 */
+	readonly sentReadStamps: Map<string, number>;
 	/** The LSP document version (`publishDiagnostics.version`) the cached
 	 *  diagnostics for a path were computed against. Only set when the server
 	 *  reports a version; absent entries mean "version unknown" and are treated
@@ -4266,24 +4287,32 @@ function enqueueDocumentNotify(
 	normalizedPath: string,
 	run: (coalescedCount: number, saved: boolean) => Promise<void>,
 	saved = false,
-): Promise<void> {
+	readStamp?: number,
+): Promise<boolean> {
 	let queue = state.notifyChangeQueues.get(normalizedPath);
 	if (!queue) {
 		queue = { running: false };
 		state.notifyChangeQueues.set(normalizedPath, queue);
 	}
-	return new Promise<void>((resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		const previous = queue?.pending;
 		// Keep superseded callers attached to the replacement's completion. The
 		// notification is dropped, but callers such as the auxiliary backlog
 		// ledger must not observe completion before the newest content is sent.
 		const waiters = previous?.waiters ?? [];
-		waiters.push({ resolve, reject });
+		// #3481: last-READ-wins. An entry read before the pending one does not
+		// replace it; its caller waits on the newer send and learns it was stale.
+		const stale =
+			readStamp !== undefined &&
+			previous?.readStamp !== undefined &&
+			readStamp < previous.readStamp;
+		waiters.push({ resolve, reject, stale });
 		queue!.pending = {
-			run,
+			run: stale ? previous!.run : run,
 			waiters,
 			coalescedCount: (previous?.coalescedCount ?? 0) + (previous ? 1 : 0),
 			saved: saved || previous?.saved === true,
+			readStamp: stale ? previous!.readStamp : readStamp,
 		};
 		if (queue!.running) return;
 		queue!.running = true;
@@ -4295,9 +4324,26 @@ function enqueueDocumentNotify(
 					const next = queue!.pending;
 					if (!next) break;
 					queue!.pending = undefined;
+					// #3481: an entry read before the content this path last sent
+					// would replace newer bytes with older ones. Drop it; its
+					// callers resolve without claiming a send.
+					const lastSent = state.sentReadStamps.get(normalizedPath);
+					if (
+						next.readStamp !== undefined &&
+						lastSent !== undefined &&
+						next.readStamp < lastSent
+					) {
+						for (const waiter of next.waiters) waiter.resolve(false);
+						continue;
+					}
+					// An unstamped send (a drift resync, a warm-up) cannot say how old
+					// its bytes are, so it leaves the last stamp in place: a stale read
+					// arriving after a drift heal is still refused.
+					if (next.readStamp !== undefined)
+						state.sentReadStamps.set(normalizedPath, next.readStamp);
 					try {
 						await next.run(next.coalescedCount, next.saved);
-						for (const waiter of next.waiters) waiter.resolve();
+						for (const waiter of next.waiters) waiter.resolve(!waiter.stale);
 					} catch (error) {
 						for (const waiter of next.waiters) waiter.reject(error);
 					}
@@ -4318,7 +4364,7 @@ function enqueueDocumentNotify(
 /** Drop unwritten document notifications when a client is torn down. */
 function cancelDocumentNotifyQueues(state: LSPClientState): void {
 	for (const queue of state.notifyChangeQueues.values()) {
-		for (const waiter of queue.pending?.waiters ?? []) waiter.resolve();
+		for (const waiter of queue.pending?.waiters ?? []) waiter.resolve(true);
 		queue.pending = undefined;
 	}
 	state.notifyChangeQueues.clear();
@@ -4332,8 +4378,9 @@ export function handleNotifyOpen(
 	preserveDiagnostics = false,
 	silent = false,
 	saved = false,
-): Promise<void> {
-	if (!isClientAlive(state)) return Promise.resolve();
+	readStamp?: number,
+): Promise<boolean> {
+	if (!isClientAlive(state)) return Promise.resolve(true);
 	const normalizedPath = normalizeMapKey(filePath);
 	return enqueueDocumentNotify(
 		state,
@@ -4350,6 +4397,7 @@ export function handleNotifyOpen(
 				queuedSaved,
 			),
 		saved,
+		readStamp,
 	);
 }
 
@@ -4415,8 +4463,8 @@ export function handleNotifyChange(
 	state: LSPClientState,
 	filePath: string,
 	content: string,
-): Promise<void> {
-	if (!isClientAlive(state)) return Promise.resolve();
+): Promise<boolean> {
+	if (!isClientAlive(state)) return Promise.resolve(true);
 	const normalizedPath = normalizeMapKey(filePath);
 	// #3405: no `saved` argument — `LSPService.updateFile` is this path's only
 	// entry point and no caller declares a save through it, so a change never
@@ -4453,6 +4501,7 @@ export async function closeDocument(
 	state.openDocumentUris?.delete(normalizedPath);
 	state.documentVersions.delete(normalizedPath);
 	state.publicationStoreCountsByPath?.delete(normalizedPath);
+	state.sentReadStamps.delete(normalizedPath);
 	state.documentOpenedAt.delete(normalizedPath);
 	state.diagnosticPublicationCounts.delete(normalizedPath);
 	// #1412 L1: projectIdentityProbedFiles is a claim-once memo scoped to the
@@ -5582,6 +5631,7 @@ export async function createLSPClient(options: {
 		publicationStoreCountsByPath: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
+		sentReadStamps: new Map(),
 		diagnosticDocVersions: new Map(),
 		documentContentHashes: new Map(),
 		incrementalTextRetainedEntries: 0,
@@ -5836,6 +5886,7 @@ export async function createLSPClient(options: {
 				preserveDiagnostics,
 				silent,
 				saved,
+				readStamp,
 			) {
 				return handleNotifyOpen(
 					state,
@@ -5845,6 +5896,7 @@ export async function createLSPClient(options: {
 					preserveDiagnostics,
 					silent,
 					saved,
+					readStamp,
 				);
 			},
 			async change(filePath, content) {

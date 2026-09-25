@@ -393,7 +393,7 @@ type RenameNotifyResult =
 	| { ok: false; error: string; disposition: RenameNotifyDisposition };
 
 async function runRenameNotify(
-	send: () => Promise<void>,
+	send: () => Promise<unknown>,
 	timeoutMs: number,
 ): Promise<RenameNotifyResult> {
 	try {
@@ -750,6 +750,15 @@ export interface LSPTouchFileOptions {
 	 * those callers is answering "is this file clean right now".
 	 */
 	saved?: boolean;
+	/**
+	 * #3481: `performance.now()` taken just before the caller read `content`.
+	 * The notify queue sends the latest READ of a path rather than the latest
+	 * enqueued, so a caller that read, awaited and then touched (the cascade)
+	 * cannot land older bytes after a newer write's touch. A touch whose read
+	 * was superseded sends nothing and claims nothing. Unset keeps
+	 * last-enqueued-wins for that touch.
+	 */
+	readStamp?: number | undefined;
 	/**
 	 * #645: per-sweep gate (see `createSweepIndexGate`/`SweepIndexGate`) that
 	 * lets a `workspaceIndexing`-strategy server (e.g. marksman) pay its full
@@ -4978,6 +4987,9 @@ export class LSPService {
 			// one outstanding write for that server. They carry no evidence about this
 			// content, so they join the coverage gap below.
 			const notifyDeferredServerIds: string[] = [];
+			// #3481: a server's queue sent a later read of this file instead of this
+			// touch's content, so this touch must not stamp the drift record.
+			let supersededRead = false;
 			if (!notifySkipped) {
 				const budget = notifyWriteBudgetMs();
 				// #1459: how long a queued auxiliary may wait for its resync slot. Bounded
@@ -5082,7 +5094,7 @@ export class LSPService {
 							}
 							slot = claim;
 						}
-						let wrote: true | undefined;
+						let wrote: boolean | undefined;
 						let rejected = false;
 						try {
 							const writeStartedAt = Date.now();
@@ -5097,8 +5109,9 @@ export class LSPService {
 									undefined,
 									silent,
 									options.saved === true,
+									options.readStamp,
 								)
-								.then(() => true as const);
+								.then((sent) => sent !== false);
 							// #1714: the document is now in this auxiliary's input queue,
 							// whether or not the write settles inside our budget. Counted here
 							// so the next file sees the real backlog.
@@ -5166,6 +5179,10 @@ export class LSPService {
 							// touch that looks fully delivered (which the silent-clean gates
 							// would then read as a confirmed clean).
 							this.markTouched(filePath, content, clientScope, entry.info.id);
+						} else if (wrote === false) {
+							// #3481: the server holds a later read, not `content`, so no
+							// debounce entry either: a revert to `content` must be sent.
+							supersededRead = true;
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
 							if (!rejected) {
@@ -5196,7 +5213,8 @@ export class LSPService {
 					content,
 					spawned,
 					notifyWriteTimedOutServerIds.length === 0 &&
-						notifyDeferredServerIds.length === 0,
+						notifyDeferredServerIds.length === 0 &&
+						!supersededRead,
 					startedAt,
 				);
 				if (notifyWriteTimedOutServerIds.length > 0) {

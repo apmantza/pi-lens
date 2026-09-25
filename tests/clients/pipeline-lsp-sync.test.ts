@@ -83,6 +83,19 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 	// server whole-file didOpen frames for documents this pipeline has always
 	// refused to sync. The save seam's policy (drop the redundant text, still
 	// send the save) is deliberately NOT this one.
+	// #3481: the read stamp reaches touchFile, where the notify queue orders
+	// the sync against other reads of the file.
+	it("passes the caller's read stamp to the touch", async () => {
+		const touch = vi.fn(async () => ({ diags: [] }));
+		mockService(touch);
+		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbg, 42);
+		expect(touch).toHaveBeenCalledWith(
+			"/proj/a.ts",
+			"content",
+			expect.objectContaining({ readStamp: 42 }),
+		);
+	});
+
 	it("does not sync a document past the shared content bound", async () => {
 		const touch = vi.fn(async () => ({ diags: [] }));
 		mockService(touch);

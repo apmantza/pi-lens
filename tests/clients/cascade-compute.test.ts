@@ -483,6 +483,8 @@ describe("computeCascadeForFile", () => {
 					source: "cascade",
 					clientScope: "primary",
 					collectDiagnostics: true,
+					// #3481: the neighbour read's stamp rides the touch.
+					readStamp: expect.any(Number),
 				}),
 			);
 			expect(result?.result?.neighbors[0]?.lspTouched).toBe(true);
@@ -821,6 +823,8 @@ describe("computeCascadeForFile", () => {
 					diagnostics: "none",
 					collectDiagnostics: false,
 					clientScope: "primary",
+					// #3481: the neighbour read's stamp rides the touch.
+					readStamp: expect.any(Number),
 				}),
 			);
 			// Recorded outstanding for the quiet-window reconcile — not silently

@@ -1969,6 +1969,9 @@ export async function computeCascadeForFile(
 					}
 
 					// A6: async read to avoid blocking event loop on network-mounted drives
+					// #3481: stamped before the read; the touches below run after awaits,
+					// and the stamp keeps them from landing over a newer write's touch.
+					const readStamp = performance.now();
 					const content = await nodeFs.promises.readFile(neighborPath, "utf8");
 
 					// #458/#1444: tier-aware cascade-lane wait. A Tier-3 silent server
@@ -2012,6 +2015,7 @@ export async function computeCascadeForFile(
 										silent: true,
 										source: "cascade",
 										clientScope: "primary",
+										readStamp,
 									});
 									if (tier === "diagnostics-unsupported") {
 										logCascade({
@@ -2103,6 +2107,7 @@ export async function computeCascadeForFile(
 						silent: true,
 						source: "cascade",
 						clientScope: "primary",
+						readStamp,
 					});
 					if (!rawDiags) {
 						// #3483: the idle reset can destroy the service this compute
