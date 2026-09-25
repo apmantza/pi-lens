@@ -1,0 +1,49 @@
+diff --git a/clients/bounded-telemetry.ts b/clients/bounded-telemetry.ts
+@@ -53,6 +53,8 @@ import { type LatencyEntry, logLatency } from "./latency-logger.js";
+  * must not also be written by a raw `logLatency` call somewhere else.
+  */
+ export const BOUNDED_TELEMETRY_PHASES = [
++	/** #2890: a duplicate pi RPC session_start was admitted but suppressed. */
++	"session_start_duplicate_suppressed",
+ 	/**
+ 	 * #2467: a demand for the analyzer bootstrap clients was not served and
+ 	 * the caller proceeded without them. Rising-edge per demand reason, with
+diff --git a/clients/degradation-ledger.ts b/clients/degradation-ledger.ts
+@@ -659,6 +659,8 @@ export type DegradationKind =
+ 	 * the per-kind entry bound is reached.
+ 	 */
+ 	| "runner-parsed-nothing"
++	/** A duplicate RPC session start was suppressed after its first full pass. */
++	| "session-start-duplicate"
+ 	/** Incremental word-index churn required an arena re-compaction. */
+ 	| "shared-checkout-probe"
+ 	/**
+diff --git a/index.ts b/index.ts
+@@ -1909,6 +1916,32 @@ function activateExtension(hostPi: ExtensionAPI) {
+ 		wrapSessionEventHandler(
+ 			"session_start",
+ 			async (event, ctx) => {
++				if (
++					sessionStartIdentity !== undefined &&
++					lastSessionStartIdentity === sessionStartIdentity &&
++					liveToolPlan?.changed !== true
++				) {
++					emitBounded(
++						"session_start_duplicate_suppressed",
++						sessionStartIdentity,
++						{
++							durationMs: 0,
++							metadata: { reason: "duplicate start suppressed" },
++						},
++						{
++							ledgerKind: "session-start-duplicate",
++							risingEdgePer: "identity",
++							reason: "duplicate start suppressed",
++						},
++					);
++					return;
++				}
++				lastSessionStartIdentity = sessionStartIdentity;
+ 				const sessionStartMonotonicAt = performance.now();
+ 				warmDispatchAtSessionStart();
+ 				void warmLspService().catch((err) =>
