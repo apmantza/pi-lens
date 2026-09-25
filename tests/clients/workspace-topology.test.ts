@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FRESHNESS_CADENCE_MS } from "../../clients/freshness-cadence.js";
 import * as latencyLogger from "../../clients/latency-logger.js";
 
 // `vi.spyOn(fs, "readdirSync")` cannot redefine a node: built-in's ESM
@@ -9,7 +10,11 @@ import * as latencyLogger from "../../clients/latency-logger.js";
 // counts to verify the "one readdir pass per directory visit" invariant.
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, readdirSync: vi.fn(actual.readdirSync) };
+	return {
+		...actual,
+		readdirSync: vi.fn(actual.readdirSync),
+		statSync: vi.fn(actual.statSync),
+	};
 });
 import {
 	findGoverningTsconfigDir,
@@ -178,6 +183,129 @@ describe("findNearestDirWithMarker / findGoverningTsconfigDir", () => {
 		// homeDir === root: the marker lives exactly at the ceiling directory,
 		// so the walk must refuse it (mirrors the #253 isAtOrAboveHomeDir rule).
 		expect(findGoverningTsconfigDir(project, root)).toBeUndefined();
+	});
+});
+
+describe("#2560: cached walk misses have bounded, cadence-based freshness", () => {
+	it("checks only startDir on warm misses instead of statting the full chain", () => {
+		const startDir = path.join(root, "a", "b", "c", "project");
+		fs.mkdirSync(startDir, { recursive: true });
+		const homeDir = path.dirname(root);
+
+		expect(
+			findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+		).toBeUndefined();
+		vi.mocked(fs.statSync).mockClear();
+
+		const warmLookups = 25;
+		for (let i = 0; i < warmLookups; i++) {
+			expect(
+				findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+			).toBeUndefined();
+		}
+
+		expect(fs.statSync).toHaveBeenCalledTimes(warmLookups);
+	});
+
+	it("immediately re-walks when startDir itself changes after a miss", () => {
+		const startDir = path.join(root, "project");
+		fs.mkdirSync(startDir, { recursive: true });
+		const homeDir = path.dirname(root);
+		expect(
+			findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+		).toBeUndefined();
+
+		// A miss is still invalidated immediately by the start directory's own
+		// mtime; only changes above it wait for the cadence.
+		const oldMtimeMs = fs.statSync(startDir).mtimeMs;
+		fs.writeFileSync(path.join(startDir, "tsconfig.json"), "{}");
+		const changedMtimeMs = Math.max(
+			fs.statSync(startDir).mtimeMs,
+			oldMtimeMs + 10_000,
+		);
+		fs.utimesSync(startDir, changedMtimeMs / 1000, changedMtimeMs / 1000);
+		expect(findNearestDirWithMarker(startDir, "tsconfigPath", homeDir)).toBe(
+			startDir,
+		);
+	});
+
+	it("notices a marker two levels above startDir only after the cadence", () => {
+		const repoRoot = path.join(root, "repo");
+		const startDir = path.join(repoRoot, "worktrees", "wt1");
+		fs.mkdirSync(startDir, { recursive: true });
+
+		vi.useFakeTimers();
+		try {
+			const startedAt = Date.now();
+			const homeDir = path.dirname(root);
+			expect(
+				findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+			).toBeUndefined();
+
+			// #2560 recurrence: a configless worktree must not inherit unrelated
+			// ancestor churn as invalidation, but a new repo-root marker must not
+			// remain hidden permanently either.
+			fs.writeFileSync(path.join(repoRoot, "tsconfig.json"), "{}");
+			vi.setSystemTime(startedAt + FRESHNESS_CADENCE_MS - 1);
+			expect(
+				findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+				"picked up the ancestor marker inside the freshness window",
+			).toBeUndefined();
+
+			vi.setSystemTime(startedAt + FRESHNESS_CADENCE_MS + 1);
+			expect(findNearestDirWithMarker(startDir, "tsconfigPath", homeDir)).toBe(
+				repoRoot,
+			);
+		} finally {
+			resetWorkspaceTopology();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps hits path-invalidated without forcing a cadence re-walk", () => {
+		const previousIdle = process.env.PI_LENS_WORKSPACE_TOPOLOGY_IDLE_EVICT_MS;
+		process.env.PI_LENS_WORKSPACE_TOPOLOGY_IDLE_EVICT_MS = "10";
+		const repoRoot = path.join(root, "repo");
+		const startDir = path.join(repoRoot, "pkg");
+		fs.mkdirSync(startDir, { recursive: true });
+		fs.writeFileSync(path.join(repoRoot, "tsconfig.json"), "{}");
+
+		vi.useFakeTimers();
+		try {
+			const homeDir = path.dirname(root);
+			expect(findNearestDirWithMarker(startDir, "tsconfigPath", homeDir)).toBe(
+				repoRoot,
+			);
+			vi.mocked(fs.readdirSync).mockClear();
+
+			// Keep the walk memo warm while letting its per-directory marker entries
+			// idle out. A cadence-only hit expiry would then have to re-list the
+			// directories; the hit path must remain governed by its recorded mtimes.
+			for (let elapsed = 0; elapsed <= FRESHNESS_CADENCE_MS; elapsed += 5) {
+				vi.advanceTimersByTime(5);
+				expect(
+					findNearestDirWithMarker(startDir, "tsconfigPath", homeDir),
+				).toBe(repoRoot);
+			}
+			expect(fs.readdirSync).not.toHaveBeenCalled();
+
+			const oldMtimeMs = fs.statSync(startDir).mtimeMs;
+			fs.writeFileSync(path.join(startDir, "tsconfig.json"), "{}");
+			const changedMtimeMs = Math.max(
+				fs.statSync(startDir).mtimeMs,
+				oldMtimeMs + 10_000,
+			);
+			fs.utimesSync(startDir, changedMtimeMs / 1000, changedMtimeMs / 1000);
+			expect(findNearestDirWithMarker(startDir, "tsconfigPath", homeDir)).toBe(
+				startDir,
+			);
+		} finally {
+			resetWorkspaceTopology();
+			vi.useRealTimers();
+			if (previousIdle === undefined)
+				delete process.env.PI_LENS_WORKSPACE_TOPOLOGY_IDLE_EVICT_MS;
+			else process.env.PI_LENS_WORKSPACE_TOPOLOGY_IDLE_EVICT_MS = previousIdle;
+		}
 	});
 });
 

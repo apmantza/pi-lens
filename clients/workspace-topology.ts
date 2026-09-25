@@ -43,6 +43,7 @@ import {
 	PROJECT_CONFIG_BASENAMES,
 	isResolvedGlobalConfigPath,
 } from "./config-locations.js";
+import { FRESHNESS_CADENCE_MS } from "./freshness-cadence.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	isAtOrAboveHomeDir,
@@ -114,6 +115,7 @@ export function registerWorkspaceTopologyReset(reset: () => void): void {
 type WalkCacheEntry = {
 	dir: string | undefined;
 	dirMtimes: Array<{ dir: string; mtimeMs: number }>;
+	walkedAtMs: number;
 	lastUsedAt: number;
 	idleTimer?: ReturnType<typeof setTimeout>;
 };
@@ -285,9 +287,8 @@ function walkCacheKey(startDir: string, markerKey: string): string {
 
 /**
  * One directory a cached marker walk probed, with the mtime it carried when the
- * walk ran — the invalidation key every cached upward marker walk in this repo
- * shares (an add/remove/rename inside a directory bumps that directory's mtime
- * on every platform pi-lens supports).
+ * walk ran. Hits compare every record; cached misses compare the start-directory
+ * record and the shared freshness cadence.
  */
 export type DirMtimeRecord = { dir: string; mtimeMs: number };
 
@@ -379,9 +380,18 @@ function walkToNearestMatch(
 ): string | undefined {
 	const key = walkCacheKey(startDir, cacheSuffix);
 	const cached = walkCache.get(key);
-	if (cached && dirMtimesStillFresh(cached.dirMtimes)) {
-		touchWalk(key, cached);
-		return cached.dir;
+	if (cached) {
+		const startDirMtime = cached.dirMtimes[0];
+		const isFresh =
+			cached.dir === undefined
+				? startDirMtime !== undefined &&
+					Date.now() - cached.walkedAtMs < FRESHNESS_CADENCE_MS &&
+					safeDirMtimeMs(startDirMtime.dir) === startDirMtime.mtimeMs
+				: dirMtimesStillFresh(cached.dirMtimes);
+		if (isFresh) {
+			touchWalk(key, cached);
+			return cached.dir;
+		}
 	}
 
 	const dirMtimes: Array<{ dir: string; mtimeMs: number }> = [];
@@ -408,10 +418,12 @@ function walkToNearestMatch(
 		depth += 1;
 	}
 
+	const walkedAtMs = Date.now();
 	const entry: WalkCacheEntry = {
 		dir: found,
 		dirMtimes,
-		lastUsedAt: Date.now(),
+		walkedAtMs,
+		lastUsedAt: walkedAtMs,
 	};
 	const outgoing = walkCache.get(key);
 	if (outgoing?.idleTimer !== undefined) {
@@ -439,9 +451,10 @@ function walkToNearestMatch(
  *   - Depth-capped at `MAX_WALK_DEPTH`; a cap trip is logged as a latency
  *     phase (not silently truncated) so a pathological deep tree is visible.
  *
- * Cached per `(startDir, markerKey)`, invalidated when any visited
- * directory's mtime changes (the same "revalidate every dir on the path"
- * pattern `project-lens-config.ts`'s `discoveryCache` established).
+ * Cached per `(startDir, markerKey)`. Hits are invalidated when any visited
+ * directory's mtime changes. Misses are revalidated against `startDir`'s mtime
+ * and the shared freshness cadence, so ancestor marker changes are eventually
+ * found without unrelated ancestor churn forcing a re-walk.
  */
 export function findNearestDirWithMarker(
 	startDir: string,
