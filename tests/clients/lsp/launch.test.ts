@@ -38,6 +38,8 @@ class MockChildProcess extends EventEmitter {
 describe("lsp launch", () => {
 	afterEach(() => {
 		vi.useRealTimers();
+		// resetModules does not clear the mock registry (#2883).
+		vi.doUnmock("node:child_process");
 		vi.resetModules();
 		vi.clearAllMocks();
 	});

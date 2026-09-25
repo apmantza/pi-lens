@@ -126,6 +126,8 @@ async function activateWithSpiedBootstrap(): Promise<
 
 afterEach(() => {
 	delete process.env.PI_LENS_STARTUP_MODE;
+	// resetModules does not clear the mock registry (#2883).
+	vi.doUnmock("../../clients/bootstrap.js");
 	vi.resetModules();
 });
 

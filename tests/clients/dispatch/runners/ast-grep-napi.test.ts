@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	makeRunnerCtx,
 	type RunnerCtxOverrides,
@@ -98,6 +98,12 @@ function mockWorkingSgLoad(): void {
 		html: undefined,
 	}));
 }
+
+// Every case installs its own @ast-grep/napi double; resetModules does not clear
+// the mock registry, so drop it after each case (#2883).
+afterEach(() => {
+	vi.doUnmock("@ast-grep/napi");
+});
 
 describe("ast-grep-napi runner — LSP supersede gate (#239 Phase 2)", () => {
 	beforeEach(() => {

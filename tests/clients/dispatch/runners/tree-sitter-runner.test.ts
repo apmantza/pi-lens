@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 
 function createCtx(filePath: string, cwdOverride?: string) {
@@ -161,6 +161,16 @@ async function loadRunnerWithQueries(
 		runQueryOnFile,
 	};
 }
+
+// Each case installs its own doubles for these modules; resetModules does not
+// clear the mock registry, so drop them after each case (#2883).
+afterEach(() => {
+	vi.doUnmock("../../../../clients/tree-sitter-logger.js");
+	vi.doUnmock("../../../../clients/review-graph/service.js");
+	vi.doUnmock("../../../../clients/tree-sitter-query-loader.js");
+	vi.doUnmock("../../../../clients/cache/rule-cache.js");
+	vi.doUnmock("../../../../clients/tree-sitter-client.js");
+});
 
 describe("tree-sitter runner — metadata", () => {
 	beforeEach(() => vi.resetModules());

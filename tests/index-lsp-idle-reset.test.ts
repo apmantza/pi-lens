@@ -118,6 +118,9 @@ describe("index.ts LSP idle reset", () => {
 		removeTempDirSync(tmpDir);
 		vi.unstubAllEnvs();
 		vi.restoreAllMocks();
+		// resetModules does not clear the mock registry (#2883).
+		vi.doUnmock("../clients/lsp/index.js");
+		vi.doUnmock("../clients/bootstrap.js");
 	});
 
 	it(

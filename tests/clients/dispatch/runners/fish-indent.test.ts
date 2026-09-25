@@ -10,6 +10,12 @@ const safeSpawnAsync = vi.fn((..._args: unknown[]) =>
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
+// Whether the mocked availability checker reports fish_indent present. A case
+// flips it instead of re-mocking the module with vi.doMock, which would outlive
+// the case (resetModules does not clear the mock registry, #2883) and, undone,
+// would drop this hoisted mock too.
+const availability = vi.hoisted(() => ({ present: true }));
+
 vi.mock(
 	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
 	async (importOriginal) => ({
@@ -17,9 +23,9 @@ vi.mock(
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
 		createAvailabilityChecker: () => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => "fish_indent",
+			isAvailable: () => availability.present,
+			isAvailableAsync: async () => availability.present,
+			getCommand: () => (availability.present ? "fish_indent" : null),
 		}),
 	}),
 );
@@ -41,6 +47,7 @@ function createFishCtx(filePath: string, cwd: string) {
 describe("fish-indent runner", () => {
 	beforeEach(() => {
 		vi.resetModules();
+		availability.present = true;
 		safeSpawnAsync.mockReset();
 		safeSpawnAsync.mockImplementation((..._args: unknown[]) =>
 			Promise.resolve({ error: null, status: 0, stdout: "", stderr: "" }),
@@ -137,16 +144,7 @@ describe("fish-indent runner", () => {
 	});
 
 	it("skips when fish_indent is not available", async () => {
-		vi.doMock(
-			"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-			() => ({
-				createAvailabilityChecker: () => ({
-					isAvailable: () => false,
-					isAvailableAsync: async () => false,
-					getCommand: () => null,
-				}),
-			}),
-		);
+		availability.present = false;
 		vi.resetModules();
 
 		const runner = (
