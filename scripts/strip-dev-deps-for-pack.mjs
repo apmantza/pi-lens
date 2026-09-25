@@ -59,7 +59,13 @@ function strip() {
 	);
 }
 
-function restore() {
+/**
+ * Put package.json and package-lock.json back from .pack-backup/ and remove
+ * it. A no-op when there is no backup. Exported (#2652) so a caller whose
+ * `npm pack` died between prepack and postpack -- a failing `prepare`, a
+ * signal -- can restore the working manifest itself.
+ */
+export function restore() {
 	if (!fs.existsSync(backupDir)) {
 		console.error("[strip-dev-deps] no backup to restore");
 		return;
