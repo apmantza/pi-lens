@@ -22,6 +22,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { matchingCloseIndex } from "../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(".");
 
@@ -116,22 +117,10 @@ export function scrubCommentsAndStrings(source: string): string {
 					break;
 				}
 				if (source[i] === "$" && source[i + 1] === "{") {
-					i += 2;
-					let depth = 1;
-					let expr = "";
-					while (i < n && depth > 0) {
-						const d = source[i];
-						if (d === "{") depth++;
-						else if (d === "}") {
-							depth--;
-							if (depth === 0) {
-								i++;
-								break;
-							}
-						}
-						expr += d;
-						i++;
-					}
+					const close = matchingCloseIndex(source, i + 1, "{", "}");
+					// Unbalanced: the rest of the source is the expression.
+					const expr = source.slice(i + 2, close === -1 ? n : close);
+					i = close === -1 ? n : close + 1;
 					out += `(${scrubCommentsAndStrings(expr)})`;
 					continue;
 				}

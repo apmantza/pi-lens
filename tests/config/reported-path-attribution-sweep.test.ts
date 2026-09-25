@@ -45,6 +45,7 @@ import {
 	codeMatches,
 	escapeRegExp,
 	listSourceFiles,
+	matchingCloseIndex,
 	matchingOpenIndex,
 	readWalkedFiles,
 	relativePosix,
@@ -314,16 +315,8 @@ function enclosingBraceSpan(
 		}
 	}
 	if (open < 0) return null;
-	depth = 0;
-	for (let i = open; i < stripped.length; i++) {
-		const ch = stripped[i];
-		if (ch === "{") depth += 1;
-		else if (ch === "}") {
-			depth -= 1;
-			if (depth === 0) return [open, i];
-		}
-	}
-	return null;
+	const close = matchingCloseIndex(stripped, open, "{", "}");
+	return close === -1 ? null : [open, close];
 }
 
 /** The property VALUE starting at `from`, up to this literal's next `,` at depth 0. */

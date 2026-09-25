@@ -32,6 +32,7 @@ import { clientSourceFiles, repoRoot } from "../support/atomic-write-scan.js";
 import {
 	assertNonEmptyScan,
 	codeMatches,
+	matchingCloseIndex,
 	stripSource,
 } from "../support/sweep-kit.js";
 
@@ -81,16 +82,14 @@ function loggerCallSites(absolute: string): LoggerCallSite[] {
 	const call = /createNdjsonLogger\s*\(/g;
 	let match = call.exec(source);
 	while (match !== null) {
-		let depth = 0;
-		let index = match.index + match[0].length - 1;
-		for (; index < source.length; index += 1) {
-			const ch = source[index];
-			if (ch === "(") depth += 1;
-			else if (ch === ")") {
-				depth -= 1;
-				if (depth === 0) break;
-			}
-		}
+		const close = matchingCloseIndex(
+			source,
+			match.index + match[0].length - 1,
+			"(",
+			")",
+		);
+		// Unbalanced: the rest of the source, as the hand-rolled loop gave.
+		const index = close === -1 ? source.length : close;
 		sites.push({
 			file: relativeToClients(absolute),
 			line: source.slice(0, match.index).split("\n").length,

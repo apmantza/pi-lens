@@ -27,6 +27,7 @@ import {
 } from "../../clients/word-index.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { matchingCloseIndex } from "../support/sweep-kit.js";
 
 // Same LSP stub as runtime-session.test.ts / runtime-session-warm.test.ts: the
 // dominant-language auto-warm (#203) must not spawn a real language server
@@ -521,18 +522,7 @@ describe("static guard: no bare loadProjectSnapshot read after an async build (#
 		let match: RegExpExecArray | null;
 		while ((match = callRe.exec(source))) {
 			const openParenIdx = match.index + match[0].length - 1;
-			let depth = 0;
-			let closeIdx = -1;
-			for (let i = openParenIdx; i < source.length; i += 1) {
-				if (source[i] === "(") depth += 1;
-				else if (source[i] === ")") {
-					depth -= 1;
-					if (depth === 0) {
-						closeIdx = i;
-						break;
-					}
-				}
-			}
+			const closeIdx = matchingCloseIndex(source, openParenIdx, "(", ")");
 			if (closeIdx === -1) continue; // unbalanced — let the real read below flag it
 			const startLine = source.slice(0, match.index).split("\n").length - 1;
 			const endLine = source.slice(0, closeIdx).split("\n").length - 1;

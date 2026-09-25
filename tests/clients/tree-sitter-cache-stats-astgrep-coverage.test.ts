@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { matchingCloseIndex } from "../support/sweep-kit.js";
 import type { TreeSitterParseCacheStats } from "../../clients/tree-sitter-client.js";
 
 // #1982: every `cache_stats` record must carry the `astGrep` sub-field
@@ -32,16 +33,9 @@ function findCallSites(rel: string, source: string): CallSite[] {
 	const marker = "logTreeSitterCacheStats({";
 	let idx = source.indexOf(marker);
 	while (idx !== -1) {
-		let depth = 0;
-		let end = idx + marker.length - 1;
-		for (; end < source.length; end++) {
-			const ch = source[end];
-			if (ch === "{") depth++;
-			else if (ch === "}") {
-				depth--;
-				if (depth === 0) break;
-			}
-		}
+		const close = matchingCloseIndex(source, idx + marker.length - 1, "{", "}");
+		// Unbalanced: the rest of the source, as the hand-rolled loop gave.
+		const end = close === -1 ? source.length : close;
 		sites.push({
 			rel,
 			line: source.slice(0, idx).split("\n").length,
@@ -112,6 +106,13 @@ describe("cache_stats astGrep sub-field coverage (#1982)", () => {
 describe("emitter always writes metadata.astGrep (#1982)", () => {
 	// Allow the real logger to run under vitest (fs is mocked, so no disk I/O).
 	process.env.PI_LENS_TEST_MODE = "0";
+
+	// The file's static imports (sweep-kit reaches clients/ modules) can load
+	// the logger's graph before `vi.doMock("node:fs")`; start each case from an
+	// empty registry so the dynamic import below binds the mocked fs (#3144).
+	beforeEach(() => {
+		vi.resetModules();
+	});
 
 	afterEach(() => {
 		vi.resetModules();

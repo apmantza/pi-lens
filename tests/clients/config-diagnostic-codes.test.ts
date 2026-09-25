@@ -12,7 +12,11 @@ import {
 	withConfigDiagnosticCode,
 } from "../../clients/config-diagnostic-codes.js";
 import { gitExecFileSync } from "../support/git-fixture-env.js";
-import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
+import {
+	assertNonEmptyScan,
+	matchingCloseIndex,
+	stripSource,
+} from "../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -183,15 +187,14 @@ function notifyCalls(source: string): string[] {
 	const needle = "notifyUserDegradation(";
 	let index = source.indexOf(needle);
 	while (index !== -1) {
-		let depth = 0;
-		let end = index + needle.length - 1;
-		for (; end < source.length; end += 1) {
-			if (source[end] === "(") depth += 1;
-			else if (source[end] === ")") {
-				depth -= 1;
-				if (depth === 0) break;
-			}
-		}
+		const close = matchingCloseIndex(
+			source,
+			index + needle.length - 1,
+			"(",
+			")",
+		);
+		// Unbalanced: the rest of the source, as the hand-rolled loop gave.
+		const end = close === -1 ? source.length : close;
 		calls.push(source.slice(index, end + 1));
 		index = source.indexOf(needle, end + 1);
 	}
