@@ -222,6 +222,58 @@ formatter, the pre-push hook selects the production tree-scanning suites
 under budget, and a tree-scanner census fails any unregistered scanner instead
 of trusting a hand list.
 
+## 2026-09-25 — defect-catalog freshness pass (retro)
+
+A retro under `docs/pi-lens-retro.md` folded the `AGENTS.md` shapes whose
+rule is now enforced by a named guard into the rule plus a pointer to that
+guard, and moved their incident narrative here. The numbering is unchanged
+(`tests/config/agents-governance.test.ts` pins all 53). The moved record:
+
+- **Shape 32 (mixed path comparison).** The capture comes first: decoration
+  the tool's renderer puts around a reported path (codespan's `┌─` locus
+  gutter, #3285) belongs outside the captured group, never tolerated by a
+  suffix compare that then blocks the fold. Never `path.resolve` with no base,
+  never `===`.
+- **Shape 46 (unbounded long-lived container).** The bounded-container sweep
+  scans `clients/`, `tools/`, `mcp/` and `index.ts` with AST evidence and keeps
+  non-zero population and flagged floors; a read-only TTL check or session
+  reset is not a bound without a finite key-space argument.
+- **Shape 49 (whitespace as structure).** Known members: an aligned
+  continuation inside a call (#3038); a block comment's interior, whose ` * `
+  lines sit one column past their opener (#3039), and the same interior picked
+  as `indent-retarget.ts`'s extrapolation base unit (#3052); a multi-line
+  template literal's interior (#3059) and the same interior picked as that base
+  unit (#3116).
+- **Shape 50 (fabricated identifier).** `tests/clients/lsp/launch.test.ts`'s
+  `spawn: () => new MockChildProcess(2468)` reached `safeSpawnAsync`, which
+  registered 2468 for lifetime cleanup; at fork teardown the suite SIGKILLed
+  pid 2468, which on ~10 % of runners was one of the CI job's own processes
+  (#2042, five weeks of unexplained exit 137; fixed in #3091). A sign or range
+  check is not the guard, ownership is: verify against `/proc/<pid>/status`
+  PPid when admitted, refuse and record what fails, and keep the verdict for
+  the resource's lifetime.
+- **Shape 51 (derived-state cache).** The 2026-08 staleness arc (#1461,
+  #1622, #1630, #1631, #1633, #1634) was six fixes to invalidation keys that
+  could not say when they were wrong; #1644 set the benchmark-first rule. A
+  cache that does not exist cannot serve stale.
+- **Shape 52 (second availability store).** Nine such stores existed on
+  2026-08-20; with no cross-store invalidation a mid-session uninstall was seen
+  by the dispatch runner and not by the formatter, which kept spawning the
+  vanished binary (#1894).
+
+- **Shape 53 (host-fatal stream throw).** The line told agents to grep
+  `on("data"|on("error"|on("close"` at every new stream site by hand, although
+  #3383's `data-handler-bounds-sweep` and #3389's `socket-error-listener-sweep`
+  already pin those populations; it now points at both and leaves only `close`
+  and timer callbacks to hand screening.
+
+Finding the pass also fixed: shape 52 stated that every store "is pinned by
+name in the #1894 registry ratchet". No such ratchet exists in the tree (no
+file references #1894; the issue is open and ADR 0005 records it as a decision,
+not a built check). The line now names the guard that does exist,
+`tests/clients/availability-policy-coverage.test.ts`, and the open issue for
+the ratchet. "Maintaining this file" now says a shape names its guard by path.
+
 ## Archived pre-trim agent context (2026-09-14)
 
 The detailed incident narratives, closed decisions, and subsystem evidence below
