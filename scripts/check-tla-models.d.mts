@@ -20,3 +20,7 @@ export declare function verdictMatches(
 ): boolean;
 export declare function describeVerdict(verdict: TlcVerdict): string;
 export declare function listModelConfigs(root: string): string[];
+export declare function resolveJarPath(
+	jarArg: string | undefined,
+	root: string,
+): string;

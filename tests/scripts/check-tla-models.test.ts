@@ -8,6 +8,7 @@ import {
 	classifyTlcOutput,
 	listModelConfigs,
 	parseModelHeader,
+	resolveJarPath,
 	verdictMatches,
 } from "../../scripts/check-tla-models.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
@@ -124,11 +125,25 @@ describe("verdictMatches (#3447)", () => {
 	});
 });
 
+describe("resolveJarPath (#3447)", () => {
+	it("makes a relative --jar absolute, since TLC runs from each config's directory", () => {
+		const resolved = resolveJarPath(".cache/tla2tools.jar", REPO_ROOT);
+		expect(path.isAbsolute(resolved)).toBe(true);
+		expect(resolved).toBe(path.resolve(".cache/tla2tools.jar"));
+	});
+
+	it("defaults to the repo's .cache/ jar", () => {
+		expect(resolveJarPath(undefined, REPO_ROOT)).toBe(
+			path.join(REPO_ROOT, ".cache", "tla2tools.jar"),
+		);
+	});
+});
+
 describe("formal/ models (#3447)", () => {
 	const configs = listModelConfigs(REPO_ROOT);
 
 	it("every config names its expectation and an existing module", () => {
-		assertNonEmptyScan("TLA+ model configs", configs.length, 13);
+		assertNonEmptyScan("TLA+ model configs", configs.length, 18);
 		const problems = configs.flatMap((config) => {
 			const header = parseModelHeader(fs.readFileSync(config, "utf8"));
 			const name = path.relative(REPO_ROOT, config);

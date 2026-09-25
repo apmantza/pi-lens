@@ -92,12 +92,20 @@ export function listModelConfigs(root) {
 	return configs.sort();
 }
 
+/**
+ * The jar TLC runs from, as an absolute path: TLC runs with each config's
+ * directory as cwd, so a relative `--jar` would not resolve there.
+ */
+export function resolveJarPath(jarArg, root) {
+	return path.resolve(jarArg ?? path.join(root, ".cache", "tla2tools.jar"));
+}
+
 function sha256(file) {
 	return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
 async function ensureJar(jarArg, root) {
-	const jar = jarArg ?? path.join(root, ".cache", "tla2tools.jar");
+	const jar = resolveJarPath(jarArg, root);
 	if (!fs.existsSync(jar)) {
 		if (jarArg) throw new Error(`--jar ${jarArg} does not exist`);
 		fs.mkdirSync(path.dirname(jar), { recursive: true });
