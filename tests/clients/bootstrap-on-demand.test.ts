@@ -122,6 +122,7 @@ beforeEach(() => {
 	vi.doUnmock("../../clients/ruff-client.js");
 	vi.doUnmock("../../clients/rust-client.js");
 	vi.doUnmock("../../clients/extension-log.js");
+	vi.doUnmock("../../clients/latency-logger.js");
 	latencyEntries.length = 0;
 });
 

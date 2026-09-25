@@ -39,8 +39,9 @@ import { quoteForWindowsCmd } from "./with-test-lock.mjs";
 export const MAX_SELECTED_TESTS = 25;
 
 // Pre-push budget: 120s. Measured on the built tree on 2026-09-25, the ten
-// registry suites took 32.68s, so a production-file push stays a bounded local
-// convenience; CI is still authoritative. Suites over the budget on their own
+// registry suites took 32.68s (vi-domock-undo, added after, runs in ~3.5s), so
+// a production-file push stays a bounded local convenience; CI is still
+// authoritative. Suites over the budget on their own
 // move to CI_ONLY_PRE_PUSH_TESTS below.
 
 // Suites measured to exceed the documented pre-push budget on their own, so
@@ -63,6 +64,7 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/hook-await-bounds.test.ts",
 	"tests/config/dmts-export-drift.test.ts",
 	"tests/config/vi-mock-export-sweep.test.ts",
+	"tests/config/vi-domock-undo.test.ts",
 	"tests/config/degradation-kind-coverage.test.ts",
 	"tests/config/degradation-kind-order.test.ts",
 	"tests/config/sweep-floor-coverage.test.ts",

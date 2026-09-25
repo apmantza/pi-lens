@@ -136,6 +136,24 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 	};
 });
 
+// Cases install their own doubles for these modules with vi.doMock;
+// resetModules does not clear the mock registry, so drop them after each case
+// in every describe below (#2883).
+afterEach(() => {
+	vi.doUnmock("../clients/bootstrap.js");
+	vi.doUnmock("../clients/bus-events-logger.js");
+	vi.doUnmock("../clients/cache-observability.js");
+	vi.doUnmock("../clients/debug-handles.js");
+	vi.doUnmock("../clients/degradation-ledger.js");
+	vi.doUnmock("../clients/diagnostic-tracker.js");
+	vi.doUnmock("../clients/dispatch/integration.js");
+	vi.doUnmock("../clients/extension-log.js");
+	vi.doUnmock("../clients/pipeline.js");
+	vi.doUnmock("../clients/quiet-window.js");
+	vi.doUnmock("../clients/runtime-agent-end.js");
+	vi.doUnmock("../clients/runtime-turn.js");
+});
+
 describe("index.ts integration", () => {
 	let tmpDir: string;
 	let originalStartupMode: string | undefined;
