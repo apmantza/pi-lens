@@ -1048,15 +1048,37 @@ function checkKillGuard(): void {
  * three checks themselves, only for whether the mem line survives it. The
  * first check's error (if any) is re-thrown after the mem report runs, so
  * the file still fails exactly as it always has.
+ *
+ * #3148: when the mem report ALSO throws (a file over the peak-RSS budget),
+ * a throwing `finally` would replace the check's pending error -- and
+ * kill-guard's pid+stack report exists nowhere but that Error. Both are
+ * kept: one `AggregateError` whose message names both, since a reporter may
+ * print only the message.
  */
 export function runTeardownWithMemReport(
 	checks: ReadonlyArray<() => void>,
 	emitMemReport: () => void,
 ): void {
+	const failures: unknown[] = [];
 	try {
 		for (const check of checks) check();
-	} finally {
+	} catch (error) {
+		failures.push(error);
+	}
+	try {
 		emitMemReport();
+	} catch (error) {
+		failures.push(error);
+	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1) {
+		const messages = failures.map((error) =>
+			error instanceof Error ? error.message : String(error),
+		);
+		throw new AggregateError(
+			failures,
+			`teardown check and [mem-file] report both failed: ${messages.join(" | ")}`,
+		);
 	}
 }
 

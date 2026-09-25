@@ -224,6 +224,33 @@ describe("#3058 per-file peak RSS is registered or fails", () => {
 			expect(backstop).toHaveBeenCalledTimes(1);
 		});
 
+		it("surfaces both errors when a check and the mem report both throw (#3148)", () => {
+			// A plain `finally` that throws replaces the pending exception, so
+			// kill-guard's pid+stack report -- which exists nowhere but that
+			// Error -- vanished behind a peak-RSS budget failure.
+			const killGuardThrow = () => {
+				throw new Error("kill-guard: pid 4242 not owned by this test");
+			};
+			const emitMemReport = () => {
+				throw new Error("peakRssMb=2300 exceeds the 2048 MB budget");
+			};
+			let thrown: unknown;
+			try {
+				runTeardownWithMemReport([killGuardThrow, () => {}], emitMemReport);
+			} catch (error) {
+				thrown = error;
+			}
+			expect(thrown).toBeInstanceOf(AggregateError);
+			const aggregate = thrown as AggregateError;
+			expect(aggregate.errors.map((error: Error) => error.message)).toEqual([
+				"kill-guard: pid 4242 not owned by this test",
+				"peakRssMb=2300 exceeds the 2048 MB budget",
+			]);
+			// The message carries both, for a reporter that prints only it.
+			expect(aggregate.message).toContain("pid 4242 not owned");
+			expect(aggregate.message).toContain("exceeds the 2048 MB budget");
+		});
+
 		it("still fails the file — a passing run never re-throws", () => {
 			const emitMemReport = vi.fn();
 			expect(() =>
