@@ -89,8 +89,8 @@ const splitOutDir = path.join(root, "dist", ".bundle-split");
  * the extension starts with `new Worker(path)`, and the installer registry
  * the shipped self-test probes.
  *
- * Chunk layout, measured on this build: the six share esbuild chunks
- * (4.11 MB, 126 files) and dist/index.js stays ONE self-contained file
+ * Chunk layout, measured on this build: these share esbuild chunks
+ * (4.13 MB, 126 files) and dist/index.js stays ONE self-contained file
  * (4.97 MB) exactly as before. Splitting index.js into the same chunks would
  * save another ~4 MB (4.93 MB for all seven) but would make pi load ~130
  * files through its loader at session start, and scripts/warm-loader-cache.mjs
