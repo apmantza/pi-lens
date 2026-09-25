@@ -5,6 +5,9 @@
 - Read the issue, `AGENTS.md`, `docs/pi-lens-subagent.md`, and this contract.
 - Trace the production entry point before naming a seam.
 - Reproduce the defect on the current tree.
+- Before writing the fix, or a unit tested in isolation, list the ways it can
+  fail (inputs, states, orderings, platforms) in the PR body; a space with two
+  axes is a table. The tests cover that list, not only the happy path.
 - Implement the smallest root-caused fix.
 - Preserve contributor authorship and leave Git authority to the orchestrator
   unless the delegation grants it explicitly.

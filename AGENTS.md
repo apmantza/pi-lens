@@ -42,7 +42,9 @@ Update this file in the same change as the behavior, structure, command, or
 invariant it documents. Keep live rules short and load-bearing. Put dated
 narratives and completed arcs in `HISTORY.md`; do not delete their decision
 record. Place new invariants in the matching subsystem section, not at the file
-end. Cite symbols and section headings, not line numbers.
+end. Cite symbols and section headings, not line numbers. A defect shape that
+claims enforcement names its guard by path; a guard that is only planned is
+named by its open issue, never described as if it runs.
 
 Keep project instructions consistent with `CLAUDE.md`, role contracts, skills,
 and tests. The repository wins when a runner-side copy differs.
@@ -208,12 +210,9 @@ ADR: docs/adr/0009-reported-path-attribution.md
 
 32. **Mixed path comparison:** use one platform-aware containment expression;
     do not combine case-sensitive equality with case-folded relative paths. A
-    runner OR TOOL CLIENT deciding whether a TOOL-REPORTED path names the
-    dispatched file asks `pathsEqual` against the cwd the tool ran in, never
-    `path.resolve` with no base and never `===`. The reported path is whatever
-    the tool's RENDERER emits, so the CAPTURE comes first: decoration around the
-    path (codespan's `┌─` locus gutter, #3285) belongs outside the captured
-    group, never tolerated by a suffix compare that then blocks the fold.
+    tool-reported path is attributed with `pathsEqual` against the tool's cwd,
+    capturing only the path the tool's renderer emits. Enforced by
+    `tests/config/reported-path-attribution-sweep.test.ts` (shrink-only census).
     ADR: docs/adr/0009-reported-path-attribution.md
 
 39. **Walk-up result used as eligibility:** return ownership and start-directory
@@ -257,13 +256,9 @@ ADR: docs/adr/0009-reported-path-attribution.md
 41. **Hot bound reached at p50:** record hit rate and prefer adaptive or
     demotion behavior over a constant that has become the work.
 
-46. **Long-lived container without a bound:** module-level or bootstrap-lived
-    `Map`/`Set` state can grow per file, project, or request despite a reset.
-    Classify each live occurrence as bounded, evicted, or content-keyed and
-    keep the inventory shrink-only; a read-only TTL check or session reset is
-    not a bound without a finite key-space argument. The bounded-container
-    sweep scans `clients/`, `tools/`, `mcp/`, and `index.ts` with AST evidence
-    and retains non-zero population and flagged floors.
+46. **Long-lived container without a bound:** module-level `Map`/`Set` state
+    is bounded, evicted, or content-keyed; a reset or TTL read is not a bound.
+    Enforced by `tests/config/bounded-container-guard.test.ts` (shrink-only).
 
 47. **Retry or drain loop consumes its own work list:** a bounded retry or
     drain loop must not remove its tracked item from the collection it iterates
@@ -272,17 +267,11 @@ ADR: docs/adr/0009-reported-path-attribution.md
     between attempts.
 
 51. **Cross-request derived-state cache where a request-local pass is
-    affordable:** a signature, line count, content hash, import graph or other
-    DERIVED value is memoised across requests, and its invalidation key cannot
-    express the truth (rename, existence flip, casing, generation). The
-    2026-08 staleness arc (#1461, #1622, #1630, #1631, #1633, #1634) was six
-    fixes to keys that could not say when they were wrong. Rule, from #1644:
-    for derived state on a hot path, first measure a request-local bounded
-    recompute; add a persistent cache only when the fresh-process benchmark
+    affordable:** for a derived value on a hot path, measure a request-local
+    bounded recompute first; persist it only when the fresh-process benchmark
     shows the recompute is the cost, and then the entry carries the generation
-    it was derived from. Tool-run caches (gitleaks, knip, trivy) are not
-    derived state; their freshness is governed by the delivery gate. A cache
-    that does not exist cannot serve stale. ADR: docs/adr/0006-derived-state-benchmark-first.md
+    it was derived from. Tool-run caches are governed by the delivery gate
+    instead. ADR: docs/adr/0006-derived-state-benchmark-first.md
 
 </important>
 
@@ -312,15 +301,10 @@ ADR: docs/adr/0009-reported-path-attribution.md
     reachability before scanning shell, workflow, or source text.
 
 49. **Whitespace counted as structure when it is alignment:** a leading run can
-    be alignment, not one nesting unit. Known members: an aligned continuation
-    inside a call (#3038), the interior of a block comment, whose ` * ` lines
-    sit one column past their opener (#3039), the same block-comment interior
-    picked as `indent-retarget.ts`'s extrapolation base unit (#3052), a
-    multi-line template literal's interior (#3059), and the same
-    template-literal interior picked as `indent-retarget.ts`'s extrapolation
-    base unit (#3116). Name which lines carry structure and exclude the rest
-    before counting; decline rather than pin a style when only ambiguous runs
-    remain.
+    be alignment, not one nesting unit (call continuations, block-comment and
+    template-literal interiors; #3038, #3039, #3052, #3059, #3116). Name which
+    lines carry structure and exclude the rest before counting; decline rather
+    than pin a style when only ambiguous runs remain.
 
 </important>
 
@@ -339,6 +323,7 @@ ADR: docs/adr/0009-reported-path-attribution.md
 
 40. **Tool root drift:** all runner, formatter, and LSP child spawns use
     `resolveToolCwd`; mutation of the seam, log, or fallback must turn a test red.
+    Enforced by `tests/support/spawn-cwd-scan.ts` and its runner sweep.
 
 42. **Language-specific rule:** use `LANGUAGES` and registry facts; add a
     non-TypeScript row whenever the rule is language-neutral.
@@ -349,13 +334,13 @@ ADR: docs/adr/0009-reported-path-attribution.md
     direction from that harm; test unreadable, absent, and thrown lookup states
     where the seam supports both directions.
 
-53. **Unhandled stream or process event is a host-fatal throw:** make every
-    `data`, `error`, `close`, and timer callback on a child process, socket, or
-    stream total — catch, bound, and record rather than throw — and add an
-    `error` listener to every accepted socket; a throw inside a stream callback
-    bypasses the caller's `try/catch` and kills the pi host (#3375, #3383,
-    #3389). Screen: grep `on("data"|on("error"|on("close"` at every new
-    stream site and name the bound and the listener in the PR body.
+53. **Unhandled stream or process event is a host-fatal throw:** every callback
+    on a child process, socket, or stream is total (catch, bound, record); a
+    throw there bypasses the caller's `try/catch` and kills the pi host (#3375,
+    #3383, #3389). `data` handlers are enforced by
+    `tests/clients/data-handler-bounds-sweep.test.ts` and socket `error`
+    listeners by `tests/clients/socket-error-listener-sweep.test.ts`; screen
+    `close` and timer callbacks by hand.
 
 </important>
 
@@ -372,7 +357,8 @@ ADR: docs/adr/0009-reported-path-attribution.md
 11. **Skipped CI as green:** absent required checks are not passing checks.
 
 14. **Duplicate module instance:** tests import the same `.js` artifact as the
-    runtime and never reset a private `.ts` twin.
+    runtime and never reset a private `.ts` twin. Enforced by
+    `tests/config/module-instance-coverage.test.ts`.
 
 33. **Source assertion for runtime behavior:** prefer a runtime probe; source
     scans need proof that runtime observation is impossible.
@@ -399,21 +385,11 @@ ADR: docs/adr/0009-reported-path-attribution.md
     and are checked against direct root resolution.
 
 50. **Test double's fabricated identifier reaching code that acts on it:** a
-    pid, fd, port, lock path or handle invented by a mock is handed to
-    PRODUCTION code that registers, signals, writes or deletes by that
-    identifier, and the identifier is real to the OS even though the object is
-    not. `tests/clients/lsp/launch.test.ts`'s `spawn: () => new
-    MockChildProcess(2468)` reached `safeSpawnAsync`, which registered 2468 for
-    lifetime cleanup; at fork teardown the suite SIGKILLed pid 2468, which on
-    ~10 % of runners was one of the CI job's own processes (#2042, five weeks
-    of unexplained exit 137; fixed in #3091). A sign or range check is not the
-    guard — the value is plausible; OWNERSHIP is. Verify the identifier against
-    the OS at the moment it is admitted (`/proc/<pid>/status` PPid), refuse and
-    record what fails, and keep the verdict for the lifetime of the resource
-    rather than re-deriving it after the resource is gone. The class is
-    mechanised for pids by `tests/support/kill-guard.ts`, which fails any test
-    file that hands an unowned pid to a production kill or spawn seam; the
-    other identifier kinds have no detector yet, so screen them by hand.
+    pid, fd, port, lock path or handle invented by a mock reaches production
+    code that registers, signals, writes or deletes by it (#2042, #3091).
+    Verify ownership against the OS when the identifier is admitted, not its
+    range. Pids are enforced by `tests/support/kill-guard.ts`; screen the
+    other identifier kinds by hand.
 
 </important>
 
@@ -452,15 +428,12 @@ ADR: docs/adr/0009-reported-path-attribution.md
 ### availability or installer
 
 52. **A second store answering the same availability question:** a new latch,
-    map or cache that answers "can `<tool>` run right now, at what path"
-    beside the shared availability policy (`availability-policy.ts`,
-    `createAvailabilityLatch`). Nine such stores existed on 2026-08-20; with no
-    cross-store invalidation a mid-session uninstall is seen by the dispatch
-    runner and not by the formatter, which keeps spawning the vanished binary
-    (#1894). Rule: every store of that shape is pinned by name in the #1894
-    registry ratchet, the registry never grows, and a change that touches a
-    registered store moves it onto the shared policy and deletes it from the
-    registry in the same change. ADR: docs/adr/0005-tool-availability-enforcement-seam.md
+    map or cache answering "can `<tool>` run, at what path" beside the shared
+    policy (`availability-policy.ts`, `createAvailabilityLatch`). A consumer the
+    gate can see is enforced by `tests/clients/availability-policy-coverage.test.ts`
+    (shrink-only `KNOWN_GAPS`); the named-store registry ratchet is still open
+    in #1894, so a change touching another store moves it onto the shared
+    policy by hand. ADR: docs/adr/0005-tool-availability-enforcement-seam.md
 
 </important>
 
