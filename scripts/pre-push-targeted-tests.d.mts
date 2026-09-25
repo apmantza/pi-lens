@@ -5,8 +5,6 @@ export const MAX_SELECTED_TESTS: number;
 
 export const TREE_SCANNING_GOVERNANCE_TESTS: string[];
 
-export const TREE_SCANNING_GOVERNANCE_BUDGET_MS: number;
-
 /** CI-only suites (file → why it cannot run in pre-push), #3426 H3432-1. */
 export const CI_ONLY_PRE_PUSH_TESTS: Record<string, string>;
 

@@ -38,10 +38,10 @@ import { quoteForWindowsCmd } from "./with-test-lock.mjs";
 
 export const MAX_SELECTED_TESTS = 25;
 
-// Measured on the built tree on 2026-09-25: the ten registry suites took
-// 32.68s. Keep the added population below two minutes so a production-file
-// push remains a bounded local convenience; CI is still authoritative.
-export const TREE_SCANNING_GOVERNANCE_BUDGET_MS = 120_000;
+// Pre-push budget: 120s. Measured on the built tree on 2026-09-25, the ten
+// registry suites took 32.68s, so a production-file push stays a bounded local
+// convenience; CI is still authoritative. Suites over the budget on their own
+// move to CI_ONLY_PRE_PUSH_TESTS below.
 
 // Suites measured to exceed the documented pre-push budget on their own, so
 // they are excluded from the local pre-push selection and run in CI instead
