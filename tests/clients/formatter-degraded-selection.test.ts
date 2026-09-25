@@ -22,9 +22,8 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
@@ -48,6 +47,10 @@ import {
 	clearFormatterCache,
 	getFormattersForFile,
 } from "../../clients/formatters.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 const timeoutResult = {
 	stdout: "",
@@ -99,7 +102,7 @@ const decisionsFor = (tool: string) =>
 
 /** A Ruby project that has elected BOTH rubocop and standardrb. */
 function rubyProject(): { cwd: string; filePath: string } {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-degraded-rb-"));
+	const cwd = setupTestEnvironment("pi-lens-degraded-rb-").tmpDir;
 	fs.writeFileSync(
 		path.join(cwd, ".rubocop.yml"),
 		"AllCops:\n  NewCops: enable\n",
@@ -115,7 +118,7 @@ function rubyProject(): { cwd: string; filePath: string } {
 
 /** A Rust project, so rustfmt's `rustup` install fallback is reachable. */
 function rustProject(): { cwd: string; filePath: string } {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-degraded-rs-"));
+	const cwd = setupTestEnvironment("pi-lens-degraded-rs-").tmpDir;
 	fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
 	const filePath = path.join(cwd, "lib.rs");
 	fs.writeFileSync(filePath, "fn main() {}\n");
@@ -124,6 +127,11 @@ function rustProject(): { cwd: string; filePath: string } {
 
 const names = async (cwd: string, filePath: string): Promise<string[]> =>
 	(await getFormattersForFile(filePath, cwd)).map((f) => f.name);
+
+// Every probe is mocked, so nothing but this file owns these roots.
+afterEach(async () => {
+	await cleanupTestEnvironmentsDrained("pi-lens-degraded-");
+});
 
 beforeEach(() => {
 	safeSpawnAsync.mockReset();
@@ -248,9 +256,7 @@ describe("the poison guard sees every binary a detect probed (#1539)", () => {
 		safeSpawnAsync.mockImplementation(pathLookups({ rubocop: "stall" }));
 		expect(await names(dirA.cwd, dirA.filePath)).toEqual([]);
 
-		const dirB = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-degraded-rb-bare-"),
-		);
+		const dirB = setupTestEnvironment("pi-lens-degraded-rb-bare-").tmpDir;
 		const bareFile = path.join(dirB, "bare.rb");
 		fs.writeFileSync(bareFile, "puts 1\n");
 		logLatencySpy.mockClear();

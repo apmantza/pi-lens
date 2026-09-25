@@ -12,10 +12,13 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
@@ -84,7 +87,7 @@ const decisions = () =>
 		.filter((entry) => entry?.phase === "availability_decision");
 
 function rustFile(): { cwd: string; filePath: string } {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-which-latch-"));
+	const cwd = setupTestEnvironment("pi-lens-which-latch-").tmpDir;
 	const filePath = path.join(cwd, "lib.rs");
 	fs.writeFileSync(filePath, "fn main() {}\n");
 	return { cwd, filePath };
@@ -92,6 +95,11 @@ function rustFile(): { cwd: string; filePath: string } {
 
 const names = async (cwd: string, filePath: string): Promise<string[]> =>
 	(await getFormattersForFile(filePath, cwd)).map((f) => f.name);
+
+// Every probe is mocked, so nothing but this file owns these roots.
+afterEach(async () => {
+	await cleanupTestEnvironmentsDrained("pi-lens-which-latch-");
+});
 
 beforeEach(() => {
 	safeSpawnAsync.mockReset();
@@ -184,9 +192,7 @@ describe("formatter PATH probes (#1495)", () => {
 		// `which rustfmt` stopped a shell detection from caching and stamped
 		// `reason: "probe-timeout"` on a selection where nothing timed out.
 		const rust = rustFile();
-		const shellCwd = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-which-latch-sh-"),
-		);
+		const shellCwd = setupTestEnvironment("pi-lens-which-latch-sh-").tmpDir;
 		const shellFile = path.join(shellCwd, "script.sh");
 		fs.writeFileSync(shellFile, "echo hi\n");
 

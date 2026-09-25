@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +11,7 @@ import {
 	getCachedReviewGraph,
 	getLastGraphBuildInfo,
 	getReviewGraphRevisionDrift,
+	waitForReviewGraphPersistsForTests,
 	_resetCwdWorktreeMismatchLogForTests,
 } from "../../clients/review-graph/builder.js";
 import {
@@ -24,7 +24,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { removeTempDirSync } from "./test-utils.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -37,12 +40,8 @@ vi.mock("../../clients/scan-utils.js", () => ({
 	getSourceFiles: vi.fn().mockReturnValue([]),
 }));
 
-const dirs: string[] = [];
-
 function tmpDir(): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-graph-stamp-"));
-	dirs.push(dir);
-	return dir;
+	return setupTestEnvironment("pi-lens-graph-stamp-").tmpDir;
 }
 
 /** Minimal hand-built `.git` (normal, non-worktree) repo — no git binary needed. */
@@ -86,10 +85,12 @@ beforeEach(() => {
 	previousDataDir = process.env.PILENS_DATA_DIR;
 });
 
-afterEach(() => {
-	for (const dir of dirs.splice(0)) {
-		removeTempDirSync(dir);
-	}
+afterEach(async () => {
+	// A build queues a persist into the project's data dir; let it land
+	// before the root is removed, or it recreates the root afterwards.
+	flushReviewGraphPersistsForTests();
+	await waitForReviewGraphPersistsForTests();
+	await cleanupTestEnvironmentsDrained("pi-lens-graph-stamp-");
 	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 	else process.env.PILENS_DATA_DIR = previousDataDir;
 	vi.restoreAllMocks();

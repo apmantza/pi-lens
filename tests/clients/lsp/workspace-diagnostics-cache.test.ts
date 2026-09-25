@@ -32,6 +32,7 @@ import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.j
 import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../../clients/project-snapshot.js";
 import {
 	cleanupTestEnvironmentsDrained,
@@ -47,14 +48,17 @@ let tmp: string;
 
 beforeEach(() => {
 	resetDegradationLedger();
-	tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-cache-"));
+	tmp = setupTestEnvironment("pi-lens-lsp-cache-").tmpDir;
 	// Legacy per-project data dir marker so the cache file writes INSIDE tmp
 	// (cleaned up by afterEach) instead of the real global ~/.pi-lens dir.
 	fs.mkdirSync(path.join(tmp, ".pi-lens"));
 });
 
-afterEach(() => {
-	removeTempDirSync(tmp);
+afterEach(async () => {
+	// `saveProjectSnapshot` queues its body write; let it land before the root
+	// is removed, or it recreates the root afterwards.
+	await waitForProjectSnapshotPersistsForTests();
+	await cleanupTestEnvironmentsDrained("pi-lens-lsp-cache-");
 });
 
 function makeEntry(

@@ -1,11 +1,19 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { main } from "../../scripts/upsert-tracking-issue.mjs";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../clients/test-utils.js";
+
+// `gh` is injected, so nothing but this file owns these roots.
+afterEach(async () => {
+	await cleanupTestEnvironmentsDrained("pi-lens-upsert-");
+});
 
 function run(args: string[], existing: unknown[] = []) {
-	const dir = mkdtempSync(join(tmpdir(), "pi-lens-upsert-"));
+	const dir = setupTestEnvironment("pi-lens-upsert-").tmpDir;
 	const body = join(dir, "body.md");
 	writeFileSync(body, "body");
 	const calls: string[][] = [];
@@ -52,7 +60,7 @@ describe("upsert-tracking-issue.mjs", () => {
 	});
 
 	it("propagates the gh failure for the CLI to report", () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-lens-upsert-failure-"));
+		const dir = setupTestEnvironment("pi-lens-upsert-failure-").tmpDir;
 		const body = join(dir, "body.md");
 		writeFileSync(body, "body");
 		expect(() =>

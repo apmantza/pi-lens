@@ -17,9 +17,8 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 
@@ -37,6 +36,10 @@ import {
 	ALL_FORMATTERS,
 	clearFormatterCache,
 } from "../../clients/formatters.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 /**
  * Binaries a formatter's `detect()` probes BESIDES its own `command[0]`, with
@@ -66,10 +69,15 @@ beforeEach(() => {
 	// probe it would ever make is recorded.
 	safeSpawnAsync.mockResolvedValue({ stdout: "", stderr: "", status: 1 });
 	clearFormatterCache();
-	cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-probe-commands-"));
+	cwd = setupTestEnvironment("pi-lens-probe-commands-").tmpDir;
 	// A Cargo.toml unlocks rustfmt's install-fallback branch, so the `rustup`
 	// probe is genuinely exercised rather than merely declared below.
 	fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]\nname='a'\n");
+});
+
+// Every probe is mocked, so nothing but this file owns these roots.
+afterEach(async () => {
+	await cleanupTestEnvironmentsDrained("pi-lens-probe-commands-");
 });
 
 /** Every binary each formatter's `detect()` looked up, in one full sweep. */

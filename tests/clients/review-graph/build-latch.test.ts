@@ -15,7 +15,6 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
@@ -31,17 +30,20 @@ import {
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
 	getLastReviewGraphBuildAttempt,
+	flushReviewGraphPersistsForTests,
 	isGraphBuildInFlight,
+	waitForReviewGraphPersistsForTests,
 } from "../../../clients/review-graph/builder.js";
 import * as scanPolicy from "../../../clients/project-scan-policy.js";
-import { removeTempDirSync } from "../test-utils.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../test-utils.js";
 
-const dirs: string[] = [];
 const savedEnv = new Map<string, string | undefined>();
 
 function tmpProject(fileCount = 2): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-build-latch-"));
-	dirs.push(dir);
+	const dir = setupTestEnvironment("pi-lens-build-latch-").tmpDir;
 	fs.mkdirSync(path.join(dir, "src"), { recursive: true });
 	for (let i = 0; i < fileCount; i += 1) {
 		fs.writeFileSync(
@@ -71,7 +73,11 @@ beforeEach(() => {
 	_resetProjectReportBuildGuardForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// A build queues a persist into the project's data dir; let it land
+	// before the root is removed, or it recreates the root afterwards.
+	flushReviewGraphPersistsForTests();
+	await waitForReviewGraphPersistsForTests();
 	for (const [name, value] of savedEnv) {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
@@ -79,7 +85,7 @@ afterEach(() => {
 	savedEnv.clear();
 	_resetReviewGraphSizeSkipTtlForTests();
 	clearReviewGraphWorkspaceCache();
-	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
+	await cleanupTestEnvironmentsDrained("pi-lens-build-latch-");
 	vi.restoreAllMocks();
 });
 
