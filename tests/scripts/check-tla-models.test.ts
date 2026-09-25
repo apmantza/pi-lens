@@ -143,7 +143,7 @@ describe("formal/ models (#3447)", () => {
 	const configs = listModelConfigs(REPO_ROOT);
 
 	it("every config names its expectation and an existing module", () => {
-		assertNonEmptyScan("TLA+ model configs", configs.length, 18);
+		assertNonEmptyScan("TLA+ model configs", configs.length, 74);
 		const problems = configs.flatMap((config) => {
 			const header = parseModelHeader(fs.readFileSync(config, "utf8"));
 			const name = path.relative(REPO_ROOT, config);
