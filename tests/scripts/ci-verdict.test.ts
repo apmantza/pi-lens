@@ -1177,6 +1177,11 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		// an explicit allowlist entry" case below for the proof that this
 		// name carries NO entry in `ADVISORY_CHECKS`.
 		"oxlint (advisory)",
+		// #3087: install-smoke's mise-repro is continue-on-error on every event,
+		// so its cells always conclude success; the "(advisory)" suffix makes
+		// ci-verdict read them as advisory instead of a gating pass.
+		"mise repro (#285) · ubuntu-latest · ${{ matrix.pi_via }} (advisory)",
+		"mise repro (#285) · macos-latest · ${{ matrix.pi_via }} (advisory)",
 		...EXTERNAL_ADVISORY_NAMES,
 	]);
 
