@@ -411,7 +411,7 @@ jobs:
         if: always()
         env:
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: 'node -e "require(\"node:fs\").writeFileSync(process.env.RUNNER_TEMP + \"/test-history-metadata.json\", JSON.stringify({headSha: process.env.HEAD_SHA, runId: process.env.GITHUB_RUN_ID, lane: \"linux\", recordedAt: new Date().toISOString()}))"'
+        run: 'node -e "require(\"node:fs\").writeFileSync(process.env.RUNNER_TEMP + \"/test-history-metadata.json\", JSON.stringify({headSha: process.env.HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, lane: \"linux\", recordedAt: new Date().toISOString()}))"'
 
       - name: Upload per-file test results
         if: always()

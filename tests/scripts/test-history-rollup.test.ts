@@ -109,11 +109,13 @@ describe("test-history-rollup real entry point", () => {
 			summaryPath: summary,
 			now: Date.parse("2026-09-23T00:00:00.000Z"),
 		});
-		expect(output.rowCount).toBe(2);
+		// Two runs on one head are two observations (#3447): flaky fails in run
+		// 101 and passes in 102, and the journal keeps both, plus steady.
+		expect(output.rowCount).toBe(3);
 		expect(output.flakeCandidates).toEqual([
 			{ file: "tests/flaky.test.ts", headSha: validHead },
 		]);
-		expect(fs.readFileSync(history, "utf8").trim().split("\n")).toHaveLength(2);
+		expect(fs.readFileSync(history, "utf8").trim().split("\n")).toHaveLength(3);
 		expect(JSON.parse(fs.readFileSync(summary, "utf8")).files).toEqual(
 			expect.arrayContaining([
 				{
@@ -125,6 +127,63 @@ describe("test-history-rollup real entry point", () => {
 				},
 			]),
 		);
+	});
+
+	it("keeps a same-head failure and its passing re-run across nightly rollups (#3447)", () => {
+		// CI run 36132594277: attempt 1 of Unit tests failed and the job was
+		// re-run under the same run id. Both attempts upload an artifact.
+		const root = tempRoot();
+		const attempt = (runAttempt: number, status: string, at: string) => {
+			const dir = path.join(root, `attempt-${runAttempt}`);
+			fs.mkdirSync(dir);
+			writeMetadata(dir, {
+				headSha: validHead,
+				runId: 7,
+				runAttempt,
+				lane: "linux",
+				recordedAt: at,
+			});
+			fs.writeFileSync(
+				path.join(dir, "vitest.json"),
+				JSON.stringify({
+					testResults: [{ name: "tests/race.test.ts", status, duration: 5 }],
+				}),
+			);
+			return dir;
+		};
+		const failed = attempt(1, "failed", "2026-09-25T12:12:40.000Z");
+		const passed = attempt(2, "passed", "2026-09-25T12:30:00.000Z");
+		const history = path.join(root, "history.ndjson");
+		const summary = path.join(root, "summary.json");
+		const now = Date.parse("2026-09-26T11:00:00.000Z");
+		rollupTestHistory({
+			artifactPaths: [failed, passed],
+			historyPath: history,
+			summaryPath: summary,
+			now,
+		});
+		// The next night: the same artifacts are downloaded again, and the
+		// journal must still hold both observations for the head.
+		const nextNight = rollupTestHistory({
+			artifactPaths: [failed, passed],
+			historyPath: history,
+			summaryPath: summary,
+			now: now + 24 * 60 * 60 * 1000,
+		});
+		expect(nextNight.rowCount).toBe(2);
+		expect(nextNight.flakeCandidates).toEqual([
+			{ file: "tests/race.test.ts", headSha: validHead },
+		]);
+		// And once the artifacts have expired, from the journal alone.
+		const afterExpiry = rollupTestHistory({
+			artifactPaths: [],
+			historyPath: history,
+			summaryPath: summary,
+			now: now + 2 * 24 * 60 * 60 * 1000,
+		});
+		expect(afterExpiry.flakeCandidates).toEqual([
+			{ file: "tests/race.test.ts", headSha: validHead },
+		]);
 	});
 
 	it("prunes rows older than 90 days while retaining current rows", () => {
