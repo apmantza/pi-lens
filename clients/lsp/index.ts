@@ -6022,10 +6022,19 @@ export class LSPService {
 									.map((o) => o.serverId);
 								if (collectLaterServerIds.length > 0) {
 									lateDeliveryServerIds = collectLaterServerIds;
+									// #3482: the freshness baseline must be the touch's own
+									// notify time, not `Date.now()` here — this line runs only
+									// AFTER the aux-grace ceiling has already given up waiting,
+									// which is up to `auxGraceMs` (2000ms by default) later than
+									// when the notify actually went out. `startedAt` is stamped
+									// at this touch's own entry, before any spawn or wait work,
+									// so it is the earliest instant this touch could possibly
+									// predate — the same anchor #2324 R2-A already uses above for
+									// the identical staleness concern.
 									markPendingAuxiliaryCoverage(
 										filePath,
 										collectLaterServerIds,
-										Date.now(),
+										startedAt,
 									);
 								}
 								logLatency({
