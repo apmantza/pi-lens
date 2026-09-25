@@ -136,6 +136,28 @@ function ownWriteFd(fd) {
 const writeFds = { 1: ownWriteFd(1), 2: ownWriteFd(2) };
 
 /**
+ * #3141: `ownWriteFd` engages only on a pipe; a UNIX socket cannot be
+ * reopened through /proc and keeps the inherited description, whose blocking
+ * flag the child still controls. Which one CI hands this wrapper decides
+ * whether that fix is live there, so the startup line names it for every
+ * run: `stdout:pipe/private` is the fixed shape, `…:socket/inherited` is the
+ * open one.
+ */
+function stdioShape(fd) {
+	let kind = "other";
+	try {
+		const stat = fs.fstatSync(fd);
+		if (stat.isFIFO()) kind = "pipe";
+		else if (stat.isSocket()) kind = "socket";
+		else if (stat.isFile()) kind = "file";
+		else if (stat.isCharacterDevice()) kind = "chardev";
+	} catch {
+		kind = "closed";
+	}
+	return `${kind}/${writeFds[fd] === fd ? "inherited" : "private"}`;
+}
+
+/**
  * #3110 round 2 review F1: routing the once-only note through `emit()`
  * inherits its UNBOUNDED EAGAIN park (the paragraph above -- correct for the
  * verdict line, which #2093 requires never drop). The note is a different
@@ -247,7 +269,8 @@ emit(
 		// nothing to match it against, and the two observed victims are exactly
 		// these two processes: the wrapper itself (run 32908647308) and its
 		// `npm` child (run 33010136296).
-		`watcherPid=${process.pid}\n`,
+		`watcherPid=${process.pid} ` +
+		`stdio=stdout:${stdioShape(1)},stderr:${stdioShape(2)}\n`,
 );
 
 const watch = {

@@ -264,7 +264,10 @@ function blankCommentsAndStrings(source) {
 
 export { blankCommentsAndStrings };
 
+// `index.ts` is the pi host adapter (AGENTS.md's runtime list), so a record it
+// adds is as real as one under clients/ (#2915).
 function isRuntimeObservabilityPath(name) {
+	if (name === "index.ts") return true;
 	return (
 		/^(?:clients|tools|mcp)\//.test(name) &&
 		!/(?:^|\/)__tests__(?:\/|$)/.test(name) &&
@@ -273,26 +276,61 @@ function isRuntimeObservabilityPath(name) {
 	);
 }
 
+// Records are harvested from each hunk's post-image (added plus context
+// lines), because a new call whose closing braces are unchanged context has
+// its literal split across both (#2915). Only a call whose span contains an
+// added line counts, so an untouched record in the context never passes as
+// new. The failure-path test still reads added lines alone.
 function runtimeObservabilityFromDiff(diff = "") {
 	const records = new Set();
 	let runtime = false;
 	let added = "";
 	let currentRuntime = false;
+	const hunks = [];
+	let hunk = null;
 	for (const line of String(diff).split(/\r?\n/)) {
 		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
 		if (header) {
 			currentRuntime = [header[1], header[2]].some(isRuntimeObservabilityPath);
 			runtime ||= currentRuntime;
+			hunk = currentRuntime ? { lines: [], added: new Set() } : null;
+			if (hunk) hunks.push(hunk);
 			continue;
 		}
-		if (currentRuntime && /^\+(?!\+\+)/.test(line))
+		if (!currentRuntime) continue;
+		if (line.startsWith("@@")) {
+			hunk = { lines: [], added: new Set() };
+			hunks.push(hunk);
+			continue;
+		}
+		if (/^\+(?!\+\+)/.test(line)) {
 			added += `${line.slice(1)}\n`;
+			hunk.lines.push(line.slice(1));
+			hunk.added.add(hunk.lines.length);
+		} else if (line.startsWith(" ") || line === "") {
+			hunk.lines.push(line.slice(1));
+		}
 	}
 	if (!runtime) return { runtime: false, records, failurePath: false };
+	for (const { lines, added: addedLines } of hunks) {
+		if (!addedLines.size) continue;
+		for (const {
+			value,
+			startLine,
+			endLine,
+		} of recordLocationsFromRuntimeSource(lines.join("\n"))) {
+			for (let line = startLine; line <= endLine; line++) {
+				if (addedLines.has(line)) {
+					records.add(value);
+					break;
+				}
+			}
+		}
+	}
 	const blanked = blankCommentsAndStrings(added).text;
 	return {
 		runtime: true,
-		records: recordLiteralsFromRuntimeSource(added),
+		records,
 		failurePath:
 			/\bcatch\b|\brecordDegradationOnce\b|\bthrow\b|\breturn\s+null\b/.test(
 				blanked,
@@ -312,18 +350,37 @@ function observabilitySectionContent(body, lines, headings) {
 	return lines.slice(heading.index + 1, next?.index ?? lines.length).join("\n");
 }
 
-function recordLiteralsFromRuntimeSource(source) {
-	return new Set(
-		recordLocationsFromRuntimeSource(source).map(({ value }) => value),
-	);
+function lineAt(source, index) {
+	return source.slice(0, index).split("\n").length;
+}
+
+// Index of the `)` closing the `(` at `open`, over comment- and
+// string-blanked text; -1 when the call runs past the end of the source.
+function closeParenIndex(blanked, open) {
+	let depth = 0;
+	for (let index = open; index < blanked.length; index++) {
+		if (blanked[index] === "(") depth++;
+		else if (blanked[index] === ")" && --depth === 0) return index;
+	}
+	return -1;
 }
 
 function recordLocationsFromRuntimeSource(source) {
 	const records = [];
 	const blanked = blankCommentsAndStrings(source).text;
+	const push = (value, valueIndex, start, end) =>
+		records.push({
+			value,
+			line: lineAt(source, valueIndex),
+			startLine: lineAt(source, start),
+			endLine: lineAt(source, end),
+		});
 	const calls = [
 		["recordDegradationOnce", ["kind"]],
 		["incrementDegradationCount", ["kind"]],
+		// #2915: the ledger's single-record entry point takes the same
+		// `{ kind }` object as its Once/Count siblings.
+		["recordDegradation", ["kind"]],
 		["logExtension", ["subsystem", "message"]],
 		["logLatency", ["phase", "event", "eventName", "name"]],
 		// #3168 F12: `logCascade` (clients/cascade-logger.ts) is a
@@ -336,7 +393,10 @@ function recordLocationsFromRuntimeSource(source) {
 		["emitBounded", ["kind", "event", "eventName"]],
 	];
 	for (const [name, fields] of calls) {
-		const callPattern = new RegExp(`${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`, "g");
+		const callPattern = new RegExp(
+			`\\b${name}\\s*\\(\\s*\\{[\\s\\S]*?\\}`,
+			"g",
+		);
 		for (const match of blanked.matchAll(callPattern)) {
 			const original = source.slice(match.index, match.index + match[0].length);
 			for (const field of fields) {
@@ -344,16 +404,41 @@ function recordLocationsFromRuntimeSource(source) {
 					original,
 				);
 				const value = fieldMatch?.[1];
-				if (value) {
-					const valueIndex =
-						match.index + fieldMatch.index + fieldMatch[0].indexOf(value);
-					records.push({
+				if (value)
+					push(
 						value,
-						line: source.slice(0, valueIndex).split("\n").length,
-					});
-				}
+						match.index + fieldMatch.index + fieldMatch[0].indexOf(value),
+						match.index,
+						match.index + match[0].length,
+					);
 			}
 		}
+	}
+	// #2915: `emitBounded(phase, identity, payload, options)` is positional
+	// (clients/bounded-telemetry.ts), so the object-literal form above never
+	// sees a real call. Its record literals are the phase string and the
+	// ledger kind in the options object.
+	for (const match of blanked.matchAll(/\bemitBounded\s*\(/g)) {
+		const open = match.index + match[0].length - 1;
+		const close = closeParenIndex(blanked, open);
+		const end = close === -1 ? source.length : close + 1;
+		const call = source.slice(open + 1, end);
+		const phase = /^\s*(["'`])([^"'`$]+)\1/.exec(call);
+		if (phase)
+			push(
+				phase[2],
+				open + 1 + phase.index + phase[0].indexOf(phase[2]),
+				match.index,
+				end,
+			);
+		const ledgerKind = /\bledgerKind\s*:\s*["']([^"']+)["']/.exec(call);
+		if (ledgerKind)
+			push(
+				ledgerKind[1],
+				open + 1 + ledgerKind.index + ledgerKind[0].indexOf(ledgerKind[1]),
+				match.index,
+				end,
+			);
 	}
 	return records;
 }

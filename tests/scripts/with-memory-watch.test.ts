@@ -142,6 +142,15 @@ describe("with-memory-watch exit forwarding (#2042)", () => {
 		expect(run.stdout).toContain("[mem-watch] done.");
 	});
 
+	it("names the stdio shape it writes through on the startup line (#3141)", async () => {
+		// spawn's `stdio: "pipe"` hands the wrapper UNIX sockets, which the
+		// private-description fix cannot reopen; the line must say so.
+		const run = await runWrapper(exitWith(0));
+		expect(run.stdout).toMatch(
+			/^\[mem-watch\] host [^\n]* stdio=stdout:socket\/inherited,stderr:socket\/inherited\n/,
+		);
+	});
+
 	it("rejects a usage error with 2", async () => {
 		// No `--` separator: nothing to run.
 		const run = await runWrapper([]);
@@ -605,6 +614,7 @@ describe.skipIf(process.platform === "win32")(
 				expect(code).toBe(0);
 				const text = fs.readFileSync(outFile, "utf8");
 				expect(text.startsWith("[mem-watch] host ")).toBe(true);
+				expect(text).toMatch(/ stdio=stdout:file\/inherited,stderr:/);
 				expect(text).toContain("child-line-0\nchild-line-1\n");
 				expect(text).toContain("child-line-49\n");
 				expect(text).toMatch(/\[mem-watch\] done\. exitCode=0 /);
@@ -665,6 +675,8 @@ describe.skipIf(process.platform === "win32")(
 				await new Promise((resolve) => reader.on("close", resolve));
 				expect(code).toBe(0);
 				expect(text).toMatch(/\[mem-watch\] done\. exitCode=0 /);
+				// #3141: the startup line says the private description engaged.
+				expect(text).toMatch(/ stdio=stdout:pipe\/private,stderr:/);
 			} finally {
 				reader.destroy();
 				fs.rmSync(dir, { recursive: true, force: true });

@@ -1040,6 +1040,101 @@ describe("PR body lint (#1844)", () => {
 		},
 	);
 
+	describe("record harvest reaches every runtime record shape (#2915)", () => {
+		const withObservability = (text: string) =>
+			body.replace("The advisory check run is the record.", text);
+		// The runtime hunks of #2895's head: two type-list entries under
+		// clients/ and the index.ts emitBounded call (trimmed to that hunk).
+		const pr2895Diff = readFileSync(
+			join(
+				repositoryRoot,
+				"tests",
+				"fixtures",
+				"ci-pr-bodies",
+				"pr-2895-runtime.diff",
+			),
+			"utf8",
+		);
+
+		it.each(["session_start_duplicate_suppressed", "session-start-duplicate"])(
+			"accepts #2895's honest body naming %s from a positional index.ts emitBounded",
+			(record) => {
+				expect(
+					lintPrBody(withObservability(`The bounded record is ${record}.`), {
+						diff: pr2895Diff,
+					}),
+				).toEqual({ valid: true, errors: [] });
+			},
+		);
+
+		it("still refuses a record #2895's diff does not add", () => {
+			expect(
+				lintPrBody(withObservability("The bounded record is not-in-diff."), {
+					diff: pr2895Diff,
+				}).valid,
+			).toBe(false);
+		});
+
+		it("requires a record for a failure path added to index.ts", () => {
+			const result = lintPrBody(
+				withObservability("No new failure path; no record added."),
+				{
+					diff: [
+						"diff --git a/index.ts b/index.ts",
+						"@@ -1,0 +1,1 @@",
+						"+try { start(); } catch { return null; }",
+					].join("\n"),
+				},
+			);
+			expect(result.errors.join(" ")).toContain(
+				"not valid when the added lines contain a failure path",
+			);
+		});
+
+		it("harvests a new call whose closing brace is an unchanged context line", () => {
+			const diff = [
+				"diff --git a/clients/example.ts b/clients/example.ts",
+				"@@ -10,2 +10,4 @@",
+				"+\tlogLatency({",
+				'+\t\tphase: "example_context_close",',
+				" \t});",
+				" }",
+			].join("\n");
+			expect(
+				lintPrBody(withObservability("The record is example_context_close."), {
+					diff,
+				}),
+			).toEqual({ valid: true, errors: [] });
+		});
+
+		it("does not count an untouched record in the hunk's context as added", () => {
+			const diff = [
+				"diff --git a/clients/example.ts b/clients/example.ts",
+				"@@ -10,2 +10,3 @@",
+				' \trecordDegradationOnce({ kind: "old-kind" });',
+				"+\tnext();",
+				" }",
+			].join("\n");
+			expect(
+				lintPrBody(withObservability("The record is old-kind."), { diff })
+					.valid,
+			).toBe(false);
+		});
+
+		it("harvests recordDegradation's kind", () => {
+			const diff = [
+				"diff --git a/clients/example.ts b/clients/example.ts",
+				"@@ -1,0 +1,1 @@",
+				'+recordDegradation({ kind: "single-record-kind" });',
+			].join("\n");
+			expect(
+				lintPrBody(withObservability("The record is single-record-kind."), {
+					diff,
+				}),
+			).toEqual({ valid: true, errors: [] });
+		});
+	});
+
 	it("accepts an existing record named with its source location", () => {
 		const source = join(process.cwd(), "clients", "existing-record.ts");
 		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
