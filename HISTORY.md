@@ -274,6 +274,15 @@ not a built check). The line now names the guard that does exist,
 `tests/clients/availability-policy-coverage.test.ts`, and the open issue for
 the ratchet. "Maintaining this file" now says a shape names its guard by path.
 
+The same retro read the session that ran it. Four mistakes were caught by
+existing guards and needed nothing new: `git stash` inside a command (twice),
+a worktree removal over a symlinked `node_modules`, and an unpinned `dist/`
+probe. Three were not: a check chained to a commit or push with `;` or a pipe
+(three incidents, guard filed as #3471), a PR opened without `npm run
+preflight` (#3468's rejected `build:` title), and a spawn-count ratchet
+pre-push never selects (#3472). Each is a row in the merge-train mistake
+table.
+
 ## Archived pre-trim agent context (2026-09-14)
 
 The detailed incident narratives, closed decisions, and subsystem evidence below
