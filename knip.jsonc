@@ -153,6 +153,9 @@
 		// see that step's own comment. Declaring it a real devDependency
 		// would undo that deliberate choice.
 		"markdownlint-cli2",
+		// scripts/check-tla-models.mjs runs TLC with the JDK on the CI runner
+		// image (#3447); it is a system tool, not an npm package.
+		"java",
 		// scripts/playground-chrome.mjs shells out to OS-level port-checking
 		// utilities (Windows `netstat`, POSIX `ss`) — system binaries, never
 		// npm-installable, so there is no dependency that could ever provide
