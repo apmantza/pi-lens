@@ -45,12 +45,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-	checkCleanSignalDrift,
 	classifyCleanBehavior,
 	classifyFirstPublish,
 	COMPARABLE_FIRST_PUBLISH,
 	DRIFT_SUMMARY_PATH,
 	createPublishTraceDrainer,
+	findCleanSignalDrift,
 	strategyKeyForLang,
 } from "./lib/clean-signal.mjs";
 import {
@@ -401,7 +401,7 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // /strategies.ts's `silentOnClean` marker. Telemetry only — NEVER a CI gate (this script
 // always exit(0)s regardless); a mismatch is logged to stdout and written as a
 // matrix footnote so a human decides whether to flip the marker. `unknown`
-// rows are never fed in (checkCleanSignalDrift already guards this).
+// rows are never fed in (findCleanSignalDrift's per-row check guards this).
 //
 // Resolved to the same `targetLang` the matrix merge uses (clean fixture wins
 // over its dirty sibling for the same base lang — resolveTargetLangRows is
@@ -417,11 +417,13 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // means today's publishes-* observation compares clean (no false alarm), and
 // a future TS7 build going silent again would surface as `silent-not-marked`
 // — a real signal, not a skipped row.
-const driftWarnings = resolveTargetLangRows(rows)
-	.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
-	.filter(
-		(d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent",
-	);
+// #3444: one row per strategy key (findCleanSignalDrift aggregates), so two fixtures of one
+// server (ast-grep, ast-grep-baseline) are judged together against its single
+// marker, and a degenerate silent row never counts.
+const driftWarnings = findCleanSignalDrift(
+	resolveTargetLangRows(rows),
+	lookupSilentOnClean,
+);
 if (driftWarnings.length) {
 	console.log(
 		`\n  Drift vs wait-policy/strategies.ts silentOnClean marker (${driftWarnings.length} — telemetry only, never a CI gate):`,
@@ -598,11 +600,10 @@ function updateMatrix(measuredRows) {
 	// agree. NEVER a CI gate — this only rewrites a footnote section in the doc.
 	// #558: native-ts7 rows are compared too, against an explicit `false`
 	// expectation (see the drift-check comment above), not classic's marker.
-	const footnoteWarnings = targetLangRows
-		.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
-		.filter(
-			(d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent",
-		);
+	const footnoteWarnings = findCleanSignalDrift(
+		targetLangRows,
+		lookupSilentOnClean,
+	);
 	out = writeDriftFootnote(out, footnoteWarnings);
 
 	if (out !== text) {

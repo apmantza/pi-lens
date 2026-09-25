@@ -229,6 +229,13 @@ export function checkCleanSignalDrift(row, silentOnClean) {
 			detail: `observed=${behavior} — not a comparable classification (never collapsed into silent/not-silent)`,
 		};
 	}
+	if (isDegenerateSilent(row)) {
+		return {
+			lang,
+			kind: "not-comparable",
+			detail: `observed=silent on a dirty fixture whose server never published a diagnostic (first-publish=${row.firstPublish ?? "unknown"}) — silence on an undiagnosed file is not evidence the server skips clean publishes (#3444)`,
+		};
+	}
 	const observedSilent = behavior === "silent";
 	const marked = Boolean(silentOnClean);
 	if (observedSilent && !marked) {
@@ -253,6 +260,75 @@ export function checkCleanSignalDrift(row, silentOnClean) {
 }
 
 /**
+ * #3444: a `silent` row is evidence only when the dirty phase proved the server
+ * diagnoses this fixture. A dirty fixture whose server never published a
+ * non-empty set (`empty-only`/`unknown` on the first-publish axis) made a
+ * "clean transition" from nothing to nothing, which proves nothing either way
+ * (Sep 25, `ast-grep-baseline`: 1 empty dirty publish, 0 clean). A `clean: true`
+ * fixture is exempt: its dirty phase is empty by design and its silence IS the
+ * clean→clean measurement.
+ *
+ * @param {{ behavior: string, firstPublish?: string, cleanFixture?: boolean }} row
+ */
+export function isDegenerateSilent(row) {
+	return (
+		row.behavior === "silent" &&
+		!row.cleanFixture &&
+		DEGENERATE_FIRST_PUBLISH.has(row.firstPublish)
+	);
+}
+
+// The first-publish classes that say the dirty phase never carried a diagnostic.
+// A row with no first-publish field at all (a caller measuring only the clean
+// axis) is not judged degenerate: absence of the axis is not evidence.
+const DEGENERATE_FIRST_PUBLISH = new Set(["empty-only", "unknown"]);
+
+const DRIFT_BEHAVIOR_RANK = {
+	"publishes-versioned": 3,
+	"publishes-unversioned": 2,
+	silent: 1,
+};
+
+/**
+ * #3444: `silentOnClean` belongs to a SERVER (the strategy key), and two
+ * fixtures can drive the same server (`ast-grep` and `ast-grep-baseline` both
+ * run `id: "ast-grep"`). Comparing each fixture against the one marker lets
+ * them disagree in the same run, and no marker can satisfy both. So the drift
+ * check sees one row per strategy key:
+ *
+ * - degenerate silent rows ({@link isDegenerateSilent}) are dropped first;
+ * - one clean-transition publish from any fixture disproves `silentOnClean`,
+ *   so a publishing row outranks a silent one (versioned over version-less);
+ * - `silent` survives only when no fixture of that server published on clean.
+ *
+ * The chosen row carries `lang` = the strategy key and `fixtures` = every
+ * fixture lang that fed it. Rows with no comparable behavior pass through
+ * untouched (checkCleanSignalDrift reports them not-comparable).
+ *
+ * @template {{ lang: string, behavior: string, firstPublish?: string, cleanFixture?: boolean }} R
+ * @param {R[]} rows
+ * @param {(lang: string) => string} [keyOf]
+ * @returns {Array<R & { fixtures: string[] }>}
+ */
+export function aggregateDriftRows(rows, keyOf = strategyKeyForLang) {
+	const byKey = new Map();
+	for (const row of rows) {
+		if (!(row.behavior in DRIFT_BEHAVIOR_RANK) || isDegenerateSilent(row))
+			continue;
+		const key = keyOf(row.lang);
+		const prev = byKey.get(key);
+		const fixtures = [...(prev?.fixtures ?? []), row.lang];
+		const best =
+			!prev ||
+			DRIFT_BEHAVIOR_RANK[row.behavior] > DRIFT_BEHAVIOR_RANK[prev.behavior]
+				? row
+				: prev;
+		byKey.set(key, { ...best, lang: key, fixtures });
+	}
+	return [...byKey.values()];
+}
+
+/**
  * Run the drift check over every measured row (already resolved to matrix
  * `targetLang` — the clean-fixture-wins step done upstream) against a
  * lang→silentOnClean lookup. Returns only the two drift kinds (never
@@ -264,7 +340,8 @@ export function checkCleanSignalDrift(row, silentOnClean) {
  */
 export function findCleanSignalDrift(rows, lookupSilentOnClean) {
 	const warnings = [];
-	for (const row of rows) {
+	// #3444: one row per strategy key, degenerate silent rows dropped.
+	for (const row of aggregateDriftRows(rows)) {
 		const result = checkCleanSignalDrift(row, lookupSilentOnClean(row.lang));
 		if (
 			result.kind === "silent-not-marked" ||
@@ -353,6 +430,11 @@ export const LANG_TO_STRATEGY_KEY = {
 	// MARKED marksman as `silent-not-marked` on every run that reached it, and a
 	// census keyed the same way cannot cover that marker in either direction.
 	markdown: "marksman",
+	// #3444: the no-sgconfig baseline fixture runs the same `id: "ast-grep"`
+	// server (`auxiliaryServerIds: ["ast-grep"]` in scripts/smoke-tools.mjs), so
+	// its observations belong to the `ast-grep` marker — a marker keyed
+	// "ast-grep-baseline" could never reach the runtime's `getStrategy("ast-grep")`.
+	"ast-grep-baseline": "ast-grep",
 };
 
 /** Resolve a matrix/fixture lang to its strategy-table key. */
