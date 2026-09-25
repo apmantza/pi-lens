@@ -384,6 +384,24 @@ function headFileSource(file, options = {}) {
 	}
 }
 
+// Local preflight reads the working tree, which also holds files git will
+// never commit (#2904 item 4). CI resolves the same citation with
+// `git show HEAD:<file>`, so an ignored path passes locally and can never
+// pass there. `git check-ignore` exits 0 for an ignored path and 1 for a
+// path git would track; anything else (no repository) leaves the answer to
+// the working-tree read, as before.
+function isGitIgnoredPath(file, options = {}) {
+	try {
+		(options.git ?? gitExecFileSync)(["check-ignore", "-q", "--", file], {
+			cwd: options.cwd ?? process.cwd(),
+			stdio: "ignore",
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function sourceLines(source) {
 	return String(source ?? "").split(/\r?\n/);
 }
@@ -683,6 +701,12 @@ function lintCodeCitations(body, options = {}) {
 		const source = headFileSource(file, options);
 		if (source === null) {
 			errors.push(`PR body citation ${key} does not exist in the HEAD tree.`);
+			continue;
+		}
+		if (options.workingTree && isGitIgnoredPath(file, options)) {
+			errors.push(
+				`PR body citation ${key} names a git-ignored path; CI resolves citations with \`git show HEAD:<file>\`, so it can never pass there.`,
+			);
 			continue;
 		}
 		const sourceRows = sourceLines(source);
