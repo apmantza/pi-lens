@@ -2031,7 +2031,7 @@ export async function ensureFixtureTools(
  * instead of reading the skips as green.
  *
  * `deps` injects the installer surface for tests (the seam `runFormatSmoke`
- * uses); production resolves it from dist/clients/installer. `toolchainPresence`
+ * uses); production resolves it from dist/probes/installer.js. `toolchainPresence`
  * is injectable for the same reason — the production value starts empty and
  * caches probe results per strategy.
  */
@@ -2060,12 +2060,13 @@ export async function runInstallRegistrySmoke({
 			);
 			process.exit(2);
 		}
+		// #3219: the bundled registry entry — an installed package no longer
+		// ships the unbundled dist/clients/ tree.
 		const installerEntry = path.join(
 			installerRoot,
 			"dist",
-			"clients",
-			"installer",
-			"index.js",
+			"probes",
+			"installer.js",
 		);
 		if (!fs.existsSync(installerEntry)) {
 			console.error(

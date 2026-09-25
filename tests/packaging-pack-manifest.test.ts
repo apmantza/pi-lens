@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // `npm pack` below runs pi-lens's OWN `prepare` -> `scripts/warm-loader-cache.mjs`,
 // whose install-log sink is `PI_LENS_INSTALL_LOG` or, failing that,
@@ -19,6 +20,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // pin closed (#2619 review F1; reused here rather than re-typing the same env
 // map, #2634).
 import { scratchEnv } from "../scripts/release-qa.mjs";
+import { packedLayoutViolations } from "../scripts/lib/packed-layout.mjs";
+import { assertNonEmptyScan } from "./support/sweep-kit.js";
 import {
 	restore as restorePackBackup,
 	stripForPack,
@@ -283,4 +286,62 @@ describe("published manifest carries no devDependencies", () => {
 			).toBe(lockBefore);
 		},
 	);
+
+	// #3219: the invariant "everything in the published package loads from the
+	// bundled tree", checked on the SAME real tarball the case above packed
+	// (one `npm pack` per run; it builds dist/ through `prepare`). Red on the
+	// pre-#3219 layout: the tarball carried 477 files under dist/clients/ and
+	// dist/tools/, which the bins and both persist workers loaded from.
+	it("ships only the bundled tree, and both persist workers start from it (#3219)", async () => {
+		const filename = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
+		if (!filename)
+			throw new Error(
+				"no tarball: the preceding real `npm pack` case must run first",
+			);
+		const unpacked = path.join(tmp, "unpacked");
+		fs.mkdirSync(unpacked, { recursive: true });
+		execFileSync("tar", ["-xzf", filename, "-C", "unpacked"], { cwd: tmp });
+		const pkgRoot = path.join(unpacked, "package");
+		const packedPaths = (
+			fs.readdirSync(pkgRoot, { recursive: true }) as string[]
+		)
+			.map((entry) => entry.split(path.sep).join("/"))
+			.filter((entry) => fs.statSync(path.join(pkgRoot, entry)).isFile());
+		// Dead-sweep floor (AGENTS.md shape 10): 1184 files packed on 2026-09-25;
+		// half, rounded down.
+		assertNonEmptyScan("packed files", packedPaths.length, 592);
+		expect(
+			packedLayoutViolations(packedPaths, (entry) =>
+				fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
+			),
+		).toEqual([]);
+		for (const entry of [
+			"dist/index.js",
+			"dist/mcp/cli.js",
+			"dist/mcp/server.js",
+			"dist/mcp/analyze-cli.js",
+			"dist/mcp/worker.js",
+			"dist/workers/project-snapshot-persist-worker.js",
+			"dist/workers/review-graph-persist-worker.js",
+		])
+			expect(packedPaths, entry).toContain(entry);
+		// The worker bundles import only node builtins and their own chunks, so
+		// the unpacked package starts them with no node_modules at all.
+		for (const name of [
+			"project-snapshot-persist-worker",
+			"review-graph-persist-worker",
+		]) {
+			const worker = new Worker(
+				path.join(pkgRoot, "dist", "workers", `${name}.js`),
+			);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					worker.once("online", () => resolve());
+					worker.once("error", reject);
+				});
+			} finally {
+				await worker.terminate();
+			}
+		}
+	});
 });

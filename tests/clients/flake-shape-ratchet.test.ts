@@ -320,7 +320,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:packaging-pack-manifest.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
+			"observes the real npm pack lifecycle (prepack/postpack), and unpacks that real tarball to check what ships (#3219); no in-process double is faithful",
 	},
 	"real-process-spawn:real-harness/child-exit.test.ts": {
 		detector: "real-process-spawn",

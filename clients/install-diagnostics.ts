@@ -62,6 +62,62 @@ function safe<T>(fn: () => T, fallback: T): T {
 	}
 }
 
+/** The resolver-ladder inputs of {@link grammarsInstalled}. */
+export interface GrammarProbeDeps {
+	resolve: (specifier: string) => string;
+	packageRoot: () => string;
+	cwd: () => string;
+}
+
+/**
+ * Whether web-tree-sitter's core grammars are installed.
+ *
+ * #3409 (sweep sibling of the same shape): this probe used to walk up from
+ * the BARE `web-tree-sitter` specifier, so on the host pi ships — a `bun
+ * build --compile` binary, where a bare specifier throws MODULE_NOT_FOUND —
+ * it reported `grammars: false` for an install whose grammars were present.
+ * The one report a user pastes when the long tail of grammars is dead has to
+ * measure the same directory the client does, through the same ladder.
+ *
+ * #3424: the ladder's inputs are injected so the compiled-host, populated and
+ * empty cases are testable in every lane; the authoritative Unit tests lane's
+ * own `node_modules/web-tree-sitter/grammars` is empty, so the live probe
+ * cannot be pinned there.
+ */
+export function grammarsInstalled(deps: GrammarProbeDeps): boolean {
+	const dir = resolveWebTreeSitterPackageDir(deps);
+	return (
+		!!dir &&
+		fs.existsSync(path.join(dir, "grammars", "tree-sitter-typescript.wasm"))
+	);
+}
+
+/**
+ * The explanatory notes for a diagnostic block. #3424: an unresolved runtime
+ * dependency names the compiled-host cause alongside the layout ones — on a
+ * `bun build --compile` host (how pi ships) a bare specifier cannot resolve
+ * whatever the package manager did, so a note naming only pnpm/nested layouts
+ * sent that user to inspect the wrong thing (#3409's root cause).
+ */
+export function installDiagnosticNotes(input: {
+	depsUnresolved: boolean;
+	astGrepCli: boolean;
+	grammars: boolean;
+}): string[] {
+	const notes: string[] = [];
+	if (input.depsUnresolved) {
+		notes.push(
+			"One or more runtime dependencies did not resolve. This is the #285/#335 failure mode — a package-manager layout (pnpm symlink store / nested install) the runtime's resolver can't traverse, an outdated runtime, or a runtime compiled into a single binary (`bun build --compile`, the way pi ships), where a bare package specifier cannot resolve whatever the layout is (#3409).",
+		);
+	}
+	if (!input.astGrepCli || !input.grammars) {
+		notes.push(
+			"ast-grep CLI and/or tree-sitter grammars are missing — pnpm/bun skip lifecycle scripts by default, so the postinstall that fetches them did not run.",
+		);
+	}
+	return notes;
+}
+
 /** Gather the environment fingerprint. Never throws. */
 export function collectInstallDiagnostics(): InstallDiagnostics {
 	const notes: string[] = [];
@@ -129,36 +185,24 @@ export function collectInstallDiagnostics(): InstallDiagnostics {
 		);
 	}, false);
 
-	const grammars = safe(() => {
-		// #3409 (sweep sibling of the same shape): this probe used to walk up from
-		// the BARE `web-tree-sitter` specifier, so on the host pi ships — a `bun
-		// build --compile` binary, where a bare specifier throws MODULE_NOT_FOUND
-		// — it reported `grammars: false` for an install whose grammars were
-		// present. The one report a user pastes when the long tail of grammars is
-		// dead has to measure the same directory the client does, through the same
-		// ladder.
-		const dir = resolveWebTreeSitterPackageDir({
-			resolve: (specifier) => require.resolve(specifier),
-			// `root` is this probe's own walk to the package root, computed above.
-			packageRoot: () => root,
-			cwd: () => process.cwd(),
-		});
-		return (
-			!!dir &&
-			fs.existsSync(path.join(dir, "grammars", "tree-sitter-typescript.wasm"))
-		);
-	}, false);
+	const grammars = safe(
+		() =>
+			grammarsInstalled({
+				resolve: (specifier) => require.resolve(specifier),
+				// `root` is this probe's own walk to the package root, computed above.
+				packageRoot: () => root,
+				cwd: () => process.cwd(),
+			}),
+		false,
+	);
 
-	if (deps.some((d) => !d.resolved)) {
-		notes.push(
-			"One or more runtime dependencies did not resolve. This is the #285/#335 failure mode — usually a package-manager layout (pnpm symlink store / nested install) the runtime's resolver can't traverse, or an outdated runtime.",
-		);
-	}
-	if (!astGrepCli || !grammars) {
-		notes.push(
-			"ast-grep CLI and/or tree-sitter grammars are missing — pnpm/bun skip lifecycle scripts by default, so the postinstall that fetches them did not run.",
-		);
-	}
+	notes.push(
+		...installDiagnosticNotes({
+			depsUnresolved: deps.some((d) => !d.resolved),
+			astGrepCli,
+			grammars,
+		}),
+	);
 
 	return {
 		piLensVersion,

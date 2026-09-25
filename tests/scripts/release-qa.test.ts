@@ -220,9 +220,7 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 		}
 		const smoke = rows.find((parsed) => parsed.id === "tool-smoke-install");
 		expect(smoke?.entryPoint).toContain("<export>/scripts/smoke-tools.mjs");
-		expect(smoke?.entryPoint).toContain(
-			"<installed>/dist/clients/installer/index.js",
-		);
+		expect(smoke?.entryPoint).toContain("<installed>/dist/probes/installer.js");
 	});
 });
 

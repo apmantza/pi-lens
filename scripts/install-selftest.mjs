@@ -127,18 +127,14 @@ function probeResolve(spec) {
 }
 
 // --- 1. The documented failure-point modules (eager bare imports) ----------
+// #3219: the package ships only bundled entries. file-utils (→ minimatch),
+// complexity-client (→ tree-sitter) and bootstrap (→ all analyzers) are inlined
+// in dist/index.js, so its import probes them; the installer registry is the
+// bundled dist/probes/installer.js the bins share chunks with.
 await probeImport("dist/index.js (entry)", "dist/index.js");
 await probeImport(
-	"clients/file-utils.js (→ minimatch)",
-	"dist/clients/file-utils.js",
-);
-await probeImport(
-	"clients/complexity-client.js (→ tree-sitter)",
-	"dist/clients/complexity-client.js",
-);
-await probeImport(
-	"clients/bootstrap.js (→ all analyzers)",
-	"dist/clients/bootstrap.js",
+	"probes/installer.js (bundled installer registry)",
+	"dist/probes/installer.js",
 );
 
 // --- 2. Direct bare-specifier resolution -----------------------------------
@@ -174,7 +170,7 @@ record(
 // symlink store) — the binary exists but the launcher can't reach it.
 try {
 	const installerUrl = `file://${path
-		.resolve(pkgRoot, "dist/clients/installer/index.js")
+		.resolve(pkgRoot, "dist/probes/installer.js")
 		.replace(/\\/g, "/")}`;
 	const { TOOLS, resolvePlatformPackageBinary } = await import(installerUrl);
 	for (const tool of TOOLS.filter((t) => t.platformPackage)) {

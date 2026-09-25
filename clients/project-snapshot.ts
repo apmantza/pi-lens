@@ -1637,12 +1637,15 @@ function resolveSnapshotPersistWorkerPath(): string | undefined {
 	// esbuild does NOT rewrite new URL(...) asset refs, so from the bundled
 	// dist/index.js a sibling ./project-snapshot-persist-worker.js resolves
 	// beside the BUNDLE where nothing exists. Try the compiled-sibling layout
-	// first (source checkout / unbundled dist/clients tree), then the dist-tree
-	// path relative to the bundle entry — same shape as the review graph's
+	// first (source checkout / tsc emit), then the bundled worker entry
+	// (#3219: dist/workers/, never the unbundled dist/clients tree, which the
+	// package no longer ships) — from dist/index.js or a dist/ chunk, then from
+	// a bin under dist/mcp/. Same shape as the review graph's
 	// resolvePersistWorkerPath (#950 review F1).
 	const candidates = [
 		new URL("./project-snapshot-persist-worker.js", import.meta.url),
-		new URL("./clients/project-snapshot-persist-worker.js", import.meta.url),
+		new URL("./workers/project-snapshot-persist-worker.js", import.meta.url),
+		new URL("../workers/project-snapshot-persist-worker.js", import.meta.url),
 	];
 	for (const url of candidates) {
 		try {
