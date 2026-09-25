@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-	cleanupTestEnvironmentsDrained,
 	removeTempDirSync,
 	setupTestEnvironment,
+	useTrackedTempDirs,
 } from "../test-utils.js";
 
 // These launch tests use fake timers and don't exercise Windows Ruby drive-root
@@ -36,20 +36,13 @@ class MockChildProcess extends EventEmitter {
 }
 
 describe("lsp launch", () => {
-	// Spawns are mocked, so nothing but this file owns the fixture roots.
-	const FIXTURE_PREFIXES = [
-		"pi-lens-shim-",
-		"pi-lens-ps1-",
-		"pi-lens-launch-",
-	] as const;
-
-	afterEach(async () => {
+	afterEach(() => {
 		vi.useRealTimers();
 		vi.resetModules();
 		vi.clearAllMocks();
-		for (const prefix of FIXTURE_PREFIXES)
-			await cleanupTestEnvironmentsDrained(prefix);
 	});
+	// Spawns are mocked, so nothing but this file owns the fixture roots.
+	useTrackedTempDirs("pi-lens-shim-", "pi-lens-ps1-", "pi-lens-launch-");
 
 	it.runIf(process.platform !== "win32")(
 		"spawns LSP servers in their own process group on POSIX",

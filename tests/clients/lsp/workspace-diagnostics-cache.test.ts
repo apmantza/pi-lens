@@ -32,12 +32,12 @@ import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.j
 import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
-	waitForProjectSnapshotPersistsForTests,
 } from "../../../clients/project-snapshot.js";
 import {
 	cleanupTestEnvironmentsDrained,
 	removeTempDirSync,
 	setupTestEnvironment,
+	useTrackedTempDirs,
 } from "../test-utils.js";
 import {
 	getDegradationSummary,
@@ -54,12 +54,9 @@ beforeEach(() => {
 	fs.mkdirSync(path.join(tmp, ".pi-lens"));
 });
 
-afterEach(async () => {
-	// `saveProjectSnapshot` queues its body write; let it land before the root
-	// is removed, or it recreates the root afterwards.
-	await waitForProjectSnapshotPersistsForTests();
-	await cleanupTestEnvironmentsDrained("pi-lens-lsp-cache-");
-});
+// `saveProjectSnapshot` queues its body write; the drain lets it land before
+// the root is removed.
+useTrackedTempDirs("pi-lens-lsp-cache-");
 
 function makeEntry(
 	overrides: Partial<WorkspaceDiagnosticsCacheEntry> = {},

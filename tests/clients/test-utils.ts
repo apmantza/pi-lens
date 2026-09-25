@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterEach, vi } from "vitest";
 
 // Windows keeps a file handle inside a just-used temp dir alive briefly after
 // a child process/watcher/background scan exits (AV scanning, delayed handle
@@ -63,15 +64,92 @@ export function cleanupTestEnvironments(
 	}
 }
 
+type WriterModule = Record<string, unknown>;
+
+/**
+ * Every copy of a writer module a drain has reached, keyed by subsystem. A
+ * test that calls `vi.resetModules()` can leave queued writes on an earlier
+ * copy (the one its top-level import holds) or on a later one (the one it
+ * re-imported), so a drain waits on each copy it has seen, not only the
+ * current one.
+ */
+const seenWriterModules = new Map<string, Set<WriterModule>>();
+
+async function drainWriter(
+	name: string,
+	load: () => Promise<WriterModule>,
+	hooks: readonly string[],
+): Promise<void> {
+	let copies = seenWriterModules.get(name);
+	if (!copies) {
+		copies = new Set();
+		seenWriterModules.set(name, copies);
+	}
+	try {
+		copies.add(await load());
+	} catch {
+		// The module failed to load under this file's mocks: nothing new to add.
+	}
+	for (const mod of copies) {
+		for (const hook of hooks) {
+			try {
+				const fn = mod[hook];
+				if (typeof fn === "function") await fn();
+			} catch {
+				// Mocked without the hook, or the hook failed: nothing to drain.
+			}
+		}
+	}
+}
+
+/**
+ * Wait for every known background writer that can recreate a fixture root
+ * after its test removed it: review-graph persists, project-snapshot body
+ * persists, and extension-log appends. Each costs nothing when idle.
+ *
+ * The modules are loaded here, at call time, never at the top of this file,
+ * so a file that never touched a writer pays only the import. Skipped under
+ * fake timers; restore real timers first.
+ *
+ * Gap: a copy is only seen once a drain runs while it is the current copy. A
+ * file that resets modules before its first drain, while its top-level import
+ * still has writes queued, must drain that copy itself.
+ */
+export async function drainBackgroundWritesForTests(): Promise<void> {
+	// The waits poll on `setTimeout`, which never fires under fake timers.
+	if (vi.isFakeTimers()) return;
+	await drainWriter(
+		"review-graph",
+		() => import("../../clients/review-graph/builder.js"),
+		["flushReviewGraphPersistsForTests", "waitForReviewGraphPersistsForTests"],
+	);
+	await drainWriter(
+		"project-snapshot",
+		() => import("../../clients/project-snapshot.js"),
+		["waitForProjectSnapshotPersistsForTests"],
+	);
+	await drainWriter(
+		"extension-log",
+		() => import("../../clients/extension-log.js"),
+		["flushExtensionLog"],
+	);
+}
+
 /**
  * Drain deferred fixture producers before the final cleanup pass. Keeping
  * roots tracked until the last tick preserves the hygiene sweep's handle.
+ * The known background writers are drained first unless `drainWrites` is
+ * false.
  */
 export async function cleanupTestEnvironmentsDrained(
 	prefix: string,
-	options: { beforeDrain?: () => Promise<void> } = {},
+	options: {
+		beforeDrain?: () => Promise<void>;
+		drainWrites?: boolean;
+	} = {},
 ): Promise<void> {
 	await options.beforeDrain?.();
+	if (options.drainWrites !== false) await drainBackgroundWritesForTests();
 	for (let tick = 0; tick < 3; tick++) {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		if (tick === 2) {
@@ -80,6 +158,17 @@ export async function cleanupTestEnvironmentsDrained(
 		}
 		cleanupTestEnvironments(prefix, { untrack: tick === 2 });
 	}
+}
+
+/**
+ * Register an `afterEach` that drains and removes every root created through
+ * `setupTestEnvironment` with one of `prefixes`. Call it at file or describe
+ * scope, and create the file's temp roots with `setupTestEnvironment`.
+ */
+export function useTrackedTempDirs(...prefixes: string[]): void {
+	afterEach(async () => {
+		for (const prefix of prefixes) await cleanupTestEnvironmentsDrained(prefix);
+	});
 }
 
 /**

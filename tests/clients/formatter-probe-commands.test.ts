@@ -18,7 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 
@@ -36,10 +36,7 @@ import {
 	ALL_FORMATTERS,
 	clearFormatterCache,
 } from "../../clients/formatters.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 /**
  * Binaries a formatter's `detect()` probes BESIDES its own `command[0]`, with
@@ -76,9 +73,7 @@ beforeEach(() => {
 });
 
 // Every probe is mocked, so nothing but this file owns these roots.
-afterEach(async () => {
-	await cleanupTestEnvironmentsDrained("pi-lens-probe-commands-");
-});
+useTrackedTempDirs("pi-lens-probe-commands-");
 
 /** Every binary each formatter's `detect()` looked up, in one full sweep. */
 async function probesByFormatter(): Promise<Map<string, Set<string>>> {

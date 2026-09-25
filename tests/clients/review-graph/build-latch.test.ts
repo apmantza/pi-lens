@@ -30,15 +30,10 @@ import {
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
 	getLastReviewGraphBuildAttempt,
-	flushReviewGraphPersistsForTests,
 	isGraphBuildInFlight,
-	waitForReviewGraphPersistsForTests,
 } from "../../../clients/review-graph/builder.js";
 import * as scanPolicy from "../../../clients/project-scan-policy.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "../test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "../test-utils.js";
 
 const savedEnv = new Map<string, string | undefined>();
 
@@ -73,11 +68,11 @@ beforeEach(() => {
 	_resetProjectReportBuildGuardForTests();
 });
 
-afterEach(async () => {
-	// A build queues a persist into the project's data dir; let it land
-	// before the root is removed, or it recreates the root afterwards.
-	flushReviewGraphPersistsForTests();
-	await waitForReviewGraphPersistsForTests();
+// A build queues a persist into the project's data dir; the drain lets it
+// land before the root is removed.
+useTrackedTempDirs("pi-lens-build-latch-");
+
+afterEach(() => {
 	for (const [name, value] of savedEnv) {
 		if (value === undefined) delete process.env[name];
 		else process.env[name] = value;
@@ -85,7 +80,6 @@ afterEach(async () => {
 	savedEnv.clear();
 	_resetReviewGraphSizeSkipTtlForTests();
 	clearReviewGraphWorkspaceCache();
-	await cleanupTestEnvironmentsDrained("pi-lens-build-latch-");
 	vi.restoreAllMocks();
 });
 

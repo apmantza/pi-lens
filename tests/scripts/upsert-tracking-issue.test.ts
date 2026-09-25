@@ -1,16 +1,14 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { main } from "../../scripts/upsert-tracking-issue.mjs";
 import {
-	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
+	useTrackedTempDirs,
 } from "../clients/test-utils.js";
 
 // `gh` is injected, so nothing but this file owns these roots.
-afterEach(async () => {
-	await cleanupTestEnvironmentsDrained("pi-lens-upsert-");
-});
+useTrackedTempDirs("pi-lens-upsert-");
 
 function run(args: string[], existing: unknown[] = []) {
 	const dir = setupTestEnvironment("pi-lens-upsert-").tmpDir;

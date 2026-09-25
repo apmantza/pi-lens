@@ -9,10 +9,7 @@ import {
 	type LSPServerInfo,
 } from "../../clients/lsp/server.js";
 import { LSPService } from "../../clients/lsp/index.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 let home: string;
 let toolCwd: typeof import("../../clients/tool-cwd.js");
@@ -35,11 +32,11 @@ beforeEach(async () => {
 	ledger.resetDegradationLedger();
 });
 
-afterEach(async () => {
-	// Log and ledger writes under this home are queued; let them land before
-	// the home is removed, or they recreate it afterwards.
-	await log.flushExtensionLog();
-	await cleanupTestEnvironmentsDrained("pi-lens-tool-cwd-");
+// Log writes under this home are queued; the drain lets them land before the
+// home is removed.
+useTrackedTempDirs("pi-lens-tool-cwd-");
+
+afterEach(() => {
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
 	delete process.env.PI_LENS_TEST_MODE;

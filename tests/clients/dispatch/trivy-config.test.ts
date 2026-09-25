@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { suppressTrivyConfigDockerOverlap } from "../../../clients/dispatch/dispatcher.js";
 import {
 	looksLikeCloudFormationTemplate,
@@ -10,10 +10,7 @@ import {
 } from "../../../clients/dispatch/runners/trivy-config.js";
 import type { Diagnostic } from "../../../clients/dispatch/types.js";
 import { makeRunnerCtx } from "../../support/runner-ctx.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "../test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "../test-utils.js";
 
 // ── appliesTo — Terraform is in scope, Terragrunt is deliberately excluded ────
 
@@ -212,9 +209,7 @@ describe("trivy-config run() — CloudFormation content gate", () => {
 	});
 
 	// trivy is mocked, so nothing but this describe owns these roots.
-	afterEach(async () => {
-		await cleanupTestEnvironmentsDrained("pi-lens-trivy-config-cfn-test-");
-	});
+	useTrackedTempDirs("pi-lens-trivy-config-cfn-test-");
 
 	it("scans a CloudFormation yaml template", async () => {
 		safeSpawnAsync.mockResolvedValue({

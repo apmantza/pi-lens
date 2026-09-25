@@ -11,7 +11,6 @@ import {
 	getCachedReviewGraph,
 	getLastGraphBuildInfo,
 	getReviewGraphRevisionDrift,
-	waitForReviewGraphPersistsForTests,
 	_resetCwdWorktreeMismatchLogForTests,
 } from "../../clients/review-graph/builder.js";
 import {
@@ -24,10 +23,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -85,12 +81,11 @@ beforeEach(() => {
 	previousDataDir = process.env.PILENS_DATA_DIR;
 });
 
-afterEach(async () => {
-	// A build queues a persist into the project's data dir; let it land
-	// before the root is removed, or it recreates the root afterwards.
-	flushReviewGraphPersistsForTests();
-	await waitForReviewGraphPersistsForTests();
-	await cleanupTestEnvironmentsDrained("pi-lens-graph-stamp-");
+// A build queues a persist into the project's data dir; the drain lets it
+// land before the root is removed.
+useTrackedTempDirs("pi-lens-graph-stamp-");
+
+afterEach(() => {
 	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 	else process.env.PILENS_DATA_DIR = previousDataDir;
 	vi.restoreAllMocks();

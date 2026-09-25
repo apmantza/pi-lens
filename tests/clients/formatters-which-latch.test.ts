@@ -13,12 +13,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
-import {
-	cleanupTestEnvironmentsDrained,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { setupTestEnvironment, useTrackedTempDirs } from "./test-utils.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
@@ -97,9 +94,7 @@ const names = async (cwd: string, filePath: string): Promise<string[]> =>
 	(await getFormattersForFile(filePath, cwd)).map((f) => f.name);
 
 // Every probe is mocked, so nothing but this file owns these roots.
-afterEach(async () => {
-	await cleanupTestEnvironmentsDrained("pi-lens-which-latch-");
-});
+useTrackedTempDirs("pi-lens-which-latch-");
 
 beforeEach(() => {
 	safeSpawnAsync.mockReset();
