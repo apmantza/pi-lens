@@ -375,6 +375,8 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 				true,
 			);
 			await recorder.untilSave();
+			// #3407: the inventory reads the same negotiated value.
+			expect(client.getSaveOptions?.()).toEqual({ includeText: false });
 
 			// The real `initialize` reply drove the send: the fixture advertises
 			// `save: true` and nothing else about saving, so no text rides along.
@@ -415,6 +417,8 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 				true,
 			);
 			await recorder.until("textDocument/didOpen");
+			// #3407: declared no save → the inventory reports none.
+			expect(client.getSaveOptions?.()).toBeUndefined();
 			// A stdio JSON-RPC stream is FIFO, so a reply to a request issued AFTER
 			// the notify proves the server has already drained everything the notify
 			// wrote. That is what makes the absence below evidence and not a race —

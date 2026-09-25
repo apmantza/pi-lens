@@ -443,6 +443,11 @@ export interface LSPClientInfo {
 	/** Top-level keys of the raw ServerCapabilities advertised at initialize —
 	 *  the full advertised surface (incl. providers pi-lens does not parse). */
 	getRawCapabilityKeys(): string[];
+	/** #3407: the `textDocumentSync.save` options negotiated at initialize, or
+	 *  `undefined` when the server declared none (see `negotiateSaveOptions`).
+	 *  Optional so hand-written client doubles need not implement it; the
+	 *  capability inventory reads it to answer "which servers get didSave". */
+	getSaveOptions?(): TextDocumentSaveOptions | undefined;
 	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts) — which concrete
 	 *  binary/protocol variant this client instance is actually running.
 	 *  Undefined = single-variant server or not yet reported (fail-safe:
@@ -5873,6 +5878,10 @@ export async function createLSPClient(options: {
 
 		getRawCapabilityKeys() {
 			return state.rawCapabilityKeys ?? [];
+		},
+
+		getSaveOptions() {
+			return state.saveOptions ? { ...state.saveOptions } : undefined;
 		},
 
 		getLaunchVariant() {

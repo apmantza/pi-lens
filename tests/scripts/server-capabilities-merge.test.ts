@@ -456,3 +456,58 @@ describe("mergeServerCapabilitiesDoc (#469)", () => {
 		expect(result.preservedCount).toBe(0);
 	});
 });
+
+describe("textDocumentSync.save column (#3407)", () => {
+	const render = (rows: Array<Record<string, unknown>>) =>
+		renderServerCapabilitiesDoc({
+			rows: rows.map((row) => ({
+				workspaceDiagnosticsSupport: { mode: "push-only" },
+				operationSupport: {},
+				advertisedCommands: [],
+				rawCapabilityKeys: [],
+				...row,
+			})) as never,
+			unavailable: new Set<string>(),
+			date: "2026-09-25",
+			platform: "linux",
+			ops: OPS,
+		});
+	const saveCells = (text: string) => {
+		const table = parseTable(text, "| server | mode |");
+		const saveIdx = table!.header.indexOf("save");
+		const serverIdx = table!.header.indexOf("server");
+		return Object.fromEntries(
+			table!.rows.map((cells) => [cells[serverIdx], cells[saveIdx]]),
+		);
+	};
+
+	it("renders each save shape, and an unreported one as unknown", () => {
+		expect(
+			saveCells(
+				render([
+					{ serverId: "expert", textDocumentSave: "save" },
+					{ serverId: "fsharp", textDocumentSave: "save+text" },
+					{ serverId: "vue", textDocumentSave: "none" },
+					{ serverId: "old-client" },
+				]),
+			),
+		).toEqual({
+			expert: "save",
+			fsharp: "save+text",
+			vue: "·",
+			"old-client": "?",
+		});
+	});
+
+	it("carries a row captured before the column existed as unknown, not as declaring none", () => {
+		const prior = [
+			"| server | mode | ws-pull | def | hov | cmds |",
+			"|---|---|---|---|---|---|",
+			"| jdtls | push-only | · | ✓ | ✓ | 3 |",
+			"",
+		].join("\n");
+		const fresh = render([{ serverId: "expert", textDocumentSave: "save" }]);
+		const { text } = mergeServerCapabilitiesDoc(prior, fresh);
+		expect(saveCells(text)).toEqual({ expert: "save", jdtls: "?" });
+	});
+});
