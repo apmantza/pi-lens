@@ -163,3 +163,13 @@ export declare function run(args?: {
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
 }): Promise<number>;
+
+export declare function callWithTransientRetry<T>(
+	call: (remainingMs: number | undefined) => T | Promise<T>,
+	options?: {
+		deadline?: number;
+		now?: () => number;
+		sleepImpl?: (ms: number) => Promise<void>;
+		onRetry?: (line: string) => void;
+	},
+): Promise<T>;
