@@ -501,6 +501,45 @@ export function resolveGhTimeoutMs(remainingMs) {
 }
 
 /**
+ * #2935: call `call(remainingMs)` and, while a `deadline` is set, wait out a
+ * failure `isTransientGhError` accepts -- 30 s, doubling to 5 min, never
+ * sleeping past the deadline -- with one `onRetry` line per retry. The
+ * failure is rethrown (exit 70) at once without a deadline (a one-shot
+ * read), for a non-transient error, or once the deadline has passed. Shared
+ * by the check-runs poll and `run()`'s startup lookups so every `gh` read
+ * under `--wait` spends one budget, not one each.
+ */
+export async function callWithTransientRetry(
+	call,
+	{
+		deadline,
+		now = () => Date.now(),
+		sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+		onRetry = () => {},
+	} = {},
+) {
+	let backoffSeconds = TRANSIENT_BACKOFF_INITIAL_SECONDS;
+	for (;;) {
+		const remainingMs =
+			deadline === undefined ? undefined : Math.max(0, deadline - now());
+		try {
+			return await call(remainingMs);
+		} catch (error) {
+			if (!remainingMs || !isTransientGhError(error)) throw error;
+			const delayMs = Math.min(backoffSeconds * 1000, remainingMs);
+			onRetry(
+				`transient gh error, retrying in ${Math.ceil(delayMs / 1000)}s (${Math.ceil(remainingMs / 1000)}s of --wait left): ${firstLine(error)}`,
+			);
+			await sleepImpl(delayMs);
+			backoffSeconds = Math.min(
+				backoffSeconds * 2,
+				TRANSIENT_BACKOFF_MAX_SECONDS,
+			);
+		}
+	}
+}
+
+/**
  * Poll `fetchPayload` (returns a check-runs JSON payload) until the computed
  * verdict is no longer PENDING or the wait budget is exhausted, at a fixed
  * `POLL_INTERVAL_SECONDS` interval. `sleepImpl` and `now` are injectable so
@@ -535,27 +574,13 @@ export async function pollVerdict({
 	const deadline = now() + capSeconds * 1000;
 	let verdict;
 	let polls = 0;
-	let backoffSeconds = TRANSIENT_BACKOFF_INITIAL_SECONDS;
 	for (;;) {
-		const remainingMs =
-			capSeconds > 0 ? Math.max(0, deadline - now()) : undefined;
-		let payload;
-		try {
-			payload = await fetchPayload(remainingMs);
-		} catch (error) {
-			if (!remainingMs || !isTransientGhError(error)) throw error;
-			const delayMs = Math.min(backoffSeconds * 1000, remainingMs);
-			onRetry(
-				`transient gh error, retrying in ${Math.ceil(delayMs / 1000)}s (${Math.ceil(remainingMs / 1000)}s of --wait left): ${firstLine(error)}`,
-			);
-			await sleepImpl(delayMs);
-			backoffSeconds = Math.min(
-				backoffSeconds * 2,
-				TRANSIENT_BACKOFF_MAX_SECONDS,
-			);
-			continue;
-		}
-		backoffSeconds = TRANSIENT_BACKOFF_INITIAL_SECONDS;
+		const payload = await callWithTransientRetry(fetchPayload, {
+			deadline: capSeconds > 0 ? deadline : undefined,
+			now,
+			sleepImpl,
+			onRetry,
+		});
 		const currentRerunState =
 			typeof rerunState === "function" ? rerunState() : rerunState;
 		verdict = computeVerdict(
@@ -859,11 +884,25 @@ export async function run({
 		const initialTimeoutMs = resolveGhTimeoutMs(
 			capSeconds > 0 ? capSeconds * 1000 : undefined,
 		);
-		const repository = resolveRepository(ghExec, initialTimeoutMs);
-		const { sha, mergeable, classification } = resolveHeadSha(
-			target,
-			ghExec,
-			initialTimeoutMs,
+		// #2935 remainder: the two lookups that throw run under the same
+		// transient retry and the same deadline as the poll, so a wait armed
+		// while GitHub is already down waits instead of exiting 70, and the
+		// time it spends here comes out of the poll's budget.
+		const clock = now ?? (() => Date.now());
+		const deadline = capSeconds > 0 ? clock() + capSeconds * 1000 : undefined;
+		const retryStartup = (call) =>
+			callWithTransientRetry(call, {
+				deadline,
+				now: clock,
+				onRetry: stderr,
+				...(sleepImpl ? { sleepImpl } : {}),
+			});
+		const repository = await retryStartup((remainingMs) =>
+			resolveRepository(ghExec, resolveGhTimeoutMs(remainingMs)),
+		);
+		const { sha, mergeable, classification } = await retryStartup(
+			(remainingMs) =>
+				resolveHeadSha(target, ghExec, resolveGhTimeoutMs(remainingMs)),
 		);
 		const ciClassification =
 			classification ?? resolveClassification(target, ghExec, initialTimeoutMs);
@@ -894,7 +933,10 @@ export async function run({
 					ghExec,
 					resolveGhTimeoutMs(remainingMs),
 				),
-			waitSeconds,
+			waitSeconds:
+				deadline === undefined
+					? waitSeconds
+					: Math.max(0, (deadline - clock()) / 1000),
 			mergeable,
 			requiredChecks,
 			classification: ciClassification,

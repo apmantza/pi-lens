@@ -2074,6 +2074,143 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 		expect(checkRunsCalls()).toBe(1);
 		expect(clock.sleeps).toEqual([]);
 	});
+
+	// #2935 remainder: the two startup lookups (`gh repo view`, `gh pr view`)
+	// ran before the retry loop, so a wait armed while GitHub was already
+	// down still exited 70 at once.
+	function startupFlakyGh(repoFailures: Error[], prFailures: Error[]) {
+		const calls = { repo: 0, pr: 0 };
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") {
+				calls.repo += 1;
+				const failure = repoFailures[calls.repo - 1];
+				if (failure) throw failure;
+				return "acme/repo";
+			}
+			if (args[0] === "pr" && args.join(" ").includes("headRefOid,mergeable")) {
+				calls.pr += 1;
+				const failure = prFailures[calls.pr - 1];
+				if (failure) throw failure;
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			}
+			if (args[0] === "pr")
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					labels: [],
+					comments: [],
+				});
+			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		return { ghExec, calls };
+	}
+
+	it("retries the startup lookups on a transient error inside --wait", async () => {
+		const { ghExec, calls } = startupFlakyGh(
+			[ghError(CONNECT), ghError(CONNECT)],
+			[ghError("HTTP 503: Service Unavailable")],
+		);
+		const clock = fakeClock();
+		const stderrLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2935", "--wait", "600"],
+			ghExec,
+			stdout: () => {},
+			stderr: (line: string) => stderrLines.push(line),
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(calls).toEqual({ repo: 3, pr: 2 });
+		// Each lookup backs off from 30 s on its own.
+		expect(clock.sleeps).toEqual([30_000, 60_000, 30_000]);
+		expect(stderrLines.filter((line) => /transient/.test(line))).toHaveLength(
+			3,
+		);
+	});
+
+	it("counts startup retries against the same --wait budget", async () => {
+		// 100 s budget: 30 + 60 s spent getting the repo leaves 10 s, so the
+		// head-SHA lookup gets one 10 s wait and one final try at the deadline.
+		const { ghExec, calls } = startupFlakyGh(
+			[ghError(CONNECT), ghError(CONNECT)],
+			Array.from({ length: 10 }, () => ghError(CONNECT)),
+		);
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935", "--wait", "100"],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_TRANSPORT);
+		expect(clock.sleeps).toEqual([30_000, 60_000, 10_000]);
+		expect(calls.pr).toBe(2);
+	});
+
+	it("startup retries and the poll share one --wait budget", async () => {
+		// One 30 s startup retry, then checks that stay pending: every sleep
+		// together must fit inside the 120 s asked for, not 30 s + 120 s.
+		let repoCalls = 0;
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") {
+				repoCalls += 1;
+				if (repoCalls === 1) throw ghError(CONNECT);
+				return "acme/repo";
+			}
+			if (args[0] === "pr")
+				return JSON.stringify({
+					headRefOid: "c0ffee",
+					mergeable: "MERGEABLE",
+					labels: [],
+					comments: [],
+				});
+			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
+			return JSON.stringify({
+				check_runs: [
+					checkRun({
+						name: "Unit tests",
+						status: "in_progress",
+						conclusion: null,
+						id: 1,
+					}),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			});
+		};
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935", "--wait", "120"],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(clock.sleeps[0]).toBe(30_000);
+		expect(clock.sleeps.reduce((sum, ms) => sum + ms, 0)).toBeLessThanOrEqual(
+			120_000,
+		);
+	});
+
+	it("a one-shot read still exits 70 when a startup lookup fails transiently", async () => {
+		const { ghExec, calls } = startupFlakyGh([ghError(CONNECT)], []);
+		const clock = fakeClock();
+		const exitCode = await run({
+			argv: ["2935"],
+			ghExec,
+			stdout: () => {},
+			stderr: () => {},
+			now: clock.now,
+			sleepImpl: clock.sleepImpl,
+		});
+		expect(exitCode).toBe(EXIT_TRANSPORT);
+		expect(calls.repo).toBe(1);
+		expect(clock.sleeps).toEqual([]);
+	});
 });
 
 describe("isTransientGhError (#2935)", () => {
