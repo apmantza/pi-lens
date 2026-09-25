@@ -151,6 +151,7 @@ export const DETECTOR_NAMES = [
 	"elapsed-time-assertion",
 	"raw-timer-wait",
 	"ungoverned-wait-for",
+	"never-settling-wait",
 ] as const;
 
 export type DetectorName = (typeof DETECTOR_NAMES)[number];
@@ -612,6 +613,55 @@ export function scanUngovernedWaitFor(
 	return hits;
 }
 
+// ── 5. Never-settling promise ───────────────────────────────────────────────
+
+/**
+ * A `new Promise(...)` whose executor body is empty, outside a
+ * `vi.useFakeTimers()` scope (#2885). Such a promise can never settle, so
+ * anything that awaits it ends only when a REAL timer fires somewhere: a
+ * production helper's budget (`withTimeout`, `withBudget`, `withDeadline` in
+ * clients/deadline-utils.ts), a harness deadline, or the test's own timeout.
+ * Detector 3 reads timer calls in test and support source only, so a wait
+ * whose `setTimeout` lives in production code was invisible: #2866's
+ * `fails a session_start handler that never settles` waited a real 5 000 ms
+ * through `pi-mock.ts`'s `withTimeout` with the ratchet green. This matches
+ * the hang itself rather than a list of helper names, so a new wrapper
+ * around a timer is covered the day it lands.
+ *
+ * Only an EMPTY executor body (or a bare `undefined` expression body) counts:
+ * one that stores `resolve` for later can settle. A never-settling promise
+ * that nothing awaits still counts; it is a hang double either way, and an
+ * admitted baseline entry costs one line.
+ */
+// `new Promise(() => {})`, `new Promise<never>((_resolve) => {})`,
+// `new Promise(function () {})`, `new Promise(() => undefined)`: an executor
+// with an empty body. Matched over comment- and string-stripped source, so a
+// shape named in prose never counts; a regex, not an AST walk, because this
+// scan runs over every test file inside the ratchet's 30 s budget.
+const NEVER_SETTLING_PROMISE =
+	/\bnew\s+Promise\s*(?:<[^()]*?>)?\s*\(\s*(?:(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(?:\{\s*\}|undefined\b)|function\s*\w*\s*\([^()]*\)\s*\{\s*\})\s*\)/g;
+
+export function scanNeverSettlingWait(
+	_file: string,
+	source: string,
+	context?: ScanContext,
+): FlakeHit[] {
+	const stripped = (context ?? scanContext(source)).stripped;
+	const lines = stripped.split("\n");
+	const stateAtLine = fakeTimersStateAtLine(lines);
+	const hits: FlakeHit[] = [];
+	for (const match of stripped.matchAll(NEVER_SETTLING_PROMISE)) {
+		const line = stripped.slice(0, match.index).split("\n").length - 1;
+		if (stateAtLine[line]) continue;
+		hits.push({
+			line: line + 1,
+			text: lines[line]?.trim() ?? "",
+			reason: "never-settling promise outside vi.useFakeTimers()",
+		});
+	}
+	return hits;
+}
+
 export const DETECTORS: Record<
 	DetectorName,
 	(file: string, source: string, context?: ScanContext) => FlakeHit[]
@@ -620,6 +670,7 @@ export const DETECTORS: Record<
 	"elapsed-time-assertion": scanElapsedTimeAssertion,
 	"raw-timer-wait": scanRawTimerWait,
 	"ungoverned-wait-for": scanUngovernedWaitFor,
+	"never-settling-wait": scanNeverSettlingWait,
 };
 
 /**
@@ -635,6 +686,7 @@ const SUPPORT_POPULATION_DETECTORS: readonly DetectorName[] = [
 	"elapsed-time-assertion",
 	"raw-timer-wait",
 	"ungoverned-wait-for",
+	"never-settling-wait",
 ];
 
 let countsCache: Record<DetectorName, Record<string, number>> | undefined;
