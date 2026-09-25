@@ -42,7 +42,11 @@ import {
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createTempFile,
+	setupTestEnvironment,
+	useTrackedTempDirs,
+} from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const logLatencySpy = vi.hoisted(() => vi.fn());
@@ -74,6 +78,10 @@ vi.mock("../../clients/lsp/index.js", () => ({
 }));
 
 import { handleSessionStart } from "../../clients/runtime-session.js";
+
+// Session start and the warmup queue project-snapshot body writes that can
+// recreate a fixture root after its `env.cleanup()`; the drain lets them land.
+useTrackedTempDirs("pi-lens-seq-budget-");
 
 function makeDeps(
 	ctxCwd: string,
