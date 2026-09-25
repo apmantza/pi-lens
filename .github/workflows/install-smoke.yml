@@ -495,7 +495,10 @@ jobs:
   # mise.run curl + npm backend are external-dep-heavy, and a green cell is not proof
   # of #285 coverage.
   mise-repro:
-    name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
+    # "(advisory)" is load-bearing (#3087): this job is continue-on-error on
+    # every event, so its check always concludes success. The suffix is how
+    # scripts/lib/ci-checks.mjs and ci-verdict tell advisory from gating.
+    name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }} (advisory)
     # #3049 review F1, swept (2026-09-15 retro F2): with
     # `if: github.event_name != 'pull_request'` here, moving the
     # `export PATH="$PNPM_HOME/bin:$PATH"` line of "Configure pnpm global bin

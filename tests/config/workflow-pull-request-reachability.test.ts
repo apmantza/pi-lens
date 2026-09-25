@@ -17,7 +17,10 @@
 // Not "blocking" -- `mise-repro` is deliberately `continue-on-error` and its
 // PR cell exists so the edited lines run and land in a log, not to gate the
 // merge. A job with no `if:` at all is trivially reachable and is not
-// examined.
+// examined by this first column. The second column (#3087) keeps the two
+// apart: a PR-reachable job whose job-level `continue-on-error` holds on a
+// pull request must declare "(advisory)" in its check-run name, so neither
+// the check list nor `ci-verdict` reads its unconditional success as a gate.
 //
 // EVALUATION: the same technique as tests/config/ci-infra-kill-rerun-gate.ts
 // and install-smoke-gates.ts -- yaml.load the REAL workflow, substitute every
@@ -49,6 +52,7 @@ import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
 import {
 	assertSortedRegistry,
 	auditRegistry,
@@ -156,7 +160,7 @@ interface WorkflowFile {
 	text: string;
 }
 
-type Job = { if?: unknown };
+type Job = { if?: unknown; name?: unknown; "continue-on-error"?: unknown };
 type Workflow = { on?: unknown; jobs?: Record<string, Job> };
 
 function loadWorkflow(text: string): Workflow {
@@ -210,6 +214,53 @@ export function findPullRequestUnreachableJobs(
 		}
 	}
 	return { flagged: flagged.sort(), jobsExamined };
+}
+
+/**
+ * True when a job-level `continue-on-error` holds on a pull request: the
+ * literal `true`, or an expression true under any PR context (#3087).
+ */
+export function isAdvisoryOnPullRequest(value: unknown): boolean {
+	if (value === true) return true;
+	if (typeof value !== "string") return false;
+	return PR_CONTEXTS.some((ctx) =>
+		Boolean(
+			new Function(
+				`"use strict"; return (${substituteForPullRequest(value, ctx)});`,
+			)(),
+		),
+	);
+}
+
+/**
+ * The second column (#3087): every job a pull request can run whose
+ * job-level `continue-on-error` holds there, and among those, the ones whose
+ * check-run name does not declare it advisory. Such a job's check always
+ * concludes `success`, so a name `isAdvisoryCheck` does not recognise makes
+ * `ci-verdict` report an unconditional pass as a gating one. The name is the
+ * job's `name:` (its template, matrix expressions and all) or else its key.
+ */
+export function findUndeclaredAdvisoryJobs(files: readonly WorkflowFile[]): {
+	flagged: string[];
+	advisoryJobs: string[];
+} {
+	const flagged: string[] = [];
+	const advisoryJobs: string[] = [];
+	for (const file of files) {
+		const workflow = loadWorkflow(file.text);
+		if (!triggersOnPullRequest(workflow)) continue;
+		for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
+			const reachable =
+				typeof job?.if !== "string" || isPullRequestReachable(job.if);
+			if (!reachable || !isAdvisoryOnPullRequest(job?.["continue-on-error"]))
+				continue;
+			const key = `${file.path}::${jobName}`;
+			advisoryJobs.push(key);
+			const checkName = typeof job.name === "string" ? job.name : jobName;
+			if (!isAdvisoryCheck(checkName.trim())) flagged.push(key);
+		}
+	}
+	return { flagged: flagged.sort(), advisoryJobs: advisoryJobs.sort() };
 }
 
 function repoWorkflowFiles(): WorkflowFile[] {
@@ -279,6 +330,25 @@ describe("every PR-triggerable workflow job is reachable on a pull request (#304
 				"to EXEMPTIONS with the reason a pull request cannot exercise it.",
 		});
 		expect(audit.problems, audit.problems.join("\n")).toEqual([]);
+	});
+
+	// REACHABLE is not GATING (#3087). A `continue-on-error` job concludes
+	// `success` whatever its steps did, so a PR can satisfy the check above
+	// with a lane that never blocks. Such a job must say so in its check-run
+	// name, the repo's advisory marker (`scripts/lib/ci-checks.mjs`), so that
+	// the check list and `ci-verdict` both read it as advisory.
+	it("names every PR-reachable continue-on-error job as advisory", () => {
+		const { flagged, advisoryJobs } =
+			findUndeclaredAdvisoryJobs(repoWorkflowFiles());
+		// Dead-sweep floor (AGENTS.md shape 10): measured 2 on 2026-09-25
+		// (ci.yml::targeted-tests-advisory, install-smoke.yml::mise-repro).
+		expect(advisoryJobs.length).toBeGreaterThanOrEqual(2);
+		expect(
+			flagged,
+			`PR-reachable continue-on-error job(s) whose check-run name does not end in "(advisory)": ` +
+				`${flagged.join(", ")}. Suffix the job's name: with "(advisory)", or make the job ` +
+				`blocking on pull_request.`,
+		).toEqual([]);
 	});
 
 	it("walks every workflow file in the tree, not a hand-maintained list", () => {
@@ -482,5 +552,108 @@ describe("the reachability model itself", () => {
 		expect(() =>
 			isPullRequestReachable("github.event.issue.number == 1"),
 		).toThrow(/unrecognised context path/);
+	});
+});
+
+describe("reachable and gating are two columns (#3087)", () => {
+	const workflow = (jobs: string) => ({
+		path: ".github/workflows/fixture.yml",
+		text: ["on:", "  pull_request:", "  push:", "jobs:", jobs].join("\n"),
+	});
+
+	it("flags a PR-reachable continue-on-error job whose name is not advisory", () => {
+		const file = workflow(
+			[
+				"  mise-repro:",
+				"    name: mise repro (#285) · ${{ matrix.os }}",
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo mise",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).flagged).toEqual([
+			".github/workflows/fixture.yml::mise-repro",
+		]);
+	});
+
+	it("flags an unnamed advisory job, whose check-run name is its key", () => {
+		const file = workflow(
+			[
+				"  drift:",
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo drift",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).flagged).toEqual([
+			".github/workflows/fixture.yml::drift",
+		]);
+	});
+
+	it("does not flag an advisory job that declares it in its name", () => {
+		const file = workflow(
+			[
+				"  mise-repro:",
+				"    name: mise repro (#285) · ${{ matrix.os }} (advisory)",
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo mise",
+			].join("\n"),
+		);
+		const result = findUndeclaredAdvisoryJobs([file]);
+		expect(result.flagged).toEqual([]);
+		expect(result.advisoryJobs).toEqual([
+			".github/workflows/fixture.yml::mise-repro",
+		]);
+	});
+
+	it("flags a job whose continue-on-error expression holds on a pull request", () => {
+		const file = workflow(
+			[
+				"  probe:",
+				"    name: probe",
+				"    continue-on-error: ${{ github.event_name == 'pull_request' }}",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo probe",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).flagged).toEqual([
+			".github/workflows/fixture.yml::probe",
+		]);
+	});
+
+	it("does not count a job that blocks on pull_request (option 1's shape)", () => {
+		const file = workflow(
+			[
+				"  mise-repro:",
+				"    name: mise repro (#285)",
+				"    continue-on-error: ${{ github.event_name != 'pull_request' }}",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo mise",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file])).toEqual({
+			flagged: [],
+			advisoryJobs: [],
+		});
+	});
+
+	it("does not count an advisory job a pull request cannot run", () => {
+		const file = workflow(
+			[
+				"  nightly:",
+				"    if: github.event_name != 'pull_request'",
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo nightly",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).advisoryJobs).toEqual([]);
 	});
 });
