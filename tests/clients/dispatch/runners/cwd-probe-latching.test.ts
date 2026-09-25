@@ -11,15 +11,18 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../../../clients/dispatch/runners/utils/availability-policy.js";
 import {
 	createCwdCachedProbe,
 	resetDispatchAvailabilityState,
 } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { getDegradationSummary } from "../../../../clients/degradation-ledger.js";
+import {
+	cleanupTestEnvironmentsDrained,
+	setupTestEnvironment,
+} from "../../test-utils.js";
 
 const {
 	logLatencySpy,
@@ -96,9 +99,27 @@ function versionProbeCalls(): unknown[][] {
 	);
 }
 
-function tempDir(prefix: string): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+// #2912: these five fixture roots were raw `mkdtempSync` with no cleanup --
+// every run left one of each in the real tmpdir (admitted in the hygiene
+// baseline as "process-owned cwd", but every spawn here is mocked; nothing
+// held them). Registered so the hygiene sweeps see them, and drained after
+// each test.
+const FIXTURE_PREFIXES = [
+	"pi-lens-eslint-latch-",
+	"pi-lens-credo-latch-",
+	"pi-lens-clippy-latch-",
+	"pi-lens-clippy-install-evidence-",
+	"pi-lens-clippy-no-install-",
+] as const;
+
+function tempDir(prefix: (typeof FIXTURE_PREFIXES)[number]): string {
+	return setupTestEnvironment(prefix).tmpDir;
 }
+
+afterEach(async () => {
+	for (const prefix of FIXTURE_PREFIXES)
+		await cleanupTestEnvironmentsDrained(prefix);
+});
 
 beforeEach(() => {
 	logLatencySpy.mockReset();

@@ -10,6 +10,7 @@ import {
 import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -825,6 +826,11 @@ describe(
 				} else {
 					process.env.PILENS_DATA_DIR = previousDataDir;
 				}
+				// #2912: saveProjectSnapshot's body persist runs off-thread and its
+				// write path recreates the root with a recursive mkdir. Unawaited,
+				// it landed after cleanup every run (6/6), leaking this root --
+				// the #3186 shape.
+				await waitForProjectSnapshotPersistsForTests();
 				env.cleanup();
 			}
 		});

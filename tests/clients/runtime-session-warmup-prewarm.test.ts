@@ -57,6 +57,7 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
 	return { ...actual, logLatency: logLatencySpy };
 });
 
+import { waitForProjectSnapshotPersistsForTests } from "../../clients/project-snapshot.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
@@ -184,6 +185,7 @@ describe("quick-mode warmup LSP pre-warm (#947)", () => {
 				expect.objectContaining({ phase: "warmup_total" }),
 			);
 		} finally {
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});
@@ -219,6 +221,7 @@ describe("quick-mode warmup LSP pre-warm (#947)", () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(touchFileSpy.mock.calls.length).toBe(callsAfterFirstWarm);
 		} finally {
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});
@@ -253,6 +256,7 @@ describe("quick-mode warmup LSP pre-warm (#947)", () => {
 				expect.objectContaining({ phase: "warmup_lsp_prewarm" }),
 			);
 		} finally {
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});
@@ -292,6 +296,7 @@ describe("quick-mode warmup LSP pre-warm (#947)", () => {
 			);
 		} finally {
 			_resetWarmAttachForTests();
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});
@@ -361,6 +366,7 @@ describe("quick-mode warmup LSP pre-warm (#947)", () => {
 				),
 			).toBe(false);
 		} finally {
+			await waitForProjectSnapshotPersistsForTests();
 			env.cleanup();
 		}
 	});

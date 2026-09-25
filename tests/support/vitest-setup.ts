@@ -292,6 +292,14 @@ try {
 	}
 }
 process.env.PI_LENS_HOME = tmpHygieneHome;
+// #2651: scripts/warm-loader-cache.mjs appends to PI_LENS_INSTALL_LOG before
+// it falls back to PI_LENS_HOME/install.log, so an ambient value (a
+// developer's shell pointing it at the real ~/.pi-lens/install.log) would
+// reach every child a test spawns with `...process.env` -- the #2634 class.
+// Pinned here once, for every worker and every inheriting child, instead of
+// one `env:` pin per call site. A test that exercises the fallback deletes it
+// from the child's env explicitly.
+process.env.PI_LENS_INSTALL_LOG = path.join(tmpHygieneHome, "install.log");
 
 // Hermeticity, same class as PI_LENS_CONFIG_PATH above: the global-config-
 // location PR (refs #2457) reads the host's config dir in the resolution's
@@ -1048,15 +1056,37 @@ function checkKillGuard(): void {
  * three checks themselves, only for whether the mem line survives it. The
  * first check's error (if any) is re-thrown after the mem report runs, so
  * the file still fails exactly as it always has.
+ *
+ * #3148: when the mem report ALSO throws (a file over the peak-RSS budget),
+ * a throwing `finally` would replace the check's pending error -- and
+ * kill-guard's pid+stack report exists nowhere but that Error. Both are
+ * kept: one `AggregateError` whose message names both, since a reporter may
+ * print only the message.
  */
 export function runTeardownWithMemReport(
 	checks: ReadonlyArray<() => void>,
 	emitMemReport: () => void,
 ): void {
+	const failures: unknown[] = [];
 	try {
 		for (const check of checks) check();
-	} finally {
+	} catch (error) {
+		failures.push(error);
+	}
+	try {
 		emitMemReport();
+	} catch (error) {
+		failures.push(error);
+	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1) {
+		const messages = failures.map((error) =>
+			error instanceof Error ? error.message : String(error),
+		);
+		throw new AggregateError(
+			failures,
+			`teardown check and [mem-file] report both failed: ${messages.join(" | ")}`,
+		);
 	}
 }
 
