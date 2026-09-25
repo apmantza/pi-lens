@@ -516,6 +516,137 @@ describe("instance-registry", () => {
 		);
 	});
 
+	// #3447: a registration can be dropped for good -- the registry lock's
+	// bounded wait ran out (recorded as instance-registry-lock-timeout), or
+	// the file was reaped. The heartbeat used to skip a missing entry, so the
+	// session stayed invisible to the shared-checkout guard for its whole
+	// life. It now re-registers from the root registerInstance was given.
+	describe("heartbeat re-registration (#3447)", () => {
+		it("re-registers this process when its entry went missing", async () => {
+			const {
+				registerInstance,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			const { getDegradationSummary } =
+				await import("../../clients/degradation-ledger.js");
+			await registerInstance("/some/project");
+			fs.writeFileSync(registryFilePath(), JSON.stringify({ instances: [] }));
+
+			await updateHeartbeat();
+			await _settleRegistryMutationsForTests();
+
+			const parsed = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
+			expect(parsed.instances.map((e: { pid: number }) => e.pid)).toEqual([
+				process.pid,
+			]);
+			expect(parsed.instances[0].projectRoot).toContain("some/project");
+			expect(
+				getDegradationSummary().find(
+					(group) => group.kind === "instance-registry-registration-missing",
+				)?.latestReasons[0]?.reason,
+			).toMatch(/heartbeat/);
+		});
+
+		it("heals a registration the lock timeout dropped", async () => {
+			const {
+				registerInstance,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			// A fresh lock held by a live process that is not this one: the
+			// bounded wait runs out and the registration is dropped.
+			const lock = `${registryFilePath()}.lock`;
+			fs.writeFileSync(lock, `${process.ppid} ${Date.now()}\n`);
+			await registerInstance("/some/project");
+			expect(fs.existsSync(registryFilePath())).toBe(false);
+			fs.rmSync(lock);
+
+			await updateHeartbeat();
+			await _settleRegistryMutationsForTests();
+
+			const parsed = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
+			expect(parsed.instances.map((e: { pid: number }) => e.pid)).toEqual([
+				process.pid,
+			]);
+		});
+
+		it("does not resurrect an instance that deregistered", async () => {
+			const {
+				registerInstance,
+				deregisterInstance,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			await registerInstance("/some/project");
+			deregisterInstance();
+
+			await updateHeartbeat();
+			await _settleRegistryMutationsForTests();
+
+			const parsed = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
+			expect(parsed.instances).toEqual([]);
+		});
+
+		it("does not resurrect an entry whose last root was deregistered", async () => {
+			const {
+				registerInstance,
+				deregisterInstanceRoot,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			await registerInstance("/some/project");
+			await deregisterInstanceRoot("/some/project");
+
+			await updateHeartbeat();
+			await _settleRegistryMutationsForTests();
+
+			const parsed = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
+			expect(parsed.instances).toEqual([]);
+		});
+
+		it("does not re-register a root deregistered while its entry was already missing", async () => {
+			const {
+				registerInstance,
+				deregisterInstanceRoot,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			const lock = `${registryFilePath()}.lock`;
+			fs.writeFileSync(lock, `${process.ppid} ${Date.now()}\n`);
+			await registerInstance("/some/project");
+			fs.rmSync(lock);
+			await deregisterInstanceRoot("/some/project");
+
+			await updateHeartbeat();
+			await _settleRegistryMutationsForTests();
+
+			expect(fs.existsSync(registryFilePath())).toBe(false);
+		});
+
+		it("never replays a registration into a different registry file", async () => {
+			// The intent is process-wide. A registration made against one
+			// registry (an earlier PI_LENS_HOME, or an earlier test) must not be
+			// written into another the first time its heartbeat misses.
+			const {
+				registerInstance,
+				updateHeartbeat,
+				_settleRegistryMutationsForTests,
+			} = await import("../../clients/instance-registry.js");
+			await registerInstance("/some/project");
+			const firstDir = dir;
+			dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-instreg-"));
+			try {
+				await updateHeartbeat();
+				await _settleRegistryMutationsForTests();
+
+				expect(fs.existsSync(registryFilePath())).toBe(false);
+			} finally {
+				removeTempDirSync(firstDir);
+			}
+		});
+	});
+
 	it("updateHeartbeat refreshes heartbeatAt and rssBytes for this pid", async () => {
 		const { registerInstance, updateHeartbeat, readInstanceRegistry } =
 			await import("../../clients/instance-registry.js");

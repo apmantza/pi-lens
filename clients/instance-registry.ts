@@ -22,7 +22,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomic, writeFileAtomicAsync } from "./atomic-write.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	incrementDegradationCount,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 import {
 	withInstanceRegistryLock,
@@ -337,6 +340,7 @@ export function registerInstance(projectRoot: string): Promise<void> {
 
 async function registerInstanceNow(projectRoot: string): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
+	rememberRegistrationRoot(projectRoot);
 	const pid = process.pid;
 	const normalizedRoot = normalizeFilePath(projectRoot);
 	const now = new Date().toISOString();
@@ -474,13 +478,16 @@ export async function updateHeartbeat(
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const pid = process.pid;
+	let missing = false;
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
 		const idx = file.instances.findIndex((entry) => entry.pid === pid);
 		if (idx === -1) {
-			// No prior registerInstance in this run (e.g. registry file was reaped
-			// out from under us, or heartbeat fired before session_start finished) —
-			// nothing to update against; skip rather than fabricate a projectRoot.
+			// No entry for this pid: registerInstance has not run here yet, or
+			// its write was dropped (lock timeout, #3447) or reaped. Never
+			// fabricate a projectRoot; re-register below only from the root
+			// registerInstance was actually given.
+			missing = true;
 			return;
 		}
 		const now = new Date().toISOString();
@@ -506,6 +513,23 @@ export async function updateHeartbeat(
 		};
 		await writeRegistryAsync(file);
 	});
+	const intent = registrationIntent();
+	if (
+		missing &&
+		intent.root !== undefined &&
+		intent.target === registryPath()
+	) {
+		incrementDegradationCount({
+			kind: "instance-registry-registration-missing",
+			subject: String(pid),
+			reason:
+				"entry missing at heartbeat; re-registering from the session root",
+		});
+		// Queued, not awaited: the heartbeat runs on the turn-end hook path,
+		// where every await counts against the hook (#2523). session_start's
+		// own `void registerInstance(...)` is the same shape.
+		void registerInstance(intent.root);
+	}
 }
 
 export interface RecordLspChildInput {
@@ -559,6 +583,41 @@ function registryTailState(): { tail: Promise<void> } {
 			tail: Promise.resolve(),
 		}),
 	);
+}
+
+/**
+ * #3447: the root `registerInstance` was last asked to register, and the
+ * registry file it was meant for. A registration can be dropped for good --
+ * the lock's bounded wait ran out (`instance-registry-lock-timeout`) or the
+ * file was reaped -- and `updateHeartbeat` re-registers from this rather
+ * than leaving the session invisible to the shared-checkout guard and warm
+ * attach for the rest of its life. It is the real session root, not a guess,
+ * which is why the heartbeat may use it where it refuses to fabricate one.
+ *
+ * Process-wide for the same reason as the tail above: the heartbeat and the
+ * registration can run in different evaluations of this module. Cleared by
+ * `deregisterInstance` and by deregistering the last root, so a late
+ * heartbeat never resurrects an instance that left.
+ */
+const REGISTRATION_INTENT_FAMILY = "instance-registry.registration-intent";
+/** Bump when the intent cell's shape changes. */
+const REGISTRATION_INTENT_VERSION = 1;
+
+function registrationIntent(): {
+	root: string | undefined;
+	target: string | undefined;
+} {
+	return getProcessSingleton(
+		REGISTRATION_INTENT_FAMILY,
+		REGISTRATION_INTENT_VERSION,
+		() => ({ root: undefined, target: undefined }),
+	);
+}
+
+function rememberRegistrationRoot(root: string | undefined): void {
+	const intent = registrationIntent();
+	intent.root = root;
+	intent.target = root === undefined ? undefined : registryPath();
 }
 
 function queueRegistryMutation(op: () => Promise<void>): Promise<void> {
@@ -718,6 +777,7 @@ async function removeLspChildNow(
  * function spawns nothing).
  */
 export function deregisterInstance(): void {
+	rememberRegistrationRoot(undefined);
 	if (!isInstanceRegistryEnabled()) return;
 	const pid = process.pid;
 	withInstanceRegistryLockSync(registryPath(), () => {
@@ -768,13 +828,25 @@ function deregisterInstanceRootNow(projectRoot: string): void {
 	withInstanceRegistryLockSync(registryPath(), () => {
 		const file = readRegistrySync();
 		const idx = file.instances.findIndex((entry) => entry.pid === pid);
-		if (idx === -1) return;
+		if (idx === -1) {
+			// Entry already gone (e.g. a dropped registration): still stop a
+			// heartbeat from re-registering the root this host just left.
+			const intent = registrationIntent();
+			if (
+				intent.root !== undefined &&
+				normalizeFilePath(intent.root) === normalizedRoot
+			)
+				rememberRegistrationRoot(undefined);
+			return;
+		}
 		const current = file.instances[idx];
 		const remainingRoots = getInstanceRoots(current).filter(
 			(root) => root !== normalizedRoot,
 		);
 		if (remainingRoots.length === getInstanceRoots(current).length) return;
 		if (remainingRoots.length === 0) {
+			// The host serves no root: a heartbeat must not bring it back.
+			rememberRegistrationRoot(undefined);
 			writeRegistrySync({
 				instances: file.instances.filter((entry) => entry.pid !== pid),
 			});
@@ -785,6 +857,8 @@ function deregisterInstanceRootNow(projectRoot: string): void {
 			projectRoot: remainingRoots[0],
 			projectRoots: remainingRoots,
 		};
+		// Keep a heartbeat re-registration on a root the host still serves.
+		rememberRegistrationRoot(remainingRoots[0]);
 		writeRegistrySync(file);
 	});
 }
