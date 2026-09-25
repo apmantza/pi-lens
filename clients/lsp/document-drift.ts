@@ -68,14 +68,19 @@
  * backpressure demotion rather than bypassing them.
  */
 
+import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import { normalizeMapKey } from "../path-utils.js";
 import { createSingleFlight, type SingleFlight } from "../single-flight.js";
 
-/** Cheap content fingerprint. Same shape as the touch-debounce fingerprint. */
+/**
+ * Whole-content fingerprint, shared by the touch debounce and this module's
+ * confirmation read. It covers every character: a length + head + tail key
+ * read a same-length middle edit as unchanged (#3480).
+ */
 export function fingerprintDocumentContent(content: string): string {
 	if (content.length <= 96) return `${content.length}:${content}`;
-	return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
+	return `${content.length}:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 /** What the server was last told, and when. */

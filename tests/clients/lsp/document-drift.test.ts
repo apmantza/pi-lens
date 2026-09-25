@@ -107,6 +107,50 @@ describe("DocumentDriftTracker (#1783)", () => {
 		]);
 	});
 
+	// #3480: a >96-char file edited only in the middle, keeping its length. A
+	// length+head+tail fingerprint read the edit as "unchanged" and re-stamped
+	// the record, so the server kept the old content until the next touch.
+	it("resyncs a same-length middle edit of a long file — the confirmation read hashes the whole text", async () => {
+		const head = `// ${"h".repeat(60)}\n`;
+		const tail = `// ${"t".repeat(60)}\n`;
+		const before = `${head}const x = 1;\n${tail}`;
+		const after = `${head}const x = 2;\n${tail}`;
+		expect(after.length).toBe(before.length);
+		const files = new Map<string, FakeFile>([
+			[k("/repo/long.ts"), { content: after, mtimeMs: SYNCED_AT + 500 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/long.ts"), before, SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps, resynced, events } = makeDeps(files, now);
+
+		const result = await tracker.sweep(deps, { force: true });
+
+		expect(result.unchanged).toBe(0);
+		expect(result.resynced).toBe(1);
+		expect(resynced).toEqual([
+			{ filePath: k("/repo/long.ts"), content: after },
+		]);
+		expect(events.map((e) => e.disposition)).toEqual(["resynced"]);
+	});
+
+	it("re-stamps a touched-but-identical long file without resyncing it", async () => {
+		const same = `// ${"h".repeat(60)}\nconst x = 1;\n// ${"t".repeat(60)}\n`;
+		const files = new Map<string, FakeFile>([
+			[k("/repo/same.ts"), { content: same, mtimeMs: SYNCED_AT + 500 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/same.ts"), same, SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps, resynced, events } = makeDeps(files, now);
+
+		const result = await tracker.sweep(deps, { force: true });
+
+		expect(result.unchanged).toBe(1);
+		expect(resynced).toEqual([]);
+		expect(events.map((e) => e.disposition)).toEqual(["unchanged"]);
+	});
+
 	it("resyncs a size change whose mtime was preserved — the mtime half alone would miss it", async () => {
 		const files = new Map<string, FakeFile>([
 			[k("/repo/b.ts"), { content: "const b = 1;\n", mtimeMs: SYNCED_AT - 10 }],

@@ -20,9 +20,10 @@ Issues: #3480 (the debounce fingerprint), #3481 (the stale cascade touch).
   `touchFile` with what it read (~2009 tier-aware, ~2099 full wait).
 - **`LSPService.touchFile`** (`lsp/index.ts`):
   - `startedAt` is taken when the call starts (~4640);
-  - there is a per-server debounce check (`shouldSkipNotify` ~1952), with a
-    1500 ms window and a fingerprint of length plus the first 48 and last
-    48 chars (~1908);
+  - there is a per-server debounce check (`shouldSkipNotify`), with a
+    1500 ms window and a whole-content fingerprint
+    (`fingerprintDocumentContent`, `document-drift.ts` ~76; before #3480 it
+    was length plus the first 48 and last 48 chars);
   - then `notify.open`;
   - after the write lands, `markTouched` (~5173) runs, and then
     `recordFullyCoveredSync(startedAt)` (~5199). A touch that skips the
@@ -63,7 +64,7 @@ equal.
 | `CascadeSendOrder` | violated SendsMonotone | violated | 2,597 | 1.4 |
 | `TwoWritesResized` | pass | pass | 1,712,166 | 18.1 |
 | `TwoWritesEqualLength` | violated ServerMatchesDisk | violated | 201,988 | 4.1 |
-| `DebounceLossyFp` | violated ServerMatchesDisk | violated | 60 | 1.1 |
+| `DebounceLossyFp` | pass (after #3480) | pass | 1,256 | 1.2 |
 | `DebounceFullFp` | pass | pass | 1,256 | 1.3 |
 | `FixCascadeEqualLength` | pass | pass | 305,808 | 5.4 |
 | `FixTwoWritesEqualLength` | pass | pass | 1,735,122 | 18.8 |
@@ -101,7 +102,8 @@ config passes only because of the size half:
 
 The last send wins, not the most recent read.
 
-**`DebounceLossyFp`** happens with no concurrency at all.
+**`DebounceLossyFp`** (before #3480, `LossyFp = TRUE`: violated in 60
+states) happened with no concurrency at all.
 
 1. A touch of A landed less than 1.5 s ago.
 2. The agent edits only the middle of the file. The file is longer than
@@ -111,7 +113,8 @@ The last send wins, not the most recent read.
 4. The sweep flags the file on mtime, reads it, gets the same lossy
    fingerprint, and re-stamps it as `unchanged`.
 
-The server keeps A.
+The server kept A. #3480 made both fingerprints hash the whole text, so the
+config now sets `LossyFp = FALSE` and passes.
 
 **Model artifact (`ArtifactCascadeResizedAnyLanding`).** If two waiters of
 one queue entry may finish in any order, the pipeline stamps the drift
@@ -174,9 +177,9 @@ part breaks the fix:
 - `MutFixNoCoalesce` is red: with an earlier notify in flight, stale A
   replaces pending B, and B is never sent.
 
-The lossy debounce has a separate fix: a full-content fingerprint for
-`shouldSkipNotify`, and for the drift record's confirmation read.
-`DebounceFullFp` passes.
+The lossy debounce has a separate fix, shipped in #3480: a full-content
+fingerprint for `shouldSkipNotify`, and for the drift record's confirmation
+read. `DebounceFullFp` and the flipped `DebounceLossyFp` pass.
 
 ## Scope and limits
 

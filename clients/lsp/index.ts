@@ -1906,13 +1906,6 @@ export class LSPService {
 		this.typeScriptIdleTimers.set(key, timer);
 	}
 
-	private fingerprintContent(content: string): string {
-		if (content.length <= 96) {
-			return `${content.length}:${content}`;
-		}
-		return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
-	}
-
 	/**
 	 * Should the whole touchFile call short-circuit? Only when the caller does
 	 * NOT need diagnostics — those callers still need to wait for the LSP to
@@ -1964,7 +1957,7 @@ export class LSPService {
 		if (!previous) return false;
 		const now = Date.now();
 		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
-		return previous.fingerprint === this.fingerprintContent(content);
+		return previous.fingerprint === fingerprintDocumentContent(content);
 	}
 
 	private recentTouchKey(
@@ -1984,7 +1977,7 @@ export class LSPService {
 		const key = this.recentTouchKey(filePath, clientScope, serverId);
 		const now = Date.now();
 		this.recentTouches.set(key, {
-			fingerprint: this.fingerprintContent(content),
+			fingerprint: fingerprintDocumentContent(content),
 			touchedAt: now,
 			clientScope,
 		});
