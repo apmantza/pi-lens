@@ -142,6 +142,36 @@ describe("withHostFileMutationQueue (#3506)", () => {
 			expect(queueRows()).toEqual([]);
 		});
 
+		it("records the copy as unverified, and no degradation, before any session_start", async () => {
+			class SessionManager {}
+			const queued: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: hostQueueDouble(queued),
+				SessionManager,
+			}));
+			await withHostFileMutationQueue("a.ts", async () => {});
+			expect(queued).toHaveLength(1);
+			expect(resolvedRows()).toEqual([
+				expect.objectContaining({ metadata: { hostCopy: "unverified" } }),
+			]);
+			expect(queueRows()).toEqual([]);
+		});
+
+		it("records the copy as unverified, and still queues, when the SDK exports no SessionManager", async () => {
+			class SessionManager {}
+			noteHostSessionManager(new SessionManager());
+			const queued: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: hostQueueDouble(queued),
+			}));
+			await withHostFileMutationQueue("a.ts", async () => {});
+			expect(queued).toHaveLength(1);
+			expect(resolvedRows()).toEqual([
+				expect.objectContaining({ metadata: { hostCopy: "unverified" } }),
+			]);
+			expect(queueRows()).toEqual([]);
+		});
+
 		it("records a degradation when the import loaded a second copy, and still queues through it", async () => {
 			class HostSessionManager {}
 			class SecondCopySessionManager {}
