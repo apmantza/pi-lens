@@ -464,12 +464,11 @@ type SelfDriftUnverifiableReason =
  * taken, and it runs BEFORE the mtime gate: an out-of-band write (a formatter,
  * a checkout) can land at-or-before the `recordedAtMs` baseline, so mtime alone
  * is blind to the own-file drift this axis exists to catch — the size gate fires
- * regardless of the mtime relationship. When the size matches, the mtime gate is
- * a fast path that skips the expensive hash tier for non-LSP records (size same
- * AND mtime never moved → the file almost certainly did not change, so we do
- * not read and hash every unchanged file on the hook path). All-LSP records
- * with an available hash baseline force the hash tier after the size check, so
- * a same-size rewrite at-or-before the baseline cannot remain authoritative.
+ * regardless of the mtime relationship. Every record with an available hash
+ * baseline forces the hash tier after the size check (#3504; all-LSP records
+ * only before it), so a same-size rewrite at-or-before the baseline, or inside
+ * its tolerance, cannot remain authoritative. The mtime fast path survives only
+ * for a record without a hash baseline, where it is the only evidence left.
  * When hashing is not forced and mtime moved, the hash separates a one-character
  * edit from a `touch`, reading the bytes and comparing against the baseline
  * `setInlineBlockerContentBaseline` attached off the dispatch path.
@@ -486,7 +485,7 @@ async function detectSelfDrift(args: {
 	recordedAtMs: number;
 	recordedSize: number | undefined;
 	recordedHash: string | undefined;
-	/** All-LSP records with a hash baseline must confirm equal-size bytes. */
+	/** Records with a hash baseline must confirm equal-size bytes (#3504). */
 	forceContent: boolean;
 	signal: AbortSignal | undefined;
 	/** Mutable per-sweep hash budget. See {@link SELF_DRIFT_HASH_BUDGET_BYTES}. */
@@ -522,9 +521,8 @@ async function detectSelfDrift(args: {
 	if (args.recordedSize === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	if (stat.size !== args.recordedSize) return { verdict: "drift" };
-	// Size matches. Non-LSP records retain the mtime fast path. All-LSP records
-	// with a hash baseline force content confirmation because a same-size rewrite
-	// can land at-or-before the baseline.
+	// Size matches. A record with a hash baseline forces content confirmation
+	// because a same-size rewrite can land at-or-before the baseline (#3504).
 	const freshness = freshnessFromMtime({
 		mtimeMs: stat.mtimeMs,
 		referenceMs: args.recordedAtMs,
@@ -533,8 +531,8 @@ async function detectSelfDrift(args: {
 		return { verdict: "unchanged" };
 	// Same length AND mtime moved. Only the hash can separate a one-character
 	// edit from a `touch`, and a same-length edit is the common shape, not an
-	// exotic one. Forced all-LSP confirmation reaches this tier even when mtime
-	// did not move.
+	// exotic one. Forced confirmation reaches this tier even when mtime did not
+	// move.
 	if (args.recordedHash === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	// Defect shape 9: each read is individually bounded, but N blockers in one
@@ -987,8 +985,11 @@ export async function sweepInlineBlockerFreshness(
 						recordedAtMs: entry.recordedAtMs,
 						recordedSize: entry.recordedSize,
 						recordedHash: entry.recordedHash,
+						// #3504: every record with a hash baseline, not only all-LSP
+						// ones. The mtime fast path cannot see a same-size rewrite
+						// inside the tolerance window or behind a coarse mtime, and
+						// the self axis sits outside the #1950 cap.
 						forceContent:
-							isLspSourced &&
 							entry.recordedSize !== undefined &&
 							entry.recordedHash !== undefined,
 						signal: options?.signal,

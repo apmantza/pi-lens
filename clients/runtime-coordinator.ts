@@ -180,10 +180,11 @@ export interface InlineBlockerRecord {
 	 */
 	sources?: readonly string[];
 	/**
-	 * #1631: wall-clock ms when the verdict was recorded. Baseline for the
-	 * turn-boundary freshness sweep, which compares the file's and its forward
-	 * imports' on-disk mtime against it. Unstamped (legacy) records are left
-	 * untouched by the sweep.
+	 * #1631: wall-clock ms baseline for the turn-boundary freshness sweep, which
+	 * compares the file's and its forward imports' on-disk mtime against it.
+	 * #3503: the moment the analysed bytes were read, not the moment the verdict
+	 * was recorded; a write during the dispatch is newer than the verdict.
+	 * Unstamped (legacy) records are left untouched by the sweep.
 	 */
 	recordedAtMs?: number;
 	/**
@@ -1154,9 +1155,10 @@ export class RuntimeCoordinator {
 	}
 
 	/**
-	 * Record a file's blocking verdict. Returns the record time, or undefined
-	 * when a newer dispatch of the same file already recorded or cleared it
-	 * (#3507).
+	 * Record a file's blocking verdict. Returns its freshness baseline, or
+	 * undefined when a newer dispatch of the same file already recorded or
+	 * cleared it (#3507). `recordedAtMs` is the pipeline's analysis read time
+	 * (#3503); a caller without one stamps now.
 	 */
 	recordInlineBlockers(
 		filePath: string,
@@ -1167,6 +1169,7 @@ export class RuntimeCoordinator {
 		contentBaseline?: { size: number; sha256: string },
 		diagnostics?: readonly Diagnostic[],
 		turnIndex = this._turnIndex,
+		recordedAtMs = Date.now(),
 	): number | undefined {
 		if (
 			!this._inlineBlockerWriteOrder.shouldWrite(
@@ -1175,7 +1178,6 @@ export class RuntimeCoordinator {
 			)
 		)
 			return undefined;
-		const recordedAtMs = Date.now();
 		this._pendingInlineBlockers.set(path.resolve(filePath), {
 			filePath,
 			summary,

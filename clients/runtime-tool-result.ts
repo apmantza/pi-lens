@@ -2565,6 +2565,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					// end instead of replaying pre-mark text.
 					result.inlineBlockerDiagnostics,
 					writeTurnIndex,
+					// #3503: the freshness baseline is the analysis read.
+					result.analysisReadAtMs,
 				),
 			) !== undefined;
 	} else {
