@@ -493,6 +493,18 @@ describe("#3502 — a crash-respawn does not inherit readiness", () => {
 		expect(createLSPClient).toHaveBeenCalledTimes(2);
 	}
 
+	/** A wedged server: it takes the document but never answers or pings. */
+	function wedged(client: ReturnType<typeof makeClient>) {
+		client.getDiagnosticsVersionForPath = () => 0;
+		client.getDiagnostics = () => [];
+		client.getAllDiagnostics = () => new Map();
+		client.waitForDiagnostics.mockImplementation(async (_fp, ms) => {
+			vi.setSystemTime(Date.now() + ms);
+		});
+		client.pingLiveness.mockResolvedValue(false);
+		return client;
+	}
+
 	it("the replacement of a client that demonstrated readiness gets its own warm-up", async () => {
 		const A = makeClient("marksman", tmp);
 		const B = makeClient("marksman", tmp);
@@ -514,15 +526,7 @@ describe("#3502 — a crash-respawn does not inherit readiness", () => {
 	});
 
 	it("the replacement of a client that stayed cold gets its own warm-up, not the cached cold verdict", async () => {
-		const A = makeClient("marksman", tmp);
-		// A wedged server: it takes the document but never answers or pings.
-		A.getDiagnosticsVersionForPath = () => 0;
-		A.getDiagnostics = () => [];
-		A.getAllDiagnostics = () => new Map();
-		A.waitForDiagnostics.mockImplementation(async (_fp, ms) => {
-			vi.setSystemTime(Date.now() + ms);
-		});
-		A.pingLiveness.mockResolvedValue(false);
+		const A = wedged(makeClient("marksman", tmp));
 		const B = makeClient("marksman", tmp);
 		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
 		const service = new LSPService();
@@ -535,5 +539,69 @@ describe("#3502 — a crash-respawn does not inherit readiness", () => {
 		const warm = await service.ensureWarmForSweep(filePath);
 
 		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+	});
+
+	// Review round 1, F2: the ready mark lands after awaits. A client that
+	// answered, then died while a concurrent touch respawned its replacement
+	// (whose dead-client branch forgets the key), re-marked the key ready for a
+	// replacement that had answered nothing.
+	it("a client that dies after answering does not mark its concurrent replacement ready", async () => {
+		const A = makeClient("marksman", tmp);
+		const B = makeClient("marksman", tmp);
+		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+		const service = new LSPService();
+		A.waitForDiagnostics.mockImplementationOnce(async () => {
+			// A holds the file and has published; then it dies after a minute of
+			// service, and a touch of another file respawns B.
+			vi.setSystemTime(Date.now() + 61_000);
+			A.kill();
+			await service.touchFile(path.join(tmp, "b.md"), "# b\n", SYNC);
+		});
+
+		const first = await service.touchFile(filePath, DIRTY, DISPATCH);
+		expect(first?.confirmation).toBe("confirmed");
+		expect(createLSPClient).toHaveBeenCalledTimes(2);
+		const warm = await service.ensureWarmForSweep(filePath);
+
+		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+		expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+			filePath,
+		);
+	});
+
+	// Review round 1, F3: the notify-stall demotion forgot `demonstratedReady`
+	// but kept `demonstratedCold`, so the server that came back after the
+	// cooldown was skipped as known cold without a warm-up of its own.
+	it("a notify-stall demotion forgets the cached cold verdict: the server back from its cooldown gets its own warm-up", async () => {
+		vi.useFakeTimers();
+		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "100";
+		try {
+			const A = wedged(makeClient("marksman", tmp));
+			const B = makeClient("marksman", tmp);
+			createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+			const service = new LSPService();
+			expect(await service.ensureWarmForSweep(filePath)).toEqual({
+				performedWarmup: true,
+				failedServerIds: ["marksman"],
+			});
+			// Three writes that never land demote A (#743).
+			A.notify.open.mockImplementation(() => new Promise<boolean>(() => {}));
+			for (let i = 0; i < 3; i++) {
+				const touch = service.touchFile(filePath, `# ${i}\n`, SYNC);
+				await vi.advanceTimersByTimeAsync(120);
+				await touch;
+			}
+			await vi.advanceTimersByTimeAsync(0);
+			expect(A.shutdown).toHaveBeenCalled();
+			// Past the 15 s broken cooldown.
+			await vi.advanceTimersByTimeAsync(16_000);
+
+			const warm = await service.ensureWarmForSweep(filePath);
+
+			expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+			expect(createLSPClient).toHaveBeenCalledTimes(2);
+		} finally {
+			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		}
 	});
 });

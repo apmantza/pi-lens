@@ -1868,8 +1868,7 @@ export class LSPService {
 		await victimClient.shutdown({ reason: "client_ceiling_lru" });
 		this.state.clients.delete(victimKey);
 		this.state.clientSpawnedAt.delete(victimKey);
-		this.state.demonstratedReady.delete(victimKey);
-		this.state.demonstratedCold.delete(victimKey);
+		this.forgetReadiness(victimKey);
 		this.clientLastUsedAt.delete(victimKey);
 		this.clearTypeScriptIdleTimer(victimKey);
 		logSessionStart(
@@ -1924,8 +1923,7 @@ export class LSPService {
 				this.releaseOutstandingAuxNotifyWrite(key);
 				this.state.clients.delete(key);
 				this.state.clientSpawnedAt.delete(key);
-				this.state.demonstratedReady.delete(key);
-				this.state.demonstratedCold.delete(key);
+				this.forgetReadiness(key);
 				this.clientLastUsedAt.delete(key);
 				try {
 					await client.shutdown({ reason: "typescript_idle_eviction" });
@@ -2064,6 +2062,17 @@ export class LSPService {
 		const root = await this.resolveServerRoot(server, filePath);
 		if (!root) return undefined;
 		return `${server.id}:${normalizeMapKey(root)}`;
+	}
+
+	/**
+	 * #3502: a retired client's readiness verdicts (ready, or cached cold) do
+	 * not describe its replacement. Every retirement path (capacity eviction,
+	 * idle eviction, notify-stall demotion, the dead-client respawn) forgets
+	 * both, so the next client earns its own.
+	 */
+	private forgetReadiness(key: string): void {
+		this.state.demonstratedReady.delete(key);
+		this.state.demonstratedCold.delete(key);
 	}
 
 	private markDemonstratedReadyKey(key: string): void {
@@ -2261,7 +2270,7 @@ export class LSPService {
 		void entry.client.shutdown().catch(() => {});
 		this.state.clients.delete(key);
 		this.state.clientSpawnedAt.delete(key);
-		this.state.demonstratedReady.delete(key);
+		this.forgetReadiness(key);
 		this.clientLastUsedAt.delete(key);
 		this.clearTypeScriptIdleTimer(key);
 		logLatency({
@@ -4087,10 +4096,8 @@ export class LSPService {
 			}
 			this.state.clients.delete(key);
 			this.state.clientSpawnedAt.delete(key);
-			// #3502: the replacement is cold and earns its own readiness verdict,
-			// as after a capacity or idle eviction.
-			this.state.demonstratedReady.delete(key);
-			this.state.demonstratedCold.delete(key);
+			// #3502: the replacement is cold and earns its own readiness verdict.
+			this.forgetReadiness(key);
 			this.clientLastUsedAt.delete(key);
 			this.clearTypeScriptIdleTimer(key);
 			this.state.broken.delete(key);
@@ -7044,7 +7051,11 @@ export class LSPService {
 					if (notifyTimedOutServerIds.has(entry.info.id)) continue;
 					if (uncoveredServerIds.has(entry.info.id)) continue;
 					const key = await this.demonstratedReadyKeyFor(entry.info, filePath);
-					if (key) this.markDemonstratedReadyKey(key);
+					// #3502: only for the client still registered under the key. One
+					// retired while this touch awaited (a crash respawn, an eviction)
+					// must not hand its answer to the replacement.
+					if (key && this.state.clients.get(key) === entry.client)
+						this.markDemonstratedReadyKey(key);
 				}
 			}
 

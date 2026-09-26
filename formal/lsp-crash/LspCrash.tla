@@ -46,6 +46,10 @@ CONSTANTS
     WindowTrip,     \* #1142 windowed runtime-exit breaker (FALSE = mutant)
     ClearReadyOnDeath, \* the dead-client branch deletes demonstratedReady/Cold
                        \* (TRUE = code since #3502; FALSE = the pre-#3502 code)
+    ReadyGuard,     \* a touch marks demonstratedReady only while its client is
+                    \* still the registered one (TRUE = code since #3502's review
+                    \* round 1; FALSE = mutant: a dead client's late answer marks
+                    \* the key its replacement now holds)
     Trip,           \* BROKEN_PERMANENT_AFTER = RUNTIME_EXIT_WINDOW_TRIP_COUNT (5 in code)
     Fix             \* "bind" (code since #3501: an entry is valid only for the
                     \* client instance it was written to), "none" (the
@@ -171,6 +175,15 @@ SpawnFor(i, countLoop) ==
     /\ pc' = [pc EXCEPT ![i] = "decide"]
     /\ loopRespawns' = IF countLoop THEN loopRespawns + 1 ELSE loopRespawns
 
+\* The ready mark after a touch's verdict. It runs after awaits, so a crash and
+\* a concurrent respawn may land first; the guard is the code's
+\* `this.state.clients.get(key) === entry.client` (registry entry of the same
+\* generation, alive or not yet detected dead).
+MarkReady(i) ==
+    IF ~ReadyGuard \/ (registry # "empty" /\ gen = tg[i])
+      THEN ready' = TRUE /\ readyGen' = tg[i]
+      ELSE UNCHANGED <<ready, readyGen>>
+
 Unavailable(i) ==
     /\ pc' = [pc EXCEPT ![i] = "done"]
     /\ verdict' = [verdict EXCEPT ![i] = "unavailable"]
@@ -249,7 +262,7 @@ Answered(i) ==
     /\ pc[i] = "wait" /\ pub[tg[i]]
     /\ pc' = [pc EXCEPT ![i] = "done"]
     /\ verdict' = [verdict EXCEPT ![i] = "dirty"]
-    /\ ready' = TRUE /\ readyGen' = tg[i]
+    /\ MarkReady(i)
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
                    Breaker, tg, skip, wrote, evictUnderLease>>
 
@@ -272,7 +285,7 @@ Gate(i) ==
     /\ pc[i] = "gate"
     /\ LET confirm == Silent /\ (PingGuard => Live(tg[i]))
        IN /\ verdict' = [verdict EXCEPT ![i] = IF confirm THEN "clean" ELSE "inconclusive"]
-          /\ IF confirm THEN ready' = TRUE /\ readyGen' = tg[i]
+          /\ IF confirm THEN MarkReady(i)
                         ELSE UNCHANGED <<ready, readyGen>>
     /\ pc' = [pc EXCEPT ![i] = "done"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,

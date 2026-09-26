@@ -58,6 +58,10 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 - `ClearReadyOnDeath`: `TRUE` is the code since #3502: the dead-client
   branch deletes `demonstratedReady` and `demonstratedCold` like every other
   retirement path. `FALSE` is the code before #3502.
+- `ReadyGuard`: `TRUE` is the code since #3502's review round 1: a touch
+  marks `demonstratedReady` only while its client is still the registered
+  one. `FALSE` is the mutant where a dead client's late answer marks the key
+  its replacement now holds.
 - `PingGuard`, `WaitTimeout`, `LeaseCheck`, `FastPath`, `WindowTrip`: `TRUE`
   is the code; `FALSE` is a guard mutant.
 
@@ -90,6 +94,8 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 | `CrashReady` (code, #3502) | pass | pass | 303 | 2.3 |
 | `FixCrashReady` (code, #3502, with an eviction) | pass | pass | 661 | 2.7 |
 | `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 107 | 2.4 |
+| `CrashReadyConcurrent` (code, #3502 round 1) | pass | pass | 2289 | 3.4 |
+| `MutCrashReadyConcurrentNoGuard` (the ready mark without its guard) | violated `ReadyIsCurrent` | violated | 829 | 2.4 |
 
 State counts of a violated config vary between runs: TLC stops at the first
 counterexample its workers reach.
@@ -107,6 +113,10 @@ counterexample its workers reach.
 - **`MutCrashReadyNoClear`** (the #3502 trace): a collecting touch on A
   earns `demonstratedReady`, A crashes, the next touch respawns B, and the
   key still claims readiness for a client that has answered nothing.
+- **`MutCrashReadyConcurrentNoGuard`**: the dead-client branch forgets the
+  key, but a concurrent touch whose client answered and then died marks it
+  ready again after the respawn. The mark is taken only for the registered
+  client since #3502's review round 1.
 
 ## Decisions the model backs
 
@@ -133,7 +143,8 @@ The throwaway replays became the regression tests:
   non-collecting touch; the TypeScript sync confirm after a crash between
   the touches and in the middle of the wait (racing and end-of-wait); and,
   for #3502, `ensureWarmForSweep` after a crash-respawn of a ready and of a
-  cold client.
+  cold client, after a concurrent crash-respawn, and after a notify-stall
+  demotion.
 - `tests/clients/lsp/crash-respawn-debounce-wire.test.ts`: the real
   `createLSPClient` and `tests/fixtures/fake-lsp-server.mjs`, SIGKILLed after
   the sync touch. Before #3501 server B's trace had no `didOpen` and the touch
