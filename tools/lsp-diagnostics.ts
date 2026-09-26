@@ -1384,6 +1384,9 @@ async function collectFileDiagnosticResult(
 		cwd,
 		collectedContent,
 		boundMismatch,
+		// #3505 r1 F1: the widget row is observed at the read, as the cache
+		// entry recorded below is.
+		scannedAt,
 	);
 	if (verdict.confirmed && !verdict.blocking) {
 		onConfirmedNoBlockers?.({

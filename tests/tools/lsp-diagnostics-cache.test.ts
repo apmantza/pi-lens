@@ -167,6 +167,40 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		expect(entry?.scannedAt).toBe(T_READ);
 	});
 
+	// #3505 r1 F1: the fresh result's widget row must carry the same read
+	// stamp as its cache entry. Stamped after the touch, a file or dependency
+	// written during the touch predates the row, and the widget's own
+	// mtime gates keep the pre-edit finding.
+	it("observes the fresh widget row at the read, not after the touch (#3505)", async () => {
+		const T_READ = 1_900_000_000_000;
+		const files = writeFiles(["a.ts"]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(T_READ);
+			touchFile.mockImplementation(async () => {
+				vi.setSystemTime(T_READ + 1500);
+				return {
+					diags: [
+						{
+							severity: 1,
+							message: "computed on the bytes read at T_READ",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+				};
+			});
+			await runBatch(files);
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(reconcileScanDiagnostics).toHaveBeenCalledTimes(1);
+		// (file, diagnostics, confirmed, writeIndex, observedAt)
+		expect(reconcileScanDiagnostics.mock.calls[0]?.[4]).toBe(T_READ);
+	});
+
 	it("a second identical batch call never touches an unchanged file again", async () => {
 		const files = writeFiles(["a.ts", "b.ts"]);
 
@@ -399,12 +433,10 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		touchFile.mockResolvedValueOnce({ diags: [diag] });
 
 		await runBatch(files);
-		// The fresh touch was OBSERVED now → no observation-time override.
 		const freshCall = reconcileScanDiagnostics.mock.calls.find((c) =>
 			String(c[0]).endsWith("a.ts"),
 		);
 		expect(freshCall).toBeDefined();
-		expect(freshCall?.[4]).toBeUndefined();
 
 		// The wall-clock time the cache recorded this scan at.
 		const cacheFile = path.join(
@@ -417,6 +449,10 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 			entries: Record<string, { scannedAt: number }>;
 		};
 		const scannedAt = Object.values(cache.entries)[0]!.scannedAt;
+		// #3505 r1 F1: the fresh touch's row is observed at its read, the same
+		// instant the cache entry is stamped with (it was `undefined`, i.e.
+		// now(), after the touch).
+		expect(freshCall?.[4]).toBe(scannedAt);
 
 		reconcileScanDiagnostics.mockClear();
 		touchFile.mockClear();
