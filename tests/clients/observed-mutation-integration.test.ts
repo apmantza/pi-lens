@@ -32,6 +32,7 @@ import {
 } from "../../clients/mutation-attribution.js";
 import {
 	armObservedMutation,
+	_setObservedTimeBoundsForTests,
 	resetObservedMutationNet,
 } from "../../clients/observed-mutation.js";
 import { readChangesSince } from "../../clients/project-changes.js";
@@ -1266,6 +1267,10 @@ describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED 
 		const env = setupTestEnvironment("pi-lens-2500-dispatch-cap-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		// The cap is what this case asserts, not the machine's speed: a loaded
+		// runner let the 50ms settle deadline cut the 33rd entry, so exactly 32
+		// changed paths were seen and nothing was dropped (master afea9074d).
+		_setObservedTimeBoundsForTests({ captureMs: 30_000, settleMs: 30_000 });
 		try {
 			const targetDir = path.join(env.tmpDir, "codemod-target");
 			fs.mkdirSync(targetDir, { recursive: true });
@@ -1299,6 +1304,7 @@ describe("#2464 review round 3 — F2: the observed dispatch targets a RECORDED 
 				"1 path(s) not dispatched",
 			);
 		} finally {
+			_setObservedTimeBoundsForTests({});
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;
 			env.cleanup();
