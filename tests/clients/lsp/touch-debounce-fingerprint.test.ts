@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as clientModule from "../../../clients/lsp/client.js";
+import { fingerprintDocumentContent } from "../../../clients/lsp/document-drift.js";
 import { LSPService } from "../../../clients/lsp/index.js";
 import { createMockState } from "./mock-client-state.js";
 
@@ -27,6 +28,18 @@ vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
 	getServersForFileWithConfig,
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
+// #3480 round 1: count the fingerprints `touchFile` computes. Wrapped, not
+// replaced: every other export is the real module.
+vi.mock("../../../clients/lsp/document-drift.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<
+			typeof import("../../../clients/lsp/document-drift.js")
+		>();
+	return {
+		...actual,
+		fingerprintDocumentContent: vi.fn(actual.fingerprintDocumentContent),
+	};
+});
 vi.mock("../../../clients/lsp/client.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../clients/lsp/client.js")>()),
 	createLSPClient,
@@ -130,6 +143,19 @@ describe("#3480 — touch debounce fingerprint covers the whole document", () =>
 		await service.touchFile(FILE, B, { diagnostics: "none", source: "test" });
 
 		expect(texts()).toEqual([`didOpen:${A}`, `didChange:${B}`]);
+	});
+
+	// #3480 round 1 N1: one whole-content hash per touch, not one per debounce
+	// check and per mark (each a sha256 of up to the whole file).
+	it("fingerprints the content once per touch", async () => {
+		const { service } = await setup();
+		await service.touchFile(FILE, A, { diagnostics: "none", source: "test" });
+		const fingerprint = vi.mocked(fingerprintDocumentContent);
+		fingerprint.mockClear();
+
+		await service.touchFile(FILE, B, { diagnostics: "none", source: "test" });
+
+		expect(fingerprint.mock.calls.filter(([c]) => c === B)).toHaveLength(1);
 	});
 
 	it("still skips a repeat touch of identical long content inside the window", async () => {

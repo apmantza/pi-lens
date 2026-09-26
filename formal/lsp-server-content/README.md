@@ -67,6 +67,7 @@ equal.
 | `TwoWritesResized` | pass | pass | 1,712,166 | 18.1 |
 | `TwoWritesEqualLength` | pass (after #3481) | pass | 1,596,714 | 29.2 |
 | `DebounceLossyFp` | pass (after #3480) | pass | 1,256 | 1.2 |
+| `MutLossyFp` | violated ServerMatchesDisk (the code before #3480) | violated | 58 | 1.1 |
 | `DebounceFullFp` | pass | pass | 1,256 | 1.3 |
 | `FixCascadeEqualLength` | pass | pass | 305,808 | 5.4 |
 | `FixTwoWritesEqualLength` | pass | pass | 1,735,122 | 18.8 |

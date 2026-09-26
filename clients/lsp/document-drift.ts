@@ -249,7 +249,13 @@ export class DocumentDriftTracker {
 	 * `LSPService.recordFullyCoveredSync`. `now` is the moment the sync STARTED,
 	 * not the moment its write landed; see {@link SyncedDocumentRecord.syncedAt}.
 	 */
-	recordSynced(filePath: string, content: string, now = Date.now()): void {
+	recordSynced(
+		filePath: string,
+		content: string,
+		now = Date.now(),
+		/** #3480: the caller's already-computed fingerprint of `content`. */
+		fingerprint = fingerprintDocumentContent(content),
+	): void {
 		const key = normalizeMapKey(filePath);
 		// Delete first so a re-record moves the entry to the END of the insertion
 		// order. Without this, a hot file keeps an old cursor position and the
@@ -257,7 +263,7 @@ export class DocumentDriftTracker {
 		this.synced.delete(key);
 		this.synced.set(key, {
 			size: Buffer.byteLength(content, "utf8"),
-			fingerprint: fingerprintDocumentContent(content),
+			fingerprint,
 			syncedAt: now,
 		});
 		while (this.synced.size > DRIFT_TRACK_CAP) {

@@ -522,6 +522,14 @@ describe("DocumentDriftTracker (#1783)", () => {
 		expect(order).toEqual(["push", "emit:resynced"]);
 	});
 
+	// #3480 round 1 N1: the caller's fingerprint is stored as given, so the
+	// touch that already hashed the content does not hash it again.
+	it("stores a fingerprint the caller already computed", () => {
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/fp.ts"), "v0\n", SYNCED_AT, "given-fp");
+		expect(tracker.peek(k("/repo/fp.ts"))?.fingerprint).toBe("given-fp");
+	});
+
 	it("caps the tracked set and evicts the least recently synced", () => {
 		const tracker = new DocumentDriftTracker();
 		for (let i = 0; i < DRIFT_TRACK_CAP + 5; i++) {

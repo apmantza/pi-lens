@@ -1922,7 +1922,7 @@ export class LSPService {
 	 */
 	private shouldSkipTouch(
 		filePath: string,
-		content: string,
+		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		waitForDiagnostics: boolean,
 		serverIds: readonly string[],
@@ -1933,7 +1933,12 @@ export class LSPService {
 		// write loop skips the servers that are covered and pushes only the rest.
 		if (serverIds.length === 0) return false;
 		return serverIds.every((serverId) =>
-			this.shouldSkipNotify(filePath, content, clientScope, serverId),
+			this.shouldSkipNotify(
+				filePath,
+				contentFingerprint,
+				clientScope,
+				serverId,
+			),
 		);
 	}
 
@@ -1955,7 +1960,7 @@ export class LSPService {
 	 */
 	private shouldSkipNotify(
 		filePath: string,
-		content: string,
+		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
 	): boolean {
@@ -1966,7 +1971,7 @@ export class LSPService {
 		if (!previous) return false;
 		const now = Date.now();
 		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
-		return previous.fingerprint === fingerprintDocumentContent(content);
+		return previous.fingerprint === contentFingerprint();
 	}
 
 	private recentTouchKey(
@@ -1979,14 +1984,14 @@ export class LSPService {
 
 	private markTouched(
 		filePath: string,
-		content: string,
+		contentFingerprint: string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
 	): void {
 		const key = this.recentTouchKey(filePath, clientScope, serverId);
 		const now = Date.now();
 		this.recentTouches.set(key, {
-			fingerprint: fingerprintDocumentContent(content),
+			fingerprint: contentFingerprint,
 			touchedAt: now,
 			clientScope,
 		});
@@ -3838,6 +3843,7 @@ export class LSPService {
 		targeted: readonly SpawnedServer[],
 		allWritesLanded: boolean,
 		at: number,
+		contentFingerprint?: () => string,
 	): void {
 		if (!allWritesLanded || targeted.length === 0) return;
 		const targetedClients = new Set(targeted.map((entry) => entry.client));
@@ -3848,7 +3854,12 @@ export class LSPService {
 			// its view is NOT covered by this content. Recording here would claim it.
 			if (documentIsOpenOn(client, filePath)) return;
 		}
-		this.documentDrift.recordSynced(filePath, content, at);
+		this.documentDrift.recordSynced(
+			filePath,
+			content,
+			at,
+			contentFingerprint?.() ?? fingerprintDocumentContent(content),
+		);
 	}
 
 	/**
@@ -4650,6 +4661,11 @@ export class LSPService {
 			return;
 		}
 		const startedAt = Date.now();
+		// #3480: the whole-content fingerprint (a sha256 past 96 chars), computed
+		// at most once per touch however many servers it checks and marks.
+		let fingerprintMemo: string | undefined;
+		const contentFingerprint = (): string =>
+			(fingerprintMemo ??= fingerprintDocumentContent(content));
 		const hookDeadlineAt =
 			options.hook !== undefined &&
 			Object.hasOwn(HOOK_WALL_BUDGET_MS, options.hook)
@@ -4809,7 +4825,7 @@ export class LSPService {
 			if (
 				this.shouldSkipTouch(
 					filePath,
-					content,
+					contentFingerprint,
 					clientScope,
 					diagnosticsMode !== "none",
 					spawnedServerIds,
@@ -4850,7 +4866,12 @@ export class LSPService {
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
 				spawnedServerIds.filter((serverId) =>
-					this.shouldSkipNotify(filePath, content, clientScope, serverId),
+					this.shouldSkipNotify(
+						filePath,
+						contentFingerprint,
+						clientScope,
+						serverId,
+					),
 				),
 			);
 			const notifySkipped =
@@ -5180,7 +5201,12 @@ export class LSPService {
 							// re-pushes it instead of laundering the failure into a later
 							// touch that looks fully delivered (which the silent-clean gates
 							// would then read as a confirmed clean).
-							this.markTouched(filePath, content, clientScope, entry.info.id);
+							this.markTouched(
+								filePath,
+								contentFingerprint(),
+								clientScope,
+								entry.info.id,
+							);
 						} else if (wrote === false) {
 							// #3481: the server holds a later read, not `content`, so no
 							// debounce entry either: a revert to `content` must be sent.
@@ -5218,6 +5244,7 @@ export class LSPService {
 						notifyDeferredServerIds.length === 0 &&
 						supersededServerIds.length === 0,
 					startedAt,
+					contentFingerprint,
 				);
 				if (notifyWriteTimedOutServerIds.length > 0) {
 					logLatency({
