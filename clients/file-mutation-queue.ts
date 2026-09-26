@@ -160,8 +160,7 @@ export function holdFileMutationQueue(
 			outliving.push(writer);
 		},
 		release() {
-			if (outliving.length === 0) releaseHeld();
-			else void Promise.allSettled(outliving).then(() => releaseHeld());
+			void Promise.allSettled(outliving).then(() => releaseHeld());
 		},
 	};
 }

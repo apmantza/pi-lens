@@ -163,9 +163,7 @@ export class FormatService {
 			})),
 			anyChanged,
 			allSucceeded,
-			...(abandoned.length > 0 && {
-				abandoned: Promise.allSettled(abandoned).then(() => {}),
-			}),
+			abandoned: Promise.allSettled(abandoned).then(() => {}),
 		};
 	}
 
