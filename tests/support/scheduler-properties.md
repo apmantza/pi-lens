@@ -60,19 +60,26 @@ timers), or when the behavior needs a real child process.
    two seconds, and fake timers for anything the code arms. The lane seed is
    one sample: any edit to the arbitraries or `numRuns` reshuffles the draws,
    so before landing, check the property green on master over many seeds
-   (the example file: seeds 1-120 at 600 runs each). A property that is only
+   (the example file: seeds 1-300 at 600 runs each). A property that is only
    green at its lane seed turns an unrelated PR red later. Explore in
-   batches of a few thousand runs per worker: one 20,000-run exploration of
-   the example file had its worker killed (SIGKILL).
+   batches of about 20 seeds (12,000 runs) per vitest process: larger
+   batches of the example file (81 seeds in one worker, and seven
+   20,000-run properties in one file) had the worker die, once with
+   SIGKILL.
 7. **Prove it catches what it claims.** Re-apply each historical regression
    as a mutation of the built `clients/*.js` and quote the shrunk
    counterexample. Also remove each condition in your oracle that narrows a
-   property and run master over many seeds, not only the lane seed: a
-   condition is inert, and goes, only when every seed stays green without
-   it. A carve-out for a known, reachable defect is never deleted as inert;
-   a seed that misses the defect proves nothing about it. A condition that
-   strengthens a property (it narrows a carve-out) stays green on master by
-   design; prove it with the mutation it exists to catch.
+   property and run master over many seeds, not only the lane seed. A red
+   seed proves the condition is needed. A green sample proves nothing about
+   inertness: seeds 1-120 of the example file stayed green without its
+   save file clause, and seed 127 did not (#3530 round 2). Delete a
+   narrowing condition only with a written argument naming the other
+   condition that covers every case it excludes, checked against the
+   production paths that reach it, and with the multi-seed sample as
+   support. A carve-out for a known, reachable defect is never deleted as
+   inert. A condition that strengthens a property (it narrows a carve-out)
+   stays green on master by design; prove it with the mutation it exists to
+   catch.
 8. **Pin findings. Do not hide them.** When the property fails on master,
    first decide whether the code or the oracle is wrong; an oracle that asks
    for something the contract never promised is narrowed, with the reason in
