@@ -161,6 +161,33 @@ export interface DiagnosticStrategy {
 	 */
 	emptyFirstPublish?: "indexing";
 	/**
+	 * #3484 — the MEASURED order in which a push server that publishes WITHOUT
+	 * a version answers a `textDocument/documentSymbol` request sent in the
+	 * same tick as a content notification, relative to its publish for that new
+	 * content.
+	 *
+	 * `"reply-first"` means the reply comes first, so the client may drop the
+	 * path's version-less publishes until it (the diagnostics fence in
+	 * clients/lsp/client.ts `armDiagnosticsFence`): anything published before
+	 * the reply was computed before the server read the change.
+	 *
+	 * Absent (the default) means no fence. That is the only safe default: a
+	 * server that publishes the new content BEFORE answering (docker-langserver,
+	 * 2-3 ms after didChange, and it never republishes) would have its only
+	 * fresh answer dropped. Versioned servers need no fence; their publishes are
+	 * checked by version.
+	 *
+	 * Measured with a raw JSON-RPC session (didChange then documentSymbol in
+	 * one write, then publish vs reply order), 2026-09-26, linux:
+	 *   yaml-language-server  reply +3..6 ms, publish +207..242 ms  (3/3)
+	 *   intelephense          reply +2..4 ms, publish +1005 ms      (3/3)
+	 *   docker-langserver     publish +2..3 ms BEFORE reply +2..4 ms (3/3)
+	 *   @prisma/language-server reply +5..7 ms, publish +6..10 ms  (23/23), a
+	 *     1-4 ms margin, so it is NOT marked: an event-loop hiccup flips it.
+	 * Not measured (no binary here): taplo, zls, dart, gleam, clojure-lsp.
+	 */
+	diagnosticsFence?: "reply-first";
+	/**
 	 * True for a push-only server whose value depends on a ONE-TIME whole-
 	 * workspace index build rather than a per-file cost — e.g. marksman's
 	 * cross-file link/anchor graph (#645). A full-tree sweep
@@ -422,6 +449,18 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			aggregateWaitMs: 8000,
 			expectSemanticSecondPush: false,
 			emptyFirstPublish: "indexing",
+			// #3484: the fence reply (+2..4 ms) precedes the publish (~+1 s).
+			diagnosticsFence: "reply-first",
+		},
+		// yaml-language-server (#3484): the default strategy plus the measured
+		// fence order — reply +3..6 ms, publish +207..242 ms after didChange.
+		yaml: {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 250,
+			debounceMs: 150,
+			aggregateWaitMs: 1500,
+			expectSemanticSecondPush: false,
+			diagnosticsFence: "reply-first",
 		},
 		// Svelte's pull diagnostics settle after the default 1500ms budget on a
 		// cold server. The tool-smoke gate caps waits at 8000ms, so give this

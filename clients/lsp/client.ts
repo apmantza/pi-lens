@@ -640,6 +640,14 @@ interface PendingDocumentNotify {
  * effectively (client, normalized path). Different files retain independent
  * queues and therefore retain the existing parallel-send behavior.
  */
+/** #3484: one outstanding diagnostics fence for a path. */
+interface DiagnosticFence {
+	/** Version-less publishes dropped while this fence was out. */
+	dropped: number;
+	/** End it early (a newer fence for the path): cancel the request, record. */
+	supersede: () => void;
+}
+
 interface DocumentNotifyQueue {
 	pending?: PendingDocumentNotify;
 	running: boolean;
@@ -1120,18 +1128,12 @@ export interface LSPClientState {
 	 */
 	emptyFirstPublishHoldSpent: boolean;
 	/**
-	 * #3484: whether the server's last publish carried a document version.
-	 * Undefined until it publishes. Only a server seen publishing WITHOUT one
-	 * pays for a diagnostics fence.
+	 * #3484: paths with a diagnostics fence outstanding. Each entry is its own
+	 * object, so an older fence's reply cannot lift a newer one, and counts the
+	 * version-less publishes it dropped. Every entry is removed by its reply,
+	 * its error, a newer fence for the path, or the fence bound.
 	 */
-	lastPublishVersioned?: boolean | undefined;
-	/**
-	 * #3484: paths with a diagnostics fence outstanding, each with its own
-	 * token so an older fence's reply cannot lift a newer one. Version-less
-	 * publishes for such a path are dropped. Every entry is removed by its
-	 * reply, its error, or the fence bound.
-	 */
-	readonly diagnosticFences: Map<string, object>;
+	readonly diagnosticFences: Map<string, DiagnosticFence>;
 	/** #3484: the fence-skipped record was written for this client. */
 	fenceSkipRecorded?: boolean;
 	/** Paths explicitly closed during this client lifetime; late publishes are dropped. */
@@ -2435,13 +2437,11 @@ export function setupIncomingHandlers(
 			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
-			state.lastPublishVersioned = docVersion !== undefined;
 			// #3484: a version-less publish received before the fence's reply may
 			// be for the content before the latest send; it cannot say which.
-			if (
-				docVersion === undefined &&
-				state.diagnosticFences.has(normalizedPath)
-			) {
+			const fence = state.diagnosticFences.get(normalizedPath);
+			if (docVersion === undefined && fence) {
+				fence.dropped += 1;
 				return;
 			}
 			if (PUB_DEBUG) {
@@ -4204,7 +4204,7 @@ async function handleNotifyOpenOnce(
 		// close + reopen so the re-edit actually triggers a re-scan instead of
 		// silently publishing nothing.
 		if (getStrategy(state.serverId, state.launchVariant).reopenOnResync) {
-			await sendFenced(state, normalizedPath, uri, "textDocument/didClose", {
+			await safeSendNotification(state.connection, "textDocument/didClose", {
 				textDocument: { uri },
 			});
 			state.openDocuments.delete(normalizedPath);
@@ -6271,7 +6271,7 @@ export async function createLSPClient(options: {
 		},
 
 		isBusy() {
-			return (activeRequestsByConnection.get(connection) ?? 0) > 0;
+			return isConnectionBusy(connection);
 		},
 
 		getDocumentUri(filePath) {
@@ -6480,8 +6480,9 @@ export async function createLSPClient(options: {
  * server never saw).
  */
 /**
- * #3484: send a document notification and, for a server seen publishing
- * without a version, a fence request in the same synchronous tick.
+ * #3484: send a document notification and, for a server whose strategy
+ * carries the measured `diagnosticsFence: "reply-first"` marker, a fence
+ * request in the same synchronous tick.
  * vscode-jsonrpc orders messages when they are sent, so the fence reaches the
  * server after the notification and its reply comes after every publish the
  * server sent before reading it. Until then the publish handler drops
@@ -6506,7 +6507,15 @@ function armDiagnosticsFence(
 	normalizedPath: string,
 	uri: string,
 ): void {
-	if (state.lastPublishVersioned !== false) return;
+	// Only a server measured to answer the fence BEFORE it publishes for the
+	// new content: fencing one that publishes first (docker-langserver) drops
+	// its only fresh answer.
+	if (
+		getStrategy(state.serverId, state.launchVariant).diagnosticsFence !==
+		"reply-first"
+	) {
+		return;
+	}
 	if (state.operationSupport?.documentSymbol !== true) {
 		// No cheap request the server answers in order: keep today's behaviour
 		// (the binding reads "unknown"), and say so once per client.
@@ -6522,34 +6531,64 @@ function armDiagnosticsFence(
 		}
 		return;
 	}
-	const token = {};
-	state.diagnosticFences.set(normalizedPath, token);
 	const armedAt = Date.now();
-	const lift = (): void => {
+	const cancellation = new CancellationTokenSource();
+	// Ends this fence once. It is still the path's current fence here: a newer
+	// fence supersedes (ends) it before taking its place. Cancelling after a
+	// reply sends nothing (vscode-jsonrpc drops the listener on the response).
+	const end = (outcome: "reply" | "timeout" | "superseded"): void => {
+		if (ended) return;
+		ended = true;
 		clearTimeout(bound);
-		if (state.diagnosticFences.get(normalizedPath) === token) {
-			state.diagnosticFences.delete(normalizedPath);
+		state.diagnosticFences.delete(normalizedPath);
+		cancellation.cancel();
+		cancellation.dispose();
+		if (outcome === "timeout" || fence.dropped > 0) {
+			logLatency({
+				type: "phase",
+				phase: "lsp_diagnostics_fence",
+				filePath: normalizedPath,
+				durationMs: Date.now() - armedAt,
+				metadata: {
+					serverId: state.serverId,
+					outcome,
+					droppedPublishes: fence.dropped,
+				},
+			});
 		}
 	};
+	let ended = false;
+	const fence: DiagnosticFence = {
+		dropped: 0,
+		supersede: () => end("superseded"),
+	};
+	state.diagnosticFences.get(normalizedPath)?.supersede();
+	state.diagnosticFences.set(normalizedPath, fence);
 	// Bounded by the client's diagnostics wait ceiling: a server that never
 	// answers cannot hold the path's publishes back past it. Publishes are then
 	// accepted as they were before #3484.
-	const bound = setTimeout(() => {
-		if (state.diagnosticFences.get(normalizedPath) !== token) return;
-		state.diagnosticFences.delete(normalizedPath);
-		logLatency({
-			type: "phase",
-			phase: "lsp_diagnostics_fence",
-			filePath: normalizedPath,
-			durationMs: Date.now() - armedAt,
-			metadata: { serverId: state.serverId, outcome: "timeout" },
-		});
-	}, DIAGNOSTICS_WAIT_TIMEOUT_MS);
+	const bound = setTimeout(() => end("timeout"), DIAGNOSTICS_WAIT_TIMEOUT_MS);
 	bound.unref?.();
+	// Sent directly, not through safeSendRequest: a fence is bookkeeping, so it
+	// must not count toward isBusy() (capacity and idle eviction read it), and a
+	// wedged server's unanswered fence would otherwise hold it busy forever.
 	// An error reply is still a reply, ordered after the earlier publishes.
-	safeSendRequest(state.connection, "textDocument/documentSymbol", {
-		textDocument: { uri },
-	}).then(lift, lift);
+	let reply: Promise<unknown>;
+	try {
+		reply = Promise.resolve(
+			state.connection.sendRequest(
+				"textDocument/documentSymbol" as never,
+				{ textDocument: { uri } } as never,
+				cancellation.token as never,
+			),
+		);
+	} catch (thrown) {
+		reply = Promise.reject(thrown);
+	}
+	reply.then(
+		() => end("reply"),
+		() => end("reply"),
+	);
 }
 
 async function safeSendNotification(
@@ -6570,6 +6609,11 @@ async function safeSendNotification(
 }
 
 const activeRequestsByConnection = new WeakMap<MessageConnection, number>();
+
+/** A request pi-lens sent on this connection is still unanswered. */
+export function isConnectionBusy(connection: MessageConnection): boolean {
+	return (activeRequestsByConnection.get(connection) ?? 0) > 0;
+}
 
 // Helper to safely send requests - catches stream destruction
 async function safeSendRequest<T>(
