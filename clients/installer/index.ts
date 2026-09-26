@@ -82,11 +82,15 @@ import { commitDurableStoreAsync } from "../durable-store.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { createGenerationMap } from "../generation-guard.js";
 import {
+	type GenerationHeartbeat,
 	type GenerationHold,
+	heartbeatIntervalMs,
 	isLockContention,
+	ownsTopGeneration,
 	recordGenerationTakeover,
 	recordLegacyLockHeld,
 	releaseGeneration,
+	startGenerationHeartbeat,
 	tryAcquireGeneration,
 } from "../generation-lock.js";
 import { resolveToolCwd } from "../tool-cwd.js";
@@ -131,15 +135,17 @@ interface InstallLockOwner {
 }
 
 /**
- * A held install lock: its generation, and the exact text it wrote to the old
- * file. Release compares that text, as the bounded lock compares its token:
- * a pid alone also matches a newer hold of this same process (#3476 review
- * F3). The `nonce` keeps two holds created in one millisecond apart; older
- * installers read only `pid` and `createdAt`.
+ * A held install lock: its generation, the exact text it wrote to the old
+ * file, and the heartbeat keeping the generation's mtime fresh for the whole
+ * hold (#3515). Release compares that text, as the bounded lock compares its
+ * token: a pid alone also matches a newer hold of this same process (#3476
+ * review F3). The `nonce` keeps two holds created in one millisecond apart;
+ * older installers read only `pid` and `createdAt`.
  */
 interface InstallLockHold {
 	generation: GenerationHold;
 	token: string;
+	heartbeat: GenerationHeartbeat;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -233,6 +239,11 @@ function installLockOwner(): string {
  * pre-#3476 file. Of two takers of one stale generation exactly one exclusive
  * create succeeds; the old takeover removed the lock by path, and a taker
  * acting on an earlier judgement could remove a live successor's lock.
+ *
+ * #3515: the generation's mtime is kept fresh by a heartbeat for as long as
+ * the hold lives — an ERESOLVE npm install can run two 120s
+ * `runInstallAttempt`s inside `maxAgeMs` (180s by default), and nothing
+ * previously renewed the generation while that ran.
  */
 function tryAcquireInstallLock(
 	maxAgeMs: number,
@@ -240,6 +251,10 @@ function tryAcquireInstallLock(
 	const hold = tryAcquireGeneration(INSTALL_LOCK_GENERATIONS, maxAgeMs);
 	if (!hold) return "busy";
 	if (hold.tookOverStale) recordGenerationTakeover(hold);
+	const heartbeat = startGenerationHeartbeat(
+		hold,
+		heartbeatIntervalMs(maxAgeMs),
+	);
 	const token = JSON.stringify({
 		pid: process.pid,
 		createdAt: Date.now(),
@@ -249,10 +264,12 @@ function tryAcquireInstallLock(
 	try {
 		took = takeLegacyInstallLock(maxAgeMs, token);
 	} catch (cause) {
+		heartbeat.stop();
 		releaseGeneration(hold);
 		throw cause;
 	}
-	if (took) return { generation: hold, token };
+	if (took) return { generation: hold, token, heartbeat };
+	heartbeat.stop();
 	releaseGeneration(hold);
 	return "legacy-held";
 }
@@ -264,6 +281,7 @@ function tryAcquireInstallLock(
  */
 function releaseInstallLock(hold: InstallLockHold): void {
 	activeInstallLocks.delete(hold);
+	hold.heartbeat.stop();
 	try {
 		if (readFileSync(INSTALL_LOCK_PATH, "utf8") === hold.token)
 			unlinkSync(INSTALL_LOCK_PATH);
@@ -276,6 +294,14 @@ function releaseInstallLock(hold: InstallLockHold): void {
 async function acquireInstallLock(): Promise<{
 	release?: () => Promise<void>;
 	reason?: string;
+	/**
+	 * Present only when `release` is: whether this hold is still the live top
+	 * generation right now (#3515). The heartbeat is what usually keeps this
+	 * true for the hold's whole lifetime; a strategy with more than one
+	 * critical write inside one hold (npm's ERESOLVE retry) checks this
+	 * between them and aborts rather than risk racing a second holder.
+	 */
+	ownsLock?: () => boolean;
 }> {
 	// #946 review F2: the waiter's bound must exceed the owner's install bound
 	// (PI_LENS_INSTALL_TIMEOUT_MS, default 120s) — a 30s waiter gave up on a
@@ -308,6 +334,7 @@ async function acquireInstallLock(): Promise<{
 					released = true;
 					releaseInstallLock(hold);
 				},
+				ownsLock: () => ownsTopGeneration(hold.generation),
 			};
 		}
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -5431,6 +5458,16 @@ function boundInstallError(
 	return line.length > limit ? `${line.slice(0, limit - 3)}...` : line;
 }
 
+/**
+ * #3515: thrown when a re-check right before a second critical write finds
+ * the install lock's generation no longer owned — a competing installer
+ * judged this hold stale (the heartbeat missed enough ticks, or the process
+ * was suspended) and took over. Caught by `installNpmTool`'s own outer catch
+ * like any other install failure; never continues to spawn a second npm
+ * process that would race the new holder's writes into `TOOLS_DIR`.
+ */
+class InstallLockLostError extends Error {}
+
 async function installNpmTool(
 	toolId: string,
 	packageName: string,
@@ -5439,7 +5476,21 @@ async function installNpmTool(
 	verificationTimeoutMs = 10_000,
 	/** See {@link packageEntryVerification} — spawn-free verification (#2722). */
 	packageEntryOf?: string,
+	/** See {@link installTool}'s `ownsLock` parameter. */
+	ownsLock?: () => boolean,
 ): Promise<string | undefined> {
+	const assertOwnsLock = (context: string): void => {
+		if (ownsLock && !ownsLock()) {
+			recordDegradationOnce({
+				kind: "install-lock-lost-mid-install",
+				subject: toolId,
+				reason: `install lock generation lost before ${context}; aborting rather than risk a second writer in TOOLS_DIR`,
+			});
+			throw new InstallLockLostError(
+				`install lock lost before ${context} for ${packageName} (#3515)`,
+			);
+		}
+	};
 	try {
 		// Ensure tools directory exists
 		await fs.mkdir(TOOLS_DIR, { recursive: true });
@@ -5488,6 +5539,7 @@ async function installNpmTool(
 			};
 		};
 
+		assertOwnsLock(`spawning ${pmCommand} install`);
 		let outcome = await runInstallAttempt([
 			...(testNpmScript ? [testNpmScript] : []),
 			...baseInstallArgs,
@@ -5501,6 +5553,12 @@ async function installNpmTool(
 			);
 
 		if (pm === "npm" && erResolve) {
+			// #3515: the first attempt alone can run up to INSTALL_TIMEOUT_MS
+			// (120s default); a second attempt on top of it is exactly the hold
+			// the fixed 180s lease used to be too short for. The heartbeat above
+			// is what keeps the lock's generation from going stale for real, but
+			// this re-check is what stops a WRITE if it ever did anyway.
+			assertOwnsLock(`retrying ${pmCommand} install with --legacy-peer-deps`);
 			const retryArgs = installArgs(pm, packageName, {
 				ignoreScripts: !needsScripts,
 				legacyPeerDeps: true,
@@ -6145,7 +6203,16 @@ async function finishInstallAttempt(
 /**
  * Install a tool by ID
  */
-export async function installTool(toolId: string): Promise<boolean> {
+export async function installTool(
+	toolId: string,
+	/**
+	 * #3515: whether the caller's install-lock hold is still the live top
+	 * generation, threaded down to the npm strategy so it can abort its
+	 * ERESOLVE retry rather than risk a second write past a lost lock.
+	 * Undefined for a caller with no lock context (there is none today).
+	 */
+	ownsLock?: () => boolean,
+): Promise<boolean> {
 	if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
 		installFailureReasons.set(
 			toolId,
@@ -6184,6 +6251,7 @@ export async function installTool(toolId: string): Promise<boolean> {
 					tool.checkArgs,
 					getToolVerificationTimeout(tool),
 					packageEntryVerification(tool),
+					ownsLock,
 				);
 				if (npmPath !== undefined) {
 					// #1746 review F4: an install just resolved this package's range
@@ -6381,7 +6449,7 @@ async function ensureToolResolved(
 		}
 		let installed: boolean;
 		try {
-			installed = await installTool(toolId);
+			installed = await installTool(toolId, lock.ownsLock);
 		} finally {
 			await lock.release();
 		}
@@ -6555,7 +6623,7 @@ async function ensureToolResolved(
 				);
 				return installedByPeer;
 			}
-			installed = await installTool(toolId);
+			installed = await installTool(toolId, lock.ownsLock);
 		} finally {
 			await lock.release();
 		}
