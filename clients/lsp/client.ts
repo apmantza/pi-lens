@@ -2439,9 +2439,11 @@ export function setupIncomingHandlers(
 			const docVersion = params.version;
 			// #3484: a version-less publish received before the fence's reply may
 			// be for the content before the latest send; it cannot say which.
+			// Dropped unstored, it still answers a send (#3482's backlog).
 			const fence = state.diagnosticFences.get(normalizedPath);
 			if (docVersion === undefined && fence) {
 				fence.dropped += 1;
+				countPublication(state, normalizedPath);
 				return;
 			}
 			if (PUB_DEBUG) {

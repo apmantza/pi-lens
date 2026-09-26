@@ -33,6 +33,7 @@ import {
 	diagnosticsVersionForPath,
 	handleNotifyOpen,
 	isConnectionBusy,
+	publicationCountsForPath,
 	type LSPClientState,
 	type LSPDiagnostic,
 	setupIncomingHandlers,
@@ -448,6 +449,24 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 		expect(rows).toEqual([
 			expect.objectContaining({ outcome: "reply", droppedPublishes: 1 }),
 		]);
+	});
+
+	// #3482: a publish received but never stored still answers one send, so the
+	// late-auxiliary backlog must count it; the fence drop is such a return.
+	it("counts a publish the fence dropped toward the path's publications (#3482)", async () => {
+		const h = harness();
+		await primed(h, false);
+		expect(publicationCountsForPath(h.state, KEY)).toEqual({
+			sent: 1,
+			published: 1,
+		});
+
+		await replay(h, { versionedStale: false, baseline: true });
+
+		expect(publicationCountsForPath(h.state, KEY)).toEqual({
+			sent: 2,
+			published: 2,
+		});
 	});
 
 	// Round 1 F4: a fence request is bookkeeping, not work the server is doing
