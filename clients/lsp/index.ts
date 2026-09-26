@@ -8406,11 +8406,13 @@ export class LSPService {
 								.then((sent) => {
 									// #3477: the timed-out close is still queued ahead of this
 									// re-open, and the queue refuses a touch behind a close (it
-									// resolves false). That is a failed resync, not a restored
-									// document.
+									// resolves false). #3543: a dead client resolves false too.
+									// Either way it is a failed resync, not a restored document.
 									if (sent === false) {
 										throw new Error(
-											"re-open not sent: the close is still queued",
+											client.isAlive()
+												? "re-open not sent: the close is still queued"
+												: "re-open not sent: the client is dead",
 										);
 									}
 								}),

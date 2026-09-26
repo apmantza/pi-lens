@@ -547,8 +547,41 @@ describe("LSPService.renameFile", () => {
 		try {
 			await expect(
 				service.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true }),
-			).rejects.toThrow(/resync also failed: typescript \(rejected\)/);
+			).rejects.toThrow(
+				/resync also failed: typescript \(rejected\): re-open not sent: the close is still queued/,
+			);
 			expect(fs.existsSync(oldPath)).toBe(true);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	// #3543: a client that died after its close failed also resolves the
+	// re-open false (nothing went on the wire). The resync failure names the
+	// death, not a queued close.
+	it("names a dead client, not a queued close, when the re-open was not sent", async () => {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-rename-file-"),
+		);
+		const oldPath = path.join(tmpDir, "old.ts");
+		const newPath = path.join(tmpDir, "new.ts");
+		fs.writeFileSync(oldPath, "export const value = 1;\n", "utf-8");
+		const client = makeClient(tmpDir, null);
+		client.isDocumentOpen.mockReturnValue(true);
+		client.closeDocument.mockRejectedValueOnce(new Error("close timed out"));
+		client.notify.open.mockImplementationOnce(async () => {
+			client.isAlive.mockReturnValue(false);
+			return false;
+		});
+		const service = new LSPService();
+		addClient(service, "typescript", tmpDir, client);
+
+		try {
+			await expect(
+				service.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true }),
+			).rejects.toThrow(
+				/resync also failed: typescript \(rejected\): re-open not sent: the client is dead/,
+			);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

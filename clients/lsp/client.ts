@@ -4589,8 +4589,8 @@ export function handleNotifyOpen(
 	saved = false,
 	readStamp?: number,
 ): Promise<boolean> {
-	// #3543: nothing is sent, so nothing landed.
-	if (!isClientAlive(state)) return Promise.resolve(false);
+	// #3543: no dead-client check here. The queued run makes it and resolves
+	// false; an early return only duplicated that answer.
 	const normalizedPath = normalizeMapKey(filePath);
 	return enqueueDocumentNotify(
 		state,
@@ -4681,8 +4681,7 @@ export function handleNotifyChange(
 	filePath: string,
 	content: string,
 ): Promise<boolean> {
-	// #3543: nothing is sent, so nothing landed.
-	if (!isClientAlive(state)) return Promise.resolve(false);
+	// #3543: the queued run makes the dead-client check and resolves false.
 	const normalizedPath = normalizeMapKey(filePath);
 	// #3405: no `saved` argument — `LSPService.updateFile` is this path's only
 	// entry point and no caller declares a save through it, so a change never

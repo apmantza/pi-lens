@@ -1091,8 +1091,9 @@ describe("handleNotifyOpen", () => {
 /**
  * #3543: a touch resolves `true` only when its content reached the wire; the
  * `touchFile` debounce entry and drift record hang on that answer. One row per
- * way a touch's run can end: the client dead up front or by the time the
- * queued run starts, dying mid-run, the transport refusing the write (a
+ * way a touch's run can end: the client dead by the time the queued run
+ * starts (the only dead-client check since #3543), dying mid-run, the
+ * transport refusing the write (a
  * destroyed stream), and the write accepted. Recurrence: a run that ended
  * without sending returned `undefined`, which the queue read as sent.
  */
@@ -1105,7 +1106,8 @@ describe("#3543 — a touch resolves true only when its content was sent", () =>
 		opened: boolean;
 		/** `opengrep` resyncs by didClose + didOpen (`reopenOnResync`). */
 		serverId?: string;
-		dead?: "up-front" | "before-run";
+		/** The client dies after the touch is queued, before its run starts. */
+		deadBeforeRun?: boolean;
 		/** The client dies while this notification is being sent. */
 		dieOn?: string;
 		/** The transport rejects this notification as a destroyed stream. */
@@ -1114,31 +1116,17 @@ describe("#3543 — a touch resolves true only when its content was sent", () =>
 	};
 	const rows: Row[] = [
 		{
-			name: "open, dead up front",
-			via: "open",
-			opened: true,
-			dead: "up-front",
-			sent: false,
-		},
-		{
-			name: "change, dead up front",
-			via: "change",
-			opened: true,
-			dead: "up-front",
-			sent: false,
-		},
-		{
 			name: "open, dead before the run",
 			via: "open",
 			opened: true,
-			dead: "before-run",
+			deadBeforeRun: true,
 			sent: false,
 		},
 		{
 			name: "change, dead before the run",
 			via: "change",
 			opened: true,
-			dead: "before-run",
+			deadBeforeRun: true,
 			sent: false,
 		},
 		{
@@ -1222,7 +1210,6 @@ describe("#3543 — a touch resolves true only when its content was sent", () =>
 			state.documentVersions.set(TEST_KEY, 0);
 			state.openDocumentUris?.set(TEST_KEY, pathToFileURL(TEST_FILE).href);
 		}
-		if (row.dead === "up-front") state.isConnected = false;
 		vi.mocked(state.connection.sendNotification).mockImplementation(
 			async (method) => {
 				if (method === row.dieOn) state.isConnected = false;
@@ -1235,7 +1222,7 @@ describe("#3543 — a touch resolves true only when its content was sent", () =>
 				? handleNotifyOpen(state, TEST_FILE, "v1", "typescript", false, true)
 				: handleNotifyChange(state, TEST_FILE, "v1");
 		// The queue starts its run on a microtask: this death lands first.
-		if (row.dead === "before-run") state.isConnected = false;
+		if (row.deadBeforeRun) state.isConnected = false;
 
 		await expect(touch).resolves.toBe(row.sent);
 	});
