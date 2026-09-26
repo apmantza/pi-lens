@@ -416,7 +416,7 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/file-utils.ts#createProjectIgnoreMatcher:32d2341a",
 		"clients/file-utils.ts#isRecordableProjectPath:f343d35d",
 		"clients/file-kinds.ts#TERRAGRUNT_FILENAMES:1c874cb6",
-		"clients/installer/index.ts#INSTALL_LOCK_PATH:297cc14b",
+		"clients/installer/index.ts#INSTALL_LOCK_GENERATIONS:ed7e1969",
 		"clients/installer/index.ts#ensureInFlight:365bfb43",
 		"clients/installer/index.ts#getInstallFailureReason:d74e98d9",
 		"clients/installer/index.ts#getInstallAttempt:c20998b0",

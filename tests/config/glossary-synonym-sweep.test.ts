@@ -428,7 +428,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/govulncheck-client.ts": 6,
 		"clients/gzip-stage-write.ts": 2,
 		"clients/install-diagnostics.ts": 4,
-		"clients/installer/index.ts": 29,
+		"clients/installer/index.ts": 26,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,

@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -501,4 +503,148 @@ describe("installer process lifecycle (#945)", () => {
 	// A literal parent-exit orphan test is intentionally omitted: racing the test
 	// harness against Windows process teardown is flaky. The deterministic timeout
 	// case above exercises the same taskkill /T descendant-tree primitive.
+});
+
+/**
+ * A real installer process: loads the installer, writes `<name>.ready`, waits
+ * for `<name>.go`, then takes the shared install lock through
+ * `acquireManagedInstallGate`. Inside, it writes `<name>.inside` and holds
+ * until `leave` exists (or, with `exitInside`, exits without releasing); a
+ * process that gives up writes `<name>.gaveup`. With `hookPid`, the first
+ * liveness probe of that pid (`process.kill(pid, 0)`, which every stale
+ * judgement makes) releases `p2` and waits until it is inside.
+ */
+function spawnInstallLockHolder(
+	root: string,
+	home: string,
+	name: string,
+	options: {
+		hookPid?: number;
+		lockTimeoutMs?: number;
+		exitInside?: boolean;
+	} = {},
+) {
+	const file = (suffix: string) =>
+		JSON.stringify(path.join(root, `${name}.${suffix}`));
+	const at = (base: string) => JSON.stringify(path.join(root, base));
+	const script = `
+import fs from "node:fs";
+const pause = new Int32Array(new SharedArrayBuffer(4));
+const waitFor = (file, ms = 20_000) => {
+	const until = Date.now() + ms;
+	while (!fs.existsSync(file) && Date.now() < until) Atomics.wait(pause, 0, 0, 5);
+	return fs.existsSync(file);
+};
+const hookPid = ${options.hookPid ?? 0};
+if (hookPid) {
+	const realKill = process.kill.bind(process);
+	let fired = false;
+	process.kill = (pid, signal) => {
+		if (pid === hookPid && !fired) {
+			fired = true;
+			fs.writeFileSync(${at("p2.go")}, "");
+			fs.writeFileSync(${file("p2entered")}, String(waitFor(${at("p2.inside")}, 10_000)));
+		}
+		return realKill(pid, signal);
+	};
+}
+const { acquireManagedInstallGate } = await import(${JSON.stringify(
+		pathToFileURL(path.resolve("clients/installer/index.js")).href,
+	)});
+fs.writeFileSync(${file("ready")}, "");
+waitFor(${file("go")});
+const gate = await acquireManagedInstallGate(${JSON.stringify(name)});
+if (!gate.ok) {
+	fs.writeFileSync(${file("gaveup")}, gate.reason ?? "");
+} else {
+	fs.writeFileSync(${file("inside")}, String(process.pid));
+	if (${options.exitInside === true}) process.exit(0);
+	waitFor(${at("leave")});
+	fs.writeFileSync(${file("left")}, "");
+	await gate.release();
+}
+`;
+	return spawn(process.execPath, ["--input-type=module", "-e", script], {
+		cwd: process.cwd(),
+		env: {
+			...process.env,
+			PI_LENS_HOME: home,
+			PI_LENS_DISABLE_TOOL_INSTALL: "0",
+			PI_LENS_TEST_MODE: "1",
+			PI_LENS_INSTALL_LOCK_TIMEOUT_MS: String(options.lockTimeoutMs ?? 20_000),
+		},
+		stdio: "ignore",
+		windowsHide: true,
+	});
+}
+
+function waitForFileSync(file: string, ms = 15_000): boolean {
+	const pause = new Int32Array(new SharedArrayBuffer(4));
+	const until = Date.now() + ms;
+	while (!fs.existsSync(file)) {
+		if (Date.now() > until) return false;
+		Atomics.wait(pause, 0, 0, 5);
+	}
+	return true;
+}
+
+describe("install lock takeover (#3476)", () => {
+	// The double takeover on the real install lock: p1 dies holding it; p3
+	// judges it stale, and before p3 acts on that judgement p2 takes the same
+	// lock over and enters. A takeover that removes the lock by path then
+	// removes p2's live lock, and two installers write TOOLS_DIR at once.
+	it("admits one of two installers taking over a dead installer's lock", async () => {
+		const root = tempDir();
+		const home = path.join(root, "home");
+		const p1 = spawnInstallLockHolder(root, home, "p1");
+		const p2 = spawnInstallLockHolder(root, home, "p2");
+		const exits = [once(p1, "exit"), once(p2, "exit")];
+		try {
+			fs.writeFileSync(path.join(root, "p1.go"), "");
+			expect(waitForFileSync(path.join(root, "p1.inside"))).toBe(true);
+			p1.kill("SIGKILL");
+			await exits[0];
+			expect(waitForFileSync(path.join(root, "p2.ready"))).toBe(true);
+
+			const p3 = spawnInstallLockHolder(root, home, "p3", {
+				hookPid: p1.pid,
+				lockTimeoutMs: 500,
+				exitInside: true,
+			});
+			const p3Exit = once(p3, "exit");
+			fs.writeFileSync(path.join(root, "p3.go"), "");
+			await p3Exit;
+			expect(fs.readFileSync(path.join(root, "p3.p2entered"), "utf8")).toBe(
+				"true",
+			);
+			expect(fs.existsSync(path.join(root, "p3.inside"))).toBe(false);
+			expect(fs.readFileSync(path.join(root, "p3.gaveup"), "utf8")).toMatch(
+				/timed out after 500ms waiting for shared tools install lock/,
+			);
+		} finally {
+			fs.writeFileSync(path.join(root, "p2.go"), "");
+			fs.writeFileSync(path.join(root, "leave"), "");
+			p1.kill("SIGKILL");
+			await Promise.all(exits);
+		}
+	}, 30_000);
+
+	// The exit cleanup used to unlink the lock path without asking whose lock
+	// it named. It now releases this process's own generation and removes the
+	// old lock file only while that file still names this process.
+	it("releases its lock when the process exits holding it", async () => {
+		const root = tempDir();
+		const home = path.join(root, "home");
+		const p1 = spawnInstallLockHolder(root, home, "p1", { exitInside: true });
+		const p1Exit = once(p1, "exit");
+		fs.writeFileSync(path.join(root, "p1.go"), "");
+		await p1Exit;
+		expect(fs.existsSync(path.join(root, "p1.inside"))).toBe(true);
+		const tools = path.join(home, "tools");
+		expect(fs.existsSync(path.join(tools, ".install.lock"))).toBe(false);
+		expect(fs.readdirSync(path.join(tools, ".install.locks")).sort()).toEqual([
+			"lock.1",
+			"lock.1.released",
+		]);
+	}, 30_000);
 });
