@@ -158,6 +158,15 @@ export const OBSERVED_TURN_BUDGET_MS = 600;
 const OBSERVED_SETTLE_DEADLINE_MS = 50;
 
 /**
+ * Test-only overrides of the two wall-clock bounds a directory observation
+ * passes through (the arm's capture timeout and the settle's per-entry
+ * deadline). A test that asserts on WHAT an observation saw — not on how fast
+ * the machine is — widens them, and restores them with `{}` when it finishes.
+ */
+let captureBudgetOverrideMs: number | undefined;
+let settleDeadlineOverrideMs: number | undefined;
+
+/**
  * Entries taken from a DIRECTORY-shaped target path, non-recursively.
  *
  * A tool that names a directory is saying "I operate in here"; its own entries
@@ -351,6 +360,15 @@ export function resetObservedMutationNet(): void {
 	current.turnIndex = -1;
 	current.turnSpentMs = 0;
 	current.sweepCursor = 0;
+}
+
+/** Test seam: widen the arm/settle time bounds; see the overrides' doc. */
+export function _setObservedTimeBoundsForTests(bounds: {
+	captureMs?: number;
+	settleMs?: number;
+}): void {
+	captureBudgetOverrideMs = bounds.captureMs;
+	settleDeadlineOverrideMs = bounds.settleMs;
 }
 
 /** Test seam: the net's live state, as plain data. */
@@ -761,7 +779,10 @@ export async function armObservedMutation(
 	}
 
 	const started = Date.now();
-	const timeoutMs = Math.min(remaining, OBSERVED_CAPTURE_BUDGET_MS);
+	const timeoutMs = Math.min(
+		remaining,
+		captureBudgetOverrideMs ?? OBSERVED_CAPTURE_BUDGET_MS,
+	);
 	const outcome = await withBounds(
 		async () => {
 			const universe = await collectObservationUniverse(args.targetPath);
@@ -1004,6 +1025,8 @@ export async function settleObservedMutation(
 	}
 
 	const started = Date.now();
+	const settleDeadlineMs =
+		settleDeadlineOverrideMs ?? OBSERVED_SETTLE_DEADLINE_MS;
 	// The target is `paths[0]` for a file target and the whole (already capped)
 	// entry list for a directory one. The deadline can only ever cut a directory
 	// target's tail — `captureFileStatsForPaths` always runs its first entry.
@@ -1015,10 +1038,10 @@ export async function settleObservedMutation(
 			captureFileStatsForPaths(pending.paths, {
 				withHashes: true,
 				hashBudgetBytes: OBSERVED_HASH_BUDGET_BYTES,
-				deadlineMs: started + OBSERVED_SETTLE_DEADLINE_MS,
+				deadlineMs: started + settleDeadlineMs,
 				signal: args.signal,
 			}),
-		OBSERVED_SETTLE_DEADLINE_MS * 4,
+		settleDeadlineMs * 4,
 		args.signal,
 		{ hook: "tool_result_edit", label: "settleObservedMutation" },
 	);
