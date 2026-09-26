@@ -233,6 +233,26 @@ describe("getLastLoggedPhase (loop_block attribution, #1122/#1123)", () => {
 		expect(getLastLoggedPhase()?.phase).toBe("lsp_touch_file");
 	});
 
+	// #3490: the rules-refreshed rebaseline is a zero-duration decision row
+	// from a notification handler. Pins the `LAST_PHASE_EXCLUDED` entry so
+	// deleting it reds here.
+	it("does not let the rules-refreshed rebaseline record own stall attribution (#3490)", () => {
+		logLatency({
+			type: "phase",
+			phase: "lsp_touch_file",
+			filePath: "/repo/src/app.ts",
+			durationMs: 5,
+		});
+		logLatency({
+			type: "phase",
+			phase: "lsp_rules_refreshed",
+			filePath: "/repo",
+			durationMs: 0,
+			metadata: { serverId: "opengrep", rebaselinedPaths: 1 },
+		});
+		expect(getLastLoggedPhase()?.phase).toBe("lsp_touch_file");
+	});
+
 	it("does not let the cache usage session summary own stall attribution (#1996)", () => {
 		logLatency({
 			type: "phase",

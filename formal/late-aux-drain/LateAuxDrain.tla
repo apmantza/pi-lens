@@ -19,6 +19,13 @@
 (*    publishes WITHOUT a version. The client stores the publish with      *)
 (*    ts = receipt time; isSupersededPush cannot drop a version-less push  *)
 (*    (client.ts ~2440-2480). It may skip a superseded scan (AllowCancel); *)
+(*  - opengrep's rule refresh (#3490, opengrep@1a5fd9d                     *)
+(*    Scan_helpers.refresh_rules): `semgrep/rulesRefreshed`, then one      *)
+(*    SURPLUS publish per file with a recorded scan. It answers no send.   *)
+(*    It may overtake scans sent before the notification; a scan sent     *)
+(*    after it lands first only with RefreshOvertake. It carries the      *)
+(*    newest version sent before the notification (opengrep reads the    *)
+(*    disk; not modelled);                                                *)
 (*  - the turn_end drain (runtime-turn.ts ~3895-4220):                     *)
 (*      DrainStart   drainPendingAuxiliaryCoverage (sync)                  *)
 (*      DrainRead    await readCachedDiagnosticsForServers, then the sync  *)
@@ -50,7 +57,14 @@ CONSTANTS
                       \* mark; deliver only once that many publishes landed
     MarkAtNotify,     \* candidate fix: markedAtMs = the touch's notify time,
                       \* not Date.now() after the grace wait (index.ts ~6028)
-    ExtDuringGrace    \* external edits may land inside a touch's aux-grace wait
+    ExtDuringGrace,   \* external edits may land inside a touch's aux-grace wait
+    Refresh,          \* "none" | "answered" | "outstanding": one
+                      \* semgrep/rulesRefreshed, arriving after v0's first
+                      \* answer ("answered") or while it is in flight
+    RefreshRebaseline,\* #3490: the notification takes one publication back
+                      \* from a path that already had one
+    RefreshOvertake   \* #3490 r1 F2: the answer to a send made after the
+                      \* notification may land before the refresh republish
 
 None == [none |-> TRUE]
 
@@ -64,7 +78,16 @@ VARIABLES
     touchBase,   \* per-path publication count before the notify
     touchAt,     \* clock at the touch's notify
     sent,        \* versions sent to the scanner, not yet scanned
-    pubCount,    \* publications received for the path (monotone)
+    pubCount,    \* publications received for the path (monotone): the
+                 \* touch's evidence
+    sentCount,   \* sends in the open lifetime, v0's open included (client.ts
+                 \* publicationCountsForPath `sent`)
+    bound,       \* the client's publication count, capped at sentCount
+                 \* (`published`): what the backlog binding reads
+    lastSent,    \* newest version sent to the scanner
+    refresh,     \* "pending" | "notified" | "done"
+    surplus,     \* version the refresh republish carries (0 = none)
+    preN,        \* scans sent before the notification, still queued
     cache,       \* None | [ver, ts]  (ver is invisible to the code)
     pending,     \* None | [marked, rearms, need, seq]
     drain,       \* "idle" | "read" | "observe"
@@ -73,13 +96,25 @@ VARIABLES
     delivered    \* set of [ver, disk]: findings delivered, disk at the gate
 
 vars == <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
-          touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap, delivered>>
+          touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap, delivered,
+          sentCount, bound, lastSent, refresh, surplus, preN>>
+
+refreshVars == <<refresh, surplus, preN>>
+
+\* countPublication: one more publication, capped at the lifetime's sends.
+Counted(b) == IF b + 1 > sentCount THEN sentCount ELSE b + 1
 
 Init ==
     /\ clock = 0 /\ disk = 1 /\ mtime = 0
     /\ touchesLeft = AgentTouches /\ extLeft = ExternalEdits /\ drainsLeft = MaxDrains
     /\ touch = "idle" /\ touchVer = 0 /\ touchBase = 0 /\ touchAt = 0
-    /\ sent = << >> /\ pubCount = 0 /\ cache = None
+    \* v0 is open (one send); its first answer landed, or is in flight.
+    /\ sent = IF Refresh = "outstanding" THEN <<1>> ELSE << >>
+    /\ sentCount = 1 /\ lastSent = 1
+    /\ bound = IF Refresh = "outstanding" THEN 0 ELSE 1
+    /\ refresh = IF Refresh = "none" THEN "done" ELSE "pending"
+    /\ surplus = 0 /\ preN = 0
+    /\ pubCount = 0 /\ cache = None
     /\ pending = None /\ drain = "idle" /\ pair = None /\ snap = None
     /\ delivered = {}
 
@@ -94,12 +129,14 @@ AgentTouch ==
     /\ \/ \* sent: clearDiagnosticsForPath, then didChange / reopen
           /\ touchVer' = disk + 1
           /\ sent' = Append(sent, disk + 1)
+          /\ sentCount' = sentCount + 1 /\ lastSent' = disk + 1
           /\ cache' = None
        \/ \* #1459 deferred: never sent, never cleared, never marked
           /\ AllowDefer
           /\ touchVer' = 0
-          /\ UNCHANGED <<sent, cache>>
-    /\ UNCHANGED <<extLeft, drainsLeft, pubCount, pending, drain, pair, snap, delivered>>
+          /\ UNCHANGED <<sent, sentCount, lastSent, cache>>
+    /\ UNCHANGED <<extLeft, drainsLeft, pubCount, pending, drain, pair, snap, delivered,
+                   bound, refreshVars>>
 
 \* Aux-grace outcome and mark: evidence check, filter and mark run in one
 \* continuation (index.ts ~5920-6030), so one step.
@@ -111,9 +148,10 @@ GraceEnd ==
          ELSE /\ clock' = clock + 1                  \* cut_off / silent: mark
               /\ pending' = [marked |-> IF MarkAtNotify THEN touchAt ELSE clock + 1,
                              rearms |-> 0,
-                             need |-> Len(sent), seq |-> pubCount]
+                             need |-> sentCount - bound, seq |-> bound]
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touchVer, touchBase, touchAt,
-                   sent, pubCount, cache, drain, pair, snap, delivered>>
+                   sent, pubCount, cache, drain, pair, snap, delivered,
+                   sentCount, bound, lastSent, refreshVars>>
 
 ExternalEdit ==
     /\ extLeft > 0
@@ -121,31 +159,63 @@ ExternalEdit ==
     /\ extLeft' = extLeft - 1
     /\ disk' = disk + 1 /\ clock' = clock + 1 /\ mtime' = clock + 1
     /\ UNCHANGED <<touchesLeft, drainsLeft, touch, touchVer, touchBase, touchAt, sent,
-                   pubCount, cache, pending, drain, pair, snap, delivered>>
+                   pubCount, cache, pending, drain, pair, snap, delivered,
+                   sentCount, bound, lastSent, refreshVars>>
 
 \* The scanner finishes the oldest outstanding scan; the client stores it.
 Publish ==
     /\ sent /= << >>
+    /\ surplus = 0 \/ preN > 0 \/ RefreshOvertake \* else a later send waits
     /\ clock' = clock + 1
     /\ cache' = [ver |-> Head(sent), ts |-> clock + 1]
     /\ pubCount' = pubCount + 1
+    /\ bound' = Counted(bound)
     /\ sent' = Tail(sent)
+    /\ preN' = IF preN > 0 THEN preN - 1 ELSE 0
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
-                   touchBase, touchAt, pending, drain, pair, snap, delivered>>
+                   touchBase, touchAt, pending, drain, pair, snap, delivered,
+                   sentCount, lastSent, refresh, surplus>>
 
 CancelSuperseded ==
     /\ AllowCancel /\ Len(sent) > 1
     /\ sent' = Tail(sent)
+    /\ preN' = IF preN > 0 THEN preN - 1 ELSE 0
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch,
-                   touchVer, touchBase, touchAt, pubCount, cache, pending, drain, pair, snap, delivered>>
+                   touchVer, touchBase, touchAt, pubCount, cache, pending, drain, pair, snap, delivered,
+                   sentCount, bound, lastSent, refresh, surplus>>
+
+\* semgrep/rulesRefreshed arrives. RefreshRebaseline is #3490's
+\* rebaselineForRulesRefresh: a path with a count entry (one publication
+\* counted this lifetime) gives one back.
+RulesRefreshed ==
+    /\ refresh = "pending"
+    /\ refresh' = "notified"
+    /\ surplus' = lastSent
+    /\ preN' = Len(sent)
+    /\ bound' = IF RefreshRebaseline /\ bound >= 1 THEN bound - 1 ELSE bound
+    /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
+                   touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap,
+                   delivered, sentCount, lastSent>>
+
+\* The refresh republish: stored and counted like any version-less publish.
+SurplusPublish ==
+    /\ refresh = "notified"
+    /\ refresh' = "done" /\ surplus' = 0 /\ preN' = 0
+    /\ clock' = clock + 1
+    /\ cache' = [ver |-> surplus, ts |-> clock + 1]
+    /\ pubCount' = pubCount + 1
+    /\ bound' = Counted(bound)
+    /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
+                   touchBase, touchAt, sent, pending, drain, pair, snap, delivered,
+                   sentCount, lastSent>>
 
 -----------------------------------------------------------------------------
 \* rearmPendingAuxiliaryCoverage; past the ceiling the pair drops.
-Rearm(p, refresh) ==
+Rearm(p, fresh) ==
     pending' = IF p.rearms >= MaxRearms THEN None
-               ELSE IF refresh
+               ELSE IF fresh
                  THEN [marked |-> clock + 1, rearms |-> p.rearms + 1,
-                       need |-> Len(sent), seq |-> pubCount]
+                       need |-> sentCount - bound, seq |-> bound]
                  ELSE [p EXCEPT !.rearms = p.rearms + 1]
 
 DrainStart ==
@@ -153,7 +223,8 @@ DrainStart ==
     /\ drainsLeft' = drainsLeft - 1
     /\ pair' = pending /\ pending' = None /\ drain' = "read"
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, touch, touchVer,
-                   touchBase, touchAt, sent, pubCount, cache, snap, delivered>>
+                   touchBase, touchAt, sent, pubCount, cache, snap, delivered,
+                   sentCount, bound, lastSent, refreshVars>>
 
 \* readCachedDiagnosticsForServers resolves with the cached entry, then the
 \* synchronous freshness check.
@@ -162,12 +233,13 @@ DrainRead ==
     /\ snap' = cache
     /\ LET waitIt == \/ cache = None
                      \/ PublishedAtCheck /\ cache.ts <= pair.marked
-                     \/ CountBind /\ pubCount - pair.seq < pair.need
+                     \/ CountBind /\ bound - pair.seq < pair.need
        IN IF waitIt
             THEN /\ Rearm(pair, FALSE) /\ drain' = "idle"
             ELSE /\ drain' = "observe" /\ UNCHANGED pending
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch,
-                   touchVer, touchBase, touchAt, sent, pubCount, cache, pair, delivered>>
+                   touchVer, touchBase, touchAt, sent, pubCount, cache, pair, delivered,
+                   sentCount, bound, lastSent, refreshVars>>
 
 \* After `await bounded(observeLateAuxiliaryAnswer)`: read + stat + deliver,
 \* all synchronous.
@@ -181,9 +253,11 @@ DrainGate ==
          ELSE /\ delivered' = delivered \cup {[ver |-> snap.ver, disk |-> disk]}
               /\ UNCHANGED <<pending, clock>>
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
-                   touchBase, touchAt, sent, pubCount, cache, pair, snap>>
+                   touchBase, touchAt, sent, pubCount, cache, pair, snap,
+                   sentCount, bound, lastSent, refreshVars>>
 
 Next == AgentTouch \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSuperseded
+        \/ RulesRefreshed \/ SurplusPublish
         \/ DrainStart \/ DrainRead \/ DrainGate
 
 Spec == Init /\ [][Next]_vars
