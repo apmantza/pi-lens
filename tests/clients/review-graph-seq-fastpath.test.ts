@@ -389,7 +389,7 @@ describe("review-graph seq fast path (#451)", () => {
 
 /**
  * #3535: the fast path must record each candidate's stat from BEFORE it read
- * the file. A write that lands after the read and before the old restat got a
+ * the file. A write that lands after the read and before the old re-stat got a
  * signature for bytes the graph never saw, so every later sweep-path build (no
  * seq hint: MCP, CLI, project_report) matched the stat and served the stale
  * graph as `cached`, in this process and from review-graph.json.gz.
@@ -399,7 +399,7 @@ describe("review-graph seq fast path (#451)", () => {
  * file. `extract` fires on the re-extract read (`setFileFact("file.content")`
  * from the content provider); `noop` fires in the no-op branch's
  * changed-symbol refresh (`getBoundedSessionFact`), which runs after the
- * content hash and before the old restat.
+ * content hash and before the old re-stat.
  */
 class WriteGateFacts extends FactStore {
 	arm:

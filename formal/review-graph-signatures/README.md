@@ -54,7 +54,7 @@ not vacuous.
   at build start, before any read, so a signature can only lag the content.
   A late-loser snapshot is therefore always re-diffed. This confirms the claim
   that cross-process regressions cost only a rebuild.
-- **The seq fast path was not honest before #3535.** It restatted its
+- **The seq fast path was not honest before #3535.** It re-statted its
   candidates after it had read them, in both the no-op branch and the
   re-extract branch. A write that landed in between got a signature the graph
   never read. The next sweep-path build matched it and served the stale graph

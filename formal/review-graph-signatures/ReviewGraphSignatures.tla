@@ -31,7 +31,7 @@
 (*    (candidateStats ~5275, #3535); confirm hashes; re-extract            *)
 (*    (updateGraphFiles); install the pre-read stats as the new sig        *)
 (*    (~5294 no-op branch, ~5338 re-extract branch). FixFpNoop /           *)
-(*    FixFpExtract = FALSE model the pre-#3535 code, which RESTATTED the   *)
+(*    FixFpExtract = FALSE model the pre-#3535 code, which RE-STATTED the  *)
 (*    candidates after the read.                                           *)
 (* Install replaces the memory entry and, when content changed, schedules  *)
 (* a persist. Promote(p) lands p's latest scheduled persist on disk at any *)
@@ -160,7 +160,7 @@ Extract(p) ==
 FpSig(b) ==
     LET fixed == IF b.T = {} THEN FixFpNoop ELSE FixFpExtract IN
     [f \in Files |-> IF f \in b.C
-                     THEN (IF fixed THEN b.S[f] ELSE st[f])  \* pre-#3535: restat now
+                     THEN (IF fixed THEN b.S[f] ELSE st[f])  \* pre-#3535: re-stat now
                      ELSE b.base.sig[f]]
 
 Install(p) ==
