@@ -71,7 +71,7 @@ three.
 | `TwoWriters` (the code, #3511) | pass; `FreshMeansComplete` violated before (4-state trace) | 205 (1,281 generated) |
 | `TwoWritersReplay` (the code, #3511) | pass; `BoundedReplayExact` violated before | 205 (1,281 generated) |
 | `Fix` (the code, two processes, timed-out seeds) | pass | 4,597 (29,765 generated) |
-| `FixUnlocked` (`Fix` with unlocked appends, three edits) | pass | 30,404 (138,969 generated) |
+| `FixUnlockedAppend` (`Fix` with unlocked appends, three edits) | pass | 30,404 (138,969 generated) |
 | `UnlockedNoReaderRule` (round-1 code, review round 2 R2-F1) | `FreshMeansComplete` violated | |
 | `UnlockedDupAtSeq` (distrust only a shared seq) | `FreshMeansComplete` violated | |
 | `FixNoLogAlloc` | `FreshMeansComplete` violated | |
