@@ -37,6 +37,7 @@ import {
 } from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
 import { sampleProcesses } from "./resource-sampler.js";
+import type { GenerationHandle } from "./generation-guard.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
 	_resetQuietWindowEnabledForTests,
@@ -56,6 +57,14 @@ interface QuietWindowContext {
 	sessionId?: string;
 	/** Stable activation owner for tasks that outlive an event callback. */
 	ownerId?: string;
+	/**
+	 * #3499: the session current when this task started. A same-cwd
+	 * replacement shares `runtime`, so a task whose write lands after an await
+	 * drops it through this handle. Captured per task, at the same instant the
+	 * task snapshots its state: a later task can start after the 15 s settle,
+	 * in the new session, and then works for that session.
+	 */
+	sessionGeneration: GenerationHandle;
 }
 
 export type QuietWindowTask = (
@@ -121,9 +130,9 @@ export interface QuietWindowDeps {
  * fire-and-forget (do not await inside an SDK-awaited event handler).
  */
 export async function runQuietWindow(deps: QuietWindowDeps): Promise<void> {
-	// `runtime` is accepted for API symmetry with turn_end's deps shape and
-	// for future built-in tasks that may need it directly; today's built-ins
-	// close over `getRuntime` via registerBuiltinQuietWindowTasks instead.
+	// `runtime` supplies each task's session generation (#3499); today's
+	// built-ins still close over `getRuntime` via
+	// registerBuiltinQuietWindowTasks for the runtime itself.
 	const { dbg, cwd } = deps;
 
 	if (!isQuietWindowEnabled()) {
@@ -162,6 +171,7 @@ export async function runQuietWindow(deps: QuietWindowDeps): Promise<void> {
 					cwd: deps.cwd,
 					sessionId: deps.sessionId,
 					ownerId: deps.ownerId,
+					sessionGeneration: deps.runtime.captureSessionGeneration(),
 				});
 			} catch (err) {
 				ok = false;
@@ -212,9 +222,11 @@ export function registerBuiltinQuietWindowTasks(
 	if (_builtinsRegistered) return;
 	_builtinsRegistered = true;
 
-	registerQuietWindowTask("cascade_carry_over_settle", async () => {
+	registerQuietWindowTask("cascade_carry_over_settle", async (context) => {
 		const runtime = getRuntime();
-		await runtime.settleCascadeRuns(quietWindowWaitMs());
+		await runtime.settleCascadeRuns(quietWindowWaitMs(), {
+			generation: context?.sessionGeneration,
+		});
 	});
 
 	registerQuietWindowTask("instance_registry_heartbeat", async () => {
