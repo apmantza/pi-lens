@@ -121,8 +121,10 @@ export interface PendingAuxCoverageEntry {
  * #3482: bind a mark to the scanner's backlog. `unpublished` sends were still
  * waiting for a publication at the mark, so the drain delivers only after that
  * many further publications (`readPublished() - publishedAtMark`). Assumes the
- * scanner publishes once per scan, in order; one that skips a superseded scan
- * only makes the drain wait. The client caps its count at the sends, which
+ * scanner publishes once per scan, in order. That is an assumption, not a
+ * guarantee: opengrep runs scans on a thread pool and can publish out of
+ * order. One that skips a superseded scan only makes the drain wait, and a
+ * superseded answer the client drops is still counted. The client caps its count at the sends, which
  * absorbs a surplus publish while nothing is outstanding; a surplus that
  * lands WHILE a send is outstanding still counts toward that send (residual).
  */

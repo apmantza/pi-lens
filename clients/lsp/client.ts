@@ -2597,7 +2597,12 @@ export function setupIncomingHandlers(
 				strategy.seedFirstPush &&
 				!state.pushDiagnostics.has(normalizedPath)
 			) {
-				if (isSupersededPush()) return;
+				// #3482 r2: a superseded answer is a scan that answered and is never
+				// stored; count it so the backlog binding is not left one short.
+				if (isSupersededPush()) {
+					countPublication(state, normalizedPath);
+					return;
+				}
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();
@@ -2620,7 +2625,10 @@ export function setupIncomingHandlers(
 
 			const timer = setTimeout(() => {
 				state.pendingDiagnostics.delete(normalizedPath);
-				if (isSupersededPush()) return;
+				if (isSupersededPush()) {
+					countPublication(state, normalizedPath);
+					return;
+				}
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();

@@ -1127,8 +1127,8 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			]);
 	}
 
-	function armOpengrep(root: string) {
-		const state = createMockState({ serverId: "opengrep", root });
+	function armOpengrep(root: string, serverId = "opengrep") {
+		const state = createMockState({ serverId, root });
 		setupIncomingHandlers(state, {});
 		const calls = vi.mocked(state.connection.onNotification).mock
 			.calls as unknown as Array<[string, (params: unknown) => void]>;
@@ -1146,6 +1146,20 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			/** A raw version-less receipt, NOT flushed through the debounce. */
 			receive: (file: string, diagnostics: LSPDiagnostic[]) =>
 				handler?.({ uri: pathToFileURL(file).href, diagnostics }),
+			/** A versioned publish (ast-grep's shape), flushed through the debounce. */
+			publishVersioned: (
+				file: string,
+				version: number,
+				diagnostics: LSPDiagnostic[],
+			) => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+				try {
+					handler?.({ uri: pathToFileURL(file).href, version, diagnostics });
+					vi.advanceTimersByTime(300);
+				} finally {
+					vi.useRealTimers();
+				}
+			},
 			/** A version-less publish, flushed through opengrep's 250 ms debounce. */
 			publish: (file: string, diagnostics: LSPDiagnostic[]) => {
 				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -1386,6 +1400,109 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			} finally {
 				vi.useRealTimers();
 			}
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-SUPERSEDED-VERSIONED-PUSH: a versioned answer dropped as superseded still counts, so v2 is delivered (#3482 r2)", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-superseded-") as any;
+		const sessionId = "late-aux-superseded";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			// A versioned scanner (ast-grep publishes document versions): v0 is
+			// opened and answered, then v1 and v2 are sent before v1's answer.
+			writeAt(file, "export const v = 0;\n", Date.now() - 30_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 0;\n",
+				"ts",
+				false,
+				true,
+			);
+			scanner.publishVersioned(file, 0, [diag(0, "V0 finding")]);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// v1's answer lands after v2 was sent: dropped as superseded, never
+			// stored. v2's answer is stored.
+			scanner.publishVersioned(file, 1, [
+				diag(11, "V1-ONLY finding on line 12"),
+			]);
+			scanner.publishVersioned(file, 2, [diag(0, "V2 CURRENT finding")]);
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-SUPERSEDED-SEEDED-PUSH: on a seed-first-push server the superseded answer still counts (#3482 r2)", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-late-aux-superseded-seed-",
+		) as any;
+		const sessionId = "late-aux-superseded-seed";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			// eslint seeds its first push after a clear: the SEED path, not the debounce.
+			const scanner = armOpengrep(env.tmpDir, "eslint");
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			// A versioned scanner (ast-grep publishes document versions): v0 is
+			// opened and answered, then v1 and v2 are sent before v1's answer.
+			writeAt(file, "export const v = 0;\n", Date.now() - 30_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 0;\n",
+				"ts",
+				false,
+				true,
+			);
+			scanner.publishVersioned(file, 0, [diag(0, "V0 finding")]);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// v1's answer lands after v2 was sent: dropped as superseded, never
+			// stored. v2's answer is stored.
+			scanner.publishVersioned(file, 1, [
+				diag(11, "V1-ONLY finding on line 12"),
+			]);
+			scanner.publishVersioned(file, 2, [diag(0, "V2 CURRENT finding")]);
 
 			const first = await turnEnd(
 				runtime,
