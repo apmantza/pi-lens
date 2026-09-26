@@ -1,4 +1,6 @@
-// Replays RegistryCrash.cfg's counterexample against the real registry lock.
+// Replays RegistryCrash.cfg's pre-#3476 counterexample against the real
+// registry lock. Since #3476 there is no rename to hold; the interleaving is
+// replayed in tests/clients/instance-registry-lock.test.ts.
 // p1: a writer that died holding the lock (dead pid, fresh mtime).
 // p3: this process. Its takeover judges p1's lock stale; its renameSync is
 //     held until p2 has taken over the same lock and entered the critical section.
