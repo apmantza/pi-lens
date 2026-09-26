@@ -343,9 +343,11 @@ function posixStartEnv() {
  * boot (`/proc/<pid>/stat` field 22), qualified by the boot it belongs to:
  * `<ticks>@<boot_id>`. Ticks restart at every boot and `instances.json`
  * survives one, so ticks alone could name a process from an earlier boot.
- * The value never changes for the life of the process, so (pid, start) names
- * one process across every reader. Undefined when the pid does not exist or
- * either file cannot be read or parsed.
+ * The kernel adds the READER's time-namespace boottime offset to field 22,
+ * so this reader's offset is subtracted: the value never changes for the life
+ * of the process, and (pid, start) names one process across every reader
+ * (#3538 review R4-F1). Undefined when the pid does not exist, or any of the
+ * three files cannot be read or parsed.
  *
  * @param {number} pid
  * @returns {string|undefined}
@@ -358,14 +360,48 @@ export function readLinuxProcessStart(pid) {
 		const boot = fs
 			.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
 			.trim();
+		const offset = readBoottimeOffsetTicks();
 		// An empty or bound-over boot_id would name every process under a boot
 		// no record or tag carries (#3538 review R3-F1): unknown, not a start.
-		return ticks === undefined || !/^[0-9a-f-]{36}$/.test(boot)
+		return ticks === undefined ||
+			offset === undefined ||
+			!/^[0-9a-f-]{36}$/.test(boot)
 			? undefined
-			: `${ticks}@${boot}`;
+			: `${Number(ticks) - offset}@${boot}`;
 	} catch {
 		return undefined;
 	}
+}
+
+/** Linux USER_HZ: the unit of `/proc/<pid>/stat` times on every architecture
+ *  Node runs on (it is 1024 only on alpha and ia64). */
+const USER_HZ = 100;
+const NSEC_PER_TICK = 1_000_000_000 / USER_HZ;
+
+/**
+ * This reader's time-namespace boottime offset, in clock ticks: 0 when the
+ * kernel has no time namespaces (`/proc/self/timens_offsets` is absent), and
+ * undefined when the file cannot be read or parsed, or the offset is not a
+ * whole number of ticks. Field 22 is the kernel's rounding of
+ * (start + offset), which can only be undone exactly for a whole-tick offset;
+ * an off-by-one would read as another process on the same boot.
+ *
+ * @returns {number|undefined}
+ */
+function readBoottimeOffsetTicks() {
+	let text;
+	try {
+		text = fs.readFileSync("/proc/self/timens_offsets", "utf8");
+	} catch (error) {
+		return /** @type {NodeJS.ErrnoException} */ (error).code === "ENOENT"
+			? 0
+			: undefined;
+	}
+	const match = /^boottime\s+(-?\d+)\s+(\d+)\s*$/m.exec(String(text));
+	if (!match) return undefined;
+	const nsec = Number(match[2]);
+	if (nsec % NSEC_PER_TICK !== 0) return undefined;
+	return Number(match[1]) * USER_HZ + nsec / NSEC_PER_TICK;
 }
 
 /**

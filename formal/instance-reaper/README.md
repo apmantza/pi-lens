@@ -89,7 +89,18 @@ not remove the record-only stale-heartbeat removal (#525): that one reads
 the wall clock, not a pid, so another namespace's entry still leaves the
 registry once its heartbeat is stale (verify round 2, R2-F1: a dead
 container's entry otherwise stayed forever and held the LSP budget). The
-model still covers a superset of the code within one namespace. The two-read race between the owner tag and
+model still covers a superset of the code within one namespace.
+
+Nor are time namespaces or a reader's view of the boot modelled: the model's
+`start` is one value every reader agrees on. The code makes that true. A
+Linux start is the kernel's ticks minus this reader's time-namespace
+boottime offset, so a reader under `unshare --time` names the same start
+(#3538 review round 4, R4-F1). The start is qualified by the boot id, and a
+start this reader cannot compute (an unreadable offset or boot id) is
+unknown, never another process's. A start from another boot is not judged
+at all (review round 3, R3-F1).
+
+The two-read race between the owner tag and
 the start (F2) is closed by re-reading the tag in the re-check, which the
 model's atomic `recheck` already assumes.
 

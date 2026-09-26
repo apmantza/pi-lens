@@ -474,6 +474,68 @@ describe("process start times (#3538)", () => {
 			spy.mockRestore();
 		}
 	});
+
+	// #3538 review R4-F1: the kernel adds the READER's time-namespace boottime
+	// offset to field 22, so one process reads as different ticks to readers
+	// in different time namespaces, and a live owner looked like a reused pid.
+	// `offsets` stands for /proc/self/timens_offsets: a string is its text,
+	// an Error is what reading it throws.
+	const BOOT = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	function startUnder(shownTicks: number, offsets: string | Error) {
+		const fields = Array.from({ length: 50 }, (_, i) =>
+			i === 18 ? String(shownTicks) : "0",
+		);
+		const real = fsModule.readFileSync;
+		const spy = vi.spyOn(fsModule, "readFileSync").mockImplementation(((
+			file: fs.PathOrFileDescriptor,
+			...rest: unknown[]
+		) => {
+			if (file === "/proc/4242/stat") return `4242 (x) S ${fields.join(" ")}`;
+			if (file === "/proc/sys/kernel/random/boot_id") return `${BOOT}\n`;
+			if (file === "/proc/self/timens_offsets") {
+				if (offsets instanceof Error) throw offsets;
+				return offsets;
+			}
+			return (real as (...args: unknown[]) => unknown)(file, ...rest);
+		}) as typeof real);
+		try {
+			return readLinuxProcessStart(4242);
+		} finally {
+			spy.mockRestore();
+		}
+	}
+	const enoent = () =>
+		Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+
+	it("subtracts this reader's time-namespace boottime offset, so every reader names one start (#3538 review R4-F1)", () => {
+		const offsets = (sec: number, nsec = 0) =>
+			`monotonic           0         0\nboottime   ${sec} ${nsec}\n`;
+		// No time namespaces (an older kernel): the ticks as shown.
+		expect(startUnder(1852456, enoent())).toBe(`1852456@${BOOT}`);
+		// The root time namespace.
+		expect(startUnder(1852456, offsets(0))).toBe(`1852456@${BOOT}`);
+		// `unshare --time --boottime 100000`: the same process, measured.
+		expect(startUnder(11852456, offsets(100000))).toBe(`1852456@${BOOT}`);
+		// A negative offset, in whole ticks (USER_HZ 100: 10 ms each).
+		expect(startUnder(1852356, offsets(-1))).toBe(`1852456@${BOOT}`);
+		expect(startUnder(1852457, offsets(0, 10_000_000))).toBe(`1852456@${BOOT}`);
+	});
+
+	it("reads a start as unknown when this reader's offsets are unreadable, malformed, or not whole ticks (#3538 review R4-F1)", () => {
+		for (const offsets of [
+			"garbage\n",
+			"monotonic 0 0\n",
+			"boottime x 0\n",
+			// A fraction of a tick: the kernel's rounding of (start + offset)
+			// cannot be undone exactly, and an off-by-one reads as a reuse.
+			"monotonic 0 0\nboottime 100000 5000000\n",
+			Object.assign(new Error("EACCES: permission denied"), {
+				code: "EACCES",
+			}),
+		]) {
+			expect(startUnder(11852456, offsets), String(offsets)).toBeUndefined();
+		}
+	});
 });
 
 describe("parseProcessTable: the extended projections (#2443)", () => {

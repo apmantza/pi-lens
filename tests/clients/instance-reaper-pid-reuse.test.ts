@@ -45,6 +45,7 @@ import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	afterAll,
 	afterEach,
@@ -940,5 +941,139 @@ describe.skipIf(process.platform !== "linux")(
 				h.latency.find((r) => r.phase === "orphan_backstop_reaped")?.metadata,
 			).toMatchObject({ killed: 0, identityChanged: 1 });
 		});
+	},
+);
+
+/**
+ * #3538 review R4-F1: the kernel adds the READER's time-namespace boottime
+ * offset to `/proc/<pid>/stat` field 22. A reader in another time namespace
+ * saw a live owner under the same boot with other ticks, took it for a
+ * reused pid, and killed its child. The vitest worker cannot enter a time
+ * namespace, so the whole scenario runs confined as pid 1 of a private pid
+ * namespace (its own /proc): its process table holds only these processes,
+ * and it can kill nothing else. Inside, a live owner tags a server; a reader
+ * runs the real backstop under `unshare --time --boottime 100000`; then the
+ * owner dies and the same reader must reap the server (the control).
+ */
+const OWNER_SCRIPT = `
+import { spawn } from "node:child_process";
+const { ownerTagForChildren, OWNER_TAG_ENV } = await import(process.env.R4_SNAPSHOT);
+const tag = await ownerTagForChildren({ timeoutMs: 5000 });
+const server = spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)", process.env.R4_TSLS, "--stdio"], {
+	env: { ...process.env, [OWNER_TAG_ENV]: String(tag) },
+	stdio: "ignore",
+});
+console.log(server.pid);
+setInterval(() => {}, 1e6);
+`;
+const READER_SCRIPT = `
+const { sweepUntrackedOrphans } = await import(process.env.R4_REAPER);
+// Holds the loop open: the sweep's own timers are unref'd, and a top-level
+// await with nothing to keep the process alive exits 13.
+const keep = setInterval(() => {}, 1e6);
+await sweepUntrackedOrphans({ force: true, graceMs: 0, allowGraceRetry: false, verifyAttempts: 3, verifyIntervalMs: 100 });
+clearInterval(keep);
+`;
+const CONFINED_SCRIPT = `
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+const owner = spawn(process.execPath, ["--input-type=module", "-e", process.env.R4_OWNER], { stdio: ["ignore", "pipe", "inherit"] });
+const [line] = await once(owner.stdout, "data");
+const server = Number(String(line).trim());
+const state = (pid) => {
+	try {
+		const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
+	} catch {
+		return "gone";
+	}
+};
+const sweepInTimeNamespace = async () => {
+	const reader = spawn("unshare", ["--time", "--boottime", "100000", "--fork", process.execPath, "--input-type=module", "-e", process.env.R4_READER], { stdio: ["ignore", "inherit", "inherit"] });
+	const [code] = await once(reader, "exit");
+	if (code !== 0) throw new Error("reader exited " + code);
+};
+await sweepInTimeNamespace();
+const live = state(server);
+const exited = once(owner, "exit");
+owner.kill("SIGKILL");
+await exited;
+await sweepInTimeNamespace();
+console.log(JSON.stringify({ live, dead: state(server) }));
+process.exit(0);
+`;
+
+describe.skipIf(process.platform !== "linux")(
+	"#3538 review round 4: a start means the same to every reader",
+	() => {
+		it("[R4-F1] a reader in another time namespace leaves a live owner's server alone, and still reaps a dead owner's", async (ctx) => {
+			const unshare = probeUnshare();
+			if (!("args" in unshare)) {
+				ctx.skip(`no pid namespace available here: ${unshare.reason}`);
+				return;
+			}
+			const timens = spawnSync(
+				"unshare",
+				[
+					...unshare.args,
+					"unshare",
+					"--time",
+					"--boottime",
+					"1",
+					"--fork",
+					"true",
+				],
+				{ encoding: "utf8" },
+			);
+			if (timens.status !== 0) {
+				ctx.skip(
+					`no time namespace available here: ${timens.error?.message ?? (timens.stderr.trim() || `exit ${timens.status}`)}`,
+				);
+				return;
+			}
+			const built = (file: string) =>
+				pathToFileURL(path.resolve(import.meta.dirname, "../..", file)).href;
+			const env = { ...process.env };
+			delete env.PI_LENS_OWNER;
+			const run = track(
+				spawn(
+					"unshare",
+					[
+						...unshare.args,
+						process.execPath,
+						"--input-type=module",
+						"-e",
+						CONFINED_SCRIPT,
+					],
+					{
+						stdio: ["ignore", "pipe", "inherit"],
+						env: {
+							...env,
+							PI_LENS_HOME: h.dir,
+							PILENS_DATA_DIR: h.dir,
+							R4_OWNER: OWNER_SCRIPT,
+							R4_READER: READER_SCRIPT,
+							R4_SNAPSHOT: built("clients/process-snapshot.js"),
+							R4_REAPER: built("clients/instance-reaper.js"),
+							R4_TSLS: TSLS,
+						},
+					},
+				),
+			);
+			let out = "";
+			run.stdout?.on("data", (chunk) => {
+				out += String(chunk);
+			});
+			const [code] = await once(run, "exit");
+
+			expect(code).toBe(0);
+			const result = JSON.parse(out) as { live: string; dead: string };
+			// The live owner's server is still running: not killed, not reaped.
+			expect(result.live).toMatch(/^[RS]$/);
+			// Control: with its owner dead, the same reader reaps it. The confined
+			// pid 1 never reaps an adopted orphan, so a killed server is a zombie.
+			expect(result.dead).toMatch(/^(Z|gone)$/);
+		}, 60_000);
 	},
 );

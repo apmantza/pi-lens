@@ -16,7 +16,7 @@
 		"clients/installer/pip-pep668.test.ts": 1,
 		"clients/installer/posix-group-kill.test.ts": 2,
 		"clients/installer/verify-binary-semantics.test.ts": 4,
-		"clients/instance-reaper-pid-reuse.test.ts": 4,
+		"clients/instance-reaper-pid-reuse.test.ts": 7,
 		"clients/instance-reaper-posix-ps.test.ts": 1,
 		"clients/instance-registry-lock.test.ts": 2,
 		"clients/instance-registry-race.test.ts": 1,
