@@ -1509,6 +1509,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2155,6 +2159,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				appendCascadeResult: () => {},
 				recordInlineBlockers: () => {},
 				clearInlineBlockers: () => {},
+				// #3506 r1 F8: the handler's session capture; this runtime never resets.
+				captureSessionGeneration: () => ({
+					guardedWrite: (_subject: string, write: () => unknown) => write(),
+				}),
 				nextWriteIndex: () => 1,
 				turnIndex: 1,
 				telemetryModel: "test-model",
@@ -2240,6 +2248,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2310,6 +2322,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2377,6 +2393,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2464,6 +2484,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2547,6 +2571,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2625,6 +2653,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2704,6 +2736,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2907,6 +2943,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",

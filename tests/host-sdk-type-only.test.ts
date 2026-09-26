@@ -44,6 +44,24 @@ const DYNAMIC_IMPORT = new RegExp(
 	String.raw`(?:\bimport|\brequire)\s*\(\s*["']${HOST_SDK}["']`,
 );
 
+/**
+ * #3506: the admitted LAZY dynamic imports, by file and exact count. pi exposes
+ * `withFileMutationQueue` only as a package export, so the pi host adapter
+ * looks it up on pi-lens' first write. It reaches the running host's copy
+ * because jiti's native import of `dist/index.js` fails on the host-provided
+ * static imports and jiti falls back to transpiling, which serves the package
+ * from pi (`virtualModules` in the bundled CLI); where those imports resolve
+ * natively it can load a second copy instead. `clients/file-mutation-queue.ts`
+ * catches a failed lookup (the writers run unqueued) and records
+ * `host-file-mutation-queue-unavailable` for it and for a second copy.
+ * Nothing is imported at load, so a host that cannot serve the package still
+ * loads pi-lens, which is the failure #1334 S6 exists to prevent. A new site,
+ * or a stale entry here, fails the scan.
+ */
+const ADMITTED_LAZY_DYNAMIC_IMPORTS: Readonly<Record<string, number>> = {
+	"index.ts": 1,
+};
+
 function* walkTs(dir: string): Generator<string> {
 	let entries: string[];
 	try {
@@ -92,7 +110,10 @@ describe("host SDK is imported type-only, never at runtime (#1334 S6)", () => {
 			if (!src.includes(HOST_SDK)) continue;
 			const rel = path.relative(root, file).replace(/\\/g, "/");
 
-			if (DYNAMIC_IMPORT.test(src)) {
+			const dynamicImports = src.match(
+				new RegExp(DYNAMIC_IMPORT.source, "g"),
+			)?.length;
+			if ((dynamicImports ?? 0) !== (ADMITTED_LAZY_DYNAMIC_IMPORTS[rel] ?? 0)) {
 				offenders.push(`${rel} (dynamic import/require)`);
 			}
 			if (SIDE_EFFECT_IMPORT.test(src)) {

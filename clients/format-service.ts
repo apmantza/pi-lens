@@ -54,6 +54,12 @@ export interface FormatSummary {
 	}>;
 	anyChanged: boolean;
 	allSucceeded: boolean;
+	/**
+	 * #3506: settles once every formatter a bound gave up on has settled. The
+	 * bound returns while the in-place child runs on and writes later, so a
+	 * caller holding the file's mutation queue keeps it until then.
+	 */
+	abandoned?: Promise<void>;
 }
 
 // --- Format Service ---
@@ -118,6 +124,7 @@ export class FormatService {
 		}
 
 		// Run formatters with limited concurrency
+		const abandoned: Promise<unknown>[] = [];
 		const results = await this.runFormattersWithConcurrency(
 			absolutePath,
 			formatters,
@@ -125,6 +132,7 @@ export class FormatService {
 			options.signal,
 			options.budgetMs,
 			options.hook,
+			abandoned,
 		);
 
 		// Record new file state after formatting
@@ -155,6 +163,7 @@ export class FormatService {
 			})),
 			anyChanged,
 			allSucceeded,
+			abandoned: Promise.allSettled(abandoned).then(() => {}),
 		};
 	}
 
@@ -168,6 +177,7 @@ export class FormatService {
 		signal?: AbortSignal,
 		budgetMs = 30_000,
 		hook: LedgerHookKey = "tool_result_edit",
+		abandoned: Promise<unknown>[] = [],
 	): Promise<FormatterResult[]> {
 		const results: FormatterResult[] = [];
 		const startedAt = Date.now();
@@ -187,23 +197,23 @@ export class FormatService {
 			// This keeps one total formatter budget per file instead of re-arming a
 			// 30s timer for every formatter.
 			try {
-				const result = await bounded(
-					loadFormatters().then(({ formatFile }) =>
-						formatFile(filePath, formatter),
-					),
-					{
-						ms: remainingMs,
-						signal,
-						hook,
-						label: "formatter-aggregate",
-					},
+				const run = loadFormatters().then(({ formatFile }) =>
+					formatFile(filePath, formatter),
 				);
+				const result = await bounded(run, {
+					ms: remainingMs,
+					signal,
+					hook,
+					label: "formatter-aggregate",
+				});
 				if (result) results.push(result);
 				else if (signal?.aborted) {
 					// Caller cancellation is intentional. Do not turn Escape into a
 					// formatter failure or requeue record.
+					abandoned.push(run);
 					break;
 				} else {
+					abandoned.push(run);
 					results.push({
 						success: false,
 						changed: false,

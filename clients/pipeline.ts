@@ -87,6 +87,10 @@ import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
+import {
+	type FileMutationHold,
+	holdFileMutationQueue,
+} from "./file-mutation-queue.js";
 import { establishToolAgreement } from "./tool-agreement.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
@@ -289,6 +293,11 @@ export interface PipelineContext {
 	wordIndex?: WordIndex | null;
 	/** Debounced-persist hook fired after a successful per-edit update. */
 	onWordIndexUpdated?: (index: WordIndex) => void;
+	/**
+	 * #3506: draws a fresh `telemetry.writeIndex` when the bytes this pipeline
+	 * analyses are not the bytes its handler's token was drawn for.
+	 */
+	nextWriteIndex?: () => number;
 }
 
 export interface PipelineDeps {
@@ -318,6 +327,8 @@ export interface PipelineResult {
 	fileModified: boolean;
 	/** Hash captured after this pipeline's own writes, before analysis awaits. */
 	postWriteStateHash?: string;
+	/** #3506: the write token the analysis was recorded under. */
+	writeIndex?: number;
 	/** Files modified by pi-lens format/autofix, including side-effect files. */
 	changedFiles?: string[];
 	/** Blocking-only formatted output for turn_end re-surfacing if agent didn't fix */
@@ -446,7 +457,11 @@ const _eslintCache = new BoundedLruCache<
  * Returns 1 if the file changed, 0 if ESLint is not configured / not available /
  * made no changes.
  */
-async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
+async function tryEslintFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const userHasConfig = hasEslintConfig(cwd);
 	if (!userHasConfig) return 0;
 	// PATH is part of command resolution; include it so an install or PATH
@@ -523,6 +538,7 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	}
 	if (cached.latch.read() !== true || !cached.bin) return 0;
 	const cmd = cached.bin;
+	if (writeHold) await writeHold.acquire();
 
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -533,9 +549,14 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryStylelintFix(filePath: string, cwd: string): Promise<number> {
+async function tryStylelintFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -546,9 +567,14 @@ async function tryStylelintFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function trySqlfluffFix(filePath: string, cwd: string): Promise<number> {
+async function trySqlfluffFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 
 	const args = ["fix", "--force", filePath];
 	if (!hasSqlfluffConfig(cwd)) {
@@ -557,7 +583,11 @@ async function trySqlfluffFix(filePath: string, cwd: string): Promise<number> {
 	return detectFileChangedAfterCommand(filePath, cmd, args, cwd);
 }
 
-async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
+async function tryRubocopFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const resolved = await resolveCommandArgsWithInstallFallback(
 		getRubocopCommand(cwd),
 		"rubocop",
@@ -566,6 +596,7 @@ async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
 		10000,
 	);
 	if (!resolved) return 0;
+	if (writeHold) await writeHold.acquire();
 
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -576,9 +607,14 @@ async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryKtlintFix(filePath: string, cwd: string): Promise<number> {
+async function tryKtlintFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -598,7 +634,11 @@ const golangciAutofixChecker = createAvailabilityChecker(
 const detektAutofixChecker = createAvailabilityChecker("detekt", ".bat");
 const ktfmtAutofixChecker = createAvailabilityChecker("ktfmt", ".bat");
 
-async function tryKtfmtFix(filePath: string, cwd: string): Promise<number> {
+async function tryKtfmtFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	// Config-first: the autofix policy only reaches here when the project opted
 	// into ktfmt, so resolveAvailableOrInstall honors that gate. ktfmt writes the
 	// formatted file in place and exits 0; treat any byte change as the fix.
@@ -608,6 +648,7 @@ async function tryKtfmtFix(filePath: string, cwd: string): Promise<number> {
 		cwd,
 	);
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
 	return detectFileChangedAfterCommand(filePath, cmd, [absPath], cwd, [0]);
 }
@@ -615,6 +656,7 @@ async function tryKtfmtFix(filePath: string, cwd: string): Promise<number> {
 async function tryGolangciLintFix(
 	filePath: string,
 	cwd: string,
+	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when a .golangci.* config
 	// exists. resolveAvailableOrInstall honors that gate (won't auto-install a
@@ -626,6 +668,7 @@ async function tryGolangciLintFix(
 		cwd,
 	);
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 	return detectFileChangedAfterCommand(
 		filePath,
 		cmd,
@@ -635,12 +678,17 @@ async function tryGolangciLintFix(
 	);
 }
 
-async function tryDetektFix(filePath: string, cwd: string): Promise<number> {
+async function tryDetektFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const configPath = findDetektConfig(cwd);
 	if (!configPath) return 0;
 	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
 	const cmd = detektAutofixChecker.getCommand(cwd);
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
 	return detectFileChangedAfterCommand(
 		filePath,
@@ -654,9 +702,11 @@ async function tryDetektFix(filePath: string, cwd: string): Promise<number> {
 async function tryMarkdownlintFix(
 	filePath: string,
 	cwd: string,
+	writeHold?: FileMutationHold,
 ): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 	// Shared config-args seam (#1247): the lint runner consumes the same
 	// builder, so the bare --fix here can never fall back to markdownlint's
 	// default all-rules-on config again (the whole-file CHANGELOG/AGENTS
@@ -671,9 +721,14 @@ async function tryMarkdownlintFix(
 	);
 }
 
-async function tryOxlintFix(filePath: string, cwd: string): Promise<number> {
+async function tryOxlintFix(
+	filePath: string,
+	cwd: string,
+	writeHold?: FileMutationHold,
+): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
 	if (!cmd) return 0;
+	if (writeHold) await writeHold.acquire();
 	return detectFileChangedAfterCommand(
 		filePath,
 		cmd,
@@ -683,7 +738,10 @@ async function tryOxlintFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryRustClippyFix(filePath: string): Promise<string[]> {
+async function tryRustClippyFix(
+	filePath: string,
+	writeHold?: FileMutationHold,
+): Promise<string[]> {
 	const check = await probeToolAsync("cargo", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
@@ -691,6 +749,7 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 		"Cargo.toml",
 	]);
 	if (!cargoDir) return [];
+	if (writeHold) await writeHold.acquire();
 
 	const before = await snapshotProjectFiles(cargoDir);
 	const result = await safeSpawnAsync(
@@ -702,7 +761,10 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 	return diffProjectSnapshot(cargoDir, before);
 }
 
-async function tryDartFix(filePath: string): Promise<string[]> {
+async function tryDartFix(
+	filePath: string,
+	writeHold?: FileMutationHold,
+): Promise<string[]> {
 	const check = await probeToolAsync("dart", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
@@ -711,6 +773,7 @@ async function tryDartFix(filePath: string): Promise<string[]> {
 		["pubspec.yaml"],
 	);
 	if (!pubspecDir) return [];
+	if (writeHold) await writeHold.acquire();
 
 	const before = await snapshotProjectFiles(pubspecDir);
 	const result = await safeSpawnAsync("dart", ["fix", "--apply"], {
@@ -730,6 +793,7 @@ export async function runAutofix(
 	dbg: PipelineContext["dbg"],
 	deps: Pick<PipelineDeps, "biomeClient" | "ruffClient" | "fixedThisTurn">,
 	getFlagSource?: PipelineContext["getFlagSource"],
+	writeHold?: FileMutationHold,
 ): Promise<{
 	fixedCount: number;
 	autofixTools: string[];
@@ -820,6 +884,10 @@ export async function runAutofix(
 		};
 	}
 
+	// #3506: a fixer rewrites the file in place, so it runs inside pi's
+	// per-file mutation queue. Each branch enters the queue only once its tool
+	// is resolved, so an availability probe or an install never holds pi's
+	// edits back.
 	for (const toolName of preferredAutofixTools) {
 		attemptedTools.push(toolName);
 		const agreement = establishToolAgreement(toolName, cwd);
@@ -842,6 +910,7 @@ export async function runAutofix(
 				dbg(`autofix: ruff unavailable for ${filePath}`);
 				continue;
 			}
+			if (writeHold) await writeHold.acquire();
 			const result = await ruffClient.fixFileAsync(filePath, cwd);
 			if (result.success && result.fixed > 0) {
 				fixedCount += result.fixed;
@@ -862,6 +931,7 @@ export async function runAutofix(
 				dbg(`autofix: biome unavailable or unsupported for ${filePath}`);
 				continue;
 			}
+			if (writeHold) await writeHold.acquire();
 			const result = await biomeClient.fixFileAsync(filePath, cwd);
 			if (result.success && result.fixed > 0) {
 				fixedCount += result.fixed;
@@ -875,7 +945,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "eslint") {
-			const eslintFixed = await tryEslintFix(filePath, cwd);
+			const eslintFixed = await tryEslintFix(filePath, cwd, writeHold);
 			if (eslintFixed > 0) {
 				fixedCount += eslintFixed;
 				autofixTools.push(`eslint:${eslintFixed}`);
@@ -888,7 +958,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "stylelint") {
-			const stylelintFixed = await tryStylelintFix(filePath, cwd);
+			const stylelintFixed = await tryStylelintFix(filePath, cwd, writeHold);
 			if (stylelintFixed > 0) {
 				fixedCount += stylelintFixed;
 				autofixTools.push(`stylelint:${stylelintFixed}`);
@@ -903,7 +973,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "sqlfluff") {
-			const sqlfluffFixed = await trySqlfluffFix(filePath, cwd);
+			const sqlfluffFixed = await trySqlfluffFix(filePath, cwd, writeHold);
 			if (sqlfluffFixed > 0) {
 				fixedCount += sqlfluffFixed;
 				autofixTools.push(`sqlfluff:${sqlfluffFixed}`);
@@ -916,7 +986,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "rubocop") {
-			const rubocopFixed = await tryRubocopFix(filePath, cwd);
+			const rubocopFixed = await tryRubocopFix(filePath, cwd, writeHold);
 			if (rubocopFixed > 0) {
 				fixedCount += rubocopFixed;
 				autofixTools.push(`rubocop:${rubocopFixed}`);
@@ -929,7 +999,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ktlint") {
-			const ktlintFixed = await tryKtlintFix(filePath, cwd);
+			const ktlintFixed = await tryKtlintFix(filePath, cwd, writeHold);
 			if (ktlintFixed > 0) {
 				fixedCount += ktlintFixed;
 				autofixTools.push(`ktlint:${ktlintFixed}`);
@@ -942,7 +1012,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "rust-clippy") {
-			const clippyChangedFiles = await tryRustClippyFix(filePath);
+			const clippyChangedFiles = await tryRustClippyFix(filePath, writeHold);
 			if (clippyChangedFiles.length > 0) {
 				fixedCount += clippyChangedFiles.length;
 				autofixTools.push(`rust-clippy:${clippyChangedFiles.length}`);
@@ -958,7 +1028,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "dart-analyze") {
-			const dartChangedFiles = await tryDartFix(filePath);
+			const dartChangedFiles = await tryDartFix(filePath, writeHold);
 			if (dartChangedFiles.length > 0) {
 				fixedCount += dartChangedFiles.length;
 				autofixTools.push(`dart-analyze:${dartChangedFiles.length}`);
@@ -974,7 +1044,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "golangci-lint") {
-			const fixed = await tryGolangciLintFix(filePath, cwd);
+			const fixed = await tryGolangciLintFix(filePath, cwd, writeHold);
 			if (fixed > 0) {
 				fixedCount += fixed;
 				autofixTools.push(`golangci-lint:${fixed}`);
@@ -987,7 +1057,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "detekt") {
-			const fixed = await tryDetektFix(filePath, cwd);
+			const fixed = await tryDetektFix(filePath, cwd, writeHold);
 			if (fixed > 0) {
 				fixedCount += fixed;
 				autofixTools.push(`detekt:${fixed}`);
@@ -1000,7 +1070,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ktfmt") {
-			const fixed = await tryKtfmtFix(filePath, cwd);
+			const fixed = await tryKtfmtFix(filePath, cwd, writeHold);
 			if (fixed > 0) {
 				fixedCount += fixed;
 				autofixTools.push(`ktfmt:${fixed}`);
@@ -1013,7 +1083,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "markdownlint") {
-			const fixed = await tryMarkdownlintFix(filePath, cwd);
+			const fixed = await tryMarkdownlintFix(filePath, cwd, writeHold);
 			if (fixed > 0) {
 				fixedCount += fixed;
 				autofixTools.push(`markdownlint:${fixed}`);
@@ -1026,7 +1096,7 @@ export async function runAutofix(
 		}
 
 		if (toolName === "oxlint") {
-			const fixed = await tryOxlintFix(filePath, cwd);
+			const fixed = await tryOxlintFix(filePath, cwd, writeHold);
 			if (fixed > 0) {
 				fixedCount += fixed;
 				autofixTools.push(`oxlint:${fixed}`);
@@ -1276,6 +1346,7 @@ export async function runFormatPhase(
 	signal?: AbortSignal,
 	budgetMs = HOOK_WALL_BUDGET_MS.tool_result_edit,
 	hook: LedgerHookKey = "tool_result_edit",
+	writeHold?: FileMutationHold,
 ): Promise<FormatPhaseResult> {
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1285,12 +1356,17 @@ export async function runFormatPhase(
 
 	const formatService = getFormatService();
 	try {
+		// #3506: the formatter rewrites the file in place (see runAutofix).
+		if (writeHold) await writeHold.acquire();
 		formatService.recordRead(filePath);
 		const result = await formatService.formatFile(filePath, {
 			signal,
 			budgetMs,
 			hook,
 		});
+		// #3506: a formatter the budget gave up on still runs, and its child
+		// writes later; the hold is released only once it has settled.
+		if (writeHold && result.abandoned) writeHold.outlive(result.abandoned);
 		// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
 		// `formattersUsed` (which drives change bookkeeping / turn summaries) and
 		// out of `formatFailures` (which requeues). Record it once, distinctly.
@@ -1422,6 +1498,22 @@ export async function runPipeline(
 	ctx: PipelineContext,
 	deps: PipelineDeps,
 ): Promise<PipelineResult> {
+	// #3506: taken at the first format/autofix write, released once the
+	// pipeline has read back and hashed its own write; the finally is the
+	// backstop for a throw in between.
+	const writeHold = holdFileMutationQueue(ctx.filePath);
+	try {
+		return await analysePipeline(ctx, deps, writeHold);
+	} finally {
+		writeHold?.release();
+	}
+}
+
+async function analysePipeline(
+	ctx: PipelineContext,
+	deps: PipelineDeps,
+	writeHold: FileMutationHold | undefined,
+): Promise<PipelineResult> {
 	const { filePath, cwd, toolName, getFlag, getFlagSource, dbg } = ctx;
 	const { getFormatService } = deps;
 	const allowAutonomousWriters = ctx.allowAutonomousWriters !== false;
@@ -1450,6 +1542,7 @@ export async function runPipeline(
 	} catch {
 		// File may not exist (e.g., deleted)
 	}
+	const readContent = fileContent;
 	phase.end("read_file");
 
 	// --- 2. Auto-format ---
@@ -1476,6 +1569,9 @@ export async function runPipeline(
 			getFormatService,
 			dbg,
 			ctx.signal,
+			undefined,
+			undefined,
+			writeHold,
 		);
 		formatChanged = formatResult.formatChanged;
 		formattersUsed = formatResult.formattersUsed;
@@ -1535,7 +1631,15 @@ export async function runPipeline(
 			changedFiles: autofixChangedFiles,
 			needsContentRefresh: fixRefresh,
 			skipReason: autofixSkipReason,
-		} = await runAutofix(filePath, cwd, getFlag, dbg, deps, getFlagSource));
+		} = await runAutofix(
+			filePath,
+			cwd,
+			getFlag,
+			dbg,
+			deps,
+			getFlagSource,
+			writeHold,
+		));
 	for (const changedFile of autofixChangedFiles) {
 		piChangedFiles.add(path.resolve(changedFile));
 	}
@@ -1597,6 +1701,13 @@ export async function runPipeline(
 					}
 				})()
 			: undefined;
+	// #3506: the token belongs to the read. When the analysed bytes are not the
+	// ones first read (this pipeline's own write, or an edit queued ahead of
+	// it), draw a fresh one while the queue still holds the file.
+	if (fileContent !== readContent && ctx.telemetry && ctx.nextWriteIndex) {
+		ctx.telemetry = { ...ctx.telemetry, writeIndex: ctx.nextWriteIndex() };
+	}
+	writeHold?.release();
 
 	// --- 4. LSP file sync ---
 	// Sync once with final post-format/post-fix content so dispatch and cascade
@@ -1931,6 +2042,7 @@ export async function runPipeline(
 		isError: false,
 		fileModified,
 		postWriteStateHash,
+		writeIndex: ctx.telemetry?.writeIndex,
 		changedFiles,
 		// #3190: re-rendered from the GATED set with `formatDiagnostics(...,
 		// "blocking")` — the very expression `dispatcher.ts:1409` builds
