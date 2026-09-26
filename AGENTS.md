@@ -808,6 +808,12 @@ processes. Real elapsed-time assertions belong in the serialized
 `lsp-spawn-heavy`. Any admitted real spawn or timer carries the flake-shape
 header, baseline row, and lane membership.
 
+When the defect is an ordering of awaits on one seam (a coalescing queue, a
+per-key serializer), or the seam has regressed before, write a scheduler
+property with `fc.scheduler()` instead of one more replay:
+`tests/support/scheduler-properties.md`, worked example
+`tests/clients/lsp/notify-queue-properties.test.ts`.
+
 Use `tests/support/fault-injection.ts` for wedged children, deterministic
 seam delays, starved budgets, gates, and reset hooks. Use `makeRunnerCtx` for
 dispatch tests, `makeLspServiceDouble` for typed LSP doubles, and

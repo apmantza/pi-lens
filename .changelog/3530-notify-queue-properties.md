@@ -1,0 +1,5 @@
+---
+section: Changed
+---
+
+- **The LSP notify queue is tested over every ordering, not one (closes #3530)** — the per-file queue that sends a file's contents to a language server broke three times in one day, and each fix was proven by a test of the one ordering it was written for. A new property test drives the real queue while fast-check chooses the order in which sends and file checks complete, and checks what the server receives: the newest read is sent last, nothing is sent after a close, a queued close is sent, a superseded save still saves, and every caller learns whether its content was sent. It fails on each of the three past bugs when they are put back. It also found three open problems, pinned by tests that fail once they are fixed: a touch on a dead client reports that its content was sent, an older read can make the queue drop a newer unstamped touch, and a stale save queued behind a change sends no save. `tests/support/scheduler-properties.md` explains when and how to write such a property instead of a single replay.
