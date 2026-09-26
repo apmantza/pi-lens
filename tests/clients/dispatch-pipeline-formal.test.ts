@@ -941,6 +941,54 @@ describe("formal/dispatch-pipeline replays", () => {
 				}
 			});
 
+			it("FixerOrphan (#3506 r1): the --immediate-format child an Escape gave up on keeps pi's queue until it writes", async () => {
+				const env = setupTestEnvironment("tla-format-escape-");
+				try {
+					const filePath = path.join(env.tmpDir, "a.ts");
+					fs.writeFileSync(filePath, "let value=1\n");
+					vi.mocked(dispatchLintWithResult).mockImplementation(
+						async () => clean("any") as never,
+					);
+					const { parked, resume } = parkChild();
+					const escape = new AbortController();
+					const run = runPipeline(
+						{
+							filePath,
+							cwd: env.tmpDir,
+							toolName: "edit",
+							autofixMode: "deferred",
+							getFlag: (name: string) =>
+								name === "immediate-format" || name === "no-lsp",
+							dbg: () => {},
+							signal: escape.signal,
+						},
+						{
+							biomeClient: noBiome as unknown as BiomeClient,
+							ruffClient: {} as never,
+							metricsClient: {} as never,
+							getFormatService: () => new FormatService("tla", true),
+							fixedThisTurn: new Set<string>(),
+						},
+					);
+					await parked.p;
+					escape.abort();
+					await run;
+					const agent = agentAppend(
+						filePath,
+						"export const AGENT_EDIT_2 = 2;\n",
+					);
+					await afterQueueRegistration(env.tmpDir);
+					expect(agent.wrote()).toBe(false);
+					resume.open();
+					await agent.done;
+					expect(fs.readFileSync(filePath, "utf8")).toBe(
+						"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+					);
+				} finally {
+					env.cleanup();
+				}
+			});
+
 			it("deferred drain (#3506 r1): the drain formatter its 30 s aggregate gave up on keeps pi's queue until it writes", async () => {
 				const env = setupTestEnvironment("tla-drain-format-orphan-");
 				try {
