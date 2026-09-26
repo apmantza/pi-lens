@@ -3080,7 +3080,14 @@ describe("per-path diagnostics versions (#1531)", () => {
 	 * stamp is proven to be written by the same code path that stores
 	 * `pushDiagnostics` — not by a helper the production push path might skip.
 	 * `typos` is used because its strategy seeds the first push (no debounce
-	 * timer), which keeps the store synchronous. */
+	 * timer), which keeps the store synchronous. Every call below carries a
+	 * `version` (#3548 review r2): typos is also `publishesOnClose`, whose
+	 * fix drops a version-less publish unconditionally before it reaches
+	 * this store — a version-less "real" typos publish is not a shape typos
+	 * ever sends (verified against tekumara/typos-lsp upstream: only its
+	 * did_close artifact omits one), so this double stays production-
+	 * faithful on the seedFirstPush axis under test here without also
+	 * exercising the now-unrelated close-publish filter. */
 	function publishHandlerFor(state: LSPClientState) {
 		setupIncomingHandlers(state, {});
 		const calls = vi.mocked(state.connection.onNotification).mock
@@ -3110,6 +3117,7 @@ describe("per-path diagnostics versions (#1531)", () => {
 
 		publish({
 			uri: pathToFileURL(FILE_A).href,
+			version: 1,
 			diagnostics: [diagnostic("typo in A")],
 		});
 
@@ -3131,6 +3139,7 @@ describe("per-path diagnostics versions (#1531)", () => {
 
 		publish({
 			uri: pathToFileURL(FILE_A).href,
+			version: 1,
 			diagnostics: [diagnostic("typo in A")],
 		});
 		const baselineA = diagnosticsVersionForPath(state, KEY_A);
@@ -3143,6 +3152,7 @@ describe("per-path diagnostics versions (#1531)", () => {
 		// above its captured baseline.
 		publish({
 			uri: pathToFileURL(FILE_B).href,
+			version: 1,
 			diagnostics: [diagnostic("typo in B")],
 		});
 		expect(diagnosticsVersionForPath(state, KEY_A)).toBeLessThanOrEqual(
@@ -3153,6 +3163,7 @@ describe("per-path diagnostics versions (#1531)", () => {
 		// global counter's value, so they never restart below an earlier one.
 		publish({
 			uri: pathToFileURL(FILE_A).href,
+			version: 2,
 			diagnostics: [diagnostic("typo in A again")],
 		});
 		expect(diagnosticsVersionForPath(state, KEY_A)).toBeGreaterThan(baselineA);
