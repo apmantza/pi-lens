@@ -974,6 +974,67 @@ describe("flake-shape ratchet — admission gate", () => {
 		expect(problems).toEqual([]);
 	}, 30_000);
 
+	// #3546: the caching above is a behaviour-preserving refactor — every
+	// value it returns must equal what the uncached production calls
+	// (`allTestSourceFiles`, `localImportTargets`) return for the same
+	// input. Old-vs-new probe through the real seam, not a re-derived copy
+	// of the caching logic, per the behaviour-preserving-refactor proof
+	// shape.
+	it("(#3546) the cached file list and import targets equal the uncached scan", () => {
+		const uncachedFiles = allTestSourceFiles().filter((file) =>
+			file.endsWith(".test.ts"),
+		);
+		expect(cachedAllTestFiles()).toEqual(uncachedFiles);
+		for (const file of uncachedFiles) {
+			expect(cachedLocalImportTargets(file)).toEqual(localImportTargets(file));
+		}
+	});
+
+	// #3546 MUTATION: the cache must be load-bearing, not dead code — poison
+	// it and show `supportHelperHasLaneProof`'s answer for a REAL admitted
+	// entry flips, then show it flips back once the cache is restored. This
+	// is the guard's own red-on-neuter proof (AGENTS.md "mutation-proof").
+	it("MUTATION (#3546): a poisoned import-targets cache flips supportHelperHasLaneProof's answer", () => {
+		const included = new Set([
+			...wallClockBudgetInclude(),
+			...realHarnessInclude,
+		]);
+		expect(
+			supportHelperHasLaneProof("support/fault-injection.ts", included),
+		).toBe(true);
+
+		const saved = new Map(importTargetsCache);
+		for (const key of importTargetsCache.keys())
+			importTargetsCache.set(key, []);
+		try {
+			expect(
+				supportHelperHasLaneProof("support/fault-injection.ts", included),
+			).toBe(false);
+		} finally {
+			importTargetsCache.clear();
+			for (const [key, value] of saved) importTargetsCache.set(key, value);
+		}
+		expect(
+			supportHelperHasLaneProof("support/fault-injection.ts", included),
+		).toBe(true);
+	});
+
+	// #3546 planted offender: a target nothing imports must be flagged
+	// (no lane proof) — same conclusion the uncached walk would reach, since
+	// the equivalence test above proves the cache returns identical data.
+	it("ATTACK (#3546): a support/ target no test imports has no lane proof — planted offender", () => {
+		const included = new Set([
+			...wallClockBudgetInclude(),
+			...realHarnessInclude,
+		]);
+		expect(
+			supportHelperHasLaneProof(
+				"support/__3546-planted-offender-never-imported.ts",
+				included,
+			),
+		).toBe(false);
+	});
+
 	// `ADMITTED_AFTER_BASELINE` is empty in steady state, so the test above
 	// alone never proves `validateAdmission` catches anything. These fixtures
 	// drive it directly, one requirement at a time.
