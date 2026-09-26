@@ -195,6 +195,7 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/lsp/launch.ts:trySpawn",
 	"clients/opengrep-client.ts:runScan",
 	"clients/pipeline.ts:tryEslintFix",
+	"clients/pipeline.ts:analysePipeline",
 	"clients/pipeline.ts:runAutofix",
 	"clients/trivy-client.ts:runScan",
 ] as const;
@@ -237,6 +238,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/lsp/launch.ts#findBinaryOnPath:90f3c9a8",
 		"execFileSync runs a PATH lookup and does not resolve project configuration",
+	],
+	[
+		"clients/pipeline.ts#runPipeline:6e2471d5",
+		"runPipeline hands its `ctx`, which carries `cwd`, to analysePipeline, its own body split off by #3506 so the queue hold's `finally` wraps it; the argument is named `ctx`, so the wrapper rule reads it as no cwd. The checked site is analysePipeline's runAutofix call",
 	],
 	[
 		"clients/safe-spawn.ts#killPidTreeSync:7ca6002e",
@@ -657,12 +662,12 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		'cwd is `pubspecDir` = findNearestContaining(dirname(filePath), ["pubspec.yaml"]): `dart fix --apply` must run at the package root',
 	],
 	[
-		"clients/pipeline.ts#runAutofix:b112a810~b112a810",
+		"clients/pipeline.ts#runAutofix:f63ee33e~f63ee33e",
 		"runAutofix forwards its own `cwd` parameter into tryEslintFix",
 	],
 	[
-		"clients/pipeline.ts#runPipeline:a5f29544~a5f29544",
-		"runPipeline forwards its own `cwd` parameter into runAutofix",
+		"clients/pipeline.ts#analysePipeline:9c1e49f0~dbf27697",
+		"analysePipeline (runPipeline's body since #3506) forwards its own `cwd` parameter into runAutofix",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~446d128f",
