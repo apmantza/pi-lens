@@ -325,6 +325,16 @@ export type DegradationKind =
 	 */
 	| "hook-handler-crash"
 	/**
+	 * #3506: the pi host adapter could not reach pi's `withFileMutationQueue`
+	 * (the host SDK import failed, exported no such function, or loaded a
+	 * second copy of the package whose `SessionManager` is not the host's), so
+	 * pi-lens' own format and autofix writers run outside pi's per-file queue
+	 * and can race a parallel agent edit of the same file. Subject is
+	 * `withFileMutationQueue`, recorded ONCE: the lookup is resolved once per
+	 * process.
+	 */
+	| "host-file-mutation-queue-unavailable"
+	/**
 	 * #3246: a live inline-blocker record re-served at turn end carried no
 	 * structured diagnostics, so the shared finding policy had no identity to
 	 * anchor a stored disposition against and the record's rendered summary was

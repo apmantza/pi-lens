@@ -18,11 +18,20 @@
  *   VALUE imports of those work with no copy on disk — verified by hiding both
  *   from the dogfood install and re-running under PI_TIMING (#1926), and by
  *   `@tintinweb/pi-subagents`, which declares pi-tui as a peer and ships no
- *   copy. `@earendil-works/pi-coding-agent` is different: it is not resolvable
- *   from an extension at all, so pi-lens imports it TYPE-ONLY and inlines the
- *   runtime helpers it needs. `tests/host-sdk-type-only.test.ts` enforces that
+ *   copy. That resolution is jiti's: pi's loader hands `dist/index.js` to
+ *   jiti, whose native import fails on those unresolvable static imports, and
+ *   the transpiled fallback serves them from pi's running instance
+ *   (`virtualModules` in the bundled CLI). `@earendil-works/pi-coding-agent` is
+ *   served the same way, but a static import of it would fail the extension
+ *   LOAD on any host that does not serve it, and where pi-lens' static imports
+ *   resolve natively a runtime import of it goes through Node and can load a
+ *   second copy. So pi-lens imports it TYPE-ONLY and inlines the runtime
+ *   helpers it needs. `tests/host-sdk-type-only.test.ts` enforces that
  *   separate rule (#1334 S6); do not read this list as permission to
- *   value-import the host SDK.
+ *   value-import the host SDK. Its one admitted exception is lazy and caught:
+ *   `index.ts` looks up pi's `withFileMutationQueue` on the first write, and
+ *   `clients/file-mutation-queue.ts` records whether it reached the host's
+ *   own copy (#3506).
  *
  * LAZY_NATIVE_PACKAGES
  *   Native addon / wasm, dynamic-imported by absolute file:// URL at call time.
