@@ -55,7 +55,9 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   only for the client instance whose write marked it. `"none"` is the code
   before #3501. `"clear"`, `"clearDeath"` and `"clearDeadFalse"` are the
   alternative fix (delete the entry on death and eviction) and its variants.
-- `ClearReadyOnDeath`: `FALSE` is the code; `TRUE` is the #3502 fix.
+- `ClearReadyOnDeath`: `TRUE` is the code since #3502: the dead-client
+  branch deletes `demonstratedReady` and `demonstratedCold` like every other
+  retirement path. `FALSE` is the code before #3502.
 - `PingGuard`, `WaitTimeout`, `LeaseCheck`, `FastPath`, `WindowTrip`: `TRUE`
   is the code; `FALSE` is a guard mutant.
 
@@ -63,30 +65,34 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 
 | Config | Expect | Verdict | States | s |
 |---|---|---|---|---|
-| `CrashBetweenTouches` (code, #3501) | pass | pass | 363 | 2.0 |
-| `CrashBetweenTouchesHeld` (code, #3501) | pass | pass | 363 | 1.9 |
-| `CrashBetweenTouchesNonSilent` | pass | pass | 363 | 2.0 |
-| `EvictBetweenTouches` (code, #3501) | pass | pass | 110 | 1.6 |
-| `MutNoBindCrashBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 347 | 1.8 |
-| `MutNoBindCrashBetweenTouchesHeld` (pre-#3501 code) | violated `SkipImpliesHeld` | violated | 76 | 1.7 |
-| `MutNoBindEvictBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 113 | 1.9 |
-| `FixBind` (code: concurrent, crash and eviction) | pass | pass | 80029 | 5.0 |
-| `FixBindSeq` (code: sequential, crash and eviction) | pass | pass | 859 | 1.6 |
-| `FixClearSeq` | pass | pass | 742 | 2.2 |
-| `MutFixClearConcurrent` | violated `NoFalseClean` | violated | 13941 | 2.8 |
-| `MutFixClearDeadFalseConcurrent` | violated `NoFalseClean` | violated | 16609 | 3.0 |
-| `MutFixClearDeathOnly` | violated `NoFalseClean` | violated | 122 | 1.8 |
-| `CrashMidWait` | pass | pass | 179 | 1.7 |
-| `MutCrashMidWaitNoPing` | violated `NoFalseClean` | violated | 78 | 1.9 |
-| `MutCrashMidWaitNoTimeout` | violated `WaitBounded` | violated | 35 | 1.9 |
-| `MutEvictNoLease` | violated `NoEvictUnderLease` | violated | 14 | 1.7 |
-| `EvictNoLeaseMidWait` | pass | pass | 45 | 1.8 |
-| `CrashLoop` | pass | pass | 35873 | 3.6 |
-| `CrashLoopNoFastPath` | pass | pass | 19397 | 3.0 |
-| `MutCrashLoopNoWindow` | violated `BoundedCrashLoop` | violated | 431 | 2.1 |
-| `MutCrashLoopNoBreaker` | violated `BoundedCrashLoop` | violated | 337 | 1.8 |
-| `CrashReady` (code, #3502 open) | violated `ReadyIsCurrent` | violated | 161 | 1.9 |
-| `FixCrashReady` | pass | pass | 661 | 1.7 |
+| `CrashBetweenTouches` (code, #3501) | pass | pass | 363 | 2.5 |
+| `CrashBetweenTouchesHeld` (code, #3501) | pass | pass | 363 | 2.4 |
+| `CrashBetweenTouchesNonSilent` | pass | pass | 363 | 2.5 |
+| `EvictBetweenTouches` (code, #3501) | pass | pass | 110 | 2.2 |
+| `MutNoBindCrashBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 318 | 2.8 |
+| `MutNoBindCrashBetweenTouchesHeld` (pre-#3501 code) | violated `SkipImpliesHeld` | violated | 112 | 2.2 |
+| `MutNoBindEvictBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 95 | 2.7 |
+| `FixBind` (code: concurrent, crash and eviction) | pass | pass | 82299 | 9.0 |
+| `FixBindSeq` (code: sequential, crash and eviction) | pass | pass | 859 | 2.7 |
+| `FixClearSeq` | pass | pass | 742 | 3.3 |
+| `MutFixClearConcurrent` | violated `NoFalseClean` | violated | 13553 | 4.5 |
+| `MutFixClearDeadFalseConcurrent` | violated `NoFalseClean` | violated | 14795 | 4.2 |
+| `MutFixClearDeathOnly` | violated `NoFalseClean` | violated | 117 | 2.4 |
+| `CrashMidWait` | pass | pass | 179 | 2.2 |
+| `MutCrashMidWaitNoPing` | violated `NoFalseClean` | violated | 68 | 2.6 |
+| `MutCrashMidWaitNoTimeout` | violated `WaitBounded` | violated | 37 | 2.0 |
+| `MutEvictNoLease` | violated `NoEvictUnderLease` | violated | 14 | 2.7 |
+| `EvictNoLeaseMidWait` | pass | pass | 45 | 2.0 |
+| `CrashLoop` | pass | pass | 35873 | 6.8 |
+| `CrashLoopNoFastPath` | pass | pass | 19397 | 5.3 |
+| `MutCrashLoopNoWindow` | violated `BoundedCrashLoop` | violated | 483 | 2.8 |
+| `MutCrashLoopNoBreaker` | violated `BoundedCrashLoop` | violated | 598 | 2.8 |
+| `CrashReady` (code, #3502) | pass | pass | 303 | 2.3 |
+| `FixCrashReady` (code, #3502, with an eviction) | pass | pass | 661 | 2.7 |
+| `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 107 | 2.4 |
+
+State counts of a violated config vary between runs: TLC stops at the first
+counterexample its workers reach.
 
 - **`MutNoBindCrashBetweenTouches`** (the #3501 trace): the sync touch
   writes to A and marks the entry, A crashes, the collecting touch respawns B,
@@ -98,6 +104,9 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   `MutFixClearDeadFalseConcurrent` shows the same even when a dead client's
   `notify.open` resolves `false`: the write that landed before the crash
   still marks. `MutFixClearDeathOnly` leaves the eviction route open.
+- **`MutCrashReadyNoClear`** (the #3502 trace): a collecting touch on A
+  earns `demonstratedReady`, A crashes, the next touch respawns B, and the
+  key still claims readiness for a client that has answered nothing.
 
 ## Decisions the model backs
 
@@ -121,7 +130,8 @@ The throwaway replays became the regression tests:
 - `tests/clients/lsp/service-crash-respawn.test.ts`: the real `touchFile` and
   the real `handleNotifyOpen` queue per client over a mock connection. Crash
   after the write, before it, and with it queued; capacity eviction; a second
-  non-collecting touch; and the TypeScript sync-confirm route.
+  non-collecting touch; the TypeScript sync-confirm route; and, for #3502,
+  `ensureWarmForSweep` after a crash-respawn of a ready and of a cold client.
 - `tests/clients/lsp/crash-respawn-debounce-wire.test.ts`: the real
   `createLSPClient` and `tests/fixtures/fake-lsp-server.mjs`, SIGKILLed after
   the sync touch. Before #3501 server B's trace had no `didOpen` and the touch

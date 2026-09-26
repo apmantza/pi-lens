@@ -328,3 +328,94 @@ describe("#3501 — a touch-debounce entry does not outlive its client", () => {
 		expect(B.syncAsked.every(Boolean)).toBe(true);
 	});
 });
+
+/**
+ * #3502: a crash-respawn retires the dead client's readiness verdicts.
+ *
+ * Recurrence this file prevents: `ensureClientForServer`'s dead-client
+ * branch deleted the client, its spawn stamp, idle timer and broken entry,
+ * but not `demonstratedReady` or `demonstratedCold`, which capacity and idle
+ * eviction both delete. The cold replacement inherited the dead client's
+ * readiness, so `ensureWarmForSweep` skipped its warm-up (TLA+
+ * `formal/lsp-crash`, `MutCrashReadyNoClear`), or inherited its cold verdict
+ * and was never given a warm-up of its own.
+ */
+describe("#3502 — a crash-respawn does not inherit readiness", () => {
+	let tmp: string;
+	let filePath: string;
+	beforeEach(() => {
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-crash-ready-"));
+		filePath = path.join(tmp, "a.md");
+		fs.writeFileSync(filePath, DIRTY);
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "50";
+		process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS = "0";
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const marksman = makeServer("marksman", ".md", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman] : [],
+		);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		delete process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS;
+		removeTempDirSync(tmp);
+	});
+
+	/** A dies after a minute of service; a touch of another file respawns B. */
+	async function crashAndRespawn(
+		service: LSPService,
+		A: ReturnType<typeof makeClient>,
+	) {
+		vi.setSystemTime(Date.now() + 61_000);
+		A.kill();
+		await service.touchFile(path.join(tmp, "b.md"), "# b\n", SYNC);
+		expect(createLSPClient).toHaveBeenCalledTimes(2);
+	}
+
+	it("the replacement of a client that demonstrated readiness gets its own warm-up", async () => {
+		const A = makeClient("marksman", tmp);
+		const B = makeClient("marksman", tmp);
+		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+		const service = new LSPService();
+		const first = await service.touchFile(filePath, DIRTY, DISPATCH);
+		expect(first?.confirmation).toBe("confirmed");
+		expect(await service.ensureWarmForSweep(filePath)).toMatchObject({
+			performedWarmup: false,
+		});
+
+		await crashAndRespawn(service, A);
+		const warm = await service.ensureWarmForSweep(filePath);
+
+		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+		expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+			filePath,
+		);
+	});
+
+	it("the replacement of a client that stayed cold gets its own warm-up, not the cached cold verdict", async () => {
+		const A = makeClient("marksman", tmp);
+		// A wedged server: it takes the document but never answers or pings.
+		A.getDiagnosticsVersionForPath = () => 0;
+		A.getDiagnostics = () => [];
+		A.getAllDiagnostics = () => new Map();
+		A.waitForDiagnostics.mockImplementation(async (_fp, ms) => {
+			vi.setSystemTime(Date.now() + ms);
+		});
+		A.pingLiveness.mockResolvedValue(false);
+		const B = makeClient("marksman", tmp);
+		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+		const service = new LSPService();
+		expect(await service.ensureWarmForSweep(filePath)).toEqual({
+			performedWarmup: true,
+			failedServerIds: ["marksman"],
+		});
+
+		await crashAndRespawn(service, A);
+		const warm = await service.ensureWarmForSweep(filePath);
+
+		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+	});
+});

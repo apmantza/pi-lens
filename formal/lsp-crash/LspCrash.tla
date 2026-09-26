@@ -45,7 +45,7 @@ CONSTANTS
     FastPath,       \* #1127 consecutive early-exit breaker (FALSE = mutant)
     WindowTrip,     \* #1142 windowed runtime-exit breaker (FALSE = mutant)
     ClearReadyOnDeath, \* the dead-client branch deletes demonstratedReady/Cold
-                       \* (FALSE = code; TRUE = the #3502 fix)
+                       \* (TRUE = code since #3502; FALSE = the pre-#3502 code)
     Trip,           \* BROKEN_PERMANENT_AFTER = RUNTIME_EXIT_WINDOW_TRIP_COUNT (5 in code)
     Fix             \* "bind" (code since #3501: an entry is valid only for the
                     \* client instance it was written to), "none" (the
@@ -189,8 +189,9 @@ Acquire(i) ==
               /\ permBroken' = NewPerm(uptime)
               /\ cooling' = NewCooling(uptime)
               /\ uptime' = "none"
-              \* #3502: demonstratedReady is NOT deleted on this path (only
-              \* eviction, idle eviction and notify-stall demotion delete it).
+              \* #3502: the branch deletes demonstratedReady like the other
+              \* retirement paths (eviction, idle eviction, notify-stall
+              \* demotion); before it, the replacement inherited it.
               /\ IF ClearReadyOnDeath THEN ready' = FALSE /\ readyGen' = None
                                      ELSE UNCHANGED <<ready, readyGen>>
               /\ rt' = IF Fix \in {"clear", "clearDeath", "clearDeadFalse"} THEN None ELSE rt

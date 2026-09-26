@@ -4068,6 +4068,10 @@ export class LSPService {
 			}
 			this.state.clients.delete(key);
 			this.state.clientSpawnedAt.delete(key);
+			// #3502: the replacement is cold and earns its own readiness verdict,
+			// as after a capacity or idle eviction.
+			this.state.demonstratedReady.delete(key);
+			this.state.demonstratedCold.delete(key);
 			this.clientLastUsedAt.delete(key);
 			this.clearTypeScriptIdleTimer(key);
 			this.state.broken.delete(key);
