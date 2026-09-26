@@ -1115,10 +1115,14 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		const key = normalizeMapKey(file);
 		// Same shape as LSPService.readCachedDiagnosticsForServers:
 		// `getAllDiagnostics().get(key)` -> { diags: entry?.diags ?? [], publishedAt: entry?.ts }.
+		// #3548: keyed by the scanner's OWN serverId (not a literal "opengrep")
+		// so the same helper drives a #3548 typos/zizmor replay; every existing
+		// call site passes an opengrep-armed scanner, so this is the same key
+		// as before for all of them.
 		return async () =>
 			new Map([
 				[
-					"opengrep",
+					state.serverId,
 					{
 						diags: state.pushDiagnostics.get(key) ?? [],
 						publishedAt: state.pushDiagnosticTimestamps.get(key),
@@ -1280,9 +1284,11 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			true,
 			saved,
 		);
+		// #3548: the scanner's own serverId, not a literal "opengrep" — every
+		// existing call site is opengrep-armed, so this is unchanged for them.
 		markPendingAuxiliaryCoverage(
 			file,
-			["opengrep"],
+			[scanner.state.serverId],
 			notifiedAtMs,
 			undefined,
 			undefined,
@@ -1292,6 +1298,39 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 
 	const V1 = `${Array.from({ length: 20 }, (_, i) => `const a${i} = ${i};`).join("\n")}\n`;
 	const V2 = "export const v = 2;\n";
+
+	it("CLOSE-PUBLISH-SKIPPED: typos' close-triggered publish does not count as an owed scan, and a later real backlog publish still does (#3548)", async () => {
+		const scanner = armOpengrep("/project", "typos");
+		const file = "/project/src/close-typos.ts";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		await closeDocument(scanner.state, file);
+		// tekumara/typos-lsp `did_close`: an empty, version-less publish, sent
+		// unconditionally on every close, that answers no send.
+		scanner.publish(file, []);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		// A genuine backlog answer arriving after the one skip is spent still
+		// counts, same as before this fix.
+		scanner.publish(file, [diag(0, "late real scan")]);
+		expect(counts()).toEqual({ sent: 1, published: 1 });
+	});
+
+	it("CLOSE-PUBLISH-UNMARKED-STILL-COUNTS: a close-time publish for a server without publishesOnClose still answers the closed lifetime's owed scan (#3548 inverse)", async () => {
+		const scanner = armOpengrep("/project", "eslint");
+		const file = "/project/src/close-inverse.ts";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		await closeDocument(scanner.state, file);
+		// The same empty, version-less shape typos' close-triggered publish
+		// carries — but eslint carries no `publishesOnClose` marker, so it is
+		// never granted a skip and this still counts, exactly as before #3548.
+		scanner.publish(file, []);
+		expect(counts()).toEqual({ sent: 1, published: 1 });
+	});
 
 	it("REPLAY-RULE-LOAD-SURPLUS: opengrep's rule-load [] plus its refresh republish cannot shorten a later backlog (#3482 r1 F1)", async () => {
 		const env = setupTestEnvironment("pi-lens-late-aux-rule-load-") as any;
@@ -1609,6 +1648,10 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			file: string;
 			turn: () => Promise<{ content: string; metadata: any }>;
 		}) => Promise<void>,
+		// #3548: which server's strategy this replay arms — defaults to
+		// opengrep (every pre-#3548 call site) so existing replays are
+		// unaffected; typos' close-publish replay passes "typos".
+		serverId = "opengrep",
 	): Promise<void> {
 		const env = setupTestEnvironment(`pi-lens-late-aux-${prefix}-`) as any;
 		const sessionId = `late-aux-${prefix}`;
@@ -1619,8 +1662,9 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			runtime.beginTurn();
 			const cacheManager = new CacheManager(false);
 			const file = path.join(env.tmpDir, "src", "scanned.ts");
-			const scanner = armOpengrep(env.tmpDir);
-			// opengrep declares `save: true` (opengrep@1a5fd9d LS.ml).
+			const scanner = armOpengrep(env.tmpDir, serverId);
+			// opengrep declares `save: true` (opengrep@1a5fd9d LS.ml); harmless
+			// for a serverId that never sends a save-marked touch.
 			scanner.state.saveOptions = { includeText: false };
 			readCachedDiagnosticsForServers.mockImplementation(
 				cachedFrom(scanner.state, file),
@@ -1722,6 +1766,23 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		).toEqual({ sent: 1, published: 0 });
 	});
 
+	it("ZIZMOR-SAVE-RESCAN-EXPECTED: a save adds one expected publication on zizmor now that rescansOnSave is set, for whenever dynamic didSave registration is honoured (#3548)", async () => {
+		// zizmor@main `crates/zizmor/src/lsp.rs` registers `textDocument/didSave`
+		// DYNAMICALLY (`initialized()`); `applyDynamicCapabilities` (client.ts)
+		// does not honour that registration today, so nothing sets
+		// `state.saveOptions` for zizmor at runtime. Set directly here, same
+		// shape as SAVE-RESCAN-EXPECTED above, to prove the counting side of
+		// the #3548 fix independent of the unbuilt dynamic-capability wiring.
+		const scanner = armOpengrep("/project", "zizmor");
+		scanner.state.saveOptions = { includeText: true };
+		const file = "/project/.github/workflows/ci.yml";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "yaml", false, true, true);
+		expect(didSaves(scanner)).toBe(1);
+		expect(counts()).toEqual({ sent: 2, published: 0 });
+	});
+
 	it("REPLAY-REOPEN-INFLIGHT: a scan queued before a close cannot answer the reopened file's send (#3482 lifetime)", async () => {
 		await surplusReplay("reopen-inflight", async ({ scanner, file, turn }) => {
 			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
@@ -1738,6 +1799,35 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
 			expect((await turn()).content).toContain("V2 finding on line 1");
 		});
+	});
+
+	it("REPLAY-CLOSE-PUBLISH-INFLIGHT: typos' close-triggered publish cannot answer an in-flight scan, so the reopened file's send is still owed one (#3548)", async () => {
+		await surplusReplay(
+			"close-publish-inflight",
+			async ({ scanner, file, turn }) => {
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// #3477: renamed away while v1's scan runs. typos' did_close
+				// publishes an empty, version-less set unconditionally, landing
+				// before v1's real (slower) scan finishes.
+				await closeDocument(scanner.state, file);
+				scanner.publish(file, []);
+				// Renamed back with v2 (a fresh didOpen, a new open lifetime).
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				// v1's real, stale scan finally lands.
+				scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+
+				const first = await turn();
+				expect(first.content).not.toContain("V1-ONLY");
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+				});
+
+				scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+				expect((await turn()).content).toContain("V2 finding on line 1");
+			},
+			"typos",
+		);
 	});
 
 	it("REPLAY-REOPEN-DROPPED-WHILE-CLOSED: a scan that publishes while the path is closed still counts, so the reopened file's answer is delivered (#3482 lifetime inverse)", async () => {

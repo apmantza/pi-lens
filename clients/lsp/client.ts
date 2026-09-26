@@ -1007,6 +1007,18 @@ export interface LSPClientState {
 	 *  lifetimes expected, since their queued scans still publish. Set at
 	 *  close, kept across the reopen. */
 	readonly expectedPublicationsBeyondSends: Map<string, number>;
+	/** #3548: how many of the NEXT publish(es) received while this path is
+	 *  closed are the server's own close-triggered publish (a `publishesOnClose`
+	 *  server, e.g. typos, answers no send) rather than a real backlog scan.
+	 *  Incremented once per close for such a server (`closeDocumentOnce`),
+	 *  decremented and skipped — never counted via `countPublication` — by
+	 *  the first that many publishes the closedDocuments branch sees, in
+	 *  arrival order; any publish beyond that count falls through to the
+	 *  normal "a scan the closed lifetime was owed" counting. A path a
+	 *  `publishesOnClose` server never marks is never given an entry, so its
+	 *  every close-time publish keeps counting exactly as before (#3548's
+	 *  required inverse). Absent entries read as 0. */
+	readonly closePublishSkipsRemaining: Map<string, number>;
 	readonly documentVersions: Map<string, number>;
 	/** #2113/#2357: latest-pending same-path document sends; different paths stay parallel. */
 	readonly notifyChangeQueues: Map<string, DocumentNotifyQueue>;
@@ -2481,6 +2493,21 @@ export function setupIncomingHandlers(
 			// Do not resurrect diagnostics or their content binding for a document
 			// that is no longer open on this client.
 			if (state.closedDocuments?.has(normalizedPath)) {
+				// #3548: a `publishesOnClose` server's own close-triggered publish
+				// (typos: an empty, version-less set on every didClose) answers no
+				// send, so it must not be credited as one of the closed lifetime's
+				// owed scans — that would let it satisfy the slot a genuinely
+				// in-flight scan should satisfy, freeing that scan's later (stale)
+				// answer to be taken as fresh once the path reopens. Skip exactly
+				// as many of these arrivals as `expectClosePublishSkip` raised at
+				// close; anything past that is a real backlog publish and still
+				// counts, same as a server this marker was never set for.
+				const skips = state.closePublishSkipsRemaining;
+				const remaining = skips.get(normalizedPath) ?? 0;
+				if (remaining > 0) {
+					skips.set(normalizedPath, remaining - 1);
+					return;
+				}
 				// #3482: a scan the closed lifetime was owed; it answered.
 				countPublication(state, normalizedPath);
 				return;
@@ -4187,6 +4214,24 @@ function expectSaveRescan(state: LSPClientState, normalizedPath: string): void {
 	beyond?.set(normalizedPath, (beyond.get(normalizedPath) ?? 0) + 1);
 }
 
+/** #3548: a didClose to a `publishesOnClose` server (typos) brings one more
+ * publication that answers no send — raised right after the close is sent
+ * (`closeDocumentOnce`), so the ONE close-triggered publish this call makes
+ * is the one this skips, never a later, unrelated one. Consumed by the
+ * first that many publishes `setupIncomingHandlers` sees for this path while
+ * it is closed; a path a `publishesOnClose` server never closes is never
+ * given an entry, so its close-time publish keeps counting exactly as before
+ * — the required inverse direction. */
+function expectClosePublishSkip(
+	state: LSPClientState,
+	normalizedPath: string,
+): void {
+	if (!getStrategy(state.serverId, state.launchVariant).publishesOnClose)
+		return;
+	const skips = state.closePublishSkipsRemaining;
+	skips.set(normalizedPath, (skips.get(normalizedPath) ?? 0) + 1);
+}
+
 /**
  * #3405: tell the server the document it just received is the file's saved
  * on-disk state.
@@ -4750,6 +4795,7 @@ async function closeDocumentOnce(
 		normalizedPath,
 		publicationCountsForPath(state, normalizedPath).sent,
 	);
+	expectClosePublishSkip(state, normalizedPath);
 	state.documentVersions.delete(normalizedPath);
 	state.sentReadStamps.delete(normalizedPath);
 	state.documentOpenedAt.delete(normalizedPath);
@@ -5880,6 +5926,7 @@ export async function createLSPClient(options: {
 		diagnosticsVersionsByPath: new Map(),
 		publicationStoreCountsByPath: new Map(),
 		expectedPublicationsBeyondSends: new Map(),
+		closePublishSkipsRemaining: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
 		sentReadStamps: new Map(),
