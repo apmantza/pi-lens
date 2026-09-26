@@ -1432,10 +1432,21 @@ export class LSPService {
 	 * its healthy siblings. A file-level key can only satisfy one of those at a
 	 * time — per-server, both hold: the stalled server simply has no entry and is
 	 * re-pushed, while every sibling whose write landed keeps its own debounce.
+	 *
+	 * #3501: an entry speaks only for the client instance whose write marked it.
+	 * A client that crashes or is evicted inside the window, or that was already
+	 * dead when its `notify.open` resolved `true`, leaves an entry its respawned
+	 * replacement must not inherit: the replacement was never sent the content.
+	 * Weak, so an entry never pins a retired client's state.
 	 */
 	private readonly recentTouches = new Map<
 		string,
-		{ fingerprint: string; touchedAt: number; clientScope: LSPTouchClientScope }
+		{
+			fingerprint: string;
+			touchedAt: number;
+			clientScope: LSPTouchClientScope;
+			client: WeakRef<LSPClientInfo>;
+		}
 	>();
 	/**
 	 * #743: consecutive per-server notify-write timeout count, keyed by
@@ -1925,19 +1936,20 @@ export class LSPService {
 		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		waitForDiagnostics: boolean,
-		serverIds: readonly string[],
+		spawned: readonly SpawnedServer[],
 	): boolean {
 		if (waitForDiagnostics) return false;
 		// #743: only short-circuit the whole call when EVERY spawned server already
 		// has this content. If even one still needs the push, fall through — the
 		// write loop skips the servers that are covered and pushes only the rest.
-		if (serverIds.length === 0) return false;
-		return serverIds.every((serverId) =>
+		if (spawned.length === 0) return false;
+		return spawned.every((entry) =>
 			this.shouldSkipNotify(
 				filePath,
 				contentFingerprint,
 				clientScope,
-				serverId,
+				entry.info.id,
+				entry.client,
 			),
 		);
 	}
@@ -1963,6 +1975,7 @@ export class LSPService {
 		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
+		client: LSPClientInfo,
 	): boolean {
 		if (TOUCH_DEBOUNCE_MS <= 0) return false;
 		const previous = this.recentTouches.get(
@@ -1971,6 +1984,9 @@ export class LSPService {
 		if (!previous) return false;
 		const now = Date.now();
 		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
+		// #3501: another client instance (a respawn, a replacement after an
+		// eviction) was never sent this content, whatever its predecessor held.
+		if (previous.client.deref() !== client) return false;
 		return previous.fingerprint === contentFingerprint();
 	}
 
@@ -1987,6 +2003,7 @@ export class LSPService {
 		contentFingerprint: string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
+		client: LSPClientInfo,
 	): void {
 		const key = this.recentTouchKey(filePath, clientScope, serverId);
 		const now = Date.now();
@@ -1994,6 +2011,7 @@ export class LSPService {
 			fingerprint: contentFingerprint,
 			touchedAt: now,
 			clientScope,
+			client: new WeakRef(client),
 		});
 		// Trim entries that are already past the debounce window — shouldSkipTouch
 		// ignores them anyway, so they serve no purpose. Only sweep when the map
@@ -4821,14 +4839,13 @@ export class LSPService {
 			return this.touchFile(filePath, content, options);
 		}
 		try {
-			const spawnedServerIds = spawned.map((entry) => entry.info.id);
 			if (
 				this.shouldSkipTouch(
 					filePath,
 					contentFingerprint,
 					clientScope,
 					diagnosticsMode !== "none",
-					spawnedServerIds,
+					spawned,
 				)
 			) {
 				logLatency({
@@ -4865,14 +4882,17 @@ export class LSPService {
 			// as the file-level "every server was skipped" summary for the logs and the
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
-				spawnedServerIds.filter((serverId) =>
-					this.shouldSkipNotify(
-						filePath,
-						contentFingerprint,
-						clientScope,
-						serverId,
-					),
-				),
+				spawned
+					.filter((entry) =>
+						this.shouldSkipNotify(
+							filePath,
+							contentFingerprint,
+							clientScope,
+							entry.info.id,
+							entry.client,
+						),
+					)
+					.map((entry) => entry.info.id),
 			);
 			const notifySkipped =
 				spawned.length > 0 && notifySkippedServerIds.size === spawned.length;
@@ -5207,6 +5227,7 @@ export class LSPService {
 								contentFingerprint(),
 								clientScope,
 								entry.info.id,
+								entry.client,
 							);
 						} else if (wrote === false) {
 							// #3481: the server does not hold `content` (a later read, or a
