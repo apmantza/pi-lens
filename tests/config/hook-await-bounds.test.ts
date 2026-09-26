@@ -413,14 +413,14 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"agent_settled's unbounded analyzer bootstrap.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#handleAgentEnd:7b3fa863~b336d9ea": {
+	"clients/runtime-agent-end.ts#handleAgentEnd:aeec4a09~51275360": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
 			"`runAutofix` on the deferred drain: per-runner spawn timeouts " +
 			"exist at the leaf, nothing bounds the phase above them. #3506 " +
-			"only moved it inside pi's per-file mutation queue (re-keyed, " +
-			"same await).",
+			"hands it a hold on pi's per-file mutation queue, which each " +
+			"fixer branch enters after its resolver (same await, same key).",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-coordinator.ts#f1693e28~c40c7404": {
@@ -2296,12 +2296,16 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/package-manager.ts": 8,
 	"clients/partial-edit-apply.ts": 2,
 	"clients/performance-report.ts": 8,
-	// #3506: 45 -> 48. `runPipeline` awaits its body inside the try whose
-	// finally releases pi's per-file mutation queue, and `runAutofix` /
-	// `runFormatPhase` each await entering that queue before their first
-	// write. The queue wait is the fix (an agent edit of the same file must
-	// finish first); the pipeline itself stays inside the handler's bounded().
-	"clients/pipeline.ts": 48,
+	// #3506: 45 -> 61. `runPipeline` awaits its body inside the try whose
+	// finally releases pi's per-file mutation queue (1), `runFormatPhase`
+	// awaits entering that queue before the formatter (1), and each of the
+	// fourteen fixer branches of `runAutofix` awaits entering it after its
+	// own resolver and before its writer (14; review round 1 moved the entry
+	// below the availability probes and installs, so those never hold pi's
+	// edits back). The queue wait is the fix (an agent edit of the same file
+	// must finish first); the pipeline itself stays inside the handler's
+	// bounded().
+	"clients/pipeline.ts": 61,
 	"clients/project-changes.ts": 2,
 	"clients/project-snapshot.ts": 2,
 	"clients/quiet-window.ts": 6,
