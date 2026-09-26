@@ -295,7 +295,7 @@ function snapshotSequenceBase(root: string): ProjectSequenceBase | undefined {
 		projectSeq: index.projectSeq,
 		fileSeqByPath: index.fileSeqByPath,
 		sinceSeq: meta.seq,
-		logEntries: meta.logEntries,
+		logEntries: meta.logEntries ?? 0,
 	};
 }
 
