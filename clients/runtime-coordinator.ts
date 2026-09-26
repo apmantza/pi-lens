@@ -7,7 +7,7 @@ import type { WordIndex } from "./word-index.js";
 import type { CascadeRun } from "./cascade-types.js";
 import { logCascade } from "./cascade-logger.js";
 import {
-	appendProjectChange,
+	appendProjectChangeAllocated,
 	type ProjectChangeRange,
 	type ProjectChangeSource,
 } from "./project-changes.js";
@@ -380,6 +380,10 @@ export class RuntimeCoordinator {
 	private _turnIndex = 0;
 	private _writeIndex = 0;
 	private _projectSeq = 0;
+	// #3511: set when the change log holds an entry at or below `_projectSeq`
+	// that this runtime never folded (a sibling process logged it, or an
+	// unlocked append could share its seq). Cleared by a seed from the log.
+	private _viewMissesLoggedEntries = false;
 	private _turnStartProjectSeq = 0;
 	private readonly _fileSeq = new Map<string, number>();
 	// File key → the projectSeq value at that file's most recent bump (#451). Lets
@@ -457,6 +461,7 @@ export class RuntimeCoordinator {
 		this._turnIndex = 0;
 		this._writeIndex = 0;
 		this._projectSeq = 0;
+		this._viewMissesLoggedEntries = false;
 		this._turnStartProjectSeq = 0;
 		this._fileSeq.clear();
 		this._fileLastProjectSeq.clear();
@@ -649,7 +654,32 @@ export class RuntimeCoordinator {
 		changedRange?: ProjectChangeRange;
 		onAppendError?: (err: unknown) => void;
 	}): { projectSeq: number; fileSeq: number } {
-		const { projectSeq, fileSeq, key } = this.bumpFileSeq(args.filePath);
+		// #3511: a logged mutation takes its seq from the shared change log,
+		// under the log's lock, so a sibling process never logs the same seq.
+		let logged: ReturnType<RuntimeCoordinator["bumpFileSeq"]> | undefined;
+		if (args.cwd !== undefined) {
+			try {
+				appendProjectChangeAllocated(args.cwd, (logMaxSeq, locked) => {
+					logged = this.bumpFileSeq(args.filePath, logMaxSeq);
+					// Unlocked, a sibling may log this seq too; never vouch for it.
+					if (!locked) this._viewMissesLoggedEntries = true;
+					return {
+						seq: logged.projectSeq,
+						timestamp: new Date().toISOString(),
+						sessionId: this.telemetrySessionId,
+						turnIndex: this.turnIndex,
+						source: args.source,
+						filePath: path.resolve(args.filePath),
+						fileSeq: logged.fileSeq,
+						changedRange: args.changedRange,
+					};
+				});
+			} catch (err) {
+				args.onAppendError?.(err);
+			}
+		}
+		const { projectSeq, fileSeq, key } =
+			logged ?? this.bumpFileSeq(args.filePath);
 		if (this._mutationReceipts.length >= MAX_MUTATION_RECEIPTS) {
 			this._mutationReceipts.shift();
 			this._droppedMutationReceipts += 1;
@@ -663,22 +693,6 @@ export class RuntimeCoordinator {
 			turnIndex: this._turnIndex,
 			ts: Date.now(),
 		});
-		if (args.cwd !== undefined) {
-			try {
-				appendProjectChange(args.cwd, {
-					seq: projectSeq,
-					timestamp: new Date().toISOString(),
-					sessionId: this.telemetrySessionId,
-					turnIndex: this.turnIndex,
-					source: args.source,
-					filePath: path.resolve(args.filePath),
-					fileSeq,
-					changedRange: args.changedRange,
-				});
-			} catch (err) {
-				args.onAppendError?.(err);
-			}
-		}
 		return { projectSeq, fileSeq };
 	}
 
@@ -828,6 +842,11 @@ export class RuntimeCoordinator {
 		return this._projectSeq;
 	}
 
+	/** True when a snapshot of this runtime must not claim `projectSeq` (#3511). */
+	get viewMissesLoggedEntries(): boolean {
+		return this._viewMissesLoggedEntries;
+	}
+
 	get turnStartProjectSeq(): number {
 		return this._turnStartProjectSeq;
 	}
@@ -837,6 +856,7 @@ export class RuntimeCoordinator {
 		fileSeqByPath?: Map<string, number>,
 	): void {
 		this._projectSeq = Math.max(0, Math.floor(projectSeq));
+		this._viewMissesLoggedEntries = false;
 		this._turnStartProjectSeq = this._projectSeq;
 		this._fileSeq.clear();
 		// Seeded per-file counters carry no projectSeq provenance, so start the
@@ -851,7 +871,11 @@ export class RuntimeCoordinator {
 		}
 	}
 
-	bumpFileSeq(filePath: string): {
+	bumpFileSeq(
+		filePath: string,
+		/** The shared change log's max seq, when this bump is logged (#3511). */
+		logMaxSeq = 0,
+	): {
 		projectSeq: number;
 		fileSeq: number;
 		/** The normalized key the bump was recorded under — reuse, never re-derive. */
@@ -861,6 +885,12 @@ export class RuntimeCoordinator {
 		// ~1.8us on POSIX since #3098; every caller that also needs the key must
 		// reuse this one instead of paying it twice.
 		const key = normalizeMapKey(path.resolve(filePath));
+		// #3511: a sibling process logged entries above our seq. Allocate above
+		// them, and remember that this runtime's view has not folded them.
+		if (logMaxSeq > this._projectSeq) {
+			this._projectSeq = logMaxSeq;
+			this._viewMissesLoggedEntries = true;
+		}
 		this._projectSeq += 1;
 		const fileSeq = (this._fileSeq.get(key) ?? 0) + 1;
 		this._fileSeq.set(key, fileSeq);

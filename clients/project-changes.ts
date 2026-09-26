@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BoundedFifoMap } from "./bounded-cache.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
 import { getProjectDataDir } from "./file-utils.js";
+import { withGenerationLockSync } from "./generation-lock.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 export type ProjectChangeSource =
@@ -71,16 +74,42 @@ function parseChangeLine(line: string): ProjectChangeEntry | undefined {
 	}
 }
 
+// #3511: the log's max seq, read incrementally so each allocation costs only
+// the bytes appended since this process last read the log. `bytes` is the
+// offset of the first line not yet folded; the log is append-only.
+const changeLogCursors = new BoundedFifoMap<
+	string,
+	{ bytes: number; maxSeq: number }
+>(16);
+
+/**
+ * Parse a whole read of the log. The read also seeds the #3511 allocation
+ * cursor, so a process's first logged mutation after session_start reads
+ * only the lines appended since, not the whole log again.
+ */
+function parseChangeLog(
+	logPath: string,
+	content: string,
+): ProjectChangeEntry[] {
+	const entries = content
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.map(parseChangeLine)
+		.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+	const bytes = Buffer.byteLength(
+		content.slice(0, content.lastIndexOf("\n") + 1),
+	);
+	let maxSeq = 0;
+	for (const entry of entries) maxSeq = Math.max(maxSeq, entry.seq);
+	changeLogCursors.set(logPath, { bytes, maxSeq });
+	return entries;
+}
+
 export function readProjectChanges(cwd: string): ProjectChangeEntry[] {
 	const logPath = getProjectChangeLogPath(cwd);
 	try {
-		const content = fs.readFileSync(logPath, "utf-8");
-		return content
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map(parseChangeLine)
-			.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+		return parseChangeLog(logPath, fs.readFileSync(logPath, "utf-8"));
 	} catch {
 		return [];
 	}
@@ -101,13 +130,10 @@ async function readProjectChangesAsync(
 ): Promise<ProjectChangeEntry[]> {
 	const logPath = getProjectChangeLogPath(cwd);
 	try {
-		const content = await fs.promises.readFile(logPath, "utf-8");
-		return content
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map(parseChangeLine)
-			.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+		return parseChangeLog(
+			logPath,
+			await fs.promises.readFile(logPath, "utf-8"),
+		);
 	} catch {
 		return [];
 	}
@@ -269,4 +295,71 @@ export function appendProjectChange(
 	const logPath = getProjectChangeLogPath(cwd);
 	fs.mkdirSync(path.dirname(logPath), { recursive: true });
 	fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf-8");
+}
+
+function readChangeLogMaxSeq(logPath: string): number {
+	let fd: number;
+	try {
+		fd = fs.openSync(logPath, "r");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+		throw err;
+	}
+	try {
+		const cursor = changeLogCursors.get(logPath) ?? { bytes: 0, maxSeq: 0 };
+		const size = fs.fstatSync(fd).size;
+		if (size > cursor.bytes) {
+			const tail = Buffer.alloc(size - cursor.bytes);
+			const read = fs.readSync(fd, tail, 0, tail.length, cursor.bytes);
+			// A line still being written by an unlocked writer is read next time.
+			const complete = tail.subarray(0, read).lastIndexOf(0x0a) + 1;
+			for (const line of tail
+				.subarray(0, complete)
+				.toString("utf-8")
+				.split("\n")) {
+				const entry = line.trim() ? parseChangeLine(line) : undefined;
+				if (entry && entry.seq > cursor.maxSeq) cursor.maxSeq = entry.seq;
+			}
+			cursor.bytes += complete;
+		}
+		changeLogCursors.set(logPath, cursor);
+		return cursor.maxSeq;
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+// Held for one incremental read and one append line: far inside the lease.
+const CHANGE_LOG_LOCK = { staleMs: 5_000, waitMs: 500 };
+
+/**
+ * #3511: append one entry whose seq is allocated from the shared log, so two
+ * processes never log the same seq. `build` receives the log's max seq and
+ * returns the entry to append; both run under the change-log lock. When the
+ * lock stays held past its wait (or fails), the entry is still appended,
+ * unlocked, with `locked: false`, and the degradation is recorded.
+ */
+export function appendProjectChangeAllocated(
+	cwd: string,
+	build: (logMaxSeq: number, locked: boolean) => ProjectChangeEntry,
+): void {
+	const logPath = getProjectChangeLogPath(cwd);
+	fs.mkdirSync(path.dirname(logPath), { recursive: true });
+	const append = (locked: boolean) => {
+		const entry = build(readChangeLogMaxSeq(logPath), locked);
+		fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf-8");
+	};
+	const result = withGenerationLockSync(
+		`${logPath}.locks`,
+		CHANGE_LOG_LOCK,
+		() => append(true),
+	);
+	if (result.held) return;
+	const code = (result.cause as NodeJS.ErrnoException | undefined)?.code;
+	incrementDegradationCount({
+		kind: "change-log-lock-unavailable",
+		subject: logPath,
+		reason: `appended unlocked: ${code ? `lock failed (${code})` : "lock wait ran out"}`,
+	});
+	append(false);
 }

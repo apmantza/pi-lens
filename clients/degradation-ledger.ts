@@ -131,6 +131,13 @@ export type DegradationKind =
 	| "cascade-pending-cap"
 	| "cascade-tier3-backlog-evicted"
 	/**
+	 * #3511: the change-log lock stayed held past its bounded wait (or its
+	 * directory failed), so a mutation's seq was allocated and appended without
+	 * it, and that runtime stops stamping fresh snapshots until its next seed.
+	 * Subject is the change-log path.
+	 */
+	| "change-log-lock-unavailable"
+	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an
 	 * outage this fires once per file per touch, so the count here is the exact

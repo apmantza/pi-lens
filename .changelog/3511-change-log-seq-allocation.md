@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **A project snapshot that missed a sibling process's edit is no longer judged fresh (closes #3511)** — two processes on one project (a pi session and the MCP server, or two sessions) each counted `projectSeq` in memory and logged different edits under the same seq. A snapshot saved by one of them then matched the change log's max seq, so the next `session_start` hydrated it as fresh without the sibling's edit, and the bounded replay skipped that edit too. A logged mutation now takes its seq from the change log, as `max(log max, own seq) + 1` under a lock beside `change-log.jsonl`. The log is read incrementally from where this process last read it, so an edit reads only the lines appended since. A runtime that finds a sibling's entry above its own seq stamps its snapshots with a never-fresh seq until its next seed from the log. When the lock stays held past its 500 ms wait, the entry is still appended, that runtime stops stamping fresh snapshots, and `change-log-lock-unavailable` is recorded in the degradation ledger.

@@ -47,15 +47,23 @@ import {
 	getProjectSnapshotPath,
 	getProjectSnapshotPersistErrorForTests,
 	getProjectSnapshotPersistStateForTests,
+	isProjectSnapshotFresh,
 	loadProjectSnapshot,
 	readProjectSnapshotMeta,
 	resetProjectSnapshotPersistWorkerForTests,
+	saveRuntimeProjectSnapshot,
 	saveProjectSnapshot,
 	buildProjectSnapshotFromRuntime,
 	setProjectSnapshotPromotionSeamForTests,
 	terminateProjectSnapshotPersistWorkerForTests,
 	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
+import {
+	appendProjectChange,
+	getProjectChangeLogPath,
+	readLatestProjectSequence,
+	readProjectChanges,
+} from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { suspendAt } from "./interleaving-kit.js";
 import { setupTestEnvironment } from "./test-utils.js";
@@ -132,6 +140,61 @@ function siblingSave(
 		const cwd = ${JSON.stringify(cwd)};
 		snap.saveProjectSnapshot(cwd, snap.buildProjectSnapshotFromRuntime({ cwd, runtime }));`,
 	).pid;
+}
+
+/**
+ * One logged edit in a real sibling process whose session started when the
+ * log's max seq was `seed`; returns the seq it logged.
+ */
+function siblingEdit(
+	home: string,
+	cwd: string,
+	seed: number,
+	filePath: string,
+): number {
+	return runSibling(
+		home,
+		seed,
+		`runtime.recordProjectMutation({ filePath: ${JSON.stringify(filePath)}, source: "agent-write", cwd: ${JSON.stringify(cwd)} });`,
+	).seq;
+}
+
+/** What a later session_start sees: the log, the snapshot, and both replays. */
+function sessionStartView(cwd: string) {
+	_resetProjectSnapshotParseCacheForTests();
+	const full = readLatestProjectSequence(cwd);
+	const snapshot = loadProjectSnapshot(cwd);
+	// The bounded-replay base, built the way runtime-session.ts's
+	// snapshotSequenceBase builds it from the meta sidecar.
+	const meta = readProjectSnapshotMeta(cwd);
+	const bounded = readLatestProjectSequence(
+		cwd,
+		meta?.sequenceIndex
+			? {
+					projectSeq: meta.sequenceIndex.projectSeq,
+					fileSeqByPath: meta.sequenceIndex.fileSeqByPath,
+					sinceSeq: meta.seq,
+				}
+			: undefined,
+	);
+	return {
+		log: readProjectChanges(cwd).map((entry) => [
+			entry.seq,
+			path.basename(entry.filePath),
+		]),
+		fresh: isProjectSnapshotFresh(snapshot, full.projectSeq),
+		boundedEqualsFull:
+			JSON.stringify([...bounded.fileSeqByPath].sort()) ===
+			JSON.stringify([...full.fileSeqByPath].sort()),
+	};
+}
+
+/** A runtime of THIS process, seeded the way session_start seeds it. */
+function seededRuntime(cwd: string): RuntimeCoordinator {
+	const latest = readLatestProjectSequence(cwd);
+	const runtime = new RuntimeCoordinator();
+	runtime.seedProjectSequence(latest.projectSeq, latest.fileSeqByPath);
+	return runtime;
 }
 
 function readDisk(cwd: string) {
@@ -369,6 +432,261 @@ describe("project snapshot persist across processes", () => {
 			if (hold) releaseGeneration(hold);
 			suspension.release();
 			suspension.restore();
+			env.cleanup();
+		}
+	});
+});
+
+describe("project seq allocation across processes (#3511)", () => {
+	function editEnv() {
+		const setup = projectEnv();
+		process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC = "1";
+		const file = (name: string) => path.join(setup.cwd, "src", name);
+		return { ...setup, file };
+	}
+
+	it("a snapshot whose runtime missed a sibling's logged edit is never fresh", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			// Both sessions start while the log is empty.
+			const runtime = seededRuntime(cwd);
+			expect(siblingEdit(home, cwd, 0, file("b.ts"))).toBe(1);
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			runtime.cachedExports.set("fromA", file("a.ts"));
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			expect(sessionStartView(cwd)).toEqual({
+				log: [
+					[1, "b.ts"],
+					[2, "a.ts"],
+				],
+				fresh: false,
+				boundedEqualsFull: true,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a sibling allocates its seq above a snapshot already stamped fresh", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			runtime.cachedExports.set("fromA", file("a.ts"));
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			expect(sessionStartView(cwd).fresh).toBe(true);
+
+			// The sibling's session started before that edit was logged.
+			expect(siblingEdit(home, cwd, 0, file("b.ts"))).toBe(2);
+			expect(sessionStartView(cwd)).toEqual({
+				log: [
+					[1, "a.ts"],
+					[2, "b.ts"],
+				],
+				fresh: false,
+				boundedEqualsFull: true,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("each allocation folds the lines a sibling appended since this process last read the log", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			expect(siblingEdit(home, cwd, 1, file("b.ts"))).toBe(2);
+			expect(
+				runtime.recordProjectMutation({
+					filePath: file("c.ts"),
+					source: "agent-write",
+					cwd,
+				}).projectSeq,
+			).toBe(3);
+			expect(readProjectChanges(cwd).map((entry) => entry.seq)).toEqual([
+				1, 2, 3,
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a line still being written is read once it is complete", () => {
+		const { env, cwd, file } = editEnv();
+		try {
+			const logPath = getProjectChangeLogPath(cwd);
+			const line = JSON.stringify({
+				seq: 5,
+				timestamp: new Date(0).toISOString(),
+				sessionId: "older-writer",
+				turnIndex: 0,
+				source: "agent-write",
+				filePath: file("b.ts"),
+				fileSeq: 1,
+			});
+			fs.mkdirSync(path.dirname(logPath), { recursive: true });
+			// An unlocked writer is halfway through its line when session_start
+			// reads the log, and still when this runtime first allocates.
+			fs.writeFileSync(logPath, line.slice(0, 20));
+			const runtime = seededRuntime(cwd);
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			// ...and finishes it; our own line landed after the fragment.
+			const after = fs.readFileSync(logPath, "utf8").slice(20);
+			fs.writeFileSync(logPath, `${line}\n${after}`);
+			expect(
+				runtime.recordProjectMutation({
+					filePath: file("c.ts"),
+					source: "agent-write",
+					cwd,
+				}).projectSeq,
+			).toBe(6);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("an append that cannot take the change-log lock still logs, and its runtime stops stamping fresh", () => {
+		const { env, cwd, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			const hold = tryAcquireGeneration(
+				`${getProjectChangeLogPath(cwd)}.locks`,
+				5_000,
+			);
+			expect(hold).toBeDefined();
+			try {
+				runtime.recordProjectMutation({
+					filePath: file("a.ts"),
+					source: "agent-write",
+					cwd,
+				});
+			} finally {
+				if (hold) releaseGeneration(hold);
+			}
+			runtime.cachedExports.set("fromA", file("a.ts"));
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			expect(sessionStartView(cwd)).toEqual({
+				log: [[1, "a.ts"]],
+				fresh: false,
+				boundedEqualsFull: true,
+			});
+			expect(getDegradationSummary()).toContainEqual(
+				expect.objectContaining({
+					kind: "change-log-lock-unavailable",
+					count: 1,
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a reseed from the log, or a new session, lets the runtime vouch for its seq again", () => {
+		const { env, cwd, file } = editEnv();
+		const logSibling = (seq: number) =>
+			appendProjectChange(cwd, {
+				seq,
+				timestamp: new Date(0).toISOString(),
+				sessionId: "sibling",
+				turnIndex: 0,
+				source: "agent-write",
+				filePath: file("b.ts"),
+				fileSeq: seq,
+			});
+		const edit = (runtime: RuntimeCoordinator) =>
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+		const stamp = (runtime: RuntimeCoordinator) =>
+			buildProjectSnapshotFromRuntime({ cwd, runtime }).seq;
+		try {
+			const runtime = seededRuntime(cwd);
+			logSibling(5);
+			expect(edit(runtime).projectSeq).toBe(6);
+			expect(stamp(runtime)).toBeLessThan(0);
+
+			const latest = readLatestProjectSequence(cwd);
+			runtime.seedProjectSequence(latest.projectSeq, latest.fileSeqByPath);
+			expect(stamp(runtime)).toBe(6);
+
+			logSibling(10);
+			expect(edit(runtime).projectSeq).toBe(11);
+			expect(stamp(runtime)).toBeLessThan(0);
+			runtime.resetForSession();
+			expect(stamp(runtime)).toBe(0);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("the first allocation after session_start reads only the lines appended since that read", () => {
+		const { env, cwd, file } = editEnv();
+		const logLine = (seq: number) =>
+			appendProjectChange(cwd, {
+				seq,
+				timestamp: new Date(0).toISOString(),
+				sessionId: "sibling",
+				turnIndex: 0,
+				source: "agent-write",
+				filePath: file("b.ts"),
+				fileSeq: seq,
+			});
+		try {
+			logLine(5);
+			const runtime = seededRuntime(cwd); // session_start's full read
+			// Rewrite the already-read prefix in place, at the same length: only a
+			// second full scan of the log could see this 9.
+			const logPath = getProjectChangeLogPath(cwd);
+			const folded = fs.readFileSync(logPath, "utf8");
+			fs.writeFileSync(logPath, folded.replace('"seq":5', '"seq":9'));
+			logLine(7); // appended after the read: the allocation must see it
+			expect(
+				runtime.recordProjectMutation({
+					filePath: file("a.ts"),
+					source: "agent-write",
+					cwd,
+				}).projectSeq,
+			).toBe(8);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("the never-fresh stamp is stale even against session_start's unknown-sequence sentinel", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			siblingEdit(home, cwd, 0, file("b.ts"));
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			expect(snapshot.seq).toBeLessThan(0);
+			// runtime-session.ts judges freshness against -1 when its sequence
+			// read timed out (UNKNOWN_PROJECT_SEQ, #1162).
+			expect(isProjectSnapshotFresh(snapshot, -1)).toBe(false);
+		} finally {
 			env.cleanup();
 		}
 	});

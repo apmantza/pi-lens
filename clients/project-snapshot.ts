@@ -60,8 +60,10 @@ interface ProjectSnapshotSymbol {
  * (#1019). Persisting it lets session-start BOUND the change-log replay: hydrate
  * this (O(files)) then fold only entries with `seq > snapshot.seq`
  * (O(changes-since-snapshot)) instead of replaying the entire append-only log.
- * `projectSeq` is invariably `=== snapshot.seq` (both come from the same
- * `runtime.projectSeq` moment); `fileSeqByPath` uses the same
+ * `projectSeq` is `=== snapshot.seq` (both come from the same
+ * `runtime.projectSeq` moment) unless the snapshot carries the never-fresh
+ * stamp (#3511), whose negative seq makes the replay fold the whole log on
+ * top of this index; `fileSeqByPath` uses the same
  * `normalizeMapKey(path.resolve())` keys as the change-log replay, so no
  * re-normalization (and no per-key `realpath` syscall) is needed on hydrate.
  */
@@ -129,6 +131,13 @@ export function getProjectSnapshotMetaPath(cwd: string): string {
 	);
 }
 
+/**
+ * #3511: the stamp of a snapshot whose runtime missed a logged entry at or
+ * below its seq. No change-log seq is negative, so it is never fresh; the
+ * promotion compare-and-set (#3509) ranks it below every stamped snapshot.
+ */
+export const PROJECT_SNAPSHOT_NEVER_FRESH_SEQ = -1;
+
 export function isProjectSnapshotFresh(
 	snapshot: ProjectSnapshot | null | undefined,
 	currentProjectSeq: number,
@@ -136,6 +145,8 @@ export function isProjectSnapshotFresh(
 	return (
 		!!snapshot &&
 		snapshot.version === PROJECT_SNAPSHOT_VERSION &&
+		// session_start's unknown-sequence sentinel is negative too (#1162).
+		snapshot.seq >= 0 &&
 		snapshot.seq === currentProjectSeq
 	);
 }
@@ -2131,7 +2142,11 @@ export function buildProjectSnapshotFromRuntime(args: {
 		version: PROJECT_SNAPSHOT_VERSION,
 		projectRoot: normalizeMapKey(path.resolve(args.cwd)),
 		generatedAt: new Date().toISOString(),
-		seq: args.runtime.projectSeq,
+		// #3511: a runtime that missed a sibling's logged entry at or below its
+		// seq cannot vouch for that seq.
+		seq: args.runtime.viewMissesLoggedEntries
+			? PROJECT_SNAPSHOT_NEVER_FRESH_SEQ
+			: args.runtime.projectSeq,
 		files: {},
 		symbols: {},
 		reverseDeps: {},
