@@ -27,6 +27,7 @@ import {
 import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../../clients/project-snapshot.js";
 import {
 	cleanupTestEnvironmentsDrained,
@@ -174,7 +175,7 @@ describe("formal/store-freshness workspace-cache replays (#3505)", () => {
 		setMtime(file, before + 5000);
 	}
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.resetModules();
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
@@ -190,6 +191,8 @@ describe("formal/store-freshness workspace-cache replays (#3505)", () => {
 		fs.writeFileSync(dep, "export const y = 1;\n");
 		for (const p of [other, file, dep]) setMtime(p, T_READ - 1000);
 		writeSnapshot();
+		// The snapshot body is written off-thread; the sweep reads it from disk.
+		await waitForProjectSnapshotPersistsForTests();
 		// Every sweep starts at T_READ, after the fixture was written.
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(T_READ);
@@ -304,6 +307,60 @@ describe("formal/store-freshness workspace-cache replays (#3505)", () => {
 						const entry =
 							loadWorkspaceDiagnosticsCache(tmp)?.entries[cacheKeyFor(file)];
 						expect(entry?.scannedAt).toBe(T_READ);
+					}
+				},
+				CASE_MS,
+			);
+		}
+
+		for (const [label, depWrittenDuringPull] of [
+			[
+				"WorkspaceDepLateStamp (#3505): a dependency written while a workspace pull is answered makes the next sweep pull again",
+				true,
+			],
+			[
+				"FixReadStamp no-drop (#3505): a dependency written before the pull leaves the pulled files served from cache",
+				false,
+			],
+		] as const) {
+			it(
+				label,
+				async () => {
+					process.env.PI_LENS_LSP_WORKSPACE_PULL = "1";
+					try {
+						if (!depWrittenDuringPull) setMtime(dep, T_READ + 40);
+						const requestWorkspaceDiagnostics = vi.fn(async () => {
+							// The server answers from T_READ; a dependency is
+							// written 400 ms in, and the sweep records at T_REC.
+							vi.setSystemTime(T_EDIT);
+							if (
+								depWrittenDuringPull &&
+								requestWorkspaceDiagnostics.mock.calls.length === 1
+							) {
+								fs.writeFileSync(dep, "export const y = 2;\n");
+								setMtime(dep, T_EDIT);
+							}
+							vi.setSystemTime(T_REC);
+							return [];
+						});
+						createLSPClient.mockResolvedValue({
+							...makeClient(tmp).client,
+							getWorkspaceDiagnosticsSupport: () => ({
+								advertised: true,
+								mode: "pull" as const,
+								workspaceDiagnostics: true,
+								diagnosticProviderKind: "object",
+							}),
+							requestWorkspaceDiagnostics,
+						});
+						await sweep();
+						expect(requestWorkspaceDiagnostics).toHaveBeenCalledTimes(1);
+						await sweep();
+						expect(requestWorkspaceDiagnostics).toHaveBeenCalledTimes(
+							depWrittenDuringPull ? 2 : 1,
+						);
+					} finally {
+						delete process.env.PI_LENS_LSP_WORKSPACE_PULL;
 					}
 				},
 				CASE_MS,
