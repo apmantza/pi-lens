@@ -66,6 +66,8 @@ function recordAllLspWithBaseline(
 			sha256: createHash("sha256").update(content).digest("hex"),
 		},
 	);
+	// The first record for the path is never superseded (#3507).
+	if (recordedAtMs === undefined) throw new Error("record superseded");
 	return recordedAtMs;
 }
 
