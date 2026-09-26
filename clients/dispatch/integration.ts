@@ -2041,15 +2041,15 @@ export async function computeCascadeForFile(
 										});
 										return undefined;
 									}
-									const record = () =>
+									const recordTouch = () =>
 										recordOutstandingCascadeTouch({
 											filePath: neighborPath,
 											serverId: spawnedForTouch.client.serverId,
 											touchedAt,
 										});
 									if (sessionGeneration)
-										sessionGeneration.guardedWrite(neighborPath, record);
-									else record();
+										sessionGeneration.guardedWrite(neighborPath, recordTouch);
+									else recordTouch();
 									const durationMs = Date.now() - neighborStart;
 									if (tier === "collect-later") collectLaterSkipped++;
 									// F1: both tier3-silent and collect-later skip the in-lane
