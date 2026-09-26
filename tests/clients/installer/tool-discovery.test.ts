@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { withEnv } from "../../support/with-env.js";
 
 vi.unmock("../../../clients/installer/index.js");
@@ -14,9 +22,19 @@ vi.hoisted(() => {
 });
 
 // ── os mock ────────────────────────────────────────────────────────────
-const TEST_HOME = vi.hoisted(() =>
-	process.platform === "win32" ? String.raw`C:\Users\test` : "/home/test",
-);
+// A real, writable per-file directory, not a fixed "/home/test": since #3476
+// the install and probe-cache locks create their generation directories with
+// sync node:fs, which this file does not mock, under the home the node:os
+// mock names. A fixed path was unwritable for CI's non-root user (EACCES from
+// every install) and left real lock directories behind on a root box.
+const TEST_HOME = vi.hoisted(() => {
+	const nodeFs = require("node:fs") as typeof import("node:fs");
+	const nodeOs = require("node:os") as typeof import("node:os");
+	const nodePath = require("node:path") as typeof import("node:path");
+	return nodeFs.mkdtempSync(
+		nodePath.join(nodeOs.tmpdir(), "pi-lens-tool-discovery-home-"),
+	);
+});
 
 vi.mock("node:os", () => ({
 	default: {
@@ -321,6 +339,10 @@ beforeEach(() => {
 	spawnVerdict.signal = undefined;
 	mockFsReadFile.mockRejectedValue(new Error("ENOENT"));
 	fakeAccess(/* nothing */);
+});
+
+afterAll(() => {
+	realFs.rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
 afterEach(() => {

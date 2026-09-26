@@ -48,8 +48,15 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, statSync, unlinkSync } from "node:fs";
+import {
+	existsSync,
+	readFileSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import https from "node:https";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -74,6 +81,14 @@ import {
 import { commitDurableStoreAsync } from "../durable-store.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { createGenerationMap } from "../generation-guard.js";
+import {
+	type GenerationHold,
+	isLockContention,
+	recordGenerationTakeover,
+	recordLegacyLockHeld,
+	releaseGeneration,
+	tryAcquireGeneration,
+} from "../generation-lock.js";
 import { resolveToolCwd } from "../tool-cwd.js";
 import {
 	allAvailableGlobalBinDirs,
@@ -97,7 +112,8 @@ import { resolveGitHubToken } from "../zizmor-config.js";
 // Global installation directory for pi-lens tools
 const TOOLS_DIR = path.join(getGlobalPiLensDir(), "tools");
 const INSTALL_LOCK_PATH = path.join(TOOLS_DIR, ".install.lock");
-const activeInstallLocks = new Set<string>();
+const INSTALL_LOCK_GENERATIONS = `${INSTALL_LOCK_PATH}s`;
+const activeInstallLocks = new Set<InstallLockHold>();
 let installLockExitCleanupRegistered = false;
 
 /**
@@ -114,6 +130,18 @@ interface InstallLockOwner {
 	createdAt: number;
 }
 
+/**
+ * A held install lock: its generation, and the exact text it wrote to the old
+ * file. Release compares that text, as the bounded lock compares its token:
+ * a pid alone also matches a newer hold of this same process (#3476 review
+ * F3). The `nonce` keeps two holds created in one millisecond apart; older
+ * installers read only `pid` and `createdAt`.
+ */
+interface InstallLockHold {
+	generation: GenerationHold;
+	token: string;
+}
+
 function isProcessAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -123,11 +151,132 @@ function isProcessAlive(pid: number): boolean {
 	}
 }
 
+/**
+ * How old a lock may be before it is stale whatever its pid says: longer than
+ * any legitimate install (the owner's install bound plus slack). #946 review
+ * F1: pid liveness alone cannot detect a hard-killed owner whose pid Windows
+ * has recycled, and that lock would poison every later install.
+ */
+function installLockMaxAgeMs(): number {
+	return (Number(process.env.PI_LENS_INSTALL_TIMEOUT_MS) || 120_000) + 60_000;
+}
+
+/**
+ * The pre-#3476 install lock file. Installers from older versions take only
+ * this file, so while mixed versions run a generation holder holds it too: an
+ * older installer blocks on it, and a live older installer blocks the holder.
+ * Only a generation holder creates or removes it, so installers of this
+ * version never race each other for it. A stale one is removed by path,
+ * which races only an older installer's own takeover.
+ */
+function legacyInstallLockIsStale(maxAgeMs: number): boolean {
+	try {
+		const owner = JSON.parse(
+			readFileSync(INSTALL_LOCK_PATH, "utf8"),
+		) as InstallLockOwner;
+		const expired =
+			Number.isFinite(owner.createdAt) &&
+			Date.now() - owner.createdAt > maxAgeMs;
+		return (
+			expired ||
+			(Number.isInteger(owner.pid) &&
+				owner.pid > 0 &&
+				!isProcessAlive(owner.pid))
+		);
+	} catch {
+		// An unreadable/empty lock has no createdAt to age out: fall back to the
+		// file's own mtime so it is eventually recoverable (#946 review F1/F6).
+		try {
+			return Date.now() - statSync(INSTALL_LOCK_PATH).mtimeMs > maxAgeMs;
+		} catch {
+			return false;
+		}
+	}
+}
+
+function createLegacyInstallLock(token: string): boolean {
+	try {
+		writeFileSync(INSTALL_LOCK_PATH, token, { flag: "wx" });
+		return true;
+	} catch (cause) {
+		if (isLockContention(cause)) return false;
+		throw cause;
+	}
+}
+
+function takeLegacyInstallLock(maxAgeMs: number, token: string): boolean {
+	if (createLegacyInstallLock(token)) return true;
+	if (!legacyInstallLockIsStale(maxAgeMs)) return false;
+	try {
+		unlinkSync(INSTALL_LOCK_PATH);
+	} catch {
+		// Gone since the create, or (Windows) still open elsewhere: retry.
+		return false;
+	}
+	return createLegacyInstallLock(token);
+}
+
+function installLockOwner(): string {
+	try {
+		const owner = JSON.parse(
+			readFileSync(INSTALL_LOCK_PATH, "utf8"),
+		) as InstallLockOwner;
+		return `pid=${owner.pid} createdAt=${owner.createdAt}`;
+	} catch {
+		return "unknown owner";
+	}
+}
+
+/**
+ * One attempt at the install lock (#3476): a generation in
+ * `TOOLS_DIR/.install.locks` with the install max age as its lease, then the
+ * pre-#3476 file. Of two takers of one stale generation exactly one exclusive
+ * create succeeds; the old takeover removed the lock by path, and a taker
+ * acting on an earlier judgement could remove a live successor's lock.
+ */
+function tryAcquireInstallLock(
+	maxAgeMs: number,
+): InstallLockHold | "busy" | "legacy-held" {
+	const hold = tryAcquireGeneration(INSTALL_LOCK_GENERATIONS, maxAgeMs);
+	if (!hold) return "busy";
+	if (hold.tookOverStale) recordGenerationTakeover(hold);
+	const token = JSON.stringify({
+		pid: process.pid,
+		createdAt: Date.now(),
+		nonce: randomUUID(),
+	});
+	let took: boolean;
+	try {
+		took = takeLegacyInstallLock(maxAgeMs, token);
+	} catch (cause) {
+		releaseGeneration(hold);
+		throw cause;
+	}
+	if (took) return { generation: hold, token };
+	releaseGeneration(hold);
+	return "legacy-held";
+}
+
+/**
+ * Release a held install lock. The old file is removed only while it still
+ * holds this hold's own text: after an age-out takeover it names the new
+ * holder, an older installer or a newer hold of this process.
+ */
+function releaseInstallLock(hold: InstallLockHold): void {
+	activeInstallLocks.delete(hold);
+	try {
+		if (readFileSync(INSTALL_LOCK_PATH, "utf8") === hold.token)
+			unlinkSync(INSTALL_LOCK_PATH);
+	} catch {
+		// Already gone: nothing of ours to remove.
+	}
+	releaseGeneration(hold.generation);
+}
+
 async function acquireInstallLock(): Promise<{
 	release?: () => Promise<void>;
 	reason?: string;
 }> {
-	await fs.mkdir(TOOLS_DIR, { recursive: true });
 	// #946 review F2: the waiter's bound must exceed the owner's install bound
 	// (PI_LENS_INSTALL_TIMEOUT_MS, default 120s) — a 30s waiter gave up on a
 	// legitimate slow install and reported the tool unavailable for the whole
@@ -135,26 +284,21 @@ async function acquireInstallLock(): Promise<{
 	const timeoutMs =
 		Number(process.env.PI_LENS_INSTALL_LOCK_TIMEOUT_MS) || 150_000;
 	const deadline = Date.now() + timeoutMs;
-	let lastOwner = "unknown owner";
+	const maxAgeMs = installLockMaxAgeMs();
+	let legacyHeldRecorded = false;
 
 	while (Date.now() < deadline) {
-		try {
-			const handle = await fs.open(INSTALL_LOCK_PATH, "wx");
-			await handle.writeFile(
-				JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-			);
-			await handle.close();
-			activeInstallLocks.add(INSTALL_LOCK_PATH);
+		const hold = tryAcquireInstallLock(maxAgeMs);
+		if (hold === "legacy-held" && !legacyHeldRecorded) {
+			legacyHeldRecorded = true;
+			recordLegacyLockHeld(INSTALL_LOCK_PATH);
+		}
+		if (typeof hold === "object") {
+			activeInstallLocks.add(hold);
 			if (!installLockExitCleanupRegistered) {
 				installLockExitCleanupRegistered = true;
 				process.once("exit", () => {
-					for (const lockPath of activeInstallLocks) {
-						try {
-							unlinkSync(lockPath);
-						} catch {
-							// Best effort; the next owner verifies this PID is dead.
-						}
-					}
+					for (const held of activeInstallLocks) releaseInstallLock(held);
 				});
 			}
 			let released = false;
@@ -162,60 +306,14 @@ async function acquireInstallLock(): Promise<{
 				release: async () => {
 					if (released) return;
 					released = true;
-					activeInstallLocks.delete(INSTALL_LOCK_PATH);
-					await fs.rm(INSTALL_LOCK_PATH, { force: true });
+					releaseInstallLock(hold);
 				},
 			};
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			try {
-				const owner = JSON.parse(
-					await fs.readFile(INSTALL_LOCK_PATH, "utf8"),
-				) as InstallLockOwner;
-				lastOwner = `pid=${owner.pid} createdAt=${owner.createdAt}`;
-				// #946 review F1: PID liveness alone cannot detect a hard-killed
-				// owner whose PID Windows has recycled — that lock would poison
-				// every future install with a full-timeout wait. A lock older
-				// than any legitimate install (owner install bound + slack) is
-				// stale regardless of what the PID now points at.
-				const maxAgeMs =
-					(Number(process.env.PI_LENS_INSTALL_TIMEOUT_MS) || 120_000) + 60_000;
-				const expired =
-					Number.isFinite(owner.createdAt) &&
-					Date.now() - owner.createdAt > maxAgeMs;
-				if (
-					expired ||
-					(Number.isInteger(owner.pid) &&
-						owner.pid > 0 &&
-						!isProcessAlive(owner.pid))
-				) {
-					await fs.rm(INSTALL_LOCK_PATH, { force: true });
-					continue;
-				}
-			} catch (readError) {
-				lastOwner = "unreadable owner";
-				// An unreadable/empty lock has no createdAt to age out — fall
-				// back to the file's own mtime for the max-age check so it is
-				// eventually recoverable (#946 review F1/F6).
-				try {
-					const stat = await fs.stat(INSTALL_LOCK_PATH);
-					const maxAgeMs =
-						(Number(process.env.PI_LENS_INSTALL_TIMEOUT_MS) || 120_000) +
-						60_000;
-					if (Date.now() - stat.mtimeMs > maxAgeMs) {
-						await fs.rm(INSTALL_LOCK_PATH, { force: true });
-						continue;
-					}
-				} catch {
-					// stat raced a release — loop and retry acquisition.
-				}
-				void readError;
-			}
-			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 	return {
-		reason: `timed out after ${timeoutMs}ms waiting for shared tools install lock (${lastOwner})`,
+		reason: `timed out after ${timeoutMs}ms waiting for shared tools install lock (${installLockOwner()})`,
 	};
 }
 
