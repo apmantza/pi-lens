@@ -919,25 +919,18 @@ describe("install lock lost mid-install aborts before a second write (#3515)", (
 			"tools",
 			".install.locks",
 		);
+		// A clean generations directory: this test's own hold becomes
+		// generation 1, so the competing generation below is unambiguously
+		// "lock.2" rather than a number read off whatever an earlier case in
+		// this file left behind.
+		realFs.rmSync(GENERATIONS_DIR, { recursive: true, force: true });
 		let stolen = false;
 		spawnVerdict.onCall = (_command, args) => {
 			if (!stolen && args.includes("madge")) {
 				stolen = true;
-				// A competing installer judged this hold stale and took over: a
-				// generation ABOVE whatever this test's own hold created. The
-				// generations directory persists across cases in this file (each
-				// forceReinstall in an earlier test bumps it), so the next
-				// generation number is read off disk rather than assumed.
-				const top = Math.max(
-					0,
-					...realFs
-						.readdirSync(GENERATIONS_DIR)
-						.map((name) => /^lock\.(\d+)$/.exec(name)?.[1])
-						.filter((digits): digits is string => digits !== undefined)
-						.map(Number),
-				);
+				// A competing installer judged this hold stale and took over.
 				realFs.writeFileSync(
-					path.join(GENERATIONS_DIR, `lock.${top + 1}`),
+					path.join(GENERATIONS_DIR, "lock.2"),
 					"999999 0\n",
 					{ flag: "wx" },
 				);
