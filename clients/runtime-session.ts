@@ -1076,7 +1076,11 @@ async function buildOrRefreshWordIndex(args: {
 					// indexed document reusable. Fresh snapshots with no changes avoid
 					// an unnecessary rewrite of the large shared snapshot.
 					if (
-						!isProjectSnapshotFresh(snapshot, effectiveSeq) ||
+						!isProjectSnapshotFresh(
+							snapshot,
+							effectiveSeq,
+							latestSeq.unlockedThrough,
+						) ||
 						result.refreshed > 0 ||
 						result.dropped > 0 ||
 						snapshot.wordIndex.truncated !== index.truncated
