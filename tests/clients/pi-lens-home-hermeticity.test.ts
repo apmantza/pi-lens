@@ -1226,9 +1226,21 @@ describe("transitive session_start backstop isolation", () => {
 		});
 		const lock = lockPaths()[0];
 		const stamp = path.join(path.dirname(lock), "orphan-backstop.json");
-		await waitFor(() => fs.existsSync(stamp) && !fs.existsSync(lock), Boolean, {
-			yieldControl: () => new Promise((resolve) => setImmediate(resolve)),
-		});
+		// Since #3476 the lock is also a generation in `<lock>s`, released just
+		// after the old directory is removed. A case that ended between the two
+		// left the next case's single attempt (`waitMs: 0`) contended.
+		const released = () => {
+			const gens = fs.readdirSync(`${lock}s`);
+			return gens.every(
+				(name) =>
+					name.endsWith(".released") || gens.includes(`${name}.released`),
+			);
+		};
+		await waitFor(
+			() => fs.existsSync(stamp) && !fs.existsSync(lock) && released(),
+			Boolean,
+			{ yieldControl: () => new Promise((resolve) => setImmediate(resolve)) },
+		);
 		return { lockPaths: lockPaths(), stamp, startedAt };
 	}
 

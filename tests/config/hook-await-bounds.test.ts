@@ -2264,7 +2264,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// file under PI_LENS_HOME. Each is intrinsically bounded or a local write;
 	// none can take the hook's signal until #2523 AC4 threads it, so this
 	// records the measured increase rather than hiding it.
-	"clients/installer/index.ts": 225,
+	// 225 → 216 (#3476): acquireInstallLock takes the install lock with the
+	// synchronous generation lock, so its awaited mkdir, open, write, close,
+	// read, stat and removes are gone; only its 100 ms retry wait remains.
+	"clients/installer/index.ts": 216,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,

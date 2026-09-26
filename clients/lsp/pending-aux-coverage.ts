@@ -125,8 +125,13 @@ export interface PendingAuxCoverageEntry {
  * guarantee: opengrep runs scans on a thread pool and can publish out of
  * order. One that skips a superseded scan only makes the drain wait, and a
  * superseded answer the client drops is still counted. The client caps its count at the sends, which
- * absorbs a surplus publish while nothing is outstanding; a surplus that
- * lands WHILE a send is outstanding still counts toward that send (residual).
+ * absorbs a surplus publish while nothing is outstanding, and takes one back
+ * per `semgrep/rulesRefreshed` for the refresh republish (#3490). Any other
+ * surplus that lands WHILE a send is outstanding still counts toward that
+ * send (residual), as does a refresh republish for a path that had received
+ * no publication yet when the refresh was notified. A republish that lands
+ * after the answer to a later send is waited for, and its (possibly older)
+ * content is what the drain then reads (residual, #3490 r1).
  */
 export interface AuxPublicationBacklog {
 	unpublished: number;
