@@ -6723,16 +6723,18 @@ export class LSPService {
 			// today's behavior: `inconclusive` = true, `collected` unchanged. This
 			// turns "unconfirmed after ~1000ms" into "confirmed at ~wait+sync-RTT"
 			// even when the race path couldn't answer.
+			const syncClient = spawned[0]?.client;
 			if (
 				diagnosticsTimedOut &&
 				tsserverSyncEligible &&
+				syncClient !== undefined &&
 				collected !== undefined &&
 				collected.length === 0
 			) {
 				try {
 					const syncResult = await attemptTsserverSyncDiagnostics(
 						filePath,
-						tsserverSyncChannel(spawned[0].client),
+						tsserverSyncChannel(syncClient),
 					);
 					if (syncResult !== undefined) {
 						// Sync answered — confirmed result (clean or with diagnostics).
