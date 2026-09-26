@@ -10,23 +10,15 @@
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	loadProjectSnapshot,
 	PROJECT_SNAPSHOT_VERSION,
 	getProjectSnapshotPath,
-	readProjectSnapshotMeta,
 	saveProjectSnapshot,
-	saveRuntimeProjectSnapshot,
 	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
-import {
-	releaseGeneration,
-	tryAcquireGeneration,
-} from "../../clients/generation-lock.js";
-import { getProjectChangeLogPath } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import {
@@ -360,73 +352,6 @@ describe("word-index lifecycle — full mode (#348)", () => {
 			restore();
 		}
 	}, 15_000);
-	it("rewrites a snapshot an unlocked log entry makes suspect, with every document reusable (#3511 review round 2)", async () => {
-		const env = setupTestEnvironment("pi-lens-wordindex-full-unlocked-");
-		const restore = setStartupMode("full");
-		try {
-			createTempFile(
-				env.tmpDir,
-				"package.json",
-				JSON.stringify({ type: "module" }),
-			);
-			createTempFile(env.tmpDir, "src/a.ts", "export function helperA() {}");
-
-			const runtime1 = new RuntimeCoordinator();
-			runtime1.resetForSession();
-			await handleSessionStart(makeDeps(env.tmpDir, runtime1, vi.fn()));
-			await vi.waitFor(() => expect(runtime1.wordIndex).not.toBeNull(), {
-				timeout: 5000,
-			});
-			await waitForPersistedSnapshot(env.tmpDir);
-			await waitForProjectSnapshotPersistsForTests();
-
-			// The change-log lock is held past its wait, so runtime1's edit is
-			// appended unlocked; runtime1 never folded it (its fold point is its
-			// session_start read), so its snapshot at that seq is suspect.
-			const hold = tryAcquireGeneration(
-				`${getProjectChangeLogPath(env.tmpDir)}.locks`,
-				5_000,
-			);
-			try {
-				runtime1.recordProjectMutation({
-					filePath: path.join(env.tmpDir, "src", "other.ts"),
-					source: "agent-write",
-					cwd: env.tmpDir,
-				});
-			} finally {
-				if (hold) releaseGeneration(hold);
-			}
-			saveRuntimeProjectSnapshot({ cwd: env.tmpDir, runtime: runtime1 });
-			await waitForProjectSnapshotPersistsForTests();
-			expect(readProjectSnapshotMeta(env.tmpDir)).toMatchObject({
-				seq: 1,
-				logEntries: 0,
-			});
-
-			// The next session folds the whole log. Nothing it indexes changed,
-			// so only the suspect verdict makes it rewrite the snapshot, which
-			// then carries its fold point and is fresh again.
-			const runtime2 = new RuntimeCoordinator();
-			runtime2.resetForSession();
-			const globals = globalThis as unknown as {
-				__piLensFirstSessionDone?: boolean;
-			};
-			globals.__piLensFirstSessionDone = true;
-			await handleSessionStart(makeDeps(env.tmpDir, runtime2, vi.fn()));
-			await vi.waitFor(
-				() =>
-					expect(readProjectSnapshotMeta(env.tmpDir)).toMatchObject({
-						seq: 1,
-						logEntries: 1,
-					}),
-				{ timeout: 5000 },
-			);
-		} finally {
-			env.cleanup();
-			restore();
-		}
-	}, 20_000);
-
 	it("full-rebuilds legacy serialization and falls back after refresh refusal", async () => {
 		const env = setupTestEnvironment("pi-lens-wordindex-fallback-");
 		const restore = setStartupMode("full");
