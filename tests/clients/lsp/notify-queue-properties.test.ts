@@ -57,11 +57,14 @@ const FILE = path.join(os.tmpdir(), "pi-lens-notify-properties", "doc.ts");
 
 /**
  * Budget: one run is a few milliseconds of microtasks (no timers, no I/O), so
- * this many runs of all properties take about two seconds. The seed is fixed
- * so the lane is deterministic; raise NUM_RUNS or drop SEED locally to explore.
+ * this many runs of all properties take about two seconds (1.8-2.1 s measured
+ * at load average 20-29 on 4 cores); PROPERTY_TIMEOUT_MS leaves headroom over
+ * the 5 s default. The seed is fixed so the lane is deterministic; raise
+ * NUM_RUNS or drop SEED locally to explore.
  */
 const NUM_RUNS = 600;
 const SEED = 3530;
+const PROPERTY_TIMEOUT_MS = 15_000;
 
 // --- Generated commands --------------------------------------------------
 
@@ -598,17 +601,21 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 		vi.restoreAllMocks();
 	});
 
-	it("holds every property for any command sequence and ordering", async () => {
-		await fc.assert(
-			fc.asyncProperty(fc.scheduler(), scenarioArb, async (s, scenario) => {
-				assertHolds(
-					await execute(s, scenario.commands, scenario.saveOptions),
-					ALL,
-				);
-			}),
-			{ numRuns: NUM_RUNS, seed: SEED },
-		);
-	});
+	it(
+		"holds every property for any command sequence and ordering",
+		{ timeout: PROPERTY_TIMEOUT_MS },
+		async () => {
+			await fc.assert(
+				fc.asyncProperty(fc.scheduler(), scenarioArb, async (s, scenario) => {
+					assertHolds(
+						await execute(s, scenario.commands, scenario.saveOptions),
+						ALL,
+					);
+				}),
+				{ numRuns: NUM_RUNS, seed: SEED },
+			);
+		},
+	);
 
 	/**
 	 * Findings on master, each replayed over every ordering of its shrunk
