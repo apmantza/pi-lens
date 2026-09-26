@@ -792,6 +792,15 @@ describe("#2464 — the observed-settle path also dispatches pipeline analysis",
 			expect(
 				(ctx.telemetry as { writeIndex?: number } | undefined)?.writeIndex,
 			).toBe(runtime.peekWriteIndex());
+			// #3512: the session this dispatch belongs to, for the cascade's
+			// tier-3 touch record.
+			const sessionGeneration = ctx.sessionGeneration as
+				| { generation: number; isCurrent(): boolean }
+				| undefined;
+			expect({
+				generation: sessionGeneration?.generation,
+				current: sessionGeneration?.isCurrent(),
+			}).toEqual({ generation: runtime.sessionGeneration, current: true });
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;
