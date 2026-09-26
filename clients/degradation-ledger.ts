@@ -267,6 +267,20 @@ export type DegradationKind =
 	 */
 	| "generation-guard-stale-write"
 	/**
+	 * #3476: a generation-lock holder (the bounded, quarantine or installer
+	 * lock) backed off because that lock's pre-generation file is held: by a
+	 * writer from an older version, or by this version's own holder whose
+	 * generation outlived the lease. Once per acquisition. Subject is the old
+	 * lock's path.
+	 */
+	| "generation-lock-legacy-held"
+	/**
+	 * #3476: a generation-lock acquisition (the bounded, quarantine or
+	 * installer lock) took over a generation whose holder was dead or past the
+	 * lock's lease. Subject is the generation directory.
+	 */
+	| "generation-lock-stale-takeover"
+	/**
 	 * Failed-first test state was retired only after ENOENT/ENOTDIR evidence,
 	 * retained when the filesystem probe was indeterminate, or evicted at the
 	 * state cap (#2044). Subject is outcome + runner + bounded path, so repeated

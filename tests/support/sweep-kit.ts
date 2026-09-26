@@ -473,9 +473,22 @@ export function matchingOpenIndex(
 	return -1;
 }
 
-/** Return every raw match whose span contains source code. */
-export function codeMatches(source: string, regex: RegExp): RegExpMatchArray[] {
-	const stringsBlanked = stripSource(source, { strings: "blank" });
+/**
+ * Return every raw match whose span contains source code.
+ *
+ * `stripped`, when given, must be this exact `source` already run through
+ * `stripSource(source)` (the same default `{ strings: "blank" }` this
+ * function uses internally) — same optional-precomputed-work shape as
+ * {@link createCallSiteScanner}'s `parsedRoot`. A caller matching the same
+ * source against several regexes (#3514) passes it once instead of paying
+ * `stripSource`'s full character-array pass again per regex.
+ */
+export function codeMatches(
+	source: string,
+	regex: RegExp,
+	stripped?: string,
+): RegExpMatchArray[] {
+	const stringsBlanked = stripped ?? stripSource(source, { strings: "blank" });
 	const globalRegex = new RegExp(
 		regex.source,
 		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,

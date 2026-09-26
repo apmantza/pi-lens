@@ -24,6 +24,8 @@ import { randomInt } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { incrementDegradationCount } from "./degradation-ledger.js";
+
 const GENERATION = /^lock\.(\d+)(\.released)?$/;
 
 export interface GenerationHold {
@@ -112,6 +114,31 @@ function removeBelowPredecessor(
 			// Left for the next holder.
 		}
 	}
+}
+
+/**
+ * Record a stale takeover for the bounded, quarantine and installer locks.
+ * The registry lock records its own kinds.
+ */
+export function recordGenerationTakeover(hold: GenerationHold): void {
+	incrementDegradationCount({
+		kind: "generation-lock-stale-takeover",
+		subject: path.resolve(hold.dir),
+		reason: `took over lock generation ${hold.generation - 1} from a dead or aged-out holder`,
+	});
+}
+
+/**
+ * Record a back-off on a held pre-generation lock file, once per acquisition.
+ * Its holder is a writer from before #3476, or this version's own holder
+ * whose generation outlived the lease while it was still inside.
+ */
+export function recordLegacyLockHeld(legacyPath: string): void {
+	incrementDegradationCount({
+		kind: "generation-lock-legacy-held",
+		subject: path.resolve(legacyPath),
+		reason: `backed off: ${path.basename(legacyPath)} is held by another writer (one from before #3476, or a holder past the generation lease)`,
+	});
 }
 
 /** Release a generation this process holds by marking it released. */
