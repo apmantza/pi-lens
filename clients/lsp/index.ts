@@ -5009,9 +5009,10 @@ export class LSPService {
 			// one outstanding write for that server. They carry no evidence about this
 			// content, so they join the coverage gap below.
 			const notifyDeferredServerIds: string[] = [];
-			// #3481: servers whose queue sent a later read of this file instead of
-			// this touch's content. The touch must not stamp the drift record, and
-			// its lsp_touch_file row names them.
+			// #3481: servers whose queue did not send this touch's content: a later
+			// read was sent instead, or the path is closing or was renamed away
+			// (#3477). The touch must not stamp the drift record, and its
+			// lsp_touch_file row names them.
 			const supersededServerIds: string[] = [];
 			if (!notifySkipped) {
 				const budget = notifyWriteBudgetMs();
@@ -5208,8 +5209,9 @@ export class LSPService {
 								entry.info.id,
 							);
 						} else if (wrote === false) {
-							// #3481: the server holds a later read, not `content`, so no
-							// debounce entry either: a revert to `content` must be sent.
+							// #3481: the server does not hold `content` (a later read, or a
+							// closing/closed path), so no debounce entry either: a revert
+							// to `content` must be sent.
 							supersededServerIds.push(entry.info.id);
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
@@ -7175,8 +7177,9 @@ export class LSPService {
 					...(notifyWriteTimedOutServerIds.length > 0 && {
 						notifyWriteTimedOutServerIds,
 					}),
-					// #3481: servers that sent a later read of this file instead of
-					// this touch's content. Absent when none did.
+					// #3481: servers that did not send this touch's content (a later
+					// read won, or the path was closing or renamed away). Absent
+					// when none.
 					...(supersededServerIds.length > 0 && { supersededServerIds }),
 					diagnosticsTimedOut,
 					inconclusive,

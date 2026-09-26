@@ -4388,9 +4388,13 @@ function enqueueDocumentNotify(
 			saved: saved || previous?.saved === true,
 			// An unstamped replacement cannot say how old its bytes are; keeping the
 			// pending stamp keeps an older read arriving next out (#3481 round 1).
-			readStamp: stale
-				? previous!.readStamp
-				: (readStamp ?? previous?.readStamp),
+			// A close carries no content, so it never inherits a stamp: the
+			// runner's stale-read drop must not drop the didClose (#3477).
+			readStamp: close
+				? undefined
+				: stale
+					? previous!.readStamp
+					: (readStamp ?? previous?.readStamp),
 		};
 		if (queue!.running) return;
 		queue!.running = true;

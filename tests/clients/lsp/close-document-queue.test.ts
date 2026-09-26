@@ -212,6 +212,77 @@ describe("#3477 — closeDocument is ordered with the path's notify queue", () =
 		expect(state.openDocuments.has(KEY)).toBe(true);
 	});
 
+	// Verify round F1: an unstamped close used to inherit the stamp of the touch
+	// it superseded; when that touch was a stale read, the runner dropped the
+	// whole entry and no didClose was sent while the rename still went ahead.
+	it("still closes when the close supersedes a stale stamped touch queued behind an in-flight send", async () => {
+		const state = openState();
+		const change = gatedPromise<void>();
+		const order = recordWire(state, { didChange: change });
+
+		const first = handleNotifyOpen(
+			state,
+			FILE,
+			"v10",
+			"typescript",
+			false,
+			false,
+			false,
+			10,
+		);
+		await waitFor(
+			() => order.length,
+			(n) => n === 1,
+		);
+		const stale = handleNotifyOpen(
+			state,
+			FILE,
+			"v5",
+			"typescript",
+			false,
+			false,
+			false,
+			5,
+		);
+		const closing = closeDocument(state, FILE);
+		change.resolve();
+		await Promise.all([first, stale, closing]);
+
+		expect(order).toEqual(["didChange", "didClose"]);
+		expect(state.openDocuments.has(KEY)).toBe(false);
+	});
+
+	it("still closes when a stale stamped touch and the close arrive in one tick after the newer send", async () => {
+		const state = openState();
+		const order = recordWire(state);
+
+		await handleNotifyOpen(
+			state,
+			FILE,
+			"v10",
+			"typescript",
+			false,
+			false,
+			false,
+			10,
+		);
+		const stale = handleNotifyOpen(
+			state,
+			FILE,
+			"v5",
+			"typescript",
+			false,
+			false,
+			false,
+			5,
+		);
+		const closing = closeDocument(state, FILE);
+		await Promise.all([stale, closing]);
+
+		expect(order).toEqual(["didChange", "didClose"]);
+		expect(state.openDocuments.has(KEY)).toBe(false);
+	});
+
 	it("closes at once when nothing is in flight, and sends nothing for a path that is not open", async () => {
 		const open = openState();
 		const openOrder = recordWire(open);
