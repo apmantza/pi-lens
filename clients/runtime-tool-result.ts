@@ -902,6 +902,7 @@ async function dispatchPipelineAnalysis(args: {
 			// cascade can record a tier-3 touch after a same-cwd replacement,
 			// and at that point only this capture still names its session.
 			sessionGeneration: runtime.captureSessionGeneration(),
+			nextWriteIndex: () => runtime.nextWriteIndex(),
 		},
 		{
 			biomeClient: biomeClient!,
@@ -2135,6 +2136,18 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// receipt. Nothing may await between this claim and the dispatch below: the
 	// claim is only atomic because `dispatchPipelineAnalysis` registers before
 	// its own first await.
+	// #3508: so the bootstrap clients are awaited ABOVE the claim, as the
+	// observed path does. A failed demand still records the edit below; it
+	// only skips the dispatch.
+	const classifiedClients = ensureToolResultClients(deps);
+	const classifiedClientsReady =
+		classifiedClients === true ||
+		!!(await bounded(Promise.resolve(classifiedClients), {
+			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+			signal: deps.signal,
+			hook: "tool_result_edit",
+			label: "classified-tool-result-analysis",
+		}));
 	const classifiedClaim = claimPipelineDispatch({
 		filePath,
 		stateHash: initialStateHash,
@@ -2187,6 +2200,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// comes from the runtime, which `message_start`/`session_start` populate —
 	// see the `telemetry:` block handed to `runPipeline` below.
 	const writeIndex = runtime.nextWriteIndex();
+	// #3507: the turn this token was drawn in orders it across turns.
+	const writeTurnIndex = runtime.turnIndex;
+	// #3506 r1 F8: the session the token belongs to. index.ts' bound abandons
+	// this handler without cancelling it, so it can settle after a
+	// session_start that restarted the turn and write counters.
+	const writeSession = runtime.captureSessionGeneration();
 	let modifiedRanges: Array<{ start: number; end: number }> | undefined;
 	// #2423: ranges a shape adapter resolved from the tool's own input. Only a
 	// classified non-native edit shape sets these — a plain host `edit` carries
@@ -2322,17 +2341,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// (defined above `handleToolResult`), shared with the observed-mutation
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
-	const classifiedClients = ensureToolResultClients(deps);
-	if (
-		classifiedClients !== true &&
-		!(await bounded(Promise.resolve(classifiedClients), {
-			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
-			signal: deps.signal,
-			hook: "tool_result_edit",
-			label: "classified-tool-result-analysis",
-		}))
-	)
-		return;
+	if (!classifiedClientsReady) return;
 	const dispatchOutcome = await bounded(
 		dispatchPipelineAnalysis({
 			deps,
@@ -2537,27 +2546,47 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		}
 	}
 
-	if (result.inlineBlockerSummary) {
+	// #3507: both verbs are ordered by this dispatch's token, so an older
+	// pipeline that settles after a newer one of the same file changes nothing.
+	let inlineVerdictApplied: boolean;
+	const { inlineBlockerSummary } = result;
+	if (inlineBlockerSummary) {
 		// #1561: stamp the verdict with THIS dispatch's write token — the same
 		// counter `lsp_diagnostics`' reconciliation seam draws from — so a later
 		// confirmed-clean result can be ordered against it instead of racing it.
-		runtime.recordInlineBlockers(
-			filePath,
-			result.inlineBlockerSummary,
-			writeIndex,
-			result.inlineBlockerSources,
-			result.inlineBlockerLines,
-			result.inlineBlockerFileContent,
-			// #3246: the structured blockers the summary was rendered from, so a
-			// later `lens_diagnostic_mark` can be applied to this record at turn
-			// end instead of replaying pre-mark text.
-			result.inlineBlockerDiagnostics,
-		);
+		inlineVerdictApplied =
+			writeSession.guardedWrite(filePath, () =>
+				runtime.recordInlineBlockers(
+					filePath,
+					inlineBlockerSummary,
+					// #3506: the token of the bytes the pipeline analysed.
+					result.writeIndex ?? writeIndex,
+					result.inlineBlockerSources,
+					result.inlineBlockerLines,
+					result.inlineBlockerFileContent,
+					// #3246: the structured blockers the summary was rendered from, so a
+					// later `lens_diagnostic_mark` can be applied to this record at turn
+					// end instead of replaying pre-mark text.
+					result.inlineBlockerDiagnostics,
+					writeTurnIndex,
+				),
+			) !== undefined;
 	} else {
-		runtime.clearInlineBlockers(filePath);
+		inlineVerdictApplied =
+			writeSession.guardedWrite(filePath, () =>
+				runtime.clearInlineBlockers(
+					filePath,
+					result.writeIndex ?? writeIndex,
+					writeTurnIndex,
+				),
+			) ?? false;
 	}
 
-	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
+	// A superseded verdict must not latch the commit gate either (#3507).
+	runtime.updateGitGuardStatus(
+		inlineVerdictApplied && result.hasBlockers,
+		result.output,
+	);
 	if (getFlag("lens-guard")) {
 		syncGitGuardRecord(runtime, cacheManager, turnStateCwd, filePath);
 		if (result.isError && !result.hasBlockers) {

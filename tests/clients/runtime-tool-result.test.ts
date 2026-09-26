@@ -73,14 +73,6 @@ vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	notifyExternalFileChange,
 }));
 
-/**
- * #3512: `handleToolResult` captures the session generation when it
- * dispatches the pipeline. The hand-built runtime doubles below never replace
- * their session, so a real handle from a fresh coordinator is faithful.
- */
-const sameSessionGeneration = () =>
-	new RuntimeCoordinator().captureSessionGeneration();
-
 const readdirMock = vi.mocked(fsp.readdir);
 const realReaddir = readdirMock.getMockImplementation()!;
 
@@ -1584,13 +1576,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2231,13 +2226,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				formatBehaviorWarnings: () => "",
 			};
 			const runtimeStub = {
-				captureSessionGeneration: sameSessionGeneration,
 				projectRoot: env.tmpDir,
 				setTelemetryIdentity: () => {},
 				updateGitGuardStatus: () => {},
 				appendCascadeResult: () => {},
 				recordInlineBlockers: () => {},
 				clearInlineBlockers: () => {},
+				// #3506 r1 F8: the handler's session capture; this runtime never resets.
+				captureSessionGeneration: () => ({
+					guardedWrite: (_subject: string, write: () => unknown) => write(),
+				}),
 				nextWriteIndex: () => 1,
 				turnIndex: 1,
 				telemetryModel: "test-model",
@@ -2317,13 +2315,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2388,13 +2389,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2456,13 +2460,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg,
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2544,13 +2551,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: (msg: string) => logs.push(msg),
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2628,13 +2638,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2707,13 +2720,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2787,13 +2803,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
@@ -2991,13 +3010,16 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
-					captureSessionGeneration: sameSessionGeneration,
 					projectRoot,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
 					appendCascadeResult: () => {},
 					recordInlineBlockers: () => {},
 					clearInlineBlockers: () => {},
+					// #3506 r1 F8: the handler's session capture; this runtime never resets.
+					captureSessionGeneration: () => ({
+						guardedWrite: (_subject: string, write: () => unknown) => write(),
+					}),
 					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
