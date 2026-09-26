@@ -86,9 +86,14 @@ How the code realises the drop, and where it is narrower than the model:
   legitimate re-open working (the file renamed back, or a new file at the
   old path). A touch that runs between the close and the rename's disk move
   is not modelled and would still open the old path.
-- Rename's re-open after a close that timed out is queued behind that close
-  and is not sent while it is still in flight; once the close lands, client
-  and server agree the document is closed, and the next touch opens it.
+- Rename's re-open after a close that timed out is refused while that close
+  is still queued (`notify.open` resolves `false`). `renameFile` reports it as
+  a failed resync (`lsp_rename_resync_failed`, and "resync also failed" in
+  the thrown error). Once the close lands, client and server agree the
+  document is closed, and the next touch opens it.
+- A file-existence check cannot replace that refusal: `renameFile` moves the
+  file only after every close has settled, so during a queued close the old
+  path always still holds the old file.
 
 ## Scope
 

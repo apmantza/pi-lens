@@ -8309,7 +8309,19 @@ export class LSPService {
 				openDocuments.map(async ({ serverId, client }) => {
 					const resyncResult = await runRenameNotify(
 						() =>
-							client.notify.open(oldFilePath, content, languageId, true, true),
+							client.notify
+								.open(oldFilePath, content, languageId, true, true)
+								.then((sent) => {
+									// #3477: the timed-out close is still queued ahead of this
+									// re-open, and the queue refuses a touch behind a close (it
+									// resolves false). That is a failed resync, not a restored
+									// document.
+									if (sent === false) {
+										throw new Error(
+											"re-open not sent: the close is still queued",
+										);
+									}
+								}),
 						RENAME_NOTIFY_TIMEOUT_MS,
 					);
 					if (!resyncResult.ok) {
