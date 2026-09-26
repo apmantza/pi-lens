@@ -84,8 +84,12 @@ what a reaper sees within its own namespace. Across namespaces a pid names
 different processes, so the code declines to judge there: a process in
 another pid namespace reads as untagged, and a registry entry from another
 namespace is neither judged dead nor pruned (#3539 review round 1, F1).
-Both only remove kills and prunes, so the model still covers a superset of
-the code within one namespace. The two-read race between the owner tag and
+Declining to judge removes kills and pid-based "dead" verdicts only. It must
+not remove the record-only stale-heartbeat removal (#525): that one reads
+the wall clock, not a pid, so another namespace's entry still leaves the
+registry once its heartbeat is stale (verify round 2, R2-F1: a dead
+container's entry otherwise stayed forever and held the LSP budget). The
+model still covers a superset of the code within one namespace. The two-read race between the owner tag and
 the start (F2) is closed by re-reading the tag in the re-check, which the
 model's atomic `recheck` already assumes.
 

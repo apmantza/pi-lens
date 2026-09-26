@@ -140,7 +140,8 @@ export async function queryProcessTable(
  *
  * The start is an opaque, per-platform string, compared only for equality
  * against a value read the same way: Linux clock ticks since boot
- * (`/proc/<pid>/stat`), macOS `lstart` in the C locale and UTC, Windows
+ * (`/proc/<pid>/stat`) qualified by the boot id, macOS `lstart` in the C
+ * locale and UTC, Windows
  * `CreationDate` in UTC (ISO-8601, so it also orders).
  */
 export interface ProcessIdentity {
@@ -206,14 +207,14 @@ export function formatOwnerTag(tag: OwnerTag): string {
 
 /**
  * Undefined for anything that is not `<positive pid>:<start>`, where the
- * start has a shape this module writes: Linux clock ticks, or an ISO-8601 UTC
- * instant (macOS). Anything longer (say, a later `pid:start:namespace` form)
+ * start has a shape this module writes: Linux clock ticks with the boot id
+ * (`<ticks>@<boot_id>`), or an ISO-8601 UTC instant (macOS). Anything longer (say, a later `pid:start:namespace` form)
  * is no tag at all rather than a tag whose start never matches, which would
  * read as a dead owner.
  */
 export function parseOwnerTag(value: string | undefined): OwnerTag | undefined {
 	const match =
-		/^(\d+):(\d+|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/.exec(
+		/^(\d+):(\d+@[0-9a-f-]{36}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/.exec(
 			value ?? "",
 		);
 	if (!match) return undefined;
@@ -289,6 +290,18 @@ export async function readOwnerTags(
 		tags,
 		status: result.status === "exit-error" ? "ok" : result.status,
 	};
+}
+
+/**
+ * Whether a registry entry's pid means something in `namespace` (#3539
+ * review F1). An entry with no namespace (an older writer, or not Linux) is
+ * taken as this one's, as every entry was before.
+ */
+export function isInPidNamespace(
+	entry: { pidNamespace?: string | undefined },
+	namespace: string | undefined,
+): boolean {
+	return entry.pidNamespace === undefined || entry.pidNamespace === namespace;
 }
 
 /**

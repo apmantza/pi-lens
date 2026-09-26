@@ -550,7 +550,7 @@ describe("decideBackstopOrphanReaping", () => {
 			parentPid: 4000,
 			start: "2026-09-26T08:00:00.0000000Z",
 		});
-		const startOf = () => "2026-09-26T09:00:00.0000000Z";
+		const startOf = () => "2026-09-26T09:00:00.0010000Z"; // an hour and a ms later
 
 		expect(
 			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
@@ -558,6 +558,22 @@ describe("decideBackstopOrphanReaping", () => {
 				startOf,
 			}),
 		).toEqual([proc]);
+	});
+
+	it("#3539 verify: a live parent up to an hour younger is still its owner (DST fall-back can misplace a start by an hour)", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T08:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T09:00:00.0000000Z";
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([]);
 	});
 
 	it("#3539 Windows: a live parent that started before this one is its owner", () => {

@@ -209,13 +209,20 @@ function spawnHost(): ChildProcess {
 function deadPid(): number {
 	return spawnSync("true").pid as number;
 }
-/** The kernel's start time for `pid`: `/proc/<pid>/stat` field 22. */
+/**
+ * The kernel's start time for `pid`, qualified by this boot:
+ * `/proc/<pid>/stat` field 22 and `/proc/sys/kernel/random/boot_id`.
+ */
 function startOf(pid: number): string {
 	const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-	return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+	const ticks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+	const boot = fs
+		.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+		.trim();
+	return `${ticks}@${boot}`;
 }
 /** A start that is not any live process's: stands for "the pid was reused". */
-const OTHER_START = "1";
+const OTHER_START = "1@00000000-0000-4000-8000-000000000000";
 
 interface Kid {
 	pid: number;
@@ -682,39 +689,54 @@ describe.skipIf(process.platform !== "linux")(
 				'const { spawn } = require("node:child_process");',
 				'const stat = fs.readFileSync("/proc/self/stat", "utf8");',
 				'const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];',
-				"const env = { ...process.env, PI_LENS_OWNER: `${process.pid}:${start}` };",
+				'const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();',
+				"const env = { ...process.env, PI_LENS_OWNER: `${process.pid}:${start}@${boot}` };",
 				// Joined at run time, so only the server's own command line
 				// carries the marker, never the owner's script.
 				`const marker = ${JSON.stringify(marker.slice(0, 4))} + ${JSON.stringify(marker.slice(4))};`,
 				`spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)", ${JSON.stringify(TSLS)}, "--stdio", marker], { env, stdio: "ignore" });`,
-				"console.log(env.PI_LENS_OWNER);",
 				"setInterval(() => {}, 1e6);",
 			].join("\n");
 			const owner = track(
 				spawn("unshare", [...unshare.args, process.execPath, "-e", script], {
-					stdio: ["ignore", "pipe", "ignore"],
+					stdio: "ignore",
 				}),
 			);
-			const tagged = await new Promise<string>((resolve) =>
-				owner.stdout?.once("data", (chunk) => resolve(String(chunk).trim())),
-			);
 			// unshare -> the namespace's first process (the owner) -> the server,
-			// followed down the chain of children as this namespace sees them.
+			// followed down the chain of children as this namespace sees them,
+			// until the server has exec'd (between fork and exec it still shows
+			// the owner's command line). Bounded: a namespace that never produces
+			// its server fails here rather than hanging the file.
+			const deadline = Date.now() + 30_000;
+			const cmdline = (pid: number) => {
+				try {
+					return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+				} catch {
+					return "";
+				}
+			};
 			let server: number | undefined;
 			while (server === undefined) {
+				if (owner.exitCode !== null || Date.now() > deadline)
+					throw new Error(
+						`no server appeared in the owner's namespace (owner exit ${owner.exitCode})`,
+					);
 				const [nsOwner] = childrenOf(owner.pid as number);
-				server = nsOwner === undefined ? undefined : childrenOf(nsOwner)[0];
-				if (server === undefined)
-					await new Promise((resolve) => setImmediate(resolve));
+				const found =
+					nsOwner === undefined ? undefined : childrenOf(nsOwner)[0];
+				if (found !== undefined && cmdline(found).includes(marker))
+					server = found;
+				else await new Promise((resolve) => setImmediate(resolve));
 			}
-			expect(fs.readFileSync(`/proc/${server}/cmdline`, "utf8")).toContain(
-				marker,
-			);
+			const tagged = fs
+				.readFileSync(`/proc/${server}/environ`, "utf8")
+				.split("\0")
+				.find((item) => item.startsWith("PI_LENS_OWNER="));
 			h.mine.add(server);
 			expect(fs.readlinkSync(`/proc/${server}/ns/pid`)).not.toBe(
 				fs.readlinkSync("/proc/self/ns/pid"),
 			);
-			expect(tagged).toMatch(/^\d+:\d+$/);
+			expect(tagged).toMatch(/^PI_LENS_OWNER=\d+:\d+@[0-9a-f-]{36}$/);
 
 			await backstop();
 
@@ -761,6 +783,91 @@ describe.skipIf(process.platform !== "linux")(
 
 			expect(signalledPids().has(pid)).toBe(true);
 			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("[R2-F1] a stale entry from another pid namespace is removed and nothing is signalled", async () => {
+			// A container that died a week ago: its pi-lens was pid 1 there, and
+			// pid 1 here is alive. Only the heartbeat can tell, and #525's
+			// record-only removal must still reach the entry.
+			const stranger = spawnHost();
+			const orphan = spawnLsp();
+			const pid = orphan.pid as number;
+			writeRegistry([
+				{
+					...entry(
+						stranger.pid as number,
+						[{ pid, processStart: startOf(pid) }],
+						{
+							processStart: OTHER_START,
+							heartbeatAgoMs: 7 * 3_600_000,
+						},
+					),
+					pidNamespace: "pid:[1]",
+				},
+			]);
+
+			await sweepOrphans();
+
+			expect(signals).toEqual([]);
+			expect(registryEntries()).toEqual([]);
+		});
+
+		it("[R2-F1] removing a stale foreign entry keeps this namespace's entry with the same pid and start", async () => {
+			const { registerInstance, _settleRegistryMutationsForTests } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance("/repo/x");
+			await _settleRegistryMutationsForTests();
+			const own = registryEntries()[0];
+			writeRegistry([
+				own,
+				{
+					...entry(process.pid, [], {
+						processStart: startOf(process.pid),
+						heartbeatAgoMs: 7 * 3_600_000,
+					}),
+					pidNamespace: "pid:[1]",
+				},
+			]);
+
+			await sweepOrphans();
+
+			expect(registryEntries()).toEqual([own]);
+		});
+
+		it("[R2-F1] a fresh foreign entry whose pid is gone here is not judged dead", async () => {
+			// The container's host runs under a pid this namespace does not have.
+			const orphan = spawnLsp();
+			const pid = orphan.pid as number;
+			writeRegistry([
+				{
+					...entry(deadPid(), [{ pid, processStart: startOf(pid) }], {
+						processStart: OTHER_START,
+					}),
+					pidNamespace: "pid:[1]",
+				},
+			]);
+
+			await sweepOrphans();
+
+			expect(signals).toEqual([]);
+			expect(registryEntries()).toHaveLength(1);
+		});
+
+		it("the health read prunes a dead, childless entry of this pid namespace", async () => {
+			writeRegistry([
+				{
+					...entry(deadPid(), []),
+					pidNamespace: fs.readlinkSync("/proc/self/ns/pid"),
+				},
+			]);
+
+			await getResourceFootprint();
+			// A prune is fire-and-forget; give it every turn it could need.
+			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+
+			expect(registryEntries()).toEqual([]);
 		});
 
 		it("[F1] the health read never prunes another pid namespace's entry", async () => {

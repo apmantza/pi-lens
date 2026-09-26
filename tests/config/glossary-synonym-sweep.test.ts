@@ -569,7 +569,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/inline-blocker-dispositions.ts": 1,
 		"clients/installer/index.ts": 4,
 		"clients/installer/managed-tool-refresh.ts": 2,
-		"clients/instance-reaper.ts": 4,
+		"clients/instance-reaper.ts": 3,
 		"clients/instance-registry.ts": 11,
 		"clients/knip-client.ts": 3,
 		"clients/language-policy.ts": 2,

@@ -340,18 +340,25 @@ function posixStartEnv() {
 
 /**
  * Linux: a process's start time as the kernel keeps it, in clock ticks since
- * boot (`/proc/<pid>/stat` field 22). It never changes for the life of the
- * process, so (pid, start) names one process across every reader. Undefined
- * when the pid does not exist or the file cannot be read or parsed.
+ * boot (`/proc/<pid>/stat` field 22), qualified by the boot it belongs to:
+ * `<ticks>@<boot_id>`. Ticks restart at every boot and `instances.json`
+ * survives one, so ticks alone could name a process from an earlier boot.
+ * The value never changes for the life of the process, so (pid, start) names
+ * one process across every reader. Undefined when the pid does not exist or
+ * either file cannot be read or parsed.
  *
  * @param {number} pid
  * @returns {string|undefined}
  */
 export function readLinuxProcessStart(pid) {
 	try {
-		return parseLinuxStatStart(
+		const ticks = parseLinuxStatStart(
 			fs.readFileSync(`/proc/${assertPid(pid)}/stat`, "utf8"),
 		);
+		const boot = fs
+			.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+			.trim();
+		return ticks === undefined ? undefined : `${ticks}@${boot}`;
 	} catch {
 		return undefined;
 	}

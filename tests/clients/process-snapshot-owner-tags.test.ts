@@ -58,7 +58,12 @@ afterEach(() => {
 
 describe("parseOwnerTag", () => {
 	it("reads the two start shapes this code writes", () => {
-		expect(parseOwnerTag("12:34567")).toEqual({ pid: 12, start: "34567" });
+		expect(
+			parseOwnerTag("12:34567@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9"),
+		).toEqual({
+			pid: 12,
+			start: "34567@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+		});
 		expect(parseOwnerTag("12:2026-09-26T09:26:02.000Z")).toEqual({
 			pid: 12,
 			start: "2026-09-26T09:26:02.000Z",
@@ -66,7 +71,13 @@ describe("parseOwnerTag", () => {
 	});
 
 	it("reads a longer tag as no tag, never as a tag whose start cannot match", () => {
-		expect(parseOwnerTag("12:34567:pid:[4026531836]")).toBeUndefined();
+		expect(
+			parseOwnerTag(
+				"12:34567@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9:pid:[4026531836]",
+			),
+		).toBeUndefined();
+		// Ticks without their boot could name a process from an earlier boot.
+		expect(parseOwnerTag("12:34567")).toBeUndefined();
 		expect(parseOwnerTag("12:not-a-start")).toBeUndefined();
 	});
 
@@ -79,11 +90,14 @@ describe("readOwnerTags on Linux: the pid namespace (F1)", () => {
 	it("returns the tag of a process in this pid namespace", async () => {
 		setPlatform("linux");
 		h.namespaces.set(7, "pid:[own]");
-		h.environ.set(7, "5:100");
+		h.environ.set(7, "5:100@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9");
 
 		const { tags } = await readOwnerTags([7], { timeoutMs: 1_000 });
 
-		expect(tags.get(7)).toEqual({ pid: 5, start: "100" });
+		expect(tags.get(7)).toEqual({
+			pid: 5,
+			start: "100@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+		});
 	});
 
 	it("returns no tag for a process in another pid namespace", async () => {
@@ -98,7 +112,7 @@ describe("readOwnerTags on Linux: the pid namespace (F1)", () => {
 
 	it("returns no tag when the namespace cannot be read", async () => {
 		setPlatform("linux");
-		h.environ.set(7, "5:100");
+		h.environ.set(7, "5:100@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9");
 
 		const { tags } = await readOwnerTags([7], { timeoutMs: 1_000 });
 

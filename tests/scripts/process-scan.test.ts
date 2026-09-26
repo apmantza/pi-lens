@@ -420,8 +420,11 @@ describe("process start times (#3538)", () => {
 		"reads this process's start from /proc as the kernel's tick count, and nothing for a pid that is gone",
 		() => {
 			const stat = fs.readFileSync("/proc/self/stat", "utf8");
+			const boot = fs
+				.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+				.trim();
 			expect(readLinuxProcessStart(process.pid)).toBe(
-				stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19],
+				`${stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]}@${boot}`,
 			);
 			expect(readLinuxProcessStart(2 ** 22 + 1)).toBeUndefined();
 		},

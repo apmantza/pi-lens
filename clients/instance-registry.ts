@@ -50,6 +50,7 @@ import {
 } from "./instance-reaper.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
+	isInPidNamespace,
 	ownPidNamespace,
 	ownProcessStart,
 	ownProcessStartIfKnown,
@@ -92,6 +93,7 @@ export interface LspChildEntry {
 export interface InstanceIdentity {
 	pid: number;
 	processStart?: string | undefined;
+	pidNamespace?: string | undefined;
 }
 
 export interface InstanceEntry {
@@ -1193,12 +1195,12 @@ export async function getResourceFootprint(
 			(instance) =>
 				!isPidAlive(instance.pid) &&
 				instance.lspChildren.length === 0 &&
-				(instance.pidNamespace === undefined ||
-					instance.pidNamespace === namespace),
+				isInPidNamespace(instance, namespace),
 		)
 		.map((instance) => ({
 			pid: instance.pid,
 			processStart: instance.processStart,
+			pidNamespace: instance.pidNamespace,
 		}));
 	if (dead.length > 0) {
 		// Fire-and-forget: a health-report read must never block on, or fail
@@ -1227,7 +1229,7 @@ export async function pruneDeadInstances(
 		// #3538: by (pid, start). A new instance that registered on a dead
 		// one's pid while the sweep ran keeps its entry.
 		const key = (identity: InstanceIdentity) =>
-			`${identity.pid}:${identity.processStart ?? ""}`;
+			`${identity.pid}:${identity.processStart ?? ""}:${identity.pidNamespace ?? ""}`;
 		const targets = new Set(dead.map(key));
 		const remaining = file.instances.filter(
 			(entry) => !targets.has(key(entry)),

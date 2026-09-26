@@ -94,6 +94,7 @@ import {
 } from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	isInPidNamespace,
 	type OwnerTag,
 	ownPidNamespace,
 	type ProcessIdentity,
@@ -282,6 +283,12 @@ function classifyDeadInstanceChildren(
  * @param startOf - the current OS start time of a live pid, or undefined
  *   when unknown (#3538). A live host pid whose start differs from the one
  *   its entry recorded is another process, so the entry's instance is dead.
+ * @param judgeable - whether this reaper can judge the entry's pid at all
+ *   (#3539 review F1: an entry from another pid namespace names a pid that
+ *   means nothing here). An entry it cannot judge is never dead and never
+ *   killed for, but its heartbeat can still go stale, and the record-only
+ *   removal (#525) still applies to it: a dead container's entry would
+ *   otherwise stay forever and keep counting against the LSP budget.
  */
 export function decideOrphanReaping(
 	registry: InstanceEntry[],
@@ -289,6 +296,7 @@ export function decideOrphanReaping(
 	matchProcess?: (pid: number, expected: ExpectedIdentity) => boolean,
 	now: number = Date.now(),
 	startOf: (pid: number) => string | undefined = () => undefined,
+	judgeable: (instance: InstanceEntry) => boolean = () => true,
 ): OrphanReapDecision {
 	const deadInstances: InstanceEntry[] = [];
 	const staleInstances: InstanceEntry[] = [];
@@ -300,7 +308,10 @@ export function decideOrphanReaping(
 	const liveMarkers = collectLiveMarkers(registry, isPidAlive);
 
 	for (const instance of registry) {
-		if (isInstanceKillEligible(instance, isPidAlive, startOf)) {
+		if (
+			judgeable(instance) &&
+			isInstanceKillEligible(instance, isPidAlive, startOf)
+		) {
 			// pid-confirmed-dead: entry removal + children classified for kills.
 			deadInstances.push(instance);
 			classifyDeadInstanceChildren(
@@ -808,9 +819,16 @@ function isOwnerDead(
 	if (!Number.isFinite(parent) || parent <= 0 || parent === proc.pid)
 		return false;
 	if (!isPidAlive(parent)) return true;
+	// A parent more than an hour younger than its child is another process on
+	// a reused ppid. The hour absorbs the DST fall-back ambiguity of the local
+	// time CIM converts from: a real parent can read up to an hour late, and
+	// a reuse inside that hour waits for a later sweep rather than risk a kill.
 	const parentStart = Date.parse(startOf(parent) ?? "");
-	return parentStart > Date.parse(proc.start ?? "");
+	return parentStart > Date.parse(proc.start ?? "") + WINDOWS_DST_MARGIN_MS;
 }
+
+/** See `isOwnerDead`: the widest error a DST fall-back puts on a start. */
+const WINDOWS_DST_MARGIN_MS = 3_600_000;
 
 /** Full classification behind `decideBackstopOrphanReaping`, including the
  *  two REJECTED-BY-AGE buckets the sweep reports so a suppressed kill is
@@ -1604,18 +1622,16 @@ export async function sweepOrphans(): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const startedAt = Date.now();
 	try {
+		const registry = await readInstanceRegistry();
+		if (registry.length === 0) return;
 		// #3539 review F1: a pid means something only inside its pid namespace.
 		// `~/.pi-lens` can be shared by instances in different namespaces (a
 		// container, a sandbox), and read from this one another namespace's
-		// live host pid names some other process, or none. Its entries are not
-		// this sweep's to judge. An entry with no namespace (an older writer,
-		// or not Linux) is judged as before.
+		// live host pid names some other process, or none. Such an entry is
+		// never judged dead here; only its heartbeat can retire it.
 		const ownNamespace = ownPidNamespace();
-		const registry = (await readInstanceRegistry()).filter(
-			(entry) =>
-				entry.pidNamespace === undefined || entry.pidNamespace === ownNamespace,
-		);
-		if (registry.length === 0) return;
+		const judgeable = (entry: InstanceEntry) =>
+			isInPidNamespace(entry, ownNamespace);
 
 		// Identity verification before any pid kill (recycled-pid guard): fetch
 		// the command line and start time of every recorded child pid, and of
@@ -1638,6 +1654,7 @@ export async function sweepOrphans(): Promise<void> {
 			matchProcess,
 			Date.now(),
 			(pid) => identities.get(pid)?.start,
+			judgeable,
 		);
 
 		// #1857 class sweep: the registry-driven path spelled the same
@@ -1710,6 +1727,7 @@ export async function sweepOrphans(): Promise<void> {
 		].map((instance) => ({
 			pid: instance.pid,
 			processStart: instance.processStart,
+			pidNamespace: instance.pidNamespace,
 		}));
 		if (pruneTargets.length > 0) {
 			try {

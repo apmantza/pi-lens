@@ -50,6 +50,7 @@ import {
 } from "./instance-registry.js";
 import { realIsPidAlive, STALE_HEARTBEAT_MS } from "./instance-reaper.js";
 import { logLatency } from "./latency-logger.js";
+import { isInPidNamespace, ownPidNamespace } from "./process-snapshot.js";
 
 /** See the module docstring for the derivation. */
 export const DEFAULT_LSP_BUDGET_CEILING = 16;
@@ -115,6 +116,10 @@ export interface LspBudgetDecision {
  * counting them here would double-penalize new sessions for load that's
  * already being cleaned up (or was already cleaned up and the entry just
  * hasn't been pruned from this snapshot yet).
+ *
+ * An entry from another pid namespace (#3539 review F1) names a pid that
+ * means nothing here, so it counts as live only while its heartbeat is
+ * fresh: a dead container's entry must not hold the budget forever.
  */
 export function decideLspBudget(
 	registry: readonly InstanceEntry[],
@@ -122,8 +127,19 @@ export function decideLspBudget(
 	ceiling: number,
 	rssCeilingBytes?: number,
 	now = Date.now(),
+	ownNamespace?: string,
 ): LspBudgetDecision {
-	const liveInstances = registry.filter((instance) => isPidAlive(instance.pid));
+	const hasFreshHeartbeat = (instance: InstanceEntry) => {
+		const heartbeatMs = Date.parse(instance.heartbeatAt);
+		return (
+			Number.isFinite(heartbeatMs) && now - heartbeatMs <= STALE_HEARTBEAT_MS
+		);
+	};
+	const liveInstances = registry.filter((instance) =>
+		isInPidNamespace(instance, ownNamespace)
+			? isPidAlive(instance.pid)
+			: hasFreshHeartbeat(instance),
+	);
 	const totalLiveLspServers = liveInstances.reduce(
 		(sum, instance) => sum + instance.lspChildren.length,
 		0,
@@ -132,10 +148,8 @@ export function decideLspBudget(
 		rssCeilingBytes !== undefined &&
 		liveInstances.length > 0 &&
 		liveInstances.every((instance) => {
-			const heartbeatMs = Date.parse(instance.heartbeatAt);
 			return (
-				Number.isFinite(heartbeatMs) &&
-				now - heartbeatMs <= STALE_HEARTBEAT_MS &&
+				hasFreshHeartbeat(instance) &&
 				Number.isFinite(instance.rssBytes) &&
 				instance.lspChildren.every((child) => Number.isFinite(child.rssBytes))
 			);
@@ -227,6 +241,8 @@ export async function checkCrossProcessLspBudget(
 			testOverrides.isPidAlive ?? realIsPidAlive,
 			ceiling,
 			getLspBudgetRssCeilingBytes(),
+			Date.now(),
+			ownPidNamespace(),
 		);
 		cachedDecision = decision;
 		if (decision.overBudget) {
