@@ -19,8 +19,8 @@
 (*    (runtime-coordinator.ts:978), resolving at any time;                 *)
 (*  - session 1's quiet window, fire-and-forget from agent_settled         *)
 (*    (index.ts:3568). runQuietWindow captures the session generation      *)
-(*    when the window starts (quiet-window.ts:162, #3499) and runs its     *)
-(*    tasks in sequence: "cascade_carry_over_settle" (quiet-window.ts:226) *)
+(*    as each task starts (quiet-window.ts:174, #3499) and runs its        *)
+(*    tasks in sequence: "cascade_carry_over_settle" (quiet-window.ts:225) *)
 (*    runs settleCascadeRuns, which takes the pending list, awaits up to   *)
 (*    15 s, then appends the settled runs and re-parks the rest            *)
 (*    (runtime-coordinator.ts:1025-1092); then the cascade-tier reconcile  *)
@@ -33,7 +33,9 @@
 (*  - optionally (Strays, #3512), the still-running session-1 compute,     *)
 (*    which records a touch after the reset.                               *)
 (* FixParts selects the #3499 guards. The shipped code is                  *)
-(* {"settle","reconcile","reconcileStart"}; {} is the code before #3499.   *)
+(* {"settle","reconcile","reconcileTaskCapture"}; {} is the code before    *)
+(* #3499. The model has no clock: it cannot see a touch that waits for a   *)
+(* later window, nor the 15-minute expiry (OUTSTANDING_TOUCH_MAX_AGE_MS).  *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -45,11 +47,14 @@ CONSTANTS
     Strays,        \* a still-running session-1 compute records a tier-3 touch
                    \* after the reset (#3512)
     FixParts       \* the #3499 guards, a subset of
-                   \*   "settle"          settleCascadeRuns drops on a stale generation
-                   \*   "reconcile"       the reconcile's append drops on a stale generation
-                   \*   "reconcileStart"  the reconcile stands down before its drain
-                   \*   "reconcileLate"   the reconcile captures at task start, not
-                   \*                     window start (mutant)
+                   \*   "settle"                settleCascadeRuns drops on a stale generation
+                   \*   "reconcile"             the reconcile's append drops on a stale
+                   \*                           generation
+                   \*   "reconcileTaskCapture"  the reconcile captures when its task
+                   \*                           starts (shipped); without it, when the
+                   \*                           window starts (rounds 0-1)
+                   \*   "reconcileStart"        the reconcile stands down before its
+                   \*                           drain on a stale generation (round 1)
 
 VARIABLES
     phase,      \* "s1" | "s1down" | "s2starting" | "s2"
@@ -132,7 +137,7 @@ SettleFinish ==
 \* (reconcileOutstandingCascadeTouches), with no await before the drain.
 ReconStart ==
     /\ settle = "done" /\ recon = "queued"
-    /\ LET g == IF "reconcileLate" \in FixParts THEN gen ELSE reconGen
+    /\ LET g == IF "reconcileTaskCapture" \in FixParts THEN gen ELSE reconGen
        IN /\ reconGen' = g
           /\ IF "reconcileStart" \in FixParts /\ g # gen
                THEN /\ recon' = "done"
@@ -147,7 +152,7 @@ ReconStart ==
 ReconFinish ==
     /\ recon = "waiting"
     /\ recon' = "done"
-    /\ IF ({"reconcile", "reconcileLate"} \cap FixParts # {}) /\ reconGen # gen
+    /\ IF "reconcile" \in FixParts /\ reconGen # gen
          THEN /\ dropped' = dropped \cup drained
               /\ UNCHANGED runs
          ELSE /\ runs' = runs \cup drained
