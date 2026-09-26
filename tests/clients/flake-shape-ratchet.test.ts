@@ -58,7 +58,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import vitestConfig, { realHarnessInclude } from "../../vitest.config.ts";
 import {
@@ -638,7 +638,25 @@ function describeProblem(p: RatchetProblem): string {
 	return `${p.detector}: ${p.file} rose from ${p.before} to ${p.after} hit(s)${admittedNote}`;
 }
 
+// #3514: `countsByDetector` already shares one walk + one parse per file
+// across all five detectors (`countsCache`, flake-shape-scan.ts) — the walk
+// itself is not redone. But that shared cost is only PAID on the first call,
+// and `it.each(DETECTOR_NAMES)` below calls it in DETECTOR_NAMES order, so
+// whichever detector is first (`real-process-spawn`) absorbed the FULL
+// five-detector cost inside its own 30s per-test budget, not just its own
+// share. Measured on this box (4 cores, load average ~27, run 2026-09-26):
+// real-process-spawn's own detector work is ~22s of a ~117s total — raw-
+// timer-wait's AST walk (`timerBindings` + its own call-site visit) is the
+// biggest single share at ~84s. Paying the whole thing once here, under its
+// own budget decoupled from any one detector's timeout, means no single
+// "detector %s" case is billed for work that belongs to all five.
+const WALK_TIMEOUT_MS = 180_000;
+
 describe("flake-shape ratchet (#2547)", () => {
+	beforeAll(() => {
+		for (const detector of DETECTOR_NAMES) countsByDetector(detector);
+	}, WALK_TIMEOUT_MS);
+
 	it("keeps every admission map sorted", () => {
 		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
 		expect(() => assertSortedRegistry("fixture", ["b", "a"])).toThrow(
