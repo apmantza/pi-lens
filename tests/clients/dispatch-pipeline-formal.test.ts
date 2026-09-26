@@ -491,6 +491,40 @@ describe("formal/dispatch-pipeline replays", () => {
 		}
 	});
 
+	it("session straddle (#3506 r1 F8): an old session's clean that settles after session_start does not clear the new session's blocker", async () => {
+		const env = setupTestEnvironment("tla-inline-session-clear-");
+		try {
+			const filePath = path.join(env.tmpDir, "a.ts");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			for (let turn = 0; turn < 3; turn += 1) runtime.beginTurn();
+			const { entered, release } = scriptDispatch({
+				v1: "clean",
+				v2: "blocker",
+			});
+			fs.writeFileSync(filePath, "export const x = 'v1';\n");
+			const late = handleToolResult({
+				...deps(runtime, noBiome),
+				event: ev("edit", filePath, "c1"),
+			} as never);
+			await entered.p;
+			runtime.resetForSession();
+			runtime.beginTurn();
+			fs.writeFileSync(filePath, "export const y = 'v2';\n");
+			await handleToolResult({
+				...deps(runtime, noBiome),
+				event: ev("edit", filePath, "c2"),
+			} as never);
+			release.open();
+			await late;
+			expect(inlineSummaries(runtime)).toEqual([
+				{ writeIndex: 1, blocker: "BLOCKER-FROM-v2" },
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// ── #3506: pi-lens' own writers inside pi's mutation queue ────────────────
 	describe("the immediate autofix and the deferred drain", () => {
 		beforeEach(() => {
