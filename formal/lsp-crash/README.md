@@ -130,8 +130,10 @@ The throwaway replays became the regression tests:
 - `tests/clients/lsp/service-crash-respawn.test.ts`: the real `touchFile` and
   the real `handleNotifyOpen` queue per client over a mock connection. Crash
   after the write, before it, and with it queued; capacity eviction; a second
-  non-collecting touch; the TypeScript sync-confirm route; and, for #3502,
-  `ensureWarmForSweep` after a crash-respawn of a ready and of a cold client.
+  non-collecting touch; the TypeScript sync confirm after a crash between
+  the touches and in the middle of the wait (racing and end-of-wait); and,
+  for #3502, `ensureWarmForSweep` after a crash-respawn of a ready and of a
+  cold client.
 - `tests/clients/lsp/crash-respawn-debounce-wire.test.ts`: the real
   `createLSPClient` and `tests/fixtures/fake-lsp-server.mjs`, SIGKILLed after
   the sync touch. Before #3501 server B's trace had no `didOpen` and the touch
@@ -142,14 +144,13 @@ The throwaway replays became the regression tests:
 Not modelled:
 - one file, one server key, primary scope only;
 - time (the debounce window and the breaker windows are over-approximated);
-- the TypeScript sync confirm (#707). It asks the registry's client for the
-  file, not the touch's own client. Before #3501 the crash-between-touches
-  route sent that question to a replacement that held no document, which
-  tsserver rejects ("No Project."), so the touch ended inconclusive; the bind
-  now sends the replacement the document first. The route the bind does not
-  touch is a crash in the middle of the wait: the confirm then respawns a
-  server the touch never wrote to. A fresh tsserver rejects it the same way;
-  one whose project another file has already loaded would answer from the
-  file on disk rather than from the touch's content (not replayed).
+- the TypeScript sync confirm (#707). It asked the registry's client for the
+  file rather than the touch's own client. After a crash in the middle of the
+  wait, a replacement whose project a concurrent touch had loaded answered
+  from the file on disk without ever being sent the touch's content: a
+  confirmed clean for a dirty buffer (replayed on the real service in review
+  round 1). Since then the confirm is asked of the touch's own client
+  (`tsserverSyncChannel`), and a dead one does not execute. The tests cover
+  both the racing and the end-of-wait confirm.
 
 The concurrent-clear counterexample was not replayed on the real code.

@@ -138,6 +138,39 @@ function makeClient(serverId: string, root: string) {
 	return client;
 }
 
+const CLEAN_TS = "const x = 1;\n";
+
+/**
+ * A classic typescript-language-server over the same double. Its
+ * `typescript.tsserverRequest` sync commands behave as tsserver's do: a dead
+ * client does not execute (`runServerCommand`), a tsserver holding no document
+ * has no project ("No Project.", the rejection `attemptTsserverSyncDiagnostics`
+ * documents), and a loaded project answers for the file's bytes ON DISK, which
+ * this fixture only models for the clean sample.
+ */
+function makeTsClient(root: string) {
+	const client = makeClient("typescript", root);
+	const syncAsked: boolean[] = [];
+	return Object.assign(client, {
+		syncAsked,
+		getAdvertisedCommands: () => ["typescript.tsserverRequest"],
+		executeCommand: vi.fn(async (_command: string, args: unknown[]) => {
+			const file = (args[1] as { file: string }).file;
+			syncAsked.push(client.holds(file));
+			if (!client.isAlive()) {
+				return { executed: false, reason: "lsp client not alive" };
+			}
+			if (client.state.openDocuments.size === 0) {
+				throw new Error("No Project.");
+			}
+			if (fs.readFileSync(file, "utf8") !== CLEAN_TS) {
+				return { executed: false, reason: "fixture: dirty disk not modelled" };
+			}
+			return { executed: true, result: { success: true, body: [] } };
+		}),
+	});
+}
+
 const SYNC = {
 	diagnostics: "none" as const,
 	clientScope: "primary" as const,
@@ -282,29 +315,11 @@ describe("#3501 — a touch-debounce entry does not outlive its client", () => {
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
 			fp.endsWith(".ts") ? [ts] : [],
 		);
-		const tsClient = () => {
-			const client = makeClient("typescript", tmp);
-			const syncAsked: boolean[] = [];
-			return Object.assign(client, {
-				syncAsked,
-				getAdvertisedCommands: () => ["typescript.tsserverRequest"],
-				executeCommand: vi.fn(async () => {
-					syncAsked.push(client.holds(tsFile));
-					if (client.state.openDocuments.size === 0) {
-						throw new Error("No Project.");
-					}
-					return {
-						executed: true,
-						result: { success: true, body: [] },
-					};
-				}),
-			});
-		};
 		const tsFile = path.join(tmp, "a.ts");
 		const content = "const x: number = 'x';\n";
 		fs.writeFileSync(tsFile, content);
-		const A = tsClient();
-		const B = tsClient();
+		const A = makeTsClient(tmp);
+		const B = makeTsClient(tmp);
 		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
 		const service = new LSPService();
 		await service.touchFile(path.join(tmp, "warm.ts"), "", {
@@ -326,6 +341,109 @@ describe("#3501 — a touch-debounce entry does not outlive its client", () => {
 		});
 		expect(B.holds(tsFile)).toBe(true);
 		expect(B.syncAsked.every(Boolean)).toBe(true);
+	});
+
+	// Review round 1, F1: the sync confirm asked the REGISTRY's client for the
+	// file. When the touch's own server died mid-wait and a concurrent touch had
+	// already respawned the replacement with its project loaded, the replacement
+	// answered for the file's bytes on disk (clean here), never having been sent
+	// the touch's content (dirty): a confirmed clean from a client that never saw
+	// the document.
+	it("typescript: a server that dies mid-wait is not confirmed clean by a replacement answering from disk", async () => {
+		const ts = makeServer("typescript", ".ts", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [ts] : [],
+		);
+		const tsFile = path.join(tmp, "a.ts");
+		fs.writeFileSync(tsFile, CLEAN_TS);
+		const dirty = "const x: number = 'x';\n";
+		const A = makeTsClient(tmp);
+		const B = makeTsClient(tmp);
+		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+		const service = new LSPService();
+		await service.touchFile(path.join(tmp, "warm.ts"), "", {
+			...SYNC,
+			source: "warm",
+		});
+		vi.setSystemTime(Date.now() + 61_000);
+		// A takes the write and dies before publishing; while the touch still
+		// waits, a touch of another file respawns B, which loads the project.
+		A.getDiagnosticsVersionForPath = () => 0;
+		A.getDiagnostics = () => [];
+		A.getAllDiagnostics = () => new Map();
+		A.waitForDiagnostics.mockImplementationOnce(async (_fp, ms) => {
+			A.kill();
+			await service.touchFile(path.join(tmp, "b.ts"), "export {};\n", SYNC);
+			vi.setSystemTime(Date.now() + ms);
+		});
+
+		const result = await service.touchFile(tsFile, dirty, DISPATCH);
+
+		expect(createLSPClient).toHaveBeenCalledTimes(2);
+		expect(B.holds(tsFile)).toBe(false);
+		expect({
+			confirmation: result?.confirmation,
+			inconclusive: result?.inconclusive,
+			diags: result?.diags,
+		}).toEqual({ confirmation: undefined, inconclusive: true, diags: [] });
+		expect(B.syncAsked).toEqual([]);
+	});
+
+	// The same question from the racing confirm (#707), which asks once the
+	// grace lapses while the push wait is still open.
+	it("typescript: the racing sync confirm is asked of the touch's own client, not a replacement answering from disk", async () => {
+		process.env.PI_LENS_TSSERVER_SYNC_GRACE_MS = "0";
+		try {
+			const ts = makeServer("typescript", ".ts", tmp);
+			getServersForFileWithConfig.mockImplementation((fp: string) =>
+				fp.endsWith(".ts") ? [ts] : [],
+			);
+			const tsFile = path.join(tmp, "a.ts");
+			fs.writeFileSync(tsFile, CLEAN_TS);
+			const A = makeTsClient(tmp);
+			const B = makeTsClient(tmp);
+			createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+			const service = new LSPService();
+			await service.touchFile(path.join(tmp, "warm.ts"), "", {
+				...SYNC,
+				source: "warm",
+			});
+			vi.setSystemTime(Date.now() + 61_000);
+			A.getDiagnosticsVersionForPath = () => 0;
+			A.getDiagnostics = () => [];
+			A.getAllDiagnostics = () => new Map();
+			// A's wait stays open until the racing confirm asks A itself.
+			let askedA: () => void = () => {};
+			const aAsked = new Promise<void>((resolve) => {
+				askedA = resolve;
+			});
+			const execA = A.executeCommand.getMockImplementation();
+			A.executeCommand.mockImplementation(async (command, args) => {
+				askedA();
+				return execA!(command, args);
+			});
+			A.waitForDiagnostics.mockImplementationOnce(async (_fp, ms) => {
+				A.kill();
+				await service.touchFile(path.join(tmp, "b.ts"), "export {};\n", SYNC);
+				await aAsked;
+				vi.setSystemTime(Date.now() + ms);
+			});
+
+			const result = await service.touchFile(
+				tsFile,
+				"const x: number = 'x';\n",
+				DISPATCH,
+			);
+
+			expect({
+				confirmation: result?.confirmation,
+				inconclusive: result?.inconclusive,
+				diags: result?.diags,
+			}).toEqual({ confirmation: undefined, inconclusive: true, diags: [] });
+			expect(B.syncAsked).toEqual([]);
+		} finally {
+			delete process.env.PI_LENS_TSSERVER_SYNC_GRACE_MS;
+		}
 	});
 });
 

@@ -455,6 +455,25 @@ function documentIsOpenOn(client: LSPClientInfo, filePath: string): boolean {
 	}
 }
 
+/**
+ * #3501: the #707 tsserver sync confirm, asked of ONE client instance: the one
+ * the touch wrote to. Routed through the service, the question went to whatever
+ * client the registry held for the file by then; after a mid-wait crash that was
+ * a replacement never sent this touch's content, answering from the file on
+ * disk. A dead client does not execute (`runServerCommand`), so the confirm
+ * then finds no answer and the touch stays inconclusive.
+ */
+function tsserverSyncChannel(client: LSPClientInfo) {
+	return {
+		getAdvertisedCommands: async () => client.getAdvertisedCommands(),
+		executeCommand: (
+			_filePath: string | undefined,
+			command: string,
+			args?: unknown[],
+		) => client.executeCommand(command, args),
+	};
+}
+
 function warmupTimeoutMs(): number {
 	const raw = Number.parseInt(
 		process.env.PI_LENS_LSP_WARMUP_TIMEOUT_MS ?? "",
@@ -6188,7 +6207,7 @@ export class LSPService {
 						try {
 							const result = await attemptTsserverSyncDiagnostics(
 								filePath,
-								this,
+								tsserverSyncChannel(primaryClient),
 							);
 							if (result === undefined || pushWaitSettled) {
 								// Sync unavailable/failed, or push won while the sync call
@@ -6706,7 +6725,7 @@ export class LSPService {
 				try {
 					const syncResult = await attemptTsserverSyncDiagnostics(
 						filePath,
-						this,
+						tsserverSyncChannel(spawned[0].client),
 					);
 					if (syncResult !== undefined) {
 						// Sync answered — confirmed result (clean or with diagnostics).
