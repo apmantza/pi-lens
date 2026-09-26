@@ -26,6 +26,7 @@ import { TurnSummaryCollector } from "./turn-summary.js";
 import { deriveProviderFromModelId } from "./model-provider.js";
 import { beginTurnContext, setTurnContextSession } from "./turn-context.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -411,6 +412,18 @@ export class RuntimeCoordinator {
 	>();
 	private readonly _pendingInlineBlockers =
 		new PathKeyedMap<InlineBlockerRecord>(normalizeMapKey);
+	/**
+	 * #3507: one per-path order for BOTH verbs on `_pendingInlineBlockers`,
+	 * the widget store's guard shape (`widget-state.ts` diagnosticsWriteGuard).
+	 * Pipelines of two same-file edits overlap under pi's parallel tools, so
+	 * an older run that settles last must neither erase nor replace the newer
+	 * run's verdict (#1198 invariants 1-2). The last applied token lives here,
+	 * not on the record, so it survives a clear.
+	 */
+	private readonly _inlineBlockerWriteOrder = new WriteOrderingGuard<
+		string,
+		number
+	>();
 	private readonly _actionableWarningsThisTurn = new Map<
 		string,
 		ActionableWarningRecord
@@ -476,6 +489,7 @@ export class RuntimeCoordinator {
 		this._toolCallAttributions.clear();
 		this._lspReadWarmState.clear();
 		this._pendingInlineBlockers.clear();
+		this._inlineBlockerWriteOrder.clear();
 		this._actionableWarningsThisTurn.clear();
 		this._codeQualityWarningsThisTurn.clear();
 		this._turnSummary.clear();
@@ -1124,6 +1138,26 @@ export class RuntimeCoordinator {
 		return this._cascadeRuns.length > 0;
 	}
 
+	/**
+	 * #3507: the `(turnIndex, writeIndex)` order of a dispatch as one token.
+	 * `writeIndex` restarts at every `beginTurn` while inline records live for
+	 * the session, so the turn has to lead the comparison. Undefined when the
+	 * caller has no write token: such a write is unordered and always applies.
+	 */
+	private inlineBlockerOrder(
+		writeIndex: number | undefined,
+		turnIndex: number,
+	): number | undefined {
+		return writeIndex === undefined
+			? undefined
+			: turnIndex * 2 ** 32 + writeIndex;
+	}
+
+	/**
+	 * Record a file's blocking verdict. Returns the record time, or undefined
+	 * when a newer dispatch of the same file already recorded or cleared it
+	 * (#3507).
+	 */
 	recordInlineBlockers(
 		filePath: string,
 		summary: string,
@@ -1132,7 +1166,15 @@ export class RuntimeCoordinator {
 		lines?: readonly number[],
 		contentBaseline?: { size: number; sha256: string },
 		diagnostics?: readonly Diagnostic[],
-	): number {
+		turnIndex = this._turnIndex,
+	): number | undefined {
+		if (
+			!this._inlineBlockerWriteOrder.shouldWrite(
+				normalizeMapKey(filePath),
+				this.inlineBlockerOrder(writeIndex, turnIndex),
+			)
+		)
+			return undefined;
 		const recordedAtMs = Date.now();
 		this._pendingInlineBlockers.set(path.resolve(filePath), {
 			filePath,
@@ -1153,8 +1195,24 @@ export class RuntimeCoordinator {
 		return recordedAtMs;
 	}
 
-	clearInlineBlockers(filePath: string): void {
+	/**
+	 * Clear a file's verdict after a clean dispatch. Returns false when a newer
+	 * dispatch of the same file already recorded or cleared it (#3507).
+	 */
+	clearInlineBlockers(
+		filePath: string,
+		writeIndex?: number,
+		turnIndex = this._turnIndex,
+	): boolean {
+		if (
+			!this._inlineBlockerWriteOrder.shouldWrite(
+				normalizeMapKey(filePath),
+				this.inlineBlockerOrder(writeIndex, turnIndex),
+			)
+		)
+			return false;
 		this._pendingInlineBlockers.delete(path.resolve(filePath));
+		return true;
 	}
 
 	/**

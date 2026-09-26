@@ -455,6 +455,25 @@ function documentIsOpenOn(client: LSPClientInfo, filePath: string): boolean {
 	}
 }
 
+/**
+ * #3501: the #707 tsserver sync confirm, asked of ONE client instance: the one
+ * the touch wrote to. Routed through the service, the question went to whatever
+ * client the registry held for the file by then; after a mid-wait crash that was
+ * a replacement never sent this touch's content, answering from the file on
+ * disk. A dead client does not execute (`runServerCommand`), so the confirm
+ * then finds no answer and the touch stays inconclusive.
+ */
+function tsserverSyncChannel(client: LSPClientInfo) {
+	return {
+		getAdvertisedCommands: async () => client.getAdvertisedCommands(),
+		executeCommand: (
+			_filePath: string | undefined,
+			command: string,
+			args?: unknown[],
+		) => client.executeCommand(command, args),
+	};
+}
+
 function warmupTimeoutMs(): number {
 	const raw = Number.parseInt(
 		process.env.PI_LENS_LSP_WARMUP_TIMEOUT_MS ?? "",
@@ -1432,10 +1451,21 @@ export class LSPService {
 	 * its healthy siblings. A file-level key can only satisfy one of those at a
 	 * time — per-server, both hold: the stalled server simply has no entry and is
 	 * re-pushed, while every sibling whose write landed keeps its own debounce.
+	 *
+	 * #3501: an entry speaks only for the client instance whose write marked it.
+	 * A client that crashes or is evicted inside the window, or that was already
+	 * dead when its `notify.open` resolved `true`, leaves an entry its respawned
+	 * replacement must not inherit: the replacement was never sent the content.
+	 * Weak, so an entry never pins a retired client's state.
 	 */
 	private readonly recentTouches = new Map<
 		string,
-		{ fingerprint: string; touchedAt: number; clientScope: LSPTouchClientScope }
+		{
+			fingerprint: string;
+			touchedAt: number;
+			clientScope: LSPTouchClientScope;
+			client: WeakRef<LSPClientInfo>;
+		}
 	>();
 	/**
 	 * #743: consecutive per-server notify-write timeout count, keyed by
@@ -1838,8 +1868,7 @@ export class LSPService {
 		await victimClient.shutdown({ reason: "client_ceiling_lru" });
 		this.state.clients.delete(victimKey);
 		this.state.clientSpawnedAt.delete(victimKey);
-		this.state.demonstratedReady.delete(victimKey);
-		this.state.demonstratedCold.delete(victimKey);
+		this.forgetReadiness(victimKey);
 		this.clientLastUsedAt.delete(victimKey);
 		this.clearTypeScriptIdleTimer(victimKey);
 		logSessionStart(
@@ -1894,8 +1923,7 @@ export class LSPService {
 				this.releaseOutstandingAuxNotifyWrite(key);
 				this.state.clients.delete(key);
 				this.state.clientSpawnedAt.delete(key);
-				this.state.demonstratedReady.delete(key);
-				this.state.demonstratedCold.delete(key);
+				this.forgetReadiness(key);
 				this.clientLastUsedAt.delete(key);
 				try {
 					await client.shutdown({ reason: "typescript_idle_eviction" });
@@ -1925,19 +1953,20 @@ export class LSPService {
 		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		waitForDiagnostics: boolean,
-		serverIds: readonly string[],
+		spawned: readonly SpawnedServer[],
 	): boolean {
 		if (waitForDiagnostics) return false;
 		// #743: only short-circuit the whole call when EVERY spawned server already
 		// has this content. If even one still needs the push, fall through — the
 		// write loop skips the servers that are covered and pushes only the rest.
-		if (serverIds.length === 0) return false;
-		return serverIds.every((serverId) =>
+		if (spawned.length === 0) return false;
+		return spawned.every((entry) =>
 			this.shouldSkipNotify(
 				filePath,
 				contentFingerprint,
 				clientScope,
-				serverId,
+				entry.info.id,
+				entry.client,
 			),
 		);
 	}
@@ -1963,6 +1992,7 @@ export class LSPService {
 		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
+		client: LSPClientInfo,
 	): boolean {
 		if (TOUCH_DEBOUNCE_MS <= 0) return false;
 		const previous = this.recentTouches.get(
@@ -1971,6 +2001,9 @@ export class LSPService {
 		if (!previous) return false;
 		const now = Date.now();
 		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
+		// #3501: another client instance (a respawn, a replacement after an
+		// eviction) was never sent this content, whatever its predecessor held.
+		if (previous.client.deref() !== client) return false;
 		return previous.fingerprint === contentFingerprint();
 	}
 
@@ -1987,6 +2020,7 @@ export class LSPService {
 		contentFingerprint: string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
+		client: LSPClientInfo,
 	): void {
 		const key = this.recentTouchKey(filePath, clientScope, serverId);
 		const now = Date.now();
@@ -1994,6 +2028,7 @@ export class LSPService {
 			fingerprint: contentFingerprint,
 			touchedAt: now,
 			clientScope,
+			client: new WeakRef(client),
 		});
 		// Trim entries that are already past the debounce window — shouldSkipTouch
 		// ignores them anyway, so they serve no purpose. Only sweep when the map
@@ -2027,6 +2062,17 @@ export class LSPService {
 		const root = await this.resolveServerRoot(server, filePath);
 		if (!root) return undefined;
 		return `${server.id}:${normalizeMapKey(root)}`;
+	}
+
+	/**
+	 * #3502: a retired client's readiness verdicts (ready, or cached cold) do
+	 * not describe its replacement. Every retirement path (capacity eviction,
+	 * idle eviction, notify-stall demotion, the dead-client respawn) forgets
+	 * both, so the next client earns its own.
+	 */
+	private forgetReadiness(key: string): void {
+		this.state.demonstratedReady.delete(key);
+		this.state.demonstratedCold.delete(key);
 	}
 
 	private markDemonstratedReadyKey(key: string): void {
@@ -2224,7 +2270,7 @@ export class LSPService {
 		void entry.client.shutdown().catch(() => {});
 		this.state.clients.delete(key);
 		this.state.clientSpawnedAt.delete(key);
-		this.state.demonstratedReady.delete(key);
+		this.forgetReadiness(key);
 		this.clientLastUsedAt.delete(key);
 		this.clearTypeScriptIdleTimer(key);
 		logLatency({
@@ -4050,6 +4096,8 @@ export class LSPService {
 			}
 			this.state.clients.delete(key);
 			this.state.clientSpawnedAt.delete(key);
+			// #3502: the replacement is cold and earns its own readiness verdict.
+			this.forgetReadiness(key);
 			this.clientLastUsedAt.delete(key);
 			this.clearTypeScriptIdleTimer(key);
 			this.state.broken.delete(key);
@@ -4468,6 +4516,9 @@ export class LSPService {
 						};
 
 			this.state.clients.set(key, client);
+			// #3502: a verdict cached while no client was registered (a failed
+			// spawn's cold warm-up) does not describe this one.
+			this.forgetReadiness(key);
 			// #2356: this generation is the replacement the late-coverage probe was
 			// waiting for. Clear the retired-generation marker before any later probe.
 			this.notifyStallDemotions.delete(key);
@@ -4821,14 +4872,13 @@ export class LSPService {
 			return this.touchFile(filePath, content, options);
 		}
 		try {
-			const spawnedServerIds = spawned.map((entry) => entry.info.id);
 			if (
 				this.shouldSkipTouch(
 					filePath,
 					contentFingerprint,
 					clientScope,
 					diagnosticsMode !== "none",
-					spawnedServerIds,
+					spawned,
 				)
 			) {
 				logLatency({
@@ -4865,14 +4915,17 @@ export class LSPService {
 			// as the file-level "every server was skipped" summary for the logs and the
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
-				spawnedServerIds.filter((serverId) =>
-					this.shouldSkipNotify(
-						filePath,
-						contentFingerprint,
-						clientScope,
-						serverId,
-					),
-				),
+				spawned
+					.filter((entry) =>
+						this.shouldSkipNotify(
+							filePath,
+							contentFingerprint,
+							clientScope,
+							entry.info.id,
+							entry.client,
+						),
+					)
+					.map((entry) => entry.info.id),
 			);
 			const notifySkipped =
 				spawned.length > 0 && notifySkippedServerIds.size === spawned.length;
@@ -5208,6 +5261,7 @@ export class LSPService {
 								contentFingerprint(),
 								clientScope,
 								entry.info.id,
+								entry.client,
 							);
 						} else if (wrote === false) {
 							// #3481: the server does not hold `content` (a later read, a
@@ -6164,7 +6218,7 @@ export class LSPService {
 						try {
 							const result = await attemptTsserverSyncDiagnostics(
 								filePath,
-								this,
+								tsserverSyncChannel(primaryClient),
 							);
 							if (result === undefined || pushWaitSettled) {
 								// Sync unavailable/failed, or push won while the sync call
@@ -6673,16 +6727,18 @@ export class LSPService {
 			// today's behavior: `inconclusive` = true, `collected` unchanged. This
 			// turns "unconfirmed after ~1000ms" into "confirmed at ~wait+sync-RTT"
 			// even when the race path couldn't answer.
+			const syncClient = spawned[0]?.client;
 			if (
 				diagnosticsTimedOut &&
 				tsserverSyncEligible &&
+				syncClient !== undefined &&
 				collected !== undefined &&
 				collected.length === 0
 			) {
 				try {
 					const syncResult = await attemptTsserverSyncDiagnostics(
 						filePath,
-						this,
+						tsserverSyncChannel(syncClient),
 					);
 					if (syncResult !== undefined) {
 						// Sync answered — confirmed result (clean or with diagnostics).
@@ -7001,7 +7057,11 @@ export class LSPService {
 					if (notifyTimedOutServerIds.has(entry.info.id)) continue;
 					if (uncoveredServerIds.has(entry.info.id)) continue;
 					const key = await this.demonstratedReadyKeyFor(entry.info, filePath);
-					if (key) this.markDemonstratedReadyKey(key);
+					// #3502: only for the client still registered under the key. One
+					// retired while this touch awaited (a crash respawn, an eviction)
+					// must not hand its answer to the replacement.
+					if (key && this.state.clients.get(key) === entry.client)
+						this.markDemonstratedReadyKey(key);
 				}
 			}
 
@@ -8877,6 +8937,14 @@ export class LSPService {
 
 		await runWarmupTouch(1);
 		let failedServerIds = stillColdServerIds();
+		// #3502: the clients this warm-up judged. A cold verdict is cached only
+		// for the client it is about; one retired while the warm-up awaited (a
+		// crash respawn, an eviction) leaves its replacement to earn its own.
+		// No client at all (a spawn that fails) is a verdict too, #799's
+		// negative cache for it; registration forgets it (`ensureClientForServer`).
+		const warmedClients = keys.map((key) =>
+			key === undefined ? undefined : this.state.clients.get(key),
+		);
 
 		// One retry, and only when the first attempt actually left a server cold —
 		// a short backoff first so a server mid-relaunch/index gets a breather
@@ -8905,7 +8973,11 @@ export class LSPService {
 			// readiness through any path (`markDemonstratedReadyKey`).
 			for (let i = 0; i < servers.length; i++) {
 				const key = keys[i];
-				if (key !== undefined && failedServerIds.includes(servers[i].id)) {
+				if (
+					key !== undefined &&
+					failedServerIds.includes(servers[i].id) &&
+					this.state.clients.get(key) === warmedClients[i]
+				) {
 					this.state.demonstratedCold.add(key);
 				}
 			}
