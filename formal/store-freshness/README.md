@@ -45,8 +45,9 @@ The clock is explicit, one tick is about 25 ms, and events can share a tick.
   serve is excused only when the first write after the read landed at or
   after the reference instant, and within `Tol + Gran` of it.
 - `NoSpuriousDemotion`: if nothing was written since the reference instant,
-  the result is not demoted. This is the no-drop half (AGENTS.md shape 54),
-  and the reason the tolerance exists.
+  the result is not demoted. This is the reason the tolerance exists
+  (`FixReadStampNoTol`). It cannot see a stamp taken too early: see Scope and
+  limits.
 - `NoRepromotion`: a demoted result is not served again unless the bytes
   match.
 
@@ -54,7 +55,7 @@ The clock is explicit, one tick is about 25 ms, and events can share a tick.
 
 | Store | Reference | Taken relative to the read | Gate | Config |
 |---|---|---|---|---|
-| widget-state own file, per entry (`reconcileStaleWidgetFiles`) | `observedAt` = the pipeline's `analysisReadAtMs`, passed to `recordDiagnostics` (#3503) | before | mtime | `WidgetOwnLateStamp`: pass. Mutant `MutWidgetOwnLateStamp` (record-time stamp): violated |
+| widget-state own file, per entry (`reconcileStaleWidgetFiles`) | `observedAt` = the pipeline's `analysisReadAtMs`, passed to `recordDiagnostics` (#3503); `lsp_diagnostics`' fresh row: its `scannedAt` (#3505) | before | mtime | `WidgetOwnLateStamp`: pass. Mutant `MutWidgetOwnLateStamp` (record-time stamp): violated |
 | widget-state dependency axis (`reconcileStaleWidgetDependencyBlockers`, and the turn-end sweep's widget rows via `getWidgetBlockingFilesForSweep`) | same `observedAt` | before | mtime | same shape as `BlockerDepLateStamp` |
 | inline blocker, import axis (`detectDrift`) | `recordedAtMs` = the pipeline's `analysisReadAtMs`, threaded through `recordInlineBlockers` (#3503) | before | mtime, latched | `BlockerDepLateStamp`: pass. Mutant `MutBlockerDepLateStamp`: violated |
 | inline blocker, own file, all-LSP | size+sha256 of the bytes the pipeline analysed | at the read | content | `BlockerLspOwn`: pass, mtime regress included |
@@ -63,7 +64,7 @@ The clock is explicit, one tick is about 25 ms, and events can share a tick.
 | workspace-diagnostics cache, own file, pull | stat after the answer, and a disk hash taken after the answer | after the server answered | eq | `WorkspaceOwnPullPostHocHash`: **violated** (#3505 part b, not fixed here; `FixWorkspacePullBinding` is the checked fix) |
 | workspace-diagnostics cache, own file, `lsp_diagnostics` | stat before its read | before | eq | the shape `WorkspaceOwnStatAfterRead` now models |
 | workspace-diagnostics cache, own file, coarse mtime | (mtime, size) inside one coarse granule | | eq | `WorkspaceOwnCoarseSameSize`: violated, admitted (#2300) |
-| workspace-diagnostics cache, dependency axis | per-file `scannedAt`, taken before the file's read (a pull: before its request; `lsp_diagnostics`: before its stat) (#3505) | before | mtime | `WorkspaceDepLateStamp`: pass. Mutant `MutWorkspaceDepLateStamp`: violated |
+| workspace-diagnostics cache, dependency axis | per-file `scannedAt`, taken before the file's read (a pull: before its request; `lsp_diagnostics`: before its stat) (#3505) | before | mtime | the same unlatched mtime gate as the widget row: `WidgetOwnLateStamp` / `MutWidgetOwnLateStamp` |
 | project-diagnostics snapshot | size+sha256 per file; `scannedAt` after the loop only for rows without a fingerprint | at the read | content | not committed (see below) |
 | advisory-provenance (gitleaks/trivy/opengrep/govulncheck `scannedAt`) | `new Date()` at `runScan` entry | before the spawn | mtime | not committed (see below) |
 | late-aux drain | `markedAtMs` | see `formal/late-aux-drain` | | |
@@ -98,7 +99,8 @@ The fixed code each passing config models, and the replay that pins it
   before `processFile`'s own read; a pull stamps `pullStartedAt` before its
   request. `record()` takes the stamp as its `scannedAt`
   (`clients/lsp/workspace-diagnostics-cache.ts`). `tools/lsp-diagnostics.ts`
-  stamps before its stat.
+  stamps before its stat and passes the same stamp as its fresh widget
+  row's `observedAt` (review round 1).
 
 ## Results
 
@@ -108,35 +110,32 @@ it varies with worker scheduling.
 
 | Config | Expect | States | s |
 |---|---|---|---|
-| `WidgetOwnLateStamp` | pass | 36,071 | 8.9 |
-| `BlockerDepLateStamp` | pass | 36,071 | 7.6 |
-| `WorkspaceDepLateStamp` | pass | 36,071 | 8.6 |
-| `FixReadStampWide` (the read stamp, three writes, latched) | pass | 823,973 | 28.2 |
-| `MutWidgetOwnLateStamp` (record-time stamp) | violated NoStaleServeBeyondTol | 2,593 | 4.4 |
-| `MutBlockerDepLateStamp` (record-time stamp) | violated NoStaleServeBeyondTol | 2,177 | 4.8 |
-| `MutWorkspaceDepLateStamp` (record-time stamp) | violated NoStaleServeBeyondTol | 1,772 | 3.7 |
-| `LateStampNoGate` (mutant: no gate) | violated NoStaleServeBeyondTol | 2,871 | 4.2 |
-| `FixReadStampNoTol` (mutant: tolerance 0) | violated NoSpuriousDemotion | 909 | 3.8 |
-| `SanityServes` | violated NeverServes | 587 | 4.2 |
-| `ToleranceWindow` | violated NoStaleServe (admitted) | 784 | 5.0 |
-| `BlockerNonLspOwnFastPath` | pass | 11,543 | 4.1 |
-| `BlockerLspOwn` | pass | 80,185 | 13.2 |
-| `MutBlockerNonLspOwnFastPath` (late stamp + fast path) | violated NoStaleServeBeyondTol | 1,601 | 4.5 |
-| `FixBlockerReadStampStrict` (read stamp, fast path kept) | violated NoStaleServe | 786 | 3.5 |
-| `WorkspaceOwnStatAfterRead` | pass | 156,415 | 10.8 |
-| `MutWorkspaceOwnStatAfterRead` (stat after the read) | violated NoStaleServe | 1,236 | 3.9 |
-| `WorkspaceOwnPullPostHocHash` (pull path, #3505 part b open) | violated NoStaleServe | 1,266 | 4.8 |
-| `FixWorkspacePullBinding` (the checked part b fix) | pass | 206,290 | 18.5 |
-| `WorkspaceOwnPullStatBeforeLag` (part b fix mutant) | violated NoStaleServe | 2,628 | 5.3 |
-| `WorkspaceOwnCoarseSameSize` | violated NoStaleServe (admitted, #2300) | 596 | 4.5 |
+| `WidgetOwnLateStamp` | pass | 36,071 | 2.3 |
+| `BlockerDepLateStamp` | pass | 36,071 | 4.6 |
+| `FixReadStampWide` (the read stamp, three writes, latched) | pass | 823,973 | 12.1 |
+| `MutWidgetOwnLateStamp` (record-time stamp) | violated NoStaleServeBeyondTol | 1,901 | 2.0 |
+| `MutBlockerDepLateStamp` (record-time stamp) | violated NoStaleServeBeyondTol | 2,128 | 2.2 |
+| `LateStampNoGate` (mutant: no gate) | violated NoStaleServeBeyondTol | 2,683 | 2.5 |
+| `FixReadStampNoTol` (mutant: tolerance 0) | violated NoSpuriousDemotion | 991 | 2.0 |
+| `SanityServes` | violated NeverServes | 798 | 1.5 |
+| `ToleranceWindow` | violated NoStaleServe (admitted) | 960 | 1.8 |
+| `BlockerNonLspOwnFastPath` | pass | 11,543 | 3.4 |
+| `BlockerLspOwn` | pass | 80,185 | 6.5 |
+| `MutBlockerNonLspOwnFastPath` (late stamp + fast path) | violated NoStaleServeBeyondTol | 1,067 | 2.0 |
+| `FixBlockerReadStampStrict` (read stamp, fast path kept) | violated NoStaleServe | 695 | 2.0 |
+| `WorkspaceOwnStatAfterRead` | pass | 156,415 | 4.0 |
+| `MutWorkspaceOwnStatAfterRead` (stat after the read) | violated NoStaleServe | 1,583 | 1.8 |
+| `WorkspaceOwnPullPostHocHash` (pull path, #3505 part b open) | violated NoStaleServe | 1,587 | 1.8 |
+| `FixWorkspacePullBinding` (the checked part b fix) | pass | 206,290 | 4.7 |
+| `WorkspaceOwnPullStatBeforeLag` (part b fix mutant) | violated NoStaleServe | 3,615 | 1.5 |
+| `WorkspaceOwnCoarseSameSize` | violated NoStaleServe (admitted, #2300) | 688 | 1.6 |
 
-Times are from a shared 4-core host at load average 28; the investigation
-measured the same configs at roughly half these times.
+Times are from a shared 4-core host at load average 11 (review round 1).
 
 ## Traces
 
 **Late record stamp** (`MutWidgetOwnLateStamp`, `MutBlockerDepLateStamp`,
-`MutWorkspaceDepLateStamp`; `MutBlockerNonLspOwnFastPath` has the same trace
+`MutBlockerNonLspOwnFastPath` has the same trace
 with an equal-size write):
 
 1. Start.
@@ -166,6 +165,17 @@ excuse it.
   server answering from an older in-memory view of the dependency reads
   before any stamp pi-lens can take, which is `ServerLag`. The read-stamp fix
   closes the pi-lens-side window, not server lag.
+- The model cannot catch a stamp taken too early. `NoSpuriousDemotion`
+  only says a result is not demoted when nothing was written after its
+  reference; a reference pinned far in the past satisfies it whenever any
+  write happened. A scratch mutant with `ref' = 0` in `Start` passes
+  `BlockerDepLateStamp`, `WidgetOwnLateStamp` and `FixReadStampWide`. The
+  too-early direction (a verdict demoted by pi-lens' own format or autofix
+  write, or by a write before the read) is pinned by the vitest cases
+  instead: `FixReadStamp no-drop (#3503)` and `FixReadStamp control (#3503)`
+  in `tests/clients/store-freshness-formal.test.ts` (mutations M3, M4, M5),
+  and the `FixReadStamp no-drop (#3505)` cases for the sweep (W3, W5, W7).
+  Modelling the read instant separately from the stamp would close this.
 - A runner that reads the file from disk itself during the dispatch reads
   after the stamp. That is the safe direction: a write between the stamp and
   that runner's read can demote a result computed on the new bytes, but can

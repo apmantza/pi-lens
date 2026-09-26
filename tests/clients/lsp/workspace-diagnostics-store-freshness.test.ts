@@ -268,7 +268,7 @@ describe("formal/store-freshness workspace-cache replays (#3505)", () => {
 	describe("the entry's scannedAt is the file's read", () => {
 		for (const [label, depWrittenDuringAnalysis] of [
 			[
-				"WorkspaceDepLateStamp (#3505): a dependency written while the file is analysed makes the next sweep re-query it",
+				"Workspace dependency axis, MutWidgetOwnLateStamp trace (#3505): a dependency written while the file is analysed makes the next sweep re-query it",
 				true,
 			],
 			[
@@ -315,7 +315,7 @@ describe("formal/store-freshness workspace-cache replays (#3505)", () => {
 
 		for (const [label, depWrittenDuringPull] of [
 			[
-				"WorkspaceDepLateStamp (#3505): a dependency written while a workspace pull is answered makes the next sweep pull again",
+				"Workspace dependency axis, MutWidgetOwnLateStamp trace (#3505): a dependency written while a workspace pull is answered makes the next sweep pull again",
 				true,
 			],
 			[
