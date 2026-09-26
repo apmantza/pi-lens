@@ -35,13 +35,23 @@ session-1 strays).
     which appends a run (`index.ts:3380-3389`).
 - **The overflow admission path** (`Overflow`, #3512). Past 32 unsettled
   computes, `appendCascadePromise` appends a settled run from a detached
-  `.then` (`runtime-coordinator.ts:994-998`) that the reset cannot reach. It
-  captures the session generation at admission and appends through
-  `guardedWrite`. Under `Overflow` the session-1 compute takes this path, and
-  session 2 admits one of its own past the cap (`Admit2`, `Resolve2`).
+  `.then` (`runtime-coordinator.ts:1021-1023`) that the reset cannot reach.
+  Under `Overflow` the session-1 compute takes this path, and session 2 admits
+  one of its own past the cap (`Admit2`, `Resolve2`).
+- **The admission's generation is the one captured at dispatch**
+  (`Dispatch1Gen`, #3512 r1). The classified `tool_result` handler captures
+  `writeSession` (`runtime-tool-result.ts:2217`) before it awaits the
+  pipeline, and hands that one handle to the pipeline (the tier-3 touch) and
+  to `appendCascadePromise` (`runtime-tool-result.ts:2515`). The admission
+  drops on a stale handle on both branches, and the overflow `.then` reuses
+  it.
+- **The late admission** (`LateAdmit`, #3512 r1). `index.ts` wraps the handler
+  in a 10 s bound that abandons without cancelling it. pi's `teardownCurrent`
+  aborts only the agent's active run, so once the turn has ended nothing stops
+  a handler still awaiting its pipeline. The handler can resume after the
+  replacement's reset and admit its compute (`Admit1`, `Fire1`).
 - **Session 2's own tier-3 touches**, split into the dispatch, which captures
-  the generation (`runtime-tool-result.ts:904`), and the record
-  (`integration.ts:2045`). Session 2's own quiet window reconciles them. That
+  the generation, and the record (`integration.ts:2045`). Session 2's own quiet window reconciles them. That
   window cannot start while session 1's is still in progress
   (`_inProgress`).
 - **Session 2's turn_end** consumes and delivers
@@ -66,8 +76,10 @@ session-1 strays).
   review rounds 0 and 1 did.
 - `reconcileStart`: the round-1 design. The reconcile stands down before its
   drain when its captured generation is stale.
-- `admission` (#3512): the overflow append drops on a stale generation
-  captured at admission.
+- `admission` (#3512): the admission, parked or overflow, and the overflow
+  append drop on a stale generation captured at dispatch.
+- `admissionAtAdmit`: the round-0 mutant. The admission captures when it
+  admits, after the pipeline await.
 - `stray` (#3512): the tier-3 touch record drops on a stale generation
   captured when the dispatch started.
 - Mutants of the #3512 captures: `admissionHoist` and `dispatchHoist` reuse
@@ -88,7 +100,7 @@ is the code before #3499.
 - `NoDropFreshTouch`: no guard drops session 2's own tier-3 touch (catalog
   shape 54, the no-drop direction).
 - `NoDropFreshAdmission`: the admission guard never drops a compute session 2
-  admits past the cap (shape 54, #3512).
+  admits (shape 54, #3512).
 - `OneResetPerSession`: one `session_start` mutation pass per session.
 
 ## Results
@@ -102,13 +114,17 @@ at its first counterexample.
 | `StraddleDelivery` (shipped code) | pass | 171 |
 | `StrayTouch` (shipped code with strays, #3512) | pass | 283 |
 | `OverflowAdmission` (shipped code, overflow and strays, #3512) | pass | 1234 |
+| `LateAdmissionParked` (shipped code, late session-1 admission, #3512 r1) | pass | 1029 |
+| `LateAdmissionOverflow` (the same past the cap) | pass | 2957 |
 | `FixNoStartCheck` (window-start capture, the round-0 code) | violated `NoDropFreshTouch` | 125 |
 | `FixWindowCaptureStartCheck` (round-1 design, see below) | pass | 135 |
 | `FixSettleOnly` (only the settle is guarded) | violated `NoCrossSessionState` | 75 |
 | `FixReconcileOnly` (only the reconcile is guarded) | violated `NoCrossSessionState` | 42 |
 | `FixNoResetClear` (guard mutant of the shipped code) | violated `NoCrossSessionState` | 17 |
 | `FixNoAdmissionGuard` (the overflow append unguarded, #3512) | violated `NoCrossSessionDelivery` | 46 |
-| `FixAdmissionHoist` (one admission handle reused, #3512) | violated `NoDropFreshAdmission` | 50 |
+| `FixAdmissionHoist` (one admission handle reused, #3512) | violated `NoDropFreshAdmission` | 28 |
+| `FixAdmitCaptureParked` (admission captures when it admits, r0) | violated `NoCrossSessionState` | 49 |
+| `FixAdmitCaptureOverflow` (the same past the cap, the review's probe) | violated `NoCrossSessionState` | 90 |
 | `FixNoStrayGuard` (the touch record unguarded, #3512) | violated `NoCrossSessionDelivery` | 81 |
 | `FixStrayRecordCapture` (stamped at record time, #3512) | violated `NoCrossSessionDelivery` | 81 |
 | `FixDispatchHoist` (one dispatch handle reused, #3512) | violated `NoDropFreshTouch` | 48 |
@@ -151,6 +167,10 @@ What each config proves:
   #3512, `StrayTouch` violated `NoCrossSessionDelivery`.
 - The overflow append needs its own guard (`FixNoAdmissionGuard`): the reset
   clears `_cascadeRuns` and `_pendingCascadeRuns`, but not a detached `.then`.
+- The admission must use the dispatch's capture (`LateAdmission*` against
+  `FixAdmitCapture*`). An abandoned handler that admits after the reset
+  captures session 2's generation at admission, so a capture there passes
+  its compute into session 2's parked list or, past the cap, its `.then`.
 - Each #3512 capture is per admission and per dispatch. A handle reused from
   session 1 drops session 2's own compute or touch (`FixAdmissionHoist`,
   `FixDispatchHoist`), so both no-drop invariants can fail.
@@ -186,8 +206,11 @@ timers:
 
 `tests/clients/runtime-tool-result.test.ts` pins where the dispatch
 generation is captured (per dispatch, at dispatch: `FixStrayRecordCapture`,
-`FixDispatchHoist`), and `tests/clients/pipeline.test.ts` pins that the
-pipeline hands it to the compute.
+`FixDispatchHoist`). It also replays the late admission through the real
+`handleToolResult`, with a gated pipeline and a reset mid-flight, on both
+branches (`LateAdmission*` against `FixAdmitCapture*`).
+`tests/clients/pipeline.test.ts` pins that the pipeline hands the handle to
+the compute.
 
 ## Scope
 
@@ -199,8 +222,10 @@ Not modelled:
   once-per-session phases) against late session-1 writers;
 - the cross-cwd replacement. There the module is re-evaluated and the old
   `runtime` is a different object, so this straddle cannot occur;
-- tool_result pipelines still running at the replacement. pi's
-  `teardownCurrent` awaits `session.abort()` first.
+- a handler abandoned BEFORE its dispatch (during its client or join
+  bounds) that resumes after the reset. It captures session 2's generation
+  at dispatch, and only a capture at handler entry would close that; it is
+  tracked as a follow-up.
 
 ## Duplicate start (#2890)
 
