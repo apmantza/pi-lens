@@ -228,12 +228,8 @@ describe("formal/store-freshness replays", () => {
 			const env = setupTestEnvironment("tla-store-dep-");
 			try {
 				const { filePath, dep, runtime } = await depWrittenDuringDispatch(env);
-				// The one stamp feeds the record, the widget row and the sweep's
-				// widget population.
-				expect(inlineRecord(runtime).recordedAtMs).toBe(T_READ);
-				expect(getWidgetBlockingFilesForSweep()).toEqual([
-					{ filePath: path.resolve(filePath), recordedAtMs: T_READ },
-				]);
+				const recordedAtMs = inlineRecord(runtime).recordedAtMs;
+				const sweepFeed = getWidgetBlockingFilesForSweep();
 				const counts = await turnEndSweep(runtime, env.tmpDir, dep);
 				expect(counts.revalidated).toBe(1);
 				expect(inlineRecord(runtime)).toMatchObject({
@@ -242,6 +238,11 @@ describe("formal/store-freshness replays", () => {
 				});
 				expect(widgetRows(filePath)).toEqual([
 					{ stale: true, staleReason: "dependency-drift" },
+				]);
+				// The one stamp fed the record and the sweep's widget population.
+				expect(recordedAtMs).toBe(T_READ);
+				expect(sweepFeed).toEqual([
+					{ filePath: path.resolve(filePath), recordedAtMs: T_READ },
 				]);
 			} finally {
 				env.cleanup();
@@ -360,9 +361,10 @@ describe("formal/store-freshness replays", () => {
 					pipelineDeps({ getFormatService: () => formatService }),
 				);
 				expect(result.fileModified).toBe(true);
-				expect(result.analysisReadAtMs).toBe(T_EDIT);
 				expect(await reconcileStaleWidgetFiles()).toBe(0);
 				expect(widgetRows(filePath)).toHaveLength(1);
+				// The same stamp is what the inline record receives.
+				expect(result.analysisReadAtMs).toBe(T_EDIT);
 			} finally {
 				env.cleanup();
 			}
@@ -420,9 +422,10 @@ describe("formal/store-freshness replays", () => {
 						pipelineDeps({ biomeClient: fixer }),
 					);
 					expect(result.fileModified).toBe(true);
-					expect(result.analysisReadAtMs).toBe(T_EDIT);
 					expect(await reconcileStaleWidgetFiles()).toBe(0);
 					expect(widgetRows(filePath)).toHaveLength(1);
+					// The same stamp is what the inline record receives.
+					expect(result.analysisReadAtMs).toBe(T_EDIT);
 				} finally {
 					env.cleanup();
 				}
