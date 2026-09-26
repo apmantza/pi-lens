@@ -1400,7 +1400,7 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		}
 	});
 
-	it("REPLAY-RULES-REFRESHED-THEN-ANSWER: after the refresh republish, v1's own answer still counts and is delivered (#3490 inverse)", async () => {
+	it("REPLAY-RULES-REFRESHED-THEN-ANSWER: after the refresh republish, the next answer still counts and is delivered (#3490 inverse)", async () => {
 		const env = setupTestEnvironment("pi-lens-late-aux-refresh-answer-") as any;
 		const sessionId = "late-aux-refresh-answer";
 		try {
@@ -1424,11 +1424,14 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 				true,
 			);
 			scanner.publish(file, []);
-			// The refresh and its republish land while nothing is outstanding.
-			scanner.rulesRefreshed();
-			scanner.publish(file, [diag(0, "V0 REPUBLISH finding")]);
 			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
 			scanner.publish(file, [diag(11, "V1 finding on line 12")]);
+			// Two publications stored, nothing outstanding: the refresh takes one
+			// back (not all of them) and its republish restores it.
+			scanner.rulesRefreshed();
+			scanner.publish(file, [diag(11, "V1 REPUBLISH finding")]);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
 
 			const first = await turnEnd(
 				runtime,
@@ -1437,7 +1440,7 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 				sessionId,
 				file,
 			);
-			expect(first.content).toContain("V1 finding on line 12");
+			expect(first.content).toContain("V2 finding on line 1");
 			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
 		} finally {
 			env.cleanup();
