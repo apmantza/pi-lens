@@ -46,6 +46,9 @@ CONSTANTS
     WindowTrip,     \* #1142 windowed runtime-exit breaker (FALSE = mutant)
     ClearReadyOnDeath, \* the dead-client branch deletes demonstratedReady/Cold
                        \* (TRUE = code since #3502; FALSE = the pre-#3502 code)
+    ColdGuard,      \* a warm-up caches demonstratedCold only while the client it
+                    \* judged is still the registered one (TRUE = code since
+                    \* #3502's verify round 2; FALSE = mutant)
     ReadyGuard,     \* a touch marks demonstratedReady only while its client is
                     \* still the registered one (TRUE = code since #3502's review
                     \* round 1; FALSE = mutant: a dead client's late answer marks
@@ -59,7 +62,12 @@ CONSTANTS
                     \* detection only), "clearDeadFalse" ("clear" plus a dead
                     \* client's notify resolving false)
 
-Kinds == [k \in 1..Len(Shape) |-> IF SubSeq(Shape, k, k) = "S" THEN "sync" ELSE "collect"]
+\* "S" sync, "C" collect, "W" ensureWarmForSweep's warm-up touch: it waits
+\* for a verdict, and a failed one caches the key cold (demonstratedCold).
+Kinds == [k \in 1..Len(Shape) |->
+            CASE SubSeq(Shape, k, k) = "S" -> "sync"
+              [] SubSeq(Shape, k, k) = "W" -> "warmup"
+              [] OTHER -> "collect"]
 N == Len(Shape)
 T == 1..N
 MaxGen == MaxCrashes + MaxEvicts
@@ -77,11 +85,12 @@ VARIABLES
     earlyStreak, windowDeaths, permBroken, cooling,
     loopRespawns,   \* ghost: respawns that followed an early/mid death
     ready, readyGen,  \* demonstratedReady for the server key, and (ghost) which generation earned it
+    cold, coldGen,    \* demonstratedCold for the server key, and (ghost) which generation it judged
     pc, tg, skip, wrote, verdict,
     evictUnderLease
 
 vars == <<gen, registry, held, pub, rt, crashes, evicts, uptime, earlyStreak,
-          windowDeaths, permBroken, cooling, loopRespawns, ready, readyGen,
+          windowDeaths, permBroken, cooling, loopRespawns, ready, readyGen, cold, coldGen,
           pc, tg, skip, wrote, verdict, evictUnderLease>>
 
 Init ==
@@ -92,6 +101,7 @@ Init ==
     /\ earlyStreak = 0 /\ windowDeaths = 0 /\ permBroken = FALSE /\ cooling = FALSE
     /\ loopRespawns = 0
     /\ ready = FALSE /\ readyGen = None
+    /\ cold = FALSE /\ coldGen = None
     /\ pc = [i \in T |-> "idle"]
     /\ tg = [i \in T |-> None]
     /\ skip = [i \in T |-> FALSE]
@@ -111,7 +121,7 @@ Crash ==
     /\ registry' = "dead"
     /\ crashes' = crashes + 1
     /\ \E u \in Uptimes : uptime' = u
-    /\ UNCHANGED <<gen, held, pub, rt, evicts, Breaker, ready, readyGen,
+    /\ UNCHANGED <<gen, held, pub, rt, evicts, Breaker, ready, readyGen, cold, coldGen,
                    Touching, evictUnderLease>>
 
 \* makeCapacityForClient: an idle, unleased client is shut down and removed.
@@ -123,6 +133,7 @@ Evict ==
     /\ evicts' = evicts + 1
     /\ evictUnderLease' = (evictUnderLease \/ Leased)
     /\ ready' = FALSE /\ readyGen' = None
+    /\ cold' = FALSE /\ coldGen' = None
     /\ rt' = IF Fix \in {"clear", "clearDeadFalse"} THEN None ELSE rt
     /\ UNCHANGED <<gen, held, pub, crashes, uptime, Breaker, Touching>>
 
@@ -132,21 +143,21 @@ CooldownExpire ==
     /\ cooling' = FALSE
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
                    earlyStreak, windowDeaths, permBroken, loopRespawns, ready,
-                   readyGen, Touching, evictUnderLease>>
+                   readyGen, cold, coldGen, Touching, evictUnderLease>>
 
 \* The TOUCH_DEBOUNCE_MS window of the recentTouches entry elapses.
 RtExpire ==
     /\ rt # None
     /\ rt' = None
     /\ UNCHANGED <<gen, registry, held, pub, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, Touching, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, Touching, evictUnderLease>>
 
 \* The server of generation g publishes the file's diagnostics.
 Publish(g) ==
     /\ Live(g) /\ held[g] /\ ~pub[g]
     /\ pub' = [pub EXCEPT ![g] = TRUE]
     /\ UNCHANGED <<gen, registry, held, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, Touching, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, Touching, evictUnderLease>>
 
 -----------------------------------------------------------------------------
 \* Touch i may start.
@@ -181,8 +192,19 @@ SpawnFor(i, countLoop) ==
 \* generation, alive or not yet detected dead).
 MarkReady(i) ==
     IF ~ReadyGuard \/ (registry # "empty" /\ gen = tg[i])
-      THEN ready' = TRUE /\ readyGen' = tg[i]
-      ELSE UNCHANGED <<ready, readyGen>>
+      THEN /\ ready' = TRUE /\ readyGen' = tg[i]
+           \* markDemonstratedReadyKey: readiness supersedes a cold verdict.
+           /\ cold' = FALSE /\ coldGen' = None
+      ELSE UNCHANGED <<ready, readyGen, cold, coldGen>>
+
+\* ensureWarmForSweep's cold cache after a failed warm-up, also after awaits;
+\* the guard is the code's snapshot of the registered client
+\* (`this.state.clients.get(key) === warmedClients[i]`).
+MarkCold(i) ==
+    /\ IF ~ColdGuard \/ (registry # "empty" /\ gen = tg[i])
+         THEN cold' = TRUE /\ coldGen' = tg[i]
+         ELSE UNCHANGED <<cold, coldGen>>
+    /\ UNCHANGED <<ready, readyGen>>
 
 Unavailable(i) ==
     /\ pc' = [pc EXCEPT ![i] = "done"]
@@ -194,7 +216,7 @@ Acquire(i) ==
     /\ CASE registry = "live" ->
               /\ tg' = [tg EXCEPT ![i] = gen]
               /\ pc' = [pc EXCEPT ![i] = "decide"]
-              /\ UNCHANGED <<gen, registry, rt, uptime, Breaker, ready, readyGen, verdict>>
+              /\ UNCHANGED <<gen, registry, rt, uptime, Breaker, ready, readyGen, cold, coldGen, verdict>>
          [] registry = "dead" ->
               \* detection: breaker, then the state.broken check, then spawn.
               /\ earlyStreak' = NewStreak(uptime)
@@ -205,8 +227,10 @@ Acquire(i) ==
               \* #3502: the branch deletes demonstratedReady like the other
               \* retirement paths (eviction, idle eviction, notify-stall
               \* demotion); before it, the replacement inherited it.
-              /\ IF ClearReadyOnDeath THEN ready' = FALSE /\ readyGen' = None
-                                     ELSE UNCHANGED <<ready, readyGen>>
+              /\ IF ClearReadyOnDeath
+                   THEN /\ ready' = FALSE /\ readyGen' = None
+                        /\ cold' = FALSE /\ coldGen' = None
+                   ELSE UNCHANGED <<ready, readyGen, cold, coldGen>>
               /\ rt' = IF Fix \in {"clear", "clearDeath", "clearDeadFalse"} THEN None ELSE rt
               /\ IF NewCooling(uptime)
                    THEN /\ registry' = "empty" /\ Unavailable(i)
@@ -218,7 +242,7 @@ Acquire(i) ==
                    THEN /\ Unavailable(i) /\ UNCHANGED <<gen, registry, loopRespawns>>
                    ELSE /\ SpawnFor(i, FALSE) /\ UNCHANGED verdict
               /\ UNCHANGED <<rt, uptime, earlyStreak, windowDeaths, permBroken,
-                             cooling, ready, readyGen>>
+                             cooling, ready, readyGen, cold, coldGen>>
     /\ UNCHANGED <<held, pub, crashes, evicts, skip, wrote, evictUnderLease>>
 
 \* shouldSkipNotify: the entry is within its window with the same fingerprint,
@@ -228,7 +252,7 @@ Decide(i) ==
     /\ skip' = [skip EXCEPT ![i] = (rt # None /\ (Fix = "bind" => rt = tg[i]))]
     /\ pc' = [pc EXCEPT ![i] = "write"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, tg, wrote, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, tg, wrote, verdict, evictUnderLease>>
 
 \* notify.open. A skipped server is not written. A dead client resolves
 \* `true` (handleNotifyOpen: `if (!isClientAlive(state)) return
@@ -246,15 +270,15 @@ Write(i) ==
                      /\ UNCHANGED held
     /\ pc' = [pc EXCEPT ![i] = "mark"]
     /\ UNCHANGED <<gen, registry, pub, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, tg, skip, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, tg, skip, verdict, evictUnderLease>>
 
 \* `if (wrote === true) markTouched(...)` - a later microtask than the write.
 Mark(i) ==
     /\ pc[i] = "mark"
     /\ rt' = IF wrote[i] THEN tg[i] ELSE rt
-    /\ pc' = [pc EXCEPT ![i] = IF Kinds[i] = "collect" THEN "wait" ELSE "done"]
+    /\ pc' = [pc EXCEPT ![i] = IF Kinds[i] = "sync" THEN "done" ELSE "wait"]
     /\ UNCHANGED <<gen, registry, held, pub, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, tg, skip, wrote, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, tg, skip, wrote, verdict, evictUnderLease>>
 
 \* The wait on client tg settles on its cache (a publish landed, possibly
 \* before that client died: the dead client's cache is still read).
@@ -276,7 +300,7 @@ TimedOut(i) ==
     /\ pc[i] = "wait" /\ TimeoutGuard(i)
     /\ pc' = [pc EXCEPT ![i] = "gate"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
-                   Breaker, ready, readyGen, tg, skip, wrote, verdict,
+                   Breaker, ready, readyGen, cold, coldGen, tg, skip, wrote, verdict,
                    evictUnderLease>>
 
 \* #799 silent-clean confirm: tier3-silent + pingLiveness() on the touch's
@@ -286,7 +310,8 @@ Gate(i) ==
     /\ LET confirm == Silent /\ (PingGuard => Live(tg[i]))
        IN /\ verdict' = [verdict EXCEPT ![i] = IF confirm THEN "clean" ELSE "inconclusive"]
           /\ IF confirm THEN MarkReady(i)
-                        ELSE UNCHANGED <<ready, readyGen>>
+             ELSE IF Kinds[i] = "warmup" THEN MarkCold(i)
+             ELSE UNCHANGED <<ready, readyGen, cold, coldGen>>
     /\ pc' = [pc EXCEPT ![i] = "done"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
                    Breaker, tg, skip, wrote, evictUnderLease>>
@@ -333,6 +358,9 @@ BoundedCrashLoop == loopRespawns < Trip
 
 \* The key's demonstratedReady claim is about the client now in the registry.
 ReadyIsCurrent == ready => (readyGen = gen /\ registry # "empty")
+
+\* The key's demonstratedCold verdict is about the client now in the registry.
+ColdIsCurrent == cold => (coldGen = gen /\ registry # "empty")
 
 \* Eviction never takes a client out from under an in-flight touch.
 NoEvictUnderLease == ~evictUnderLease

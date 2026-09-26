@@ -19,7 +19,9 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   lease is shut down and removed from the registry.
 - **Touches** of the one file (`LSPService.touchFile`) with the same content,
   sequential or concurrent: `"S"` is the pipeline's `lsp_sync` touch (no
-  diagnostics), `"C"` the dispatch runner's collecting touch. Each is:
+  diagnostics), `"C"` the dispatch runner's collecting touch, and `"W"`
+  `ensureWarmForSweep`'s warm-up touch, whose failed verdict caches the key
+  cold (`demonstratedCold`). Each is:
   1. Acquire: `getClientForFile` → `ensureClientForServer`, which detects a
      dead client, runs the #1127/#1142 breakers and respawns, then a lease.
   2. Decide: `shouldSkipNotify` reads the `recentTouches` entry for
@@ -46,6 +48,8 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   deaths.
 - `ReadyIsCurrent`: the key's `demonstratedReady` describes the client now in
   the registry.
+- `ColdIsCurrent`: the key's `demonstratedCold` describes the client now in
+  the registry.
 - `NoEvictUnderLease`: eviction never takes a client out from under an
   in-flight touch.
 
@@ -58,6 +62,10 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 - `ClearReadyOnDeath`: `TRUE` is the code since #3502: the dead-client
   branch deletes `demonstratedReady` and `demonstratedCold` like every other
   retirement path. `FALSE` is the code before #3502.
+- `ColdGuard`: `TRUE` is the code since #3502's verify round 2: a failed
+  warm-up caches the key cold only while the client it judged is still the
+  registered one. `FALSE` is the mutant where the replacement is cached cold
+  for its predecessor's failure.
 - `ReadyGuard`: `TRUE` is the code since #3502's review round 1: a touch
   marks `demonstratedReady` only while its client is still the registered
   one. `FALSE` is the mutant where a dead client's late answer marks the key
@@ -96,6 +104,8 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 | `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 107 | 2.4 |
 | `CrashReadyConcurrent` (code, #3502 round 1) | pass | pass | 2289 | 3.4 |
 | `MutCrashReadyConcurrentNoGuard` (the ready mark without its guard) | violated `ReadyIsCurrent` | violated | 829 | 2.4 |
+| `WarmupColdConcurrent` (code, #3502 verify round 2) | pass | pass | 2289 | 2.7 |
+| `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 729 | 2.4 |
 
 State counts of a violated config vary between runs: TLC stops at the first
 counterexample its workers reach.
@@ -117,6 +127,11 @@ counterexample its workers reach.
   key, but a concurrent touch whose client answered and then died marks it
   ready again after the respawn. The mark is taken only for the registered
   client since #3502's review round 1.
+- **`MutWarmupColdNoGuard`**: the cold twin. A warm-up on A fails because A
+  dies; a concurrent touch respawns B, whose dead-client branch forgets the
+  key; the warm-up then caches the key cold, and B is skipped from the cache
+  on every later sweep. Since #3502's verify round 2 the cache is taken only
+  for the client the warm-up judged.
 
 ## Decisions the model backs
 
@@ -143,8 +158,9 @@ The throwaway replays became the regression tests:
   non-collecting touch; the TypeScript sync confirm after a crash between
   the touches and in the middle of the wait (racing and end-of-wait); and,
   for #3502, `ensureWarmForSweep` after a crash-respawn of a ready and of a
-  cold client, after a concurrent crash-respawn, and after a notify-stall
-  demotion.
+  cold client, after a concurrent crash-respawn (ready mark and cold
+  cache), after a notify-stall demotion, and after capacity and idle
+  eviction.
 - `tests/clients/lsp/crash-respawn-debounce-wire.test.ts`: the real
   `createLSPClient` and `tests/fixtures/fake-lsp-server.mjs`, SIGKILLed after
   the sync touch. Before #3501 server B's trace had no `didOpen` and the touch
