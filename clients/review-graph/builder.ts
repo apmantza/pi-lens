@@ -3520,6 +3520,30 @@ export function flushReviewGraphPersist(
 			}),
 		});
 	}
+	// #3536: the generation gate binds the forced write too. The worker serves
+	// requests concurrently, so a newer generation can already have promoted
+	// while this one was in flight; writing it would put the older view back.
+	// persistGraph sets the key's generation before it queues any request and
+	// nothing clears it, so it is defined whenever a candidate exists.
+	const currentGeneration = _persistGenerations.get(key)!;
+	if (pending && pending.generation !== currentGeneration) {
+		logReviewGraph({
+			cwd: key,
+			phase: "persist_skipped",
+			reason: "superseded",
+			observability: persistObservability(pending, {
+				status: "superseded",
+				supersededByGeneration: currentGeneration,
+				reason: "forced_flush_superseded",
+				workerStarted: true,
+				workerCompleted: false,
+			}),
+		});
+		return {
+			ok: false,
+			reason: `queued snapshot generation ${pending.generation} was superseded by generation ${currentGeneration}`,
+		};
+	}
 	if (!pending) {
 		return {
 			ok: false,
