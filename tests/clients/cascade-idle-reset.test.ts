@@ -16,7 +16,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ImpactCascadeResult,
 	ReviewGraph,
@@ -132,6 +132,15 @@ function impact(filePath: string, neighbors: string[]): ImpactCascadeResult {
 		riskFlags: [],
 	};
 }
+
+// The first import of the real LSP service and the cascade module costs
+// seconds cold (transform + load), which put the first test of each describe
+// near vitest's 5 s default under load. Pay it once here, under its own
+// budget; the per-test re-imports after vi.resetModules() are then cheap.
+beforeAll(async () => {
+	await import("../../clients/lsp/index.js");
+	await import("../../clients/dispatch/integration.js");
+}, 30_000);
 
 beforeEach(async () => {
 	vi.resetModules();
