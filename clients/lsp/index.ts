@@ -1453,9 +1453,10 @@ export class LSPService {
 	 * re-pushed, while every sibling whose write landed keeps its own debounce.
 	 *
 	 * #3501: an entry speaks only for the client instance whose write marked it.
-	 * A client that crashes or is evicted inside the window, or that was already
-	 * dead when its `notify.open` resolved `true`, leaves an entry its respawned
-	 * replacement must not inherit: the replacement was never sent the content.
+	 * A client that crashes or is evicted inside the window leaves an entry its
+	 * respawned replacement must not inherit: the replacement was never sent the
+	 * content. (A client already dead at the write resolves `false` since #3543,
+	 * so it marks no entry.)
 	 * Weak, so an entry never pins a retired client's state.
 	 */
 	private readonly recentTouches = new Map<

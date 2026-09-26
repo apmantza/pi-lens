@@ -3,9 +3,9 @@
  *
  * Recurrence this file prevents: `recentTouches` was keyed by
  * path:scope:serverId with no client identity, so an entry earned by a client
- * that then crashed or was evicted (or written by a client already dead,
- * whose `notify.open` resolves `true`) survived the respawn. The next touch
- * of the same content skipped the write to the replacement, and a
+ * that then crashed or was evicted (or, before #3543, written by a client
+ * already dead, whose `notify.open` resolved `true`) survived the respawn.
+ * The next touch of the same content skipped the write to the replacement, and a
  * silentOnClean server's silence was then confirmed clean for a document it
  * had never been sent (TLA+ `formal/lsp-crash`, `MutNoBindCrashBetweenTouches`
  * and `MutNoBindEvictBetweenTouches`).
@@ -222,7 +222,10 @@ describe("#3501 — a touch-debounce entry does not outlive its client", () => {
 
 	it.each([
 		["after its write landed", "after"],
-		["before its write (a dead client's notify resolves true)", "before"],
+		[
+			"before its write (a dead client's notify resolves false, #3543)",
+			"before",
+		],
 		["with its write still queued", "queued"],
 	] as const)(
 		"a server that dies %s between the sync and dispatch touches: the respawned client is sent the document and its error is reported",
