@@ -662,8 +662,14 @@ ADR: docs/adr/0009-reported-path-attribution.md
 - Raw components fit every rendered line with `clients/tui-fit.ts`. Read the
   mode from the event context: widgets require `tui`; proactive notifications
   are suppressed only in `print` and `json`.
-- Host SDK imports are type-only. Runtime dependencies belong in
-  `dependencies`, not `devDependencies`.
+- Host SDK imports are type-only, except the one lazy, caught lookup of pi's
+  `withFileMutationQueue` in `index.ts` (#3506) that
+  `tests/host-sdk-type-only.test.ts` admits by count. It reaches pi's running
+  instance only because jiti's native import of `dist/index.js` fails on the
+  host-provided static imports and jiti falls back to transpiling; where
+  those resolve natively it can load a second SDK copy, which
+  `clients/file-mutation-queue.ts` detects and records. Runtime dependencies
+  belong in `dependencies`, not `devDependencies`.
 
 </important>
 ## Key source layout
@@ -807,6 +813,12 @@ processes. Real elapsed-time assertions belong in the serialized
 `wallClockBudgetInclude` lane. Real LSP child tests belong in
 `lsp-spawn-heavy`. Any admitted real spawn or timer carries the flake-shape
 header, baseline row, and lane membership.
+
+When the defect is an ordering of awaits on one seam (a coalescing queue, a
+per-key serializer), or the seam has regressed before, write a scheduler
+property with `fc.scheduler()` instead of one more replay:
+`tests/support/scheduler-properties.md`, worked example
+`tests/clients/lsp/notify-queue-properties.test.ts`.
 
 Use `tests/support/fault-injection.ts` for wedged children, deterministic
 seam delays, starved budgets, gates, and reset hooks. Use `makeRunnerCtx` for
