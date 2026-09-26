@@ -73,6 +73,14 @@ vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	notifyExternalFileChange,
 }));
 
+/**
+ * #3512: `handleToolResult` captures the session generation when it
+ * dispatches the pipeline. The hand-built runtime doubles below never replace
+ * their session, so a real handle from a fresh coordinator is faithful.
+ */
+const sameSessionGeneration = () =>
+	new RuntimeCoordinator().captureSessionGeneration();
+
 const readdirMock = vi.mocked(fsp.readdir);
 const realReaddir = readdirMock.getMockImplementation()!;
 
@@ -1404,6 +1412,72 @@ describe("monorepo turn-state cwd alignment", () => {
 			env.cleanup();
 		}
 	});
+
+	it("hands the pipeline the session generation current when it dispatches (#3512)", async () => {
+		// The deferred cascade outlives this handler, and a session-1 compute
+		// can record a tier-3 touch after a same-cwd replacement. Its record
+		// site drops the touch through this handle, so the handle must name the
+		// session the dispatch started in, not the one current at record time.
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const env = setupTestEnvironment("pi-lens-3512-dispatch-generation-");
+		try {
+			const filePath = createTempFile(
+				env.tmpDir,
+				"edit.ts",
+				"export const x = 2;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.resetForSession();
+			runtime.beginTurn();
+			const dispatchGeneration = runtime.sessionGeneration;
+
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 2;" },
+					content: [{ type: "text", text: "ok" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			const ctx = vi.mocked(runPipeline).mock.calls.at(-1)?.[0];
+			const handle = ctx?.sessionGeneration;
+			const before = handle?.isCurrent();
+			runtime.resetForSession();
+			expect({
+				generation: handle?.generation,
+				currentAtDispatch: before,
+				currentAfterReplacement: handle?.isCurrent(),
+			}).toEqual({
+				generation: dispatchGeneration,
+				currentAtDispatch: true,
+				currentAfterReplacement: false,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("runtime-tool-result inline behavior warnings", () => {
@@ -1503,6 +1577,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2149,6 +2224,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				formatBehaviorWarnings: () => "",
 			};
 			const runtimeStub = {
+				captureSessionGeneration: sameSessionGeneration,
 				projectRoot: env.tmpDir,
 				setTelemetryIdentity: () => {},
 				updateGitGuardStatus: () => {},
@@ -2234,6 +2310,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2304,6 +2381,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2371,6 +2449,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg,
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2458,6 +2537,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: (msg: string) => logs.push(msg),
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2541,6 +2621,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2619,6 +2700,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2698,6 +2780,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot: env.tmpDir,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},
@@ -2901,6 +2984,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				getFlag: () => false,
 				dbg: () => {},
 				runtime: {
+					captureSessionGeneration: sameSessionGeneration,
 					projectRoot,
 					setTelemetryIdentity: () => {},
 					updateGitGuardStatus: () => {},

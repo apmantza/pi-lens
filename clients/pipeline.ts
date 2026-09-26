@@ -61,6 +61,7 @@ import {
 	isExcludedDirName,
 } from "./file-utils.js";
 import type { FormatService } from "./format-service.js";
+import type { GenerationHandle } from "./generation-guard.js";
 import { logLatency } from "./latency-logger.js";
 import type { PostAutofixNotice } from "./post-autofix-notice.js";
 import { emitLensAnalysisComplete } from "./lens-events.js";
@@ -289,6 +290,12 @@ export interface PipelineContext {
 	wordIndex?: WordIndex | null;
 	/** Debounced-persist hook fired after a successful per-edit update. */
 	onWordIndexUpdated?: (index: WordIndex) => void;
+	/**
+	 * #3512: the session current when this pipeline was dispatched, handed to
+	 * the deferred cascade so a touch it records after a same-cwd replacement
+	 * is dropped. Absent ⇒ the cascade records unguarded.
+	 */
+	sessionGeneration?: GenerationHandle;
 }
 
 export interface PipelineDeps {
@@ -1865,6 +1872,7 @@ export async function runPipeline(
 				fileContent,
 				wordIndex: ctx.wordIndex,
 				onWordIndexUpdated: ctx.onWordIndexUpdated,
+				sessionGeneration: ctx.sessionGeneration,
 			})
 				.then((run) => ({ ...run, origin: cascadeOrigin }))
 				.catch((err): import("./cascade-types.js").CascadeRun => {

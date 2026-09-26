@@ -898,6 +898,10 @@ async function dispatchPipelineAnalysis(args: {
 			onWordIndexUpdated: (index) => {
 				scheduleWordIndexPersist(dispatchCwd, index, dbg);
 			},
+			// #3512: captured now, when the pipeline is dispatched. The deferred
+			// cascade can record a tier-3 touch after a same-cwd replacement,
+			// and at that point only this capture still names its session.
+			sessionGeneration: runtime.captureSessionGeneration(),
 		},
 		{
 			biomeClient: biomeClient!,

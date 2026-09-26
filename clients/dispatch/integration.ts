@@ -64,6 +64,7 @@ import type {
 	CascadeSkipReason,
 } from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
+import type { GenerationHandle } from "../generation-guard.js";
 import {
 	classifyCascadeWaitTier,
 	isTierAwareCascadeEnabled,
@@ -1042,6 +1043,13 @@ export async function computeCascadeForFile(
 		wordIndex?: WordIndex | null;
 		/** Debounced-persist hook for the updated word index (#348 phase 2). */
 		onWordIndexUpdated?: (index: WordIndex) => void;
+		/**
+		 * #3512: the session current when this compute was dispatched. It runs
+		 * detached and can outlive a same-cwd replacement, whose reset has
+		 * already cleared the tier-3 registry; a touch it records afterwards is
+		 * dropped through this handle rather than reconciled for the new session.
+		 */
+		sessionGeneration?: GenerationHandle;
 	} = {},
 ): Promise<CascadeRun> {
 	const reverseDepsTimersToRelease = new Set<string>();
@@ -1062,6 +1070,7 @@ export async function computeCascadeForFile(
 			fileContent,
 			wordIndex,
 			onWordIndexUpdated,
+			sessionGeneration,
 		} = options;
 
 		ensureCascadeTurnScope(turnSeq);
@@ -2032,11 +2041,15 @@ export async function computeCascadeForFile(
 										});
 										return undefined;
 									}
-									recordOutstandingCascadeTouch({
-										filePath: neighborPath,
-										serverId: spawnedForTouch.client.serverId,
-										touchedAt,
-									});
+									const record = () =>
+										recordOutstandingCascadeTouch({
+											filePath: neighborPath,
+											serverId: spawnedForTouch.client.serverId,
+											touchedAt,
+										});
+									if (sessionGeneration)
+										sessionGeneration.guardedWrite(neighborPath, record);
+									else record();
 									const durationMs = Date.now() - neighborStart;
 									if (tier === "collect-later") collectLaterSkipped++;
 									// F1: both tier3-silent and collect-later skip the in-lane

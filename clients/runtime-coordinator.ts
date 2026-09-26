@@ -988,8 +988,14 @@ export class RuntimeCoordinator {
 			subject: "runtime-coordinator",
 			reason: `deferred cascade admission capped at ${MAX_PENDING_CASCADE_RUNS}`,
 		});
+		// #3512: the reset cannot reach this detached append, so a compute
+		// admitted in one session and settling after a same-cwd replacement is
+		// dropped here instead of landing in the new session's runs.
+		const generation = this.captureSessionGeneration();
 		void p
-			.then((run) => this.appendCascadeRun(run))
+			.then((run) =>
+				generation.guardedWrite(run.filePath, () => this.appendCascadeRun(run)),
+			)
 			.catch(() => {
 				// Pipeline promises are normally non-rejecting; preserve the existing
 				// failure sink if a caller violates that contract.
