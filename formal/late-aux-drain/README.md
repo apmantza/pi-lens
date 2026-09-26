@@ -7,7 +7,8 @@ marks the pair, the scanner publishes late, and the `turn_end` drain in
 (`node scripts/check-tla-models.mjs`) checks every config here against its
 `\* expect:` line.
 
-Issues: #3482, #3490 (the rules-refresh surplus publish).
+Issues: #3482 (with its save-rescan and close-and-reopen surpluses), #3490
+(the rules-refresh surplus publish).
 
 ## What the model covers
 
@@ -38,6 +39,20 @@ Issues: #3482, #3490 (the rules-refresh surplus publish).
   before the notification. `RefreshRebaseline` is the #3490 fix: the
   notification takes one publication back from a path that already had
   one.
+- **opengrep's save rescan** (#3482, `AllowSave`). opengrep@1a5fd9d
+  `Notification_handler.on_notification` runs `Scan_helpers.scan_file` on
+  `DidSaveTextDocument`, so a touch that is a save (#3405, the
+  `lsp_diagnostics` tool's `saved: true`) makes opengrep scan and publish
+  twice. `SaveExpect` is how many publications the client expects per save
+  beyond the send: 0 before the fix, 1 the fix (`rescansOnSave`), 2 a
+  mutant.
+- **A close and a fresh reopen** (#3482, `Closes`). A #3477 rename closes
+  the path. Scans still queued publish anyway: while the path is closed
+  the client drops them (the `closedDocuments` return), and after a reopen
+  it stores them. `Carry = "none"` is the code before the fix: the counts
+  restart at the reopen. `"span"` is the fix: the counts span the close,
+  and a publish dropped while closed is counted. `"spanNoDrop"` is a
+  mutant that does not count the dropped publish.
 - **The drain**, in three steps split at its awaits:
   1. `drainPendingAuxiliaryCoverage`.
   2. `await readCachedDiagnosticsForServers`, then the synchronous check
@@ -52,7 +67,7 @@ Timestamps are a logical clock. Agent touches do not overlap the drain,
 because `turn_end` runs after the turn's tools. External edits and publishes
 can land between any two steps.
 
-## Invariant
+## Invariants
 
 `NoStaleFindings`: every finding the drain delivers was computed on the
 content that was on disk when the drain checked the file. This is what
@@ -60,6 +75,15 @@ runtime-turn.ts promises at ~4070 ("a changed file cannot resurrect stale
 data") and at ~4131. The model does not check delivery time: the advisory
 is assembled after further awaits, so an edit after the gate is an
 unavoidable TOCTOU window.
+
+`NoFreshWithheld` (the no-drop direction, AGENTS.md shape 54): when the
+drain reads a stored answer for the content on disk, published after the
+mark, and no scan of that content is still to publish, the backlog binding
+does not make it wait. Such a wait either lasts until the rearm ceiling
+drops the pair, or ends on an older publish that lands later, so it drops
+the current answer. A wait while a scan of the current content is still
+due (the save rescan of the same version) is allowed. The invariant is a
+state predicate, so the `\* expect:` checker can read its verdict.
 
 ## Results
 
@@ -77,6 +101,27 @@ unavoidable TOCTOU window.
 | `RulesRefreshRebaseline`, `RulesRefreshRebaselineWide` | pass (#3490 fix) |
 | `RulesRefreshFirstAnswerOutstanding` | violated (admitted #3490 residual) |
 | `RulesRefreshOvertake` | violated (admitted #3490 residual: a later answer lands first) |
+| `FixNoDrop`, `RulesRefreshRebaselineNoDrop` | pass, both invariants (no cancel, as opengrep) |
+| `CancelWithholds` | violated `NoFreshWithheld` (admitted: a scanner that skips a superseded scan) |
+| `RulesRefreshOvertakeWithheld` | violated `NoFreshWithheld` (the #3490 r1 F2 trade, no-drop side) |
+| `RulesRefreshOvertakeNoRebaseline` | pass `NoFreshWithheld` (the trade's other side) |
+| `SaveRescanUncounted` | violated `NoStaleFindings` (the save rescan before the fix) |
+| `SaveRescanExpected` | pass, both invariants (the fix) |
+| `SaveRescanOverExpected` | violated `NoFreshWithheld` (mutant: two per save) |
+| `ReopenUncarried` | violated `NoStaleFindings` (the reopen before the fix) |
+| `ReopenSpan`, `ReopenRulesRefresh` | pass, both invariants (the fix) |
+| `ReopenSpanNoDropCount` | violated `NoFreshWithheld` (mutant: a publish dropped while closed not counted) |
+
+The existing configs keep `NoStaleFindings` alone and keep their verdicts.
+Adding `NoFreshWithheld` to them violates it in every config with
+`AllowCancel = TRUE` (`Fix`, `FixWide`, `ReTouchRemark`,
+`RulesRefreshRebaseline`, ...): a cancelled scan never publishes, so the
+binding waits for it. That is #3482's admitted "a scanner that skips
+superseded scans only makes the drain wait", which the no-drop invariant
+shows is a drop until the rearm ceiling. `CancelWithholds` pins it.
+opengrep does not cancel: each notification's reply runs to completion
+(opengrep@1a5fd9d `RPC_server.ml`, `Lwt.dont_wait`), so the `NoDrop`
+configs set `AllowCancel = FALSE`.
 
 - **Bug 1, `ReTouchRemark`.** A second agent touch lands while the v1 scan is
   still outstanding: it clears, sends v2, finds no evidence, and re-marks,
@@ -103,9 +148,10 @@ stale.
 - **Backlog binding** (`CountBind`): at mark, record how many sends to the
   scanner are unpublished and the per-path publish count. Deliver only after
   that many further publishes. This assumes a scanner publishes once per
-  scan, in order. A scanner that skips superseded scans only makes the
-  drain wait (safe). A scanner that publishes extra times, such as an empty
-  publish on close, would break the assumption; the model does not cover it.
+  scan, in order. A scanner that skips superseded scans makes the drain
+  wait until the rearm ceiling (`CancelWithholds`). The extra publishes
+  pi-lens triggers in opengrep are modelled below; opengrep publishes
+  nothing on close.
 - **No refresh on stale** (`RefreshOnStale = FALSE`): a stale re-arm keeps
   the baseline. Only a producer re-mark moves it.
 
@@ -117,14 +163,34 @@ send that is still outstanding, and that send's own publish is later
 delivered against the next revision. TLC's shortest trace is a touch sent
 after the notification: the republish carries the older version and is
 counted as that touch's answer. With the rebaseline, both the #3490 order
-and this one pass. `RulesRefreshFirstAnswerOutstanding` is the admitted
-residual: the notification arrives before the path's first answer, so the
+and this one pass. `RulesRefreshFirstAnswerOutstanding` is an accepted
+limit: the notification arrives before the path's first answer, so the
 path has no count to take back, and its republish can still count toward
-a later send. `RulesRefreshOvertake` is the other admitted residual: the
+a later send. It cannot be observed: opengrep republishes a path only if
+a scan is recorded for it, and the client cannot see whether the first
+scan was recorded before the refresh read the list. Taking one back
+anyway would, when the refresh misses the path, hold every later
+delivery for it until the rearm ceiling. `RulesRefreshOvertake` is the other admitted residual: the
 answer to a touch made after the notification lands before the republish.
 The rebaseline then waits for the republish and delivers its older
 content. Without the rebaseline, the current answer is delivered only if
-the drain runs before the republish is stored.
+the drain runs before the republish is stored. `NoFreshWithheld` checks
+this trade from both sides: `RulesRefreshOvertakeWithheld` (the rebaseline
+withholds the stored current answer) and
+`RulesRefreshOvertakeNoRebaseline` (without it nothing is withheld, and
+`RulesRefreshInFlight` shows the stale delivery that costs).
+
+**The save rescan and the reopen (#3482).** Without the save expectation
+(`SaveRescanUncounted`), the rescan of v1 lands after a re-touch sends v2
+and is counted as v2's answer, so v1 is delivered against v2. Without the
+spanning counts (`ReopenUncarried`), a scan queued before the close lands
+after the reopen and is counted as the reopened send's answer. Each fix
+passes both invariants (`SaveRescanExpected`, `ReopenSpan`), and each
+over-correction withholds the current answer (`SaveRescanOverExpected`,
+`ReopenSpanNoDropCount`). `ReopenRulesRefresh` runs the refresh before,
+during and after a close and reopen: the take-back stays in the spanning
+count, and the republish restores it whether it is dropped while closed
+or stored after the reopen.
 
 ## Scope
 
@@ -142,7 +208,14 @@ Not modelled:
   (#3490 r1 F1, handled in the code and pinned by
   `REPLAY-RULES-REFRESHED-DURING-DEBOUNCE`) is not in the model;
 - a refresh scan that fails and never republishes (a liveness cost, not a
-  safety one).
+  safety one), and likewise a save rescan or a queued scan that fails;
+- the order of a save's two scans: opengrep runs them on separate threads,
+  and both carry the saved version in the model;
+- a receipt still inside the debounce at the close (the code counts it
+  when the close's `clearDiagnosticsForPath` drops it);
+- opengrep's other publish triggers: `ChangeWorkspaceFolders`
+  (`scan_workspace`), `DidDeleteFiles`, `semgrep/scanWorkspace` and
+  `semgrep/refreshRules`. pi-lens sends none of them.
 
 The aux-grace touch path itself also accepts a late v1 publish as v2's
 "answer" (`FixRefreshOnStale` step 7). That is the touch's own result, not
