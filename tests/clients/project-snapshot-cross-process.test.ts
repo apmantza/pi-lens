@@ -364,6 +364,40 @@ describe("project snapshot persist across processes", () => {
 		}
 	});
 
+	it("after a refusal, in-process readers and merge-writers build on the sibling's newer body (#3509)", async () => {
+		const { env, cwd, home } = projectEnv();
+		process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC = "1";
+		try {
+			// The sibling's body lands BEFORE our admission, so admission takes
+			// the sibling's body as its read-your-writes baseline.
+			siblingSave(home, cwd, 6, "child_seq6");
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 5, "parent_seq5"));
+			expect(loadProjectSnapshot(cwd)?.seq).toBe(6);
+
+			// A merge-writer (the word-index and reverse-deps writers' shape)
+			// rebases on what it loads, so its update lands.
+			const merged = loadProjectSnapshot(cwd);
+			if (!merged) throw new Error("no snapshot to merge into");
+			saveProjectSnapshot(cwd, {
+				...merged,
+				generatedAt: new Date().toISOString(),
+				cachedExports: [...merged.cachedExports, ["merged", "m.ts"]],
+			});
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 6,
+				bodyExports: ["child_seq6", "merged"],
+				metaSeq: 6,
+			});
+			expect(
+				latencyRows.filter(
+					(row) => row.metadata?.decision === "superseded_on_disk",
+				),
+			).toHaveLength(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("a held cache lock keeps both the admission meta write and the promotion out (#3509)", async () => {
 		const { env, cwd } = projectEnv();
 		process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC = "1";

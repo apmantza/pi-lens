@@ -1442,6 +1442,12 @@ function promoteSnapshotBody(
 		return false;
 	}
 	if (typeof locked.value === "boolean") return locked.value;
+	// The refused view must stop serving in-process readers. When the sibling's
+	// body landed before our admission, the loader's mtime/size baseline is the
+	// sibling's own body, so it cannot tell ours is stale. A newer in-process
+	// save would carry a newer generation and be gated out before this point,
+	// so the entry is ours, as on the failure path.
+	deleteAuthoritativeSnapshot(pending.key);
 	logSnapshotPersistDecision({
 		cwd: pending.cwd,
 		seq: pending.snapshot.seq,
