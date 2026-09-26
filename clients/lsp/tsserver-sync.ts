@@ -416,9 +416,11 @@ async function runTsserverSyncCommand(
  * surfaced to the caller, not discarded. `confirmed: false` = sync path
  * unavailable, fall through to existing behavior.
  *
- * #2598: `getAdvertisedCommands` is REQUIRED here rather than probed for. The
- * real `LSPService` defines it unconditionally (clients/lsp/index.ts), and both
- * production callers hand this function that service, so the former
+ * #2598: `getAdvertisedCommands` is REQUIRED here rather than probed for.
+ * Every production caller supplies it: `lsp_diagnostics` hands this function
+ * the real `LSPService`, which defines it unconditionally, and `touchFile`'s
+ * two confirms hand it a `tsserverSyncChannel` bound to the touch's own client
+ * (#3501; clients/lsp/index.ts). So the former
  * `typeof … !== "function"` bail was reachable only from a partial test double
  * (AGENTS.md shape 7). It was also unobservable even there: an absent method
  * throws a `TypeError` that this function's own catch turns into the same
