@@ -24,7 +24,11 @@ describe("deferred cascade settle (#450)", () => {
 		resetDegradationLedger();
 		const runtime = new RuntimeCoordinator();
 		for (let i = 0; i < 33; i++)
-			runtime.appendCascadePromise(Promise.resolve(run(`${i}.ts`)));
+			runtime.appendCascadePromise(
+				Promise.resolve(run(`${i}.ts`)),
+				runtime.captureSessionGeneration(),
+				"edit.ts",
+			);
 		await new Promise<void>((resolve) => queueMicrotask(resolve));
 		const summary = getDegradationSummary();
 		expect(summary.some((entry) => entry.kind === "cascade-pending-cap")).toBe(
@@ -35,8 +39,16 @@ describe("deferred cascade settle (#450)", () => {
 	});
 	it("appends fulfilled runs and reports settled count", async () => {
 		const runtime = new RuntimeCoordinator();
-		runtime.appendCascadePromise(Promise.resolve(run("a.ts")));
-		runtime.appendCascadePromise(Promise.resolve(run("b.ts")));
+		runtime.appendCascadePromise(
+			Promise.resolve(run("a.ts")),
+			runtime.captureSessionGeneration(),
+			"edit.ts",
+		);
+		runtime.appendCascadePromise(
+			Promise.resolve(run("b.ts")),
+			runtime.captureSessionGeneration(),
+			"edit.ts",
+		);
 
 		const { settled, timedOut } = await runtime.settleCascadeRuns(1000);
 		expect(settled).toBe(2);
@@ -53,6 +65,8 @@ describe("deferred cascade settle (#450)", () => {
 			new Promise<CascadeRun>((res) => {
 				release = res;
 			}),
+			runtime.captureSessionGeneration(),
+			"edit.ts",
 		);
 
 		// Cap of 0ms: the pending promise cannot settle in time.
@@ -77,7 +91,11 @@ describe("deferred cascade settle (#450)", () => {
 		const skip = Promise.reject(new Error("boom")).catch((): CascadeRun =>
 			run("err.ts", "error"),
 		);
-		runtime.appendCascadePromise(skip);
+		runtime.appendCascadePromise(
+			skip,
+			runtime.captureSessionGeneration(),
+			"edit.ts",
+		);
 
 		const { settled } = await runtime.settleCascadeRuns(1000);
 		expect(settled).toBe(1);
@@ -95,6 +113,8 @@ describe("deferred cascade settle (#450)", () => {
 			new Promise<CascadeRun>((res) => {
 				release = res;
 			}),
+			runtime.captureSessionGeneration(),
+			"edit.ts",
 		);
 		const first = await runtime.settleCascadeRuns(0);
 		expect(first.timedOut).toBe(1);
@@ -114,6 +134,8 @@ describe("deferred cascade settle (#450)", () => {
 			new Promise<CascadeRun>(() => {
 				// never resolves
 			}),
+			runtime.captureSessionGeneration(),
+			"edit.ts",
 		);
 		runtime.resetForSession();
 		const { settled, timedOut } = await runtime.settleCascadeRuns(0);

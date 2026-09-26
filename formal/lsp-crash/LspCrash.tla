@@ -64,7 +64,9 @@ CONSTANTS
                     \* deleted when a dead client is detected and when a client
                     \* is evicted), "clearDeath" (deleted on dead-client
                     \* detection only), "clearDeadFalse" ("clear" plus a dead
-                    \* client's notify resolving false)
+                    \* client's notify resolving false; since #3543 every
+                    \* value resolves false, so it is the same model as
+                    \* "clear")
 
 \* "S" sync, "C" collect, "W" ensureWarmForSweep's warm-up touch: it waits
 \* for a verdict, and a failed one caches the key cold (demonstratedCold).
@@ -280,9 +282,11 @@ Decide(i) ==
                    ready, readyGen, cold, coldGen, tg, wrote, verdict, evictUnderLease>>
 
 \* notify.open. A skipped server is not written. A dead client resolves
-\* `true` (handleNotifyOpen: `if (!isClientAlive(state)) return
-\* Promise.resolve(true)`, and a queued entry whose runner sees the dead
-\* client returns void, read as sent by `sent !== false`).
+\* `false` since #3543: the queued run that finds the client dead returns
+\* `false`, since nothing went on the wire. Before #3543 it resolved `true`.
+\* No config's verdict depends on this value (every config keeps its verdict
+\* with #3501's `true`), so `Fix = "clearDeadFalse"` is now the same model
+\* as "clear".
 Write(i) ==
     /\ pc[i] = "write"
     /\ IF skip[i]
@@ -291,7 +295,7 @@ Write(i) ==
          ELSE IF Live(tg[i])
                 THEN /\ held' = [held EXCEPT ![tg[i]] = TRUE]
                      /\ wrote' = [wrote EXCEPT ![i] = TRUE]
-                ELSE /\ wrote' = [wrote EXCEPT ![i] = (Fix # "clearDeadFalse")]
+                ELSE /\ wrote' = [wrote EXCEPT ![i] = FALSE]
                      /\ UNCHANGED held
     /\ pc' = [pc EXCEPT ![i] = "mark"]
     /\ UNCHANGED <<gen, registry, pub, rt, crashes, evicts, uptime, Breaker,
