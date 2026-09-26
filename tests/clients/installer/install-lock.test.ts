@@ -115,7 +115,8 @@ describe("install lock across versions (#3476)", () => {
 		expect(gate.reason).toBe(
 			`timed out after 150ms waiting for shared tools install lock (pid=${process.pid} createdAt=${createdAt})`,
 		);
-		expect(degradationCount("generation-lock-legacy-held")).toBeGreaterThan(0);
+		// Review F2: the 150 ms wait makes two attempts; one back-off is recorded.
+		expect(degradationCount("generation-lock-legacy-held")).toBe(1);
 		fs.unlinkSync(LEGACY);
 		// A generation kept by a back-off would hold this out for 180 s.
 		const next = await acquireManagedInstallGate("test");
@@ -156,6 +157,27 @@ describe("install lock across versions (#3476)", () => {
 
 	// Issue comment on #3476: after an age-out takeover, the old owner's
 	// release removed the new owner's lock by path.
+	// #3476 review F3: release matched the old file by pid alone, so after a
+	// same-process age-out takeover the superseded hold removed its
+	// successor's file while the successor was inside.
+	it("keeps its successor's lock file when a superseded hold in this process releases", async () => {
+		const first = await acquireManagedInstallGate("test");
+		expect(first.ok).toBe(true);
+		const aged = new Date(Date.now() - 200_000);
+		fs.utimesSync(path.join(GENERATIONS, "lock.1"), aged, aged);
+		fs.writeFileSync(
+			LEGACY,
+			JSON.stringify({ pid: process.pid, createdAt: aged.getTime() }),
+		);
+		const second = await acquireManagedInstallGate("test");
+		expect(second.ok).toBe(true);
+		const successors = fs.readFileSync(LEGACY, "utf8");
+		await first.release?.();
+		expect(fs.readFileSync(LEGACY, "utf8")).toBe(successors);
+		await second.release?.();
+		expect(fs.existsSync(LEGACY)).toBe(false);
+	});
+
 	it("keeps an older installer's replacement lock file when it releases", async () => {
 		const gate = await acquireManagedInstallGate("test");
 		const theirs = JSON.stringify({ pid: DEAD_PID, createdAt: Date.now() });

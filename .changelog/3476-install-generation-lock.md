@@ -8,6 +8,6 @@ section: Fixed
   taker had just created. The lock is now a generation lock in
   `tools/.install.locks/`: every acquisition creates the next generation
   exclusively, so exactly one taker wins. Releasing the lock, or exiting while
-  holding it, no longer removes a lock another installer took over after an
+  holding it, no longer removes a lock another holder took over after an
   age-out. A holder also takes the old `tools/.install.lock` file, so
   installers from older versions still block (refs #3476).

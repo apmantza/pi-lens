@@ -120,7 +120,7 @@ describe("pid-file locks: generation takeover (#3476)", () => {
 		return { dir, lockPath: path.join(dir, "state.lock") };
 	}
 
-	// BoundedCrash.cfg on the real lock: p1 dies holding it; this process
+	// The double takeover on the real lock: p1 dies holding it; this process
 	// (p3) judges it stale, and before p3 acts on that judgement p2 takes the
 	// same lock over and enters. A takeover that removes the lock by path
 	// then removes p2's live lock, and both are inside.
@@ -419,9 +419,9 @@ describe("acquireBoundedPidFileLock across versions (#3476)", () => {
 		return { lockPath, gens: `${lockPath}s` };
 	}
 
-	function take(lockPath: string) {
+	function take(lockPath: string, waitMs = 0) {
 		return acquireBoundedPidFileLock(lockPath, {
-			waitMs: 0,
+			waitMs,
 			retryMs: 5,
 			timeoutMessage: "bounded lock timed out",
 			onContention: "skip-log",
@@ -452,10 +452,27 @@ describe("acquireBoundedPidFileLock across versions (#3476)", () => {
 		expect(fs.existsSync(lockPath)).toBe(false);
 	});
 
+	// #3476 review F1: while the bridge exists the 5 s generation lease does
+	// not supersede a live holder, because its old file is judged by pid
+	// liveness alone. #3489 removes the bridge and this case then reds: the
+	// dispositions and actionable-warnings stores would silently gain a 5 s
+	// lease on live holders, so that removal must decide the lease on purpose.
+	// Review F2: one acquisition records one back-off, not one per retry.
+	it("keeps a contender out of a live holder's lock past the 5 s lease", () => {
+		const { lockPath, gens } = lockIn();
+		const release = take(lockPath);
+		const old = new Date(Date.now() - 10_000);
+		fs.utimesSync(path.join(gens, "lock.1"), old, old);
+		expect(take(lockPath, 50)).toBeNull();
+		expect(degradationCount("generation-lock-stale-takeover")).toBe(1);
+		expect(degradationCount("generation-lock-legacy-held")).toBe(1);
+		release?.();
+	});
+
 	it("backs off a live older writer's lock file without keeping its generation", () => {
 		const { lockPath } = lockIn();
 		fs.writeFileSync(lockPath, `${process.pid}:${Date.now()}:older`);
-		expect(take(lockPath)).toBeNull();
+		expect(take(lockPath, 50)).toBeNull();
 		expect(degradationCount("generation-lock-legacy-held")).toBe(1);
 		fs.unlinkSync(lockPath);
 		// No wait: a generation kept by the back-off would hold this out.
@@ -547,9 +564,9 @@ describe("acquireQuarantinePidFileLock across versions (#3476)", () => {
 		return { lockPath, gens: `${lockPath}s` };
 	}
 
-	function take(lockPath: string, staleMs = 60_000) {
+	function take(lockPath: string, staleMs = 60_000, waitMs = 0) {
 		return acquireQuarantinePidFileLock(lockPath, {
-			waitMs: 0,
+			waitMs,
 			retryMs: 5,
 			staleMs,
 			timeoutMessage: "quarantine lock timed out",
@@ -589,7 +606,8 @@ describe("acquireQuarantinePidFileLock across versions (#3476)", () => {
 			path.join(lockPath, "owner.json"),
 			JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: "old" }),
 		);
-		expect(await take(lockPath)).toBeNull();
+		// Review F2: several retries in one acquisition record one back-off.
+		expect(await take(lockPath, 60_000, 50)).toBeNull();
 		expect(degradationCount("generation-lock-legacy-held")).toBe(1);
 		fs.rmSync(lockPath, { recursive: true });
 		// No wait: a generation kept by the back-off would hold this out.

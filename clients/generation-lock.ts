@@ -127,12 +127,16 @@ export function recordGenerationTakeover(hold: GenerationHold): void {
 	});
 }
 
-/** Record a back-off on a pre-generation lock file held by an older writer. */
+/**
+ * Record a back-off on a held pre-generation lock file, once per acquisition.
+ * Its holder is a writer from before #3476, or this version's own holder
+ * whose generation outlived the lease while it was still inside.
+ */
 export function recordLegacyLockHeld(legacyPath: string): void {
 	incrementDegradationCount({
 		kind: "generation-lock-legacy-held",
 		subject: path.resolve(legacyPath),
-		reason: `backed off: ${path.basename(legacyPath)} is held by a writer from before #3476`,
+		reason: `backed off: ${path.basename(legacyPath)} is held by another writer (one from before #3476, or a holder past the generation lease)`,
 	});
 }
 

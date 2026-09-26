@@ -261,8 +261,10 @@ export type DegradationKind =
 	| "generation-guard-stale-write"
 	/**
 	 * #3476: a generation-lock holder (the bounded, quarantine or installer
-	 * lock) backed off because that lock's pre-generation file is held by a
-	 * live writer from an older version. Subject is the old lock's path.
+	 * lock) backed off because that lock's pre-generation file is held: by a
+	 * writer from an older version, or by this version's own holder whose
+	 * generation outlived the lease. Once per acquisition. Subject is the old
+	 * lock's path.
 	 */
 	| "generation-lock-legacy-held"
 	/**

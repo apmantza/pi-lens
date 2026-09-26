@@ -56,6 +56,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import https from "node:https";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -112,7 +113,7 @@ import { resolveGitHubToken } from "../zizmor-config.js";
 const TOOLS_DIR = path.join(getGlobalPiLensDir(), "tools");
 const INSTALL_LOCK_PATH = path.join(TOOLS_DIR, ".install.lock");
 const INSTALL_LOCK_GENERATIONS = `${INSTALL_LOCK_PATH}s`;
-const activeInstallLocks = new Set<GenerationHold>();
+const activeInstallLocks = new Set<InstallLockHold>();
 let installLockExitCleanupRegistered = false;
 
 /**
@@ -127,6 +128,18 @@ export function getManagedToolsDir(): string {
 interface InstallLockOwner {
 	pid: number;
 	createdAt: number;
+}
+
+/**
+ * A held install lock: its generation, and the exact text it wrote to the old
+ * file. Release compares that text, as the bounded lock compares its token:
+ * a pid alone also matches a newer hold of this same process (#3476 review
+ * F3). The `nonce` keeps two holds created in one millisecond apart; older
+ * installers read only `pid` and `createdAt`.
+ */
+interface InstallLockHold {
+	generation: GenerationHold;
+	token: string;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -181,13 +194,9 @@ function legacyInstallLockIsStale(maxAgeMs: number): boolean {
 	}
 }
 
-function createLegacyInstallLock(): boolean {
+function createLegacyInstallLock(token: string): boolean {
 	try {
-		writeFileSync(
-			INSTALL_LOCK_PATH,
-			JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-			{ flag: "wx" },
-		);
+		writeFileSync(INSTALL_LOCK_PATH, token, { flag: "wx" });
 		return true;
 	} catch (cause) {
 		if (isLockContention(cause)) return false;
@@ -195,8 +204,8 @@ function createLegacyInstallLock(): boolean {
 	}
 }
 
-function takeLegacyInstallLock(maxAgeMs: number): boolean {
-	if (createLegacyInstallLock()) return true;
+function takeLegacyInstallLock(maxAgeMs: number, token: string): boolean {
+	if (createLegacyInstallLock(token)) return true;
 	if (!legacyInstallLockIsStale(maxAgeMs)) return false;
 	try {
 		unlinkSync(INSTALL_LOCK_PATH);
@@ -204,7 +213,7 @@ function takeLegacyInstallLock(maxAgeMs: number): boolean {
 		// Gone since the create, or (Windows) still open elsewhere: retry.
 		return false;
 	}
-	return createLegacyInstallLock();
+	return createLegacyInstallLock(token);
 }
 
 function installLockOwner(): string {
@@ -225,39 +234,43 @@ function installLockOwner(): string {
  * create succeeds; the old takeover removed the lock by path, and a taker
  * acting on an earlier judgement could remove a live successor's lock.
  */
-function tryAcquireInstallLock(maxAgeMs: number): GenerationHold | undefined {
+function tryAcquireInstallLock(
+	maxAgeMs: number,
+): InstallLockHold | "busy" | "legacy-held" {
 	const hold = tryAcquireGeneration(INSTALL_LOCK_GENERATIONS, maxAgeMs);
-	if (!hold) return undefined;
+	if (!hold) return "busy";
 	if (hold.tookOverStale) recordGenerationTakeover(hold);
+	const token = JSON.stringify({
+		pid: process.pid,
+		createdAt: Date.now(),
+		nonce: randomUUID(),
+	});
 	let took: boolean;
 	try {
-		took = takeLegacyInstallLock(maxAgeMs);
+		took = takeLegacyInstallLock(maxAgeMs, token);
 	} catch (cause) {
 		releaseGeneration(hold);
 		throw cause;
 	}
-	if (took) return hold;
-	recordLegacyLockHeld(INSTALL_LOCK_PATH);
+	if (took) return { generation: hold, token };
 	releaseGeneration(hold);
-	return undefined;
+	return "legacy-held";
 }
 
 /**
  * Release a held install lock. The old file is removed only while it still
- * names this process: after an age-out takeover by an older installer, it
- * names that installer.
+ * holds this hold's own text: after an age-out takeover it names the new
+ * holder, an older installer or a newer hold of this process.
  */
-function releaseInstallLock(hold: GenerationHold): void {
+function releaseInstallLock(hold: InstallLockHold): void {
 	activeInstallLocks.delete(hold);
 	try {
-		const owner = JSON.parse(
-			readFileSync(INSTALL_LOCK_PATH, "utf8"),
-		) as InstallLockOwner;
-		if (owner.pid === process.pid) unlinkSync(INSTALL_LOCK_PATH);
+		if (readFileSync(INSTALL_LOCK_PATH, "utf8") === hold.token)
+			unlinkSync(INSTALL_LOCK_PATH);
 	} catch {
-		// Already gone or replaced: nothing of ours to remove.
+		// Already gone: nothing of ours to remove.
 	}
-	releaseGeneration(hold);
+	releaseGeneration(hold.generation);
 }
 
 async function acquireInstallLock(): Promise<{
@@ -272,10 +285,15 @@ async function acquireInstallLock(): Promise<{
 		Number(process.env.PI_LENS_INSTALL_LOCK_TIMEOUT_MS) || 150_000;
 	const deadline = Date.now() + timeoutMs;
 	const maxAgeMs = installLockMaxAgeMs();
+	let legacyHeldRecorded = false;
 
 	while (Date.now() < deadline) {
 		const hold = tryAcquireInstallLock(maxAgeMs);
-		if (hold) {
+		if (hold === "legacy-held" && !legacyHeldRecorded) {
+			legacyHeldRecorded = true;
+			recordLegacyLockHeld(INSTALL_LOCK_PATH);
+		}
+		if (typeof hold === "object") {
 			activeInstallLocks.add(hold);
 			if (!installLockExitCleanupRegistered) {
 				installLockExitCleanupRegistered = true;

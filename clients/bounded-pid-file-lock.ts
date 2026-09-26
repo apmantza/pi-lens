@@ -15,8 +15,10 @@ const waitArray = new Int32Array(new SharedArrayBuffer(4));
 
 /**
  * How long a bounded lock with no readable pid stays live (#3475), and since
- * #3476 the bounded lock's lease: a generation older than this is stale even
- * if its pid is alive.
+ * #3476 the lease of the bounded lock's generations: a generation older than
+ * this is stale even if its pid is alive. While the pre-#3476 file is also
+ * taken (the bridge, #3489), that file is judged by pid liveness alone, so a
+ * live holder still keeps every contender out past this lease.
  *
  * The exclusive create and the token write are separate steps, so a
  * contender can read a lock whose creator is alive but has not written its
@@ -222,9 +224,9 @@ async function tryAcquireQuarantineLock(
 async function tryAcquireQuarantineGeneration(
 	lockPath: string,
 	staleMs: number,
-): Promise<(() => Promise<void>) | null> {
+): Promise<(() => Promise<void>) | "busy" | "legacy-held"> {
 	const hold = tryAcquireGeneration(generationDir(lockPath), staleMs);
-	if (!hold) return null;
+	if (!hold) return "busy";
 	if (hold.tookOverStale) recordGenerationTakeover(hold);
 	let releaseLegacy: (() => Promise<void>) | null;
 	try {
@@ -239,9 +241,8 @@ async function tryAcquireQuarantineGeneration(
 			releaseGeneration(hold);
 		};
 	}
-	recordLegacyLockHeld(lockPath);
 	releaseGeneration(hold);
-	return null;
+	return "legacy-held";
 }
 
 /**
@@ -271,12 +272,17 @@ export async function acquireQuarantinePidFileLock(
 		),
 ): Promise<(() => Promise<void>) | null> {
 	const deadline = Date.now() + options.waitMs;
+	let legacyHeldRecorded = false;
 	for (;;) {
 		const release = await tryAcquireQuarantineGeneration(
 			lockPath,
 			options.staleMs,
 		);
-		if (release) return release;
+		if (typeof release === "function") return release;
+		if (release === "legacy-held" && !legacyHeldRecorded) {
+			legacyHeldRecorded = true;
+			recordLegacyLockHeld(lockPath);
+		}
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) {
 			if (options.onContention === "skip-log") {
@@ -336,16 +342,19 @@ function releaseLegacyBoundedLock(lockPath: string, token: string): void {
 	}
 }
 
-/** One attempt: the hold, or undefined when the lock is held (retry). */
+/**
+ * One attempt: the hold, or why not: "busy" (the generation is held) or
+ * "legacy-held" (the old file is). The caller retries either way.
+ */
 function tryAcquireBoundedLock(
 	lockPath: string,
 	token: string,
-): GenerationHold | undefined {
+): GenerationHold | "busy" | "legacy-held" {
 	const hold = tryAcquireGeneration(
 		generationDir(lockPath),
 		UNREADABLE_LOCK_STALE_MS,
 	);
-	if (!hold) return undefined;
+	if (!hold) return "busy";
 	if (hold.tookOverStale) recordGenerationTakeover(hold);
 	let took: boolean;
 	try {
@@ -355,9 +364,8 @@ function tryAcquireBoundedLock(
 		throw cause;
 	}
 	if (took) return hold;
-	recordLegacyLockHeld(lockPath);
 	releaseGeneration(hold);
-	return undefined;
+	return "legacy-held";
 }
 
 /**
@@ -368,9 +376,12 @@ function tryAcquireBoundedLock(
  * The old takeover unlinked `lockPath`, and a taker acting on an earlier
  * judgement could unlink a live successor's lock.
  *
- * PID liveness cannot distinguish a recycled PID from the original owner. A
- * recycled PID can therefore make a stale lock look live, but only until the
- * UNREADABLE_LOCK_STALE_MS lease runs out.
+ * A live holder is never superseded while the bridge to the pre-#3476 file
+ * exists: a taker of its aged-out generation still backs off on that file,
+ * which is judged by pid liveness alone. PID liveness cannot distinguish a
+ * recycled PID from the original owner, so a recycled PID still wedges the
+ * lock until that process exits, as before #3476. Removing the bridge
+ * (#3489) gives live holders the UNREADABLE_LOCK_STALE_MS lease.
  */
 export function acquireBoundedPidFileLock(
 	lockPath: string,
@@ -393,13 +404,18 @@ export function acquireBoundedPidFileLock(
 ): (() => void) | null {
 	const token = `${process.pid}:${Date.now()}:${randomUUID()}`;
 	const deadline = Date.now() + options.waitMs;
+	let legacyHeldRecorded = false;
 	for (;;) {
 		const hold = tryAcquireBoundedLock(lockPath, token);
-		if (hold) {
+		if (typeof hold === "object") {
 			return () => {
 				releaseLegacyBoundedLock(lockPath, token);
 				releaseGeneration(hold);
 			};
+		}
+		if (hold === "legacy-held" && !legacyHeldRecorded) {
+			legacyHeldRecorded = true;
+			recordLegacyLockHeld(lockPath);
 		}
 		if (Date.now() >= deadline) {
 			if (options.onContention === "skip-log") {

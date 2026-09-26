@@ -8,5 +8,7 @@ section: Fixed
   could unlink the lock a second taker had just created. The lock is now a
   generation lock in `<store>.locks/`: every acquisition creates the next
   generation exclusively, so exactly one taker wins. A holder also takes the
-  old `<store>.lock` file, so writers from older versions still block, and a
-  live holder is now superseded after 5 s (refs #3476).
+  old `<store>.lock` file, so writers from older versions still block. That
+  file is judged by pid liveness alone, so a live holder is still never
+  superseded, and a recycled pid still holds the lock until that process
+  exits (refs #3476).
