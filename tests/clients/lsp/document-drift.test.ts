@@ -134,6 +134,76 @@ describe("DocumentDriftTracker (#1783)", () => {
 		expect(events.map((e) => e.disposition)).toEqual(["resynced"]);
 	});
 
+	// #3481 round 1: the resync carries a read stamp taken BEFORE the sweep's
+	// read, so a read that straddles a write is ordered as the older one.
+	it("hands the resync a read stamp taken before its read", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/stamp.ts"), { content: "v1\n", mtimeMs: SYNCED_AT + 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/stamp.ts"), "v0\n", SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps } = makeDeps(files, now);
+		let readStartedAt = Number.NaN;
+		let stamp: number | undefined;
+		// A clock that ticks on every reading, so "before the read" is a strict
+		// order without waiting on real time.
+		let tick = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => ++tick);
+
+		await tracker.sweep(
+			{
+				...deps,
+				read: async (filePath: string) => {
+					readStartedAt = performance.now();
+					return deps.read(filePath);
+				},
+				resync: async (_filePath, _content, _age, readStamp) => {
+					stamp = readStamp;
+					return true;
+				},
+			},
+			{ force: true },
+		);
+
+		expect(stamp).toBeTypeOf("number");
+		expect(stamp).toBeLessThan(readStartedAt);
+	});
+
+	it("stamps a Git-recovery resync before its read too", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/git.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/git.ts"), "v1\n", SYNCED_AT);
+		tracker.enqueueResync([k("/repo/git.ts")]);
+		const { deps } = makeDeps(files, now);
+		let readStartedAt = Number.NaN;
+		let stamp: number | undefined;
+		// A clock that ticks on every reading, so "before the read" is a strict
+		// order without waiting on real time.
+		let tick = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => ++tick);
+
+		await tracker.sweep(
+			{
+				...deps,
+				read: async (filePath: string) => {
+					readStartedAt = performance.now();
+					return deps.read(filePath);
+				},
+				resync: async (_filePath, _content, _age, readStamp) => {
+					stamp = readStamp;
+					return true;
+				},
+			},
+			{ force: true },
+		);
+
+		expect(stamp).toBeTypeOf("number");
+		expect(stamp).toBeLessThan(readStartedAt);
+	});
+
 	it("re-stamps a touched-but-identical long file without resyncing it", async () => {
 		const same = `// ${"h".repeat(60)}\nconst x = 1;\n// ${"t".repeat(60)}\n`;
 		const files = new Map<string, FakeFile>([

@@ -28,9 +28,19 @@ import {
 import { waitFor } from "../interleaving-kit.js";
 import { createMockState } from "./mock-client-state.js";
 
-const { getServersForFileWithConfig, createLSPClient } = vi.hoisted(() => ({
-	getServersForFileWithConfig: vi.fn(),
-	createLSPClient: vi.fn(),
+const { getServersForFileWithConfig, createLSPClient, logLatency } = vi.hoisted(
+	() => ({
+		getServersForFileWithConfig: vi.fn(),
+		createLSPClient: vi.fn(),
+		logLatency: vi.fn(),
+	}),
+);
+
+vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
+	...(await importActual<
+		typeof import("../../../clients/latency-logger.js")
+	>()),
+	logLatency,
 }));
 
 vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
@@ -64,6 +74,10 @@ async function setup() {
 				contentChanges?: Array<{ text: string }>;
 			};
 			const text = p?.textDocument?.text ?? p?.contentChanges?.at(-1)?.text;
+			if (m === "didSave") {
+				wire.push("didSave");
+				return;
+			}
 			if (m !== "didOpen" && m !== "didChange") return;
 			wire.push(`${m}:${text}`);
 			const gate = text === undefined ? undefined : gates.get(text);
@@ -127,11 +141,12 @@ async function setup() {
 	]);
 	createLSPClient.mockResolvedValue(client);
 	const service = new LSPService();
-	const touch = (content: string, readStamp?: number) =>
+	const touch = (content: string, readStamp?: number, saved = false) =>
 		service.touchFile(FILE, content, {
 			diagnostics: "none",
 			source: "test",
 			readStamp,
+			...(saved && { saved }),
 		});
 	// Open the document with A, then step past the 1500 ms touch debounce so a
 	// later touch of A is not skipped as a repeat.
@@ -185,6 +200,78 @@ describe("#3481 — the notify queue sends the latest read, not the latest enque
 		expect(recordFp()).toBe(fingerprintDocumentContent(B));
 	});
 
+	// Round 1 S2: a superseded touch says so in its own lsp_touch_file row.
+	it("names the superseded server on the dropped touch's lsp_touch_file row", async () => {
+		const { wire, gates, touch, pendingQueued } = await setup();
+		const gate = gatedPromise<void>();
+		gates.set(B, gate);
+		logLatency.mockClear();
+		const pipeline = touch(B, 2);
+		await waitFor(
+			() => wire.length,
+			(n) => n === 2,
+		);
+		const cascade = touch(A, 1);
+		await pendingQueued();
+		gate.resolve();
+		await Promise.all([pipeline, cascade]);
+
+		const rows = logLatency.mock.calls
+			.map(
+				([entry]) =>
+					entry as {
+						phase?: string;
+						metadata?: { supersededServerIds?: string[] };
+					},
+			)
+			.filter((entry) => entry.phase === "lsp_touch_file")
+			.map((entry) => entry.metadata?.supersededServerIds);
+		expect(rows).toEqual([undefined, ["typescript"]]);
+	});
+
+	// Round 1 B1 (#3405): dropping an older read must not drop the save it
+	// carried. The server already holds newer bytes, so the save goes out for
+	// the held document (text is optional in DidSaveTextDocumentParams).
+	it("still sends didSave when the dropped older read was the save", async () => {
+		const { state, wire, touch } = await setup();
+		state.saveOptions = { includeText: false };
+		await touch(B, 100);
+		vi.setSystemTime(Date.now() + 5_000);
+		await touch(B, 90, true);
+
+		expect(wire).toEqual([`didOpen:${A}`, `didChange:${B}`, "didSave"]);
+	});
+
+	// Round 1 B2: an unstamped touch replacing a pending stamped one keeps the
+	// pending stamp, so an older read arriving next is still kept out.
+	it("keeps the pending read stamp when an unstamped touch replaces the entry", async () => {
+		const { wire, gates, touch, pendingQueued } = await setup();
+		await touch(C, 50);
+		vi.setSystemTime(Date.now() + 5_000);
+		const gate = gatedPromise<void>();
+		gates.set(P, gate);
+		const earlier = touch(P);
+		await waitFor(
+			() => wire.length,
+			(n) => n === 3,
+		);
+		const newer = touch(B, 100);
+		await pendingQueued();
+		const unstamped = touch(A);
+		await pendingQueued(2);
+		const stale = touch(C, 70);
+		await pendingQueued(3);
+		gate.resolve();
+		await Promise.all([earlier, newer, unstamped, stale]);
+
+		expect(wire).toEqual([
+			`didOpen:${A}`,
+			`didChange:${C}`,
+			`didChange:${P}`,
+			`didChange:${A}`,
+		]);
+	});
+
 	it("drops a touch read before content already sent after its queue retired", async () => {
 		const { wire, touch } = await setup();
 		// Two same-turn pipelines: #1 read B (stamp 1), the agent wrote C, #2 read
@@ -235,10 +322,11 @@ describe("#3481 — the notify queue sends the latest read, not the latest enque
 		expect(wire).toEqual([`didOpen:${A}`, `didChange:${P}`, `didChange:${C}`]);
 	});
 
-	it("still drops a stale read after an unstamped send such as a drift resync", async () => {
+	it("still drops a read older than the last stamp after an unstamped send", async () => {
 		const { wire, touch } = await setup();
 		await touch(B, 2);
-		// A drift resync (no read stamp) heals the document to what disk holds.
+		// An unstamped touch (a warm-up, an explicit query) cannot say how old
+		// its bytes are, so it leaves the last stamp in place.
 		vi.setSystemTime(Date.now() + 5_000);
 		await touch(C);
 		await touch(A, 1);

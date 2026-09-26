@@ -183,6 +183,8 @@ export interface DriftSweepDeps {
 		filePath: string,
 		content: string,
 		driftAgeMs: number,
+		/** #3481: `performance.now()` taken before the sweep read `content`. */
+		readStamp?: number,
 	): Promise<boolean>;
 	/**
 	 * Does a live language server still hold this document open? A record for a
@@ -427,6 +429,7 @@ export class DocumentDriftTracker {
 				continue;
 			}
 			let content: string;
+			const readStamp = performance.now();
 			try {
 				content = await read(key);
 			} catch {
@@ -436,7 +439,7 @@ export class DocumentDriftTracker {
 			}
 			let landed = false;
 			try {
-				landed = await deps.resync(key, content, 0);
+				landed = await deps.resync(key, content, 0, readStamp);
 			} catch {
 				landed = false;
 			}
@@ -482,6 +485,7 @@ export class DocumentDriftTracker {
 				continue;
 			}
 			let content: string;
+			const readStamp = performance.now();
 			try {
 				content = await read(key);
 			} catch {
@@ -511,7 +515,7 @@ export class DocumentDriftTracker {
 			const diskSize = Buffer.byteLength(content, "utf8");
 			let landed = false;
 			try {
-				landed = await deps.resync(key, content, driftAgeMs);
+				landed = await deps.resync(key, content, driftAgeMs, readStamp);
 			} catch {
 				landed = false;
 			}

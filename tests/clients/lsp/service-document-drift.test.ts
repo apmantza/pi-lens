@@ -174,6 +174,10 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		expect(result?.candidates).toBe(1);
 		expect(result?.resynced).toBe(1);
 		expect(client.received).toEqual([ORIGINAL, BULK_EDITED]);
+		// #3481 round 1: the heal carries its read stamp, so an older stamped
+		// read that arrives after it is dropped instead of undoing the heal.
+		const lastOpen = client.notify.open.mock.calls.at(-1) as unknown[];
+		expect(lastOpen[6]).toEqual(expect.any(Number));
 	});
 
 	it("resynchronizes an open document from the recovered Git-change seam", async () => {

@@ -638,8 +638,9 @@ describe("clientShutdown", () => {
 				(count) => count === 2,
 				{ timeoutMs: 1_000 },
 			);
-			await expect(second).resolves.toBe(true);
-			await expect(newest).resolves.toBe(true);
+			// Round 1 N2: cancelled, never sent — not a landed write.
+			await expect(second).resolves.toBe(false);
+			await expect(newest).resolves.toBe(false);
 
 			writeGate.resolve();
 			await expect(first).resolves.toBe(true);

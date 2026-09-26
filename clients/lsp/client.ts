@@ -4145,6 +4145,28 @@ async function sendDidSave(
 	});
 }
 
+/**
+ * #3481 round 1: a save carried by a queue entry that was dropped for an older
+ * read. `text` is optional in `DidSaveTextDocumentParams`, and the server
+ * already holds the newer bytes, so the save is sent without it.
+ */
+async function sendDidSaveForHeldDocument(
+	state: LSPClientState,
+	normalizedPath: string,
+): Promise<void> {
+	if (!state.saveOptions || !isClientAlive(state)) return;
+	if (!state.openDocuments.has(normalizedPath)) return;
+	const uri = state.openDocumentUris?.get(normalizedPath);
+	if (uri === undefined) return;
+	try {
+		await safeSendNotification(state.connection, "textDocument/didSave", {
+			textDocument: { uri },
+		});
+	} catch {
+		// A failed save notify must not stop the queue runner.
+	}
+}
+
 async function handleNotifyOpenOnce(
 	state: LSPClientState,
 	filePath: string,
@@ -4362,7 +4384,11 @@ function enqueueDocumentNotify(
 			waiters,
 			coalescedCount: (previous?.coalescedCount ?? 0) + (previous ? 1 : 0),
 			saved: saved || previous?.saved === true,
-			readStamp: stale ? previous!.readStamp : readStamp,
+			// An unstamped replacement cannot say how old its bytes are; keeping the
+			// pending stamp keeps an older read arriving next out (#3481 round 1).
+			readStamp: stale
+				? previous!.readStamp
+				: (readStamp ?? previous?.readStamp),
 		};
 		if (queue!.running) return;
 		queue!.running = true;
@@ -4383,12 +4409,15 @@ function enqueueDocumentNotify(
 						lastSent !== undefined &&
 						next.readStamp < lastSent
 					) {
+						// #3405: the save still happened. The server holds newer bytes,
+						// so the save goes out for the document it holds.
+						if (next.saved)
+							await sendDidSaveForHeldDocument(state, normalizedPath);
 						for (const waiter of next.waiters) waiter.resolve(false);
 						continue;
 					}
-					// An unstamped send (a drift resync, a warm-up) cannot say how old
-					// its bytes are, so it leaves the last stamp in place: a stale read
-					// arriving after a drift heal is still refused.
+					// An unstamped send (a warm-up, an explicit query) cannot say how
+					// old its bytes are, so it leaves the last stamp in place.
 					if (next.readStamp !== undefined)
 						state.sentReadStamps.set(normalizedPath, next.readStamp);
 					try {
@@ -4415,7 +4444,8 @@ function enqueueDocumentNotify(
 /** Drop unwritten document notifications when a client is torn down. */
 function cancelDocumentNotifyQueues(state: LSPClientState): void {
 	for (const queue of state.notifyChangeQueues.values()) {
-		for (const waiter of queue.pending?.waiters ?? []) waiter.resolve(true);
+		// Never sent: not a landed write, so `touchFile` records nothing for it.
+		for (const waiter of queue.pending?.waiters ?? []) waiter.resolve(false);
 		queue.pending = undefined;
 	}
 	state.notifyChangeQueues.clear();

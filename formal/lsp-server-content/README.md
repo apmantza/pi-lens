@@ -167,9 +167,14 @@ check.
 
 Each touch carries a read stamp: when the caller read the bytes. The code
 uses `performance.now()` taken just before the read, passed down as the
-`touchFile` option `readStamp`; the post-write pipeline and the cascade set
-it. An unstamped touch coalesces as before (last enqueued wins) and never
-moves the last-sent stamp. The fix has two parts:
+`touchFile` option `readStamp`. The post-write pipeline, the cascade, the
+drift resync (stamped before the sweep's read, as the model's `res` actor
+is), the dispatch runner and the tool-call auto-touch set it. An unstamped
+touch (warm-ups, explicit queries, the workspace sweep) replaces a pending
+entry as before but keeps that entry's stamp, and never moves the last-sent
+stamp. An unstamped touch is not in the model: one that reads older bytes
+and is sent between two stamped touches is still sent. The fix has two
+parts:
 
 1. **Coalesce by read order.** An unstarted entry is replaced only by one
    that was read no earlier (`FixCoalesce`).

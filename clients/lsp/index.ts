@@ -3700,7 +3700,7 @@ export class LSPService {
 		if (this.checkDestroyed()) return undefined;
 		return this.documentDrift.sweep(
 			{
-				resync: async (filePath, content) => {
+				resync: async (filePath, content, _driftAgeMs, readStamp) => {
 					// Reuse the normal touch path so the resync inherits the existing
 					// per-server notify-write budget, the #743 backpressure demotion and
 					// the client-lease machinery. diagnostics:"none" keeps it a pure
@@ -3719,6 +3719,7 @@ export class LSPService {
 						source: "drift_resync",
 						clientScope: "all",
 						excludeServerIds: await this.serverIdsNotHoldingDocument(filePath),
+						readStamp,
 					});
 					// touchFile swallows a rejected or timed-out notify write so the
 					// caller's edit keeps moving, so its return proves nothing about
@@ -4987,9 +4988,10 @@ export class LSPService {
 			// one outstanding write for that server. They carry no evidence about this
 			// content, so they join the coverage gap below.
 			const notifyDeferredServerIds: string[] = [];
-			// #3481: a server's queue sent a later read of this file instead of this
-			// touch's content, so this touch must not stamp the drift record.
-			let supersededRead = false;
+			// #3481: servers whose queue sent a later read of this file instead of
+			// this touch's content. The touch must not stamp the drift record, and
+			// its lsp_touch_file row names them.
+			const supersededServerIds: string[] = [];
 			if (!notifySkipped) {
 				const budget = notifyWriteBudgetMs();
 				// #1459: how long a queued auxiliary may wait for its resync slot. Bounded
@@ -5182,7 +5184,7 @@ export class LSPService {
 						} else if (wrote === false) {
 							// #3481: the server holds a later read, not `content`, so no
 							// debounce entry either: a revert to `content` must be sent.
-							supersededRead = true;
+							supersededServerIds.push(entry.info.id);
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
 							if (!rejected) {
@@ -5214,7 +5216,7 @@ export class LSPService {
 					spawned,
 					notifyWriteTimedOutServerIds.length === 0 &&
 						notifyDeferredServerIds.length === 0 &&
-						!supersededRead,
+						supersededServerIds.length === 0,
 					startedAt,
 				);
 				if (notifyWriteTimedOutServerIds.length > 0) {
@@ -7146,6 +7148,9 @@ export class LSPService {
 					...(notifyWriteTimedOutServerIds.length > 0 && {
 						notifyWriteTimedOutServerIds,
 					}),
+					// #3481: servers that sent a later read of this file instead of
+					// this touch's content. Absent when none did.
+					...(supersededServerIds.length > 0 && { supersededServerIds }),
 					diagnosticsTimedOut,
 					inconclusive,
 					// #1549: the attribution the issue's observability contract asks for —

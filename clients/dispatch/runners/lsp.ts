@@ -163,6 +163,8 @@ const lspRunner: RunnerDefinition = {
 		let deferredServerIds: readonly string[] = [];
 		let usedWarmAttach = false;
 		let failureReason = "";
+		// #3481: when the synced bytes were read, for the notify queue's order.
+		const readStamp = performance.now();
 		const content = readFileContent(ctx.filePath);
 		if (!content) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
@@ -218,6 +220,7 @@ const lspRunner: RunnerDefinition = {
 						maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
 						maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
 						source: "dispatch-lsp-runner",
+						readStamp,
 					});
 			if (touched === undefined) {
 				lspClientReady = false;
