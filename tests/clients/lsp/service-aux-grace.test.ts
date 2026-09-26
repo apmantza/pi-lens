@@ -2059,6 +2059,48 @@ describe("#1470 — cut-off auxiliary honesty", () => {
 		expect(result?.inconclusive).toBeUndefined();
 	});
 
+	it("#3482: marks the collect-later pair at the touch's own notify time, not when the ceiling gives up", async () => {
+		// `markedAtMs` is the turn-end drain's freshness baseline — the pending
+		// pair's doc comment calls it "roughly when the touch's notify went
+		// out". The producer here instead stamped `Date.now()` AFTER the
+		// 2000ms aux-grace ceiling gave up waiting, which is ~2s later than
+		// the notify. A file saved again inside that window has an mtime that
+		// lands BEFORE the (wrongly late) baseline, so the turn-end freshness
+		// gate reads it as unmodified since the mark and delivers the
+		// cut-off scanner's answer for the file's PREVIOUS revision as fresh.
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { drainPendingAuxiliaryCoverage } =
+			await import("../../../clients/lsp/pending-aux-coverage.js");
+		const service = new LSPService();
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep"),
+		]);
+		createLSPClient
+			.mockResolvedValueOnce(makeClient(800, [], { serverId: "ts-primary" }))
+			.mockResolvedValueOnce(
+				makeClient(3000, [makeDiagnostic("never")], { serverId: "opengrep" }),
+			);
+		await service.getClientsForFile(FILE);
+
+		const notifiedAt = Date.now();
+		const touch = service.touchFile(FILE, "probe", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		// 800 (primary) + 2000 (aux ceiling) + slack, same budget probe() uses.
+		await vi.advanceTimersByTimeAsync(3000);
+		await touch;
+
+		const [pair] = drainPendingAuxiliaryCoverage().filter(
+			(p) => p.filePath === FILE && p.serverId === "opengrep",
+		);
+		expect(pair).toBeDefined();
+		expect(Math.abs((pair?.markedAtMs ?? 0) - notifiedAt)).toBeLessThan(50);
+	});
+
 	// CLASS SWEEP (#1470's own acceptance criterion). opengrep is the scanner the
 	// issue was reported against, and under today's DEFAULTS it is the only
 	// auxiliary that can reach the cut-off shape: `budgetMs = Math.min(
