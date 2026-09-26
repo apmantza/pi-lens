@@ -67,9 +67,9 @@ config, the state count is how far TLC got before the counterexample.
 | `VersionedSkipped` | pass | pass | 3872 | 2.5 |
 | `VersionedSeedSkipped` | pass | pass | 2744 | 2.5 |
 | `VersionedPreserve` | pass | pass | 3640 | 2.2 |
-| `VersionlessBaseline` | violated FreshResult | violated FreshResult | 1011 | 1.8 |
-| `VersionlessSkipped` | violated FreshResult | violated FreshResult | 833 | 1.8 |
-| `VersionlessSeedSkipped` | violated FreshResult | violated FreshResult | 535 | 1.9 |
+| `VersionlessBaseline` | pass (after #3484) | pass | 3696 | 1.5 |
+| `VersionlessSkipped` | pass (after #3484) | pass | 3696 | 1.6 |
+| `VersionlessSeedSkipped` | pass (after #3484) | pass | 3408 | 2.3 |
 | `PreserveTimeoutRead` | violated FreshRead | violated FreshRead | 1735 | 2.1 |
 | `MutantNoGuards` | violated FreshResult | violated FreshResult | 921 | 1.7 |
 | `MutantNoSuperseded` | violated FreshResult | violated FreshResult | 3617 | 2.2 |
@@ -87,8 +87,9 @@ a version-less one.
 
 ## The traces
 
-**`VersionlessSkipped` / `VersionlessBaseline`** (9 states; the admitted
-limitation):
+**`VersionlessSkipped` / `VersionlessBaseline`** (before #3484, with
+`Fence = FALSE`: violated in 9 states; `VersionlessSeedSkipped` in 8. #3484
+set `Fence = TRUE` in all three):
 1. A reads baseline 0. Its runner bumps the version to 1, clears the path,
    and sends `didChange(1)`.
 2. The server, still on content 0 (a slow analysis of the previous edit),
@@ -152,9 +153,9 @@ A throwaway vitest file (deleted from `tests/` after the run) drives the real cl
 A version-less server's stale publish settles both waits at once. The same
 publish with `version: 0` is dropped, and the wait runs to its budget.
 
-## Candidate fix and its mutations
+## The fix (#3484) and its mutations
 
-**Fence** (`Fence = TRUE`):
+**Fence** (`Fence = TRUE`, shipped in #3484):
 - in the same tick as the `didChange` send, the client also sends a request
   the server must answer in order;
 - until the reply arrives, the handler drops version-less publishes for the
@@ -175,9 +176,29 @@ The reply comes after every publish the server sent before reading the
   that out without a version, so no client-side ordering fix is sound for
   every version-less server.
 
-LSP has no generic no-op request for the fence. It would have to borrow a
-cheap request the server answers in order (for example `documentSymbol`),
-at one extra round trip per touch.
+LSP has no generic no-op request for the fence. The code borrows
+`textDocument/documentSymbol`, at one extra round trip per touch.
+
+How the code realises it (`clients/lsp/client.ts` `sendFenced`,
+`armDiagnosticsFence`), and where it is narrower than the model:
+- The fence goes out only to a server whose last publish carried no version
+  (`lastPublishVersioned === false`). A versioned server pays nothing. A server
+  that has not published yet is treated as versioned, so the first touch after
+  it starts is not fenced; the model's version-less server is fenced from its
+  first touch.
+- A version-less server that does not advertise `documentSymbolProvider` gets
+  no fence and keeps the behaviour the `Fence = FALSE` configs describe; one
+  `lsp_diagnostics_fence` row (`outcome: "no-request"`) per client says so.
+- The fence lifts on its reply, on an error reply, or after the client's
+  diagnostics wait ceiling (`DIAGNOSTICS_WAIT_TIMEOUT_MS`, logged as
+  `outcome: "timeout"`); publishes are then accepted as before and the
+  binding stays "unknown". The model's fence always gets its reply.
+- Each touch's fence has its own token, so an older fence's reply does not
+  lift a newer one.
+- The fence is armed at the first send after the clear on every branch that
+  clears: the open document's `didChange`, the close of a `reopenOnResync`
+  close + reopen, the first `didOpen`, and the change path's fallback
+  `didOpen` and `didChange`. Only the first of these is modelled.
 
 ## Scope
 

@@ -1119,6 +1119,21 @@ export interface LSPClientState {
 	 * re-publishes — resolves on its first publish exactly as before.
 	 */
 	emptyFirstPublishHoldSpent: boolean;
+	/**
+	 * #3484: whether the server's last publish carried a document version.
+	 * Undefined until it publishes. Only a server seen publishing WITHOUT one
+	 * pays for a diagnostics fence.
+	 */
+	lastPublishVersioned?: boolean | undefined;
+	/**
+	 * #3484: paths with a diagnostics fence outstanding, each with its own
+	 * token so an older fence's reply cannot lift a newer one. Version-less
+	 * publishes for such a path are dropped. Every entry is removed by its
+	 * reply, its error, or the fence bound.
+	 */
+	readonly diagnosticFences: Map<string, object>;
+	/** #3484: the fence-skipped record was written for this client. */
+	fenceSkipRecorded?: boolean;
 	/** Paths explicitly closed during this client lifetime; late publishes are dropped. */
 	readonly closedDocuments?: Set<string>;
 	/** Original URI spelling for each open document; path keys are normalized. */
@@ -2420,6 +2435,15 @@ export function setupIncomingHandlers(
 			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
+			state.lastPublishVersioned = docVersion !== undefined;
+			// #3484: a version-less publish received before the fence's reply may
+			// be for the content before the latest send; it cannot say which.
+			if (
+				docVersion === undefined &&
+				state.diagnosticFences.has(normalizedPath)
+			) {
+				return;
+			}
 			if (PUB_DEBUG) {
 				// #1333: PUB_DEBUG gate preserved; sink is extension.log.
 				logExtension({
@@ -4158,7 +4182,7 @@ async function handleNotifyOpenOnce(
 		// close + reopen so the re-edit actually triggers a re-scan instead of
 		// silently publishing nothing.
 		if (getStrategy(state.serverId, state.launchVariant).reopenOnResync) {
-			await safeSendNotification(state.connection, "textDocument/didClose", {
+			await sendFenced(state, normalizedPath, uri, "textDocument/didClose", {
 				textDocument: { uri },
 			});
 			state.openDocuments.delete(normalizedPath);
@@ -4196,8 +4220,10 @@ async function handleNotifyOpenOnce(
 			if (saved && reopenSent) await sendDidSave(state, uri, content);
 			return;
 		}
-		const changeSent = await safeSendNotification(
-			state.connection,
+		const changeSent = await sendFenced(
+			state,
+			normalizedPath,
+			uri,
 			"textDocument/didChange",
 			{
 				textDocument: { uri, version },
@@ -4250,8 +4276,10 @@ async function handleNotifyOpenOnce(
 
 	if (!isClientAlive(state)) return;
 
-	const openSent = await safeSendNotification(
-		state.connection,
+	const openSent = await sendFenced(
+		state,
+		normalizedPath,
+		uri,
 		"textDocument/didOpen",
 		{ textDocument: { uri, languageId, version: 0, text: content } },
 	);
@@ -4439,8 +4467,10 @@ async function handleNotifyChangeOnce(
 		if (await closedAndGone(state, filePath, normalizedPath)) return false;
 		// Safety fallback: keep protocol ordering valid even if caller sends
 		// didChange before first didOpen for this document.
-		const fallbackOpenSent = await safeSendNotification(
-			state.connection,
+		const fallbackOpenSent = await sendFenced(
+			state,
+			normalizedPath,
+			uri,
 			"textDocument/didOpen",
 			{
 				textDocument: {
@@ -4466,8 +4496,10 @@ async function handleNotifyChangeOnce(
 	// Clear stale diagnostics before sending new content so waitForDiagnostics
 	// doesn't return immediately with the previous edit's results.
 	clearDiagnosticsForPath(state, normalizedPath);
-	const changeSent = await safeSendNotification(
-		state.connection,
+	const changeSent = await sendFenced(
+		state,
+		normalizedPath,
+		uri,
 		"textDocument/didChange",
 		{
 			textDocument: { uri, version },
@@ -5716,6 +5748,7 @@ export async function createLSPClient(options: {
 		openDocuments: new Set(),
 		// #3310: one-shot, per client session.
 		emptyFirstPublishHoldSpent: false,
+		diagnosticFences: new Map(),
 		closedDocuments: new Set(),
 		openDocumentUris: new Map(),
 		pendingOpens: new Set(),
@@ -6416,6 +6449,79 @@ export async function createLSPClient(options: {
  * it (the next Incremental range would be computed against content the
  * server never saw).
  */
+/**
+ * #3484: send a document notification and, for a server seen publishing
+ * without a version, a fence request in the same synchronous tick.
+ * vscode-jsonrpc orders messages when they are sent, so the fence reaches the
+ * server after the notification and its reply comes after every publish the
+ * server sent before reading it. Until then the publish handler drops
+ * version-less publishes for the path. A server that answers the fence and
+ * THEN publishes an older analysis still defeats it (the model's
+ * `FenceAsyncServer`); no client-side ordering can rule that out.
+ */
+function sendFenced(
+	state: LSPClientState,
+	normalizedPath: string,
+	uri: string,
+	method: string,
+	params: unknown,
+): Promise<boolean> {
+	const sent = safeSendNotification(state.connection, method, params);
+	armDiagnosticsFence(state, normalizedPath, uri);
+	return sent;
+}
+
+function armDiagnosticsFence(
+	state: LSPClientState,
+	normalizedPath: string,
+	uri: string,
+): void {
+	if (state.lastPublishVersioned !== false) return;
+	if (state.operationSupport?.documentSymbol !== true) {
+		// No cheap request the server answers in order: keep today's behaviour
+		// (the binding reads "unknown"), and say so once per client.
+		if (!state.fenceSkipRecorded) {
+			state.fenceSkipRecorded = true;
+			logLatency({
+				type: "phase",
+				phase: "lsp_diagnostics_fence",
+				filePath: normalizedPath,
+				durationMs: 0,
+				metadata: { serverId: state.serverId, outcome: "no-request" },
+			});
+		}
+		return;
+	}
+	const token = {};
+	state.diagnosticFences.set(normalizedPath, token);
+	const armedAt = Date.now();
+	const lift = (): void => {
+		clearTimeout(bound);
+		if (state.diagnosticFences.get(normalizedPath) === token) {
+			state.diagnosticFences.delete(normalizedPath);
+		}
+	};
+	// Bounded by the client's diagnostics wait ceiling: a server that never
+	// answers cannot hold the path's publishes back past it. Publishes are then
+	// accepted as they were before #3484.
+	const bound = setTimeout(() => {
+		if (state.diagnosticFences.get(normalizedPath) !== token) return;
+		state.diagnosticFences.delete(normalizedPath);
+		logLatency({
+			type: "phase",
+			phase: "lsp_diagnostics_fence",
+			filePath: normalizedPath,
+			durationMs: Date.now() - armedAt,
+			metadata: { serverId: state.serverId, outcome: "timeout" },
+		});
+	}, DIAGNOSTICS_WAIT_TIMEOUT_MS);
+	bound.unref?.();
+	// An error reply is still a reply, ordered after the earlier publishes.
+	safeSendRequest(state.connection, "textDocument/documentSymbol", {
+		textDocument: { uri },
+	}).then(lift, lift);
+}
+
 async function safeSendNotification(
 	connection: MessageConnection,
 	method: string,
