@@ -100,7 +100,8 @@ The fixed code each passing config models, and the replay that pins it
   request. `record()` takes the stamp as its `scannedAt`
   (`clients/lsp/workspace-diagnostics-cache.ts`). `tools/lsp-diagnostics.ts`
   stamps before its stat and passes the same stamp as its fresh widget
-  row's `observedAt` (review round 1).
+  row's `observedAt` (review round 1); its single-file mode stamps the row
+  before its touch (review round 2).
 
 ## Results
 
@@ -134,9 +135,8 @@ Times are from a shared 4-core host at load average 11 (review round 1).
 
 ## Traces
 
-**Late record stamp** (`MutWidgetOwnLateStamp`, `MutBlockerDepLateStamp`,
-`MutBlockerNonLspOwnFastPath` has the same trace
-with an equal-size write):
+**Late record stamp** (`MutWidgetOwnLateStamp`, `MutBlockerDepLateStamp`;
+`MutBlockerNonLspOwnFastPath` has the same trace with an equal-size write):
 
 1. Start.
 2. Read v1 at t=0.
@@ -174,7 +174,9 @@ excuse it.
   write, or by a write before the read) is pinned by the vitest cases
   instead: `FixReadStamp no-drop (#3503)` and `FixReadStamp control (#3503)`
   in `tests/clients/store-freshness-formal.test.ts` (mutations M3, M4, M5),
-  and the `FixReadStamp no-drop (#3505)` cases for the sweep (W3, W5, W7).
+  the `FixReadStamp no-drop (#3505)` cases for the sweep (W3, W5, W7), and
+  the `lsp_diagnostics` widget-row cases in
+  `tests/tools/lsp-diagnostics-cache.test.ts` (R1b, R2b).
   Modelling the read instant separately from the stamp would close this.
 - A runner that reads the file from disk itself during the dispatch reads
   after the stamp. That is the safe direction: a write between the stamp and
