@@ -306,9 +306,9 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// 2's next window, and a touch older than OUTSTANDING_TOUCH_MAX_AGE_MS
 		// (15 min) expires unanswered.
 		//
-		// The code cannot tell this touch from a stray that a still-running
-		// session-1 compute records after the reset (#3512), so a stray is
-		// delivered the same way.
+		// The reconcile cannot tell this touch from a stray that a still-running
+		// session-1 compute records after the reset; since #3512 the record site
+		// drops the stray instead (the #3512 describe below).
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
 		runtime.appendCascadePromise(compute.promise);
