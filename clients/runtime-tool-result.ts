@@ -2131,6 +2131,18 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// receipt. Nothing may await between this claim and the dispatch below: the
 	// claim is only atomic because `dispatchPipelineAnalysis` registers before
 	// its own first await.
+	// #3508: so the bootstrap clients are awaited ABOVE the claim, as the
+	// observed path does. A failed demand still records the edit below; it
+	// only skips the dispatch.
+	const classifiedClients = ensureToolResultClients(deps);
+	const classifiedClientsReady =
+		classifiedClients === true ||
+		!!(await bounded(Promise.resolve(classifiedClients), {
+			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+			signal: deps.signal,
+			hook: "tool_result_edit",
+			label: "classified-tool-result-analysis",
+		}));
 	const classifiedClaim = claimPipelineDispatch({
 		filePath,
 		stateHash: initialStateHash,
@@ -2318,17 +2330,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// (defined above `handleToolResult`), shared with the observed-mutation
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
-	const classifiedClients = ensureToolResultClients(deps);
-	if (
-		classifiedClients !== true &&
-		!(await bounded(Promise.resolve(classifiedClients), {
-			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
-			signal: deps.signal,
-			hook: "tool_result_edit",
-			label: "classified-tool-result-analysis",
-		}))
-	)
-		return;
+	if (!classifiedClientsReady) return;
 	const dispatchOutcome = await bounded(
 		dispatchPipelineAnalysis({
 			deps,
