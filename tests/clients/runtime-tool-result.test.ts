@@ -1557,7 +1557,11 @@ describe("monorepo turn-state cwd alignment", () => {
 					(_, i) => ({ ...sessionOneRun, filePath: `/proj/own-${i}.ts` }),
 				);
 				for (const own of ownRuns)
-					runtime.appendCascadePromise(Promise.resolve(own));
+					runtime.appendCascadePromise(
+						Promise.resolve(own),
+						runtime.captureSessionGeneration(),
+						own.filePath,
+					);
 				release.resolve();
 				await handler;
 
@@ -1572,10 +1576,15 @@ describe("monorepo turn-state cwd alignment", () => {
 						.find((e) => e.kind === "generation-guard-stale-write")
 						?.latestReasons.map((e) => e.subject) ?? [];
 				console.log(
-					`[LateAdmission ${path_}] delivered=${delivered.filter((f) => f.includes("session-one")).length ? JSON.stringify(delivered.filter((f) => f.includes("session-one"))) : "[]"} own=${delivered.length} staleWrites=${JSON.stringify(staleWrites.filter((s) => s.includes("cascade")))}`,
+					`[LateAdmission ${path_}] delivered=${delivered.filter((f) => f.includes("session-one")).length ? JSON.stringify(delivered.filter((f) => f.includes("session-one"))) : "[]"} own=${delivered.length} staleWrites=${JSON.stringify(staleWrites.map((s) => s.replace(env.tmpDir, "<tmp>")))}`,
 				);
 				expect(delivered).toEqual(ownRuns.map((r) => r.filePath).sort());
-				expect(staleWrites).toContain("runtime-session:cascade-admission");
+				// Dropped at admission, under the edited file's subject: the
+				// overflow `.then`, whose subject is the run's file, never sees it.
+				expect(staleWrites).toContain(`runtime-session:${filePath}`);
+				expect(staleWrites).not.toContain(
+					`runtime-session:${sessionOneRun.filePath}`,
+				);
 			} finally {
 				env.cleanup();
 			}

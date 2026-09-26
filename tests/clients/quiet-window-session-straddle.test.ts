@@ -224,7 +224,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		for (let i = 0; i < 3; i++) runtime.bumpFileSeq(FILE);
 		const originSeq = runtime.projectSeq;
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const quiet = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -245,7 +249,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// StraddleState: the re-park half of the settle arm.
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const quiet = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -311,7 +319,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// drops the stray instead (the #3512 describe below).
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const stale = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -350,8 +362,16 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		const runtime = sessionOne();
 		const settled = gatedPromise<CascadeRun>();
 		const pending = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(settled.promise);
-		runtime.appendCascadePromise(pending.promise);
+		runtime.appendCascadePromise(
+			settled.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
+		runtime.appendCascadePromise(
+			pending.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 		recordOutstandingCascadeTouch({
 			filePath: NEIGHBOR,
 			serverId: "typescript",
@@ -393,7 +413,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		/** Park the cap's worth of computes that never settle. */
 		function fillPending(runtime: RuntimeCoordinator): void {
 			for (let i = 0; i < MAX_PENDING_CASCADE_RUNS; i++)
-				runtime.appendCascadePromise(gatedPromise<CascadeRun>().promise);
+				runtime.appendCascadePromise(
+					gatedPromise<CascadeRun>().promise,
+					runtime.captureSessionGeneration(),
+					FILE,
+				);
 		}
 
 		it("drops session 1's 33rd compute, admitted past the cap, and delivers the one session 2 admits past the cap", async () => {
@@ -404,12 +428,20 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 			const runtime = sessionOne();
 			fillPending(runtime);
 			const sessionOneOverflow = gatedPromise<CascadeRun>();
-			runtime.appendCascadePromise(sessionOneOverflow.promise);
+			runtime.appendCascadePromise(
+				sessionOneOverflow.promise,
+				runtime.captureSessionGeneration(),
+				FILE,
+			);
 
 			replaceSession(runtime);
 			fillPending(runtime);
 			const sessionTwoOverflow = gatedPromise<CascadeRun>();
-			runtime.appendCascadePromise(sessionTwoOverflow.promise);
+			runtime.appendCascadePromise(
+				sessionTwoOverflow.promise,
+				runtime.captureSessionGeneration(),
+				FILE,
+			);
 			sessionOneOverflow.resolve(run(FILE));
 			sessionTwoOverflow.resolve(run("/proj/c.ts"));
 

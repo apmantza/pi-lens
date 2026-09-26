@@ -993,16 +993,16 @@ export class RuntimeCoordinator {
 	 * #3512: `generation` is the session the compute was dispatched in. The
 	 * admitting handler awaits the pipeline first and can resume after a
 	 * same-cwd replacement's reset, so a capture taken here would name the new
-	 * session. Omitted, the current session is captured.
+	 * session; it is therefore required. `filePath` is the edited file the
+	 * compute belongs to, the subject of a dropped admission's ledger row.
 	 */
 	appendCascadePromise(
 		p: Promise<CascadeRun>,
-		generation: GenerationHandle = this.captureSessionGeneration(),
+		generation: GenerationHandle,
+		filePath: string,
 	): void {
-		// A stale admission is dropped on both branches below. An unsettled
-		// compute has no file yet; the ledger row counts them.
-		if (generation.guardedWrite("cascade-admission", () => true) === undefined)
-			return;
+		// A stale admission is dropped on both branches below.
+		if (generation.guardedWrite(filePath, () => true) === undefined) return;
 		if (this._pendingCascadeRuns.length < MAX_PENDING_CASCADE_RUNS) {
 			this._pendingCascadeRuns.push(p);
 			return;

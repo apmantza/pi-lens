@@ -2512,7 +2512,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	}
 
 	if (result.cascadePromise) {
-		runtime.appendCascadePromise(result.cascadePromise, writeSession);
+		runtime.appendCascadePromise(result.cascadePromise, writeSession, filePath);
 	}
 
 	if (result.actionableWarnings?.length) {

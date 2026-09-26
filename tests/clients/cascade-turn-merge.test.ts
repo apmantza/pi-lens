@@ -190,6 +190,8 @@ describe("cascade turn-end merge", () => {
 				new Promise((res) => {
 					release = res;
 				}),
+				runtime.captureSessionGeneration(),
+				"edit.ts",
 			);
 			await turnEnd();
 			consumeTurnEndFindings(cacheManager, env.tmpDir);
@@ -380,7 +382,11 @@ describe("cascade turn-end merge", () => {
 			const cacheManager = new CacheManager(false);
 			// A compute that never settles: the peek must NOT route the
 			// read-only turn into the settle-cap wait for it.
-			runtime.appendCascadePromise(new Promise(() => {}));
+			runtime.appendCascadePromise(
+				new Promise(() => {}),
+				runtime.captureSessionGeneration(),
+				"edit.ts",
+			);
 			expect(runtime.hasCascadeRuns()).toBe(false);
 			runtime.beginTurn();
 			const startedAt = Date.now();
