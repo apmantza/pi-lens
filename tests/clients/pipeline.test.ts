@@ -398,6 +398,40 @@ describe("Pipeline", () => {
 		);
 	});
 
+	it("hands the cascade the session generation captured at dispatch (#3512)", async () => {
+		// The cascade's tier-3 touch record drops a touch whose dispatch session
+		// was replaced. The handle comes from runtime-tool-result.ts; if this hop
+		// drops it, the guard is inert in production.
+		const filePath = createTempFile(tmpDir, "cascade-generation.ts", "x");
+		vi.mocked(dispatchLintWithResult).mockResolvedValue({
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "",
+			blockerOutput: "",
+			hasBlockers: false,
+		});
+		const sessionGeneration = {
+			generation: 7,
+			isCurrent: () => true,
+			guardedWrite: <T>(_subject: string, write: () => T) => write(),
+		};
+
+		await runPipeline(
+			createMockContext(filePath, { sessionGeneration }),
+			createMockDeps(),
+		);
+
+		expect(computeCascadeForFile).toHaveBeenCalledWith(
+			filePath,
+			tmpDir,
+			expect.objectContaining({ sessionGeneration }),
+		);
+	});
+
 	describe("Format phase", () => {
 		it("defers format by default", async () => {
 			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");

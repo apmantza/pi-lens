@@ -21,6 +21,8 @@
  * are gates (`tests/support/fault-injection.ts`) and fake timers; nothing
  * here sleeps on the wall clock.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CascadeRun } from "../../clients/cascade-types.js";
 import {
@@ -44,8 +46,50 @@ import {
 	registerBuiltinQuietWindowTasks,
 	runQuietWindow,
 } from "../../clients/quiet-window.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	MAX_PENDING_CASCADE_RUNS,
+	RuntimeCoordinator,
+} from "../../clients/runtime-coordinator.js";
+import {
+	computeCascadeForFile,
+	resetDispatchBaselines,
+} from "../../clients/dispatch/integration.js";
+import type {
+	ImpactCascadeResult,
+	ReviewGraph,
+} from "../../clients/review-graph/types.js";
 import { gatedPromise } from "../support/fault-injection.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { setupTestEnvironment } from "./test-utils.js";
+
+// #3512: the stray cases drive the real `computeCascadeForFile`. Its graph and
+// its LSP service are the two boundaries replaced here, as in
+// cascade-compute.test.ts; everything else in those modules stays real.
+const cascadeMocks = vi.hoisted(() => ({
+	buildOrUpdateGraph: vi.fn(),
+	computeImpactCascade: vi.fn(),
+	getLSPService: vi.fn(),
+}));
+
+vi.mock("../../clients/review-graph/service.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/review-graph/service.js")
+	>()),
+	buildOrUpdateGraph: cascadeMocks.buildOrUpdateGraph,
+	computeImpactCascade: cascadeMocks.computeImpactCascade,
+	computeTransitiveImpact: () => ({
+		seedFile: "",
+		hits: [],
+		truncated: false,
+		maxDepthReached: 0,
+	}),
+	formatImpactCascade: () => "impact header",
+}));
+
+vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+	getLSPService: cascadeMocks.getLSPService,
+}));
 
 const WAIT_MS = 15_000;
 const FILE = "/proj/a.ts";
@@ -86,7 +130,10 @@ async function turnEnd(runtime: RuntimeCoordinator): Promise<CascadeRun[]> {
 }
 
 /** A warm client whose per-file publish for NEIGHBOR landed after the touch. */
-function warmService(gate?: { entered: () => void; open: Promise<void> }) {
+function warmService(
+	gate?: { entered: () => void; open: Promise<void> },
+	publishedFor: string[] = [NEIGHBOR],
+) {
 	const diagnostics = [
 		{
 			severity: 1,
@@ -107,12 +154,12 @@ function warmService(gate?: { entered: () => void; open: Promise<void> }) {
 				client: {
 					serverId: "typescript",
 					getAllDiagnostics: () =>
-						new Map([
-							[
-								normalizeMapKey(NEIGHBOR),
+						new Map(
+							publishedFor.map((file) => [
+								normalizeMapKey(file),
 								{ ts: Date.now(), diags: diagnostics },
-							],
-						]),
+							]),
+						),
 				},
 			};
 		},
@@ -177,7 +224,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		for (let i = 0; i < 3; i++) runtime.bumpFileSeq(FILE);
 		const originSeq = runtime.projectSeq;
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const quiet = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -198,7 +249,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// StraddleState: the re-park half of the settle arm.
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const quiet = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -259,12 +314,16 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// 2's next window, and a touch older than OUTSTANDING_TOUCH_MAX_AGE_MS
 		// (15 min) expires unanswered.
 		//
-		// The code cannot tell this touch from a stray that a still-running
-		// session-1 compute records after the reset (#3512), so a stray is
-		// delivered the same way.
+		// The reconcile cannot tell this touch from a stray that a still-running
+		// session-1 compute records after the reset; since #3512 the record site
+		// drops the stray instead (the #3512 describe below).
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(compute.promise);
+		runtime.appendCascadePromise(
+			compute.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 
 		const stale = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
@@ -303,8 +362,16 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		const runtime = sessionOne();
 		const settled = gatedPromise<CascadeRun>();
 		const pending = gatedPromise<CascadeRun>();
-		runtime.appendCascadePromise(settled.promise);
-		runtime.appendCascadePromise(pending.promise);
+		runtime.appendCascadePromise(
+			settled.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
+		runtime.appendCascadePromise(
+			pending.promise,
+			runtime.captureSessionGeneration(),
+			FILE,
+		);
 		recordOutstandingCascadeTouch({
 			filePath: NEIGHBOR,
 			serverId: "typescript",
@@ -323,5 +390,156 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		// Window order: the settle's append, the reconcile's, then the re-park.
 		expect(runs.map((r) => r.filePath)).toEqual([FILE, NEIGHBOR, "/proj/c.ts"]);
 		expect(staleWriteSubjects()).toEqual([]);
+	});
+
+	describe("the overflow admission path and session-1 strays (#3512)", () => {
+		beforeEach(() => {
+			resetDispatchBaselines();
+			cascadeMocks.buildOrUpdateGraph.mockReset().mockResolvedValue({
+				version: "test",
+				builtAt: new Date().toISOString(),
+				nodes: new Map(),
+				edges: [],
+				edgesByFrom: new Map(),
+				edgesByTo: new Map(),
+				fileNodes: new Map(),
+				symbolNodesByFile: new Map(),
+				changedSymbolsByFile: new Map(),
+			} satisfies ReviewGraph);
+			cascadeMocks.computeImpactCascade.mockReset();
+			cascadeMocks.getLSPService.mockReset();
+		});
+
+		/** Park the cap's worth of computes that never settle. */
+		function fillPending(runtime: RuntimeCoordinator): void {
+			for (let i = 0; i < MAX_PENDING_CASCADE_RUNS; i++)
+				runtime.appendCascadePromise(
+					gatedPromise<CascadeRun>().promise,
+					runtime.captureSessionGeneration(),
+					FILE,
+				);
+		}
+
+		it("drops session 1's 33rd compute, admitted past the cap, and delivers the one session 2 admits past the cap", async () => {
+			// OverflowAdmission (pass) against FixNoAdmissionGuard (no guard) and
+			// FixAdmissionHoist (one handle reused across admissions). The first
+			// half is the #3499 reviewer's probe: 33 gated computes, a
+			// replacement, then compute #33 resolves.
+			const runtime = sessionOne();
+			fillPending(runtime);
+			const sessionOneOverflow = gatedPromise<CascadeRun>();
+			runtime.appendCascadePromise(
+				sessionOneOverflow.promise,
+				runtime.captureSessionGeneration(),
+				FILE,
+			);
+
+			replaceSession(runtime);
+			fillPending(runtime);
+			const sessionTwoOverflow = gatedPromise<CascadeRun>();
+			runtime.appendCascadePromise(
+				sessionTwoOverflow.promise,
+				runtime.captureSessionGeneration(),
+				FILE,
+			);
+			sessionOneOverflow.resolve(run(FILE));
+			sessionTwoOverflow.resolve(run("/proj/c.ts"));
+
+			const delivered = await turnEnd(runtime);
+			console.log(
+				`[OverflowAdmission] delivered=${JSON.stringify(delivered.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
+			);
+			expect(delivered.map((r) => r.filePath)).toEqual(["/proj/c.ts"]);
+			expect(staleWriteSubjects()).toEqual([`runtime-session:${FILE}`]);
+		});
+
+		it("drops a touch a session-1 compute records after the reset and delivers the touch session 2's own compute records", async () => {
+			// StrayTouch (pass) against FixNoStrayGuard, FixStrayRecordCapture
+			// (stamping at record time, which the issue rules out) and
+			// FixDispatchHoist. Both touches land after the reset, so only the
+			// generation each dispatch captured when it started tells them apart.
+			const env = setupTestEnvironment("pi-lens-3512-stray-");
+			try {
+				const primary = path.join(env.tmpDir, "src", "primary.ts");
+				const stray = path.join(env.tmpDir, "src", "stray.ts");
+				const own = path.join(env.tmpDir, "src", "own.ts");
+				fs.mkdirSync(path.dirname(primary), { recursive: true });
+				fs.writeFileSync(primary, "export const x = 1;\n");
+				fs.writeFileSync(stray, "import { x } from './primary';\n");
+				fs.writeFileSync(own, "import { x } from './primary';\n");
+				const impact = (neighbor: string): ImpactCascadeResult => ({
+					filePath: primary,
+					changedSymbols: ["changed"],
+					directImporters: [neighbor],
+					directCallers: [],
+					neighborFiles: [neighbor],
+					riskFlags: [],
+				});
+				cascadeMocks.computeImpactCascade
+					.mockReturnValueOnce(impact(stray))
+					.mockReturnValueOnce(impact(own));
+				const strayTouchEntered = gatedPromise<void>();
+				const strayTouchGate = gatedPromise<void>();
+				cascadeMocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
+					// No passive snapshot: every neighbour takes the active touch.
+					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+					getCapabilitySnapshots: vi.fn().mockResolvedValue([
+						{
+							serverId: "typescript",
+							root: env.tmpDir,
+							operationSupport: {},
+							workspaceDiagnosticsSupport: { mode: "push-only" },
+							advertisedCommands: [],
+							rawCapabilityKeys: [],
+						},
+					]),
+					getClientForFile: vi
+						.fn()
+						.mockResolvedValue({ client: { serverId: "typescript" } }),
+					// Session 1's compute is inside its touch when the replacement
+					// lands.
+					touchFile: vi.fn(async (filePath: string) => {
+						if (filePath !== stray) return;
+						strayTouchEntered.resolve();
+						await strayTouchGate.promise;
+					}),
+					getDiagnostics: vi.fn(),
+				});
+				const runtime = sessionOne(warmService(undefined, [stray, own]));
+				// runtime-tool-result.ts captures when it dispatches the pipeline,
+				// which hands the handle on to the compute.
+				const sessionOneCompute = computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+					sessionGeneration: runtime.captureSessionGeneration(),
+				});
+				await strayTouchEntered.promise;
+
+				replaceSession(runtime);
+				await computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+					sessionGeneration: runtime.captureSessionGeneration(),
+				});
+				strayTouchGate.resolve();
+				await sessionOneCompute;
+				const recorded = _getOutstandingCascadeTouchesForTests().map((t) =>
+					path.basename(t.filePath),
+				);
+
+				// Session 2's window: its publishes land after both touches.
+				await vi.advanceTimersByTimeAsync(100);
+				await runQuietWindow({ runtime, dbg: () => {} });
+				const delivered = runtime.consumeCascadeRuns();
+				console.log(
+					`[StrayTouch] recorded=${JSON.stringify(recorded)} delivered=${JSON.stringify(delivered.map((r) => path.basename(r.filePath)))} staleWrites=${JSON.stringify(staleWriteSubjects().map((s) => s.replace(env.tmpDir, "<tmp>")))}`,
+				);
+				expect(delivered.map((r) => r.filePath)).toEqual([own]);
+				expect(staleWriteSubjects()).toEqual([`runtime-session:${stray}`]);
+			} finally {
+				env.cleanup();
+			}
+		});
 	});
 });

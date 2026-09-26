@@ -1453,9 +1453,10 @@ export class LSPService {
 	 * re-pushed, while every sibling whose write landed keeps its own debounce.
 	 *
 	 * #3501: an entry speaks only for the client instance whose write marked it.
-	 * A client that crashes or is evicted inside the window, or that was already
-	 * dead when its `notify.open` resolved `true`, leaves an entry its respawned
-	 * replacement must not inherit: the replacement was never sent the content.
+	 * A client that crashes or is evicted inside the window leaves an entry its
+	 * respawned replacement must not inherit: the replacement was never sent the
+	 * content. (A client already dead at the write resolves `false` since #3543,
+	 * so it marks no entry.)
 	 * Weak, so an entry never pins a retired client's state.
 	 */
 	private readonly recentTouches = new Map<
@@ -5064,7 +5065,8 @@ export class LSPService {
 			const notifyDeferredServerIds: string[] = [];
 			// #3481: servers whose queue did not send this touch's content: a later
 			// read was sent instead, or the path is closing or was renamed away
-			// (#3477). The touch must not stamp the drift record, and its
+			// (#3477), or the client died or its transport refused the write
+			// (#3543). The touch must not stamp the drift record, and its
 			// lsp_touch_file row names them.
 			const supersededServerIds: string[] = [];
 			if (!notifySkipped) {
@@ -5263,9 +5265,9 @@ export class LSPService {
 								entry.client,
 							);
 						} else if (wrote === false) {
-							// #3481: the server does not hold `content` (a later read, or a
-							// closing/closed path), so no debounce entry either: a revert
-							// to `content` must be sent.
+							// #3481: the server does not hold `content` (a later read, a
+							// closing/closed path, or a dead client, #3543), so no debounce
+							// entry either: a revert to `content` must be sent.
 							supersededServerIds.push(entry.info.id);
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
@@ -7238,8 +7240,8 @@ export class LSPService {
 						notifyWriteTimedOutServerIds,
 					}),
 					// #3481: servers that did not send this touch's content (a later
-					// read won, or the path was closing or renamed away). Absent
-					// when none.
+					// read won, the path was closing or renamed away, or the client
+					// was dead, #3543). Absent when none.
 					...(supersededServerIds.length > 0 && { supersededServerIds }),
 					diagnosticsTimedOut,
 					inconclusive,
@@ -8404,11 +8406,13 @@ export class LSPService {
 								.then((sent) => {
 									// #3477: the timed-out close is still queued ahead of this
 									// re-open, and the queue refuses a touch behind a close (it
-									// resolves false). That is a failed resync, not a restored
-									// document.
+									// resolves false). #3543: a dead client resolves false too.
+									// Either way it is a failed resync, not a restored document.
 									if (sent === false) {
 										throw new Error(
-											"re-open not sent: the close is still queued",
+											client.isAlive()
+												? "re-open not sent: the close is still queued"
+												: "re-open not sent: the client is dead",
 										);
 									}
 								}),
