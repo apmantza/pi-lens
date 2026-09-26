@@ -61,7 +61,9 @@ CONSTANTS
     FixTomb,        \* candidate fix: the last applied token survives a clear (a per-path guard, not the record's own field)
     FixQueue,       \* candidate fix, part 1: the fixer's read-fix-write runs inside pi's withFileMutationQueue for F
     FixQueueRefresh,\* candidate fix, part 2: the queue is held through the after-read, refresh and postWriteStateHash
-    FixReToken      \* candidate fix, part 3: a post-autofix content refresh takes a fresh writeIndex (token = when the analysed bytes were read)
+    FixReToken,     \* candidate fix, part 3: a post-autofix content refresh takes a fresh writeIndex (token = when the analysed bytes were read)
+    WriterBound,    \* TRUE: the pipeline's own bound on the writer (FormatService's per-file budget) can give up on it while its child runs on
+    FixHoldWriter   \* review-round-1 fix: the hold is released only once an abandoned writer has settled
 
 Pipes == 1..Edits
 NoC == [e |-> {0}, f |-> FALSE]          \* "no hash yet"
@@ -75,11 +77,12 @@ VARIABLES
     hpc, hsh, wi, ct, fbuf, fixedBy, fh, aband, jt,
     nextWi, regMap, latch,
     widget, wSeen,
-    inl, itok
+    inl, itok,
+    orphanW
 
 vars == <<disk, applied, blk, agentI, agentPc, abuf, qlock, hpc, hsh, wi, ct,
           fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
-          inl, itok>>
+          inl, itok, orphanW>>
 
 Blocker(c) == MaxE(c.e) \in blk
 
@@ -94,6 +97,7 @@ Init ==
     /\ nextWi = 1 /\ regMap = {} /\ latch = NoC
     /\ widget = Init0 /\ wSeen = 0
     /\ inl = [has |-> FALSE, c |-> Init0, tok |-> 0] /\ itok = 0
+    /\ orphanW = [i \in Pipes |-> FALSE]
 
 HandlerReturned(i) == hpc[i] = "done" \/ aband[i]
 
@@ -106,6 +110,7 @@ AgentRead ==
     /\ abuf' = disk /\ qlock' = "agent" /\ agentPc' = "write"
     /\ UNCHANGED <<disk, applied, blk, agentI, hpc, hsh, wi, ct, fbuf, fixedBy, fh,
                    aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
 
 AgentWrite ==
     /\ agentPc = "write"
@@ -117,6 +122,7 @@ AgentWrite ==
     /\ agentPc' = IF agentI = Edits THEN "done" ELSE "read"
     /\ UNCHANGED <<blk, abuf, hsh, wi, ct, fbuf, fixedBy, fh, aband, jt, nextWi,
                    regMap, latch, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
 
 ----------------------------------------------------------------------------
 \* registerInFlightPipeline: filePipelines.set(stateHash, pipeline) -- a
@@ -150,6 +156,7 @@ Hash(i) ==
                          /\ hpc' = [hpc EXCEPT ![i] = AfterStart(i)]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, fbuf, fixedBy,
                    fh, aband, latch, widget, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* After the clients await: register, admit, read.
 Start(i) ==
@@ -160,6 +167,7 @@ Start(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = AfterStart(i)]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, fbuf,
                    fixedBy, fh, aband, jt, nextWi, latch, widget, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* The in-place fixer reads F (inside the queue under FixQueue).
 FixRead(i) ==
@@ -170,6 +178,7 @@ FixRead(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "fixwrite"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fixedBy,
                    fh, aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* ... and writes its fix of what it read.
 FixWrite(i) ==
@@ -179,6 +188,7 @@ FixWrite(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "refresh"]
     /\ UNCHANGED <<applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fbuf, fixedBy,
                    fh, aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* After-read compare, content refresh and postWriteStateHash.
 Refresh(i) ==
@@ -192,10 +202,12 @@ Refresh(i) ==
                     /\ wSeen' = Max(wSeen, nextWi)
                ELSE UNCHANGED <<wi, nextWi, wSeen>>
     /\ fh' = [fh EXCEPT ![i] = disk]
-    /\ qlock' = IF FixQueue /\ FixQueueRefresh THEN "none" ELSE qlock
+    /\ qlock' = IF FixQueue /\ FixQueueRefresh /\ ~(FixHoldWriter /\ orphanW[i])
+                   THEN "none" ELSE qlock
     /\ hpc' = [hpc EXCEPT ![i] = "analyse"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, fbuf,
                    aband, jt, regMap, latch, widget, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* dispatchLintWithResult returns; recordDiagnostics (widget store).
 Analyse(i) ==
@@ -207,6 +219,7 @@ Analyse(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "release"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* releaseInFlightPipeline (by hash key) and the already-analysed latch.
 Release(i) ==
@@ -216,6 +229,7 @@ Release(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "record"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* The handler records (blocker) or clears (clean) the inline-blocker record.
 \* An abandoned handler returned already and records nothing.
@@ -232,6 +246,7 @@ Record(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "done"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen>>
+    /\ UNCHANGED orphanW
 
 \* A joined duplicate awaits the pipeline it joined, then returns.
 JoinDone(i) ==
@@ -241,6 +256,7 @@ JoinDone(i) ==
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
                    inl, itok>>
+    /\ UNCHANGED orphanW
 
 \* The handler's 10 s bound fires; the pipeline keeps running.
 Abandon(i) ==
@@ -249,17 +265,46 @@ Abandon(i) ==
     /\ aband' = [aband EXCEPT ![i] = TRUE]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hpc, hsh, wi, ct,
                    fbuf, fixedBy, fh, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
+    /\ UNCHANGED orphanW
+
+\* The writer's own bound gives up on it (format-service.ts
+\* runFormattersWithConcurrency: `bounded`, per-file budget 10 s) while its
+\* in-place child (formatters.ts formatFile, 15 s spawn timeout) runs on; the
+\* pipeline carries on to its refresh as if the writer had returned.
+WriterAbandon(i) ==
+    /\ WriterBound
+    /\ hpc[i] = "fixwrite"
+    /\ orphanW' = [orphanW EXCEPT ![i] = TRUE]
+    /\ hpc' = [hpc EXCEPT ![i] = "refresh"]
+    /\ qlock' = IF FixQueue /\ ~FixQueueRefresh THEN "none" ELSE qlock
+    /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fbuf,
+                   fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
+                   inl, itok>>
+
+\* The abandoned child writes its fix of what it read. Under FixHoldWriter
+\* the hold its pipeline already released waits for this settle
+\* (file-mutation-queue.ts `outlive`).
+OrphanWrite(i) ==
+    /\ orphanW[i]
+    /\ disk' = [e |-> fbuf[i].e, f |-> TRUE]
+    /\ orphanW' = [orphanW EXCEPT ![i] = FALSE]
+    /\ qlock' = IF FixQueue /\ FixQueueRefresh /\ FixHoldWriter /\ hpc[i] # "refresh"
+                 THEN "none" ELSE qlock
+    /\ UNCHANGED <<applied, blk, agentI, agentPc, abuf, hpc, hsh, wi, ct, fbuf,
+                   fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
+                   inl, itok>>
 
 Next ==
     \/ AgentRead \/ AgentWrite
     \/ \E i \in Pipes :
          Hash(i) \/ Start(i) \/ FixRead(i) \/ FixWrite(i) \/ Refresh(i)
          \/ Analyse(i) \/ Release(i) \/ Record(i) \/ JoinDone(i) \/ Abandon(i)
+         \/ WriterAbandon(i) \/ OrphanWrite(i)
 
 Spec == Init /\ [][Next]_vars
 
 ----------------------------------------------------------------------------
-Quiescent == agentPc = "done" /\ \A i \in Pipes : hpc[i] = "done"
+Quiescent == agentPc = "done" /\ \A i \in Pipes : hpc[i] = "done" /\ ~orphanW[i]
 
 \* An autofix never overwrites an agent edit (pi-coding-agent docs/extensions.md
 \* ~1925: a file-mutating extension must use withFileMutationQueue).

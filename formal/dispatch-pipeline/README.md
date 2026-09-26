@@ -33,6 +33,11 @@ Issues: #3506, #3507, #3508.
      `biome lint --write`) reads F and later writes its fix of what it read.
      Only a turn's first `write` runs this (`recordMutationToolReceipt`: edits
      are deferred).
+     With `WriterBound`, the writer's own bound (FormatService's per-file
+     budget, `format-service.ts` `runFormattersWithConcurrency`) can give up
+     on it (`WriterAbandon`) while its in-place child runs on; the child
+     writes its fix of what it read later (`OrphanWrite`), after the
+     pipeline has carried on.
   4. `Refresh`: the before/after compare (biome-client.ts ~409), the content
      refresh, and the `postWriteStateHash` capture (pipeline.ts ~1560-1600).
   5. `Analyse`: `dispatchLintWithResult` returns, and `recordDiagnostics`
@@ -73,13 +78,14 @@ witness, so a change that drops it turns the check red.
 | `WidgetParallel` | the widget guard, with the pre-#3508 claim gap | pass | 732,720 |
 | `MutWidgetNoGuard` | the widget without its guard | violated `WidgetNewest` | 819 |
 | `FixerSequential` | before #3506, sequential tools | pass | 176 |
-| `FixerParallel` | fixed code (#3506) | pass | 840 |
-| `FixerOrphan` | fixed code (#3506), handler abandoned | pass | 1,664 |
+| `FixerParallel` | fixed code (#3506 with review round 1), writer bound | pass | 1,564 |
+| `FixerOrphan` | fixed code (#3506 with review round 1), handler abandoned, writer bound | pass | 3,080 |
 | `FixerAttribution` | fixed code (#3506) | pass | 840 |
 | `FixerQueue` | fixed code (#3506), three edits | pass | 829,712 |
 | `MutFixerNoQueue` | #3506 without part 1 (the code before it) | violated `NoLostEdit` | 156 |
 | `FixerQueueWriteOnly` | #3506 without part 2 | violated `NoForeignAttribution` | 218 |
 | `FixerQueueNoReToken` | #3506 without part 3 | violated `WidgetNewest` | 24,746 |
+| `MutWriterNoHold` | the round-1 code: the hold released while an abandoned writer's child runs | violated `NoLostEdit` | 457 (at the violation) |
 | `ClaimAtomic` | resident clients | pass | 797,392 |
 | `ClaimGap` | fixed code (#3508) | pass | 264 |
 | `MutClaimGap` | the code before #3508 | violated `NoDoubleDispatch` | 57 |
@@ -94,7 +100,7 @@ Non-vacuity:
   `FixerSequential` green before the fixes. `InlineParallel`, `FixerParallel`
   and `FixerOrphan` remove it.
 
-## Bugs (all four reproduced on the real code, all fixed)
+## Bugs (all five reproduced on the real code, all fixed)
 
 1. **The inline-blocker record was last-completer-wins** (#3507). The handler
    recorded or cleared the record with no order check. The record stored
@@ -122,6 +128,11 @@ Non-vacuity:
    by the latch. For the latch to skip it, that edit's handler must hash the
    file after the older pipeline has finished, so this needs a delayed
    handler.
+5. **The hold was released while an abandoned writer ran on** (#3506 review
+   round 1). The `--immediate-format` writer's own 10 s budget gave up on a
+   formatter whose child (15 s spawn timeout) kept running; the pipeline
+   released the hold, pi's next edit landed, and the child wrote its format
+   of the pre-edit bytes over it. `MutWriterNoHold` is that code.
 
 ## Fixes (checked here, replayed in `tests/clients/dispatch-pipeline-formal.test.ts`)
 
@@ -137,8 +148,14 @@ Non-vacuity:
   bytes are not the ones the pipeline first read, it takes a fresh
   `writeIndex` while it still holds the queue (part 3). Without part 2,
   `FixerQueueWriteOnly` goes red; without part 3, `FixerQueueNoReToken` goes
-  red. The code takes the hold at the first format or autofix write, so a
-  pipeline with no writer never waits on the queue.
+  red. The code takes the hold at the first format or autofix write, and
+  each fixer branch enters it only once its tool is resolved (review round
+  1), so neither a pipeline with no writer nor an availability probe or
+  install ever holds pi's edits back.
+- **Abandoned writer (#3506 review round 1).** `FormatService` reports the
+  formatter runs a bound gave up on, and the hold releases only once they
+  settle (`FixHoldWriter`). The deferred drain's formatter uses the same
+  hold, and its release follows the format phase, not the hook's bound.
 - **Claim (#3508).** The clients are awaited before `claimPipelineDispatch`,
   as the observed path already did. This is `ClaimGap = FALSE`.
 
