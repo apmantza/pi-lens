@@ -2477,6 +2477,28 @@ export function setupIncomingHandlers(
 			const publishReceivedAt = Date.now();
 			const filePath = uriToPath(params.uri);
 			const normalizedPath = normalizeMapKey(filePath);
+			const docVersion = params.version;
+			// #3548 review r2: a `publishesOnClose` server's own close-triggered
+			// publish (typos' `did_close`: an empty, version-less set on every
+			// close) is the ONLY version-less publish it ever sends — every real
+			// scan answer, `did_open`/`did_change` alike, carries a version, a
+			// genuinely clean one included (tekumara/typos-lsp
+			// `crates/typos-lsp/src/lsp.rs`, verified against upstream `main`:
+			// the sole version-less `publish_diagnostics` call is `did_close`'s).
+			// It answers no send, so it is pure noise: dropped before storage or
+			// counting, in EITHER arrival order relative to the reopen — unlike a
+			// counting adjustment scoped to the closedDocuments branch (round 1's
+			// `closePublishSkipsRemaining`), this also stops it from overwriting
+			// a real, already-stored answer once it arrives late, after a
+			// reopen, through the ordinary open-document publish path (review
+			// r2: PROBE-STALE-EMPTY-OVERWRITES-REAL). A server this marker is
+			// not set for is unaffected — the required inverse.
+			if (
+				docVersion === undefined &&
+				getStrategy(state.serverId, state.launchVariant).publishesOnClose
+			) {
+				return;
+			}
 			// A server can flush a queued publish after didClose during teardown.
 			// Do not resurrect diagnostics or their content binding for a document
 			// that is no longer open on this client.
@@ -2487,7 +2509,6 @@ export function setupIncomingHandlers(
 			}
 			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
-			const docVersion = params.version;
 			// #3484: a version-less publish received before the fence's reply may
 			// be for the content before the latest send; it cannot say which.
 			// Dropped unstored, it still answers a send (#3482's backlog).

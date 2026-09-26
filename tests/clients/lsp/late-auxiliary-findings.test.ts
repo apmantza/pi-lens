@@ -79,6 +79,7 @@ import {
 	type LSPDiagnostic,
 } from "../../../clients/lsp/client.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
+import { getStrategy } from "../../../clients/lsp/wait-policy/strategies.js";
 import { pathToFileURL } from "node:url";
 import { createMockState } from "./mock-client-state.js";
 import { setupTestEnvironment } from "../test-utils.js";
@@ -1115,10 +1116,14 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		const key = normalizeMapKey(file);
 		// Same shape as LSPService.readCachedDiagnosticsForServers:
 		// `getAllDiagnostics().get(key)` -> { diags: entry?.diags ?? [], publishedAt: entry?.ts }.
+		// #3548: keyed by the scanner's OWN serverId (not a literal "opengrep")
+		// so the same helper drives a #3548 typos/zizmor replay; every existing
+		// call site passes an opengrep-armed scanner, so this is the same key
+		// as before for all of them.
 		return async () =>
 			new Map([
 				[
-					"opengrep",
+					state.serverId,
 					{
 						diags: state.pushDiagnostics.get(key) ?? [],
 						publishedAt: state.pushDiagnosticTimestamps.get(key),
@@ -1280,9 +1285,11 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			true,
 			saved,
 		);
+		// #3548: the scanner's own serverId, not a literal "opengrep" — every
+		// existing call site is opengrep-armed, so this is unchanged for them.
 		markPendingAuxiliaryCoverage(
 			file,
-			["opengrep"],
+			[scanner.state.serverId],
 			notifiedAtMs,
 			undefined,
 			undefined,
@@ -1292,6 +1299,232 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 
 	const V1 = `${Array.from({ length: 20 }, (_, i) => `const a${i} = ${i};`).join("\n")}\n`;
 	const V2 = "export const v = 2;\n";
+
+	it("CLOSE-PUBLISH-SKIPPED: typos' close-triggered publish does not count as an owed scan, and a later real backlog publish still does (#3548)", async () => {
+		const scanner = armOpengrep("/project", "typos");
+		const file = "/project/src/close-typos.ts";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		await closeDocument(scanner.state, file);
+		// tekumara/typos-lsp `did_close`: an empty, version-less publish, sent
+		// unconditionally on every close, that answers no send.
+		scanner.publish(file, []);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		// A genuine backlog answer — VERSIONED, like every real typos answer
+		// (verified against tekumara/typos-lsp `main`; only `did_close`'s
+		// artifact is version-less) — arriving after the close artifact still
+		// counts, same as before this fix.
+		scanner.publishVersioned(file, 0, [diag(0, "late real scan")]);
+		expect(counts()).toEqual({ sent: 1, published: 1 });
+	});
+
+	it("CLOSE-PUBLISH-UNMARKED-STILL-COUNTS: a close-time publish for a server without publishesOnClose still answers the closed lifetime's owed scan (#3548 inverse)", async () => {
+		const scanner = armOpengrep("/project", "eslint");
+		const file = "/project/src/close-inverse.ts";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+		expect(counts()).toEqual({ sent: 1, published: 0 });
+		await closeDocument(scanner.state, file);
+		// The same empty, version-less shape typos' close-triggered publish
+		// carries — but eslint carries no `publishesOnClose` marker, so it is
+		// never granted a skip and this still counts, exactly as before #3548.
+		scanner.publish(file, []);
+		expect(counts()).toEqual({ sent: 1, published: 1 });
+	});
+
+	it("CLOSE-PUBLISH-MULTI-CLOSE-SAFE: two closes each produce their own close-triggered publish, and neither leaves residual state that swallows a later genuine, versioned answer (#3548 review r1 B1 — structurally moot under the stateless, version-based filter: there is no credit to leak)", async () => {
+		// #3477's `closedAndGone` drops a reopen for a closed path whose file
+		// is also gone from disk — a real file is required for the reopens
+		// below to actually run rather than being silently skipped.
+		const env = setupTestEnvironment("pi-lens-close-multi-") as any;
+		try {
+			const scanner = armOpengrep(env.tmpDir, "typos");
+			const file = path.join(env.tmpDir, "src", "multi-close.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "a");
+			const counts = () =>
+				publicationCountsForPath(scanner.state, normalizeMapKey(file));
+			await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+			await closeDocument(scanner.state, file);
+			await handleNotifyOpen(scanner.state, file, "b", "ts", false, true);
+			await closeDocument(scanner.state, file);
+			// Both closes' own close-triggered publishes: version-less, dropped
+			// unconditionally before storage or counting — no per-close credit is
+			// tracked at all, so nothing accumulates across them either way.
+			scanner.publish(file, []);
+			scanner.publish(file, []);
+			expect(counts()).toEqual({ sent: 2, published: 0 });
+			// A genuine, VERSIONED backlog answer (typos never sends a real
+			// answer version-less) still counts after both closes.
+			scanner.publishVersioned(file, 0, [diag(0, "real finding")]);
+			expect(counts()).toEqual({ sent: 2, published: 1 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #3548 review r2 (blocking): the prior "admitted residual" here asserted
+	// only raw storage state and never ran `turnEnd` — it missed that a stale
+	// close-triggered publish landing on the OPEN path after a reopen used to
+	// overwrite an already-stored, genuine finding via "latest publish wins"
+	// AND satisfy the backlog count that gates the late-auxiliary drain,
+	// producing a false clean (PROBE-STALE-EMPTY-OVERWRITES-REAL below). The
+	// three probes replacing it drive the fix end-to-end through
+	// `surplusReplay`/`turnEnd`, for both arrival orders plus the required
+	// inverse (a genuine clean answer must still be delivered, never
+	// permanently withheld — shape 54).
+
+	it("PROBE-STALE-EMPTY-SAFE-BEFORE-REAL: typos' stale close-triggered publish, arriving on the open path after a reopen but BEFORE the reopened file's real answer, is dropped and the real answer still delivers once it lands (#3548 review r2, probe 1)", async () => {
+		await surplusReplay(
+			"stale-before-real",
+			async ({ scanner, file, turn }) => {
+				const key = normalizeMapKey(file);
+				const counts = () => publicationCountsForPath(scanner.state, key);
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// #3477: renamed away while v1's scan is still in flight and
+				// never answers it before the close below.
+				await closeDocument(scanner.state, file);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				const beforeStale = counts().published;
+				const storedBeforeStale = scanner.state.pushDiagnostics.get(key);
+				// The EARLIER close's own close-triggered publish, arriving late,
+				// now that the path is open again — BEFORE V2's real answer.
+				scanner.publish(file, []);
+				// Dropped: neither stored nor counted.
+				expect(scanner.state.pushDiagnostics.get(key)).toEqual(
+					storedBeforeStale,
+				);
+				expect(counts().published).toBe(beforeStale);
+
+				const first = await turn();
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+					cleanConfirmed: 0,
+				});
+
+				// V2's real, versioned answer lands and is unaffected by the
+				// earlier stale artifact.
+				scanner.publishVersioned(file, 0, [diag(0, "V2 REAL finding")]);
+				const second = await turn();
+				expect(second.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+					cleanConfirmed: 0,
+				});
+
+				// The mark's second (and last) owed publish lands and delivers —
+				// the earlier stale, dropped artifact left no residue behind.
+				scanner.publishVersioned(file, 0, [diag(0, "V2 REAL finding")]);
+				const third = await turn();
+				expect(third.metadata).toMatchObject({
+					delivered: 1,
+					backlogPending: 0,
+					cleanConfirmed: 0,
+				});
+				expect(third.content).toContain("V2 REAL finding");
+			},
+			"typos",
+		);
+	});
+
+	it("PROBE-STALE-EMPTY-OVERWRITES-REAL: typos' stale close-triggered publish, arriving on the open path AFTER the reopened file's real answer is already stored, must not erase it or report a false clean (#3548 review r2, probe 2, blocking)", async () => {
+		await surplusReplay(
+			"stale-overwrites-real",
+			async ({ scanner, file, turn }) => {
+				const key = normalizeMapKey(file);
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// #3477: renamed away while v1's scan is still in flight and
+				// never answers it before the close below.
+				await closeDocument(scanner.state, file);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				// The reopened file's REAL, versioned answer lands first and is
+				// stored, but the mark's backlog is not yet satisfied (one more
+				// publish is still owed for this lifetime) — same shape as every
+				// other REPLAY-* single-publish-then-second-satisfies pattern in
+				// this file.
+				scanner.publishVersioned(file, 0, [diag(0, "V2 REAL finding")]);
+				const first = await turn();
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+					cleanConfirmed: 0,
+				});
+				expect(scanner.state.pushDiagnostics.get(key)).toEqual([
+					diag(0, "V2 REAL finding"),
+				]);
+
+				// The EARLIER close's own stale, version-less close-triggered
+				// publish lands late, on the now-open path, AFTER the real
+				// answer already landed.
+				scanner.publish(file, []);
+
+				// Pre-fix: this overwrote pushDiagnostics with [] (unconditional
+				// "latest publish wins") and counted toward the backlog, so the
+				// next turn reported a false cleanConfirmed with the real finding
+				// gone. Fixed: dropped before either happens — the real finding
+				// survives verbatim and the backlog is unmoved.
+				expect(scanner.state.pushDiagnostics.get(key)).toEqual([
+					diag(0, "V2 REAL finding"),
+				]);
+				const second = await turn();
+				expect(second.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+					cleanConfirmed: 0,
+				});
+				expect(second.content).not.toContain("V2 REAL finding");
+
+				// The genuinely owed second real publish for this mark still
+				// lands and delivers — the fix does not leave the pair stuck.
+				scanner.publishVersioned(file, 0, [diag(0, "V2 REAL finding")]);
+				const third = await turn();
+				expect(third.metadata).toMatchObject({
+					delivered: 1,
+					backlogPending: 0,
+					cleanConfirmed: 0,
+				});
+				expect(third.content).toContain("V2 REAL finding");
+			},
+			"typos",
+		);
+	});
+
+	it("PROBE-STALE-EMPTY-GENUINE-CLEAN-NOT-WITHHELD: a genuine, VERSIONED empty answer for the reopened file is still delivered as cleanConfirmed, never permanently withheld by the version-based filter (#3548 review r2, shape 54 inverse)", async () => {
+		await surplusReplay(
+			"genuine-clean-not-withheld",
+			async ({ scanner, file, turn }) => {
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// #3477: renamed away while v1's scan is still in flight and
+				// never answers it before the close below.
+				await closeDocument(scanner.state, file);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				// Genuinely clean, but VERSIONED — typos never sends a real
+				// answer (clean included) version-less; only its did_close
+				// artifact is. The filter checks `docVersion === undefined`, not
+				// content, so this must pass through untouched.
+				scanner.publishVersioned(file, 0, []);
+				const first = await turn();
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+					cleanConfirmed: 0,
+				});
+
+				scanner.publishVersioned(file, 0, []);
+				const second = await turn();
+				expect(second.metadata).toMatchObject({
+					backlogPending: 0,
+					cleanConfirmed: 1,
+					delivered: 0,
+				});
+			},
+			"typos",
+		);
+	});
 
 	it("REPLAY-RULE-LOAD-SURPLUS: opengrep's rule-load [] plus its refresh republish cannot shorten a later backlog (#3482 r1 F1)", async () => {
 		const env = setupTestEnvironment("pi-lens-late-aux-rule-load-") as any;
@@ -1609,6 +1842,10 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			file: string;
 			turn: () => Promise<{ content: string; metadata: any }>;
 		}) => Promise<void>,
+		// #3548: which server's strategy this replay arms — defaults to
+		// opengrep (every pre-#3548 call site) so existing replays are
+		// unaffected; typos' close-publish replay passes "typos".
+		serverId = "opengrep",
 	): Promise<void> {
 		const env = setupTestEnvironment(`pi-lens-late-aux-${prefix}-`) as any;
 		const sessionId = `late-aux-${prefix}`;
@@ -1619,8 +1856,9 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			runtime.beginTurn();
 			const cacheManager = new CacheManager(false);
 			const file = path.join(env.tmpDir, "src", "scanned.ts");
-			const scanner = armOpengrep(env.tmpDir);
-			// opengrep declares `save: true` (opengrep@1a5fd9d LS.ml).
+			const scanner = armOpengrep(env.tmpDir, serverId);
+			// opengrep declares `save: true` (opengrep@1a5fd9d LS.ml); harmless
+			// for a serverId that never sends a save-marked touch.
 			scanner.state.saveOptions = { includeText: false };
 			readCachedDiagnosticsForServers.mockImplementation(
 				cachedFrom(scanner.state, file),
@@ -1628,7 +1866,17 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			const v0 = "export const v = 0;\n";
 			writeAt(file, v0, Date.now() - 30_000);
 			await handleNotifyOpen(scanner.state, file, v0, "ts", false, true);
-			scanner.publish(file, []);
+			// #3548 review r2: a `publishesOnClose` server (typos) never sends a
+			// version-less REAL answer — only its close-triggered artifact is
+			// version-less (verified against tekumara/typos-lsp `main`). v0's own
+			// open-time answer must carry a version here too, or every typos-armed
+			// replay's "real" traffic is itself the unrealistic double the review
+			// flagged.
+			if (getStrategy(serverId, undefined).publishesOnClose) {
+				scanner.publishVersioned(file, 0, []);
+			} else {
+				scanner.publish(file, []);
+			}
 			await body({
 				scanner,
 				file,
@@ -1722,6 +1970,23 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		).toEqual({ sent: 1, published: 0 });
 	});
 
+	it("ZIZMOR-SAVE-RESCAN-EXPECTED: a save adds one expected publication on zizmor now that rescansOnSave is set, for whenever dynamic didSave registration is honoured (#3548)", async () => {
+		// zizmor@main `crates/zizmor/src/lsp.rs` registers `textDocument/didSave`
+		// DYNAMICALLY (`initialized()`); `applyDynamicCapabilities` (client.ts)
+		// does not honour that registration today, so nothing sets
+		// `state.saveOptions` for zizmor at runtime. Set directly here, same
+		// shape as SAVE-RESCAN-EXPECTED above, to prove the counting side of
+		// the #3548 fix independent of the unbuilt dynamic-capability wiring.
+		const scanner = armOpengrep("/project", "zizmor");
+		scanner.state.saveOptions = { includeText: true };
+		const file = "/project/.github/workflows/ci.yml";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "yaml", false, true, true);
+		expect(didSaves(scanner)).toBe(1);
+		expect(counts()).toEqual({ sent: 2, published: 0 });
+	});
+
 	it("REPLAY-REOPEN-INFLIGHT: a scan queued before a close cannot answer the reopened file's send (#3482 lifetime)", async () => {
 		await surplusReplay("reopen-inflight", async ({ scanner, file, turn }) => {
 			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
@@ -1738,6 +2003,85 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
 			expect((await turn()).content).toContain("V2 finding on line 1");
 		});
+	});
+
+	it("REPLAY-CLOSE-PUBLISH-INFLIGHT: typos' close-triggered publish cannot answer an in-flight scan, so the reopened file's send is still owed one (#3548)", async () => {
+		await surplusReplay(
+			"close-publish-inflight",
+			async ({ scanner, file, turn }) => {
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// #3477: renamed away while v1's scan runs. typos' did_close
+				// publishes an empty, version-less set unconditionally, landing
+				// before v1's real (slower) scan finishes.
+				await closeDocument(scanner.state, file);
+				scanner.publish(file, []);
+				// Renamed back with v2 (a fresh didOpen, a new open lifetime).
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				// v1's real, stale scan finally lands — VERSIONED, like every
+				// real typos answer (only did_close's artifact is version-less).
+				// documentVersions resets to 0 on each fresh open in this
+				// harness, so v1's own (now-stale) version and v2's current one
+				// collide on the same number — deliberately: the freshness gate
+				// here is the backlog COUNT, not the version, and this is exactly
+				// the collision that makes that so.
+				scanner.publishVersioned(file, 0, [
+					diag(11, "V1-ONLY finding on line 12"),
+				]);
+
+				const first = await turn();
+				expect(first.content).not.toContain("V1-ONLY");
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+				});
+
+				scanner.publishVersioned(file, 0, [diag(0, "V2 finding on line 1")]);
+				expect((await turn()).content).toContain("V2 finding on line 1");
+			},
+			"typos",
+		);
+	});
+
+	it("REPLAY-CLOSE-PUBLISH-DOUBLE-CLOSE-SAFE: two closes' own close-triggered publishes, and a genuine backlog finding published while closed between them, do not disturb the late-auxiliary delivery across the eventual reopen (#3548 review r1 B1 — the credit this once tested leaking no longer exists; kept as a double-close regression)", async () => {
+		await surplusReplay(
+			"close-publish-double-close-safe",
+			async ({ scanner, file, turn }) => {
+				// Close #1: typos owes one close-triggered publish. The reopen
+				// below happens before it ever arrives.
+				await closeDocument(scanner.state, file);
+				await touchAndMark(scanner, file, V1, Date.now() - 30_000);
+				// Close #2: typos owes ANOTHER close-triggered publish, for
+				// THIS close.
+				await closeDocument(scanner.state, file);
+				// typos' own close-triggered publish for close #2 arrives —
+				// version-less, dropped before storage or counting.
+				scanner.publish(file, []);
+				// A GENUINE backlog finding — VERSIONED, like every real typos
+				// answer — the real, late answer this pair's mark is actually
+				// waiting on, arrives while still closed.
+				scanner.publishVersioned(file, 0, [diag(11, "REAL-FINDING")]);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+
+				const first = await turn();
+				expect(first.content).not.toContain("REAL-FINDING");
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+				});
+
+				// v2's real, versioned answer lands and is the last publish the
+				// mark needed (REAL-FINDING already counted while closed) — it
+				// delivers.
+				scanner.publishVersioned(file, 0, [diag(0, "V2 finding on line 1")]);
+				const second = await turn();
+				expect(second.metadata).toMatchObject({
+					delivered: 1,
+					backlogPending: 0,
+				});
+				expect(second.content).toContain("V2 finding on line 1");
+			},
+			"typos",
+		);
 	});
 
 	it("REPLAY-REOPEN-DROPPED-WHILE-CLOSED: a scan that publishes while the path is closed still counts, so the reopened file's answer is delivered (#3482 lifetime inverse)", async () => {
