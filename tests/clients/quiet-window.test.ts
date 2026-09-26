@@ -77,7 +77,7 @@ describe("quiet-window", () => {
 			cwd: "/tmp/proj",
 			sessionId: "session-a",
 			ownerId: "activation-a",
-			// #3499: the settled session's generation, captured for the window.
+			// #3499: the current session's generation, captured when the task starts.
 			sessionGeneration: expect.objectContaining({
 				generation: runtime.sessionGeneration,
 			}),

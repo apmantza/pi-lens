@@ -58,11 +58,11 @@ interface QuietWindowContext {
 	/** Stable activation owner for tasks that outlive an event callback. */
 	ownerId?: string;
 	/**
-	 * #3499: the session that settled, captured when the window starts. A
-	 * same-cwd replacement shares `runtime`, so a task whose write lands after
-	 * an await drops it through this handle. Captured once for the window, not
-	 * per task: a later task can start after the 15 s settle, in the new
-	 * session.
+	 * #3499: the session current when this task started. A same-cwd
+	 * replacement shares `runtime`, so a task whose write lands after an await
+	 * drops it through this handle. Captured per task, at the same instant the
+	 * task snapshots its state: a later task can start after the 15 s settle,
+	 * in the new session, and then works for that session.
 	 */
 	sessionGeneration: GenerationHandle;
 }
@@ -130,7 +130,7 @@ export interface QuietWindowDeps {
  * fire-and-forget (do not await inside an SDK-awaited event handler).
  */
 export async function runQuietWindow(deps: QuietWindowDeps): Promise<void> {
-	// `runtime` supplies the window's session generation (#3499); today's
+	// `runtime` supplies each task's session generation (#3499); today's
 	// built-ins still close over `getRuntime` via
 	// registerBuiltinQuietWindowTasks for the runtime itself.
 	const { dbg, cwd } = deps;
@@ -159,7 +159,6 @@ export async function runQuietWindow(deps: QuietWindowDeps): Promise<void> {
 	}
 
 	_inProgress = true;
-	const sessionGeneration = deps.runtime.captureSessionGeneration();
 	const totalStart = Date.now();
 	const results: QuietWindowTaskResult[] = [];
 	try {
@@ -172,7 +171,7 @@ export async function runQuietWindow(deps: QuietWindowDeps): Promise<void> {
 					cwd: deps.cwd,
 					sessionId: deps.sessionId,
 					ownerId: deps.ownerId,
-					sessionGeneration,
+					sessionGeneration: deps.runtime.captureSessionGeneration(),
 				});
 			} catch (err) {
 				ok = false;
