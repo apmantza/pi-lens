@@ -11,7 +11,7 @@ Worked example: `tests/clients/lsp/notify-queue-properties.test.ts` (#3530),
 the per-path LSP notify queue. It reds with a shrunk counterexample on each
 of the queue's three historical regressions (#3481, #3477, and the #3491
 close-stamp drop) re-applied as mutations, and it found three defects on
-master that no replay covered.
+master that no replay covered (#3543, #3544, #3545).
 
 ## When to write one
 
@@ -57,20 +57,33 @@ timers), or when the behavior needs a real child process.
    (it never passes stale input) and the no-drop property (it never drops
    the only fresh answer). Shape 54 is the cost of writing only one.
 6. **Budget the lane.** Use a fixed `seed` and a `numRuns` that fits in about
-   two seconds, and fake timers for anything the code arms. Explore off-lane
-   by raising `numRuns` or dropping the seed, in batches of a few thousand
-   runs: one 20,000-run exploration of the example file had its worker
-   killed (SIGKILL).
+   two seconds, and fake timers for anything the code arms. The lane seed is
+   one sample: any edit to the arbitraries or `numRuns` reshuffles the draws,
+   so before landing, check the property green on master over many seeds
+   (the example file: seeds 1-120 at 600 runs each). A property that is only
+   green at its lane seed turns an unrelated PR red later. Explore in
+   batches of a few thousand runs per worker: one 20,000-run exploration of
+   the example file had its worker killed (SIGKILL).
 7. **Prove it catches what it claims.** Re-apply each historical regression
    as a mutation of the built `clients/*.js` and quote the shrunk
    counterexample. Also remove each condition in your oracle that narrows a
-   property: if the property still passes on master under the fixed seed,
-   the condition is inert and goes.
+   property and run master over many seeds, not only the lane seed: a
+   condition is inert, and goes, only when every seed stays green without
+   it. A carve-out for a known, reachable defect is never deleted as inert;
+   a seed that misses the defect proves nothing about it. A condition that
+   strengthens a property (it narrows a carve-out) stays green on master by
+   design; prove it with the mutation it exists to catch.
 8. **Pin findings. Do not hide them.** When the property fails on master,
-   replay the shrunk counterexample and report it. If the lane must stay
-   green, carve the finding out with a named predicate that cites it, and
-   pin it with an `it.fails` replay of the counterexample's commands. The
-   replay turns red when the finding is fixed, and both go with the fix.
+   first decide whether the code or the oracle is wrong; an oracle that asks
+   for something the contract never promised is narrowed, with the reason in
+   its docstring. For a real defect, replay the shrunk counterexample and
+   file it. If the lane must stay green, carve the finding out with a named
+   predicate that cites the tracking issue number, and pin it with an
+   `it.fails` replay of the counterexample's commands whose title cites the
+   same issue. Keep the carve-out as narrow as the defect's own signature,
+   then re-run the regression mutations: a wide carve-out hides them (#3530
+   round 1: the first F2 carve-out kept the #3481 round-1 stamp drop green).
+   The replay turns red when the finding is fixed, and both go with the fix.
 
 Throw an `Error` whose message carries the event log from inside the
 property. fast-check then prints the shrunk counterexample with a readable
