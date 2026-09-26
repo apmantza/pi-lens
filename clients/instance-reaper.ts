@@ -87,12 +87,22 @@ import { getGlobalPiLensDir } from "./file-utils.js";
 import { resolveBackstopStateDir } from "./instance-reaper-state.js";
 import {
 	type InstanceEntry,
+	type InstanceIdentity,
 	isInstanceRegistryEnabled,
 	pruneDeadInstances as pruneDeadRegistryInstances,
 	readInstanceRegistry,
 } from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
-import { queryProcessTable, windowsExe } from "./process-snapshot.js";
+import {
+	isInPidNamespace,
+	type OwnerTag,
+	ownPidNamespace,
+	type ProcessIdentity,
+	queryProcessIdentities,
+	queryProcessTable,
+	readOwnerTags,
+	windowsExe,
+} from "./process-snapshot.js";
 
 const isWindows = process.platform === "win32";
 
@@ -100,6 +110,16 @@ export interface ChildToKill {
 	pid: number;
 	serverId: string;
 	command: string;
+	marker?: string | undefined;
+	/** The OS start time recorded at spawn (#3538). */
+	processStart?: string | undefined;
+}
+
+/** What a recorded child must still be for a kill by pid to land on it. */
+interface ExpectedIdentity {
+	command: string;
+	marker?: string | undefined;
+	processStart?: string | undefined;
 }
 
 interface MarkerSearch {
@@ -139,8 +159,34 @@ export interface OrphanReapDecision {
 function isInstanceKillEligible(
 	instance: InstanceEntry,
 	isPidAlive: (pid: number) => boolean,
+	startOf: (pid: number) => string | undefined,
 ): boolean {
-	return !isPidAlive(instance.pid);
+	if (!isPidAlive(instance.pid)) return true;
+	// #3538: a live pid that started at a different time is another process
+	// on a reused pid, and the instance that registered this entry is dead.
+	// Both starts must be known; an unknown one falls back to the pid alone.
+	return isAnotherProcess(instance.processStart, startOf(instance.pid));
+}
+
+/**
+ * Whether a live pid's `current` start names another process than the
+ * `recorded` one. Both must be known, and both must come from one boot
+ * (`<ticks>@<boot_id>` on Linux; no boot elsewhere): a live pid cannot carry
+ * an earlier boot's start, so a boot that disagrees is this reader's own view
+ * (an empty or bound-over boot_id) and cannot be judged (#3538 review R3-F1).
+ */
+function isAnotherProcess(
+	recorded: string | undefined,
+	current: string | undefined,
+): boolean {
+	const bootOf = (start: string) =>
+		start.includes("@") ? start.slice(start.indexOf("@") + 1) : "";
+	return (
+		recorded !== undefined &&
+		current !== undefined &&
+		current !== recorded &&
+		bootOf(current) === bootOf(recorded)
+	);
 }
 
 /**
@@ -194,7 +240,7 @@ function classifyDeadInstanceChildren(
 	instance: InstanceEntry,
 	isPidAlive: (pid: number) => boolean,
 	matchProcess:
-		| ((pid: number, expected: { command: string; marker?: string }) => boolean)
+		| ((pid: number, expected: ExpectedIdentity) => boolean)
 		| undefined,
 	liveMarkers: Set<string>,
 	out: { childrenToKill: ChildToKill[]; markerSearches: MarkerSearch[] },
@@ -202,17 +248,19 @@ function classifyDeadInstanceChildren(
 	for (const child of instance.lspChildren) {
 		const childAlive = isPidAlive(child.pid);
 		if (childAlive) {
+			const expected: ExpectedIdentity = {
+				command: child.command,
+				marker: child.marker,
+				processStart: child.processStart,
+			};
 			const identityOk = matchProcess
-				? matchProcess(child.pid, {
-						command: child.command,
-						marker: child.marker,
-					})
+				? matchProcess(child.pid, expected)
 				: true;
 			if (identityOk) {
 				out.childrenToKill.push({
 					pid: child.pid,
 					serverId: child.serverId,
-					command: child.command,
+					...expected,
 				});
 				continue;
 			}
@@ -248,15 +296,23 @@ function classifyDeadInstanceChildren(
  *   older than `STALE_HEARTBEAT_MS` ⇒ `staleInstances` (entry removal ONLY —
  *   never kills, never loses marker protection; the parent may be an
  *   overnight-idle-but-alive session). See the module docstring.
+ * @param startOf - the current OS start time of a live pid, or undefined
+ *   when unknown (#3538). A live host pid whose start differs from the one
+ *   its entry recorded is another process, so the entry's instance is dead.
+ * @param judgeable - whether this reaper can judge the entry's pid at all
+ *   (#3539 review F1: an entry from another pid namespace names a pid that
+ *   means nothing here). An entry it cannot judge is never dead and never
+ *   killed for, but its heartbeat can still go stale, and the record-only
+ *   removal (#525) still applies to it: a dead container's entry would
+ *   otherwise stay forever and keep counting against the LSP budget.
  */
 export function decideOrphanReaping(
 	registry: InstanceEntry[],
 	isPidAlive: (pid: number) => boolean,
-	matchProcess?: (
-		pid: number,
-		expected: { command: string; marker?: string },
-	) => boolean,
+	matchProcess?: (pid: number, expected: ExpectedIdentity) => boolean,
 	now: number = Date.now(),
+	startOf: (pid: number) => string | undefined = () => undefined,
+	judgeable: (instance: InstanceEntry) => boolean = () => true,
 ): OrphanReapDecision {
 	const deadInstances: InstanceEntry[] = [];
 	const staleInstances: InstanceEntry[] = [];
@@ -268,7 +324,10 @@ export function decideOrphanReaping(
 	const liveMarkers = collectLiveMarkers(registry, isPidAlive);
 
 	for (const instance of registry) {
-		if (isInstanceKillEligible(instance, isPidAlive)) {
+		if (
+			judgeable(instance) &&
+			isInstanceKillEligible(instance, isPidAlive, startOf)
+		) {
 			// pid-confirmed-dead: entry removal + children classified for kills.
 			deadInstances.push(instance);
 			classifyDeadInstanceChildren(
@@ -419,62 +478,62 @@ async function findPidsByMarkerWindows(marker: string): Promise<number[]> {
 	return result.rows.map((row) => row.pid);
 }
 
-/** Fetch command lines for a set of pids in one query (Windows: CIM; POSIX:
- *  `ps`). Returns a pid → command-line map; pids that can't be resolved are
- *  simply absent (the caller treats absent as "identity unverifiable — do not
- *  kill by pid").
+/** Fetch the identity (command line and OS start time, #3538) of a set of
+ *  pids in one query (Windows: CIM; POSIX: `ps`, plus `/proc` on Linux).
+ *  Pids that can't be resolved are simply absent (the caller treats absent
+ *  as "identity unverifiable — do not kill by pid").
  *
- *  Best-effort: any failure ⇒ empty map, RECORDED (#1857 class sweep). An
- *  errored query makes every recorded child unverifiable at once, which
- *  suppresses the entire registry-driven reap — and reads exactly like a
- *  registry whose children have all already exited. Only the record separates
- *  the two. */
-async function queryCommandLines(pids: number[]): Promise<Map<number, string>> {
-	const valid = [...new Set(pids.filter((p) => Number.isFinite(p) && p > 0))];
-	const map = new Map<number, string>();
-	if (valid.length === 0) return map;
-	const result = await queryProcessTable(
-		{
-			fields: ["pid", "command"],
-			filter: { column: "ProcessId", op: "eq", values: valid },
-		},
-		{
-			timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
-			// #2527 review F2: same rationale as findPidsByMarkerWindows above —
-			// route through the reaper's own tree-kill-and-verify machinery with
-			// the backstop's kind rather than falling through to the unverified
-			// default kill with no ledger record.
-			onTimeout: (child) =>
-				terminateScannerChild(child, {
-					kind: "orphan-backstop-scanner-escalated",
-					timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
-				}),
-		},
-	);
+ *  Best-effort: any failure ⇒ empty map and `failed: true`, RECORDED (#1857
+ *  class sweep). An errored query makes every recorded child unverifiable at
+ *  once, which suppresses the entire registry-driven reap — and reads exactly
+ *  like a registry whose children have all already exited. Only the record
+ *  separates the two, and `failed` tells the sweep not to drop the entries
+ *  it could not judge (#3539). */
+async function queryIdentities(
+	pids: number[],
+): Promise<{ identities: Map<number, ProcessIdentity>; failed: boolean }> {
+	const result = await queryProcessIdentities(pids, {
+		timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+		// #2527 review F2: same rationale as findPidsByMarkerWindows above —
+		// route through the reaper's own tree-kill-and-verify machinery with
+		// the backstop's kind rather than falling through to the unverified
+		// default kill with no ledger record.
+		onTimeout: (child) =>
+			terminateScannerChild(child, {
+				kind: "orphan-backstop-scanner-escalated",
+				timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+			}),
+	});
 	// POSIX `ps -p` exits nonzero when NONE of the requested pids exist, which
 	// is a legitimate clean result for this caller, so that one status is not
 	// recorded on that platform. The shared collector calls it an exit failure;
 	// this caller's command contract makes it the expected empty table. Windows
 	// CIM has no such convention, so an exit failure there is a real failure.
 	const psReportedNoSuchPid = !isWindows && result.status === "exit-error";
-	if (result.status !== "ok" && !psReportedNoSuchPid) {
+	const failed = result.status !== "ok" && !psReportedNoSuchPid;
+	if (failed) {
 		recordDegradationOnce({
 			kind: "orphan-backstop-scan-failed",
 			subject: "identity-query",
 			reason: `command-line identity query ${result.status}; reap suppressed this sweep`,
 		});
 	}
-	for (const row of result.rows) map.set(row.pid, row.command);
-	return map;
+	return { identities: result.identities, failed };
 }
 
 /**
- * Build a `matchProcess` identity predicate from a pid → command-line map
- * (as produced by `queryCommandLines`). PURE — exported for unit testing.
+ * Build a `matchProcess` identity predicate from a pid → identity map (as
+ * produced by `queryIdentities`). PURE — exported for unit testing.
  *
  * Semantics (guarding pid kills against pid recycling):
  * - pid absent from the map ⇒ false: identity is UNVERIFIABLE, so never kill
  *   by pid (the marker-search fallback may still catch a real orphan).
+ * - #3538: the OS start time recorded at spawn must equal the pid's start
+ *   now. An unknown start on either side ⇒ false: a record from an older
+ *   pi-lens, or a start that could not be read, never authorises a kill.
+ *   The command line alone cannot tell a reused pid from the original: any
+ *   typescript-language-server matches another's basename, and a recorded
+ *   `node` matches every node process, a live pi-lens host included.
  * - marker recorded and present in the command line ⇒ match (strongest
  *   signal — markers are per-spawn-unique).
  * - else: the recorded command's basename appears (case-insensitive) in the
@@ -482,11 +541,17 @@ async function queryCommandLines(pids: number[]): Promise<Map<number, string>> {
  *   recorded empty/odd command matching everything via `includes("")`).
  */
 export function buildIdentityMatcher(
-	cmdlines: Map<number, string>,
-): (pid: number, expected: { command: string; marker?: string }) => boolean {
+	identities: Map<number, ProcessIdentity>,
+): (pid: number, expected: ExpectedIdentity) => boolean {
 	return (pid, expected) => {
-		const cmdline = cmdlines.get(pid);
-		if (cmdline === undefined) return false; // unverifiable ⇒ never kill by pid
+		const identity = identities.get(pid);
+		if (identity === undefined) return false; // unverifiable ⇒ never kill by pid
+		if (
+			expected.processStart === undefined ||
+			identity.start !== expected.processStart
+		)
+			return false;
+		const cmdline = identity.command;
 		if (expected.marker && cmdline.includes(expected.marker)) return true;
 		const basename = path.basename(expected.command ?? "").toLowerCase();
 		if (!basename) return false;
@@ -498,14 +563,16 @@ export function buildIdentityMatcher(
  * Result of one kill attempt (#1857 item 1). `gone` is VERIFIED: the pid was
  * observed dead after the attempt. `alive` means the attempt was made and the
  * pid is still there — a kill that did not happen. `invalid` means the pid was
- * never well-formed enough to attempt.
+ * never well-formed enough to attempt. `changed` means the identity check
+ * that runs immediately before the signal failed, so nothing was signalled
+ * (#3538).
  *
  * Before #1857 `killPidTree` returned `void`, so both sweeps incremented a
  * `killed` counter unconditionally: `killed: 4` could mean four failures, and
  * a permanently unkillable process read exactly like a successful reap while
  * paying the full sweep cost every session.
  */
-type KillOutcome = "gone" | "alive" | "invalid";
+type KillOutcome = "gone" | "alive" | "invalid" | "changed";
 
 /** Post-kill liveness poll budget. `taskkill /F /T` returns before the kernel
  *  has finished tearing the tree down, so a single immediate check would
@@ -526,6 +593,15 @@ interface KillPidTreeOptions {
 	isPidAlive?: (pid: number) => boolean;
 	verifyAttempts?: number;
 	verifyIntervalMs?: number;
+	/**
+	 * Whether the pid still names the process the caller decided to kill,
+	 * asked immediately before the signal (#3538). A sweep decides from one
+	 * identity query and then kills pid after pid, each with its own verify
+	 * poll, so a pid can exit and be reused between the query and its turn.
+	 * Omitted only for a child the caller holds a handle to (a timed-out
+	 * scanner).
+	 */
+	confirmIdentity?: () => Promise<boolean>;
 }
 
 /**
@@ -542,9 +618,19 @@ interface KillPidTreeOptions {
  */
 async function killPidTree(
 	pid: number,
+	options?: Omit<KillPidTreeOptions, "confirmIdentity">,
+): Promise<Exclude<KillOutcome, "changed">>;
+async function killPidTree(
+	pid: number,
+	options: KillPidTreeOptions,
+): Promise<KillOutcome>;
+async function killPidTree(
+	pid: number,
 	options: KillPidTreeOptions = {},
 ): Promise<KillOutcome> {
 	if (!Number.isFinite(pid) || pid <= 0) return "invalid";
+	if (options.confirmIdentity && !(await options.confirmIdentity()))
+		return "changed";
 	if (isWindows) {
 		try {
 			const taskkill = windowsExe("taskkill.exe");
@@ -669,6 +755,18 @@ export interface OsProcessInfo {
 	 * be ruled out.
 	 */
 	ageMs?: number;
+	/**
+	 * The OS start time (#3538), or undefined when it could not be read. A
+	 * process whose start is unknown is never kill-eligible: the kill could
+	 * not be tied to the process the decision was about.
+	 */
+	start?: string | undefined;
+	/**
+	 * POSIX: the pi-lens instance that spawned this process, read from the
+	 * `PI_LENS_OWNER` variable it inherited (#3539). Undefined for a process
+	 * pi-lens did not spawn, or one spawned before #3539.
+	 */
+	ownerTag?: OwnerTag | undefined;
 }
 
 /**
@@ -682,19 +780,12 @@ export interface OsProcessInfo {
  * - its pid is NOT already tracked in any instance's `lspChildren[]` (tracked
  *   pids stay owned by the registry-driven `decideOrphanReaping` path above —
  *   this backstop must never race or duplicate that logic);
- * - its reported parent pid is a verifiable, well-formed pid (finite,
- *   positive, and not equal to its own pid) — an unresolvable/malformed
- *   parent pid is UNVERIFIABLE, never treated as "confirmed dead" (this is a
- *   stricter contract than `realIsPidAlive`'s own conservatism, because here
- *   an invalid value means "the OS couldn't tell us", not "confirmed gone");
- * - `isPidAlive(parentPid)` reports the parent as dead.
+ * - the pi-lens instance that owned it is dead (`isOwnerDead`);
+ * - its start time is known (#3538), and it is older than the spawn grace.
  *
- * Note the direction of the ambiguity guard: if `parentPid` itself was
- * recycled onto an unrelated live process, `isPidAlive` conservatively
- * reports "alive" and the process is (safely) left alone — a false negative,
- * never a false positive kill. Binary name alone is never sufficient (name
- * matching only decides which processes are candidates for this check at
- * all); a live parent is never overridden "however unfamiliar" the process.
+ * Binary name alone is never sufficient (name matching only decides which
+ * processes are candidates for this check at all); a live owner is never
+ * overridden "however unfamiliar" the process.
  */
 export function decideBackstopOrphanReaping(
 	processes: OsProcessInfo[],
@@ -727,7 +818,54 @@ export const BACKSTOP_SPAWN_GRACE_MS = 60_000;
 export interface BackstopDecisionOptions {
 	/** Override `BACKSTOP_SPAWN_GRACE_MS` (tests). */
 	graceMs?: number;
+	/** Whose ownership rule applies; defaults to the live `process.platform`. */
+	platform?: NodeJS.Platform;
+	/** The current start of a live pid (an owner or a parent), or undefined. */
+	startOf?: (pid: number) => string | undefined;
 }
+
+/**
+ * Whether the pi-lens instance that owned `proc` is dead (#3539).
+ *
+ * POSIX reparents an orphan to init or a subreaper, which is alive, so the
+ * ppid never showed a dead owner there and the backstop reaped nothing. The
+ * owner tag names the owner's incarnation, (pid, start): it is dead when its
+ * pid is, or when a process with another start of the same boot holds that
+ * pid now (see `isAnotherProcess`). A process with no tag was not spawned by
+ * pi-lens (or predates #3539) and is never judged here.
+ *
+ * Windows keeps the dead parent's pid as the orphan's ppid, and reuses pids:
+ * a live process on that pid that started more than an hour after this one
+ * cannot be its parent. A malformed or unresolvable ppid is UNVERIFIABLE, never "confirmed
+ * dead", and an unknown start falls back to the pid.
+ */
+function isOwnerDead(
+	proc: OsProcessInfo,
+	isPidAlive: (pid: number) => boolean,
+	platform: NodeJS.Platform,
+	startOf: (pid: number) => string | undefined,
+): boolean {
+	if (platform !== "win32") {
+		const tag = proc.ownerTag;
+		if (tag === undefined) return false;
+		if (!isPidAlive(tag.pid)) return true;
+		return isAnotherProcess(tag.start, startOf(tag.pid));
+	}
+	const parent = proc.parentPid;
+	if (!Number.isFinite(parent) || parent <= 0 || parent === proc.pid)
+		return false;
+	if (!isPidAlive(parent)) return true;
+	// A parent more than an hour younger than its child is another process on
+	// a reused ppid. The hour absorbs the DST fall-back ambiguity of the local
+	// time CIM converts from: a real parent can read up to an hour late. The
+	// cost: an orphan whose ppid was reused within the hour is never judged by
+	// this rule, and leaks until the process on that pid exits.
+	const parentStart = Date.parse(startOf(parent) ?? "");
+	return parentStart > Date.parse(proc.start ?? "") + WINDOWS_DST_MARGIN_MS;
+}
+
+/** See `isOwnerDead`: the widest error a DST fall-back puts on a start. */
+const WINDOWS_DST_MARGIN_MS = 3_600_000;
 
 /** Full classification behind `decideBackstopOrphanReaping`, including the
  *  two REJECTED-BY-AGE buckets the sweep reports so a suppressed kill is
@@ -739,6 +877,9 @@ export interface BackstopPartition {
 	/** Dead-parent, untracked, but the OS reported no usable creation time,
 	 *  so "recently spawned" could not be ruled out. */
 	unknownAge: OsProcessInfo[];
+	/** Dead-parent, untracked, but its start time could not be read (#3538),
+	 *  so no kill could be tied to this process. */
+	unknownStart: OsProcessInfo[];
 }
 
 /**
@@ -753,21 +894,38 @@ export function partitionBackstopCandidates(
 	options: BackstopDecisionOptions = {},
 ): BackstopPartition {
 	const graceMs = Math.max(0, options.graceMs ?? BACKSTOP_SPAWN_GRACE_MS);
-	const trackedPids = new Set<number>();
+	const platform = options.platform ?? process.platform;
+	const startOf = options.startOf ?? (() => undefined);
+	// #3538: a record shields the process it was made for, (pid, start). A
+	// record for an earlier process on a reused pid shields nothing. A record
+	// with no start (an older pi-lens) still shields by pid, the conservative
+	// reading; a process whose own start is unknown is never killed below.
+	const trackedStarts = new Map<number, Array<string | undefined>>();
 	for (const instance of registry) {
-		for (const child of instance.lspChildren) trackedPids.add(child.pid);
+		for (const child of instance.lspChildren) {
+			const starts = trackedStarts.get(child.pid) ?? [];
+			starts.push(child.processStart);
+			trackedStarts.set(child.pid, starts);
+		}
 	}
+	const isTracked = (proc: OsProcessInfo): boolean =>
+		trackedStarts
+			.get(proc.pid)
+			?.some((start) => start === undefined || start === proc.start) === true;
 
 	const partition: BackstopPartition = {
 		eligible: [],
 		tooFresh: [],
 		unknownAge: [],
+		unknownStart: [],
 	};
 	for (const proc of processes) {
-		if (trackedPids.has(proc.pid)) continue; // owned by the registry-driven reaper
-		if (!Number.isFinite(proc.parentPid) || proc.parentPid <= 0) continue; // unverifiable
-		if (proc.parentPid === proc.pid) continue; // malformed data guard
-		if (isPidAlive(proc.parentPid)) continue; // live parent — never kill
+		if (isTracked(proc)) continue; // owned by the registry-driven reaper
+		if (!isOwnerDead(proc, isPidAlive, platform, startOf)) continue; // never kill
+		if (proc.start === undefined) {
+			partition.unknownStart.push(proc);
+			continue;
+		}
 		// Spawn-grace guard, applied LAST so the buckets only ever contain
 		// processes that passed every other eligibility test.
 		if (graceMs > 0) {
@@ -925,6 +1083,8 @@ export async function terminateScannerChild(
 	options: TerminateScannerChildOptions,
 ): Promise<SpawnTimeoutKill> {
 	const pid = child.pid;
+	// No `confirmIdentity`: the scanner is our own child, so the kill never
+	// reports "changed".
 	const outcome =
 		typeof pid === "number" && pid > 0
 			? await killPidTree(pid, {
@@ -1069,11 +1229,40 @@ export async function sweepUntrackedOrphans(
 			);
 		}
 
+		// #3539: on POSIX the owner tag, not the ppid, says whose a process is.
+		const pids = scan.processes.map((proc) => proc.pid);
+		const tagScan = await readTags(pids);
+		if (tagScan.status !== "ok") {
+			// A candidate the failed query did not answer reads as untagged and
+			// is not reaped this sweep: a sweep that could not tell, not a clean
+			// one.
+			recordDegradationOnce({
+				kind: "orphan-backstop-scan-failed",
+				subject: "owner-tag-query",
+				reason: `owner tag query ${tagScan.status}; POSIX reap suppressed this sweep`,
+			});
+		}
+		const tags = tagScan.tags;
+		// #3538: the start time ties each decision, and each kill, to one
+		// process rather than to whatever holds the pid by then. Owners' and
+		// parents' starts tell a live owner from a reused pid.
+		const { identities } = await queryIdentities([
+			...pids,
+			...[...tags.values()].map((tag) => tag.pid),
+			...scan.processes.map((proc) => proc.parentPid),
+		]);
 		const partition = partitionBackstopCandidates(
-			scan.processes,
+			scan.processes.map((proc) => ({
+				...proc,
+				start: identities.get(proc.pid)?.start,
+				ownerTag: tags.get(proc.pid),
+			})),
 			registry,
 			realIsPidAlive,
-			{ graceMs: options.graceMs },
+			{
+				graceMs: options.graceMs,
+				startOf: (pid) => identities.get(pid)?.start,
+			},
 		);
 
 		for (const proc of partition.unknownAge) {
@@ -1088,12 +1277,33 @@ export async function sweepUntrackedOrphans(
 
 		const killed: string[] = [];
 		const unverified: string[] = [];
+		let identityChanged = 0;
 		for (const proc of partition.eligible) {
 			const identity = describeManagedProcess(proc);
 			const outcome = await killPidTree(proc.pid, {
 				verifyAttempts: options.verifyAttempts,
 				verifyIntervalMs: options.verifyIntervalMs,
+				confirmIdentity: async () => {
+					const now = (await queryIdentities([proc.pid])).identities.get(
+						proc.pid,
+					);
+					// #3539 review F2: the tag and the start came from two reads,
+					// and a pid reused between them pairs a dead owner's tag with a
+					// live process's start. The tag must still be the one decided on.
+					const tagNow = (await readTags([proc.pid])).tags.get(proc.pid);
+					return (
+						now !== undefined &&
+						now.start === proc.start &&
+						matchesManagedBinary(now.command) &&
+						tagNow?.pid === proc.ownerTag?.pid &&
+						tagNow?.start === proc.ownerTag?.start
+					);
+				},
 			});
+			if (outcome === "changed") {
+				identityChanged++;
+				continue;
+			}
 			if (outcome === "gone") {
 				killed.push(identity);
 				continue;
@@ -1117,8 +1327,13 @@ export async function sweepUntrackedOrphans(
 				eligible: partition.eligible.length,
 				tooFresh: partition.tooFresh.length,
 				unknownAge: partition.unknownAge.length,
+				unknownStart: partition.unknownStart.length,
+				// #3539 review F6: "every candidate untagged" is not "no orphans".
+				tagged: tags.size,
+				untagged: scan.processes.length - tags.size,
 				killed: killed.length,
 				killUnverified: unverified.length,
+				identityChanged,
 				// Identity of the kill, bounded — #1857 item 3. Counts alone can
 				// never answer "which process did we kill?".
 				killedProcesses: killed.slice(0, BACKSTOP_IDENTITY_LOG_LIMIT),
@@ -1345,6 +1560,18 @@ async function isWithinCooldown(
 	return sinceLastMs < cooldownMs ? sinceLastMs : undefined;
 }
 
+/** The backstop's owner-tag read, bounded like its other scanner queries. */
+function readTags(pids: number[]) {
+	return readOwnerTags(pids, {
+		timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+		onTimeout: (child) =>
+			terminateScannerChild(child, {
+				kind: "orphan-backstop-scanner-escalated",
+				timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+			}),
+	});
+}
+
 /** Short, stable identity for one managed process: which binary, which pid.
  *  Full command lines are user paths and can be long, so the record carries
  *  the matched managed-binary name plus the pid. */
@@ -1434,23 +1661,37 @@ export async function sweepOrphans(): Promise<void> {
 	try {
 		const registry = await readInstanceRegistry();
 		if (registry.length === 0) return;
+		// #3539 review F1: a pid means something only inside its pid namespace.
+		// `~/.pi-lens` can be shared by instances in different namespaces (a
+		// container, a sandbox), and read from this one another namespace's
+		// live host pid names some other process, or none. Such an entry is
+		// never judged dead here; only its heartbeat can retire it.
+		const ownNamespace = ownPidNamespace();
+		const judgeable = (entry: InstanceEntry) =>
+			isInPidNamespace(entry, ownNamespace);
 
 		// Identity verification before any pid kill (recycled-pid guard): fetch
-		// the command lines of every recorded child pid in ONE batched query,
-		// then let the pure decision function verify each live child's identity
-		// against what was recorded at spawn. A pid whose command line can't be
-		// fetched is treated as unverifiable and never killed by pid — the
-		// marker-search fallback may still catch it.
-		const candidatePids = registry.flatMap((instance) =>
-			instance.lspChildren.map((child) => child.pid),
-		);
-		const cmdlines = await queryCommandLines(candidatePids);
-		const matchProcess = buildIdentityMatcher(cmdlines);
+		// the command line and start time of every recorded child pid, and of
+		// every host pid (#3538: a host pid that started at another time is a
+		// reused pid, so its instance is dead), in ONE batched query, then let
+		// the pure decision function verify each live child's identity against
+		// what was recorded at spawn. A pid whose identity can't be fetched is
+		// treated as unverifiable and never killed by pid — the marker-search
+		// fallback may still catch it.
+		const candidatePids = registry.flatMap((instance) => [
+			instance.pid,
+			...instance.lspChildren.map((child) => child.pid),
+		]);
+		const { identities, failed } = await queryIdentities(candidatePids);
+		const matchProcess = buildIdentityMatcher(identities);
 
 		const decision = decideOrphanReaping(
 			registry,
 			realIsPidAlive,
 			matchProcess,
+			Date.now(),
+			(pid) => identities.get(pid)?.start,
+			judgeable,
 		);
 
 		// #1857 class sweep: the registry-driven path spelled the same
@@ -1458,10 +1699,24 @@ export async function sweepOrphans(): Promise<void> {
 		// verified accounting and the same bounded, identity-carrying record.
 		let killedCount = 0;
 		let unverifiedCount = 0;
+		let identityChangedCount = 0;
 		const killedServerIds: string[] = [];
 
-		const killAndAccount = async (pid: number, serverId: string) => {
-			const outcome = await killPidTree(pid);
+		// #3538: the decision above is one query old by the time each kill
+		// runs, so every kill asks again, immediately before its signal.
+		const killAndAccount = async (
+			pid: number,
+			serverId: string,
+			stillSame: (now: Map<number, ProcessIdentity>) => boolean,
+		) => {
+			const outcome = await killPidTree(pid, {
+				confirmIdentity: async () =>
+					stillSame((await queryIdentities([pid])).identities),
+			});
+			if (outcome === "changed") {
+				identityChangedCount++;
+				return;
+			}
 			if (outcome === "gone") {
 				killedCount++;
 				killedServerIds.push(serverId);
@@ -1476,14 +1731,20 @@ export async function sweepOrphans(): Promise<void> {
 		};
 
 		for (const child of decision.childrenToKill) {
-			await killAndAccount(child.pid, child.serverId);
+			await killAndAccount(child.pid, child.serverId, (now) =>
+				buildIdentityMatcher(now)(child.pid, child),
+			);
 		}
 
 		for (const search of decision.markerSearches) {
 			try {
 				const pids = await findPidsByMarkerWindows(search.marker);
 				for (const pid of pids) {
-					await killAndAccount(pid, search.serverId);
+					await killAndAccount(
+						pid,
+						search.serverId,
+						(now) => now.get(pid)?.command.includes(search.marker) === true,
+					);
 				}
 			} catch {
 				// best-effort — a failed marker search just misses that orphan this sweep
@@ -1493,16 +1754,21 @@ export async function sweepOrphans(): Promise<void> {
 		// Entry removal covers BOTH sets: pid-dead instances AND stale-heartbeat
 		// (pid-alive) instances — the latter is record cleanup only (#525);
 		// nothing belonging to a stale instance was killed above.
-		if (
-			decision.deadInstances.length > 0 ||
-			decision.staleInstances.length > 0
-		) {
+		// Removal is by (pid, start) (#3538), so it cannot take a live entry
+		// that shares the pid. #3539: a dead instance whose children could not
+		// be judged, because the identity query failed, keeps its entry for the
+		// next sweep. Dropping it lost the only record of those children.
+		const pruneTargets: InstanceIdentity[] = [
+			...(failed ? [] : decision.deadInstances),
+			...decision.staleInstances,
+		].map((instance) => ({
+			pid: instance.pid,
+			processStart: instance.processStart,
+			pidNamespace: instance.pidNamespace,
+		}));
+		if (pruneTargets.length > 0) {
 			try {
-				const prunePids = new Set([
-					...decision.deadInstances.map((i) => i.pid),
-					...decision.staleInstances.map((i) => i.pid),
-				]);
-				await pruneDeadInstances(prunePids);
+				await pruneDeadInstances(pruneTargets);
 			} catch {
 				// best-effort — a stale registry entry is re-evaluated next sweep
 			}
@@ -1519,6 +1785,7 @@ export async function sweepOrphans(): Promise<void> {
 					staleInstances: decision.staleInstances.length,
 					killed: killedCount,
 					killUnverified: unverifiedCount,
+					identityChanged: identityChangedCount,
 					serverIds: killedServerIds,
 					markerSearches: decision.markerSearches.length,
 				},
@@ -1551,9 +1818,11 @@ export async function sweepOrphans(): Promise<void> {
  *  entry. `writeFileAtomicAsync` also cleans up its staging file on a failed
  *  rename, which the hand-rolled copy did not, and puts this writer back on
  *  the same scheme as the other writer of this same file. */
-export async function pruneDeadInstances(deadPids: Set<number>): Promise<void> {
+export async function pruneDeadInstances(
+	dead: readonly InstanceIdentity[],
+): Promise<void> {
 	try {
-		await pruneDeadRegistryInstances(deadPids);
+		await pruneDeadRegistryInstances(dead);
 	} catch {
 		// best-effort
 	}

@@ -119,6 +119,62 @@ describe("decideLspBudget", () => {
 		expect(decision.overBudget).toBe(false);
 	});
 
+	it("#3539 verify R2-F1: another pid namespace's entry counts only while its heartbeat is fresh, never by a pid read from here", () => {
+		const HOUR = 3_600_000;
+		const now = Date.parse("2026-09-26T12:00:00.000Z");
+		const at = (msAgo: number) => new Date(now - msAgo).toISOString();
+		const foreign = (heartbeatAgoMs: number) => ({
+			...instance({
+				pid: 1, // alive here, whatever it is
+				heartbeatAt: at(heartbeatAgoMs),
+				lspChildren: childrenOfCount(16, "typescript", 100),
+			}),
+			pidNamespace: "pid:[container]",
+		});
+
+		const dead = decideLspBudget(
+			[foreign(7 * HOUR)],
+			() => true,
+			16,
+			undefined,
+			now,
+			"pid:[own]",
+		);
+		const live = decideLspBudget(
+			[foreign(HOUR)],
+			() => false,
+			16,
+			undefined,
+			now,
+			"pid:[own]",
+		);
+
+		expect(dead.totalLiveLspServers).toBe(0);
+		expect(dead.degradeAuxiliary).toBe(false);
+		expect(live.totalLiveLspServers).toBe(16);
+	});
+
+	it("an entry from this pid namespace is still counted by its pid", () => {
+		const now = Date.parse("2026-09-26T12:00:00.000Z");
+		const own = {
+			...instance({
+				pid: 2,
+				heartbeatAt: new Date(now - 7 * 3_600_000).toISOString(),
+				lspChildren: childrenOfCount(3, "typescript", 100),
+			}),
+			pidNamespace: "pid:[own]",
+		};
+
+		expect(
+			decideLspBudget([own], alivePids(2), 16, undefined, now, "pid:[own]")
+				.totalLiveLspServers,
+		).toBe(3);
+		expect(
+			decideLspBudget([own], alivePids(), 16, undefined, now, "pid:[own]")
+				.totalLiveLspServers,
+		).toBe(0);
+	});
+
 	it("empty registry — zero load, never over budget", () => {
 		const decision = decideLspBudget([], () => true, 16);
 		expect(decision.totalLiveLspServers).toBe(0);

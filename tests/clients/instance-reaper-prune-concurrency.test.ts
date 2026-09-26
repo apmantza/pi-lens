@@ -104,25 +104,25 @@ afterEach(async () => {
 describe("pruneDeadInstances", () => {
 	it("drops exactly the named pids", async () => {
 		seedRegistry(5);
-		await pruneDeadInstances(new Set([2, 4]));
+		await pruneDeadInstances([{ pid: 2 }, { pid: 4 }]);
 		expect(readPids()).toEqual([1, 3, 5]);
 	});
 
 	it("leaves the file untouched when no pid matches", async () => {
 		seedRegistry(3);
 		const before = fs.readFileSync(registryPath, "utf-8");
-		await pruneDeadInstances(new Set([99]));
+		await pruneDeadInstances([{ pid: 99 }]);
 		expect(fs.readFileSync(registryPath, "utf-8")).toBe(before);
 	});
 
 	it("leaves no staging file behind", async () => {
 		seedRegistry(3);
-		await pruneDeadInstances(new Set([1]));
+		await pruneDeadInstances([{ pid: 1 }]);
 		expect(stageLeftovers()).toEqual([]);
 	});
 
 	it("is best-effort on a missing registry", async () => {
-		await expect(pruneDeadInstances(new Set([1]))).resolves.toBeUndefined();
+		await expect(pruneDeadInstances([{ pid: 1 }])).resolves.toBeUndefined();
 	});
 });
 
@@ -165,8 +165,8 @@ describe(
 				seedRegistry(TOTAL, PAD);
 				// One prune drops a single pid (~2 MB result); the other drops every
 				// even pid (~1 MB result).
-				const pruneOne = new Set([2]);
-				const pruneEvens = new Set(EVENS);
+				const pruneOne = [{ pid: 2 }];
+				const pruneEvens = EVENS.map((pid) => ({ pid }));
 				// Alternate launch order so neither writer is systematically first.
 				const [first, second] =
 					i % 2 === 0 ? [pruneOne, pruneEvens] : [pruneEvens, pruneOne];
@@ -207,7 +207,7 @@ describe(
 			seedRegistry(TOTAL, PAD);
 			const settling = Promise.all(
 				Array.from({ length: 8 }, (_, i) =>
-					pruneDeadInstances(new Set([i + 2])),
+					pruneDeadInstances([{ pid: i + 2 }]),
 				),
 			);
 			inFlight = settling;

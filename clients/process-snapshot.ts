@@ -31,11 +31,16 @@ import {
 	spawnCollectStdoutResult,
 } from "./child-unref.js";
 import {
+	buildEnvironmentQuery,
 	buildProcessQuery,
+	parseEnvironmentVariable,
 	parseProcessTable,
 	type ProcessField,
 	type ProcessFilter,
 	type ProcRow,
+	readLinuxPidNamespace,
+	readLinuxProcessEnvironmentVariable,
+	readLinuxProcessStart,
 } from "../scripts/lib/process-scan.mjs";
 /**
  * Re-exported, not redefined. `windowsExe` resolves an absolute System32
@@ -105,7 +110,12 @@ export async function queryProcessTable(
 	const result = await spawnCollectStdoutResult(
 		query.command,
 		query.args,
-		{ shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+		{
+			shell: false,
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "ignore"],
+			env: query.env,
+		},
 		{ timeoutMs: options.timeoutMs, onTimeout: options.onTimeout },
 	);
 	return {
@@ -120,4 +130,232 @@ export async function queryProcessTable(
 		timeoutKill: result.timeoutKill,
 		serverSideFiltered: query.serverSideFiltered,
 	};
+}
+
+/**
+ * Who a process is: its command line and its OS start time (#3538). A pid
+ * alone names whichever process holds it now; (pid, start) names one process
+ * for its whole life. `start` is undefined when the platform did not report
+ * it, and an unknown start never matches a recorded one.
+ *
+ * The start is an opaque, per-platform string, compared only for equality
+ * against a value read the same way: Linux clock ticks since boot
+ * (`/proc/<pid>/stat`) qualified by the boot id, macOS `lstart` in the C
+ * locale and UTC, Windows
+ * `CreationDate` in UTC (ISO-8601, so it also orders).
+ */
+export interface ProcessIdentity {
+	command: string;
+	start?: string | undefined;
+}
+
+/** `pids` without duplicates and without anything that is not a pid. */
+function validPids(pids: readonly number[]): number[] {
+	return [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))];
+}
+
+/**
+ * The identity of each live pid in `pids`, in one query. Pids that are gone
+ * are absent. `status` is the listing's own status (see
+ * `ProcessTableResult.status`); on POSIX `ps -p` exits non-zero when none of
+ * the pids exist, which the caller may read as a clean empty result.
+ */
+export async function queryProcessIdentities(
+	pids: readonly number[],
+	options: ProcessTableOptions,
+): Promise<{
+	identities: Map<number, ProcessIdentity>;
+	status: SpawnCollectStatus;
+}> {
+	const valid = validPids(pids);
+	const identities = new Map<number, ProcessIdentity>();
+	if (valid.length === 0) return { identities, status: "ok" };
+	const linux = process.platform === "linux";
+	const result = await queryProcessTable(
+		{
+			fields: linux ? ["pid", "command"] : ["pid", "startedAt", "command"],
+			filter: { column: "ProcessId", op: "eq", values: valid },
+		},
+		options,
+	);
+	for (const row of result.rows) {
+		const start = linux ? readLinuxProcessStart(row.pid) : row.startedAt;
+		identities.set(row.pid, {
+			command: row.command,
+			start: start ? start : undefined,
+		});
+	}
+	return { identities, status: result.status };
+}
+
+/**
+ * The environment variable an LSP child carries naming the pi-lens process
+ * that spawned it: `<pid>:<start>` (#3539). An orphan keeps it after its
+ * owner dies, and on POSIX, where the orphan is reparented and its ppid says
+ * nothing about the owner, it is the only record of who owned it.
+ */
+export const OWNER_TAG_ENV = "PI_LENS_OWNER";
+
+export interface OwnerTag {
+	pid: number;
+	start: string;
+}
+
+export function formatOwnerTag(tag: OwnerTag): string {
+	return `${tag.pid}:${tag.start}`;
+}
+
+/**
+ * Undefined for anything that is not `<positive pid>:<start>`, where the
+ * start has a shape this module writes: Linux clock ticks with the boot id
+ * (`<ticks>@<boot_id>`), or an ISO-8601 UTC instant (macOS). Anything longer (say, a later `pid:start:namespace` form)
+ * is no tag at all rather than a tag whose start never matches, which would
+ * read as a dead owner.
+ */
+export function parseOwnerTag(value: string | undefined): OwnerTag | undefined {
+	const match =
+		/^(\d+):(\d+@[0-9a-f-]{36}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/.exec(
+			value ?? "",
+		);
+	if (!match) return undefined;
+	const [, pidText = "", start = ""] = match;
+	const pid = Number(pidText);
+	return pid > 0 ? { pid, start } : undefined;
+}
+
+/**
+ * The value of `OWNER_TAG_ENV` for a child this process spawns, or undefined
+ * when there is none to give. Windows gets none: its backstop reads the
+ * ppid, and reading this process's start there would put a CIM query on the
+ * LSP spawn path.
+ */
+export async function ownerTagForChildren(
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "win32") return undefined;
+	const start = await ownProcessStart(options);
+	return start === undefined
+		? undefined
+		: formatOwnerTag({ pid: process.pid, start });
+}
+
+/**
+ * The owner tag each pid carries. POSIX only: Linux reads
+ * `/proc/<pid>/environ`, macOS asks `ps -E`. Windows has no way to read
+ * another process's environment without native code, so it returns none and
+ * its backstop judges ownership from the ppid instead.
+ *
+ * Linux returns no tag for a process in another pid namespace (a container,
+ * a rootless podman or Flatpak sandbox): the pid inside its tag names a
+ * process in THAT namespace, and read from this one it names some other
+ * process or none, which would judge a live owner dead (#3539 review F1).
+ */
+export async function readOwnerTags(
+	pids: readonly number[],
+	options: ProcessTableOptions,
+): Promise<{ tags: Map<number, OwnerTag>; status: SpawnCollectStatus }> {
+	const tags = new Map<number, OwnerTag>();
+	const valid = validPids(pids);
+	if (valid.length === 0 || process.platform === "win32")
+		return { tags, status: "ok" };
+	if (process.platform === "linux") {
+		const own = ownPidNamespace();
+		for (const pid of valid) {
+			const namespace = readLinuxPidNamespace(pid);
+			if (namespace === undefined || namespace !== own) continue;
+			const tag = parseOwnerTag(
+				readLinuxProcessEnvironmentVariable(pid, OWNER_TAG_ENV),
+			);
+			if (tag) tags.set(pid, tag);
+		}
+		return { tags, status: "ok" };
+	}
+	const query = buildEnvironmentQuery(valid);
+	const result = await spawnCollectStdoutResult(
+		query.command,
+		query.args,
+		{ shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+		options,
+	);
+	for (const [pid, value] of parseEnvironmentVariable(
+		result.stdout,
+		OWNER_TAG_ENV,
+	)) {
+		const tag = parseOwnerTag(value);
+		if (tag) tags.set(pid, tag);
+	}
+	// `ps -p` exits non-zero when a requested pid is gone, which is a clean
+	// answer for that pid (no tag), not a failed read of the others.
+	return {
+		tags,
+		status: result.status === "exit-error" ? "ok" : result.status,
+	};
+}
+
+/**
+ * Whether a registry entry's pid means something in `namespace` (#3539
+ * review F1). An entry with no namespace (an older writer, or not Linux) is
+ * taken as this one's, as every entry was before.
+ */
+export function isInPidNamespace(
+	entry: { pidNamespace?: string | undefined },
+	namespace: string | undefined,
+): boolean {
+	return entry.pidNamespace === undefined || entry.pidNamespace === namespace;
+}
+
+/**
+ * This process's pid namespace (Linux), or undefined elsewhere or when it
+ * cannot be read. A pid means something only inside its namespace.
+ */
+export function ownPidNamespace(): string | undefined {
+	return process.platform === "linux"
+		? readLinuxPidNamespace(process.pid)
+		: undefined;
+}
+
+interface OwnStartCell {
+	promise: Promise<string | undefined>;
+	value?: string;
+}
+
+/** This process's start, once read. A failed read is not kept. */
+let ownStart: OwnStartCell | null = null;
+
+/**
+ * This process's OS start time, read once. Linux reads it synchronously; the
+ * other platforms query the process table the first time. A failed read is
+ * not remembered, so the next caller tries again.
+ */
+export function ownProcessStart(
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "linux")
+		return Promise.resolve(readLinuxProcessStart(process.pid));
+	if (ownStart) return ownStart.promise;
+	const cell: OwnStartCell = {
+		promise: readProcessStart(process.pid, options).then((start) => {
+			if (start === undefined) ownStart = null;
+			else cell.value = start;
+			return start;
+		}),
+	};
+	ownStart = cell;
+	return cell.promise;
+}
+
+/** One pid's OS start time, or undefined when it cannot be read. */
+export async function readProcessStart(
+	pid: number,
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "linux") return readLinuxProcessStart(pid);
+	return (await queryProcessIdentities([pid], options)).identities.get(pid)
+		?.start;
+}
+
+/** This process's start if it is already known, without waiting. */
+export function ownProcessStartIfKnown(): string | undefined {
+	if (process.platform === "linux") return readLinuxProcessStart(process.pid);
+	return ownStart?.value;
 }

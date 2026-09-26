@@ -369,6 +369,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/installer/pip-pep668.test.ts",
 	"tests/clients/installer/posix-group-kill.test.ts",
 	"tests/clients/installer/verify-binary-semantics.test.ts",
+	// #3538/#3539: real children stand for the pids the reaper judges and
+	// kills (flake-shape admission).
+	"tests/clients/instance-reaper-pid-reuse.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
 	// afterwards. Real child spawn (flake-shape admission), and it also spawns a
