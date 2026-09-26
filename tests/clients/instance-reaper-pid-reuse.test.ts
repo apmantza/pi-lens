@@ -25,6 +25,15 @@
  * record naming a live process with a start that is not its own, which is
  * exactly what the reaper would read after a real reuse.
  *
+ * #3539 — on POSIX a lost registry record leaked the orphan for good. The
+ * #658 backstop judged ownership by "the ppid is dead", and a POSIX orphan
+ * is reparented to init or a subreaper, which is alive. The replays
+ * PosixFootprint, PosixScanFail, PosixStaleMcp and PosixLateRecord below
+ * lose the record four ways; PosixSamePid, above, is the fifth. Every LSP
+ * child now carries its owner's incarnation (`PI_LENS_OWNER=<pid>:<start>`)
+ * and the POSIX backstop reaps by whether that incarnation is dead. Each
+ * orphan's ppid here is this live test process, standing for init.
+ *
  * lane: Unit tests (ubuntu). Linux only (`describe.skipIf`): the start-time
  * oracle below reads `/proc/<pid>/stat` directly rather than through the
  * helper under test, and the kill guard that polices these signals is
@@ -53,6 +62,8 @@ const h = vi.hoisted(() => ({
 	mine: new Set<number>(),
 	/** Runs once, after the first identity query returns. */
 	afterFirstIdentityQuery: undefined as undefined | (() => Promise<void>),
+	/** The next identity query times out (one shot). */
+	failNextIdentityQuery: false,
 	latency: [] as Array<{ phase?: string; metadata?: Record<string, unknown> }>,
 }));
 
@@ -70,6 +81,12 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
 		h.latency.push(entry);
 	},
 }));
+
+function takeIdentityFailure(): boolean {
+	const fail = h.failNextIdentityQuery;
+	h.failNextIdentityQuery = false;
+	return fail;
+}
 
 async function runIdentityHook(): Promise<void> {
 	const hook = h.afterFirstIdentityQuery;
@@ -89,6 +106,12 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 			request: Parameters<typeof real.queryProcessTable>[0],
 			options: Parameters<typeof real.queryProcessTable>[1],
 		) => {
+			if (request.filter?.column === "ProcessId" && takeIdentityFailure())
+				return {
+					rows: [],
+					status: "timeout" as const,
+					serverSideFiltered: true,
+				};
 			const result = await real.queryProcessTable(request, options);
 			const rows = result.rows.filter((row) => h.mine.has(row.pid));
 			if (request.filter?.column === "ProcessId") await runIdentityHook();
@@ -98,6 +121,8 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 			pids: readonly number[],
 			options: Parameters<typeof real.queryProcessIdentities>[1],
 		) => {
+			if (takeIdentityFailure())
+				return { identities: new Map(), status: "timeout" as const };
 			const result = await real.queryProcessIdentities(
 				pids.filter((pid) => h.mine.has(pid)),
 				options,
@@ -108,7 +133,10 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 	};
 });
 
-const { sweepOrphans } = await import("../../clients/instance-reaper.js");
+const { sweepOrphans, sweepUntrackedOrphans } =
+	await import("../../clients/instance-reaper.js");
+const { getResourceFootprint } =
+	await import("../../clients/instance-registry.js");
 
 const TSLS = "/opt/fake/node_modules/typescript-language-server/lib/cli.mjs";
 const TSLS_BIN = "/opt/fake/node_modules/.bin/typescript-language-server";
@@ -133,16 +161,21 @@ function track(child: ChildProcess): ChildProcess {
 	h.mine.add(child.pid as number);
 	return child;
 }
-/** A live node process whose command line looks like a node-launched LSP. */
-function spawnLsp(): ChildProcess {
+/**
+ * A live node process whose command line looks like a node-launched LSP.
+ * `owner` sets the tag a pi-lens owner gives the children it spawns
+ * (#3539); its ppid is always this test, standing for the live init or
+ * subreaper a POSIX orphan is reparented to.
+ */
+function spawnLsp(owner?: string): ChildProcess {
+	const env = { ...process.env };
+	delete env.PI_LENS_OWNER;
+	if (owner !== undefined) env.PI_LENS_OWNER = owner;
 	return track(
 		spawn(
 			process.execPath,
 			["-e", "setInterval(()=>{},1e6)", TSLS, "--stdio"],
-			{
-				stdio: "ignore",
-				detached: true,
-			},
+			{ stdio: "ignore", detached: true, env },
 		),
 	);
 }
@@ -421,6 +454,160 @@ describe.skipIf(process.platform !== "linux")(
 					processStart: startOf(process.pid),
 				}),
 			]);
+		});
+	},
+);
+
+/** One backstop sweep, now: no cooldown, no grace, no follow-up. */
+function backstop() {
+	return sweepUntrackedOrphans({
+		force: true,
+		cooldownMs: 0,
+		graceMs: 0,
+		allowGraceRetry: false,
+		verifyIntervalMs: 0,
+	});
+}
+/** The tag an owner that is `pid` with `start` gives its children. */
+const tag = (pid: number, start: string) => `${pid}:${start}`;
+
+describe.skipIf(process.platform !== "linux")(
+	"#3539: an orphan whose registry record is lost is still reaped on POSIX",
+	() => {
+		it("[PosixLateRecord] an orphan whose owner died before recording it is reaped through its owner tag", async () => {
+			const orphan = spawnLsp(tag(deadPid(), OTHER_START));
+			const pid = orphan.pid as number;
+			const exited = once(orphan, "exit");
+
+			await backstop();
+
+			expect(signalledPids().has(pid)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("a child whose owner is alive under the tagged start is not reaped", async () => {
+			h.mine.add(process.pid); // the owner's start must be readable
+			const child = spawnLsp(tag(process.pid, startOf(process.pid)));
+
+			await backstop();
+
+			expect(signalledPids().has(child.pid as number)).toBe(false);
+		});
+
+		it("an owner pid now held by a process with another start is a dead owner", async () => {
+			const stranger = spawnHost();
+			const orphan = spawnLsp(tag(stranger.pid as number, OTHER_START));
+			const exited = once(orphan, "exit");
+
+			await backstop();
+
+			expect(signalledPids().has(orphan.pid as number)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+			expect(signalledPids().has(stranger.pid as number)).toBe(false);
+		});
+
+		it("a malformed tag naming pid 0 is no owner, never a dead one", async () => {
+			const server = spawnLsp(tag(0, OTHER_START));
+
+			await backstop();
+
+			expect(signalledPids().has(server.pid as number)).toBe(false);
+		});
+
+		it("a server pi-lens did not spawn (no tag) is never reaped", async () => {
+			const server = spawnLsp();
+
+			await backstop();
+
+			expect(signalledPids().has(server.pid as number)).toBe(false);
+		});
+
+		it("[PosixFootprint] a health read keeps a dead instance's entry while it lists children, and the next sweep reaps them", async () => {
+			const owner = deadPid();
+			const orphan = spawnLsp(tag(owner, OTHER_START));
+			const pid = orphan.pid as number;
+			writeRegistry([
+				entry(owner, [{ pid, processStart: startOf(pid) }], {
+					processStart: OTHER_START,
+				}),
+			]);
+
+			await getResourceFootprint();
+			// The health read prunes fire-and-forget; give a prune every turn it
+			// could need to land before reading the file.
+			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			expect(registryEntries().map((e) => e.pid)).toEqual([owner]);
+
+			const exited = once(orphan, "exit");
+			await sweepOrphans();
+			expect(signalledPids().has(pid)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("[PosixScanFail] a failed identity query keeps the dead entry, and the next sweep reaps its children", async () => {
+			const owner = deadPid();
+			const orphan = spawnLsp(tag(owner, OTHER_START));
+			const pid = orphan.pid as number;
+			writeRegistry([
+				entry(owner, [{ pid, processStart: startOf(pid) }], {
+					processStart: OTHER_START,
+				}),
+			]);
+
+			h.failNextIdentityQuery = true;
+			await sweepOrphans();
+			expect(signals).toEqual([]);
+			expect(registryEntries().map((e) => e.pid)).toEqual([owner]);
+
+			const exited = once(orphan, "exit");
+			await sweepOrphans();
+			expect(signalledPids().has(pid)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("[PosixStaleMcp] a stale entry dropped while its host lived: the host's children are reaped after it dies", async () => {
+			const host = spawnHost(); // an MCP host: never heartbeats
+			const hostPid = host.pid as number;
+			const orphan = spawnLsp(tag(hostPid, startOf(hostPid)));
+			const pid = orphan.pid as number;
+			writeRegistry([
+				entry(hostPid, [{ pid, processStart: startOf(pid) }], {
+					processStart: startOf(hostPid),
+					heartbeatAgoMs: 7 * 3_600_000,
+				}),
+			]);
+
+			await sweepOrphans();
+			expect(signals).toEqual([]);
+			expect(registryEntries()).toEqual([]);
+
+			const hostExited = once(host, "exit");
+			host.kill("SIGKILL"); // the MCP host dies
+			await hostExited;
+
+			const exited = once(orphan, "exit");
+			await sweepOrphans();
+			await backstop();
+			expect(signalledPids().has(pid)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("launchLSP gives every LSP child this process's owner tag", async () => {
+			const { launchLSP } = await import("../../clients/lsp/launch.js");
+			const handle = await launchLSP("/bin/sh", ["-c", "sleep 30"], {
+				cwd: process.cwd(),
+			});
+			children.push(handle.process);
+			const environ = fs
+				.readFileSync(`/proc/${handle.pid}/environ`, "utf8")
+				.split("\0");
+
+			expect(environ).toContain(
+				`PI_LENS_OWNER=${tag(process.pid, startOf(process.pid))}`,
+			);
+			handle.process.kill("SIGKILL");
 		});
 	},
 );

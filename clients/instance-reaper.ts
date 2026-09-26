@@ -94,9 +94,11 @@ import {
 } from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	type OwnerTag,
 	type ProcessIdentity,
 	queryProcessIdentities,
 	queryProcessTable,
+	readOwnerTags,
 	windowsExe,
 } from "./process-snapshot.js";
 
@@ -710,6 +712,12 @@ export interface OsProcessInfo {
 	 * not be tied to the process the decision was about.
 	 */
 	start?: string | undefined;
+	/**
+	 * POSIX: the pi-lens instance that spawned this process, read from the
+	 * `PI_LENS_OWNER` variable it inherited (#3539). Undefined for a process
+	 * pi-lens did not spawn, or one spawned before #3539.
+	 */
+	ownerTag?: OwnerTag | undefined;
 }
 
 /**
@@ -723,19 +731,12 @@ export interface OsProcessInfo {
  * - its pid is NOT already tracked in any instance's `lspChildren[]` (tracked
  *   pids stay owned by the registry-driven `decideOrphanReaping` path above —
  *   this backstop must never race or duplicate that logic);
- * - its reported parent pid is a verifiable, well-formed pid (finite,
- *   positive, and not equal to its own pid) — an unresolvable/malformed
- *   parent pid is UNVERIFIABLE, never treated as "confirmed dead" (this is a
- *   stricter contract than `realIsPidAlive`'s own conservatism, because here
- *   an invalid value means "the OS couldn't tell us", not "confirmed gone");
- * - `isPidAlive(parentPid)` reports the parent as dead.
+ * - the pi-lens instance that owned it is dead (`isOwnerDead`);
+ * - its start time is known (#3538), and it is older than the spawn grace.
  *
- * Note the direction of the ambiguity guard: if `parentPid` itself was
- * recycled onto an unrelated live process, `isPidAlive` conservatively
- * reports "alive" and the process is (safely) left alone — a false negative,
- * never a false positive kill. Binary name alone is never sufficient (name
- * matching only decides which processes are candidates for this check at
- * all); a live parent is never overridden "however unfamiliar" the process.
+ * Binary name alone is never sufficient (name matching only decides which
+ * processes are candidates for this check at all); a live owner is never
+ * overridden "however unfamiliar" the process.
  */
 export function decideBackstopOrphanReaping(
 	processes: OsProcessInfo[],
@@ -768,6 +769,46 @@ export const BACKSTOP_SPAWN_GRACE_MS = 60_000;
 export interface BackstopDecisionOptions {
 	/** Override `BACKSTOP_SPAWN_GRACE_MS` (tests). */
 	graceMs?: number;
+	/** Whose ownership rule applies; defaults to the live `process.platform`. */
+	platform?: NodeJS.Platform;
+	/** The current start of a live pid (an owner or a parent), or undefined. */
+	startOf?: (pid: number) => string | undefined;
+}
+
+/**
+ * Whether the pi-lens instance that owned `proc` is dead (#3539).
+ *
+ * POSIX reparents an orphan to init or a subreaper, which is alive, so the
+ * ppid never showed a dead owner there and the backstop reaped nothing. The
+ * owner tag names the owner's incarnation, (pid, start): it is dead when its
+ * pid is, or when a process with another start holds that pid now. A process
+ * with no tag was not spawned by pi-lens (or predates #3539) and is never
+ * judged here.
+ *
+ * Windows keeps the dead parent's pid as the orphan's ppid, and reuses pids:
+ * a live process on that pid that started after this one cannot be its
+ * parent. A malformed or unresolvable ppid is UNVERIFIABLE, never "confirmed
+ * dead", and an unknown start falls back to the pid.
+ */
+function isOwnerDead(
+	proc: OsProcessInfo,
+	isPidAlive: (pid: number) => boolean,
+	platform: NodeJS.Platform,
+	startOf: (pid: number) => string | undefined,
+): boolean {
+	if (platform !== "win32") {
+		const tag = proc.ownerTag;
+		if (tag === undefined) return false;
+		if (!isPidAlive(tag.pid)) return true;
+		const current = startOf(tag.pid);
+		return current !== undefined && current !== tag.start;
+	}
+	const parent = proc.parentPid;
+	if (!Number.isFinite(parent) || parent <= 0 || parent === proc.pid)
+		return false;
+	if (!isPidAlive(parent)) return true;
+	const parentStart = Date.parse(startOf(parent) ?? "");
+	return parentStart > Date.parse(proc.start ?? "");
 }
 
 /** Full classification behind `decideBackstopOrphanReaping`, including the
@@ -797,6 +838,8 @@ export function partitionBackstopCandidates(
 	options: BackstopDecisionOptions = {},
 ): BackstopPartition {
 	const graceMs = Math.max(0, options.graceMs ?? BACKSTOP_SPAWN_GRACE_MS);
+	const platform = options.platform ?? process.platform;
+	const startOf = options.startOf ?? (() => undefined);
 	// #3538: a record shields the process it was made for, (pid, start). A
 	// record for an earlier process on a reused pid shields nothing. A record
 	// with no start (an older pi-lens) still shields by pid, the conservative
@@ -822,9 +865,7 @@ export function partitionBackstopCandidates(
 	};
 	for (const proc of processes) {
 		if (isTracked(proc)) continue; // owned by the registry-driven reaper
-		if (!Number.isFinite(proc.parentPid) || proc.parentPid <= 0) continue; // unverifiable
-		if (proc.parentPid === proc.pid) continue; // malformed data guard
-		if (isPidAlive(proc.parentPid)) continue; // live parent — never kill
+		if (!isOwnerDead(proc, isPidAlive, platform, startOf)) continue; // never kill
 		if (proc.start === undefined) {
 			partition.unknownStart.push(proc);
 			continue;
@@ -1132,19 +1173,46 @@ export async function sweepUntrackedOrphans(
 			);
 		}
 
+		// #3539: on POSIX the owner tag, not the ppid, says whose a process is.
+		const pids = scan.processes.map((proc) => proc.pid);
+		const tagScan = await readOwnerTags(pids, {
+			timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+			onTimeout: (child) =>
+				terminateScannerChild(child, {
+					kind: "orphan-backstop-scanner-escalated",
+					timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+				}),
+		});
+		if (tagScan.status !== "ok") {
+			// Every candidate reads as untagged, so nothing is reaped: a sweep
+			// that could not tell, not a clean one.
+			recordDegradationOnce({
+				kind: "orphan-backstop-scan-failed",
+				subject: "owner-tag-query",
+				reason: `owner tag query ${tagScan.status}; POSIX reap suppressed this sweep`,
+			});
+		}
+		const tags = tagScan.tags;
 		// #3538: the start time ties each decision, and each kill, to one
-		// process rather than to whatever holds the pid by then.
-		const { identities } = await queryIdentities(
-			scan.processes.map((proc) => proc.pid),
-		);
+		// process rather than to whatever holds the pid by then. Owners' and
+		// parents' starts tell a live owner from a reused pid.
+		const { identities } = await queryIdentities([
+			...pids,
+			...[...tags.values()].map((tag) => tag.pid),
+			...scan.processes.map((proc) => proc.parentPid),
+		]);
 		const partition = partitionBackstopCandidates(
 			scan.processes.map((proc) => ({
 				...proc,
 				start: identities.get(proc.pid)?.start,
+				ownerTag: tags.get(proc.pid),
 			})),
 			registry,
 			realIsPidAlive,
-			{ graceMs: options.graceMs },
+			{
+				graceMs: options.graceMs,
+				startOf: (pid) => identities.get(pid)?.start,
+			},
 		);
 
 		for (const proc of partition.unknownAge) {
@@ -1535,7 +1603,7 @@ export async function sweepOrphans(): Promise<void> {
 			instance.pid,
 			...instance.lspChildren.map((child) => child.pid),
 		]);
-		const { identities } = await queryIdentities(candidatePids);
+		const { identities, failed } = await queryIdentities(candidatePids);
 		const matchProcess = buildIdentityMatcher(identities);
 
 		const decision = decideOrphanReaping(
@@ -1607,9 +1675,11 @@ export async function sweepOrphans(): Promise<void> {
 		// (pid-alive) instances — the latter is record cleanup only (#525);
 		// nothing belonging to a stale instance was killed above.
 		// Removal is by (pid, start) (#3538), so it cannot take a live entry
-		// that shares the pid.
+		// that shares the pid. #3539: a dead instance whose children could not
+		// be judged, because the identity query failed, keeps its entry for the
+		// next sweep. Dropping it lost the only record of those children.
 		const pruneTargets: InstanceIdentity[] = [
-			...decision.deadInstances,
+			...(failed ? [] : decision.deadInstances),
 			...decision.staleInstances,
 		].map((instance) => ({
 			pid: instance.pid,

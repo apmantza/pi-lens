@@ -1159,7 +1159,9 @@ export function computeResourceFootprint(
  * caller" convention `sweepOrphans`/`pruneDeadInstances` already use.
  * Pruning here is a bonus cleanup, not a substitute for the reaper sweep:
  * this path only prunes pids this particular read happened to find dead,
- * while the reaper sweep is the authoritative, scheduled cleanup. Injectable
+ * while the reaper sweep is the authoritative, scheduled cleanup. It never
+ * prunes an entry that still lists children (#3539): only the sweep reaps
+ * those, and it reaps them from that entry. Injectable
  * so tests can pass a fake predicate (or omit filtering entirely by passing
  * a function that always returns true) without touching real OS process
  * state.
@@ -1168,8 +1170,14 @@ export async function getResourceFootprint(
 	isPidAlive: (pid: number) => boolean = realIsPidAlive,
 ): Promise<ResourceFootprint> {
 	const instances = await readInstanceRegistry();
+	// #3539: only an entry with no children left to reap. This read kills
+	// nothing, so dropping an entry that still lists children lost the only
+	// record the registry sweep would have reaped them from.
 	const dead: InstanceIdentity[] = instances
-		.filter((instance) => !isPidAlive(instance.pid))
+		.filter(
+			(instance) =>
+				!isPidAlive(instance.pid) && instance.lspChildren.length === 0,
+		)
 		.map((instance) => ({
 			pid: instance.pid,
 			processStart: instance.processStart,

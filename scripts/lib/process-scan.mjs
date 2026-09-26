@@ -361,6 +361,70 @@ export function readLinuxProcessStart(pid) {
 }
 
 /**
+ * Linux: one variable from a process's initial environment
+ * (`/proc/<pid>/environ`). Undefined when the variable is absent or the file
+ * cannot be read (another user's process, a pid that is gone).
+ *
+ * @param {number} pid
+ * @param {string} name
+ * @returns {string|undefined}
+ */
+export function readLinuxProcessEnvironmentVariable(pid, name) {
+	let environ;
+	try {
+		environ = fs.readFileSync(`/proc/${assertPid(pid)}/environ`, "utf8");
+	} catch {
+		return undefined;
+	}
+	const prefix = `${name}=`;
+	const entry = environ.split("\0").find((item) => item.startsWith(prefix));
+	return entry === undefined ? undefined : entry.slice(prefix.length);
+}
+
+/**
+ * macOS and the BSDs: the query that prints each pid's command line followed
+ * by its environment (`ps -E`; the kernel shows it for the caller's own
+ * processes only). Read back with `parseEnvironmentVariable`.
+ *
+ * @param {ReadonlyArray<number>} pids
+ * @returns {{ command: string, args: string[] }}
+ */
+export function buildEnvironmentQuery(pids) {
+	return {
+		command: posixPsPath(),
+		args: [
+			"-E",
+			"-ww",
+			"-p",
+			pids.map((pid) => assertPid(pid)).join(","),
+			"-o",
+			"pid=,command=",
+		],
+	};
+}
+
+/**
+ * Read one variable per pid out of `buildEnvironmentQuery` output. `ps -E`
+ * joins the arguments and the environment with spaces, so the value is the
+ * token after `<name>=`.
+ *
+ * @param {string} out
+ * @param {string} name
+ * @returns {Map<number, string>}
+ */
+export function parseEnvironmentVariable(out, name) {
+	const values = new Map();
+	const pattern = new RegExp(`(?:^|\\s)${name}=(\\S+)`);
+	for (const line of String(out ?? "").split(/\r?\n/)) {
+		const row = /^\s*(\d+)\s+(.*)$/.exec(line);
+		if (!row) continue;
+		const value = pattern.exec(row[2]);
+		if (value) values.set(Number(row[1]), value[1]);
+	}
+	return values;
+}
+
+/**
  * Parse a non-negative integer token, rejecting anything else. A nonsensical
  * value means the value is UNKNOWN, not zero — a caller reasoning from a
  * fabricated 0 is how the #1857 local-time age bug stayed invisible.

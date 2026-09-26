@@ -31,11 +31,14 @@ import {
 	spawnCollectStdoutResult,
 } from "./child-unref.js";
 import {
+	buildEnvironmentQuery,
 	buildProcessQuery,
+	parseEnvironmentVariable,
 	parseProcessTable,
 	type ProcessField,
 	type ProcessFilter,
 	type ProcRow,
+	readLinuxProcessEnvironmentVariable,
 	readLinuxProcessStart,
 } from "../scripts/lib/process-scan.mjs";
 /**
@@ -181,6 +184,88 @@ export async function queryProcessIdentities(
 		});
 	}
 	return { identities, status: result.status };
+}
+
+/**
+ * The environment variable an LSP child carries naming the pi-lens process
+ * that spawned it: `<pid>:<start>` (#3539). An orphan keeps it after its
+ * owner dies, and on POSIX, where the orphan is reparented and its ppid says
+ * nothing about the owner, it is the only record of who owned it.
+ */
+export const OWNER_TAG_ENV = "PI_LENS_OWNER";
+
+export interface OwnerTag {
+	pid: number;
+	start: string;
+}
+
+export function formatOwnerTag(tag: OwnerTag): string {
+	return `${tag.pid}:${tag.start}`;
+}
+
+/** Undefined for anything that is not `<positive pid>:<non-empty start>`. */
+export function parseOwnerTag(value: string | undefined): OwnerTag | undefined {
+	const match = /^(\d+):(\S+)$/.exec(value ?? "");
+	if (!match) return undefined;
+	const [, pidText = "", start = ""] = match;
+	const pid = Number(pidText);
+	return pid > 0 ? { pid, start } : undefined;
+}
+
+/**
+ * The value of `OWNER_TAG_ENV` for a child this process spawns, or undefined
+ * when there is none to give. Windows gets none: its backstop reads the
+ * ppid, and reading this process's start there would put a CIM query on the
+ * LSP spawn path.
+ */
+export async function ownerTagForChildren(
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "win32") return undefined;
+	const start = await ownProcessStart(options);
+	return start === undefined
+		? undefined
+		: formatOwnerTag({ pid: process.pid, start });
+}
+
+/**
+ * The owner tag each pid carries. POSIX only: Linux reads
+ * `/proc/<pid>/environ`, macOS asks `ps -E`. Windows has no way to read
+ * another process's environment without native code, so it returns none and
+ * its backstop judges ownership from the ppid instead.
+ */
+export async function readOwnerTags(
+	pids: readonly number[],
+	options: ProcessTableOptions,
+): Promise<{ tags: Map<number, OwnerTag>; status: SpawnCollectStatus }> {
+	const tags = new Map<number, OwnerTag>();
+	const valid = validPids(pids);
+	if (valid.length === 0 || process.platform === "win32")
+		return { tags, status: "ok" };
+	if (process.platform === "linux") {
+		for (const pid of valid) {
+			const tag = parseOwnerTag(
+				readLinuxProcessEnvironmentVariable(pid, OWNER_TAG_ENV),
+			);
+			if (tag) tags.set(pid, tag);
+		}
+		return { tags, status: "ok" };
+	}
+	const query = buildEnvironmentQuery(valid);
+	const result = await spawnCollectStdoutResult(
+		query.command,
+		query.args,
+		{ shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+		options,
+	);
+	for (const [pid, value] of parseEnvironmentVariable(
+		result.stdout,
+		OWNER_TAG_ENV,
+	)) {
+		const tag = parseOwnerTag(value);
+		if (tag) tags.set(pid, tag);
+	}
+	return { tags, status: result.status };
 }
 
 interface OwnStartCell {

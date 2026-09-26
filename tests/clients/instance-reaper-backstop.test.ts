@@ -64,6 +64,8 @@ const h = vi.hoisted(() => {
 		/** What every identity query after the first reports: the process the
 		 *  sweep decided on, or another one on its pid (#3538). */
 		laterIdentity: { command: string; start: string } | undefined;
+		/** The owner-tag query's status (#3539). */
+		tagStatus: "ok" | "timeout";
 	} = {
 		registry: [],
 		enabled: true,
@@ -75,6 +77,7 @@ const h = vi.hoisted(() => {
 		bareKills: [],
 		identityQueries: 0,
 		laterIdentity: undefined,
+		tagStatus: "ok",
 	};
 	let nextPid = 90_000;
 	function makeFakeChild(command: string, args: string[]) {
@@ -140,10 +143,27 @@ vi.mock("../../clients/instance-registry.js", () => ({
 // #3538: the sweep reads each candidate's start time and asks again right
 // before each kill. The candidates here are fabricated rows, so their
 // identity is fabricated with them: a managed command and one stable start.
+// #3539: on POSIX the sweep reads each candidate's owner tag instead of its
+// ppid; each fabricated row names its ppid as its owner, under that same
+// start, so "owner alive" here is exactly the "parent alive" these cases
+// were written against.
 vi.mock("../../clients/process-snapshot.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../clients/process-snapshot.js")
 	>()),
+	readOwnerTags: async (pids: readonly number[]) => {
+		const owners = new Map<number, number>();
+		for (const line of h.state.stdout.split("\n")) {
+			const row = /^\s*(\d+)\s+(\d+)/.exec(line);
+			if (row) owners.set(Number(row[1]), Number(row[2]));
+		}
+		const tags = new Map<number, { pid: number; start: string }>();
+		for (const pid of pids) {
+			const owner = owners.get(pid);
+			if (owner) tags.set(pid, { pid: owner, start: "t0" });
+		}
+		return { tags, status: h.state.tagStatus };
+	},
 	queryProcessIdentities: async (pids: readonly number[]) => {
 		const later =
 			h.state.identityQueries++ > 0 ? h.state.laterIdentity : undefined;
@@ -300,6 +320,7 @@ beforeEach(() => {
 	h.state.bareKills.length = 0;
 	h.state.identityQueries = 0;
 	h.state.laterIdentity = undefined;
+	h.state.tagStatus = "ok";
 	// Each test gets a fresh cooldown stamp and sweep lock. PI_LENS_HOME is
 	// this file's OWN private dir (pinned in beforeAll above, #3042/#3050) —
 	// never the run-shared home other Vitest forks' real reaper sweeps use.
@@ -366,6 +387,18 @@ describe("#3538: the backstop asks again, immediately before each kill", () => {
 
 		expect(killsOf(5000).length).toBeGreaterThan(0);
 		expect(backstopMetadata()).toMatchObject({ killed: 1, identityChanged: 0 });
+	});
+});
+
+describe("#3539: a failed owner-tag read", () => {
+	it("is recorded, never read as a sweep that found nothing", async () => {
+		h.state.tagStatus = "timeout";
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(reasonsFor("orphan-backstop-scan-failed")).toEqual([
+			expect.objectContaining({ subject: "owner-tag-query" }),
+		]);
 	});
 });
 
@@ -762,6 +795,7 @@ describe("#1857 item 4: spawn-grace guard", () => {
 			command: "opengrep --lsp",
 			ageMs: 10 * 60 * 1000,
 			start: "t0",
+			ownerTag: { pid: 4000, start: "t0" },
 			...overrides,
 		};
 	}

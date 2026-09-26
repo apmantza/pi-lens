@@ -428,16 +428,25 @@ function osProc(overrides: Partial<OsProcessInfo> = {}): OsProcessInfo {
 }
 
 describe("decideBackstopOrphanReaping", () => {
+	// The ppid rule is Windows's (#3539): these cases keep testing it there.
+	// POSIX judges ownership by the owner tag, covered below.
+	const WIN = { platform: "win32" } as const;
+
 	it("untracked process + confirmed-dead parent ⇒ kill-eligible", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids()); // parent 4000 dead
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids(), WIN); // parent 4000 dead
 
 		expect(decision).toEqual([proc]);
 	});
 
 	it("untracked process + LIVE parent ⇒ never kill-eligible, however unfamiliar the binary", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids(4000));
+		const decision = decideBackstopOrphanReaping(
+			[proc],
+			[],
+			alivePids(4000),
+			WIN,
+		);
 
 		expect(decision).toHaveLength(0);
 	});
@@ -445,7 +454,7 @@ describe("decideBackstopOrphanReaping", () => {
 	it("process already tracked in the registry (any instance's lspChildren) ⇒ deferred to the registry-driven reaper, never backstop-killed — even with a dead parent", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
 		const reg = [instance({ pid: 1, lspChildren: [child({ pid: 5000 })] })];
-		const decision = decideBackstopOrphanReaping([proc], reg, alivePids()); // parent dead too
+		const decision = decideBackstopOrphanReaping([proc], reg, alivePids(), WIN); // parent dead too
 
 		expect(decision).toHaveLength(0);
 	});
@@ -458,6 +467,7 @@ describe("decideBackstopOrphanReaping", () => {
 			[zero, negative, nan],
 			[],
 			alivePids(),
+			WIN,
 		);
 
 		expect(decision).toHaveLength(0);
@@ -465,7 +475,7 @@ describe("decideBackstopOrphanReaping", () => {
 
 	it("self-parenting malformed row (parentPid === pid) ⇒ never kill-eligible", () => {
 		const proc = osProc({ pid: 5000, parentPid: 5000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids());
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids(), WIN);
 
 		expect(decision).toHaveLength(0);
 	});
@@ -485,13 +495,16 @@ describe("decideBackstopOrphanReaping", () => {
 			[orphan, legit],
 			[],
 			alivePids(7000), // 7000 alive, 4000 dead
+			WIN,
 		);
 
 		expect(decision).toEqual([orphan]);
 	});
 
 	it("empty process list ⇒ no work", () => {
-		expect(decideBackstopOrphanReaping([], [], alivePids())).toHaveLength(0);
+		expect(decideBackstopOrphanReaping([], [], alivePids(), WIN)).toHaveLength(
+			0,
+		);
 	});
 
 	it("#3538: a record made for an earlier process on the reused pid does not shield the one there now", () => {
@@ -503,7 +516,7 @@ describe("decideBackstopOrphanReaping", () => {
 			}),
 		];
 
-		expect(decideBackstopOrphanReaping([proc], reg, alivePids())).toEqual([
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids(), WIN)).toEqual([
 			proc,
 		]);
 	});
@@ -517,16 +530,119 @@ describe("decideBackstopOrphanReaping", () => {
 			}),
 		];
 
-		expect(decideBackstopOrphanReaping([proc], reg, alivePids())).toEqual([]);
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids(), WIN)).toEqual(
+			[],
+		);
 	});
 
 	it("#3538: a process whose start could not be read is never kill-eligible, and is counted", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000, start: undefined });
 
-		const partition = partitionBackstopCandidates([proc], [], alivePids());
+		const partition = partitionBackstopCandidates([proc], [], alivePids(), WIN);
 
 		expect(partition.eligible).toEqual([]);
 		expect(partition.unknownStart).toEqual([proc]);
+	});
+
+	it("#3539 Windows: a live process on the ppid that started after this one is not its parent (ppid reused)", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T08:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T09:00:00.0000000Z";
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([proc]);
+	});
+
+	it("#3539 Windows: a live parent that started before this one is its owner", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T09:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T08:00:00.0000000Z";
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([]);
+	});
+
+	it("#3539 Windows: a live parent whose start cannot be read is its owner", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T09:00:00.0000000Z",
+		});
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf: () => undefined,
+			}),
+		).toEqual([]);
+	});
+});
+
+describe("decideBackstopOrphanReaping on POSIX: the owner tag (#3539)", () => {
+	const POSIX = { platform: "linux" } as const;
+	const owner = { pid: 900, start: "o0" };
+
+	it("an orphan whose owner is dead is eligible though its ppid (init) is alive", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1), POSIX),
+		).toEqual([proc]);
+	});
+
+	it("a process with no owner tag is never eligible, even under a dead ppid", () => {
+		const proc = osProc({ parentPid: 4000 });
+
+		expect(decideBackstopOrphanReaping([proc], [], alivePids(), POSIX)).toEqual(
+			[],
+		);
+	});
+
+	it("an owner that is alive with the tagged start owns it", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => "o0",
+			}),
+		).toEqual([]);
+	});
+
+	it("an owner pid now held by a process with another start is a dead owner", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => "o1",
+			}),
+		).toEqual([proc]);
+	});
+
+	it("an owner pid that is alive with an unknown start owns it", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => undefined,
+			}),
+		).toEqual([]);
 	});
 });
 

@@ -72,6 +72,21 @@ export function isoFromLstart(raw: string): string | undefined;
 
 export function readLinuxProcessStart(pid: number): string | undefined;
 
+export function readLinuxProcessEnvironmentVariable(
+	pid: number,
+	name: string,
+): string | undefined;
+
+export function buildEnvironmentQuery(pids: readonly number[]): {
+	command: string;
+	args: string[];
+};
+
+export function parseEnvironmentVariable(
+	out: string,
+	name: string,
+): Map<number, string>;
+
 export const ALL_PROCESS_FIELDS: readonly ProcessField[];
 
 export function windowsExe(name: string): string;
