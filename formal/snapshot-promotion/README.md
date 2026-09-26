@@ -62,6 +62,11 @@ The fix constants (`SweepLiveness`, `PromoteCAS`, `AdmissionCAS`,
   throws the body away without reading it.
 - `NoLiveStageLoss`: no other process removes a live process's staged body
   before it is promoted.
+- `NoDrop` (no drop, catalog shape 54; review round 1, M1): once every live
+  process is idle, the body is at least as new as each live process's latest
+  save. A refusal is only ever a loss to a body that landed or will land.
+  Without it, a promotion that refuses every save passes every other
+  invariant (`FixRefuseAll`).
 
 ## Results
 
@@ -71,13 +76,28 @@ The fix constants (`SweepLiveness`, `PromoteCAS`, `AdmissionCAS`,
 | `OneProcessNoGenGate` (mutant: no gate) | `NoSupersededPromotion` violated | |
 | `OneProcessNoSingleActive` (mutant: no one-active queue) | `InProcessLatestWins` violated | |
 | `SessionResetMutant` | `InProcessLatestWins` violated | |
-| `TwoProcesses` (the code, #3509) | pass; `NoRegression` violated before (8-state trace) | |
-| `TwoProcessesMeta` (the code, #3509) | pass; `MetaNotBehindBody` violated before (6-state trace) | |
-| `SiblingSweep` (the code, #3510) | pass; `NoLiveStageLoss` violated before (6-state trace) | |
+| `TwoProcesses` (the code, #3509, with `NoDrop`) | pass; `NoRegression` violated before (8-state trace) | 468 (1,341 generated) |
+| `TwoProcessesMeta` (the code, #3509, with `NoDrop`) | pass; `MetaNotBehindBody` violated before (6-state trace) | 468 (1,341 generated) |
+| `SiblingSweep` (the code, #3510) | pass; `NoLiveStageLoss` violated before (6-state trace) | 97 (205 generated) |
 | `Fix` (two processes, crash allowed) | pass | 109,396 (342,981 generated, ~10 s) |
+| `FixNoCrash` (two processes, every invariant including `NoDrop`) | pass | 32,085 (120,909 generated) |
+| `FixRefuseAll` (every promotion refused) | `NoDrop` violated | |
+| `FixCrashDrop` (`Fix` with `NoDrop`) | `NoDrop` violated: the known crash residual below | |
 | `FixNoPromoteCAS`, `FixUnlocked` | `NoRegression` violated | |
 | `FixNoAdmissionCAS` | `MetaNotBehindBody` violated | |
 | `FixNoSweepLiveness` | `NoLiveStageLoss` violated | |
+
+**Known residual (`FixCrashDrop`).** p2's admission raises the meta to 2, p1's
+seq-1 promotion is refused, and p2 dies before promoting. p1's save is then
+refused until some save at seq 2 or above lands. In the code a dead process's
+seq was allocated from the change log, so the next logged edit in any process
+allocates above it; the loss is p1's snapshot content until then, not a wrong
+freshness verdict. `NoDrop` holds whenever no process dies (`FixNoCrash`).
+
+The seq in this model is a view seq. #3511 keeps it the order key: a view that
+missed a logged entry is stamped `incomplete` as a separate flag (see
+`../snapshot-freshness/`), so it takes part in the compare-and-set at its real
+seq and still lands.
 
 Inside one process the guards hold, and each one is needed while the fix
 constants are off:
@@ -126,7 +146,9 @@ Not modelled:
   neither body nor meta);
 - worker death and the exit hook (both re-dispatch through the same gated
   sync writer);
-- the authoritative in-process cache;
+- the authoritative in-process cache (a refused save drops its own entry, so
+  in-process readers see the sibling's body; tested in
+  `after a refusal, in-process readers and merge-writers build on the sibling's newer body (#3509)`);
 - the legacy uncompressed body;
 - the async gap between the sweep's `readdir` and its `rm`, which only widens
   `NoLiveStageLoss`;

@@ -50,7 +50,8 @@ CONSTANTS
     AdmissionCAS,   \* candidate fix: admission meta write only if it raises meta
     CASAtomic,      \* candidate fix: check + rename + meta under one lock
     AllowCrash,     \* a process may die
-    SessionReset    \* mutant: session_start clears the coordinator
+    SessionReset,   \* mutant: session_start clears the coordinator
+    RefuseAll       \* mutant: the promotion refuses every save
 
 NoReq == [none |-> TRUE]
 Phases == {"posted", "staged", "checked", "renamed"}
@@ -70,10 +71,11 @@ VARIABLES
     promoted,   \* history: promoted[p] = highest ver p has put in `body`
     inprocBad,  \* history: p put an older ver over a newer one of its own
     lostStage,  \* history: a live process found its own stage removed
-    staleProm   \* history: p promoted a seq older than its latest admitted one
+    staleProm,  \* history: p promoted a seq older than its latest admitted one
+    lastSaved   \* history: lastSaved[p] = the view seq of p's latest save
 
 vars == <<view, alive, saves, genSeq, active, queued, swept, stages, body,
-          meta, hi, promoted, inprocBad, lostStage, staleProm>>
+          meta, hi, promoted, inprocBad, lostStage, staleProm, lastSaved>>
 
 Init ==
     /\ view = [p \in Procs |-> 1]
@@ -91,6 +93,7 @@ Init ==
     /\ inprocBad = FALSE
     /\ lostStage = FALSE
     /\ staleProm = FALSE
+    /\ lastSaved = [p \in Procs |-> 0]
 
 StageName(s) == <<s.p, s.g>>
 HasStage(p, g) == \E s \in stages : s.p = p /\ s.g = g
@@ -138,6 +141,7 @@ Save(p) ==
            g == IF genSeq[p].s = s THEN genSeq[p].g ELSE genSeq[p].g + 1
            r == [ver |-> saves[p] + 1, seq |-> s, g |-> g, phase |-> "posted", det |-> FALSE]
        IN /\ saves' = [saves EXCEPT ![p] = @ + 1]
+          /\ lastSaved' = [lastSaved EXCEPT ![p] = s]
           /\ genSeq' = [genSeq EXCEPT ![p] = [g |-> g, s |-> s]]
           \* meta-first for a new seq (~1815)
           /\ meta' = IF meta /= s /\ (~AdmissionCAS \/ meta < s) THEN s ELSE meta
@@ -163,7 +167,7 @@ PromotedBody(p, r) ==
     ELSE [p |-> p, g |-> r.g, ver |-> r.ver, seq |-> r.seq]
 
 Superseded(p, r) == GenGate /\ genSeq[p].g /= r.g
-CASRefuses(r) == PromoteCAS /\ meta > r.seq
+CASRefuses(r) == PromoteCAS /\ (RefuseAll \/ meta > r.seq)
 
 Promote(p, r) ==
     /\ alive[p] /\ ~Busy(p) /\ r \in active[p] /\ r.phase = "staged"
@@ -240,9 +244,11 @@ Reset(p) ==
 
 Next ==
     \E p \in Procs :
-        \/ Advance(p) \/ Save(p) \/ Sweep(p) \/ Crash(p) \/ Reset(p)
-        \/ \E r \in active[p] :
-              Stage(p, r) \/ Promote(p, r) \/ RenameChecked(p, r) \/ Finalize(p, r)
+        \/ Save(p)
+        \/ /\ \/ Advance(p) \/ Sweep(p) \/ Crash(p) \/ Reset(p)
+              \/ \E r \in active[p] :
+                    Stage(p, r) \/ Promote(p, r) \/ RenameChecked(p, r) \/ Finalize(p, r)
+           /\ UNCHANGED lastSaved
 
 Spec == Init /\ [][Next]_vars
 
@@ -271,6 +277,12 @@ NoLiveStageLoss == lostStage = FALSE
 \* promotes a view it has already superseded by a newer admitted save, not
 \* even transiently.
 NoSupersededPromotion == staleProm = FALSE
+
+\* No drop (catalog shape 54): once every live process is idle, the body is
+\* at least as new as each live process's latest save. A save refused by the
+\* compare-and-set was older than a body that landed or will land.
+Quiescent == \A p \in Procs : alive[p] => (active[p] = {} /\ queued[p] = NoReq)
+NoDrop == Quiescent => \A p \in Procs : alive[p] => body.seq >= lastSaved[p]
 
 TypeOK ==
     /\ meta \in 0..MaxSeq
