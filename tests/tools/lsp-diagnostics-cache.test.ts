@@ -142,6 +142,31 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		expect(entry?.sizeBytes).toBe(fs.statSync(files[0]!).size);
 	});
 
+	// #3505 class sweep: this path's own-file stat already precedes its read,
+	// but its `scannedAt` (the reference the entry's dependency mtimes are
+	// compared against) was stamped when the entry was recorded, after the
+	// touch. A dependency written during the touch predated the entry.
+	it("stamps the entry's scannedAt before the touch, not when it records (#3505)", async () => {
+		const T_READ = 1_900_000_000_000;
+		const files = writeFiles(["a.ts"]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(T_READ);
+			touchFile.mockImplementation(async () => {
+				// The touch takes 1.5 s; the entry is recorded after it.
+				vi.setSystemTime(T_READ + 1500);
+				return { diags: [] };
+			});
+			await runBatch(files);
+		} finally {
+			vi.useRealTimers();
+		}
+		const entry = Object.values(cacheEntries())[0] as
+			| { scannedAt?: number }
+			| undefined;
+		expect(entry?.scannedAt).toBe(T_READ);
+	});
+
 	it("a second identical batch call never touches an unchanged file again", async () => {
 		const files = writeFiles(["a.ts", "b.ts"]);
 

@@ -1208,6 +1208,9 @@ async function collectFileDiagnosticResult(
 	// its LSP promise settles. A slower old result must not receive a newer token
 	// merely because it completed later (#1198).
 	const writeIndex = nextWriteIndex?.();
+	// #3505: the cache entry's `scannedAt`, taken before the stat and the read,
+	// so a dependency written while this file is analysed is newer than it.
+	const scannedAt = Date.now();
 	let stat: ReturnType<typeof fs.statSync>;
 	try {
 		stat = fs.statSync(file);
@@ -1424,6 +1427,7 @@ async function collectFileDiagnosticResult(
 				? hashDiagnosticContent(collectedContent)
 				: undefined,
 			stat.size,
+			scannedAt,
 		);
 	}
 	return {
