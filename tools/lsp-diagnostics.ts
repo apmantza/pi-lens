@@ -1463,6 +1463,8 @@ async function runFileDiagnostics(
 	// Reserve the token before awaiting this file's LSP result. The direct-file
 	// path performs its own confirmation/reconciliation below (#1198).
 	const writeIndex = nextWriteIndex?.();
+	// #3505 r2: the widget row is observed at the read, not after the touch.
+	const observedAt = Date.now();
 	const {
 		diagnostics: rawDiags,
 		timedOut,
@@ -1579,6 +1581,7 @@ async function runFileDiagnostics(
 		cwd,
 		collectedContent,
 		boundMismatch,
+		observedAt,
 	);
 	// #1561: a confirmed current view with nothing at the blocking tier retires
 	// this file's stale inline blocker — the store #571 corrected the footer for

@@ -201,6 +201,45 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		expect(reconcileScanDiagnostics.mock.calls[0]?.[4]).toBe(T_READ);
 	});
 
+	// #3505 r2: the single-file mode (`path`, not `paths`) writes the same
+	// widget row through its own reconcile, and had the same late stamp.
+	it("observes the single-file widget row at the read, not after the touch (#3505)", async () => {
+		const T_READ = 1_900_000_000_000;
+		const [file] = writeFiles(["a.ts"]);
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(T_READ);
+			touchFile.mockImplementation(async () => {
+				vi.setSystemTime(T_READ + 1500);
+				return {
+					diags: [
+						{
+							severity: 1,
+							message: "computed on the bytes read at T_READ",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+				};
+			});
+			const tool = createLspDiagnosticsTool();
+			await tool.execute(
+				"diag-single-file-test",
+				{ path: file, severity: "all", waitMs: 50 },
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			);
+		} finally {
+			vi.useRealTimers();
+		}
+		expect(reconcileScanDiagnostics).toHaveBeenCalledTimes(1);
+		// (file, diagnostics, confirmed, writeIndex, observedAt)
+		expect(reconcileScanDiagnostics.mock.calls[0]?.[4]).toBe(T_READ);
+	});
+
 	it("a second identical batch call never touches an unchanged file again", async () => {
 		const files = writeFiles(["a.ts", "b.ts"]);
 
