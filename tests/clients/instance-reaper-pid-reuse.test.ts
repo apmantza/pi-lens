@@ -697,15 +697,17 @@ describe.skipIf(process.platform !== "linux")(
 				'const stat = fs.readFileSync("/proc/self/stat", "utf8");',
 				'const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];',
 				'const boot = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();',
-				"const env = { ...process.env, PI_LENS_OWNER: `${process.pid}:${start}@${boot}` };",
-				// Joined at run time, so only the server's own command line
-				// carries the marker, never the owner's script.
-				`const marker = ${JSON.stringify(marker.slice(0, 4))} + ${JSON.stringify(marker.slice(4))};`,
-				`spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)", ${JSON.stringify(TSLS)}, "--stdio", marker], { env, stdio: "ignore" });`,
+				// The marker and server path arrive as data in the environment,
+				// never spliced into this code, so only the server's own command
+				// line carries the marker, never the owner's script or argv.
+				"const { F1_MARKER: marker, F1_TSLS: tsls, ...rest } = process.env;",
+				"const env = { ...rest, PI_LENS_OWNER: `${process.pid}:${start}@${boot}` };",
+				'spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)", tsls, "--stdio", marker], { env, stdio: "ignore" });',
 				"setInterval(() => {}, 1e6);",
 			].join("\n");
 			const owner = track(
 				spawn("unshare", [...unshare.args, process.execPath, "-e", script], {
+					env: { ...process.env, F1_MARKER: marker, F1_TSLS: TSLS },
 					stdio: "ignore",
 				}),
 			);
