@@ -540,15 +540,44 @@ function wallClockBudgetInclude(): string[] {
 	return include.map(String);
 }
 
+// #3546: `supportHelperHasLaneProof` re-walks the whole `tests/**/*.test.ts`
+// import graph, from scratch, once per admitted/pinned `support/` entry the
+// caller asks about — and `localImportTargets` (hook-await-scan.mjs:291) has
+// no cache of its own, so every candidate file it touches is re-read and
+// re-parsed on every call. Same shape as #3514/PR #3542: a per-file walk's
+// shared cost, billed to a single test's own budget instead of a budget
+// sized for the walk. `cachedTestFiles`/`importTargetsCache` memoize the two
+// per-file costs (the file list, and each file's import targets) across
+// every call this test file makes, keyed by absolute path, so the second
+// admitted entry (and any repeated BFS visit inside one entry's own walk)
+// pays nothing beyond a Map lookup.
+let cachedTestFiles: string[] | undefined;
+function cachedAllTestFiles(): string[] {
+	if (cachedTestFiles === undefined) {
+		cachedTestFiles = allTestSourceFiles().filter((file) =>
+			file.endsWith(".test.ts"),
+		);
+	}
+	return cachedTestFiles;
+}
+
+const importTargetsCache = new Map<string, string[]>();
+function cachedLocalImportTargets(absolute: string): string[] {
+	let targets = importTargetsCache.get(absolute);
+	if (targets === undefined) {
+		targets = localImportTargets(absolute);
+		importTargetsCache.set(absolute, targets);
+	}
+	return targets;
+}
+
 /** Support helpers inherit the serialized lane from an importing test. */
 function supportHelperHasLaneProof(
 	relativePath: string,
 	included: ReadonlySet<string>,
 ): boolean {
 	const target = path.join(repoRoot, "tests", relativePath);
-	const files = allTestSourceFiles().filter((file) =>
-		file.endsWith(".test.ts"),
-	);
+	const files = cachedAllTestFiles();
 	const visited = new Set<string>();
 	const walk = (absolute: string): boolean => {
 		if (visited.has(absolute)) return false;
@@ -559,12 +588,13 @@ function supportHelperHasLaneProof(
 		if (absolute.endsWith(".test.ts") && included.has(relative)) return true;
 		return files.some(
 			(candidate) =>
-				localImportTargets(candidate).includes(absolute) && walk(candidate),
+				cachedLocalImportTargets(candidate).includes(absolute) &&
+				walk(candidate),
 		);
 	};
 	return files.some(
 		(candidate) =>
-			localImportTargets(candidate).includes(target) && walk(candidate),
+			cachedLocalImportTargets(candidate).includes(target) && walk(candidate),
 	);
 }
 
@@ -895,7 +925,19 @@ function validateAdmission(
 	return problems;
 }
 
+// #3546: the import-graph walk `supportHelperHasLaneProof` drives (see its
+// own comment above) is billed to this describe block's single 30s `it`
+// budget even though it is a whole-tests-tree walk, not that test's own
+// work. Pre-warm the shared cache here, under its own measured timeout,
+// decoupled from the `it` below the same way `WALK_TIMEOUT_MS` decouples
+// `countsByDetector`'s pre-warm from each `detector %s` case's 30s budget.
+const SUPPORT_LANE_WALK_TIMEOUT_MS = 180_000;
+
 describe("flake-shape ratchet — admission gate", () => {
+	beforeAll(() => {
+		for (const file of cachedAllTestFiles()) cachedLocalImportTargets(file);
+	}, SUPPORT_LANE_WALK_TIMEOUT_MS);
+
 	// #2857: the admission sweep reads every admitted file's source and timed
 	// out at vitest's 5 s default under full-suite load; give it a real budget.
 	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
