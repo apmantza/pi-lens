@@ -104,6 +104,8 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 	// --- Permanent: migrating would be circular. ---
 	"single-flight.ts":
 		"the #1753 singleFlight primitive OWNS its generation compare. It is GenerationGuard's sibling, not its caller: routing singleFlight's own share-branch check through GenerationGuard would make two primitives depend on each other for the property each exists to provide. Permanent, not backlog. Listed at FILE level so it survives #1762's restructuring of that comparison",
+	"generation-lock.ts":
+		"#3515's ownsTopGeneration compares a directory LISTING (topGeneration(entries)) against the held file generation number — a cross-process, filesystem-backed generation the bounded/quarantine/installer locks share, not an in-process value createGenerationSource/createGenerationMap could hold instead. generation-lock.ts is GenerationGuard's peer primitive for cross-process mutual exclusion, not one of its callers, the same circularity single-flight.ts states above. Permanent, not backlog.",
 };
 
 // The identifier must END at the generation-named word. Letting the match run
