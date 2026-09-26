@@ -64,7 +64,13 @@ export interface ProcessQuery {
 	tabSeparated: boolean;
 	fields: ProcessField[];
 	serverSideFiltered: boolean;
+	/** Set when the query needs a pinned locale and zone (a POSIX start time). */
+	env?: NodeJS.ProcessEnv;
 }
+
+export function isoFromLstart(raw: string): string | undefined;
+
+export function readLinuxProcessStart(pid: number): string | undefined;
 
 export const ALL_PROCESS_FIELDS: readonly ProcessField[];
 

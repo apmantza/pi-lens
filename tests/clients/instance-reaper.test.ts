@@ -9,6 +9,7 @@ import {
 	buildIdentityMatcher,
 	decideBackstopOrphanReaping,
 	decideOrphanReaping,
+	partitionBackstopCandidates,
 	STALE_HEARTBEAT_MS,
 	type ChildToKill,
 	type OsProcessInfo,
@@ -416,6 +417,8 @@ function osProc(overrides: Partial<OsProcessInfo> = {}): OsProcessInfo {
 		pid: 5000,
 		parentPid: 4000,
 		command: "C:\\tools\\opengrep.exe --lsp",
+		// #3538: a known start time, without which nothing is kill-eligible.
+		start: "t0",
 		// #1857: past the spawn-grace window by default, so these eligibility
 		// cases keep testing the property they were written for. The grace guard
 		// itself is covered in instance-reaper-backstop.test.ts.
@@ -490,27 +493,94 @@ describe("decideBackstopOrphanReaping", () => {
 	it("empty process list ⇒ no work", () => {
 		expect(decideBackstopOrphanReaping([], [], alivePids())).toHaveLength(0);
 	});
+
+	it("#3538: a record made for an earlier process on the reused pid does not shield the one there now", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: "t0" });
+		const reg = [
+			instance({
+				pid: 1,
+				lspChildren: [child({ pid: 5000, processStart: "t9" })],
+			}),
+		];
+
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids())).toEqual([
+			proc,
+		]);
+	});
+
+	it("#3538: a record with the process's own start still shields it", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: "t0" });
+		const reg = [
+			instance({
+				pid: 1,
+				lspChildren: [child({ pid: 5000, processStart: "t0" })],
+			}),
+		];
+
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids())).toEqual([]);
+	});
+
+	it("#3538: a process whose start could not be read is never kill-eligible, and is counted", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: undefined });
+
+		const partition = partitionBackstopCandidates([proc], [], alivePids());
+
+		expect(partition.eligible).toEqual([]);
+		expect(partition.unknownStart).toEqual([proc]);
+	});
+});
+
+describe("decideOrphanReaping — host start time (#3538)", () => {
+	const orphan = child({ pid: 1000, processStart: "c0" });
+	const matchAll = () => true;
+
+	it("a live host pid under another start is a reused pid: the instance is dead", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, processStart: "h0", lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => "h1",
+		);
+
+		expect(decision.deadInstances).toHaveLength(1);
+		expect(decision.childrenToKill.map((c) => c.pid)).toEqual([1000]);
+	});
+
+	it("a live host whose current start cannot be read is judged by its pid alone", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, processStart: "h0", lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => undefined,
+		);
+
+		expect(decision.deadInstances).toHaveLength(0);
+		expect(decision.childrenToKill).toHaveLength(0);
+	});
 });
 
 describe("buildIdentityMatcher", () => {
 	const expected = {
 		command: "C:\\tools\\ast-grep.exe",
 		marker: "C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
+		processStart: "t0",
 	};
+	/** A live pid with this command line and the recorded start. */
+	const live = (command: string, start = "t0") =>
+		new Map([[100, { command, start }]]);
 
-	it("pid absent from the command-line map ⇒ false (unverifiable — never kill by pid)", () => {
+	it("pid absent from the identity map ⇒ false (unverifiable — never kill by pid)", () => {
 		const match = buildIdentityMatcher(new Map());
 		expect(match(100, expected)).toBe(false);
 	});
 
 	it("marker present in the command line ⇒ match", () => {
 		const match = buildIdentityMatcher(
-			new Map([
-				[
-					100,
-					"node wrapper.js lsp --config C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
-				],
-			]),
+			live(
+				"node wrapper.js lsp --config C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
+			),
 		);
 		expect(match(100, expected)).toBe(true);
 	});
@@ -519,20 +589,54 @@ describe("buildIdentityMatcher", () => {
 		// Separator-free command so path.basename behaves identically on every
 		// CI platform (win32 backslash paths don't split under POSIX basename).
 		const match = buildIdentityMatcher(
-			new Map([[100, '"C:\\Other\\Path\\AST-GREP.EXE" lsp']]),
+			live('"C:\\Other\\Path\\AST-GREP.EXE" lsp'),
 		);
-		expect(match(100, { command: "ast-grep.exe" })).toBe(true);
+		expect(match(100, { command: "ast-grep.exe", processStart: "t0" })).toBe(
+			true,
+		);
 	});
 
 	it("neither marker nor basename in the command line ⇒ false (recycled pid)", () => {
 		const match = buildIdentityMatcher(
-			new Map([[100, "C:\\Windows\\System32\\notepad.exe unrelated.txt"]]),
+			live("C:\\Windows\\System32\\notepad.exe unrelated.txt"),
 		);
 		expect(match(100, expected)).toBe(false);
 	});
 
 	it("empty command basename never matches (guard against includes(''))", () => {
-		const match = buildIdentityMatcher(new Map([[100, "anything at all"]]));
-		expect(match(100, { command: "" })).toBe(false);
+		const match = buildIdentityMatcher(live("anything at all"));
+		expect(match(100, { command: "", processStart: "t0" })).toBe(false);
+	});
+
+	it("#3538: a matching command line under another start time ⇒ false (a reused pid)", () => {
+		const match = buildIdentityMatcher(
+			live("node wrapper.js lsp C:\\tools\\ast-grep.exe", "t1"),
+		);
+		expect(match(100, expected)).toBe(false);
+	});
+
+	it("#3538: a record with no start never matches, whatever the command line", () => {
+		const match = buildIdentityMatcher(
+			live("node wrapper.js lsp C:\\tools\\ast-grep.exe"),
+		);
+		expect(match(100, { ...expected, processStart: undefined })).toBe(false);
+	});
+
+	it("#3538: an unknown start on both sides is not a match", () => {
+		const match = buildIdentityMatcher(
+			new Map([
+				[100, { command: "node wrapper.js lsp C:\\tools\\ast-grep.exe" }],
+			]),
+		);
+		expect(match(100, { ...expected, processStart: undefined })).toBe(false);
+	});
+
+	it("#3538: a live pid whose start could not be read never matches", () => {
+		const match = buildIdentityMatcher(
+			new Map([
+				[100, { command: "node wrapper.js lsp C:\\tools\\ast-grep.exe" }],
+			]),
+		);
+		expect(match(100, expected)).toBe(false);
 	});
 });

@@ -76,7 +76,7 @@ const FIELD_COLUMNS = Object.freeze({
 	rssBytes: { wmi: "WorkingSetSize", ps: null, token: "int" },
 	cpuKernel100ns: { wmi: "KernelModeTime", ps: null, token: "int" },
 	cpuUser100ns: { wmi: "UserModeTime", ps: null, token: "int" },
-	startedAt: { wmi: "CreationDate", ps: null, token: "text" },
+	startedAt: { wmi: "CreationDate", ps: "lstart", token: "lstart" },
 	command: { wmi: "CommandLine", ps: "args", token: "tail" },
 });
 
@@ -270,13 +270,19 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 		const excludeSelf = options.excludeSelfPid
 			? " | Where-Object { $_.ProcessId -ne $PID }"
 			: "";
-		const prelude = layout.includes("ageMs")
-			? "$age = if ($_.CreationDate -is [datetime]) { [int64]((Get-Date) - $_.CreationDate).TotalMilliseconds } else { '' }; "
-			: "";
+		const prelude =
+			(layout.includes("ageMs")
+				? "$age = if ($_.CreationDate -is [datetime]) { [int64]((Get-Date) - $_.CreationDate).TotalMilliseconds } else { '' }; "
+				: "") +
+			(layout.includes("startedAt")
+				? "$st = if ($_.CreationDate -is [datetime]) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }; "
+				: "");
 		const row = layout
-			.map((field) =>
-				field === "ageMs" ? "$age" : `$($_.${FIELD_COLUMNS[field].wmi})`,
-			)
+			.map((field) => {
+				if (field === "ageMs") return "$age";
+				if (field === "startedAt") return "$st";
+				return `$($_.${FIELD_COLUMNS[field].wmi})`;
+			})
 			.join("`t");
 		return {
 			command: windowsExe("WindowsPowerShell\\v1.0\\powershell.exe"),
@@ -297,6 +303,14 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 			`process query: ${unsupported.join(", ")} has no POSIX ps column`,
 		);
 	}
+	if (layout.includes("startedAt") && process.platform === "linux") {
+		// procps prints `lstart` as boot time plus ticks, and the kernel moves
+		// boot time when the wall clock is stepped, so one process can print two
+		// start times. Linux reads the ticks themselves: readLinuxProcessStart.
+		throw new Error(
+			"process query: startedAt on Linux is read from /proc, not ps",
+		);
+	}
 	const columns = layout
 		.map((field) => `${FIELD_COLUMNS[field].ps}=`)
 		.join(",");
@@ -312,7 +326,38 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 		tabSeparated: false,
 		fields: layout,
 		serverSideFiltered: Boolean(pidFilter),
+		// BSD `ps` formats `lstart` with strftime("%c") in the local zone, so
+		// two readers with different locales or zones would print one process
+		// two ways. Pinned, every reader prints the same text.
+		...(layout.includes("startedAt") ? { env: posixStartEnv() } : {}),
 	};
+}
+
+/** The environment a POSIX start-time query runs in (see buildProcessQuery). */
+function posixStartEnv() {
+	return { ...process.env, LC_ALL: "C", TZ: "UTC0" };
+}
+
+/**
+ * Linux: a process's start time as the kernel keeps it, in clock ticks since
+ * boot (`/proc/<pid>/stat` field 22). It never changes for the life of the
+ * process, so (pid, start) names one process across every reader. Undefined
+ * when the pid does not exist or the file cannot be read or parsed.
+ *
+ * @param {number} pid
+ * @returns {string|undefined}
+ */
+export function readLinuxProcessStart(pid) {
+	let stat;
+	try {
+		stat = fs.readFileSync(`/proc/${assertPid(pid)}/stat`, "utf8");
+	} catch {
+		return undefined;
+	}
+	// The command name (field 2) is parenthesised and may itself contain ") ".
+	const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+	const start = fields[19];
+	return /^\d+$/.test(start ?? "") ? start : undefined;
 }
 
 /**
@@ -363,7 +408,50 @@ export function ageMsFromPosixEtime(raw) {
  * @returns {string}
  */
 function posixTokenPattern(field) {
-	return FIELD_COLUMNS[field].token === "age" ? "(\\S+)" : "(\\d+)";
+	const token = FIELD_COLUMNS[field].token;
+	if (token === "age") return "(\\S+)";
+	// `lstart` in the C locale: "Sat Sep 26 09:26:02 2026", five tokens.
+	if (token === "lstart")
+		return "(\\S+\\s+\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+\\s+\\d+)";
+	return "(\\d+)";
+}
+
+const LSTART_MONTHS = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
+
+/**
+ * A C-locale, UTC `lstart` token as an ISO-8601 string, or undefined for any
+ * other shape. ISO carries no spaces, so it can travel inside an owner tag.
+ *
+ * @param {string} raw
+ * @returns {string|undefined}
+ */
+export function isoFromLstart(raw) {
+	const match =
+		/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(
+			String(raw ?? "").trim(),
+		);
+	if (!match) return undefined;
+	const month = LSTART_MONTHS.indexOf(match[1]);
+	if (month === -1) return undefined;
+	const [day, hours, minutes, seconds, year] = [2, 3, 4, 5, 6].map((i) =>
+		Number(match[i]),
+	);
+	return new Date(
+		Date.UTC(year, month, day, hours, minutes, seconds),
+	).toISOString();
 }
 
 /**
@@ -442,7 +530,9 @@ export function parseProcessTable(
 					? parseNonNegativeInt(raw)
 					: ageMsFromPosixEtime(raw ?? "");
 			} else if (field === "startedAt") {
-				row.startedAt = String(raw ?? "").trim();
+				row.startedAt = tabSeparated
+					? String(raw ?? "").trim()
+					: isoFromLstart(raw ?? "");
 			} else {
 				row[field] = parseNonNegativeInt(raw);
 			}
@@ -514,6 +604,7 @@ export function snapshotProcesses(
 				shell: false,
 				windowsHide: true,
 				stdio: ["ignore", "pipe", "ignore"],
+				env: query.env,
 			});
 		} catch {
 			finish([], false);

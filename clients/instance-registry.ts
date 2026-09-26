@@ -42,8 +42,19 @@ import {
 // use on both sides happens inside function bodies, never at module-
 // evaluation time, so both modules are fully initialized before either
 // import is actually invoked.
-import { realIsPidAlive, STALE_HEARTBEAT_MS } from "./instance-reaper.js";
+import {
+	BACKSTOP_SCAN_TIMEOUT_MS,
+	realIsPidAlive,
+	STALE_HEARTBEAT_MS,
+	terminateScannerChild,
+} from "./instance-reaper.js";
 import { normalizeFilePath } from "./path-utils.js";
+import {
+	ownProcessStart,
+	ownProcessStartIfKnown,
+	type ProcessTableOptions,
+	readProcessStart,
+} from "./process-snapshot.js";
 import { getProcessSingleton } from "./process-singletons.js";
 import { getSubagentIdentity, isSubagentSession } from "./subagent-mode.js";
 
@@ -63,10 +74,35 @@ export interface LspChildEntry {
 	 *  on a multi-core box under sustained load) sampled at the same cadence.
 	 *  Same best-effort/undefined semantics as `rssBytes`. */
 	cpuPercent?: number;
+	/**
+	 * The child's OS start time, read when it was recorded (#3538). The
+	 * reaper kills this pid only while it still has this start: a pid alone
+	 * names whatever process holds it now. Absent on records written by
+	 * pi-lens before #3538 or when the read failed; such a child is never
+	 * killed by pid.
+	 */
+	processStart?: string;
+}
+
+/**
+ * One process incarnation: a pid and the OS start time it had (#3538). Two
+ * entries with the same pid and different starts belong to two processes.
+ */
+export interface InstanceIdentity {
+	pid: number;
+	processStart?: string | undefined;
 }
 
 export interface InstanceEntry {
 	pid: number;
+	/**
+	 * The host's OS start time (#3538). A live pid with a different start is
+	 * another process on a reused pid, and this entry's instance is dead.
+	 * Absent on entries written before #3538; they are judged by pid alone.
+	 * Added beside `startedAt`, which is the session's start as pi-lens
+	 * records it and which older versions still read.
+	 */
+	processStart?: string;
 	startedAt: string;
 	/**
 	 * The host's FIRST registered root — its primary. Pinned at first
@@ -130,6 +166,40 @@ interface RegistryFile {
 
 function registryPath(): string {
 	return path.join(getGlobalPiLensDir(), "instances.json");
+}
+
+/**
+ * Bounds a start-time read the same way the reaper bounds its own. A
+ * function, not a module constant: the reaper import is a cycle, usable only
+ * inside function bodies (see the import's comment).
+ */
+function startReadOptions(): ProcessTableOptions {
+	return {
+		timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+		onTimeout: (child) =>
+			terminateScannerChild(child, {
+				kind: "orphan-backstop-scanner-escalated",
+				timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+			}),
+	};
+}
+
+/**
+ * Whether `entry` is this process's own entry (#3538). The pid must match,
+ * and so must the start time the entry recorded. An entry left on this pid
+ * by an instance that crashed is not this process's: taking it over adopted
+ * that instance's LSP children, and a later removal by pid dropped them
+ * without a kill (#3539). An entry with no start (written before #3538, or
+ * while this process's own start was unknown) is judged by the pid, as
+ * every entry was before. This process writes its start only once it is
+ * known, and then keeps it, so while `selfStart` is unknown an entry that
+ * carries a start is some other process's.
+ */
+function isOwnEntry(entry: InstanceEntry, selfStart: string | undefined) {
+	return (
+		entry.pid === process.pid &&
+		(entry.processStart === undefined || entry.processStart === selfStart)
+	);
 }
 
 // --- Kill switch (lazy, memoized — house style per clients/runtime-config.ts) ---
@@ -347,6 +417,7 @@ async function registerInstanceNow(projectRoot: string): Promise<void> {
 	const normalizedRoot = normalizeFilePath(projectRoot);
 	const now = new Date().toISOString();
 	const identity = isSubagentSession() ? getSubagentIdentity() : undefined;
+	const selfStart = await ownProcessStart(startReadOptions());
 	const subagent = identity
 		? {
 				marker: identity.marker,
@@ -357,8 +428,12 @@ async function registerInstanceNow(projectRoot: string): Promise<void> {
 		: undefined;
 	await writeRegistryWithRetry(
 		(file) => {
-			const others = file.instances.filter((entry) => entry.pid !== pid);
-			const existing = file.instances.find((entry) => entry.pid === pid);
+			const others = file.instances.filter(
+				(entry) => !isOwnEntry(entry, selfStart),
+			);
+			const existing = file.instances.find((entry) =>
+				isOwnEntry(entry, selfStart),
+			);
 			// #2130 round 2, class sweep. A `recordLspChild` that arrives before
 			// this call synthesizes the entry from `process.cwd()` and stamps
 			// `rootSource: "lsp-fallback"` to say so. Pinning made that GUESS
@@ -389,6 +464,7 @@ async function registerInstanceNow(projectRoot: string): Promise<void> {
 					: mergeInstanceRoots(existingRoots, normalizedRoot);
 			others.push({
 				pid,
+				...(selfStart === undefined ? {} : { processStart: selfStart }),
 				startedAt: existing?.startedAt ?? now,
 				projectRoot: roots[0] ?? normalizedRoot,
 				projectRoots: roots,
@@ -400,7 +476,7 @@ async function registerInstanceNow(projectRoot: string): Promise<void> {
 			});
 			return { instances: others };
 		},
-		(file) => file.instances.some((entry) => entry.pid === pid),
+		(file) => file.instances.some((entry) => isOwnEntry(entry, selfStart)),
 	);
 }
 
@@ -433,11 +509,13 @@ export function registerInstanceRoot(projectRoot: string): Promise<void> {
 
 async function registerInstanceRootNow(projectRoot: string): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
-	const pid = process.pid;
 	const normalizedRoot = normalizeFilePath(projectRoot);
+	const selfStart = await ownProcessStart(startReadOptions());
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
-		const idx = file.instances.findIndex((entry) => entry.pid === pid);
+		const idx = file.instances.findIndex((entry) =>
+			isOwnEntry(entry, selfStart),
+		);
 		if (idx === -1) return;
 		const current = file.instances[idx];
 		const priorRoots = getInstanceRoots(current);
@@ -480,10 +558,13 @@ export async function updateHeartbeat(
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const pid = process.pid;
+	const selfStart = await ownProcessStart(startReadOptions());
 	let missing = false;
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
-		const idx = file.instances.findIndex((entry) => entry.pid === pid);
+		const idx = file.instances.findIndex((entry) =>
+			isOwnEntry(entry, selfStart),
+		);
 		if (idx === -1) {
 			// No entry for this pid: registerInstance has not run here yet, or
 			// its write was dropped (lock timeout, #3447) or reaped. Never
@@ -651,17 +732,24 @@ async function recordLspChildNow(entry: RecordLspChildInput): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const pid = process.pid;
 	const now = new Date().toISOString();
+	const [selfStart, childStart] = await Promise.all([
+		ownProcessStart(startReadOptions()),
+		readProcessStart(entry.pid, startReadOptions()),
+	]);
 	const childEntry: LspChildEntry = {
 		pid: entry.pid,
 		serverId: entry.serverId,
 		command: entry.command,
 		marker: entry.marker,
 		spawnedAt: now,
+		...(childStart === undefined ? {} : { processStart: childStart }),
 	};
 	const hostIdentity = getSubagentIdentity();
 	await writeRegistryWithRetry(
 		(file) => {
-			const idx = file.instances.findIndex((inst) => inst.pid === pid);
+			const idx = file.instances.findIndex((inst) =>
+				isOwnEntry(inst, selfStart),
+			);
 			if (idx === -1) {
 				// registerInstance hasn't run yet in this process (or was reaped) —
 				// synthesize a minimal entry so the child is still tracked.
@@ -683,6 +771,7 @@ async function recordLspChildNow(entry: RecordLspChildInput): Promise<void> {
 				);
 				file.instances.push({
 					pid,
+					...(selfStart === undefined ? {} : { processStart: selfStart }),
 					startedAt: identity?.startedAt ?? now,
 					projectRoot,
 					rootSource: identity?.rootSource ?? "lsp-fallback",
@@ -719,7 +808,7 @@ async function recordLspChildNow(entry: RecordLspChildInput): Promise<void> {
 		(file) =>
 			file.instances.some(
 				(instance) =>
-					instance.pid === pid &&
+					isOwnEntry(instance, selfStart) &&
 					instance.lspChildren.some((child) => child.pid === entry.pid),
 			),
 	);
@@ -750,10 +839,10 @@ async function removeLspChildNow(
 	expectedMarker?: string,
 ): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
-	const selfPid = process.pid;
+	const selfStart = await ownProcessStart(startReadOptions());
 	await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
-		const idx = file.instances.findIndex((inst) => inst.pid === selfPid);
+		const idx = file.instances.findIndex((inst) => isOwnEntry(inst, selfStart));
 		if (idx === -1) return;
 		const current = file.instances[idx];
 		const filtered = current.lspChildren.filter((child) => {
@@ -781,10 +870,12 @@ async function removeLspChildNow(
 export function deregisterInstance(): void {
 	rememberRegistrationRoot(undefined);
 	if (!isInstanceRegistryEnabled()) return;
-	const pid = process.pid;
+	const selfStart = ownProcessStartIfKnown();
 	withInstanceRegistryLockSync(registryPath(), () => {
 		const file = readRegistrySync();
-		const remaining = file.instances.filter((entry) => entry.pid !== pid);
+		const remaining = file.instances.filter(
+			(entry) => !isOwnEntry(entry, selfStart),
+		);
 		if (remaining.length === file.instances.length) return;
 		writeRegistrySync({ instances: remaining });
 	});
@@ -825,11 +916,13 @@ export function deregisterInstanceRoot(projectRoot: string): Promise<void> {
 
 function deregisterInstanceRootNow(projectRoot: string): void {
 	if (!isInstanceRegistryEnabled()) return;
-	const pid = process.pid;
 	const normalizedRoot = normalizeFilePath(projectRoot);
+	const selfStart = ownProcessStartIfKnown();
 	withInstanceRegistryLockSync(registryPath(), () => {
 		const file = readRegistrySync();
-		const idx = file.instances.findIndex((entry) => entry.pid === pid);
+		const idx = file.instances.findIndex((entry) =>
+			isOwnEntry(entry, selfStart),
+		);
 		if (idx === -1) {
 			// Entry already gone (e.g. a dropped registration): still stop a
 			// heartbeat from re-registering the root this host just left.
@@ -850,7 +943,9 @@ function deregisterInstanceRootNow(projectRoot: string): void {
 			// The host serves no root: a heartbeat must not bring it back.
 			rememberRegistrationRoot(undefined);
 			writeRegistrySync({
-				instances: file.instances.filter((entry) => entry.pid !== pid),
+				instances: file.instances.filter(
+					(entry) => !isOwnEntry(entry, selfStart),
+				),
 			});
 			return;
 		}
@@ -1073,15 +1168,16 @@ export async function getResourceFootprint(
 	isPidAlive: (pid: number) => boolean = realIsPidAlive,
 ): Promise<ResourceFootprint> {
 	const instances = await readInstanceRegistry();
-	const deadPids = new Set(
-		instances
-			.filter((instance) => !isPidAlive(instance.pid))
-			.map((instance) => instance.pid),
-	);
-	if (deadPids.size > 0) {
+	const dead: InstanceIdentity[] = instances
+		.filter((instance) => !isPidAlive(instance.pid))
+		.map((instance) => ({
+			pid: instance.pid,
+			processStart: instance.processStart,
+		}));
+	if (dead.length > 0) {
 		// Fire-and-forget: a health-report read must never block on, or fail
 		// because of, a registry write.
-		prunePids(deadPids).catch(() => {
+		prunePids(dead).catch(() => {
 			// best-effort — a dead-pid entry that fails to prune here is simply
 			// re-evaluated (and re-dropped from the report) on the next read, and
 			// remains catchable by the scheduled reaper sweep regardless.
@@ -1098,12 +1194,17 @@ export async function getResourceFootprint(
  *  `pruneDeadInstances` in the reaper delegates here so this module owns the
  *  registry lock seam without creating a dependency on the reaper. */
 export async function pruneDeadInstances(
-	deadPids: Set<number>,
+	dead: readonly InstanceIdentity[],
 ): Promise<"pruned" | "no-match" | "could-not-acquire"> {
 	const result = await withInstanceRegistryLock(registryPath(), async () => {
 		const file = await readRegistryAsync();
+		// #3538: by (pid, start). A new instance that registered on a dead
+		// one's pid while the sweep ran keeps its entry.
+		const key = (identity: InstanceIdentity) =>
+			`${identity.pid}:${identity.processStart ?? ""}`;
+		const targets = new Set(dead.map(key));
 		const remaining = file.instances.filter(
-			(entry) => !deadPids.has(entry.pid),
+			(entry) => !targets.has(key(entry)),
 		);
 		if (remaining.length === file.instances.length) return "no-match" as const;
 		await writeRegistryAsync({ instances: remaining });
@@ -1112,6 +1213,6 @@ export async function pruneDeadInstances(
 	return result ?? "could-not-acquire";
 }
 
-async function prunePids(deadPids: Set<number>): Promise<void> {
-	await pruneDeadInstances(deadPids);
+async function prunePids(dead: readonly InstanceIdentity[]): Promise<void> {
+	await pruneDeadInstances(dead);
 }

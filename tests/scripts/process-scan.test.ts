@@ -6,6 +6,7 @@
  * scripts/prune-agent-worktrees.mjs now share (PR #2438 review round 3, F2).
  */
 
+import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	ageMsFromPosixEtime,
@@ -15,9 +16,11 @@ import {
 	escapeWqlStringValue,
 	evaluateNoSurvivingLspProcesses,
 	isLspServerCommand,
+	isoFromLstart,
 	normalizeProcessFields,
 	parseProcessTable,
 	posixPsPath,
+	readLinuxProcessStart,
 	snapshotProcesses,
 	windowsExe,
 	ALL_PROCESS_FIELDS,
@@ -346,6 +349,75 @@ describe("buildProcessQuery (#2443: the one composed platform listing)", () => {
 			withPlatform("linux", () => buildProcessQuery(["pid", "rssBytes"])),
 		).toThrow(/no POSIX ps column/);
 	});
+});
+
+describe("process start times (#3538)", () => {
+	it("macOS asks ps for lstart in the C locale and UTC, so every reader prints one process the same way", () => {
+		const query = withPlatform("darwin", () =>
+			buildProcessQuery(["pid", "startedAt", "command"], {
+				filter: { column: "ProcessId", op: "eq", values: [7] },
+			}),
+		);
+		expect(query.args).toEqual(["-p", "7", "-o", "pid=,lstart=,args="]);
+		expect(query.env).toMatchObject({ LC_ALL: "C", TZ: "UTC0" });
+	});
+
+	it("a query without a start time keeps the caller's environment", () => {
+		const query = withPlatform("darwin", () =>
+			buildProcessQuery(["pid", "command"]),
+		);
+		expect(query.env).toBeUndefined();
+	});
+
+	it("Linux never takes a start time from ps: procps derives lstart from a boot time that moves with the clock", () => {
+		expect(() =>
+			withPlatform("linux", () => buildProcessQuery(["pid", "startedAt"])),
+		).toThrow(/read from \/proc/);
+	});
+
+	it("Windows emits CreationDate in UTC, ISO-8601, so starts compare across zones and order", () => {
+		const query = withPlatform("win32", () =>
+			buildProcessQuery(["pid", "startedAt"]),
+		);
+		const script = query.args[query.args.length - 1];
+		expect(script).toContain(
+			"$st = if ($_.CreationDate -is [datetime]) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }; ",
+		);
+		expect(script).toContain('"$($_.ProcessId)`t$st"');
+	});
+
+	it("parses a C-locale lstart row into an ISO start", () => {
+		const rows = parseProcessTable(
+			"  4242 Sat Sep  6 09:26:02 2026 /usr/bin/node x.js\n",
+			false,
+			["pid", "startedAt", "command"],
+		);
+		expect(rows).toEqual([
+			{
+				pid: 4242,
+				ppid: 0,
+				command: "/usr/bin/node x.js",
+				startedAt: "2026-09-06T09:26:02.000Z",
+			},
+		]);
+	});
+
+	it("reads an lstart it cannot parse as unknown, never as a start", () => {
+		expect(isoFromLstart("Sat Foo  6 09:26:02 2026")).toBeUndefined();
+		expect(isoFromLstart("6 Sept 2026")).toBeUndefined();
+	});
+
+	it.skipIf(process.platform !== "linux")(
+		// lane: Unit tests (ubuntu); the reader is /proc itself.
+		"reads this process's start from /proc as the kernel's tick count, and nothing for a pid that is gone",
+		() => {
+			const stat = fs.readFileSync("/proc/self/stat", "utf8");
+			expect(readLinuxProcessStart(process.pid)).toBe(
+				stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19],
+			);
+			expect(readLinuxProcessStart(2 ** 22 + 1)).toBeUndefined();
+		},
+	);
 });
 
 describe("parseProcessTable: the extended projections (#2443)", () => {

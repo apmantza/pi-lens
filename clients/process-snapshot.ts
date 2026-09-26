@@ -36,6 +36,7 @@ import {
 	type ProcessField,
 	type ProcessFilter,
 	type ProcRow,
+	readLinuxProcessStart,
 } from "../scripts/lib/process-scan.mjs";
 /**
  * Re-exported, not redefined. `windowsExe` resolves an absolute System32
@@ -105,7 +106,12 @@ export async function queryProcessTable(
 	const result = await spawnCollectStdoutResult(
 		query.command,
 		query.args,
-		{ shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+		{
+			shell: false,
+			windowsHide: true,
+			stdio: ["ignore", "pipe", "ignore"],
+			env: query.env,
+		},
 		{ timeoutMs: options.timeoutMs, onTimeout: options.onTimeout },
 	);
 	return {
@@ -120,4 +126,105 @@ export async function queryProcessTable(
 		timeoutKill: result.timeoutKill,
 		serverSideFiltered: query.serverSideFiltered,
 	};
+}
+
+/**
+ * Who a process is: its command line and its OS start time (#3538). A pid
+ * alone names whichever process holds it now; (pid, start) names one process
+ * for its whole life. `start` is undefined when the platform did not report
+ * it, and an unknown start never matches a recorded one.
+ *
+ * The start is an opaque, per-platform string, compared only for equality
+ * against a value read the same way: Linux clock ticks since boot
+ * (`/proc/<pid>/stat`), macOS `lstart` in the C locale and UTC, Windows
+ * `CreationDate` in UTC (ISO-8601, so it also orders).
+ */
+export interface ProcessIdentity {
+	command: string;
+	start?: string | undefined;
+}
+
+/** `pids` without duplicates and without anything that is not a pid. */
+function validPids(pids: readonly number[]): number[] {
+	return [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))];
+}
+
+/**
+ * The identity of each live pid in `pids`, in one query. Pids that are gone
+ * are absent. `status` is the listing's own status (see
+ * `ProcessTableResult.status`); on POSIX `ps -p` exits non-zero when none of
+ * the pids exist, which the caller may read as a clean empty result.
+ */
+export async function queryProcessIdentities(
+	pids: readonly number[],
+	options: ProcessTableOptions,
+): Promise<{
+	identities: Map<number, ProcessIdentity>;
+	status: SpawnCollectStatus;
+}> {
+	const valid = validPids(pids);
+	const identities = new Map<number, ProcessIdentity>();
+	if (valid.length === 0) return { identities, status: "ok" };
+	const linux = process.platform === "linux";
+	const result = await queryProcessTable(
+		{
+			fields: linux ? ["pid", "command"] : ["pid", "startedAt", "command"],
+			filter: { column: "ProcessId", op: "eq", values: valid },
+		},
+		options,
+	);
+	for (const row of result.rows) {
+		const start = linux ? readLinuxProcessStart(row.pid) : row.startedAt;
+		identities.set(row.pid, {
+			command: row.command,
+			start: start ? start : undefined,
+		});
+	}
+	return { identities, status: result.status };
+}
+
+interface OwnStartCell {
+	promise: Promise<string | undefined>;
+	value?: string;
+}
+
+/** This process's start, once read. A failed read is not kept. */
+let ownStart: OwnStartCell | null = null;
+
+/**
+ * This process's OS start time, read once. Linux reads it synchronously; the
+ * other platforms query the process table the first time. A failed read is
+ * not remembered, so the next caller tries again.
+ */
+export function ownProcessStart(
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "linux")
+		return Promise.resolve(readLinuxProcessStart(process.pid));
+	if (ownStart) return ownStart.promise;
+	const cell: OwnStartCell = {
+		promise: readProcessStart(process.pid, options).then((start) => {
+			if (start === undefined) ownStart = null;
+			else cell.value = start;
+			return start;
+		}),
+	};
+	ownStart = cell;
+	return cell.promise;
+}
+
+/** One pid's OS start time, or undefined when it cannot be read. */
+export async function readProcessStart(
+	pid: number,
+	options: ProcessTableOptions,
+): Promise<string | undefined> {
+	if (process.platform === "linux") return readLinuxProcessStart(pid);
+	return (await queryProcessIdentities([pid], options)).identities.get(pid)
+		?.start;
+}
+
+/** This process's start if it is already known, without waiting. */
+export function ownProcessStartIfKnown(): string | undefined {
+	if (process.platform === "linux") return readLinuxProcessStart(process.pid);
+	return ownStart?.value;
 }

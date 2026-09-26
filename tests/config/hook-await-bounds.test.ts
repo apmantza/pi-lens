@@ -2267,8 +2267,15 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// read, stat and removes are gone; only its 100 ms retry wait remains.
 	"clients/installer/index.ts": 216,
 	"clients/installer/managed-tool-refresh.ts": 29,
-	"clients/instance-reaper.ts": 26,
-	"clients/instance-registry.ts": 23,
+	// #3538 adds four in the reaper and five in the registry. The reaper reads
+	// start times before its backstop decision and asks again before every
+	// signal (the re-check query and the kill's own confirm await); the
+	// registry reads this process's start once per mutation and a new child's
+	// start. Each is a process-table query under BACKSTOP_SCAN_TIMEOUT_MS with
+	// the reaper's tree-kill on timeout, or a synchronous /proc read on Linux;
+	// none can take the hook's signal until #2523 AC4 threads it.
+	"clients/instance-reaper.ts": 30,
+	"clients/instance-registry.ts": 28,
 	"clients/language-profile.ts": 3,
 	"clients/lens-engine.ts": 1,
 	"clients/lens-map.ts": 2,
