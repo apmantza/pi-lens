@@ -13,3 +13,5 @@ section: Fixed
   longer stands in for the reopened file's answer. The same holds for
   opengrep's rule-load republish when the file is closed and reopened
   before it lands.
+  A scanner that publishes on every close (typos) is not yet covered
+  (refs #3548).
