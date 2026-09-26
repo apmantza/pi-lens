@@ -4,10 +4,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import {
 	type GenerationHold,
+	heartbeatIntervalMs,
 	isLockContention,
 	recordGenerationTakeover,
 	recordLegacyLockHeld,
 	releaseGeneration,
+	startGenerationHeartbeat,
 	tryAcquireGeneration,
 } from "./generation-lock.js";
 
@@ -220,6 +222,11 @@ async function tryAcquireQuarantineLock(
  * directory, so a generation holder holds it too, as the bounded lock holds
  * its old file. Only a generation holder takes it, so its rename-aside
  * takeover races only an older writer's own.
+ *
+ * #3515: this is an async holder — its caller's commit can span awaited I/O —
+ * so a heartbeat keeps the generation's mtime fresh for the whole hold,
+ * exactly as the installer's lock now does, rather than leaving `staleMs` as
+ * the only thing standing between a slow commit and a stale-takeover race.
  */
 async function tryAcquireQuarantineGeneration(
 	lockPath: string,
@@ -236,7 +243,12 @@ async function tryAcquireQuarantineGeneration(
 		throw cause;
 	}
 	if (releaseLegacy) {
+		const heartbeat = startGenerationHeartbeat(
+			hold,
+			heartbeatIntervalMs(staleMs),
+		);
 		return async () => {
+			heartbeat.stop();
 			await releaseLegacy();
 			releaseGeneration(hold);
 		};

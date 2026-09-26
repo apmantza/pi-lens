@@ -331,6 +331,17 @@ export type DegradationKind =
 	 * (`runtime-tool-result.ts`); a row here names a producer that did not.
 	 */
 	| "inline-blocker-unstructured"
+	/**
+	 * #3515: the install lock's generation was no longer owned when
+	 * `installNpmTool` re-checked right before a second critical write (the
+	 * ERESOLVE `--legacy-peer-deps` retry spawn) — a competing installer
+	 * judged this hold stale and took over. The heartbeat that keeps the
+	 * generation's mtime fresh for the whole hold is what USUALLY prevents
+	 * this; this fires only on the tick it missed. Subject is the tool id,
+	 * once per session (`recordDegradationOnce`) since the same install
+	 * cannot lose the lock twice in one attempt.
+	 */
+	| "install-lock-lost-mid-install"
 	| "install-retry-exhausted"
 	/**
 	 * #3311: a command the resolution ladder found on PATH failed the registry

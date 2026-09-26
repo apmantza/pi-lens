@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Worker } from "node:worker_threads";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
@@ -765,6 +766,99 @@ describe("review-graph persist circuit-breaker (#260)", () => {
 			newGraph.nodes.size,
 		);
 	});
+
+	// #3536: the persist worker serves requests concurrently, so generation 2
+	// can promote while generation 1 is still in the worker. The forced flush
+	// (the CLI, and the exit hook) used to pick the newest in-flight candidate,
+	// generation 1, and write it over the promoted generation 2.
+	it.each([
+		["cli flush", (cwd: string) => flushReviewGraphPersist(cwd, "cli")],
+		["exit hook", (_cwd: string) => flushReviewGraphPersistsForExitForTests()],
+	] as const)(
+		"%s never writes a generation the gate already superseded (#3536)",
+		async (_seam, flush) => {
+			const env = makeEnv();
+			const cachePath = cachePathFor(env.tmpDir);
+			const diskFiles = () =>
+				(
+					JSON.parse(
+						gunzipSync(fs.readFileSync(cachePath)).toString("utf8"),
+					) as {
+						fileSignatures: Array<[string, string]>;
+					}
+				).fileSignatures
+					.map(([file]) => path.basename(file))
+					.sort();
+			process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS = "0";
+			// Gate 1: generation 1's request never reaches the worker, so it
+			// stays in flight for as long as the test needs.
+			const post = Worker.prototype.postMessage;
+			const hold = vi
+				.spyOn(Worker.prototype, "postMessage")
+				.mockImplementation(function (this: Worker, message, ...rest) {
+					const request = message as {
+						generation?: number;
+						stagePath?: string;
+					};
+					if (
+						request.generation === 1 &&
+						request.stagePath?.startsWith(cachePath)
+					) {
+						return;
+					}
+					return post.call(this, message, ...rest);
+				});
+			// Gate 2: resolves when generation 2's worker result is promoted.
+			let promoted!: () => void;
+			const generation2Promoted = new Promise<void>((resolve) => {
+				promoted = resolve;
+			});
+			vi.mocked(logReviewGraph).mockImplementation((entry) => {
+				if (
+					entry.phase === "persist_succeeded" &&
+					entry.offloaded === true &&
+					entry.observability?.persistence?.generation === 2
+				) {
+					promoted();
+				}
+			});
+			try {
+				const a = createTempFile(env.tmpDir, "a.ts", "export const a = 1;\n");
+				await buildOrUpdateGraph(env.tmpDir, [a], new FactStore());
+				expect(hold).toHaveBeenCalledTimes(1);
+				const c = createTempFile(env.tmpDir, "c.ts", "export const c = 3;\n");
+				clearGraphCache();
+				await buildOrUpdateGraph(env.tmpDir, [c], new FactStore());
+				await generation2Promoted;
+				expect(diskFiles()).toEqual(["a.ts", "c.ts"]);
+
+				flush(env.tmpDir);
+
+				expect(diskFiles()).toEqual(["a.ts", "c.ts"]);
+				const skipped = vi
+					.mocked(logReviewGraph)
+					.mock.calls.map(([entry]) => entry)
+					.filter(
+						(entry) =>
+							entry.phase === "persist_skipped" &&
+							entry.observability?.persistence?.reason ===
+								"forced_flush_superseded",
+					);
+				expect(
+					skipped.map((entry) => entry.observability?.persistence),
+				).toEqual([
+					expect.objectContaining({
+						generation: 1,
+						status: "superseded",
+						supersededByGeneration: 2,
+					}),
+				]);
+			} finally {
+				hold.mockRestore();
+				vi.mocked(logReviewGraph).mockReset();
+			}
+		},
+	);
 
 	it("forced flush records when it selected an in-flight worker snapshot", async () => {
 		const env = makeEnv();
