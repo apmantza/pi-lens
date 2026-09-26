@@ -455,46 +455,18 @@ describe("#1162 — bounded session_start sequence read", () => {
 	])(
 		"does NOT retroactively hydrate from an incomplete snapshot at the confirmed seq, %s (#3511)",
 		async (_source, fromDisk) => {
-			const env = setupTestEnvironment("pi-lens-seq-budget-retro-incomplete-");
-			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
-			try {
-				const cwd = makeProject(env);
-				const exportedFile = path.join(cwd, "index.ts");
-				// Saved at the seq the late read will confirm, but by a runtime that
-				// missed a sibling's logged edit: never fresh.
-				saveProjectSnapshot(cwd, {
-					version: PROJECT_SNAPSHOT_VERSION,
-					projectRoot: cwd,
-					generatedAt: new Date().toISOString(),
-					seq: 0,
-					incomplete: true,
-					files: {},
-					symbols: {},
-					reverseDeps: {},
-					cachedExports: [["x", exportedFile]],
-					projectRulesScan: { hasCustomRules: true, rules: [] },
-				});
-				if (fromDisk) {
-					// A fresh process: no in-process copy, the narrow loader parses disk.
-					await waitForProjectSnapshotPersistsForTests();
-					_resetProjectSnapshotParseCacheForTests();
-				}
-
-				const slow = deferred<ProjectSequenceIndex>();
-				readLatestProjectSequenceAsyncSpy.mockImplementation(
-					() => slow.promise,
-				);
-
-				const runtime = new RuntimeCoordinator();
-				await handleSessionStart(makeDeps(cwd, runtime));
-				slow.resolve({ projectSeq: 0, fileSeqByPath: new Map() });
-				await settleDeferredRead();
-
-				expect(runtime.cachedExports.get("x")).toBeUndefined();
-				expect(runtime.projectRulesScan.hasCustomRules).toBe(false);
-			} finally {
-				env.cleanup();
-			}
+			// Saved at the seq the late read will confirm, but by a runtime that
+			// missed a sibling's logged edit: never fresh.
+			await runRetroHydrate({
+				prefix: "pi-lens-seq-budget-retro-incomplete-",
+				snapshot: { incomplete: true },
+				fromDisk,
+				lateRead: { projectSeq: 0, fileSeqByPath: new Map() },
+				check: (runtime) => {
+					expect(runtime.cachedExports.get("x")).toBeUndefined();
+					expect(runtime.projectRulesScan.hasCustomRules).toBe(false);
+				},
+			});
 		},
 	);
 
@@ -506,51 +478,24 @@ describe("#1162 — bounded session_start sequence read", () => {
 	])(
 		"retro hydrate at the confirmed seq with an unlocked entry at log position 1, %s (from disk: %s), snapshot folded %s entries, hydrated: %s (#3511 review round 2)",
 		async (_source, fromDisk, logEntries, hydrated) => {
-			const env = setupTestEnvironment("pi-lens-seq-budget-retro-unlocked-");
-			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
-			try {
-				const cwd = makeProject(env);
-				const exportedFile = path.join(cwd, "index.ts");
-				saveProjectSnapshot(cwd, {
-					version: PROJECT_SNAPSHOT_VERSION,
-					projectRoot: cwd,
-					generatedAt: new Date().toISOString(),
-					seq: 0,
-					logEntries,
-					files: {},
-					symbols: {},
-					reverseDeps: {},
-					cachedExports: [["x", exportedFile]],
-					projectRulesScan: { hasCustomRules: true, rules: [] },
-				});
-				if (fromDisk) {
-					await waitForProjectSnapshotPersistsForTests();
-					_resetProjectSnapshotParseCacheForTests();
-				}
-
-				const slow = deferred<ProjectSequenceIndex>();
-				readLatestProjectSequenceAsyncSpy.mockImplementation(
-					() => slow.promise,
-				);
-
-				const runtime = new RuntimeCoordinator();
-				await handleSessionStart(makeDeps(cwd, runtime));
+			await runRetroHydrate({
+				prefix: "pi-lens-seq-budget-retro-unlocked-",
+				snapshot: { logEntries },
+				fromDisk,
 				// The late read: the snapshot's seq, and an unlocked entry first in
 				// the log, which only a snapshot that folded it can vouch for.
-				slow.resolve({
+				lateRead: {
 					projectSeq: 0,
 					fileSeqByPath: new Map(),
 					logEntries: 2,
 					unlockedThrough: 1,
-				});
-				await settleDeferredRead();
-
-				expect(runtime.cachedExports.get("x")).toBe(
-					hydrated ? exportedFile : undefined,
-				);
-			} finally {
-				env.cleanup();
-			}
+				},
+				check: (runtime, exportedFile) => {
+					expect(runtime.cachedExports.get("x")).toBe(
+						hydrated ? exportedFile : undefined,
+					);
+				},
+			});
 		},
 	);
 
@@ -667,6 +612,55 @@ describe("#1162 — bounded session_start sequence read", () => {
 
 	async function settleDeferredRead(): Promise<void> {
 		for (let i = 0; i < 20; i++) await Promise.resolve();
+	}
+
+	/**
+	 * The retro-hydrate replay (#3511): save a snapshot at the seq the late
+	 * read will confirm, optionally drop the in-process copy so the narrow
+	 * loader parses disk, start a session whose sequence read is still
+	 * pending, then land that read and hand the runtime to `check`.
+	 */
+	async function runRetroHydrate(args: {
+		prefix: string;
+		snapshot: { incomplete?: true; logEntries?: number };
+		fromDisk: boolean;
+		lateRead: ProjectSequenceIndex;
+		check: (runtime: RuntimeCoordinator, exportedFile: string) => void;
+	}): Promise<void> {
+		const env = setupTestEnvironment(args.prefix);
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const cwd = makeProject(env);
+			const exportedFile = path.join(cwd, "index.ts");
+			saveProjectSnapshot(cwd, {
+				version: PROJECT_SNAPSHOT_VERSION,
+				projectRoot: cwd,
+				generatedAt: new Date().toISOString(),
+				seq: 0,
+				...args.snapshot,
+				files: {},
+				symbols: {},
+				reverseDeps: {},
+				cachedExports: [["x", exportedFile]],
+				projectRulesScan: { hasCustomRules: true, rules: [] },
+			});
+			if (args.fromDisk) {
+				// A fresh process: no in-process copy, the narrow loader parses disk.
+				await waitForProjectSnapshotPersistsForTests();
+				_resetProjectSnapshotParseCacheForTests();
+			}
+
+			const slow = deferred<ProjectSequenceIndex>();
+			readLatestProjectSequenceAsyncSpy.mockImplementation(() => slow.promise);
+
+			const runtime = new RuntimeCoordinator();
+			await handleSessionStart(makeDeps(cwd, runtime));
+			slow.resolve(args.lateRead);
+			await settleDeferredRead();
+			args.check(runtime, exportedFile);
+		} finally {
+			env.cleanup();
+		}
 	}
 
 	it("clears an in-window edit's incomplete mark once the late sequence read covers what it missed (#3511 review B2)", async () => {
