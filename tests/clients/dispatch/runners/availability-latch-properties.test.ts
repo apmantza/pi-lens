@@ -31,10 +31,9 @@
  * `PI_LENS_PROP_RUNS=1`) and re-run this file to reproduce that exact run
  * in isolation, no file edit required.
  *
- * `fast-check` is not a dependency of this repo (checked before adding
- * one); a hand-rolled seeded PRNG keeps this file dependency-free and the
- * run bounded, in line with the module's own "kept dependency-light on
- * purpose" doc comment.
+ * Written before `fast-check` became a devDependency (#3530); a hand-rolled
+ * seeded PRNG keeps this file dependency-free and the run bounded, in line
+ * with the module's own "kept dependency-light on purpose" doc comment.
  *
  * This suite targets the latch MACHINERY only (`createAvailabilityLatch`,
  * `classifyProbeFailure`, the #1568 provisional/retained arms, the
