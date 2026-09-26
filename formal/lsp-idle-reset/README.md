@@ -73,8 +73,8 @@ Each caller handles an `undefined` touch result differently:
 | `SweepReapOverrunLabel` | violated `HonestSweepLabel` | violated | 75 | 1.1 |
 | `SweepNoHoldCheck` (mutant) | violated `NoResetUnderHold` | violated | 25 | 1.1 |
 | `WarmAttachOnly` | pass | pass | 21 | 1.1 |
-| `CascadeUncovered` | violated `NoSilentLoss` | violated | 116 | 1.2 |
-| `AllActors` | violated `NoSilentLoss` | violated | 1410 | 1.8 |
+| `CascadeUncovered` (fixed code, #3483) | pass | pass | 128 | 1.7 |
+| `AllActors` (fixed code, #3483) | pass | pass | 12756 | 2.3 |
 | `CascadeFix` | pass | pass | 128 | 1.4 |
 | `AllActorsFix` | pass | pass | 12756 | 2.3 |
 | `CascadeFixEntryOnly` (fix mutant) | violated `NoSilentLoss` | violated | 151 | 1.2 |

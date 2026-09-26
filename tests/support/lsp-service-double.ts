@@ -42,6 +42,7 @@ export function makeLspServiceDouble(
 		hasLSP: vi.fn(async () => false),
 		isSpawnInFlight: vi.fn(() => false),
 		touchFile: vi.fn(async () => ({ diags: [] })),
+		checkDestroyed: vi.fn(() => false),
 		openFile: vi.fn(async () => undefined),
 		getAuxiliaryClientsForFile: vi.fn(async () => []),
 		getAllDiagnostics: vi.fn(async () => new Map()),

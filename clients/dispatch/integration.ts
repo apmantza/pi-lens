@@ -2104,7 +2104,37 @@ export async function computeCascadeForFile(
 						source: "cascade",
 						clientScope: "primary",
 					});
-					if (!rawDiags) return undefined;
+					if (!rawDiags) {
+						// #3483: the idle reset can destroy the service this compute
+						// captured while neighbours are still being touched; both
+						// destroyed returns in touchFile (entry and client acquire)
+						// come back undefined. Keep the neighbour as unconfirmed, or
+						// the run silently loses it and can read "clean".
+						if (!lspService.checkDestroyed()) return undefined;
+						const durationMs = Date.now() - neighborStart;
+						logCascade({
+							phase: "neighbor_touch",
+							filePath,
+							neighborFile: neighborPath,
+							diagnosticCount: 0,
+							durationMs,
+							lspTouched: true,
+							lspServerCount: configuredServerCount,
+							coldSnapshot: isColdSnapshot,
+							metadata: {
+								inconclusive: true,
+								inconclusiveReason: "service-destroyed",
+							},
+						});
+						return {
+							filePath: neighborPath,
+							reason: neighborReason(importerSet, callerSet, neighborPath),
+							diagnostics: [],
+							lspTouched: true as const,
+							inconclusive: true as const,
+							durationMs,
+						} satisfies CascadeResult["neighbors"][number];
+					}
 					// #1093/#571/#1095: a touch result is only a CONFIRMED observation of the
 					// neighbor's current on-disk state when it is neither `inconclusive` (the
 					// notify/diagnostics wait lapsed — e.g. the tight 1000ms cold-snapshot
