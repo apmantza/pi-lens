@@ -1089,6 +1089,146 @@ describe("handleNotifyOpen", () => {
 });
 
 /**
+ * #3543: a touch resolves `true` only when its content reached the wire; the
+ * `touchFile` debounce entry and drift record hang on that answer. One row per
+ * way a touch's run can end: the client dead by the time the queued run
+ * starts (the only dead-client check since #3543), dying mid-run, the
+ * transport refusing the write (a
+ * destroyed stream), and the write accepted. Recurrence: a run that ended
+ * without sending returned `undefined`, which the queue read as sent.
+ */
+describe("#3543 — a touch resolves true only when its content was sent", () => {
+	const DIED = "write after end: stream destroyed";
+	type Row = {
+		name: string;
+		via: "open" | "change";
+		/** The server already holds the document. */
+		opened: boolean;
+		/** `opengrep` resyncs by didClose + didOpen (`reopenOnResync`). */
+		serverId?: string;
+		/** The client dies after the touch is queued, before its run starts. */
+		deadBeforeRun?: boolean;
+		/** The client dies while this notification is being sent. */
+		dieOn?: string;
+		/** The transport rejects this notification as a destroyed stream. */
+		refuse?: string;
+		sent: boolean;
+	};
+	const rows: Row[] = [
+		{
+			name: "open, dead before the run",
+			via: "open",
+			opened: true,
+			deadBeforeRun: true,
+			sent: false,
+		},
+		{
+			name: "change, dead before the run",
+			via: "change",
+			opened: true,
+			deadBeforeRun: true,
+			sent: false,
+		},
+		{
+			name: "open, first didOpen accepted",
+			via: "open",
+			opened: false,
+			sent: true,
+		},
+		{
+			name: "open, first didOpen refused",
+			via: "open",
+			opened: false,
+			refuse: "textDocument/didOpen",
+			sent: false,
+		},
+		{ name: "open, didChange accepted", via: "open", opened: true, sent: true },
+		{
+			name: "open, didChange refused",
+			via: "open",
+			opened: true,
+			refuse: "textDocument/didChange",
+			sent: false,
+		},
+		{
+			name: "open, reopen accepted",
+			via: "open",
+			opened: true,
+			serverId: "opengrep",
+			sent: true,
+		},
+		{
+			name: "open, reopen didOpen refused",
+			via: "open",
+			opened: true,
+			serverId: "opengrep",
+			refuse: "textDocument/didOpen",
+			sent: false,
+		},
+		{
+			name: "open, dies during the reopen's didClose",
+			via: "open",
+			opened: true,
+			serverId: "opengrep",
+			dieOn: "textDocument/didClose",
+			sent: false,
+		},
+		{
+			name: "change, fallback didOpen accepted",
+			via: "change",
+			opened: false,
+			sent: true,
+		},
+		{
+			name: "change, fallback didOpen refused",
+			via: "change",
+			opened: false,
+			refuse: "textDocument/didOpen",
+			sent: false,
+		},
+		{
+			name: "change, didChange accepted",
+			via: "change",
+			opened: true,
+			sent: true,
+		},
+		{
+			name: "change, didChange refused",
+			via: "change",
+			opened: true,
+			refuse: "textDocument/didChange",
+			sent: false,
+		},
+	];
+
+	it.each(rows)("$name resolves $sent", async (row) => {
+		const state = createMockState(
+			row.serverId ? { serverId: row.serverId } : {},
+		);
+		if (row.opened) {
+			state.openDocuments.add(TEST_KEY);
+			state.documentVersions.set(TEST_KEY, 0);
+			state.openDocumentUris?.set(TEST_KEY, pathToFileURL(TEST_FILE).href);
+		}
+		vi.mocked(state.connection.sendNotification).mockImplementation(
+			async (method) => {
+				if (method === row.dieOn) state.isConnected = false;
+				if (method === row.refuse) throw new Error(DIED);
+			},
+		);
+
+		const touch =
+			row.via === "open"
+				? handleNotifyOpen(state, TEST_FILE, "v1", "typescript", false, true)
+				: handleNotifyChange(state, TEST_FILE, "v1");
+		// The queue starts its run on a microtask: this death lands first.
+		if (row.deadBeforeRun) state.isConnected = false;
+
+		await expect(touch).resolves.toBe(row.sent);
+	});
+});
+
+/**
  * #1668 — external (bash-authored) file changes that never went through
  * textDocument/didOpen/didChange. Reproduces the server-side stale view: a
  * bash-deleted file left NO trace in the fixture client's outbound traffic
