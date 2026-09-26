@@ -8,9 +8,9 @@
  * #3481 (an older read sent after a newer one), #3477 (a touch queued before
  * rename's close re-opened the path after didClose) and the #3491 verify-round
  * close-stamp drop (a close inherited a stale touch's read stamp and was
- * dropped with it, so no didClose went out). Each property below reds on its
- * regression re-applied as a mutation; PR #3530's body quotes the shrunk
- * counterexamples.
+ * dropped with it, so no didClose went out). The property reds on each of
+ * them re-applied as a mutation of the built client; the #3530 PR body quotes
+ * the shrunk counterexamples.
  *
  * Production chain: the REAL `handleNotifyOpen` / `handleNotifyChange` /
  * `closeDocument` over `createMockState`. Two awaits are handed to the
@@ -409,7 +409,6 @@ function staleReadDisplacesUnstamped(
 function newestReadHeld(run: Run): string[] {
 	if (run.diedAt !== undefined) return [];
 	const lastClose = run.closes.at(-1);
-	if (lastClose && lastClose.settledAt === undefined) return [];
 	const from = lastClose?.settledAt ?? -1;
 	if (lastClose && (!existsAt(run, from) || run.gone.some((g) => g > from)))
 		return [];
@@ -488,28 +487,6 @@ function queuedCloseSent(run: Run): string[] {
 }
 
 /**
- * Finding F3 (#3530): a stale saved read kept out behind a pending `change`
- * entry rides on the change's run, which drops saves (#3405), so no didSave
- * goes out. `handleNotifyChange` has no production caller today
- * (`LSPService.updateFile` is uncalled). Carved out of `saveSurvives` only;
- * the replay below fails until it is fixed.
- */
-function staleSaveBehindChange(run: Run, save: Touch): boolean {
-	return run.touches.some(
-		(c) =>
-			c.kind === "change" &&
-			c.issuedAt < save.issuedAt &&
-			run.touches.some(
-				(p) =>
-					p.issuedAt < c.issuedAt &&
-					p.stamp !== undefined &&
-					save.stamp !== undefined &&
-					p.stamp > save.stamp,
-			),
-	);
-}
-
-/**
  * #3405 / #3481 round-1 B1: a save produces a didSave after it was issued,
  * even when its content was superseded; and no didSave goes out for a
  * document the server does not hold. The save is owed only while nothing
@@ -541,7 +518,6 @@ function saveSurvives(run: Run): string[] {
 			run.touches.some((t) => t.kind === "change" && t.issuedAt > save.issuedAt)
 		)
 			continue;
-		if (staleSaveBehindChange(run, save)) continue;
 		const saved = run.wire.some(
 			(m) => m.method === "didSave" && m.delivered && m.at > save.issuedAt,
 		);
@@ -564,8 +540,9 @@ function deadClientResolvesTrue(run: Run, t: Touch): boolean {
 
 /**
  * Every waiter's result: `true` whenever its content reached the server, and
- * `true` otherwise only when a touch issued after it, no older read, reached
- * the server (a superseded caller waits on its replacement, #2113).
+ * `true` otherwise only when a touch issued after it reached the server (a
+ * superseded caller waits on its replacement, #2113). A stale read is issued
+ * after the entry that keeps it out, so it has no such replacement.
  */
 function waiterTruth(run: Run): string[] {
 	const out: string[] = [];
@@ -577,14 +554,9 @@ function waiterTruth(run: Run): string[] {
 		if (sent && t.result !== true)
 			out.push(`${t.content} was sent but resolved ${t.result}`);
 		if (sent || t.result !== true) continue;
-		const replaced = delivered.some((m) => {
-			const u = touchOf(run, m.text);
-			return (
-				u !== undefined &&
-				u.issuedAt > t.issuedAt &&
-				!(t.stamp !== undefined && u.stamp !== undefined && u.stamp < t.stamp)
-			);
-		});
+		const replaced = delivered.some(
+			(m) => (touchOf(run, m.text)?.issuedAt ?? -1) > t.issuedAt,
+		);
 		if (!replaced && !deadClientResolvesTrue(run, t))
 			out.push(
 				`${t.content} resolved true, but neither it nor a newer touch was sent`,
@@ -639,9 +611,12 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 	});
 
 	/**
-	 * The findings the property carves out, each replayed from its shrunk
-	 * counterexample with the carve-out bypassed. `it.fails`: green while the
-	 * finding stands; a fix turns it red, and the carve-out goes with it.
+	 * Findings on master, each replayed over every ordering of its shrunk
+	 * counterexample's commands. `it.fails`: green while the finding stands; a
+	 * fix turns it red. F1 and F2 are carved out of the property above by name
+	 * (`deadClientResolvesTrue`, `staleReadDisplacesUnstamped`), and the
+	 * carve-out goes with the fix. F3 has none: the fixed seed never reaches it,
+	 * other seeds do.
 	 */
 	describe("findings on master (#3530), pinned until fixed", () => {
 		const replay = (
@@ -666,10 +641,14 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 		});
 
 		it.fails("F1: a touch on a dead client resolves true without sending", () =>
-			replay([{ t: "die" }, open()], false, (run) =>
+			replay([open(), open(), { t: "die" }], false, (run) =>
 				run.touches
-					.filter((t) => t.result === true)
-					.map((t) => `${t.content} resolved true on a dead client`),
+					.filter(
+						(t) =>
+							t.result === true &&
+							!run.wire.some((m) => m.delivered && m.text === t.content),
+					)
+					.map((t) => `${t.content} resolved true, never sent`),
 			));
 
 		it.fails("F2: a stale read makes the queue drop an unstamped touch issued after the newest read", () =>
