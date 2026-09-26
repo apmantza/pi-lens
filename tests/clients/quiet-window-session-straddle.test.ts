@@ -28,6 +28,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import {
+	_getOutstandingCascadeTouchesForTests,
 	_resetCascadeTierReconcileRegistrationForTests,
 	_resetOutstandingCascadeTouchesForTests,
 	_resetTierAwareCascadeEnabledForTests,
@@ -247,34 +248,50 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		expect(staleWriteSubjects()).toEqual([`runtime-session:${NEIGHBOR}`]);
 	});
 
-	it("drops a stray touch a session-1 compute records after the replacement, because the window captured its generation before the settle", async () => {
-		// FixReconcileLateCapture. The replacement lands inside the settle wait;
-		// the session-1 compute then records its tier-3 touch (as the cascade
-		// lane does, clients/dispatch/integration.ts recordOutstandingCascadeTouch)
-		// and resolves. The reconcile task starts only after the settle, already
-		// in session 2: a generation captured at TASK start would read current.
+	it("leaves a touch recorded after the replacement for session 2's own window, and never drops it", async () => {
+		// Shape 54, the no-drop direction (#3499 review round 1, probe P1). The
+		// replacement lands inside the settle wait and session 2 records its own
+		// tier-3 touch. Session 2's agent_settled window is skipped (a window is
+		// still in progress). The stale window's reconcile starts only after the
+		// settle, in session 2: it must neither deliver the touch for session 2
+		// nor drain and drop it. Session 2's next window delivers it.
+		//
+		// The code cannot tell this touch from a stray that a still-running
+		// session-1 compute records after the reset (#3512), so a stray is left
+		// for session 2 too.
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
 		runtime.appendCascadePromise(compute.promise);
 
-		const quiet = runQuietWindow({ runtime, dbg: () => {} });
+		const stale = runQuietWindow({ runtime, dbg: () => {} });
 		replaceSession(runtime);
 		recordOutstandingCascadeTouch({
 			filePath: NEIGHBOR,
 			serverId: "typescript",
 			touchedAt: Date.now() - 50,
 		});
+		const skipped = vi.fn();
+		await runQuietWindow({ runtime, dbg: skipped });
 		compute.resolve(run(FILE));
-		await quiet;
+		await stale;
 
+		const afterStale = {
+			runs: runtime.hasCascadeRuns(),
+			touches: _getOutstandingCascadeTouchesForTests().map((t) => t.filePath),
+		};
+		await runQuietWindow({ runtime, dbg: () => {} });
 		const delivered = runtime.consumeCascadeRuns();
 		console.log(
-			`[LateCapture] delivered=${JSON.stringify(delivered.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
+			`[FreshTouch] afterStale=${JSON.stringify(afterStale)} delivered=${JSON.stringify(delivered.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
-		expect(delivered).toEqual([]);
+		expect(skipped).toHaveBeenCalledWith(
+			expect.stringContaining("a previous run is still in progress"),
+		);
+		expect(afterStale).toEqual({ runs: false, touches: [NEIGHBOR] });
+		expect(delivered.map((r) => r.filePath)).toEqual([NEIGHBOR]);
 		expect(staleWriteSubjects()).toEqual([
 			`runtime-session:${FILE}`,
-			`runtime-session:${NEIGHBOR}`,
+			"runtime-session:cascade_tier3_reconcile",
 		]);
 	});
 
