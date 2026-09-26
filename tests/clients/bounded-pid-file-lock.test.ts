@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import mutableFs from "node:fs";
+import fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -7,7 +8,10 @@ import { once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { acquireBoundedPidFileLock } from "../../clients/bounded-pid-file-lock.js";
+import {
+	acquireBoundedPidFileLock,
+	acquireQuarantinePidFileLock,
+} from "../../clients/bounded-pid-file-lock.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -166,6 +170,81 @@ describe("pid-file locks: generation takeover (#3476)", () => {
 			fs.writeFileSync(path.join(dir, "leave"), "");
 			p1.kill("SIGKILL");
 			await Promise.all([p1Exit, p2Exit]);
+		}
+	}, 30_000);
+
+	// RegistryCrashFix4.cfg on the real quarantine lock: p1 dies holding it;
+	// p3 (this process) judges it stale while p2 takes it over and enters.
+	// p3's rename-aside-and-inspect then moves p2's live lock away, and while
+	// it inspects, p4 finds the path empty and enters beside p2.
+	it("quarantine: keeps a fourth writer out while a taker inspects a live successor", async () => {
+		const { dir, lockPath } = tempLock();
+		const p1 = spawnHolder(dir, lockPath, "p1", "quarantine");
+		const p2 = spawnHolder(dir, lockPath, "p2", "quarantine");
+		const p4 = spawnHolder(dir, lockPath, "p4", "quarantine", 300);
+		const exits = [p1, p2, p4].map((child) => once(child, "exit"));
+		try {
+			fs.writeFileSync(path.join(dir, "p1.go"), "");
+			expect(waitForFileSync(path.join(dir, "p1.inside"))).toBe(true);
+			p1.kill("SIGKILL");
+			await exits[0];
+			expect(waitForFileSync(path.join(dir, "p2.ready"))).toBe(true);
+			expect(waitForFileSync(path.join(dir, "p4.ready"))).toBe(true);
+
+			let p2Entered = false;
+			let p4EnteredBesideP2: boolean | undefined;
+			const probe = onLivenessProbes(
+				new Map([
+					[
+						p1.pid!,
+						() => {
+							fs.writeFileSync(path.join(dir, "p2.go"), "");
+							p2Entered = waitForFileSync(path.join(dir, "p2.inside"));
+						},
+					],
+					[
+						p2.pid!,
+						() => {
+							fs.writeFileSync(path.join(dir, "p4.go"), "");
+							const inside = path.join(dir, "p4.inside");
+							const gaveUp = path.join(dir, "p4.gaveup");
+							const pause = new Int32Array(new SharedArrayBuffer(4));
+							const until = Date.now() + 10_000 * testTimeoutScale;
+							while (!fs.existsSync(inside) && !fs.existsSync(gaveUp)) {
+								if (Date.now() > until) break;
+								Atomics.wait(pause, 0, 0, 5);
+							}
+							p4EnteredBesideP2 =
+								fs.existsSync(inside) &&
+								!fs.existsSync(path.join(dir, "p2.left"));
+						},
+					],
+				]),
+			);
+			let release: (() => Promise<void>) | null;
+			try {
+				release = await acquireQuarantinePidFileLock(lockPath, {
+					waitMs: 500,
+					retryMs: 10,
+					staleMs: 60_000,
+					timeoutMessage: "p3 timed out",
+					onContention: "skip-log",
+					logContention: () => {},
+				});
+			} finally {
+				probe.restore();
+			}
+			await release?.();
+			expect(p2Entered).toBe(true);
+			expect(probe.fired(p2.pid!)).toBe(true);
+			expect(p4EnteredBesideP2).toBe(false);
+			expect(release).toBeNull();
+		} finally {
+			for (const name of ["p2", "p4"])
+				fs.writeFileSync(path.join(dir, `${name}.go`), "");
+			fs.writeFileSync(path.join(dir, "leave"), "");
+			p1.kill("SIGKILL");
+			await Promise.all(exits);
 		}
 	}, 30_000);
 });
@@ -457,5 +536,130 @@ describe("acquireBoundedPidFileLock across versions (#3476)", () => {
 		const release = take(lockPath);
 		expect(release).toBeTypeOf("function");
 		release?.();
+	});
+});
+
+describe("acquireQuarantinePidFileLock across versions (#3476)", () => {
+	function lockIn(): { lockPath: string; gens: string } {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pid-lock-"));
+		tempDirs.push(dir);
+		const lockPath = path.join(dir, "state.lock");
+		return { lockPath, gens: `${lockPath}s` };
+	}
+
+	function take(lockPath: string, staleMs = 60_000) {
+		return acquireQuarantinePidFileLock(lockPath, {
+			waitMs: 0,
+			retryMs: 5,
+			staleMs,
+			timeoutMessage: "quarantine lock timed out",
+			onContention: "skip-log",
+			logContention: () => {},
+		});
+	}
+
+	function degradationCount(kind: string): number {
+		return (
+			getDegradationSummary().find((group) => group.kind === kind)?.count ?? 0
+		);
+	}
+
+	afterEach(() => resetDegradationLedger());
+
+	// A writer from before #3476 takes only the `<store>.lock` directory.
+	it("holds the pre-generation lock directory while inside, so an older writer blocks", async () => {
+		const { lockPath } = lockIn();
+		const release = await take(lockPath);
+		expect(release).toBeTypeOf("function");
+		expect(() => fs.mkdirSync(lockPath)).toThrow(
+			expect.objectContaining({ code: "EEXIST" }),
+		);
+		const owner = JSON.parse(
+			fs.readFileSync(path.join(lockPath, "owner.json"), "utf8"),
+		);
+		expect(owner.pid).toBe(process.pid);
+		await release?.();
+		expect(fs.existsSync(lockPath)).toBe(false);
+	});
+
+	it("backs off a live older writer's lock directory without keeping its generation", async () => {
+		const { lockPath } = lockIn();
+		fs.mkdirSync(lockPath);
+		fs.writeFileSync(
+			path.join(lockPath, "owner.json"),
+			JSON.stringify({ pid: process.pid, createdAt: Date.now(), token: "old" }),
+		);
+		expect(await take(lockPath)).toBeNull();
+		expect(degradationCount("generation-lock-legacy-held")).toBe(1);
+		fs.rmSync(lockPath, { recursive: true });
+		// No wait: a generation kept by the back-off would hold this out.
+		const release = await take(lockPath);
+		expect(release).toBeTypeOf("function");
+		await release?.();
+	});
+
+	it("releases each generation and keeps only the two newest", async () => {
+		const { lockPath, gens } = lockIn();
+		for (let round = 1; round <= 5; round++) {
+			const release = await take(lockPath);
+			expect(release).toBeTypeOf("function");
+			await release?.();
+		}
+		expect(fs.readdirSync(gens).sort()).toEqual([
+			"lock.4",
+			"lock.4.released",
+			"lock.5",
+			"lock.5.released",
+		]);
+		expect(getDegradationSummary()).toEqual([]);
+	});
+
+	it("records a takeover of a dead owner's generation", async () => {
+		const { lockPath, gens } = lockIn();
+		const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+		await once(child, "exit");
+		fs.mkdirSync(gens);
+		fs.writeFileSync(path.join(gens, "lock.1"), `${child.pid} ${Date.now()}\n`);
+		const release = await take(lockPath);
+		expect(release).toBeTypeOf("function");
+		await release?.();
+		expect(degradationCount("generation-lock-stale-takeover")).toBe(1);
+	});
+
+	it("takes over a live owner's generation once staleMs has run out", async () => {
+		const { lockPath, gens } = lockIn();
+		fs.mkdirSync(gens);
+		const lock = path.join(gens, "lock.1");
+		fs.writeFileSync(lock, `${process.pid} ${Date.now()}\n`);
+		const old = new Date(Date.now() - 10_000);
+		fs.utimesSync(lock, old, old);
+		expect(await take(lockPath, 60_000)).toBeNull();
+		const release = await take(lockPath, 5_000);
+		expect(release).toBeTypeOf("function");
+		await release?.();
+	});
+
+	it("releases its generation when the old lock directory cannot be created", async () => {
+		const { lockPath } = lockIn();
+		const realMkdir = fsp.mkdir;
+		let refused = 0;
+		fsp.mkdir = (async (...args: Parameters<typeof realMkdir>) => {
+			if (args[0] === lockPath) {
+				refused += 1;
+				throw Object.assign(new Error("EACCES: permission denied"), {
+					code: "EACCES",
+				});
+			}
+			return realMkdir(...args);
+		}) as typeof realMkdir;
+		try {
+			await expect(take(lockPath)).rejects.toThrow("EACCES");
+		} finally {
+			fsp.mkdir = realMkdir;
+		}
+		expect(refused).toBe(1);
+		const release = await take(lockPath);
+		expect(release).toBeTypeOf("function");
+		await release?.();
 	});
 });

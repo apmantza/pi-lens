@@ -163,6 +163,7 @@ async function reclaimQuarantineLock(
 	return false;
 }
 
+/** The pre-#3476 directory lock; since #3476 only a generation holder takes it. */
 async function tryAcquireQuarantineLock(
 	lockPath: string,
 	staleMs: number,
@@ -211,9 +212,44 @@ async function tryAcquireQuarantineLock(
 }
 
 /**
- * Async directory-lock variant for commits that may span awaited I/O. Stale
- * owners are renamed aside before inspection/removal; token-checked release
- * likewise renames first, so a late owner can never delete its replacement.
+ * One attempt at the quarantine lock since #3476: a generation in
+ * `<lockPath>s` with `staleMs` as its lease, then the pre-#3476 directory
+ * lock `lockPath` (above). Writers from older versions take only that
+ * directory, so a generation holder holds it too, as the bounded lock holds
+ * its old file. Only a generation holder takes it, so its rename-aside
+ * takeover races only an older writer's own.
+ */
+async function tryAcquireQuarantineGeneration(
+	lockPath: string,
+	staleMs: number,
+): Promise<(() => Promise<void>) | null> {
+	const hold = tryAcquireGeneration(generationDir(lockPath), staleMs);
+	if (!hold) return null;
+	if (hold.tookOverStale) recordGenerationTakeover(hold);
+	let releaseLegacy: (() => Promise<void>) | null;
+	try {
+		releaseLegacy = await tryAcquireQuarantineLock(lockPath, staleMs);
+	} catch (cause) {
+		releaseGeneration(hold);
+		throw cause;
+	}
+	if (releaseLegacy) {
+		return async () => {
+			await releaseLegacy();
+			releaseGeneration(hold);
+		};
+	}
+	recordLegacyLockHeld(lockPath);
+	releaseGeneration(hold);
+	return null;
+}
+
+/**
+ * Async lock variant for commits that may span awaited I/O. Since #3476 it
+ * is a generation lock, so of two takers of a dead owner's lock exactly one
+ * enters. The old takeover renamed the lock directory aside to inspect it,
+ * and while a live successor's directory was aside a fourth writer could
+ * create the path and enter beside it.
  */
 export async function acquireQuarantinePidFileLock(
 	lockPath: string,
@@ -236,7 +272,10 @@ export async function acquireQuarantinePidFileLock(
 ): Promise<(() => Promise<void>) | null> {
 	const deadline = Date.now() + options.waitMs;
 	for (;;) {
-		const release = await tryAcquireQuarantineLock(lockPath, options.staleMs);
+		const release = await tryAcquireQuarantineGeneration(
+			lockPath,
+			options.staleMs,
+		);
 		if (release) return release;
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) {

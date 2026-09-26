@@ -32,10 +32,12 @@ whatever file the path names at that moment.
 files `lock.1`, `lock.2`, … Every acquisition, including a stale takeover, is
 an exclusive create of the next generation, so nothing is removed by path.
 `clients/generation-lock.ts` implements it, and the registry lock
-(`RegistryCrash.cfg`) and the bounded lock (`BoundedCrash.cfg`) use it since
-#3476. `ListedMarker = TRUE` judges as that code does:
-the released marker is read from the listing, and a generation file that is
-gone reads as held. The code creates a generation with `wx` rather than
+(`RegistryCrash.cfg`), the bounded lock (`BoundedCrash.cfg`) and the
+quarantine lock use it since #3476. The quarantine lock runs the same
+primitive with its caller's `staleMs` as the lease, which the model does not
+distinguish, so `RegistryCrash.cfg` and `RegistryCrash4.cfg` cover it.
+`ListedMarker = TRUE` judges as that code does: the released marker is read
+from the listing, and a generation file that is gone reads as held. The code creates a generation with `wx` rather than
 linking a written temp file (hard links fail on FAT/exFAT); a judge that reads
 it before its pid is written holds it live until it ages out, which only
 makes `Free` false in more states than the model's atomic create.
@@ -78,10 +80,10 @@ Three results matter most:
   temp file into place also passes, but hard links fail on FAT/exFAT and
   some network shares.
 - **The identity-checked takeover** (restore the displaced file if it was not
-  the judged one) only narrows the crash race, and it is the quarantine lock's
-  current shape. The generation lock closes it in the model. The post-create
-  listing is required: without it, a stale listing re-creates a name cleanup
-  removed.
+  the judged one) only narrows the crash race, and it was the quarantine
+  lock's shape before #3476. The generation lock closes it in the model.
+  The post-create listing is required: without it, a stale listing
+  re-creates a name cleanup removed.
 
 The model is not passing vacuously: letting the `wx` create succeed on an
 occupied path makes `RegistryNoFault.cfg` violate `MutualExclusion`.
@@ -118,9 +120,9 @@ judgement's liveness probe (`admits one of two takers of a dead owner's lock`).
 Not modelled:
 - backoff timing (any retry may give up, as the wait deadline does);
 - pid reuse;
-- the quarantine lock itself, whose restore has the shape of
+- the quarantine lock before #3476, whose restore had the shape of
   `RegistryCrashFix.cfg`;
-- writers from before #3476 running beside current ones. A registry or
-  bounded generation holder also holds the old `.lock` file so they block
-  each other, and a stale one keeps the old path takeover race against an
-  older writer.
+- writers from before #3476 running beside current ones. A registry,
+  bounded or quarantine generation holder also holds the old `.lock` file
+  (a directory for the quarantine lock) so they block each other, and a
+  stale one keeps the old path takeover race against an older writer.
