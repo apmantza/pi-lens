@@ -480,7 +480,8 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(h.state.diagnosticFences.size).toBe(1);
 			if (cached) h.state.pushDiagnostics.set(KEY, [STALE]);
-			const timer = setTimeout(() => {}, 60_000);
+			// A stand-in handle: only the map entry's presence is read here.
+			const timer = {} as ReturnType<typeof setTimeout>;
 			if (pending) h.state.pendingDiagnostics.set(KEY, timer);
 
 			h.publish({ uri: URI, diagnostics });
@@ -499,7 +500,6 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 						]
 					: [],
 			);
-			clearTimeout(timer);
 			h.state.pendingDiagnostics.delete(KEY);
 			h.change.resolve();
 			await touch;
