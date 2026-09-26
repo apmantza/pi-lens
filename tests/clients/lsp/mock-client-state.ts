@@ -73,6 +73,7 @@ export function createMockState(
 		diagnosticEmitter,
 		diagnosticsVersion: 0,
 		diagnosticsVersionsByPath: new Map(),
+		publicationStoreCountsByPath: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
 		diagnosticDocVersions: new Map(),

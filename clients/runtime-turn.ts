@@ -103,6 +103,7 @@ import { getLSPService } from "./lsp/index.js";
 import {
 	drainPendingAuxCapEvictedCount,
 	drainPendingAuxiliaryCoverage,
+	isAuxBacklogPublished,
 	isPendingAuxiliaryPastRearmTtl,
 	rearmPendingAuxiliaryCoverage,
 	MAX_LATE_AUX_REARMS,
@@ -3897,6 +3898,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	let lateAuxStale = 0;
 	let lateAuxMissing = 0;
 	let lateAuxRearmed = 0;
+	// #3482: informational, like `probeFailed` — the pair still resolves
+	// through rearmed/expired/ceilingExhausted.
+	let lateAuxBacklogPending = 0;
 	let lateAuxClientGone = 0;
 	let lateAuxProbeFailed = 0;
 	let lateAuxCleanConfirmed = 0;
@@ -4036,9 +4040,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						continue;
 					}
 					const rawDiags = cachedEntry.diags;
+					// #3482: a version-less publish after the mark can still be an
+					// OLDER scan's answer when a re-touch re-marked while it was in
+					// flight. Wait until the scanner has published past the backlog
+					// it had at the mark.
+					const backlogPending = !isAuxBacklogPublished(pair);
+					if (backlogPending) lateAuxBacklogPending += 1;
 					if (
 						cachedEntry.publishedAt === undefined ||
-						cachedEntry.publishedAt <= pair.markedAtMs
+						cachedEntry.publishedAt <= pair.markedAtMs ||
+						backlogPending
 					) {
 						// Still scanning (or published nothing yet) — keep waiting
 						// so a scan finishing before the NEXT turn end still
@@ -4144,12 +4155,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					if (gate.live.length === 0) {
 						if (gate.stale.length > 0) {
 							// Stale findings mean the scan predates the last edit. Re-arm
-							// with a refreshed baseline and carry the ceiling count.
+							// with the SAME baseline and carry the ceiling count (#3482:
+							// a refreshed baseline absorbed the edit, so an older queued
+							// scan that published later passed both gates).
 							if (
 								!isPendingAuxiliaryPastRearmTtl(pair) &&
 								(pair.rearmCount ?? 0) < MAX_LATE_AUX_REARMS
 							) {
-								rearmPendingAuxiliaryCoverage(pair, Date.now(), true);
+								rearmPendingAuxiliaryCoverage(pair);
 								lateAuxRearmed += 1;
 							} else if (isPendingAuxiliaryPastRearmTtl(pair)) {
 								lateAuxExpired += 1;
@@ -4265,6 +4278,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				stale: lateAuxStale,
 				missing: lateAuxMissing,
 				rearmed: lateAuxRearmed,
+				backlogPending: lateAuxBacklogPending,
 				clientGone: lateAuxClientGone,
 				probeFailed: lateAuxProbeFailed,
 				cleanConfirmed: lateAuxCleanConfirmed,

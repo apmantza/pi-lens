@@ -377,6 +377,12 @@ export interface LSPClientInfo {
 	 * per path.
 	 */
 	getDiagnosticsVersionForPath(filePath: string): number;
+	/** #3482: see {@link publicationCountsForPath}. Optional so a client double
+	 *  that predates it only loses the late-auxiliary backlog binding. */
+	getPublicationCountsForPath?(filePath: string): {
+		sent: number;
+		published: number;
+	};
 	waitForDiagnostics(
 		filePath: string,
 		timeoutMs?: number,
@@ -957,6 +963,12 @@ export interface LSPClientState {
 	 *  for the same hot-receive-path reason as `diagnosticPublicationCounts`
 	 *  above; readers fold their input through `normalizeMapKey`. */
 	readonly diagnosticsVersionsByPath: Map<string, number>;
+	/** #3482: how many publications each path received in its current open
+	 *  lifetime, capped at its sends. Counted when a receipt is stored
+	 *  (`bumpDiagnosticsVersion`) or superseded unstored (resync clear, debounce
+	 *  replacement), never at raw receipt; not reset by a resync clear; reset on
+	 *  a first open and dropped on close. */
+	readonly publicationStoreCountsByPath: Map<string, number>;
 	readonly documentVersions: Map<string, number>;
 	/** #2113/#2357: latest-pending same-path document sends; different paths stay parallel. */
 	readonly notifyChangeQueues: Map<string, DocumentNotifyQueue>;
@@ -1793,6 +1805,39 @@ export function bumpDiagnosticsVersion(
 		normalizedPath,
 		state.diagnosticsVersion,
 	);
+	countPublication(state, normalizedPath);
+}
+
+/** #3482: count one publication for the path: stored, or superseded before it
+ * could be (a resync clear, or a newer receipt inside the debounce window).
+ * Capped at this lifetime's sends, so a surplus publish while nothing is
+ * outstanding (opengrep's empty rule-load answer, republished after
+ * `semgrep/rulesRefreshed`) is absorbed instead of shortening every later
+ * backlog. Nothing is counted for a path with no send in this lifetime. */
+function countPublication(state: LSPClientState, normalizedPath: string): void {
+	const counts = state.publicationStoreCountsByPath;
+	if (!counts) return;
+	const { sent } = publicationCountsForPath(state, normalizedPath);
+	if (sent === 0) return;
+	counts.set(
+		normalizedPath,
+		Math.min((counts.get(normalizedPath) ?? 0) + 1, sent),
+	);
+}
+
+/** #3482: sends and stored publications for a path in its current open
+ * lifetime. `sent` is derived from `documentVersions` (0 on the first open, +1
+ * per resync), so the late-auxiliary drain can bind a mark to the scanner's
+ * backlog: the sends still unpublished at the mark must publish first. */
+export function publicationCountsForPath(
+	state: LSPClientState,
+	normalizedPath: string,
+): { sent: number; published: number } {
+	const lastSent = state.documentVersions.get(normalizedPath);
+	return {
+		sent: lastSent === undefined ? 0 : lastSent + 1,
+		published: state.publicationStoreCountsByPath?.get(normalizedPath) ?? 0,
+	};
 }
 
 /** #1531: the global counter's value when diagnostics were last stored for
@@ -1823,7 +1868,12 @@ export function clearDiagnosticsForPath(
 	};
 	state.pushDiagnostics?.delete(normalizedPath);
 	const pending = state.pendingDiagnostics?.get(normalizedPath);
-	if (pending) clearTimeout(pending);
+	if (pending) {
+		clearTimeout(pending);
+		// #3482: the scan answered; its receipt is dropped with the cache it
+		// would have filled, so it still counts toward the backlog.
+		countPublication(state, normalizedPath);
+	}
 	state.pendingDiagnostics?.delete(normalizedPath);
 	state.pushDiagnosticTimestamps?.delete(normalizedPath);
 	state.documentPullDiagnostics?.delete(normalizedPath);
@@ -2561,7 +2611,12 @@ export function setupIncomingHandlers(
 			logSequence(false, "publication", 0);
 
 			const existingTimer = state.pendingDiagnostics.get(normalizedPath);
-			if (existingTimer) clearTimeout(existingTimer);
+			if (existingTimer) {
+				clearTimeout(existingTimer);
+				// #3482: the replaced receipt is a scan that answered and will never
+				// be stored; count it so the backlog is not left one short.
+				countPublication(state, normalizedPath);
+			}
 
 			const timer = setTimeout(() => {
 				state.pendingDiagnostics.delete(normalizedPath);
@@ -4128,6 +4183,8 @@ async function handleNotifyOpenOnce(
 	state.documentOpenedAt.set(normalizedPath, Date.now());
 	state.diagnosticPublicationCounts.set(normalizedPath, 0);
 	clearDiagnosticsForPath(state, normalizedPath); // always clear for initial open
+	// #3482: after the clear, which counts a dropped pre-open receipt.
+	state.publicationStoreCountsByPath?.delete(normalizedPath);
 
 	// Send workspace notification first (like opencode does).
 	// Skipped in silent mode — cascade reads a file for diagnostics,
@@ -4387,6 +4444,7 @@ export async function closeDocument(
 	state.closedDocuments?.add(normalizedPath);
 	state.openDocumentUris?.delete(normalizedPath);
 	state.documentVersions.delete(normalizedPath);
+	state.publicationStoreCountsByPath?.delete(normalizedPath);
 	state.documentOpenedAt.delete(normalizedPath);
 	state.diagnosticPublicationCounts.delete(normalizedPath);
 	// #1412 L1: projectIdentityProbedFiles is a claim-once memo scoped to the
@@ -5513,6 +5571,7 @@ export async function createLSPClient(options: {
 		diagnosticEmitter,
 		diagnosticsVersion: 0,
 		diagnosticsVersionsByPath: new Map(),
+		publicationStoreCountsByPath: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
 		diagnosticDocVersions: new Map(),
@@ -5798,6 +5857,10 @@ export async function createLSPClient(options: {
 
 		getDiagnosticsVersionForPath(filePath) {
 			return diagnosticsVersionForPath(state, normalizeMapKey(filePath));
+		},
+
+		getPublicationCountsForPath(filePath) {
+			return publicationCountsForPath(state, normalizeMapKey(filePath));
 		},
 
 		getAllDiagnostics() {
