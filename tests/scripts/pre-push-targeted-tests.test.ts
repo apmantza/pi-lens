@@ -27,8 +27,10 @@ import {
 	CI_ONLY_PRE_PUSH_TESTS,
 	collectTestFiles,
 	MAX_SELECTED_TESTS,
+	TEST_TREE_GOVERNANCE_TESTS,
 	TREE_SCANNING_GOVERNANCE_TESTS,
 	changesProductionFile,
+	changesTestTreeFile,
 	selectTargetedTests,
 } from "../../scripts/pre-push-targeted-tests.mjs";
 
@@ -117,6 +119,61 @@ describe("selectTargetedTests — path-mirror pass", () => {
 		});
 		expect(ci.selected).toEqual([ciOnlyFile]);
 		expect(ci.excludedCiOnly).toEqual([]);
+	});
+
+	// #3472 recurrence (#3492, 2026-09-26): a new test's real 60 s setTimeout
+	// pushed with the flake-shape ratchet red, because the ratchet scans the
+	// tests tree and neither the mirror nor the import pass selects it. The
+	// changed files are 0b5cb182a's own.
+	it("arms the tests-tree ratchet when a pushed change touches the tests tree", () => {
+		enterFixture();
+		for (const test of TEST_TREE_GOVERNANCE_TESTS)
+			write(test, "it('ratchet');\n");
+		write("clients/lsp/client.ts", "export {}\n");
+		write("tests/clients/lsp/diagnostics-fence.test.ts", "it('x');\n");
+
+		const changed = [
+			".changelog/3484-fence-hold-record.md",
+			"clients/lsp/client.ts",
+			"tests/clients/lsp/diagnostics-fence.test.ts",
+		];
+		const result = selectTargetedTests(changed, collectTestFiles("tests"));
+
+		expect(TEST_TREE_GOVERNANCE_TESTS).toContain(
+			"tests/clients/flake-shape-ratchet.test.ts",
+		);
+		expect([...result.selected].sort()).toEqual(
+			[
+				"tests/clients/lsp/diagnostics-fence.test.ts",
+				...TEST_TREE_GOVERNANCE_TESTS,
+			].sort(),
+		);
+		// A support-module change reaches the ratchet too: it counts helpers
+		// under tests/support (the #2885 never-settling-promise detector).
+		expect(changesTestTreeFile("tests/support/fake-child.ts")).toBe(true);
+		expect(
+			selectTargetedTests(
+				["tests/support/fake-child.ts"],
+				collectTestFiles("tests"),
+			).selected,
+		).toEqual(TEST_TREE_GOVERNANCE_TESTS);
+	});
+
+	it("leaves the tests-tree ratchet out of a push that touches no test file", () => {
+		enterFixture();
+		for (const test of TEST_TREE_GOVERNANCE_TESTS)
+			write(test, "it('ratchet');\n");
+		write("clients/foo/bar.ts", "export const x = 1;\n");
+
+		const allTests = collectTestFiles("tests");
+		expect(changesTestTreeFile("clients/foo/bar.ts")).toBe(false);
+		expect(changesTestTreeFile("docs/tests/x.md")).toBe(false);
+		expect(
+			selectTargetedTests(["clients/foo/bar.ts"], allTests).selected,
+		).toEqual([]);
+		expect(selectTargetedTests(["docs/tests/x.md"], allTests).selected).toEqual(
+			[],
+		);
 	});
 
 	it("always includes a changed test file itself", () => {
@@ -211,6 +268,52 @@ describe("selectTargetedTests — the >25-file cap (F1)", () => {
 		expect(result.capped).toBe(true);
 		expect(result.selected).toEqual([]);
 		expect(result.totalBeforeCap).toBe(testCount);
+	});
+
+	// #3492 (2026-09-26): 0b5cb182a changed clients/lsp/client.ts, which 71
+	// test files match, so the heuristic selection capped and the hook ran
+	// NOTHING; the raw 60 s timer it added reached CI. The registries are
+	// bounded by construction, so a capped push still runs them.
+	it("still runs the armed governance registries when the heuristic selection caps", () => {
+		enterFixture();
+		for (const test of [
+			...TREE_SCANNING_GOVERNANCE_TESTS,
+			...TEST_TREE_GOVERNANCE_TESTS,
+		])
+			write(test, "it('governance');\n");
+		write("clients/lsp/client.ts", "export const shared = 1;\n");
+		for (let i = 0; i < MAX_SELECTED_TESTS + 1; i++) {
+			write(
+				`tests/clients/lsp/generated-${i}.test.ts`,
+				`import { shared } from '../../../clients/lsp/client.js';\n`,
+			);
+		}
+		write("tests/clients/lsp/diagnostics-fence.test.ts", "it('x');\n");
+
+		const result = selectTargetedTests(
+			[
+				".changelog/3484-fence-hold-record.md",
+				"clients/lsp/client.ts",
+				"tests/clients/lsp/diagnostics-fence.test.ts",
+			],
+			collectTestFiles("tests"),
+		);
+
+		expect(result.capped).toBe(true);
+		expect([...result.selected].sort()).toEqual(
+			[...TREE_SCANNING_GOVERNANCE_TESTS, ...TEST_TREE_GOVERNANCE_TESTS].sort(),
+		);
+		// The registries never push the heuristic selection over the cap.
+		for (let i = MAX_SELECTED_TESTS - 1; i <= MAX_SELECTED_TESTS + 1; i++)
+			fs.rmSync(`tests/clients/lsp/generated-${i}.test.ts`, { force: true });
+		const underCap = selectTargetedTests(
+			["clients/lsp/client.ts", "tests/clients/lsp/diagnostics-fence.test.ts"],
+			collectTestFiles("tests"),
+		);
+		expect(underCap.capped).toBe(false);
+		expect(underCap.selected).toContain(
+			"tests/clients/lsp/generated-0.test.ts",
+		);
 	});
 
 	it("does not cap when the match count is exactly at the limit", () => {
