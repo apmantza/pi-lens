@@ -994,13 +994,19 @@ export interface LSPClientState {
 	 *  for the same hot-receive-path reason as `diagnosticPublicationCounts`
 	 *  above; readers fold their input through `normalizeMapKey`. */
 	readonly diagnosticsVersionsByPath: Map<string, number>;
-	/** #3482: how many publications each path received in its current open
-	 *  lifetime, capped at its sends. Counted when a receipt is stored
-	 *  (`bumpDiagnosticsVersion`) or superseded unstored (resync clear, debounce
-	 *  replacement), never at raw receipt; not reset by a resync clear; reset on
-	 *  a first open and dropped on close; one taken back per
+	/** #3482: how many publications each path received, capped at the
+	 *  publications it expects (`publicationCountsForPath`'s `sent`). Counted
+	 *  when a receipt is stored (`bumpDiagnosticsVersion`) or superseded
+	 *  unstored (resync clear, debounce replacement, a receipt for a closed
+	 *  path), never at raw receipt; not reset by a resync clear or a close;
+	 *  reset on the first open of a path never closed; one taken back per
 	 *  `semgrep/rulesRefreshed` (#3490), so an entry can be 0 or below. */
 	readonly publicationStoreCountsByPath: Map<string, number>;
+	/** #3482: publications a path expects beyond its open lifetime's sends:
+	 *  one per didSave to a `rescansOnSave` server, plus every one its closed
+	 *  lifetimes expected, since their queued scans still publish. Set at
+	 *  close, kept across the reopen. */
+	readonly expectedPublicationsBeyondSends: Map<string, number>;
 	readonly documentVersions: Map<string, number>;
 	/** #2113/#2357: latest-pending same-path document sends; different paths stay parallel. */
 	readonly notifyChangeQueues: Map<string, DocumentNotifyQueue>;
@@ -1858,11 +1864,11 @@ export function bumpDiagnosticsVersion(
 
 /** #3482: count one publication for the path: stored, or superseded before it
  * could be (a resync clear, or a newer receipt inside the debounce window).
- * Capped at this lifetime's sends, so a surplus publish while nothing is
- * outstanding is absorbed instead of shortening every later backlog; the
- * republish after `semgrep/rulesRefreshed` is rebaselined instead
- * ({@link rebaselineForRulesRefresh}). Nothing is counted for a path with no
- * send in this lifetime. */
+ * Capped at the publications the path expects, so a surplus publish while
+ * nothing is outstanding is absorbed instead of shortening every later
+ * backlog; the republish after `semgrep/rulesRefreshed` is rebaselined instead
+ * ({@link rebaselineForRulesRefresh}). Nothing is counted for a path that
+ * expects none. */
 function countPublication(state: LSPClientState, normalizedPath: string): void {
 	const counts = state.publicationStoreCountsByPath;
 	if (!counts) return;
@@ -1877,8 +1883,9 @@ function countPublication(state: LSPClientState, normalizedPath: string): void {
 /** #3490: opengrep sends `semgrep/rulesRefreshed` once its rules are loaded,
  * then republishes every file it has a scan recorded for (opengrep@1a5fd9d
  * `Scan_helpers.refresh_rules`). That republish answers no send, so take one
- * publication back from every path that already received one this lifetime
- * (any publish means a recorded scan, so the republish will come), counted or
+ * publication back from every path that already received one, a closed path
+ * included (any publish means a recorded scan, so the republish will come,
+ * and a closed path counts it as it is dropped, #3482), counted or
  * still inside the debounce; the republish then restores the count instead of
  * answering an outstanding send. A path with no receipt yet is left alone:
  * whether the refresh reaches it is not observable, and a publication taken
@@ -1908,17 +1915,21 @@ export function rebaselineForRulesRefresh(state: LSPClientState): void {
 	});
 }
 
-/** #3482: sends and stored publications for a path in its current open
- * lifetime. `sent` is derived from `documentVersions` (0 on the first open, +1
- * per resync), so the late-auxiliary drain can bind a mark to the scanner's
- * backlog: the sends still unpublished at the mark must publish first. */
+/** #3482: expected and counted publications for a path. `sent` is the open
+ * lifetime's sends, derived from `documentVersions` (0 on the first open, +1
+ * per resync), plus {@link LSPClientState.expectedPublicationsBeyondSends},
+ * so the late-auxiliary drain can bind a mark to the scanner's backlog: the
+ * publications still due at the mark must land first. Both counts span a
+ * close and reopen, so a mark keeps its frame across one. */
 export function publicationCountsForPath(
 	state: LSPClientState,
 	normalizedPath: string,
 ): { sent: number; published: number } {
 	const lastSent = state.documentVersions.get(normalizedPath);
 	return {
-		sent: lastSent === undefined ? 0 : lastSent + 1,
+		sent:
+			(lastSent === undefined ? 0 : lastSent + 1) +
+			(state.expectedPublicationsBeyondSends?.get(normalizedPath) ?? 0),
 		published: state.publicationStoreCountsByPath?.get(normalizedPath) ?? 0,
 	};
 }
@@ -2469,7 +2480,11 @@ export function setupIncomingHandlers(
 			// A server can flush a queued publish after didClose during teardown.
 			// Do not resurrect diagnostics or their content binding for a document
 			// that is no longer open on this client.
-			if (state.closedDocuments?.has(normalizedPath)) return;
+			if (state.closedDocuments?.has(normalizedPath)) {
+				// #3482: a scan the closed lifetime was owed; it answered.
+				countPublication(state, normalizedPath);
+				return;
+			}
 			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
@@ -4160,6 +4175,18 @@ export function handleNotifyExternalChange(
 	state.watchQueue.enqueue(uri, type);
 }
 
+/** #3482: a didSave to a `rescansOnSave` server (opengrep) brings one more
+ * publication that answers no send, so the path expects it. Raised before the
+ * save is written, so the rescan can never land first and be absorbed by the
+ * cap. A save that fails to leave does so because the connection is gone,
+ * and a dead client's backlog no longer binds (`captureAuxPublicationBacklog`),
+ * so nothing is given back. */
+function expectSaveRescan(state: LSPClientState, normalizedPath: string): void {
+	if (!getStrategy(state.serverId, state.launchVariant).rescansOnSave) return;
+	const beyond = state.expectedPublicationsBeyondSends;
+	beyond?.set(normalizedPath, (beyond.get(normalizedPath) ?? 0) + 1);
+}
+
 /**
  * #3405: tell the server the document it just received is the file's saved
  * on-disk state.
@@ -4183,12 +4210,14 @@ export function handleNotifyExternalChange(
  */
 async function sendDidSave(
 	state: LSPClientState,
+	normalizedPath: string,
 	uri: string,
 	content: string,
 ): Promise<void> {
 	const save = state.saveOptions;
 	if (!save) return;
 	if (!isClientAlive(state)) return;
+	expectSaveRescan(state, normalizedPath);
 	// #3405 r2 (M3406-1): `text` is a SECOND full copy of bytes the server was
 	// just handed, so it is the one payload here that can be file-sized. The
 	// explicit `lsp_diagnostics` writer reads whole files with no bound of its
@@ -4233,6 +4262,7 @@ async function sendDidSaveForHeldDocument(
 	if (!state.openDocuments.has(normalizedPath)) return;
 	const uri = state.openDocumentUris?.get(normalizedPath);
 	if (uri === undefined) return;
+	expectSaveRescan(state, normalizedPath);
 	try {
 		await safeSendNotification(state.connection, "textDocument/didSave", {
 			textDocument: { uri },
@@ -4314,7 +4344,8 @@ async function handleNotifyOpenOnce(
 				);
 			state.openDocuments.add(normalizedPath);
 			state.openDocumentUris?.set(normalizedPath, uri);
-			if (saved && reopenSent) await sendDidSave(state, uri, content);
+			if (saved && reopenSent)
+				await sendDidSave(state, normalizedPath, uri, content);
 			return;
 		}
 		const changeSent = await sendFenced(
@@ -4335,7 +4366,8 @@ async function handleNotifyOpenOnce(
 				content,
 				coalescedCount,
 			);
-		if (saved && changeSent) await sendDidSave(state, uri, content);
+		if (saved && changeSent)
+			await sendDidSave(state, normalizedPath, uri, content);
 		return;
 	}
 
@@ -4345,8 +4377,10 @@ async function handleNotifyOpenOnce(
 	state.documentOpenedAt.set(normalizedPath, Date.now());
 	state.diagnosticPublicationCounts.set(normalizedPath, 0);
 	clearDiagnosticsForPath(state, normalizedPath); // always clear for initial open
-	// #3482: after the clear, which counts a dropped pre-open receipt.
-	state.publicationStoreCountsByPath?.delete(normalizedPath);
+	// #3482: after the clear, which counts a dropped pre-open receipt. A
+	// reopened path keeps its counts: its closed lifetime's scans still land.
+	if (!state.expectedPublicationsBeyondSends?.has(normalizedPath))
+		state.publicationStoreCountsByPath?.delete(normalizedPath);
 
 	// Send workspace notification first (like opencode does).
 	// Skipped in silent mode — cascade reads a file for diagnostics,
@@ -4386,7 +4420,7 @@ async function handleNotifyOpenOnce(
 	state.openDocuments.add(normalizedPath);
 	state.closedDocuments?.delete(normalizedPath);
 	state.openDocumentUris?.set(normalizedPath, uri);
-	if (saved && openSent) await sendDidSave(state, uri, content);
+	if (saved && openSent) await sendDidSave(state, normalizedPath, uri, content);
 	// Telemetry is deliberately detached after didOpen succeeds.
 	// #1412 H1: routed through runReadOnlyServerCommand, NOT runServerCommand —
 	// the probe must never open the serverEditsAllowed/activeMutationContext
@@ -4710,8 +4744,13 @@ async function closeDocumentOnce(
 	state.openDocuments.delete(normalizedPath);
 	state.closedDocuments?.add(normalizedPath);
 	state.openDocumentUris?.delete(normalizedPath);
+	// #3482: the scans this lifetime expected still publish, after the close
+	// (counted as they are dropped) or after a reopen, so the counts span it.
+	state.expectedPublicationsBeyondSends?.set(
+		normalizedPath,
+		publicationCountsForPath(state, normalizedPath).sent,
+	);
 	state.documentVersions.delete(normalizedPath);
-	state.publicationStoreCountsByPath?.delete(normalizedPath);
 	state.sentReadStamps.delete(normalizedPath);
 	state.documentOpenedAt.delete(normalizedPath);
 	state.diagnosticPublicationCounts.delete(normalizedPath);
@@ -5840,6 +5879,7 @@ export async function createLSPClient(options: {
 		diagnosticsVersion: 0,
 		diagnosticsVersionsByPath: new Map(),
 		publicationStoreCountsByPath: new Map(),
+		expectedPublicationsBeyondSends: new Map(),
 		documentVersions: new Map(),
 		notifyChangeQueues: new Map(),
 		sentReadStamps: new Map(),
