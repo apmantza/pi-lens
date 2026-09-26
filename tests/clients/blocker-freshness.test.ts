@@ -597,6 +597,47 @@ describe("blocker freshness sweep — self-drift on non-LSP provenance", () => {
 		);
 	});
 
+	// #3504 makes every hashed record read its file, not only all-LSP ones, so
+	// the per-sweep byte budget is now spent by non-LSP records too. A record
+	// past it must stay exactly as it is (unverifiable), never demoted and
+	// never confirmed, whatever its bytes.
+	it("leaves a same-size non-LSP record past the sweep's hash budget untouched (#3504)", async () => {
+		const dir = makeDir("pi-lens-fresh-budget-");
+		const runtime = new RuntimeCoordinator();
+		// Five 2 MiB files, the pipeline's largest baseline, against the 8 MiB
+		// budget: the first four are hashed, the fifth is past it.
+		const bytes = "a".repeat(2 * 1024 * 1024);
+		const targets = Array.from({ length: 5 }, (_, i) =>
+			path.join(dir, `consumer-${i}.ts`),
+		);
+		for (const target of targets) {
+			fs.writeFileSync(target, bytes);
+			recordWithBaseline(runtime, target, `🔴 ${target}`, ["ast-grep"]);
+			// A same-size rewrite: only the hash could see it.
+			fs.writeFileSync(target, `b${bytes.slice(1)}`);
+		}
+
+		const counts = await sweepInlineBlockerFreshness(runtime, dir, {
+			resolveForwardImports: () => [],
+		});
+		expect(counts).toMatchObject({
+			revalidated: 4,
+			selfUnverifiable: 1,
+			hashBudgetExhausted: 1,
+		});
+		const stale = runtime
+			.getInlineBlockersSnapshot()
+			.filter((entry) => entry.stale)
+			.map((entry) => path.basename(entry.filePath));
+		expect(stale).toHaveLength(4);
+		expect(stale).not.toContain(path.basename(targets[4]!));
+		expect(getDegradationSummary()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ kind: "self-drift-hash-budget-exhausted" }),
+			]),
+		);
+	});
+
 	it("records a distinct bounded record when the self-drift bound expires", async () => {
 		const dir = makeDir("pi-lens-fresh-bound-");
 		const target = path.join(dir, "consumer.ts");
