@@ -589,6 +589,32 @@ describe("withGenerationLockSync (#3509)", () => {
 		expect(result).toEqual({ held: true, value: "entered" });
 	});
 
+	it("records a takeover from a dead holder, as every other generation-lock caller does (#3476 parity)", () => {
+		const dir = lockDir();
+		fs.mkdirSync(dir, { recursive: true });
+		let deadPid = 999_983;
+		for (; deadPid > 1000; deadPid -= 7919) {
+			try {
+				process.kill(deadPid, 0);
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "ESRCH") break;
+			}
+		}
+		fs.writeFileSync(path.join(dir, "lock.1"), `${deadPid} ${Date.now()}\n`);
+		const result = withGenerationLockSync(
+			dir,
+			{ staleMs: 5_000, waitMs: 500 },
+			() => "entered",
+		);
+		expect(result).toEqual({ held: true, value: "entered" });
+		expect(getDegradationSummary()).toContainEqual(
+			expect.objectContaining({
+				kind: "generation-lock-stale-takeover",
+				count: 1,
+			}),
+		);
+	});
+
 	it("stops on a filesystem error other than contention and hands back its cause", () => {
 		const dir = lockDir();
 		const realMkdir = fs.mkdirSync;

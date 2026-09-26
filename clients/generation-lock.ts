@@ -217,6 +217,7 @@ export function withGenerationLockSync<T>(
 			return { held: false, cause };
 		}
 		if (hold) {
+			if (hold.tookOverStale) recordGenerationTakeover(hold);
 			try {
 				return { held: true, value: op() };
 			} finally {
