@@ -1438,41 +1438,48 @@ describe("monorepo turn-state cwd alignment", () => {
 			runtime.beginTurn();
 			const dispatchGeneration = runtime.sessionGeneration;
 
-			await handleToolResult({
-				event: {
-					toolName: "edit",
-					input: { path: filePath },
-					details: { diff: "+  1 export const x = 2;" },
-					content: [{ type: "text", text: "ok" }],
-				},
-				getFlag: () => false,
-				dbg: () => {},
-				runtime,
-				cacheManager: {
-					addModifiedRange: () => {},
-					readTurnState: () => ({}),
-				},
-				biomeClient: {},
-				ruffClient: {},
-				testRunnerClient: {},
-				metricsClient: {},
-				resetLSPService: () => {},
-				agentBehaviorRecord: () => [],
-				formatBehaviorWarnings: () => "",
-			} as any);
+			const dispatch = async (content: string) => {
+				fs.writeFileSync(filePath, content);
+				await handleToolResult({
+					event: {
+						toolName: "edit",
+						input: { path: filePath },
+						details: { diff: `+  1 ${content.trim()}` },
+						content: [{ type: "text", text: "ok" }],
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: {
+						addModifiedRange: () => {},
+						readTurnState: () => ({}),
+					},
+					biomeClient: {},
+					ruffClient: {},
+					testRunnerClient: {},
+					metricsClient: {},
+					resetLSPService: () => {},
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as any);
+				return vi.mocked(runPipeline).mock.calls.at(-1)?.[0].sessionGeneration;
+			};
 
-			const ctx = vi.mocked(runPipeline).mock.calls.at(-1)?.[0];
-			const handle = ctx?.sessionGeneration;
-			const before = handle?.isCurrent();
+			const sessionOne = await dispatch("export const x = 2;\n");
+			const currentAtDispatch = sessionOne?.isCurrent();
+			// A same-cwd replacement; the next dispatch belongs to session 2.
 			runtime.resetForSession();
+			const sessionTwo = await dispatch("export const x = 3;\n");
 			expect({
-				generation: handle?.generation,
-				currentAtDispatch: before,
-				currentAfterReplacement: handle?.isCurrent(),
+				generation: sessionOne?.generation,
+				currentAtDispatch,
+				currentAfterReplacement: sessionOne?.isCurrent(),
+				sessionTwoCurrent: sessionTwo?.isCurrent(),
 			}).toEqual({
 				generation: dispatchGeneration,
 				currentAtDispatch: true,
 				currentAfterReplacement: false,
+				sessionTwoCurrent: true,
 			});
 		} finally {
 			env.cleanup();
