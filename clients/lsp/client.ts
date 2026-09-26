@@ -1877,16 +1877,27 @@ function countPublication(state: LSPClientState, normalizedPath: string): void {
 /** #3490: opengrep sends `semgrep/rulesRefreshed` once its rules are loaded,
  * then republishes every file it has a scan recorded for (opengrep@1a5fd9d
  * `Scan_helpers.refresh_rules`). That republish answers no send, so take one
- * publication back from every path that already had one this lifetime (any
- * publish means a recorded scan, so the republish will come); the republish
- * then restores the count instead of answering an outstanding send. A path
- * with none yet is left alone: whether the refresh reaches it is not
- * observable, and a publication taken back for good would hold every later
- * late-auxiliary delivery for it. */
+ * publication back from every path that already received one this lifetime
+ * (any publish means a recorded scan, so the republish will come), counted or
+ * still inside the debounce; the republish then restores the count instead of
+ * answering an outstanding send. A path with no receipt yet is left alone:
+ * whether the refresh reaches it is not observable, and a publication taken
+ * back for good would hold every later late-auxiliary delivery for it. The
+ * same harm follows if the refresh scan itself fails and never republishes
+ * (residual). */
 export function rebaselineForRulesRefresh(state: LSPClientState): void {
 	const counts = state.publicationStoreCountsByPath;
 	for (const [normalizedPath, published] of counts) {
 		counts.set(normalizedPath, published - 1);
+	}
+	// A first receipt still in the debounce is counted when it flushes.
+	for (const normalizedPath of state.pendingDiagnostics.keys()) {
+		if (
+			counts.has(normalizedPath) ||
+			publicationCountsForPath(state, normalizedPath).sent === 0
+		)
+			continue;
+		counts.set(normalizedPath, -1);
 	}
 	logLatency({
 		type: "phase",

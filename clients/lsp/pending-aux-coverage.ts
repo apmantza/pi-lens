@@ -128,8 +128,10 @@ export interface PendingAuxCoverageEntry {
  * absorbs a surplus publish while nothing is outstanding, and takes one back
  * per `semgrep/rulesRefreshed` for the refresh republish (#3490). Any other
  * surplus that lands WHILE a send is outstanding still counts toward that
- * send (residual), as does a refresh republish for a path that had no
- * publication yet when the refresh was notified.
+ * send (residual), as does a refresh republish for a path that had received
+ * no publication yet when the refresh was notified. A republish that lands
+ * after the answer to a later send is waited for, and its (possibly older)
+ * content is what the drain then reads (residual, #3490 r1).
  */
 export interface AuxPublicationBacklog {
 	unpublished: number;
