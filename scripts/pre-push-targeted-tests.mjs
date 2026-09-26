@@ -24,7 +24,8 @@
 //
 // Selection is capped at MAX_SELECTED_TESTS: past that, "targeted" has
 // stopped meaning anything cheaper than the full suite, so this degrades to
-// build-only and says so — the "never the full suite" claim holds by
+// the armed governance registries alone (bounded by construction; build-only
+// when none is armed) and says so — the "never the full suite" claim holds by
 // construction, not by hoping the heuristic stays narrow.
 //
 // If nothing matches (docs-only / non-.ts changes, or a changed file with no
@@ -41,7 +42,9 @@ export const MAX_SELECTED_TESTS = 25;
 // Pre-push budget: 120s. Measured on the built tree on 2026-09-25, the ten
 // registry suites took 32.68s (vi-domock-undo, added after, runs in ~3.5s), so
 // a production-file push stays a bounded local convenience; CI is still
-// authoritative. Suites over the budget on their own
+// authoritative. With the flake-shape ratchet, all twelve registry suites ran
+// in 64.91s through this hook on 2026-09-26 (#3492's range, capped selection).
+// Suites over the budget on their own
 // move to CI_ONLY_PRE_PUSH_TESTS below.
 
 // Suites measured to exceed the documented pre-push budget on their own, so
@@ -70,6 +73,20 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/sweep-floor-coverage.test.ts",
 	"tests/config/tracked-control-bytes.test.ts",
 ];
+
+// Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
+// wait, a never-settling promise) instead of importing the changed module, so
+// neither pass above selects them. Armed whenever a pushed change touches the
+// tests tree. #3472's recurrence (#3492, 2026-09-26): a new test's real 60 s
+// setTimeout pushed with the flake-shape ratchet red and failed CI's Unit
+// tests. Measured locally at ~17-23 s alone, inside the 120 s budget.
+export const TEST_TREE_GOVERNANCE_TESTS = [
+	"tests/clients/flake-shape-ratchet.test.ts",
+];
+
+export function changesTestTreeFile(file) {
+	return toPosix(file).startsWith("tests/");
+}
 
 const PRODUCTION_ROOTS = ["clients/", "tools/", "mcp/", "scripts/"];
 
@@ -241,19 +258,24 @@ export function selectTargetedTests(changed, allTests, options = {}) {
 		perFile.set(file, matches);
 	}
 
-	if (changed.some(changesProductionFile)) {
-		const available = new Set(allTests);
-		for (const test of TREE_SCANNING_GOVERNANCE_TESTS) {
-			if (!available.has(test)) continue;
-			if (!perFile.has(test)) perFile.set(test, new Set([test]));
-			else perFile.get(test).add(test);
-		}
-	}
-
-	const selected = new Set();
+	// The heuristic passes above are what the cap bounds. The registries are
+	// bounded by construction (their measured cost is in the budget note), so
+	// they are kept apart and survive a capped selection: a change to a hub
+	// module (clients/lsp/client.ts alone matches 71 test files) otherwise
+	// caps and runs nothing at all (#3492, 2026-09-26).
+	const heuristic = new Set();
 	for (const matches of perFile.values()) {
-		for (const test of matches) selected.add(test);
+		for (const test of matches) heuristic.add(test);
 	}
+	const available = new Set(allTests);
+	const armed = new Set();
+	const arm = (registry) => {
+		for (const test of registry) if (available.has(test)) armed.add(test);
+	};
+	if (changed.some(changesProductionFile)) arm(TREE_SCANNING_GOVERNANCE_TESTS);
+	if (changed.some(changesTestTreeFile)) arm(TEST_TREE_GOVERNANCE_TESTS);
+
+	const selected = new Set([...heuristic, ...armed]);
 
 	// CI-only tier (#3426 H3432-1): remove the suites measured to exceed the
 	// pre-push budget unless the caller is the CI job that owns them. The
@@ -272,10 +294,14 @@ export function selectTargetedTests(changed, allTests, options = {}) {
 		(file) => !file.endsWith(".test.ts") && perFile.get(file).size === 0,
 	);
 	const totalBeforeCap = selected.size;
-	const capped = totalBeforeCap > MAX_SELECTED_TESTS;
+	const capped =
+		[...heuristic].filter((test) => selected.has(test)).length >
+		MAX_SELECTED_TESTS;
 
 	return {
-		selected: capped ? [] : [...selected],
+		selected: capped
+			? [...selected].filter((test) => armed.has(test))
+			: [...selected],
 		unmatched,
 		capped,
 		totalBeforeCap,
@@ -383,16 +409,18 @@ export async function main() {
 
 	if (capped) {
 		console.warn(
-			`[pre-push] selection too broad (${totalBeforeCap} test files matched ${changed.length} changed file(s), over the ${MAX_SELECTED_TESTS}-file cap); rely on CI.`,
+			`[pre-push] selection too broad (${totalBeforeCap} test files matched ${changed.length} changed file(s), over the ${MAX_SELECTED_TESTS}-file cap); rely on CI${selected.length > 0 ? `, running only the ${selected.length} governance registry suite(s)` : ""}.`,
 		);
-		writeSelectionSummary({
-			changedCount: changed.length,
-			selectedCount: 0,
-			totalBeforeCap,
-			status: `cap exceeded (${MAX_SELECTED_TESTS}); build-only`,
-			excludedCiOnly,
-		});
-		return 0;
+		if (selected.length === 0) {
+			writeSelectionSummary({
+				changedCount: changed.length,
+				selectedCount: 0,
+				totalBeforeCap,
+				status: `cap exceeded (${MAX_SELECTED_TESTS}); build-only`,
+				excludedCiOnly,
+			});
+			return 0;
+		}
 	}
 
 	if (selected.length === 0) {
@@ -413,7 +441,9 @@ export async function main() {
 		changedCount: changed.length,
 		selectedCount: selected.length,
 		totalBeforeCap,
-		status: "selected",
+		status: capped
+			? `cap exceeded (${MAX_SELECTED_TESTS}); governance registries only`
+			: "selected",
 		excludedCiOnly,
 	});
 
