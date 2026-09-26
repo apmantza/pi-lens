@@ -998,7 +998,8 @@ export interface LSPClientState {
 	 *  lifetime, capped at its sends. Counted when a receipt is stored
 	 *  (`bumpDiagnosticsVersion`) or superseded unstored (resync clear, debounce
 	 *  replacement), never at raw receipt; not reset by a resync clear; reset on
-	 *  a first open and dropped on close. */
+	 *  a first open and dropped on close; one taken back per
+	 *  `semgrep/rulesRefreshed` (#3490), so an entry can be 0 or below. */
 	readonly publicationStoreCountsByPath: Map<string, number>;
 	readonly documentVersions: Map<string, number>;
 	/** #2113/#2357: latest-pending same-path document sends; different paths stay parallel. */
@@ -1858,9 +1859,10 @@ export function bumpDiagnosticsVersion(
 /** #3482: count one publication for the path: stored, or superseded before it
  * could be (a resync clear, or a newer receipt inside the debounce window).
  * Capped at this lifetime's sends, so a surplus publish while nothing is
- * outstanding (opengrep's empty rule-load answer, republished after
- * `semgrep/rulesRefreshed`) is absorbed instead of shortening every later
- * backlog. Nothing is counted for a path with no send in this lifetime. */
+ * outstanding is absorbed instead of shortening every later backlog; the
+ * republish after `semgrep/rulesRefreshed` is rebaselined instead
+ * ({@link rebaselineForRulesRefresh}). Nothing is counted for a path with no
+ * send in this lifetime. */
 function countPublication(state: LSPClientState, normalizedPath: string): void {
 	const counts = state.publicationStoreCountsByPath;
 	if (!counts) return;
@@ -1870,6 +1872,29 @@ function countPublication(state: LSPClientState, normalizedPath: string): void {
 		normalizedPath,
 		Math.min((counts.get(normalizedPath) ?? 0) + 1, sent),
 	);
+}
+
+/** #3490: opengrep sends `semgrep/rulesRefreshed` once its rules are loaded,
+ * then republishes every file it has a scan recorded for (opengrep@1a5fd9d
+ * `Scan_helpers.refresh_rules`). That republish answers no send, so take one
+ * publication back from every path that already had one this lifetime (any
+ * publish means a recorded scan, so the republish will come); the republish
+ * then restores the count instead of answering an outstanding send. A path
+ * with none yet is left alone: whether the refresh reaches it is not
+ * observable, and a publication taken back for good would hold every later
+ * late-auxiliary delivery for it. */
+export function rebaselineForRulesRefresh(state: LSPClientState): void {
+	const counts = state.publicationStoreCountsByPath;
+	for (const [normalizedPath, published] of counts) {
+		counts.set(normalizedPath, published - 1);
+	}
+	logLatency({
+		type: "phase",
+		phase: "lsp_rules_refreshed",
+		filePath: state.root,
+		durationMs: 0,
+		metadata: { serverId: state.serverId, rebaselinedPaths: counts.size },
+	});
 }
 
 /** #3482: sends and stored publications for a path in its current open
@@ -2890,6 +2915,9 @@ export function setupIncomingHandlers(
 		},
 	);
 	state.connection.onRequest("window/workDoneProgress/create", async () => {});
+	state.connection.onNotification("semgrep/rulesRefreshed", () =>
+		rebaselineForRulesRefresh(state),
+	);
 	// #1669: a server can send `workspace/diagnostic/refresh` (typically after a
 	// project-wide config change) to say every pull result it has already
 	// reported may be stale. Left unhandled, vscode-jsonrpc replies
