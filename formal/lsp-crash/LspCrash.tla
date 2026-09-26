@@ -47,8 +47,12 @@ CONSTANTS
     ClearReadyOnDeath, \* the dead-client branch deletes demonstratedReady/Cold
                        \* (TRUE = code since #3502; FALSE = the pre-#3502 code)
     ColdGuard,      \* a warm-up caches demonstratedCold only while the client it
-                    \* judged is still the registered one (TRUE = code since
-                    \* #3502's verify round 2; FALSE = mutant)
+                    \* judged, or the absence of one, is still what is
+                    \* registered (TRUE = code since #3502's verify round 2;
+                    \* FALSE = mutant)
+    RegClear,       \* registering a client forgets the key's readiness verdicts
+                    \* (TRUE = code since #3502's verify round 3; FALSE = mutant:
+                    \* a no-client cold verdict outlives the first spawn)
     ReadyGuard,     \* a touch marks demonstratedReady only while its client is
                     \* still the registered one (TRUE = code since #3502's review
                     \* round 1; FALSE = mutant: a dead client's late answer marks
@@ -201,7 +205,9 @@ MarkReady(i) ==
 \* the guard is the code's snapshot of the registered client
 \* (`this.state.clients.get(key) === warmedClients[i]`).
 MarkCold(i) ==
-    /\ IF ~ColdGuard \/ (registry # "empty" /\ gen = tg[i])
+    /\ IF \/ ~ColdGuard
+          \/ IF tg[i] = None THEN registry = "empty"
+                             ELSE registry # "empty" /\ gen = tg[i]
          THEN cold' = TRUE /\ coldGen' = tg[i]
          ELSE UNCHANGED <<cold, coldGen>>
     /\ UNCHANGED <<ready, readyGen>>
@@ -240,10 +246,29 @@ Acquire(i) ==
          [] registry = "empty" ->
               /\ IF cooling
                    THEN /\ Unavailable(i) /\ UNCHANGED <<gen, registry, loopRespawns>>
+                        /\ UNCHANGED <<ready, readyGen, cold, coldGen>>
                    ELSE /\ SpawnFor(i, FALSE) /\ UNCHANGED verdict
+                        \* #3502 verify round 3: registration forgets a verdict
+                        \* cached while no client was registered.
+                        /\ IF RegClear
+                             THEN /\ ready' = FALSE /\ readyGen' = None
+                                  /\ cold' = FALSE /\ coldGen' = None
+                             ELSE UNCHANGED <<ready, readyGen, cold, coldGen>>
               /\ UNCHANGED <<rt, uptime, earlyStreak, windowDeaths, permBroken,
-                             cooling, ready, readyGen, cold, coldGen>>
+                             cooling>>
     /\ UNCHANGED <<held, pub, crashes, evicts, skip, wrote, evictUnderLease>>
+
+\* A warm-up that finds no client to ask (the key in its breaker cooldown, a
+\* spawn that fails) fails its verdict for the absence of a client: #799's
+\* negative cache holds the key cold until a client registers.
+WarmupNoClient(i) ==
+    /\ CanStart(i) /\ Kinds[i] = "warmup"
+    /\ registry = "empty" /\ cooling
+    /\ pc' = [pc EXCEPT ![i] = "done"]
+    /\ verdict' = [verdict EXCEPT ![i] = "unavailable"]
+    /\ MarkCold(i)
+    /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
+                   Breaker, tg, skip, wrote, evictUnderLease>>
 
 \* shouldSkipNotify: the entry is within its window with the same fingerprint,
 \* and (#3501, Fix = "bind") it was written by this touch's client instance.
@@ -319,7 +344,7 @@ Gate(i) ==
 Next ==
     \/ Crash \/ Evict \/ CooldownExpire \/ RtExpire
     \/ \E g \in Gens : Publish(g)
-    \/ \E i \in T : Acquire(i) \/ Decide(i) \/ Write(i) \/ Mark(i)
+    \/ \E i \in T : Acquire(i) \/ WarmupNoClient(i) \/ Decide(i) \/ Write(i) \/ Mark(i)
                     \/ Answered(i) \/ TimedOut(i) \/ Gate(i)
 
 Spec == Init /\ [][Next]_vars
@@ -359,8 +384,9 @@ BoundedCrashLoop == loopRespawns < Trip
 \* The key's demonstratedReady claim is about the client now in the registry.
 ReadyIsCurrent == ready => (readyGen = gen /\ registry # "empty")
 
-\* The key's demonstratedCold verdict is about the client now in the registry.
-ColdIsCurrent == cold => (coldGen = gen /\ registry # "empty")
+\* The key's demonstratedCold verdict is about the client now in the registry,
+\* or about the absence of one while none is registered.
+ColdIsCurrent == cold => (registry = "empty" \/ coldGen = gen)
 
 \* Eviction never takes a client out from under an in-flight touch.
 NoEvictUnderLease == ~evictUnderLease

@@ -21,7 +21,10 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   sequential or concurrent: `"S"` is the pipeline's `lsp_sync` touch (no
   diagnostics), `"C"` the dispatch runner's collecting touch, and `"W"`
   `ensureWarmForSweep`'s warm-up touch, whose failed verdict caches the key
-  cold (`demonstratedCold`). Each is:
+  cold (`demonstratedCold`). A warm-up that finds no client to ask (the key
+  in its breaker cooldown) fails for the absence of a client and caches the
+  key cold too (`WarmupNoClient`), #799's negative cache for a server that
+  does not spawn. Each touch is:
   1. Acquire: `getClientForFile` → `ensureClientForServer`, which detects a
      dead client, runs the #1127/#1142 breakers and respawns, then a lease.
   2. Decide: `shouldSkipNotify` reads the `recentTouches` entry for
@@ -49,7 +52,7 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 - `ReadyIsCurrent`: the key's `demonstratedReady` describes the client now in
   the registry.
 - `ColdIsCurrent`: the key's `demonstratedCold` describes the client now in
-  the registry.
+  the registry, or the absence of one while none is registered.
 - `NoEvictUnderLease`: eviction never takes a client out from under an
   in-flight touch.
 
@@ -64,8 +67,13 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   retirement path. `FALSE` is the code before #3502.
 - `ColdGuard`: `TRUE` is the code since #3502's verify round 2: a failed
   warm-up caches the key cold only while the client it judged is still the
-  registered one. `FALSE` is the mutant where the replacement is cached cold
-  for its predecessor's failure.
+  registered one (for a no-client verdict: while none is registered). `FALSE`
+  is the mutant where the replacement is cached cold for its predecessor's
+  failure.
+- `RegClear`: `TRUE` is the code since #3502's verify round 3: registering a
+  client forgets the key's readiness verdicts, so a cold verdict cached while
+  no client existed does not pass to the first client that spawns. `FALSE` is
+  that mutant.
 - `ReadyGuard`: `TRUE` is the code since #3502's review round 1: a touch
   marks `demonstratedReady` only while its client is still the registered
   one. `FALSE` is the mutant where a dead client's late answer marks the key
@@ -104,8 +112,10 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 | `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 107 | 2.4 |
 | `CrashReadyConcurrent` (code, #3502 round 1) | pass | pass | 2289 | 3.4 |
 | `MutCrashReadyConcurrentNoGuard` (the ready mark without its guard) | violated `ReadyIsCurrent` | violated | 829 | 2.4 |
-| `WarmupColdConcurrent` (code, #3502 verify round 2) | pass | pass | 2289 | 2.7 |
-| `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 729 | 2.4 |
+| `WarmupColdConcurrent` (code, #3502 verify round 2) | pass | pass | 2291 | 2.2 |
+| `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 730 | 2.1 |
+| `WarmupColdNoClient` (code, #3502 verify round 3) | pass | pass | 249 | 1.7 |
+| `MutWarmupColdNoRegClear` (registration keeps the no-client verdict) | violated `ColdIsCurrent` | violated | 66 | 2.6 |
 
 State counts of a violated config vary between runs: TLC stops at the first
 counterexample its workers reach.
@@ -132,6 +142,11 @@ counterexample its workers reach.
   key; the warm-up then caches the key cold, and B is skipped from the cache
   on every later sweep. Since #3502's verify round 2 the cache is taken only
   for the client the warm-up judged.
+- **`MutWarmupColdNoRegClear`**: a warm-up finds the key in its breaker
+  cooldown and caches it cold with no client; after the cooldown a touch
+  spawns a client, which keeps the cached verdict and is skipped from the
+  cache without a warm-up. Since #3502's verify round 3 registration forgets
+  it (`WarmupColdNoClient` passes).
 
 ## Decisions the model backs
 
@@ -170,6 +185,10 @@ The throwaway replays became the regression tests:
 
 Not modelled:
 - one file, one server key, primary scope only;
+- the warm-up's retry: a `"W"` touch is one attempt, and its verdict is that
+  attempt's (the code snapshots the registered client after attempt 1 and
+  checks it after the retry). The no-client verdict is reached only from the
+  breaker cooldown, not from a spawn that throws;
 - time (the debounce window and the breaker windows are over-approximated);
 - the TypeScript sync confirm (#707). It asked the registry's client for the
   file rather than the touch's own client. After a crash in the middle of the
