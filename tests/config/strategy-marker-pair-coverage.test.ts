@@ -46,6 +46,7 @@ export const BEHAVIOUR_MARKERS = [
 	"diagnosticsFence",
 	"emptyFirstPublish",
 	"reopenOnResync",
+	"rescansOnSave",
 	"silentOnClean",
 	"workspaceIndexing",
 ] as const satisfies readonly (keyof DiagnosticStrategy)[];
@@ -63,6 +64,11 @@ const PAIR_TESTS: Record<string, PairTest> = {
 		file: "tests/clients/lsp/diagnostics-fence.test.ts",
 		title:
 			"a fence-dropped $shape on the indexing server leaves the hold spent=$spent",
+	},
+	"opengrep:reopenOnResync+rescansOnSave": {
+		file: "tests/clients/lsp/late-auxiliary-findings.test.ts",
+		title:
+			"REPLAY-SAVE-RESCAN: opengrep's didSave rescan of v1 cannot answer v2's send, so v1 is withheld after a re-touch (#3482 surplus)",
 	},
 };
 

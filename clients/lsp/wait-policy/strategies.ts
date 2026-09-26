@@ -96,6 +96,11 @@ export interface DiagnosticStrategy {
 	 *  that only re-scan on a fresh open — e.g. opengrep ignores didChange, so an
 	 *  incremental sync silently yields zero findings on every edit-after-first. */
 	reopenOnResync?: boolean;
+	/** #3482: `textDocument/didSave` makes this server scan the document again
+	 *  and publish once more, an answer to no send (opengrep@1a5fd9d
+	 *  `Notification_handler.on_notification`: `DidSaveTextDocument` ->
+	 *  `Scan_helpers.scan_file`). The client expects that publication. */
+	rescansOnSave?: boolean;
 	/**
 	 * Tier-3 marker (#458): true only for a `mode: "push-only"` server that is
 	 * known to publish NOTHING on a clean→clean transition (silent on clean —
@@ -307,6 +312,7 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			expectSemanticSecondPush: false,
 			// Opengrep re-scans only on a fresh didOpen — didChange is a no-op for it.
 			reopenOnResync: true,
+			rescansOnSave: true,
 		},
 		// ast-grep structural linter (sgconfig-gated auxiliary LSP). Push-only,
 		// compiles the project rules on the first scan of a session, and — like

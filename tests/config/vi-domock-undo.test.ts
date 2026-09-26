@@ -25,6 +25,7 @@ import {
 	codeMatches,
 	listSourceFiles,
 	relativePosix,
+	stripSource,
 } from "../support/sweep-kit.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -36,15 +37,29 @@ const DO_UNMOCK = /\bvi\.doUnmock\(\s*(["'`])([^"'`]+)\1/g;
 // `test.skip(`), each counted once.
 const TEST_CALL = /\b(?:it|test)(?:\s*\.\s*[A-Za-z]+(?:\s*\([^()]*\))?)*\s*\(/g;
 
-function specifiers(source: string, pattern: RegExp): Set<string> {
-	return new Set(codeMatches(source, pattern).map((match) => match[2]));
+function specifiers(
+	source: string,
+	pattern: RegExp,
+	stripped?: string,
+): Set<string> {
+	return new Set(
+		codeMatches(source, pattern, stripped).map((match) => match[2]),
+	);
 }
 
-/** The `vi.doMock` specifiers a multi-test file never undoes. */
-export function unUndoneDoMocks(source: string): string[] {
-	if (codeMatches(source, TEST_CALL).length < 2) return [];
-	const undone = specifiers(source, DO_UNMOCK);
-	return [...specifiers(source, DO_MOCK)]
+/**
+ * The `vi.doMock` specifiers a multi-test file never undoes.
+ *
+ * `stripped`, when given, must be `stripSource(source)` (#3514) — the same
+ * precomputed-work shape `codeMatches` itself takes, so a caller matching one
+ * file against this and the sibling `DO_MOCK` count below pays `stripSource`
+ * once, not once per regex. Omitted, this recomputes it, so the standalone
+ * `unUndoneDoMocks(source)` unit tests below are unaffected.
+ */
+export function unUndoneDoMocks(source: string, stripped?: string): string[] {
+	if (codeMatches(source, TEST_CALL, stripped).length < 2) return [];
+	const undone = specifiers(source, DO_UNMOCK, stripped);
+	return [...specifiers(source, DO_MOCK, stripped)]
 		.filter((spec) => !undone.has(spec))
 		.sort();
 }
@@ -61,14 +76,23 @@ function scanTree(): { flagged: string[]; filesWithDoMock: number } {
 		const file = relativePosix(ROOT, absolute);
 		if (file.includes("/fixtures/")) continue;
 		const source = readFileSync(absolute, "utf8");
-		if (codeMatches(source, DO_MOCK).length > 0) filesWithDoMock++;
-		for (const spec of unUndoneDoMocks(source))
+		// #3514: one `stripSource` pass per file, shared by the three regex
+		// matches below (TEST_CALL, DO_MOCK, DO_UNMOCK) instead of the four
+		// `codeMatches` calls each redoing it. Measured: 1212 files, match time
+		// ~5.0s unshared vs ~1.3s shared (see PR body).
+		const stripped = stripSource(source);
+		if (codeMatches(source, DO_MOCK, stripped).length > 0) filesWithDoMock++;
+		for (const spec of unUndoneDoMocks(source, stripped))
 			flagged.push(`${file}::${spec}`);
 	}
 	return { flagged: flagged.sort(), filesWithDoMock };
 }
 
 describe("vi.doMock is undone in multi-test files (#2883)", () => {
+	// Whole-tree walk + parse (#3514): times out under load at the 5s default
+	// (measured 9.9s at load average ~18, run 2026-09-26). Explicit budget
+	// sized from a loaded replay after the stripSource sharing above; see the
+	// PR body's before/after numbers.
 	it("flags no vi.doMock specifier a multi-test file never undoes", () => {
 		const { flagged, filesWithDoMock } = scanTree();
 		// Dead-sweep floor (AGENTS.md shape 10); see FLOOR.
@@ -79,7 +103,7 @@ describe("vi.doMock is undone in multi-test files (#2883)", () => {
 				"`vi.doUnmock(<same specifier>)` to the file's afterEach (vi.resetModules " +
 				"does not clear the mock registry).",
 		).toEqual([]);
-	});
+	}, 30_000);
 });
 
 describe("the doMock-undo matcher", () => {

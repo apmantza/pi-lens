@@ -26,6 +26,19 @@
 (*    after it lands first only with RefreshOvertake. It carries the      *)
 (*    newest version sent before the notification (opengrep reads the    *)
 (*    disk; not modelled);                                                *)
+(*  - opengrep's save rescan (#3482, opengrep@1a5fd9d                      *)
+(*    Notification_handler: DidSaveTextDocument -> scan_file). A touch    *)
+(*    that is a save (#3405, `saved: true`) sends the content, then        *)
+(*    didSave, so opengrep scans and publishes twice. The client expects  *)
+(*    SaveExpect publications per save beyond the send;                   *)
+(*  - a close and a fresh reopen (#3477: a rename away and back). Close    *)
+(*    ends the open lifetime (client.ts closeDocumentOnce) and clears the  *)
+(*    entry; scans still queued publish anyway. While the path is closed   *)
+(*    they are dropped (the closedDocuments return); after the reopen they *)
+(*    are stored. Before the fix (Carry = "none") the counts restart at    *)
+(*    the reopen, so they count toward the new lifetime. The fix           *)
+(*    ("span"): the counts span the close, and a publish dropped while     *)
+(*    closed is counted;                                                   *)
 (*  - the turn_end drain (runtime-turn.ts ~3895-4220):                     *)
 (*      DrainStart   drainPendingAuxiliaryCoverage (sync)                  *)
 (*      DrainRead    await readCachedDiagnosticsForServers, then the sync  *)
@@ -63,8 +76,16 @@ CONSTANTS
                       \* answer ("answered") or while it is in flight
     RefreshRebaseline,\* #3490: the notification takes one publication back
                       \* from a path that already had one
-    RefreshOvertake   \* #3490 r1 F2: the answer to a send made after the
+    RefreshOvertake,  \* #3490 r1 F2: the answer to a send made after the
                       \* notification may land before the refresh republish
+    AllowSave,        \* an agent touch may be a save (didSave after the send)
+    SaveExpect,       \* publications expected per save beyond its send:
+                      \* 0 before the #3482 surplus fix, 1 the fix, 2 a mutant
+    Closes,           \* close-and-reopen cycles
+    Carry             \* "none": counts restart at a fresh open (before the
+                      \* fix); "span": they span the close, and a publish
+                      \* dropped while closed counts; "spanNoDrop": a mutant
+                      \* that does not count the dropped publish
 
 None == [none |-> TRUE]
 
@@ -93,15 +114,18 @@ VARIABLES
     drain,       \* "idle" | "read" | "observe"
     pair,        \* the drained pair
     snap,        \* the cache entry readCachedDiagnosticsForServers returned
-    delivered    \* set of [ver, disk]: findings delivered, disk at the gate
+    delivered,   \* set of [ver, disk]: findings delivered, disk at the gate
+    closed,      \* the path is closed on the client
+    closesLeft
 
 vars == <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
           touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap, delivered,
-          sentCount, bound, lastSent, refresh, surplus, preN>>
+          sentCount, bound, lastSent, refresh, surplus, preN, closed, closesLeft>>
 
 refreshVars == <<refresh, surplus, preN>>
+lifeVars == <<closed, closesLeft>>
 
-\* countPublication: one more publication, capped at the lifetime's sends.
+\* countPublication: one more publication, capped at the expected ones.
 Counted(b) == IF b + 1 > sentCount THEN sentCount ELSE b + 1
 
 Init ==
@@ -117,6 +141,7 @@ Init ==
     /\ pubCount = 0 /\ cache = None
     /\ pending = None /\ drain = "idle" /\ pair = None /\ snap = None
     /\ delivered = {}
+    /\ closed = FALSE /\ closesLeft = Closes
 
 -----------------------------------------------------------------------------
 \* Agent edit + touch notify. The write and the notify are one step: the
@@ -126,17 +151,43 @@ AgentTouch ==
     /\ touchesLeft' = touchesLeft - 1
     /\ disk' = disk + 1 /\ clock' = clock + 1 /\ mtime' = clock + 1
     /\ touch' = "grace" /\ touchBase' = pubCount /\ touchAt' = clock + 1
-    /\ \/ \* sent: clearDiagnosticsForPath, then didChange / reopen
+    /\ \/ \* sent: clearDiagnosticsForPath, then didChange / reopen, or the
+          \* fresh didOpen of a closed path (a new lifetime). A save then
+          \* sends didSave, and opengrep scans the touch's content again.
+          \E save \in IF AllowSave THEN BOOLEAN ELSE {FALSE} :
           /\ touchVer' = disk + 1
-          /\ sent' = Append(sent, disk + 1)
-          /\ sentCount' = sentCount + 1 /\ lastSent' = disk + 1
+          /\ sent' = IF save THEN Append(Append(sent, disk + 1), disk + 1)
+                              ELSE Append(sent, disk + 1)
+          /\ sentCount' = (IF closed /\ Carry = "none" THEN 1 ELSE sentCount + 1)
+                           + (IF save THEN SaveExpect ELSE 0)
+          /\ bound' = IF closed /\ Carry = "none" THEN 0 ELSE bound
+          /\ closed' = FALSE
+          /\ lastSent' = disk + 1
           /\ cache' = None
        \/ \* #1459 deferred: never sent, never cleared, never marked
           /\ AllowDefer
           /\ touchVer' = 0
-          /\ UNCHANGED <<sent, sentCount, lastSent, cache>>
+          /\ UNCHANGED <<sent, sentCount, lastSent, cache, bound, closed>>
     /\ UNCHANGED <<extLeft, drainsLeft, pubCount, pending, drain, pair, snap, delivered,
-                   bound, refreshVars>>
+                   refreshVars, closesLeft>>
+
+\* The path is closed (#3477: a rename away) and its entry cleared. Before
+\* the fix the lifetime's sends and counts are dropped. Its queued scans
+\* still publish.
+Close ==
+    /\ closesLeft > 0 /\ ~closed /\ touch = "idle" /\ drain = "idle"
+    /\ closesLeft' = closesLeft - 1 /\ closed' = TRUE
+    /\ sentCount' = IF Carry = "none" THEN 0 ELSE sentCount
+    /\ bound' = IF Carry = "none" THEN 0 ELSE bound
+    /\ cache' = None
+    /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
+                   touchBase, touchAt, sent, pubCount, pending, drain, pair, snap,
+                   delivered, lastSent, refreshVars>>
+
+\* A publish for a closed path: dropped unstored; with the fix, counted.
+DroppedWhileClosed ==
+    /\ bound' = IF Carry = "span" THEN Counted(bound) ELSE bound
+    /\ UNCHANGED <<clock, cache, pubCount>>
 
 \* Aux-grace outcome and mark: evidence check, filter and mark run in one
 \* continuation (index.ts ~5920-6030), so one step.
@@ -151,7 +202,7 @@ GraceEnd ==
                              need |-> sentCount - bound, seq |-> bound]
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touchVer, touchBase, touchAt,
                    sent, pubCount, cache, drain, pair, snap, delivered,
-                   sentCount, bound, lastSent, refreshVars>>
+                   sentCount, bound, lastSent, refreshVars, lifeVars>>
 
 ExternalEdit ==
     /\ extLeft > 0
@@ -160,21 +211,24 @@ ExternalEdit ==
     /\ disk' = disk + 1 /\ clock' = clock + 1 /\ mtime' = clock + 1
     /\ UNCHANGED <<touchesLeft, drainsLeft, touch, touchVer, touchBase, touchAt, sent,
                    pubCount, cache, pending, drain, pair, snap, delivered,
-                   sentCount, bound, lastSent, refreshVars>>
+                   sentCount, bound, lastSent, refreshVars, lifeVars>>
 
-\* The scanner finishes the oldest outstanding scan; the client stores it.
+\* The scanner finishes the oldest outstanding scan; the client stores it,
+\* or drops it while the path is closed.
 Publish ==
     /\ sent /= << >>
     /\ surplus = 0 \/ preN > 0 \/ RefreshOvertake \* else a later send waits
-    /\ clock' = clock + 1
-    /\ cache' = [ver |-> Head(sent), ts |-> clock + 1]
-    /\ pubCount' = pubCount + 1
-    /\ bound' = Counted(bound)
     /\ sent' = Tail(sent)
     /\ preN' = IF preN > 0 THEN preN - 1 ELSE 0
+    /\ IF closed
+         THEN DroppedWhileClosed
+         ELSE /\ clock' = clock + 1
+              /\ cache' = [ver |-> Head(sent), ts |-> clock + 1]
+              /\ pubCount' = pubCount + 1
+              /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent, refresh, surplus>>
+                   sentCount, lastSent, refresh, surplus, closed, closesLeft>>
 
 CancelSuperseded ==
     /\ AllowCancel /\ Len(sent) > 1
@@ -182,7 +236,7 @@ CancelSuperseded ==
     /\ preN' = IF preN > 0 THEN preN - 1 ELSE 0
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch,
                    touchVer, touchBase, touchAt, pubCount, cache, pending, drain, pair, snap, delivered,
-                   sentCount, bound, lastSent, refresh, surplus>>
+                   sentCount, bound, lastSent, refresh, surplus, lifeVars>>
 
 \* semgrep/rulesRefreshed arrives. RefreshRebaseline is #3490's
 \* rebaselineForRulesRefresh: a path with a count entry (one publication
@@ -195,19 +249,22 @@ RulesRefreshed ==
     /\ bound' = IF RefreshRebaseline /\ bound >= 1 THEN bound - 1 ELSE bound
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap,
-                   delivered, sentCount, lastSent>>
+                   delivered, sentCount, lastSent, lifeVars>>
 
-\* The refresh republish: stored and counted like any version-less publish.
+\* The refresh republish: stored and counted like any version-less publish,
+\* or dropped while the path is closed.
 SurplusPublish ==
     /\ refresh = "notified"
     /\ refresh' = "done" /\ surplus' = 0 /\ preN' = 0
-    /\ clock' = clock + 1
-    /\ cache' = [ver |-> surplus, ts |-> clock + 1]
-    /\ pubCount' = pubCount + 1
-    /\ bound' = Counted(bound)
+    /\ IF closed
+         THEN DroppedWhileClosed
+         ELSE /\ clock' = clock + 1
+              /\ cache' = [ver |-> surplus, ts |-> clock + 1]
+              /\ pubCount' = pubCount + 1
+              /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent>>
+                   sentCount, lastSent, closed, closesLeft>>
 
 -----------------------------------------------------------------------------
 \* rearmPendingAuxiliaryCoverage; past the ceiling the pair drops.
@@ -224,7 +281,7 @@ DrainStart ==
     /\ pair' = pending /\ pending' = None /\ drain' = "read"
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, touch, touchVer,
                    touchBase, touchAt, sent, pubCount, cache, snap, delivered,
-                   sentCount, bound, lastSent, refreshVars>>
+                   sentCount, bound, lastSent, refreshVars, lifeVars>>
 
 \* readCachedDiagnosticsForServers resolves with the cached entry, then the
 \* synchronous freshness check.
@@ -239,7 +296,7 @@ DrainRead ==
             ELSE /\ drain' = "observe" /\ UNCHANGED pending
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch,
                    touchVer, touchBase, touchAt, sent, pubCount, cache, pair, delivered,
-                   sentCount, bound, lastSent, refreshVars>>
+                   sentCount, bound, lastSent, refreshVars, lifeVars>>
 
 \* After `await bounded(observeLateAuxiliaryAnswer)`: read + stat + deliver,
 \* all synchronous.
@@ -254,9 +311,9 @@ DrainGate ==
               /\ UNCHANGED <<pending, clock>>
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pubCount, cache, pair, snap,
-                   sentCount, bound, lastSent, refreshVars>>
+                   sentCount, bound, lastSent, refreshVars, lifeVars>>
 
-Next == AgentTouch \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSuperseded
+Next == AgentTouch \/ Close \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSuperseded
         \/ RulesRefreshed \/ SurplusPublish
         \/ DrainStart \/ DrainRead \/ DrainGate
 
@@ -267,6 +324,18 @@ Spec == Init /\ [][Next]_vars
 \* cannot resurrect stale data". Findings delivered were computed on the
 \* content that was on disk when the drain checked it.
 NoStaleFindings == \A d \in delivered : d.ver = d.disk
+
+\* The no-drop direction (AGENTS.md shape 54): the backlog binding never
+\* withholds the current answer once it is stored and no publication of the
+\* current content is still to come. Such a wait lasts until the rearm
+\* ceiling drops the pair, or ends on an older publish that lands later
+\* (the #3490 r1 F2 trade), so it drops the answer.
+FreshDue == \/ \E i \in 1..Len(sent) : sent[i] = disk
+            \/ refresh = "notified" /\ surplus = disk
+NoFreshWithheld ==
+    (/\ drain = "read" /\ cache /= None /\ cache.ver = disk
+     /\ cache.ts > pair.marked /\ ~FreshDue)
+        => ~(CountBind /\ bound - pair.seq < pair.need)
 
 \* Sanity: the drain can deliver at all (checked as a violated "invariant").
 NeverDelivers == delivered = {}

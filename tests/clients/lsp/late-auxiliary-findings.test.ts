@@ -1245,12 +1245,12 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 			// A resync clears the cache but not the count.
 			await handleNotifyOpen(scanner.state, file, "b", "ts", false, true);
 			expect(counts(file)).toEqual({ sent: 2, published: 1 });
-			// A receipt still pending at close is not counted into a map entry
-			// that would outlive the document.
+			// #3482 lifetime: the counts span a close, and a receipt still pending
+			// at close answered its send, so it counts.
 			scanner.receive(file, [diag(0, "at close")]);
 			await closeDocument(scanner.state, file);
-			expect(counts(file)).toEqual({ sent: 0, published: 0 });
-			expect(scanner.state.publicationStoreCountsByPath.has(key)).toBe(false);
+			expect(counts(file)).toEqual({ sent: 2, published: 2 });
+			expect(scanner.state.publicationStoreCountsByPath.has(key)).toBe(true);
 
 			// The didChange fallback open starts a lifetime too.
 			scanner.receive(other, []);
@@ -1268,9 +1268,18 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		file: string,
 		content: string,
 		notifiedAtMs: number,
+		saved = false,
 	): Promise<void> {
 		writeAt(file, content, notifiedAtMs);
-		await handleNotifyOpen(scanner.state, file, content, "ts", false, true);
+		await handleNotifyOpen(
+			scanner.state,
+			file,
+			content,
+			"ts",
+			false,
+			true,
+			saved,
+		);
 		markPendingAuxiliaryCoverage(
 			file,
 			["opengrep"],
@@ -1585,6 +1594,184 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		scanner.publish(unanswered, [diag(0, "first answer")]);
 		expect(counts(answered)).toEqual({ sent: 1, published: 1 });
 		expect(counts(unanswered)).toEqual({ sent: 1, published: 1 });
+	});
+
+	/**
+	 * #3482's surplus publishes that pi-lens itself triggers, read from
+	 * opengrep@1a5fd9d `Notification_handler.on_notification`: a didSave runs
+	 * `scan_file` again, and a scan queued before a close publishes after it.
+	 * v0 is open and answered in each replay.
+	 */
+	async function surplusReplay(
+		prefix: string,
+		body: (ctx: {
+			scanner: ReturnType<typeof armOpengrep>;
+			file: string;
+			turn: () => Promise<{ content: string; metadata: any }>;
+		}) => Promise<void>,
+	): Promise<void> {
+		const env = setupTestEnvironment(`pi-lens-late-aux-${prefix}-`) as any;
+		const sessionId = `late-aux-${prefix}`;
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			// opengrep declares `save: true` (opengrep@1a5fd9d LS.ml).
+			scanner.state.saveOptions = { includeText: false };
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			const v0 = "export const v = 0;\n";
+			writeAt(file, v0, Date.now() - 30_000);
+			await handleNotifyOpen(scanner.state, file, v0, "ts", false, true);
+			scanner.publish(file, []);
+			await body({
+				scanner,
+				file,
+				turn: () => turnEnd(runtime, cacheManager, env.tmpDir, sessionId, file),
+			});
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	const didSaves = (scanner: ReturnType<typeof armOpengrep>) =>
+		vi
+			.mocked(scanner.state.connection.sendNotification)
+			.mock.calls.filter(([method]) => method === "textDocument/didSave")
+			.length;
+
+	it("REPLAY-SAVE-RESCAN: opengrep's didSave rescan of v1 cannot answer v2's send, so v1 is withheld after a re-touch (#3482 surplus)", async () => {
+		await surplusReplay("save-rescan", async ({ scanner, file, turn }) => {
+			// Touch 1 is a save (#3405, lsp_diagnostics): opengrep scans v1 on
+			// the reopen and again on didSave.
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000, true);
+			expect(didSaves(scanner)).toBe(1);
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// v1's save rescan lands after touch 2's send.
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+
+			const first = await turn();
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 0, backlogPending: 1 });
+
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+			expect((await turn()).content).toContain("V2 finding on line 1");
+		});
+	});
+
+	it("REPLAY-SAVE-RESCAN-THEN-ANSWER: after a save's two publications, the next answer still counts and is delivered (#3482 surplus inverse)", async () => {
+		await surplusReplay("save-answer", async ({ scanner, file, turn }) => {
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000, true);
+			scanner.publish(file, [diag(0, "V1 open scan")]);
+			scanner.publish(file, [diag(0, "V1 save rescan")]);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+
+			const first = await turn();
+			expect(first.content).toContain("V2 finding on line 1");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		});
+	});
+
+	it("SAVE-RESCAN-EXPECTED: a save adds one expected publication on a rescansOnSave server only, the held-document save included (#3482 surplus)", async () => {
+		const scanner = armOpengrep("/project");
+		scanner.state.saveOptions = { includeText: false };
+		const file = "/project/src/saved.ts";
+		const counts = () =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(file));
+		await handleNotifyOpen(scanner.state, file, "a", "ts", false, true, true);
+		expect(counts()).toEqual({ sent: 2, published: 0 });
+		// #3481: an entry read before the content last sent is dropped, and its
+		// save goes out for the document the server holds.
+		await handleNotifyOpen(
+			scanner.state,
+			file,
+			"c",
+			"ts",
+			false,
+			true,
+			false,
+			2,
+		);
+		await handleNotifyOpen(
+			scanner.state,
+			file,
+			"b",
+			"ts",
+			false,
+			true,
+			true,
+			1,
+		);
+		expect(didSaves(scanner)).toBe(2);
+		expect(counts()).toEqual({ sent: 4, published: 0 });
+
+		// ast-grep declares no rescan on save: its didSave expects nothing.
+		const other = armOpengrep("/project", "ast-grep");
+		other.state.saveOptions = { includeText: false };
+		await handleNotifyOpen(other.state, file, "a", "ts", false, true, true);
+		expect(didSaves(other)).toBe(1);
+		expect(
+			publicationCountsForPath(other.state, normalizeMapKey(file)),
+		).toEqual({ sent: 1, published: 0 });
+	});
+
+	it("REPLAY-REOPEN-INFLIGHT: a scan queued before a close cannot answer the reopened file's send (#3482 lifetime)", async () => {
+		await surplusReplay("reopen-inflight", async ({ scanner, file, turn }) => {
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			// #3477: renamed away while v1's scan runs, then back with v2 (a fresh
+			// didOpen, a new open lifetime).
+			await closeDocument(scanner.state, file);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+
+			const first = await turn();
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 0, backlogPending: 1 });
+
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+			expect((await turn()).content).toContain("V2 finding on line 1");
+		});
+	});
+
+	it("REPLAY-REOPEN-DROPPED-WHILE-CLOSED: a scan that publishes while the path is closed still counts, so the reopened file's answer is delivered (#3482 lifetime inverse)", async () => {
+		await surplusReplay("reopen-dropped", async ({ scanner, file, turn }) => {
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await closeDocument(scanner.state, file);
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+			expect(scanner.state.pushDiagnostics.has(normalizeMapKey(file))).toBe(
+				false,
+			);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+
+			const first = await turn();
+			expect(first.content).toContain("V2 finding on line 1");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		});
+	});
+
+	it("REPLAY-RULES-REFRESHED-ACROSS-REOPEN: the refresh take-back survives a close and reopen, so the republish cannot answer the reopened file's send (#3482 lifetime, #3513 residual 4)", async () => {
+		await surplusReplay("refresh-reopen", async ({ scanner, file, turn }) => {
+			scanner.rulesRefreshed();
+			await closeDocument(scanner.state, file);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// The refresh republish for v0 lands after the reopen.
+			scanner.publish(file, [diag(11, "V0 REPUBLISH finding on line 12")]);
+
+			const first = await turn();
+			expect(first.content).not.toContain("V0 REPUBLISH");
+			expect(first.metadata).toMatchObject({ delivered: 0, backlogPending: 1 });
+
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+			expect((await turn()).content).toContain("V2 finding on line 1");
+		});
 	});
 
 	it("REPLAY-RESYNC-DROPS-PENDING-RECEIPT: a receipt the resync clear drops still counts, so v2 is delivered (#3482 r1 F2)", async () => {

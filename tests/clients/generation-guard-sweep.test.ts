@@ -80,7 +80,7 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 		"the warm word-index idle eviction captures a per-entry generation before its timer fires and re-checks it in the callback, alongside an entry-identity compare. The eviction direction again, on a per-entry counter rather than a keyed map; a migration candidate once GenerationMap gains an entry-scoped form",
 
 	"observed-mutation.ts":
-		"the settle rejects a baseline whose sessionGeneration no longer matches the one the tool_result carries. This IS the capture-before/check-after shape, but the counter is RuntimeCoordinator.sessionGeneration — captured at tool_call, handed back at tool_result, and owned by runtime-coordinator.ts, whose own migration is deferred above. Declaring a GenerationSource here would mint a SECOND counter mirroring the session's, which is the single-source-of-truth defect the ratchet exists to prevent; this file migrates when runtime-coordinator.ts exposes its source as one",
+		"the settle rejects a baseline whose sessionGeneration no longer matches the one the tool_result carries. This IS the capture-before/check-after shape, but the counter is RuntimeCoordinator.sessionGeneration — captured at tool_call, handed back at tool_result, and owned by runtime-coordinator.ts, whose own migration is deferred above. Declaring a GenerationSource here would mint a SECOND counter mirroring the session's, which is the single-source-of-truth defect the ratchet exists to prevent. Since #3499 that counter IS a GenerationSource (RuntimeCoordinator.captureSessionGeneration), but this file carries the captured value as a plain number on the pending baseline across tool_call -> tool_result and compares it there; moving that record to a handle is its own migration, not yet filed",
 
 	// --- Not the shape: a generation is compared, but no post-await write
 	// hangs on the answer. ---
@@ -104,6 +104,8 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 	// --- Permanent: migrating would be circular. ---
 	"single-flight.ts":
 		"the #1753 singleFlight primitive OWNS its generation compare. It is GenerationGuard's sibling, not its caller: routing singleFlight's own share-branch check through GenerationGuard would make two primitives depend on each other for the property each exists to provide. Permanent, not backlog. Listed at FILE level so it survives #1762's restructuring of that comparison",
+	"generation-lock.ts":
+		"#3515's ownsTopGeneration compares a directory LISTING (topGeneration(entries)) against the held file generation number — a cross-process, filesystem-backed generation the bounded/quarantine/installer locks share, not an in-process value createGenerationSource/createGenerationMap could hold instead. generation-lock.ts is GenerationGuard's peer primitive for cross-process mutual exclusion, not one of its callers, the same circularity single-flight.ts states above. Permanent, not backlog.",
 };
 
 // The identifier must END at the generation-named word. Letting the match run
