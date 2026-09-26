@@ -379,33 +379,6 @@ function newestReadOrder(run: Run): string[] {
 }
 
 /**
- * Finding F2, #3544: a stale read displaces an unstamped touch. An unstamped
- * entry replacing a pending stale read inherits its stamp, and a stale read
- * replacing a pending unstamped entry takes its place; either way the runner
- * then drops the entry and the unstamped content is never sent. The server
- * keeps what it had, so the carve-out never covers a server that holds a
- * stale read itself (that is #3481, or the #3481 round-1 stamp drop).
- * Carved out of `newestReadHeld` only; the replay below fails until #3544 is
- * fixed, and this predicate goes with the fix.
- */
-function staleReadDisplacesUnstamped(
-	segment: readonly Touch[],
-	newest: Touch,
-	expected: Touch,
-	held: Touch | undefined,
-): boolean {
-	const isStale = (t: Touch) =>
-		t.stamp !== undefined &&
-		t.stamp < newest.stamp! &&
-		t.issuedAt > newest.issuedAt;
-	return (
-		expected.stamp === undefined &&
-		segment.some(isStale) &&
-		!(held !== undefined && isStale(held))
-	);
-}
-
-/**
  * #3481, no-drop: at quiescence the server holds the newest read, or an
  * unstamped touch issued after it. "Newest" spans every read since the server
  * last dropped the document (a delivered didClose), except reads refused while
@@ -453,9 +426,6 @@ function newestReadHeld(run: Run): string[] {
 		b.issuedAt > a.issuedAt ? b : a,
 	);
 	const doc = serverDoc(run.wire);
-	const held = doc.open ? touchOf(run, doc.content) : undefined;
-	if (newest && staleReadDisplacesUnstamped(segment, newest, expected, held))
-		return [];
 	if (!doc.open) return [`server holds nothing; expected ${expected.content}`];
 	if (doc.content !== expected.content)
 		return [`server holds ${doc.content}; expected ${expected.content}`];
@@ -580,23 +550,11 @@ function saveSurvives(run: Run): string[] {
 }
 
 /**
- * Finding F1, #3543: on a dead client a touch resolves `true` without
- * sending — `handleNotifyOpen`/`handleNotifyChange` return `true` up front,
- * and a queued entry whose run finds the client dead returns `undefined`,
- * which the runner reads as sent. Teardown's own cancel resolves `false` for
- * the same "never sent" state (#3481 round 1). Carved out of `waiterTruth`
- * only; the replay below fails until #3543 is fixed, and this predicate goes
- * with the fix.
- */
-function deadClientResolvesTrue(run: Run, t: Touch): boolean {
-	return run.diedAt !== undefined && run.diedAt < (t.settledAt ?? 0);
-}
-
-/**
  * Every waiter's result: `true` whenever its content reached the server, and
  * `true` otherwise only when a touch issued after it reached the server (a
  * superseded caller waits on its replacement, #2113). A stale read is issued
- * after the entry that keeps it out, so it has no such replacement.
+ * after the entry that keeps it out, so it has no such replacement. A dead
+ * client sends nothing, so its touches resolve `false` (#3543).
  */
 function waiterTruth(run: Run): string[] {
 	const out: string[] = [];
@@ -611,7 +569,7 @@ function waiterTruth(run: Run): string[] {
 		const replaced = delivered.some(
 			(m) => (touchOf(run, m.text)?.issuedAt ?? -1) > t.issuedAt,
 		);
-		if (!replaced && !deadClientResolvesTrue(run, t))
+		if (!replaced)
 			out.push(
 				`${t.content} resolved true, but neither it nor a newer touch was sent`,
 			);
@@ -669,13 +627,14 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 	);
 
 	/**
-	 * Findings on master, each replayed over every ordering of its shrunk
-	 * counterexample's commands. `it.fails`: green while the finding stands; a
-	 * fix turns it red. Each is carved out of the property above by a named
-	 * predicate (`deadClientResolvesTrue` #3543, `staleReadDisplacesUnstamped`
-	 * #3544, `staleSaveBehindChange` #3545) that goes with its fix.
+	 * Findings of this property, each replayed over every ordering of its
+	 * shrunk counterexample's commands. F1 (#3543) and F2 (#3544) are fixed and
+	 * replay as regressions. `it.fails` marks a finding still open on master:
+	 * green while it stands, red once fixed. An open finding is carved out of
+	 * the property above by a named predicate (`staleSaveBehindChange` #3545)
+	 * that goes with its fix.
 	 */
-	describe("findings on master, pinned until fixed", () => {
+	describe("findings, replayed over every ordering", () => {
 		const replay = (
 			commands: Command[],
 			saveOptions: boolean,
@@ -697,7 +656,7 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 			silent: true,
 		});
 
-		it.fails("F1 (#3543): a touch on a dead client resolves true without sending", () =>
+		it("F1 (#3543): a touch on a dead client never resolves true unsent", () =>
 			replay([open(), open(), { t: "die" }], false, (run) =>
 				run.touches
 					.filter(
@@ -708,7 +667,7 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 					.map((t) => `${t.content} resolved true, never sent`),
 			));
 
-		it.fails("F2 (#3544): a stale read makes the queue drop an unstamped touch issued after the newest read", () =>
+		it("F2 (#3544): a stale read never drops an unstamped touch issued after the newest read", () =>
 			replay([open(6), open(), open(0)], false, (run) => {
 				const doc = serverDoc(run.wire);
 				return doc.open && doc.content === "c1"
