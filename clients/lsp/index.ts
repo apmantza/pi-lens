@@ -4516,6 +4516,9 @@ export class LSPService {
 						};
 
 			this.state.clients.set(key, client);
+			// #3502: a verdict cached while no client was registered (a failed
+			// spawn's cold warm-up) does not describe this one.
+			this.forgetReadiness(key);
 			// #2356: this generation is the replacement the late-coverage probe was
 			// waiting for. Clear the retired-generation marker before any later probe.
 			this.notifyStallDemotions.delete(key);
@@ -8936,6 +8939,8 @@ export class LSPService {
 		// #3502: the clients this warm-up judged. A cold verdict is cached only
 		// for the client it is about; one retired while the warm-up awaited (a
 		// crash respawn, an eviction) leaves its replacement to earn its own.
+		// No client at all (a spawn that fails) is a verdict too, #799's
+		// negative cache for it; registration forgets it (`ensureClientForServer`).
 		const warmedClients = keys.map((key) =>
 			key === undefined ? undefined : this.state.clients.get(key),
 		);
@@ -8970,7 +8975,6 @@ export class LSPService {
 				if (
 					key !== undefined &&
 					failedServerIds.includes(servers[i].id) &&
-					warmedClients[i] !== undefined &&
 					this.state.clients.get(key) === warmedClients[i]
 				) {
 					this.state.demonstratedCold.add(key);

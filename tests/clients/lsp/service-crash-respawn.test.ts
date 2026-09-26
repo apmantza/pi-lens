@@ -710,4 +710,53 @@ describe("#3502 — a crash-respawn does not inherit readiness", () => {
 			delete process.env.PI_LENS_TS_IDLE_EVICT_MS;
 		}
 	});
+
+	// Verify round 3, V1: #799's negative cache must still hold a server that
+	// never spawns. With no registered client to compare, the round-2 guard
+	// refused the cold verdict, so every sweep re-paid the warm-up's retry and
+	// a spawn attempt, per file on the batch path.
+	it("a server whose spawn fails is cached cold after one warm-up", async () => {
+		createLSPClient.mockRejectedValue(new Error("spawn failed"));
+		const service = new LSPService();
+		expect(await service.ensureWarmForSweep(filePath)).toEqual({
+			performedWarmup: true,
+			failedServerIds: ["marksman"],
+		});
+		const spawnsAfterWarmup = createLSPClient.mock.calls.length;
+		// Past any spawn cooldown: only the cache can spare the next sweep.
+		vi.setSystemTime(Date.now() + 120_000);
+
+		const next = await service.ensureWarmForSweep(filePath);
+
+		expect(next).toEqual({
+			performedWarmup: false,
+			failedServerIds: ["marksman"],
+			skippedFromCache: true,
+		});
+		expect(createLSPClient).toHaveBeenCalledTimes(spawnsAfterWarmup);
+	});
+
+	// ...and that verdict is about the absence of a client, so the client that
+	// finally registers earns its own (the forget at registration).
+	it("a server cached cold with no client gets its own warm-up once a client registers", async () => {
+		const B = makeClient("marksman", tmp);
+		createLSPClient
+			.mockRejectedValueOnce(new Error("spawn failed"))
+			.mockResolvedValueOnce(B);
+		const service = new LSPService();
+		expect(await service.ensureWarmForSweep(filePath)).toEqual({
+			performedWarmup: true,
+			failedServerIds: ["marksman"],
+		});
+		vi.setSystemTime(Date.now() + 120_000);
+		await service.touchFile(path.join(tmp, "b.md"), "# b\n", SYNC);
+		expect(createLSPClient).toHaveBeenCalledTimes(2);
+
+		const warm = await service.ensureWarmForSweep(filePath);
+
+		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+		expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+			filePath,
+		);
+	});
 });
