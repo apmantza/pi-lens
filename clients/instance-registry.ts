@@ -12,11 +12,13 @@
  * File shape: `{ instances: InstanceEntry[] }`. Missing or corrupt file is
  * treated as `{ instances: [] }` — this module must never throw on a read.
  *
- * Concurrency: every whole-file writer holds the adjacent `<registry>.lock`
- * O_EXCL lock across its read-modify-write. Contenders use 5-25ms jittered
- * backoff for up to 500ms; stale locks older than 5s or owned by a dead pid
- * are displaced and reclaimed. A crash can still leave a stale lock during
- * that window, so takeover remains deliberately bounded and observable.
+ * Concurrency: every whole-file writer holds the registry lock
+ * (`instance-registry-lock.ts`) across its read-modify-write: a generation
+ * lock in `<registry>.locks/` (#3476), plus the old `<registry>.lock` file so
+ * writers from older versions still block. Contenders use 5-25ms jittered
+ * backoff for up to 500ms. A generation older than 5s or owned by a dead pid
+ * is taken over by exclusively creating the next one, so only one taker
+ * wins; takeovers, timeouts and lock errors are recorded in the ledger.
  */
 
 import * as fs from "node:fs";

@@ -50,6 +50,8 @@ makes `Free` false in more states than the model's atomic create.
 |---|---|---|
 | `RegistryNoFault.cfg` | none | pass |
 | `RegistryCrash.cfg` | one writer dies | pass on the generation lock (#3476); `MutualExclusion` violated on the path lock before |
+| `RegistryCrash4.cfg` | the generation lock, four writers, two die | pass |
+| `RegistryCrashNoRecheck.cfg` | the generation lock, no second listing | `MutualExclusion` violated |
 | `RegistryExpiry.cfg` | a holder outlives 5 s | `MutualExclusion` violated (the lease) |
 | `RegistryCrashFix.cfg` | crash, identity-checked takeover | `NoOrphanLock` violated |
 | `RegistryCrashFix4.cfg` | the same, four writers | `MutualExclusion` violated |

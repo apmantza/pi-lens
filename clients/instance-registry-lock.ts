@@ -66,21 +66,57 @@ function releaseLegacyLock(lock: string): void {
 	}
 }
 
-function tryAcquire(target: string): GenerationHold | undefined {
-	const hold = tryAcquireGeneration(generationDir(target), LOCK_STALE_MS);
-	if (!hold) return undefined;
-	let held = false;
+/**
+ * One attempt: the hold, "busy" (retry after a backoff), or "failed" (a
+ * filesystem error other than contention, recorded; the caller gives up).
+ * Never throws: a throw would reach session shutdown's deregisterInstance().
+ */
+function tryAcquire(target: string): GenerationHold | "busy" | "failed" {
+	let hold: GenerationHold | undefined;
 	try {
-		held = takeLegacyLock(legacyLockPath(target));
-	} finally {
-		if (!held) releaseGeneration(hold);
+		hold = tryAcquireGeneration(generationDir(target), LOCK_STALE_MS);
+		if (!hold) return "busy";
+		if (hold.tookOverStale) recordStaleTakeover(target, hold);
+		if (takeLegacyLock(legacyLockPath(target))) return hold;
+		recordLegacyHeld(target);
+		releaseGeneration(hold);
+		return "busy";
+	} catch (cause) {
+		recordLockFailure(target, cause);
+		if (hold) releaseGeneration(hold);
+		return "failed";
 	}
-	return held ? hold : undefined;
 }
 
 function release(target: string, hold: GenerationHold): void {
 	releaseLegacyLock(legacyLockPath(target));
 	releaseGeneration(hold);
+}
+
+function recordLockFailure(target: string, cause: unknown): void {
+	const code = (cause as NodeJS.ErrnoException | undefined)?.code ?? "unknown";
+	incrementDegradationCount({
+		kind: "instance-registry-lock-failed",
+		subject: path.resolve(target),
+		reason: `lock acquisition failed for ${path.basename(target)} (${code}); the registry write was skipped`,
+	});
+}
+
+function recordStaleTakeover(target: string, hold: GenerationHold): void {
+	incrementDegradationCount({
+		kind: "instance-registry-lock-stale-takeover",
+		subject: path.resolve(target),
+		reason: `took over lock generation ${hold.generation - 1} from a dead or aged-out holder`,
+	});
+}
+
+function recordLegacyHeld(target: string): void {
+	const lock = legacyLockPath(target);
+	incrementDegradationCount({
+		kind: "instance-registry-lock-legacy-held",
+		subject: path.resolve(lock),
+		reason: `backed off: ${path.basename(lock)} is held by pid ${pidFileOwner(lock) ?? "unknown"}, a writer from before #3476`,
+	});
 }
 
 function recordLockTimeout(target: string): void {
@@ -104,10 +140,10 @@ export async function withInstanceRegistryLock<T>(
 	op: () => Promise<T>,
 ): Promise<T | undefined> {
 	const deadline = Date.now() + LOCK_WAIT_MS;
-	await fs.promises.mkdir(path.dirname(target), { recursive: true });
 	while (Date.now() <= deadline) {
 		const hold = tryAcquire(target);
-		if (!hold) {
+		if (hold === "failed") return undefined;
+		if (hold === "busy") {
 			if (Date.now() <= deadline)
 				await new Promise((resolve) => setTimeout(resolve, backoffMs()));
 			continue;
@@ -127,10 +163,10 @@ export function withInstanceRegistryLockSync<T>(
 	op: () => T,
 ): T | undefined {
 	const deadline = Date.now() + LOCK_WAIT_MS;
-	fs.mkdirSync(path.dirname(target), { recursive: true });
 	while (Date.now() <= deadline) {
 		const hold = tryAcquire(target);
-		if (!hold) {
+		if (hold === "failed") return undefined;
+		if (hold === "busy") {
 			if (Date.now() <= deadline) backoff();
 			continue;
 		}

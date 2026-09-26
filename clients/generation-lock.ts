@@ -28,6 +28,8 @@ const GENERATION = /^lock\.(\d+)(\.released)?$/;
 export interface GenerationHold {
 	readonly dir: string;
 	readonly generation: number;
+	/** The generation below was held by a dead or aged-out owner, not released. */
+	readonly tookOverStale: boolean;
 }
 
 /** The pid a `<pid> <ms>` lock file names, if it names one. */
@@ -122,7 +124,8 @@ export function releaseGeneration(hold: GenerationHold): void {
 
 /**
  * One acquisition attempt: undefined when the lock is held or another taker
- * won the race; the caller backs off and retries.
+ * won the race; the caller backs off and retries. Any other filesystem error
+ * throws, after releasing any generation this attempt created.
  */
 export function tryAcquireGeneration(
 	dir: string,
@@ -131,14 +134,11 @@ export function tryAcquireGeneration(
 	fs.mkdirSync(dir, { recursive: true });
 	const listed = fs.readdirSync(dir);
 	const top = topGeneration(listed);
-	if (
-		top > 0 &&
-		!listed.includes(releasedName(top)) &&
-		!pidFileIsStale(generationPath(dir, top), staleMs)
-	) {
+	const free = top === 0 || listed.includes(releasedName(top));
+	if (!free && !pidFileIsStale(generationPath(dir, top), staleMs)) {
 		return undefined;
 	}
-	const hold = { dir, generation: top + 1 };
+	const hold = { dir, generation: top + 1, tookOverStale: !free };
 	try {
 		fs.writeFileSync(
 			generationPath(dir, hold.generation),
@@ -151,7 +151,15 @@ export function tryAcquireGeneration(
 	}
 	// A listing taken before cleanup can re-create a generation cleanup
 	// removed; the new generation then sits below the top, and must back off.
-	const entries = fs.readdirSync(dir);
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(dir);
+	} catch (cause) {
+		// Unreleased, this live process's generation would hold every writer
+		// out until the lease ran out.
+		releaseGeneration(hold);
+		throw cause;
+	}
 	if (topGeneration(entries) > hold.generation) {
 		releaseGeneration(hold);
 		return undefined;

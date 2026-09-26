@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,6 +29,10 @@ afterEach(() => {
 	// The #3476 cases time out by design; each case reads its own count.
 	resetDegradationLedger();
 });
+
+function degradationKinds(): string[] {
+	return getDegradationSummary().map((group) => group.kind);
+}
 
 const lockModuleUrl = pathToFileURL(
 	path.resolve("clients/instance-registry-lock.js"),
@@ -263,6 +268,28 @@ describe("instance registry lock: generation takeover (#3476)", () => {
 			"lock.9.released",
 		]);
 		expect(fs.existsSync(`${target}.lock`)).toBe(false);
+		// A released predecessor is no takeover, and nothing held the old file.
+		expect(degradationKinds()).toEqual([]);
+	});
+
+	it("records a takeover of a dead owner's generation", () => {
+		const { target, gens } = tempTarget();
+		fs.mkdirSync(gens);
+		fs.writeFileSync(
+			path.join(gens, "lock.1"),
+			`999999 ${Date.now() - 10_000}\n`,
+		);
+		const old = new Date(Date.now() - 10_000);
+		fs.utimesSync(path.join(gens, "lock.1"), old, old);
+		expect(withInstanceRegistryLockSync(target, () => "entered")).toBe(
+			"entered",
+		);
+		expect(getDegradationSummary()).toContainEqual(
+			expect.objectContaining({
+				kind: "instance-registry-lock-stale-takeover",
+				count: 1,
+			}),
+		);
 	});
 
 	// Mixed versions: a writer from before #3476 takes only `<target>.lock`.
@@ -287,10 +314,102 @@ describe("instance registry lock: generation takeover (#3476)", () => {
 		expect(
 			withInstanceRegistryLockSync(target, () => "entered"),
 		).toBeUndefined();
+		expect(degradationKinds()).toContain("instance-registry-lock-legacy-held");
 		fs.unlinkSync(legacy);
 		expect(withInstanceRegistryLockSync(target, () => "entered")).toBe(
 			"entered",
 		);
+	});
+
+	// #3476 review F1: a lock directory this process cannot use (here a file
+	// in its place; in the field a root-owned directory left by `sudo pi`)
+	// must not throw into session shutdown's deregisterInstance().
+	it("degrades instead of throwing when the lock directory is unusable", async () => {
+		const { target, gens } = tempTarget();
+		fs.writeFileSync(gens, "not a directory\n");
+		expect(
+			withInstanceRegistryLockSync(target, () => "entered"),
+		).toBeUndefined();
+		await expect(
+			withInstanceRegistryLock(target, async () => "entered"),
+		).resolves.toBeUndefined();
+		expect(getDegradationSummary()).toContainEqual(
+			expect.objectContaining({
+				kind: "instance-registry-lock-failed",
+				count: 2,
+			}),
+		);
+	});
+
+	// #3476 review F2: a listing that throws after the create must not leave
+	// this process's live generation holding everyone out for the lease.
+	it("releases a created generation when the listing after it throws", () => {
+		const { target } = tempTarget();
+		const realReaddir = fs.readdirSync;
+		let listings = 0;
+		fs.readdirSync = ((...args: Parameters<typeof realReaddir>) => {
+			listings += 1;
+			if (listings === 2)
+				throw Object.assign(new Error("EMFILE: too many open files"), {
+					code: "EMFILE",
+				});
+			return realReaddir(...args);
+		}) as typeof fs.readdirSync;
+		syncBuiltinESMExports();
+		let first: string | undefined;
+		try {
+			first = withInstanceRegistryLockSync(target, () => "entered");
+		} finally {
+			fs.readdirSync = realReaddir;
+			syncBuiltinESMExports();
+		}
+		expect(listings).toBe(2);
+		expect(first).toBeUndefined();
+		expect(withInstanceRegistryLockSync(target, () => "entered")).toBe(
+			"entered",
+		);
+	});
+
+	it("releases its generation when the old lock file cannot be created", () => {
+		const { target } = tempTarget();
+		const realWrite = fs.writeFileSync;
+		let refused = 0;
+		fs.writeFileSync = ((...args: Parameters<typeof realWrite>) => {
+			if (args[0] === `${target}.lock`) {
+				refused += 1;
+				throw Object.assign(new Error("EACCES: permission denied"), {
+					code: "EACCES",
+				});
+			}
+			return realWrite(...args);
+		}) as typeof fs.writeFileSync;
+		syncBuiltinESMExports();
+		let first: string | undefined;
+		try {
+			first = withInstanceRegistryLockSync(target, () => "entered");
+		} finally {
+			fs.writeFileSync = realWrite;
+			syncBuiltinESMExports();
+		}
+		expect(refused).toBe(1);
+		expect(first).toBeUndefined();
+		expect(withInstanceRegistryLockSync(target, () => "entered")).toBe(
+			"entered",
+		);
+	});
+
+	// #3476 review F4: before #3476 the sync variant's catch wrapped the op,
+	// so an op error coded like contention was swallowed and the op re-ran.
+	it("propagates an op error coded like contention once", () => {
+		const { target } = tempTarget();
+		let runs = 0;
+		expect(() =>
+			withInstanceRegistryLockSync(target, () => {
+				runs += 1;
+				throw Object.assign(new Error("op failed"), { code: "EEXIST" });
+			}),
+		).toThrow("op failed");
+		expect(runs).toBe(1);
 	});
 });
 
