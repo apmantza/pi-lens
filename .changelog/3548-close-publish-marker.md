@@ -13,7 +13,11 @@ section: Fixed
   `publishesOnClose` strategy marker, set for typos, excludes exactly its
   own close-triggered publish from that count; every other server's
   close-time publish (a real, if late, backlog answer) still counts exactly
-  as before.
+  as before. The exemption's own credit is cleared at every reopen (the
+  same point the closed-path marker itself is), so a credit a close never
+  got to spend cannot survive into, and stack with, a later close's own —
+  which otherwise could wrongly swallow that close's first genuine backlog
+  finding, permanently.
   Separately, zizmor's dynamically-registered `textDocument/didSave` (which
   re-audits and republishes, the same surplus shape as opengrep's save
   rescan) is given the existing `rescansOnSave` marker now, ahead of that
