@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { BoundedFifoMap } from "./bounded-cache.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
 import { getProjectDataDir } from "./file-utils.js";
+import { withGenerationLockSync } from "./generation-lock.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 export type ProjectChangeSource =
@@ -39,6 +42,12 @@ export interface ProjectChangeEntry {
 	filePath: string;
 	fileSeq: number;
 	changedRange?: ProjectChangeRange;
+	/**
+	 * #3511 review round 2 (R2-F1): appended without the change-log lock, so
+	 * a lock holder may have logged the same seq. A snapshot whose runtime
+	 * never folded this entry is not fresh (see `ProjectSequenceIndex`).
+	 */
+	unlocked?: true;
 }
 
 export function getProjectChangeLogPath(cwd: string): string {
@@ -65,22 +74,49 @@ function parseChangeLine(line: string): ProjectChangeEntry | undefined {
 			filePath: parsed.filePath,
 			fileSeq: parsed.fileSeq,
 			changedRange: parsed.changedRange,
+			...(parsed.unlocked === true ? { unlocked: true as const } : {}),
 		};
 	} catch {
 		return undefined;
 	}
 }
 
+// #3511: the log's max seq, read incrementally so each allocation costs only
+// the bytes appended since this process last read the log. `bytes` is the
+// offset of the first line not yet folded; the log is append-only.
+const changeLogCursors = new BoundedFifoMap<
+	string,
+	{ bytes: number; maxSeq: number }
+>(16);
+
+/**
+ * Parse a whole read of the log. The read also seeds the #3511 allocation
+ * cursor, so a process's first logged mutation after session_start reads
+ * only the lines appended since, not the whole log again.
+ */
+function parseChangeLog(
+	logPath: string,
+	content: string,
+): ProjectChangeEntry[] {
+	const entries = content
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.map(parseChangeLine)
+		.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+	const bytes = Buffer.byteLength(
+		content.slice(0, content.lastIndexOf("\n") + 1),
+	);
+	let maxSeq = 0;
+	for (const entry of entries) maxSeq = Math.max(maxSeq, entry.seq);
+	changeLogCursors.set(logPath, { bytes, maxSeq });
+	return entries;
+}
+
 export function readProjectChanges(cwd: string): ProjectChangeEntry[] {
 	const logPath = getProjectChangeLogPath(cwd);
 	try {
-		const content = fs.readFileSync(logPath, "utf-8");
-		return content
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map(parseChangeLine)
-			.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+		return parseChangeLog(logPath, fs.readFileSync(logPath, "utf-8"));
 	} catch {
 		return [];
 	}
@@ -101,13 +137,10 @@ async function readProjectChangesAsync(
 ): Promise<ProjectChangeEntry[]> {
 	const logPath = getProjectChangeLogPath(cwd);
 	try {
-		const content = await fs.promises.readFile(logPath, "utf-8");
-		return content
-			.split(/\r?\n/)
-			.map((line) => line.trim())
-			.filter(Boolean)
-			.map(parseChangeLine)
-			.filter((entry): entry is ProjectChangeEntry => Boolean(entry));
+		return parseChangeLog(
+			logPath,
+			await fs.promises.readFile(logPath, "utf-8"),
+		);
 	} catch {
 		return [];
 	}
@@ -128,6 +161,15 @@ export function readChangesSince(
 export interface ProjectSequenceIndex {
 	projectSeq: number;
 	fileSeqByPath: Map<string, number>;
+	/** #3511 review round 2: the log entries this read folded. */
+	logEntries?: number;
+	/**
+	 * #3511 review round 2 (R2-F1): the 1-based position of the log's last
+	 * `unlocked` entry, 0 when there is none. A snapshot whose runtime folded
+	 * fewer entries (`ProjectSnapshot.logEntries`) may have missed it, even at
+	 * the log's max seq, so it is not fresh.
+	 */
+	unlockedThrough?: number;
 }
 
 /**
@@ -148,6 +190,8 @@ export interface ProjectSequenceBase {
 	fileSeqByPath: Iterable<readonly [string, number]>;
 	/** The snapshot's `seq`: entries at or below this are covered by the base. */
 	sinceSeq: number;
+	/** The log entries the snapshot's runtime folded (#3511 review round 2). */
+	logEntries?: number;
 }
 
 // Test-observable count of the EXPENSIVE per-entry folds (each one does a
@@ -236,12 +280,29 @@ export function readLatestProjectSequence(
 	cwd: string,
 	base?: ProjectSequenceBase,
 ): ProjectSequenceIndex {
-	const entries = readProjectChanges(cwd);
-	if (base) {
-		const partial = partialReplay(entries, base);
-		if (partial) return partial;
-	}
-	return fullReplay(entries);
+	return replay(readProjectChanges(cwd), base);
+}
+
+/**
+ * The bounded replay when `base` can be trusted, else the full one, plus the
+ * fold point and the last unlocked entry (#3511 review round 2). An unlocked
+ * entry after the base's fold point may share a seq at or below `sinceSeq`
+ * that the base never folded, so that base is not trusted.
+ */
+function replay(
+	entries: ProjectChangeEntry[],
+	base: ProjectSequenceBase | undefined,
+): ProjectSequenceIndex {
+	let unlockedThrough = 0;
+	entries.forEach((entry, index) => {
+		if (entry.unlocked) unlockedThrough = index + 1;
+	});
+	const index =
+		(base &&
+			unlockedThrough <= (base.logEntries ?? 0) &&
+			partialReplay(entries, base)) ||
+		fullReplay(entries);
+	return { ...index, logEntries: entries.length, unlockedThrough };
 }
 
 /**
@@ -254,12 +315,7 @@ export async function readLatestProjectSequenceAsync(
 	cwd: string,
 	base?: ProjectSequenceBase,
 ): Promise<ProjectSequenceIndex> {
-	const entries = await readProjectChangesAsync(cwd);
-	if (base) {
-		const partial = partialReplay(entries, base);
-		if (partial) return partial;
-	}
-	return fullReplay(entries);
+	return replay(await readProjectChangesAsync(cwd), base);
 }
 
 export function appendProjectChange(
@@ -269,4 +325,73 @@ export function appendProjectChange(
 	const logPath = getProjectChangeLogPath(cwd);
 	fs.mkdirSync(path.dirname(logPath), { recursive: true });
 	fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf-8");
+}
+
+function readChangeLogMaxSeq(logPath: string): number {
+	let fd: number;
+	try {
+		fd = fs.openSync(logPath, "r");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+		throw err;
+	}
+	try {
+		const cursor = changeLogCursors.get(logPath) ?? { bytes: 0, maxSeq: 0 };
+		const size = fs.fstatSync(fd).size;
+		if (size > cursor.bytes) {
+			const tail = Buffer.alloc(size - cursor.bytes);
+			const read = fs.readSync(fd, tail, 0, tail.length, cursor.bytes);
+			// A line still being written by an unlocked writer is read next time.
+			const complete = tail.subarray(0, read).lastIndexOf(0x0a) + 1;
+			for (const line of tail
+				.subarray(0, complete)
+				.toString("utf-8")
+				.split("\n")) {
+				const entry = line.trim() ? parseChangeLine(line) : undefined;
+				if (entry && entry.seq > cursor.maxSeq) cursor.maxSeq = entry.seq;
+			}
+			cursor.bytes += complete;
+		}
+		changeLogCursors.set(logPath, cursor);
+		return cursor.maxSeq;
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+// Held for one incremental read and one append line: far inside the lease.
+const CHANGE_LOG_LOCK = { staleMs: 5_000, waitMs: 500 };
+
+/**
+ * #3511: append one entry whose seq is allocated from the shared log, so two
+ * processes never log the same seq. `build` receives the log's max seq and
+ * returns the entry to append; both run under the change-log lock. When the
+ * lock stays held past its wait (or fails), the entry is still appended,
+ * unlocked and tagged `unlocked` (review round 2), and the degradation is
+ * recorded.
+ */
+export function appendProjectChangeAllocated(
+	cwd: string,
+	build: (logMaxSeq: number) => ProjectChangeEntry,
+): void {
+	const logPath = getProjectChangeLogPath(cwd);
+	fs.mkdirSync(path.dirname(logPath), { recursive: true });
+	const append = (locked: boolean) => {
+		const entry = build(readChangeLogMaxSeq(logPath));
+		const line = locked ? entry : { ...entry, unlocked: true as const };
+		fs.appendFileSync(logPath, `${JSON.stringify(line)}\n`, "utf-8");
+	};
+	const result = withGenerationLockSync(
+		`${logPath}.locks`,
+		CHANGE_LOG_LOCK,
+		() => append(true),
+	);
+	if (result.held) return;
+	const code = (result.cause as NodeJS.ErrnoException | undefined)?.code;
+	incrementDegradationCount({
+		kind: "change-log-lock-unavailable",
+		subject: logPath,
+		reason: `appended unlocked: ${code ? `lock failed (${code})` : "lock wait ran out"}`,
+	});
+	append(false);
 }

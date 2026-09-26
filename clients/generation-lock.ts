@@ -20,6 +20,7 @@
  * can only delay a takeover, never admit one.
  */
 
+import { randomInt } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -256,4 +257,42 @@ export function tryAcquireGeneration(
 	}
 	removeBelowPredecessor(dir, entries, hold.generation);
 	return hold;
+}
+
+/**
+ * Run `op` holding the lock at `dir`, retrying after a 5-25 ms synchronous
+ * backoff until `waitMs` runs out (#3509, #3511). The caller keeps its hold
+ * far below `staleMs`, the lease after which another process takes over.
+ * `held: false` means the wait ran out or a filesystem error other than
+ * contention stopped acquisition (`cause`); `op` did not run.
+ */
+export function withGenerationLockSync<T>(
+	dir: string,
+	timing: { staleMs: number; waitMs: number },
+	op: () => T,
+): { held: true; value: T } | { held: false; cause?: unknown } {
+	const deadline = Date.now() + timing.waitMs;
+	for (;;) {
+		let hold: GenerationHold | undefined;
+		try {
+			hold = tryAcquireGeneration(dir, timing.staleMs);
+		} catch (cause) {
+			return { held: false, cause };
+		}
+		if (hold) {
+			if (hold.tookOverStale) recordGenerationTakeover(hold);
+			try {
+				return { held: true, value: op() };
+			} finally {
+				releaseGeneration(hold);
+			}
+		}
+		if (Date.now() >= deadline) return { held: false };
+		Atomics.wait(
+			new Int32Array(new SharedArrayBuffer(4)),
+			0,
+			0,
+			randomInt(5, 26),
+		);
+	}
 }

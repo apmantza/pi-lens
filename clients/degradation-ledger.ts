@@ -131,6 +131,13 @@ export type DegradationKind =
 	| "cascade-pending-cap"
 	| "cascade-tier3-backlog-evicted"
 	/**
+	 * #3511: the change-log lock stayed held past its bounded wait (or its
+	 * directory failed), so a mutation's seq was allocated and appended without
+	 * it, and that runtime stops stamping fresh snapshots until its next seed.
+	 * Subject is the change-log path.
+	 */
+	| "change-log-lock-unavailable"
+	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an
 	 * outage this fires once per file per touch, so the count here is the exact
@@ -784,6 +791,13 @@ export type DegradationKind =
 	 */
 	| "process-singleton-reset"
 	/**
+	 * #3509: the project snapshot's cache-dir lock stayed held past its bounded
+	 * wait (or its directory failed), so an admission meta write was skipped or
+	 * a body promotion was dropped as a failed persist. Subject is the gz body
+	 * path; reason names which of the two.
+	 */
+	| "project-snapshot-lock-unavailable"
+	/**
 	 * The orphan backstop's OWN process-table scanner blew the scan timeout and
 	 * had to be tree-killed (#1864 review F3). Reason carries the kill verdict,
 	 * so a scanner that survived its own sweep's escalation — an orphan sweep
@@ -1063,6 +1077,14 @@ export type DegradationKind =
 	 * `truncatedBodies`) make the truncation reconstructable.
 	 */
 	| "snapshot-sequence-read-timeout"
+	/**
+	 * #3511: a runtime's view missed a logged change-log entry at or below its
+	 * seq (a sibling process logged it, or the runtime was seeded at 0 by a
+	 * timed-out read), so its snapshots are stamped incomplete and never
+	 * served fresh until the next seed. Once per session; subject is the
+	 * project root, reason names which.
+	 */
+	| "snapshot-view-incomplete"
 	/**
 	 * A `<script>` body of an HTML file the napi runner was evaluating (#2347)
 	 * refused to parse as JavaScript, so that body contributed no embedded

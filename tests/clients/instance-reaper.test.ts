@@ -9,6 +9,7 @@ import {
 	buildIdentityMatcher,
 	decideBackstopOrphanReaping,
 	decideOrphanReaping,
+	partitionBackstopCandidates,
 	STALE_HEARTBEAT_MS,
 	type ChildToKill,
 	type OsProcessInfo,
@@ -416,6 +417,8 @@ function osProc(overrides: Partial<OsProcessInfo> = {}): OsProcessInfo {
 		pid: 5000,
 		parentPid: 4000,
 		command: "C:\\tools\\opengrep.exe --lsp",
+		// #3538: a known start time, without which nothing is kill-eligible.
+		start: "t0",
 		// #1857: past the spawn-grace window by default, so these eligibility
 		// cases keep testing the property they were written for. The grace guard
 		// itself is covered in instance-reaper-backstop.test.ts.
@@ -425,16 +428,25 @@ function osProc(overrides: Partial<OsProcessInfo> = {}): OsProcessInfo {
 }
 
 describe("decideBackstopOrphanReaping", () => {
+	// The ppid rule is Windows's (#3539): these cases keep testing it there.
+	// POSIX judges ownership by the owner tag, covered below.
+	const WIN = { platform: "win32" } as const;
+
 	it("untracked process + confirmed-dead parent ⇒ kill-eligible", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids()); // parent 4000 dead
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids(), WIN); // parent 4000 dead
 
 		expect(decision).toEqual([proc]);
 	});
 
 	it("untracked process + LIVE parent ⇒ never kill-eligible, however unfamiliar the binary", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids(4000));
+		const decision = decideBackstopOrphanReaping(
+			[proc],
+			[],
+			alivePids(4000),
+			WIN,
+		);
 
 		expect(decision).toHaveLength(0);
 	});
@@ -442,7 +454,7 @@ describe("decideBackstopOrphanReaping", () => {
 	it("process already tracked in the registry (any instance's lspChildren) ⇒ deferred to the registry-driven reaper, never backstop-killed — even with a dead parent", () => {
 		const proc = osProc({ pid: 5000, parentPid: 4000 });
 		const reg = [instance({ pid: 1, lspChildren: [child({ pid: 5000 })] })];
-		const decision = decideBackstopOrphanReaping([proc], reg, alivePids()); // parent dead too
+		const decision = decideBackstopOrphanReaping([proc], reg, alivePids(), WIN); // parent dead too
 
 		expect(decision).toHaveLength(0);
 	});
@@ -455,6 +467,7 @@ describe("decideBackstopOrphanReaping", () => {
 			[zero, negative, nan],
 			[],
 			alivePids(),
+			WIN,
 		);
 
 		expect(decision).toHaveLength(0);
@@ -462,7 +475,7 @@ describe("decideBackstopOrphanReaping", () => {
 
 	it("self-parenting malformed row (parentPid === pid) ⇒ never kill-eligible", () => {
 		const proc = osProc({ pid: 5000, parentPid: 5000 });
-		const decision = decideBackstopOrphanReaping([proc], [], alivePids());
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids(), WIN);
 
 		expect(decision).toHaveLength(0);
 	});
@@ -482,13 +495,292 @@ describe("decideBackstopOrphanReaping", () => {
 			[orphan, legit],
 			[],
 			alivePids(7000), // 7000 alive, 4000 dead
+			WIN,
 		);
 
 		expect(decision).toEqual([orphan]);
 	});
 
 	it("empty process list ⇒ no work", () => {
-		expect(decideBackstopOrphanReaping([], [], alivePids())).toHaveLength(0);
+		expect(decideBackstopOrphanReaping([], [], alivePids(), WIN)).toHaveLength(
+			0,
+		);
+	});
+
+	it("#3538: a record made for an earlier process on the reused pid does not shield the one there now", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: "t0" });
+		const reg = [
+			instance({
+				pid: 1,
+				lspChildren: [child({ pid: 5000, processStart: "t9" })],
+			}),
+		];
+
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids(), WIN)).toEqual([
+			proc,
+		]);
+	});
+
+	it("#3538: a record with the process's own start still shields it", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: "t0" });
+		const reg = [
+			instance({
+				pid: 1,
+				lspChildren: [child({ pid: 5000, processStart: "t0" })],
+			}),
+		];
+
+		expect(decideBackstopOrphanReaping([proc], reg, alivePids(), WIN)).toEqual(
+			[],
+		);
+	});
+
+	it("#3538: a process whose start could not be read is never kill-eligible, and is counted", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000, start: undefined });
+
+		const partition = partitionBackstopCandidates([proc], [], alivePids(), WIN);
+
+		expect(partition.eligible).toEqual([]);
+		expect(partition.unknownStart).toEqual([proc]);
+	});
+
+	it("#3539 Windows: a live process on the ppid that started after this one is not its parent (ppid reused)", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T08:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T09:00:00.0010000Z"; // an hour and a ms later
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([proc]);
+	});
+
+	it("#3539 verify: a live parent up to an hour younger is still its owner (DST fall-back can misplace a start by an hour)", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T08:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T09:00:00.0000000Z";
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([]);
+	});
+
+	it("#3539 Windows: a live parent that started before this one is its owner", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T09:00:00.0000000Z",
+		});
+		const startOf = () => "2026-09-26T08:00:00.0000000Z";
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf,
+			}),
+		).toEqual([]);
+	});
+
+	it("#3539 Windows: a live parent whose start cannot be read is its owner", () => {
+		const proc = osProc({
+			pid: 5000,
+			parentPid: 4000,
+			start: "2026-09-26T09:00:00.0000000Z",
+		});
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(4000), {
+				...WIN,
+				startOf: () => undefined,
+			}),
+		).toEqual([]);
+	});
+});
+
+describe("decideBackstopOrphanReaping on POSIX: the owner tag (#3539)", () => {
+	const POSIX = { platform: "linux" } as const;
+	const owner = { pid: 900, start: "o0" };
+
+	it("an orphan whose owner is dead is eligible though its ppid (init) is alive", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1), POSIX),
+		).toEqual([proc]);
+	});
+
+	it("a process with no owner tag is never eligible, even under a dead ppid", () => {
+		const proc = osProc({ parentPid: 4000 });
+
+		expect(decideBackstopOrphanReaping([proc], [], alivePids(), POSIX)).toEqual(
+			[],
+		);
+	});
+
+	it("an owner that is alive with the tagged start owns it", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => "o0",
+			}),
+		).toEqual([]);
+	});
+
+	it("an owner pid now held by a process with another start is a dead owner", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => "o1",
+			}),
+		).toEqual([proc]);
+	});
+
+	it("an owner pid that is alive with an unknown start owns it", () => {
+		const proc = osProc({ parentPid: 1, ownerTag: owner });
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => undefined,
+			}),
+		).toEqual([]);
+	});
+
+	// #3538 review R3-F1: a live pid cannot carry an earlier boot's tag, so a
+	// boot that disagrees is this reader's view (an empty or bound-over
+	// boot_id), never a reused owner pid.
+	const BOOT_A = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	const BOOT_B = "11111111-2222-4333-8444-555555555555";
+
+	it("a live owner read under another boot, or none, is not judged dead (R3-F1)", () => {
+		const proc = osProc({
+			parentPid: 1,
+			ownerTag: { pid: 900, start: `5@${BOOT_A}` },
+		});
+
+		for (const current of [`5@${BOOT_B}`, "5@", `6@${BOOT_B}`]) {
+			expect(
+				decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+					...POSIX,
+					startOf: () => current,
+				}),
+				current,
+			).toEqual([]);
+		}
+	});
+
+	it("an owner pid held by another start of the same boot is a dead owner (R3-F1 control)", () => {
+		const proc = osProc({
+			parentPid: 1,
+			ownerTag: { pid: 900, start: `5@${BOOT_A}` },
+		});
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => `6@${BOOT_A}`,
+			}),
+		).toEqual([proc]);
+	});
+});
+
+describe("decideOrphanReaping — host start time (#3538)", () => {
+	const orphan = child({ pid: 1000, processStart: "c0" });
+	const matchAll = () => true;
+
+	it("a live host pid under another start is a reused pid: the instance is dead", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, processStart: "h0", lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => "h1",
+		);
+
+		expect(decision.deadInstances).toHaveLength(1);
+		expect(decision.childrenToKill.map((c) => c.pid)).toEqual([1000]);
+	});
+
+	it("a live host whose current start cannot be read is judged by its pid alone", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, processStart: "h0", lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => undefined,
+		);
+
+		expect(decision.deadInstances).toHaveLength(0);
+		expect(decision.childrenToKill).toHaveLength(0);
+	});
+
+	it("a live host whose entry has no start is judged by its pid alone, under a start with no boot (macOS)", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => "2026-09-26T09:26:02.000Z",
+		);
+
+		expect(decision.deadInstances).toHaveLength(0);
+	});
+
+	const BOOT_A = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	const BOOT_B = "11111111-2222-4333-8444-555555555555";
+
+	it("a live host read under another boot, or none, is not judged dead (R3-F1)", () => {
+		for (const current of [`7@${BOOT_B}`, "7@", `8@${BOOT_B}`]) {
+			const decision = decideOrphanReaping(
+				[
+					instance({
+						pid: 1,
+						processStart: `7@${BOOT_A}`,
+						lspChildren: [orphan],
+					}),
+				],
+				alivePids(1, 1000),
+				matchAll,
+				Date.now(),
+				() => current,
+			);
+
+			expect(decision.deadInstances, current).toHaveLength(0);
+			expect(decision.childrenToKill, current).toHaveLength(0);
+		}
+	});
+
+	it("a live host pid under another start of the same boot is a dead instance (R3-F1 control)", () => {
+		const decision = decideOrphanReaping(
+			[
+				instance({
+					pid: 1,
+					processStart: `7@${BOOT_A}`,
+					lspChildren: [orphan],
+				}),
+			],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => `8@${BOOT_A}`,
+		);
+
+		expect(decision.deadInstances).toHaveLength(1);
 	});
 });
 
@@ -496,21 +788,22 @@ describe("buildIdentityMatcher", () => {
 	const expected = {
 		command: "C:\\tools\\ast-grep.exe",
 		marker: "C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
+		processStart: "t0",
 	};
+	/** A live pid with this command line and the recorded start. */
+	const live = (command: string, start = "t0") =>
+		new Map([[100, { command, start }]]);
 
-	it("pid absent from the command-line map ⇒ false (unverifiable — never kill by pid)", () => {
+	it("pid absent from the identity map ⇒ false (unverifiable — never kill by pid)", () => {
 		const match = buildIdentityMatcher(new Map());
 		expect(match(100, expected)).toBe(false);
 	});
 
 	it("marker present in the command line ⇒ match", () => {
 		const match = buildIdentityMatcher(
-			new Map([
-				[
-					100,
-					"node wrapper.js lsp --config C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
-				],
-			]),
+			live(
+				"node wrapper.js lsp --config C:/temp/pi-lens-ast-grep/baseline-42.sgconfig.yml",
+			),
 		);
 		expect(match(100, expected)).toBe(true);
 	});
@@ -519,20 +812,54 @@ describe("buildIdentityMatcher", () => {
 		// Separator-free command so path.basename behaves identically on every
 		// CI platform (win32 backslash paths don't split under POSIX basename).
 		const match = buildIdentityMatcher(
-			new Map([[100, '"C:\\Other\\Path\\AST-GREP.EXE" lsp']]),
+			live('"C:\\Other\\Path\\AST-GREP.EXE" lsp'),
 		);
-		expect(match(100, { command: "ast-grep.exe" })).toBe(true);
+		expect(match(100, { command: "ast-grep.exe", processStart: "t0" })).toBe(
+			true,
+		);
 	});
 
 	it("neither marker nor basename in the command line ⇒ false (recycled pid)", () => {
 		const match = buildIdentityMatcher(
-			new Map([[100, "C:\\Windows\\System32\\notepad.exe unrelated.txt"]]),
+			live("C:\\Windows\\System32\\notepad.exe unrelated.txt"),
 		);
 		expect(match(100, expected)).toBe(false);
 	});
 
 	it("empty command basename never matches (guard against includes(''))", () => {
-		const match = buildIdentityMatcher(new Map([[100, "anything at all"]]));
-		expect(match(100, { command: "" })).toBe(false);
+		const match = buildIdentityMatcher(live("anything at all"));
+		expect(match(100, { command: "", processStart: "t0" })).toBe(false);
+	});
+
+	it("#3538: a matching command line under another start time ⇒ false (a reused pid)", () => {
+		const match = buildIdentityMatcher(
+			live("node wrapper.js lsp C:\\tools\\ast-grep.exe", "t1"),
+		);
+		expect(match(100, expected)).toBe(false);
+	});
+
+	it("#3538: a record with no start never matches, whatever the command line", () => {
+		const match = buildIdentityMatcher(
+			live("node wrapper.js lsp C:\\tools\\ast-grep.exe"),
+		);
+		expect(match(100, { ...expected, processStart: undefined })).toBe(false);
+	});
+
+	it("#3538: an unknown start on both sides is not a match", () => {
+		const match = buildIdentityMatcher(
+			new Map([
+				[100, { command: "node wrapper.js lsp C:\\tools\\ast-grep.exe" }],
+			]),
+		);
+		expect(match(100, { ...expected, processStart: undefined })).toBe(false);
+	});
+
+	it("#3538: a live pid whose start could not be read never matches", () => {
+		const match = buildIdentityMatcher(
+			new Map([
+				[100, { command: "node wrapper.js lsp C:\\tools\\ast-grep.exe" }],
+			]),
+		);
+		expect(match(100, expected)).toBe(false);
 	});
 });

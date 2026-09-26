@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — session_start's background tasks and the quick-mode warmup timer expose no awaitable, so a real-time vi.waitFor is the only join on their snapshot save.
 /**
  * #348 phase 1 — the word index's load -> rebuild-if-stale -> persist
  * lifecycle, given the same shape the call-graph task already uses:
@@ -10,15 +11,23 @@
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	loadProjectSnapshot,
 	PROJECT_SNAPSHOT_VERSION,
 	getProjectSnapshotPath,
+	readProjectSnapshotMeta,
 	saveProjectSnapshot,
+	saveRuntimeProjectSnapshot,
 	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
+import {
+	releaseGeneration,
+	tryAcquireGeneration,
+} from "../../clients/generation-lock.js";
+import { getProjectChangeLogPath } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import {
@@ -352,6 +361,90 @@ describe("word-index lifecycle — full mode (#348)", () => {
 			restore();
 		}
 	}, 15_000);
+	// #3511 review rounds 2-3: the warmup's own save is the only session_start
+	// save that rewrites a suspect snapshot in quick mode, the mode of every
+	// interactive first session_start. Full mode also saves at project rules.
+	it.each(["full", "quick"] as const)(
+		"rewrites a snapshot an unlocked log entry makes suspect, with every document reusable, session 2 in %s mode (#3511 review round 3)",
+		async (secondMode) => {
+			const env = setupTestEnvironment("pi-lens-wordindex-unlocked-");
+			const restore = setStartupMode("full");
+			try {
+				createTempFile(
+					env.tmpDir,
+					"package.json",
+					JSON.stringify({ type: "module" }),
+				);
+				createTempFile(env.tmpDir, "src/a.ts", "export function helperA() {}");
+
+				const runtime1 = new RuntimeCoordinator();
+				runtime1.resetForSession();
+				await handleSessionStart(makeDeps(env.tmpDir, runtime1, vi.fn()));
+				await vi.waitFor(() => expect(runtime1.wordIndex).not.toBeNull(), {
+					timeout: 5000,
+				});
+				await waitForPersistedSnapshot(env.tmpDir);
+				await waitForProjectSnapshotPersistsForTests();
+
+				// The change-log lock is held past its wait, so runtime1's edit is
+				// appended unlocked; runtime1 never folded it (its fold point is its
+				// session_start read), so its snapshot at that seq is suspect.
+				const hold = tryAcquireGeneration(
+					`${getProjectChangeLogPath(env.tmpDir)}.locks`,
+					5_000,
+				);
+				try {
+					runtime1.recordProjectMutation({
+						filePath: path.join(env.tmpDir, "src", "other.ts"),
+						source: "agent-write",
+						cwd: env.tmpDir,
+					});
+				} finally {
+					if (hold) releaseGeneration(hold);
+				}
+				saveRuntimeProjectSnapshot({ cwd: env.tmpDir, runtime: runtime1 });
+				await waitForProjectSnapshotPersistsForTests();
+				expect(readProjectSnapshotMeta(env.tmpDir)).toMatchObject({
+					seq: 1,
+					logEntries: 0,
+				});
+
+				// The next session folds the whole log. Nothing it indexes changed,
+				// so only the suspect verdict makes it rewrite the snapshot, which
+				// then carries its fold point and is fresh again.
+				const runtime2 = new RuntimeCoordinator();
+				runtime2.resetForSession();
+				const globals = globalThis as unknown as {
+					__piLensFirstSessionDone?: boolean;
+					__piLensWarmupScheduled?: boolean;
+				};
+				if (secondMode === "quick") {
+					// A new interactive process: its first session_start is quick,
+					// and the warmup (with the word-index refresh) fires shortly after.
+					delete process.env.PI_LENS_STARTUP_MODE;
+					process.env.PI_LENS_WARMUP_DELAY_MS = "10";
+					globals.__piLensFirstSessionDone = false;
+					globals.__piLensWarmupScheduled = false;
+				} else {
+					globals.__piLensFirstSessionDone = true;
+				}
+				await handleSessionStart(makeDeps(env.tmpDir, runtime2, vi.fn()));
+				await vi.waitFor(
+					() =>
+						expect(readProjectSnapshotMeta(env.tmpDir)).toMatchObject({
+							seq: 1,
+							logEntries: 1,
+						}),
+					{ timeout: 5000 },
+				);
+			} finally {
+				env.cleanup();
+				restore();
+			}
+		},
+		20_000,
+	);
+
 	it("full-rebuilds legacy serialization and falls back after refresh refusal", async () => {
 		const env = setupTestEnvironment("pi-lens-wordindex-fallback-");
 		const restore = setStartupMode("full");

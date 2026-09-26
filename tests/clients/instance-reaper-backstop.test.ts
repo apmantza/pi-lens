@@ -59,6 +59,18 @@ const h = vi.hoisted(() => {
 		scannerPids: number[];
 		/** pids that received a bare `child.kill()` rather than a tree kill. */
 		bareKills: number[];
+		/** Identity queries answered so far this test. */
+		identityQueries: number;
+		/** What every identity query after the first reports: the process the
+		 *  sweep decided on, or another one on its pid (#3538). */
+		laterIdentity: { command: string; start: string } | undefined;
+		/** The owner-tag query's status (#3539). */
+		tagStatus: "ok" | "timeout";
+		/** Owner tags answered so far this test. */
+		tagReads: number;
+		/** What every owner-tag read after the first reports (review F2). */
+		laterTagStart: string | undefined;
+		laterTagPid: number | undefined;
 	} = {
 		registry: [],
 		enabled: true,
@@ -68,6 +80,12 @@ const h = vi.hoisted(() => {
 		alivePids: new Set<number>(),
 		scannerPids: [],
 		bareKills: [],
+		identityQueries: 0,
+		laterIdentity: undefined,
+		tagStatus: "ok",
+		tagReads: 0,
+		laterTagStart: undefined,
+		laterTagPid: undefined,
 	};
 	let nextPid = 90_000;
 	function makeFakeChild(command: string, args: string[]) {
@@ -128,6 +146,50 @@ vi.mock("node:child_process", () => ({
 vi.mock("../../clients/instance-registry.js", () => ({
 	isInstanceRegistryEnabled: () => h.state.enabled,
 	readInstanceRegistry: async () => h.state.registry,
+}));
+
+// #3538: the sweep reads each candidate's start time and asks again right
+// before each kill. The candidates here are fabricated rows, so their
+// identity is fabricated with them: a managed command and one stable start.
+// #3539: on POSIX the sweep reads each candidate's owner tag instead of its
+// ppid; each fabricated row names its ppid as its owner, under that same
+// start, so "owner alive" here is exactly the "parent alive" these cases
+// were written against.
+vi.mock("../../clients/process-snapshot.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/process-snapshot.js")
+	>()),
+	readOwnerTags: async (pids: readonly number[]) => {
+		const owners = new Map<number, number>();
+		for (const line of h.state.stdout.split("\n")) {
+			const row = /^\s*(\d+)\s+(\d+)/.exec(line);
+			if (row) owners.set(Number(row[1]), Number(row[2]));
+		}
+		const later = h.state.tagReads++ > 0;
+		const tags = new Map<number, { pid: number; start: string }>();
+		for (const pid of pids) {
+			const owner = owners.get(pid);
+			if (owner)
+				tags.set(pid, {
+					pid: (later && h.state.laterTagPid) || owner,
+					start: (later && h.state.laterTagStart) || "t0",
+				});
+		}
+		return { tags, status: h.state.tagStatus };
+	},
+	queryProcessIdentities: async (pids: readonly number[]) => {
+		const later =
+			h.state.identityQueries++ > 0 ? h.state.laterIdentity : undefined;
+		return {
+			identities: new Map(
+				pids.map((pid) => [
+					pid,
+					later ?? { command: "opengrep --lsp", start: "t0" },
+				]),
+			),
+			status: "ok",
+		};
+	},
 }));
 
 vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
@@ -269,6 +331,12 @@ beforeEach(() => {
 	h.state.alivePids = new Set<number>();
 	h.state.scannerPids.length = 0;
 	h.state.bareKills.length = 0;
+	h.state.identityQueries = 0;
+	h.state.laterIdentity = undefined;
+	h.state.tagStatus = "ok";
+	h.state.tagReads = 0;
+	h.state.laterTagStart = undefined;
+	h.state.laterTagPid = undefined;
 	// Each test gets a fresh cooldown stamp and sweep lock. PI_LENS_HOME is
 	// this file's OWN private dir (pinned in beforeAll above, #3042/#3050) —
 	// never the run-shared home other Vitest forks' real reaper sweeps use.
@@ -290,6 +358,108 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+});
+
+describe("#3538: the backstop asks again, immediately before each kill", () => {
+	const orphanRow = () =>
+		enumerationRow({
+			pid: 5000,
+			parentPid: 4000,
+			ageMs: 10 * 60 * 1000,
+			command: ORPHAN_COMMAND,
+		});
+	const killsOf = (pid: number) =>
+		vi
+			.mocked(process.kill)
+			.mock.calls.filter(
+				([target, signal]) => Math.abs(target) === pid && signal !== 0,
+			);
+
+	it("a pid that started again since the decision is not signalled", async () => {
+		h.state.stdout = orphanRow();
+		h.state.laterIdentity = { command: "opengrep --lsp", start: "t1" };
+
+		const outcome = await sweepUntrackedOrphans(FAST);
+
+		expect(killsOf(5000)).toEqual([]);
+		expect(outcome).toBe("clean");
+		expect(backstopMetadata()).toMatchObject({ killed: 0, identityChanged: 1 });
+	});
+
+	it("a pid that is no longer a managed binary is not signalled", async () => {
+		h.state.stdout = orphanRow();
+		h.state.laterIdentity = { command: "/usr/bin/vim notes.txt", start: "t0" };
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(killsOf(5000)).toEqual([]);
+		expect(backstopMetadata()).toMatchObject({ identityChanged: 1 });
+	});
+
+	it("a pid whose owner tag changed since the decision is not signalled (review F2)", async () => {
+		h.state.stdout = orphanRow();
+		h.state.laterTagStart = "t1";
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(killsOf(5000)).toEqual([]);
+		expect(backstopMetadata()).toMatchObject({ killed: 0, identityChanged: 1 });
+	});
+
+	it("a pid whose tag names another owner pid since the decision is not signalled (review F2)", async () => {
+		h.state.stdout = orphanRow();
+		h.state.laterTagPid = 4001;
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(killsOf(5000)).toEqual([]);
+		expect(backstopMetadata()).toMatchObject({ killed: 0, identityChanged: 1 });
+	});
+
+	it("the same process at the re-check is signalled (control)", async () => {
+		h.state.stdout = orphanRow();
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(killsOf(5000).length).toBeGreaterThan(0);
+		expect(backstopMetadata()).toMatchObject({ killed: 1, identityChanged: 0 });
+	});
+});
+
+describe("#3539 review F6: tagged and untagged candidates are counted", () => {
+	it("an all-untagged table reads as such, not as no orphans", async () => {
+		h.state.stdout = [
+			enumerationRow({
+				pid: 5000,
+				parentPid: 4000,
+				ageMs: 10 * 60 * 1000,
+				command: ORPHAN_COMMAND,
+			}),
+			// ppid 0: the fake tags nothing for it.
+			enumerationRow({
+				pid: 5001,
+				parentPid: 0,
+				ageMs: 10 * 60 * 1000,
+				command: ORPHAN_COMMAND,
+			}),
+		].join("\n");
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(backstopMetadata()).toMatchObject({ tagged: 1, untagged: 1 });
+	});
+});
+
+describe("#3539: a failed owner-tag read", () => {
+	it("is recorded, never read as a sweep that found nothing", async () => {
+		h.state.tagStatus = "timeout";
+
+		await sweepUntrackedOrphans(FAST);
+
+		expect(reasonsFor("orphan-backstop-scan-failed")).toEqual([
+			expect.objectContaining({ subject: "owner-tag-query" }),
+		]);
+	});
 });
 
 describe("#1857 item 1+3: kill accounting is verified and carries identity", () => {
@@ -684,6 +854,8 @@ describe("#1857 item 4: spawn-grace guard", () => {
 			parentPid: 4000,
 			command: "opengrep --lsp",
 			ageMs: 10 * 60 * 1000,
+			start: "t0",
+			ownerTag: { pid: 4000, start: "t0" },
 			...overrides,
 		};
 	}

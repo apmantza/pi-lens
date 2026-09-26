@@ -168,6 +168,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"scanner behavior cases, not a production population sweep",
 	"tests/clients/project-snapshot.test.ts":
 		"snapshot behavior cases, not a production population sweep",
+	"tests/clients/project-snapshot-cross-process.test.ts":
+		"cross-process project-snapshot cases; it lists one cache directory's stage files and asserts none are left, not a production population sweep",
 	"tests/clients/recent-touches.test.ts":
 		"touch behavior cases, not a production population sweep",
 	"tests/clients/review-graph-git-stamp.test.ts":

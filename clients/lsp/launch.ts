@@ -21,6 +21,7 @@ import { getGlobalPiLensDir } from "../file-utils.js";
 import { getGlobalPiLensLogDir } from "../probe-home-state.js";
 import { isFullyQualified } from "../path-utils.js";
 import { findGlobalBinary } from "../package-manager.js";
+import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,
@@ -45,6 +46,9 @@ export interface LSPProcess {
 }
 
 const isWindows = process.platform === "win32";
+
+/** Bound on the one-time read of this process's start for the owner tag. */
+const OWNER_TAG_READ_MS = 5_000;
 
 /**
  * Whether a resolved command must be spawned through a shell on Windows.
@@ -566,10 +570,15 @@ export async function launchLSP(
 	const cwd = String(options.cwd ?? process.cwd());
 	const mergedEnv = { ...process.env, ...options.env };
 	const augmentedPath = await buildAugmentedPath(resolvePathValue(mergedEnv));
+	// #3539: the child names this process's incarnation, so the orphan
+	// backstop can tell whose it is after this process dies and the child is
+	// reparented.
+	const ownerTag = await ownerTagForChildren({ timeoutMs: OWNER_TAG_READ_MS });
 	const env: NodeJS.ProcessEnv = {
 		...mergedEnv,
 		PATH: augmentedPath,
 		...(isWindows ? { Path: augmentedPath } : {}),
+		...(ownerTag === undefined ? {} : { [OWNER_TAG_ENV]: ownerTag }),
 	};
 
 	// Resolve command path
