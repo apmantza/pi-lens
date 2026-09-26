@@ -455,24 +455,73 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 	// first publish spends the one-shot hold: it was skipped already, and
 	// holding the next publish too would swallow the real answer. A dropped
 	// NON-empty publish leaves the hold armed (a timeout, never a false clean).
+	// A dropped empty publish that clears a cached or pending finding is not the
+	// hold's first-publish shape either, so it leaves the hold armed too.
 	it.each([
 		{ shape: "an empty first publish", diagnostics: [], spent: true },
 		{ shape: "a non-empty publish", diagnostics: [STALE], spent: false },
+		{
+			shape: "an empty publish over a cached push",
+			diagnostics: [],
+			spent: false,
+			cached: true,
+		},
+		{
+			shape: "an empty publish over a pending debounce",
+			diagnostics: [],
+			spent: false,
+			pending: true,
+		},
 	])(
 		"a fence-dropped $shape on the indexing server leaves the hold spent=$spent",
-		async ({ diagnostics, spent }) => {
+		async ({ diagnostics, spent, cached, pending }) => {
 			const h = harness({ serverId: "php" });
 			const touch = handleNotifyOpen(h.state, FILE, "content 1", "php");
 			await vi.advanceTimersByTimeAsync(0);
 			expect(h.state.diagnosticFences.size).toBe(1);
+			if (cached) h.state.pushDiagnostics.set(KEY, [STALE]);
+			const timer = setTimeout(() => {}, 60_000);
+			if (pending) h.state.pendingDiagnostics.set(KEY, timer);
 
 			h.publish({ uri: URI, diagnostics });
 
 			expect(h.state.emptyFirstPublishHoldSpent).toBe(spent);
+			// The spend is recorded, once, like a hold on the stored path.
+			const held = logLatency.mock.calls
+				.map(([entry]) => entry as { phase?: string; metadata?: unknown })
+				.filter((entry) => entry.phase === "lsp_empty_first_publish_held");
+			expect(held).toEqual(
+				spent
+					? [
+							expect.objectContaining({
+								metadata: expect.objectContaining({ via: "fence-drop" }),
+							}),
+						]
+					: [],
+			);
+			clearTimeout(timer);
+			h.state.pendingDiagnostics.delete(KEY);
 			h.change.resolve();
 			await touch;
 		},
 	);
+
+	it("records a fence-drop spend at most once per client", async () => {
+		const h = harness({ serverId: "php" });
+		const touch = handleNotifyOpen(h.state, FILE, "content 1", "php");
+		await vi.advanceTimersByTimeAsync(0);
+
+		h.publish({ uri: URI, diagnostics: [] });
+		h.publish({ uri: URI, diagnostics: [] });
+
+		const held = logLatency.mock.calls.filter(
+			([entry]) =>
+				(entry as { phase?: string }).phase === "lsp_empty_first_publish_held",
+		);
+		expect(held).toHaveLength(1);
+		h.change.resolve();
+		await touch;
+	});
 
 	// #3482: a publish received but never stored still answers one send, so the
 	// late-auxiliary backlog must count it; the fence drop is such a return.

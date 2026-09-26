@@ -2452,11 +2452,32 @@ export function setupIncomingHandlers(
 				if (
 					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish ===
 						"indexing" &&
+					!state.emptyFirstPublishHoldSpent &&
 					newDiags.length === 0 &&
 					!state.pushDiagnostics.has(normalizedPath) &&
 					!state.pendingDiagnostics.has(normalizedPath)
-				)
+				) {
 					state.emptyFirstPublishHoldSpent = true;
+					// One record per client session, as for the held path: without it
+					// a hold spent here reads as a hold that never engaged.
+					logLatency({
+						type: "phase",
+						phase: "lsp_empty_first_publish_held",
+						filePath: normalizedPath,
+						durationMs: Math.max(
+							0,
+							publishReceivedAt -
+								(state.documentOpenedAt.get(normalizedPath) ??
+									publishReceivedAt),
+						),
+						metadata: {
+							serverId: state.serverId,
+							emptyFirstPublish: "indexing",
+							via: "fence-drop",
+							pubVersion: "push-unversioned",
+						},
+					});
+				}
 				return;
 			}
 			if (PUB_DEBUG) {
