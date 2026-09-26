@@ -2444,12 +2444,17 @@ export function setupIncomingHandlers(
 			if (docVersion === undefined && fence) {
 				fence.dropped += 1;
 				countPublication(state, normalizedPath);
-				// #3310: the one-shot hold skips the publish that precedes the cold
-				// index. A fence-dropped publish was skipped already; holding the
-				// next one as well would swallow the server's real answer.
+				// #3310: the one-shot hold skips the empty first publish that precedes
+				// the cold index. A fence-dropped one was skipped already; holding the
+				// next one as well would swallow the server's real answer. Only the
+				// hold's own shape spends it: a dropped non-empty publish leaves the
+				// hold armed (a timeout, never a false clean).
 				if (
 					getStrategy(state.serverId, state.launchVariant).emptyFirstPublish ===
-					"indexing"
+						"indexing" &&
+					newDiags.length === 0 &&
+					!state.pushDiagnostics.has(normalizedPath) &&
+					!state.pendingDiagnostics.has(normalizedPath)
 				)
 					state.emptyFirstPublishHoldSpent = true;
 				return;

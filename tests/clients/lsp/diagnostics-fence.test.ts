@@ -451,6 +451,29 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 		]);
 	});
 
+	// #3310 x #3484: on the indexing-class server (php) a fence-dropped EMPTY
+	// first publish spends the one-shot hold: it was skipped already, and
+	// holding the next publish too would swallow the real answer. A dropped
+	// NON-empty publish leaves the hold armed (a timeout, never a false clean).
+	it.each([
+		{ shape: "an empty first publish", diagnostics: [], spent: true },
+		{ shape: "a non-empty publish", diagnostics: [STALE], spent: false },
+	])(
+		"a fence-dropped $shape on the indexing server leaves the hold spent=$spent",
+		async ({ diagnostics, spent }) => {
+			const h = harness({ serverId: "php" });
+			const touch = handleNotifyOpen(h.state, FILE, "content 1", "php");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(h.state.diagnosticFences.size).toBe(1);
+
+			h.publish({ uri: URI, diagnostics });
+
+			expect(h.state.emptyFirstPublishHoldSpent).toBe(spent);
+			h.change.resolve();
+			await touch;
+		},
+	);
+
 	// #3482: a publish received but never stored still answers one send, so the
 	// late-auxiliary backlog must count it; the fence drop is such a return.
 	it("counts a publish the fence dropped toward the path's publications (#3482)", async () => {
