@@ -1915,6 +1915,9 @@ export function appendActionableWarningsHistory(
 ): void {
 	const entries: ActionableWarningsHistoryEntry[] = [];
 	for (const file of report.files) {
+		// An incomplete re-verify carries prior warnings; it did not observe them
+		// this turn, so do not append duplicate history rows.
+		if (file.reVerifyIncomplete) continue;
 		for (const warning of file.warnings) {
 			entries.push({
 				timestamp: report.generatedAt,

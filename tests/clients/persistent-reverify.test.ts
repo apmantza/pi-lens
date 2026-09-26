@@ -40,6 +40,7 @@ import type { TouchFileResult } from "../../clients/lsp/diagnostic-binding.js";
 import type { LSPDiagnostic } from "../../clients/lsp/client.js";
 import {
 	formatActionableWarningsAdvisory,
+	getActionableWarningsHistoryPath,
 	publishActionableWarningsReport,
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
@@ -308,6 +309,67 @@ describe("persistent reverify (#3170)", () => {
 		const replacement = result.replacementFiles[0];
 		expect(replacement?.warnings).toHaveLength(1);
 		expect(replacement?.reVerifyIncomplete).toBe(true);
+	});
+
+	it("#3205: repeated incomplete re-verifies stay visible but do not grow observed history", async () => {
+		// Recurrence: a failed re-verify is carried, not observed; publishing it
+		// on successive turns must not append duplicate history rows.
+		const carried = makeCarriedReport(filePath);
+		const cacheManager = new CacheManager(false);
+		cacheManager.writeCache("actionable-warnings", carried, cwd);
+		const historyPath = getActionableWarningsHistoryPath(cwd);
+		const historyLineCount = () =>
+			fs.existsSync(historyPath)
+				? fs.readFileSync(historyPath, "utf8").trimEnd().split("\n").length
+				: 0;
+		const failReverifyAndPublish = async () => {
+			const result = await runPersistentReverify({
+				report: carried,
+				cwd,
+				lspService: makeService("throw"),
+			});
+			expect(result.replacementFiles[0]?.reVerifyIncomplete).toBe(true);
+			publishActionableWarningsReport(
+				cacheManager,
+				cwd,
+				{ ...carried, files: result.replacementFiles },
+				{ origin: "in-band" },
+			);
+		};
+
+		await failReverifyAndPublish();
+		const firstTurnLines = historyLineCount();
+		const persisted = cacheManager.readCache("actionable-warnings", cwd)
+			?.data as ActionableWarningsReport;
+		const persistedFile = persisted.files.find(
+			(file) => file.filePath === filePath,
+		);
+		expect(persistedFile?.reVerifyIncomplete).toBe(true);
+		expect(formatActionableWarningsAdvisory(persisted, cwd)).toContain(
+			"(re-verify incomplete)",
+		);
+
+		await failReverifyAndPublish();
+		const secondTurnLines = historyLineCount();
+		expect(secondTurnLines).toBe(firstTurnLines);
+		expect(secondTurnLines).toBe(0);
+
+		const fresh = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService({
+				diags: [makeDiag()],
+				confirmation: "confirmed",
+			}),
+		});
+		expect(fresh.replacementFiles[0]?.reVerified).toBe(true);
+		publishActionableWarningsReport(
+			cacheManager,
+			cwd,
+			{ ...carried, files: fresh.replacementFiles },
+			{ origin: "in-band" },
+		);
+		expect(historyLineCount()).toBe(secondTurnLines + 1);
 	});
 
 	it("F6: an entry re-arms — the pass re-verifies it again on the next run", async () => {
