@@ -5011,7 +5011,8 @@ export class LSPService {
 			const notifyDeferredServerIds: string[] = [];
 			// #3481: servers whose queue did not send this touch's content: a later
 			// read was sent instead, or the path is closing or was renamed away
-			// (#3477). The touch must not stamp the drift record, and its
+			// (#3477), or the client died or its transport refused the write
+			// (#3543). The touch must not stamp the drift record, and its
 			// lsp_touch_file row names them.
 			const supersededServerIds: string[] = [];
 			if (!notifySkipped) {
@@ -5209,9 +5210,9 @@ export class LSPService {
 								entry.info.id,
 							);
 						} else if (wrote === false) {
-							// #3481: the server does not hold `content` (a later read, or a
-							// closing/closed path), so no debounce entry either: a revert
-							// to `content` must be sent.
+							// #3481: the server does not hold `content` (a later read, a
+							// closing/closed path, or a dead client, #3543), so no debounce
+							// entry either: a revert to `content` must be sent.
 							supersededServerIds.push(entry.info.id);
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
@@ -7178,8 +7179,8 @@ export class LSPService {
 						notifyWriteTimedOutServerIds,
 					}),
 					// #3481: servers that did not send this touch's content (a later
-					// read won, or the path was closing or renamed away). Absent
-					// when none.
+					// read won, the path was closing or renamed away, or the client
+					// was dead, #3543). Absent when none.
 					...(supersededServerIds.length > 0 && { supersededServerIds }),
 					diagnosticsTimedOut,
 					inconclusive,

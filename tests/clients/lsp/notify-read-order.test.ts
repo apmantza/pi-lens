@@ -383,10 +383,23 @@ describe("#3543 — a touch on a dead client records nothing", () => {
 	it("writes no debounce entry or drift record for a touch on a dead client", async () => {
 		const { state, wire, touch, recordFp } = await setup();
 		state.isConnected = false;
+		logLatency.mockClear();
 		await touch(B);
 
 		expect(wire).toEqual([`didOpen:${A}`]);
 		expect(recordFp()).toBe(fingerprintDocumentContent(A));
+		// The row says which server did not take the content.
+		const rows = logLatency.mock.calls
+			.map(
+				([entry]) =>
+					entry as {
+						phase?: string;
+						metadata?: { supersededServerIds?: string[] };
+					},
+			)
+			.filter((entry) => entry.phase === "lsp_touch_file")
+			.map((entry) => entry.metadata?.supersededServerIds);
+		expect(rows).toEqual([["typescript"]]);
 		// Inside the debounce window: B was never pushed, so it goes out now.
 		state.isConnected = true;
 		await touch(B);
