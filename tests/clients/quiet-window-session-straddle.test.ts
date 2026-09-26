@@ -256,7 +256,7 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 	});
 
 	it("leaves a touch recorded after the replacement for session 2's own window, and never drops it", async () => {
-		// Shape 54, the no-drop direction (#3499 review round 1, probe P1). The
+		// FixNoStartCheck; shape 54, the no-drop direction (#3499 round 1). The
 		// replacement lands inside the settle wait and session 2 records its own
 		// tier-3 touch. Session 2's agent_settled window is skipped (a window is
 		// still in progress). The stale window's reconcile starts only after the
