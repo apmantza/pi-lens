@@ -11,6 +11,8 @@ section: Fixed
   host's OS start time; a kill needs the same start as recorded, a record
   without one is never killed by pid, and the identity is checked again right
   before each signal. On Linux the start includes the boot id, so a record
-  that survived a reboot never matches. A new session on a crashed
-  session's pid no longer takes over its children. `instances.json` only gains fields, so older
-  versions still read it (refs #3538).
+  that survived a reboot never matches, and a session that cannot read this
+  boot's id (an empty or bound-over `boot_id`) judges no start at all rather
+  than taking every live owner for a reused pid. A new session on a crashed
+  session's pid no longer takes over its children. `instances.json` only
+  gains fields, so older versions still read it (refs #3538).

@@ -358,7 +358,11 @@ export function readLinuxProcessStart(pid) {
 		const boot = fs
 			.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
 			.trim();
-		return ticks === undefined ? undefined : `${ticks}@${boot}`;
+		// An empty or bound-over boot_id would name every process under a boot
+		// no record or tag carries (#3538 review R3-F1): unknown, not a start.
+		return ticks === undefined || !/^[0-9a-f-]{36}$/.test(boot)
+			? undefined
+			: `${ticks}@${boot}`;
 	} catch {
 		return undefined;
 	}

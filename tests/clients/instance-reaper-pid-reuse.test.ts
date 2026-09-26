@@ -151,7 +151,7 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 
 const { sweepOrphans, sweepUntrackedOrphans } =
 	await import("../../clients/instance-reaper.js");
-const { getResourceFootprint } =
+const { getResourceFootprint, _settleRegistryMutationsForTests } =
 	await import("../../clients/instance-registry.js");
 
 const TSLS = "/opt/fake/node_modules/typescript-language-server/lib/cli.mjs";
@@ -221,8 +221,16 @@ function startOf(pid: number): string {
 		.trim();
 	return `${ticks}@${boot}`;
 }
-/** A start that is not any live process's: stands for "the pid was reused". */
-const OTHER_START = "1@00000000-0000-4000-8000-000000000000";
+/**
+ * A start of THIS boot that is not any test process's: stands for "the pid
+ * was reused". A start from another boot is not a reuse but an unjudgeable
+ * read (#3538 review R3-F1). The file's cases run on Linux only.
+ */
+const OTHER_START = `1@${
+	process.platform === "linux"
+		? fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
+		: ""
+}`;
 
 interface Kid {
 	pid: number;
@@ -557,11 +565,9 @@ describe.skipIf(process.platform !== "linux")(
 			]);
 
 			await getResourceFootprint();
-			// The health read prunes fire-and-forget; give a prune every turn it
-			// could need to land before reading the file.
-			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
-				await new Promise((resolve) => setImmediate(resolve));
-			}
+			// The health read prunes fire-and-forget on the registry's mutation
+			// queue; wait for that prune itself before reading the file.
+			await _settleRegistryMutationsForTests();
 			expect(registryEntries().map((e) => e.pid)).toEqual([owner]);
 
 			const exited = once(orphan, "exit");
@@ -862,10 +868,9 @@ describe.skipIf(process.platform !== "linux")(
 			]);
 
 			await getResourceFootprint();
-			// A prune is fire-and-forget; give it every turn it could need.
-			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
-				await new Promise((resolve) => setImmediate(resolve));
-			}
+			// The prune is fire-and-forget on the registry's mutation queue:
+			// wait for it, not for a number of turns (#3538 review R3-F3).
+			await _settleRegistryMutationsForTests();
 
 			expect(registryEntries()).toEqual([]);
 		});
@@ -874,10 +879,9 @@ describe.skipIf(process.platform !== "linux")(
 			writeRegistry([{ ...entry(deadPid(), []), pidNamespace: "pid:[1]" }]);
 
 			await getResourceFootprint();
-			// A prune is fire-and-forget; give it every turn it could need.
-			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
-				await new Promise((resolve) => setImmediate(resolve));
-			}
+			// The prune is fire-and-forget on the registry's mutation queue:
+			// wait for it, not for a number of turns (#3538 review R3-F3).
+			await _settleRegistryMutationsForTests();
 
 			expect(registryEntries()).toHaveLength(1);
 		});

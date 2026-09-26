@@ -1204,8 +1204,9 @@ export async function getResourceFootprint(
 		}));
 	if (dead.length > 0) {
 		// Fire-and-forget: a health-report read must never block on, or fail
-		// because of, a registry write.
-		prunePids(dead).catch(() => {
+		// because of, a registry write. Queued behind this process's other
+		// registry writes, so `_settleRegistryMutationsForTests` awaits it too.
+		queueRegistryMutation(() => prunePids(dead)).catch(() => {
 			// best-effort — a dead-pid entry that fails to prune here is simply
 			// re-evaluated (and re-dropped from the report) on the next read, and
 			// remains catchable by the scheduled reaper sweep regardless.

@@ -165,11 +165,27 @@ function isInstanceKillEligible(
 	// #3538: a live pid that started at a different time is another process
 	// on a reused pid, and the instance that registered this entry is dead.
 	// Both starts must be known; an unknown one falls back to the pid alone.
-	const current = startOf(instance.pid);
+	return isAnotherProcess(instance.processStart, startOf(instance.pid));
+}
+
+/**
+ * Whether a live pid's `current` start names another process than the
+ * `recorded` one. Both must be known, and both must come from one boot
+ * (`<ticks>@<boot_id>` on Linux; no boot elsewhere): a live pid cannot carry
+ * an earlier boot's start, so a boot that disagrees is this reader's own view
+ * (an empty or bound-over boot_id) and cannot be judged (#3538 review R3-F1).
+ */
+function isAnotherProcess(
+	recorded: string | undefined,
+	current: string | undefined,
+): boolean {
+	const bootOf = (start: string) =>
+		start.includes("@") ? start.slice(start.indexOf("@") + 1) : "";
 	return (
-		instance.processStart !== undefined &&
+		recorded !== undefined &&
 		current !== undefined &&
-		current !== instance.processStart
+		current !== recorded &&
+		bootOf(current) === bootOf(recorded)
 	);
 }
 
@@ -793,13 +809,13 @@ export interface BackstopDecisionOptions {
  * POSIX reparents an orphan to init or a subreaper, which is alive, so the
  * ppid never showed a dead owner there and the backstop reaped nothing. The
  * owner tag names the owner's incarnation, (pid, start): it is dead when its
- * pid is, or when a process with another start holds that pid now. A process
- * with no tag was not spawned by pi-lens (or predates #3539) and is never
- * judged here.
+ * pid is, or when a process with another start of the same boot holds that
+ * pid now (see `isAnotherProcess`). A process with no tag was not spawned by
+ * pi-lens (or predates #3539) and is never judged here.
  *
  * Windows keeps the dead parent's pid as the orphan's ppid, and reuses pids:
- * a live process on that pid that started after this one cannot be its
- * parent. A malformed or unresolvable ppid is UNVERIFIABLE, never "confirmed
+ * a live process on that pid that started more than an hour after this one
+ * cannot be its parent. A malformed or unresolvable ppid is UNVERIFIABLE, never "confirmed
  * dead", and an unknown start falls back to the pid.
  */
 function isOwnerDead(
@@ -812,8 +828,7 @@ function isOwnerDead(
 		const tag = proc.ownerTag;
 		if (tag === undefined) return false;
 		if (!isPidAlive(tag.pid)) return true;
-		const current = startOf(tag.pid);
-		return current !== undefined && current !== tag.start;
+		return isAnotherProcess(tag.start, startOf(tag.pid));
 	}
 	const parent = proc.parentPid;
 	if (!Number.isFinite(parent) || parent <= 0 || parent === proc.pid)
@@ -821,8 +836,9 @@ function isOwnerDead(
 	if (!isPidAlive(parent)) return true;
 	// A parent more than an hour younger than its child is another process on
 	// a reused ppid. The hour absorbs the DST fall-back ambiguity of the local
-	// time CIM converts from: a real parent can read up to an hour late, and
-	// a reuse inside that hour waits for a later sweep rather than risk a kill.
+	// time CIM converts from: a real parent can read up to an hour late. The
+	// cost: an orphan whose ppid was reused within the hour is never judged by
+	// this rule, and leaks until the process on that pid exits.
 	const parentStart = Date.parse(startOf(parent) ?? "");
 	return parentStart > Date.parse(proc.start ?? "") + WINDOWS_DST_MARGIN_MS;
 }

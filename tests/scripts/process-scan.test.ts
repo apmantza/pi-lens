@@ -7,7 +7,8 @@
  */
 
 import * as fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import fsModule from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import {
 	ageMsFromPosixEtime,
 	buildProcessQuery,
@@ -429,6 +430,50 @@ describe("process start times (#3538)", () => {
 			expect(readLinuxProcessStart(2 ** 22 + 1)).toBeUndefined();
 		},
 	);
+
+	it("reads a start whose boot id is empty or malformed as unknown, never as a start of another boot (#3538 review R3-F1)", () => {
+		// A reader whose boot_id is bound over (an empty file) or substituted
+		// would otherwise name every process under a boot no tag or record
+		// carries, and a live owner would read as dead.
+		// After "S", fields 4.. read 3, 4, 5, ...: field 22 (starttime) is "21".
+		const tail = Array.from({ length: 50 }, (_, i) => String(i + 3)).join(" ");
+		const real = fsModule.readFileSync;
+		let boot = "";
+		const spy = vi
+			.spyOn(fsModule, "readFileSync")
+			.mockImplementation(((
+				file: fs.PathOrFileDescriptor,
+				...rest: unknown[]
+			) =>
+				file === "/proc/4242/stat"
+					? `4242 (x) S ${tail}`
+					: file === "/proc/sys/kernel/random/boot_id"
+						? boot
+						: (real as (...args: unknown[]) => unknown)(
+								file,
+								...rest,
+							)) as typeof real);
+		try {
+			for (const bad of [
+				"",
+				"\n",
+				"not-a-boot-id\n",
+				"0B1C2D3E-4F50-4617-8293-A4B5C6D7E8F9\n",
+			]) {
+				boot = bad;
+				expect(
+					readLinuxProcessStart(4242),
+					JSON.stringify(bad),
+				).toBeUndefined();
+			}
+			boot = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9\n";
+			expect(readLinuxProcessStart(4242)).toBe(
+				"21@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });
 
 describe("parseProcessTable: the extended projections (#2443)", () => {

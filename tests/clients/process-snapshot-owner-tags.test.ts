@@ -82,7 +82,10 @@ describe("parseOwnerTag", () => {
 	});
 
 	it("reads pid 0 as no owner", () => {
-		expect(parseOwnerTag("0:34567")).toBeUndefined();
+		// A well-formed start, so only the pid can refuse it (#3538 review R3-F2).
+		expect(
+			parseOwnerTag("0:34567@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9"),
+		).toBeUndefined();
 	});
 });
 
@@ -103,7 +106,8 @@ describe("readOwnerTags on Linux: the pid namespace (F1)", () => {
 	it("returns no tag for a process in another pid namespace", async () => {
 		setPlatform("linux");
 		h.namespaces.set(7, "pid:[container]");
-		h.environ.set(7, "1:100");
+		// A valid tag, so only the namespace can refuse it (#3538 review R3-F2).
+		h.environ.set(7, "5:100@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9");
 
 		const { tags } = await readOwnerTags([7], { timeoutMs: 1_000 });
 

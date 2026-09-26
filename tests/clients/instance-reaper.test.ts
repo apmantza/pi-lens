@@ -660,6 +660,43 @@ describe("decideBackstopOrphanReaping on POSIX: the owner tag (#3539)", () => {
 			}),
 		).toEqual([]);
 	});
+
+	// #3538 review R3-F1: a live pid cannot carry an earlier boot's tag, so a
+	// boot that disagrees is this reader's view (an empty or bound-over
+	// boot_id), never a reused owner pid.
+	const BOOT_A = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	const BOOT_B = "11111111-2222-4333-8444-555555555555";
+
+	it("a live owner read under another boot, or none, is not judged dead (R3-F1)", () => {
+		const proc = osProc({
+			parentPid: 1,
+			ownerTag: { pid: 900, start: `5@${BOOT_A}` },
+		});
+
+		for (const current of [`5@${BOOT_B}`, "5@", `6@${BOOT_B}`]) {
+			expect(
+				decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+					...POSIX,
+					startOf: () => current,
+				}),
+				current,
+			).toEqual([]);
+		}
+	});
+
+	it("an owner pid held by another start of the same boot is a dead owner (R3-F1 control)", () => {
+		const proc = osProc({
+			parentPid: 1,
+			ownerTag: { pid: 900, start: `5@${BOOT_A}` },
+		});
+
+		expect(
+			decideBackstopOrphanReaping([proc], [], alivePids(1, 900), {
+				...POSIX,
+				startOf: () => `6@${BOOT_A}`,
+			}),
+		).toEqual([proc]);
+	});
 });
 
 describe("decideOrphanReaping — host start time (#3538)", () => {
@@ -690,6 +727,60 @@ describe("decideOrphanReaping — host start time (#3538)", () => {
 
 		expect(decision.deadInstances).toHaveLength(0);
 		expect(decision.childrenToKill).toHaveLength(0);
+	});
+
+	it("a live host whose entry has no start is judged by its pid alone, under a start with no boot (macOS)", () => {
+		const decision = decideOrphanReaping(
+			[instance({ pid: 1, lspChildren: [orphan] })],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => "2026-09-26T09:26:02.000Z",
+		);
+
+		expect(decision.deadInstances).toHaveLength(0);
+	});
+
+	const BOOT_A = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	const BOOT_B = "11111111-2222-4333-8444-555555555555";
+
+	it("a live host read under another boot, or none, is not judged dead (R3-F1)", () => {
+		for (const current of [`7@${BOOT_B}`, "7@", `8@${BOOT_B}`]) {
+			const decision = decideOrphanReaping(
+				[
+					instance({
+						pid: 1,
+						processStart: `7@${BOOT_A}`,
+						lspChildren: [orphan],
+					}),
+				],
+				alivePids(1, 1000),
+				matchAll,
+				Date.now(),
+				() => current,
+			);
+
+			expect(decision.deadInstances, current).toHaveLength(0);
+			expect(decision.childrenToKill, current).toHaveLength(0);
+		}
+	});
+
+	it("a live host pid under another start of the same boot is a dead instance (R3-F1 control)", () => {
+		const decision = decideOrphanReaping(
+			[
+				instance({
+					pid: 1,
+					processStart: `7@${BOOT_A}`,
+					lspChildren: [orphan],
+				}),
+			],
+			alivePids(1, 1000),
+			matchAll,
+			Date.now(),
+			() => `8@${BOOT_A}`,
+		);
+
+		expect(decision.deadInstances).toHaveLength(1);
 	});
 });
 
