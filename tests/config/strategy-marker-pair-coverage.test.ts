@@ -45,6 +45,8 @@ const repoRoot = path.resolve(
 export const BEHAVIOUR_MARKERS = [
 	"diagnosticsFence",
 	"emptyFirstPublish",
+	// #3548: typos' close-publish marker.
+	"publishesOnClose",
 	"reopenOnResync",
 	"rescansOnSave",
 	"silentOnClean",

@@ -82,10 +82,38 @@ CONSTANTS
     SaveExpect,       \* publications expected per save beyond its send:
                       \* 0 before the #3482 surplus fix, 1 the fix, 2 a mutant
     Closes,           \* close-and-reopen cycles
-    Carry             \* "none": counts restart at a fresh open (before the
+    Carry,            \* "none": counts restart at a fresh open (before the
                       \* fix); "span": they span the close, and a publish
                       \* dropped while closed counts; "spanNoDrop": a mutant
                       \* that does not count the dropped publish
+    AllowClosePublish, \* #3548: this server publishes once, unconditionally,
+                      \* as a direct effect of the close itself (typos'
+                      \* did_close), distinct from any queued scan still in
+                      \* flight. Pending from the Close step until ClosePublish
+                      \* consumes it — which, unlike round 1's design, may be
+                      \* ANY LATER STEP, including after a reopen (AgentTouch's
+                      \* reopen branch does NOT clear it): the close-triggered
+                      \* publish is an independent in-flight message with no
+                      \* tie to the document's open/closed lifecycle, exactly
+                      \* what let it slip through on the real code's ordinary
+                      \* open-document publish path once it arrived late.
+    ClosePublishFiltered \* #3548 review r2: is the close-triggered publish
+                      \* recognised and dropped BEFORE it can be stored or
+                      \* counted, regardless of open/closed state or arrival
+                      \* order (client.ts's version-less + publishesOnClose
+                      \* guard, checked before the closedDocuments branch)?
+                      \* TRUE is the fix — round 1's per-close credit
+                      \* (closePublishCredit, closePublishSkipsRemaining) and
+                      \* its own reopen-leak (review r1 B1) are gone entirely,
+                      \* not merely reset, since there is no state left to
+                      \* leak. FALSE is the bug this review round caught: once
+                      \* it arrives on the OPEN path (after a reopen), it is
+                      \* processed exactly like any other version-less
+                      \* publish — stored (overwriting a real, already-stored
+                      \* answer) and counted (satisfying the backlog, so the
+                      \* next drain reports a false clean) — modelled by
+                      \* ClosePublish falling through to the SAME branches
+                      \* Publish/SurplusPublish use.
 
 None == [none |-> TRUE]
 
@@ -116,14 +144,25 @@ VARIABLES
     snap,        \* the cache entry readCachedDiagnosticsForServers returned
     delivered,   \* set of [ver, disk]: findings delivered, disk at the gate
     closed,      \* the path is closed on the client
-    closesLeft
+    closesLeft,
+    closePublishPending \* #3548: a publishesOnClose server's own close-
+                 \* triggered publish is still owed, from the close that set
+                 \* it (Close) until ClosePublish consumes it — which may be
+                 \* ANY later step, closed or open, unlike round 1's
+                 \* closedDocuments-scoped credit. A boolean, not a counter:
+                 \* a second Close before the first artifact is consumed just
+                 \* re-asserts TRUE (a simplification — at most one arrival is
+                 \* modelled outstanding at a time — but the case under test,
+                 \* ONE close-triggered publish surviving into ITS OWN
+                 \* reopen, needs no more).
 
 vars == <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
           touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap, delivered,
-          sentCount, bound, lastSent, refresh, surplus, preN, closed, closesLeft>>
+          sentCount, bound, lastSent, refresh, surplus, preN, closed, closesLeft,
+          closePublishPending>>
 
 refreshVars == <<refresh, surplus, preN>>
-lifeVars == <<closed, closesLeft>>
+lifeVars == <<closed, closesLeft, closePublishPending>>
 
 \* countPublication: one more publication, capped at the expected ones.
 Counted(b) == IF b + 1 > sentCount THEN sentCount ELSE b + 1
@@ -141,7 +180,7 @@ Init ==
     /\ pubCount = 0 /\ cache = None
     /\ pending = None /\ drain = "idle" /\ pair = None /\ snap = None
     /\ delivered = {}
-    /\ closed = FALSE /\ closesLeft = Closes
+    /\ closed = FALSE /\ closesLeft = Closes /\ closePublishPending = FALSE
 
 -----------------------------------------------------------------------------
 \* Agent edit + touch notify. The write and the notify are one step: the
@@ -164,12 +203,18 @@ AgentTouch ==
           /\ closed' = FALSE
           /\ lastSent' = disk + 1
           /\ cache' = None
+          \* #3548 review r2: unlike round 1's credit, a reopen (this branch
+          \* — client.ts handleNotifyOpenOnce's closedDocuments?.delete) does
+          \* NOT touch closePublishPending. The close-triggered publish it
+          \* may still owe is an independent in-flight message with no tie to
+          \* the open/closed lifecycle; it stays owed until ClosePublish
+          \* consumes it, exactly what lets it arrive on the now-open path.
        \/ \* #1459 deferred: never sent, never cleared, never marked
           /\ AllowDefer
           /\ touchVer' = 0
           /\ UNCHANGED <<sent, sentCount, lastSent, cache, bound, closed>>
     /\ UNCHANGED <<extLeft, drainsLeft, pubCount, pending, drain, pair, snap, delivered,
-                   refreshVars, closesLeft>>
+                   refreshVars, closesLeft, closePublishPending>>
 
 \* The path is closed (#3477: a rename away) and its entry cleared. Before
 \* the fix the lifetime's sends and counts are dropped. Its queued scans
@@ -180,14 +225,61 @@ Close ==
     /\ sentCount' = IF Carry = "none" THEN 0 ELSE sentCount
     /\ bound' = IF Carry = "none" THEN 0 ELSE bound
     /\ cache' = None
+    \* #3548: a publishesOnClose server owes exactly one close-triggered
+    \* publish for THIS close; ClosePublish consumes it, whenever it fires.
+    /\ closePublishPending' = AllowClosePublish
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pubCount, pending, drain, pair, snap,
                    delivered, lastSent, refreshVars>>
 
-\* A publish for a closed path: dropped unstored; with the fix, counted.
+\* A real queued scan's publish for a closed path: dropped unstored, counted
+\* only under the "span" accounting (#3482, independent of #3548). Never
+\* shares state with the close-triggered publish (ClosePublish) — round 1's
+\* per-close credit is gone; nothing about a `publishesOnClose` server
+\* changes how ITS real, closedDocuments-branch publishes are handled.
 DroppedWhileClosed ==
     /\ bound' = IF Carry = "span" THEN Counted(bound) ELSE bound
     /\ UNCHANGED <<clock, cache, pubCount>>
+
+\* #3548: the server's OWN close-triggered publish (typos' did_close: an
+\* empty, version-less set on every close). It never overtakes a genuine
+\* queued scan since it is not itself queued in `sent`. Fires whenever
+\* closePublishPending, closed or open — the reopen carries it forward
+\* unresolved (AgentTouch does not clear it) — so THIS action is exactly
+\* where a close-triggered publish that survives into the open lifetime is
+\* modelled. A server this marker was never set for (AllowClosePublish =
+\* FALSE) is never granted `closePublishPending`, so this action never fires
+\* for it at all — the required inverse: its own close-time publish, via
+\* Publish/SurplusPublish, is unaffected either way.
+\*
+\* ClosePublishFiltered (the fix, client.ts's version-less + publishesOnClose
+\* guard, checked before EVERYTHING else in the notification handler):
+\* state-transparent — no store, no count, in EITHER closed or open state.
+\* ~ClosePublishFiltered (the bug this review round caught): falls through
+\* to whichever branch a same-shaped publish would use — closed, the
+\* `DroppedWhileClosed` (#3482 "span") accounting a real scan would get;
+\* open, treated exactly like Publish: stored with a sentinel `ver = 0` (no
+\* real content ever carries this — `disk` starts at 1 and only increases,
+\* so any delivery of it is unconditionally stale) and counted. That stored,
+\* counted sentinel is PROBE-STALE-EMPTY-OVERWRITES-REAL: it overwrites
+\* whatever real answer `cache` held and satisfies the backlog binding, so
+\* the next drain reports a false clean — caught by NoStaleFindings the
+\* moment it is ever delivered, without a dedicated invariant, because a
+\* delivery whose `ver` no real send ever produced can never equal `disk`.
+ClosePublish ==
+    /\ closePublishPending
+    /\ closePublishPending' = FALSE
+    /\ IF ClosePublishFiltered
+         THEN /\ UNCHANGED <<clock, cache, pubCount, bound>>
+         ELSE IF closed
+                THEN DroppedWhileClosed
+                ELSE /\ clock' = clock + 1
+                     /\ cache' = [ver |-> 0, ts |-> clock + 1]
+                     /\ pubCount' = pubCount + 1
+                     /\ bound' = Counted(bound)
+    /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
+                   touchBase, touchAt, sent, pending, drain, pair, snap,
+                   delivered, sentCount, lastSent, refreshVars, closed, closesLeft>>
 
 \* Aux-grace outcome and mark: evidence check, filter and mark run in one
 \* continuation (index.ts ~5920-6030), so one step.
@@ -228,7 +320,8 @@ Publish ==
               /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent, refresh, surplus, closed, closesLeft>>
+                   sentCount, lastSent, refresh, surplus, closed, closesLeft,
+                   closePublishPending>>
 
 CancelSuperseded ==
     /\ AllowCancel /\ Len(sent) > 1
@@ -264,7 +357,7 @@ SurplusPublish ==
               /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent, closed, closesLeft>>
+                   sentCount, lastSent, closed, closesLeft, closePublishPending>>
 
 -----------------------------------------------------------------------------
 \* rearmPendingAuxiliaryCoverage; past the ceiling the pair drops.
@@ -314,7 +407,7 @@ DrainGate ==
                    sentCount, bound, lastSent, refreshVars, lifeVars>>
 
 Next == AgentTouch \/ Close \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSuperseded
-        \/ RulesRefreshed \/ SurplusPublish
+        \/ RulesRefreshed \/ SurplusPublish \/ ClosePublish
         \/ DrainStart \/ DrainRead \/ DrainGate
 
 Spec == Init /\ [][Next]_vars
@@ -336,6 +429,12 @@ NoFreshWithheld ==
     (/\ drain = "read" /\ cache /= None /\ cache.ver = disk
      /\ cache.ts > pair.marked /\ ~FreshDue)
         => ~(CountBind /\ bound - pair.seq < pair.need)
+
+\* #3548 review r1 B1's own invariant (NoExcessCloseCredit, over a
+\* closePublishCredit counter) is retired along with the credit itself: the
+\* review r2 stateless redesign (ClosePublishFiltered) leaves no per-close
+\* state to leak, so there is nothing left for that invariant to name. See
+\* formal/late-aux-drain/README.md for the history.
 
 \* Sanity: the drain can deliver at all (checked as a violated "invariant").
 NeverDelivers == delivered = {}

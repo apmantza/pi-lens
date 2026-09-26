@@ -7,7 +7,11 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { readChangesSince } from "../../clients/project-changes.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	MAX_PENDING_CASCADE_RUNS,
+	RuntimeCoordinator,
+} from "../../clients/runtime-coordinator.js";
+import { gatedPromise } from "../support/fault-injection.js";
 import {
 	registerPrimarySession,
 	releasePrimarySession,
@@ -1404,6 +1408,188 @@ describe("monorepo turn-state cwd alignment", () => {
 			env.cleanup();
 		}
 	});
+
+	it("hands the pipeline the session generation current when it dispatches (#3512)", async () => {
+		// The deferred cascade outlives this handler, and a session-1 compute
+		// can record a tier-3 touch after a same-cwd replacement. Its record
+		// site drops the touch through this handle, so the handle must name the
+		// session the dispatch started in, not the one current at record time.
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const env = setupTestEnvironment("pi-lens-3512-dispatch-generation-");
+		try {
+			const filePath = createTempFile(
+				env.tmpDir,
+				"edit.ts",
+				"export const x = 2;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.resetForSession();
+			runtime.beginTurn();
+			const dispatchGeneration = runtime.sessionGeneration;
+
+			const dispatch = async (content: string) => {
+				fs.writeFileSync(filePath, content);
+				await handleToolResult({
+					event: {
+						toolName: "edit",
+						input: { path: filePath },
+						details: { diff: `+  1 ${content.trim()}` },
+						content: [{ type: "text", text: "ok" }],
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: {
+						addModifiedRange: () => {},
+						readTurnState: () => ({}),
+					},
+					biomeClient: {},
+					ruffClient: {},
+					testRunnerClient: {},
+					metricsClient: {},
+					resetLSPService: () => {},
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as any);
+				return vi.mocked(runPipeline).mock.calls.at(-1)?.[0].sessionGeneration;
+			};
+
+			const sessionOne = await dispatch("export const x = 2;\n");
+			const currentAtDispatch = sessionOne?.isCurrent();
+			// A same-cwd replacement; the next dispatch belongs to session 2.
+			runtime.resetForSession();
+			const sessionTwo = await dispatch("export const x = 3;\n");
+			expect({
+				generation: sessionOne?.generation,
+				currentAtDispatch,
+				currentAfterReplacement: sessionOne?.isCurrent(),
+				sessionTwoCurrent: sessionTwo?.isCurrent(),
+			}).toEqual({
+				generation: dispatchGeneration,
+				currentAtDispatch: true,
+				currentAfterReplacement: false,
+				sessionTwoCurrent: true,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it.each(["parked", "overflow"] as const)(
+		"drops the cascade a session-1 handler admits after the replacement, %s (#3512 r1 B2)",
+		async (path_) => {
+			// index.ts' bound abandons this handler without cancelling it, and
+			// pi's teardown aborts only the active run, so a handler whose
+			// pipeline outlives turn end resumes after session 2's reset and
+			// admits its compute. The admission must use the generation captured
+			// when the handler dispatched, not one captured at admission.
+			const { runPipeline } = await import("../../clients/pipeline.js");
+			const entered = gatedPromise<void>();
+			const release = gatedPromise<void>();
+			const sessionOneRun = {
+				filePath: "/proj/session-one.ts",
+				origin: { projectSeq: 1, turnSeq: 1 },
+				result: undefined,
+				neighborCount: 1,
+				diagnosticCount: 1,
+			};
+			vi.mocked(runPipeline).mockImplementation(async () => {
+				entered.resolve();
+				await release.promise;
+				return {
+					output: "",
+					hasBlockers: false,
+					isError: false,
+					fileModified: false,
+					cascadePromise: Promise.resolve(sessionOneRun),
+				};
+			});
+			resetDegradationLedger();
+			const env = setupTestEnvironment("pi-lens-3512-late-admission-");
+			try {
+				const filePath = createTempFile(
+					env.tmpDir,
+					"edit.ts",
+					"export const x = 2;\n",
+				);
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.resetForSession();
+				runtime.beginTurn();
+
+				const handler = handleToolResult({
+					event: {
+						toolName: "edit",
+						input: { path: filePath },
+						details: { diff: "+  1 export const x = 2;" },
+						content: [{ type: "text", text: "ok" }],
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: {
+						addModifiedRange: () => {},
+						readTurnState: () => ({}),
+					},
+					biomeClient: {},
+					ruffClient: {},
+					testRunnerClient: {},
+					metricsClient: {},
+					resetLSPService: () => {},
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as any);
+				await entered.promise;
+
+				// The replacement's reset lands while the pipeline is in flight.
+				runtime.resetForSession();
+				// Session 2's own computes: on the overflow row they fill the cap,
+				// so the late admission takes the detached `.then` branch.
+				const ownRuns = Array.from(
+					{ length: path_ === "overflow" ? MAX_PENDING_CASCADE_RUNS : 1 },
+					(_, i) => ({ ...sessionOneRun, filePath: `/proj/own-${i}.ts` }),
+				);
+				for (const own of ownRuns)
+					runtime.appendCascadePromise(
+						Promise.resolve(own),
+						runtime.captureSessionGeneration(),
+						own.filePath,
+					);
+				release.resolve();
+				await handler;
+
+				// Session 2's turn_end: everything is settled, so no wait elapses.
+				await runtime.settleCascadeRuns(1_000, { trackTurnEndClock: true });
+				const delivered = runtime
+					.consumeCascadeRuns()
+					.map((r) => r.filePath)
+					.sort();
+				const staleWrites =
+					getDegradationSummary()
+						.find((e) => e.kind === "generation-guard-stale-write")
+						?.latestReasons.map((e) => e.subject) ?? [];
+				console.log(
+					`[LateAdmission ${path_}] delivered=${delivered.filter((f) => f.includes("session-one")).length ? JSON.stringify(delivered.filter((f) => f.includes("session-one"))) : "[]"} own=${delivered.length} staleWrites=${JSON.stringify(staleWrites.map((s) => s.replace(env.tmpDir, "<tmp>")))}`,
+				);
+				expect(delivered).toEqual(ownRuns.map((r) => r.filePath).sort());
+				// Dropped at admission, under the edited file's subject: the
+				// overflow `.then`, whose subject is the run's file, never sees it.
+				expect(staleWrites).toContain(`runtime-session:${filePath}`);
+				expect(staleWrites).not.toContain(
+					`runtime-session:${sessionOneRun.filePath}`,
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 });
 
 describe("runtime-tool-result inline behavior warnings", () => {

@@ -1082,7 +1082,20 @@ export class RuntimeCoordinator {
 		this._cascadeRuns.push(run);
 	}
 
-	appendCascadePromise(p: Promise<CascadeRun>): void {
+	/**
+	 * #3512: `generation` is the session the compute was dispatched in. The
+	 * admitting handler awaits the pipeline first and can resume after a
+	 * same-cwd replacement's reset, so a capture taken here would name the new
+	 * session; it is therefore required. `filePath` is the edited file the
+	 * compute belongs to, the subject of a dropped admission's ledger row.
+	 */
+	appendCascadePromise(
+		p: Promise<CascadeRun>,
+		generation: GenerationHandle,
+		filePath: string,
+	): void {
+		// A stale admission is dropped on both branches below.
+		if (generation.guardedWrite(filePath, () => true) === undefined) return;
 		if (this._pendingCascadeRuns.length < MAX_PENDING_CASCADE_RUNS) {
 			this._pendingCascadeRuns.push(p);
 			return;
@@ -1095,8 +1108,13 @@ export class RuntimeCoordinator {
 			subject: "runtime-coordinator",
 			reason: `deferred cascade admission capped at ${MAX_PENDING_CASCADE_RUNS}`,
 		});
+		// #3512: the reset cannot reach this detached append, so a compute
+		// admitted in one session and settling after a same-cwd replacement is
+		// dropped here instead of landing in the new session's runs.
 		void p
-			.then((run) => this.appendCascadeRun(run))
+			.then((run) =>
+				generation.guardedWrite(run.filePath, () => this.appendCascadeRun(run)),
+			)
 			.catch(() => {
 				// Pipeline promises are normally non-rejecting; preserve the existing
 				// failure sink if a caller violates that contract.
