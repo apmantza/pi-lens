@@ -592,85 +592,101 @@ describe("DegradationKind bare-identifier resolution (#3140)", () => {
 	});
 });
 
-describe("DegradationKind union coverage (#3071, #3140)", () => {
-	it("declares every kind literal emitted at a recordDegradationOnce / incrementDegradationCount / logDurableDegradation call site, plus LEDGER_FILE's own read-time fold emitters, and never silently drops an identifier-valued kind", () => {
-		const { occurrences, scannedFiles, unresolved } = scanCallSites();
-		// #1718 shape: a walk that resolved to nothing would read as a clean
-		// sweep. 400 is comfortably under the ~470 TypeScript files these four
-		// trees held at authoring time, so ordinary churn does not trip it.
-		assertNonEmptyScan(
-			"DegradationKind call-site coverage (files)",
-			scannedFiles,
-			400,
-		);
-		// 100 is comfortably under the 118 distinct kinds / 169 occurrences
-		// measured at authoring time.
-		assertNonEmptyScan(
-			"DegradationKind call-site coverage (occurrences)",
-			occurrences.length,
-			100,
-		);
+// One walk per worker (#3479): the three cases below read the same scan of
+// SCAN_ROOTS. Uncached, pre-push ran three full walks in parallel with the
+// other tree-scanning suites and each blew vitest's 5 s default. Whichever
+// case runs first pays the walk (a `-t` filter can make that a liveness
+// case), so the whole block carries the loaded-machine bound.
+let scanCache: ReturnType<typeof scanCallSites> | undefined;
+function scannedCallSites(): ReturnType<typeof scanCallSites> {
+	scanCache ??= scanCallSites();
+	return scanCache;
+}
+const SCAN_TIMEOUT_MS = 30_000;
 
-		// #3140: a bare-identifier `kind:` at a scanned call site that is
-		// neither a same-file const nor named in AUDITED_IDENTIFIER_KIND_SITES
-		// fails LOUD here, with the file:line, rather than vanishing into a
-		// silent `[]` that lets an undeclared kind ship unnoticed.
-		expect(unresolved).toEqual([]);
+describe(
+	"DegradationKind union coverage (#3071, #3140)",
+	{ timeout: SCAN_TIMEOUT_MS },
+	() => {
+		it("declares every kind literal emitted at a recordDegradationOnce / incrementDegradationCount / logDurableDegradation call site, plus LEDGER_FILE's own read-time fold emitters, and never silently drops an identifier-valued kind", () => {
+			const { occurrences, scannedFiles, unresolved } = scannedCallSites();
+			// #1718 shape: a walk that resolved to nothing would read as a clean
+			// sweep. 400 is comfortably under the ~470 TypeScript files these four
+			// trees held at authoring time, so ordinary churn does not trip it.
+			assertNonEmptyScan(
+				"DegradationKind call-site coverage (files)",
+				scannedFiles,
+				400,
+			);
+			// 100 is comfortably under the 118 distinct kinds / 169 occurrences
+			// measured at authoring time.
+			assertNonEmptyScan(
+				"DegradationKind call-site coverage (occurrences)",
+				occurrences.length,
+				100,
+			);
 
-		const declared = declaredKinds();
-		expect(declared.length).toBeGreaterThan(0);
+			// #3140: a bare-identifier `kind:` at a scanned call site that is
+			// neither a same-file const nor named in AUDITED_IDENTIFIER_KIND_SITES
+			// fails LOUD here, with the file:line, rather than vanishing into a
+			// silent `[]` that lets an undeclared kind ship unnoticed.
+			expect(unresolved).toEqual([]);
 
-		// One flagged entry per DISTINCT kind — many call sites legitimately
-		// share one kind, which is expected and not a `stableOccurrenceKey`
-		// collision; the first occurrence's key is kept as the readable detail.
-		const byKind = new Map<string, string>();
-		for (const occurrence of occurrences) {
-			if (!byKind.has(occurrence.kind)) {
-				byKind.set(occurrence.kind, occurrence.detail);
+			const declared = declaredKinds();
+			expect(declared.length).toBeGreaterThan(0);
+
+			// One flagged entry per DISTINCT kind — many call sites legitimately
+			// share one kind, which is expected and not a `stableOccurrenceKey`
+			// collision; the first occurrence's key is kept as the readable detail.
+			const byKind = new Map<string, string>();
+			for (const occurrence of occurrences) {
+				if (!byKind.has(occurrence.kind)) {
+					byKind.set(occurrence.kind, occurrence.detail);
+				}
 			}
-		}
-		const flagged = [...byKind.entries()].map(([kind, detail]) => ({
-			key: kind,
-			detail,
-		}));
+			const flagged = [...byKind.entries()].map(([kind, detail]) => ({
+				key: kind,
+				detail,
+			}));
 
-		const audit = auditRegistry({
-			sweepName: "DegradationKind call-site coverage",
-			flagged,
-			registered: declared,
-			scannedCount: scannedFiles,
-			minScanned: 400,
-			minFlagged: 100,
-			remediation:
-				"Add the kind to the DegradationKind union in " +
-				`${LEDGER_FILE} (alphabetically — ` +
-				"tests/config/degradation-kind-order.test.ts enforces the order) " +
-				"before shipping a call site that emits it (#3071).",
+			const audit = auditRegistry({
+				sweepName: "DegradationKind call-site coverage",
+				flagged,
+				registered: declared,
+				scannedCount: scannedFiles,
+				minScanned: 400,
+				minFlagged: 100,
+				remediation:
+					"Add the kind to the DegradationKind union in " +
+					`${LEDGER_FILE} (alphabetically — ` +
+					"tests/config/degradation-kind-order.test.ts enforces the order) " +
+					"before shipping a call site that emits it (#3071).",
+			});
+
+			expect(audit.problems).toEqual([]);
 		});
 
-		expect(audit.problems).toEqual([]);
-	});
+		// A declared-but-unflagged union member is FINE by design
+		// (`auditRegistry`'s own asymmetric policy, module header above) — so the
+		// assertion above alone would stay green even if the LEDGER_PUSH_CALLEES
+		// branch or the bare-identifier resolution path were deleted entirely,
+		// as long as the union still declares the two kinds. These two checks
+		// independently confirm the scan actually OBSERVES the occurrence, not
+		// only that the union happens to declare it.
+		it("actually scans LEDGER_FILE's summary.push emitters, not just the union declaration", () => {
+			const { occurrences } = scannedCallSites();
+			const kinds = new Set(occurrences.map((occurrence) => occurrence.kind));
+			expect(kinds.has("process-singleton-reset")).toBe(true);
+		});
 
-	// A declared-but-unflagged union member is FINE by design
-	// (`auditRegistry`'s own asymmetric policy, module header above) — so the
-	// assertion above alone would stay green even if the LEDGER_PUSH_CALLEES
-	// branch or the bare-identifier resolution path were deleted entirely,
-	// as long as the union still declares the two kinds. These two checks
-	// independently confirm the scan actually OBSERVES the occurrence, not
-	// only that the union happens to declare it.
-	it("actually scans LEDGER_FILE's summary.push emitters, not just the union declaration", () => {
-		const { occurrences } = scanCallSites();
-		const kinds = new Set(occurrences.map((occurrence) => occurrence.kind));
-		expect(kinds.has("process-singleton-reset")).toBe(true);
-	});
-
-	it("actually resolves TRUST_REFUSAL_KIND at its own call site, not only via project-trust.ts's bare literal", () => {
-		const { occurrences } = scanCallSites();
-		const resolvedAtProcessSpec = occurrences.some(
-			(occurrence) =>
-				occurrence.kind === "trust-refusal" &&
-				occurrence.detail.includes("process-spec.ts"),
-		);
-		expect(resolvedAtProcessSpec).toBe(true);
-	});
-});
+		it("actually resolves TRUST_REFUSAL_KIND at its own call site, not only via project-trust.ts's bare literal", () => {
+			const { occurrences } = scannedCallSites();
+			const resolvedAtProcessSpec = occurrences.some(
+				(occurrence) =>
+					occurrence.kind === "trust-refusal" &&
+					occurrence.detail.includes("process-spec.ts"),
+			);
+			expect(resolvedAtProcessSpec).toBe(true);
+		});
+	},
+);

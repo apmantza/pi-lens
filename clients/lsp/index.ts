@@ -1685,8 +1685,9 @@ export class LSPService {
 		);
 	}
 
-	/** Guard: return true if service is shutting down or shut down */
-	private checkDestroyed(): boolean {
+	/** Guard: return true if service is shutting down or shut down. Public so a
+	 *  caller holding this generation can tell a reset from "no client" (#3483). */
+	checkDestroyed(): boolean {
 		return this.isDestroyed;
 	}
 
