@@ -989,7 +989,20 @@ export class RuntimeCoordinator {
 		this._cascadeRuns.push(run);
 	}
 
-	appendCascadePromise(p: Promise<CascadeRun>): void {
+	/**
+	 * #3512: `generation` is the session the compute was dispatched in. The
+	 * admitting handler awaits the pipeline first and can resume after a
+	 * same-cwd replacement's reset, so a capture taken here would name the new
+	 * session. Omitted, the current session is captured.
+	 */
+	appendCascadePromise(
+		p: Promise<CascadeRun>,
+		generation: GenerationHandle = this.captureSessionGeneration(),
+	): void {
+		// A stale admission is dropped on both branches below. An unsettled
+		// compute has no file yet; the ledger row counts them.
+		if (generation.guardedWrite("cascade-admission", () => true) === undefined)
+			return;
 		if (this._pendingCascadeRuns.length < MAX_PENDING_CASCADE_RUNS) {
 			this._pendingCascadeRuns.push(p);
 			return;
@@ -1005,7 +1018,6 @@ export class RuntimeCoordinator {
 		// #3512: the reset cannot reach this detached append, so a compute
 		// admitted in one session and settling after a same-cwd replacement is
 		// dropped here instead of landing in the new session's runs.
-		const generation = this.captureSessionGeneration();
 		void p
 			.then((run) =>
 				generation.guardedWrite(run.filePath, () => this.appendCascadeRun(run)),
