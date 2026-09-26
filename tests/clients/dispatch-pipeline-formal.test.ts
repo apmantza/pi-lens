@@ -13,10 +13,16 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
-import { clearWidgetState } from "../../clients/widget-state.js";
+import {
+	clearWidgetState,
+	getFileDiagnostics,
+} from "../../clients/widget-state.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
-vi.mock("../../clients/dispatch/integration.js", () => ({
+vi.mock("../../clients/dispatch/integration.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/dispatch/integration.js")
+	>()),
 	dispatchLintWithResult: vi.fn(),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
 }));
@@ -100,6 +106,63 @@ function clean(label: string) {
 	};
 }
 
+function blocking(filePath: string, label: string) {
+	const d = {
+		id: `tsc:${label}`,
+		tool: "tsc",
+		rule: "TS2322",
+		message: `BLOCKER-FROM-${label}`,
+		filePath,
+		line: 1,
+		column: 1,
+		severity: "error",
+		semantic: "blocking",
+	};
+	return {
+		diagnostics: [d],
+		blockers: [d],
+		warnings: [],
+		baselineWarningCount: 0,
+		fixed: [],
+		resolvedCount: 0,
+		output: `STOP ${label}`,
+		blockerOutput: `STOP ${label}`,
+		hasBlockers: true,
+	};
+}
+
+/** The revision label a fixture file's bytes carry (`v1`, `v2`, ...). */
+function revisionOf(filePath: string): string {
+	return /v\d/.exec(fs.readFileSync(filePath, "utf8"))?.[0] ?? "none";
+}
+
+/**
+ * Dispatch double for the inline-record replays: `slow` revisions park until
+ * their gate opens, and `entered` opens once one of them has been dispatched.
+ */
+function scriptDispatch(verdicts: Record<string, "clean" | "blocker">) {
+	const entered = gate();
+	const release = gate();
+	vi.mocked(dispatchLintWithResult).mockImplementation(async (fp) => {
+		const rev = revisionOf(fp as string);
+		if (rev === "v1") {
+			entered.open();
+			await release.p;
+		}
+		return (
+			verdicts[rev] === "blocker" ? blocking(fp as string, rev) : clean(rev)
+		) as never;
+	});
+	return { entered, release };
+}
+
+function inlineSummaries(runtime: RuntimeCoordinator) {
+	return runtime.getInlineBlockersSnapshot().map((r) => ({
+		writeIndex: r.writeIndex,
+		blocker: r.summary.match(/BLOCKER-FROM-v\d/)?.[0],
+	}));
+}
+
 type Dbg = (message: string) => void;
 
 function deps(
@@ -153,6 +216,115 @@ describe("formal/dispatch-pipeline replays", () => {
 			}) as never,
 		);
 		vi.mocked(dispatchLintWithResult).mockReset();
+	});
+
+	// ── #3507: the inline-blocker record (InlineParallel) ──────────────────────
+	// P1 is the older edit's pipeline, parked in its dispatch; P2, the newer
+	// edit's, runs to completion; then P1 settles last.
+	async function olderSettlesLast(
+		verdicts: Record<string, "clean" | "blocker">,
+	): Promise<{
+		runtime: RuntimeCoordinator;
+		filePath: string;
+		afterP2: ReturnType<typeof inlineSummaries>;
+		cleanup: () => void;
+	}> {
+		const env = setupTestEnvironment("tla-inline-");
+		const filePath = path.join(env.tmpDir, "a.ts");
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = env.tmpDir;
+		runtime.beginTurn();
+		const { entered, release } = scriptDispatch(verdicts);
+		fs.writeFileSync(filePath, "export const x = 'v1';\n");
+		const p1 = handleToolResult({
+			...deps(runtime, noBiome),
+			event: ev("edit", filePath, "c1"),
+		} as never);
+		await entered.p;
+		fs.writeFileSync(filePath, "export const y = 'v2';\n");
+		await handleToolResult({
+			...deps(runtime, noBiome),
+			event: ev("edit", filePath, "c2"),
+		} as never);
+		const afterP2 = inlineSummaries(runtime);
+		release.open();
+		await p1;
+		return { runtime, filePath, afterP2, cleanup: env.cleanup };
+	}
+
+	it("InlineParallel (#3507): an older clean pipeline that settles last does not erase the newer edit's blocker", async () => {
+		const run = await olderSettlesLast({ v1: "clean", v2: "blocker" });
+		try {
+			expect(run.afterP2).toEqual([
+				{ writeIndex: 2, blocker: "BLOCKER-FROM-v2" },
+			]);
+			expect(inlineSummaries(run.runtime)).toEqual(run.afterP2);
+			expect(run.runtime.gitGuardHasBlockers).toBe(true);
+			// The widget store's own guard agrees.
+			expect(
+				(getFileDiagnostics(run.filePath) ?? []).map((d) => d.message),
+			).toEqual(["BLOCKER-FROM-v2"]);
+		} finally {
+			run.cleanup();
+		}
+	});
+
+	it("InlineParallel (#3507): an older blocker that settles last does not replace the newer edit's verdict", async () => {
+		const run = await olderSettlesLast({ v1: "blocker", v2: "blocker" });
+		try {
+			expect(inlineSummaries(run.runtime)).toEqual([
+				{ writeIndex: 2, blocker: "BLOCKER-FROM-v2" },
+			]);
+		} finally {
+			run.cleanup();
+		}
+	});
+
+	it("InlineParallel (#3507): an older blocker that settles after the newer edit cleared the record neither restores it nor latches the commit gate", async () => {
+		const run = await olderSettlesLast({ v1: "blocker", v2: "clean" });
+		try {
+			expect(run.afterP2).toEqual([]);
+			expect(inlineSummaries(run.runtime)).toEqual([]);
+			expect(run.runtime.gitGuardHasBlockers).toBe(false);
+		} finally {
+			run.cleanup();
+		}
+	});
+
+	it("InlineParallel (#3507): the order spans turns, so a later turn's clean clears a blocker recorded under a higher write index", async () => {
+		const env = setupTestEnvironment("tla-inline-turns-");
+		try {
+			const filePath = path.join(env.tmpDir, "a.ts");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			vi.mocked(dispatchLintWithResult).mockImplementation(
+				async (fp) =>
+					(revisionOf(fp as string) === "v3"
+						? blocking(fp as string, "v3")
+						: clean(revisionOf(fp as string))) as never,
+			);
+			for (const rev of ["v1", "v2", "v3"]) {
+				fs.writeFileSync(filePath, `export const x = '${rev}';\n`);
+				await handleToolResult({
+					...deps(runtime, noBiome),
+					event: ev("edit", filePath, rev),
+				} as never);
+			}
+			expect(inlineSummaries(runtime)).toEqual([
+				{ writeIndex: 3, blocker: "BLOCKER-FROM-v3" },
+			]);
+			runtime.beginTurn();
+			fs.writeFileSync(filePath, "export const x = 'v4';\n");
+			await handleToolResult({
+				...deps(runtime, noBiome),
+				event: ev("edit", filePath, "v4"),
+			} as never);
+			expect(inlineSummaries(runtime)).toEqual([]);
+			expect(runtime.gitGuardHasBlockers).toBe(false);
+		} finally {
+			env.cleanup();
+		}
 	});
 
 	it("ClaimGap (#3508): with the bootstrap clients not resident, two handlers for one post-write state dispatch once", async () => {

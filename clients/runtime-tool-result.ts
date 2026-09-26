@@ -2195,6 +2195,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// comes from the runtime, which `message_start`/`session_start` populate —
 	// see the `telemetry:` block handed to `runPipeline` below.
 	const writeIndex = runtime.nextWriteIndex();
+	// #3507: the turn this token was drawn in orders it across turns.
+	const writeTurnIndex = runtime.turnIndex;
 	let modifiedRanges: Array<{ start: number; end: number }> | undefined;
 	// #2423: ranges a shape adapter resolved from the tool's own input. Only a
 	// classified non-native edit shape sets these — a plain host `edit` carries
@@ -2535,27 +2537,40 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		}
 	}
 
+	// #3507: both verbs are ordered by this dispatch's token, so an older
+	// pipeline that settles after a newer one of the same file changes nothing.
+	let inlineVerdictApplied: boolean;
 	if (result.inlineBlockerSummary) {
 		// #1561: stamp the verdict with THIS dispatch's write token — the same
 		// counter `lsp_diagnostics`' reconciliation seam draws from — so a later
 		// confirmed-clean result can be ordered against it instead of racing it.
-		runtime.recordInlineBlockers(
-			filePath,
-			result.inlineBlockerSummary,
-			writeIndex,
-			result.inlineBlockerSources,
-			result.inlineBlockerLines,
-			result.inlineBlockerFileContent,
-			// #3246: the structured blockers the summary was rendered from, so a
-			// later `lens_diagnostic_mark` can be applied to this record at turn
-			// end instead of replaying pre-mark text.
-			result.inlineBlockerDiagnostics,
-		);
+		inlineVerdictApplied =
+			runtime.recordInlineBlockers(
+				filePath,
+				result.inlineBlockerSummary,
+				writeIndex,
+				result.inlineBlockerSources,
+				result.inlineBlockerLines,
+				result.inlineBlockerFileContent,
+				// #3246: the structured blockers the summary was rendered from, so a
+				// later `lens_diagnostic_mark` can be applied to this record at turn
+				// end instead of replaying pre-mark text.
+				result.inlineBlockerDiagnostics,
+				writeTurnIndex,
+			) !== undefined;
 	} else {
-		runtime.clearInlineBlockers(filePath);
+		inlineVerdictApplied = runtime.clearInlineBlockers(
+			filePath,
+			writeIndex,
+			writeTurnIndex,
+		);
 	}
 
-	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
+	// A superseded verdict must not latch the commit gate either (#3507).
+	runtime.updateGitGuardStatus(
+		inlineVerdictApplied && result.hasBlockers,
+		result.output,
+	);
 	if (getFlag("lens-guard")) {
 		syncGitGuardRecord(runtime, cacheManager, turnStateCwd, filePath);
 		if (result.isError && !result.hasBlockers) {

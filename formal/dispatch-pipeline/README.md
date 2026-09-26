@@ -63,7 +63,7 @@ TLC 2.19 (`tla2tools.jar` v1.7.4), 4 workers.
 | Config | Expect | Distinct states | s |
 |---|---|---|---|
 | `InlineSequential` | pass | 152 | 2 |
-| `InlineParallel` | violated `InlineNewest` (bug 1) | 256 | 2 |
+| `InlineParallel` | pass (fixed code, #3507) | 256 | 1 |
 | `InlineFix` | pass | 8,176 | 4 |
 | `InlineFixNoRecord` / `NoClear` / `NoTomb` | violated `InlineNewest` | ~260 each | 2 |
 | `WidgetParallel` | pass | 732,720 | 28-44 |
@@ -91,13 +91,17 @@ Non-vacuity:
 
 ## Bugs (all four reproduce on the real code)
 
-1. **The inline-blocker record is last-completer-wins** (`InlineParallel`).
-   The handler records or clears the record with no order check. The record
-   stores `writeIndex` but never compares it. An older clean run that
-   settles last erases the newer edit's blocker, and the git guard
-   unlatches. An older blocker that settles last replaces the newer verdict
-   with a `writeIndex: 1` record. The widget store, which has the guard,
-   keeps v2 in both cases.
+1. **The inline-blocker record is last-completer-wins** (fixed by #3507;
+   `InlineParallel` now models the fixed code, and `InlineFixNoRecord`,
+   `InlineFixNoClear` and `InlineFixNoTomb` keep each missing part as a
+   violated witness). The handler recorded or cleared the record with no
+   order check. The record stored `writeIndex` but never compared it. An
+   older clean run that settled last erased the newer edit's blocker, and the
+   git guard unlatched. An older blocker that settled last replaced the newer
+   verdict with a `writeIndex: 1` record. The widget store, which has the
+   guard, kept v2 in both cases. The fixed code orders both verbs by
+   `(turnIndex, writeIndex)`: the model has one turn, and the code's
+   `writeIndex` restarts at every `beginTurn`, so the turn leads the order.
 2. **The immediate autofix runs outside pi's mutation queue** (`FixerParallel`,
    `FixerOrphan`, `FixerAttribution`). Take a turn's first `write` followed by
    an edit of the same file, either in one parallel batch or after the
