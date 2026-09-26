@@ -8,7 +8,8 @@ marks the pair, the scanner publishes late, and the `turn_end` drain in
 `\* expect:` line.
 
 Issues: #3482 (with its save-rescan and close-and-reopen surpluses), #3490
-(the rules-refresh surplus publish).
+(the rules-refresh surplus publish), #3548 (typos' unconditional
+close-triggered publish).
 
 ## What the model covers
 
@@ -53,6 +54,22 @@ Issues: #3482 (with its save-rescan and close-and-reopen surpluses), #3490
   restart at the reopen. `"span"` is the fix: the counts span the close,
   and a publish dropped while closed is counted. `"spanNoDrop"` is a
   mutant that does not count the dropped publish.
+- **A server's own close-triggered publish** (#3548, `AllowClosePublish` /
+  `ClosePublishCounted`). opengrep publishes nothing on close, but
+  tekumara/typos-lsp `crates/typos-lsp/src/lsp.rs` `did_close` publishes an
+  empty, version-less set UNCONDITIONALLY, on every close, answering no
+  send. `AllowClosePublish` arms one such publish at the `Close` step
+  itself — distinct from, and arriving before, any real scan still queued
+  in `sent` (typos' close handler is fast and synchronous; a genuinely
+  in-flight scan for the pre-close content is slower). Whether it is
+  credited toward the closed lifetime's owed scans is
+  `ClosePublishCounted`: `TRUE` reproduces #3548 (client.ts's `Counted`
+  charged against `bound` unconditionally in the `closedDocuments` branch);
+  `FALSE` is the fix (the `publishesOnClose` strategy marker's skip). It
+  never affects a server `AllowClosePublish` is left `FALSE` for: that
+  server's own close-time publish (from a real queued scan) still goes
+  through `DroppedWhileClosed` exactly as before, gated only by `Carry`
+  — the required inverse direction.
 - **The drain**, in three steps split at its awaits:
   1. `drainPendingAuxiliaryCoverage`.
   2. `await readCachedDiagnosticsForServers`, then the synchronous check
@@ -111,6 +128,8 @@ state predicate, so the `\* expect:` checker can read its verdict.
 | `ReopenUncarried` | violated `NoStaleFindings` (the reopen before the fix) |
 | `ReopenSpan`, `ReopenRulesRefresh` | pass, both invariants (the fix) |
 | `ReopenSpanNoDropCount` | violated `NoFreshWithheld` (mutant: a publish dropped while closed not counted) |
+| `ClosePublishUncounted` | violated `NoStaleFindings` (#3548 before the fix: typos' close-triggered publish counted) |
+| `ClosePublishExempt` | pass, both invariants (#3548 fix: `publishesOnClose` skip) |
 
 The existing configs keep `NoStaleFindings` alone and keep their verdicts.
 Adding `NoFreshWithheld` to them violates it in every config with
@@ -151,7 +170,8 @@ stale.
   scan, in order. A scanner that skips superseded scans makes the drain
   wait until the rearm ceiling (`CancelWithholds`). The extra publishes
   pi-lens triggers in opengrep are modelled below; opengrep publishes
-  nothing on close.
+  nothing on close, but typos does (#3548, modelled separately by
+  `AllowClosePublish`/`ClosePublishCounted`).
 - **No refresh on stale** (`RefreshOnStale = FALSE`): a stale re-arm keeps
   the baseline. Only a producer re-mark moves it.
 
@@ -191,6 +211,22 @@ over-correction withholds the current answer (`SaveRescanOverExpected`,
 during and after a close and reopen: the take-back stays in the spanning
 count, and the republish restores it whether it is dropped while closed
 or stored after the reopen.
+
+**A server's own close-triggered publish (#3548).** `ReopenSpan` above
+already fixes #3482's "a QUEUED scan lands after the close" surplus; it
+never modelled a publish the close ITSELF produces, because opengrep
+produces none. typos does, unconditionally, on every close. Without the
+`publishesOnClose` skip (`ClosePublishUncounted`), that publish is
+credited toward the closed lifetime's owed scans — the same class of bug
+`ReopenUncarried` shows, but caused by the close's own side effect rather
+than by resetting the carry — so a genuinely in-flight scan's later (stale)
+answer is free to be taken as the reopened file's fresh answer instead.
+With the skip (`ClosePublishExempt`), that publish is dropped like any
+other publish while closed but never credited, so the in-flight scan's own
+answer is still required before the reopened send is satisfied; the
+`NoFreshWithheld` side confirms a server this marker is not set for keeps
+counting its own close-time publish exactly as before (`ClosePublishCounted`
+never gates `DroppedWhileClosed`, only the dedicated close-publish action).
 
 ## Scope
 

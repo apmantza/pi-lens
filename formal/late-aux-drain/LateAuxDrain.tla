@@ -82,10 +82,20 @@ CONSTANTS
     SaveExpect,       \* publications expected per save beyond its send:
                       \* 0 before the #3482 surplus fix, 1 the fix, 2 a mutant
     Closes,           \* close-and-reopen cycles
-    Carry             \* "none": counts restart at a fresh open (before the
+    Carry,            \* "none": counts restart at a fresh open (before the
                       \* fix); "span": they span the close, and a publish
                       \* dropped while closed counts; "spanNoDrop": a mutant
                       \* that does not count the dropped publish
+    AllowClosePublish, \* #3548: this server publishes once, unconditionally,
+                      \* as a direct effect of the close itself (typos'
+                      \* did_close), distinct from any queued scan still in
+                      \* flight. Arrives at the Close step, before a slower
+                      \* in-flight scan's own (later) answer.
+    ClosePublishCounted \* #3548: is that close-triggered publish credited
+                      \* toward the closed lifetime's owed scans? TRUE is the
+                      \* bug (client.ts's unconditional countPublication in
+                      \* the closedDocuments branch); FALSE is the fix (the
+                      \* `publishesOnClose` marker's skip).
 
 None == [none |-> TRUE]
 
@@ -116,14 +126,19 @@ VARIABLES
     snap,        \* the cache entry readCachedDiagnosticsForServers returned
     delivered,   \* set of [ver, disk]: findings delivered, disk at the gate
     closed,      \* the path is closed on the client
-    closesLeft
+    closesLeft,
+    closePublishPending \* #3548: a publishesOnClose server's own close-
+                 \* triggered publish is still owed for the CURRENT close
+                 \* (set TRUE by Close when AllowClosePublish, consumed by
+                 \* ClosePublish)
 
 vars == <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
           touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap, delivered,
-          sentCount, bound, lastSent, refresh, surplus, preN, closed, closesLeft>>
+          sentCount, bound, lastSent, refresh, surplus, preN, closed, closesLeft,
+          closePublishPending>>
 
 refreshVars == <<refresh, surplus, preN>>
-lifeVars == <<closed, closesLeft>>
+lifeVars == <<closed, closesLeft, closePublishPending>>
 
 \* countPublication: one more publication, capped at the expected ones.
 Counted(b) == IF b + 1 > sentCount THEN sentCount ELSE b + 1
@@ -141,7 +156,7 @@ Init ==
     /\ pubCount = 0 /\ cache = None
     /\ pending = None /\ drain = "idle" /\ pair = None /\ snap = None
     /\ delivered = {}
-    /\ closed = FALSE /\ closesLeft = Closes
+    /\ closed = FALSE /\ closesLeft = Closes /\ closePublishPending = FALSE
 
 -----------------------------------------------------------------------------
 \* Agent edit + touch notify. The write and the notify are one step: the
@@ -169,7 +184,7 @@ AgentTouch ==
           /\ touchVer' = 0
           /\ UNCHANGED <<sent, sentCount, lastSent, cache, bound, closed>>
     /\ UNCHANGED <<extLeft, drainsLeft, pubCount, pending, drain, pair, snap, delivered,
-                   refreshVars, closesLeft>>
+                   refreshVars, closesLeft, closePublishPending>>
 
 \* The path is closed (#3477: a rename away) and its entry cleared. Before
 \* the fix the lifetime's sends and counts are dropped. Its queued scans
@@ -180,6 +195,9 @@ Close ==
     /\ sentCount' = IF Carry = "none" THEN 0 ELSE sentCount
     /\ bound' = IF Carry = "none" THEN 0 ELSE bound
     /\ cache' = None
+    \* #3548: a publishesOnClose server owes exactly one close-triggered
+    \* publish for THIS close; ClosePublish consumes it.
+    /\ closePublishPending' = AllowClosePublish
     /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pubCount, pending, drain, pair, snap,
                    delivered, lastSent, refreshVars>>
@@ -188,6 +206,24 @@ Close ==
 DroppedWhileClosed ==
     /\ bound' = IF Carry = "span" THEN Counted(bound) ELSE bound
     /\ UNCHANGED <<clock, cache, pubCount>>
+
+\* #3548: the server's OWN close-triggered publish (typos' did_close: an
+\* empty, version-less set on every close). Dropped unstored, like any
+\* publish while closed — it never overtakes a genuine queued scan since it
+\* is not itself queued in `sent`. Whether it is credited toward the closed
+\* lifetime's owed scans is ClosePublishCounted: TRUE reproduces the bug
+\* (client.ts's unconditional count before the #3548 fix), FALSE is the fix
+\* (a server this marker was never set for is never granted
+\* closePublishPending, so this action never fires for it — the required
+\* inverse: its own close-time publish, via Publish/SurplusPublish's
+\* DroppedWhileClosed, always counts under Carry = "span").
+ClosePublish ==
+    /\ closePublishPending
+    /\ closePublishPending' = FALSE
+    /\ bound' = IF ClosePublishCounted THEN Counted(bound) ELSE bound
+    /\ UNCHANGED <<clock, disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
+                   touchBase, touchAt, sent, pubCount, cache, pending, drain, pair, snap,
+                   delivered, sentCount, lastSent, refreshVars, closed, closesLeft>>
 
 \* Aux-grace outcome and mark: evidence check, filter and mark run in one
 \* continuation (index.ts ~5920-6030), so one step.
@@ -228,7 +264,8 @@ Publish ==
               /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent, refresh, surplus, closed, closesLeft>>
+                   sentCount, lastSent, refresh, surplus, closed, closesLeft,
+                   closePublishPending>>
 
 CancelSuperseded ==
     /\ AllowCancel /\ Len(sent) > 1
@@ -264,7 +301,7 @@ SurplusPublish ==
               /\ bound' = Counted(bound)
     /\ UNCHANGED <<disk, mtime, touchesLeft, extLeft, drainsLeft, touch, touchVer,
                    touchBase, touchAt, sent, pending, drain, pair, snap, delivered,
-                   sentCount, lastSent, closed, closesLeft>>
+                   sentCount, lastSent, closed, closesLeft, closePublishPending>>
 
 -----------------------------------------------------------------------------
 \* rearmPendingAuxiliaryCoverage; past the ceiling the pair drops.
@@ -314,7 +351,7 @@ DrainGate ==
                    sentCount, bound, lastSent, refreshVars, lifeVars>>
 
 Next == AgentTouch \/ Close \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSuperseded
-        \/ RulesRefreshed \/ SurplusPublish
+        \/ RulesRefreshed \/ SurplusPublish \/ ClosePublish
         \/ DrainStart \/ DrainRead \/ DrainGate
 
 Spec == Init /\ [][Next]_vars
