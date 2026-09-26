@@ -7,7 +7,7 @@ marks the pair, the scanner publishes late, and the `turn_end` drain in
 (`node scripts/check-tla-models.mjs`) checks every config here against its
 `\* expect:` line.
 
-Issue: #3482.
+Issues: #3482, #3490 (the rules-refresh surplus publish).
 
 ## What the model covers
 
@@ -25,6 +25,18 @@ Issue: #3482.
   publish carries no version, so `isSupersededPush` cannot drop it. The
   client stores it with `ts` set to the receipt time. The scanner may skip a
   superseded scan.
+- **The client's publication count** (`publicationCountsForPath`). v0 is
+  open when the model starts. `need` at mark is the lifetime's sends minus
+  the counted publications, and each publication is counted up to the sends
+  (the cap).
+- **opengrep's rule refresh** (#3490, `Refresh`). opengrep@1a5fd9d
+  `Scan_helpers.refresh_rules` sends `semgrep/rulesRefreshed` once its rules
+  load, then republishes every file it has a scan recorded for. The model
+  sends one such surplus publish. It may overtake scans sent before the
+  notification but not scans sent after it, and it carries the newest
+  version sent before the notification. `RefreshRebaseline` is the #3490
+  fix: the notification takes one publication back from a path that
+  already had one.
 - **The drain**, in three steps split at its awaits:
   1. `drainPendingAuxiliaryCoverage`.
   2. `await readCachedDiagnosticsForServers`, then the synchronous check
@@ -60,6 +72,9 @@ unavoidable TOCTOU window.
 | `ToleranceWindow` | violated (admitted: the 50 ms tolerance, #1710) |
 | `Fix`, `FixWide` | pass (candidate fix) |
 | `FixNoCountBind`, `FixLateMark`, `FixRefreshOnStale` | violated (each fix part is needed) |
+| `RulesRefreshInFlight` | violated (#3490 before the fix) |
+| `RulesRefreshRebaseline`, `RulesRefreshRebaselineWide` | pass (#3490 fix) |
+| `RulesRefreshFirstAnswerOutstanding` | violated (admitted #3490 residual) |
 
 - **Bug 1, `ReTouchRemark`.** A second agent touch lands while the v1 scan is
   still outstanding: it clears, sends v2, finds no evidence, and re-marks,
@@ -94,6 +109,17 @@ stale.
 
 Mutating any one part turns `Fix` red.
 
+**The rules-refresh surplus (#3490).** Without the rebaseline
+(`RulesRefreshInFlight`), the refresh republish counts as the answer to a
+send that is still outstanding, and that send's own publish is later
+delivered against the next revision. TLC's shortest trace is a touch sent
+after the notification: the republish carries the older version and is
+counted as that touch's answer. With the rebaseline, both the #3490 order
+and this one pass. `RulesRefreshFirstAnswerOutstanding` is the admitted
+residual: the notification arrives before the path's first answer, so the
+path has no count to take back, and its republish can still count toward
+a later send.
+
 ## Scope
 
 Not modelled:
@@ -103,7 +129,9 @@ Not modelled:
 - the policy stack;
 - several servers or files;
 - the cap eviction;
-- a scanner that reads the disk at scan time instead of the sent text.
+- a scanner that reads the disk at scan time instead of the sent text;
+- a second rules refresh, and a refresh republish that lands after a scan
+  sent after the notification (the scanner is assumed to publish in order).
 
 The aux-grace touch path itself also accepts a late v1 publish as v2's
 "answer" (`FixRefreshOnStale` step 7). That is the touch's own result, not
