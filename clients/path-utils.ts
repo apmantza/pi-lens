@@ -1133,12 +1133,45 @@ function compileWorkspaceMemberPattern(
  * `(?:.+/)?` groups, which denote the same language as one and cost the same
  * table.
  */
+const WORKSPACE_GLOB_MEMO_CELL_CAP = 2_000_000;
+// Bound this session latch to the ledger's 20 retained entries per kind.
+const WORKSPACE_GLOB_CAP_EVENT_MAX_LENGTHS = 20;
+const workspaceGlobCapPatternLengths = new Set<number>();
+let workspaceGlobCapDroppedCount = 0;
+
+export function getWorkspaceGlobCapPatternLengths(): number[] {
+	return [...workspaceGlobCapPatternLengths];
+}
+
+export function getWorkspaceGlobCapDroppedCount(): number {
+	return workspaceGlobCapDroppedCount;
+}
+
+export function resetWorkspaceGlobCapPatternLengths(): void {
+	workspaceGlobCapPatternLengths.clear();
+	workspaceGlobCapDroppedCount = 0;
+}
+
 function matchesWorkspaceMemberSteps(
 	steps: readonly WorkspaceGlobStep[],
 	subject: string,
+	patternLength: number,
 ): boolean {
 	const stepCount = steps.length;
 	const width = subject.length + 1;
+	// 2,000,000 cells is above real ~8e5-cell globs and below the issue's ~1.6e7-cell row.
+	if ((stepCount + 1) * width > WORKSPACE_GLOB_MEMO_CELL_CAP) {
+		if (!workspaceGlobCapPatternLengths.has(patternLength)) {
+			if (
+				workspaceGlobCapPatternLengths.size < WORKSPACE_GLOB_CAP_EVENT_MAX_LENGTHS
+			) {
+				workspaceGlobCapPatternLengths.add(patternLength);
+			} else {
+				workspaceGlobCapDroppedCount += 1;
+			}
+		}
+		return false;
+	}
 	// One byte per (step, position) cell; `1` means "the rest matches from here".
 	const table = new Uint8Array((stepCount + 1) * width);
 	for (let p = subject.length; p >= 0; p -= 1) {
@@ -1250,7 +1283,8 @@ export function matchesWorkspaceMemberPattern(
 	}
 	const steps = compileWorkspaceMemberPattern(normalized, dialect);
 	return (
-		steps !== undefined && matchesWorkspaceMemberSteps(steps, relativePath)
+		steps !== undefined &&
+		matchesWorkspaceMemberSteps(steps, relativePath, pattern.length)
 	);
 }
 

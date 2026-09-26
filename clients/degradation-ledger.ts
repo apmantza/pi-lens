@@ -32,6 +32,11 @@ import {
 // into `probe-home-state.ts` and read back here instead. See that module's doc
 // comment for the full account.
 import { getProbeHomeRedirectEvent } from "./probe-home-state.js";
+import {
+	getWorkspaceGlobCapDroppedCount,
+	getWorkspaceGlobCapPatternLengths,
+	resetWorkspaceGlobCapPatternLengths,
+} from "./path-utils.js";
 
 // Re-exported so existing importers keep one name for the ledger's bound.
 export { LEDGER_FIELD_MAX, truncateForLedger };
@@ -1349,7 +1354,8 @@ export type DegradationKind =
 	 * `tree-sitter-shared.ts`) resolves zero files from a HEALTHY root and
 	 * must never be confused with the root itself being gone.
 	 */
-	| "word-index-orphan-file-id";
+	| "word-index-orphan-file-id"
+	| "workspace-glob-cap";
 
 export interface DegradationRecord {
 	kind: unknown;
@@ -1695,6 +1701,19 @@ export function getDegradationSummary(): DegradationGroup[] {
 			],
 		});
 	}
+	const workspaceGlobCapLengths = getWorkspaceGlobCapPatternLengths();
+	const workspaceGlobCapDroppedCount = getWorkspaceGlobCapDroppedCount();
+	if (workspaceGlobCapLengths.length > 0 || workspaceGlobCapDroppedCount > 0) {
+		summary.push({
+			kind: "workspace-glob-cap",
+			count: workspaceGlobCapLengths.length + workspaceGlobCapDroppedCount,
+			droppedCount: workspaceGlobCapDroppedCount,
+			latestReasons: workspaceGlobCapLengths.map((length) => ({
+				subject: String(length),
+				reason: "workspace glob matcher exceeded its memo-table cell cap",
+			})),
+		});
+	}
 	return summary;
 }
 
@@ -1789,6 +1808,7 @@ export function resetDegradationLedger(): void {
 	// process-lifetime latch too — it re-arms alongside the rest of the
 	// ledger rather than surviving past the session that observed it.
 	resetSinkWriteFailures();
+	resetWorkspaceGlobCapPatternLengths();
 	// #2505, same catalog shape 17 re-arm: a rotation tally recurs (new writes
 	// keep crossing the bound), so clearing it costs nothing and a later
 	// session re-observes the fact fresh.

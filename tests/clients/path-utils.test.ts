@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Controllable `os.homedir()` override for the mutation-proof HOME-default
 // test below — `vi.spyOn(os, "homedir")` fails under Vitest's ESM
@@ -44,6 +44,10 @@ import {
 	uriToPath,
 	walkUpDirs,
 } from "../../clients/path-utils.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { createCaseAliasFixture, setupTestEnvironment } from "./test-utils.js";
 
 describe("isWindowsPath (#1213 review pins)", () => {
@@ -1769,6 +1773,131 @@ describe("matchesWorkspaceMemberPattern dialect table (#2591)", () => {
 				new Set([vector.cargo, vector.uvMembers, vector.uvExclude]).size > 1,
 		);
 		expect(separating.length).toBeGreaterThanOrEqual(12);
+	});
+});
+
+describe("workspace glob memo cell cap (#2629)", () => {
+	beforeEach(() => resetDegradationLedger());
+	afterEach(() => resetDegradationLedger());
+
+	it("preserves a below-cap workspace glob match", () => {
+		expect(
+			matchesWorkspaceMemberPattern(
+				"crates/*",
+				"crates/widget",
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			),
+		).toBe(true);
+		expect(
+			getDegradationSummary().filter(
+				(group) => group.kind === "workspace-glob-cap",
+			),
+		).toHaveLength(0);
+	});
+
+	it("declines over-cap matching literals and records once per pattern length", () => {
+		// Recurrence prevented: #2629 allocated an unbounded matcher table even when a literal glob matched.
+		// 1,414 literal steps times 1,415 positions is 2,002,225 cells, above the 2,000,000-cell cap.
+		const patternA = "a".repeat(1_414);
+		const patternB = "b".repeat(1_414);
+		expect(
+			matchesWorkspaceMemberPattern(
+				patternA,
+				patternA,
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			),
+		).toBe(false);
+		expect(
+			matchesWorkspaceMemberPattern(
+				patternB,
+				patternB,
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			),
+		).toBe(false);
+
+		const rows = getDegradationSummary().filter(
+			(group) => group.kind === "workspace-glob-cap",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			count: 1,
+			latestReasons: [{ subject: "1414" }],
+		});
+		expect(JSON.stringify(rows[0])).not.toContain(patternA);
+		expect(JSON.stringify(rows[0])).not.toContain(patternB);
+
+		resetDegradationLedger();
+		expect(
+			getDegradationSummary().filter(
+				(group) => group.kind === "workspace-glob-cap",
+			),
+		).toHaveLength(0);
+		expect(
+			matchesWorkspaceMemberPattern(
+				patternA,
+				patternA,
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			),
+		).toBe(false);
+		expect(
+			getDegradationSummary().filter(
+				(group) => group.kind === "workspace-glob-cap",
+			),
+		).toMatchObject([{ count: 1, latestReasons: [{ subject: "1414" }] }]);
+	});
+
+	it("bounds distinct over-cap pattern-length events per session", () => {
+		// Recurrence prevented: unique huge pattern lengths cannot grow the session latch without bound.
+		for (let length = 1_414; length <= 1_434; length += 1) {
+			const pattern = "x".repeat(length);
+			expect(
+				matchesWorkspaceMemberPattern(
+					pattern,
+					pattern,
+					UV_WORKSPACE_MEMBERS_DIALECT,
+				),
+			).toBe(false);
+		}
+
+		const [row] = getDegradationSummary().filter(
+			(group) => group.kind === "workspace-glob-cap",
+		);
+		expect(row?.count).toBe(21);
+		expect(row?.droppedCount).toBe(1);
+		expect(row?.latestReasons).toHaveLength(20);
+
+		// A length already in the retained set does not count as dropped when the cap is full.
+		const retainedPattern = "x".repeat(1_414);
+		expect(
+			matchesWorkspaceMemberPattern(
+				retainedPattern,
+				retainedPattern,
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			),
+		).toBe(false);
+		const [afterRetainedLength] = getDegradationSummary().filter(
+			(group) => group.kind === "workspace-glob-cap",
+		);
+		expect(afterRetainedLength).toMatchObject({
+			count: 21,
+			droppedCount: 1,
+		});
+		expect(afterRetainedLength?.latestReasons).toHaveLength(20);
+
+		resetDegradationLedger();
+		for (let length = 1_414; length <= 1_434; length += 1) {
+			const pattern = "x".repeat(length);
+			matchesWorkspaceMemberPattern(
+				pattern,
+				pattern,
+				UV_WORKSPACE_MEMBERS_DIALECT,
+			);
+		}
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "workspace-glob-cap",
+			),
+		).toMatchObject({ count: 21, droppedCount: 1 });
 	});
 });
 
