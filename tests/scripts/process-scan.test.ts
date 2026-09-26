@@ -6,7 +6,9 @@
  * scripts/prune-agent-worktrees.mjs now share (PR #2438 review round 3, F2).
  */
 
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import fsModule from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import {
 	ageMsFromPosixEtime,
 	buildProcessQuery,
@@ -15,9 +17,12 @@ import {
 	escapeWqlStringValue,
 	evaluateNoSurvivingLspProcesses,
 	isLspServerCommand,
+	isoFromLstart,
 	normalizeProcessFields,
+	parseLinuxStatStart,
 	parseProcessTable,
 	posixPsPath,
+	readLinuxProcessStart,
 	snapshotProcesses,
 	windowsExe,
 	ALL_PROCESS_FIELDS,
@@ -345,6 +350,191 @@ describe("buildProcessQuery (#2443: the one composed platform listing)", () => {
 		expect(() =>
 			withPlatform("linux", () => buildProcessQuery(["pid", "rssBytes"])),
 		).toThrow(/no POSIX ps column/);
+	});
+});
+
+describe("process start times (#3538)", () => {
+	it("macOS asks ps for lstart in the C locale and UTC, so every reader prints one process the same way", () => {
+		const query = withPlatform("darwin", () =>
+			buildProcessQuery(["pid", "startedAt", "command"], {
+				filter: { column: "ProcessId", op: "eq", values: [7] },
+			}),
+		);
+		expect(query.args).toEqual(["-p", "7", "-o", "pid=,lstart=,args="]);
+		expect(query.env).toMatchObject({ LC_ALL: "C", TZ: "UTC0" });
+	});
+
+	it("a query without a start time keeps the caller's environment", () => {
+		const query = withPlatform("darwin", () =>
+			buildProcessQuery(["pid", "command"]),
+		);
+		expect(query.env).toBeUndefined();
+	});
+
+	it("Linux never takes a start time from ps: procps derives lstart from a boot time that moves with the clock", () => {
+		expect(() =>
+			withPlatform("linux", () => buildProcessQuery(["pid", "startedAt"])),
+		).toThrow(/read from \/proc/);
+	});
+
+	it("Windows emits CreationDate in UTC, ISO-8601, so starts compare across zones and order", () => {
+		const query = withPlatform("win32", () =>
+			buildProcessQuery(["pid", "startedAt"]),
+		);
+		const script = query.args[query.args.length - 1];
+		expect(script).toContain(
+			"$st = if ($_.CreationDate -is [datetime]) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }; ",
+		);
+		expect(script).toContain('"$($_.ProcessId)`t$st"');
+	});
+
+	it("parses a C-locale lstart row into an ISO start", () => {
+		const rows = parseProcessTable(
+			"  4242 Sat Sep  6 09:26:02 2026 /usr/bin/node x.js\n",
+			false,
+			["pid", "startedAt", "command"],
+		);
+		expect(rows).toEqual([
+			{
+				pid: 4242,
+				ppid: 0,
+				command: "/usr/bin/node x.js",
+				startedAt: "2026-09-06T09:26:02.000Z",
+			},
+		]);
+	});
+
+	it('counts /proc stat fields from the LAST paren, so a command name holding ") R 1 2" cannot shift the start (#3538 review F4)', () => {
+		const tail = Array.from({ length: 50 }, (_, i) => String(i + 3)).join(" ");
+		// Fields 3.. are 3, 4, 5, ...: field 22 (starttime) reads "22".
+		expect(parseLinuxStatStart(`4242 (x) R 1 2 3 4) ${tail}`)).toBe("22");
+		expect(parseLinuxStatStart(`4242 (plain) ${tail}`)).toBe("22");
+	});
+
+	it("reads an lstart it cannot parse as unknown, never as a start", () => {
+		expect(isoFromLstart("Sat Foo  6 09:26:02 2026")).toBeUndefined();
+		expect(isoFromLstart("6 Sept 2026")).toBeUndefined();
+	});
+
+	it.skipIf(process.platform !== "linux")(
+		// lane: Unit tests (ubuntu); the reader is /proc itself.
+		"reads this process's start from /proc as the kernel's tick count, and nothing for a pid that is gone",
+		() => {
+			const stat = fs.readFileSync("/proc/self/stat", "utf8");
+			const boot = fs
+				.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+				.trim();
+			expect(readLinuxProcessStart(process.pid)).toBe(
+				`${stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]}@${boot}`,
+			);
+			expect(readLinuxProcessStart(2 ** 22 + 1)).toBeUndefined();
+		},
+	);
+
+	it("reads a start whose boot id is empty or malformed as unknown, never as a start of another boot (#3538 review R3-F1)", () => {
+		// A reader whose boot_id is bound over (an empty file) or substituted
+		// would otherwise name every process under a boot no tag or record
+		// carries, and a live owner would read as dead.
+		// After "S", fields 4.. read 3, 4, 5, ...: field 22 (starttime) is "21".
+		const tail = Array.from({ length: 50 }, (_, i) => String(i + 3)).join(" ");
+		const real = fsModule.readFileSync;
+		let boot = "";
+		const spy = vi
+			.spyOn(fsModule, "readFileSync")
+			.mockImplementation(((
+				file: fs.PathOrFileDescriptor,
+				...rest: unknown[]
+			) =>
+				file === "/proc/4242/stat"
+					? `4242 (x) S ${tail}`
+					: file === "/proc/sys/kernel/random/boot_id"
+						? boot
+						: (real as (...args: unknown[]) => unknown)(
+								file,
+								...rest,
+							)) as typeof real);
+		try {
+			for (const bad of [
+				"",
+				"\n",
+				"not-a-boot-id\n",
+				"0B1C2D3E-4F50-4617-8293-A4B5C6D7E8F9\n",
+			]) {
+				boot = bad;
+				expect(
+					readLinuxProcessStart(4242),
+					JSON.stringify(bad),
+				).toBeUndefined();
+			}
+			boot = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9\n";
+			expect(readLinuxProcessStart(4242)).toBe(
+				"21@0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// #3538 review R4-F1: the kernel adds the READER's time-namespace boottime
+	// offset to field 22, so one process reads as different ticks to readers
+	// in different time namespaces, and a live owner looked like a reused pid.
+	// `offsets` stands for /proc/self/timens_offsets: a string is its text,
+	// an Error is what reading it throws.
+	const BOOT = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9";
+	function startUnder(shownTicks: number, offsets: string | Error) {
+		const fields = Array.from({ length: 50 }, (_, i) =>
+			i === 18 ? String(shownTicks) : "0",
+		);
+		const real = fsModule.readFileSync;
+		const spy = vi.spyOn(fsModule, "readFileSync").mockImplementation(((
+			file: fs.PathOrFileDescriptor,
+			...rest: unknown[]
+		) => {
+			if (file === "/proc/4242/stat") return `4242 (x) S ${fields.join(" ")}`;
+			if (file === "/proc/sys/kernel/random/boot_id") return `${BOOT}\n`;
+			if (file === "/proc/self/timens_offsets") {
+				if (offsets instanceof Error) throw offsets;
+				return offsets;
+			}
+			return (real as (...args: unknown[]) => unknown)(file, ...rest);
+		}) as typeof real);
+		try {
+			return readLinuxProcessStart(4242);
+		} finally {
+			spy.mockRestore();
+		}
+	}
+	const enoent = () =>
+		Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+
+	it("subtracts this reader's time-namespace boottime offset, so every reader names one start (#3538 review R4-F1)", () => {
+		const offsets = (sec: number, nsec = 0) =>
+			`monotonic           0         0\nboottime   ${sec} ${nsec}\n`;
+		// No time namespaces (an older kernel): the ticks as shown.
+		expect(startUnder(1852456, enoent())).toBe(`1852456@${BOOT}`);
+		// The root time namespace.
+		expect(startUnder(1852456, offsets(0))).toBe(`1852456@${BOOT}`);
+		// `unshare --time --boottime 100000`: the same process, measured.
+		expect(startUnder(11852456, offsets(100000))).toBe(`1852456@${BOOT}`);
+		// A negative offset, in whole ticks (USER_HZ 100: 10 ms each).
+		expect(startUnder(1852356, offsets(-1))).toBe(`1852456@${BOOT}`);
+		expect(startUnder(1852457, offsets(0, 10_000_000))).toBe(`1852456@${BOOT}`);
+	});
+
+	it("reads a start as unknown when this reader's offsets are unreadable, malformed, or not whole ticks (#3538 review R4-F1)", () => {
+		for (const offsets of [
+			"garbage\n",
+			"monotonic 0 0\n",
+			"boottime x 0\n",
+			// A fraction of a tick: the kernel's rounding of (start + offset)
+			// cannot be undone exactly, and an off-by-one reads as a reuse.
+			"monotonic 0 0\nboottime 100000 5000000\n",
+			Object.assign(new Error("EACCES: permission denied"), {
+				code: "EACCES",
+			}),
+		]) {
+			expect(startUnder(11852456, offsets), String(offsets)).toBeUndefined();
+		}
 	});
 });
 

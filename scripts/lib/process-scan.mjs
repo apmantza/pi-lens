@@ -76,7 +76,7 @@ const FIELD_COLUMNS = Object.freeze({
 	rssBytes: { wmi: "WorkingSetSize", ps: null, token: "int" },
 	cpuKernel100ns: { wmi: "KernelModeTime", ps: null, token: "int" },
 	cpuUser100ns: { wmi: "UserModeTime", ps: null, token: "int" },
-	startedAt: { wmi: "CreationDate", ps: null, token: "text" },
+	startedAt: { wmi: "CreationDate", ps: "lstart", token: "lstart" },
 	command: { wmi: "CommandLine", ps: "args", token: "tail" },
 });
 
@@ -270,13 +270,19 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 		const excludeSelf = options.excludeSelfPid
 			? " | Where-Object { $_.ProcessId -ne $PID }"
 			: "";
-		const prelude = layout.includes("ageMs")
-			? "$age = if ($_.CreationDate -is [datetime]) { [int64]((Get-Date) - $_.CreationDate).TotalMilliseconds } else { '' }; "
-			: "";
+		const prelude =
+			(layout.includes("ageMs")
+				? "$age = if ($_.CreationDate -is [datetime]) { [int64]((Get-Date) - $_.CreationDate).TotalMilliseconds } else { '' }; "
+				: "") +
+			(layout.includes("startedAt")
+				? "$st = if ($_.CreationDate -is [datetime]) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }; "
+				: "");
 		const row = layout
-			.map((field) =>
-				field === "ageMs" ? "$age" : `$($_.${FIELD_COLUMNS[field].wmi})`,
-			)
+			.map((field) => {
+				if (field === "ageMs") return "$age";
+				if (field === "startedAt") return "$st";
+				return `$($_.${FIELD_COLUMNS[field].wmi})`;
+			})
 			.join("`t");
 		return {
 			command: windowsExe("WindowsPowerShell\\v1.0\\powershell.exe"),
@@ -297,6 +303,14 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 			`process query: ${unsupported.join(", ")} has no POSIX ps column`,
 		);
 	}
+	if (layout.includes("startedAt") && process.platform === "linux") {
+		// procps prints `lstart` as boot time plus ticks, and the kernel moves
+		// boot time when the wall clock is stepped, so one process can print two
+		// start times. Linux reads the ticks themselves: readLinuxProcessStart.
+		throw new Error(
+			"process query: startedAt on Linux is read from /proc, not ps",
+		);
+	}
 	const columns = layout
 		.map((field) => `${FIELD_COLUMNS[field].ps}=`)
 		.join(",");
@@ -312,7 +326,179 @@ export function buildProcessQuery(fields = ALL_PROCESS_FIELDS, options = {}) {
 		tabSeparated: false,
 		fields: layout,
 		serverSideFiltered: Boolean(pidFilter),
+		// BSD `ps` formats `lstart` with strftime("%c") in the local zone, so
+		// two readers with different locales or zones would print one process
+		// two ways. Pinned, every reader prints the same text.
+		...(layout.includes("startedAt") ? { env: posixStartEnv() } : {}),
 	};
+}
+
+/** The environment a POSIX start-time query runs in (see buildProcessQuery). */
+function posixStartEnv() {
+	return { ...process.env, LC_ALL: "C", TZ: "UTC0" };
+}
+
+/**
+ * Linux: a process's start time as the kernel keeps it, in clock ticks since
+ * boot (`/proc/<pid>/stat` field 22), qualified by the boot it belongs to:
+ * `<ticks>@<boot_id>`. Ticks restart at every boot and `instances.json`
+ * survives one, so ticks alone could name a process from an earlier boot.
+ * The kernel adds the READER's time-namespace boottime offset to field 22,
+ * so this reader's offset is subtracted: the value never changes for the life
+ * of the process, and (pid, start) names one process across every reader
+ * (#3538 review R4-F1). Undefined when the pid does not exist, or any of the
+ * three files cannot be read or parsed.
+ *
+ * @param {number} pid
+ * @returns {string|undefined}
+ */
+export function readLinuxProcessStart(pid) {
+	try {
+		const ticks = parseLinuxStatStart(
+			fs.readFileSync(`/proc/${assertPid(pid)}/stat`, "utf8"),
+		);
+		const boot = fs
+			.readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+			.trim();
+		const offset = readBoottimeOffsetTicks();
+		// An empty or bound-over boot_id would name every process under a boot
+		// no record or tag carries (#3538 review R3-F1): unknown, not a start.
+		return ticks === undefined ||
+			offset === undefined ||
+			!/^[0-9a-f-]{36}$/.test(boot)
+			? undefined
+			: `${Number(ticks) - offset}@${boot}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Linux USER_HZ: the unit of `/proc/<pid>/stat` times on every architecture
+ *  Node runs on (it is 1024 only on alpha and ia64). */
+const USER_HZ = 100;
+const NSEC_PER_TICK = 1_000_000_000 / USER_HZ;
+
+/**
+ * This reader's time-namespace boottime offset, in clock ticks: 0 when the
+ * kernel has no time namespaces (`/proc/self/timens_offsets` is absent), and
+ * undefined when the file cannot be read or parsed, or the offset is not a
+ * whole number of ticks. Field 22 is the kernel's rounding of
+ * (start + offset), which can only be undone exactly for a whole-tick offset;
+ * an off-by-one would read as another process on the same boot.
+ *
+ * @returns {number|undefined}
+ */
+function readBoottimeOffsetTicks() {
+	let text;
+	try {
+		text = fs.readFileSync("/proc/self/timens_offsets", "utf8");
+	} catch (error) {
+		return /** @type {NodeJS.ErrnoException} */ (error).code === "ENOENT"
+			? 0
+			: undefined;
+	}
+	const match = /^boottime\s+(-?\d+)\s+(\d+)\s*$/m.exec(String(text));
+	if (!match) return undefined;
+	const nsec = Number(match[2]);
+	if (nsec % NSEC_PER_TICK !== 0) return undefined;
+	return Number(match[1]) * USER_HZ + nsec / NSEC_PER_TICK;
+}
+
+/**
+ * Field 22 (starttime) of a `/proc/<pid>/stat` line, or undefined. The
+ * command name (field 2) is parenthesised and may itself contain ") ", so
+ * the fields are counted from the LAST ")".
+ *
+ * @param {string} stat
+ * @returns {string|undefined}
+ */
+export function parseLinuxStatStart(stat) {
+	const fields = String(stat)
+		.slice(stat.lastIndexOf(")") + 2)
+		.split(" ");
+	const start = fields[19];
+	return /^\d+$/.test(start ?? "") ? start : undefined;
+}
+
+/**
+ * Linux: the pid namespace a process lives in (`/proc/<pid>/ns/pid`, e.g.
+ * `pid:[4026531836]`), or undefined when it cannot be read. A pid, and a
+ * pid named inside an owner tag, only means something within one namespace:
+ * a container's pid 1 is not the host's.
+ *
+ * @param {number} pid
+ * @returns {string|undefined}
+ */
+export function readLinuxPidNamespace(pid) {
+	try {
+		return fs.readlinkSync(`/proc/${assertPid(pid)}/ns/pid`);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Linux: one variable from a process's initial environment
+ * (`/proc/<pid>/environ`). Undefined when the variable is absent or the file
+ * cannot be read (another user's process, a pid that is gone).
+ *
+ * @param {number} pid
+ * @param {string} name
+ * @returns {string|undefined}
+ */
+export function readLinuxProcessEnvironmentVariable(pid, name) {
+	let environ;
+	try {
+		environ = fs.readFileSync(`/proc/${assertPid(pid)}/environ`, "utf8");
+	} catch {
+		return undefined;
+	}
+	const prefix = `${name}=`;
+	const entry = environ.split("\0").find((item) => item.startsWith(prefix));
+	return entry === undefined ? undefined : entry.slice(prefix.length);
+}
+
+/**
+ * macOS and the BSDs: the query that prints each pid's command line followed
+ * by its environment (`ps -E`; the kernel shows it for the caller's own
+ * processes only). Read back with `parseEnvironmentVariable`.
+ *
+ * @param {ReadonlyArray<number>} pids
+ * @returns {{ command: string, args: string[] }}
+ */
+export function buildEnvironmentQuery(pids) {
+	return {
+		command: posixPsPath(),
+		args: [
+			"-E",
+			"-ww",
+			"-p",
+			pids.map((pid) => assertPid(pid)).join(","),
+			"-o",
+			"pid=,command=",
+		],
+	};
+}
+
+/**
+ * Read one variable per pid out of `buildEnvironmentQuery` output. `ps -E`
+ * joins the arguments and the environment with spaces, so the value is the
+ * token after `<name>=`.
+ *
+ * @param {string} out
+ * @param {string} name
+ * @returns {Map<number, string>}
+ */
+export function parseEnvironmentVariable(out, name) {
+	const values = new Map();
+	const pattern = new RegExp(`(?:^|\\s)${name}=(\\S+)`);
+	for (const line of String(out ?? "").split(/\r?\n/)) {
+		const row = /^\s*(\d+)\s+(.*)$/.exec(line);
+		if (!row) continue;
+		const value = pattern.exec(row[2]);
+		if (value) values.set(Number(row[1]), value[1]);
+	}
+	return values;
 }
 
 /**
@@ -363,7 +549,50 @@ export function ageMsFromPosixEtime(raw) {
  * @returns {string}
  */
 function posixTokenPattern(field) {
-	return FIELD_COLUMNS[field].token === "age" ? "(\\S+)" : "(\\d+)";
+	const token = FIELD_COLUMNS[field].token;
+	if (token === "age") return "(\\S+)";
+	// `lstart` in the C locale: "Sat Sep 26 09:26:02 2026", five tokens.
+	if (token === "lstart")
+		return "(\\S+\\s+\\S+\\s+\\d+\\s+\\d+:\\d+:\\d+\\s+\\d+)";
+	return "(\\d+)";
+}
+
+const LSTART_MONTHS = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
+
+/**
+ * A C-locale, UTC `lstart` token as an ISO-8601 string, or undefined for any
+ * other shape. ISO carries no spaces, so it can travel inside an owner tag.
+ *
+ * @param {string} raw
+ * @returns {string|undefined}
+ */
+export function isoFromLstart(raw) {
+	const match =
+		/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(
+			String(raw ?? "").trim(),
+		);
+	if (!match) return undefined;
+	const month = LSTART_MONTHS.indexOf(match[1]);
+	if (month === -1) return undefined;
+	const [day, hours, minutes, seconds, year] = [2, 3, 4, 5, 6].map((i) =>
+		Number(match[i]),
+	);
+	return new Date(
+		Date.UTC(year, month, day, hours, minutes, seconds),
+	).toISOString();
 }
 
 /**
@@ -442,7 +671,9 @@ export function parseProcessTable(
 					? parseNonNegativeInt(raw)
 					: ageMsFromPosixEtime(raw ?? "");
 			} else if (field === "startedAt") {
-				row.startedAt = String(raw ?? "").trim();
+				row.startedAt = tabSeparated
+					? String(raw ?? "").trim()
+					: isoFromLstart(raw ?? "");
 			} else {
 				row[field] = parseNonNegativeInt(raw);
 			}
@@ -514,6 +745,7 @@ export function snapshotProcesses(
 				shell: false,
 				windowsHide: true,
 				stdio: ["ignore", "pipe", "ignore"],
+				env: query.env,
 			});
 		} catch {
 			finish([], false);

@@ -245,6 +245,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// libuv finding no referenced handle mid `lsp_diagnostics` and Node exiting
 	// 0. A process cannot watch its own loop decide to drain, so the exit code
 	// and stdout of a real headless child are the only faithful observation.
+	// #3538/#3539: the reaper's kill decision reads a pid's command line and
+	// kernel start time, and its POSIX backstop reads a child's inherited
+	// environment. Only a real process carries all three.
+	"real-process-spawn:clients/instance-reaper-pid-reuse.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the reaper's evidence is a real pid's command line, kernel start time and inherited environment; a double would encode the very identity guess the fix removes",
+	},
 	"real-process-spawn:clients/lsp/headless-tool-call-keepalive.test.ts": {
 		detector: "real-process-spawn",
 		reason:

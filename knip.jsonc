@@ -165,6 +165,10 @@
 		// npm-installable.
 		"mkfifo",
 		"netstat",
-		"ss"
+		"ss",
+		// tests/clients/instance-reaper-pid-reuse.test.ts (#3538 R4-F1) runs
+		// the reaper confined under util-linux `unshare --pid --time` -- a
+		// system binary, never npm-installable; the case skips when absent.
+		"unshare"
 	]
 }
