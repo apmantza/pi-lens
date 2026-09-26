@@ -478,6 +478,19 @@ export function registerCascadeTierReconcileTask(
 
 	registerQuietWindowTask("cascade_tier3_reconcile", async (context) => {
 		if (!isTierAwareCascadeEnabled()) return;
+		// #3499 (shape 54): the session reset cleared the registry, so a stale
+		// window that starts here after it would drain only touches recorded
+		// since, and the append guard below would drop them. Leave them for the
+		// current session's window. No await sits between this check and the
+		// synchronous drain.
+		if (
+			context &&
+			!context.sessionGeneration.guardedWrite(
+				"cascade_tier3_reconcile",
+				() => true,
+			)
+		)
+			return;
 		const outcomes = await reconcileOutstandingCascadeTouches(getLspService());
 
 		// #1023: re-inject each resolved-found neighbor error so it reaches the

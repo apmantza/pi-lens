@@ -191,7 +191,11 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 				`staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
 		expect(delivered).toEqual([]);
-		expect(staleWriteSubjects()).toEqual([`runtime-session:${FILE}`]);
+		// The stale window's reconcile starts after the reset and stands down.
+		expect(staleWriteSubjects()).toEqual([
+			`runtime-session:${FILE}`,
+			"runtime-session:cascade_tier3_reconcile",
+		]);
 	});
 
 	it("drops the re-park of a session-1 compute still pending at the settle cap, so session 2's turn_end settle never picks it up", async () => {
@@ -213,7 +217,10 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 			`[StraddleState] delivered=${JSON.stringify(runs.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
 		expect(runs).toEqual([]);
-		expect(staleWriteSubjects()).toEqual(["runtime-session:cascade-pending"]);
+		expect(staleWriteSubjects()).toEqual([
+			"runtime-session:cascade-pending",
+			"runtime-session:cascade_tier3_reconcile",
+		]);
 	});
 
 	it("drops a session-1 tier-3 reconcile append that resolves after the replacement", async () => {
