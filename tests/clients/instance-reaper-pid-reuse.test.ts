@@ -64,6 +64,8 @@ const h = vi.hoisted(() => ({
 	afterFirstIdentityQuery: undefined as undefined | (() => Promise<void>),
 	/** The next identity query times out (one shot). */
 	failNextIdentityQuery: false,
+	/** Runs once, after the first owner-tag read returns. */
+	afterFirstTagRead: undefined as undefined | (() => Promise<void>),
 	latency: [] as Array<{ phase?: string; metadata?: Record<string, unknown> }>,
 }));
 
@@ -91,12 +93,16 @@ function takeIdentityFailure(): boolean {
 async function runIdentityHook(): Promise<void> {
 	const hook = h.afterFirstIdentityQuery;
 	h.afterFirstIdentityQuery = undefined;
+	h.afterFirstTagRead = undefined;
 	if (hook) await hook();
 }
 
-// The reaper sees only this file's pids. The identity hook sits on both
-// doors an identity query can take: the pid-filtered table query the reaper
-// made before #3538, and the identity query it makes since.
+// The backstop's enumeration sees only this file's pids, so nothing else is
+// ever a candidate. Identity reads (a pid's command line and start) see the
+// real table, as in production: an owner or host pid the reaper judges may
+// be any process. The identity hook sits on both doors an identity query can
+// take: the pid-filtered table query the reaper made before #3538, and the
+// identity query it makes since.
 vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 	const real =
 		await importOriginal<typeof import("../../clients/process-snapshot.js")>();
@@ -113,8 +119,11 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 					serverSideFiltered: true,
 				};
 			const result = await real.queryProcessTable(request, options);
-			const rows = result.rows.filter((row) => h.mine.has(row.pid));
-			if (request.filter?.column === "ProcessId") await runIdentityHook();
+			const identity = request.filter?.column === "ProcessId";
+			const rows = identity
+				? result.rows
+				: result.rows.filter((row) => h.mine.has(row.pid));
+			if (identity) await runIdentityHook();
 			return { ...result, rows };
 		},
 		queryProcessIdentities: async (
@@ -123,11 +132,18 @@ vi.mock("../../clients/process-snapshot.js", async (importOriginal) => {
 		) => {
 			if (takeIdentityFailure())
 				return { identities: new Map(), status: "timeout" as const };
-			const result = await real.queryProcessIdentities(
-				pids.filter((pid) => h.mine.has(pid)),
-				options,
-			);
+			const result = await real.queryProcessIdentities(pids, options);
 			await runIdentityHook();
+			return result;
+		},
+		readOwnerTags: async (
+			pids: readonly number[],
+			options: Parameters<typeof real.readOwnerTags>[1],
+		) => {
+			const result = await real.readOwnerTags(pids, options);
+			const hook = h.afterFirstTagRead;
+			h.afterFirstTagRead = undefined;
+			if (hook) await hook();
 			return result;
 		},
 	};
@@ -398,6 +414,7 @@ describe.skipIf(process.platform !== "linux")(
 				expect.objectContaining({
 					pid: process.pid,
 					processStart: startOf(process.pid),
+					pidNamespace: fs.readlinkSync("/proc/self/ns/pid"),
 					lspChildren: [
 						expect.objectContaining({ pid, processStart: startOf(pid) }),
 					],
@@ -608,6 +625,209 @@ describe.skipIf(process.platform !== "linux")(
 				`PI_LENS_OWNER=${tag(process.pid, startOf(process.pid))}`,
 			);
 			handle.process.kill("SIGKILL");
+		});
+	},
+);
+
+/**
+ * Whether this host can start a process in a new pid namespace, and how: as
+ * root directly, else inside a new user namespace. Neither is a given (an
+ * unprivileged CI runner may forbid user namespaces), so the namespace case
+ * below skips with the reason instead of passing vacuously.
+ */
+function probeUnshare(): { args: string[] } | { reason: string } {
+	const base = ["--pid", "--fork", "--mount-proc", "--kill-child"];
+	const reasons: string[] = [];
+	for (const extra of [[], ["--user", "--map-root-user"]]) {
+		const probe = spawnSync("unshare", [...extra, ...base, "true"], {
+			encoding: "utf8",
+		});
+		if (probe.status === 0) return { args: [...extra, ...base] };
+		reasons.push(
+			`unshare ${[...extra, ...base].join(" ")}: ${probe.error?.message ?? probe.stderr.trim() ?? `exit ${probe.status}`}`,
+		);
+	}
+	return { reason: reasons.join("; ") };
+}
+
+/** A process's direct children, as this namespace sees them. */
+function childrenOf(pid: number): number[] {
+	try {
+		return fs
+			.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8")
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean)
+			.map(Number);
+	} catch {
+		return [];
+	}
+}
+
+describe.skipIf(process.platform !== "linux")(
+	"#3538/#3539 review round 1: identity is only judged where it means something",
+	() => {
+		it("[F1] a live session's server in another pid namespace is never reaped, whatever pid its tag names", async (ctx) => {
+			const unshare = probeUnshare();
+			if (!("args" in unshare)) {
+				ctx.skip(`no pid namespace available here: ${unshare.reason}`);
+				return;
+			}
+			// A live pi-lens owner inside its own pid namespace spawns a server
+			// tagged with ITS pid and start. Seen from here that pid is some
+			// other process (or none), which read as a dead owner.
+			const marker = `ns-marker-${process.pid}-${Date.now()}`;
+			const script = [
+				'const fs = require("node:fs");',
+				'const { spawn } = require("node:child_process");',
+				'const stat = fs.readFileSync("/proc/self/stat", "utf8");',
+				'const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];',
+				"const env = { ...process.env, PI_LENS_OWNER: `${process.pid}:${start}` };",
+				// Joined at run time, so only the server's own command line
+				// carries the marker, never the owner's script.
+				`const marker = ${JSON.stringify(marker.slice(0, 4))} + ${JSON.stringify(marker.slice(4))};`,
+				`spawn(process.execPath, ["-e", "setInterval(()=>{},1e6)", ${JSON.stringify(TSLS)}, "--stdio", marker], { env, stdio: "ignore" });`,
+				"console.log(env.PI_LENS_OWNER);",
+				"setInterval(() => {}, 1e6);",
+			].join("\n");
+			const owner = track(
+				spawn("unshare", [...unshare.args, process.execPath, "-e", script], {
+					stdio: ["ignore", "pipe", "ignore"],
+				}),
+			);
+			const tagged = await new Promise<string>((resolve) =>
+				owner.stdout?.once("data", (chunk) => resolve(String(chunk).trim())),
+			);
+			// unshare -> the namespace's first process (the owner) -> the server,
+			// followed down the chain of children as this namespace sees them.
+			let server: number | undefined;
+			while (server === undefined) {
+				const [nsOwner] = childrenOf(owner.pid as number);
+				server = nsOwner === undefined ? undefined : childrenOf(nsOwner)[0];
+				if (server === undefined)
+					await new Promise((resolve) => setImmediate(resolve));
+			}
+			expect(fs.readFileSync(`/proc/${server}/cmdline`, "utf8")).toContain(
+				marker,
+			);
+			h.mine.add(server);
+			expect(fs.readlinkSync(`/proc/${server}/ns/pid`)).not.toBe(
+				fs.readlinkSync("/proc/self/ns/pid"),
+			);
+			expect(tagged).toMatch(/^\d+:\d+$/);
+
+			await backstop();
+
+			expect(signalledPids().has(server)).toBe(false);
+		});
+
+		it("[F1] a registry entry from another pid namespace is neither judged dead nor pruned", async () => {
+			const stranger = spawnHost(); // this namespace's view of the entry's pid
+			const orphan = spawnLsp();
+			const pid = orphan.pid as number;
+			writeRegistry([
+				{
+					...entry(
+						stranger.pid as number,
+						[{ pid, processStart: startOf(pid) }],
+						{
+							processStart: OTHER_START,
+						},
+					),
+					pidNamespace: "pid:[1]",
+				},
+			]);
+
+			await sweepOrphans();
+
+			expect(signals).toEqual([]);
+			expect(registryEntries().map((e) => e.pid)).toEqual([stranger.pid]);
+		});
+
+		it("[F1] an entry from this pid namespace is still judged: its orphan is reaped", async () => {
+			const orphan = spawnLsp();
+			const pid = orphan.pid as number;
+			writeRegistry([
+				{
+					...entry(deadPid(), [{ pid, processStart: startOf(pid) }], {
+						processStart: OTHER_START,
+					}),
+					pidNamespace: fs.readlinkSync("/proc/self/ns/pid"),
+				},
+			]);
+			const exited = once(orphan, "exit");
+
+			await sweepOrphans();
+
+			expect(signalledPids().has(pid)).toBe(true);
+			expect((await exited)[1]).toBe("SIGKILL");
+		});
+
+		it("[F1] the health read never prunes another pid namespace's entry", async () => {
+			writeRegistry([{ ...entry(deadPid(), []), pidNamespace: "pid:[1]" }]);
+
+			await getResourceFootprint();
+			// A prune is fire-and-forget; give it every turn it could need.
+			for (let turn = 0; turn < 500 && registryEntries().length > 0; turn++) {
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+
+			expect(registryEntries()).toHaveLength(1);
+		});
+
+		it("registerInstance records this process's pid namespace", async () => {
+			const { registerInstance, _settleRegistryMutationsForTests } =
+				await import("../../clients/instance-registry.js");
+
+			await registerInstance("/repo/x");
+			await _settleRegistryMutationsForTests();
+
+			expect(registryEntries()).toEqual([
+				expect.objectContaining({
+					pid: process.pid,
+					pidNamespace: fs.readlinkSync("/proc/self/ns/pid"),
+				}),
+			]);
+		});
+
+		it("[F2] a pid whose owner tag changed after the decision is not signalled", async () => {
+			// The orphan carries a dead owner's tag when the sweep reads it, then
+			// becomes a live session's process on the same pid: `exec` keeps the
+			// pid and the start and replaces the environment, which is what a
+			// reuse between the tag read and the start read looks like.
+			const liveTag = tag(process.pid, startOf(process.pid));
+			const orphan = track(
+				spawn(
+					"sh",
+					[
+						"-c",
+						`read x; exec env PI_LENS_OWNER=${liveTag} "${process.execPath}" -e "setInterval(()=>{},1e6)" ${TSLS} --stdio`,
+						"sh",
+						TSLS,
+					],
+					{
+						stdio: ["pipe", "ignore", "ignore"],
+						detached: true,
+						env: { ...process.env, PI_LENS_OWNER: tag(deadPid(), OTHER_START) },
+					},
+				),
+			);
+			const pid = orphan.pid as number;
+			const environ = () =>
+				fs.readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+			h.afterFirstTagRead = async () => {
+				orphan.stdin?.write("go\n");
+				while (!environ().includes(`PI_LENS_OWNER=${liveTag}`)) {
+					await new Promise((resolve) => setImmediate(resolve));
+				}
+			};
+
+			await backstop();
+
+			expect(signalledPids().has(pid)).toBe(false);
+			expect(
+				h.latency.find((r) => r.phase === "orphan_backstop_reaped")?.metadata,
+			).toMatchObject({ killed: 0, identityChanged: 1 });
 		});
 	},
 );

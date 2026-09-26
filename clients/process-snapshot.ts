@@ -38,6 +38,7 @@ import {
 	type ProcessField,
 	type ProcessFilter,
 	type ProcRow,
+	readLinuxPidNamespace,
 	readLinuxProcessEnvironmentVariable,
 	readLinuxProcessStart,
 } from "../scripts/lib/process-scan.mjs";
@@ -203,9 +204,18 @@ export function formatOwnerTag(tag: OwnerTag): string {
 	return `${tag.pid}:${tag.start}`;
 }
 
-/** Undefined for anything that is not `<positive pid>:<non-empty start>`. */
+/**
+ * Undefined for anything that is not `<positive pid>:<start>`, where the
+ * start has a shape this module writes: Linux clock ticks, or an ISO-8601 UTC
+ * instant (macOS). Anything longer (say, a later `pid:start:namespace` form)
+ * is no tag at all rather than a tag whose start never matches, which would
+ * read as a dead owner.
+ */
 export function parseOwnerTag(value: string | undefined): OwnerTag | undefined {
-	const match = /^(\d+):(\S+)$/.exec(value ?? "");
+	const match =
+		/^(\d+):(\d+|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$/.exec(
+			value ?? "",
+		);
 	if (!match) return undefined;
 	const [, pidText = "", start = ""] = match;
 	const pid = Number(pidText);
@@ -233,6 +243,11 @@ export async function ownerTagForChildren(
  * `/proc/<pid>/environ`, macOS asks `ps -E`. Windows has no way to read
  * another process's environment without native code, so it returns none and
  * its backstop judges ownership from the ppid instead.
+ *
+ * Linux returns no tag for a process in another pid namespace (a container,
+ * a rootless podman or Flatpak sandbox): the pid inside its tag names a
+ * process in THAT namespace, and read from this one it names some other
+ * process or none, which would judge a live owner dead (#3539 review F1).
  */
 export async function readOwnerTags(
 	pids: readonly number[],
@@ -243,7 +258,10 @@ export async function readOwnerTags(
 	if (valid.length === 0 || process.platform === "win32")
 		return { tags, status: "ok" };
 	if (process.platform === "linux") {
+		const own = ownPidNamespace();
 		for (const pid of valid) {
+			const namespace = readLinuxPidNamespace(pid);
+			if (namespace === undefined || namespace !== own) continue;
 			const tag = parseOwnerTag(
 				readLinuxProcessEnvironmentVariable(pid, OWNER_TAG_ENV),
 			);
@@ -265,7 +283,22 @@ export async function readOwnerTags(
 		const tag = parseOwnerTag(value);
 		if (tag) tags.set(pid, tag);
 	}
-	return { tags, status: result.status };
+	// `ps -p` exits non-zero when a requested pid is gone, which is a clean
+	// answer for that pid (no tag), not a failed read of the others.
+	return {
+		tags,
+		status: result.status === "exit-error" ? "ok" : result.status,
+	};
+}
+
+/**
+ * This process's pid namespace (Linux), or undefined elsewhere or when it
+ * cannot be read. A pid means something only inside its namespace.
+ */
+export function ownPidNamespace(): string | undefined {
+	return process.platform === "linux"
+		? readLinuxPidNamespace(process.pid)
+		: undefined;
 }
 
 interface OwnStartCell {

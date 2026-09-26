@@ -79,6 +79,16 @@ code:
 Not modelled: the Windows marker search, the `.cmd` shim, and registry
 corruption read as empty.
 
+Not modelled either: pid namespaces. The model has one pid space, which is
+what a reaper sees within its own namespace. Across namespaces a pid names
+different processes, so the code declines to judge there: a process in
+another pid namespace reads as untagged, and a registry entry from another
+namespace is neither judged dead nor pruned (#3539 review round 1, F1).
+Both only remove kills and prunes, so the model still covers a superset of
+the code within one namespace. The two-read race between the owner tag and
+the start (F2) is closed by re-reading the tag in the re-check, which the
+model's atomic `recheck` already assumes.
+
 ## Results
 
 The flipped configs (`ReuseToctou`, `RecheckOnly`, `RecheckOnlyNodeCmd`,

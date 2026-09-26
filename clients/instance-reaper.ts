@@ -95,6 +95,7 @@ import {
 import { logLatency } from "./latency-logger.js";
 import {
 	type OwnerTag,
+	ownPidNamespace,
 	type ProcessIdentity,
 	queryProcessIdentities,
 	queryProcessTable,
@@ -1175,17 +1176,11 @@ export async function sweepUntrackedOrphans(
 
 		// #3539: on POSIX the owner tag, not the ppid, says whose a process is.
 		const pids = scan.processes.map((proc) => proc.pid);
-		const tagScan = await readOwnerTags(pids, {
-			timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
-			onTimeout: (child) =>
-				terminateScannerChild(child, {
-					kind: "orphan-backstop-scanner-escalated",
-					timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
-				}),
-		});
+		const tagScan = await readTags(pids);
 		if (tagScan.status !== "ok") {
-			// Every candidate reads as untagged, so nothing is reaped: a sweep
-			// that could not tell, not a clean one.
+			// A candidate the failed query did not answer reads as untagged and
+			// is not reaped this sweep: a sweep that could not tell, not a clean
+			// one.
 			recordDegradationOnce({
 				kind: "orphan-backstop-scan-failed",
 				subject: "owner-tag-query",
@@ -1237,10 +1232,16 @@ export async function sweepUntrackedOrphans(
 					const now = (await queryIdentities([proc.pid])).identities.get(
 						proc.pid,
 					);
+					// #3539 review F2: the tag and the start came from two reads,
+					// and a pid reused between them pairs a dead owner's tag with a
+					// live process's start. The tag must still be the one decided on.
+					const tagNow = (await readTags([proc.pid])).tags.get(proc.pid);
 					return (
 						now !== undefined &&
 						now.start === proc.start &&
-						matchesManagedBinary(now.command)
+						matchesManagedBinary(now.command) &&
+						tagNow?.pid === proc.ownerTag?.pid &&
+						tagNow?.start === proc.ownerTag?.start
 					);
 				},
 			});
@@ -1272,6 +1273,9 @@ export async function sweepUntrackedOrphans(
 				tooFresh: partition.tooFresh.length,
 				unknownAge: partition.unknownAge.length,
 				unknownStart: partition.unknownStart.length,
+				// #3539 review F6: "every candidate untagged" is not "no orphans".
+				tagged: tags.size,
+				untagged: scan.processes.length - tags.size,
 				killed: killed.length,
 				killUnverified: unverified.length,
 				identityChanged,
@@ -1501,6 +1505,18 @@ async function isWithinCooldown(
 	return sinceLastMs < cooldownMs ? sinceLastMs : undefined;
 }
 
+/** The backstop's owner-tag read, bounded like its other scanner queries. */
+function readTags(pids: number[]) {
+	return readOwnerTags(pids, {
+		timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+		onTimeout: (child) =>
+			terminateScannerChild(child, {
+				kind: "orphan-backstop-scanner-escalated",
+				timeoutMs: BACKSTOP_SCAN_TIMEOUT_MS,
+			}),
+	});
+}
+
 /** Short, stable identity for one managed process: which binary, which pid.
  *  Full command lines are user paths and can be long, so the record carries
  *  the matched managed-binary name plus the pid. */
@@ -1588,7 +1604,17 @@ export async function sweepOrphans(): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const startedAt = Date.now();
 	try {
-		const registry = await readInstanceRegistry();
+		// #3539 review F1: a pid means something only inside its pid namespace.
+		// `~/.pi-lens` can be shared by instances in different namespaces (a
+		// container, a sandbox), and read from this one another namespace's
+		// live host pid names some other process, or none. Its entries are not
+		// this sweep's to judge. An entry with no namespace (an older writer,
+		// or not Linux) is judged as before.
+		const ownNamespace = ownPidNamespace();
+		const registry = (await readInstanceRegistry()).filter(
+			(entry) =>
+				entry.pidNamespace === undefined || entry.pidNamespace === ownNamespace,
+		);
 		if (registry.length === 0) return;
 
 		// Identity verification before any pid kill (recycled-pid guard): fetch

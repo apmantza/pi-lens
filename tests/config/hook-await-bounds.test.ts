@@ -2274,8 +2274,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// child's start. Each is a process-table query under
 	// BACKSTOP_SCAN_TIMEOUT_MS with the reaper's tree-kill on timeout, or a
 	// synchronous /proc read on Linux; none can take the hook's signal until
-	// #2523 AC4 threads it.
-	"clients/instance-reaper.ts": 31,
+	// #2523 AC4 threads it. Review round 1 (F2) adds one more in the reaper:
+	// the re-check also re-reads the owner tag, the same bounded query.
+	"clients/instance-reaper.ts": 32,
 	"clients/instance-registry.ts": 28,
 	"clients/language-profile.ts": 3,
 	"clients/lens-engine.ts": 1,

@@ -72,6 +72,10 @@ export function isoFromLstart(raw: string): string | undefined;
 
 export function readLinuxProcessStart(pid: number): string | undefined;
 
+export function parseLinuxStatStart(stat: string): string | undefined;
+
+export function readLinuxPidNamespace(pid: number): string | undefined;
+
 export function readLinuxProcessEnvironmentVariable(
 	pid: number,
 	name: string,

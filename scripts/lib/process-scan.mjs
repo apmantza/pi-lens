@@ -348,16 +348,46 @@ function posixStartEnv() {
  * @returns {string|undefined}
  */
 export function readLinuxProcessStart(pid) {
-	let stat;
 	try {
-		stat = fs.readFileSync(`/proc/${assertPid(pid)}/stat`, "utf8");
+		return parseLinuxStatStart(
+			fs.readFileSync(`/proc/${assertPid(pid)}/stat`, "utf8"),
+		);
 	} catch {
 		return undefined;
 	}
-	// The command name (field 2) is parenthesised and may itself contain ") ".
-	const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+}
+
+/**
+ * Field 22 (starttime) of a `/proc/<pid>/stat` line, or undefined. The
+ * command name (field 2) is parenthesised and may itself contain ") ", so
+ * the fields are counted from the LAST ")".
+ *
+ * @param {string} stat
+ * @returns {string|undefined}
+ */
+export function parseLinuxStatStart(stat) {
+	const fields = String(stat)
+		.slice(stat.lastIndexOf(")") + 2)
+		.split(" ");
 	const start = fields[19];
 	return /^\d+$/.test(start ?? "") ? start : undefined;
+}
+
+/**
+ * Linux: the pid namespace a process lives in (`/proc/<pid>/ns/pid`, e.g.
+ * `pid:[4026531836]`), or undefined when it cannot be read. A pid, and a
+ * pid named inside an owner tag, only means something within one namespace:
+ * a container's pid 1 is not the host's.
+ *
+ * @param {number} pid
+ * @returns {string|undefined}
+ */
+export function readLinuxPidNamespace(pid) {
+	try {
+		return fs.readlinkSync(`/proc/${assertPid(pid)}/ns/pid`);
+	} catch {
+		return undefined;
+	}
 }
 
 /**

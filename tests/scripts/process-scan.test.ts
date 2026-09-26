@@ -18,6 +18,7 @@ import {
 	isLspServerCommand,
 	isoFromLstart,
 	normalizeProcessFields,
+	parseLinuxStatStart,
 	parseProcessTable,
 	posixPsPath,
 	readLinuxProcessStart,
@@ -400,6 +401,13 @@ describe("process start times (#3538)", () => {
 				startedAt: "2026-09-06T09:26:02.000Z",
 			},
 		]);
+	});
+
+	it('counts /proc stat fields from the LAST paren, so a command name holding ") R 1 2" cannot shift the start (#3538 review F4)', () => {
+		const tail = Array.from({ length: 50 }, (_, i) => String(i + 3)).join(" ");
+		// Fields 3.. are 3, 4, 5, ...: field 22 (starttime) reads "22".
+		expect(parseLinuxStatStart(`4242 (x) R 1 2 3 4) ${tail}`)).toBe("22");
+		expect(parseLinuxStatStart(`4242 (plain) ${tail}`)).toBe("22");
 	});
 
 	it("reads an lstart it cannot parse as unknown, never as a start", () => {

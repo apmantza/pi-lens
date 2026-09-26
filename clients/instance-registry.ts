@@ -50,6 +50,7 @@ import {
 } from "./instance-reaper.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
+	ownPidNamespace,
 	ownProcessStart,
 	ownProcessStartIfKnown,
 	type ProcessTableOptions,
@@ -103,6 +104,13 @@ export interface InstanceEntry {
 	 * records it and which older versions still read.
 	 */
 	processStart?: string;
+	/**
+	 * The host's pid namespace on Linux (`/proc/<pid>/ns/pid`, #3539 review
+	 * F1). `pid` and `processStart` mean something only inside it; a reaper
+	 * in another namespace leaves the entry alone. Absent elsewhere and on
+	 * entries written before it.
+	 */
+	pidNamespace?: string | undefined;
 	startedAt: string;
 	/**
 	 * The host's FIRST registered root — its primary. Pinned at first
@@ -462,9 +470,11 @@ async function registerInstanceNow(projectRoot: string): Promise<void> {
 								[normalizedRoot],
 							)
 					: mergeInstanceRoots(existingRoots, normalizedRoot);
+			const namespace = ownPidNamespace();
 			others.push({
 				pid,
 				...(selfStart === undefined ? {} : { processStart: selfStart }),
+				...(namespace === undefined ? {} : { pidNamespace: namespace }),
 				startedAt: existing?.startedAt ?? now,
 				projectRoot: roots[0] ?? normalizedRoot,
 				projectRoots: roots,
@@ -769,9 +779,11 @@ async function recordLspChildNow(entry: RecordLspChildInput): Promise<void> {
 				const projectRoot = normalizeFilePath(
 					identity?.projectRoot ?? process.cwd(),
 				);
+				const namespace = ownPidNamespace();
 				file.instances.push({
 					pid,
 					...(selfStart === undefined ? {} : { processStart: selfStart }),
+					...(namespace === undefined ? {} : { pidNamespace: namespace }),
 					startedAt: identity?.startedAt ?? now,
 					projectRoot,
 					rootSource: identity?.rootSource ?? "lsp-fallback",
@@ -1172,11 +1184,17 @@ export async function getResourceFootprint(
 	const instances = await readInstanceRegistry();
 	// #3539: only an entry with no children left to reap. This read kills
 	// nothing, so dropping an entry that still lists children lost the only
-	// record the registry sweep would have reaped them from.
+	// record the registry sweep would have reaped them from. And only an entry
+	// from this pid namespace: another namespace's pid, read from here, is not
+	// its host (review F1).
+	const namespace = ownPidNamespace();
 	const dead: InstanceIdentity[] = instances
 		.filter(
 			(instance) =>
-				!isPidAlive(instance.pid) && instance.lspChildren.length === 0,
+				!isPidAlive(instance.pid) &&
+				instance.lspChildren.length === 0 &&
+				(instance.pidNamespace === undefined ||
+					instance.pidNamespace === namespace),
 		)
 		.map((instance) => ({
 			pid: instance.pid,
