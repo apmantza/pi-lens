@@ -191,11 +191,7 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 				`staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
 		expect(delivered).toEqual([]);
-		// The stale window's reconcile starts after the reset and stands down.
-		expect(staleWriteSubjects()).toEqual([
-			`runtime-session:${FILE}`,
-			"runtime-session:cascade_tier3_reconcile",
-		]);
+		expect(staleWriteSubjects()).toEqual([`runtime-session:${FILE}`]);
 	});
 
 	it("drops the re-park of a session-1 compute still pending at the settle cap, so session 2's turn_end settle never picks it up", async () => {
@@ -217,10 +213,7 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 			`[StraddleState] delivered=${JSON.stringify(runs.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
 		expect(runs).toEqual([]);
-		expect(staleWriteSubjects()).toEqual([
-			"runtime-session:cascade-pending",
-			"runtime-session:cascade_tier3_reconcile",
-		]);
+		expect(staleWriteSubjects()).toEqual(["runtime-session:cascade-pending"]);
 	});
 
 	it("drops a session-1 tier-3 reconcile append that resolves after the replacement", async () => {
@@ -255,17 +248,20 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		expect(staleWriteSubjects()).toEqual([`runtime-session:${NEIGHBOR}`]);
 	});
 
-	it("leaves a touch recorded after the replacement for session 2's own window, and never drops it", async () => {
-		// FixNoStartCheck; shape 54, the no-drop direction (#3499 round 1). The
-		// replacement lands inside the settle wait and session 2 records its own
-		// tier-3 touch. Session 2's agent_settled window is skipped (a window is
-		// still in progress). The stale window's reconcile starts only after the
-		// settle, in session 2: it must neither deliver the touch for session 2
-		// nor drain and drop it. Session 2's next window delivers it.
+	it("delivers a touch recorded after the replacement even when session 2's next window is more than 15 minutes away", async () => {
+		// Shape 54, the no-drop direction (#3499 rounds 1-2, probes P1 and P4).
+		// The replacement lands inside the settle wait and session 2 records its
+		// own tier-3 touch. Session 2's agent_settled window is skipped (a window
+		// is still in progress). The stale window's reconcile starts only after
+		// the settle, in session 2. It captures its generation when it drains, so
+		// it delivers the touch for session 2 now. A window-start capture would
+		// leave it (FixNoStartCheck, or the round-1 start check) until session
+		// 2's next window, and a touch older than OUTSTANDING_TOUCH_MAX_AGE_MS
+		// (15 min) expires unanswered.
 		//
 		// The code cannot tell this touch from a stray that a still-running
-		// session-1 compute records after the reset (#3512), so a stray is left
-		// for session 2 too.
+		// session-1 compute records after the reset (#3512), so a stray is
+		// delivered the same way.
 		const runtime = sessionOne();
 		const compute = gatedPromise<CascadeRun>();
 		runtime.appendCascadePromise(compute.promise);
@@ -286,20 +282,19 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 			runs: runtime.hasCascadeRuns(),
 			touches: _getOutstandingCascadeTouchesForTests().map((t) => t.filePath),
 		};
+		// Session 2's next prompt settles 16 minutes later.
+		await vi.advanceTimersByTimeAsync(16 * 60_000);
 		await runQuietWindow({ runtime, dbg: () => {} });
 		const delivered = runtime.consumeCascadeRuns();
 		console.log(
-			`[FreshTouch] afterStale=${JSON.stringify(afterStale)} delivered=${JSON.stringify(delivered.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
+			`[FreshTouch] afterStale=${JSON.stringify(afterStale)} deliveredAt16min=${JSON.stringify(delivered.map((r) => r.filePath))} staleWrites=${JSON.stringify(staleWriteSubjects())}`,
 		);
 		expect(skipped).toHaveBeenCalledWith(
 			expect.stringContaining("a previous run is still in progress"),
 		);
-		expect(afterStale).toEqual({ runs: false, touches: [NEIGHBOR] });
 		expect(delivered.map((r) => r.filePath)).toEqual([NEIGHBOR]);
-		expect(staleWriteSubjects()).toEqual([
-			`runtime-session:${FILE}`,
-			"runtime-session:cascade_tier3_reconcile",
-		]);
+		expect(afterStale).toEqual({ runs: true, touches: [] });
+		expect(staleWriteSubjects()).toEqual([`runtime-session:${FILE}`]);
 	});
 
 	it("delivers every arm's write when no replacement lands during the window", async () => {
