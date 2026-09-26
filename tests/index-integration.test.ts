@@ -136,6 +136,17 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 	};
 });
 
+// #3506 (PR #3561) made index.ts register a lazy `import()` of the host SDK
+// for pi's per-file mutation queue, and a case here that drives a pi-lens
+// write resolves it. The real package costs ~110 MB of RSS in this fork and
+// put the file over the #3058 per-worker peak-RSS budget. No case here is
+// about the queue (tests/index-3506-file-mutation-queue-wiring.test.ts drives
+// the real one), so a pass-through stands in. `SessionManager` is left out on
+// purpose: without it the lookup reports "unverified", not a second copy.
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	withFileMutationQueue: <T>(_filePath: string, fn: () => Promise<T>) => fn(),
+}));
+
 // Cases install their own doubles for these modules with vi.doMock;
 // resetModules does not clear the mock registry, so drop them after each case
 // in every describe below (#2883).
