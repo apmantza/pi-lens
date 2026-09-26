@@ -42,6 +42,12 @@ export interface ProjectChangeEntry {
 	filePath: string;
 	fileSeq: number;
 	changedRange?: ProjectChangeRange;
+	/**
+	 * #3511 review round 2 (R2-F1): appended without the change-log lock, so
+	 * a lock holder may have logged the same seq. A snapshot whose runtime
+	 * never folded this entry is not fresh (see `ProjectSequenceIndex`).
+	 */
+	unlocked?: true;
 }
 
 export function getProjectChangeLogPath(cwd: string): string {
@@ -68,6 +74,7 @@ function parseChangeLine(line: string): ProjectChangeEntry | undefined {
 			filePath: parsed.filePath,
 			fileSeq: parsed.fileSeq,
 			changedRange: parsed.changedRange,
+			...(parsed.unlocked === true ? { unlocked: true as const } : {}),
 		};
 	} catch {
 		return undefined;
@@ -154,6 +161,15 @@ export function readChangesSince(
 export interface ProjectSequenceIndex {
 	projectSeq: number;
 	fileSeqByPath: Map<string, number>;
+	/** #3511 review round 2: the log entries this read folded. */
+	logEntries?: number;
+	/**
+	 * #3511 review round 2 (R2-F1): the 1-based position of the log's last
+	 * `unlocked` entry, 0 when there is none. A snapshot whose runtime folded
+	 * fewer entries (`ProjectSnapshot.logEntries`) may have missed it, even at
+	 * the log's max seq, so it is not fresh.
+	 */
+	unlockedThrough?: number;
 }
 
 /**
@@ -174,6 +190,8 @@ export interface ProjectSequenceBase {
 	fileSeqByPath: Iterable<readonly [string, number]>;
 	/** The snapshot's `seq`: entries at or below this are covered by the base. */
 	sinceSeq: number;
+	/** The log entries the snapshot's runtime folded (#3511 review round 2). */
+	logEntries?: number;
 }
 
 // Test-observable count of the EXPENSIVE per-entry folds (each one does a
@@ -262,12 +280,29 @@ export function readLatestProjectSequence(
 	cwd: string,
 	base?: ProjectSequenceBase,
 ): ProjectSequenceIndex {
-	const entries = readProjectChanges(cwd);
-	if (base) {
-		const partial = partialReplay(entries, base);
-		if (partial) return partial;
-	}
-	return fullReplay(entries);
+	return replay(readProjectChanges(cwd), base);
+}
+
+/**
+ * The bounded replay when `base` can be trusted, else the full one, plus the
+ * fold point and the last unlocked entry (#3511 review round 2). An unlocked
+ * entry after the base's fold point may share a seq at or below `sinceSeq`
+ * that the base never folded, so that base is not trusted.
+ */
+function replay(
+	entries: ProjectChangeEntry[],
+	base: ProjectSequenceBase | undefined,
+): ProjectSequenceIndex {
+	let unlockedThrough = 0;
+	entries.forEach((entry, index) => {
+		if (entry.unlocked) unlockedThrough = index + 1;
+	});
+	const index =
+		(base &&
+			unlockedThrough <= (base.logEntries ?? 0) &&
+			partialReplay(entries, base)) ||
+		fullReplay(entries);
+	return { ...index, logEntries: entries.length, unlockedThrough };
 }
 
 /**
@@ -280,12 +315,7 @@ export async function readLatestProjectSequenceAsync(
 	cwd: string,
 	base?: ProjectSequenceBase,
 ): Promise<ProjectSequenceIndex> {
-	const entries = await readProjectChangesAsync(cwd);
-	if (base) {
-		const partial = partialReplay(entries, base);
-		if (partial) return partial;
-	}
-	return fullReplay(entries);
+	return replay(await readProjectChangesAsync(cwd), base);
 }
 
 export function appendProjectChange(
@@ -337,17 +367,19 @@ const CHANGE_LOG_LOCK = { staleMs: 5_000, waitMs: 500 };
  * processes never log the same seq. `build` receives the log's max seq and
  * returns the entry to append; both run under the change-log lock. When the
  * lock stays held past its wait (or fails), the entry is still appended,
- * unlocked, with `locked: false`, and the degradation is recorded.
+ * unlocked and tagged `unlocked` (review round 2), and the degradation is
+ * recorded.
  */
 export function appendProjectChangeAllocated(
 	cwd: string,
-	build: (logMaxSeq: number, locked: boolean) => ProjectChangeEntry,
+	build: (logMaxSeq: number) => ProjectChangeEntry,
 ): void {
 	const logPath = getProjectChangeLogPath(cwd);
 	fs.mkdirSync(path.dirname(logPath), { recursive: true });
 	const append = (locked: boolean) => {
-		const entry = build(readChangeLogMaxSeq(logPath), locked);
-		fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, "utf-8");
+		const entry = build(readChangeLogMaxSeq(logPath));
+		const line = locked ? entry : { ...entry, unlocked: true as const };
+		fs.appendFileSync(logPath, `${JSON.stringify(line)}\n`, "utf-8");
 	};
 	const result = withGenerationLockSync(
 		`${logPath}.locks`,

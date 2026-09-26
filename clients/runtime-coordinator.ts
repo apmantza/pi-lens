@@ -81,15 +81,13 @@ const MAX_MUTATION_RECEIPTS = 512;
  */
 function recordViewIncomplete(
 	cwd: string,
-	cause: { locked: boolean; ownSeq: number; logMaxSeq: number },
+	cause: { ownSeq: number; logMaxSeq: number },
 ): void {
-	const why = cause.locked
-		? `the change log reached seq ${cause.logMaxSeq} while this runtime was at ${cause.ownSeq} (${
-				cause.ownSeq === 0
-					? "a sibling process, or a timed-out session_start read that seeded 0; see snapshot-sequence-read-timeout"
-					: "a sibling process logged above it"
-			})`
-		: "the change-log lock was unavailable, so a sibling may log the same seq";
+	const why = `the change log reached seq ${cause.logMaxSeq} while this runtime was at ${cause.ownSeq} (${
+		cause.ownSeq === 0
+			? "a sibling process, or a timed-out session_start read that seeded 0; see snapshot-sequence-read-timeout"
+			: "a sibling process logged above it"
+	})`;
 	recordDegradationOnce({
 		kind: "snapshot-view-incomplete",
 		subject: path.resolve(cwd),
@@ -411,10 +409,13 @@ export class RuntimeCoordinator {
 	private _writeIndex = 0;
 	private _projectSeq = 0;
 	// #3511: the highest logged seq this runtime's view is known to have missed
-	// (a sibling process logged it, or an unlocked append could share it); 0
-	// when the view folds every logged entry at or below `_projectSeq`. Cleared
-	// by a seed from the log, or by a late read that covers it.
+	// (a sibling process logged it above our seq); 0 when none. Cleared by a
+	// seed from the log, or by a late read that covers it.
 	private _viewMissingThrough = 0;
+	// #3511 review round 2: the change-log entries folded by this session's
+	// seed or late merge. An `unlocked` entry after it may share a seq we
+	// hold, so a snapshot stamped with it is judged against the log's tags.
+	private _viewLogEntries = 0;
 	private _turnStartProjectSeq = 0;
 	private readonly _fileSeq = new Map<string, number>();
 	// File key → the projectSeq value at that file's most recent bump (#451). Lets
@@ -505,6 +506,7 @@ export class RuntimeCoordinator {
 		this._writeIndex = 0;
 		this._projectSeq = 0;
 		this._viewMissingThrough = 0;
+		this._viewLogEntries = 0;
 		this._turnStartProjectSeq = 0;
 		this._fileSeq.clear();
 		this._fileLastProjectSeq.clear();
@@ -704,18 +706,11 @@ export class RuntimeCoordinator {
 		if (args.cwd !== undefined) {
 			try {
 				const cwd = args.cwd;
-				appendProjectChangeAllocated(cwd, (logMaxSeq, locked) => {
+				appendProjectChangeAllocated(cwd, (logMaxSeq) => {
 					const ownSeq = this._projectSeq;
 					logged = this.bumpFileSeq(args.filePath, logMaxSeq);
-					// Unlocked, a sibling may log this seq too; never vouch for it.
-					if (!locked) {
-						this._viewMissingThrough = Math.max(
-							this._viewMissingThrough,
-							logged.projectSeq,
-						);
-					}
 					if (this._viewMissingThrough > 0) {
-						recordViewIncomplete(cwd, { locked, ownSeq, logMaxSeq });
+						recordViewIncomplete(cwd, { ownSeq, logMaxSeq });
 					}
 					return {
 						seq: logged.projectSeq,
@@ -901,6 +896,11 @@ export class RuntimeCoordinator {
 		return this._viewMissingThrough > 0;
 	}
 
+	/** The change-log entries this session's seed or merge folded (#3511). */
+	get viewLogEntries(): number {
+		return this._viewLogEntries;
+	}
+
 	get turnStartProjectSeq(): number {
 		return this._turnStartProjectSeq;
 	}
@@ -908,9 +908,12 @@ export class RuntimeCoordinator {
 	seedProjectSequence(
 		projectSeq: number,
 		fileSeqByPath?: Map<string, number>,
+		/** The log entries the read folded (#3511 review round 2). */
+		logEntries = 0,
 	): void {
 		this._projectSeq = Math.max(0, Math.floor(projectSeq));
 		this._viewMissingThrough = 0;
+		this._viewLogEntries = logEntries;
 		this._turnStartProjectSeq = this._projectSeq;
 		this._fileSeq.clear();
 		// Seeded per-file counters carry no projectSeq provenance, so start the
@@ -931,14 +934,18 @@ export class RuntimeCoordinator {
 	 * advanced. Unlike `seedProjectSequence` it never lowers the seq or a
 	 * file's seq, and keeps the in-window changed-since marks. It clears the
 	 * incomplete mark only when the read reaches every entry the view missed:
-	 * log allocation appends entries in rising seq order, so a read whose max
-	 * is at or above that seq saw all of them.
+	 * locked allocation appends entries in rising seq order, so a read whose
+	 * max is at or above that seq saw all of them. An unlocked entry breaks
+	 * that order; readers catch it by its tag after the fold point, which the
+	 * merge only ever advances (review round 2).
 	 */
 	mergeProjectSequence(
 		projectSeq: number,
 		fileSeqByPath: Map<string, number>,
+		logEntries = 0,
 	): void {
 		this._projectSeq = Math.max(this._projectSeq, Math.floor(projectSeq));
+		this._viewLogEntries = Math.max(this._viewLogEntries, logEntries);
 		for (const [filePath, seq] of fileSeqByPath) {
 			const key = normalizeMapKey(path.resolve(filePath));
 			this._fileSeq.set(key, Math.max(this._fileSeq.get(key) ?? 0, seq));

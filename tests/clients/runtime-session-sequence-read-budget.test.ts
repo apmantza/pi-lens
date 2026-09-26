@@ -232,6 +232,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 			const slowResult: ProjectSequenceIndex = {
 				projectSeq: 42,
 				fileSeqByPath: new Map([["/some/file.ts", 7]]),
+				logEntries: 9,
 			};
 			const slow = deferred<ProjectSequenceIndex>();
 			readLatestProjectSequenceAsyncSpy.mockImplementation(() => slow.promise);
@@ -256,7 +257,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 			expect(elapsed).toBeLessThan(2000);
 
 			// Cold-start fallback: seeded with the safe empty sentinel.
-			expect(seedSpy).toHaveBeenCalledWith(0, new Map());
+			expect(seedSpy).toHaveBeenCalledWith(0, new Map(), undefined);
 
 			// Never silent (shape 10): the latency line distinguishes the
 			// fallback from a healthy read.
@@ -272,7 +273,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 			logLatencySpy.mockClear();
 			slow.resolve(slowResult);
 			await vi.waitFor(() => {
-				expect(seedSpy).toHaveBeenCalledWith(42, slowResult.fileSeqByPath);
+				expect(seedSpy).toHaveBeenCalledWith(42, slowResult.fileSeqByPath, 9);
 			});
 			expect(logLatencySpy).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -293,6 +294,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 			const fastResult: ProjectSequenceIndex = {
 				projectSeq: 3,
 				fileSeqByPath: new Map([["/some/other.ts", 1]]),
+				logEntries: 4,
 			};
 			readLatestProjectSequenceAsyncSpy.mockResolvedValue(fastResult);
 
@@ -301,7 +303,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 
 			await handleSessionStart(makeDeps(cwd, runtime));
 
-			expect(seedSpy).toHaveBeenCalledWith(3, fastResult.fileSeqByPath);
+			expect(seedSpy).toHaveBeenCalledWith(3, fastResult.fileSeqByPath, 4);
 			expect(logLatencySpy).toHaveBeenCalledWith(
 				expect.objectContaining({
 					phase: "session_start_sequence_read",
@@ -509,7 +511,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 			const seedSpy = spyOnSeed(runtime);
 
 			await handleSessionStart(makeDeps(cwd, runtime));
-			expect(seedSpy).toHaveBeenCalledWith(0, new Map());
+			expect(seedSpy).toHaveBeenCalledWith(0, new Map(), undefined);
 			seedSpy.mockClear();
 			logLatencySpy.mockClear();
 
@@ -543,7 +545,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 
 			await handleSessionStart(makeDeps(cwd, runtime));
 			// Cold-start fallback, as in the slow-read test above.
-			expect(seedSpy).toHaveBeenCalledWith(0, new Map());
+			expect(seedSpy).toHaveBeenCalledWith(0, new Map(), undefined);
 			expect(runtime.projectSeq).toBe(0);
 
 			// Simulate an agent edit landing IN the stall window: AFTER the cold
@@ -638,6 +640,8 @@ describe("#1162 — bounded session_start sequence read", () => {
 			expect(runtime.viewMissesLoggedEntries).toBe(false);
 			expect(runtime.projectSeq).toBe(6);
 			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			// The merge carries the late read's fold point (review round 2).
+			expect(snapshot.logEntries).toBe(5);
 			expect(
 				isProjectSnapshotFresh(
 					snapshot,

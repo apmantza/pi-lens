@@ -1079,10 +1079,10 @@ export type DegradationKind =
 	| "snapshot-sequence-read-timeout"
 	/**
 	 * #3511: a runtime's view missed a logged change-log entry at or below its
-	 * seq (a sibling process logged it, the runtime was seeded at 0 by a
-	 * timed-out read, or an append ran without the change-log lock), so its
-	 * snapshots are stamped incomplete and never served fresh until the next
-	 * seed. Once per session; subject is the project root, reason names which.
+	 * seq (a sibling process logged it, or the runtime was seeded at 0 by a
+	 * timed-out read), so its snapshots are stamped incomplete and never
+	 * served fresh until the next seed. Once per session; subject is the
+	 * project root, reason names which.
 	 */
 	| "snapshot-view-incomplete"
 	/**

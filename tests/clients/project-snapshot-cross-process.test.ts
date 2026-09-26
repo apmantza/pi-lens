@@ -14,6 +14,8 @@
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import nodeFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -198,6 +200,7 @@ function sessionStartView(cwd: string) {
 					projectSeq: meta.sequenceIndex.projectSeq,
 					fileSeqByPath: meta.sequenceIndex.fileSeqByPath,
 					sinceSeq: meta.seq,
+					logEntries: meta.logEntries,
 				}
 			: undefined,
 	);
@@ -206,7 +209,11 @@ function sessionStartView(cwd: string) {
 			entry.seq,
 			path.basename(entry.filePath),
 		]),
-		fresh: isProjectSnapshotFresh(snapshot, full.projectSeq),
+		fresh: isProjectSnapshotFresh(
+			snapshot,
+			full.projectSeq,
+			full.unlockedThrough,
+		),
 		boundedEqualsFull:
 			JSON.stringify([...bounded.fileSeqByPath].sort(byPathKey)) ===
 			JSON.stringify([...full.fileSeqByPath].sort(byPathKey)),
@@ -217,21 +224,57 @@ function sessionStartView(cwd: string) {
 function seededRuntime(cwd: string): RuntimeCoordinator {
 	const latest = readLatestProjectSequence(cwd);
 	const runtime = new RuntimeCoordinator();
-	runtime.seedProjectSequence(latest.projectSeq, latest.fileSeqByPath);
+	runtime.seedProjectSequence(
+		latest.projectSeq,
+		latest.fileSeqByPath,
+		latest.logEntries,
+	);
 	return runtime;
 }
 
 function readDisk(cwd: string) {
 	const body = JSON.parse(
 		gunzipSync(fs.readFileSync(getProjectSnapshotPath(cwd))).toString(),
-	) as { seq: number; cachedExports: Array<[string, string]> };
+	) as {
+		seq: number;
+		incompleteSeq?: number;
+		cachedExports: Array<[string, string]>;
+	};
 	const meta = JSON.parse(
 		fs.readFileSync(getProjectSnapshotMetaPath(cwd), "utf8"),
-	) as { seq: number };
+	) as { seq: number; incompleteSeq?: number };
+	// The seq as this version decodes it: an incomplete snapshot stores its
+	// real seq beside the legacy field (review round 2, R2-F2).
 	return {
-		bodySeq: body.seq,
+		bodySeq: body.incompleteSeq ?? body.seq,
 		bodyExports: body.cachedExports.map((entry) => entry[0]),
-		metaSeq: meta.seq,
+		metaSeq: meta.incompleteSeq ?? meta.seq,
+	};
+}
+
+/**
+ * Run `sibling` inside a runtime of this process's change-log critical
+ * section, just before its line is appended: the sibling finds the lock held,
+ * waits out the 500 ms wait and appends unlocked, having read the log before
+ * our line landed. That is a lock holder slower than the wait (review round
+ * 2, R2-F1: a first allocation that reads a large log whole). The hook fires
+ * once, at the node:fs seam.
+ */
+function beforeNextChangeLogAppend(cwd: string, sibling: () => void) {
+	const logPath = getProjectChangeLogPath(cwd);
+	const realAppend = nodeFs.appendFileSync;
+	let armed = true;
+	nodeFs.appendFileSync = ((...args: Parameters<typeof realAppend>) => {
+		if (armed && String(args[0]) === logPath) {
+			armed = false;
+			sibling();
+		}
+		return realAppend(...args);
+	}) as typeof realAppend;
+	syncBuiltinESMExports();
+	return () => {
+		nodeFs.appendFileSync = realAppend;
+		syncBuiltinESMExports();
 	};
 }
 
@@ -676,18 +719,9 @@ describe("project seq allocation across processes (#3511)", () => {
 					count: 1,
 				}),
 			);
-			expect(getDegradationSummary()).toContainEqual(
-				expect.objectContaining({
-					kind: "snapshot-view-incomplete",
-					latestReasons: [
-						expect.objectContaining({
-							reason: expect.stringContaining(
-								"change-log lock was unavailable",
-							),
-						}),
-					],
-				}),
-			);
+			// Tagged, so a reader distrusts every snapshot whose runtime never
+			// folded it, the lock holder's included (review round 2).
+			expect(readProjectChanges(cwd)[0]?.unlocked).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -832,6 +866,125 @@ describe("project seq allocation across processes (#3511)", () => {
 					],
 				}),
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+	it("a lock holder's snapshot is not fresh when a sibling that timed out on the lock logged the same seq (review round 2)", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			let siblingSeq = 0;
+			const restore = beforeNextChangeLogAppend(cwd, () => {
+				siblingSeq = siblingEdit(home, cwd, 0, file("b.ts"));
+			});
+			try {
+				runtime.recordProjectMutation({
+					filePath: file("a.ts"),
+					source: "agent-write",
+					cwd,
+				});
+			} finally {
+				restore();
+			}
+			expect(siblingSeq).toBe(1);
+			runtime.cachedExports.set("fromA", file("a.ts"));
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			expect(sessionStartView(cwd)).toEqual({
+				log: [
+					[1, "b.ts"],
+					[1, "a.ts"],
+				],
+				fresh: false,
+				boundedEqualsFull: true,
+			});
+
+			// The holder's next edit takes it above the collision; the unlocked
+			// entry still sits after the holder's fold point.
+			runtime.recordProjectMutation({
+				filePath: file("c.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			expect(sessionStartView(cwd)).toEqual({
+				log: [
+					[1, "b.ts"],
+					[1, "a.ts"],
+					[2, "c.ts"],
+				],
+				fresh: false,
+				boundedEqualsFull: true,
+			});
+
+			// A session seeded after the unlocked entry has folded it.
+			saveRuntimeProjectSnapshot({ cwd, runtime: seededRuntime(cwd) });
+			expect(sessionStartView(cwd).fresh).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a runtime's fold point follows its seed and a late merge, never backwards (review round 2)", () => {
+		const { env, cwd } = editEnv();
+		try {
+			const runtime = new RuntimeCoordinator();
+			const foldPoint = () =>
+				buildProjectSnapshotFromRuntime({ cwd, runtime }).logEntries;
+			runtime.seedProjectSequence(3, new Map(), 5);
+			expect(foldPoint()).toBe(5);
+			// A late read taken before the seed folded fewer entries.
+			runtime.mergeProjectSequence(3, new Map(), 4);
+			expect(foldPoint()).toBe(5);
+			runtime.mergeProjectSequence(3, new Map(), 7);
+			expect(foldPoint()).toBe(7);
+			runtime.resetForSession();
+			expect(foldPoint()).toBe(0);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("an incomplete snapshot is stored with a legacy seq no pre-#3511 reader matches (review round 2)", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			expect(siblingEdit(home, cwd, 0, file("b.ts"))).toBe(1);
+			runtime.recordProjectMutation({
+				filePath: file("a.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			saveRuntimeProjectSnapshot({ cwd, runtime });
+			const raw = () => [
+				JSON.parse(fs.readFileSync(getProjectSnapshotMetaPath(cwd), "utf8")),
+				JSON.parse(
+					gunzipSync(fs.readFileSync(getProjectSnapshotPath(cwd))).toString(),
+				),
+			];
+			// A pre-#3511 reader compares the stored seq with the log max (never
+			// negative), or with -1 after a timed-out sequence read.
+			for (const stored of raw()) {
+				expect(stored.seq).toBeLessThan(-1);
+				expect(stored.incompleteSeq).toBe(2);
+			}
+			_resetProjectSnapshotParseCacheForTests();
+			expect(readProjectSnapshotMeta(cwd)).toMatchObject({
+				seq: 2,
+				incomplete: true,
+			});
+			expect(loadProjectSnapshot(cwd)).toMatchObject({
+				seq: 2,
+				incomplete: true,
+			});
+
+			// A complete snapshot keeps its real seq there, so older readers
+			// still hydrate it.
+			saveRuntimeProjectSnapshot({ cwd, runtime: seededRuntime(cwd) });
+			for (const stored of raw()) {
+				expect(stored.seq).toBe(2);
+				expect(stored.incompleteSeq).toBeUndefined();
+			}
 		} finally {
 			env.cleanup();
 		}

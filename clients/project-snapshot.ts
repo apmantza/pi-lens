@@ -83,12 +83,19 @@ export interface ProjectSnapshot {
 	cachedExports: Array<[name: string, filePath: string]>;
 	/**
 	 * #3511: the writing runtime missed a logged entry at or below `seq` (a
-	 * sibling process logged it, or an unlocked append could share it). Such a
-	 * snapshot is never fresh and carries no `sequenceIndex`, but `seq` is
-	 * still its real, log-allocated seq, so it takes part in the promotion
-	 * compare-and-set (#3509) like any other.
+	 * sibling process logged it). Such a snapshot is never fresh and carries
+	 * no `sequenceIndex`, but `seq` is still its real, log-allocated seq, so
+	 * it takes part in the promotion compare-and-set (#3509) like any other.
+	 * It is stored with its seq encoded (`INCOMPLETE_STORED_SEQ`).
 	 */
 	incomplete?: true;
+	/**
+	 * #3511 review round 2 (R2-F1): the change-log entries the writing runtime
+	 * folded at its seed or late merge. An `unlocked` log entry after them
+	 * may share a seq the runtime holds, so the snapshot is not fresh then
+	 * (`ProjectSequenceIndex.unlockedThrough`). Absent means 0.
+	 */
+	logEntries?: number;
 	sequenceIndex?: SnapshotSequenceIndex;
 	wordIndex?: SerializedWordIndex;
 	projectRulesScan?: RuleScanResult;
@@ -139,14 +146,52 @@ export function getProjectSnapshotMetaPath(cwd: string): string {
 	);
 }
 
+/**
+ * #3511 review round 2 (R2-F2): how an incomplete snapshot's seq is stored. A
+ * reader from before #3511 knows no `incomplete` flag and compares the stored
+ * `seq` with the log's max seq (never negative), or with -1 after a timed-out
+ * sequence read (runtime-session.ts `UNKNOWN_PROJECT_SEQ`). The legacy field
+ * therefore holds -2, which it can never match, and the real seq travels in
+ * `incompleteSeq`. A complete snapshot is stored unchanged.
+ */
+const INCOMPLETE_STORED_SEQ = -2;
+
+function storedSeq(snapshot: { seq: number; incomplete?: true }) {
+	return snapshot.incomplete
+		? { seq: INCOMPLETE_STORED_SEQ, incompleteSeq: snapshot.seq }
+		: { seq: snapshot.seq };
+}
+
+/** The body as stored: the snapshot, with an incomplete seq encoded. */
+function storedSnapshot(snapshot: ProjectSnapshot): object {
+	if (!snapshot.incomplete) return snapshot;
+	const stored: Partial<ProjectSnapshot> = { ...snapshot };
+	delete stored.incomplete;
+	return { ...stored, ...storedSeq(snapshot) };
+}
+
+/** The seq and incomplete flag of a stored body or meta, or null. */
+function readStoredSeq(stored: {
+	seq?: unknown;
+	incompleteSeq?: unknown;
+}): { seq: number; incomplete?: true } | null {
+	if (typeof stored.incompleteSeq === "number") {
+		return { seq: stored.incompleteSeq, incomplete: true };
+	}
+	return typeof stored.seq === "number" ? { seq: stored.seq } : null;
+}
+
 export function isProjectSnapshotFresh(
 	snapshot: ProjectSnapshot | null | undefined,
 	currentProjectSeq: number,
+	/** `ProjectSequenceIndex.unlockedThrough` of the log read (#3511). */
+	unlockedThrough = 0,
 ): snapshot is ProjectSnapshot {
 	return (
 		!!snapshot &&
 		snapshot.version === PROJECT_SNAPSHOT_VERSION &&
 		!snapshot.incomplete &&
+		(snapshot.logEntries ?? 0) >= unlockedThrough &&
 		snapshot.seq === currentProjectSeq
 	);
 }
@@ -157,13 +202,14 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 	if (snapshot.version !== PROJECT_SNAPSHOT_VERSION) return null;
 	if (typeof snapshot.projectRoot !== "string") return null;
 	if (typeof snapshot.generatedAt !== "string") return null;
-	if (typeof snapshot.seq !== "number") return null;
+	const stored = readStoredSeq(value);
+	if (!stored) return null;
 	if (!Array.isArray(snapshot.cachedExports)) return null;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
 		projectRoot: snapshot.projectRoot,
 		generatedAt: snapshot.generatedAt,
-		seq: snapshot.seq,
+		seq: stored.seq,
 		files: snapshot.files ?? {},
 		symbols: snapshot.symbols ?? {},
 		reverseDeps: snapshot.reverseDeps ?? {},
@@ -173,7 +219,9 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 				typeof entry[0] === "string" &&
 				typeof entry[1] === "string",
 		),
-		...(snapshot.incomplete === true ? { incomplete: true as const } : {}),
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof snapshot.logEntries === "number" ? snapshot.logEntries : undefined,
 		sequenceIndex: parseSequenceIndex(snapshot.sequenceIndex),
 		wordIndex: snapshot.wordIndex,
 		projectRulesScan: snapshot.projectRulesScan,
@@ -199,6 +247,8 @@ export interface ProjectSnapshotMeta {
 	gzBytes?: number;
 	/** #3511: mirrors `ProjectSnapshot.incomplete`; such a meta is never fresh. */
 	incomplete?: true;
+	/** #3511 review round 2: mirrors `ProjectSnapshot.logEntries`. */
+	logEntries?: number;
 	/**
 	 * The derived sequence index as of `seq` (#1019), MIRRORED here from the
 	 * snapshot body so session-start can bound the change-log replay WITHOUT
@@ -212,11 +262,12 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 	if (!value || typeof value !== "object") return null;
 	const meta = value as Partial<ProjectSnapshotMeta>;
 	if (typeof meta.version !== "number") return null;
-	if (typeof meta.seq !== "number") return null;
+	const stored = readStoredSeq(value);
+	if (!stored) return null;
 	return {
 		timestamp: typeof meta.timestamp === "string" ? meta.timestamp : "",
 		version: meta.version,
-		seq: meta.seq,
+		seq: stored.seq,
 		fingerprint:
 			typeof meta.fingerprint === "string" &&
 			/^[a-f0-9]{64}$/.test(meta.fingerprint)
@@ -228,7 +279,9 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 			meta.gzBytes > 0
 				? meta.gzBytes
 				: undefined,
-		...(meta.incomplete === true ? { incomplete: true as const } : {}),
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof meta.logEntries === "number" ? meta.logEntries : undefined,
 		sequenceIndex: parseSequenceIndex(meta.sequenceIndex),
 	};
 }
@@ -258,10 +311,13 @@ export function readProjectSnapshotMeta(
 export function isProjectSnapshotMetaStale(
 	meta: ProjectSnapshotMeta,
 	currentProjectSeq: number,
+	/** `ProjectSequenceIndex.unlockedThrough` of the log read (#3511). */
+	unlockedThrough = 0,
 ): boolean {
 	return (
 		meta.version !== PROJECT_SNAPSHOT_VERSION ||
 		meta.incomplete === true ||
+		(meta.logEntries ?? 0) < unlockedThrough ||
 		meta.seq !== currentProjectSeq
 	);
 }
@@ -689,6 +745,7 @@ export interface ProjectSnapshotExportsAndRules {
 	version: typeof PROJECT_SNAPSHOT_VERSION;
 	seq: number;
 	incomplete?: true;
+	logEntries?: number;
 	cachedExports: Array<[name: string, filePath: string]>;
 	projectRulesScan?: RuleScanResult;
 }
@@ -748,12 +805,15 @@ function parseExportsAndRulesOnly(
 	};
 	const parsed = JSON.parse(narrowed) as Partial<ProjectSnapshot>;
 	if (parsed.version !== PROJECT_SNAPSHOT_VERSION) return null;
-	if (typeof parsed.seq !== "number") return null;
+	const stored = readStoredSeq(parsed);
+	if (!stored) return null;
 	if (!Array.isArray(parsed.cachedExports)) return null;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
-		seq: parsed.seq,
-		...(parsed.incomplete === true ? { incomplete: true as const } : {}),
+		seq: stored.seq,
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof parsed.logEntries === "number" ? parsed.logEntries : undefined,
 		cachedExports: parsed.cachedExports.filter(
 			(entry): entry is [string, string] =>
 				Array.isArray(entry) &&
@@ -822,12 +882,19 @@ export function loadProjectSnapshotExportsAndRules(
 			(body.mtimeMs <= authoritative.knownMtime &&
 				body.size === authoritative.knownSize);
 		if (notSuperseded) {
-			const { version, seq, incomplete, cachedExports, projectRulesScan } =
-				authoritative.snapshot;
+			const {
+				version,
+				seq,
+				incomplete,
+				logEntries,
+				cachedExports,
+				projectRulesScan,
+			} = authoritative.snapshot;
 			return {
 				version,
 				seq,
 				...(incomplete ? { incomplete } : {}),
+				logEntries,
 				cachedExports,
 				projectRulesScan,
 			};
@@ -1182,7 +1249,7 @@ function writeProjectSnapshotMeta(
 		JSON.stringify({
 			timestamp: bodyRecord?.generatedAt ?? snapshot.generatedAt,
 			version: snapshot.version,
-			seq: snapshot.seq,
+			...storedSeq(snapshot),
 			...(bodyRecord
 				? {
 						fingerprint: bodyRecord.fingerprint,
@@ -1191,7 +1258,7 @@ function writeProjectSnapshotMeta(
 							: { gzBytes: bodyRecord.gzBytes }),
 					}
 				: {}),
-			...(snapshot.incomplete ? { incomplete: true } : {}),
+			logEntries: snapshot.logEntries,
 			...(snapshot.sequenceIndex
 				? { sequenceIndex: snapshot.sequenceIndex }
 				: {}),
@@ -1501,7 +1568,7 @@ function writeSnapshotBodyOnMainThread(
 	}
 	try {
 		const serializeStarted = performance.now();
-		const json = JSON.stringify(pending.snapshot);
+		const json = JSON.stringify(storedSnapshot(pending.snapshot));
 		const serializeMs = performance.now() - serializeStarted;
 		const rawBytes = Buffer.byteLength(json);
 		const fingerprint = fingerprintProjectSnapshotJson(
@@ -1728,7 +1795,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 		id,
 		generation: pending.generation,
 		stagePath: pending.stagePath,
-		data: pending.snapshot,
+		data: storedSnapshot(pending.snapshot),
 		priorFingerprints: pending.dedupeFingerprints,
 		testDelayMs:
 			process.env.NODE_ENV === "test"
@@ -2169,6 +2236,7 @@ export function buildProjectSnapshotFromRuntime(args: {
 		generatedAt: new Date().toISOString(),
 		seq: args.runtime.projectSeq,
 		...(incomplete ? { incomplete: true as const } : {}),
+		logEntries: args.runtime.viewLogEntries,
 		files: {},
 		symbols: {},
 		reverseDeps: {},

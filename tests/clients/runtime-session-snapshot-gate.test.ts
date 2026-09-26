@@ -19,6 +19,8 @@
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
+import nodeFs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -30,6 +32,10 @@ import {
 	resetSnapshotBodyReadCountForTests,
 	saveProjectSnapshot,
 } from "../../clients/project-snapshot.js";
+import {
+	getProjectChangeLogPath,
+	readProjectChanges,
+} from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
@@ -322,6 +328,75 @@ describe("session_start snapshot meta-gate (#947)", () => {
 			env.cleanup();
 		}
 	});
+
+	it.each([
+		["quick", false],
+		["quick", true],
+		["full", false],
+	] as const)(
+		"an unlocked log entry after the snapshot's fold point keeps it from hydrating (%s mode, meta dropped: %s; review round 2)",
+		async (mode, dropMeta) => {
+			const env = setupTestEnvironment(`pi-lens-meta-gate-unlocked-${mode}-`);
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			process.env.PI_LENS_STARTUP_MODE = mode;
+			try {
+				const cwd = makeProject(env);
+				const holder = new RuntimeCoordinator();
+				holder.seedProjectSequence(0, new Map(), 0);
+				// A sibling finds the change-log lock held by the holder, waits
+				// out the 500 ms wait, and appends unlocked at the seq the holder
+				// is about to log (R2-F1). The hook fires once, at the node:fs seam.
+				const logPath = getProjectChangeLogPath(cwd);
+				const realAppend = nodeFs.appendFileSync;
+				let armed = true;
+				nodeFs.appendFileSync = ((...args: Parameters<typeof realAppend>) => {
+					if (armed && String(args[0]) === logPath) {
+						armed = false;
+						new RuntimeCoordinator().recordProjectMutation({
+							filePath: path.join(cwd, "src", "b.ts"),
+							source: "agent-write",
+							cwd,
+						});
+					}
+					return realAppend(...args);
+				}) as typeof realAppend;
+				syncBuiltinESMExports();
+				try {
+					holder.recordProjectMutation({
+						filePath: path.join(cwd, "src", "a.ts"),
+						source: "agent-write",
+						cwd,
+					});
+				} finally {
+					nodeFs.appendFileSync = realAppend;
+					syncBuiltinESMExports();
+				}
+				expect(readProjectChanges(cwd).map((entry) => entry.seq)).toEqual([
+					1, 1,
+				]);
+				holder.cachedExports.set("makeThing", path.join(cwd, "src", "a.ts"));
+				saveProjectSnapshot(
+					cwd,
+					buildProjectSnapshotFromRuntime({ cwd, runtime: holder }),
+				);
+				_resetProjectSnapshotParseCacheForTests();
+				if (dropMeta) fs.unlinkSync(getProjectSnapshotMetaPath(cwd));
+
+				const deps = makeDeps(cwd);
+				await handleSessionStart(deps);
+
+				expect(deps.runtime.cachedExports.get("makeThing")).toBeUndefined();
+				expect(snapshotLoadRecord()).toMatchObject({
+					fresh: false,
+					reason: dropMeta
+						? "unlocked-entry-after-fold(folded=0, unlocked=1)"
+						: "stale-meta-gate",
+				});
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	it("full-mode path carries the same gate and record flag", async () => {
 		const env = setupTestEnvironment("pi-lens-meta-gate-full-");
