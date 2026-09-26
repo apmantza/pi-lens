@@ -379,32 +379,37 @@ function newestReadOrder(run: Run): string[] {
 }
 
 /**
- * Finding F2 (#3530): a stale read displaces an unstamped touch. An unstamped
+ * Finding F2, #3544: a stale read displaces an unstamped touch. An unstamped
  * entry replacing a pending stale read inherits its stamp, and a stale read
  * replacing a pending unstamped entry takes its place; either way the runner
- * then drops the entry and the unstamped content is never sent. Carved out of
- * `newestReadHeld` only; the replay below fails until it is fixed.
+ * then drops the entry and the unstamped content is never sent. The server
+ * keeps what it had, so the carve-out never covers a server that holds a
+ * stale read itself (that is #3481, or the #3481 round-1 stamp drop).
+ * Carved out of `newestReadHeld` only; the replay below fails until #3544 is
+ * fixed, and this predicate goes with the fix.
  */
 function staleReadDisplacesUnstamped(
 	segment: readonly Touch[],
 	newest: Touch,
 	expected: Touch,
+	held: Touch | undefined,
 ): boolean {
+	const isStale = (t: Touch) =>
+		t.stamp !== undefined &&
+		t.stamp < newest.stamp! &&
+		t.issuedAt > newest.issuedAt;
 	return (
 		expected.stamp === undefined &&
-		segment.some(
-			(t) =>
-				t.stamp !== undefined &&
-				t.stamp < newest.stamp! &&
-				t.issuedAt > newest.issuedAt,
-		)
+		segment.some(isStale) &&
+		!(held !== undefined && isStale(held))
 	);
 }
 
 /**
  * #3481, no-drop: at quiescence the server holds the newest read, or an
  * unstamped touch issued after it. "Newest" spans every read since the server
- * last dropped the document (a delivered didClose); the touches that may
+ * last dropped the document (a delivered didClose), except reads refused while
+ * a close was queued; the touches that may
  * answer are those issued after the last close settled. Judged only where the
  * model says nothing may refuse them: the client never died, and no close is
  * involved or the file was there from the last close on.
@@ -423,7 +428,17 @@ function newestReadHeld(run: Run): string[] {
 			.filter((m) => m.delivered && m.method === "didClose")
 			.map((m) => m.at),
 	);
-	const newest = newestStamped(run.touches.filter((t) => t.issuedAt > reset));
+	// A touch issued while a close was queued is refused unsent (#3477), so
+	// its read is not one the queue knows of.
+	const refusedByClosing = (t: Touch) =>
+		run.closes.some(
+			(c) =>
+				c.issuedAt < t.issuedAt &&
+				t.issuedAt < (c.settledAt ?? Number.POSITIVE_INFINITY),
+		);
+	const newest = newestStamped(
+		run.touches.filter((t) => t.issuedAt > reset && !refusedByClosing(t)),
+	);
 	const candidates = newest
 		? [
 				...(segment.includes(newest) ? [newest] : []),
@@ -437,9 +452,10 @@ function newestReadHeld(run: Run): string[] {
 	const expected = candidates.reduce((a, b) =>
 		b.issuedAt > a.issuedAt ? b : a,
 	);
-	if (newest && staleReadDisplacesUnstamped(segment, newest, expected))
-		return [];
 	const doc = serverDoc(run.wire);
+	const held = doc.open ? touchOf(run, doc.content) : undefined;
+	if (newest && staleReadDisplacesUnstamped(segment, newest, expected, held))
+		return [];
 	if (!doc.open) return [`server holds nothing; expected ${expected.content}`];
 	if (doc.content !== expected.content)
 		return [`server holds ${doc.content}; expected ${expected.content}`];
@@ -490,12 +506,39 @@ function queuedCloseSent(run: Run): string[] {
 }
 
 /**
+ * Finding F3, #3545: a stale saved read kept out behind a pending `change`
+ * entry rides on the change's run, which drops saves (#3405), so no didSave
+ * goes out. `handleNotifyChange` has no production caller today
+ * (`LSPService.updateFile` is uncalled). Carved out of `saveSurvives` only;
+ * the replay below fails until #3545 is fixed, and this predicate goes with
+ * the fix.
+ */
+function staleSaveBehindChange(run: Run, save: Touch): boolean {
+	return run.touches.some(
+		(c) =>
+			c.kind === "change" &&
+			c.issuedAt < save.issuedAt &&
+			run.touches.some(
+				(p) =>
+					p.issuedAt < c.issuedAt &&
+					p.stamp !== undefined &&
+					save.stamp !== undefined &&
+					p.stamp > save.stamp,
+			),
+	);
+}
+
+/**
  * #3405 / #3481 round-1 B1: a save produces a didSave after it was issued,
- * even when its content was superseded; and no didSave goes out for a
- * document the server does not hold. The save is owed only while nothing
- * legitimately ends it: a live client, no close after it or pending when it
- * was issued, a file there throughout, and no later `change` (a change drops
- * an inherited save by design, #3405).
+ * even when its content was superseded, for the document the server holds;
+ * and no didSave goes out for a document the server does not hold. The save
+ * is owed only while nothing legitimately ends it: a live client, no close
+ * after it or pending when it was issued, no later `change` (a change drops
+ * an inherited save by design, #3405), and a document on the server at the
+ * end. A saved read older than one the queue already ran is dropped; when
+ * that newer read was itself refused (its file was gone), the server holds
+ * nothing and no didSave is possible. A touch refused because its file is
+ * gone also leaves the server holding nothing, so no separate file clause.
  */
 function saveSurvives(run: Run): string[] {
 	const out: string[] = [];
@@ -513,14 +556,11 @@ function saveSurvives(run: Run): string[] {
 		);
 		if (endedByClose) continue;
 		if (
-			!existsAt(run, save.issuedAt) ||
-			run.gone.some((g) => g > save.issuedAt)
-		)
-			continue;
-		if (
 			run.touches.some((t) => t.kind === "change" && t.issuedAt > save.issuedAt)
 		)
 			continue;
+		if (!serverDoc(run.wire).open) continue;
+		if (staleSaveBehindChange(run, save)) continue;
 		const saved = run.wire.some(
 			(m) => m.method === "didSave" && m.delivered && m.at > save.issuedAt,
 		);
@@ -530,12 +570,13 @@ function saveSurvives(run: Run): string[] {
 }
 
 /**
- * Finding F1 (#3530): on a dead client a touch resolves `true` without
+ * Finding F1, #3543: on a dead client a touch resolves `true` without
  * sending — `handleNotifyOpen`/`handleNotifyChange` return `true` up front,
  * and a queued entry whose run finds the client dead returns `undefined`,
  * which the runner reads as sent. Teardown's own cancel resolves `false` for
  * the same "never sent" state (#3481 round 1). Carved out of `waiterTruth`
- * only; the replay below fails until it is fixed.
+ * only; the replay below fails until #3543 is fixed, and this predicate goes
+ * with the fix.
  */
 function deadClientResolvesTrue(run: Run, t: Touch): boolean {
 	return run.diedAt !== undefined && run.diedAt < (t.settledAt ?? 0);
@@ -620,12 +661,11 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 	/**
 	 * Findings on master, each replayed over every ordering of its shrunk
 	 * counterexample's commands. `it.fails`: green while the finding stands; a
-	 * fix turns it red. F1 and F2 are carved out of the property above by name
-	 * (`deadClientResolvesTrue`, `staleReadDisplacesUnstamped`), and the
-	 * carve-out goes with the fix. F3 has none: the fixed seed never reaches it,
-	 * other seeds do.
+	 * fix turns it red. Each is carved out of the property above by a named
+	 * predicate (`deadClientResolvesTrue` #3543, `staleReadDisplacesUnstamped`
+	 * #3544, `staleSaveBehindChange` #3545) that goes with its fix.
 	 */
-	describe("findings on master (#3530), pinned until fixed", () => {
+	describe("findings on master, pinned until fixed", () => {
 		const replay = (
 			commands: Command[],
 			saveOptions: boolean,
@@ -647,7 +687,7 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 			silent: true,
 		});
 
-		it.fails("F1: a touch on a dead client resolves true without sending", () =>
+		it.fails("F1 (#3543): a touch on a dead client resolves true without sending", () =>
 			replay([open(), open(), { t: "die" }], false, (run) =>
 				run.touches
 					.filter(
@@ -658,7 +698,7 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 					.map((t) => `${t.content} resolved true, never sent`),
 			));
 
-		it.fails("F2: a stale read makes the queue drop an unstamped touch issued after the newest read", () =>
+		it.fails("F2 (#3544): a stale read makes the queue drop an unstamped touch issued after the newest read", () =>
 			replay([open(6), open(), open(0)], false, (run) => {
 				const doc = serverDoc(run.wire);
 				return doc.open && doc.content === "c1"
@@ -666,7 +706,7 @@ describe("#3530 — notify queue properties over scheduled interleavings", () =>
 					: [`server holds ${doc.open ? doc.content : "nothing"}, not c1`];
 			}));
 
-		it.fails("F3: a stale saved read kept out behind a pending change sends no didSave", () =>
+		it.fails("F3 (#3545): a stale saved read kept out behind a pending change sends no didSave", () =>
 			replay([open(0), open(3), { t: "change" }, open(2, true)], true, (run) =>
 				run.wire.some((m) => m.method === "didSave")
 					? []
