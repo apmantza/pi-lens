@@ -33,10 +33,11 @@ Issues: #3482, #3490 (the rules-refresh surplus publish).
   `Scan_helpers.refresh_rules` sends `semgrep/rulesRefreshed` once its rules
   load, then republishes every file it has a scan recorded for. The model
   sends one such surplus publish. It may overtake scans sent before the
-  notification but not scans sent after it, and it carries the newest
-  version sent before the notification. `RefreshRebaseline` is the #3490
-  fix: the notification takes one publication back from a path that
-  already had one.
+  notification. A scan sent after the notification publishes first only
+  with `RefreshOvertake`. The republish carries the newest version sent
+  before the notification. `RefreshRebaseline` is the #3490 fix: the
+  notification takes one publication back from a path that already had
+  one.
 - **The drain**, in three steps split at its awaits:
   1. `drainPendingAuxiliaryCoverage`.
   2. `await readCachedDiagnosticsForServers`, then the synchronous check
@@ -75,6 +76,7 @@ unavoidable TOCTOU window.
 | `RulesRefreshInFlight` | violated (#3490 before the fix) |
 | `RulesRefreshRebaseline`, `RulesRefreshRebaselineWide` | pass (#3490 fix) |
 | `RulesRefreshFirstAnswerOutstanding` | violated (admitted #3490 residual) |
+| `RulesRefreshOvertake` | violated (admitted #3490 residual: a later answer lands first) |
 
 - **Bug 1, `ReTouchRemark`.** A second agent touch lands while the v1 scan is
   still outstanding: it clears, sends v2, finds no evidence, and re-marks,
@@ -118,7 +120,11 @@ counted as that touch's answer. With the rebaseline, both the #3490 order
 and this one pass. `RulesRefreshFirstAnswerOutstanding` is the admitted
 residual: the notification arrives before the path's first answer, so the
 path has no count to take back, and its republish can still count toward
-a later send.
+a later send. `RulesRefreshOvertake` is the other admitted residual: the
+answer to a touch made after the notification lands before the republish.
+The rebaseline then waits for the republish and delivers its older
+content. Without the rebaseline, the current answer is delivered only if
+the drain runs before the republish is stored.
 
 ## Scope
 
@@ -130,8 +136,13 @@ Not modelled:
 - several servers or files;
 - the cap eviction;
 - a scanner that reads the disk at scan time instead of the sent text;
-- a second rules refresh, and a refresh republish that lands after a scan
-  sent after the notification (the scanner is assumed to publish in order).
+- a second rules refresh;
+- the client's 250 ms debounce: `Publish` stores and counts in one step,
+  so a first answer received but not yet counted at the notification
+  (#3490 r1 F1, handled in the code and pinned by
+  `REPLAY-RULES-REFRESHED-DURING-DEBOUNCE`) is not in the model;
+- a refresh scan that fails and never republishes (a liveness cost, not a
+  safety one).
 
 The aux-grace touch path itself also accepts a late v1 publish as v2's
 "answer" (`FixRefreshOnStale` step 7). That is the touch's own result, not

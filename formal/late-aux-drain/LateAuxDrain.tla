@@ -22,9 +22,10 @@
 (*  - opengrep's rule refresh (#3490, opengrep@1a5fd9d                     *)
 (*    Scan_helpers.refresh_rules): `semgrep/rulesRefreshed`, then one      *)
 (*    SURPLUS publish per file with a recorded scan. It answers no send.   *)
-(*    It may overtake scans sent before the notification, never one sent  *)
-(*    after it, and carries the newest version sent before the            *)
-(*    notification (opengrep reads the disk; not modelled);               *)
+(*    It may overtake scans sent before the notification; a scan sent     *)
+(*    after it lands first only with RefreshOvertake. It carries the      *)
+(*    newest version sent before the notification (opengrep reads the    *)
+(*    disk; not modelled);                                                *)
 (*  - the turn_end drain (runtime-turn.ts ~3895-4220):                     *)
 (*      DrainStart   drainPendingAuxiliaryCoverage (sync)                  *)
 (*      DrainRead    await readCachedDiagnosticsForServers, then the sync  *)
@@ -60,8 +61,10 @@ CONSTANTS
     Refresh,          \* "none" | "answered" | "outstanding": one
                       \* semgrep/rulesRefreshed, arriving after v0's first
                       \* answer ("answered") or while it is in flight
-    RefreshRebaseline \* #3490: the notification takes one publication back
+    RefreshRebaseline,\* #3490: the notification takes one publication back
                       \* from a path that already had one
+    RefreshOvertake   \* #3490 r1 F2: the answer to a send made after the
+                      \* notification may land before the refresh republish
 
 None == [none |-> TRUE]
 
@@ -162,7 +165,7 @@ ExternalEdit ==
 \* The scanner finishes the oldest outstanding scan; the client stores it.
 Publish ==
     /\ sent /= << >>
-    /\ surplus = 0 \/ preN > 0          \* a later send waits for the republish
+    /\ surplus = 0 \/ preN > 0 \/ RefreshOvertake \* else a later send waits
     /\ clock' = clock + 1
     /\ cache' = [ver |-> Head(sent), ts |-> clock + 1]
     /\ pubCount' = pubCount + 1
