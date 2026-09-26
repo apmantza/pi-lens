@@ -504,7 +504,7 @@ describe("#1162 — bounded session_start sequence read", () => {
 		["written by this process", false, 2, true],
 		["read back from disk", true, 2, true],
 	])(
-		"retro hydrate at the confirmed seq with an unlocked entry at log position 1, %s, snapshot folded %s entries: hydrated %s (#3511 review round 2)",
+		"retro hydrate at the confirmed seq with an unlocked entry at log position 1, %s (from disk: %s), snapshot folded %s entries, hydrated: %s (#3511 review round 2)",
 		async (_source, fromDisk, logEntries, hydrated) => {
 			const env = setupTestEnvironment("pi-lens-seq-budget-retro-unlocked-");
 			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");

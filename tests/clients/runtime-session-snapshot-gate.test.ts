@@ -34,7 +34,10 @@ import {
 } from "../../clients/project-snapshot.js";
 import {
 	getProjectChangeLogPath,
+	getSequenceFoldCountForTests,
+	readLatestProjectSequence,
 	readProjectChanges,
+	resetSequenceFoldCountForTests,
 } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -122,6 +125,41 @@ function makeProject(env: { tmpDir: string }): string {
 	fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
 	createTempFile(env.tmpDir, "project/index.ts", "export const x = 1;\n");
 	return cwd;
+}
+
+/**
+ * Log one edit through `holder` while a sibling runtime edits in its
+ * critical section: the sibling finds the change-log lock held, waits out the
+ * 500 ms wait, and appends unlocked at the seq the holder is about to log
+ * (#3511 review round 2, R2-F1). The hook fires once, at the node:fs seam.
+ */
+function logCollision(cwd: string, holder: RuntimeCoordinator): void {
+	const logPath = getProjectChangeLogPath(cwd);
+	const realAppend = nodeFs.appendFileSync;
+	let armed = true;
+	nodeFs.appendFileSync = ((...args: Parameters<typeof realAppend>) => {
+		if (armed && String(args[0]) === logPath) {
+			armed = false;
+			new RuntimeCoordinator().recordProjectMutation({
+				filePath: path.join(cwd, "src", "b.ts"),
+				source: "agent-write",
+				cwd,
+			});
+		}
+		return realAppend(...args);
+	}) as typeof realAppend;
+	syncBuiltinESMExports();
+	try {
+		holder.recordProjectMutation({
+			filePath: path.join(cwd, "src", "a.ts"),
+			source: "agent-write",
+			cwd,
+		});
+	} finally {
+		nodeFs.appendFileSync = realAppend;
+		syncBuiltinESMExports();
+	}
+	expect(readProjectChanges(cwd).map((entry) => entry.seq)).toEqual([1, 1]);
 }
 
 /** Seed a snapshot at `seq` carrying one export, via the real save path. */
@@ -333,6 +371,7 @@ describe("session_start snapshot meta-gate (#947)", () => {
 		["quick", false],
 		["quick", true],
 		["full", false],
+		["full", true],
 	] as const)(
 		"an unlocked log entry after the snapshot's fold point keeps it from hydrating (%s mode, meta dropped: %s; review round 2)",
 		async (mode, dropMeta) => {
@@ -343,37 +382,7 @@ describe("session_start snapshot meta-gate (#947)", () => {
 				const cwd = makeProject(env);
 				const holder = new RuntimeCoordinator();
 				holder.seedProjectSequence(0, new Map(), 0);
-				// A sibling finds the change-log lock held by the holder, waits
-				// out the 500 ms wait, and appends unlocked at the seq the holder
-				// is about to log (R2-F1). The hook fires once, at the node:fs seam.
-				const logPath = getProjectChangeLogPath(cwd);
-				const realAppend = nodeFs.appendFileSync;
-				let armed = true;
-				nodeFs.appendFileSync = ((...args: Parameters<typeof realAppend>) => {
-					if (armed && String(args[0]) === logPath) {
-						armed = false;
-						new RuntimeCoordinator().recordProjectMutation({
-							filePath: path.join(cwd, "src", "b.ts"),
-							source: "agent-write",
-							cwd,
-						});
-					}
-					return realAppend(...args);
-				}) as typeof realAppend;
-				syncBuiltinESMExports();
-				try {
-					holder.recordProjectMutation({
-						filePath: path.join(cwd, "src", "a.ts"),
-						source: "agent-write",
-						cwd,
-					});
-				} finally {
-					nodeFs.appendFileSync = realAppend;
-					syncBuiltinESMExports();
-				}
-				expect(readProjectChanges(cwd).map((entry) => entry.seq)).toEqual([
-					1, 1,
-				]);
+				logCollision(cwd, holder);
 				holder.cachedExports.set("makeThing", path.join(cwd, "src", "a.ts"));
 				saveProjectSnapshot(
 					cwd,
@@ -392,6 +401,51 @@ describe("session_start snapshot meta-gate (#947)", () => {
 						? "unlocked-entry-after-fold(folded=0, unlocked=1)"
 						: "stale-meta-gate",
 				});
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
+	it.each(["quick", "full"] as const)(
+		"a snapshot whose runtime folded the unlocked entry hydrates, with the bounded replay (%s mode; review round 2)",
+		async (mode) => {
+			const env = setupTestEnvironment(`pi-lens-meta-gate-folded-${mode}-`);
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			process.env.PI_LENS_STARTUP_MODE = mode;
+			try {
+				const cwd = makeProject(env);
+				const holder = new RuntimeCoordinator();
+				holder.seedProjectSequence(0, new Map(), 0);
+				logCollision(cwd, holder);
+				// The next session seeds from the whole log, so it folds both.
+				const latest = readLatestProjectSequence(cwd);
+				const next = new RuntimeCoordinator();
+				next.seedProjectSequence(
+					latest.projectSeq,
+					latest.fileSeqByPath,
+					latest.logEntries,
+				);
+				next.cachedExports.set("makeThing", path.join(cwd, "src", "a.ts"));
+				saveProjectSnapshot(
+					cwd,
+					buildProjectSnapshotFromRuntime({ cwd, runtime: next }),
+				);
+				_resetProjectSnapshotParseCacheForTests();
+				resetSequenceFoldCountForTests();
+
+				const deps = makeDeps(cwd);
+				await handleSessionStart(deps);
+
+				expect(deps.runtime.cachedExports.get("makeThing")).toBe(
+					path.join(cwd, "src", "a.ts"),
+				);
+				expect(snapshotLoadRecord()).toMatchObject({ fresh: true });
+				// Both entries sit at the snapshot's seq, so the bounded replay folds
+				// none of them; the full replay would fold both.
+				expect(getSequenceFoldCountForTests()).toBe(0);
+				// This session's own fold point is the whole log.
+				expect(deps.runtime.viewLogEntries).toBe(2);
 			} finally {
 				env.cleanup();
 			}
