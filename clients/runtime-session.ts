@@ -384,6 +384,7 @@ function retroactivelyHydrateAfterDeferredSequence(args: {
 		if (
 			!snapshot ||
 			snapshot.version !== PROJECT_SNAPSHOT_VERSION ||
+			snapshot.incomplete ||
 			snapshot.seq !== latestSeq.projectSeq
 		) {
 			return;
@@ -609,9 +610,31 @@ async function readSequenceWithBudget(args: {
 				// positive from a legitimately-empty log (which leaves it at 0, and
 				// the reseed below is then still wanted: it recovers the real,
 				// possibly non-empty, result that arrived too late for the budget).
+				//
+				// #3511 review B2: the late read is folded in, not dropped. Since
+				// logged edits allocate from the log, an in-window edit also marks
+				// this runtime's view incomplete (the cold seed folded nothing), and
+				// only this merge can clear that mark within the session.
 				if (runtime.projectSeq > 0) {
+					const mergeStartedAt = Date.now();
+					runtime.mergeProjectSequence?.(
+						latestSeq.projectSeq,
+						latestSeq.fileSeqByPath,
+					);
+					logLatency({
+						type: "phase",
+						phase: "session_start_sequence_read_deferred_reseed",
+						filePath: cwd,
+						startedAt: new Date(mergeStartedAt).toISOString(),
+						durationMs: Date.now() - mergeStartedAt,
+						metadata: {
+							entries: latestSeq.fileSeqByPath.size,
+							deferred: true,
+							merged: true,
+						},
+					});
 					dbg(
-						"session_start: deferred sequence read completed, but the session already advanced (in-window edit) — skipping reseed to avoid clobbering it",
+						`session_start: deferred sequence read completed after an in-window edit — merged projectSeq=${latestSeq.projectSeq} into the advanced session (now ${runtime.projectSeq})`,
 					);
 					return;
 				}

@@ -33,12 +33,20 @@ import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectSequenceIndex } from "../../clients/project-changes.js";
+import {
+	appendProjectChange,
+	type ProjectSequenceIndex,
+	readLatestProjectSequence,
+} from "../../clients/project-changes.js";
 import { getDegradationSummary } from "../../clients/degradation-ledger.js";
 import {
+	_resetProjectSnapshotParseCacheForTests,
+	buildProjectSnapshotFromRuntime,
 	getProjectSnapshotLegacyPath,
+	isProjectSnapshotFresh,
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
+	waitForProjectSnapshotPersistsForTests,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
@@ -402,6 +410,92 @@ describe("#1162 — bounded session_start sequence read", () => {
 		}
 	});
 
+	it("skips the body parse for an incomplete snapshot at the current seq, from its meta alone (#3511, #947)", async () => {
+		const env = setupTestEnvironment("pi-lens-seq-budget-incomplete-meta-");
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const cwd = makeProject(env);
+			saveProjectSnapshot(cwd, {
+				version: PROJECT_SNAPSHOT_VERSION,
+				projectRoot: cwd,
+				generatedAt: new Date().toISOString(),
+				seq: 3,
+				incomplete: true,
+				files: {},
+				symbols: {},
+				reverseDeps: {},
+				cachedExports: [],
+			});
+			readLatestProjectSequenceAsyncSpy.mockResolvedValue({
+				projectSeq: 3,
+				fileSeqByPath: new Map(),
+			});
+
+			await handleSessionStart(makeDeps(cwd, new RuntimeCoordinator()));
+
+			expect(logLatencySpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "session_start_snapshot_load",
+					metadata: expect.objectContaining({
+						fresh: false,
+						skippedStale: true,
+					}),
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it.each([
+		["written by this process", false],
+		["read back from disk", true],
+	])(
+		"does NOT retroactively hydrate from an incomplete snapshot at the confirmed seq, %s (#3511)",
+		async (_source, fromDisk) => {
+			const env = setupTestEnvironment("pi-lens-seq-budget-retro-incomplete-");
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const cwd = makeProject(env);
+				const exportedFile = path.join(cwd, "index.ts");
+				// Saved at the seq the late read will confirm, but by a runtime that
+				// missed a sibling's logged edit: never fresh.
+				saveProjectSnapshot(cwd, {
+					version: PROJECT_SNAPSHOT_VERSION,
+					projectRoot: cwd,
+					generatedAt: new Date().toISOString(),
+					seq: 0,
+					incomplete: true,
+					files: {},
+					symbols: {},
+					reverseDeps: {},
+					cachedExports: [["x", exportedFile]],
+					projectRulesScan: { hasCustomRules: true, rules: [] },
+				});
+				if (fromDisk) {
+					// A fresh process: no in-process copy, the narrow loader parses disk.
+					await waitForProjectSnapshotPersistsForTests();
+					_resetProjectSnapshotParseCacheForTests();
+				}
+
+				const slow = deferred<ProjectSequenceIndex>();
+				readLatestProjectSequenceAsyncSpy.mockImplementation(
+					() => slow.promise,
+				);
+
+				const runtime = new RuntimeCoordinator();
+				await handleSessionStart(makeDeps(cwd, runtime));
+				slow.resolve({ projectSeq: 0, fileSeqByPath: new Map() });
+				await settleDeferredRead();
+
+				expect(runtime.cachedExports.get("x")).toBeUndefined();
+				expect(runtime.projectRulesScan.hasCustomRules).toBe(false);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	it("does NOT reseed in the background for a one-shot `pi --print` invocation (shape 4 screen)", async () => {
 		const env = setupTestEnvironment("pi-lens-seq-budget-print-");
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
@@ -473,16 +567,117 @@ describe("#1162 — bounded session_start sequence read", () => {
 			// the fix, to observe the advancement and skip).
 			await new Promise((resolve) => setTimeout(resolve, 150));
 
-			// The guard must have skipped the reseed entirely — no clobber.
+			// The guard must not reseed over the bump — no clobber. Since #3511
+			// review B2 it folds the late read in instead of dropping it: the
+			// seq only rises, and every file keeps its highest seq.
 			expect(seedSpy).not.toHaveBeenCalled();
-			expect(logLatencySpy).not.toHaveBeenCalledWith(
+			expect(logLatencySpy).toHaveBeenCalledWith(
 				expect.objectContaining({
 					phase: "session_start_sequence_read_deferred_reseed",
+					metadata: expect.objectContaining({ merged: true }),
 				}),
 			);
 			// The in-window bump survives completely untouched.
 			expect(runtime.getFileSeq(editedFile)).toBe(1);
-			expect(runtime.projectSeq).toBe(1);
+			expect(runtime.getFileSeq("/some/other-file.ts")).toBe(7);
+			expect(runtime.projectSeq).toBe(42);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #3511 review B2: a timed-out read seeds projectSeq 0 with an empty view.
+	 * The first logged in-window edit then finds the log above it, so the
+	 * runtime marks its view incomplete. The late read must fold in and clear
+	 * that mark when it covers everything the edit missed; before, the reseed
+	 * was skipped once projectSeq > 0 and the mark held for the session.
+	 */
+	function logEntries(cwd: string, seqs: number[]): void {
+		for (const seq of seqs) {
+			appendProjectChange(cwd, {
+				seq,
+				timestamp: new Date(0).toISOString(),
+				sessionId: "earlier",
+				turnIndex: 0,
+				source: "agent-write",
+				filePath: path.join(cwd, `f${seq}.ts`),
+				fileSeq: 1,
+			});
+		}
+	}
+
+	async function settleDeferredRead(): Promise<void> {
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+	}
+
+	it("clears an in-window edit's incomplete mark once the late sequence read covers what it missed (#3511 review B2)", async () => {
+		const env = setupTestEnvironment("pi-lens-seq-budget-merge-");
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const cwd = makeProject(env);
+			logEntries(cwd, [1, 2, 3, 4, 5]);
+			const before = readLatestProjectSequence(cwd);
+			const slow = deferred<ProjectSequenceIndex>();
+			readLatestProjectSequenceAsyncSpy.mockImplementation(() => slow.promise);
+
+			const runtime = new RuntimeCoordinator();
+			await handleSessionStart(makeDeps(cwd, runtime));
+			expect(runtime.projectSeq).toBe(0);
+			runtime.recordProjectMutation({
+				filePath: path.join(cwd, "index.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			expect(runtime.projectSeq).toBe(6);
+			expect(runtime.viewMissesLoggedEntries).toBe(true);
+
+			slow.resolve(before);
+			await settleDeferredRead();
+
+			expect(runtime.viewMissesLoggedEntries).toBe(false);
+			expect(runtime.projectSeq).toBe(6);
+			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			expect(
+				isProjectSnapshotFresh(
+					snapshot,
+					readLatestProjectSequence(cwd).projectSeq,
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps the incomplete mark when the late sequence read predates an entry the edit missed (#3511 review B2)", async () => {
+		const env = setupTestEnvironment("pi-lens-seq-budget-merge-old-");
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const cwd = makeProject(env);
+			logEntries(cwd, [1, 2, 3, 4, 5]);
+			const before = readLatestProjectSequence(cwd);
+			const slow = deferred<ProjectSequenceIndex>();
+			readLatestProjectSequenceAsyncSpy.mockImplementation(() => slow.promise);
+
+			const runtime = new RuntimeCoordinator();
+			await handleSessionStart(makeDeps(cwd, runtime));
+			// A sibling logs seq 6 after the read, before our in-window edit.
+			logEntries(cwd, [6]);
+			runtime.recordProjectMutation({
+				filePath: path.join(cwd, "index.ts"),
+				source: "agent-write",
+				cwd,
+			});
+			expect(runtime.projectSeq).toBe(7);
+
+			slow.resolve(before);
+			await settleDeferredRead();
+
+			expect(runtime.viewMissesLoggedEntries).toBe(true);
+			expect(runtime.projectSeq).toBe(7);
+			expect(buildProjectSnapshotFromRuntime({ cwd, runtime }).incomplete).toBe(
+				true,
+			);
 		} finally {
 			env.cleanup();
 		}

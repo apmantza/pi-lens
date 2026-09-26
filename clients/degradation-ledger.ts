@@ -1057,6 +1057,14 @@ export type DegradationKind =
 	 */
 	| "snapshot-sequence-read-timeout"
 	/**
+	 * #3511: a runtime's view missed a logged change-log entry at or below its
+	 * seq (a sibling process logged it, the runtime was seeded at 0 by a
+	 * timed-out read, or an append ran without the change-log lock), so its
+	 * snapshots are stamped incomplete and never served fresh until the next
+	 * seed. Once per session; subject is the project root, reason names which.
+	 */
+	| "snapshot-view-incomplete"
+	/**
 	 * A `<script>` body of an HTML file the napi runner was evaluating (#2347)
 	 * refused to parse as JavaScript, so that body contributed no embedded
 	 * findings. Subject is the file path; counted so the totals survive the

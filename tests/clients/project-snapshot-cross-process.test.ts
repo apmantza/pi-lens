@@ -159,6 +159,30 @@ function siblingEdit(
 	).seq;
 }
 
+/** One logged edit then one runtime snapshot save in a real sibling process. */
+function siblingEditAndSave(
+	home: string,
+	cwd: string,
+	seed: number,
+	filePath: string,
+	marker: string,
+): number {
+	return runSibling(
+		home,
+		seed,
+		`const cwd = ${JSON.stringify(cwd)};
+		runtime.recordProjectMutation({ filePath: ${JSON.stringify(filePath)}, source: "agent-write", cwd });
+		runtime.cachedExports.set(${JSON.stringify(marker)}, "x.ts");
+		snap.saveRuntimeProjectSnapshot({ cwd, runtime });`,
+	).seq;
+}
+
+/** Code-unit order on the path key, so equal maps compare equal. */
+function byPathKey(a: [string, number], b: [string, number]): number {
+	if (a[0] < b[0]) return -1;
+	return a[0] > b[0] ? 1 : 0;
+}
+
 /** What a later session_start sees: the log, the snapshot, and both replays. */
 function sessionStartView(cwd: string) {
 	_resetProjectSnapshotParseCacheForTests();
@@ -184,8 +208,8 @@ function sessionStartView(cwd: string) {
 		]),
 		fresh: isProjectSnapshotFresh(snapshot, full.projectSeq),
 		boundedEqualsFull:
-			JSON.stringify([...bounded.fileSeqByPath].sort()) ===
-			JSON.stringify([...full.fileSeqByPath].sort()),
+			JSON.stringify([...bounded.fileSeqByPath].sort(byPathKey)) ===
+			JSON.stringify([...full.fileSeqByPath].sort(byPathKey)),
 	};
 }
 
@@ -627,6 +651,18 @@ describe("project seq allocation across processes (#3511)", () => {
 					count: 1,
 				}),
 			);
+			expect(getDegradationSummary()).toContainEqual(
+				expect.objectContaining({
+					kind: "snapshot-view-incomplete",
+					latestReasons: [
+						expect.objectContaining({
+							reason: expect.stringContaining(
+								"change-log lock was unavailable",
+							),
+						}),
+					],
+				}),
+			);
 		} finally {
 			env.cleanup();
 		}
@@ -650,23 +686,28 @@ describe("project seq allocation across processes (#3511)", () => {
 				source: "agent-write",
 				cwd,
 			});
-		const stamp = (runtime: RuntimeCoordinator) =>
-			buildProjectSnapshotFromRuntime({ cwd, runtime }).seq;
+		const stamp = (runtime: RuntimeCoordinator) => {
+			const { seq, incomplete } = buildProjectSnapshotFromRuntime({
+				cwd,
+				runtime,
+			});
+			return { seq, incomplete: incomplete === true };
+		};
 		try {
 			const runtime = seededRuntime(cwd);
 			logSibling(5);
 			expect(edit(runtime).projectSeq).toBe(6);
-			expect(stamp(runtime)).toBeLessThan(0);
+			expect(stamp(runtime)).toEqual({ seq: 6, incomplete: true });
 
 			const latest = readLatestProjectSequence(cwd);
 			runtime.seedProjectSequence(latest.projectSeq, latest.fileSeqByPath);
-			expect(stamp(runtime)).toBe(6);
+			expect(stamp(runtime)).toEqual({ seq: 6, incomplete: false });
 
 			logSibling(10);
 			expect(edit(runtime).projectSeq).toBe(11);
-			expect(stamp(runtime)).toBeLessThan(0);
+			expect(stamp(runtime)).toEqual({ seq: 11, incomplete: true });
 			runtime.resetForSession();
-			expect(stamp(runtime)).toBe(0);
+			expect(stamp(runtime)).toEqual({ seq: 0, incomplete: false });
 		} finally {
 			env.cleanup();
 		}
@@ -705,7 +746,7 @@ describe("project seq allocation across processes (#3511)", () => {
 		}
 	});
 
-	it("the never-fresh stamp is stale even against session_start's unknown-sequence sentinel", () => {
+	it("an incomplete snapshot keeps its real seq and is never fresh, not even at that seq", () => {
 		const { env, cwd, home, file } = editEnv();
 		try {
 			const runtime = seededRuntime(cwd);
@@ -716,10 +757,56 @@ describe("project seq allocation across processes (#3511)", () => {
 				cwd,
 			});
 			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
-			expect(snapshot.seq).toBeLessThan(0);
-			// runtime-session.ts judges freshness against -1 when its sequence
-			// read timed out (UNKNOWN_PROJECT_SEQ, #1162).
-			expect(isProjectSnapshotFresh(snapshot, -1)).toBe(false);
+			expect(snapshot).toMatchObject({ seq: 2, incomplete: true });
+			expect(snapshot.sequenceIndex).toBeUndefined();
+			expect(isProjectSnapshotFresh(snapshot, 2)).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a runtime that missed a sibling's edit still persists its newer view, marked never fresh (review B2)", () => {
+		const { env, cwd, home, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			// The sibling logs seq 1 and saves a complete snapshot at seq 1.
+			expect(siblingEditAndSave(home, cwd, 0, file("b.ts"), "child_seq1")).toBe(
+				1,
+			);
+			for (const name of ["a.ts", "c.ts"]) {
+				runtime.recordProjectMutation({
+					filePath: file(name),
+					source: "agent-write",
+					cwd,
+				});
+				runtime.cachedExports.set(`from_${name}`, file(name));
+				saveRuntimeProjectSnapshot({ cwd, runtime });
+			}
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 3,
+				bodyExports: ["from_a.ts", "from_c.ts"],
+				metaSeq: 3,
+			});
+			expect(readProjectSnapshotMeta(cwd)?.incomplete).toBe(true);
+			expect(sessionStartView(cwd).fresh).toBe(false);
+			expect(
+				latencyRows.filter(
+					(row) => row.metadata?.decision === "superseded_on_disk",
+				),
+			).toEqual([]);
+			expect(getDegradationSummary()).toContainEqual(
+				expect.objectContaining({
+					kind: "snapshot-view-incomplete",
+					count: 1,
+					latestReasons: [
+						expect.objectContaining({
+							reason: expect.stringContaining(
+								"the change log reached seq 1 while this runtime was at 0",
+							),
+						}),
+					],
+				}),
+			);
 		} finally {
 			env.cleanup();
 		}

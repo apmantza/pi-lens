@@ -1012,6 +1012,39 @@ describe("project snapshot", () => {
 			expect(laundered?.wordIndex).toBeUndefined();
 		}));
 
+	it("carries a same-seq word index only from a snapshot at least as complete (#3511)", () =>
+		withProjectDataDir((cwd) => {
+			// A runtime whose view missed logged entries up to seq 4: seq 5,
+			// incomplete. It persists a word index.
+			const incompleteView = () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.seedProjectSequence(2);
+				runtime.bumpFileSeq(path.join(cwd, "a.ts"), 4);
+				return runtime;
+			};
+			const withIndex = incompleteView();
+			withIndex.wordIndex = buildWordIndex([
+				{ path: path.join(cwd, "a.ts"), content: "function partial() {}" },
+			]);
+			saveRuntimeProjectSnapshot({ cwd, runtime: withIndex });
+			expect(loadProjectSnapshot(cwd)).toMatchObject({
+				seq: 5,
+				incomplete: true,
+			});
+
+			// Another incomplete view at seq 5 keeps it: nothing is claimed fresh.
+			saveRuntimeProjectSnapshot({ cwd, runtime: incompleteView() });
+			expect(loadProjectSnapshot(cwd)?.wordIndex).toBeDefined();
+
+			// A complete view at seq 5 must not stamp it fresh.
+			const complete = new RuntimeCoordinator();
+			complete.seedProjectSequence(5);
+			saveRuntimeProjectSnapshot({ cwd, runtime: complete });
+			const saved = loadProjectSnapshot(cwd);
+			expect(saved?.incomplete).toBeUndefined();
+			expect(saved?.wordIndex).toBeUndefined();
+		}));
+
 	it("rejects wrong-version, stale, and future snapshots", () =>
 		withProjectDataDir((cwd) => {
 			const badPath = getProjectSnapshotPath(cwd);

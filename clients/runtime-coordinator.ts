@@ -72,6 +72,30 @@ export interface MutationReceipt {
  */
 const MAX_MUTATION_RECEIPTS = 512;
 
+/**
+ * #3511 review S2: once per session and project, record why this runtime's
+ * snapshots stopped being servable as fresh. Without it a monitor sees only
+ * never-fresh snapshots. A runtime at seq 0 cannot tell a sibling from a
+ * timed-out session_start read; the timeout has its own ledger kind.
+ */
+function recordViewIncomplete(
+	cwd: string,
+	cause: { locked: boolean; ownSeq: number; logMaxSeq: number },
+): void {
+	const why = cause.locked
+		? `the change log reached seq ${cause.logMaxSeq} while this runtime was at ${cause.ownSeq} (${
+				cause.ownSeq === 0
+					? "a sibling process, or a timed-out session_start read that seeded 0; see snapshot-sequence-read-timeout"
+					: "a sibling process logged above it"
+			})`
+		: "the change-log lock was unavailable, so a sibling may log the same seq";
+	recordDegradationOnce({
+		kind: "snapshot-view-incomplete",
+		subject: path.resolve(cwd),
+		reason: `snapshots are stamped incomplete (never fresh) until the next seed from the change log: ${why}`,
+	});
+}
+
 export type DeferredMutationKind = "autofix" | "format";
 
 export interface PathSetLike {
@@ -385,10 +409,11 @@ export class RuntimeCoordinator {
 	private _turnIndex = 0;
 	private _writeIndex = 0;
 	private _projectSeq = 0;
-	// #3511: set when the change log holds an entry at or below `_projectSeq`
-	// that this runtime never folded (a sibling process logged it, or an
-	// unlocked append could share its seq). Cleared by a seed from the log.
-	private _viewMissesLoggedEntries = false;
+	// #3511: the highest logged seq this runtime's view is known to have missed
+	// (a sibling process logged it, or an unlocked append could share it); 0
+	// when the view folds every logged entry at or below `_projectSeq`. Cleared
+	// by a seed from the log, or by a late read that covers it.
+	private _viewMissingThrough = 0;
 	private _turnStartProjectSeq = 0;
 	private readonly _fileSeq = new Map<string, number>();
 	// File key → the projectSeq value at that file's most recent bump (#451). Lets
@@ -466,7 +491,7 @@ export class RuntimeCoordinator {
 		this._turnIndex = 0;
 		this._writeIndex = 0;
 		this._projectSeq = 0;
-		this._viewMissesLoggedEntries = false;
+		this._viewMissingThrough = 0;
 		this._turnStartProjectSeq = 0;
 		this._fileSeq.clear();
 		this._fileLastProjectSeq.clear();
@@ -664,10 +689,20 @@ export class RuntimeCoordinator {
 		let logged: ReturnType<RuntimeCoordinator["bumpFileSeq"]> | undefined;
 		if (args.cwd !== undefined) {
 			try {
-				appendProjectChangeAllocated(args.cwd, (logMaxSeq, locked) => {
+				const cwd = args.cwd;
+				appendProjectChangeAllocated(cwd, (logMaxSeq, locked) => {
+					const ownSeq = this._projectSeq;
 					logged = this.bumpFileSeq(args.filePath, logMaxSeq);
 					// Unlocked, a sibling may log this seq too; never vouch for it.
-					if (!locked) this._viewMissesLoggedEntries = true;
+					if (!locked) {
+						this._viewMissingThrough = Math.max(
+							this._viewMissingThrough,
+							logged.projectSeq,
+						);
+					}
+					if (this._viewMissingThrough > 0) {
+						recordViewIncomplete(cwd, { locked, ownSeq, logMaxSeq });
+					}
 					return {
 						seq: logged.projectSeq,
 						timestamp: new Date().toISOString(),
@@ -849,7 +884,7 @@ export class RuntimeCoordinator {
 
 	/** True when a snapshot of this runtime must not claim `projectSeq` (#3511). */
 	get viewMissesLoggedEntries(): boolean {
-		return this._viewMissesLoggedEntries;
+		return this._viewMissingThrough > 0;
 	}
 
 	get turnStartProjectSeq(): number {
@@ -861,7 +896,7 @@ export class RuntimeCoordinator {
 		fileSeqByPath?: Map<string, number>,
 	): void {
 		this._projectSeq = Math.max(0, Math.floor(projectSeq));
-		this._viewMissesLoggedEntries = false;
+		this._viewMissingThrough = 0;
 		this._turnStartProjectSeq = this._projectSeq;
 		this._fileSeq.clear();
 		// Seeded per-file counters carry no projectSeq provenance, so start the
@@ -874,6 +909,27 @@ export class RuntimeCoordinator {
 				Math.max(0, seq),
 			);
 		}
+	}
+
+	/**
+	 * #3511 review B2: fold a late sequence read (session_start's deferred one,
+	 * after a timed-out read seeded 0) into a session that has already
+	 * advanced. Unlike `seedProjectSequence` it never lowers the seq or a
+	 * file's seq, and keeps the in-window changed-since marks. It clears the
+	 * incomplete mark only when the read reaches every entry the view missed:
+	 * log allocation appends entries in rising seq order, so a read whose max
+	 * is at or above that seq saw all of them.
+	 */
+	mergeProjectSequence(
+		projectSeq: number,
+		fileSeqByPath: Map<string, number>,
+	): void {
+		this._projectSeq = Math.max(this._projectSeq, Math.floor(projectSeq));
+		for (const [filePath, seq] of fileSeqByPath) {
+			const key = normalizeMapKey(path.resolve(filePath));
+			this._fileSeq.set(key, Math.max(this._fileSeq.get(key) ?? 0, seq));
+		}
+		if (projectSeq >= this._viewMissingThrough) this._viewMissingThrough = 0;
 	}
 
 	bumpFileSeq(
@@ -894,7 +950,7 @@ export class RuntimeCoordinator {
 		// them, and remember that this runtime's view has not folded them.
 		if (logMaxSeq > this._projectSeq) {
 			this._projectSeq = logMaxSeq;
-			this._viewMissesLoggedEntries = true;
+			this._viewMissingThrough = Math.max(this._viewMissingThrough, logMaxSeq);
 		}
 		this._projectSeq += 1;
 		const fileSeq = (this._fileSeq.get(key) ?? 0) + 1;

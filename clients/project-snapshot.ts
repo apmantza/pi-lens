@@ -81,6 +81,14 @@ export interface ProjectSnapshot {
 	symbols: Record<string, ProjectSnapshotSymbol[]>;
 	reverseDeps: Record<string, string[]>;
 	cachedExports: Array<[name: string, filePath: string]>;
+	/**
+	 * #3511: the writing runtime missed a logged entry at or below `seq` (a
+	 * sibling process logged it, or an unlocked append could share it). Such a
+	 * snapshot is never fresh and carries no `sequenceIndex`, but `seq` is
+	 * still its real, log-allocated seq, so it takes part in the promotion
+	 * compare-and-set (#3509) like any other.
+	 */
+	incomplete?: true;
 	sequenceIndex?: SnapshotSequenceIndex;
 	wordIndex?: SerializedWordIndex;
 	projectRulesScan?: RuleScanResult;
@@ -131,13 +139,6 @@ export function getProjectSnapshotMetaPath(cwd: string): string {
 	);
 }
 
-/**
- * #3511: the stamp of a snapshot whose runtime missed a logged entry at or
- * below its seq. No change-log seq is negative, so it is never fresh; the
- * promotion compare-and-set (#3509) ranks it below every stamped snapshot.
- */
-export const PROJECT_SNAPSHOT_NEVER_FRESH_SEQ = -1;
-
 export function isProjectSnapshotFresh(
 	snapshot: ProjectSnapshot | null | undefined,
 	currentProjectSeq: number,
@@ -145,8 +146,7 @@ export function isProjectSnapshotFresh(
 	return (
 		!!snapshot &&
 		snapshot.version === PROJECT_SNAPSHOT_VERSION &&
-		// session_start's unknown-sequence sentinel is negative too (#1162).
-		snapshot.seq >= 0 &&
+		!snapshot.incomplete &&
 		snapshot.seq === currentProjectSeq
 	);
 }
@@ -173,6 +173,7 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 				typeof entry[0] === "string" &&
 				typeof entry[1] === "string",
 		),
+		...(snapshot.incomplete === true ? { incomplete: true as const } : {}),
 		sequenceIndex: parseSequenceIndex(snapshot.sequenceIndex),
 		wordIndex: snapshot.wordIndex,
 		projectRulesScan: snapshot.projectRulesScan,
@@ -196,6 +197,8 @@ export interface ProjectSnapshotMeta {
 	 * next successful write populates it.
 	 */
 	gzBytes?: number;
+	/** #3511: mirrors `ProjectSnapshot.incomplete`; such a meta is never fresh. */
+	incomplete?: true;
 	/**
 	 * The derived sequence index as of `seq` (#1019), MIRRORED here from the
 	 * snapshot body so session-start can bound the change-log replay WITHOUT
@@ -225,6 +228,7 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 			meta.gzBytes > 0
 				? meta.gzBytes
 				: undefined,
+		...(meta.incomplete === true ? { incomplete: true as const } : {}),
 		sequenceIndex: parseSequenceIndex(meta.sequenceIndex),
 	};
 }
@@ -256,7 +260,9 @@ export function isProjectSnapshotMetaStale(
 	currentProjectSeq: number,
 ): boolean {
 	return (
-		meta.version !== PROJECT_SNAPSHOT_VERSION || meta.seq !== currentProjectSeq
+		meta.version !== PROJECT_SNAPSHOT_VERSION ||
+		meta.incomplete === true ||
+		meta.seq !== currentProjectSeq
 	);
 }
 
@@ -682,6 +688,7 @@ const HEAVY_SNAPSHOT_KEYS: ReadonlySet<string> = new Set([
 export interface ProjectSnapshotExportsAndRules {
 	version: typeof PROJECT_SNAPSHOT_VERSION;
 	seq: number;
+	incomplete?: true;
 	cachedExports: Array<[name: string, filePath: string]>;
 	projectRulesScan?: RuleScanResult;
 }
@@ -746,6 +753,7 @@ function parseExportsAndRulesOnly(
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
 		seq: parsed.seq,
+		...(parsed.incomplete === true ? { incomplete: true as const } : {}),
 		cachedExports: parsed.cachedExports.filter(
 			(entry): entry is [string, string] =>
 				Array.isArray(entry) &&
@@ -814,9 +822,15 @@ export function loadProjectSnapshotExportsAndRules(
 			(body.mtimeMs <= authoritative.knownMtime &&
 				body.size === authoritative.knownSize);
 		if (notSuperseded) {
-			const { version, seq, cachedExports, projectRulesScan } =
+			const { version, seq, incomplete, cachedExports, projectRulesScan } =
 				authoritative.snapshot;
-			return { version, seq, cachedExports, projectRulesScan };
+			return {
+				version,
+				seq,
+				...(incomplete ? { incomplete } : {}),
+				cachedExports,
+				projectRulesScan,
+			};
 		}
 		// On mismatch, unlike the full loader, this narrow loader neither
 		// deletes the entry nor touches its idle timer (it never calls
@@ -1177,6 +1191,7 @@ function writeProjectSnapshotMeta(
 							: { gzBytes: bodyRecord.gzBytes }),
 					}
 				: {}),
+			...(snapshot.incomplete ? { incomplete: true } : {}),
 			...(snapshot.sequenceIndex
 				? { sequenceIndex: snapshot.sequenceIndex }
 				: {}),
@@ -2144,15 +2159,16 @@ export function buildProjectSnapshotFromRuntime(args: {
 	languageProfile?: ProjectLanguageProfile;
 	conventions?: ProjectConventions;
 }): ProjectSnapshot {
+	// #3511: a runtime that missed a sibling's logged entry at or below its seq
+	// cannot vouch for that seq, and its index is not the fold of the log up to
+	// it. Its seq still orders the promotion compare-and-set (#3509).
+	const incomplete = args.runtime.viewMissesLoggedEntries;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
 		projectRoot: normalizeMapKey(path.resolve(args.cwd)),
 		generatedAt: new Date().toISOString(),
-		// #3511: a runtime that missed a sibling's logged entry at or below its
-		// seq cannot vouch for that seq.
-		seq: args.runtime.viewMissesLoggedEntries
-			? PROJECT_SNAPSHOT_NEVER_FRESH_SEQ
-			: args.runtime.projectSeq,
+		seq: args.runtime.projectSeq,
+		...(incomplete ? { incomplete: true as const } : {}),
 		files: {},
 		symbols: {},
 		reverseDeps: {},
@@ -2164,10 +2180,12 @@ export function buildProjectSnapshotFromRuntime(args: {
 		// every append, so `getFileSeqEntries()` IS the fold of the log up to
 		// `projectSeq` — and its keys are already `normalizeMapKey(path.resolve())`,
 		// the exact form the change-log replay produces.
-		sequenceIndex: {
-			projectSeq: args.runtime.projectSeq,
-			fileSeqByPath: args.runtime.getFileSeqEntries(),
-		},
+		sequenceIndex: incomplete
+			? undefined
+			: {
+					projectSeq: args.runtime.projectSeq,
+					fileSeqByPath: args.runtime.getFileSeqEntries(),
+				},
 		wordIndex: args.runtime.wordIndex
 			? serializeWordIndex(args.runtime.wordIndex)
 			: undefined,
@@ -2286,10 +2304,13 @@ export function saveRuntimeProjectSnapshot(args: {
 			// isProjectSnapshotFresh on load, seq mismatch) would get silently
 			// re-stamped with the CURRENT seq by this save, "laundering" a stale
 			// index into looking fresh before the word-index task even runs.
+			// #3511: an index from an incomplete view at the same seq would be
+			// laundered the same way into a complete snapshot.
 			if (
 				!snapshot.wordIndex &&
 				existing.wordIndex &&
-				existing.seq === snapshot.seq
+				existing.seq === snapshot.seq &&
+				(snapshot.incomplete || !existing.incomplete)
 			) {
 				snapshot.wordIndex = existing.wordIndex;
 			}
