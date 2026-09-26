@@ -311,6 +311,27 @@ export function realIsPidAlive(pid: number): boolean {
 	}
 }
 
+const STAGE_PID_PATTERN = /\.stage-(\d+)-/;
+
+/**
+ * True only for a `<artifactPrefix>…stage-<pid>-<gen>` persist artifact (or
+ * its worker tmp) whose embedded pid is dead. A live pid, ours included, is
+ * a healthy owner's in-flight write: the review graph (#1206) and the
+ * project snapshot (#3510) both sweep their shared cache dir with this, so
+ * a sibling process's first save never deletes a live stage before its
+ * owner promotes it. A recycled pid leaves one stale file behind, which is
+ * the safe direction.
+ */
+export function isStaleStageFile(
+	entry: string,
+	artifactPrefix: string,
+): boolean {
+	if (!entry.startsWith(artifactPrefix)) return false;
+	const match = STAGE_PID_PATTERN.exec(entry);
+	if (!match) return false;
+	return !realIsPidAlive(Number(match[1]));
+}
+
 /** Maximum number of directory entries inspected by one staging sweep. */
 export const ATOMIC_STAGE_SWEEP_MAX_ENTRIES = 512;
 

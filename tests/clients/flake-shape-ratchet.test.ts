@@ -265,6 +265,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"two real Node children must contend on the production rename; an in-process mock cannot expose the cross-process ENOENT",
 	},
+	"real-process-spawn:clients/project-snapshot-cross-process.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the sibling snapshot writer must be a second real process: the stage sweep keys on its pid, and a second module instance here shares ours",
+	},
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
 		detector: "real-process-spawn",
 		reason:

@@ -393,6 +393,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/persistent-reverify.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
 	"tests/clients/project-data-dir-slug.test.ts",
+	// #3510: a real sibling node process with its own pid shares the project
+	// snapshot cache dir (flake-shape admission).
+	"tests/clients/project-snapshot-cross-process.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	// #2622: adjacent read-guard stars previously produced exponential regex
 	// backtracking against a long non-matching path; the test measures the real

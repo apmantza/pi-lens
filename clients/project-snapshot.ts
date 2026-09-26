@@ -7,6 +7,7 @@ import { writeFileAtomic } from "./atomic-write.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
+import { isStaleStageFile } from "./instance-reaper.js";
 import { readJsonCache } from "./json-cache-read.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -1718,18 +1719,17 @@ function getSnapshotPersistWorker(): Worker | undefined {
 
 // #950 review F3: a process that dies between a worker's staged write and its
 // promotion leaves project-snapshot.json.gz.stage-<pid>-<gen> (and the worker's
-// .tmp-<pid>) behind forever. Sweep leftovers from PRIOR processes once per
-// cache dir; our own live stage files carry this pid and are skipped.
+// .tmp-<pid>) behind forever. Sweep leftovers from DEAD processes once per
+// cache dir. A live sibling's in-flight stage is kept (#3510): removing it
+// sent the sibling's promotion to the synchronous main-thread gzip.
 const _sweptSnapshotStageDirs = new Set<string>();
 function sweepStaleSnapshotStageFiles(cacheDir: string): void {
 	if (_sweptSnapshotStageDirs.has(cacheDir)) return;
 	_sweptSnapshotStageDirs.add(cacheDir);
 	fs.readdir(cacheDir, (err, entries) => {
 		if (err) return;
-		const ownMarker = `.stage-${process.pid}-`;
 		for (const entry of entries) {
-			if (!entry.startsWith("project-snapshot.json.gz.stage-")) continue;
-			if (entry.includes(ownMarker)) continue;
+			if (!isStaleStageFile(entry, "project-snapshot.json.gz.stage-")) continue;
 			fs.rm(path.join(cacheDir, entry), { force: true }, () => {});
 		}
 	});

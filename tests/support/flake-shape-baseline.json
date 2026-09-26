@@ -30,6 +30,7 @@
 		"clients/opaque-mutation-scan.test.ts": 53,
 		"clients/persistence-worker-exit.test.ts": 1,
 		"clients/project-data-dir-slug.test.ts": 1,
+		"clients/project-snapshot-cross-process.test.ts": 2,
 		"clients/review-graph.service.test.ts": 7,
 		"clients/safe-spawn-ambient-signal.test.ts": 10,
 		"clients/safe-spawn-failure-taxonomy.test.ts": 4,

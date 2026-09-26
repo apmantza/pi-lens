@@ -20,7 +20,7 @@ import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { collectUntrackedIgnoredIds } from "../git-tracked-ignore.js";
-import { realIsPidAlive } from "../instance-reaper.js";
+import { isStaleStageFile } from "../instance-reaper.js";
 import { logLatency } from "../latency-logger.js";
 import {
 	containerNameChain,
@@ -2715,24 +2715,10 @@ function ensurePersistExitHook(): void {
 // artifact-specific pass.
 //
 // Liveness: an entry whose embedded stage pid is still alive belongs to a
-// concurrent healthy owner (or to us) and is skipped, reusing the reaper's
-// conservative `realIsPidAlive` (ESRCH-only-means-dead) rather than inventing
-// a second liveness probe. A recycled pid can therefore leave one stale stage
-// file behind instead of destroying a live one — deliberately the safe
-// direction; a later process whose pid table has moved on sweeps it.
+// concurrent healthy owner (or to us) and is skipped, through the reaper's
+// shared `isStaleStageFile` (the project snapshot sweeps with it too, #3510).
 const _sweptStageDirs = new Set<string>();
 const REVIEW_GRAPH_ARTIFACT_PREFIX = "review-graph.";
-const STAGE_PID_PATTERN = /\.stage-(\d+)-/;
-
-/** True only for a review-graph stage artifact left behind by a dead process. */
-function isStaleReviewGraphStageFile(entry: string): boolean {
-	if (!entry.startsWith(REVIEW_GRAPH_ARTIFACT_PREFIX)) return false;
-	const match = STAGE_PID_PATTERN.exec(entry);
-	if (!match) return false;
-	const pid = Number(match[1]);
-	if (pid === process.pid) return false; // our own live stage file
-	return !realIsPidAlive(pid);
-}
 
 function sweepStaleStageFiles(cacheDir: string): void {
 	if (_sweptStageDirs.has(cacheDir)) return;
@@ -2740,7 +2726,7 @@ function sweepStaleStageFiles(cacheDir: string): void {
 	fs.readdir(cacheDir, (err, entries) => {
 		if (err) return;
 		for (const entry of entries) {
-			if (!isStaleReviewGraphStageFile(entry)) continue;
+			if (!isStaleStageFile(entry, REVIEW_GRAPH_ARTIFACT_PREFIX)) continue;
 			fs.rm(path.join(cacheDir, entry), { force: true }, () => {});
 		}
 	});
