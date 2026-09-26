@@ -412,20 +412,23 @@ describe("#3501 — a touch-debounce entry does not outlive its client", () => {
 			A.getDiagnosticsVersionForPath = () => 0;
 			A.getDiagnostics = () => [];
 			A.getAllDiagnostics = () => new Map();
-			// A's wait stays open until the racing confirm asks A itself.
-			let askedA: () => void = () => {};
-			const aAsked = new Promise<void>((resolve) => {
-				askedA = resolve;
+			// A's wait stays open until the racing confirm asks a client, so the
+			// race is decided by that answer, whichever client it asks.
+			let confirmAsked: () => void = () => {};
+			const asked = new Promise<void>((resolve) => {
+				confirmAsked = resolve;
 			});
-			const execA = A.executeCommand.getMockImplementation();
-			A.executeCommand.mockImplementation(async (command, args) => {
-				askedA();
-				return execA!(command, args);
-			});
+			for (const client of [A, B]) {
+				const execute = client.executeCommand.getMockImplementation();
+				client.executeCommand.mockImplementation(async (command, args) => {
+					confirmAsked();
+					return execute!(command, args);
+				});
+			}
 			A.waitForDiagnostics.mockImplementationOnce(async (_fp, ms) => {
 				A.kill();
 				await service.touchFile(path.join(tmp, "b.ts"), "export {};\n", SYNC);
-				await aAsked;
+				await asked;
 				vi.setSystemTime(Date.now() + ms);
 			});
 
