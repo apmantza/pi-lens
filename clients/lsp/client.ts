@@ -4464,6 +4464,17 @@ async function handleNotifyOpenOnce(
 	state.pendingOpens.delete(normalizedPath);
 	state.openDocuments.add(normalizedPath);
 	state.closedDocuments?.delete(normalizedPath);
+	// #3548 review r1 B1: a skip granted by a close whose own close-triggered
+	// publish never arrived before this reopen (or arrived after a PRIOR
+	// reopen and was never routed through the closedDocuments branch at all)
+	// must not carry into the NEXT close — the closedDocuments branch that
+	// spends it cannot tell a leftover credit from one this close legitimately
+	// owns, and a spent-but-leftover credit swallows that close's first real
+	// backlog publish with nothing to notice, unlike `expectedPublicationsBeyondSends`
+	// (never cleared here — it spans a reopen by design, #3482) whose own cap
+	// (`publicationCountsForPath`'s `sent`) bounds `countPublication` even when
+	// stale, so it can only ever under- rather than over-count.
+	state.closePublishSkipsRemaining.delete(normalizedPath);
 	state.openDocumentUris?.set(normalizedPath, uri);
 	if (saved && openSent) await sendDidSave(state, normalizedPath, uri, content);
 	// Telemetry is deliberately detached after didOpen succeeds.

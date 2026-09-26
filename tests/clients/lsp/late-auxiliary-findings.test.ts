@@ -1332,6 +1332,80 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 		expect(counts()).toEqual({ sent: 1, published: 1 });
 	});
 
+	it("CLOSE-PUBLISH-CREDIT-RESET: a skip credit granted by one close does not survive a reopen, so a second close only ever grants its own (#3548 review r1 B1)", async () => {
+		// #3477's `closedAndGone` drops a reopen for a closed path whose file
+		// is also gone from disk — a real file is required for the reopens
+		// below to actually run rather than being silently skipped.
+		const env = setupTestEnvironment("pi-lens-close-credit-reset-") as any;
+		try {
+			const scanner = armOpengrep(env.tmpDir, "typos");
+			const file = path.join(env.tmpDir, "src", "credit-reset.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "a");
+			const counts = () =>
+				publicationCountsForPath(scanner.state, normalizeMapKey(file));
+			await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+			// Close #1: typos owes one close-triggered publish. Reopen happens
+			// before it ever arrives, so the credit is spent by nothing.
+			await closeDocument(scanner.state, file);
+			await handleNotifyOpen(scanner.state, file, "b", "ts", false, true);
+			expect(counts()).toEqual({ sent: 2, published: 0 });
+			// Close #2: a fresh credit for THIS close only — never two.
+			await closeDocument(scanner.state, file);
+			// One close-triggered publish arrives (close #2's own) and spends it.
+			scanner.publish(file, []);
+			// A GENUINE backlog finding — the real, late answer this pair is
+			// actually owed — arrives next, still closed. With the leak, close
+			// #2's OWN credit is really 2 (1 leaked from close #1, spent by
+			// nothing, plus 1 fresh), so this publish is ALSO wrongly skipped
+			// and `published` stays 0. Fixed, close #2 granted exactly 1
+			// credit, already spent by its own close-triggered publish above,
+			// so this one counts.
+			scanner.publish(file, [diag(0, "real finding")]);
+			expect(counts()).toEqual({ sent: 2, published: 1 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("CLOSE-PUBLISH-LATE-AFTER-REOPEN: typos' close-triggered publish that arrives only AFTER a reopen is not exempted — an admitted residual (#3548 review r1 B1)", async () => {
+		const env = setupTestEnvironment("pi-lens-close-publish-late-") as any;
+		try {
+			const scanner = armOpengrep(env.tmpDir, "typos");
+			const file = path.join(env.tmpDir, "src", "publish-late.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "a");
+			const key = normalizeMapKey(file);
+			const counts = () => publicationCountsForPath(scanner.state, key);
+			await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+			await closeDocument(scanner.state, file);
+			// Reopen BEFORE the close-triggered publish arrives: closedDocuments
+			// no longer has this path, so the skip credit (now spent by the
+			// reopen clear, #3548 review r1 B1) is moot for what follows either
+			// way.
+			await handleNotifyOpen(scanner.state, file, "b", "ts", false, true);
+			expect(counts()).toEqual({ sent: 2, published: 0 });
+			expect(scanner.state.pushDiagnostics.has(key)).toBe(false);
+			// typos' close-triggered publish for the FIRST close finally arrives,
+			// now that the path is open again. It is not routed through the
+			// closedDocuments branch at all (the path isn't closed), so nothing
+			// this PR added applies to it: it is stored and counted exactly like
+			// any other publish for the currently open document — a version-
+			// less, possibly EMPTY set standing in for content "b"'s real
+			// diagnostics until "b"'s own scan publishes. This ordering (the
+			// close handler's publish outrunning a slower in-flight scan) is
+			// exactly what #3548's `publishesOnClose` marker assumes does NOT
+			// happen for the credit itself to be meaningful; when it doesn't
+			// hold, this is the existing #3482 "span" behavior, unchanged by
+			// this fix in either direction.
+			scanner.publish(file, []);
+			expect(counts()).toEqual({ sent: 2, published: 1 });
+			expect(scanner.state.pushDiagnostics.get(key)).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("REPLAY-RULE-LOAD-SURPLUS: opengrep's rule-load [] plus its refresh republish cannot shorten a later backlog (#3482 r1 F1)", async () => {
 		const env = setupTestEnvironment("pi-lens-late-aux-rule-load-") as any;
 		const sessionId = "late-aux-rule-load";
@@ -1825,6 +1899,52 @@ describe("turn-end late-auxiliary drain never delivers an older revision's scan 
 
 				scanner.publish(file, [diag(0, "V2 finding on line 1")]);
 				expect((await turn()).content).toContain("V2 finding on line 1");
+			},
+			"typos",
+		);
+	});
+
+	it("REPLAY-CLOSE-PUBLISH-CREDIT-LEAK: a skip credit from one close cannot swallow a genuine backlog finding across a second close (#3548 review r1 B1)", async () => {
+		await surplusReplay(
+			"close-publish-credit-leak",
+			async ({ scanner, file, turn }) => {
+				// Close #1: typos owes one close-triggered publish. The reopen
+				// below happens before it ever arrives, so (leaked) the credit
+				// is never spent and (fixed) is discarded rather than carried.
+				await closeDocument(scanner.state, file);
+				await touchAndMark(scanner, file, V1, Date.now() - 30_000);
+				// Close #2: typos owes ANOTHER close-triggered publish, for
+				// THIS close.
+				await closeDocument(scanner.state, file);
+				// typos' own close-triggered publish for close #2 arrives,
+				// spending exactly the credit THIS close granted.
+				scanner.publish(file, []);
+				// A GENUINE backlog finding — the real, late answer this pair's
+				// mark is actually waiting on — arrives while still closed.
+				// Leaked, the leftover credit from close #1 swallows it too;
+				// fixed, there is no credit left and it counts.
+				scanner.publish(file, [diag(11, "REAL-FINDING")]);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+
+				const first = await turn();
+				expect(first.content).not.toContain("REAL-FINDING");
+				expect(first.metadata).toMatchObject({
+					delivered: 0,
+					backlogPending: 1,
+				});
+
+				// v2's real answer lands. Fixed, this is the last publish the
+				// mark needed (REAL-FINDING already counted) and it delivers.
+				// Leaked, REAL-FINDING's lost count means the mark still needs
+				// ONE MORE publish than this ever supplies — permanently stuck,
+				// re-armed every turn, never delivered.
+				scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+				const second = await turn();
+				expect(second.metadata).toMatchObject({
+					delivered: 1,
+					backlogPending: 0,
+				});
+				expect(second.content).toContain("V2 finding on line 1");
 			},
 			"typos",
 		);
