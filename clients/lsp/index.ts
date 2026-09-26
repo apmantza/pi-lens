@@ -8933,6 +8933,12 @@ export class LSPService {
 
 		await runWarmupTouch(1);
 		let failedServerIds = stillColdServerIds();
+		// #3502: the clients this warm-up judged. A cold verdict is cached only
+		// for the client it is about; one retired while the warm-up awaited (a
+		// crash respawn, an eviction) leaves its replacement to earn its own.
+		const warmedClients = keys.map((key) =>
+			key === undefined ? undefined : this.state.clients.get(key),
+		);
 
 		// One retry, and only when the first attempt actually left a server cold —
 		// a short backoff first so a server mid-relaunch/index gets a breather
@@ -8961,7 +8967,12 @@ export class LSPService {
 			// readiness through any path (`markDemonstratedReadyKey`).
 			for (let i = 0; i < servers.length; i++) {
 				const key = keys[i];
-				if (key !== undefined && failedServerIds.includes(servers[i].id)) {
+				if (
+					key !== undefined &&
+					failedServerIds.includes(servers[i].id) &&
+					warmedClients[i] !== undefined &&
+					this.state.clients.get(key) === warmedClients[i]
+				) {
 					this.state.demonstratedCold.add(key);
 				}
 			}

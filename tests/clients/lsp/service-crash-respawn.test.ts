@@ -607,4 +607,107 @@ describe("#3502 — a crash-respawn does not inherit readiness", () => {
 			delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
 		}
 	});
+
+	// Verify round 2: the cold verdict is the ready mark's twin. It is cached
+	// after the warm-up's awaits, so a client that failed its retry and died
+	// while a concurrent touch respawned the replacement (whose dead-client
+	// branch forgot the key) cached the replacement cold, and every later sweep
+	// skipped it from the cache without a warm-up of its own.
+	it("a warm-up whose client dies during the retry does not cache the concurrent replacement cold", async () => {
+		const A = wedged(makeClient("marksman", tmp));
+		const B = makeClient("marksman", tmp);
+		createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+		const service = new LSPService();
+		let attempts = 0;
+		A.waitForDiagnostics.mockImplementation(async (_fp, ms) => {
+			attempts += 1;
+			if (attempts === 2) {
+				// The retry: A dies after a minute of service, and a touch of
+				// another file respawns B while the retry still waits on A.
+				vi.setSystemTime(Date.now() + 61_000);
+				A.kill();
+				await service.touchFile(path.join(tmp, "b.md"), "# b\n", SYNC);
+			}
+			vi.setSystemTime(Date.now() + ms);
+		});
+
+		expect(await service.ensureWarmForSweep(filePath)).toEqual({
+			performedWarmup: true,
+			failedServerIds: ["marksman"],
+		});
+		expect(createLSPClient).toHaveBeenCalledTimes(2);
+		const warm = await service.ensureWarmForSweep(filePath);
+
+		expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+		expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+			filePath,
+		);
+	});
+
+	// `forgetReadiness` on the two eviction paths, which a replacement reaches
+	// without a crash: each must leave the next client to earn its own verdict.
+	it("a capacity eviction forgets readiness: the replacement gets its own warm-up", async () => {
+		process.env.PI_LENS_LSP_CLIENT_CEILING = "1";
+		try {
+			const lua = makeServer("lua", ".lua", tmp);
+			const marksman = makeServer("marksman", ".md", tmp);
+			getServersForFileWithConfig.mockImplementation((fp: string) =>
+				fp.endsWith(".md") ? [marksman] : fp.endsWith(".lua") ? [lua] : [],
+			);
+			const A = makeClient("marksman", tmp);
+			const L = makeClient("lua", tmp);
+			const B = makeClient("marksman", tmp);
+			createLSPClient
+				.mockResolvedValueOnce(A)
+				.mockResolvedValueOnce(L)
+				.mockResolvedValueOnce(B);
+			const service = new LSPService();
+			const first = await service.touchFile(filePath, DIRTY, DISPATCH);
+			expect(first?.confirmation).toBe("confirmed");
+
+			await service.touchFile(path.join(tmp, "x.lua"), "local x = 1\n", SYNC);
+			expect(A.shutdown).toHaveBeenCalledTimes(1);
+			const warm = await service.ensureWarmForSweep(filePath);
+
+			expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+			expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+				filePath,
+			);
+		} finally {
+			delete process.env.PI_LENS_LSP_CLIENT_CEILING;
+		}
+	});
+
+	it("a TypeScript idle eviction forgets readiness: the replacement gets its own warm-up", async () => {
+		vi.useFakeTimers();
+		process.env.PI_LENS_TS_IDLE_EVICT_MS = "1000";
+		try {
+			const ts = makeServer("typescript", ".ts", tmp);
+			getServersForFileWithConfig.mockImplementation((fp: string) =>
+				fp.endsWith(".ts") ? [ts] : [],
+			);
+			const tsFile = path.join(tmp, "a.ts");
+			const content = "const x: number = 'x';\n";
+			fs.writeFileSync(tsFile, content);
+			const A = makeTsClient(tmp);
+			const B = makeTsClient(tmp);
+			createLSPClient.mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+			const service = new LSPService();
+			const first = await service.touchFile(tsFile, content, DISPATCH);
+			expect(first?.diags).toEqual([
+				expect.objectContaining({ message: ERROR.message }),
+			]);
+
+			await vi.advanceTimersByTimeAsync(1_100);
+			expect(A.shutdown).toHaveBeenCalledTimes(1);
+			const warm = await service.ensureWarmForSweep(tsFile);
+
+			expect(warm).toEqual({ performedWarmup: true, failedServerIds: [] });
+			expect(B.waitForDiagnostics.mock.calls.map(([fp]) => fp)).toContain(
+				tsFile,
+			);
+		} finally {
+			delete process.env.PI_LENS_TS_IDLE_EVICT_MS;
+		}
+	});
 });
