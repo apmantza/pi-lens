@@ -400,6 +400,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/persistent-reverify.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
 	"tests/clients/project-data-dir-slug.test.ts",
+	// #3510: a real sibling node process with its own pid shares the project
+	// snapshot cache dir (flake-shape admission).
+	"tests/clients/project-snapshot-cross-process.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	// #2622: adjacent read-guard stars previously produced exponential regex
 	// backtracking against a long non-matching path; the test measures the real
@@ -420,6 +423,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/sgconfig-scratch-bound.test.ts",
 	"tests/clients/shared-checkout-guard.test.ts",
 	"tests/clients/startup-overhead.test.ts",
+	// #3511 review round 3: the quick-mode warmup witness joins session_start's
+	// background save with vi.waitFor (flake-shape admission).
+	"tests/clients/word-index-lifecycle.test.ts",
 	// #2603 (was #2591 review round 2, F1): the workspace-member matcher's
 	// budget asserts a real elapsed-time bound through detectPythonEnvironment;
 	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved

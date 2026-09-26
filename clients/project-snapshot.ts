@@ -7,6 +7,8 @@ import { writeFileAtomic } from "./atomic-write.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
+import { withGenerationLockSync } from "./generation-lock.js";
+import { isStaleStageFile } from "./instance-reaper.js";
 import { readJsonCache } from "./json-cache-read.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -58,8 +60,10 @@ interface ProjectSnapshotSymbol {
  * (#1019). Persisting it lets session-start BOUND the change-log replay: hydrate
  * this (O(files)) then fold only entries with `seq > snapshot.seq`
  * (O(changes-since-snapshot)) instead of replaying the entire append-only log.
- * `projectSeq` is invariably `=== snapshot.seq` (both come from the same
- * `runtime.projectSeq` moment); `fileSeqByPath` uses the same
+ * `projectSeq` is `=== snapshot.seq` (both come from the same
+ * `runtime.projectSeq` moment) unless the snapshot carries the never-fresh
+ * stamp (#3511), whose negative seq makes the replay fold the whole log on
+ * top of this index; `fileSeqByPath` uses the same
  * `normalizeMapKey(path.resolve())` keys as the change-log replay, so no
  * re-normalization (and no per-key `realpath` syscall) is needed on hydrate.
  */
@@ -77,6 +81,21 @@ export interface ProjectSnapshot {
 	symbols: Record<string, ProjectSnapshotSymbol[]>;
 	reverseDeps: Record<string, string[]>;
 	cachedExports: Array<[name: string, filePath: string]>;
+	/**
+	 * #3511: the writing runtime missed a logged entry at or below `seq` (a
+	 * sibling process logged it). Such a snapshot is never fresh and carries
+	 * no `sequenceIndex`, but `seq` is still its real, log-allocated seq, so
+	 * it takes part in the promotion compare-and-set (#3509) like any other.
+	 * It is stored with its seq encoded (`INCOMPLETE_STORED_SEQ`).
+	 */
+	incomplete?: true;
+	/**
+	 * #3511 review round 2 (R2-F1): the change-log entries the writing runtime
+	 * folded at its seed or late merge. An `unlocked` log entry after them
+	 * may share a seq the runtime holds, so the snapshot is not fresh then
+	 * (`ProjectSequenceIndex.unlockedThrough`). Absent means 0.
+	 */
+	logEntries?: number;
 	sequenceIndex?: SnapshotSequenceIndex;
 	wordIndex?: SerializedWordIndex;
 	projectRulesScan?: RuleScanResult;
@@ -127,13 +146,52 @@ export function getProjectSnapshotMetaPath(cwd: string): string {
 	);
 }
 
+/**
+ * #3511 review round 2 (R2-F2): how an incomplete snapshot's seq is stored. A
+ * reader from before #3511 knows no `incomplete` flag and compares the stored
+ * `seq` with the log's max seq (never negative), or with -1 after a timed-out
+ * sequence read (runtime-session.ts `UNKNOWN_PROJECT_SEQ`). The legacy field
+ * therefore holds -2, which it can never match, and the real seq travels in
+ * `incompleteSeq`. A complete snapshot is stored unchanged.
+ */
+const INCOMPLETE_STORED_SEQ = -2;
+
+function storedSeq(snapshot: { seq: number; incomplete?: true }) {
+	return snapshot.incomplete
+		? { seq: INCOMPLETE_STORED_SEQ, incompleteSeq: snapshot.seq }
+		: { seq: snapshot.seq };
+}
+
+/** The body as stored: the snapshot, with an incomplete seq encoded. */
+function storedSnapshot(snapshot: ProjectSnapshot): object {
+	if (!snapshot.incomplete) return snapshot;
+	const stored: Partial<ProjectSnapshot> = { ...snapshot };
+	delete stored.incomplete;
+	return { ...stored, ...storedSeq(snapshot) };
+}
+
+/** The seq and incomplete flag of a stored body or meta, or null. */
+function readStoredSeq(stored: {
+	seq?: unknown;
+	incompleteSeq?: unknown;
+}): { seq: number; incomplete?: true } | null {
+	if (typeof stored.incompleteSeq === "number") {
+		return { seq: stored.incompleteSeq, incomplete: true };
+	}
+	return typeof stored.seq === "number" ? { seq: stored.seq } : null;
+}
+
 export function isProjectSnapshotFresh(
 	snapshot: ProjectSnapshot | null | undefined,
 	currentProjectSeq: number,
+	/** `ProjectSequenceIndex.unlockedThrough` of the log read (#3511). */
+	unlockedThrough = 0,
 ): snapshot is ProjectSnapshot {
 	return (
 		!!snapshot &&
 		snapshot.version === PROJECT_SNAPSHOT_VERSION &&
+		!snapshot.incomplete &&
+		(snapshot.logEntries ?? 0) >= unlockedThrough &&
 		snapshot.seq === currentProjectSeq
 	);
 }
@@ -144,13 +202,14 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 	if (snapshot.version !== PROJECT_SNAPSHOT_VERSION) return null;
 	if (typeof snapshot.projectRoot !== "string") return null;
 	if (typeof snapshot.generatedAt !== "string") return null;
-	if (typeof snapshot.seq !== "number") return null;
+	const stored = readStoredSeq(value);
+	if (!stored) return null;
 	if (!Array.isArray(snapshot.cachedExports)) return null;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
 		projectRoot: snapshot.projectRoot,
 		generatedAt: snapshot.generatedAt,
-		seq: snapshot.seq,
+		seq: stored.seq,
 		files: snapshot.files ?? {},
 		symbols: snapshot.symbols ?? {},
 		reverseDeps: snapshot.reverseDeps ?? {},
@@ -160,6 +219,9 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 				typeof entry[0] === "string" &&
 				typeof entry[1] === "string",
 		),
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof snapshot.logEntries === "number" ? snapshot.logEntries : undefined,
 		sequenceIndex: parseSequenceIndex(snapshot.sequenceIndex),
 		wordIndex: snapshot.wordIndex,
 		projectRulesScan: snapshot.projectRulesScan,
@@ -183,6 +245,10 @@ export interface ProjectSnapshotMeta {
 	 * next successful write populates it.
 	 */
 	gzBytes?: number;
+	/** #3511: mirrors `ProjectSnapshot.incomplete`; such a meta is never fresh. */
+	incomplete?: true;
+	/** #3511 review round 2: mirrors `ProjectSnapshot.logEntries`. */
+	logEntries?: number;
 	/**
 	 * The derived sequence index as of `seq` (#1019), MIRRORED here from the
 	 * snapshot body so session-start can bound the change-log replay WITHOUT
@@ -196,11 +262,12 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 	if (!value || typeof value !== "object") return null;
 	const meta = value as Partial<ProjectSnapshotMeta>;
 	if (typeof meta.version !== "number") return null;
-	if (typeof meta.seq !== "number") return null;
+	const stored = readStoredSeq(value);
+	if (!stored) return null;
 	return {
 		timestamp: typeof meta.timestamp === "string" ? meta.timestamp : "",
 		version: meta.version,
-		seq: meta.seq,
+		seq: stored.seq,
 		fingerprint:
 			typeof meta.fingerprint === "string" &&
 			/^[a-f0-9]{64}$/.test(meta.fingerprint)
@@ -212,6 +279,9 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 			meta.gzBytes > 0
 				? meta.gzBytes
 				: undefined,
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof meta.logEntries === "number" ? meta.logEntries : undefined,
 		sequenceIndex: parseSequenceIndex(meta.sequenceIndex),
 	};
 }
@@ -241,9 +311,14 @@ export function readProjectSnapshotMeta(
 export function isProjectSnapshotMetaStale(
 	meta: ProjectSnapshotMeta,
 	currentProjectSeq: number,
+	/** `ProjectSequenceIndex.unlockedThrough` of the log read (#3511). */
+	unlockedThrough = 0,
 ): boolean {
 	return (
-		meta.version !== PROJECT_SNAPSHOT_VERSION || meta.seq !== currentProjectSeq
+		meta.version !== PROJECT_SNAPSHOT_VERSION ||
+		meta.incomplete === true ||
+		(meta.logEntries ?? 0) < unlockedThrough ||
+		meta.seq !== currentProjectSeq
 	);
 }
 
@@ -669,6 +744,8 @@ const HEAVY_SNAPSHOT_KEYS: ReadonlySet<string> = new Set([
 export interface ProjectSnapshotExportsAndRules {
 	version: typeof PROJECT_SNAPSHOT_VERSION;
 	seq: number;
+	incomplete?: true;
+	logEntries?: number;
 	cachedExports: Array<[name: string, filePath: string]>;
 	projectRulesScan?: RuleScanResult;
 }
@@ -728,11 +805,15 @@ function parseExportsAndRulesOnly(
 	};
 	const parsed = JSON.parse(narrowed) as Partial<ProjectSnapshot>;
 	if (parsed.version !== PROJECT_SNAPSHOT_VERSION) return null;
-	if (typeof parsed.seq !== "number") return null;
+	const stored = readStoredSeq(parsed);
+	if (!stored) return null;
 	if (!Array.isArray(parsed.cachedExports)) return null;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
-		seq: parsed.seq,
+		seq: stored.seq,
+		...(stored.incomplete ? { incomplete: true as const } : {}),
+		logEntries:
+			typeof parsed.logEntries === "number" ? parsed.logEntries : undefined,
 		cachedExports: parsed.cachedExports.filter(
 			(entry): entry is [string, string] =>
 				Array.isArray(entry) &&
@@ -801,9 +882,22 @@ export function loadProjectSnapshotExportsAndRules(
 			(body.mtimeMs <= authoritative.knownMtime &&
 				body.size === authoritative.knownSize);
 		if (notSuperseded) {
-			const { version, seq, cachedExports, projectRulesScan } =
-				authoritative.snapshot;
-			return { version, seq, cachedExports, projectRulesScan };
+			const {
+				version,
+				seq,
+				incomplete,
+				logEntries,
+				cachedExports,
+				projectRulesScan,
+			} = authoritative.snapshot;
+			return {
+				version,
+				seq,
+				...(incomplete ? { incomplete } : {}),
+				logEntries,
+				cachedExports,
+				projectRulesScan,
+			};
 		}
 		// On mismatch, unlike the full loader, this narrow loader neither
 		// deletes the entry nor touches its idle timer (it never calls
@@ -1155,7 +1249,7 @@ function writeProjectSnapshotMeta(
 		JSON.stringify({
 			timestamp: bodyRecord?.generatedAt ?? snapshot.generatedAt,
 			version: snapshot.version,
-			seq: snapshot.seq,
+			...storedSeq(snapshot),
 			...(bodyRecord
 				? {
 						fingerprint: bodyRecord.fingerprint,
@@ -1164,6 +1258,7 @@ function writeProjectSnapshotMeta(
 							: { gzBytes: bodyRecord.gzBytes }),
 					}
 				: {}),
+			logEntries: snapshot.logEntries,
 			...(snapshot.sequenceIndex
 				? { sequenceIndex: snapshot.sequenceIndex }
 				: {}),
@@ -1231,9 +1326,16 @@ function logSnapshotPersistDecision(args: {
 	cwd: string;
 	seq: number;
 	fingerprint?: string;
-	decision: "requested" | "coalesced" | "skipped_unchanged" | "retry";
+	decision:
+		| "requested"
+		| "coalesced"
+		| "skipped_unchanged"
+		| "retry"
+		| "superseded_on_disk";
 	avoidedRawBytes?: number;
 	avoidedGzipBytes?: number;
+	/** The newer seq a sibling already published (`superseded_on_disk`). */
+	diskSeq?: number;
 }): void {
 	logLatency({
 		type: "phase",
@@ -1252,6 +1354,7 @@ function logSnapshotPersistDecision(args: {
 			...(args.avoidedGzipBytes === undefined
 				? {}
 				: { avoidedGzipBytes: args.avoidedGzipBytes }),
+			...(args.diskSeq === undefined ? {} : { diskSeq: args.diskSeq }),
 		},
 	});
 }
@@ -1353,6 +1456,89 @@ function completeSnapshotPersist(pending: PendingSnapshotBody): void {
 	dispatchSnapshotPersist(queued);
 }
 
+// #3509: more than one process writes a project's snapshot (a pi session and
+// the MCP server's word-index writer, or two sessions in one checkout). Every
+// meta check, body publish and meta write runs under this cache-dir lock. The
+// gzip runs before the lock is taken, so the hold is a small read, a rename
+// (the worker) or one write of the compressed body (the sync writer), and a
+// small write: far inside the lease.
+const SNAPSHOT_CACHE_LOCK = { staleMs: 5_000, waitMs: 500 };
+
+function withSnapshotCacheLock<T>(
+	gzPath: string,
+	purpose: string,
+	op: () => T,
+): { held: true; value: T } | { held: false } {
+	const result = withGenerationLockSync(
+		`${gzPath}.locks`,
+		SNAPSHOT_CACHE_LOCK,
+		op,
+	);
+	if (!result.held) {
+		const code = (result.cause as NodeJS.ErrnoException | undefined)?.code;
+		incrementDegradationCount({
+			kind: "project-snapshot-lock-unavailable",
+			subject: gzPath,
+			reason: `${purpose} skipped: ${code ? `lock failed (${code})` : "lock wait ran out"}`,
+		});
+	}
+	return result;
+}
+
+/**
+ * #3509: publish a body (the worker's stage file, or the sync writer's gzip)
+ * as a compare-and-set. It lands only while the durable meta is not ahead of
+ * this save's seq, with its meta written in the same critical section;
+ * otherwise a sibling already published a newer view, which keeps its body,
+ * and ours is dropped. Returns true only when body and meta both landed. A
+ * write or rename error propagates.
+ */
+function promoteSnapshotBody(
+	pending: PendingSnapshotBody,
+	body: { stagePath: string } | { gzip: Buffer },
+	record: Pick<
+		SnapshotPersistRecord,
+		"fingerprint" | "generatedAt" | "gzBytes"
+	>,
+): boolean {
+	const dropStage = () => {
+		if ("stagePath" in body) fs.rmSync(body.stagePath, { force: true });
+	};
+	const locked = withSnapshotCacheLock(pending.gzPath, "body promotion", () => {
+		const onDisk = readProjectSnapshotMeta(pending.cwd);
+		if (onDisk && onDisk.seq > pending.snapshot.seq) {
+			dropStage();
+			return onDisk.seq;
+		}
+		if ("stagePath" in body) fs.renameSync(body.stagePath, pending.gzPath);
+		else writeFileAtomic(pending.gzPath, body.gzip, { bestEffort: false });
+		fs.rmSync(pending.legacyPath, { force: true });
+		return finalizeProjectSnapshotMeta(pending, record);
+	});
+	if (!locked.held) {
+		dropStage();
+		recordSnapshotPersistFailure(
+			pending,
+			"project snapshot cache lock unavailable",
+		);
+		return false;
+	}
+	if (typeof locked.value === "boolean") return locked.value;
+	// The refused view must stop serving in-process readers. When the sibling's
+	// body landed before our admission, the loader's mtime/size baseline is the
+	// sibling's own body, so it cannot tell ours is stale. A newer in-process
+	// save would carry a newer generation and be gated out before this point,
+	// so the entry is ours, as on the failure path.
+	deleteAuthoritativeSnapshot(pending.key);
+	logSnapshotPersistDecision({
+		cwd: pending.cwd,
+		seq: pending.snapshot.seq,
+		decision: "superseded_on_disk",
+		diskSeq: locked.value,
+	});
+	return false;
+}
+
 function writeSnapshotBodyOnMainThread(
 	pending: PendingSnapshotBody,
 	reason?: string,
@@ -1382,7 +1568,7 @@ function writeSnapshotBodyOnMainThread(
 	}
 	try {
 		const serializeStarted = performance.now();
-		const json = JSON.stringify(pending.snapshot);
+		const json = JSON.stringify(storedSnapshot(pending.snapshot));
 		const serializeMs = performance.now() - serializeStarted;
 		const rawBytes = Buffer.byteLength(json);
 		const fingerprint = fingerprintProjectSnapshotJson(
@@ -1425,14 +1611,16 @@ function writeSnapshotBodyOnMainThread(
 		const writeStarted = performance.now();
 		const gzip = gzipSync(json);
 		fs.mkdirSync(path.dirname(pending.gzPath), { recursive: true });
-		writeFileAtomic(pending.gzPath, gzip, { bestEffort: false });
-		fs.rmSync(pending.legacyPath, { force: true });
-		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
-			fingerprint,
-			generatedAt: pending.snapshot.generatedAt,
-			gzBytes: gzip.byteLength,
-		});
-		if (!metadataFinalized) return;
+		const promoted = promoteSnapshotBody(
+			pending,
+			{ gzip },
+			{
+				fingerprint,
+				generatedAt: pending.snapshot.generatedAt,
+				gzBytes: gzip.byteLength,
+			},
+		);
+		if (!promoted) return;
 		reconcileAuthoritativeAfterWrite(pending, rawBytes);
 		logSnapshotPersistSuccess(pending, fingerprint, {
 			rawBytes,
@@ -1552,14 +1740,16 @@ function handleSnapshotWorkerResult(
 		return;
 	}
 	try {
-		fs.renameSync(result.stagePath, pending.gzPath);
-		fs.rmSync(pending.legacyPath, { force: true });
-		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
-			fingerprint: result.semanticFingerprint,
-			generatedAt: pending.snapshot.generatedAt,
-			gzBytes: result.gzBytes,
-		});
-		if (!metadataFinalized) {
+		const promoted = promoteSnapshotBody(
+			pending,
+			{ stagePath: result.stagePath },
+			{
+				fingerprint: result.semanticFingerprint,
+				generatedAt: pending.snapshot.generatedAt,
+				gzBytes: result.gzBytes,
+			},
+		);
+		if (!promoted) {
 			completeSnapshotPersist(pending);
 			return;
 		}
@@ -1605,7 +1795,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 		id,
 		generation: pending.generation,
 		stagePath: pending.stagePath,
-		data: pending.snapshot,
+		data: storedSnapshot(pending.snapshot),
 		priorFingerprints: pending.dedupeFingerprints,
 		testDelayMs:
 			process.env.NODE_ENV === "test"
@@ -1718,18 +1908,17 @@ function getSnapshotPersistWorker(): Worker | undefined {
 
 // #950 review F3: a process that dies between a worker's staged write and its
 // promotion leaves project-snapshot.json.gz.stage-<pid>-<gen> (and the worker's
-// .tmp-<pid>) behind forever. Sweep leftovers from PRIOR processes once per
-// cache dir; our own live stage files carry this pid and are skipped.
+// .tmp-<pid>) behind forever. Sweep leftovers from DEAD processes once per
+// cache dir. A live sibling's in-flight stage is kept (#3510): removing it
+// sent the sibling's promotion to the synchronous main-thread gzip.
 const _sweptSnapshotStageDirs = new Set<string>();
 function sweepStaleSnapshotStageFiles(cacheDir: string): void {
 	if (_sweptSnapshotStageDirs.has(cacheDir)) return;
 	_sweptSnapshotStageDirs.add(cacheDir);
 	fs.readdir(cacheDir, (err, entries) => {
 		if (err) return;
-		const ownMarker = `.stage-${process.pid}-`;
 		for (const entry of entries) {
-			if (!entry.startsWith("project-snapshot.json.gz.stage-")) continue;
-			if (entry.includes(ownMarker)) continue;
+			if (!isStaleStageFile(entry, "project-snapshot.json.gz.stage-")) continue;
 			fs.rm(path.join(cacheDir, entry), { force: true }, () => {});
 		}
 	});
@@ -1812,9 +2001,16 @@ export function saveProjectSnapshot(
 	// untouched until the worker has a semantic verdict. This prevents a stale
 	// local request from replacing a
 	// newer sibling process's same-seq fingerprint before it can coalesce.
-	if (priorPersist?.seq !== snapshot.seq) {
-		writeProjectSnapshotMeta(metaPath, snapshot);
-	}
+	//
+	// #3509: the write only ever RAISES the meta seq, read and written under
+	// the cache lock. A sibling process that already published a newer view
+	// keeps its meta; this save's promotion is then refused on the same check.
+	withSnapshotCacheLock(gzPath, "admission meta write", () => {
+		const onDisk = readProjectSnapshotMeta(cwd);
+		if (!onDisk || onDisk.seq < snapshot.seq) {
+			writeProjectSnapshotMeta(metaPath, snapshot);
+		}
+	});
 
 	// Record the authoritative in-process write BEFORE handing the body off, so
 	// a merge-read between now and the worker's promotion sees our own object
@@ -2030,11 +2226,17 @@ export function buildProjectSnapshotFromRuntime(args: {
 	languageProfile?: ProjectLanguageProfile;
 	conventions?: ProjectConventions;
 }): ProjectSnapshot {
+	// #3511: a runtime that missed a sibling's logged entry at or below its seq
+	// cannot vouch for that seq, and its index is not the fold of the log up to
+	// it. Its seq still orders the promotion compare-and-set (#3509).
+	const incomplete = args.runtime.viewMissesLoggedEntries;
 	return {
 		version: PROJECT_SNAPSHOT_VERSION,
 		projectRoot: normalizeMapKey(path.resolve(args.cwd)),
 		generatedAt: new Date().toISOString(),
 		seq: args.runtime.projectSeq,
+		...(incomplete ? { incomplete: true as const } : {}),
+		logEntries: args.runtime.viewLogEntries,
 		files: {},
 		symbols: {},
 		reverseDeps: {},
@@ -2046,10 +2248,12 @@ export function buildProjectSnapshotFromRuntime(args: {
 		// every append, so `getFileSeqEntries()` IS the fold of the log up to
 		// `projectSeq` — and its keys are already `normalizeMapKey(path.resolve())`,
 		// the exact form the change-log replay produces.
-		sequenceIndex: {
-			projectSeq: args.runtime.projectSeq,
-			fileSeqByPath: args.runtime.getFileSeqEntries(),
-		},
+		sequenceIndex: incomplete
+			? undefined
+			: {
+					projectSeq: args.runtime.projectSeq,
+					fileSeqByPath: args.runtime.getFileSeqEntries(),
+				},
 		wordIndex: args.runtime.wordIndex
 			? serializeWordIndex(args.runtime.wordIndex)
 			: undefined,
@@ -2168,10 +2372,13 @@ export function saveRuntimeProjectSnapshot(args: {
 			// isProjectSnapshotFresh on load, seq mismatch) would get silently
 			// re-stamped with the CURRENT seq by this save, "laundering" a stale
 			// index into looking fresh before the word-index task even runs.
+			// #3511: an index from an incomplete view at the same seq would be
+			// laundered the same way into a complete snapshot.
 			if (
 				!snapshot.wordIndex &&
 				existing.wordIndex &&
-				existing.seq === snapshot.seq
+				existing.seq === snapshot.seq &&
+				(snapshot.incomplete || !existing.incomplete)
 			) {
 				snapshot.wordIndex = existing.wordIndex;
 			}

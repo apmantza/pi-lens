@@ -273,6 +273,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"two real Node children must contend on the production rename; an in-process mock cannot expose the cross-process ENOENT",
 	},
+	"real-process-spawn:clients/project-snapshot-cross-process.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the sibling snapshot writer must be a second real process: the stage sweep keys on its pid, and a second module instance here shares ours",
+	},
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -518,6 +523,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"a real cross-process directory removal races node's own recursive-watch readdirSync; no in-process stand-in can occupy the other side of that window",
+	},
+	// 2026-09-26 (#3511 review round 3): the quick-mode warmup witness must
+	// run the real warmup timer and background word-index save, which no
+	// test hook awaits.
+	"ungoverned-wait-for:clients/word-index-lifecycle.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"session_start's background tasks and the quick-mode warmup timer expose no awaitable, so a real-time vi.waitFor is the only join on their snapshot save",
 	},
 };
 

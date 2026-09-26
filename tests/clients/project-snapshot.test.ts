@@ -62,6 +62,10 @@ import {
 } from "../../clients/project-snapshot.js";
 import type { ProjectSnapshot } from "../../clients/project-snapshot.js";
 import { fingerprintProjectSnapshotJson } from "../../clients/project-snapshot-fingerprint.js";
+import {
+	releaseGeneration,
+	tryAcquireGeneration,
+} from "../../clients/generation-lock.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { buildWordIndex, searchWordIndex } from "../../clients/word-index.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -1008,6 +1012,39 @@ describe("project snapshot", () => {
 			expect(laundered?.wordIndex).toBeUndefined();
 		}));
 
+	it("carries a same-seq word index only from a snapshot at least as complete (#3511)", () =>
+		withProjectDataDir((cwd) => {
+			// A runtime whose view missed logged entries up to seq 4: seq 5,
+			// incomplete. It persists a word index.
+			const incompleteView = () => {
+				const runtime = new RuntimeCoordinator();
+				runtime.seedProjectSequence(2);
+				runtime.bumpFileSeq(path.join(cwd, "a.ts"), 4);
+				return runtime;
+			};
+			const withIndex = incompleteView();
+			withIndex.wordIndex = buildWordIndex([
+				{ path: path.join(cwd, "a.ts"), content: "function partial() {}" },
+			]);
+			saveRuntimeProjectSnapshot({ cwd, runtime: withIndex });
+			expect(loadProjectSnapshot(cwd)).toMatchObject({
+				seq: 5,
+				incomplete: true,
+			});
+
+			// Another incomplete view at seq 5 keeps it: nothing is claimed fresh.
+			saveRuntimeProjectSnapshot({ cwd, runtime: incompleteView() });
+			expect(loadProjectSnapshot(cwd)?.wordIndex).toBeDefined();
+
+			// A complete view at seq 5 must not stamp it fresh.
+			const complete = new RuntimeCoordinator();
+			complete.seedProjectSequence(5);
+			saveRuntimeProjectSnapshot({ cwd, runtime: complete });
+			const saved = loadProjectSnapshot(cwd);
+			expect(saved?.incomplete).toBeUndefined();
+			expect(saved?.wordIndex).toBeUndefined();
+		}));
+
 	it("rejects wrong-version, stale, and future snapshots", () =>
 		withProjectDataDir((cwd) => {
 			const badPath = getProjectSnapshotPath(cwd);
@@ -1812,10 +1849,24 @@ describe("project snapshot worker persist (#958)", () => {
 					buildProjectSnapshotFromRuntime({ cwd, runtime: old }),
 				);
 				await suspension.admitted;
-				saveProjectSnapshot(
-					cwd,
-					buildProjectSnapshotFromRuntime({ cwd, runtime: fresh }),
+				// #3509: an admitted newer seq raises the durable meta, and the
+				// promotion compare-and-set then refuses the stale view on its own.
+				// The gate alone stands between them only when that admission
+				// write was skipped because another process held the cache lock.
+				const hold = tryAcquireGeneration(
+					`${getProjectSnapshotPath(cwd)}.locks`,
+					5_000,
 				);
+				expect(hold).toBeDefined();
+				try {
+					saveProjectSnapshot(
+						cwd,
+						buildProjectSnapshotFromRuntime({ cwd, runtime: fresh }),
+					);
+				} finally {
+					if (hold) releaseGeneration(hold);
+				}
+				expect(readProjectSnapshotMeta(cwd)?.seq).toBe(3);
 				// Delay the queued write so the stale promotion is observable on disk.
 				process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS = "1000";
 				setProjectSnapshotPromotionSeamForTests(undefined);

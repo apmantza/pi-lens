@@ -295,6 +295,7 @@ function snapshotSequenceBase(root: string): ProjectSequenceBase | undefined {
 		projectSeq: index.projectSeq,
 		fileSeqByPath: index.fileSeqByPath,
 		sinceSeq: meta.seq,
+		logEntries: meta.logEntries ?? 0,
 	};
 }
 
@@ -384,6 +385,8 @@ function retroactivelyHydrateAfterDeferredSequence(args: {
 		if (
 			!snapshot ||
 			snapshot.version !== PROJECT_SNAPSHOT_VERSION ||
+			snapshot.incomplete ||
+			(snapshot.logEntries ?? 0) < (latestSeq.unlockedThrough ?? 0) ||
 			snapshot.seq !== latestSeq.projectSeq
 		) {
 			return;
@@ -407,10 +410,18 @@ function retroactivelyHydrateAfterDeferredSequence(args: {
 function loadSnapshotBodyUnlessStale(args: {
 	root: string;
 	currentProjectSeq: number;
+	unlockedThrough: number;
 	dbg: (msg: string) => void;
 }): { snapshot: ProjectSnapshot | null; skippedStale: boolean } {
 	const meta = readProjectSnapshotMeta(args.root);
-	if (meta && isProjectSnapshotMetaStale(meta, args.currentProjectSeq)) {
+	if (
+		meta &&
+		isProjectSnapshotMetaStale(
+			meta,
+			args.currentProjectSeq,
+			args.unlockedThrough,
+		)
+	) {
 		args.dbg(
 			`project_snapshot: meta gate stale (metaSeq=${meta.seq} metaVersion=${meta.version} current=${args.currentProjectSeq}) — skipping body parse`,
 		);
@@ -425,12 +436,21 @@ function loadSnapshotBodyUnlessStale(args: {
 function describeSnapshotMiss(
 	snapshot: ProjectSnapshot | null,
 	currentProjectSeq: number,
-	args: { skippedStale: boolean; bodyPresent: boolean },
+	args: {
+		skippedStale: boolean;
+		bodyPresent: boolean;
+		unlockedThrough: number;
+	},
 ): string {
 	if (args.skippedStale) return "stale-meta-gate";
 	if (!snapshot) return args.bodyPresent ? "invalid-body" : "missing";
 	if (snapshot.seq !== currentProjectSeq) {
 		return `stale(seq=${snapshot.seq}, current=${currentProjectSeq})`;
+	}
+	// #3511 review round 2: an unlocked change-log entry the snapshot's
+	// runtime never folded may share its seq.
+	if ((snapshot.logEntries ?? 0) < args.unlockedThrough) {
+		return `unlocked-entry-after-fold(folded=${snapshot.logEntries ?? 0}, unlocked=${args.unlockedThrough})`;
 	}
 	// Defensive-only arm: parseSnapshot rejects incompatible versions, and a
 	// same-sequence parsed snapshot is fresh. Keep this classification explicit
@@ -442,13 +462,20 @@ function logProjectSnapshotProbe(args: {
 	dbg: (msg: string) => void;
 	root: string;
 	currentProjectSeq: number;
+	unlockedThrough: number;
 	snapshot: ProjectSnapshot | null;
 	missReason: string;
 }): void {
 	args.dbg(
 		`project_snapshot: probe root=${args.root} path=${getProjectSnapshotPath(args.root)} currentSeq=${args.currentProjectSeq}`,
 	);
-	if (isProjectSnapshotFresh(args.snapshot, args.currentProjectSeq)) {
+	if (
+		isProjectSnapshotFresh(
+			args.snapshot,
+			args.currentProjectSeq,
+			args.unlockedThrough,
+		)
+	) {
 		args.dbg(
 			`project_snapshot: loaded seq=${args.snapshot.seq} exports=${args.snapshot.cachedExports.length} files=${Object.keys(args.snapshot.files ?? {}).length} reverseDeps=${Object.keys(args.snapshot.reverseDeps ?? {}).length} startupScan=${Boolean(args.snapshot.startupScan)} languageProfile=${Boolean(args.snapshot.languageProfile)}`,
 		);
@@ -609,9 +636,32 @@ async function readSequenceWithBudget(args: {
 				// positive from a legitimately-empty log (which leaves it at 0, and
 				// the reseed below is then still wanted: it recovers the real,
 				// possibly non-empty, result that arrived too late for the budget).
+				//
+				// #3511 review B2: the late read is folded in, not dropped. Since
+				// logged edits allocate from the log, an in-window edit also marks
+				// this runtime's view incomplete (the cold seed folded nothing), and
+				// only this merge can clear that mark within the session.
 				if (runtime.projectSeq > 0) {
+					const mergeStartedAt = Date.now();
+					runtime.mergeProjectSequence?.(
+						latestSeq.projectSeq,
+						latestSeq.fileSeqByPath,
+						latestSeq.logEntries,
+					);
+					logLatency({
+						type: "phase",
+						phase: "session_start_sequence_read_deferred_reseed",
+						filePath: cwd,
+						startedAt: new Date(mergeStartedAt).toISOString(),
+						durationMs: Date.now() - mergeStartedAt,
+						metadata: {
+							entries: latestSeq.fileSeqByPath.size,
+							deferred: true,
+							merged: true,
+						},
+					});
 					dbg(
-						"session_start: deferred sequence read completed, but the session already advanced (in-window edit) — skipping reseed to avoid clobbering it",
+						`session_start: deferred sequence read completed after an in-window edit — merged projectSeq=${latestSeq.projectSeq} into the advanced session (now ${runtime.projectSeq})`,
 					);
 					return;
 				}
@@ -619,6 +669,7 @@ async function readSequenceWithBudget(args: {
 				runtime.seedProjectSequence?.(
 					latestSeq.projectSeq,
 					latestSeq.fileSeqByPath,
+					latestSeq.logEntries,
 				);
 				logLatency({
 					type: "phase",
@@ -1025,7 +1076,11 @@ async function buildOrRefreshWordIndex(args: {
 					// indexed document reusable. Fresh snapshots with no changes avoid
 					// an unnecessary rewrite of the large shared snapshot.
 					if (
-						!isProjectSnapshotFresh(snapshot, effectiveSeq) ||
+						!isProjectSnapshotFresh(
+							snapshot,
+							effectiveSeq,
+							latestSeq.unlockedThrough,
+						) ||
 						result.refreshed > 0 ||
 						result.dropped > 0 ||
 						snapshot.wordIndex.truncated !== index.truncated
@@ -2546,6 +2601,7 @@ export async function handleSessionStart(
 		runtime.seedProjectSequence?.(
 			latestSeq.projectSeq,
 			latestSeq.fileSeqByPath,
+			latestSeq.logEntries,
 		);
 		const effectiveSeq = runtime.projectSeq ?? latestSeq.projectSeq;
 		dbg(
@@ -2576,13 +2632,19 @@ export async function handleSessionStart(
 		const snapshotGate = loadSnapshotBodyUnlessStale({
 			root: snapshotRoot,
 			currentProjectSeq: freshnessSeq,
+			unlockedThrough: latestSeq.unlockedThrough ?? 0,
 			dbg,
 		});
 		const snapshot = snapshotGate.snapshot;
-		const snapshotFresh = isProjectSnapshotFresh(snapshot, freshnessSeq);
+		const snapshotFresh = isProjectSnapshotFresh(
+			snapshot,
+			freshnessSeq,
+			latestSeq.unlockedThrough,
+		);
 		const snapshotMissReason = describeSnapshotMiss(snapshot, freshnessSeq, {
 			skippedStale: snapshotGate.skippedStale,
 			bodyPresent: snapshotBodyPresent,
+			unlockedThrough: latestSeq.unlockedThrough ?? 0,
 		});
 		logLatency({
 			type: "phase",
@@ -2603,6 +2665,7 @@ export async function handleSessionStart(
 			dbg,
 			root: snapshotRoot,
 			currentProjectSeq: freshnessSeq,
+			unlockedThrough: latestSeq.unlockedThrough ?? 0,
 			snapshot,
 			missReason: snapshotMissReason,
 		});
@@ -2729,7 +2792,11 @@ export async function handleSessionStart(
 			snapshotPath: getProjectSnapshotPath(snapshotRoot),
 		});
 	}
-	runtime.seedProjectSequence?.(latestSeq.projectSeq, latestSeq.fileSeqByPath);
+	runtime.seedProjectSequence?.(
+		latestSeq.projectSeq,
+		latestSeq.fileSeqByPath,
+		latestSeq.logEntries,
+	);
 	const effectiveSeq = runtime.projectSeq ?? latestSeq.projectSeq;
 	dbg(
 		`session_start sequence: projectSeq=${effectiveSeq} fileSeqEntries=${latestSeq.fileSeqByPath.size}`,
@@ -2756,13 +2823,19 @@ export async function handleSessionStart(
 	const snapshotGate = loadSnapshotBodyUnlessStale({
 		root: snapshotRoot,
 		currentProjectSeq: freshnessSeq,
+		unlockedThrough: latestSeq.unlockedThrough ?? 0,
 		dbg,
 	});
 	const snapshot = snapshotGate.snapshot;
-	const snapshotFresh = isProjectSnapshotFresh(snapshot, freshnessSeq);
+	const snapshotFresh = isProjectSnapshotFresh(
+		snapshot,
+		freshnessSeq,
+		latestSeq.unlockedThrough,
+	);
 	const snapshotMissReason = describeSnapshotMiss(snapshot, freshnessSeq, {
 		skippedStale: snapshotGate.skippedStale,
 		bodyPresent: snapshotBodyPresent,
+		unlockedThrough: latestSeq.unlockedThrough ?? 0,
 	});
 	logLatency({
 		type: "phase",
@@ -2783,6 +2856,7 @@ export async function handleSessionStart(
 		dbg,
 		root: snapshotRoot,
 		currentProjectSeq: freshnessSeq,
+		unlockedThrough: latestSeq.unlockedThrough ?? 0,
 		snapshot,
 		missReason: snapshotMissReason,
 	});

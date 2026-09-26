@@ -7,7 +7,7 @@ import type { WordIndex } from "./word-index.js";
 import type { CascadeRun } from "./cascade-types.js";
 import { logCascade } from "./cascade-logger.js";
 import {
-	appendProjectChange,
+	appendProjectChangeAllocated,
 	type ProjectChangeRange,
 	type ProjectChangeSource,
 } from "./project-changes.js";
@@ -72,6 +72,28 @@ export interface MutationReceipt {
  * incomplete (#936 honesty rule).
  */
 const MAX_MUTATION_RECEIPTS = 512;
+
+/**
+ * #3511 review S2: once per session and project, record why this runtime's
+ * snapshots stopped being servable as fresh. Without it a monitor sees only
+ * never-fresh snapshots. A runtime at seq 0 cannot tell a sibling from a
+ * timed-out session_start read; the timeout has its own ledger kind.
+ */
+function recordViewIncomplete(
+	cwd: string,
+	cause: { ownSeq: number; logMaxSeq: number },
+): void {
+	const why = `the change log reached seq ${cause.logMaxSeq} while this runtime was at ${cause.ownSeq} (${
+		cause.ownSeq === 0
+			? "a sibling process, or a timed-out session_start read that seeded 0; see snapshot-sequence-read-timeout"
+			: "a sibling process logged above it"
+	})`;
+	recordDegradationOnce({
+		kind: "snapshot-view-incomplete",
+		subject: path.resolve(cwd),
+		reason: `snapshots are stamped incomplete (never fresh) until the next seed from the change log: ${why}`,
+	});
+}
 
 export type DeferredMutationKind = "autofix" | "format";
 
@@ -386,6 +408,14 @@ export class RuntimeCoordinator {
 	private _turnIndex = 0;
 	private _writeIndex = 0;
 	private _projectSeq = 0;
+	// #3511: the highest logged seq this runtime's view is known to have missed
+	// (a sibling process logged it above our seq); 0 when none. Cleared by a
+	// seed from the log, or by a late read that covers it.
+	private _viewMissingThrough = 0;
+	// #3511 review round 2: the change-log entries folded by this session's
+	// seed or late merge. An `unlocked` entry after it may share a seq we
+	// hold, so a snapshot stamped with it is judged against the log's tags.
+	private _viewLogEntries = 0;
 	private _turnStartProjectSeq = 0;
 	private readonly _fileSeq = new Map<string, number>();
 	// File key → the projectSeq value at that file's most recent bump (#451). Lets
@@ -475,6 +505,8 @@ export class RuntimeCoordinator {
 		this._turnIndex = 0;
 		this._writeIndex = 0;
 		this._projectSeq = 0;
+		this._viewMissingThrough = 0;
+		this._viewLogEntries = 0;
 		this._turnStartProjectSeq = 0;
 		this._fileSeq.clear();
 		this._fileLastProjectSeq.clear();
@@ -668,7 +700,35 @@ export class RuntimeCoordinator {
 		changedRange?: ProjectChangeRange;
 		onAppendError?: (err: unknown) => void;
 	}): { projectSeq: number; fileSeq: number } {
-		const { projectSeq, fileSeq, key } = this.bumpFileSeq(args.filePath);
+		// #3511: a logged mutation takes its seq from the shared change log,
+		// under the log's lock, so a sibling process never logs the same seq.
+		let logged: ReturnType<RuntimeCoordinator["bumpFileSeq"]> | undefined;
+		if (args.cwd !== undefined) {
+			try {
+				const cwd = args.cwd;
+				appendProjectChangeAllocated(cwd, (logMaxSeq) => {
+					const ownSeq = this._projectSeq;
+					logged = this.bumpFileSeq(args.filePath, logMaxSeq);
+					if (this._viewMissingThrough > 0) {
+						recordViewIncomplete(cwd, { ownSeq, logMaxSeq });
+					}
+					return {
+						seq: logged.projectSeq,
+						timestamp: new Date().toISOString(),
+						sessionId: this.telemetrySessionId,
+						turnIndex: this.turnIndex,
+						source: args.source,
+						filePath: path.resolve(args.filePath),
+						fileSeq: logged.fileSeq,
+						changedRange: args.changedRange,
+					};
+				});
+			} catch (err) {
+				args.onAppendError?.(err);
+			}
+		}
+		const { projectSeq, fileSeq, key } =
+			logged ?? this.bumpFileSeq(args.filePath);
 		if (this._mutationReceipts.length >= MAX_MUTATION_RECEIPTS) {
 			this._mutationReceipts.shift();
 			this._droppedMutationReceipts += 1;
@@ -682,22 +742,6 @@ export class RuntimeCoordinator {
 			turnIndex: this._turnIndex,
 			ts: Date.now(),
 		});
-		if (args.cwd !== undefined) {
-			try {
-				appendProjectChange(args.cwd, {
-					seq: projectSeq,
-					timestamp: new Date().toISOString(),
-					sessionId: this.telemetrySessionId,
-					turnIndex: this.turnIndex,
-					source: args.source,
-					filePath: path.resolve(args.filePath),
-					fileSeq,
-					changedRange: args.changedRange,
-				});
-			} catch (err) {
-				args.onAppendError?.(err);
-			}
-		}
 		return { projectSeq, fileSeq };
 	}
 
@@ -847,6 +891,16 @@ export class RuntimeCoordinator {
 		return this._projectSeq;
 	}
 
+	/** True when a snapshot of this runtime must not claim `projectSeq` (#3511). */
+	get viewMissesLoggedEntries(): boolean {
+		return this._viewMissingThrough > 0;
+	}
+
+	/** The change-log entries this session's seed or merge folded (#3511). */
+	get viewLogEntries(): number {
+		return this._viewLogEntries;
+	}
+
 	get turnStartProjectSeq(): number {
 		return this._turnStartProjectSeq;
 	}
@@ -854,8 +908,12 @@ export class RuntimeCoordinator {
 	seedProjectSequence(
 		projectSeq: number,
 		fileSeqByPath?: Map<string, number>,
+		/** The log entries the read folded (#3511 review round 2). */
+		logEntries = 0,
 	): void {
 		this._projectSeq = Math.max(0, Math.floor(projectSeq));
+		this._viewMissingThrough = 0;
+		this._viewLogEntries = logEntries;
 		this._turnStartProjectSeq = this._projectSeq;
 		this._fileSeq.clear();
 		// Seeded per-file counters carry no projectSeq provenance, so start the
@@ -870,7 +928,36 @@ export class RuntimeCoordinator {
 		}
 	}
 
-	bumpFileSeq(filePath: string): {
+	/**
+	 * #3511 review B2: fold a late sequence read (session_start's deferred one,
+	 * after a timed-out read seeded 0) into a session that has already
+	 * advanced. Unlike `seedProjectSequence` it never lowers the seq or a
+	 * file's seq, and keeps the in-window changed-since marks. It clears the
+	 * incomplete mark only when the read reaches every entry the view missed:
+	 * locked allocation appends entries in rising seq order, so a read whose
+	 * max is at or above that seq saw all of them. An unlocked entry breaks
+	 * that order; readers catch it by its tag after the fold point, which the
+	 * merge only ever advances (review round 2).
+	 */
+	mergeProjectSequence(
+		projectSeq: number,
+		fileSeqByPath: Map<string, number>,
+		logEntries = 0,
+	): void {
+		this._projectSeq = Math.max(this._projectSeq, Math.floor(projectSeq));
+		this._viewLogEntries = Math.max(this._viewLogEntries, logEntries);
+		for (const [filePath, seq] of fileSeqByPath) {
+			const key = normalizeMapKey(path.resolve(filePath));
+			this._fileSeq.set(key, Math.max(this._fileSeq.get(key) ?? 0, seq));
+		}
+		if (projectSeq >= this._viewMissingThrough) this._viewMissingThrough = 0;
+	}
+
+	bumpFileSeq(
+		filePath: string,
+		/** The shared change log's max seq, when this bump is logged (#3511). */
+		logMaxSeq = 0,
+	): {
 		projectSeq: number;
 		fileSeq: number;
 		/** The normalized key the bump was recorded under — reuse, never re-derive. */
@@ -880,6 +967,12 @@ export class RuntimeCoordinator {
 		// ~1.8us on POSIX since #3098; every caller that also needs the key must
 		// reuse this one instead of paying it twice.
 		const key = normalizeMapKey(path.resolve(filePath));
+		// #3511: a sibling process logged entries above our seq. Allocate above
+		// them, and remember that this runtime's view has not folded them.
+		if (logMaxSeq > this._projectSeq) {
+			this._projectSeq = logMaxSeq;
+			this._viewMissingThrough = Math.max(this._viewMissingThrough, logMaxSeq);
+		}
 		this._projectSeq += 1;
 		const fileSeq = (this._fileSeq.get(key) ?? 0) + 1;
 		this._fileSeq.set(key, fileSeq);
