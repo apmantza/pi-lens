@@ -12,17 +12,23 @@ Issue: #3511.
   (`readLatestProjectSequence`) and seeds `runtime.projectSeq`
   (`seedProjectSequence`). After a timed-out read, the late result folds into a
   session that already advanced (`mergeProjectSequence`). Either way the view
-  then holds every logged entry and is complete again.
+  then holds every logged entry and is complete again, and its fold point (the
+  log entries it folded, `logEntries`) moves to the end of the log.
 - **Cold seed** (`ColdSeeds`): a timed-out sequence read seeds projectSeq 0
-  with an empty view.
+  with an empty view and fold point 0.
 - **Edit** (`recordProjectMutation` in `runtime-coordinator.ts`). Under the
   change-log lock, `appendProjectChangeAllocated` reads the log's max seq, and
   `bumpFileSeq` allocates `max(log max, own seq) + 1` (`LogAlloc`). A log max
   above the runtime's own seq means entries this runtime never folded; it
   records the highest one (`CompleteStamp`, `missing[p]`).
+- **Unlocked edit** (`UnlockedEdits`, review round 2): when the change-log lock
+  stays held past its 500 ms wait, the same edit is appended without it. The
+  read of the log's max and the append are two steps, and every other process
+  may act between them, so the seq can equal the one the lock holder logs. The
+  entry is tagged `unlocked` in the log.
 - **Save** (`saveRuntimeProjectSnapshot`, `buildProjectSnapshotFromRuntime`)
-  stamps the runtime's real `projectSeq`, its view, and `incomplete` when the
-  view missed an entry. The promotion is the compare-and-set of
+  stamps the runtime's real `projectSeq`, its view, its fold point, and
+  `incomplete` when the view missed an entry. The promotion is the compare-and-set of
   `SnapshotPromotion.tla` (`SeqCAS`): a body lands unless the canonical one is
   at a higher seq. Its ordering is that model's subject; here it is atomic.
 
@@ -31,12 +37,21 @@ an incomplete view at a higher seq lands over a complete one at a lower seq,
 and is never served fresh. A config with `LogAlloc` and `CompleteStamp`
 `FALSE` models the code before #3511.
 
+The reader rule (`ReaderRule`) is what `session_start` checks beyond the flag
+and the seq. The code's rule, `"tag"`: a snapshot is not fresh, and its
+`sequenceIndex` does not seed the bounded replay, while an `unlocked` entry
+sits after its fold point. The runtime that folded such an entry at a seed or
+merge vouches for it; any other may have missed it, even at the log's max seq.
+`"none"` is the code before round 2, and `"dup"` is the review's first
+prescription (distrust only a seq two entries share).
+
 ## Invariants
 
 - `FreshMeansComplete`: a snapshot that `session_start` judges fresh (not
-  incomplete, and `snapshot.seq == log max`) reflects every logged edit.
+  incomplete, `snapshot.seq == log max`, and passing the reader rule) reflects
+  every logged edit.
 - `BoundedReplayExact`: the bounded replay equals the full replay. Only a
-  complete snapshot carries the `sequenceIndex` it starts from.
+  complete snapshot that passes the reader rule seeds it.
 - `FreshForOwnRuntime`: a runtime whose seq matches a complete snapshot's is
   not served one that lacks one of its own edits.
 - `NewestSaveLands` (no drop, catalog shape 54): the canonical snapshot is
@@ -52,10 +67,13 @@ three.
 
 | Config | Verdict | States (distinct) |
 |---|---|---|
-| `OneWriter` (the code, one process, timed-out seeds) | pass | 80 (280 generated) |
-| `TwoWriters` (the code, #3511) | pass; `FreshMeansComplete` violated before (4-state trace) | 63 (397 generated) |
-| `TwoWritersReplay` (the code, #3511) | pass; `BoundedReplayExact` violated before | 63 (397 generated) |
-| `Fix` (the code, two processes, timed-out seeds) | pass | 1,323 (8,581 generated) |
+| `OneWriter` (the code, one process, timed-out seeds) | pass | 195 (676 generated) |
+| `TwoWriters` (the code, #3511) | pass; `FreshMeansComplete` violated before (4-state trace) | 205 (1,281 generated) |
+| `TwoWritersReplay` (the code, #3511) | pass; `BoundedReplayExact` violated before | 205 (1,281 generated) |
+| `Fix` (the code, two processes, timed-out seeds) | pass | 4,597 (29,765 generated) |
+| `FixUnlocked` (`Fix` with unlocked appends, three edits) | pass | 30,404 (138,969 generated) |
+| `UnlockedNoReaderRule` (round-1 code, review round 2 R2-F1) | `FreshMeansComplete` violated | |
+| `UnlockedDupAtSeq` (distrust only a shared seq) | `FreshMeansComplete` violated | |
 | `FixNoLogAlloc` | `FreshMeansComplete` violated | |
 | `FixNoCompleteStamp` | `FreshMeansComplete` violated | |
 | `NeverSeqMutant` (round-0 design: stamp seq -1) | `NewestSaveLands` violated, one process | |
@@ -78,6 +96,14 @@ flag. The compare-and-set then ranked it below every stamped snapshot, so it
 never landed: `NeverSeqMutant` violates `NewestSaveLands` with one process,
 through a timed-out seed followed by one edit (review round 1, B2).
 
+Round 1 had the unlocked writer mark its own view incomplete, and nothing
+else. `UnlockedNoReaderRule` finds the gap: the lock holder logs the same seq,
+stays complete, and its snapshot is fresh without the unlocked edit. The
+review's first prescription, `UnlockedDupAtSeq`, fails too: after the
+collision the lock holder's next edit allocates one above it, so no seq its
+snapshot carries is shared. The tag rule needs no self-mark: the unlocked
+writer's own entry sits after its own fold point, so round 2 removed it.
+
 The replays are in `tests/clients/project-snapshot-cross-process.test.ts`
 (`project seq allocation across processes (#3511)`, with a real child `node`
 process as the sibling) and, for the timed-out seed,
@@ -92,7 +118,6 @@ Not modelled:
   own postings regardless of seq;
 - a late read taken before an entry the edit missed (the merge keeps the
   incomplete mark then; tested, not modelled: the model's reads are atomic);
-- a change-log lock held past its 500 ms wait: the code then appends without
-  it, marks the view incomplete, and records `change-log-lock-unavailable`
-  and `snapshot-view-incomplete`;
+- writers from before #3511, which neither allocate from the log nor tag an
+  unlocked append;
 - log truncation.
