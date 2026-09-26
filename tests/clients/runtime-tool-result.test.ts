@@ -7,7 +7,11 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { readChangesSince } from "../../clients/project-changes.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	MAX_PENDING_CASCADE_RUNS,
+	RuntimeCoordinator,
+} from "../../clients/runtime-coordinator.js";
+import { gatedPromise } from "../support/fault-injection.js";
 import {
 	registerPrimarySession,
 	releasePrimarySession,
@@ -1477,6 +1481,106 @@ describe("monorepo turn-state cwd alignment", () => {
 			env.cleanup();
 		}
 	});
+
+	it.each(["parked", "overflow"] as const)(
+		"drops the cascade a session-1 handler admits after the replacement, %s (#3512 r1 B2)",
+		async (path_) => {
+			// index.ts' bound abandons this handler without cancelling it, and
+			// pi's teardown aborts only the active run, so a handler whose
+			// pipeline outlives turn end resumes after session 2's reset and
+			// admits its compute. The admission must use the generation captured
+			// when the handler dispatched, not one captured at admission.
+			const { runPipeline } = await import("../../clients/pipeline.js");
+			const entered = gatedPromise<void>();
+			const release = gatedPromise<void>();
+			const sessionOneRun = {
+				filePath: "/proj/session-one.ts",
+				origin: { projectSeq: 1, turnSeq: 1 },
+				result: undefined,
+				neighborCount: 1,
+				diagnosticCount: 1,
+			};
+			vi.mocked(runPipeline).mockImplementation(async () => {
+				entered.resolve();
+				await release.promise;
+				return {
+					output: "",
+					hasBlockers: false,
+					isError: false,
+					fileModified: false,
+					cascadePromise: Promise.resolve(sessionOneRun),
+				};
+			});
+			resetDegradationLedger();
+			const env = setupTestEnvironment("pi-lens-3512-late-admission-");
+			try {
+				const filePath = createTempFile(
+					env.tmpDir,
+					"edit.ts",
+					"export const x = 2;\n",
+				);
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.resetForSession();
+				runtime.beginTurn();
+
+				const handler = handleToolResult({
+					event: {
+						toolName: "edit",
+						input: { path: filePath },
+						details: { diff: "+  1 export const x = 2;" },
+						content: [{ type: "text", text: "ok" }],
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: {
+						addModifiedRange: () => {},
+						readTurnState: () => ({}),
+					},
+					biomeClient: {},
+					ruffClient: {},
+					testRunnerClient: {},
+					metricsClient: {},
+					resetLSPService: () => {},
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as any);
+				await entered.promise;
+
+				// The replacement's reset lands while the pipeline is in flight.
+				runtime.resetForSession();
+				// Session 2's own computes: on the overflow row they fill the cap,
+				// so the late admission takes the detached `.then` branch.
+				const ownRuns = Array.from(
+					{ length: path_ === "overflow" ? MAX_PENDING_CASCADE_RUNS : 1 },
+					(_, i) => ({ ...sessionOneRun, filePath: `/proj/own-${i}.ts` }),
+				);
+				for (const own of ownRuns)
+					runtime.appendCascadePromise(Promise.resolve(own));
+				release.resolve();
+				await handler;
+
+				// Session 2's turn_end: everything is settled, so no wait elapses.
+				await runtime.settleCascadeRuns(1_000, { trackTurnEndClock: true });
+				const delivered = runtime
+					.consumeCascadeRuns()
+					.map((r) => r.filePath)
+					.sort();
+				const staleWrites =
+					getDegradationSummary()
+						.find((e) => e.kind === "generation-guard-stale-write")
+						?.latestReasons.map((e) => e.subject) ?? [];
+				console.log(
+					`[LateAdmission ${path_}] delivered=${delivered.filter((f) => f.includes("session-one")).length ? JSON.stringify(delivered.filter((f) => f.includes("session-one"))) : "[]"} own=${delivered.length} staleWrites=${JSON.stringify(staleWrites.filter((s) => s.includes("cascade")))}`,
+				);
+				expect(delivered).toEqual(ownRuns.map((r) => r.filePath).sort());
+				expect(staleWrites).toContain("runtime-session:cascade-admission");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 });
 
 describe("runtime-tool-result inline behavior warnings", () => {
