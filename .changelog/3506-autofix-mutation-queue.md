@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **pi-lens' autofix and formatting no longer erase, or take credit for, an edit the agent makes to the same file at the same time (closes #3506)** — pi runs tool calls in parallel and makes its own `edit` and `write` tools take turns on each file, but pi-lens' in-place fixers (`biome lint --write`, `eslint --fix`, `ruff`, and the rest) and `--immediate-format` wrote without taking a turn. An agent edit that ran while a fixer was working could be overwritten by the fixer's copy of the older file, which the write's tool result then called authoritative; or it could be reported as pi-lens' own autofix, leaving the edit's own result empty. These writers, and the formatting and autofix pi-lens defers to the end of the agent's run, now take their turn in pi's queue for the file and keep it until they have read their result back, and an analysis of bytes that changed under it is ordered as the newer one. On a host that does not provide the queue, the writers run as before and pi-lens records it once in its degradation report.

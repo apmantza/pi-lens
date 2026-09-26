@@ -898,6 +898,7 @@ async function dispatchPipelineAnalysis(args: {
 			onWordIndexUpdated: (index) => {
 				scheduleWordIndexPersist(dispatchCwd, index, dbg);
 			},
+			nextWriteIndex: () => runtime.nextWriteIndex(),
 		},
 		{
 			biomeClient: biomeClient!,
@@ -2548,7 +2549,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			runtime.recordInlineBlockers(
 				filePath,
 				result.inlineBlockerSummary,
-				writeIndex,
+				// #3506: the token of the bytes the pipeline analysed.
+				result.writeIndex ?? writeIndex,
 				result.inlineBlockerSources,
 				result.inlineBlockerLines,
 				result.inlineBlockerFileContent,
@@ -2561,7 +2563,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	} else {
 		inlineVerdictApplied = runtime.clearInlineBlockers(
 			filePath,
-			writeIndex,
+			result.writeIndex ?? writeIndex,
 			writeTurnIndex,
 		);
 	}

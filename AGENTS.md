@@ -662,8 +662,10 @@ ADR: docs/adr/0009-reported-path-attribution.md
 - Raw components fit every rendered line with `clients/tui-fit.ts`. Read the
   mode from the event context: widgets require `tui`; proactive notifications
   are suppressed only in `print` and `json`.
-- Host SDK imports are type-only. Runtime dependencies belong in
-  `dependencies`, not `devDependencies`.
+- Host SDK imports are type-only, except the one lazy, caught lookup of pi's
+  `withFileMutationQueue` in `index.ts` (#3506) that
+  `tests/host-sdk-type-only.test.ts` admits by count. Runtime dependencies
+  belong in `dependencies`, not `devDependencies`.
 
 </important>
 ## Key source layout

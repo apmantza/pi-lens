@@ -22,7 +22,9 @@
  *   from an extension at all, so pi-lens imports it TYPE-ONLY and inlines the
  *   runtime helpers it needs. `tests/host-sdk-type-only.test.ts` enforces that
  *   separate rule (#1334 S6); do not read this list as permission to
- *   value-import the host SDK.
+ *   value-import the host SDK. Its one admitted exception is lazy and caught:
+ *   `index.ts` looks up pi's `withFileMutationQueue` on the first write, which
+ *   pi's loader serves from the running host (#3506).
  *
  * LAZY_NATIVE_PACKAGES
  *   Native addon / wasm, dynamic-imported by absolute file:// URL at call time.

@@ -44,6 +44,21 @@ const DYNAMIC_IMPORT = new RegExp(
 	String.raw`(?:\bimport|\brequire)\s*\(\s*["']${HOST_SDK}["']`,
 );
 
+/**
+ * #3506: the admitted LAZY dynamic imports, by file and exact count. pi exposes
+ * `withFileMutationQueue` only as a package export, and its extension loader
+ * serves that package from the running host (jiti `virtualModules` in the
+ * bundled CLI), so the pi host adapter looks it up on pi-lens' first write,
+ * behind a catch that falls back to unqueued writes and records
+ * `host-file-mutation-queue-unavailable` (`clients/file-mutation-queue.ts`).
+ * Nothing is imported at load, so a host that cannot serve the package still
+ * loads pi-lens, which is the failure #1334 S6 exists to prevent. A new site,
+ * or a stale entry here, fails the scan.
+ */
+const ADMITTED_LAZY_DYNAMIC_IMPORTS: Readonly<Record<string, number>> = {
+	"index.ts": 1,
+};
+
 function* walkTs(dir: string): Generator<string> {
 	let entries: string[];
 	try {
@@ -92,7 +107,10 @@ describe("host SDK is imported type-only, never at runtime (#1334 S6)", () => {
 			if (!src.includes(HOST_SDK)) continue;
 			const rel = path.relative(root, file).replace(/\\/g, "/");
 
-			if (DYNAMIC_IMPORT.test(src)) {
+			const dynamicImports = src.match(
+				new RegExp(DYNAMIC_IMPORT.source, "g"),
+			)?.length;
+			if ((dynamicImports ?? 0) !== (ADMITTED_LAZY_DYNAMIC_IMPORTS[rel] ?? 0)) {
 				offenders.push(`${rel} (dynamic import/require)`);
 			}
 			if (SIDE_EFFECT_IMPORT.test(src)) {

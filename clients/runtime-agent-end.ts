@@ -28,6 +28,7 @@ import {
 	type PiLensFlagSource,
 } from "./lens-config.js";
 import { resyncLspFile, runAutofix, runFormatPhase } from "./pipeline.js";
+import { withHostFileMutationQueue } from "./file-mutation-queue.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { type ProjectChangeSource } from "./project-changes.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -409,13 +410,16 @@ export async function handleAgentEnd({
 		if (executedAutofixScopes.has(scopeKey)) continue;
 		executedAutofixScopes.add(scopeKey);
 		try {
-			const result = await runAutofix(
-				filePath,
-				record.cwd,
-				getFlag,
-				dbg,
-				{ biomeClient, ruffClient, fixedThisTurn: runtime.fixedThisTurn },
-				getFlagSource,
+			// #3506: the fixer rewrites the file in place, inside pi's queue.
+			const result = await withHostFileMutationQueue(filePath, () =>
+				runAutofix(
+					filePath,
+					record.cwd,
+					getFlag,
+					dbg,
+					{ biomeClient, ruffClient, fixedThisTurn: runtime.fixedThisTurn },
+					getFlagSource,
+				),
 			);
 			const tools = result.autofixTools.map((label) => label.split(":")[0]);
 			for (const changed of result.changedFiles) {
@@ -564,13 +568,17 @@ export async function handleAgentEnd({
 						filePath,
 						fileStart,
 						result: await bounded(
-							runFormatPhase(
-								filePath,
-								getFormatService,
-								dbg,
-								ambientSignal,
-								30_000,
-								"agent_settled",
+							// #3506: the formatter rewrites the file in place, and its
+							// read-back belongs to the same hold.
+							withHostFileMutationQueue(filePath, () =>
+								runFormatPhase(
+									filePath,
+									getFormatService,
+									dbg,
+									ambientSignal,
+									30_000,
+									"agent_settled",
+								),
 							),
 							{
 								ms: HOOK_WALL_BUDGET_MS.agent_settled,

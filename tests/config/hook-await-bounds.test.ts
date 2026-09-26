@@ -413,12 +413,14 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"agent_settled's unbounded analyzer bootstrap.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#handleAgentEnd:aeec4a09~51275360": {
+	"clients/runtime-agent-end.ts#handleAgentEnd:7b3fa863~b336d9ea": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
 			"`runAutofix` on the deferred drain: per-runner spawn timeouts " +
-			"exist at the leaf, nothing bounds the phase above them.",
+			"exist at the leaf, nothing bounds the phase above them. #3506 " +
+			"only moved it inside pi's per-file mutation queue (re-keyed, " +
+			"same await).",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-coordinator.ts#f1693e28~c40c7404": {
@@ -2291,7 +2293,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/package-manager.ts": 8,
 	"clients/partial-edit-apply.ts": 2,
 	"clients/performance-report.ts": 8,
-	"clients/pipeline.ts": 45,
+	// #3506: 45 -> 48. `runPipeline` awaits its body inside the try whose
+	// finally releases pi's per-file mutation queue, and `runAutofix` /
+	// `runFormatPhase` each await entering that queue before their first
+	// write. The queue wait is the fix (an agent edit of the same file must
+	// finish first); the pipeline itself stays inside the handler's bounded().
+	"clients/pipeline.ts": 48,
 	"clients/project-changes.ts": 2,
 	"clients/project-snapshot.ts": 2,
 	"clients/quiet-window.ts": 6,

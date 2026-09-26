@@ -24,6 +24,7 @@
   "./clients/event-loop-monitor.js",
   "./clients/extension-log.js",
   "./clients/extension-mode.js",
+  "./clients/file-mutation-queue.js",
   "./clients/file-utils.js",
   "./clients/format-events-publish.js",
   "./clients/format-service.js",

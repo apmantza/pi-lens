@@ -6,6 +6,8 @@ write per-file stores, and pi-lens' own in-place autofix writes the file. The
 `TLA+ models` CI job (`node scripts/check-tla-models.mjs`) checks every
 config here against its `\* expect:` line.
 
+Issues: #3506, #3507, #3508.
+
 ## What the model covers
 
 - **The agent.** It makes edits 1..N of file F, in order. Each edit is a
@@ -58,83 +60,87 @@ is chosen at Init, so every assignment is checked.
 
 ## Results
 
-TLC 2.19 (`tla2tools.jar` v1.7.4), 4 workers.
+TLC 2.19 (`tla2tools.jar` v1.7.4), `-workers auto`. The configs named after
+a bug now model the fixed code; each part of each fix keeps a violated
+witness, so a change that drops it turns the check red.
 
-| Config | Expect | Distinct states | s |
+| Config | Models | Expect | Distinct states |
 |---|---|---|---|
-| `InlineSequential` | pass | 152 | 2 |
-| `InlineParallel` | pass (fixed code, #3507) | 256 | 1 |
-| `InlineFix` | pass | 8,176 | 4 |
-| `InlineFixNoRecord` / `NoClear` / `NoTomb` | violated `InlineNewest` | ~260 each | 2 |
-| `WidgetParallel` | pass | 732,720 | 28-44 |
-| `MutWidgetNoGuard` | violated `WidgetNewest` | 819 | 2 |
-| `FixerSequential` | pass | 176 | 2 |
-| `FixerParallel` | violated `NoLostEdit` (bug 2) | 141 | 2 |
-| `FixerOrphan` | violated `NoLostEdit` (bug 2) | 170 | 2 |
-| `FixerAttribution` | violated `NoForeignAttribution` (bug 2) | 229 | 2 |
-| `FixerQueue` | pass | 829,712 | 37 |
-| `FixerQueueWriteOnly` | violated `NoForeignAttribution` | 218 | 2 |
-| `FixerQueueNoReToken` | violated `WidgetNewest` (bug 4) | 24,746 | 4 |
-| `ClaimAtomic` | pass | 797,392 | 27 |
-| `MutNoInflightDedupe` | violated `NoDoubleDispatch` | 68 | 2 |
-| `ClaimGap` | pass (fixed code, #3508) | 264 | 1 |
-| `MutClaimGap` | violated `NoDoubleDispatch` (bug 3: the code before #3508) | 57 | 1 |
-| `AllActorsFix` | pass | 43,512 | 7 |
-| `AllActorsFixOrphan` | pass | 804,400 | 28 |
+| `InlineSequential` | before #3507, sequential tools | pass | 152 |
+| `InlineParallel` | fixed code (#3507) | pass | 256 |
+| `InlineFix` | fixed code (#3507), three edits | pass | 8,176 |
+| `InlineFixNoRecord` / `NoClear` / `NoTomb` | #3507 without one part | violated `InlineNewest` | ~260 each |
+| `WidgetParallel` | the widget guard, with the pre-#3508 claim gap | pass | 732,720 |
+| `MutWidgetNoGuard` | the widget without its guard | violated `WidgetNewest` | 819 |
+| `FixerSequential` | before #3506, sequential tools | pass | 176 |
+| `FixerParallel` | fixed code (#3506) | pass | 840 |
+| `FixerOrphan` | fixed code (#3506), handler abandoned | pass | 1,664 |
+| `FixerAttribution` | fixed code (#3506) | pass | 840 |
+| `FixerQueue` | fixed code (#3506), three edits | pass | 829,712 |
+| `MutFixerNoQueue` | #3506 without part 1 (the code before it) | violated `NoLostEdit` | 156 |
+| `FixerQueueWriteOnly` | #3506 without part 2 | violated `NoForeignAttribution` | 218 |
+| `FixerQueueNoReToken` | #3506 without part 3 | violated `WidgetNewest` | 24,746 |
+| `ClaimAtomic` | resident clients | pass | 797,392 |
+| `ClaimGap` | fixed code (#3508) | pass | 264 |
+| `MutClaimGap` | the code before #3508 | violated `NoDoubleDispatch` | 57 |
+| `MutNoInflightDedupe` | the claim without the in-flight dedupe | violated `NoDoubleDispatch` | 68 |
+| `AllActorsFix` | all three fixes | pass | 43,512 |
+| `AllActorsFixOrphan` | all three fixes, handler abandoned | pass | 804,400 |
 
 Non-vacuity:
 - The widget's existing guard is load-bearing: `MutWidgetNoGuard` goes red.
 - The in-flight dedupe is load-bearing: `MutNoInflightDedupe` goes red.
-- pi's own serialisation of the handler is what keeps `InlineSequential` and
-  `FixerSequential` green. `InlineParallel`, `FixerParallel` and
-  `FixerOrphan` remove it.
+- pi's own serialisation of the handler is what kept `InlineSequential` and
+  `FixerSequential` green before the fixes. `InlineParallel`, `FixerParallel`
+  and `FixerOrphan` remove it.
 
-## Bugs (all four reproduce on the real code)
+## Bugs (all four reproduced on the real code, all fixed)
 
-1. **The inline-blocker record is last-completer-wins** (fixed by #3507;
-   `InlineParallel` now models the fixed code, and `InlineFixNoRecord`,
-   `InlineFixNoClear` and `InlineFixNoTomb` keep each missing part as a
-   violated witness). The handler recorded or cleared the record with no
-   order check. The record stored `writeIndex` but never compared it. An
-   older clean run that settled last erased the newer edit's blocker, and the
-   git guard unlatched. An older blocker that settled last replaced the newer
-   verdict with a `writeIndex: 1` record. The widget store, which has the
-   guard, kept v2 in both cases. The fixed code orders both verbs by
-   `(turnIndex, writeIndex)`: the model has one turn, and the code's
-   `writeIndex` restarts at every `beginTurn`, so the turn leads the order.
-2. **The immediate autofix runs outside pi's mutation queue** (`FixerParallel`,
-   `FixerOrphan`, `FixerAttribution`). Take a turn's first `write` followed by
-   an edit of the same file, either in one parallel batch or after the
-   write's pipeline outlived its 10 s bound. The fixer's stale write erases
-   the agent's edit, and the tool result calls the erased content
-   "authoritative". An agent edit inside the fixer's before/after window is
-   instead claimed as pi-lens' autofix. Its hash then becomes the
-   already-analysed latch, and the edit's own tool result is empty.
-3. **The claim is not atomic when the clients are not resident**
-   (`MutClaimGap`; fixed by #3508, `ClaimGap`). The classified path awaited
-   the bootstrap clients after `claimPipelineDispatch`, so two handlers for
-   one post-write state both ran the pipeline.
-4. **A refreshed pipeline keeps the handler's `writeIndex`**
-   (`FixerQueueNoReToken`). A pipeline whose autofix ran on a newer revision
-   analyses those bytes under the older token. The ordering guard then keeps
-   an older verdict, while the newest edit's own run was skipped by the
-   latch. For the latch to skip it, that edit's handler must hash the file
-   after the older pipeline has finished, so this needs a delayed handler.
+1. **The inline-blocker record was last-completer-wins** (#3507). The handler
+   recorded or cleared the record with no order check. The record stored
+   `writeIndex` but never compared it. An older clean run that settled last
+   erased the newer edit's blocker, and the git guard unlatched. An older
+   blocker that settled last replaced the newer verdict with a
+   `writeIndex: 1` record. The widget store, which has the guard, kept v2 in
+   both cases.
+2. **The immediate autofix ran outside pi's mutation queue** (#3506). Take a
+   turn's first `write` followed by an edit of the same file, either in one
+   parallel batch or after the write's pipeline outlived its 10 s bound. The
+   fixer's stale write erased the agent's edit, and the tool result called
+   the erased content "authoritative". An agent edit inside the fixer's
+   before/after window was instead claimed as pi-lens' autofix. Its hash then
+   became the already-analysed latch, and the edit's own tool result was
+   empty.
+3. **The claim was not atomic when the clients were not resident** (#3508).
+   The classified path awaited the bootstrap clients after
+   `claimPipelineDispatch`, so two handlers for one post-write state both ran
+   the pipeline.
+4. **A refreshed pipeline kept the handler's `writeIndex`** (#3506 part 3).
+   Once the fixer queues behind agent edits, a pipeline whose autofix ran on
+   a newer revision analyses those bytes; under the older token the ordering
+   guard kept an older verdict, while the newest edit's own run was skipped
+   by the latch. For the latch to skip it, that edit's handler must hash the
+   file after the older pipeline has finished, so this needs a delayed
+   handler.
 
-## Candidate fixes (checked)
+## Fixes (checked here, replayed in `tests/clients/dispatch-pipeline-formal.test.ts`)
 
-- **Inline record.** Record and clear go through one per-path
-  `WriteOrderingGuard` on `writeIndex`: compare on record, compare on clear,
-  and keep the token across a clear. Dropping any of the three parts turns
-  it red.
-- **Autofix.** Run the fixer inside `withFileMutationQueue(F)` (part 1),
-  and hold the queue through the after-read, refresh and hash (part 2).
-  After a refresh that moved the bytes, take a fresh `writeIndex` (part 3).
-  Without part 2, `FixerQueueWriteOnly` goes red; without part 3,
-  `FixerQueueNoReToken` goes red.
-- **Claim.** Await the clients before `claimPipelineDispatch`, as the
-  observed path already does (~1892 before ~1916). This is `ClaimGap =
-  FALSE`.
+- **Inline record (#3507).** Record and clear go through one per-path
+  `WriteOrderingGuard` on the dispatch's token: compare on record, compare on
+  clear, and keep the token across a clear. Dropping any of the three parts
+  turns it red. The code orders by `(turnIndex, writeIndex)`: the model has
+  one turn, and the code's `writeIndex` restarts at every `beginTurn`, so the
+  turn leads the order.
+- **Autofix (#3506).** The fixer runs inside pi's `withFileMutationQueue(F)`
+  (part 1), and the queue is held through the after-read, the content
+  refresh and the `postWriteStateHash` capture (part 2). When the analysed
+  bytes are not the ones the pipeline first read, it takes a fresh
+  `writeIndex` while it still holds the queue (part 3). Without part 2,
+  `FixerQueueWriteOnly` goes red; without part 3, `FixerQueueNoReToken` goes
+  red. The code takes the hold at the first format or autofix write, so a
+  pipeline with no writer never waits on the queue.
+- **Claim (#3508).** The clients are awaited before `claimPipelineDispatch`,
+  as the observed path already did. This is `ClaimGap = FALSE`.
 
 ## Scope and assumptions
 
@@ -146,7 +152,8 @@ Not modelled:
 - turn and session boundaries (`sessionGeneration`, the latch's
   `turnIndex`);
 - the debounce: its default is 0;
-- the deferred `agent_end` format/autofix drain;
+- the deferred `agent_end` format/autofix drain (the code runs it inside the
+  same queue; the tests replay it);
 - collect-later runners: they share `formal/late-aux-drain`'s freshness-gate
   shape;
 - the dispatcher's delta baseline;

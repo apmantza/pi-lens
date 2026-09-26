@@ -1192,7 +1192,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	telemetry: {
 		"clients/lsp-mutation.ts": 11,
 		"clients/lsp/client.ts": 2,
-		"clients/pipeline.ts": 22,
+		// #3506: the re-token rewrites `ctx.telemetry` (22 -> 26); the field
+		// is the context's own name, so it is routed, not renamed, here.
+		"clients/pipeline.ts": 26,
 		"clients/runtime-tool-result.ts": 1,
 	},
 	version: {

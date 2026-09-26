@@ -10,7 +10,16 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// pi's real per-file queue, the one its `edit`/`write` tools run under. The
+// pi host adapter hands the same export to pi-lens' writers (index.ts).
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BiomeClient } from "../../clients/biome-client.js";
+import type { CacheManager } from "../../clients/cache-manager.js";
+import type { FormatService } from "../../clients/format-service.js";
+import { setHostFileMutationQueueLoader } from "../../clients/file-mutation-queue.js";
+import { runPipeline } from "../../clients/pipeline.js";
+import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import {
@@ -164,6 +173,92 @@ function inlineSummaries(runtime: RuntimeCoordinator) {
 }
 
 type Dbg = (message: string) => void;
+
+/**
+ * The Biome agreement evidence the autofix gate requires before it lets an
+ * autonomous writer touch the project.
+ */
+function writeBiomeAgreement(root: string): void {
+	fs.writeFileSync(
+		path.join(root, "package.json"),
+		JSON.stringify({ devDependencies: { "@biomejs/biome": "^2.4.10" } }),
+	);
+	fs.writeFileSync(
+		path.join(root, "package-lock.json"),
+		JSON.stringify({
+			lockfileVersion: 3,
+			packages: {
+				"": {},
+				"node_modules/@biomejs/biome": { version: "2.4.10" },
+			},
+		}),
+	);
+}
+
+/**
+ * The agent's next edit of `filePath`, run the way pi's edit tool runs it:
+ * read-modify-write inside pi's mutation queue. The body is synchronous once
+ * the queue admits it.
+ */
+function agentAppend(filePath: string, line: string) {
+	let wrote = false;
+	const done = withFileMutationQueue(filePath, async () => {
+		fs.writeFileSync(filePath, `${fs.readFileSync(filePath, "utf8")}${line}`);
+		wrote = true;
+	});
+	return { done, wrote: () => wrote };
+}
+
+/**
+ * Resolves once every queue call made before it has registered: pi chains
+ * registrations through one module-wide promise, so a call on another path
+ * registers after them. An earlier call whose file is free has run by then.
+ */
+function afterQueueRegistration(dir: string): Promise<void> {
+	return withFileMutationQueue(
+		path.join(dir, "registration-barrier"),
+		async () => {},
+	);
+}
+
+/**
+ * A `BiomeClient.fixFileAsync` double with the real one's shape
+ * (biome-client.ts): read the file, let `lint --write` rewrite what it read,
+ * read it back, and report a fix only when the bytes moved. `hold` parks the
+ * process between its read and the step `holdBefore` names.
+ */
+function gatedFixer(holdBefore: "write" | "after-read") {
+	const parked = gate();
+	const resume = gate();
+	const fixer = {
+		isSupportedFile: () => true,
+		ensureAvailable: async () => true,
+		fixFileAsync: async (fp: string) => {
+			const before = fs.readFileSync(fp, "utf8");
+			if (holdBefore === "write") {
+				parked.open();
+				await resume.p;
+			}
+			fs.writeFileSync(fp, before.replace("var ", "const "));
+			if (holdBefore === "after-read") {
+				parked.open();
+				await resume.p;
+			}
+			const after = fs.readFileSync(fp, "utf8");
+			return {
+				success: true,
+				changed: before !== after,
+				fixed: before !== after ? 1 : 0,
+			};
+		},
+	} as unknown as BiomeClient;
+	return { fixer, parked, resume };
+}
+
+const text = (r: unknown) =>
+	((r as { content?: Array<{ text?: string }> })?.content ?? [])
+		.map((c) => c.text ?? "")
+		.join("\n");
 
 function deps(
 	runtime: RuntimeCoordinator,
@@ -325,6 +420,386 @@ describe("formal/dispatch-pipeline replays", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	// ── #3506: pi-lens' own writers inside pi's mutation queue ────────────────
+	describe("the immediate autofix and the deferred drain", () => {
+		beforeEach(() => {
+			setHostFileMutationQueueLoader(async () => ({ withFileMutationQueue }));
+		});
+		afterEach(() => {
+			setHostFileMutationQueueLoader(undefined);
+		});
+
+		it("FixerParallel (#3506): the immediate autofix does not write over an agent edit made through pi's queue", async () => {
+			const env = setupTestEnvironment("tla-fixer-lost-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				vi.mocked(dispatchLintWithResult).mockImplementation(
+					async () => clean("any") as never,
+				);
+				const { fixer, parked, resume } = gatedFixer("write");
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const write = handleToolResult({
+					...deps(runtime, fixer),
+					event: ev("write", filePath, "c1"),
+				} as never);
+				await parked.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				resume.open();
+				await write;
+				await agent.done;
+				expect(fs.readFileSync(filePath, "utf8")).toBe(
+					"const a = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("FixerAttribution (#3506): an agent edit is never reported as pi-lens' autofix, and its own analysis runs", async () => {
+			const env = setupTestEnvironment("tla-fixer-attr-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				const analysed: string[] = [];
+				vi.mocked(dispatchLintWithResult).mockImplementation(async (fp) => {
+					analysed.push(fs.readFileSync(fp as string, "utf8"));
+					return clean("any") as never;
+				});
+				// Nothing to fix: the fixer writes back what it read, then parks
+				// before its after-read.
+				const { fixer, parked, resume } = gatedFixer("after-read");
+				fs.writeFileSync(filePath, "export const a = 1;\n");
+				const write = handleToolResult({
+					...deps(runtime, fixer),
+					event: ev("write", filePath, "c1"),
+				} as never);
+				await parked.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				resume.open();
+				const writeResult = await write;
+				await agent.done;
+				await handleToolResult({
+					...deps(runtime, noBiome),
+					event: ev("edit", filePath, "c2"),
+				} as never);
+				expect(text(writeResult)).not.toContain("pi-lens applied autofix");
+				expect(analysed.filter((a) => a.includes("AGENT_EDIT_2"))).toHaveLength(
+					1,
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("FixerQueueNoReToken (#3506): a pipeline whose autofix fixed a newer revision records it under a fresh write index", async () => {
+			const env = setupTestEnvironment("tla-fixer-token-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				vi.mocked(dispatchLintWithResult).mockImplementation(async (fp) => {
+					const bytes = fs.readFileSync(fp as string, "utf8");
+					const rev = bytes.includes("E3")
+						? "v3"
+						: bytes.includes("E2")
+							? "v2"
+							: "v1";
+					return blocking(fp as string, rev) as never;
+				});
+				// The first write's fixer starts late (its availability probe),
+				// by which time two more edits have landed.
+				const probing = gate();
+				const probed = gate();
+				const fixer = {
+					isSupportedFile: () => true,
+					ensureAvailable: async () => {
+						probing.open();
+						await probed.p;
+						return true;
+					},
+					fixFileAsync: async (fp: string) => {
+						const before = fs.readFileSync(fp, "utf8");
+						fs.writeFileSync(fp, before.replace("var ", "const "));
+						const after = fs.readFileSync(fp, "utf8");
+						return {
+							success: true,
+							changed: before !== after,
+							fixed: before !== after ? 1 : 0,
+						};
+					},
+				} as unknown as BiomeClient;
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const write = handleToolResult({
+					...deps(runtime, fixer),
+					event: ev("write", filePath, "c1"),
+				} as never);
+				await probing.p;
+				fs.writeFileSync(filePath, "var a = 1;\nexport const E2 = 2;\n");
+				await handleToolResult({
+					...deps(runtime, noBiome),
+					event: ev("edit", filePath, "c2"),
+				} as never);
+				fs.writeFileSync(
+					filePath,
+					"var a = 1;\nexport const E2 = 2;\nexport const E3 = 3;\n",
+				);
+				probed.open();
+				await write;
+				// Edit 3's own handler finds the bytes already analysed.
+				await handleToolResult({
+					...deps(runtime, noBiome),
+					event: ev("edit", filePath, "c3"),
+				} as never);
+				expect(fs.readFileSync(filePath, "utf8")).toBe(
+					"const a = 1;\nexport const E2 = 2;\nexport const E3 = 3;\n",
+				);
+				expect(
+					(getFileDiagnostics(filePath) ?? []).map((d) => d.message),
+				).toEqual(["BLOCKER-FROM-v3"]);
+				expect(inlineSummaries(runtime)).toEqual([
+					{ writeIndex: 3, blocker: "BLOCKER-FROM-v3" },
+				]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("FixerQueue (#3506): a queued pipeline whose fixer changed nothing keeps its handler's token, so the newer edit's verdict stands", async () => {
+			const env = setupTestEnvironment("tla-fixer-keep-token-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				vi.mocked(dispatchLintWithResult).mockImplementation(
+					async (fp) =>
+						blocking(fp as string, revisionOf(fp as string)) as never,
+				);
+				fs.writeFileSync(filePath, "export const a = 'v1';\n");
+				// The agent's edit 2 already holds pi's queue for the file.
+				const agentEntered = gate();
+				const agentGo = gate();
+				const agent = withFileMutationQueue(filePath, async () => {
+					agentEntered.open();
+					await agentGo.p;
+					fs.writeFileSync(filePath, "export const a = 'v2';\n");
+				});
+				await agentEntered.p;
+				// The first write's pipeline reaches its fixer and queues behind it.
+				const atAutofix = gate();
+				const dbg: Dbg = (message) => {
+					if (message.startsWith("autofix: policy for")) atAutofix.open();
+				};
+				const { fixer, parked, resume } = gatedFixer("write");
+				const write = handleToolResult({
+					...deps(runtime, fixer, { dbg }),
+					event: ev("write", filePath, "c1"),
+				} as never);
+				await atAutofix.p;
+				agentGo.open();
+				await agent;
+				// The fixer reads v2 and finds nothing to fix; meanwhile edit 2's own
+				// handler analyses v2.
+				await parked.p;
+				await handleToolResult({
+					...deps(runtime, noBiome),
+					event: ev("edit", filePath, "c2"),
+				} as never);
+				resume.open();
+				await write;
+				expect(
+					(getFileDiagnostics(filePath) ?? []).map((d) => d.message),
+				).toEqual(["BLOCKER-FROM-v2"]);
+				expect(inlineSummaries(runtime)).toEqual([
+					{ writeIndex: 2, blocker: "BLOCKER-FROM-v2" },
+				]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("immediate format (#3506): the --immediate-format write does not overwrite an agent edit made through pi's queue", async () => {
+			const env = setupTestEnvironment("tla-immediate-format-");
+			try {
+				const filePath = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(filePath, "let value=1\n");
+				vi.mocked(dispatchLintWithResult).mockImplementation(
+					async () => clean("any") as never,
+				);
+				const parked = gate();
+				const resume = gate();
+				const formatService = {
+					recordRead: () => {},
+					formatFile: async (fp: string) => {
+						const before = fs.readFileSync(fp, "utf8");
+						parked.open();
+						await resume.p;
+						fs.writeFileSync(
+							fp,
+							before.replace("let value=1", "let value = 1;"),
+						);
+						return {
+							filePath: fp,
+							formatters: [{ name: "biome", success: true, changed: true }],
+							anyChanged: true,
+							allSucceeded: true,
+						};
+					},
+				} as unknown as FormatService;
+				const run = runPipeline(
+					{
+						filePath,
+						cwd: env.tmpDir,
+						toolName: "edit",
+						autofixMode: "deferred",
+						getFlag: (name: string) =>
+							name === "immediate-format" || name === "no-lsp",
+						dbg: () => {},
+					},
+					{
+						biomeClient: noBiome as unknown as BiomeClient,
+						ruffClient: {} as never,
+						metricsClient: {} as never,
+						getFormatService: () => formatService,
+						fixedThisTurn: new Set<string>(),
+					},
+				);
+				await parked.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				resume.open();
+				await run;
+				await agent.done;
+				expect(fs.readFileSync(filePath, "utf8")).toBe(
+					"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		function drainDeps(
+			runtime: RuntimeCoordinator,
+			env: { tmpDir: string },
+			overrides: {
+				biomeClient?: BiomeClient;
+				getFormatService?: () => FormatService;
+			},
+		) {
+			return {
+				ctxCwd: env.tmpDir,
+				getFlag: (name: string) => name === "no-lsp",
+				notify: () => {},
+				dbg: () => {},
+				runtime,
+				cacheManager: {
+					addModifiedRange: () => {},
+				} as unknown as CacheManager,
+				biomeClient: overrides.biomeClient,
+				ruffClient: {} as never,
+				getFormatService:
+					overrides.getFormatService ?? (() => ({}) as FormatService),
+			};
+		}
+
+		it("deferred drain (#3506): the agent_end autofix does not write over an agent edit made through pi's queue", async () => {
+			const env = setupTestEnvironment("tla-drain-autofix-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				fs.writeFileSync(path.join(env.tmpDir, "biome.json"), "{}\n");
+				const filePath = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferMutation(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"autofix",
+				);
+				const { fixer, parked, resume } = gatedFixer("write");
+				const drain = handleAgentEnd(
+					drainDeps(runtime, env, { biomeClient: fixer }),
+				);
+				await parked.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				resume.open();
+				await drain;
+				await agent.done;
+				expect(fs.readFileSync(filePath, "utf8")).toBe(
+					"const a = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("deferred drain (#3506): the agent_end format does not write over an agent edit made through pi's queue", async () => {
+			const env = setupTestEnvironment("tla-drain-format-");
+			try {
+				const filePath = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(filePath, "let value=1\n");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferMutation(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"format",
+				);
+				const parked = gate();
+				const resume = gate();
+				const formatService = {
+					recordRead: () => {},
+					formatFile: async (fp: string) => {
+						const before = fs.readFileSync(fp, "utf8");
+						parked.open();
+						await resume.p;
+						fs.writeFileSync(
+							fp,
+							before.replace("let value=1", "let value = 1;"),
+						);
+						return {
+							filePath: fp,
+							formatters: [{ name: "biome", success: true, changed: true }],
+							anyChanged: true,
+							allSucceeded: true,
+						};
+					},
+				} as unknown as FormatService;
+				const drain = handleAgentEnd(
+					drainDeps(runtime, env, { getFormatService: () => formatService }),
+				);
+				await parked.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				resume.open();
+				await drain;
+				await agent.done;
+				expect(fs.readFileSync(filePath, "utf8")).toBe(
+					"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
 	});
 
 	it("ClaimGap (#3508): with the bootstrap clients not resident, two handlers for one post-write state dispatch once", async () => {
