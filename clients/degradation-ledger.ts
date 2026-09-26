@@ -749,6 +749,13 @@ export type DegradationKind =
 	 */
 	| "process-singleton-reset"
 	/**
+	 * #3509: the project snapshot's cache-dir lock stayed held past its bounded
+	 * wait (or its directory failed), so an admission meta write was skipped or
+	 * a body promotion was dropped as a failed persist. Subject is the gz body
+	 * path; reason names which of the two.
+	 */
+	| "project-snapshot-lock-unavailable"
+	/**
 	 * The orphan backstop's OWN process-table scanner blew the scan timeout and
 	 * had to be tree-killed (#1864 review F3). Reason carries the kill verdict,
 	 * so a scanner that survived its own sweep's escalation — an orphan sweep

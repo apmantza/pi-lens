@@ -1,6 +1,7 @@
 // flake-shape: real-process-spawn — the sibling writer must be a second real
 // process with its own pid: the stage-sweep liveness check (#3510) keys on a
-// pid, and a second module instance in this process shares ours.
+// pid, and a second module instance in this process shares ours; the cache
+// lock (#3509) orders writers that share nothing but the disk.
 /**
  * Cross-process persist of the project snapshot, replayed from the
  * `formal/snapshot-promotion/` counterexamples. The parent process is one
@@ -16,10 +17,38 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const latencyRows = vi.hoisted(
+	() => [] as Array<{ phase?: string; metadata?: Record<string, unknown> }>,
+);
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/latency-logger.js")>();
+	return {
+		...actual,
+		logLatency: (entry: Parameters<typeof actual.logLatency>[0]) => {
+			latencyRows.push(entry as (typeof latencyRows)[number]);
+			actual.logLatency(entry);
+		},
+	};
+});
+
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
+	releaseGeneration,
+	tryAcquireGeneration,
+} from "../../clients/generation-lock.js";
+import {
+	_resetProjectSnapshotParseCacheForTests,
 	getProjectSnapshotMetaPath,
 	getProjectSnapshotPath,
 	getProjectSnapshotPersistErrorForTests,
+	getProjectSnapshotPersistStateForTests,
+	loadProjectSnapshot,
+	readProjectSnapshotMeta,
 	resetProjectSnapshotPersistWorkerForTests,
 	saveProjectSnapshot,
 	buildProjectSnapshotFromRuntime,
@@ -41,6 +70,9 @@ afterEach(async () => {
 	await waitForProjectSnapshotPersistsForTests();
 	await terminateProjectSnapshotPersistWorkerForTests();
 	resetProjectSnapshotPersistWorkerForTests();
+	_resetProjectSnapshotParseCacheForTests();
+	resetDegradationLedger();
+	latencyRows.length = 0;
 	process.env = { ...envBefore };
 });
 
@@ -51,22 +83,23 @@ function snapshotAt(cwd: string, seq: number, marker: string) {
 	return buildProjectSnapshotFromRuntime({ cwd, runtime });
 }
 
-/** One synchronous save in a real sibling process; returns its pid. */
-function siblingSave(
+/**
+ * Run `body` in a real sibling `node` process that has `snap` (the built
+ * project-snapshot module) and a fresh `runtime` seeded at `seed`. It
+ * prints its pid and its runtime's projectSeq when done.
+ */
+function runSibling(
 	home: string,
-	cwd: string,
-	seq: number,
-	marker: string,
-): number {
+	seed: number,
+	body: string,
+): { pid: number; seq: number } {
 	const script = `
 		const snap = await import(${JSON.stringify(snapshotJs)});
 		const rt = await import(${JSON.stringify(runtimeJs)});
 		const runtime = new rt.RuntimeCoordinator();
-		runtime.seedProjectSequence(${seq});
-		runtime.cachedExports.set(${JSON.stringify(marker)}, "x.ts");
-		const cwd = ${JSON.stringify(cwd)};
-		snap.saveProjectSnapshot(cwd, snap.buildProjectSnapshotFromRuntime({ cwd, runtime }));
-		console.log(JSON.stringify({ pid: process.pid }));
+		runtime.seedProjectSequence(${seed});
+		${body}
+		console.log(JSON.stringify({ pid: process.pid, seq: runtime.projectSeq }));
 	`;
 	const child = spawnSync(
 		process.execPath,
@@ -82,7 +115,23 @@ function siblingSave(
 		},
 	);
 	expect(child.status, child.stderr).toBe(0);
-	return (JSON.parse(child.stdout.trim()) as { pid: number }).pid;
+	return JSON.parse(child.stdout.trim()) as { pid: number; seq: number };
+}
+
+/** One synchronous snapshot save in a real sibling process; returns its pid. */
+function siblingSave(
+	home: string,
+	cwd: string,
+	seq: number,
+	marker: string,
+): number {
+	return runSibling(
+		home,
+		seq,
+		`runtime.cachedExports.set(${JSON.stringify(marker)}, "x.ts");
+		const cwd = ${JSON.stringify(cwd)};
+		snap.saveProjectSnapshot(cwd, snap.buildProjectSnapshotFromRuntime({ cwd, runtime }));`,
+	).pid;
 }
 
 function readDisk(cwd: string) {
@@ -162,6 +211,162 @@ describe("project snapshot persist across processes", () => {
 			});
 			expect(stageFiles(cwd)).toEqual([]);
 		} finally {
+			suspension.release();
+			suspension.restore();
+			env.cleanup();
+		}
+	});
+
+	it("a slow worker's older view is refused over a sibling's newer body (#3509)", async () => {
+		const { env, cwd, home } = projectEnv();
+		const seam = vi.fn();
+		const suspension = suspendAt(seam, async () => {}, { calls: 1 });
+		try {
+			setProjectSnapshotPromotionSeamForTests(async () => {
+				await seam();
+			});
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 5, "parent_seq5"));
+			await suspension.admitted; // seq 5 is staged; promotion is parked
+
+			siblingSave(home, cwd, 6, "child_seq6");
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 6,
+				bodyExports: ["child_seq6"],
+				metaSeq: 6,
+			});
+
+			setProjectSnapshotPromotionSeamForTests(undefined);
+			suspension.release();
+			await suspension.completed;
+			await waitForProjectSnapshotPersistsForTests();
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 6,
+				bodyExports: ["child_seq6"],
+				metaSeq: 6,
+			});
+			expect(stageFiles(cwd)).toEqual([]);
+			// In-process readers see the sibling's body, not our refused one.
+			expect(loadProjectSnapshot(cwd)?.seq).toBe(6);
+			expect(
+				latencyRows.filter(
+					(row) =>
+						row.phase === "project_snapshot_persist_decision" &&
+						row.metadata?.decision === "superseded_on_disk",
+				),
+			).toEqual([
+				expect.objectContaining({
+					metadata: expect.objectContaining({ seq: 5, diskSeq: 6 }),
+				}),
+			]);
+		} finally {
+			suspension.release();
+			suspension.restore();
+			env.cleanup();
+		}
+	});
+
+	it("admission never lowers a sibling's newer meta, and the sync writer refuses the older body (#3509)", async () => {
+		const { env, cwd, home } = projectEnv();
+		process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC = "1";
+		const seam = vi.fn();
+		const suspension = suspendAt(seam, async () => {}, { calls: 1 });
+		try {
+			siblingSave(home, cwd, 6, "child_seq6");
+			setProjectSnapshotPromotionSeamForTests(async () => {
+				await seam();
+			});
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 5, "parent_seq5"));
+			await suspension.admitted; // only admission has run
+			expect(readProjectSnapshotMeta(cwd)?.seq).toBe(6);
+
+			setProjectSnapshotPromotionSeamForTests(undefined);
+			suspension.release();
+			await suspension.completed;
+			await waitForProjectSnapshotPersistsForTests();
+			expect(getProjectSnapshotPersistStateForTests(cwd).active).toBe(false);
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 6,
+				bodyExports: ["child_seq6"],
+				metaSeq: 6,
+			});
+			expect(
+				fs
+					.readdirSync(path.dirname(getProjectSnapshotPath(cwd)))
+					.filter((name) => name.includes(".tmp-")),
+			).toEqual([]);
+		} finally {
+			suspension.release();
+			suspension.restore();
+			env.cleanup();
+		}
+	});
+
+	it("a held cache lock keeps both the admission meta write and the promotion out (#3509)", async () => {
+		const { env, cwd } = projectEnv();
+		process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC = "1";
+		try {
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 6, "first_seq6"));
+			const lockDir = `${getProjectSnapshotPath(cwd)}.locks`;
+			const hold = tryAcquireGeneration(lockDir, 5_000);
+			expect(hold).toBeDefined();
+			try {
+				saveProjectSnapshot(cwd, snapshotAt(cwd, 7, "blocked_seq7"));
+			} finally {
+				if (hold) releaseGeneration(hold);
+			}
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 6,
+				bodyExports: ["first_seq6"],
+				metaSeq: 6,
+			});
+			expect(getProjectSnapshotPersistErrorForTests()).toBe(
+				"project snapshot cache lock unavailable",
+			);
+			expect(getDegradationSummary()).toContainEqual(
+				expect.objectContaining({
+					kind: "project-snapshot-lock-unavailable",
+					count: 2,
+				}),
+			);
+
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 7, "after_seq7"));
+			expect(readDisk(cwd)).toEqual({
+				bodySeq: 7,
+				bodyExports: ["after_seq7"],
+				metaSeq: 7,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a worker promotion that cannot take the cache lock drops its stage as a failed persist (#3509)", async () => {
+		const { env, cwd } = projectEnv();
+		const seam = vi.fn();
+		const suspension = suspendAt(seam, async () => {}, { calls: 1 });
+		const lockDir = `${getProjectSnapshotPath(cwd)}.locks`;
+		let hold: ReturnType<typeof tryAcquireGeneration> = undefined;
+		try {
+			setProjectSnapshotPromotionSeamForTests(async () => {
+				await seam();
+			});
+			saveProjectSnapshot(cwd, snapshotAt(cwd, 5, "parent_seq5"));
+			await suspension.admitted;
+			expect(stageFiles(cwd)).toHaveLength(1);
+			hold = tryAcquireGeneration(lockDir, 5_000);
+			expect(hold).toBeDefined();
+
+			setProjectSnapshotPromotionSeamForTests(undefined);
+			suspension.release();
+			await suspension.completed;
+			await waitForProjectSnapshotPersistsForTests();
+			expect(stageFiles(cwd)).toEqual([]);
+			expect(fs.existsSync(getProjectSnapshotPath(cwd))).toBe(false);
+			expect(getProjectSnapshotPersistErrorForTests()).toBe(
+				"project snapshot cache lock unavailable",
+			);
+		} finally {
+			if (hold) releaseGeneration(hold);
 			suspension.release();
 			suspension.restore();
 			env.cleanup();

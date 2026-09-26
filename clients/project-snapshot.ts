@@ -7,6 +7,7 @@ import { writeFileAtomic } from "./atomic-write.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
+import { withGenerationLockSync } from "./generation-lock.js";
 import { isStaleStageFile } from "./instance-reaper.js";
 import { readJsonCache } from "./json-cache-read.js";
 import { logLatency } from "./latency-logger.js";
@@ -1232,9 +1233,16 @@ function logSnapshotPersistDecision(args: {
 	cwd: string;
 	seq: number;
 	fingerprint?: string;
-	decision: "requested" | "coalesced" | "skipped_unchanged" | "retry";
+	decision:
+		| "requested"
+		| "coalesced"
+		| "skipped_unchanged"
+		| "retry"
+		| "superseded_on_disk";
 	avoidedRawBytes?: number;
 	avoidedGzipBytes?: number;
+	/** The newer seq a sibling already published (`superseded_on_disk`). */
+	diskSeq?: number;
 }): void {
 	logLatency({
 		type: "phase",
@@ -1253,6 +1261,7 @@ function logSnapshotPersistDecision(args: {
 			...(args.avoidedGzipBytes === undefined
 				? {}
 				: { avoidedGzipBytes: args.avoidedGzipBytes }),
+			...(args.diskSeq === undefined ? {} : { diskSeq: args.diskSeq }),
 		},
 	});
 }
@@ -1354,6 +1363,83 @@ function completeSnapshotPersist(pending: PendingSnapshotBody): void {
 	dispatchSnapshotPersist(queued);
 }
 
+// #3509: more than one process writes a project's snapshot (a pi session and
+// the MCP server's word-index writer, or two sessions in one checkout). Every
+// meta check, body publish and meta write runs under this cache-dir lock. The
+// gzip runs before the lock is taken, so the hold is a small read, a rename
+// (the worker) or one write of the compressed body (the sync writer), and a
+// small write: far inside the lease.
+const SNAPSHOT_CACHE_LOCK = { staleMs: 5_000, waitMs: 500 };
+
+function withSnapshotCacheLock<T>(
+	gzPath: string,
+	purpose: string,
+	op: () => T,
+): { held: true; value: T } | { held: false } {
+	const result = withGenerationLockSync(
+		`${gzPath}.locks`,
+		SNAPSHOT_CACHE_LOCK,
+		op,
+	);
+	if (!result.held) {
+		const code = (result.cause as NodeJS.ErrnoException | undefined)?.code;
+		incrementDegradationCount({
+			kind: "project-snapshot-lock-unavailable",
+			subject: gzPath,
+			reason: `${purpose} skipped: ${code ? `lock failed (${code})` : "lock wait ran out"}`,
+		});
+	}
+	return result;
+}
+
+/**
+ * #3509: publish a body (the worker's stage file, or the sync writer's gzip)
+ * as a compare-and-set. It lands only while the durable meta is not ahead of
+ * this save's seq, with its meta written in the same critical section;
+ * otherwise a sibling already published a newer view, which keeps its body,
+ * and ours is dropped. Returns true only when body and meta both landed. A
+ * write or rename error propagates.
+ */
+function promoteSnapshotBody(
+	pending: PendingSnapshotBody,
+	body: { stagePath: string } | { gzip: Buffer },
+	record: Pick<
+		SnapshotPersistRecord,
+		"fingerprint" | "generatedAt" | "gzBytes"
+	>,
+): boolean {
+	const dropStage = () => {
+		if ("stagePath" in body) fs.rmSync(body.stagePath, { force: true });
+	};
+	const locked = withSnapshotCacheLock(pending.gzPath, "body promotion", () => {
+		const onDisk = readProjectSnapshotMeta(pending.cwd);
+		if (onDisk && onDisk.seq > pending.snapshot.seq) {
+			dropStage();
+			return onDisk.seq;
+		}
+		if ("stagePath" in body) fs.renameSync(body.stagePath, pending.gzPath);
+		else writeFileAtomic(pending.gzPath, body.gzip, { bestEffort: false });
+		fs.rmSync(pending.legacyPath, { force: true });
+		return finalizeProjectSnapshotMeta(pending, record);
+	});
+	if (!locked.held) {
+		dropStage();
+		recordSnapshotPersistFailure(
+			pending,
+			"project snapshot cache lock unavailable",
+		);
+		return false;
+	}
+	if (typeof locked.value === "boolean") return locked.value;
+	logSnapshotPersistDecision({
+		cwd: pending.cwd,
+		seq: pending.snapshot.seq,
+		decision: "superseded_on_disk",
+		diskSeq: locked.value,
+	});
+	return false;
+}
+
 function writeSnapshotBodyOnMainThread(
 	pending: PendingSnapshotBody,
 	reason?: string,
@@ -1426,14 +1512,16 @@ function writeSnapshotBodyOnMainThread(
 		const writeStarted = performance.now();
 		const gzip = gzipSync(json);
 		fs.mkdirSync(path.dirname(pending.gzPath), { recursive: true });
-		writeFileAtomic(pending.gzPath, gzip, { bestEffort: false });
-		fs.rmSync(pending.legacyPath, { force: true });
-		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
-			fingerprint,
-			generatedAt: pending.snapshot.generatedAt,
-			gzBytes: gzip.byteLength,
-		});
-		if (!metadataFinalized) return;
+		const promoted = promoteSnapshotBody(
+			pending,
+			{ gzip },
+			{
+				fingerprint,
+				generatedAt: pending.snapshot.generatedAt,
+				gzBytes: gzip.byteLength,
+			},
+		);
+		if (!promoted) return;
 		reconcileAuthoritativeAfterWrite(pending, rawBytes);
 		logSnapshotPersistSuccess(pending, fingerprint, {
 			rawBytes,
@@ -1553,14 +1641,16 @@ function handleSnapshotWorkerResult(
 		return;
 	}
 	try {
-		fs.renameSync(result.stagePath, pending.gzPath);
-		fs.rmSync(pending.legacyPath, { force: true });
-		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
-			fingerprint: result.semanticFingerprint,
-			generatedAt: pending.snapshot.generatedAt,
-			gzBytes: result.gzBytes,
-		});
-		if (!metadataFinalized) {
+		const promoted = promoteSnapshotBody(
+			pending,
+			{ stagePath: result.stagePath },
+			{
+				fingerprint: result.semanticFingerprint,
+				generatedAt: pending.snapshot.generatedAt,
+				gzBytes: result.gzBytes,
+			},
+		);
+		if (!promoted) {
 			completeSnapshotPersist(pending);
 			return;
 		}
@@ -1812,9 +1902,16 @@ export function saveProjectSnapshot(
 	// untouched until the worker has a semantic verdict. This prevents a stale
 	// local request from replacing a
 	// newer sibling process's same-seq fingerprint before it can coalesce.
-	if (priorPersist?.seq !== snapshot.seq) {
-		writeProjectSnapshotMeta(metaPath, snapshot);
-	}
+	//
+	// #3509: the write only ever RAISES the meta seq, read and written under
+	// the cache lock. A sibling process that already published a newer view
+	// keeps its meta; this save's promotion is then refused on the same check.
+	withSnapshotCacheLock(gzPath, "admission meta write", () => {
+		const onDisk = readProjectSnapshotMeta(cwd);
+		if (!onDisk || onDisk.seq < snapshot.seq) {
+			writeProjectSnapshotMeta(metaPath, snapshot);
+		}
+	});
 
 	// Record the authoritative in-process write BEFORE handing the body off, so
 	// a merge-read between now and the worker's promotion sees our own object

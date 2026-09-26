@@ -14,7 +14,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { tryAcquireGeneration } from "../../clients/generation-lock.js";
+import {
+	tryAcquireGeneration,
+	withGenerationLockSync,
+} from "../../clients/generation-lock.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const dirs: string[] = [];
@@ -539,5 +542,84 @@ describe("instance registry lock", () => {
 			}),
 		).toBe("blocked");
 		expect(fs.readFileSync(marker, "utf8")).toBe("sync body reached\n");
+	});
+});
+
+describe("withGenerationLockSync (#3509)", () => {
+	function lockDir(): string {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-gen-sync-"));
+		dirs.push(dir);
+		return path.join(dir, "cache.locks");
+	}
+
+	it("waits out a sibling's short hold and then runs op once", () => {
+		const dir = lockDir();
+		// A sibling won the exclusive create twice: this process backs off and
+		// retries inside its wait instead of giving the save up.
+		const realWrite = fs.writeFileSync;
+		let contended = 0;
+		fs.writeFileSync = ((...args: Parameters<typeof realWrite>) => {
+			const file = String(args[0]);
+			if (contended < 2 && /[\\/]lock\.\d+$/.test(file)) {
+				contended += 1;
+				throw Object.assign(new Error("EEXIST: file already exists"), {
+					code: "EEXIST",
+				});
+			}
+			return realWrite(...args);
+		}) as typeof fs.writeFileSync;
+		syncBuiltinESMExports();
+		let ran = 0;
+		let result: ReturnType<typeof withGenerationLockSync<string>>;
+		try {
+			result = withGenerationLockSync(
+				dir,
+				{ staleMs: 5_000, waitMs: 500 },
+				() => {
+					ran += 1;
+					return "entered";
+				},
+			);
+		} finally {
+			fs.writeFileSync = realWrite;
+			syncBuiltinESMExports();
+		}
+		expect(contended).toBe(2);
+		expect(ran).toBe(1);
+		expect(result).toEqual({ held: true, value: "entered" });
+	});
+
+	it("stops on a filesystem error other than contention and hands back its cause", () => {
+		const dir = lockDir();
+		const realMkdir = fs.mkdirSync;
+		fs.mkdirSync = ((...args: Parameters<typeof realMkdir>) => {
+			if (String(args[0]) === dir) {
+				throw Object.assign(new Error("EACCES: permission denied"), {
+					code: "EACCES",
+				});
+			}
+			return realMkdir(...args);
+		}) as typeof fs.mkdirSync;
+		syncBuiltinESMExports();
+		let ran = 0;
+		let result: ReturnType<typeof withGenerationLockSync<string>>;
+		try {
+			result = withGenerationLockSync(
+				dir,
+				{ staleMs: 5_000, waitMs: 500 },
+				() => {
+					ran += 1;
+					return "entered";
+				},
+			);
+		} finally {
+			fs.mkdirSync = realMkdir;
+			syncBuiltinESMExports();
+		}
+		expect(ran).toBe(0);
+		expect(result).toEqual({
+			held: false,
+			cause: expect.objectContaining({ code: "EACCES" }),
+		});
 	});
 });
