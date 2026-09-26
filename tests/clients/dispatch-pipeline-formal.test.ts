@@ -17,6 +17,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
 import type { CacheManager } from "../../clients/cache-manager.js";
 import { FormatService } from "../../clients/format-service.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { setHostFileMutationQueueLoader } from "../../clients/file-mutation-queue.js";
 import { HOOK_WALL_BUDGET_MS } from "../../clients/hook-budgets.js";
 import { runPipeline } from "../../clients/pipeline.js";
@@ -474,9 +478,24 @@ describe("formal/dispatch-pipeline replays", () => {
 			await entered.p;
 			runtime.resetForSession();
 			runtime.beginTurn();
+			resetDegradationLedger();
 			release.open();
 			await late;
 			expect(inlineSummaries(runtime)).toEqual([]);
+			// The dropped write is observable, not silent.
+			expect(
+				getDegradationSummary().filter(
+					(group) => group.kind === "generation-guard-stale-write",
+				),
+			).toEqual([
+				expect.objectContaining({
+					latestReasons: [
+						expect.objectContaining({
+							subject: `runtime-session:${filePath}`,
+						}),
+					],
+				}),
+			]);
 			// The new session's own first edit records under its own token.
 			fs.writeFileSync(filePath, "export const y = 'v2';\n");
 			await handleToolResult({
