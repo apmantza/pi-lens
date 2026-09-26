@@ -72,6 +72,7 @@ migrate-*.js
 !tests/fixtures/ci-pr-bodies/*.md
 !CLAUDE.md
 !tests/fixtures/changelog-entries/*.md
+!tests/support/scheduler-properties.md
 !.changelog/*.md
 !AGENTS.md
 !HISTORY.md
