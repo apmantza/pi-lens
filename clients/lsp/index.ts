@@ -8254,8 +8254,13 @@ export class LSPService {
 				oldUri: client.getDocumentUri(oldFilePath),
 			}));
 		const closeFailures: RenameNotifyFailure[] = [];
+		// #3477: every active client, not only those that report the document
+		// open now. The close is queued behind any send for the path, so an open
+		// still in flight is closed once it lands, and a client that never had
+		// the document still records it as closed, so a late touch carrying the
+		// renamed-away file's old bytes is not opened.
 		await Promise.all(
-			openDocuments.map(async ({ serverId, client }) => {
+			activeClients.map(async ({ serverId, client }) => {
 				// #1621: bounded so one wedged server's didClose write cannot stall
 				// this Promise.all — and therefore the whole rename — for every
 				// other client alongside it.

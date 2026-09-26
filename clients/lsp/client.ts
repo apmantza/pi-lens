@@ -605,9 +605,13 @@ export interface LSPClientInfo {
  * document state waits behind it and supersedes only the still-pending entry.
  */
 interface PendingDocumentNotify {
-	run: (coalescedCount: number, saved: boolean) => Promise<void>;
+	/** Resolves `false` when it sent nothing for the path (#3477). */
+	run: (coalescedCount: number, saved: boolean) => Promise<boolean | void>;
 	waiters: Array<{
-		/** `false`: a later read superseded this caller's content, so it was not sent (#3481). */
+		/**
+		 * `false`: this caller's content was not sent, because a later read
+		 * superseded it (#3481) or the path was closed first (#3477).
+		 */
 		resolve: (sent: boolean) => void;
 		reject: (error: unknown) => void;
 		/** #3481: kept out by a pending entry that was read later. */
@@ -639,6 +643,11 @@ interface PendingDocumentNotify {
 interface DocumentNotifyQueue {
 	pending?: PendingDocumentNotify;
 	running: boolean;
+	/**
+	 * #3477: a close was queued. Touches that arrive before the queue drains
+	 * are for a document being closed (renamed away) and are not sent.
+	 */
+	closing?: boolean;
 }
 
 // --- Constants ---
@@ -4121,7 +4130,7 @@ async function handleNotifyOpenOnce(
 	silent = false,
 	coalescedCount = 0,
 	saved = false,
-): Promise<void> {
+): Promise<boolean | void> {
 	if (!isClientAlive(state)) return;
 	const normalizedPath = normalizeMapKey(filePath);
 	const uri =
@@ -4207,6 +4216,7 @@ async function handleNotifyOpenOnce(
 		return;
 	}
 
+	if (await closedAndGone(state, filePath, normalizedPath)) return false;
 	state.pendingOpens.add(normalizedPath);
 	state.documentVersions.set(normalizedPath, 0);
 	state.documentOpenedAt.set(normalizedPath, Date.now());
@@ -4285,9 +4295,10 @@ async function handleNotifyOpenOnce(
 function enqueueDocumentNotify(
 	state: LSPClientState,
 	normalizedPath: string,
-	run: (coalescedCount: number, saved: boolean) => Promise<void>,
+	run: (coalescedCount: number, saved: boolean) => Promise<boolean | void>,
 	saved = false,
 	readStamp?: number,
+	close = false,
 ): Promise<boolean> {
 	let queue = state.notifyChangeQueues.get(normalizedPath);
 	if (!queue) {
@@ -4295,11 +4306,22 @@ function enqueueDocumentNotify(
 		state.notifyChangeQueues.set(normalizedPath, queue);
 	}
 	return new Promise<boolean>((resolve, reject) => {
+		// #3477: sending this touch after the queued close would re-open the
+		// path, or reach the server as a didChange for a closed document.
+		if (queue!.closing && !close) {
+			resolve(false);
+			return;
+		}
 		const previous = queue?.pending;
 		// Keep superseded callers attached to the replacement's completion. The
 		// notification is dropped, but callers such as the auxiliary backlog
 		// ledger must not observe completion before the newest content is sent.
 		const waiters = previous?.waiters ?? [];
+		if (close) {
+			// The close supersedes unsent touches: their content is never sent.
+			for (const waiter of waiters) waiter.stale = true;
+			queue!.closing = true;
+		}
 		// #3481: last-READ-wins. An entry read before the pending one does not
 		// replace it; its caller waits on the newer send and learns it was stale.
 		const stale =
@@ -4342,8 +4364,9 @@ function enqueueDocumentNotify(
 					if (next.readStamp !== undefined)
 						state.sentReadStamps.set(normalizedPath, next.readStamp);
 					try {
-						await next.run(next.coalescedCount, next.saved);
-						for (const waiter of next.waiters) waiter.resolve(!waiter.stale);
+						const sent = await next.run(next.coalescedCount, next.saved);
+						for (const waiter of next.waiters)
+							waiter.resolve(sent !== false && !waiter.stale);
 					} catch (error) {
 						for (const waiter of next.waiters) waiter.reject(error);
 					}
@@ -4407,12 +4430,13 @@ async function handleNotifyChangeOnce(
 	content: string,
 	normalizedPath: string,
 	coalescedCount = 0,
-): Promise<void> {
+): Promise<boolean | void> {
 	if (!isClientAlive(state)) return;
 	const uri =
 		state.openDocumentUris?.get(normalizedPath) ?? pathToFileURL(filePath).href;
 
 	if (!state.openDocuments.has(normalizedPath)) {
+		if (await closedAndGone(state, filePath, normalizedPath)) return false;
 		// Safety fallback: keep protocol ordering valid even if caller sends
 		// didChange before first didOpen for this document.
 		const fallbackOpenSent = await safeSendNotification(
@@ -4481,14 +4505,60 @@ export function handleNotifyChange(
 	);
 }
 
-/** Close a document through the same lifecycle path exposed by the client. */
+/**
+ * #3477: a touch of a path this client closed, whose file is gone. It carries
+ * bytes read before a rename moved the file (a carried-over cascade), and
+ * opening them would leave the server a document for a file that no longer
+ * exists. A file there again (renamed back, recreated) re-opens normally.
+ */
+async function closedAndGone(
+	state: LSPClientState,
+	filePath: string,
+	normalizedPath: string,
+): Promise<boolean> {
+	if (!state.closedDocuments?.has(normalizedPath)) return false;
+	try {
+		await access(filePath);
+		return false;
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * Close a document through the same lifecycle path exposed by the client.
+ *
+ * #3477: an entry on the path's notify queue, so it waits for a send in flight
+ * and reads `openDocuments` when it runs. Unsent touches queued before it, or
+ * arriving before it drains, are not sent.
+ */
 export async function closeDocument(
 	state: LSPClientState,
 	filePath: string,
 ): Promise<void> {
 	if (!isClientAlive(state)) return;
 	const normalizedPath = normalizeMapKey(filePath);
-	if (!state.openDocuments.has(normalizedPath)) return;
+	await enqueueDocumentNotify(
+		state,
+		normalizedPath,
+		() => closeDocumentOnce(state, filePath, normalizedPath),
+		false,
+		undefined,
+		true,
+	);
+}
+
+async function closeDocumentOnce(
+	state: LSPClientState,
+	filePath: string,
+	normalizedPath: string,
+): Promise<void> {
+	if (!isClientAlive(state)) return;
+	if (!state.openDocuments.has(normalizedPath)) {
+		// Not open here, but still closed for this client: see closedAndGone.
+		state.closedDocuments?.add(normalizedPath);
+		return;
+	}
 	await safeSendNotification(state.connection, "textDocument/didClose", {
 		textDocument: {
 			uri:
