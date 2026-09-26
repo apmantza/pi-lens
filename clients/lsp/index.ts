@@ -393,7 +393,7 @@ type RenameNotifyResult =
 	| { ok: false; error: string; disposition: RenameNotifyDisposition };
 
 async function runRenameNotify(
-	send: () => Promise<void>,
+	send: () => Promise<unknown>,
 	timeoutMs: number,
 ): Promise<RenameNotifyResult> {
 	try {
@@ -750,6 +750,15 @@ export interface LSPTouchFileOptions {
 	 * those callers is answering "is this file clean right now".
 	 */
 	saved?: boolean;
+	/**
+	 * #3481: `performance.now()` taken just before the caller read `content`.
+	 * The notify queue sends the latest READ of a path rather than the latest
+	 * enqueued, so a caller that read, awaited and then touched (the cascade)
+	 * cannot land older bytes after a newer write's touch. A touch whose read
+	 * was superseded sends nothing and claims nothing. Unset keeps
+	 * last-enqueued-wins for that touch.
+	 */
+	readStamp?: number | undefined;
 	/**
 	 * #645: per-sweep gate (see `createSweepIndexGate`/`SweepIndexGate`) that
 	 * lets a `workspaceIndexing`-strategy server (e.g. marksman) pay its full
@@ -1906,13 +1915,6 @@ export class LSPService {
 		this.typeScriptIdleTimers.set(key, timer);
 	}
 
-	private fingerprintContent(content: string): string {
-		if (content.length <= 96) {
-			return `${content.length}:${content}`;
-		}
-		return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
-	}
-
 	/**
 	 * Should the whole touchFile call short-circuit? Only when the caller does
 	 * NOT need diagnostics — those callers still need to wait for the LSP to
@@ -1920,7 +1922,7 @@ export class LSPService {
 	 */
 	private shouldSkipTouch(
 		filePath: string,
-		content: string,
+		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		waitForDiagnostics: boolean,
 		serverIds: readonly string[],
@@ -1931,7 +1933,12 @@ export class LSPService {
 		// write loop skips the servers that are covered and pushes only the rest.
 		if (serverIds.length === 0) return false;
 		return serverIds.every((serverId) =>
-			this.shouldSkipNotify(filePath, content, clientScope, serverId),
+			this.shouldSkipNotify(
+				filePath,
+				contentFingerprint,
+				clientScope,
+				serverId,
+			),
 		);
 	}
 
@@ -1953,7 +1960,7 @@ export class LSPService {
 	 */
 	private shouldSkipNotify(
 		filePath: string,
-		content: string,
+		contentFingerprint: () => string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
 	): boolean {
@@ -1964,7 +1971,7 @@ export class LSPService {
 		if (!previous) return false;
 		const now = Date.now();
 		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
-		return previous.fingerprint === this.fingerprintContent(content);
+		return previous.fingerprint === contentFingerprint();
 	}
 
 	private recentTouchKey(
@@ -1977,14 +1984,14 @@ export class LSPService {
 
 	private markTouched(
 		filePath: string,
-		content: string,
+		contentFingerprint: string,
 		clientScope: LSPTouchClientScope,
 		serverId: string,
 	): void {
 		const key = this.recentTouchKey(filePath, clientScope, serverId);
 		const now = Date.now();
 		this.recentTouches.set(key, {
-			fingerprint: this.fingerprintContent(content),
+			fingerprint: contentFingerprint,
 			touchedAt: now,
 			clientScope,
 		});
@@ -3698,7 +3705,7 @@ export class LSPService {
 		if (this.checkDestroyed()) return undefined;
 		return this.documentDrift.sweep(
 			{
-				resync: async (filePath, content) => {
+				resync: async (filePath, content, _driftAgeMs, readStamp) => {
 					// Reuse the normal touch path so the resync inherits the existing
 					// per-server notify-write budget, the #743 backpressure demotion and
 					// the client-lease machinery. diagnostics:"none" keeps it a pure
@@ -3717,6 +3724,7 @@ export class LSPService {
 						source: "drift_resync",
 						clientScope: "all",
 						excludeServerIds: await this.serverIdsNotHoldingDocument(filePath),
+						readStamp,
 					});
 					// touchFile swallows a rejected or timed-out notify write so the
 					// caller's edit keeps moving, so its return proves nothing about
@@ -3835,6 +3843,7 @@ export class LSPService {
 		targeted: readonly SpawnedServer[],
 		allWritesLanded: boolean,
 		at: number,
+		contentFingerprint?: () => string,
 	): void {
 		if (!allWritesLanded || targeted.length === 0) return;
 		const targetedClients = new Set(targeted.map((entry) => entry.client));
@@ -3845,7 +3854,12 @@ export class LSPService {
 			// its view is NOT covered by this content. Recording here would claim it.
 			if (documentIsOpenOn(client, filePath)) return;
 		}
-		this.documentDrift.recordSynced(filePath, content, at);
+		this.documentDrift.recordSynced(
+			filePath,
+			content,
+			at,
+			contentFingerprint?.() ?? fingerprintDocumentContent(content),
+		);
 	}
 
 	/**
@@ -4647,6 +4661,11 @@ export class LSPService {
 			return;
 		}
 		const startedAt = Date.now();
+		// #3480: the whole-content fingerprint (a sha256 past 96 chars), computed
+		// at most once per touch however many servers it checks and marks.
+		let fingerprintMemo: string | undefined;
+		const contentFingerprint = (): string =>
+			(fingerprintMemo ??= fingerprintDocumentContent(content));
 		const hookDeadlineAt =
 			options.hook !== undefined &&
 			Object.hasOwn(HOOK_WALL_BUDGET_MS, options.hook)
@@ -4806,7 +4825,7 @@ export class LSPService {
 			if (
 				this.shouldSkipTouch(
 					filePath,
-					content,
+					contentFingerprint,
 					clientScope,
 					diagnosticsMode !== "none",
 					spawnedServerIds,
@@ -4847,7 +4866,12 @@ export class LSPService {
 			// no-new-version baseline below.
 			const notifySkippedServerIds = new Set(
 				spawnedServerIds.filter((serverId) =>
-					this.shouldSkipNotify(filePath, content, clientScope, serverId),
+					this.shouldSkipNotify(
+						filePath,
+						contentFingerprint,
+						clientScope,
+						serverId,
+					),
 				),
 			);
 			const notifySkipped =
@@ -4985,6 +5009,11 @@ export class LSPService {
 			// one outstanding write for that server. They carry no evidence about this
 			// content, so they join the coverage gap below.
 			const notifyDeferredServerIds: string[] = [];
+			// #3481: servers whose queue did not send this touch's content: a later
+			// read was sent instead, or the path is closing or was renamed away
+			// (#3477). The touch must not stamp the drift record, and its
+			// lsp_touch_file row names them.
+			const supersededServerIds: string[] = [];
 			if (!notifySkipped) {
 				const budget = notifyWriteBudgetMs();
 				// #1459: how long a queued auxiliary may wait for its resync slot. Bounded
@@ -5089,7 +5118,7 @@ export class LSPService {
 							}
 							slot = claim;
 						}
-						let wrote: true | undefined;
+						let wrote: boolean | undefined;
 						let rejected = false;
 						try {
 							const writeStartedAt = Date.now();
@@ -5104,8 +5133,9 @@ export class LSPService {
 									undefined,
 									silent,
 									options.saved === true,
+									options.readStamp,
 								)
-								.then(() => true as const);
+								.then((sent) => sent !== false);
 							// #1714: the document is now in this auxiliary's input queue,
 							// whether or not the write settles inside our budget. Counted here
 							// so the next file sees the real backlog.
@@ -5172,7 +5202,17 @@ export class LSPService {
 							// re-pushes it instead of laundering the failure into a later
 							// touch that looks fully delivered (which the silent-clean gates
 							// would then read as a confirmed clean).
-							this.markTouched(filePath, content, clientScope, entry.info.id);
+							this.markTouched(
+								filePath,
+								contentFingerprint(),
+								clientScope,
+								entry.info.id,
+							);
+						} else if (wrote === false) {
+							// #3481: the server does not hold `content` (a later read, or a
+							// closing/closed path), so no debounce entry either: a revert
+							// to `content` must be sent.
+							supersededServerIds.push(entry.info.id);
 						} else {
 							notifyWriteTimedOutServerIds.push(entry.info.id);
 							if (!rejected) {
@@ -5203,8 +5243,10 @@ export class LSPService {
 					content,
 					spawned,
 					notifyWriteTimedOutServerIds.length === 0 &&
-						notifyDeferredServerIds.length === 0,
+						notifyDeferredServerIds.length === 0 &&
+						supersededServerIds.length === 0,
 					startedAt,
+					contentFingerprint,
 				);
 				if (notifyWriteTimedOutServerIds.length > 0) {
 					logLatency({
@@ -7135,6 +7177,10 @@ export class LSPService {
 					...(notifyWriteTimedOutServerIds.length > 0 && {
 						notifyWriteTimedOutServerIds,
 					}),
+					// #3481: servers that did not send this touch's content (a later
+					// read won, or the path was closing or renamed away). Absent
+					// when none.
+					...(supersededServerIds.length > 0 && { supersededServerIds }),
 					diagnosticsTimedOut,
 					inconclusive,
 					// #1549: the attribution the issue's observability contract asks for —
@@ -8243,8 +8289,13 @@ export class LSPService {
 				oldUri: client.getDocumentUri(oldFilePath),
 			}));
 		const closeFailures: RenameNotifyFailure[] = [];
+		// #3477: every active client, not only those that report the document
+		// open now. The close is queued behind any send for the path, so an open
+		// still in flight is closed once it lands, and a client that never had
+		// the document still records it as closed, so a late touch carrying the
+		// renamed-away file's old bytes is not opened.
 		await Promise.all(
-			openDocuments.map(async ({ serverId, client }) => {
+			activeClients.map(async ({ serverId, client }) => {
 				// #1621: bounded so one wedged server's didClose write cannot stall
 				// this Promise.all — and therefore the whole rename — for every
 				// other client alongside it.
@@ -8288,7 +8339,19 @@ export class LSPService {
 				openDocuments.map(async ({ serverId, client }) => {
 					const resyncResult = await runRenameNotify(
 						() =>
-							client.notify.open(oldFilePath, content, languageId, true, true),
+							client.notify
+								.open(oldFilePath, content, languageId, true, true)
+								.then((sent) => {
+									// #3477: the timed-out close is still queued ahead of this
+									// re-open, and the queue refuses a touch behind a close (it
+									// resolves false). That is a failed resync, not a restored
+									// document.
+									if (sent === false) {
+										throw new Error(
+											"re-open not sent: the close is still queued",
+										);
+									}
+								}),
 						RENAME_NOTIFY_TIMEOUT_MS,
 					);
 					if (!resyncResult.ok) {

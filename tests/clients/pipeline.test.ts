@@ -1180,6 +1180,8 @@ describe("Pipeline", () => {
 					// #3405: the post-write sync is the touch that knows pi-lens wrote
 					// the file, so it is the one that declares a save.
 					saved: true,
+					// #3481: when the synced bytes were read.
+					readStamp: expect.any(Number),
 				},
 			);
 			// The old openFile path (which never registered the touch) must not run.
@@ -1287,6 +1289,90 @@ describe("Pipeline", () => {
 
 			expect(result.output).toContain("Auto-fixed");
 			expect(result.fileModified).toBe(true);
+		});
+	});
+
+	// #3481: the LSP sync carries WHEN its content was read, so the per-path
+	// notify queue can refuse to land it over a newer read of the same file.
+	// A stamp taken before the read that produced the synced bytes (the
+	// pre-format read, say) would rank post-format bytes as older than they are.
+	describe("LSP sync read stamp (#3481)", () => {
+		const cleanDispatch = {
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "",
+			blockerOutput: "",
+			hasBlockers: false,
+		};
+		const syncedStamp = () => {
+			const calls = (
+				mockLSPService.touchFile as unknown as {
+					mock: {
+						calls: Array<
+							[string, string, { source?: string; readStamp?: number }]
+						>;
+					};
+				}
+			).mock.calls;
+			return calls.find(([, , opts]) => opts?.source === "lsp_sync")?.[2]
+				.readStamp;
+		};
+
+		it("stamps the sync with the read after an immediate format", async () => {
+			const filePath = createTempFile(tmpDir, "stamp-format.ts", "const x=1");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue(cleanDispatch);
+			const formatService = getFormatService("test", true);
+			let formattedAt = Number.POSITIVE_INFINITY;
+			formatService.formatFile = async (fp: string) => {
+				fs.writeFileSync(fp, "const x = 1;\n");
+				formattedAt = performance.now();
+				return {
+					filePath: fp,
+					formatters: [
+						{
+							name: "biome",
+							success: true,
+							changed: true,
+							outcome: "formatted" as const,
+						},
+					],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			};
+
+			await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+				}),
+				createMockDeps({ getFormatService: () => formatService }),
+			);
+
+			expect(syncedStamp()).toBeGreaterThanOrEqual(formattedAt);
+		});
+
+		it("stamps the sync with the read after an autofix", async () => {
+			const filePath = createTempFile(tmpDir, "stamp-fix.ts", "const x=1");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue(cleanDispatch);
+			const deps = createMockDeps();
+			let fixedAt = Number.POSITIVE_INFINITY;
+			deps.biomeClient = {
+				isSupportedFile: () => true,
+				ensureAvailable: async () => true,
+				fixFileAsync: async () => {
+					fs.writeFileSync(filePath, "const x = 1;\n");
+					fixedAt = performance.now();
+					return { success: true, changed: true, fixed: 1 };
+				},
+			} as unknown as BiomeClient;
+
+			await runPipeline(createMockContext(filePath), deps);
+
+			expect(syncedStamp()).toBeGreaterThanOrEqual(fixedAt);
 		});
 	});
 

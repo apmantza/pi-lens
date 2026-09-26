@@ -41,8 +41,12 @@ CONSTANTS
     SeedFirstPush,   \* strategy.seedFirstPush (else the debounce-timer path)
     AsyncServer,     \* TRUE: a publish may be for the content before the last read
     Preserve,        \* resync keeps diagnostics (preserveDiagnostics; not touchFile's own notify)
-    Fence,           \* candidate fix: a fence request goes out with the didChange;
-                     \* version-less publishes are dropped until its response arrives
+    Fence,           \* the fix (#3484): a fence request goes out with the didChange;
+                     \* version-less publishes are dropped until its response arrives.
+                     \* The code fences only servers marked diagnosticsFence: "reply-first".
+    ReplyFirst,      \* the server answers a fence before it publishes for content it read
+                     \* after that fence's didChange (measured: yaml, intelephense). FALSE
+                     \* lets it publish the new content first (docker-langserver).
     MaxPubs,         \* bound on server publishes
     Mutant           \* "none" or a removed guard, see below
 
@@ -233,6 +237,9 @@ ServerRead ==
 
 ServerPublish ==
     /\ npubs < MaxPubs
+    \* ReplyFirst: after reading a didChange, no publish until the fence sent
+    \* with it has been read (and answered).
+    /\ ~(ReplyFirst /\ wire # << >> /\ Head(wire).k = "fence")
     /\ \E c \in (IF AsyncServer THEN {srvVer, srvPrev} ELSE {srvVer}), ne \in BOOLEAN :
          pubs' = Append(pubs, [k |-> "pub", cv |-> c,
                                dv |-> IF VersionedServer THEN c ELSE NONE, ne |-> ne])
@@ -284,6 +291,13 @@ Spec == Init /\ [][Next]_vars
 \* or for newer content, never for older content. An empty cache is not a
 \* result.
 FreshResult == (w = "read" /\ how = "settled" /\ result.has) => result.cv >= 1
+
+\* The fence never drops a publish computed for the touch's content: a
+\* version-less publish for content 1 at the head of the server's messages
+\* while the fence is out would be dropped, and a server that never
+\* republishes then leaves the touch with no answer (#3484 review, docker).
+NoFreshDropped == ~(Fence /\ fencing /\ pubs # << >> /\ Head(pubs).k = "pub"
+                    /\ Head(pubs).dv = NONE /\ Head(pubs).cv >= 1)
 
 \* The same, including a wait that timed out and read whatever was cached.
 FreshRead == (w = "read" /\ result.has) => result.cv >= 1

@@ -213,6 +213,8 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			// #3405: this touch declares no save, so the server is told nothing
 			// about one — see tests/clients/lsp/service-did-save-option.test.ts.
 			false,
+			// #3481: no read stamp, so the queue keeps last-enqueued-wins.
+			undefined,
 		);
 		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 25);
 		expect(result?.diags).toEqual([attributedDiagnostic]);

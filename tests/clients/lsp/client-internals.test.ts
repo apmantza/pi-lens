@@ -638,11 +638,12 @@ describe("clientShutdown", () => {
 				(count) => count === 2,
 				{ timeoutMs: 1_000 },
 			);
-			await expect(second).resolves.toBeUndefined();
-			await expect(newest).resolves.toBeUndefined();
+			// Round 1 N2: cancelled, never sent — not a landed write.
+			await expect(second).resolves.toBe(false);
+			await expect(newest).resolves.toBe(false);
 
 			writeGate.resolve();
-			await expect(first).resolves.toBeUndefined();
+			await expect(first).resolves.toBe(true);
 		} finally {
 			writeGate.resolve();
 		}
@@ -707,6 +708,28 @@ describe("closeDocument", () => {
 		expect(state.projectIdentityProbedFiles?.has("/project/other.ts")).toBe(
 			true,
 		);
+	});
+
+	// #3481: the last-sent read stamp lives per path for the document's open
+	// lifetime, like `documentVersions`; without the close cleanup it would
+	// keep one entry per path ever synced for the client's whole life.
+	it("forgets the closed file's last-sent read stamp (#3481)", async () => {
+		const state = createMockState();
+		await handleNotifyOpen(
+			state,
+			TEST_FILE,
+			"v1",
+			"typescript",
+			false,
+			false,
+			false,
+			7,
+		);
+		expect(state.sentReadStamps.get(TEST_KEY)).toBe(7);
+
+		await closeDocument(state, TEST_FILE);
+
+		expect(state.sentReadStamps.has(TEST_KEY)).toBe(false);
 	});
 });
 
@@ -1288,7 +1311,7 @@ describe("handleNotifyChange", () => {
 				(calls) => calls === 2,
 				{ timeoutMs: 1_000 },
 			);
-			await expect(newer).resolves.toBeUndefined();
+			await expect(newer).resolves.toBe(true);
 			expect(state.notifyChangeQueues.size).toBe(0);
 		} finally {
 			firstWrite.resolve();

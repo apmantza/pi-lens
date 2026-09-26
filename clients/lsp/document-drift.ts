@@ -68,14 +68,19 @@
  * backpressure demotion rather than bypassing them.
  */
 
+import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import { normalizeMapKey } from "../path-utils.js";
 import { createSingleFlight, type SingleFlight } from "../single-flight.js";
 
-/** Cheap content fingerprint. Same shape as the touch-debounce fingerprint. */
+/**
+ * Whole-content fingerprint, shared by the touch debounce and this module's
+ * confirmation read. It covers every character: a length + head + tail key
+ * read a same-length middle edit as unchanged (#3480).
+ */
 export function fingerprintDocumentContent(content: string): string {
 	if (content.length <= 96) return `${content.length}:${content}`;
-	return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
+	return `${content.length}:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 /** What the server was last told, and when. */
@@ -178,6 +183,8 @@ export interface DriftSweepDeps {
 		filePath: string,
 		content: string,
 		driftAgeMs: number,
+		/** #3481: `performance.now()` taken before the sweep read `content`. */
+		readStamp?: number,
 	): Promise<boolean>;
 	/**
 	 * Does a live language server still hold this document open? A record for a
@@ -242,7 +249,13 @@ export class DocumentDriftTracker {
 	 * `LSPService.recordFullyCoveredSync`. `now` is the moment the sync STARTED,
 	 * not the moment its write landed; see {@link SyncedDocumentRecord.syncedAt}.
 	 */
-	recordSynced(filePath: string, content: string, now = Date.now()): void {
+	recordSynced(
+		filePath: string,
+		content: string,
+		now = Date.now(),
+		/** #3480: the caller's already-computed fingerprint of `content`. */
+		fingerprint = fingerprintDocumentContent(content),
+	): void {
 		const key = normalizeMapKey(filePath);
 		// Delete first so a re-record moves the entry to the END of the insertion
 		// order. Without this, a hot file keeps an old cursor position and the
@@ -250,7 +263,7 @@ export class DocumentDriftTracker {
 		this.synced.delete(key);
 		this.synced.set(key, {
 			size: Buffer.byteLength(content, "utf8"),
-			fingerprint: fingerprintDocumentContent(content),
+			fingerprint,
 			syncedAt: now,
 		});
 		while (this.synced.size > DRIFT_TRACK_CAP) {
@@ -422,6 +435,7 @@ export class DocumentDriftTracker {
 				continue;
 			}
 			let content: string;
+			const readStamp = performance.now();
 			try {
 				content = await read(key);
 			} catch {
@@ -431,7 +445,7 @@ export class DocumentDriftTracker {
 			}
 			let landed = false;
 			try {
-				landed = await deps.resync(key, content, 0);
+				landed = await deps.resync(key, content, 0, readStamp);
 			} catch {
 				landed = false;
 			}
@@ -477,6 +491,7 @@ export class DocumentDriftTracker {
 				continue;
 			}
 			let content: string;
+			const readStamp = performance.now();
 			try {
 				content = await read(key);
 			} catch {
@@ -506,7 +521,7 @@ export class DocumentDriftTracker {
 			const diskSize = Buffer.byteLength(content, "utf8");
 			let landed = false;
 			try {
-				landed = await deps.resync(key, content, driftAgeMs);
+				landed = await deps.resync(key, content, driftAgeMs, readStamp);
 			} catch {
 				landed = false;
 			}

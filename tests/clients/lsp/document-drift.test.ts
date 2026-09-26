@@ -107,6 +107,120 @@ describe("DocumentDriftTracker (#1783)", () => {
 		]);
 	});
 
+	// #3480: a >96-char file edited only in the middle, keeping its length. A
+	// length+head+tail fingerprint read the edit as "unchanged" and re-stamped
+	// the record, so the server kept the old content until the next touch.
+	it("resyncs a same-length middle edit of a long file — the confirmation read hashes the whole text", async () => {
+		const head = `// ${"h".repeat(60)}\n`;
+		const tail = `// ${"t".repeat(60)}\n`;
+		const before = `${head}const x = 1;\n${tail}`;
+		const after = `${head}const x = 2;\n${tail}`;
+		expect(after.length).toBe(before.length);
+		const files = new Map<string, FakeFile>([
+			[k("/repo/long.ts"), { content: after, mtimeMs: SYNCED_AT + 500 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/long.ts"), before, SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps, resynced, events } = makeDeps(files, now);
+
+		const result = await tracker.sweep(deps, { force: true });
+
+		expect(result.unchanged).toBe(0);
+		expect(result.resynced).toBe(1);
+		expect(resynced).toEqual([
+			{ filePath: k("/repo/long.ts"), content: after },
+		]);
+		expect(events.map((e) => e.disposition)).toEqual(["resynced"]);
+	});
+
+	// #3481 round 1: the resync carries a read stamp taken BEFORE the sweep's
+	// read, so a read that straddles a write is ordered as the older one.
+	it("hands the resync a read stamp taken before its read", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/stamp.ts"), { content: "v1\n", mtimeMs: SYNCED_AT + 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/stamp.ts"), "v0\n", SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps } = makeDeps(files, now);
+		let readStartedAt = Number.NaN;
+		let stamp: number | undefined;
+		// A clock that ticks on every reading, so "before the read" is a strict
+		// order without waiting on real time.
+		let tick = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => ++tick);
+
+		await tracker.sweep(
+			{
+				...deps,
+				read: async (filePath: string) => {
+					readStartedAt = performance.now();
+					return deps.read(filePath);
+				},
+				resync: async (_filePath, _content, _age, readStamp) => {
+					stamp = readStamp;
+					return true;
+				},
+			},
+			{ force: true },
+		);
+
+		expect(stamp).toBeTypeOf("number");
+		expect(stamp).toBeLessThan(readStartedAt);
+	});
+
+	it("stamps a Git-recovery resync before its read too", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/git.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/git.ts"), "v1\n", SYNCED_AT);
+		tracker.enqueueResync([k("/repo/git.ts")]);
+		const { deps } = makeDeps(files, now);
+		let readStartedAt = Number.NaN;
+		let stamp: number | undefined;
+		// A clock that ticks on every reading, so "before the read" is a strict
+		// order without waiting on real time.
+		let tick = 0;
+		vi.spyOn(performance, "now").mockImplementation(() => ++tick);
+
+		await tracker.sweep(
+			{
+				...deps,
+				read: async (filePath: string) => {
+					readStartedAt = performance.now();
+					return deps.read(filePath);
+				},
+				resync: async (_filePath, _content, _age, readStamp) => {
+					stamp = readStamp;
+					return true;
+				},
+			},
+			{ force: true },
+		);
+
+		expect(stamp).toBeTypeOf("number");
+		expect(stamp).toBeLessThan(readStartedAt);
+	});
+
+	it("re-stamps a touched-but-identical long file without resyncing it", async () => {
+		const same = `// ${"h".repeat(60)}\nconst x = 1;\n// ${"t".repeat(60)}\n`;
+		const files = new Map<string, FakeFile>([
+			[k("/repo/same.ts"), { content: same, mtimeMs: SYNCED_AT + 500 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/same.ts"), same, SYNCED_AT);
+		clock = SYNCED_AT + 1_000;
+		const { deps, resynced, events } = makeDeps(files, now);
+
+		const result = await tracker.sweep(deps, { force: true });
+
+		expect(result.unchanged).toBe(1);
+		expect(resynced).toEqual([]);
+		expect(events.map((e) => e.disposition)).toEqual(["unchanged"]);
+	});
+
 	it("resyncs a size change whose mtime was preserved — the mtime half alone would miss it", async () => {
 		const files = new Map<string, FakeFile>([
 			[k("/repo/b.ts"), { content: "const b = 1;\n", mtimeMs: SYNCED_AT - 10 }],
@@ -406,6 +520,14 @@ describe("DocumentDriftTracker (#1783)", () => {
 		);
 
 		expect(order).toEqual(["push", "emit:resynced"]);
+	});
+
+	// #3480 round 1 N1: the caller's fingerprint is stored as given, so the
+	// touch that already hashed the content does not hash it again.
+	it("stores a fingerprint the caller already computed", () => {
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/fp.ts"), "v0\n", SYNCED_AT, "given-fp");
+		expect(tracker.peek(k("/repo/fp.ts"))?.fingerprint).toBe("given-fp");
 	});
 
 	it("caps the tracked set and evicts the least recently synced", () => {

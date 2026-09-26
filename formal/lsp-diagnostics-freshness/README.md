@@ -55,6 +55,15 @@ the version goes on the wire.
 - `FreshRead`: the same check, but also for a wait that timed out.
 - `NoKnownStaleCached`: after the send, no cached entry has a known version
   older than the document's.
+- `NoFreshDropped` (#3484 review): the fence never drops a version-less
+  publish computed for the touch's own content. A server that publishes the
+  new content once and never again would otherwise leave the touch with no
+  answer at all.
+
+`ReplyFirst` is a server property: the server answers a fence before it
+publishes for content it read after that fence's `didChange`. With
+`ReplyFirst = FALSE` the server may publish the new content first, as
+docker-langserver does 2-3 ms after `didChange`.
 
 ## Results
 
@@ -67,18 +76,23 @@ config, the state count is how far TLC got before the counterexample.
 | `VersionedSkipped` | pass | pass | 3872 | 2.5 |
 | `VersionedSeedSkipped` | pass | pass | 2744 | 2.5 |
 | `VersionedPreserve` | pass | pass | 3640 | 2.2 |
-| `VersionlessBaseline` | violated FreshResult | violated FreshResult | 1011 | 1.8 |
-| `VersionlessSkipped` | violated FreshResult | violated FreshResult | 833 | 1.8 |
-| `VersionlessSeedSkipped` | violated FreshResult | violated FreshResult | 535 | 1.9 |
+| `VersionlessBaseline` | pass (after #3484: fenced, reply-first) | pass | 2736 | 1.2 |
+| `VersionlessSkipped` | pass (after #3484: fenced, reply-first) | pass | 2736 | 1.2 |
+| `VersionlessSeedSkipped` | pass (after #3484: fenced, reply-first) | pass | 2448 | 1.2 |
+| `UnfencedVersionless` | violated FreshResult (residual: unmarked servers) | violated FreshResult | 859 | 1.2 |
+| `MutFencePublishFirst` | violated NoFreshDropped | violated NoFreshDropped | 84 | 1.1 |
 | `PreserveTimeoutRead` | violated FreshRead | violated FreshRead | 1735 | 2.1 |
 | `MutantNoGuards` | violated FreshResult | violated FreshResult | 921 | 1.7 |
 | `MutantNoSuperseded` | violated FreshResult | violated FreshResult | 3617 | 2.2 |
 | `MutantPreserveNoVersionStale` | violated FreshResult | violated FreshResult | 1689 | 2.1 |
-| `FenceSkipped` | pass | pass | 3696 | 2.1 |
-| `FenceBaseline` | pass | pass | 3408 | 1.9 |
-| `FenceAsyncServer` | violated FreshResult | violated FreshResult | 4345 | 2.0 |
-| `FenceNoClear` | violated FreshResult | violated FreshResult | 1987 | 2.1 |
-| `FenceLate` | violated FreshResult | violated FreshResult | 1893 | 1.6 |
+| `FenceSkipped` | pass | pass | 2736 | 1.3 |
+| `FenceBaseline` | pass | pass | 2448 | 1.3 |
+| `FenceAsyncServer` | violated FreshResult | violated FreshResult | 3048 | 1.2 |
+| `FenceNoClear` | violated FreshResult | violated FreshResult | 1444 | 1.3 |
+| `FenceLate` | violated FreshResult | violated FreshResult | 1777 | 1.2 |
+
+Every `Fence = TRUE` config sets `ReplyFirst = TRUE`; the others set it
+`FALSE` (it only restricts the server, so their verdicts are unchanged).
 
 The versioned passes allow `AsyncServer`: late publishes for older content
 are in scope. In the exploration grid, every combination of `SeedFirstPush`
@@ -87,8 +101,9 @@ a version-less one.
 
 ## The traces
 
-**`VersionlessSkipped` / `VersionlessBaseline`** (9 states; the admitted
-limitation):
+**`VersionlessSkipped` / `VersionlessBaseline`** (before #3484, with
+`Fence = FALSE`: violated in 9 states; `VersionlessSeedSkipped` in 8. #3484
+set `Fence = TRUE` in all three):
 1. A reads baseline 0. Its runner bumps the version to 1, clears the path,
    and sends `didChange(1)`.
 2. The server, still on content 0 (a slow analysis of the previous edit),
@@ -152,9 +167,9 @@ A throwaway vitest file (deleted from `tests/` after the run) drives the real cl
 A version-less server's stale publish settles both waits at once. The same
 publish with `version: 0` is dropped, and the wait runs to its budget.
 
-## Candidate fix and its mutations
+## The fix (#3484) and its mutations
 
-**Fence** (`Fence = TRUE`):
+**Fence** (`Fence = TRUE`, shipped in #3484):
 - in the same tick as the `didChange` send, the client also sends a request
   the server must answer in order;
 - until the reply arrives, the handler drops version-less publishes for the
@@ -175,9 +190,44 @@ The reply comes after every publish the server sent before reading the
   that out without a version, so no client-side ordering fix is sound for
   every version-less server.
 
-LSP has no generic no-op request for the fence. It would have to borrow a
-cheap request the server answers in order (for example `documentSymbol`),
-at one extra round trip per touch.
+LSP has no generic no-op request for the fence. The code borrows
+`textDocument/documentSymbol`, at one extra round trip per touch.
+
+**Neither order is sound for every server** (#3484 review). A server that
+publishes the new content before it answers the fence (docker-langserver)
+has that answer dropped, and it never republishes: `MutFencePublishFirst`
+violates `NoFreshDropped` in a few states, and against the real server the
+touch waited its full budget with no diagnostics on every edit. So the fence
+is per server.
+
+How the code realises it (`clients/lsp/client.ts` `sendFenced`,
+`armDiagnosticsFence`), and where it is narrower than the model:
+- The fence goes out only to a server whose strategy carries the measured
+  marker `diagnosticsFence: "reply-first"`
+  (`clients/lsp/wait-policy/strategies.ts`): `yaml` and `php` (intelephense).
+  `Fence = TRUE, ReplyFirst = TRUE` is that server. A marked server is fenced
+  from its first touch; nothing is learned from its publishes.
+- Every other server is unfenced (`UnfencedVersionless`, violated): docker
+  (measured publish-first), prisma (measured reply-first 23/23, but by only
+  1-4 ms, so not marked), and the unmeasured taplo, zls, dart, gleam and
+  clojure-lsp. Versioned servers need no fence.
+- A marked server that does not advertise `documentSymbolProvider` gets no
+  fence; one `lsp_diagnostics_fence` row (`outcome: "no-request"`) per client
+  says so.
+- The fence lifts on its reply, on an error reply, on a newer fence for the
+  path, or after the client's diagnostics wait ceiling
+  (`DIAGNOSTICS_WAIT_TIMEOUT_MS`); publishes are then accepted as before and
+  the binding stays "unknown". An unanswered or superseded fence's request is
+  cancelled (`$/cancelRequest`), and a fence never counts toward `isBusy()`.
+  The model's fence always gets its reply.
+- Every drop is counted: the `lsp_diagnostics_fence` row that ends a fence
+  carries `droppedPublishes` (written on a timeout, and on any end that
+  dropped something).
+- The fence is armed at the first send after the clear on the open
+  document's `didChange`, the first `didOpen`, and the change path's fallback
+  `didOpen` and `didChange`. Only the first is modelled. The `reopenOnResync`
+  close + reopen is not fenced: only opengrep uses it, and opengrep is not
+  marked.
 
 ## Scope
 

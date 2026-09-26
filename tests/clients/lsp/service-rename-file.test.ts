@@ -498,9 +498,15 @@ describe("LSPService.renameFile", () => {
 		addClient(service, "typescript", tmpDir, client);
 
 		try {
-			await expect(
-				service.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true }),
-			).rejects.toThrow(/didClose failed; rename aborted/);
+			const failure = await service
+				.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true })
+				.then(
+					() => undefined,
+					(error: Error) => error.message,
+				);
+			expect(failure).toMatch(/didClose failed; rename aborted/);
+			// The re-open landed, so no resync failure is claimed (#3477 round 1).
+			expect(failure).not.toContain("resync also failed");
 			expect(fs.existsSync(oldPath)).toBe(true);
 			expect(fs.existsSync(newPath)).toBe(false);
 			expect(client.didRenameFiles).not.toHaveBeenCalled();
@@ -515,6 +521,34 @@ describe("LSPService.renameFile", () => {
 				true,
 				true,
 			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	// #3477 round 1 S1: a timed-out close is still queued, and the queue refuses
+	// the re-open behind it (`notify.open` resolves false). That is a failed
+	// resync, not a landed one: the rename reports it (and logs
+	// lsp_rename_resync_failed) instead of claiming the document was restored.
+	it("reports a re-open the queue refused as a failed resync", async () => {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-rename-file-"),
+		);
+		const oldPath = path.join(tmpDir, "old.ts");
+		const newPath = path.join(tmpDir, "new.ts");
+		fs.writeFileSync(oldPath, "export const value = 1;\n", "utf-8");
+		const client = makeClient(tmpDir, null);
+		client.isDocumentOpen.mockReturnValue(true);
+		client.closeDocument.mockRejectedValueOnce(new Error("close timed out"));
+		client.notify.open.mockResolvedValueOnce(false);
+		const service = new LSPService();
+		addClient(service, "typescript", tmpDir, client);
+
+		try {
+			await expect(
+				service.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true }),
+			).rejects.toThrow(/resync also failed: typescript \(rejected\)/);
+			expect(fs.existsSync(oldPath)).toBe(true);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

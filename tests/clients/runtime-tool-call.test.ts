@@ -233,6 +233,11 @@ describe("handleToolCall", () => {
 				}),
 			);
 			expect(touchFileMock).toHaveBeenCalled();
+			// #3481 round 1: the auto-touch says when it read the file, so the
+			// notify queue can order it against the other reads of that file.
+			expect(touchFileMock.mock.calls.at(-1)?.[2]).toEqual(
+				expect.objectContaining({ readStamp: expect.any(Number) }),
+			);
 		} finally {
 			env.cleanup();
 		}

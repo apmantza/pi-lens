@@ -57,7 +57,12 @@ const DIRTY_PHP = `<?php\nfunction greet(string $name): string\n{\n    return "H
  * detector keys on, so the workspace IS the LSP root and the shim is the first
  * launch candidate.
  */
-function createWorkspace(name: string, sequence: string, gapMs = 250): string {
+function createWorkspace(
+	name: string,
+	sequence: string,
+	gapMs = 250,
+	firstMs = 50,
+): string {
 	const workspace = path.join(root, name);
 	fs.mkdirSync(path.join(workspace, "node_modules", ".bin"), {
 		recursive: true,
@@ -73,6 +78,9 @@ function createWorkspace(name: string, sequence: string, gapMs = 250): string {
 			'process.env.FAKE_LSP_NO_DIAGNOSTIC_PROVIDER = "1";',
 			`process.env.FAKE_LSP_PUBLISH_SEQUENCE = ${JSON.stringify(sequence)};`,
 			`process.env.FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS = ${JSON.stringify(String(gapMs))};`,
+			// #3484: intelephense carries the reply-first fence marker; measured, it
+			// answers the fence before it publishes, so the fake does too.
+			`process.env.FAKE_LSP_PUBLISH_SEQUENCE_FIRST_MS = ${JSON.stringify(String(firstMs))};`,
 			`import(${JSON.stringify(pathToFileURL(fakeServer).href)});`,
 			"",
 		].join("\n"),
@@ -153,6 +161,23 @@ describe("#3310 empty first publish from an indexing push server", () => {
 		// The affirmative clean comes from the server's own post-index publish,
 		// so it is a confirmed clean, never a timeout.
 		expect(details.primaryDiagnosticsCount).toBe(0);
+		expect(text).toContain("Primary LSP (php): confirmed clean.");
+		expect(text).not.toContain("check timed out");
+	});
+
+	// #3484: if the first publish ever lands before the fence reply (didOpen
+	// order is not measured), the fence drops it. That dropped publish is the
+	// one the hold skips; holding the next one too swallowed the real answer.
+	it("spends the hold on a publish the diagnostics fence dropped", async () => {
+		const workspace = createWorkspace("fenced", "empty,empty", 250, 0);
+		const file = path.join(workspace, "fenced.php");
+		fs.writeFileSync(
+			file,
+			`<?php\nfunction ok(string $name): string\n{\n    return "Hello " . $name;\n}\n`,
+		);
+
+		const { text } = await runDiagnostics(workspace, file, 3000);
+
 		expect(text).toContain("Primary LSP (php): confirmed clean.");
 		expect(text).not.toContain("check timed out");
 	});

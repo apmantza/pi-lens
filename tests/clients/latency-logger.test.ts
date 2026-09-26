@@ -214,6 +214,25 @@ describe("getLastLoggedPhase (loop_block attribution, #1122/#1123)", () => {
 		expect(getLastLoggedPhase()?.phase).toBe("lsp_touch_file");
 	});
 
+	// #3484: the diagnostics-fence record is a decision row (skip) or a bound
+	// timer's report (timeout, duration = the fence's age), never work of its
+	// own. Pins the `LAST_PHASE_EXCLUDED` entry so deleting it reds here.
+	it("does not let the diagnostics fence record own stall attribution (#3484)", () => {
+		logLatency({
+			type: "phase",
+			phase: "lsp_touch_file",
+			filePath: "/repo/src/app.ts",
+			durationMs: 5,
+		});
+		logLatency({
+			type: "phase",
+			phase: "lsp_diagnostics_fence",
+			filePath: "/repo/src/app.ts",
+			durationMs: 10_000,
+		});
+		expect(getLastLoggedPhase()?.phase).toBe("lsp_touch_file");
+	});
+
 	it("does not let the cache usage session summary own stall attribution (#1996)", () => {
 		logLatency({
 			type: "phase",

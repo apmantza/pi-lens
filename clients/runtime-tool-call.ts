@@ -819,6 +819,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	}
 	if (shouldAutoTouch) {
 		try {
+			// #3481: when the synced bytes were read, for the notify queue's order.
+			const readStamp = performance.now();
 			const fileContent = nodeFs.readFileSync(filePath, "utf-8");
 			const maxClientWaitMs =
 				toolName === "lsp_navigation"
@@ -834,6 +836,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					source: `tool_call:${toolName}`,
 					clientScope: "primary",
 					maxClientWaitMs,
+					readStamp,
 				})
 				.then((result) => {
 					if (toolName === "read") {

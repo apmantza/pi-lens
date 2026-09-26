@@ -217,6 +217,13 @@ const PUBLISH_SEQUENCE = (process.env.FAKE_LSP_PUBLISH_SEQUENCE ?? "")
 const PUBLISH_SEQUENCE_GAP_MS = Number(
 	process.env.FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS ?? "300",
 );
+// #3484: delay before the FIRST publish (default 0: published while the
+// didOpen/didChange is handled, before any request sent after it is read).
+// Measured intelephense answers a documentSymbol sent in the same tick first
+// (+2..4 ms) and publishes ~1 s later, which a positive delay reproduces.
+const PUBLISH_SEQUENCE_FIRST_MS = Number(
+	process.env.FAKE_LSP_PUBLISH_SEQUENCE_FIRST_MS ?? "0",
+);
 
 function publishSequenceFor(uri) {
 	if (PUBLISH_SEQUENCE.length === 0) return false;
@@ -245,11 +252,14 @@ function publishSequenceFor(uri) {
 				},
 			});
 		};
-		if (index === 0) {
+		if (index === 0 && PUBLISH_SEQUENCE_FIRST_MS <= 0) {
 			emit();
 			return;
 		}
-		const timer = setTimeout(emit, index * PUBLISH_SEQUENCE_GAP_MS);
+		const timer = setTimeout(
+			emit,
+			PUBLISH_SEQUENCE_FIRST_MS + index * PUBLISH_SEQUENCE_GAP_MS,
+		);
 		timer.unref?.();
 	});
 	return true;

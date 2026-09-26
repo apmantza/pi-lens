@@ -458,6 +458,8 @@ describe("runner status/semantic edge cases", () => {
 					auxiliaryServerIds: expect.arrayContaining(["opengrep"]),
 					maxClientWaitMs: expect.any(Number),
 					source: "dispatch-lsp-runner",
+					// #3481 round 1: when the runner read the file.
+					readStamp: expect.any(Number),
 				}),
 			);
 			expect(getDiagnostics).not.toHaveBeenCalled();

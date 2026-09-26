@@ -1060,6 +1060,8 @@ export async function resyncLspFile(
 	lspSyncCompleted: boolean,
 	getFlag: PipelineContext["getFlag"],
 	dbg: PipelineContext["dbg"],
+	/** #3481: `performance.now()` taken before `fileContent` was read. */
+	readStamp?: number,
 ): Promise<void> {
 	if (getFlag("no-lsp")) return;
 	if (!needsContentRefresh && lspSyncCompleted) return;
@@ -1109,6 +1111,7 @@ export async function resyncLspFile(
 					// the project on didSave and on nothing else) publishes for the edit
 					// only because of this flag.
 					saved: true,
+					readStamp,
 				})
 				.then(() => "done" as const)
 				.catch((err) => {
@@ -1262,6 +1265,8 @@ export interface FormatPhaseResult {
 	 */
 	formatUnavailable: Array<{ formatter: string; reason: string }>;
 	fileContent: string | undefined;
+	/** #3481: `performance.now()` taken before `fileContent` was read. */
+	fileReadStamp: number;
 }
 
 export async function runFormatPhase(
@@ -1345,6 +1350,7 @@ export async function runFormatPhase(
 		dbg(`autoformat error: ${err}`);
 	}
 
+	const fileReadStamp = performance.now();
 	try {
 		fileContent = nodeFs.readFileSync(filePath, "utf-8");
 	} catch {
@@ -1357,6 +1363,7 @@ export async function runFormatPhase(
 		formatFailures,
 		formatUnavailable,
 		fileContent,
+		fileReadStamp,
 	};
 }
 
@@ -1435,6 +1442,9 @@ export async function runPipeline(
 	// --- 1. Read file content ---
 	phase.start("read_file");
 	let fileContent: string | undefined;
+	// #3481: when `fileContent` was read, so the LSP sync below cannot land
+	// these bytes after a newer read of the same file (a same-turn pipeline).
+	let fileReadStamp = performance.now();
 	try {
 		fileContent = nodeFs.readFileSync(filePath, "utf-8");
 	} catch {
@@ -1471,6 +1481,7 @@ export async function runPipeline(
 		formattersUsed = formatResult.formattersUsed;
 		formatFailures = formatResult.formatFailures;
 		fileContent = formatResult.fileContent;
+		fileReadStamp = formatResult.fileReadStamp;
 		if (formatChanged) {
 			const absPath = path.resolve(filePath);
 			piChangedFiles.add(absPath);
@@ -1548,6 +1559,7 @@ export async function runPipeline(
 		});
 	}
 	if (fixRefresh) {
+		fileReadStamp = performance.now();
 		try {
 			fileContent = nodeFs.readFileSync(filePath, "utf-8");
 		} catch {
@@ -1592,7 +1604,15 @@ export async function runPipeline(
 	phase.start("lsp_sync");
 	let lspSyncCompleted = false;
 	if (fileContent) {
-		await resyncLspFile(filePath, fileContent, true, false, getFlag, dbg);
+		await resyncLspFile(
+			filePath,
+			fileContent,
+			true,
+			false,
+			getFlag,
+			dbg,
+			fileReadStamp,
+		);
 		lspSyncCompleted = true;
 	}
 	phase.end("lsp_sync", { completed: lspSyncCompleted, finalContent: true });
