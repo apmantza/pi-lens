@@ -336,6 +336,8 @@ export interface PipelineResult {
 	postWriteStateHash?: string;
 	/** #3506: the write token the analysis was recorded under. */
 	writeIndex?: number;
+	/** #3503: `Date.now()` taken before the bytes the analysis ran on were read. */
+	analysisReadAtMs?: number;
 	/** Files modified by pi-lens format/autofix, including side-effect files. */
 	changedFiles?: string[];
 	/** Blocking-only formatted output for turn_end re-surfacing if agent didn't fix */
@@ -1344,6 +1346,8 @@ export interface FormatPhaseResult {
 	fileContent: string | undefined;
 	/** #3481: `performance.now()` taken before `fileContent` was read. */
 	fileReadStamp: number;
+	/** #3503: `Date.now()` taken before `fileContent` was read. */
+	fileReadAtMs: number;
 }
 
 export async function runFormatPhase(
@@ -1434,6 +1438,7 @@ export async function runFormatPhase(
 	}
 
 	const fileReadStamp = performance.now();
+	const fileReadAtMs = Date.now();
 	try {
 		fileContent = nodeFs.readFileSync(filePath, "utf-8");
 	} catch {
@@ -1447,6 +1452,7 @@ export async function runFormatPhase(
 		formatUnavailable,
 		fileContent,
 		fileReadStamp,
+		fileReadAtMs,
 	};
 }
 
@@ -1544,6 +1550,10 @@ async function analysePipeline(
 	// #3481: when `fileContent` was read, so the LSP sync below cannot land
 	// these bytes after a newer read of the same file (a same-turn pipeline).
 	let fileReadStamp = performance.now();
+	// #3503: the wall-clock twin, the reference every freshness gate compares
+	// mtimes against. A write that lands after this read is newer than the
+	// verdict, even when it lands while the dispatch below is still awaited.
+	let analysisReadAtMs = Date.now();
 	try {
 		fileContent = nodeFs.readFileSync(filePath, "utf-8");
 	} catch {
@@ -1585,6 +1595,7 @@ async function analysePipeline(
 		formatFailures = formatResult.formatFailures;
 		fileContent = formatResult.fileContent;
 		fileReadStamp = formatResult.fileReadStamp;
+		analysisReadAtMs = formatResult.fileReadAtMs;
 		if (formatChanged) {
 			const absPath = path.resolve(filePath);
 			piChangedFiles.add(absPath);
@@ -1671,6 +1682,7 @@ async function analysePipeline(
 	}
 	if (fixRefresh) {
 		fileReadStamp = performance.now();
+		analysisReadAtMs = Date.now();
 		try {
 			fileContent = nodeFs.readFileSync(filePath, "utf-8");
 		} catch {
@@ -1781,6 +1793,7 @@ async function analysePipeline(
 		filePath,
 		dispatchResult.diagnostics,
 		ctx.telemetry?.writeIndex,
+		analysisReadAtMs,
 	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,
@@ -2051,6 +2064,7 @@ async function analysePipeline(
 		fileModified,
 		postWriteStateHash,
 		writeIndex: ctx.telemetry?.writeIndex,
+		analysisReadAtMs,
 		changedFiles,
 		// #3190: re-rendered from the GATED set with `formatDiagnostics(...,
 		// "blocking")` — the very expression `dispatcher.ts:1409` builds

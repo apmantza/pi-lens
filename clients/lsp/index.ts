@@ -9200,6 +9200,27 @@ export class LSPService {
 		// syscalls — so the cache write below can give `isEntryFresh` a size
 		// axis alongside the mtime.
 		const scannedSizeByFile = new Map<string, number>();
+		// #3505: the entry's `scannedAt`, the reference its dependencies' mtimes
+		// are compared against. Taken per file before its read, not once when
+		// the whole sweep records, so a dependency written while this file was
+		// being analysed is newer than the entry.
+		const scannedAtByFile = new Map<string, number>();
+		// #3505: stamp and stat a file BEFORE the read its answer is computed
+		// from. A stat taken after the read records a write that landed in
+		// between as the entry's own state, and the pre-edit verdict is then
+		// served for it. Synchronous, so it adds no event-loop tick to the
+		// timing-sensitive open burst (see `processFile`).
+		const noteScanStat = (filePath: string): void => {
+			scannedAtByFile.set(filePath, Date.now());
+			try {
+				const scanStat = nodeFs.statSync(filePath);
+				scannedMtimeByFile.set(filePath, scanStat.mtimeMs);
+				scannedSizeByFile.set(filePath, scanStat.size);
+			} catch {
+				// Best-effort: a failed stat just means this file won't be
+				// eligible for caching below (no entry gets written for it).
+			}
+		};
 
 		// Group files by their primary language server (#387, extracted as
 		// `groupFilesByPrimaryServer` for #631). tsserver — and most servers — is
@@ -9286,6 +9307,7 @@ export class LSPService {
 			for (const filePath of groupFiles) {
 				if (signal?.aborted) return;
 				let content: string;
+				noteScanStat(filePath);
 				try {
 					content = await nodeFs.promises.readFile(filePath, "utf-8");
 				} catch {
@@ -9388,26 +9410,21 @@ export class LSPService {
 
 		const processFile = async (filePath: string): Promise<void> => {
 			try {
-				const content =
-					contentCache.get(filePath) ??
-					(await nodeFs.promises.readFile(filePath, "utf-8"));
-				// #671: captured alongside the read, ahead of the (possibly slow)
-				// touchFile wait below, so the cache entry records the mtime this
-				// file actually had AT scan time — not a later re-stat that could
-				// race a concurrent edit and silently mis-date the entry. Deliberately
-				// synchronous (not `nodeFs.promises.stat`): this loop is timing-
-				// sensitive (its opens must land inside `WatchedFilesQueue`'s 100ms
-				// debounce window — see workspace-diagnostics-sweep-batch-open.test.ts
-				// / -preopen-chunk.test.ts), and a blocking `statSync` costs a few
+				// #671: captured ahead of the (possibly slow) touchFile wait below, so
+				// the cache entry records the mtime this file had AT scan time.
+				// #3505: and before the read, so it describes the bytes the answer is
+				// computed from. Content the pre-open pass read carries the stat that
+				// pass took before it. Deliberately synchronous (not
+				// `nodeFs.promises.stat`): this loop is timing-sensitive (its opens
+				// must land inside `WatchedFilesQueue`'s 100ms debounce window — see
+				// workspace-diagnostics-sweep-batch-open.test.ts /
+				// -preopen-chunk.test.ts), and a blocking `statSync` costs a few
 				// microseconds with no extra event-loop tick, where an awaited
 				// promise would insert one.
-				try {
-					const scanStat = nodeFs.statSync(filePath);
-					scannedMtimeByFile.set(filePath, scanStat.mtimeMs);
-					scannedSizeByFile.set(filePath, scanStat.size);
-				} catch {
-					// Best-effort: a failed stat here just means this file won't be
-					// eligible for caching below (no entry gets written for it).
+				let content = contentCache.get(filePath);
+				if (content === undefined) {
+					noteScanStat(filePath);
+					content = await nodeFs.promises.readFile(filePath, "utf-8");
 				}
 				// onTimeout:"undefined" so a hung file yields no diagnostics and the
 				// worker moves on; a real touchFile rejection still propagates to the
@@ -9652,6 +9669,8 @@ export class LSPService {
 					}
 					// Fast path: one project-wide pull for the whole group (opt-in).
 					if (!isWarmAttached() && workspacePullEnabled && !group.multiServer) {
+						// #3505: the server reads the files after this instant.
+						const pullStartedAt = Date.now();
 						const pulled = await this.tryWorkspacePull(
 							group.files,
 							perFileMs,
@@ -9682,6 +9701,7 @@ export class LSPService {
 									const pullStat = nodeFs.statSync(result.filePath);
 									scannedMtimeByFile.set(result.filePath, pullStat.mtimeMs);
 									scannedSizeByFile.set(result.filePath, pullStat.size);
+									scannedAtByFile.set(result.filePath, pullStartedAt);
 								} catch {
 									// Not cache-eligible without a confirmed mtime.
 								}
@@ -9875,6 +9895,7 @@ export class LSPService {
 				scannedAt,
 				result.contentHash,
 				scannedSizeByFile.get(result.filePath),
+				scannedAtByFile.get(result.filePath),
 			);
 		}
 		workspaceDiagnosticsCacheCtx.persist();

@@ -460,19 +460,16 @@ type SelfDriftUnverifiableReason =
  * replayed"), and the same reasoning governs here, where an unconfirmed
  * demotion would walk a finding out of the authoritative channel.
  *
- * Three gates, in cost order. `size` decides most cases from the stat already
- * taken, and it runs BEFORE the mtime gate: an out-of-band write (a formatter,
+ * Two gates, in cost order. `size` decides most cases from the stat already
+ * taken, with no mtime gate before it: an out-of-band write (a formatter,
  * a checkout) can land at-or-before the `recordedAtMs` baseline, so mtime alone
  * is blind to the own-file drift this axis exists to catch — the size gate fires
- * regardless of the mtime relationship. When the size matches, the mtime gate is
- * a fast path that skips the expensive hash tier for non-LSP records (size same
- * AND mtime never moved → the file almost certainly did not change, so we do
- * not read and hash every unchanged file on the hook path). All-LSP records
- * with an available hash baseline force the hash tier after the size check, so
- * a same-size rewrite at-or-before the baseline cannot remain authoritative.
- * When hashing is not forced and mtime moved, the hash separates a one-character
+ * regardless of the mtime relationship. When the size matches, the hash tier
+ * decides (#3504): an mtime fast path that skipped it for non-LSP records kept
+ * a same-size rewrite that landed at-or-before the baseline, or inside its
+ * tolerance, authoritative for the session. The hash separates a one-character
  * edit from a `touch`, reading the bytes and comparing against the baseline
- * `setInlineBlockerContentBaseline` attached off the dispatch path.
+ * the pipeline captured from the bytes it analysed.
  *
  * Both tiers fail toward `"unverifiable"`, never toward `"drift"`: a bound that
  * expires, a baseline that never landed, or a file past the per-sweep hash
@@ -483,11 +480,8 @@ type SelfDriftUnverifiableReason =
  */
 async function detectSelfDrift(args: {
 	filePath: string;
-	recordedAtMs: number;
 	recordedSize: number | undefined;
 	recordedHash: string | undefined;
-	/** All-LSP records with a hash baseline must confirm equal-size bytes. */
-	forceContent: boolean;
 	signal: AbortSignal | undefined;
 	/** Mutable per-sweep hash budget. See {@link SELF_DRIFT_HASH_BUDGET_BYTES}. */
 	budget: { bytesLeft: number; exhausted: boolean };
@@ -513,7 +507,7 @@ async function detectSelfDrift(args: {
 	);
 	if (stat === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "stat-unavailable" };
-	// Size gate FIRST, before the mtime gate. mtime is a blind signal for the
+	// Size gate FIRST, and no mtime gate at all. mtime is a blind signal for the
 	// out-of-band-rewrite case: an external write (a formatter, a checkout) can
 	// land at-or-before the `recordedAtMs` baseline, so `freshnessFromMtime`
 	// reports the own file unchanged even though its bytes differ. Size is cheap
@@ -522,19 +516,10 @@ async function detectSelfDrift(args: {
 	if (args.recordedSize === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	if (stat.size !== args.recordedSize) return { verdict: "drift" };
-	// Size matches. Non-LSP records retain the mtime fast path. All-LSP records
-	// with a hash baseline force content confirmation because a same-size rewrite
-	// can land at-or-before the baseline.
-	const freshness = freshnessFromMtime({
-		mtimeMs: stat.mtimeMs,
-		referenceMs: args.recordedAtMs,
-	});
-	if (!args.forceContent && freshness.verdict !== "stale")
-		return { verdict: "unchanged" };
-	// Same length AND mtime moved. Only the hash can separate a one-character
-	// edit from a `touch`, and a same-length edit is the common shape, not an
-	// exotic one. Forced all-LSP confirmation reaches this tier even when mtime
-	// did not move.
+	// Same length. Only the hash can separate a one-character edit from a
+	// `touch`, and a same-length edit is the common shape, not an exotic one.
+	// Whatever the mtime says (#3504): a same-size rewrite can land at-or-before
+	// the baseline, or inside its tolerance.
 	if (args.recordedHash === undefined)
 		return { verdict: "unverifiable", unverifiableReason: "missing-baseline" };
 	// Defect shape 9: each read is individually bounded, but N blockers in one
@@ -984,13 +969,8 @@ export async function sweepInlineBlockerFreshness(
 				const selfDrift = (await bounded(
 					detectSelfDrift({
 						filePath: entry.filePath,
-						recordedAtMs: entry.recordedAtMs,
 						recordedSize: entry.recordedSize,
 						recordedHash: entry.recordedHash,
-						forceContent:
-							isLspSourced &&
-							entry.recordedSize !== undefined &&
-							entry.recordedHash !== undefined,
 						signal: options?.signal,
 						budget: hashBudget,
 					}),

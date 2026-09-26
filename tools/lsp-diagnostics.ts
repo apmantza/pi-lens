@@ -1208,6 +1208,9 @@ async function collectFileDiagnosticResult(
 	// its LSP promise settles. A slower old result must not receive a newer token
 	// merely because it completed later (#1198).
 	const writeIndex = nextWriteIndex?.();
+	// #3505: the cache entry's `scannedAt`, taken before the stat and the read,
+	// so a dependency written while this file is analysed is newer than it.
+	const scannedAt = Date.now();
 	let stat: ReturnType<typeof fs.statSync>;
 	try {
 		stat = fs.statSync(file);
@@ -1381,6 +1384,9 @@ async function collectFileDiagnosticResult(
 		cwd,
 		collectedContent,
 		boundMismatch,
+		// #3505 r1 F1: the widget row is observed at the read, as the cache
+		// entry recorded below is.
+		scannedAt,
 	);
 	if (verdict.confirmed && !verdict.blocking) {
 		onConfirmedNoBlockers?.({
@@ -1424,6 +1430,7 @@ async function collectFileDiagnosticResult(
 				? hashDiagnosticContent(collectedContent)
 				: undefined,
 			stat.size,
+			scannedAt,
 		);
 	}
 	return {
@@ -1456,6 +1463,8 @@ async function runFileDiagnostics(
 	// Reserve the token before awaiting this file's LSP result. The direct-file
 	// path performs its own confirmation/reconciliation below (#1198).
 	const writeIndex = nextWriteIndex?.();
+	// #3505 r2: the widget row is observed at the read, not after the touch.
+	const observedAt = Date.now();
 	const {
 		diagnostics: rawDiags,
 		timedOut,
@@ -1572,6 +1581,7 @@ async function runFileDiagnostics(
 		cwd,
 		collectedContent,
 		boundMismatch,
+		observedAt,
 	);
 	// #1561: a confirmed current view with nothing at the blocking tier retires
 	// this file's stale inline blocker — the store #571 corrected the footer for
