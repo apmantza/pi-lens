@@ -557,6 +557,31 @@ describe("project seq allocation across processes (#3511)", () => {
 		}
 	});
 
+	it("a runtime's own consecutive edits keep its view complete and unrecorded", () => {
+		const { env, cwd, file } = editEnv();
+		try {
+			const runtime = seededRuntime(cwd);
+			for (const name of ["a.ts", "a.ts", "c.ts"]) {
+				runtime.recordProjectMutation({
+					filePath: file(name),
+					source: "agent-write",
+					cwd,
+				});
+			}
+			// Each allocation finds the log's max at our own last seq.
+			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			expect(snapshot.seq).toBe(3);
+			expect(snapshot.incomplete).toBeUndefined();
+			expect(snapshot.sequenceIndex?.projectSeq).toBe(3);
+			expect(isProjectSnapshotFresh(snapshot, 3)).toBe(true);
+			expect(getDegradationSummary().map((row) => row.kind)).not.toContain(
+				"snapshot-view-incomplete",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("each allocation folds the lines a sibling appended since this process last read the log", () => {
 		const { env, cwd, home, file } = editEnv();
 		try {

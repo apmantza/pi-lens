@@ -587,6 +587,10 @@ describe("withGenerationLockSync (#3509)", () => {
 		expect(contended).toBe(2);
 		expect(ran).toBe(1);
 		expect(result).toEqual({ held: true, value: "entered" });
+		// Waiting out a live holder is not a takeover.
+		expect(getDegradationSummary().map((row) => row.kind)).not.toContain(
+			"generation-lock-stale-takeover",
+		);
 	});
 
 	it("records a takeover from a dead holder, as every other generation-lock caller does (#3476 parity)", () => {
