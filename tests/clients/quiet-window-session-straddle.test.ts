@@ -301,11 +301,8 @@ describe("quiet-window cascade writes across a session replacement (#3499)", () 
 		const delivered = turnEnd(runtime);
 		pending.resolve(run("/proj/c.ts"));
 		const runs = await delivered;
-		expect(runs.map((r) => r.filePath).sort()).toEqual([
-			FILE,
-			NEIGHBOR,
-			"/proj/c.ts",
-		]);
+		// Window order: the settle's append, the reconcile's, then the re-park.
+		expect(runs.map((r) => r.filePath)).toEqual([FILE, NEIGHBOR, "/proj/c.ts"]);
 		expect(staleWriteSubjects()).toEqual([]);
 	});
 });
