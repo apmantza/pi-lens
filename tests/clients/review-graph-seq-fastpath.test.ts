@@ -6,8 +6,10 @@ import {
 	buildOrUpdateGraph,
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
+	flushReviewGraphPersistsForTests,
 	type GraphSeqHint,
 	getLastGraphBuildInfo,
+	waitForReviewGraphPersistsForTests,
 } from "../../clients/review-graph/builder.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
@@ -383,4 +385,132 @@ describe("review-graph seq fast path (#451)", () => {
 			env.cleanup();
 		}
 	});
+});
+
+/**
+ * #3535: the fast path must record each candidate's stat from BEFORE it read
+ * the file. A write that lands after the read and before the old re-stat got a
+ * signature for bytes the graph never saw, so every later sweep-path build (no
+ * seq hint: MCP, CLI, project_report) matched the stat and served the stale
+ * graph as `cached`, in this process and from review-graph.json.gz.
+ *
+ * The gate is a FactStore hook, not a sleep: the external write runs
+ * synchronously inside a FactStore call the build makes after it has read the
+ * file. `extract` fires on the re-extract read (`setFileFact("file.content")`
+ * from the content provider); `noop` fires in the no-op branch's
+ * changed-symbol refresh (`getBoundedSessionFact`), which runs after the
+ * content hash and before the old re-stat.
+ */
+class WriteGateFacts extends FactStore {
+	arm:
+		| { branch: "extract" | "noop"; file: string; write: () => void }
+		| undefined;
+	private fire(branch: "extract" | "noop", key: string): void {
+		const arm = this.arm;
+		if (arm?.branch !== branch) return;
+		if (!key.endsWith(normalizeMapKey(arm.file))) return;
+		this.arm = undefined;
+		arm.write();
+	}
+	override setFileFact(filePath: string, factId: string, value: unknown): void {
+		super.setFileFact(filePath, factId, value);
+		if (factId === "file.content") {
+			this.fire("extract", normalizeMapKey(filePath));
+		}
+	}
+	override getBoundedSessionFact<T>(factId: string): T | undefined {
+		this.fire("noop", factId);
+		return super.getBoundedSessionFact<T>(factId);
+	}
+}
+
+const symbolNames = (graph: { nodes: Map<string, { symbolName?: string }> }) =>
+	new Set([...graph.nodes.values()].map((node) => node.symbolName));
+
+describe("review-graph seq fast path: a write after the read (#3535)", () => {
+	afterEach(() => {
+		clearReviewGraphWorkspaceCache();
+		vi.unstubAllEnvs();
+	});
+
+	it.each([
+		["extract", "memory"],
+		["extract", "disk"],
+		["noop", "memory"],
+		["noop", "disk"],
+	] as const)(
+		"%s branch, %s tier: a hint-less build re-reads the file",
+		async (branch, tier) => {
+			vi.stubEnv("PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS", "0");
+			const env = setupTestEnvironment("pi-lens-seqfp-3535-");
+			try {
+				const aPath = createTempFile(
+					env.tmpDir,
+					"src/a.ts",
+					"export function alpha() { return 1; }\n",
+				);
+				const bPath = createTempFile(
+					env.tmpDir,
+					"src/b.ts",
+					"import { alpha } from './a';\nexport function beta() { return alpha(); }\n",
+				);
+				const facts = new WriteGateFacts();
+				const hint = makeSeqHint();
+				clearGraphCache();
+				await buildOrUpdateGraph(env.tmpDir, [aPath], facts, hint);
+				expect(getLastGraphBuildInfo().mode).toBe("full");
+
+				// A pi-observed write: a real edit for the re-extract branch, the
+				// same bytes for the no-op branch. Either way it bumps projectSeq.
+				if (branch === "extract") {
+					fs.writeFileSync(aPath, "export function alphaV2() { return 2; }\n");
+				}
+				hint.bump(aPath);
+				// The external write (an IDE or a formatter) that lands after the
+				// fast path read a.ts. A different size, so `size:mtimeMs` moves
+				// even on a coarse-mtime filesystem.
+				facts.arm = {
+					branch,
+					file: aPath,
+					write: () =>
+						fs.writeFileSync(
+							aPath,
+							"export function alphaV3External() { return 333333; }\n",
+						),
+				};
+				clearGraphCache();
+				await buildOrUpdateGraph(env.tmpDir, [aPath], facts, hint);
+				expect(getLastGraphBuildInfo().mode).toBe("seq-fastpath");
+				expect(getLastGraphBuildInfo().graphChanged).toBe(branch === "extract");
+				expect(facts.arm).toBeUndefined(); // the gate fired
+
+				if (tier === "disk") {
+					if (branch === "noop") {
+						// The no-op branch does not persist. A later fast-path
+						// re-extract of b.ts does, and carries a.ts's entry with it.
+						fs.writeFileSync(
+							bPath,
+							"import { alpha } from './a';\nexport function betaV2() { return alpha(); }\n",
+						);
+						hint.bump(bPath);
+						clearGraphCache();
+						await buildOrUpdateGraph(env.tmpDir, [bPath], facts, hint);
+						expect(getLastGraphBuildInfo().mode).toBe("seq-fastpath");
+					}
+					flushReviewGraphPersistsForTests();
+					await waitForReviewGraphPersistsForTests();
+					clearReviewGraphWorkspaceCache();
+				}
+
+				// No seq hint, no further writes: the sweep path's stat must not
+				// match a signature taken after the read.
+				clearGraphCache();
+				const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+				expect(getLastGraphBuildInfo().mode).not.toBe("cached");
+				expect(symbolNames(graph).has("alphaV3External")).toBe(true);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 });

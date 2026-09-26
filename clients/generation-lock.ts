@@ -150,6 +150,69 @@ export function releaseGeneration(hold: GenerationHold): void {
 	}
 }
 
+/** A running heartbeat started by {@link startGenerationHeartbeat}. */
+export interface GenerationHeartbeat {
+	/** Stop refreshing. Idempotent; the holder calls this in `finally`. */
+	stop(): void;
+}
+
+/**
+ * How often a heartbeat refreshes a held generation's mtime: a quarter of the
+ * lease, floored at 1s so a very short lease (tests) never thrashes the
+ * filesystem. A quarter leaves three missed ticks of margin before a
+ * contender's `pidFileIsStale` would judge the generation stale (#3515).
+ */
+export function heartbeatIntervalMs(leaseMs: number): number {
+	return Math.max(1_000, Math.floor(leaseMs / 4));
+}
+
+/**
+ * Keep a held generation's mtime fresh so a hold that legitimately outlives
+ * its lease is never judged stale by a contender's `tryAcquireGeneration`
+ * (#3515: an ERESOLVE npm install can run two 120s attempts inside the
+ * installer's 180s lease). An unref'd interval — it must never keep the
+ * process alive on its own — that the holder always stops in `finally`,
+ * released or not. A failed `utimesSync` (the generation directory gone, a
+ * transient I/O error) is swallowed here: `ownsTopGeneration` below is what
+ * the holder checks before a write it cannot safely race, not this tick.
+ */
+export function startGenerationHeartbeat(
+	hold: GenerationHold,
+	intervalMs: number,
+): GenerationHeartbeat {
+	const file = generationPath(hold.dir, hold.generation);
+	const timer = setInterval(() => {
+		try {
+			const now = new Date();
+			fs.utimesSync(file, now, now);
+		} catch {
+			// Best effort; see doc comment above.
+		}
+	}, intervalMs);
+	timer.unref();
+	return { stop: () => clearInterval(timer) };
+}
+
+/**
+ * Whether `hold` is still the live top generation: its own generation is
+ * neither marked released nor superseded by a taker that judged it stale.
+ * The holder calls this right before a write it cannot safely race with a
+ * second holder (#3515) — `startGenerationHeartbeat` is what USUALLY keeps
+ * that race from becoming reachable at all; this is the check for the tick
+ * it missed (a suspended process, a blocked event loop, a heartbeat write
+ * that failed). Any error reading the directory (removed, unreadable) is
+ * "no longer owned": the safe direction for a check guarding a write.
+ */
+export function ownsTopGeneration(hold: GenerationHold): boolean {
+	try {
+		const entries = fs.readdirSync(hold.dir);
+		if (entries.includes(releasedName(hold.generation))) return false;
+		return topGeneration(entries) === hold.generation;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * One acquisition attempt: undefined when the lock is held or another taker
  * won the race; the caller backs off and retries. Any other filesystem error

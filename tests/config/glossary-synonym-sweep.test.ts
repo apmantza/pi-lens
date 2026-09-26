@@ -1167,7 +1167,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/read-guard.ts": 13,
 		"clients/resource-sampler.ts": 7,
 		"clients/review-graph-logger.ts": 1,
-		"clients/review-graph/builder.ts": 11,
+		"clients/review-graph/builder.ts": 12,
 		"clients/runtime-context.ts": 4,
 		"clients/runtime-coordinator.ts": 4,
 		"clients/runtime-turn.ts": 6,
