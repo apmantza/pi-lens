@@ -30,7 +30,11 @@ import {
 	type DiagnosticStrategy,
 	SERVER_DIAGNOSTIC_STRATEGIES,
 } from "../../clients/lsp/wait-policy/strategies.js";
-import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
+import {
+	assertNonEmptyScan,
+	escapeRegExp,
+	stripSource,
+} from "../support/sweep-kit.js";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -82,10 +86,6 @@ export function markerPairs(
 				pairs.push(`${server}:${on[i]}+${on[j]}`);
 	}
 	return pairs;
-}
-
-function escapeRegExp(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function auditPairCoverage(
