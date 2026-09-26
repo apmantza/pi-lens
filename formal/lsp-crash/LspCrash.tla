@@ -282,10 +282,11 @@ Decide(i) ==
                    ready, readyGen, cold, coldGen, tg, wrote, verdict, evictUnderLease>>
 
 \* notify.open. A skipped server is not written. A dead client resolves
-\* `false` since #3543: nothing went on the wire (handleNotifyOpen's
-\* `if (!isClientAlive(state)) return Promise.resolve(false)`, and a queued
-\* run that finds the client dead returns `false`). Before #3543 it resolved
-\* `true`; `Fix = "clearDeadFalse"` was the only value that modelled `false`.
+\* `false` since #3543: the queued run that finds the client dead returns
+\* `false`, since nothing went on the wire. Before #3543 it resolved `true`.
+\* No config's verdict depends on this value (every config keeps its verdict
+\* with #3501's `true`), so `Fix = "clearDeadFalse"` is now the same model
+\* as "clear".
 Write(i) ==
     /\ pc[i] = "write"
     /\ IF skip[i]

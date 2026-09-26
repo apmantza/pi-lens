@@ -29,9 +29,8 @@ Issues: #3501 (the touch debounce outlives its client), #3502
      dead client, runs the #1127/#1142 breakers and respawns, then a lease.
   2. Decide: `shouldSkipNotify` reads the `recentTouches` entry for
      (path, scope, serverId).
-  3. Write: `notify.open`. A dead client resolves `false` since #3543
-     (`handleNotifyOpen`'s `!isClientAlive` return, and a queued run that
-     finds the client dead). Before #3543 both resolved `true`.
+  3. Write: `notify.open`. A dead client resolves `false` since #3543 (the
+     queued run finds the client dead). Before #3543 it resolved `true`.
   4. Mark: `markTouched`, after the write resolved `true`.
   5. For `"C"`: the wait, bounded by its own timeout, then the verdict. A
      silentOnClean server's timed-out silence is confirmed clean when
@@ -155,19 +154,26 @@ counterexample its workers reach.
 - **Bind, not clear.** The code compares the entry's `WeakRef` to the
   touch's own client in `shouldSkipNotify`, which `shouldSkipTouch` also
   calls for each spawned server.
-- **A dead client's write resolves `false` (#3543).** #3501 kept it `true`:
-  under the bind, the entry it marks can only match the dead instance, and
-  `false` alone does not close the concurrent route
-  (`MutFixClearDeadFalseConcurrent`). That holds for the debounce entry,
-  which is per client. The drift record is per file, not per client:
+
+## A decision the model is indifferent to
+
+- **A dead client's write resolves `false` (#3543).** `Write` models it, but
+  no verdict depends on it: with `Write` set back to #3501's `true`, all 31
+  configs keep their verdicts. So `"clearDeadFalse"` is now the same model
+  as `"clear"`. #3501 kept `true` because, under the bind, the entry a dead
+  write marks can only match the dead instance. That covers the debounce
+  entry, which is per client. The drift record is per file, not per client:
   `touchFile` stamps it when every targeted write resolved `true`, so a dead
-  client's `true` told the drift sweep a respawned server's view was in sync
-  and the sweep never re-pushed it. #3543 makes every write that put nothing
-  on the wire resolve `false`. Its readers: `touchFile` files the server
-  under `supersededServerIds` and stamps neither record; the rename resync
-  counts the re-open as failed and names the dead client in its reason. The
-  bind stays: a write that landed before the crash still marks, and every
-  #3501 and #3502 config keeps its verdict with `Write` resolving `false`.
+  client's `true` told the drift sweep a respawned server's view was in sync.
+  The decision rests on the tests, not on this model:
+  - `tests/clients/lsp/notify-read-order.test.ts`: `writes no debounce entry
+    or drift record for a touch on a dead client`, and `writes no debounce
+    entry or drift record for a queued touch the client died under`.
+  - `waiterTruth` in `tests/clients/lsp/notify-queue-properties.test.ts`.
+
+  Its readers: `touchFile` files the server under `supersededServerIds` and
+  stamps neither record. The rename resync counts the re-open as failed and
+  names the dead client in its reason.
 
 ## Replay on the real code
 
