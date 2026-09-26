@@ -181,6 +181,14 @@ const spawnVerdict = vi.hoisted(() => ({
 	stdout: "",
 	stderr: "",
 	signal: undefined as string | undefined,
+	// #3515: an optional hook a test can set to react to (and mutate the
+	// verdict of) a SPECIFIC spawn call, decided by its own args — used to
+	// simulate a competing installer taking the lock's generation between
+	// installNpmTool's ERESOLVE attempt and its --legacy-peer-deps retry,
+	// which nothing else in this shared mock can express (the two calls
+	// happen inside one `await`, with no tick back to the test in between).
+	// Undefined by default: every other test in this file is unaffected.
+	onCall: undefined as ((command: string, args: string[]) => void) | undefined,
 }));
 vi.mock("../../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
@@ -194,6 +202,7 @@ vi.mock("../../../clients/safe-spawn.js", () => ({
 			args: args ?? [],
 			timeout: options?.timeout,
 		});
+		spawnVerdict.onCall?.(String(command), args ?? []);
 		return {
 			stdout: spawnVerdict.stdout,
 			stderr: spawnVerdict.stderr,
@@ -249,6 +258,10 @@ vi.mock("../../../clients/dependency-checker.js", () => ({
 
 import * as realFs from "node:fs";
 import * as path from "node:path";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import {
 	_peekEnsureInFlightForTesting,
 	checkProbeCache,
@@ -337,8 +350,10 @@ beforeEach(() => {
 	spawnVerdict.stdout = "";
 	spawnVerdict.stderr = "";
 	spawnVerdict.signal = undefined;
+	spawnVerdict.onCall = undefined;
 	mockFsReadFile.mockRejectedValue(new Error("ENOENT"));
 	fakeAccess(/* nothing */);
+	resetDegradationLedger();
 });
 
 afterAll(() => {
@@ -877,5 +892,108 @@ describe("ensureTool force-reinstall", () => {
 		// Reaching installTool means it attempted the GitHub-release fetch. (The
 		// fetch is mocked to fail, so no real network — hermetic.)
 		expect(httpsGetCalls.length).toBeGreaterThan(0);
+	});
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// install lock lost mid-install (#3515)
+// ═════════════════════════════════════════════════════════════════════════
+
+describe("install lock lost mid-install aborts before a second write (#3515)", () => {
+	// The generation-lock heartbeat (clients/generation-lock.ts,
+	// tests/clients/generation-lock-heartbeat.test.ts) is what USUALLY keeps
+	// an ERESOLVE-length hold from ever going stale — this exercises the
+	// belt-and-suspenders half: installNpmTool re-checks ownership right
+	// before its second critical write (the --legacy-peer-deps retry spawn)
+	// and must never race a competing holder's writes into TOOLS_DIR even if
+	// the heartbeat somehow missed the tick. `spawnVerdict.onCall` simulates
+	// exactly that miss by creating a competing generation the instant the
+	// FIRST attempt's spawn is reached — before installNpmTool's own
+	// ownership re-check runs for the retry.
+	it("never spawns the --legacy-peer-deps retry once a competing generation has taken the lock", async () => {
+		process.env.PI_LENS_TEST_MODE = "1";
+		process.env.PI_LENS_TEST_NPM_SCRIPT = "install";
+		const GENERATIONS_DIR = path.join(
+			TEST_HOME,
+			".pi-lens",
+			"tools",
+			".install.locks",
+		);
+		let stolen = false;
+		spawnVerdict.onCall = (_command, args) => {
+			if (!stolen && args.includes("madge")) {
+				stolen = true;
+				// A competing installer judged this hold stale and took over: a
+				// generation ABOVE whatever this test's own hold created. The
+				// generations directory persists across cases in this file (each
+				// forceReinstall in an earlier test bumps it), so the next
+				// generation number is read off disk rather than assumed.
+				const top = Math.max(
+					0,
+					...realFs
+						.readdirSync(GENERATIONS_DIR)
+						.map((name) => /^lock\.(\d+)$/.exec(name)?.[1])
+						.filter((digits): digits is string => digits !== undefined)
+						.map(Number),
+				);
+				realFs.writeFileSync(
+					path.join(GENERATIONS_DIR, `lock.${top + 1}`),
+					"999999 0\n",
+					{ flag: "wx" },
+				);
+				spawnVerdict.status = 1;
+				spawnVerdict.stderr =
+					"npm error ERESOLVE could not resolve dependency tree";
+			}
+		};
+
+		const result = await ensureTool("madge", { forceReinstall: true });
+
+		expect(result).toBeUndefined();
+		const installSpawns = spawnCalls.filter(({ args }) =>
+			args.includes("madge"),
+		);
+		// Exactly the FIRST attempt: the retry that would have raced the new
+		// holder's writes into TOOLS_DIR never spawns.
+		expect(installSpawns).toHaveLength(1);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "install-lock-lost-mid-install",
+			)?.count,
+		).toBe(1);
+	});
+
+	// Mutation / red-first: with the competing generation removed, the SAME
+	// ERESOLVE failure retries normally — proving the abort above is caused
+	// by the lock loss, not by the ERESOLVE stderr or the mock plumbing.
+	it("mutation: the same ERESOLVE failure DOES retry when nobody has taken the lock", async () => {
+		process.env.PI_LENS_TEST_MODE = "1";
+		process.env.PI_LENS_TEST_NPM_SCRIPT = "install";
+		let calls = 0;
+		spawnVerdict.onCall = (_command, args) => {
+			if (args.includes("madge")) {
+				calls += 1;
+				if (calls === 1) {
+					spawnVerdict.status = 1;
+					spawnVerdict.stderr =
+						"npm error ERESOLVE could not resolve dependency tree";
+				} else {
+					spawnVerdict.status = 0;
+					spawnVerdict.stderr = "";
+				}
+			}
+		};
+
+		await ensureTool("madge", { forceReinstall: true });
+
+		const installSpawns = spawnCalls.filter(({ args }) =>
+			args.includes("madge"),
+		);
+		expect(installSpawns).toHaveLength(2);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "install-lock-lost-mid-install",
+			),
+		).toBeUndefined();
 	});
 });
