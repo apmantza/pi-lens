@@ -1031,7 +1031,7 @@ export class RuntimeCoordinator {
 			 * fire-and-forget and can outlive its session; after a replacement,
 			 * both the append and the re-park are dropped.
 			 */
-			generation?: GenerationHandle;
+			generation?: GenerationHandle | undefined;
 		} = {},
 	): Promise<{ settled: number; timedOut: number }> {
 		const pending = this._pendingCascadeRuns;
