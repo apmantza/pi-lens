@@ -516,6 +516,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real cross-process directory removal races node's own recursive-watch readdirSync; no in-process stand-in can occupy the other side of that window",
 	},
+	// 2026-09-26 (#3511 review round 3): the quick-mode warmup witness must
+	// run the real warmup timer and background word-index save, which no
+	// test hook awaits.
+	"ungoverned-wait-for:clients/word-index-lifecycle.test.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"session_start's background tasks and the quick-mode warmup timer expose no awaitable, so a real-time vi.waitFor is the only join on their snapshot save",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

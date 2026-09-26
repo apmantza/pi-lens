@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — session_start's background tasks and the quick-mode warmup timer expose no awaitable, so a real-time vi.waitFor is the only join on their snapshot save.
 /**
  * #348 phase 1 — the word index's load -> rebuild-if-stale -> persist
  * lifecycle, given the same shape the call-graph task already uses:

@@ -273,7 +273,7 @@
 		"clients/runtime-session-warmup-supersession.test.ts": 1,
 		"clients/runtime-session.test.ts": 13,
 		"clients/widget-state.test.ts": 2,
-		"clients/word-index-lifecycle.test.ts": 11,
+		"clients/word-index-lifecycle.test.ts": 13,
 		"clients/word-index-observability.test.ts": 5,
 		"clients/word-index.test.ts": 5,
 		"mcp/turn-end-route.smoke.test.ts": 1,
