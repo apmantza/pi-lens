@@ -498,6 +498,62 @@ describe("#1162 — bounded session_start sequence read", () => {
 		},
 	);
 
+	it.each([
+		["written by this process", false, 0, false],
+		["read back from disk", true, 0, false],
+		["written by this process", false, 2, true],
+		["read back from disk", true, 2, true],
+	])(
+		"retro hydrate at the confirmed seq with an unlocked entry at log position 1, %s, snapshot folded %s entries: hydrated %s (#3511 review round 2)",
+		async (_source, fromDisk, logEntries, hydrated) => {
+			const env = setupTestEnvironment("pi-lens-seq-budget-retro-unlocked-");
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const cwd = makeProject(env);
+				const exportedFile = path.join(cwd, "index.ts");
+				saveProjectSnapshot(cwd, {
+					version: PROJECT_SNAPSHOT_VERSION,
+					projectRoot: cwd,
+					generatedAt: new Date().toISOString(),
+					seq: 0,
+					logEntries,
+					files: {},
+					symbols: {},
+					reverseDeps: {},
+					cachedExports: [["x", exportedFile]],
+					projectRulesScan: { hasCustomRules: true, rules: [] },
+				});
+				if (fromDisk) {
+					await waitForProjectSnapshotPersistsForTests();
+					_resetProjectSnapshotParseCacheForTests();
+				}
+
+				const slow = deferred<ProjectSequenceIndex>();
+				readLatestProjectSequenceAsyncSpy.mockImplementation(
+					() => slow.promise,
+				);
+
+				const runtime = new RuntimeCoordinator();
+				await handleSessionStart(makeDeps(cwd, runtime));
+				// The late read: the snapshot's seq, and an unlocked entry first in
+				// the log, which only a snapshot that folded it can vouch for.
+				slow.resolve({
+					projectSeq: 0,
+					fileSeqByPath: new Map(),
+					logEntries: 2,
+					unlockedThrough: 1,
+				});
+				await settleDeferredRead();
+
+				expect(runtime.cachedExports.get("x")).toBe(
+					hydrated ? exportedFile : undefined,
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	it("does NOT reseed in the background for a one-shot `pi --print` invocation (shape 4 screen)", async () => {
 		const env = setupTestEnvironment("pi-lens-seq-budget-print-");
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");

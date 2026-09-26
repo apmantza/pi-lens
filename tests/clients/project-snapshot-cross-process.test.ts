@@ -945,48 +945,57 @@ describe("project seq allocation across processes (#3511)", () => {
 		}
 	});
 
-	it("an incomplete snapshot is stored with a legacy seq no pre-#3511 reader matches (review round 2)", () => {
-		const { env, cwd, home, file } = editEnv();
-		try {
-			const runtime = seededRuntime(cwd);
-			expect(siblingEdit(home, cwd, 0, file("b.ts"))).toBe(1);
-			runtime.recordProjectMutation({
-				filePath: file("a.ts"),
-				source: "agent-write",
-				cwd,
-			});
-			saveRuntimeProjectSnapshot({ cwd, runtime });
-			const raw = () => [
-				JSON.parse(fs.readFileSync(getProjectSnapshotMetaPath(cwd), "utf8")),
-				JSON.parse(
-					gunzipSync(fs.readFileSync(getProjectSnapshotPath(cwd))).toString(),
-				),
-			];
-			// A pre-#3511 reader compares the stored seq with the log max (never
-			// negative), or with -1 after a timed-out sequence read.
-			for (const stored of raw()) {
-				expect(stored.seq).toBeLessThan(-1);
-				expect(stored.incompleteSeq).toBe(2);
-			}
-			_resetProjectSnapshotParseCacheForTests();
-			expect(readProjectSnapshotMeta(cwd)).toMatchObject({
-				seq: 2,
-				incomplete: true,
-			});
-			expect(loadProjectSnapshot(cwd)).toMatchObject({
-				seq: 2,
-				incomplete: true,
-			});
+	it.each([
+		["the sync writer", true],
+		["the persist worker", false],
+	])(
+		"an incomplete snapshot is stored with a legacy seq no pre-#3511 reader matches, through %s (review round 2)",
+		async (_writer, sync) => {
+			const { env, cwd, home, file } = editEnv();
+			if (!sync) delete process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC;
+			try {
+				const runtime = seededRuntime(cwd);
+				expect(siblingEdit(home, cwd, 0, file("b.ts"))).toBe(1);
+				runtime.recordProjectMutation({
+					filePath: file("a.ts"),
+					source: "agent-write",
+					cwd,
+				});
+				saveRuntimeProjectSnapshot({ cwd, runtime });
+				await waitForProjectSnapshotPersistsForTests();
+				const raw = () => [
+					JSON.parse(fs.readFileSync(getProjectSnapshotMetaPath(cwd), "utf8")),
+					JSON.parse(
+						gunzipSync(fs.readFileSync(getProjectSnapshotPath(cwd))).toString(),
+					),
+				];
+				// A pre-#3511 reader compares the stored seq with the log max (never
+				// negative), or with -1 after a timed-out sequence read.
+				for (const stored of raw()) {
+					expect(stored.seq).toBeLessThan(-1);
+					expect(stored.incompleteSeq).toBe(2);
+				}
+				_resetProjectSnapshotParseCacheForTests();
+				expect(readProjectSnapshotMeta(cwd)).toMatchObject({
+					seq: 2,
+					incomplete: true,
+				});
+				expect(loadProjectSnapshot(cwd)).toMatchObject({
+					seq: 2,
+					incomplete: true,
+				});
 
-			// A complete snapshot keeps its real seq there, so older readers
-			// still hydrate it.
-			saveRuntimeProjectSnapshot({ cwd, runtime: seededRuntime(cwd) });
-			for (const stored of raw()) {
-				expect(stored.seq).toBe(2);
-				expect(stored.incompleteSeq).toBeUndefined();
+				// A complete snapshot keeps its real seq there, so older readers
+				// still hydrate it.
+				saveRuntimeProjectSnapshot({ cwd, runtime: seededRuntime(cwd) });
+				await waitForProjectSnapshotPersistsForTests();
+				for (const stored of raw()) {
+					expect(stored.seq).toBe(2);
+					expect(stored.incompleteSeq).toBeUndefined();
+				}
+			} finally {
+				env.cleanup();
 			}
-		} finally {
-			env.cleanup();
-		}
-	});
+		},
+	);
 });
