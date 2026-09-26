@@ -476,7 +476,7 @@ export function registerCascadeTierReconcileTask(
 	if (_reconcileTaskRegistered) return;
 	_reconcileTaskRegistered = true;
 
-	registerQuietWindowTask("cascade_tier3_reconcile", async () => {
+	registerQuietWindowTask("cascade_tier3_reconcile", async (context) => {
 		if (!isTierAwareCascadeEnabled()) return;
 		const outcomes = await reconcileOutstandingCascadeTouches(getLspService());
 
@@ -487,14 +487,20 @@ export function registerCascadeTierReconcileTask(
 		for (const o of outcomes) {
 			try {
 				if (o.outcome === "resolved-found" && o.diagnostics?.length) {
-					options.onResolvedFound?.({
+					const neighbor: ResolvedFoundNeighbor = {
 						filePath: o.filePath,
 						serverId: o.serverId,
 						diagnostics: o.diagnostics,
 						...(o.publishedAt !== undefined
 							? { publishedAt: o.publishedAt }
 							: {}),
-					});
+					};
+					const deliver = () => options.onResolvedFound?.(neighbor);
+					// #3499: the re-injection appends to the runtime shared with a
+					// same-cwd replacement; drop it if the window's session is gone.
+					if (context)
+						context.sessionGeneration.guardedWrite(o.filePath, deliver);
+					else deliver();
 				} else if (o.outcome === "resolved-clean" && o.publishedAt != null) {
 					// #1444: the stale-footer half of the same honesty problem — the
 					// neighbour proved clean, but only after the in-lane wait was

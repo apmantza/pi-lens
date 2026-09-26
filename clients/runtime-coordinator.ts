@@ -26,6 +26,10 @@ import { TurnSummaryCollector } from "./turn-summary.js";
 import { deriveProviderFromModelId } from "./model-provider.js";
 import { beginTurnContext, setTurnContextSession } from "./turn-context.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	createGenerationSource,
+	type GenerationHandle,
+} from "./generation-guard.js";
 
 /** Keep deferred cascade admission bounded without dropping late findings. */
 export const MAX_PENDING_CASCADE_RUNS = 32;
@@ -329,7 +333,8 @@ const TOOL_CALL_ATTRIBUTION_TTL_MS = 5 * 60_000;
 
 export class RuntimeCoordinator {
 	private _projectRoot = normalizeMapKey(process.cwd());
-	private _sessionGeneration = 0;
+	private readonly _sessionGeneration =
+		createGenerationSource("runtime-session");
 	private _sessionStartedAt = Date.now();
 	private _errorDebtBaseline: ErrorDebtBaseline | null = null;
 	private _pipelineCrashCounts = new Map<string, number>();
@@ -427,7 +432,7 @@ export class RuntimeCoordinator {
 	readonly partialApplyRecords = new PartialApplyRecordStore();
 
 	resetForSession(startedAt = Date.now()): void {
-		this._sessionGeneration += 1;
+		this._sessionGeneration.bump();
 		this._sessionStartedAt = startedAt;
 		this._complexityBaselines.clear();
 		this._pipelineCrashCounts.clear();
@@ -892,11 +897,19 @@ export class RuntimeCoordinator {
 	}
 
 	get sessionGeneration(): number {
-		return this._sessionGeneration;
+		return this._sessionGeneration.current();
+	}
+
+	/**
+	 * #3499: a handle on the current session, for a write that lands after an
+	 * await which can outlive the session (a fire-and-forget quiet window).
+	 */
+	captureSessionGeneration(): GenerationHandle {
+		return this._sessionGeneration.capture();
 	}
 
 	isCurrentSession(generation: number): boolean {
-		return this._sessionGeneration === generation;
+		return this._sessionGeneration.current() === generation;
 	}
 
 	markStartupScanInFlight(name: string, generation: number): void {
@@ -1011,7 +1024,15 @@ export class RuntimeCoordinator {
 	 */
 	async settleCascadeRuns(
 		maxWaitMs: number,
-		settleOptions: { trackTurnEndClock?: boolean } = {},
+		settleOptions: {
+			trackTurnEndClock?: boolean;
+			/**
+			 * #3499: the session this settle belongs to. The quiet window runs
+			 * fire-and-forget and can outlive its session; after a replacement,
+			 * both the append and the re-park are dropped.
+			 */
+			generation?: GenerationHandle;
+		} = {},
 	): Promise<{ settled: number; timedOut: number }> {
 		const pending = this._pendingCascadeRuns;
 		if (pending.length === 0) return { settled: 0, timedOut: 0 };
@@ -1048,14 +1069,23 @@ export class RuntimeCoordinator {
 				timeout,
 			]);
 
+			const { generation } = settleOptions;
+			const commit = (subject: string, write: () => void): void => {
+				if (generation) generation.guardedWrite(subject, write);
+				else write();
+			};
 			let settled = 0;
 			let timedOut = 0;
 			for (const entry of tracked) {
-				if (entry.done && entry.run) {
-					this.appendCascadeRun(entry.run);
+				const { run } = entry;
+				if (entry.done && run) {
+					commit(run.filePath, () => this.appendCascadeRun(run));
 					settled += 1;
 				} else {
-					this._pendingCascadeRuns.push(entry.promise);
+					// An unsettled compute has no file yet; the ledger row counts them.
+					commit("cascade-pending", () =>
+						this._pendingCascadeRuns.push(entry.promise),
+					);
 					timedOut += 1;
 				}
 			}
