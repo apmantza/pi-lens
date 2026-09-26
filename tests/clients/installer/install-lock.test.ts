@@ -61,6 +61,7 @@ afterEach(() => {
 	fs.rmSync(LEGACY, { force: true });
 	fs.rmSync(GENERATIONS, { recursive: true, force: true });
 	resetDegradationLedger();
+	vi.useRealTimers();
 });
 
 afterAll(() => removeTempDirSync(TEST_HOME));
@@ -220,5 +221,32 @@ describe("install lock across versions (#3476)", () => {
 		const gate = await acquireManagedInstallGate("test");
 		expect(gate.ok).toBe(true);
 		await gate.release?.();
+	});
+
+	// #3515: the lease (installLockMaxAgeMs — the install timeout plus 60s
+	// slack, 180s by default) is shorter than a legitimate ERESOLVE npm
+	// install, which runs two 120s runInstallAttempts inside ONE hold
+	// (clients/installer/index.ts's installNpmTool). Nothing renewed the
+	// generation's mtime while that ran, so a second installer judged the
+	// first stale and took over mid-write. Real elapsed time is not
+	// realistic to wait out here (240s+), so this drives Date/setTimeout with
+	// fake timers rather than a real sleep.
+	describe("install lock lease vs. a long ERESOLVE-length hold (#3515)", () => {
+		it("keeps a second installer out across a hold that outlives the old 180s lease", async () => {
+			vi.useFakeTimers();
+			const first = await acquireManagedInstallGate("test");
+			expect(first.ok).toBe(true);
+			// Two 120s runInstallAttempts inside one hold: 240s, longer than the
+			// 180s lease (PI_LENS_INSTALL_TIMEOUT_MS unset -> 120_000 + 60_000).
+			vi.advanceTimersByTime(240_000);
+			const secondAttempt = acquireManagedInstallGate("test");
+			// The contended retry loop awaits a real (now fake) 100ms setTimeout
+			// between attempts, bounded by PI_LENS_INSTALL_LOCK_TIMEOUT_MS=150 —
+			// advance far enough to let it exhaust and resolve.
+			await vi.advanceTimersByTimeAsync(1_000);
+			const second = await secondAttempt;
+			expect(second.ok).toBe(false);
+			await first.release?.();
+		});
 	});
 });
