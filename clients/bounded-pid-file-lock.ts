@@ -2,13 +2,23 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import {
+	type GenerationHold,
+	isLockContention,
+	recordGenerationTakeover,
+	recordLegacyLockHeld,
+	releaseGeneration,
+	tryAcquireGeneration,
+} from "./generation-lock.js";
 
 const waitArray = new Int32Array(new SharedArrayBuffer(4));
 
 /**
- * How long a bounded lock with no readable pid stays live (#3475).
+ * How long a bounded lock with no readable pid stays live (#3475), and since
+ * #3476 the bounded lock's lease: a generation older than this is stale even
+ * if its pid is alive.
  *
- * `openSync(lockPath, "wx")` and the token write are separate steps, so a
+ * The exclusive create and the token write are separate steps, so a
  * contender can read a lock whose creator is alive but has not written its
  * token yet. Reading that empty file as a dead owner unlinked a live lock. A
  * lock with no parseable pid is therefore live until its mtime is this old,
@@ -16,6 +26,14 @@ const waitArray = new Int32Array(new SharedArrayBuffer(4));
  * leaves behind. The same bound as the registry lock's LOCK_STALE_MS.
  */
 const UNREADABLE_LOCK_STALE_MS = 5_000;
+
+/**
+ * The generation directory of a pid-file lock (#3476): `<store>.lock` holds
+ * its generations in `<store>.locks`.
+ */
+function generationDir(lockPath: string): string {
+	return `${lockPath}s`;
+}
 
 /** A contender's verdict on an existing bounded lock. */
 function boundedLockIsStale(lockPath: string): boolean {
@@ -234,21 +252,87 @@ export async function acquireQuarantinePidFileLock(
 	}
 }
 
-/**
- * Acquire a bounded synchronous cross-process file lock.
- *
- * PID liveness cannot distinguish a recycled PID from the original owner. A
- * recycled PID can therefore make a stale lock look live, but only for the
- * caller's bounded wait. OS start-time validation would require a platform-
- * specific subprocess on this synchronous behavior-gating path; the unique
- * token instead prevents a late release from deleting a replacement lock.
- */
 interface BoundedPidFileLockOptions {
 	waitMs: number;
 	retryMs: number;
 	timeoutMessage: string;
 }
 
+/**
+ * The pre-#3476 bounded lock file, `lockPath` itself. Writers from older
+ * versions take only this file, so while mixed versions run a generation
+ * holder holds it too: an older writer blocks on it, and a live older writer
+ * blocks the holder. Only a generation holder creates or removes it, so
+ * writers of this version never race each other for it. A stale one is
+ * removed by path, which races only an older writer's own takeover.
+ */
+function createLegacyBoundedLock(lockPath: string, token: string): boolean {
+	try {
+		fs.writeFileSync(lockPath, token, { encoding: "utf8", flag: "wx" });
+		return true;
+	} catch (cause) {
+		if (isLockContention(cause)) return false;
+		throw cause;
+	}
+}
+
+function takeLegacyBoundedLock(lockPath: string, token: string): boolean {
+	if (createLegacyBoundedLock(lockPath, token)) return true;
+	try {
+		if (!boundedLockIsStale(lockPath)) return false;
+		fs.unlinkSync(lockPath);
+	} catch {
+		// Gone since the create, or (Windows) still open elsewhere: retry.
+		return false;
+	}
+	return createLegacyBoundedLock(lockPath, token);
+}
+
+function releaseLegacyBoundedLock(lockPath: string, token: string): void {
+	try {
+		// An older writer's stale takeover may have replaced it: keep theirs.
+		if (fs.readFileSync(lockPath, "utf8") === token) fs.unlinkSync(lockPath);
+	} catch {
+		// Protected write completed; cleanup is best-effort.
+	}
+}
+
+/** One attempt: the hold, or undefined when the lock is held (retry). */
+function tryAcquireBoundedLock(
+	lockPath: string,
+	token: string,
+): GenerationHold | undefined {
+	const hold = tryAcquireGeneration(
+		generationDir(lockPath),
+		UNREADABLE_LOCK_STALE_MS,
+	);
+	if (!hold) return undefined;
+	if (hold.tookOverStale) recordGenerationTakeover(hold);
+	let took: boolean;
+	try {
+		took = takeLegacyBoundedLock(lockPath, token);
+	} catch (cause) {
+		releaseGeneration(hold);
+		throw cause;
+	}
+	if (took) return hold;
+	recordLegacyLockHeld(lockPath);
+	releaseGeneration(hold);
+	return undefined;
+}
+
+/**
+ * Acquire a bounded synchronous cross-process file lock.
+ *
+ * Since #3476 it is a generation lock (`clients/generation-lock.ts`) in
+ * `<lockPath>s`, so of two takers of a dead owner's lock exactly one enters.
+ * The old takeover unlinked `lockPath`, and a taker acting on an earlier
+ * judgement could unlink a live successor's lock.
+ *
+ * PID liveness cannot distinguish a recycled PID from the original owner. A
+ * recycled PID can therefore make a stale lock look live, but only until the
+ * UNREADABLE_LOCK_STALE_MS lease runs out.
+ */
 export function acquireBoundedPidFileLock(
 	lockPath: string,
 	options: BoundedPidFileLockOptions & { onContention?: "throw" },
@@ -271,37 +355,20 @@ export function acquireBoundedPidFileLock(
 	const token = `${process.pid}:${Date.now()}:${randomUUID()}`;
 	const deadline = Date.now() + options.waitMs;
 	for (;;) {
-		try {
-			const fd = fs.openSync(lockPath, "wx");
-			fs.writeFileSync(fd, token, "utf8");
-			fs.closeSync(fd);
+		const hold = tryAcquireBoundedLock(lockPath, token);
+		if (hold) {
 			return () => {
-				try {
-					if (fs.readFileSync(lockPath, "utf8") === token) {
-						fs.unlinkSync(lockPath);
-					}
-				} catch {
-					// Protected write completed; cleanup is best-effort.
-				}
+				releaseLegacyBoundedLock(lockPath, token);
+				releaseGeneration(hold);
 			};
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			try {
-				if (boundedLockIsStale(lockPath)) {
-					fs.unlinkSync(lockPath);
-					continue;
-				}
-			} catch (lockError) {
-				if ((lockError as NodeJS.ErrnoException).code === "ENOENT") continue;
-			}
-			if (Date.now() >= deadline) {
-				if (options.onContention === "skip-log") {
-					options.logContention();
-					return null;
-				}
-				throw new Error(options.timeoutMessage, { cause: error });
-			}
-			Atomics.wait(waitArray, 0, 0, options.retryMs);
 		}
+		if (Date.now() >= deadline) {
+			if (options.onContention === "skip-log") {
+				options.logContention();
+				return null;
+			}
+			throw new Error(options.timeoutMessage);
+		}
+		Atomics.wait(waitArray, 0, 0, options.retryMs);
 	}
 }

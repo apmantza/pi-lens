@@ -110,6 +110,9 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"rule precedence fixtures, not a production population sweep",
 	"tests/clients/atomic-write.test.ts":
 		"atomic-write behavior cases, not a production population sweep",
+	"tests/clients/bounded-pid-file-lock.test.ts":
+		"lock behavior cases; it lists one lock directory and asserts an empty " +
+		"degradation ledger, not a production population sweep",
 	"tests/clients/bundled-resource-health.test.ts":
 		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep (#2636, same shape as skills-resolver.test.ts below)",
 	"tests/clients/bus-producer-coverage.test.ts":

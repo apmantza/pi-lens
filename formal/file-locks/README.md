@@ -20,8 +20,9 @@ pinned `tla2tools.jar` to `.cache/` and verifies its sha256. It needs Java.
 - `clients/instance-registry-lock.ts` before #3476 (`Registry*.cfg` other
   than `RegistryCrash.cfg`), guarding the registry read-modify-write in
   `clients/instance-registry.ts`;
-- `acquireBoundedPidFileLock` in `clients/bounded-pid-file-lock.ts`
-  (`Bounded*.cfg`), guarding `commitDurableStore`.
+- `acquireBoundedPidFileLock` in `clients/bounded-pid-file-lock.ts` before
+  #3476 (`Bounded*.cfg` other than `BoundedCrash.cfg`), guarding
+  `commitDurableStore`.
 
 Each acquisition creates a new file. The exclusive create and the pid write
 are separate steps unless `AtomicCreate`. Stale takeover and release act on
@@ -30,8 +31,9 @@ whatever file the path names at that moment.
 **`GenerationLock.tla`** is the redesign from #3476. The lock is a series of
 files `lock.1`, `lock.2`, … Every acquisition, including a stale takeover, is
 an exclusive create of the next generation, so nothing is removed by path.
-`clients/generation-lock.ts` implements it, and the registry lock uses it since
-#3476 (`RegistryCrash.cfg`). `ListedMarker = TRUE` judges as that code does:
+`clients/generation-lock.ts` implements it, and the registry lock
+(`RegistryCrash.cfg`) and the bounded lock (`BoundedCrash.cfg`) use it since
+#3476. `ListedMarker = TRUE` judges as that code does:
 the released marker is read from the listing, and a generation file that is
 gone reads as held. The code creates a generation with `wx` rather than
 linking a written temp file (hard links fail on FAT/exFAT); a judge that reads
@@ -57,7 +59,7 @@ makes `Free` false in more states than the model's atomic create.
 | `RegistryCrashFix4.cfg` | the same, four writers | `MutualExclusion` violated |
 | `BoundedNoFault.cfg` | none | pass (fixed in #3475; `MutualExclusion` violated before) |
 | `BoundedLinkedNoFault.cfg` | none, lock linked from a written temp file | pass (the alternative #3475 considered) |
-| `BoundedCrash.cfg` | one writer dies | `MutualExclusion` violated (#3476) |
+| `BoundedCrash.cfg` | one writer dies | pass on the generation lock (#3476); `MutualExclusion` violated on the path lock before |
 | `GenerationNoFault.cfg` | none | pass |
 | `GenerationCrash.cfg` | one writer dies, two rounds each | pass |
 | `GenerationCrash4.cfg` | four writers, two die | pass |
@@ -118,7 +120,7 @@ Not modelled:
 - pid reuse;
 - the quarantine lock itself, whose restore has the shape of
   `RegistryCrashFix.cfg`;
-- writers from before #3476 running beside current ones. A registry
-  generation holder also holds the old `<registry>.lock` file so they block
+- writers from before #3476 running beside current ones. A registry or
+  bounded generation holder also holds the old `.lock` file so they block
   each other, and a stale one keeps the old path takeover race against an
   older writer.
