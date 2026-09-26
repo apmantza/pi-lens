@@ -306,6 +306,14 @@ ADR: docs/adr/0009-reported-path-attribution.md
     lines carry structure and exclude the rest before counting; decline rather
     than pin a style when only ambiguous runs remain.
 
+54. **One-direction filter proof:** a filter that drops stale input is proven
+    in both directions: it never passes stale input and never drops the only
+    fresh answer. The model carries a no-drop invariant beside the safety one,
+    and the test double emits in the real server's measured order, not the
+    order the fix assumes (#3484 r1: the fence dropped docker-langserver's only
+    publish; the model checked `FreshResult` alone and the fake published after
+    the fence reply).
+
 </important>
 
 <important if="a runner outcome or tool execution">
@@ -420,6 +428,13 @@ ADR: docs/adr/0009-reported-path-attribution.md
 
 30. **Load-time platform constant:** use a live platform read or an isolated
     fresh import for every platform branch test.
+
+55. **Field inherited across entry kinds:** when a coalescing queue carries a
+    field from a replaced entry into its replacement (a read stamp, a save
+    flag), check every kind the replacement can be, not only the kind the fix
+    was written for (#3491: a queued close inherited a stale touch's read stamp
+    and the stale-read drop discarded the close). No model composes the two
+    fixes yet; that is #3495.
 
 </important>
 
