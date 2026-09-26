@@ -2198,6 +2198,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const writeIndex = runtime.nextWriteIndex();
 	// #3507: the turn this token was drawn in orders it across turns.
 	const writeTurnIndex = runtime.turnIndex;
+	// #3506 r1 F8: the session the token belongs to. index.ts' bound abandons
+	// this handler without cancelling it, so it can settle after a
+	// session_start that restarted the turn and write counters.
+	const writeSession = runtime.captureSessionGeneration();
 	let modifiedRanges: Array<{ start: number; end: number }> | undefined;
 	// #2423: ranges a shape adapter resolved from the tool's own input. Only a
 	// classified non-native edit shape sets these — a plain host `edit` carries
@@ -2541,31 +2545,37 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// #3507: both verbs are ordered by this dispatch's token, so an older
 	// pipeline that settles after a newer one of the same file changes nothing.
 	let inlineVerdictApplied: boolean;
-	if (result.inlineBlockerSummary) {
+	const { inlineBlockerSummary } = result;
+	if (inlineBlockerSummary) {
 		// #1561: stamp the verdict with THIS dispatch's write token — the same
 		// counter `lsp_diagnostics`' reconciliation seam draws from — so a later
 		// confirmed-clean result can be ordered against it instead of racing it.
 		inlineVerdictApplied =
-			runtime.recordInlineBlockers(
-				filePath,
-				result.inlineBlockerSummary,
-				// #3506: the token of the bytes the pipeline analysed.
-				result.writeIndex ?? writeIndex,
-				result.inlineBlockerSources,
-				result.inlineBlockerLines,
-				result.inlineBlockerFileContent,
-				// #3246: the structured blockers the summary was rendered from, so a
-				// later `lens_diagnostic_mark` can be applied to this record at turn
-				// end instead of replaying pre-mark text.
-				result.inlineBlockerDiagnostics,
-				writeTurnIndex,
+			writeSession.guardedWrite(filePath, () =>
+				runtime.recordInlineBlockers(
+					filePath,
+					inlineBlockerSummary,
+					// #3506: the token of the bytes the pipeline analysed.
+					result.writeIndex ?? writeIndex,
+					result.inlineBlockerSources,
+					result.inlineBlockerLines,
+					result.inlineBlockerFileContent,
+					// #3246: the structured blockers the summary was rendered from, so a
+					// later `lens_diagnostic_mark` can be applied to this record at turn
+					// end instead of replaying pre-mark text.
+					result.inlineBlockerDiagnostics,
+					writeTurnIndex,
+				),
 			) !== undefined;
 	} else {
-		inlineVerdictApplied = runtime.clearInlineBlockers(
-			filePath,
-			result.writeIndex ?? writeIndex,
-			writeTurnIndex,
-		);
+		inlineVerdictApplied =
+			writeSession.guardedWrite(filePath, () =>
+				runtime.clearInlineBlockers(
+					filePath,
+					result.writeIndex ?? writeIndex,
+					writeTurnIndex,
+				),
+			) ?? false;
 	}
 
 	// A superseded verdict must not latch the commit gate either (#3507).

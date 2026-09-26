@@ -16,8 +16,9 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
 import type { CacheManager } from "../../clients/cache-manager.js";
-import type { FormatService } from "../../clients/format-service.js";
+import { FormatService } from "../../clients/format-service.js";
 import { setHostFileMutationQueueLoader } from "../../clients/file-mutation-queue.js";
+import { HOOK_WALL_BUDGET_MS } from "../../clients/hook-budgets.js";
 import { runPipeline } from "../../clients/pipeline.js";
 import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -87,6 +88,37 @@ vi.mock("../../clients/bootstrap.js", async () => {
 				);
 			}),
 	);
+});
+
+// #3506 r1: an in-place formatter CHILD for the real FormatService, the shape
+// of formatters.ts formatFile's spawn: it reads the file, runs, and writes its
+// format of what it read, whatever the service's budget decided meanwhile.
+const formatterChild = vi.hoisted(() => ({
+	active: false,
+	parked: undefined as undefined | (() => void),
+	resume: undefined as undefined | Promise<void>,
+}));
+vi.mock("../../clients/formatters-lazy.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/formatters-lazy.js")>();
+	return {
+		...actual,
+		loadFormatters: async () => {
+			const real = await actual.loadFormatters();
+			if (!formatterChild.active) return real;
+			return {
+				...real,
+				getFormattersForFile: async () => [{ name: "slowfmt" }],
+				formatFile: async (fp: string) => {
+					const before = fs.readFileSync(fp, "utf8");
+					formatterChild.parked?.();
+					await formatterChild.resume;
+					fs.writeFileSync(fp, before.replace("let value=1", "let value = 1;"));
+					return { success: true, changed: true, outcome: "formatted" };
+				},
+			};
+		},
+	};
 });
 
 import { dispatchLintWithResult } from "../../clients/dispatch/integration.js";
@@ -417,6 +449,43 @@ describe("formal/dispatch-pipeline replays", () => {
 			} as never);
 			expect(inlineSummaries(runtime)).toEqual([]);
 			expect(runtime.gitGuardHasBlockers).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("session straddle (#3506 r1 F8): an old session's handler that settles after session_start records nothing into the new session", async () => {
+		const env = setupTestEnvironment("tla-inline-session-");
+		try {
+			const filePath = path.join(env.tmpDir, "a.ts");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			for (let turn = 0; turn < 3; turn += 1) runtime.beginTurn();
+			const { entered, release } = scriptDispatch({
+				v1: "blocker",
+				v2: "blocker",
+			});
+			fs.writeFileSync(filePath, "export const x = 'v1';\n");
+			// index.ts' bound abandoned this handler; it runs on.
+			const late = handleToolResult({
+				...deps(runtime, noBiome),
+				event: ev("edit", filePath, "c1"),
+			} as never);
+			await entered.p;
+			runtime.resetForSession();
+			runtime.beginTurn();
+			release.open();
+			await late;
+			expect(inlineSummaries(runtime)).toEqual([]);
+			// The new session's own first edit records under its own token.
+			fs.writeFileSync(filePath, "export const y = 'v2';\n");
+			await handleToolResult({
+				...deps(runtime, noBiome),
+				event: ev("edit", filePath, "c2"),
+			} as never);
+			expect(inlineSummaries(runtime)).toEqual([
+				{ writeIndex: 1, blocker: "BLOCKER-FROM-v2" },
+			]);
 		} finally {
 			env.cleanup();
 		}
@@ -796,6 +865,238 @@ describe("formal/dispatch-pipeline replays", () => {
 				expect(fs.readFileSync(filePath, "utf8")).toBe(
 					"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
 				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// ── review round 1 ──────────────────────────────────────────────────
+		describe("the hold outlives an abandoned formatter child (r1 F3)", () => {
+			beforeEach(() => {
+				formatterChild.active = true;
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			});
+			afterEach(() => {
+				vi.useRealTimers();
+				formatterChild.active = false;
+				formatterChild.parked = undefined;
+				formatterChild.resume = undefined;
+			});
+
+			/** Parks the formatter child between its read and its write. */
+			function parkChild() {
+				const parked = gate();
+				const resume = gate();
+				formatterChild.parked = parked.open;
+				formatterChild.resume = resume.p;
+				return { parked, resume };
+			}
+
+			it("FixerOrphan (#3506 r1): the --immediate-format child the budget gave up on keeps pi's queue until it writes", async () => {
+				const env = setupTestEnvironment("tla-format-orphan-");
+				try {
+					const filePath = path.join(env.tmpDir, "a.ts");
+					fs.writeFileSync(filePath, "let value=1\n");
+					vi.mocked(dispatchLintWithResult).mockImplementation(
+						async () => clean("any") as never,
+					);
+					const { parked, resume } = parkChild();
+					const run = runPipeline(
+						{
+							filePath,
+							cwd: env.tmpDir,
+							toolName: "edit",
+							autofixMode: "deferred",
+							getFlag: (name: string) =>
+								name === "immediate-format" || name === "no-lsp",
+							dbg: () => {},
+						},
+						{
+							biomeClient: noBiome as unknown as BiomeClient,
+							ruffClient: {} as never,
+							metricsClient: {} as never,
+							getFormatService: () => new FormatService("tla", true),
+							fixedThisTurn: new Set<string>(),
+						},
+					);
+					await parked.p;
+					// The service's per-file budget fires; the child runs on.
+					await vi.advanceTimersByTimeAsync(
+						HOOK_WALL_BUDGET_MS.tool_result_edit,
+					);
+					await run;
+					const agent = agentAppend(
+						filePath,
+						"export const AGENT_EDIT_2 = 2;\n",
+					);
+					await afterQueueRegistration(env.tmpDir);
+					expect(agent.wrote()).toBe(false);
+					resume.open();
+					await agent.done;
+					expect(fs.readFileSync(filePath, "utf8")).toBe(
+						"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+					);
+				} finally {
+					env.cleanup();
+				}
+			});
+
+			it("deferred drain (#3506 r1): the drain formatter its 30 s aggregate gave up on keeps pi's queue until it writes", async () => {
+				const env = setupTestEnvironment("tla-drain-format-orphan-");
+				try {
+					const filePath = path.join(env.tmpDir, "a.ts");
+					fs.writeFileSync(filePath, "let value=1\n");
+					const runtime = new RuntimeCoordinator();
+					runtime.projectRoot = env.tmpDir;
+					runtime.deferMutation(
+						filePath,
+						env.tmpDir,
+						"edit",
+						env.tmpDir,
+						"format",
+					);
+					const { parked, resume } = parkChild();
+					const drain = handleAgentEnd(
+						drainDeps(runtime, env, {
+							getFormatService: () => new FormatService("tla", true),
+						}),
+					);
+					await parked.p;
+					// The hook's own bound fires first; the phase's 30 s aggregate
+					// then gives up on the child, which runs on.
+					await vi.advanceTimersByTimeAsync(30_000);
+					await drain;
+					const agent = agentAppend(
+						filePath,
+						"export const AGENT_EDIT_2 = 2;\n",
+					);
+					await afterQueueRegistration(env.tmpDir);
+					expect(agent.wrote()).toBe(false);
+					resume.open();
+					await agent.done;
+					expect(fs.readFileSync(filePath, "utf8")).toBe(
+						"let value = 1;\nexport const AGENT_EDIT_2 = 2;\n",
+					);
+				} finally {
+					env.cleanup();
+				}
+			});
+		});
+
+		/** A Biome client whose availability probe (an install) is in flight. */
+		function installingBiome() {
+			const installing = gate();
+			const installed = gate();
+			const client = {
+				isSupportedFile: () => true,
+				ensureAvailable: async () => {
+					installing.open();
+					await installed.p;
+					return true;
+				},
+				fixFileAsync: async () => ({ success: true, changed: false, fixed: 0 }),
+			} as unknown as BiomeClient;
+			return { client, installing, installed };
+		}
+
+		it("autofix install (#3506 r1 F5): an install in progress does not hold pi's queue, so the agent's edit lands", async () => {
+			const env = setupTestEnvironment("tla-fixer-install-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				vi.mocked(dispatchLintWithResult).mockImplementation(
+					async () => clean("any") as never,
+				);
+				const { client, installing, installed } = installingBiome();
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const write = handleToolResult({
+					...deps(runtime, client),
+					event: ev("write", filePath, "c1"),
+				} as never);
+				await installing.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				expect(agent.wrote()).toBe(true);
+				installed.open();
+				await write;
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("deferred drain install (#3506 r1 F5): an install in progress does not hold pi's queue, so the agent's edit lands", async () => {
+			const env = setupTestEnvironment("tla-drain-install-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				fs.writeFileSync(path.join(env.tmpDir, "biome.json"), "{}\n");
+				const filePath = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferMutation(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"autofix",
+				);
+				const { client, installing, installed } = installingBiome();
+				const drain = handleAgentEnd(
+					drainDeps(runtime, env, { biomeClient: client }),
+				);
+				await installing.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				await afterQueueRegistration(env.tmpDir);
+				expect(agent.wrote()).toBe(true);
+				installed.open();
+				await drain;
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("fixer crash (#3506 r1 F6): a fixer that throws inside the hold releases pi's queue", async () => {
+			const env = setupTestEnvironment("tla-fixer-throws-");
+			try {
+				writeBiomeAgreement(env.tmpDir);
+				const filePath = path.join(env.tmpDir, "a.ts");
+				fs.writeFileSync(filePath, "var a = 1;\n");
+				const inFixer = gate();
+				const crash = gate();
+				const fixer = {
+					isSupportedFile: () => true,
+					ensureAvailable: async () => true,
+					fixFileAsync: async () => {
+						inFixer.open();
+						await crash.p;
+						throw new Error("fixer crashed");
+					},
+				} as unknown as BiomeClient;
+				const run = runPipeline(
+					{
+						filePath,
+						cwd: env.tmpDir,
+						toolName: "write",
+						getFlag: (name: string) => name === "no-lsp",
+						dbg: () => {},
+					},
+					{
+						biomeClient: fixer,
+						ruffClient: { isPythonFile: () => false } as never,
+						metricsClient: {} as never,
+						getFormatService: () => ({}) as FormatService,
+						fixedThisTurn: new Set<string>(),
+					},
+				);
+				await inFixer.p;
+				const agent = agentAppend(filePath, "export const AGENT_EDIT_2 = 2;\n");
+				crash.open();
+				await expect(run).rejects.toThrow("fixer crashed");
+				await afterQueueRegistration(env.tmpDir);
+				expect(agent.wrote()).toBe(true);
 			} finally {
 				env.cleanup();
 			}

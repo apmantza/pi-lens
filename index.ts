@@ -321,7 +321,10 @@ import {
 } from "./clients/session-start-observability.js";
 import { normalizeToolDefinition } from "./clients/tool-definition.js";
 import { warmFormatters } from "./clients/formatters-lazy.js";
-import { setHostFileMutationQueueLoader } from "./clients/file-mutation-queue.js";
+import {
+	noteHostSessionManager,
+	setHostFileMutationQueueLoader,
+} from "./clients/file-mutation-queue.js";
 
 type DispatchIntegration = Awaited<ReturnType<typeof loadDispatchIntegration>>;
 let loadedDispatchIntegration: DispatchIntegration | undefined;
@@ -730,9 +733,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// console, because it runs outside every window.
 	const pi = withConsoleCaptureWindows(hostPi);
 	// #3506: pi-lens' format and autofix writers join pi's per-file mutation
-	// queue. pi serves its own package to an extension through the loader's
-	// virtualModules, so this resolves to the running host's queue; the lookup
-	// runs on the first write, and a host without it records a degradation.
+	// queue. The lookup runs on the first write. It reaches the running host's
+	// copy of the package when jiti transpiles pi-lens (its native import fails
+	// on the host-provided static imports) and can reach a second copy where
+	// those resolve natively; clients/file-mutation-queue.ts checks which, and
+	// a host without the export records a degradation.
 	setHostFileMutationQueueLoader(
 		() => import("@earendil-works/pi-coding-agent"),
 	);
@@ -2020,6 +2025,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 								};
 							}
 						)?.sessionManager;
+						// #3506: the host's own instance, to tell its SDK copy apart.
+						noteHostSessionManager(sessionManager);
 						return {
 							sessionId: sessionManager?.getSessionId?.(),
 							sessionFile: getSessionFile(ctx),

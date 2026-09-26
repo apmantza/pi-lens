@@ -8,14 +8,32 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../clients/degradation-ledger.js";
+import {
+	noteHostSessionManager,
 	setHostFileMutationQueueLoader,
 	withHostFileMutationQueue,
 } from "../clients/file-mutation-queue.js";
-import { createPiMock } from "./support/pi-mock.js";
+import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
+
+// The resolved-queue row is an extension-log record, which the sink drops in
+// test mode; capture it at the seam.
+vi.mock("../clients/extension-log.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../clients/extension-log.js")>()),
+	logExtension: vi.fn(),
+}));
+import { logExtension } from "../clients/extension-log.js";
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
@@ -32,6 +50,7 @@ describe("index.ts registers pi's mutation queue for pi-lens' writers (#3506)", 
 	let tmp: string | undefined;
 	afterEach(() => {
 		setHostFileMutationQueueLoader(undefined);
+		noteHostSessionManager(undefined);
 		if (tmp) removeTempDirSync(tmp);
 	});
 
@@ -71,4 +90,83 @@ describe("index.ts registers pi's mutation queue for pi-lens' writers (#3506)", 
 		},
 		WIRING_TIMEOUT_MS,
 	);
+
+	// #3506 r1 (C2): session_start hands the host's own session manager to the
+	// check that tells the host's SDK copy from a second one.
+	describe("the SDK-copy check reads the host's session manager", () => {
+		const previousStartupMode = process.env.PI_LENS_STARTUP_MODE;
+		afterEach(() => {
+			_resetSessionLifecycleForTests();
+			resetDegradationLedger();
+			vi.mocked(logExtension).mockClear();
+			if (previousStartupMode === undefined)
+				delete process.env.PI_LENS_STARTUP_MODE;
+			else process.env.PI_LENS_STARTUP_MODE = previousStartupMode;
+		});
+
+		async function startSessionThenWrite(sessionManager: unknown) {
+			tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3506-copy-"));
+			process.env.PI_LENS_STARTUP_MODE = "quick";
+			_resetSessionLifecycleForTests();
+			resetDegradationLedger();
+			vi.mocked(logExtension).mockClear();
+			const { default: registerExtension } = await import("../index.js");
+			const pi = createPiMock({});
+			registerExtension(pi.asExtensionAPI() as never);
+			const ctx = Object.assign(makeCtx({ cwd: tmp }), { sessionManager });
+			await pi.emit("session_start", makeSessionStartEvent(), ctx);
+			await withHostFileMutationQueue(path.join(tmp, "a.ts"), async () => {});
+			return {
+				resolved: vi
+					.mocked(logExtension)
+					.mock.calls.map(([entry]) => entry)
+					.filter((entry) => entry.subsystem === "file-mutation-queue"),
+				degraded: getDegradationSummary().filter(
+					(group) => group.kind === "host-file-mutation-queue-unavailable",
+				),
+			};
+		}
+
+		it(
+			"the host's own session manager verifies the copy the lookup reached",
+			async () => {
+				const { resolved, degraded } = await startSessionThenWrite(
+					SessionManager.inMemory(os.tmpdir()),
+				);
+				expect(resolved).toEqual([
+					expect.objectContaining({ metadata: { hostCopy: "verified" } }),
+				]);
+				expect(degraded).toEqual([]);
+			},
+			WIRING_TIMEOUT_MS,
+		);
+
+		it(
+			"a session manager of another SDK copy records the second-copy degradation",
+			async () => {
+				class SecondCopySessionManager {
+					getSessionId() {
+						return "second-copy-session";
+					}
+					getSessionFile() {
+						return undefined;
+					}
+				}
+				const { resolved, degraded } = await startSessionThenWrite(
+					new SecondCopySessionManager(),
+				);
+				expect(resolved).toEqual([]);
+				expect(degraded).toEqual([
+					expect.objectContaining({
+						latestReasons: [
+							expect.objectContaining({
+								reason: expect.stringContaining("second copy"),
+							}),
+						],
+					}),
+				]);
+			},
+			WIRING_TIMEOUT_MS,
+		);
+	});
 });

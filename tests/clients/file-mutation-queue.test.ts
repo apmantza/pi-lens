@@ -4,15 +4,31 @@
  * run, and must say so once in the degradation ledger (AGENTS.md shape 10: a
  * lost safety property is never silent).
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import {
+	noteHostSessionManager,
 	setHostFileMutationQueueLoader,
 	withHostFileMutationQueue,
 } from "../../clients/file-mutation-queue.js";
+
+// The success row is an extension-log record, which the sink drops in test
+// mode; capture it at the seam.
+vi.mock("../../clients/extension-log.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/extension-log.js")>()),
+	logExtension: vi.fn(),
+}));
+import { logExtension } from "../../clients/extension-log.js";
+
+function resolvedRows() {
+	return vi
+		.mocked(logExtension)
+		.mock.calls.map(([entry]) => entry)
+		.filter((entry) => entry.subsystem === "file-mutation-queue");
+}
 
 const KIND = "host-file-mutation-queue-unavailable";
 
@@ -23,9 +39,11 @@ function queueRows() {
 describe("withHostFileMutationQueue (#3506)", () => {
 	beforeEach(() => {
 		resetDegradationLedger();
+		vi.mocked(logExtension).mockClear();
 	});
 	afterEach(() => {
 		setHostFileMutationQueueLoader(undefined);
+		noteHostSessionManager(undefined);
 		resetDegradationLedger();
 	});
 
@@ -68,7 +86,7 @@ describe("withHostFileMutationQueue (#3506)", () => {
 				count: 1,
 				latestReasons: [
 					{
-						subject: "@earendil-works/pi-coding-agent",
+						subject: "withFileMutationQueue",
 						reason: "Cannot find package '@earendil-works/pi-coding-agent'",
 					},
 				],
@@ -85,11 +103,69 @@ describe("withHostFileMutationQueue (#3506)", () => {
 			expect.objectContaining({
 				latestReasons: [
 					{
-						subject: "@earendil-works/pi-coding-agent",
+						subject: "withFileMutationQueue",
 						reason: "the host SDK exports no withFileMutationQueue",
 					},
 				],
 			}),
 		]);
+	});
+
+	// #3506 r1 (C2): the lazy import can reach a second copy of the SDK where
+	// pi-lens' static imports resolve natively; that copy's queue does not
+	// order pi's own edits, so the lookup checks the copy against the host's
+	// session manager and records the outcome either way.
+	describe("which SDK copy the lookup reached", () => {
+		function hostQueueDouble(queued: string[]) {
+			return async <T>(filePath: string, fn: () => Promise<T>) => {
+				queued.push(filePath);
+				return fn();
+			};
+		}
+
+		it("records the host's own copy as verified, and no degradation", async () => {
+			class SessionManager {}
+			noteHostSessionManager(new SessionManager());
+			const queued: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: hostQueueDouble(queued),
+				SessionManager,
+			}));
+			await withHostFileMutationQueue("a.ts", async () => {});
+			expect(queued).toHaveLength(1);
+			expect(resolvedRows()).toEqual([
+				expect.objectContaining({
+					message: "resolved the host's withFileMutationQueue",
+					metadata: { hostCopy: "verified" },
+				}),
+			]);
+			expect(queueRows()).toEqual([]);
+		});
+
+		it("records a degradation when the import loaded a second copy, and still queues through it", async () => {
+			class HostSessionManager {}
+			class SecondCopySessionManager {}
+			noteHostSessionManager(new HostSessionManager());
+			const queued: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: hostQueueDouble(queued),
+				SessionManager: SecondCopySessionManager,
+			}));
+			await withHostFileMutationQueue("a.ts", async () => {});
+			await withHostFileMutationQueue("b.ts", async () => {});
+			expect(queued).toHaveLength(2);
+			expect(resolvedRows()).toEqual([]);
+			expect(queueRows()).toEqual([
+				expect.objectContaining({
+					count: 1,
+					latestReasons: [
+						{
+							subject: "withFileMutationQueue",
+							reason: expect.stringContaining("second copy"),
+						},
+					],
+				}),
+			]);
+		});
 	});
 });

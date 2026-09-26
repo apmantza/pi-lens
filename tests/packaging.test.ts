@@ -487,11 +487,23 @@ describe("bundled dist entry shape (#335)", () => {
 	it.runIf(built)("keeps host-provided packages external", () => {
 		// Derived from the same list bundle-dist.mjs uses (#1926), so the bundle
 		// contract and the dependency contract cannot drift apart. Only the ones
-		// the entry actually imports are asserted; pi-coding-agent is types-only.
-		const imported = HOST_PROVIDED_PACKAGES.filter((dep) =>
-			src.includes(`"${dep}"`),
+		// the entry actually imports are asserted; pi-coding-agent is types-only
+		// apart from the one lazy lookup `tests/host-sdk-type-only.test.ts`
+		// admits in `index.ts` (#3506), admitted here by the same exact count.
+		const count = (needle: string) => src.split(needle).length - 1;
+		const lazyImports: Readonly<Record<string, number>> = {
+			"@earendil-works/pi-coding-agent": 1,
+		};
+		const imported = HOST_PROVIDED_PACKAGES.filter(
+			(dep) => count(`"${dep}"`) > count(`import("${dep}")`),
 		);
 		expect(imported.length).toBeGreaterThan(0);
+		for (const dep of HOST_PROVIDED_PACKAGES) {
+			expect(
+				count(`import("${dep}")`),
+				`${dep}: lazy dynamic imports in dist/index.js`,
+			).toBe(lazyImports[dep] ?? 0);
+		}
 		for (const dep of imported) {
 			expect(
 				src.includes(`from "${dep}"`),

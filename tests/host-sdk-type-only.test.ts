@@ -46,11 +46,14 @@ const DYNAMIC_IMPORT = new RegExp(
 
 /**
  * #3506: the admitted LAZY dynamic imports, by file and exact count. pi exposes
- * `withFileMutationQueue` only as a package export, and its extension loader
- * serves that package from the running host (jiti `virtualModules` in the
- * bundled CLI), so the pi host adapter looks it up on pi-lens' first write,
- * behind a catch that falls back to unqueued writes and records
- * `host-file-mutation-queue-unavailable` (`clients/file-mutation-queue.ts`).
+ * `withFileMutationQueue` only as a package export, so the pi host adapter
+ * looks it up on pi-lens' first write. It reaches the running host's copy
+ * because jiti's native import of `dist/index.js` fails on the host-provided
+ * static imports and jiti falls back to transpiling, which serves the package
+ * from pi (`virtualModules` in the bundled CLI); where those imports resolve
+ * natively it can load a second copy instead. `clients/file-mutation-queue.ts`
+ * catches a failed lookup (the writers run unqueued) and records
+ * `host-file-mutation-queue-unavailable` for it and for a second copy.
  * Nothing is imported at load, so a host that cannot serve the package still
  * loads pi-lens, which is the failure #1334 S6 exists to prevent. A new site,
  * or a stale entry here, fails the scan.

@@ -28,7 +28,7 @@ import {
 	type PiLensFlagSource,
 } from "./lens-config.js";
 import { resyncLspFile, runAutofix, runFormatPhase } from "./pipeline.js";
-import { withHostFileMutationQueue } from "./file-mutation-queue.js";
+import { holdFileMutationQueue } from "./file-mutation-queue.js";
 import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { type ProjectChangeSource } from "./project-changes.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -409,17 +409,18 @@ export async function handleAgentEnd({
 				: `${policy?.defaultTool ?? "unknown"}:${filePath}`;
 		if (executedAutofixScopes.has(scopeKey)) continue;
 		executedAutofixScopes.add(scopeKey);
+		// #3506: the fixer rewrites the file in place, inside pi's queue, which
+		// runAutofix enters only once the fixer is resolved.
+		const fixHold = holdFileMutationQueue(filePath);
 		try {
-			// #3506: the fixer rewrites the file in place, inside pi's queue.
-			const result = await withHostFileMutationQueue(filePath, () =>
-				runAutofix(
-					filePath,
-					record.cwd,
-					getFlag,
-					dbg,
-					{ biomeClient, ruffClient, fixedThisTurn: runtime.fixedThisTurn },
-					getFlagSource,
-				),
+			const result = await runAutofix(
+				filePath,
+				record.cwd,
+				getFlag,
+				dbg,
+				{ biomeClient, ruffClient, fixedThisTurn: runtime.fixedThisTurn },
+				getFlagSource,
+				fixHold,
 			);
 			const tools = result.autofixTools.map((label) => label.split(":")[0]);
 			for (const changed of result.changedFiles) {
@@ -464,6 +465,8 @@ export async function handleAgentEnd({
 				],
 				"autofix-failed",
 			);
+		} finally {
+			fixHold?.release();
 		}
 	}
 	if (deferredAutofixFixes.length > 0) {
@@ -562,24 +565,26 @@ export async function handleAgentEnd({
 					};
 					continue;
 				}
+				// #3506: the formatter rewrites the file in place, and its read-back
+				// belongs to the same hold. The release follows the phase itself,
+				// not this bound, and an abandoned formatter keeps it until its
+				// child settles.
+				const formatHold = holdFileMutationQueue(filePath);
 				try {
 					work[index] = {
 						record,
 						filePath,
 						fileStart,
 						result: await bounded(
-							// #3506: the formatter rewrites the file in place, and its
-							// read-back belongs to the same hold.
-							withHostFileMutationQueue(filePath, () =>
-								runFormatPhase(
-									filePath,
-									getFormatService,
-									dbg,
-									ambientSignal,
-									30_000,
-									"agent_settled",
-								),
-							),
+							runFormatPhase(
+								filePath,
+								getFormatService,
+								dbg,
+								ambientSignal,
+								30_000,
+								"agent_settled",
+								formatHold,
+							).finally(() => formatHold?.release()),
 							{
 								ms: HOOK_WALL_BUDGET_MS.agent_settled,
 								signal: ambientSignal,

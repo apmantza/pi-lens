@@ -664,7 +664,11 @@ ADR: docs/adr/0009-reported-path-attribution.md
   are suppressed only in `print` and `json`.
 - Host SDK imports are type-only, except the one lazy, caught lookup of pi's
   `withFileMutationQueue` in `index.ts` (#3506) that
-  `tests/host-sdk-type-only.test.ts` admits by count. Runtime dependencies
+  `tests/host-sdk-type-only.test.ts` admits by count. It reaches pi's running
+  instance only because jiti's native import of `dist/index.js` fails on the
+  host-provided static imports and jiti falls back to transpiling; where
+  those resolve natively it can load a second SDK copy, which
+  `clients/file-mutation-queue.ts` detects and records. Runtime dependencies
   belong in `dependencies`, not `devDependencies`.
 
 </important>
