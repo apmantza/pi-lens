@@ -25,7 +25,8 @@ CONSTANTS
     MaxGen,         \* bound on generations, to keep the state space finite
     Cleanup,        \* holders delete generations below their predecessor
     Recheck,        \* the post-create listing; FALSE shows why it is needed
-    Rounds          \* acquisitions per writer
+    Rounds,         \* acquisitions per writer
+    ListedMarker    \* judge as clients/generation-lock.ts does (see Free)
 
 Gens == 1..MaxGen
 None == 0
@@ -43,9 +44,10 @@ VARIABLES
     snap,
     committed,
     crashes,
-    rounds      \* acquisitions this writer has completed
+    rounds,     \* acquisitions this writer has completed
+    seen        \* seen[p]: lock.(view[p]).released was in p's listing
 
-vars == <<pc, alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds>>
+vars == <<pc, alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 CS == {"cs_read", "cs_write"}
 
@@ -67,33 +69,46 @@ Init ==
     /\ committed = [p \in Procs |-> FALSE]
     /\ crashes = 0
     /\ rounds = [p \in Procs |-> 0]
+    /\ seen = [p \in Procs |-> FALSE]
 
 List(p) ==
     /\ pc[p] = "list"
     /\ view' = [view EXCEPT ![p] = Top]
+    /\ seen' = [seen EXCEPT ![p] = Top /= None /\ released[Top]]
     /\ pc' = [pc EXCEPT ![p] = "judge"]
     /\ UNCHANGED <<alive, exists, owner, released, expired, mine, reg, snap, committed, crashes, rounds>>
 
 \* A generation removed by cleanup since the listing reads as free: the create
 \* that follows then fails, or the recheck catches it.
-Free(g) ==
-    \/ g = None
-    \/ ~exists[g]
-    \/ released[g]
-    \/ expired[g]
-    \/ ~alive[owner[g]]
+\*
+\* ListedMarker judges as clients/generation-lock.ts does: the released marker
+\* is the one p's listing saw, which cleanup may since have removed, and a
+\* generation whose file is gone now reads as held (the caller retries).
+Free(p, g) ==
+    IF ListedMarker
+      THEN \/ g = None
+           \/ seen[p]
+           \/ exists[g] /\ (expired[g] \/ ~alive[owner[g]])
+      ELSE \/ g = None
+           \/ ~exists[g]
+           \/ released[g]
+           \/ expired[g]
+           \/ ~alive[owner[g]]
 
 Judge(p) ==
     /\ pc[p] = "judge"
-    /\ pc' = [pc EXCEPT ![p] = IF Free(view[p]) THEN "create" ELSE "list"]
-    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds>>
+    /\ pc' = [pc EXCEPT ![p] = IF Free(p, view[p]) THEN "create" ELSE "list"]
+    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 GiveUp(p) ==
     /\ pc[p] \in {"list", "judge"}
     /\ pc' = [pc EXCEPT ![p] = "timeout"]
-    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds>>
+    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 \* Exclusive create (link from a written temp file): fails if lock.(v+1) exists.
+\* clients/generation-lock.ts creates with "wx" and writes the pid after; a
+\* judge that reads the empty file holds it live until it ages out, which only
+\* makes Free false in more states than this atomic step does.
 Create(p) ==
     /\ pc[p] = "create"
     /\ LET g == view[p] + 1 IN
@@ -106,7 +121,7 @@ Create(p) ==
                 /\ pc' = [pc EXCEPT ![p] = IF Recheck THEN "recheck" ELSE "cs_read"]
            ELSE /\ pc' = [pc EXCEPT ![p] = "list"]
                 /\ UNCHANGED <<exists, owner, released, expired, mine>>
-    /\ UNCHANGED <<alive, view, reg, snap, committed, crashes, rounds>>
+    /\ UNCHANGED <<alive, view, reg, snap, committed, crashes, rounds, seen>>
 
 Recheck_(p) ==
     /\ pc[p] = "recheck"
@@ -115,20 +130,20 @@ Recheck_(p) ==
               /\ pc' = [pc EXCEPT ![p] = "list"]
          ELSE /\ pc' = [pc EXCEPT ![p] = "cs_read"]
               /\ UNCHANGED released
-    /\ UNCHANGED <<alive, exists, owner, expired, view, mine, reg, snap, committed, crashes, rounds>>
+    /\ UNCHANGED <<alive, exists, owner, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 CsRead(p) ==
     /\ pc[p] = "cs_read"
     /\ snap' = [snap EXCEPT ![p] = reg]
     /\ pc' = [pc EXCEPT ![p] = "cs_write"]
-    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, committed, crashes, rounds>>
+    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, committed, crashes, rounds, seen>>
 
 CsWrite(p) ==
     /\ pc[p] = "cs_write"
     /\ reg' = snap[p] \cup {p}
     /\ committed' = [committed EXCEPT ![p] = TRUE]
     /\ pc' = [pc EXCEPT ![p] = "release"]
-    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, snap, crashes, rounds>>
+    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, snap, crashes, rounds, seen>>
 
 \* Writers acquire again after each release, up to Rounds (every heartbeat is
 \* a registry write), so generations advance and cleanup has work to do.
@@ -139,7 +154,7 @@ Release(p) ==
     /\ released' = [released EXCEPT ![mine[p]] = TRUE]
     /\ rounds' = [rounds EXCEPT ![p] = @ + 1]
     /\ pc' = [pc EXCEPT ![p] = IF rounds[p] + 1 < Rounds THEN "list" ELSE "done"]
-    /\ UNCHANGED <<alive, exists, owner, expired, view, mine, reg, snap, committed, crashes>>
+    /\ UNCHANGED <<alive, exists, owner, expired, view, mine, reg, snap, committed, crashes, seen>>
 
 \* A holder deletes one generation below its predecessor.
 Clean(p) ==
@@ -150,7 +165,7 @@ Clean(p) ==
          /\ exists[g]
          /\ exists' = [exists EXCEPT ![g] = FALSE]
          /\ released' = [released EXCEPT ![g] = FALSE]
-    /\ UNCHANGED <<pc, alive, owner, expired, view, mine, reg, snap, committed, crashes, rounds>>
+    /\ UNCHANGED <<pc, alive, owner, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 Crash(p) ==
     /\ alive[p]
@@ -158,14 +173,14 @@ Crash(p) ==
     /\ crashes < MaxCrashes
     /\ alive' = [alive EXCEPT ![p] = FALSE]
     /\ crashes' = crashes + 1
-    /\ UNCHANGED <<pc, exists, owner, released, expired, view, mine, reg, snap, committed, rounds>>
+    /\ UNCHANGED <<pc, exists, owner, released, expired, view, mine, reg, snap, committed, rounds, seen>>
 
 Expire ==
     /\ AllowExpiry
     /\ Top /= None
     /\ ~expired[Top]
     /\ expired' = [expired EXCEPT ![Top] = TRUE]
-    /\ UNCHANGED <<pc, alive, exists, owner, released, view, mine, reg, snap, committed, crashes, rounds>>
+    /\ UNCHANGED <<pc, alive, exists, owner, released, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 Step(p) ==
     /\ alive[p]

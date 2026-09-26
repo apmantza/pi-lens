@@ -13,13 +13,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_LATE_AUX_REARM_TTL_MS,
 	MAX_PENDING_AUX_ENTRIES,
+	captureAuxPublicationBacklog,
 	clearPendingAuxiliaryCoverage,
+	isAuxBacklogPublished,
 	drainPendingAuxCapEvictedCount,
 	drainPendingAuxiliaryCoverage,
 	isPendingAuxiliaryPastRearmTtl,
 	markPendingAuxiliaryCoverage,
 	pendingAuxiliaryCoverageSize,
 	readLateAuxRearmTtlMs,
+	rearmPendingAuxiliaryCoverage,
 	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
 
@@ -149,6 +152,72 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		expect(drained.some((e) => e.filePath === "/w/file1.ts")).toBe(false);
 		const file0 = drained.find((e) => e.filePath === "/w/file0.ts");
 		expect(file0?.markedAtMs).toBe(0);
+	});
+
+	it("a re-arm that lands after a producer re-mark keeps the re-mark's baseline AND backlog (#3482)", () => {
+		// The turn-end drain awaits between draining a pair and re-arming it; a
+		// touch that re-marks in that window owns the baseline, and the backlog
+		// must be the one captured WITH that baseline, not the drained pair's.
+		const older = {
+			unpublished: 1,
+			publishedAtMark: 0,
+			readPublished: () => 0,
+		};
+		const newer = {
+			unpublished: 2,
+			publishedAtMark: 0,
+			readPublished: () => 0,
+		};
+		markPendingAuxiliaryCoverage(
+			"/w/a.ts",
+			["opengrep"],
+			1000,
+			undefined,
+			undefined,
+			older,
+		);
+		const [drainedPair] = drainPendingAuxiliaryCoverage();
+		markPendingAuxiliaryCoverage(
+			"/w/a.ts",
+			["opengrep"],
+			9000,
+			undefined,
+			undefined,
+			newer,
+		);
+		rearmPendingAuxiliaryCoverage(drainedPair, 9500);
+
+		const [pair] = drainPendingAuxiliaryCoverage();
+		expect(pair.markedAtMs).toBe(9000);
+		expect(pair.backlog).toBe(newer);
+	});
+
+	it("a dead notified client reads as no binding instead of wedging the pair (#3482 r1 F4)", () => {
+		let alive = true;
+		const client = {
+			isAlive: () => alive,
+			getPublicationCountsForPath: () => ({ sent: 2, published: 0 }),
+		};
+		const backlog = captureAuxPublicationBacklog(client, "/w/a.ts");
+		const pair = {
+			filePath: "/w/a.ts",
+			serverId: "opengrep",
+			markedAtMs: 0,
+			backlog,
+		};
+		expect(isAuxBacklogPublished(pair)).toBe(false);
+		// Respawned away: the frozen count no longer describes the live client.
+		alive = false;
+		expect(backlog?.readPublished()).toBeUndefined();
+		expect(isAuxBacklogPublished(pair)).toBe(true);
+	});
+
+	it("never records a negative backlog from a surplus count (#3482 r1 F4)", () => {
+		const backlog = captureAuxPublicationBacklog(
+			{ getPublicationCountsForPath: () => ({ sent: 1, published: 3 }) },
+			"/w/a.ts",
+		);
+		expect(backlog).toMatchObject({ unpublished: 0, publishedAtMark: 3 });
 	});
 
 	it("re-arming stamps lastRearmedAtMs without moving the baseline", () => {

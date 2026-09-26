@@ -48,6 +48,7 @@ import {
 	type DriftSweepResult,
 } from "./document-drift.js";
 import {
+	captureAuxPublicationBacklog,
 	markPendingAuxiliaryCoverage,
 	napiFallbackCoveredSince,
 } from "./pending-aux-coverage.js";
@@ -6023,20 +6024,26 @@ export class LSPService {
 									.map((o) => o.serverId);
 								if (collectLaterServerIds.length > 0) {
 									lateDeliveryServerIds = collectLaterServerIds;
-									// #3482: the freshness baseline must be the touch's own
-									// notify time, not `Date.now()` here — this line runs only
-									// AFTER the aux-grace ceiling has already given up waiting,
-									// which is up to `auxGraceMs` (2000ms by default) later than
-									// when the notify actually went out. `startedAt` is stamped
-									// at this touch's own entry, before any spawn or wait work,
-									// so it is the earliest instant this touch could possibly
-									// predate — the same anchor #2324 R2-A already uses above for
-									// the identical staleness concern.
-									markPendingAuxiliaryCoverage(
-										filePath,
-										collectLaterServerIds,
-										startedAt,
-									);
+									// #3482: the baseline is this touch's entry, before any
+									// spawn or notify, not the end of this wait (an edit
+									// inside the wait would predate it); the scanner was
+									// sent `content`, so any later disk edit is stale. Each
+									// pair is also bound to the backlog its scanner still
+									// had to publish.
+									for (const serverId of collectLaterServerIds) {
+										markPendingAuxiliaryCoverage(
+											filePath,
+											[serverId],
+											startedAt,
+											undefined,
+											undefined,
+											captureAuxPublicationBacklog(
+												auxWaits.find((aux) => aux.serverId === serverId)
+													?.client,
+												filePath,
+											),
+										);
+									}
 								}
 								logLatency({
 									type: "phase",

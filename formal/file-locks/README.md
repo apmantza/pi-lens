@@ -17,8 +17,9 @@ pinned `tla2tools.jar` to `.cache/` and verifies its sha256. It needs Java.
 ## Models
 
 **`FileLock.tla`** covers both locks that create a pid file with `wx`:
-- `clients/instance-registry-lock.ts` (`Registry*.cfg`), guarding the
-  registry read-modify-write in `clients/instance-registry.ts`;
+- `clients/instance-registry-lock.ts` before #3476 (`Registry*.cfg` other
+  than `RegistryCrash.cfg`), guarding the registry read-modify-write in
+  `clients/instance-registry.ts`;
 - `acquireBoundedPidFileLock` in `clients/bounded-pid-file-lock.ts`
   (`Bounded*.cfg`), guarding `commitDurableStore`.
 
@@ -26,10 +27,16 @@ Each acquisition creates a new file. The exclusive create and the pid write
 are separate steps unless `AtomicCreate`. Stale takeover and release act on
 whatever file the path names at that moment.
 
-**`GenerationLock.tla`** is the candidate redesign from #3476. The lock is a
-series of files `lock.1`, `lock.2`, … Every acquisition, including a stale
-takeover, is an exclusive create of the next generation, so nothing is removed
-by path.
+**`GenerationLock.tla`** is the redesign from #3476. The lock is a series of
+files `lock.1`, `lock.2`, … Every acquisition, including a stale takeover, is
+an exclusive create of the next generation, so nothing is removed by path.
+`clients/generation-lock.ts` implements it, and the registry lock uses it since
+#3476 (`RegistryCrash.cfg`). `ListedMarker = TRUE` judges as that code does:
+the released marker is read from the listing, and a generation file that is
+gone reads as held. The code creates a generation with `wx` rather than
+linking a written temp file (hard links fail on FAT/exFAT); a judge that reads
+it before its pid is written holds it live until it ages out, which only
+makes `Free` false in more states than the model's atomic create.
 
 ## Invariants
 
@@ -42,7 +49,9 @@ by path.
 | Config | Faults | Verdict |
 |---|---|---|
 | `RegistryNoFault.cfg` | none | pass |
-| `RegistryCrash.cfg` | one writer dies | `MutualExclusion` violated (#3476) |
+| `RegistryCrash.cfg` | one writer dies | pass on the generation lock (#3476); `MutualExclusion` violated on the path lock before |
+| `RegistryCrash4.cfg` | the generation lock, four writers, two die | pass |
+| `RegistryCrashNoRecheck.cfg` | the generation lock, no second listing | `MutualExclusion` violated |
 | `RegistryExpiry.cfg` | a holder outlives 5 s | `MutualExclusion` violated (the lease) |
 | `RegistryCrashFix.cfg` | crash, identity-checked takeover | `NoOrphanLock` violated |
 | `RegistryCrashFix4.cfg` | the same, four writers | `MutualExclusion` violated |
@@ -81,7 +90,7 @@ Run from the repository root after `npm run build`. Each script delays one
 step to force the interleaving TLC found; neither changes the lock's logic.
 
 ```text
-$ node formal/file-locks/repro-registry-double-takeover.mjs
+$ node formal/file-locks/repro-registry-double-takeover.mjs   # before #3476
 p3: p2 is in its critical section; lock now reads "23804 1790370894347" (p2 pid)
 p3: in critical section (pid 23796); p2 still inside: true
 p3: MUTUAL EXCLUSION VIOLATED
@@ -97,10 +106,19 @@ B: acquired
 B: exclusive
 ```
 
+Since #3476 the registry lock has no rename for the first script to hold, so
+it no longer reaches the race. `tests/clients/instance-registry-lock.test.ts`
+replays the same interleaving on any lock layout by holding the stale
+judgement's liveness probe (`admits one of two takers of a dead owner's lock`).
+
 ## Scope
 
 Not modelled:
 - backoff timing (any retry may give up, as the wait deadline does);
 - pid reuse;
 - the quarantine lock itself, whose restore has the shape of
-  `RegistryCrashFix.cfg`.
+  `RegistryCrashFix.cfg`;
+- writers from before #3476 running beside current ones. A registry
+  generation holder also holds the old `<registry>.lock` file so they block
+  each other, and a stale one keeps the old path takeover race against an
+  older writer.

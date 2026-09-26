@@ -36,7 +36,7 @@ const KERNEL_FILE = "freshness.ts";
 const EXEMPT: Record<string, string> = {
 	"bounded-pid-file-lock.ts":
 		"age-based TTL staleness of a lock file (Date.now() - mtime), not comparison against a recorded scan/record timestamp",
-	"instance-registry-lock.ts":
+	"generation-lock.ts":
 		"lock staleness is a cross-process liveness check on a foreign file, not a content-freshness read; freshnessFromMtime targets in-kernel content caches",
 	"installer/index.ts":
 		"age-based maxAge expiry of a cached install probe, same TTL-not-freshness shape",

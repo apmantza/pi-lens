@@ -340,6 +340,23 @@ export type DegradationKind =
 	 */
 	| "instance-registry-identity-fallback"
 	/**
+	 * #3476: a registry-lock acquisition hit a filesystem error other than
+	 * contention (e.g. EACCES on a root-owned `<registry>.locks/`); the write
+	 * was skipped instead of throwing. Subject is the resolved lock target.
+	 */
+	| "instance-registry-lock-failed"
+	/**
+	 * #3476: a registry-lock holder backed off because the pre-generation
+	 * `<registry>.lock` file is held by a live writer from an older version.
+	 * Subject is that lock file's resolved path.
+	 */
+	| "instance-registry-lock-legacy-held"
+	/**
+	 * #3476: a registry-lock acquisition took over a generation whose holder
+	 * was dead or past the 5 s lease. Subject is the resolved lock target.
+	 */
+	| "instance-registry-lock-stale-takeover"
+	/**
 	 * #3071: a registry-file lock acquisition exhausted its retry budget
 	 * (`instance-registry-lock.ts`'s `recordLockTimeout`). Subject is the
 	 * resolved lock target path.

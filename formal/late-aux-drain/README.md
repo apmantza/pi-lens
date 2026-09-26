@@ -55,8 +55,8 @@ unavoidable TOCTOU window.
 | `PublishAroundMark`, `EditDuringDrain`, `ExternalEditRearm` | pass |
 | `EditDuringDrainNoMtimeGate` (mutant: no mtime gate) | violated |
 | `ExternalEditRearmNoPublishedAt` (mutant: no `publishedAt` wait) | violated |
-| `ReTouchRemark` | **violated**: bug 1 |
-| `EditDuringGrace` | **violated**: bug 2 |
+| `ReTouchRemark` | pass (fixed code; bug 1 before #3482) |
+| `EditDuringGrace` | pass (fixed code; bug 2 before #3482) |
 | `ToleranceWindow` | violated (admitted: the 50 ms tolerance, #1710) |
 | `Fix`, `FixWide` | pass (candidate fix) |
 | `FixNoCountBind`, `FixLateMark`, `FixRefreshOnStale` | violated (each fix part is needed) |

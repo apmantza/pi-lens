@@ -61,6 +61,7 @@ import {
 import { RuntimeCoordinator } from "../../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../../clients/runtime-turn.js";
 import {
+	captureAuxPublicationBacklog,
 	drainPendingAuxiliaryCoverage,
 	markPendingAuxiliaryCoverage,
 	MAX_LATE_AUX_REARMS,
@@ -68,7 +69,18 @@ import {
 	readLateAuxRearmTtlMs,
 	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
-import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
+import {
+	closeDocument,
+	handleNotifyChange,
+	handleNotifyOpen,
+	publicationCountsForPath,
+	setupIncomingHandlers,
+	type LSPClientState,
+	type LSPDiagnostic,
+} from "../../../clients/lsp/client.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+import { pathToFileURL } from "node:url";
+import { createMockState } from "./mock-client-state.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
 // The fixed behavior admits 20 detailed gap rows per turn. The regression uses
@@ -395,9 +407,8 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 			const file = path.join(env.tmpDir, "src", "stale-ceiling.ts");
 
 			// Write the file ONCE and pin its mtime far in the future so every
-			// turn's freshness gate sees it as edited-after-the-scan (stale),
-			// independent of how many times the pair's baseline gets refreshed
-			// by the stale-path re-arm (which stamps a fresh `markedAtMs`).
+			// turn's freshness gate sees it as edited-after-the-scan (stale)
+			// on every re-arm.
 			fs.mkdirSync(path.dirname(file), { recursive: true });
 			fs.writeFileSync(file, "export const value = 1;\n");
 			const future = new Date(Date.now() + 600_000);
@@ -1086,6 +1097,592 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 				clientGone: 0,
 				coverageGapReRaised: 0,
 			});
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+/**
+ * #3482: the drain's freshness was two timestamps plus an mtime gate, and a
+ * version-less publish cannot say which revision it scanned. These cases drive
+ * the real publish handler, resync clear and per-path counts (only the service
+ * lookup is a double, reading that real client state) into the real
+ * `handleTurnEnd`.
+ */
+describe("turn-end late-auxiliary drain never delivers an older revision's scan (#3482)", () => {
+	function cachedFrom(state: LSPClientState, file: string) {
+		const key = normalizeMapKey(file);
+		// Same shape as LSPService.readCachedDiagnosticsForServers:
+		// `getAllDiagnostics().get(key)` -> { diags: entry?.diags ?? [], publishedAt: entry?.ts }.
+		return async () =>
+			new Map([
+				[
+					"opengrep",
+					{
+						diags: state.pushDiagnostics.get(key) ?? [],
+						publishedAt: state.pushDiagnosticTimestamps.get(key),
+					},
+				],
+			]);
+	}
+
+	function armOpengrep(root: string, serverId = "opengrep") {
+		const state = createMockState({ serverId, root });
+		setupIncomingHandlers(state, {});
+		const calls = vi.mocked(state.connection.onNotification).mock
+			.calls as unknown as Array<[string, (params: unknown) => void]>;
+		const handler = calls.find(
+			(call) => call[0] === "textDocument/publishDiagnostics",
+		)?.[1];
+		expect(handler).toBeDefined();
+		const client = {
+			getPublicationCountsForPath: (filePath: string) =>
+				publicationCountsForPath(state, normalizeMapKey(filePath)),
+		};
+		return {
+			state,
+			client,
+			/** A raw version-less receipt, NOT flushed through the debounce. */
+			receive: (file: string, diagnostics: LSPDiagnostic[]) =>
+				handler?.({ uri: pathToFileURL(file).href, diagnostics }),
+			/** A versioned publish (ast-grep's shape), flushed through the debounce. */
+			publishVersioned: (
+				file: string,
+				version: number,
+				diagnostics: LSPDiagnostic[],
+			) => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+				try {
+					handler?.({ uri: pathToFileURL(file).href, version, diagnostics });
+					vi.advanceTimersByTime(300);
+				} finally {
+					vi.useRealTimers();
+				}
+			},
+			/** A version-less publish, flushed through opengrep's 250 ms debounce. */
+			publish: (file: string, diagnostics: LSPDiagnostic[]) => {
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+				try {
+					handler?.({ uri: pathToFileURL(file).href, diagnostics });
+					vi.advanceTimersByTime(300);
+				} finally {
+					vi.useRealTimers();
+				}
+			},
+		};
+	}
+
+	function writeAt(file: string, content: string, mtimeMs: number): void {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, content);
+		fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
+	}
+
+	async function turnEnd(
+		runtime: RuntimeCoordinator,
+		cacheManager: CacheManager,
+		cwd: string,
+		sessionId: string,
+		file: string,
+	): Promise<{ content: string; metadata: any }> {
+		logLatency.mockClear();
+		cacheManager.addModifiedRange(
+			file,
+			{ start: 1, end: 1 },
+			false,
+			cwd,
+			sessionId,
+		);
+		await handleTurnEnd(makeDeps(runtime, cacheManager, cwd));
+		return {
+			content: turnEndContent(cacheManager, cwd),
+			metadata: lateAuxRecord()?.metadata,
+		};
+	}
+
+	it("counts sends and STORED publications per open lifetime (#3482 backlog axis)", async () => {
+		// The binding is only as good as these two counts: a count taken at raw
+		// receipt lets a debounced receipt satisfy the backlog while the cache
+		// still holds the older scan, and a count that outlives its document
+		// lifetime (or a store for a path never opened) under-counts the backlog.
+		const scanner = armOpengrep("/project");
+		const file = "/project/src/counted.ts";
+		const other = "/project/src/fallback.ts";
+		const counts = (target: string) =>
+			publicationCountsForPath(scanner.state, normalizeMapKey(target));
+
+		const key = normalizeMapKey(file);
+
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			scanner.receive(file, []); // a store before any open (e.g. a workspace pull)
+			vi.advanceTimersByTime(300);
+			expect(counts(file)).toEqual({ sent: 0, published: 0 });
+			// A receipt still pending when the first open clears it belongs to no
+			// send of this lifetime.
+			scanner.receive(file, [diag(0, "pre-open")]);
+			await handleNotifyOpen(scanner.state, file, "a", "ts", false, true);
+			expect(counts(file)).toEqual({ sent: 1, published: 0 });
+
+			scanner.receive(file, [diag(0, "received")]);
+			expect(counts(file)).toEqual({ sent: 1, published: 0 });
+			vi.advanceTimersByTime(300);
+			expect(counts(file)).toEqual({ sent: 1, published: 1 });
+			// #3482 r1 F1: a surplus while nothing is outstanding (opengrep's
+			// rule-load [] then its post-rulesRefreshed republish) is absorbed.
+			scanner.receive(file, [diag(0, "republished")]);
+			vi.advanceTimersByTime(300);
+			expect(counts(file)).toEqual({ sent: 1, published: 1 });
+
+			// A resync clears the cache but not the count.
+			await handleNotifyOpen(scanner.state, file, "b", "ts", false, true);
+			expect(counts(file)).toEqual({ sent: 2, published: 1 });
+			// A receipt still pending at close is not counted into a map entry
+			// that would outlive the document.
+			scanner.receive(file, [diag(0, "at close")]);
+			await closeDocument(scanner.state, file);
+			expect(counts(file)).toEqual({ sent: 0, published: 0 });
+			expect(scanner.state.publicationStoreCountsByPath.has(key)).toBe(false);
+
+			// The didChange fallback open starts a lifetime too.
+			scanner.receive(other, []);
+			vi.advanceTimersByTime(300);
+			await handleNotifyChange(scanner.state, other, "x");
+			expect(counts(other)).toEqual({ sent: 1, published: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	/** One agent touch: write, resync-send, and mark with the captured backlog. */
+	async function touchAndMark(
+		scanner: ReturnType<typeof armOpengrep>,
+		file: string,
+		content: string,
+		notifiedAtMs: number,
+	): Promise<void> {
+		writeAt(file, content, notifiedAtMs);
+		await handleNotifyOpen(scanner.state, file, content, "ts", false, true);
+		markPendingAuxiliaryCoverage(
+			file,
+			["opengrep"],
+			notifiedAtMs,
+			undefined,
+			undefined,
+			captureAuxPublicationBacklog(scanner.client, file),
+		);
+	}
+
+	const V1 = `${Array.from({ length: 20 }, (_, i) => `const a${i} = ${i};`).join("\n")}\n`;
+	const V2 = "export const v = 2;\n";
+
+	it("REPLAY-RULE-LOAD-SURPLUS: opengrep's rule-load [] plus its refresh republish cannot shorten a later backlog (#3482 r1 F1)", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-rule-load-") as any;
+		const sessionId = "late-aux-rule-load";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			// v0 is opened during the one-time rule load: an empty answer, then
+			// the real scan after `semgrep/rulesRefreshed`.
+			writeAt(file, "export const v = 0;\n", Date.now() - 30_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 0;\n",
+				"ts",
+				false,
+				true,
+			);
+			scanner.publish(file, []);
+			scanner.publish(file, [diag(0, "V0 finding")]);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 0, backlogPending: 1 });
+
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+			const second = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(second.content).toContain("V2 finding on line 1");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-RESYNC-DROPS-PENDING-RECEIPT: a receipt the resync clear drops still counts, so v2 is delivered (#3482 r1 F2)", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-resync-drop-") as any;
+		const sessionId = "late-aux-resync-drop";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			try {
+				await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+				// v1's scan answers, but touch 2's resync clears it inside the
+				// 250 ms debounce, before it is stored.
+				scanner.receive(file, [diag(11, "V1-ONLY finding on line 12")]);
+				await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+				scanner.receive(file, [diag(0, "V2 CURRENT finding")]);
+				vi.advanceTimersByTime(300);
+			} finally {
+				vi.useRealTimers();
+			}
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-DEBOUNCE-COALESCES-TWO-SCANS: two receipts inside one debounce window count twice, so v2 is delivered (#3482 r1 F2)", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-coalesce-") as any;
+		const sessionId = "late-aux-coalesce";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			try {
+				// Both queued scans answer after touch 2, 100 ms apart: the second
+				// receipt replaces the first's debounce timer, one store.
+				scanner.receive(file, [diag(11, "V1-ONLY finding on line 12")]);
+				vi.advanceTimersByTime(100);
+				scanner.receive(file, [diag(0, "V2 CURRENT finding")]);
+				vi.advanceTimersByTime(300);
+			} finally {
+				vi.useRealTimers();
+			}
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-SUPERSEDED-VERSIONED-PUSH: a versioned answer dropped as superseded still counts, so v2 is delivered (#3482 r2)", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-superseded-") as any;
+		const sessionId = "late-aux-superseded";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			// A versioned scanner (ast-grep publishes document versions): v0 is
+			// opened and answered, then v1 and v2 are sent before v1's answer.
+			writeAt(file, "export const v = 0;\n", Date.now() - 30_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 0;\n",
+				"ts",
+				false,
+				true,
+			);
+			scanner.publishVersioned(file, 0, [diag(0, "V0 finding")]);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// v1's answer lands after v2 was sent: dropped as superseded, never
+			// stored. v2's answer is stored.
+			scanner.publishVersioned(file, 1, [
+				diag(11, "V1-ONLY finding on line 12"),
+			]);
+			scanner.publishVersioned(file, 2, [diag(0, "V2 CURRENT finding")]);
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-SUPERSEDED-SEEDED-PUSH: on a seed-first-push server the superseded answer still counts (#3482 r2)", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-late-aux-superseded-seed-",
+		) as any;
+		const sessionId = "late-aux-superseded-seed";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			// eslint seeds its first push after a clear: the SEED path, not the debounce.
+			const scanner = armOpengrep(env.tmpDir, "eslint");
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+			// A versioned scanner (ast-grep publishes document versions): v0 is
+			// opened and answered, then v1 and v2 are sent before v1's answer.
+			writeAt(file, "export const v = 0;\n", Date.now() - 30_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 0;\n",
+				"ts",
+				false,
+				true,
+			);
+			scanner.publishVersioned(file, 0, [diag(0, "V0 finding")]);
+			await touchAndMark(scanner, file, V1, Date.now() - 20_000);
+			await touchAndMark(scanner, file, V2, Date.now() - 10_000);
+			// v1's answer lands after v2 was sent: dropped as superseded, never
+			// stored. v2's answer is stored.
+			scanner.publishVersioned(file, 1, [
+				diag(11, "V1-ONLY finding on line 12"),
+			]);
+			scanner.publishVersioned(file, 2, [diag(0, "V2 CURRENT finding")]);
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).toContain("V2 CURRENT finding");
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("REPLAY-RETOUCH-REMARK: withholds v1's publish after a re-touch re-marks, then delivers v2's", async () => {
+		const env = setupTestEnvironment("pi-lens-late-aux-retouch-") as any;
+		const sessionId = "late-aux-retouch";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "scanned.ts");
+			const scanner = armOpengrep(env.tmpDir);
+			readCachedDiagnosticsForServers.mockImplementation(
+				cachedFrom(scanner.state, file),
+			);
+
+			// Touch 1 sends v1 (20 lines); its grace lapses and marks the pair.
+			const v1 = Array.from({ length: 20 }, (_, i) => `const a${i} = ${i};`);
+			writeAt(file, `${v1.join("\n")}\n`, Date.now() - 20_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				v1.join("\n"),
+				"ts",
+				false,
+				true,
+			);
+			markPendingAuxiliaryCoverage(
+				file,
+				["opengrep"],
+				Date.now() - 20_000,
+				undefined,
+				undefined,
+				captureAuxPublicationBacklog(scanner.client, file),
+			);
+			// Touch 2: the agent edits to a one-line v2 while v1's scan runs. The
+			// resync clears, sends v2, finds no evidence and re-marks.
+			writeAt(file, "export const v = 2;\n", Date.now() - 10_000);
+			await handleNotifyOpen(
+				scanner.state,
+				file,
+				"export const v = 2;\n",
+				"ts",
+				false,
+				true,
+			);
+			markPendingAuxiliaryCoverage(
+				file,
+				["opengrep"],
+				Date.now() - 10_000,
+				undefined,
+				undefined,
+				captureAuxPublicationBacklog(scanner.client, file),
+			);
+			// v1's scan publishes, with no version, after the re-mark.
+			scanner.publish(file, [diag(11, "V1-ONLY finding on line 12")]);
+
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).not.toContain("V1-ONLY");
+			expect(first.metadata).toMatchObject({
+				delivered: 0,
+				rearmed: 1,
+				backlogPending: 1,
+			});
+			// The re-arm carries the binding: a second turn end still withholds it.
+			const second = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(second.content).not.toContain("V1-ONLY");
+			expect(second.metadata).toMatchObject({
+				delivered: 0,
+				backlogPending: 1,
+			});
+
+			// v2's own scan publishes: the binding releases and v2's finding lands.
+			scanner.publish(file, [diag(0, "V2 finding on line 1")]);
+			const third = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(third.content).toContain("V2 finding on line 1");
+			expect(third.content).not.toContain("V1-ONLY");
+			expect(third.metadata).toMatchObject({ delivered: 1, backlogPending: 0 });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps the baseline on a stale re-arm, so a later publish cannot absorb an external edit", async () => {
+		// FixRefreshOnStale: the stale verdict used to re-arm with a baseline of
+		// "now", which moved past the external edit's mtime; an older queued scan
+		// that published afterwards then passed both the publishedAt and mtime
+		// gates against content it never saw.
+		const env = setupTestEnvironment("pi-lens-late-aux-stale-keep-") as any;
+		const sessionId = "late-aux-stale-keep";
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "600000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "external.ts");
+			// Marked at the touch's notify; an external edit lands afterwards.
+			markPendingAuxiliaryCoverage(file, ["opengrep"], Date.now() - 20_000);
+			writeAt(file, "export const external = 1;\n", Date.now() - 10_000);
+			readCachedDiagnosticsForServers.mockImplementation(
+				async () =>
+					new Map([
+						[
+							"opengrep",
+							{
+								diags: [diag(4, "SCANNED-BEFORE-EDIT")],
+								publishedAt: Date.now() - 5_000,
+							},
+						],
+					]),
+			);
+			const first = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(first.content).not.toContain("SCANNED-BEFORE-EDIT");
+			expect(first.metadata).toMatchObject({ delivered: 0, rearmed: 1 });
+			expect(first.metadata.stale).toBeGreaterThan(0);
+
+			// An older queued scan publishes after that drain.
+			const laterPublish = Date.now() + 1;
+			readCachedDiagnosticsForServers.mockImplementation(
+				async () =>
+					new Map([
+						[
+							"opengrep",
+							{
+								diags: [diag(4, "QUEUED-OLDER-SCAN")],
+								publishedAt: laterPublish,
+							},
+						],
+					]),
+			);
+			const second = await turnEnd(
+				runtime,
+				cacheManager,
+				env.tmpDir,
+				sessionId,
+				file,
+			);
+			expect(second.content).not.toContain("QUEUED-OLDER-SCAN");
+			expect(second.metadata).toMatchObject({ delivered: 0 });
+			expect(second.metadata.stale).toBeGreaterThan(0);
 		} finally {
 			env.cleanup();
 		}

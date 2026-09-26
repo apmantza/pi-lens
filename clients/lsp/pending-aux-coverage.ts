@@ -88,8 +88,9 @@ export interface PendingAuxCoverageEntry {
 	filePath: string;
 	serverId: string;
 	/**
-	 * Freshness baseline: when this pair was FIRST marked, i.e. roughly when
-	 * the touch's notify went out. The turn-end gate stats the file against
+	 * Freshness baseline: the marking touch's entry, before its notify went
+	 * out (#3482: never the end of the grace wait, or an edit inside the wait
+	 * would predate it). The turn-end gate stats the file against
 	 * this timestamp; re-arming preserves it so the baseline never drifts
 	 * forward past the content the pending findings describe. Only a NEWER
 	 * touch (a producer re-mark for a newer revision) advances it (#2027).
@@ -107,6 +108,72 @@ export interface PendingAuxCoverageEntry {
 	 */
 	lastRearmedAtMs?: number;
 	rearmCount?: number;
+	/**
+	 * #3482: the scanner's backlog for this path at the mark. A version-less
+	 * publish cannot say which revision it scanned, so a re-touch that re-marks
+	 * while an older scan is in flight would otherwise let that older publish
+	 * through both freshness gates. Absent when the client cannot count.
+	 */
+	backlog?: AuxPublicationBacklog;
+}
+
+/**
+ * #3482: bind a mark to the scanner's backlog. `unpublished` sends were still
+ * waiting for a publication at the mark, so the drain delivers only after that
+ * many further publications (`readPublished() - publishedAtMark`). Assumes the
+ * scanner publishes once per scan, in order. That is an assumption, not a
+ * guarantee: opengrep runs scans on a thread pool and can publish out of
+ * order. One that skips a superseded scan only makes the drain wait, and a
+ * superseded answer the client drops is still counted. The client caps its count at the sends, which
+ * absorbs a surplus publish while nothing is outstanding; a surplus that
+ * lands WHILE a send is outstanding still counts toward that send (residual).
+ */
+export interface AuxPublicationBacklog {
+	unpublished: number;
+	publishedAtMark: number;
+	/**
+	 * The notified client's per-path publication count, read at drain;
+	 * `undefined` once that client is dead or collected — its backlog no longer
+	 * describes the live client, so the binding no longer applies.
+	 */
+	readPublished: () => number | undefined;
+}
+
+type BacklogClient = {
+	isAlive?(): boolean;
+	getPublicationCountsForPath?(filePath: string): {
+		sent: number;
+		published: number;
+	};
+};
+
+/** Capture the backlog from the client the touch notified, at mark time. */
+export function captureAuxPublicationBacklog(
+	client: BacklogClient | undefined,
+	filePath: string,
+): AuxPublicationBacklog | undefined {
+	const counts = client?.getPublicationCountsForPath?.(filePath);
+	if (!client || !counts) return undefined;
+	// Weak, so a pending pair never pins a respawned-away client's state.
+	const notified = new WeakRef(client);
+	return {
+		unpublished: Math.max(0, counts.sent - counts.published),
+		publishedAtMark: counts.published,
+		readPublished: () => {
+			const live = notified.deref();
+			if (!live || live.isAlive?.() === false) return undefined;
+			return live.getPublicationCountsForPath?.(filePath)?.published;
+		},
+	};
+}
+
+/** Has the scanner published past the backlog the pair was marked with? */
+export function isAuxBacklogPublished(pair: PendingAuxCoverageEntry): boolean {
+	const backlog = pair.backlog;
+	if (!backlog) return true;
+	const published = backlog.readPublished();
+	if (published === undefined) return true;
+	return published - backlog.publishedAtMark >= backlog.unpublished;
 }
 
 /**
@@ -159,6 +226,7 @@ export function markPendingAuxiliaryCoverage(
 	markedAtMs: number = Date.now(),
 	rearmedAtMs?: number,
 	rearmCount?: number,
+	backlog?: AuxPublicationBacklog,
 ): void {
 	for (const serverId of serverIds) {
 		const key = pairKey(filePath, serverId);
@@ -169,17 +237,19 @@ export function markPendingAuxiliaryCoverage(
 			// keeping the original baseline would make every post-baseline mtime
 			// read as stale, permanently dropping current-revision findings.
 			// A re-arm form never moves the baseline — only the TTL anchor.
+			// #3482: the backlog travels with the baseline.
 			pending.delete(key);
 			pending.set(
 				key,
 				rearmedAtMs === undefined
-					? { filePath, serverId, markedAtMs }
+					? { filePath, serverId, markedAtMs, ...(backlog && { backlog }) }
 					: {
 							filePath,
 							serverId,
 							markedAtMs: existing.markedAtMs,
 							lastRearmedAtMs: rearmedAtMs,
 							rearmCount: rearmCount ?? (existing.rearmCount ?? 0) + 1,
+							...(existing.backlog && { backlog: existing.backlog }),
 						},
 			);
 			continue;
@@ -187,32 +257,38 @@ export function markPendingAuxiliaryCoverage(
 		const evicted = pending.set(
 			key,
 			rearmedAtMs === undefined
-				? { filePath, serverId, markedAtMs }
+				? { filePath, serverId, markedAtMs, ...(backlog && { backlog }) }
 				: {
 						filePath,
 						serverId,
 						markedAtMs,
 						lastRearmedAtMs: rearmedAtMs,
 						rearmCount: rearmCount ?? 1,
+						...(backlog && { backlog }),
 					},
 		);
 		capEvictedCount += evicted.length;
 	}
 }
 
-/** Re-arm a drained pair while carrying its ceiling count across the drain. */
+/**
+ * Re-arm a drained pair while carrying its ceiling count and backlog across
+ * the drain. The baseline never moves here, a stale verdict included (#3482:
+ * a refreshed baseline absorbed an external edit, so an older queued scan
+ * that published later passed both gates). Only a producer re-mark moves it.
+ */
 export function rearmPendingAuxiliaryCoverage(
 	pair: PendingAuxCoverageEntry,
 	rearmedAtMs: number = Date.now(),
-	refreshBaseline = false,
 ): void {
 	const nextCount = (pair.rearmCount ?? 0) + 1;
 	markPendingAuxiliaryCoverage(
 		pair.filePath,
 		[pair.serverId],
-		refreshBaseline ? rearmedAtMs : pair.markedAtMs,
+		pair.markedAtMs,
 		rearmedAtMs,
 		nextCount,
+		pair.backlog,
 	);
 }
 

@@ -147,6 +147,9 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"gzip stage cases, not a production population sweep",
 	"tests/clients/instance-reaper-prune-concurrency.test.ts":
 		"concurrency cases, not a production population sweep",
+	"tests/clients/instance-registry-lock.test.ts":
+		"lock behavior cases; it lists one lock directory and asserts an empty " +
+		"degradation ledger, not a production population sweep",
 	"tests/clients/instance-registry.test.ts":
 		"registry behavior cases, not a production population sweep",
 	"tests/clients/lsp/edits.test.ts":

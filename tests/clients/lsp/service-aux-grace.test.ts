@@ -1602,6 +1602,106 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		);
 	});
 
+	// #3482 EditDuringGrace: the pair used to be marked with Date.now() AFTER
+	// the ~2 s grace wait, so another writer's edit inside that wait had an
+	// mtime before the baseline and the turn-end gate delivered the older
+	// scan's findings against it. The mark is now the touch's entry.
+	it("REPLAY-EDIT-DURING-GRACE: marks a cut-off pair before its notify, so an edit inside the wait is stale (#3482)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
+			await import("../../../clients/lsp/pending-aux-coverage.js");
+		const { gateFindingsByPathFreshness } =
+			await import("../../../clients/advisory-provenance.js");
+		const service = new LSPService();
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep"),
+		]);
+		const auxiliary = makeClient(3000, [], { serverId: "opengrep" });
+		let notifiedAt: number | undefined;
+		auxiliary.notify.open = vi.fn(async () => {
+			notifiedAt = Date.now();
+		});
+		createLSPClient
+			.mockResolvedValueOnce(makeClient(100, [], { serverId: "ts-primary" }))
+			.mockResolvedValueOnce(auxiliary);
+		await service.getClientsForFile(FILE);
+
+		const touch = service.touchFile(FILE, "v1", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(2110);
+		await touch;
+
+		const [pair] = drainPendingAuxiliaryCoverage().filter(
+			(entry) => entry.filePath === FILE && entry.serverId === "opengrep",
+		);
+		expect(notifiedAt).toBeDefined();
+		expect(pair).toBeDefined();
+		// Another writer edits 1 s into the 2 s wait. The real turn-end gate,
+		// fed the real mark, must call the scan stale.
+		const editedAt = (notifiedAt as number) + 1000;
+		const { "late-auxiliary-findings": gate } = gateFindingsByPathFreshness({
+			cwd: "C:/repo",
+			sources: {
+				"late-auxiliary-findings": {
+					findings: [{ message: "v1 finding" }],
+					scannedAt: pair?.markedAtMs,
+					citedPath: () => FILE,
+				},
+			},
+			probePath: () => ({ state: "present", mtimeMs: editedAt }),
+		});
+		expect(pair?.markedAtMs).toBeLessThanOrEqual(notifiedAt as number);
+		expect(gate).toEqual({ live: [], stale: [{ message: "v1 finding" }] });
+		clearPendingAuxiliaryCoverage(FILE, "opengrep");
+	});
+
+	// #3482 ReTouchRemark: the mark records how many sends the scanner still
+	// had to publish, read from the client the touch notified, so the turn-end
+	// drain can tell an older scan's version-less publish from this one's.
+	it("binds a cut-off pair to its scanner's unpublished backlog at mark time (#3482)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const { clearPendingAuxiliaryCoverage, drainPendingAuxiliaryCoverage } =
+			await import("../../../clients/lsp/pending-aux-coverage.js");
+		const service = new LSPService();
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-primary"),
+			makeAuxServer("opengrep"),
+		]);
+		const counts = { sent: 3, published: 1 };
+		const auxiliary = Object.assign(
+			makeClient(3000, [], { serverId: "opengrep" }),
+			{ getPublicationCountsForPath: vi.fn(() => ({ ...counts })) },
+		);
+		createLSPClient
+			.mockResolvedValueOnce(makeClient(100, [], { serverId: "ts-primary" }))
+			.mockResolvedValueOnce(auxiliary);
+		await service.getClientsForFile(FILE);
+
+		const touch = service.touchFile(FILE, "v3", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+		await vi.advanceTimersByTimeAsync(2110);
+		await touch;
+
+		const [pair] = drainPendingAuxiliaryCoverage().filter(
+			(entry) => entry.filePath === FILE && entry.serverId === "opengrep",
+		);
+		expect(auxiliary.getPublicationCountsForPath).toHaveBeenCalledWith(FILE);
+		expect(pair?.backlog).toMatchObject({ unpublished: 2, publishedAtMark: 1 });
+		// The drain reads the SAME client's count later, not a snapshot.
+		counts.published = 3;
+		expect(pair?.backlog?.readPublished()).toBe(3);
+		clearPendingAuxiliaryCoverage(FILE, "opengrep");
+	});
+
 	// #1458 S1: `waitForDiagnostics` RESOLVES on its own timeout and never
 	// rejects (client.ts) — so a silent auxiliary's promise settling within
 	// budget looks, promise-wise, identical to one that actually answered.
