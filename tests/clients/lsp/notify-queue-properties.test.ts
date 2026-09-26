@@ -508,7 +508,8 @@ function queuedCloseSent(run: Run): string[] {
 /**
  * Finding F3, #3545: a stale saved read kept out behind a pending `change`
  * entry rides on the change's run, which drops saves (#3405), so no didSave
- * goes out. `handleNotifyChange` has no production caller today
+ * goes out. The change must still be unsettled when the save is issued; one
+ * that already settled has no run left to ride on. `handleNotifyChange` has no production caller today
  * (`LSPService.updateFile` is uncalled). Carved out of `saveSurvives` only;
  * the replay below fails until #3545 is fixed, and this predicate goes with
  * the fix.
@@ -518,6 +519,7 @@ function staleSaveBehindChange(run: Run, save: Touch): boolean {
 		(c) =>
 			c.kind === "change" &&
 			c.issuedAt < save.issuedAt &&
+			(c.settledAt ?? Number.POSITIVE_INFINITY) > save.issuedAt &&
 			run.touches.some(
 				(p) =>
 					p.issuedAt < c.issuedAt &&
@@ -534,11 +536,14 @@ function staleSaveBehindChange(run: Run, save: Touch): boolean {
  * and no didSave goes out for a document the server does not hold. The save
  * is owed only while nothing legitimately ends it: a live client, no close
  * after it or pending when it was issued, no later `change` (a change drops
- * an inherited save by design, #3405), and a document on the server at the
- * end. A saved read older than one the queue already ran is dropped; when
- * that newer read was itself refused (its file was gone), the server holds
- * nothing and no didSave is possible. A touch refused because its file is
- * gone also leaves the server holding nothing, so no separate file clause.
+ * an inherited save by design, #3405), a document on the server at the end,
+ * and a file there from the save on. The last two are separate cases:
+ * - A saved read older than one the queue already ran is dropped. When that
+ *   newer read was itself refused (its file was gone), the server holds
+ *   nothing and no didSave is possible.
+ * - A saved touch refused because its file is gone (#3477) sends nothing,
+ *   yet a later touch can re-open the document once the file is back; the
+ *   server then holds a document and the refused save still owes nothing.
  */
 function saveSurvives(run: Run): string[] {
 	const out: string[] = [];
@@ -560,6 +565,11 @@ function saveSurvives(run: Run): string[] {
 		)
 			continue;
 		if (!serverDoc(run.wire).open) continue;
+		if (
+			!existsAt(run, save.issuedAt) ||
+			run.gone.some((g) => g > save.issuedAt)
+		)
+			continue;
 		if (staleSaveBehindChange(run, save)) continue;
 		const saved = run.wire.some(
 			(m) => m.method === "didSave" && m.delivered && m.at > save.issuedAt,
