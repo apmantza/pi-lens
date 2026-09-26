@@ -58,18 +58,30 @@ close-triggered publish).
   `ClosePublishCounted`). opengrep publishes nothing on close, but
   tekumara/typos-lsp `crates/typos-lsp/src/lsp.rs` `did_close` publishes an
   empty, version-less set UNCONDITIONALLY, on every close, answering no
-  send. `AllowClosePublish` arms one such publish at the `Close` step
-  itself — distinct from, and arriving before, any real scan still queued
-  in `sent` (typos' close handler is fast and synchronous; a genuinely
-  in-flight scan for the pre-close content is slower). Whether it is
-  credited toward the closed lifetime's owed scans is
-  `ClosePublishCounted`: `TRUE` reproduces #3548 (client.ts's `Counted`
-  charged against `bound` unconditionally in the `closedDocuments` branch);
-  `FALSE` is the fix (the `publishesOnClose` strategy marker's skip). It
-  never affects a server `AllowClosePublish` is left `FALSE` for: that
-  server's own close-time publish (from a real queued scan) still goes
-  through `DroppedWhileClosed` exactly as before, gated only by `Carry`
-  — the required inverse direction.
+  send. `AllowClosePublish` arms one such publish (`ClosePublish`, only
+  while still closed — see its own comment for why) — distinct from any
+  real scan still queued in `sent`, and NOT ordered ahead of one: both
+  compete for the SAME credit (below), whichever reaches
+  `DroppedWhileClosed` first. Whether the credit mechanism is engaged at
+  all is `ClosePublishCounted`: `TRUE` reproduces #3548 (client.ts's
+  `Counted` charged against `bound` unconditionally in the closedDocuments
+  branch, no credit concept); `FALSE` is the fix (the `publishesOnClose`
+  strategy marker). It never affects a server `AllowClosePublish` is left
+  `FALSE` for: that server's own close-time publish (from a real queued
+  scan) still goes through `DroppedWhileClosed` exactly as before, gated
+  only by `Carry` — the required inverse direction.
+- **The close-publish credit, and its reopen reset** (#3548 review r1 B1,
+  `closePublishCredit` / `ResetClosePublishCredit`). `closePublishCredit`
+  is `closePublishSkipsRemaining`: a counter, not a one-shot flag,
+  incremented once per close (when the credit mechanism is engaged) and
+  SHARED — `DroppedWhileClosed` (called by `Publish`/`SurplusPublish` for a
+  real scan, or by `ClosePublish` for the close's own trigger) spends it on
+  whichever reaches it first while closed, matching client.ts's single
+  `if (remaining > 0)` check exactly. `ResetClosePublishCredit` is whether
+  `AgentTouch`'s reopen branch clears it (client.ts `handleNotifyOpenOnce`'s
+  `closePublishSkipsRemaining.delete`, the same point `closedDocuments` is
+  cleared): `FALSE` is the leak a credit spent by nothing before a reopen
+  survives into, and stacks with, the NEXT close's own; `TRUE` is the fix.
 - **The drain**, in three steps split at its awaits:
   1. `drainPendingAuxiliaryCoverage`.
   2. `await readCachedDiagnosticsForServers`, then the synchronous check
@@ -129,7 +141,9 @@ state predicate, so the `\* expect:` checker can read its verdict.
 | `ReopenSpan`, `ReopenRulesRefresh` | pass, both invariants (the fix) |
 | `ReopenSpanNoDropCount` | violated `NoFreshWithheld` (mutant: a publish dropped while closed not counted) |
 | `ClosePublishUncounted` | violated `NoStaleFindings` (#3548 before the fix: typos' close-triggered publish counted) |
-| `ClosePublishExempt` | pass, both invariants (#3548 fix: `publishesOnClose` skip) |
+| `ClosePublishExempt` | pass `NoStaleFindings` (#3548 fix: `publishesOnClose` skip; `NoFreshWithheld` not checked — see the credit paragraph above) |
+| `ClosePublishCreditLeak` | violated `NoExcessCloseCredit` (review r1 B1 before the fix: the credit survives a reopen and stacks across a second close) |
+| `ClosePublishCreditReset` | pass `NoStaleFindings` and `NoExcessCloseCredit` (review r1 B1 fix: the credit is cleared at every reopen) |
 
 The existing configs keep `NoStaleFindings` alone and keep their verdicts.
 Adding `NoFreshWithheld` to them violates it in every config with
@@ -223,10 +237,50 @@ than by resetting the carry — so a genuinely in-flight scan's later (stale)
 answer is free to be taken as the reopened file's fresh answer instead.
 With the skip (`ClosePublishExempt`), that publish is dropped like any
 other publish while closed but never credited, so the in-flight scan's own
-answer is still required before the reopened send is satisfied; the
-`NoFreshWithheld` side confirms a server this marker is not set for keeps
-counting its own close-time publish exactly as before (`ClosePublishCounted`
-never gates `DroppedWhileClosed`, only the dedicated close-publish action).
+answer is still required before the reopened send is satisfied. A server
+this marker is not set for keeps counting its own close-time publish
+exactly as before: `AllowClosePublish = FALSE` never grants
+`closePublishPending`, so `ClosePublish` never fires for it, and its
+close-time publish (a real, if late, backlog answer) still goes through
+`Publish`/`SurplusPublish`'s own `DroppedWhileClosed` call untouched. This
+inverse is `NoStaleFindings`-only in every config (`ClosePublishExempt`
+included; see the credit paragraph below for why `NoFreshWithheld` is
+deliberately not one of them).
+
+**The close-publish credit does not survive a reopen (#3548 review r1
+B1).** `closePublishSkipsRemaining` (`closePublishCredit` here) is a
+SHARED resource: `DroppedWhileClosed` — called by `Publish`/`SurplusPublish`
+for a real queued scan's own answer AND by `ClosePublish` for the close's
+own trigger — spends it on whichever of the two reaches the closedDocuments
+branch first while closed, matching client.ts exactly (one `if (remaining >
+0)` check, no distinction between the two). Two consequences follow from
+sharing ONE resource this way:
+
+- *An accepted, reviewed residual, independent of this fix.* Even within a
+  SINGLE close, if the real scan happens to arrive before `ClosePublish`,
+  it spends the close's OWN legitimate credit — `ClosePublish`'s own
+  contribution to `bound` is then left pending until it fires. Neither
+  event ever touches `cache` (`DroppedWhileClosed` only ever drops), so
+  this is a transient wait, never a stale delivery — `NoStaleFindings`
+  still holds (`ClosePublishExempt`) — cleared by the reviewer as
+  cancelling out numerically once both arrivals resolve. Because this
+  model does not represent a close-publish's resolution once reopened
+  (see `ClosePublish`'s own comment: modelling that would need a `ver` for
+  a stored, content-less publish, a `NoStaleFindings` question out of
+  scope here), a trace where the real scan wins and the reopen happens
+  before `ClosePublish` gets a turn leaves it "pending forever" in THIS
+  model — a scope limitation, not a defect — which is why
+  `ClosePublishExempt` checks `NoStaleFindings` only, never
+  `NoFreshWithheld`.
+- *The leak itself.* Without a reopen reset (`ResetClosePublishCredit =
+  FALSE`), a credit granted by one close that the ordering residual above
+  (or simple bad luck) leaves unspent survives into the NEXT close and
+  stacks with its own fresh credit — `NoExcessCloseCredit`
+  (`closePublishCredit <= 1`) is the leak's own, uncontaminated signature,
+  independent of the ordering residual's `NoFreshWithheld` noise: the
+  residual never creates a SECOND credit (`ClosePublishCreditLeak`
+  violates `NoExcessCloseCredit` only; `ClosePublishCreditReset`, WITH the
+  reset, passes `NoStaleFindings` and `NoExcessCloseCredit`).
 
 ## Scope
 
