@@ -29,9 +29,9 @@ Issues: #3501 (the touch debounce outlives its client), #3502
      dead client, runs the #1127/#1142 breakers and respawns, then a lease.
   2. Decide: `shouldSkipNotify` reads the `recentTouches` entry for
      (path, scope, serverId).
-  3. Write: `notify.open`. A dead client resolves `true`
-     (`handleNotifyOpen`'s `!isClientAlive` return, and a queued entry whose
-     runner sees the dead client, read as sent by `sent !== false`).
+  3. Write: `notify.open`. A dead client resolves `false` since #3543
+     (`handleNotifyOpen`'s `!isClientAlive` return, and a queued run that
+     finds the client dead). Before #3543 both resolved `true`.
   4. Mark: `markTouched`, after the write resolved `true`.
   5. For `"C"`: the wait, bounded by its own timeout, then the verdict. A
      silentOnClean server's timed-out silence is confirmed clean when
@@ -62,6 +62,8 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   only for the client instance whose write marked it. `"none"` is the code
   before #3501. `"clear"`, `"clearDeath"` and `"clearDeadFalse"` are the
   alternative fix (delete the entry on death and eviction) and its variants.
+  `"clearDeadFalse"` added a dead client's write resolving `false`; since
+  #3543 every value models that, so it is now the same model as `"clear"`.
 - `ClearReadyOnDeath`: `TRUE` is the code since #3502: the dead-client
   branch deletes `demonstratedReady` and `demonstratedCold` like every other
   retirement path. `FALSE` is the code before #3502.
@@ -85,37 +87,37 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 
 | Config | Expect | Verdict | States | s |
 |---|---|---|---|---|
-| `CrashBetweenTouches` (code, #3501) | pass | pass | 363 | 2.5 |
-| `CrashBetweenTouchesHeld` (code, #3501) | pass | pass | 363 | 2.4 |
-| `CrashBetweenTouchesNonSilent` | pass | pass | 363 | 2.5 |
-| `EvictBetweenTouches` (code, #3501) | pass | pass | 110 | 2.2 |
-| `MutNoBindCrashBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 318 | 2.8 |
-| `MutNoBindCrashBetweenTouchesHeld` (pre-#3501 code) | violated `SkipImpliesHeld` | violated | 112 | 2.2 |
-| `MutNoBindEvictBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 95 | 2.7 |
-| `FixBind` (code: concurrent, crash and eviction) | pass | pass | 82299 | 9.0 |
-| `FixBindSeq` (code: sequential, crash and eviction) | pass | pass | 859 | 2.7 |
-| `FixClearSeq` | pass | pass | 742 | 3.3 |
-| `MutFixClearConcurrent` | violated `NoFalseClean` | violated | 13553 | 4.5 |
-| `MutFixClearDeadFalseConcurrent` | violated `NoFalseClean` | violated | 14795 | 4.2 |
-| `MutFixClearDeathOnly` | violated `NoFalseClean` | violated | 117 | 2.4 |
-| `CrashMidWait` | pass | pass | 179 | 2.2 |
-| `MutCrashMidWaitNoPing` | violated `NoFalseClean` | violated | 68 | 2.6 |
-| `MutCrashMidWaitNoTimeout` | violated `WaitBounded` | violated | 37 | 2.0 |
-| `MutEvictNoLease` | violated `NoEvictUnderLease` | violated | 14 | 2.7 |
-| `EvictNoLeaseMidWait` | pass | pass | 45 | 2.0 |
-| `CrashLoop` | pass | pass | 35873 | 6.8 |
-| `CrashLoopNoFastPath` | pass | pass | 19397 | 5.3 |
-| `MutCrashLoopNoWindow` | violated `BoundedCrashLoop` | violated | 483 | 2.8 |
-| `MutCrashLoopNoBreaker` | violated `BoundedCrashLoop` | violated | 598 | 2.8 |
-| `CrashReady` (code, #3502) | pass | pass | 303 | 2.3 |
-| `FixCrashReady` (code, #3502, with an eviction) | pass | pass | 661 | 2.7 |
-| `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 107 | 2.4 |
-| `CrashReadyConcurrent` (code, #3502 round 1) | pass | pass | 2289 | 3.4 |
-| `MutCrashReadyConcurrentNoGuard` (the ready mark without its guard) | violated `ReadyIsCurrent` | violated | 829 | 2.4 |
-| `WarmupColdConcurrent` (code, #3502 verify round 2) | pass | pass | 2291 | 2.2 |
-| `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 730 | 2.1 |
-| `WarmupColdNoClient` (code, #3502 verify round 3) | pass | pass | 249 | 1.7 |
-| `MutWarmupColdNoRegClear` (registration keeps the no-client verdict) | violated `ColdIsCurrent` | violated | 66 | 2.6 |
+| `CrashBetweenTouches` (code, #3501) | pass | pass | 371 | 3.0 |
+| `CrashBetweenTouchesHeld` (code, #3501) | pass | pass | 371 | 3.6 |
+| `CrashBetweenTouchesNonSilent` | pass | pass | 371 | 4.2 |
+| `EvictBetweenTouches` (code, #3501) | pass | pass | 110 | 2.0 |
+| `MutNoBindCrashBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 325 | 2.6 |
+| `MutNoBindCrashBetweenTouchesHeld` (pre-#3501 code) | violated `SkipImpliesHeld` | violated | 157 | 2.6 |
+| `MutNoBindEvictBetweenTouches` (pre-#3501 code) | violated `NoFalseClean` | violated | 124 | 3.0 |
+| `FixBind` (code: concurrent, crash and eviction) | pass | pass | 81101 | 7.6 |
+| `FixBindSeq` (code: sequential, crash and eviction) | pass | pass | 875 | 2.8 |
+| `FixClearSeq` | pass | pass | 760 | 2.4 |
+| `MutFixClearConcurrent` | violated `NoFalseClean` | violated | 11535 | 4.8 |
+| `MutFixClearDeadFalseConcurrent` | violated `NoFalseClean` | violated | 16530 | 5.6 |
+| `MutFixClearDeathOnly` | violated `NoFalseClean` | violated | 122 | 2.9 |
+| `CrashMidWait` | pass | pass | 161 | 2.9 |
+| `MutCrashMidWaitNoPing` | violated `NoFalseClean` | violated | 73 | 3.5 |
+| `MutCrashMidWaitNoTimeout` | violated `WaitBounded` | violated | 30 | 4.5 |
+| `MutEvictNoLease` | violated `NoEvictUnderLease` | violated | 5 | 3.5 |
+| `EvictNoLeaseMidWait` | pass | pass | 42 | 1.9 |
+| `CrashLoop` | pass | pass | 45393 | 11.4 |
+| `CrashLoopNoFastPath` | pass | pass | 26050 | 8.6 |
+| `MutCrashLoopNoWindow` | violated `BoundedCrashLoop` | violated | 233 | 3.3 |
+| `MutCrashLoopNoBreaker` | violated `BoundedCrashLoop` | violated | 872 | 3.5 |
+| `CrashReady` (code, #3502) | pass | pass | 293 | 2.8 |
+| `FixCrashReady` (code, #3502, with an eviction) | pass | pass | 641 | 2.3 |
+| `MutCrashReadyNoClear` (pre-#3502 code) | violated `ReadyIsCurrent` | violated | 114 | 3.5 |
+| `CrashReadyConcurrent` (code, #3502 round 1) | pass | pass | 2172 | 3.8 |
+| `MutCrashReadyConcurrentNoGuard` (the ready mark without its guard) | violated `ReadyIsCurrent` | violated | 687 | 5.4 |
+| `WarmupColdConcurrent` (code, #3502 verify round 2) | pass | pass | 2174 | 3.9 |
+| `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 799 | 3.3 |
+| `WarmupColdNoClient` (code, #3502 verify round 3) | pass | pass | 249 | 3.2 |
+| `MutWarmupColdNoRegClear` (registration keeps the no-client verdict) | violated `ColdIsCurrent` | violated | 184 | 3.5 |
 
 State counts of a violated config vary between runs: TLC stops at the first
 counterexample its workers reach.
@@ -153,15 +155,19 @@ counterexample its workers reach.
 - **Bind, not clear.** The code compares the entry's `WeakRef` to the
   touch's own client in `shouldSkipNotify`, which `shouldSkipTouch` also
   calls for each spawned server.
-- **A dead client's write still resolves `true`.** Under the bind, the entry
-  it marks can only match the dead instance. A new touch never acquires a dead
-  instance (`ensureClientForServer` respawns), and a touch that acquired it
-  before the crash skips only on it: its wait times out and its ping fails.
-  Resolving `false` instead would
-  not close the concurrent route (`MutFixClearDeadFalseConcurrent`), and
-  `false` already means something else to its readers: `touchFile` treats it
-  as a superseded write (#3481) and the rename resync treats it as a close
-  still queued ahead of the re-open.
+- **A dead client's write resolves `false` (#3543).** #3501 kept it `true`:
+  under the bind, the entry it marks can only match the dead instance, and
+  `false` alone does not close the concurrent route
+  (`MutFixClearDeadFalseConcurrent`). That holds for the debounce entry,
+  which is per client. The drift record is per file, not per client:
+  `touchFile` stamps it when every targeted write resolved `true`, so a dead
+  client's `true` told the drift sweep a respawned server's view was in sync
+  and the sweep never re-pushed it. #3543 makes every write that put nothing
+  on the wire resolve `false`. Its readers: `touchFile` files the server
+  under `supersededServerIds` and stamps neither record; the rename resync
+  counts the re-open as failed and names the dead client in its reason. The
+  bind stays: a write that landed before the crash still marks, and every
+  #3501 and #3502 config keeps its verdict with `Write` resolving `false`.
 
 ## Replay on the real code
 
