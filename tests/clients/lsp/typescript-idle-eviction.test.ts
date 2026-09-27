@@ -38,7 +38,7 @@ function fakeClient(label: string, busy = false) {
 	};
 }
 
-function configureTypeScriptServer() {
+function configureTypeScriptServer(id = "typescript") {
 	const spawn = vi.fn(async () => ({
 		process: {
 			process: { killed: false },
@@ -50,8 +50,8 @@ function configureTypeScriptServer() {
 	}));
 	getServersForFileWithConfig.mockReturnValue([
 		{
-			id: "typescript",
-			name: "TypeScript",
+			id,
+			name: id,
 			extensions: [".ts"],
 			root: async () => "/repo",
 			spawn,
@@ -108,6 +108,30 @@ describe("TypeScript language-service idle eviction (#1332 b2)", () => {
 		expect(createLSPClient).toHaveBeenCalledTimes(2);
 		await service.shutdown();
 	});
+
+	it.each(["python", "marksman", "opengrep"])(
+		"also releases an idle %s client and rebuilds it on demand",
+		async (id) => {
+			vi.useFakeTimers();
+			const first = fakeClient("first");
+			const rebuilt = fakeClient("rebuilt");
+			createLSPClient
+				.mockResolvedValueOnce(first)
+				.mockResolvedValueOnce(rebuilt);
+			configureTypeScriptServer(id);
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+
+			await service.getClientForFile("/repo/main.ts");
+			await vi.advanceTimersByTimeAsync(20);
+			expect(first.shutdown).toHaveBeenCalledTimes(1);
+			expect(service.getAliveClientCount()).toBe(0);
+			expect((await service.getClientForFile("/repo/main.ts"))?.client).toBe(
+				rebuilt,
+			);
+			await service.shutdown();
+		},
+	);
 
 	it("does not evict an in-flight client and restarts its idle window", async () => {
 		vi.useFakeTimers();

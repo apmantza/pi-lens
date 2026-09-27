@@ -1900,7 +1900,8 @@ export class LSPService {
 	}
 
 	private scheduleTypeScriptIdleEviction(key: string): void {
-		if (!key.startsWith("typescript:")) return;
+		// Servers that stay resident with large heaps; the next request respawns them.
+		if (!/^(typescript|python|marksman|opengrep):/.test(key)) return;
 		// Pressure-gating these timers would require a separate reconciliation pass
 		// when the manager crosses the threshold; keep ownership simple and use the
 		// warm-LSP-friendly 20-minute default instead.
