@@ -53,6 +53,7 @@
 		"real-harness/child-exit.test.ts": 1,
 		"real-harness/diagnostic-provenance.test.ts": 7,
 		"real-harness/negative.test.ts": 2,
+		"real-harness/provider-compatibility.test.ts": 5,
 		"real-harness/scenario-1.test.ts": 1,
 		"real-harness/scenario-3.test.ts": 1,
 		"real-harness/tools-enabled.test.ts": 5,

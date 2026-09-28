@@ -26,16 +26,16 @@ function providerTools(context) {
 		let hasTranscriptTools = false;
 		for (const message of context.messages) {
 			if (message?.role !== "system") continue;
-			if (Array.isArray(message.toolsAdded)) {
-				hasTranscriptTools = true;
-				for (const tool of message.toolsAdded) {
-					if (typeof tool?.name === "string") tools.set(tool.name, tool);
-				}
-			}
 			if (Array.isArray(message.toolsRemoved)) {
 				hasTranscriptTools = true;
 				for (const tool of message.toolsRemoved) {
 					if (typeof tool?.name === "string") tools.delete(tool.name);
+				}
+			}
+			if (Array.isArray(message.toolsAdded)) {
+				hasTranscriptTools = true;
+				for (const tool of message.toolsAdded) {
+					if (typeof tool?.name === "string") tools.set(tool.name, tool);
 				}
 			}
 		}

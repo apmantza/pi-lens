@@ -358,6 +358,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real pi must surface provider exhaustion and malformed tool arguments across the process boundary",
 	},
+	"real-process-spawn:real-harness/provider-compatibility.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the installed pi host must load the built extension and expose its provider roster across the process boundary",
+	},
 	"real-process-spawn:real-harness/scenario-1.test.ts": {
 		detector: "real-process-spawn",
 		reason:
