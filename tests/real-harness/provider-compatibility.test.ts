@@ -16,17 +16,35 @@ function latestToolNames(pi: {
 	);
 }
 
-function resolvedPiPackage(): { version: string } {
+type PiResolution = { version?: string; skipReason?: string };
+
+function resolvedPiPackage(): PiResolution {
 	// The harness starts this same `pi` command. Some CI shims print the
 	// version and still return non-zero, so the output—not the status—is the
 	// evidence this witness needs.
-	const resolved = spawnSync("pi", ["--version"], { encoding: "utf8" });
-	const version = resolved.stdout.match(/\b\d+\.\d+\.\d+\b/)?.[0] ?? "";
-	return { version };
+	try {
+		const resolved = spawnSync("pi", ["--version"], { encoding: "utf8" });
+		if (resolved.error !== undefined)
+			return {
+				skipReason: `pi unavailable: --version could not spawn (${resolved.error.message})`,
+			};
+		if (typeof resolved.stdout !== "string" || resolved.stdout.trim() === "")
+			return { skipReason: "pi unavailable: --version produced no stdout" };
+		const version = resolved.stdout.match(/\b\d+\.\d+\.\d+\b/)?.[0];
+		return version === undefined
+			? { skipReason: "pi unavailable: --version had no parseable version" }
+			: { version };
+	} catch (error) {
+		return {
+			skipReason: `pi unavailable: --version probe threw (${error instanceof Error ? error.message : String(error)})`,
+		};
+	}
 }
 
-async function runInstalledPi(): Promise<void> {
-	const installed = resolvedPiPackage();
+const installedPi = resolvedPiPackage();
+
+async function runInstalledPi(installed: { version: string }): Promise<void> {
+	expect(installed.version, "installed pi version").toMatch(/^\d+\.\d+\.\d+$/);
 
 	await withRealPi(
 		{ fixture: "scenario-1", script: "script.json", args: ["--no-lazy-tools"] },
@@ -173,7 +191,12 @@ describe("real pi scripted-provider compatibility", () => {
 		expect(rows.filter((row) => Array.isArray(row.tools))).toHaveLength(4);
 	});
 
-	it("preserves active and disabled rosters for the installed pi", async () => {
-		await runInstalledPi();
+	it("preserves active and disabled rosters for the installed pi", async (ctx) => {
+		ctx.skip(
+			installedPi.skipReason !== undefined,
+			installedPi.skipReason ?? "",
+		);
+		if (installedPi.version === undefined) return;
+		await runInstalledPi({ version: installedPi.version });
 	}, 180_000);
 });
