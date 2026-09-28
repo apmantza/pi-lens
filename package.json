@@ -163,7 +163,7 @@
 		"dependency-cruiser": "^18.2.0",
 		"fast-check": "^4.10.2",
 		"husky": "^9.1.7",
-		"jscpd": "5.3.0",
+		"jscpd": "5.3.2",
 		"json5": "^2.2.3",
 		"knip": "6.37.0",
 		"oxfmt": "0.68.0",
