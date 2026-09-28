@@ -21,6 +21,7 @@ describe("real harness lane admission", () => {
 			"tests/real-harness/scenario-3.test.ts",
 			"tests/real-harness/tools-enabled.test.ts",
 			"tests/real-harness/diagnostic-provenance.test.ts",
+			"tests/real-harness/provider-compatibility.test.ts",
 		];
 		expect(realHarnessInclude).toEqual(expect.arrayContaining(expected));
 		expect(realHarnessInclude).toHaveLength(expected.length);
