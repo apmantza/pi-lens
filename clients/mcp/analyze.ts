@@ -449,7 +449,6 @@ export async function analyzeFile(
 		await warmLspForFile(absPath, host);
 	}
 
-	const reportsBefore = getLatencyReports().length;
 	const start = Date.now();
 	// No telemetryModel/telemetryProvider here (#1448): this MCP facade has no
 	// RuntimeCoordinator to hold a host-reported identity (see the module doc
@@ -572,13 +571,26 @@ export async function analyzeFile(
 		}
 	}
 
-	// dispatchForFile appended a latency report during the call above. Match the
-	// newly-added report for this exact path; fall back to the most recent new
-	// report if the path normalization differs.
-	const newReports = getLatencyReports().slice(reportsBefore);
-	const latencyReport =
-		newReports.find((report) => path.resolve(report.filePath) === absPath) ??
-		newReports[newReports.length - 1];
+	// dispatchForFile appended a latency report during the call above. A
+	// length-delta slice (`getLatencyReports().slice(reportsBefore)`) breaks
+	// once the ring is at its 100-entry cap (#3642): dispatcher.ts:1444-1449
+	// pushes then shifts, so a full ring's length is unchanged by the push and
+	// the slice is always empty. Scan the full current ring for this path
+	// instead, tail first (newest first) so a duplicate path elsewhere in the
+	// ring can't shadow the report this call just produced; fall back to the
+	// newest entry if the path normalization differs.
+	const allReports = getLatencyReports();
+	let latencyReport: (typeof allReports)[number] | undefined;
+	for (let i = allReports.length - 1; i >= 0; i--) {
+		const report = allReports[i];
+		if (report && path.resolve(report.filePath) === absPath) {
+			latencyReport = report;
+			break;
+		}
+	}
+	if (!latencyReport) {
+		latencyReport = allReports[allReports.length - 1];
+	}
 
 	const lspRunner = latencyReport?.runners.find(
 		(runner) => runner.runnerId === "lsp",

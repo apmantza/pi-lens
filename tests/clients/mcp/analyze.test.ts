@@ -178,22 +178,20 @@ describe("analyzeFile", () => {
 
 	it("counts a deferred LSP runner as ran while preserving its status", async () => {
 		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
-		vi.mocked(getLatencyReports)
-			.mockReturnValueOnce([])
-			.mockReturnValueOnce([
-				{
-					filePath: tsFile,
-					fileKind: "jsts",
-					runners: [
-						{
-							runnerId: "lsp",
-							status: "deferred",
-							diagnosticCount: 0,
-							durationMs: 10,
-						},
-					],
-				},
-			] as never);
+		vi.mocked(getLatencyReports).mockReturnValueOnce([
+			{
+				filePath: tsFile,
+				fileKind: "jsts",
+				runners: [
+					{
+						runnerId: "lsp",
+						status: "deferred",
+						diagnosticCount: 0,
+						durationMs: 10,
+					},
+				],
+			},
+		] as never);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
@@ -226,9 +224,7 @@ describe("analyzeFile", () => {
 			warnings: 0,
 		};
 
-		vi.mocked(getLatencyReports)
-			.mockReturnValueOnce([])
-			.mockReturnValueOnce([report]);
+		vi.mocked(getLatencyReports).mockReturnValueOnce([report]);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
@@ -240,6 +236,72 @@ describe("analyzeFile", () => {
 			diagnosticCount: 0,
 			durationMs: 1000,
 		});
+		expect(result.latency).toEqual({
+			totalDurationMs: 1200,
+			stoppedEarly: false,
+			runners: [
+				{
+					runnerId: "lsp",
+					durationMs: 1000,
+					status: "succeeded",
+					diagnosticCount: 0,
+				},
+			],
+		});
+	});
+
+	it("attaches the latency report even when the ring is already at its 100-entry cap (#3642)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+
+		// dispatcher.ts:1444-1449 pushes then shifts once length > 100, so a
+		// full ring's length is UNCHANGED by this dispatch's push (100 -> 100).
+		// analyzeFile must still find the report it just caused, not rely on a
+		// length delta.
+		const fillerReport: DispatchLatencyReport = {
+			filePath: path.join(tmpDir, "other-file.ts"),
+			fileKind: "jsts",
+			overallStartMs: 0,
+			overallEndMs: 1,
+			totalDurationMs: 1,
+			runners: [],
+			stoppedEarly: false,
+			totalDiagnostics: 0,
+			blockers: 0,
+			warnings: 0,
+		};
+		const newestReport: DispatchLatencyReport = {
+			filePath: tsFile,
+			fileKind: "jsts",
+			overallStartMs: 0,
+			overallEndMs: 1200,
+			totalDurationMs: 1200,
+			runners: [
+				{
+					runnerId: "lsp",
+					startTime: 0,
+					endTime: 1000,
+					durationMs: 1000,
+					status: "succeeded",
+					diagnosticCount: 0,
+					semantic: "blocking",
+				},
+			],
+			stoppedEarly: false,
+			totalDiagnostics: 0,
+			blockers: 0,
+			warnings: 0,
+		};
+		// Ring was already at capacity (100) before this dispatch, and stays at
+		// 100 after it, since the push+shift keeps length constant; the newest
+		// entry (this dispatch's report) sits at the tail.
+		const ringBefore = Array.from({ length: 99 }, () => fillerReport);
+		const ringAfter = [...ringBefore, newestReport];
+
+		vi.mocked(getLatencyReports).mockReturnValueOnce(ringAfter);
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(result.latency).toBeDefined();
 		expect(result.latency).toEqual({
 			totalDurationMs: 1200,
 			stoppedEarly: false,
