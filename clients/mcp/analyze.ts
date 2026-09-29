@@ -18,7 +18,6 @@ import { CacheManager, MCP_TURN_STATE_OWNER_ID } from "../cache-manager.js";
 import {
 	CASCADE_GRAPH_KINDS,
 	dispatchLintWithResult,
-	getLatencyReports,
 } from "../dispatch/integration.js";
 import { FactStore } from "../dispatch/fact-store.js";
 import type { Diagnostic } from "../dispatch/types.js";
@@ -26,7 +25,7 @@ import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/index.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
-import { normalizeMapKey, pathsEqual } from "../path-utils.js";
+import { normalizeMapKey } from "../path-utils.js";
 import { loadProjectSnapshot } from "../project-snapshot.js";
 import { buildOrUpdateGraph } from "../review-graph/service.js";
 import { classifyDiagnosticTier, recordDiagnostics } from "../widget-state.js";
@@ -450,7 +449,6 @@ export async function analyzeFile(
 	}
 
 	const start = Date.now();
-	const reportsBefore = new Set(getLatencyReports());
 	// No telemetryModel/telemetryProvider here (#1448): this MCP facade has no
 	// RuntimeCoordinator to hold a host-reported identity (see the module doc
 	// above), so any worklog entries this dispatch produces get a blank
@@ -465,10 +463,6 @@ export async function analyzeFile(
 			blockingOnly: options.blockingOnly ?? false,
 		},
 	);
-	const appendedReports: ReturnType<typeof getLatencyReports> = [];
-	for (const report of getLatencyReports()) {
-		if (!reportsBefore.has(report)) appendedReports.push(report);
-	}
 	const durationMs = Date.now() - start;
 
 	if (options.record !== false) {
@@ -576,21 +570,7 @@ export async function analyzeFile(
 		}
 	}
 
-	// The dispatcher stores each report object once and getLatencyReports returns
-	// a shallow copy. Reference identity therefore survives the ring's push+shift
-	// at capacity, unlike a length delta. A single appended reference is this
-	// dispatch's report; with concurrent appends, only matching reports can be
-	// attributed and the newest matching report wins. No foreign fallback exists.
-	let latencyReport =
-		appendedReports.length === 1 ? appendedReports[0] : undefined;
-	if (appendedReports.length > 1) {
-		// Newest matching report wins; no foreign fallback exists.
-		for (const report of appendedReports) {
-			if (pathsEqual(path.resolve(cwd, report.filePath), absPath)) {
-				latencyReport = report;
-			}
-		}
-	}
+	const latencyReport = result.latencyReport;
 
 	const lspRunner = latencyReport?.runners.find(
 		(runner) => runner.runnerId === "lsp",

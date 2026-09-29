@@ -1483,6 +1483,7 @@ export async function dispatchForFile(
 	});
 
 	return {
+		latencyReport,
 		diagnostics: visibleDiagnostics,
 		blockers,
 		warnings,

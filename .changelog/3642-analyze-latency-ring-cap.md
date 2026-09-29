@@ -2,8 +2,7 @@
 section: Fixed
 ---
 
-- `analyzeFile`'s MCP result no longer drops the latency report once the
-  100-entry ring is at capacity. The report is matched by stable object
-  identity across the before/after ring snapshots, with `pathsEqual` used
-  only to disambiguate multiple concurrent appends; foreign reports are never
-  used as a fallback (refs #3642, refs #3643).
+- `analyzeFile`'s MCP result now consumes the exact latency report carried by
+  `DispatchResult`, so a 100-entry ring and concurrent same-path dispatches
+  cannot cause cross-call attribution or a foreign fallback (refs #3642,
+  refs #3643).

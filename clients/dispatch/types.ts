@@ -17,6 +17,7 @@ import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
 import type { PiLensProjectConfig } from "../project-lens-config.js";
+import type { DispatchLatencyReport } from "./dispatcher.js";
 
 export type DefectClass =
 	| "silent-error"
@@ -105,6 +106,8 @@ export interface Diagnostic {
 }
 
 export interface DispatchResult {
+	/** The latency report this dispatch appended for its own file, when one was captured. Carries identity so a caller never has to infer it from the ring (clients/dispatch/dispatcher.ts). */
+	latencyReport?: DispatchLatencyReport;
 	/** All diagnostics found (delta-filtered for this run) */
 	diagnostics: Diagnostic[];
 	/** Blockers that must be fixed (delta-filtered) */
