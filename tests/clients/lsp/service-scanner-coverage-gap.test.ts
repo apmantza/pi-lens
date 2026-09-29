@@ -74,6 +74,7 @@ function makeServer(
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		...(role !== undefined && { role }),
 		root: async () => ROOT,
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),

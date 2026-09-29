@@ -364,6 +364,7 @@ describe("runWorkspaceDiagnostics honors the expiry bound end to end (#1782 AC3)
 			id: "typescript",
 			name: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => tmpSweep,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};

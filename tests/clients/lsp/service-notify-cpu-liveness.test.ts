@@ -111,6 +111,7 @@ describe("#2358 — CPU-liveness discriminator on a real wedged scanner", () => 
 			name: "opengrep",
 			role: "auxiliary" as const,
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => ROOT,
 			spawn: async () => {
 				const { spawnFakeLspServer } =

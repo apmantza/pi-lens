@@ -49,6 +49,7 @@ function makeTsServer(root: string) {
 		id: "typescript",
 		name: "typescript",
 		extensions: [".ts"],
+		idleEviction: "resident",
 		root: async () => root,
 		spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 	};
@@ -293,6 +294,7 @@ function makeServer(id: string, ext: string, root: string) {
 		id,
 		name: id,
 		extensions: [ext],
+		idleEviction: "resident",
 		root: async () => root,
 		spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 	};
@@ -768,6 +770,7 @@ describe("LSP warm-up telemetry pairing (#1374)", () => {
 			name: "deno",
 			fallbackFor: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => undefined,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};

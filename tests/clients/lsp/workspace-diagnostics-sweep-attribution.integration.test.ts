@@ -41,6 +41,7 @@ describe("runWorkspaceDiagnostics sweep bracket on the real wire (#2332)", () =>
 				id: "typescript",
 				name: "typescript",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => root,
 				spawn: async () => ({
 					process: await spawnFakeLspServer({

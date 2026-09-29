@@ -59,6 +59,7 @@ describe("#3501 — real-wire crash between two same-content touches", () => {
 			id: "marksman",
 			name: "marksman",
 			extensions: [".md"],
+			idleEviction: "resident",
 			root: async () => tmp,
 			spawn: async () => {
 				const trace = path.join(tmp, `trace-${procs.length}.log`);

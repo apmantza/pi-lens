@@ -40,6 +40,7 @@ function makeMarksmanServer() {
 		id: "marksman",
 		name: "marksman",
 		extensions: [".md"],
+		idleEviction: "resident",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 	};
@@ -146,6 +147,7 @@ describe("runWorkspaceDiagnostics — sweep-scoped index gate for workspaceIndex
 			id: "python",
 			name: "python",
 			extensions: [".py"],
+			idleEviction: "resident",
 			root: async () => "C:/repo",
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};

@@ -24,6 +24,7 @@ function server(id: string) {
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
 			process: {

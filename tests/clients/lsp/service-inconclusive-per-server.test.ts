@@ -73,6 +73,7 @@ function makeServer(id: string, role?: "auxiliary", custom = false) {
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		...(role && { role }),
 		...(custom && { custom }),
 		root: async () => "C:/repo",

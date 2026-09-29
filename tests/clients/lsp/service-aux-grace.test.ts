@@ -73,6 +73,7 @@ function makePrimaryServer(id: string, ext = ".ts") {
 		id,
 		name: id,
 		extensions: [ext],
+		idleEviction: "resident",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
 			process: makeFakeProcess(),
@@ -87,6 +88,7 @@ function makeAuxServer(id: string, ext = ".ts", projectRoot = "C:/repo") {
 		id,
 		name: id,
 		extensions: [ext],
+		idleEviction: "resident",
 		role: "auxiliary" as const,
 		root: async () => projectRoot,
 		spawn: vi.fn(async () => ({

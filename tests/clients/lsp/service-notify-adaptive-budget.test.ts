@@ -69,6 +69,7 @@ function makeServer(
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		...(role !== undefined && { role }),
 		...extra,
 		root: async () => ROOT,

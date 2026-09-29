@@ -129,6 +129,7 @@ describe("a clean re-answer evicts a cache-served entry (#1782 defect C)", () =>
 			id: "typescript",
 			name: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => tmp,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};
@@ -244,6 +245,7 @@ describe("a clean re-answer evicts a cache-served entry (#1782 defect C)", () =>
 			id: "typescript",
 			name: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => tmp,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};
@@ -354,6 +356,7 @@ describe("duplicate and unrelated report entries (#1786 review F2/F3)", () => {
 			id: "typescript",
 			name: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => tmp,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		};

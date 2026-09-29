@@ -142,6 +142,7 @@ describe("LSP spawn records count truthfully (#2064)", () => {
 				id: "typescript",
 				name: "TypeScript",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => "/repo",
 				spawn: vi.fn(() => spawnBehavior()),
 			},

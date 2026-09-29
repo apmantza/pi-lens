@@ -75,6 +75,7 @@ describe("lsp_client_unavailable dedupe + recovery re-arm (#1374)", () => {
 				id: "typescript",
 				name: "TypeScript",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => "/repo",
 				spawn: vi.fn(() => spawnBehavior()),
 			},

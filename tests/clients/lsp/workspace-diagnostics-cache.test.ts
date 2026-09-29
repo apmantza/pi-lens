@@ -1010,6 +1010,7 @@ function makeTsServer(root: string, id = "typescript", extension = ".ts") {
 		id,
 		name: id,
 		extensions: [extension],
+		idleEviction: "resident",
 		root: async () => root,
 		spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 	};

@@ -25,6 +25,7 @@ function makeServer(id: string, root = "C:/repo") {
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		root: async () => root,
 		spawn: vi.fn(async () => ({
 			process: {

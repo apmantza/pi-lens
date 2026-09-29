@@ -62,6 +62,7 @@ async function makeAuxServer() {
 		name: "ast-grep",
 		role: "auxiliary" as const,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		root: async () => ROOT,
 		spawn: async () => ({
 			process: await spawnFakeLspServer({

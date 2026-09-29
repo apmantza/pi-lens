@@ -165,6 +165,7 @@ describe("LSPService race hardening", () => {
 				id: "marksman",
 				name: "Marksman",
 				extensions: [".md"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn,
 			},
@@ -250,6 +251,7 @@ describe("LSPService race hardening", () => {
 				id: "marksman",
 				name: "Marksman",
 				extensions: [".md"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn: vi.fn(async () => ({
 					process: {
@@ -318,6 +320,7 @@ describe("LSPService race hardening", () => {
 				id: "marksman",
 				name: "Marksman",
 				extensions: [".md"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn: vi.fn(async () => {
 					queueMicrotask(() =>
@@ -381,6 +384,7 @@ describe("LSPService race hardening", () => {
 					id: "marksman",
 					name: "Marksman",
 					extensions: [".md"],
+					idleEviction: "resident",
 					root: async () => "C:/repo",
 					spawn: vi.fn(async () => ({
 						process: {
@@ -431,6 +435,7 @@ describe("LSPService race hardening", () => {
 				id: "marksman",
 				name: "Marksman",
 				extensions: [".md"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn: vi.fn(async () => ({
 					process: {
@@ -532,6 +537,7 @@ describe("LSPService race hardening", () => {
 				id: "marksman",
 				name: "Marksman",
 				extensions: [".md"],
+				idleEviction: "resident",
 				root: async () => "C:/repo-b",
 				spawn: vi.fn(async () => undefined),
 			},
@@ -615,6 +621,7 @@ describe("LSPService race hardening", () => {
 				id: "typescript",
 				name: "TypeScript",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn: primarySpawn,
 			},
@@ -623,6 +630,7 @@ describe("LSPService race hardening", () => {
 				name: "Typos",
 				role: "auxiliary",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => "C:/repo",
 				spawn: auxSpawn,
 			},

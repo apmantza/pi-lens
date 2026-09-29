@@ -35,6 +35,7 @@ function makeServer() {
 		id: "typescript",
 		name: "typescript",
 		extensions: [".ts"],
+		idleEviction: "resident",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 	};

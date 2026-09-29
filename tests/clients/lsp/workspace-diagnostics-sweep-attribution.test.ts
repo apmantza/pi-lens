@@ -100,6 +100,7 @@ describe(
 				id: "typescript",
 				name: "typescript",
 				extensions: [".ts"],
+				idleEviction: "resident",
 				root: async () => sessionDir,
 				spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 			};

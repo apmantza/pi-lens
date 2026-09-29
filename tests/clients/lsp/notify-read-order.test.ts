@@ -135,6 +135,7 @@ async function setup() {
 			id: "typescript",
 			name: "typescript",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			root: async () => ROOT,
 			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 		},

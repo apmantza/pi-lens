@@ -57,6 +57,7 @@ function makeServer(id: string, role?: "auxiliary") {
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		...(role && { role }),
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
@@ -199,6 +200,7 @@ describe("#2540 concurrent LSP server spawn & auxiliary readiness", () => {
 			id: "ast-grep",
 			name: "ast-grep",
 			extensions: [".ts"],
+			idleEviction: "resident",
 			role: "auxiliary" as const,
 			root: async () => "C:/repo",
 			spawn: vi.fn(

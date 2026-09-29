@@ -49,6 +49,7 @@ function makeServer(id: string, aux: boolean) {
 		id,
 		name: id,
 		extensions: [".ts"],
+		idleEviction: "resident",
 		...(aux ? { role: "auxiliary" as const } : {}),
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),

@@ -32,11 +32,17 @@ vi.mock("../../../clients/lsp/client.js", () => ({
 const FILE = "C:/repo/main.ts";
 const NOTIFY_BUDGET_MS = 100;
 
-function makeServer(id: string, ext = ".ts") {
+type TestServer = Omit<
+	import("../../../clients/lsp/server.js").LSPServerInfo,
+	"spawn"
+> & { spawn: ReturnType<typeof vi.fn> };
+
+function makeServer(id: string, ext = ".ts"): TestServer {
 	return {
 		id,
 		name: id,
 		extensions: [ext],
+		idleEviction: "transparent",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
 			process: {

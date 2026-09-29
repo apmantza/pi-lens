@@ -34,6 +34,7 @@ function makeServer(id: string) {
 		id,
 		name: id,
 		extensions: [".py"],
+		idleEviction: "resident",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
 			process: makeFakeProcess(),

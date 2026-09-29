@@ -62,6 +62,7 @@ function makeServer(id: string, ext: string) {
 		id,
 		name: id,
 		extensions: [ext],
+		idleEviction: "resident",
 		root: async () => ROOT,
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),
 	};
