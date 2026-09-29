@@ -465,9 +465,10 @@ export async function analyzeFile(
 			blockingOnly: options.blockingOnly ?? false,
 		},
 	);
-	const appendedReports = getLatencyReports().filter(
-		(report) => !reportsBefore.has(report),
-	);
+	const appendedReports: ReturnType<typeof getLatencyReports> = [];
+	for (const report of getLatencyReports()) {
+		if (!reportsBefore.has(report)) appendedReports.push(report);
+	}
 	const durationMs = Date.now() - start;
 
 	if (options.record !== false) {
@@ -583,10 +584,12 @@ export async function analyzeFile(
 	let latencyReport =
 		appendedReports.length === 1 ? appendedReports[0] : undefined;
 	if (appendedReports.length > 1) {
-		const matchingReports = appendedReports.filter((report) =>
-			pathsEqual(path.resolve(cwd, report.filePath), absPath),
-		);
-		latencyReport = matchingReports.at(-1);
+		// Newest matching report wins; no foreign fallback exists.
+		for (const report of appendedReports) {
+			if (pathsEqual(path.resolve(cwd, report.filePath), absPath)) {
+				latencyReport = report;
+			}
+		}
 	}
 
 	const lspRunner = latencyReport?.runners.find(

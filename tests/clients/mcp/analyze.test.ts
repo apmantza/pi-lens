@@ -385,24 +385,26 @@ describe("analyzeFile", () => {
 
 	it("chooses the newest matching appended report, not a foreign tail", async () => {
 		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		// Typed literals, not `as never` on each: a `never`-typed value cannot be
+		// spread (TS2698). The single cast sits on the array the mock consumes.
 		const older = {
 			filePath: tsFile,
 			fileKind: "jsts",
 			runners: [],
 			totalDurationMs: 11,
 			stoppedEarly: false,
-		} as never;
-		const newer = { ...older, totalDurationMs: 22 } as never;
+		};
+		const newer = { ...older, totalDurationMs: 22 };
 		const foreign = {
 			filePath: path.join(tmpDir, "foreign.ts"),
 			fileKind: "jsts",
 			runners: [],
 			totalDurationMs: 99,
 			stoppedEarly: false,
-		} as never;
+		};
 		vi.mocked(getLatencyReports)
 			.mockReturnValueOnce([])
-			.mockReturnValueOnce([older, newer, foreign]);
+			.mockReturnValueOnce([older, newer, foreign] as never);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
