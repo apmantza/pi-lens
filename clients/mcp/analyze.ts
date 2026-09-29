@@ -26,7 +26,7 @@ import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/index.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
-import { normalizeMapKey } from "../path-utils.js";
+import { normalizeMapKey, pathsEqual } from "../path-utils.js";
 import { loadProjectSnapshot } from "../project-snapshot.js";
 import { buildOrUpdateGraph } from "../review-graph/service.js";
 import { classifyDiagnosticTier, recordDiagnostics } from "../widget-state.js";
@@ -450,6 +450,7 @@ export async function analyzeFile(
 	}
 
 	const start = Date.now();
+	const reportsBefore = new Set(getLatencyReports());
 	// No telemetryModel/telemetryProvider here (#1448): this MCP facade has no
 	// RuntimeCoordinator to hold a host-reported identity (see the module doc
 	// above), so any worklog entries this dispatch produces get a blank
@@ -463,6 +464,9 @@ export async function analyzeFile(
 		{
 			blockingOnly: options.blockingOnly ?? false,
 		},
+	);
+	const appendedReports = getLatencyReports().filter(
+		(report) => !reportsBefore.has(report),
 	);
 	const durationMs = Date.now() - start;
 
@@ -571,25 +575,18 @@ export async function analyzeFile(
 		}
 	}
 
-	// dispatchForFile appended a latency report during the call above. A
-	// length-delta slice (`getLatencyReports().slice(reportsBefore)`) breaks
-	// once the ring is at its 100-entry cap (#3642): dispatcher.ts:1444-1449
-	// pushes then shifts, so a full ring's length is unchanged by the push and
-	// the slice is always empty. Scan the full current ring for this path
-	// instead, tail first (newest first) so a duplicate path elsewhere in the
-	// ring can't shadow the report this call just produced; fall back to the
-	// newest entry if the path normalization differs.
-	const allReports = getLatencyReports();
-	let latencyReport: (typeof allReports)[number] | undefined;
-	for (let i = allReports.length - 1; i >= 0; i--) {
-		const report = allReports[i];
-		if (report && path.resolve(report.filePath) === absPath) {
-			latencyReport = report;
-			break;
-		}
-	}
-	if (!latencyReport) {
-		latencyReport = allReports[allReports.length - 1];
+	// The dispatcher stores each report object once and getLatencyReports returns
+	// a shallow copy. Reference identity therefore survives the ring's push+shift
+	// at capacity, unlike a length delta. A single appended reference is this
+	// dispatch's report; with concurrent appends, only matching reports can be
+	// attributed and the newest matching report wins. No foreign fallback exists.
+	let latencyReport =
+		appendedReports.length === 1 ? appendedReports[0] : undefined;
+	if (appendedReports.length > 1) {
+		const matchingReports = appendedReports.filter((report) =>
+			pathsEqual(path.resolve(cwd, report.filePath), absPath),
+		);
+		latencyReport = matchingReports.at(-1);
 	}
 
 	const lspRunner = latencyReport?.runners.find(

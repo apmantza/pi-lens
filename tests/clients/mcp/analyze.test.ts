@@ -178,20 +178,35 @@ describe("analyzeFile", () => {
 
 	it("counts a deferred LSP runner as ran while preserving its status", async () => {
 		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
-		vi.mocked(getLatencyReports).mockReturnValueOnce([
-			{
-				filePath: tsFile,
-				fileKind: "jsts",
-				runners: [
-					{
-						runnerId: "lsp",
-						status: "deferred",
-						diagnosticCount: 0,
-						durationMs: 10,
-					},
-				],
-			},
-		] as never);
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce([
+				{
+					filePath: tsFile,
+					fileKind: "jsts",
+					runners: [
+						{
+							runnerId: "lsp",
+							status: "deferred",
+							diagnosticCount: 0,
+							durationMs: 10,
+						},
+					],
+				},
+			] as never)
+			.mockReturnValueOnce([
+				{
+					filePath: tsFile,
+					fileKind: "jsts",
+					runners: [
+						{
+							runnerId: "lsp",
+							status: "deferred",
+							diagnosticCount: 0,
+							durationMs: 10,
+						},
+					],
+				} as never,
+			]);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
@@ -224,7 +239,9 @@ describe("analyzeFile", () => {
 			warnings: 0,
 		};
 
-		vi.mocked(getLatencyReports).mockReturnValueOnce([report]);
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce([])
+			.mockReturnValueOnce([report]);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
@@ -294,10 +311,15 @@ describe("analyzeFile", () => {
 		// Ring was already at capacity (100) before this dispatch, and stays at
 		// 100 after it, since the push+shift keeps length constant; the newest
 		// entry (this dispatch's report) sits at the tail.
-		const ringBefore = Array.from({ length: 99 }, () => fillerReport);
-		const ringAfter = [...ringBefore, newestReport];
+		const ringBefore = Array.from({ length: 100 }, (_, index) => ({
+			...fillerReport,
+			filePath: path.join(tmpDir, `other-file-${index}.ts`),
+		}));
+		const ringAfter = [...ringBefore.slice(1), newestReport];
 
-		vi.mocked(getLatencyReports).mockReturnValueOnce(ringAfter);
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce(ringBefore)
+			.mockReturnValueOnce(ringAfter);
 
 		const result = await analyzeFile(tsFile, tmpDir);
 
@@ -314,6 +336,77 @@ describe("analyzeFile", () => {
 				},
 			],
 		});
+	});
+
+	it("does not attach a foreign report when dispatch appends nothing", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		const foreign = {
+			filePath: path.join(tmpDir, "foreign.ts"),
+			fileKind: "jsts",
+			runners: [],
+			totalDurationMs: 77,
+			stoppedEarly: false,
+		} as never;
+		const ring = Array.from({ length: 100 }, () => foreign);
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce(ring)
+			.mockReturnValueOnce(ring);
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(result.latency).toBeUndefined();
+		expect(result.fileKind).toBeUndefined();
+	});
+
+	it("keeps below-cap attribution and uses the runner cwd for reported paths", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		const foreign = {
+			filePath: path.join(tmpDir, "foreign.ts"),
+			fileKind: "jsts",
+			runners: [],
+			totalDurationMs: 99,
+			stoppedEarly: false,
+		} as never;
+		const report = {
+			filePath: "app\\ts",
+			fileKind: "jsts",
+			runners: [],
+			totalDurationMs: 12,
+			stoppedEarly: false,
+		} as never;
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce([foreign])
+			.mockReturnValueOnce([foreign, report]);
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(result.latency?.totalDurationMs).toBe(12);
+	});
+
+	it("chooses the newest matching appended report, not a foreign tail", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		const older = {
+			filePath: tsFile,
+			fileKind: "jsts",
+			runners: [],
+			totalDurationMs: 11,
+			stoppedEarly: false,
+		} as never;
+		const newer = { ...older, totalDurationMs: 22 } as never;
+		const foreign = {
+			filePath: path.join(tmpDir, "foreign.ts"),
+			fileKind: "jsts",
+			runners: [],
+			totalDurationMs: 99,
+			stoppedEarly: false,
+		} as never;
+		vi.mocked(getLatencyReports)
+			.mockReturnValueOnce([])
+			.mockReturnValueOnce([older, newer, foreign]);
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(result.latency?.totalDurationMs).toBe(22);
 	});
 
 	it("returns an empty result (no latency) for an unsupported file kind", async () => {
