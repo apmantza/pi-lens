@@ -305,6 +305,7 @@ describe("resolveToolCwd (#2777)", () => {
 			id: "markerless-test-server",
 			name: "Markerless test server",
 			extensions: [".ts"],
+			idleEviction: "unmeasured",
 			root: async () => computedRoot,
 			spawn: vi.fn(),
 		};
@@ -327,6 +328,7 @@ describe("resolveToolCwd (#2777)", () => {
 			id: "failing-root-test-server",
 			name: "Failing root test server",
 			extensions: [".ts"],
+			idleEviction: "unmeasured",
 			root: async () => {
 				calls++;
 				if (calls === 1) throw new Error("root probe failed");

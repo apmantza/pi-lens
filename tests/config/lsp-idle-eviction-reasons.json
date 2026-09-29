@@ -1,0 +1,6 @@
+{
+	"typescript": "Existing measured idle-eviction behavior from the TypeScript client path.",
+	"python": "PR #3622 measured transparent release and next-request respawn for Pyright.",
+	"marksman": "PR #3622 measured transparent release and next-request respawn for Marksman.",
+	"opengrep": "PR #3622 measured transparent release and next-request respawn for Opengrep."
+}

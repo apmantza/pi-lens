@@ -53,6 +53,11 @@ function configureTypeScriptServer(id = "typescript") {
 			id,
 			name: id,
 			extensions: [".ts"],
+			idleEviction: ["typescript", "python", "marksman", "opengrep"].includes(
+				id,
+			)
+				? "transparent"
+				: "unmeasured",
 			root: async () => "/repo",
 			spawn,
 		},
@@ -132,6 +137,21 @@ describe("TypeScript language-service idle eviction (#1332 b2)", () => {
 			await service.shutdown();
 		},
 	);
+
+	it("keeps an unmeasured server resident", async () => {
+		vi.useFakeTimers();
+		const client = fakeClient("unmeasured");
+		createLSPClient.mockResolvedValue(client);
+		configureTypeScriptServer("go");
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		await service.getClientForFile("/repo/main.ts");
+		await vi.advanceTimersByTimeAsync(20);
+		expect(client.shutdown).not.toHaveBeenCalled();
+		expect(service.getAliveClientCount()).toBe(1);
+		await service.shutdown();
+	});
 
 	it("does not evict an in-flight client and restarts its idle window", async () => {
 		vi.useFakeTimers();

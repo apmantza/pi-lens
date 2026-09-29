@@ -1777,7 +1777,7 @@ export class LSPService {
 	private async acquireClientLeases(
 		entries: readonly SpawnedServer[],
 		filePath: string,
-	): Promise<string[] | undefined> {
+	): Promise<{ key: string; server: LSPServerInfo }[] | undefined> {
 		const keys = await Promise.all(
 			entries.map((entry) => this.clientKeyFor(entry, filePath)),
 		);
@@ -1797,11 +1797,11 @@ export class LSPService {
 			for (const [key] of keyed) {
 				this.clientLeases.set(key, (this.clientLeases.get(key) ?? 0) + 1);
 			}
-			return keyed.map(([key]) => key);
+			return keyed.map(([key, entry]) => ({ key, server: entry.info }));
 		});
 	}
 
-	private releaseClientLease(key: string): void {
+	private releaseClientLease(key: string, server: LSPServerInfo): void {
 		const remaining = (this.clientLeases.get(key) ?? 1) - 1;
 		if (remaining > 0) {
 			this.clientLeases.set(key, remaining);
@@ -1810,7 +1810,7 @@ export class LSPService {
 		this.clientLeases.delete(key);
 		if (this.state.clients.has(key)) {
 			this.clientLastUsedAt.set(key, Date.now());
-			this.scheduleTypeScriptIdleEviction(key);
+			this.scheduleTypeScriptIdleEviction(key, server);
 		}
 	}
 
@@ -1828,7 +1828,7 @@ export class LSPService {
 			try {
 				return await use(entry);
 			} finally {
-				this.releaseClientLease(leaseKey);
+				this.releaseClientLease(leaseKey, entry.info);
 			}
 		}
 		return undefined;
@@ -1899,9 +1899,12 @@ export class LSPService {
 		current.resolveSettled();
 	}
 
-	private scheduleTypeScriptIdleEviction(key: string): void {
-		// Servers that stay resident with large heaps; the next request respawns them.
-		if (!/^(typescript|python|marksman|opengrep):/.test(key)) return;
+	private scheduleTypeScriptIdleEviction(
+		key: string,
+		server: LSPServerInfo,
+	): void {
+		// The registry owns this policy. Unmeasured and resident servers stay resident.
+		if (server.idleEviction !== "transparent") return;
 		// Pressure-gating these timers would require a separate reconciliation pass
 		// when the manager crosses the threshold; keep ownership simple and use the
 		// warm-LSP-friendly 20-minute default instead.
@@ -1918,7 +1921,7 @@ export class LSPService {
 					(this.clientLeases.get(key) ?? 0) > 0 ||
 					(this.clientLastUsedAt.get(key) ?? 0) !== lastUsedAt
 				) {
-					this.scheduleTypeScriptIdleEviction(key);
+					this.scheduleTypeScriptIdleEviction(key, server);
 					return;
 				}
 
@@ -2156,7 +2159,7 @@ export class LSPService {
 		const verdict = await this.notifyStallCpuVerdict(entry);
 		if (verdict.cpuVerdict === "busy") {
 			if (this.state.clients.get(key) === entry.client) {
-				this.scheduleTypeScriptIdleEviction(key);
+				this.scheduleTypeScriptIdleEviction(key, entry.info);
 			}
 			this.logNotifyStallCpuBusy(key, entry, filePath, 0, verdict);
 			return;
@@ -4050,7 +4053,7 @@ export class LSPService {
 			if (existing.isAlive()) {
 				this.unavailableLogged.delete(key);
 				this.clientLastUsedAt.set(key, Date.now());
-				this.scheduleTypeScriptIdleEviction(key);
+				this.scheduleTypeScriptIdleEviction(key, server);
 				if (!this.warmStartLogged.has(key)) {
 					logSessionStart(
 						`lsp warm-start ${server.id}: reused root=${root} file=${filePath}`,
@@ -4540,7 +4543,7 @@ export class LSPService {
 			this.lastSpawnVerdict.delete(key);
 			this.state.clientSpawnedAt.set(key, Date.now());
 			this.clientLastUsedAt.set(key, Date.now());
-			this.scheduleTypeScriptIdleEviction(key);
+			this.scheduleTypeScriptIdleEviction(key, server);
 			this.failureCounts.delete(key);
 			if (isOptionalServer) {
 				this.optionalDisabled.delete(key);
@@ -7323,7 +7326,8 @@ export class LSPService {
 			});
 			return result;
 		} finally {
-			for (const key of leaseKeys) this.releaseClientLease(key);
+			for (const lease of leaseKeys)
+				this.releaseClientLease(lease.key, lease.server);
 		}
 	}
 

@@ -221,8 +221,11 @@ env-tunable window; all default to 20 minutes (`1200000` ms).
 
 ### `PI_LENS_TS_IDLE_EVICT_MS`
 
-Idle window (ms) after which TypeScript language-service clients release their
-hydrated program and shut down, rebuilding transparently on the next request.
+Shared idle window (ms) after which the `typescript`, `python`, `marksman`, and
+`opengrep` language-service clients release their hydrated programs and shut
+down, rebuilding transparently on the next request. The window is intentionally
+shared across these four governed servers; the existing TypeScript-named
+variable is retained for compatibility.
 **Default:** 20 minutes (`1200000`).
 
 ### `PI_LENS_WORD_INDEX_IDLE_EVICT_MS`

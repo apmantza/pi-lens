@@ -498,6 +498,7 @@ export function createCustomServer(
 		name: config.name,
 		custom: true,
 		extensions: config.extensions,
+		idleEviction: "unmeasured",
 		...(config.rootMarkers ? { rootMarkers: config.rootMarkers } : {}),
 		root: config.rootMarkers
 			? async (file) =>
