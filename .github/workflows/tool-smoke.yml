@@ -74,6 +74,7 @@ jobs:
           name: expert-readiness-probe
           path: .probe-home/expert-readiness-probe*.log
           if-no-files-found: error
+          include-hidden-files: true
 
   test-history-rollup:
     name: Roll up durable unit-test history
