@@ -141,6 +141,7 @@ jobs:
 
   tool-smoke:
     name: Live tool + LSP smoke
+    if: github.event_name != 'workflow_dispatch' || inputs.run_expert_probe != true
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 10 successful master runs: 855s (14m15s); sized at
