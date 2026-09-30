@@ -15,6 +15,7 @@ import {
 	augmentAndSummarize,
 	buildRunConfig,
 	capMutationFiles,
+	changedLineWeights,
 	compiledJsPath,
 	decideMutationOutcome,
 	dedupePatterns,
@@ -201,18 +202,63 @@ describe("stryker diff selection", () => {
 		expect(result.tests).toEqual([]);
 	});
 
-	it("caps the mutation population alphabetically and names skipped files", () => {
+	it("caps the mutation population to the files that changed most and names the skipped ones", () => {
 		// Recurrence: an unbounded changed-script population can turn the
-		// advisory lane into an unbounded CI cost.
+		// advisory lane into an unbounded CI cost. And (#3810, from the #3797
+		// review) the old alphabetical cut skipped the four files holding #3706's
+		// actual change while it mutated label plumbing and a formatter reflow:
+		// the heaviest files must survive the cap whatever their names.
+		const weights = new Map([
+			["scripts/z-core.mjs", 120],
+			["scripts/a-reflow.mjs", 3],
+			["scripts/m-mid.mjs", 40],
+		]);
+		const result = capMutationFiles(
+			["scripts/a-reflow.mjs", "scripts/z-core.mjs", "scripts/m-mid.mjs"],
+			2,
+			weights,
+		);
+
+		expect(result.selected).toEqual([
+			"scripts/z-core.mjs",
+			"scripts/m-mid.mjs",
+		]);
+		expect(result.skipped).toEqual(["scripts/a-reflow.mjs"]);
+		expect(formatCapNotice(2, 3, result.skipped)).toBe(
+			"capped: 2 of 3 changed files mutated; skipped: scripts/a-reflow.mjs",
+		);
+	});
+
+	it("breaks a weight tie by path so the same diff always mutates the same files", () => {
 		const result = capMutationFiles(
 			["scripts/z.mjs", "scripts/a.mjs", "scripts/m.mjs"],
 			2,
+			new Map([
+				["scripts/z.mjs", 5],
+				["scripts/a.mjs", 5],
+				["scripts/m.mjs", 5],
+			]),
 		);
-
 		expect(result.selected).toEqual(["scripts/a.mjs", "scripts/m.mjs"]);
-		expect(result.skipped).toEqual(["scripts/z.mjs"]);
-		expect(formatCapNotice(2, 3, result.skipped)).toBe(
-			"capped: 2 of 3 changed files mutated; skipped: scripts/z.mjs",
+		expect(
+			capMutationFiles(["scripts/b.mjs", "scripts/a.mjs"], 1).selected,
+		).toEqual(["scripts/a.mjs"]);
+	});
+
+	it("weighs a file by the lines its diff changed, counting a deletion-only hunk as one line", () => {
+		const diff = [
+			"+++ b/scripts/one.mjs",
+			"@@ -394 +394 @@ const cache = new Map();",
+			"@@ -761 +761,5 @@ function extract(value) {",
+			"+++ b/scripts/two.mjs",
+			"@@ -40,3 +39,0 @@ function gone() {",
+			"",
+		].join("\n");
+		expect(changedLineWeights(parseChangedLineRanges(diff))).toEqual(
+			new Map([
+				["scripts/one.mjs", 6],
+				["scripts/two.mjs", 1],
+			]),
 		);
 	});
 
@@ -473,6 +519,13 @@ describe("coverage selection and incremental cache wiring (#3810)", () => {
 		expect(code).toContain("priorities: selection.priorities,");
 		expect(code).toContain("lines: probeLines,");
 		expect(code).toContain("probeAllTests(");
+	});
+
+	it("caps the changed files by changed-line weight with whitespace-only lines ignored (#3797 review)", () => {
+		expect(code).toContain(
+			"changedLineWeights(changedLineRanges(allFiles, { ignoreWhitespace: true }))",
+		);
+		expect(code).toMatch(/\.\.\.\(ignoreWhitespace \? \["\s*"\] : \[\]\)/);
 	});
 
 	it("never hands vitest an empty test list (S10)", () => {

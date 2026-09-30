@@ -137,11 +137,29 @@ function normalized(file) {
 		.replace(/\.(?:mjs|js|cjs|ts)$/, "");
 }
 
-export function capMutationFiles(files, maxFiles = DEFAULT_MAX_FILES) {
+/**
+ * The heaviest `maxFiles` files by changed-line weight (#3810, from the #3797
+ * review): the old alphabetical cut skipped the four files holding #3706's
+ * actual change and mutated its label plumbing and an oxfmt reflow. Equal
+ * weights fall back to the path so the choice stays deterministic.
+ *
+ * @param {string[]} files
+ * @param {number} [maxFiles]
+ * @param {Map<string, number>} [weights] changed lines per file (see changedLineWeights)
+ */
+export function capMutationFiles(
+	files,
+	maxFiles = DEFAULT_MAX_FILES,
+	weights = new Map(),
+) {
 	if (!Number.isInteger(maxFiles) || maxFiles < 0) {
 		throw new RangeError("maxFiles must be a non-negative integer");
 	}
-	const ordered = [...files].sort();
+	const ordered = [...files].sort(
+		(a, b) =>
+			(weights.get(b) ?? 0) - (weights.get(a) ?? 0) ||
+			(a < b ? -1 : a > b ? 1 : 0),
+	);
 	return {
 		selected: ordered.slice(0, maxFiles),
 		skipped: ordered.slice(maxFiles),
@@ -178,6 +196,21 @@ export function parseChangedLineRanges(diffText) {
 		ranges.get(file).push([start, Math.max(start, newStart + count - 1)]);
 	}
 	return ranges;
+}
+
+/**
+ * Changed lines per file, from the ranges of `parseChangedLineRanges`.
+ *
+ * @param {Map<string, Array<[number, number]>>} rangesByFile
+ * @returns {Map<string, number>}
+ */
+export function changedLineWeights(rangesByFile) {
+	return new Map(
+		[...rangesByFile].map(([file, ranges]) => [
+			file,
+			ranges.reduce((sum, [start, end]) => sum + (end - start + 1), 0),
+		]),
+	);
 }
 
 /**

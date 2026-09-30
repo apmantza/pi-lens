@@ -13,6 +13,7 @@ import {
 	augmentAndSummarize,
 	buildRunConfig,
 	capMutationFiles,
+	changedLineWeights,
 	compiledJsPath,
 	decideMutationOutcome,
 	dedupePatterns,
@@ -143,7 +144,7 @@ function changedPaths() {
 	}
 }
 
-function changedLineRanges(files) {
+function changedLineRanges(files, { ignoreWhitespace = false } = {}) {
 	if (files.length === 0) return new Map();
 	try {
 		return parseChangedLineRanges(
@@ -151,6 +152,7 @@ function changedLineRanges(files) {
 				"git",
 				[
 					"diff",
+					...(ignoreWhitespace ? ["-w"] : []),
 					"--unified=0",
 					"--diff-filter=AM",
 					`${baseRef}...HEAD`,
@@ -277,7 +279,13 @@ function logSurvivors(mutants) {
 
 const allChangedPaths = changedPaths();
 const allFiles = changedMutationFiles();
-const { selected: files, skipped } = capMutationFiles(allFiles, maxFiles);
+// #3810 (from the #3797 review): which files the cap keeps is a matter of how
+// much each changed, ignoring whitespace-only lines, not of how it sorts.
+const { selected: files, skipped } = capMutationFiles(
+	allFiles,
+	maxFiles,
+	changedLineWeights(changedLineRanges(allFiles, { ignoreWhitespace: true })),
+);
 if (skipped.length > 0) {
 	console.log(formatCapNotice(files.length, allFiles.length, skipped));
 }

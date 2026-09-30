@@ -16,7 +16,11 @@ export declare function mutationLaneExclusion(
 export declare function capMutationFiles(
 	files: string[],
 	maxFiles?: number,
+	weights?: Map<string, number>,
 ): { selected: string[]; skipped: string[] };
+export declare function changedLineWeights(
+	rangesByFile: Map<string, Array<[number, number]>>,
+): Map<string, number>;
 export declare function formatCapNotice(
 	selectedCount: number,
 	totalCount: number,
