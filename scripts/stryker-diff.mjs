@@ -592,6 +592,7 @@ const measureResult = spawnSync(
 		killSignal: "SIGTERM",
 	},
 );
+rmSync(STRYKER_LOG_PATH, { force: true });
 const measureOutput = `${measureResult.stdout ?? ""}${measureResult.stderr ?? ""}`;
 console.log(measureOutput);
 
@@ -768,6 +769,9 @@ for (;;) {
 	// restored file's fingerprint matched: it is pruned to this run's ranges
 	// and kept, and the fingerprint stored beside it is renewed.
 	const reuse = attempt === 0 && incrementalDecision.reuse;
+	// A resample retry runs against a file the previous attempt cleared: it is
+	// cold whatever the decision for the first attempt was.
+	if (attempt > 0) incrementalMeta = { state: "cold-no-cache" };
 	if (reuse) {
 		try {
 			writeFileSync(

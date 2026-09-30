@@ -599,6 +599,9 @@ describe("coverage selection and incremental cache wiring (#3810)", () => {
 		expect(code).toContain(
 			"const reuse = attempt === 0 && incrementalDecision.reuse;",
 		);
+		expect(code).toMatch(
+			/if \(attempt > 0\) incrementalMeta = \{ state: "\s*" \};/,
+		);
 		expect(code).toContain("pruneIncrementalReport(");
 		expect(code).toContain("reuse: reuse && incrementalMeta.state");
 		expect(code).toContain("keptTests: tests,");
