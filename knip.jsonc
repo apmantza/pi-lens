@@ -43,6 +43,7 @@
 		// reached by any import from index.ts.
 		"scripts/*.ts",
 		"scripts/*.mjs",
+		"scripts/probes/*.mjs",
 		// The Windows CI job invokes this population source directly, and the
 		// governance test imports it as the same executable seam.
 		"scripts/lib/win32-gate-population.mjs",
