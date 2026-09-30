@@ -519,6 +519,9 @@ describe("coverage selection and incremental cache wiring (#3810)", () => {
 		expect(code).toContain("priorities: selection.priorities,");
 		expect(code).toContain("lines: probeLines,");
 		expect(code).toContain("probeAllTests(");
+		// The probes share the job's budget; they must not be able to eat it all.
+		expect(code).toContain("signal: AbortSignal.timeout(");
+		expect(code).toContain("PROBE_BUDGET_SHARE");
 	});
 
 	it("caps the changed files by changed-line weight with whitespace-only lines ignored (#3797 review)", () => {
@@ -536,6 +539,11 @@ describe("coverage selection and incremental cache wiring (#3810)", () => {
 
 	it("reads the restored incremental file only through the fingerprint decision, pruned to the current ranges", () => {
 		expect(code).toContain("decideIncrementalReuse({");
+		// Only the first attempt may read the restored file: a resample retry
+		// runs different ranges against a file the previous attempt rewrote.
+		expect(code).toContain(
+			"const reuse = attempt === 0 && incrementalDecision.reuse;",
+		);
 		expect(code).toContain("pruneIncrementalReport(");
 		expect(code).toContain("reuse: reuse && incrementalMeta.state");
 		expect(code).toContain("keptTests: tests,");
