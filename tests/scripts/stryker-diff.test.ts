@@ -69,6 +69,18 @@ const workflow = readFileSync(
 	"utf8",
 );
 
+// lane: mutation (advisory) -- dry run and mutant runs. That lane mutates the
+// driver in place (stryker.config.mjs `inPlace: true`), and Stryker sets
+// STRYKER_MUTATOR_WORKER in every test-runner process it starts (child-process-
+// proxy.ts). Every expression of an instrumented file is rewritten to
+// `stryMutAct_<ns>("<id>") ? <mutant> : (stryCov_<ns>("<id>"), <original>)`,
+// so a text pin on a changed driver line false-reds the dry run (#3108) and the
+// lane reports "dry run failed" for any PR that edits the driver. The pins stay
+// live in the ordinary Unit tests lane, where the variable is never set; the
+// behaviour they stand for is pinned by the spawned driver test above, which
+// runs the instrumented driver itself and so also kills its mutants.
+const underStryker = process.env.STRYKER_MUTATOR_WORKER !== undefined;
+
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const driverPath = join(repositoryRoot, "scripts", "stryker-diff.mjs");
 
@@ -661,62 +673,65 @@ describe("mutation concurrency is pinned to its CI measurement (#3810 item 3)", 
 	});
 });
 
-describe("coverage selection and incremental cache wiring (#3810)", () => {
-	// Stated exception (same as the resample-loop pin above): the driver is a
-	// top-level script this suite cannot import. The decision points are pinned
-	// as pure functions in mutation-test-selection.test.ts; these pin that the
-	// driver calls them with the inputs the brief names. The executable check is
-	// the real driver run on #3794's head quoted in the PR body
-	// ("related 72 -> covering 16 -> kept 16 (3 own)") and the two-push cache
-	// proof on the PR's own mutation job.
-	const code = stripSource(driver);
+describe.skipIf(underStryker)(
+	"coverage selection and incremental cache wiring (#3810)",
+	() => {
+		// Stated exception (same as the resample-loop pin above): the driver is a
+		// top-level script this suite cannot import. The decision points are pinned
+		// as pure functions in mutation-test-selection.test.ts; these pin that the
+		// driver calls them with the inputs the brief names. The executable check is
+		// the real driver run on #3794's head quoted in the PR body
+		// ("related 72 -> covering 16 -> kept 16 (3 own)") and the two-push cache
+		// proof on the PR's own mutation job.
+		const code = stripSource(driver);
 
-	it("feeds the PR's own tests and the import-graph priorities into the selector, with probed coverage", () => {
-		expect(code).toContain("ownTestFiles(allChangedPaths)");
-		expect(code).toContain("selectMutationTests({");
-		expect(code).toContain("ownTests,");
-		expect(code).toContain("priorities: selection.priorities,");
-		expect(code).toContain("lines: probeLines,");
-		expect(code).toContain("probeAllTests(");
-		// The probes share the job's budget; they must not be able to eat it all.
-		expect(code).toContain("signal: AbortSignal.timeout(");
-		expect(code).toContain("PROBE_BUDGET_SHARE");
-	});
+		it("feeds the PR's own tests and the import-graph priorities into the selector, with probed coverage", () => {
+			expect(code).toContain("ownTestFiles(allChangedPaths)");
+			expect(code).toContain("selectMutationTests({");
+			expect(code).toContain("ownTests,");
+			expect(code).toContain("priorities: selection.priorities,");
+			expect(code).toContain("lines: probeLines,");
+			expect(code).toContain("probeAllTests(");
+			// The probes share the job's budget; they must not be able to eat it all.
+			expect(code).toContain("signal: AbortSignal.timeout(");
+			expect(code).toContain("PROBE_BUDGET_SHARE");
+		});
 
-	it("caps the changed files by changed-line weight with whitespace-only lines ignored (#3797 review)", () => {
-		expect(code).toContain(
-			"changedLineWeights(changedLineRanges(allFiles, { ignoreWhitespace: true }))",
-		);
-		expect(code).toMatch(/\.\.\.\(ignoreWhitespace \? \["\s*"\] : \[\]\)/);
-	});
+		it("caps the changed files by changed-line weight with whitespace-only lines ignored (#3797 review)", () => {
+			expect(code).toContain(
+				"changedLineWeights(changedLineRanges(allFiles, { ignoreWhitespace: true }))",
+			);
+			expect(code).toMatch(/\.\.\.\(ignoreWhitespace \? \["\s*"\] : \[\]\)/);
+		});
 
-	it("never hands vitest an empty test list (S10)", () => {
-		expect(code).toMatch(
-			/if \(tests\.length === 0\) \{[\s\S]*?process\.exit\(0\);/,
-		);
-	});
+		it("never hands vitest an empty test list (S10)", () => {
+			expect(code).toMatch(
+				/if \(tests\.length === 0\) \{[\s\S]*?process\.exit\(0\);/,
+			);
+		});
 
-	it("reads the restored incremental file only through the fingerprint decision, pruned to the current ranges", () => {
-		expect(code).toContain("decideIncrementalReuse({");
-		// Only the first attempt may read the restored file: a resample retry
-		// runs different ranges against a file the previous attempt rewrote.
-		expect(code).toContain(
-			"const reuse = attempt === 0 && incrementalDecision.reuse;",
-		);
-		expect(code).toMatch(
-			/if \(attempt > 0\) incrementalMeta = \{ state: "\s*" \};/,
-		);
-		expect(code).toContain("pruneIncrementalReport(");
-		expect(code).toContain("reuse: reuse && incrementalMeta.state");
-		expect(code).toContain("keptTests: tests,");
-		expect(code).toContain("mutatedFiles: files,");
-	});
+		it("reads the restored incremental file only through the fingerprint decision, pruned to the current ranges", () => {
+			expect(code).toContain("decideIncrementalReuse({");
+			// Only the first attempt may read the restored file: a resample retry
+			// runs different ranges against a file the previous attempt rewrote.
+			expect(code).toContain(
+				"const reuse = attempt === 0 && incrementalDecision.reuse;",
+			);
+			expect(code).toMatch(
+				/if \(attempt > 0\) incrementalMeta = \{ state: "\s*" \};/,
+			);
+			expect(code).toContain("pruneIncrementalReport(");
+			expect(code).toContain("reuse: reuse && incrementalMeta.state");
+			expect(code).toContain("keptTests: tests,");
+			expect(code).toContain("mutatedFiles: files,");
+		});
 
-	it("does not keep the old alphabetical cap", () => {
-		expect(code).not.toContain("capRelatedTests");
-		expect(driver).not.toContain("formatTestCapNotice");
-	});
-});
+		it("does not keep the old alphabetical cap", () => {
+			expect(code).not.toContain("capRelatedTests");
+			expect(driver).not.toContain("formatTestCapNotice");
+		});
+	},
+);
 
 describe("mutation workflow incremental cache (#3810 item 2)", () => {
 	type Step = {
@@ -758,18 +773,21 @@ describe("mutation workflow incremental cache (#3810 item 2)", () => {
 		expect(save?.key).toBe(restore?.key);
 	});
 
-	it("caches exactly the incremental file and its fingerprint, both ways", () => {
-		for (const index of [restoreIndex, saveIndex]) {
-			expect(steps[index]?.with?.path?.trim().split("\n")).toEqual([
+	it.skipIf(underStryker)(
+		"caches exactly the incremental file and its fingerprint, both ways",
+		() => {
+			for (const index of [restoreIndex, saveIndex]) {
+				expect(steps[index]?.with?.path?.trim().split("\n")).toEqual([
+					".stryker/incremental.json",
+					".stryker/incremental.fingerprint",
+				]);
+			}
+			expect(driverCachePaths()).toEqual([
 				".stryker/incremental.json",
 				".stryker/incremental.fingerprint",
 			]);
-		}
-		expect(driverCachePaths()).toEqual([
-			".stryker/incremental.json",
-			".stryker/incremental.fingerprint",
-		]);
-	});
+		},
+	);
 
 	it("pins both cache actions by commit sha", () => {
 		for (const index of [restoreIndex, saveIndex]) {
