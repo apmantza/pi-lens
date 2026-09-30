@@ -756,8 +756,12 @@ jobs:
         with:
           node-version: '22'
 
+      # Lockfile-locked and script-free (SonarCloud githubactions:S6505 and
+      # S8543 flagged the `npm install` this step first had, #3807): `prepare`
+      # only builds what the next two steps build explicitly, and the vitest
+      # global setup pre-fetches any missing grammar.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Build
         run: npm run build
