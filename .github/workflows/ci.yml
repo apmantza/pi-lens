@@ -6,7 +6,7 @@ on:
   repository_dispatch:
     types: [merge-train-post-merge]
   pull_request:
-    branches: [master]
+    branches: [master, 'ci/3801-exp-base']
 
 # A merge made with GITHUB_TOKEN suppresses its push event. Replayed
 # repository_dispatch runs must validate the exact merge commit, and duplicate
