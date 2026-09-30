@@ -1,0 +1,84 @@
+name: Mutation probe 3810
+
+# TEMPORARY (#3810): measures the mutation diff on one fixed real diff -- PR
+# #3794's head -- with the old selection (master's driver) and the new one at
+# Stryker concurrency 2, 3 and 4 on the same runner class. Lives on a throwaway
+# probe PR, never merged.
+on:
+  pull_request:
+    branches: [master]
+
+permissions: {}
+
+jobs:
+  probe:
+    name: probe 3810 (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [old-c2, new-c2, new-c3, new-c4]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          path: mine
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/pull/3794/head
+          fetch-depth: 0
+          persist-credentials: false
+          path: target
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mine/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: mine
+      - run: ln -s "$PWD/mine/node_modules" target/node_modules
+      - run: npm run build
+        working-directory: mine
+      - run: npm run build
+        working-directory: target
+      - name: Measure ${{ matrix.arm }}
+        working-directory: target
+        run: |
+          set -u
+          arm="${{ matrix.arm }}"
+          conc="${arm##*-c}"
+          (while true; do free -m | awk 'NR==2{print $3}' >> "$RUNNER_TEMP/mem.log"; sleep 10; done) &
+          sampler=$!
+          git -C . rev-parse HEAD > "$RUNNER_TEMP/target-head.txt"
+          start=$(date +%s)
+          if [ "${arm%%-*}" = "new" ]; then
+            sed -i "s/concurrency: 2,/concurrency: ${conc},/" ../mine/stryker.config.mjs
+            grep -n "concurrency:" ../mine/stryker.config.mjs
+            node ../mine/scripts/stryker-diff.mjs --base origin/master --max-files 6 --max-ranges 12 --head-sha "$(cat "$RUNNER_TEMP/target-head.txt")" > "$RUNNER_TEMP/driver.log" 2>&1 || true
+          else
+            node scripts/stryker-diff.mjs --base origin/master --max-files 6 --max-ranges 12 --head-sha "$(cat "$RUNNER_TEMP/target-head.txt")" > "$RUNNER_TEMP/driver.log" 2>&1 || true
+          fi
+          end=$(date +%s)
+          kill "$sampler" || true
+          {
+            echo "### ${arm}"
+            echo "- target head: $(cat "$RUNNER_TEMP/target-head.txt")"
+            echo "- driver wall: $((end - start)) s"
+            echo "- peak used memory: $(sort -n "$RUNNER_TEMP/mem.log" | tail -1) MB of $(free -m | awk 'NR==2{print $2}') MB; vCPU $(nproc)"
+            echo '```'
+            node ../mine/scripts/mutation-report.mjs --report reports/mutation/mutation.json | head -60
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -E "capped:|related [0-9]+|measured [0-9]+ mutant|incremental cache|Ran [0-9]+ tests|Done in|mutation diff score|mutation diff counts" "$RUNNER_TEMP/driver.log" | sed 's/\x1b\[[0-9;]*m//g' | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-${{ matrix.arm }}
+          path: |
+            target/reports/mutation/mutation.json
+          if-no-files-found: ignore
