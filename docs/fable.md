@@ -165,3 +165,5 @@ the four ingest boundaries — **persisted-key rehydrate** (snapshot / word-inde
 call-graph / review-graph symbol keys written on Windows, read on Linux CI) is the
 hot one — so interior code can once again trust host-default `path` fns. Full P1–P5
 plan + enforcement in #1193; the latest missed member fixed in #1194.
+
+<!-- docs-only CI probe for #3807; scratch branch, never merged -->
