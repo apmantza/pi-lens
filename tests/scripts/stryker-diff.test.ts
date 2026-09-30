@@ -184,7 +184,8 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 	// the pure functions. The driver is a top-level script, so this spawns it
 	// against a throwaway git repo whose only test imports the changed file but
 	// never calls the changed function: the real tsc build, the real vitest
-	// coverage probe (one process, v8, source-mapped), the real selector.
+	// coverage probe (one process, v8, source-mapped), the real selector, and
+	// the file cap reading the real `git diff -w`.
 	it("probes real coverage, keeps no test when none executes a changed line, and reports a zero-mutant run instead of running the suite", () => {
 		const fixtureRepo = mkdtempSync(
 			join(repositoryRoot, ".tmp-stryker-diff-fixture-"),
@@ -211,6 +212,13 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			writeFileSync(
 				join(fixtureRepo, "scripts", "thing.mjs"),
 				"export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 2;\n}\n",
+			);
+			// A second changed script whose only change is indentation: five changed
+			// lines to a plain diff, none to `git diff -w`. The cap of one file must
+			// keep the script whose single line really changed (the #3797 review).
+			writeFileSync(
+				join(fixtureRepo, "scripts", "a-reflowed.mjs"),
+				"export const a = 1;\nexport const b = 2;\nexport const c = 3;\nexport const d = 4;\nexport const e = 5;\n",
 			);
 			writeFileSync(
 				join(fixtureRepo, "tests", "scripts", "thing.test.ts"),
@@ -239,11 +247,15 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				join(fixtureRepo, "scripts", "thing.mjs"),
 				"export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 3;\n}\n",
 			);
+			writeFileSync(
+				join(fixtureRepo, "scripts", "a-reflowed.mjs"),
+				"  export const a = 1;\n  export const b = 2;\n  export const c = 3;\n  export const d = 4;\n  export const e = 5;\n",
+			);
 			git(["commit", "-qam", "change the function nobody calls"]);
 
 			const output = execFileSync(
 				process.execPath,
-				[driverPath, "--base", "main"],
+				[driverPath, "--base", "main", "--max-files", "1"],
 				{ cwd: fixtureRepo, encoding: "utf8", timeout: 120_000 },
 			);
 
@@ -258,6 +270,9 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			expect(report.piLensMutationDiff.zeroMutants.reason).toContain(
 				"no related test executes a changed line",
 			);
+			expect(report.piLensMutationDiff.filesSkippedOverCap).toEqual([
+				"scripts/a-reflowed.mjs",
+			]);
 			expect(report.piLensMutationDiff.testSelection).toEqual({
 				mode: "coverage",
 				pool: 1,
