@@ -40,6 +40,7 @@ import {
 	planResample,
 	sampleRangesDeterministically,
 } from "../../scripts/lib/stryker-diff.mjs";
+import yaml from "../../clients/deps/js-yaml.js";
 import { stripSource } from "../support/sweep-kit.js";
 import {
 	buildLineIndex,
@@ -454,6 +455,115 @@ describe("stryker diff wall-clock budget", () => {
 		expect(driver).not.toContain("buildCommand:");
 	});
 });
+
+describe("coverage selection and incremental cache wiring (#3810)", () => {
+	// Stated exception (same as the resample-loop pin above): the driver is a
+	// top-level script this suite cannot import. The decision points are pinned
+	// as pure functions in mutation-test-selection.test.ts; these pin that the
+	// driver calls them with the inputs the brief names. The executable check is
+	// the real driver run on #3794's head quoted in the PR body
+	// ("related 72 -> covering 16 -> kept 16 (3 own)") and the two-push cache
+	// proof on the PR's own mutation job.
+	const code = stripSource(driver);
+
+	it("feeds the PR's own tests and the import-graph priorities into the selector, with probed coverage", () => {
+		expect(code).toContain("ownTestFiles(allChangedPaths)");
+		expect(code).toContain("selectMutationTests({");
+		expect(code).toContain("ownTests,");
+		expect(code).toContain("priorities: selection.priorities,");
+		expect(code).toContain("lines: probeLines,");
+		expect(code).toContain("probeAllTests(");
+	});
+
+	it("never hands vitest an empty test list (S10)", () => {
+		expect(code).toMatch(
+			/if \(tests\.length === 0\) \{[\s\S]*?process\.exit\(0\);/,
+		);
+	});
+
+	it("reads the restored incremental file only through the fingerprint decision, pruned to the current ranges", () => {
+		expect(code).toContain("decideIncrementalReuse({");
+		expect(code).toContain("pruneIncrementalReport(");
+		expect(code).toContain("reuse: reuse && incrementalMeta.state");
+		expect(code).toContain("keptTests: tests,");
+		expect(code).toContain("mutatedFiles: files,");
+	});
+
+	it("does not keep the old alphabetical cap", () => {
+		expect(code).not.toContain("capRelatedTests");
+		expect(driver).not.toContain("formatTestCapNotice");
+	});
+});
+
+describe("mutation workflow incremental cache (#3810 item 2)", () => {
+	type Step = {
+		name?: string;
+		uses?: string;
+		run?: string;
+		if?: string;
+		with?: { path?: string; key?: string; "restore-keys"?: string };
+	};
+	const steps = (
+		yaml.load(workflow) as { jobs: { mutation: { steps: Step[] } } }
+	).jobs.mutation.steps;
+	const restoreIndex = steps.findIndex((step) =>
+		step.uses?.startsWith("actions/cache/restore@"),
+	);
+	const saveIndex = steps.findIndex((step) =>
+		step.uses?.startsWith("actions/cache/save@"),
+	);
+	const driverIndex = steps.findIndex((step) =>
+		step.run?.includes("scripts/stryker-diff.mjs"),
+	);
+
+	it("restores before the driver and saves after it, even when the driver fails", () => {
+		expect(restoreIndex).toBeGreaterThan(-1);
+		expect(restoreIndex).toBeLessThan(driverIndex);
+		expect(saveIndex).toBeGreaterThan(driverIndex);
+		expect(steps[saveIndex]?.if).toBe("always()");
+	});
+
+	it("keys on the PR number and the base sha, restoring by that prefix (C3, C7)", () => {
+		const restore = steps[restoreIndex]?.with;
+		const save = steps[saveIndex]?.with;
+		const prefix =
+			"mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-";
+		expect(restore?.["restore-keys"]?.trim()).toBe(prefix);
+		expect(restore?.key).toBe(
+			`${prefix}\${{ github.event.pull_request.head.sha }}`,
+		);
+		expect(save?.key).toBe(restore?.key);
+	});
+
+	it("caches exactly the incremental file and its fingerprint, both ways", () => {
+		for (const index of [restoreIndex, saveIndex]) {
+			expect(steps[index]?.with?.path?.trim().split("\n")).toEqual([
+				".stryker/incremental.json",
+				".stryker/incremental.fingerprint",
+			]);
+		}
+		expect(driverCachePaths()).toEqual([
+			".stryker/incremental.json",
+			".stryker/incremental.fingerprint",
+		]);
+	});
+
+	it("pins both cache actions by commit sha", () => {
+		for (const index of [restoreIndex, saveIndex]) {
+			expect(steps[index]?.uses).toMatch(
+				/^actions\/cache\/(?:restore|save)@[0-9a-f]{40}$/,
+			);
+		}
+	});
+});
+
+function driverCachePaths(): string[] {
+	// The driver's constants are the other half of the contract: the workflow
+	// caches what the driver reads and writes.
+	const inc = /INCREMENTAL_PATH = "([^"]+)"/.exec(driver)?.[1];
+	const fp = /FINGERPRINT_PATH = "([^"]+)"/.exec(driver)?.[1];
+	return [inc ?? "", fp ?? ""];
+}
 
 describe("compiled-source mutation targets (#3531 rescope)", () => {
 	it("classifies clients/tools/mcp .ts sources and the root index.ts, excluding tests and .d.ts", () => {
