@@ -8,7 +8,14 @@
 // a real, throwaway git fixture reproduces the actual TDZ ordering bug.
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import {
@@ -138,6 +145,103 @@ describe("driver early-exit paths, spawned for real (#3592 round 2 F1)", () => {
 			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
 	});
+});
+
+describe("driver selection stage, spawned for real (#3810)", () => {
+	// Recurrence this guards: a selector that hands vitest an EMPTY file list
+	// (every probe succeeded, none executes a changed line) runs the WHOLE
+	// suite as the mutation command, and a driver that wires the probe, the
+	// selector and the zero-mutant exit in the wrong order cannot be seen from
+	// the pure functions. The driver is a top-level script, so this spawns it
+	// against a throwaway git repo whose only test imports the changed file but
+	// never calls the changed function: the real tsc build, the real vitest
+	// coverage probe (one process, v8, source-mapped), the real selector.
+	it("probes real coverage, keeps no test when none executes a changed line, and reports a zero-mutant run instead of running the suite", () => {
+		const fixtureRepo = mkdtempSync(
+			join(repositoryRoot, ".tmp-stryker-diff-fixture-"),
+		);
+		try {
+			mkdirSync(join(fixtureRepo, "scripts"));
+			mkdirSync(join(fixtureRepo, "src"));
+			mkdirSync(join(fixtureRepo, "tests", "scripts"), { recursive: true });
+			writeFileSync(join(fixtureRepo, "package.json"), '{"type":"module"}\n');
+			// Its own vitest config: without one vitest walks up to the repo's,
+			// whose globalSetup belongs to the repo's suite, not this fixture.
+			writeFileSync(
+				join(fixtureRepo, "vitest.config.mjs"),
+				"export default {};\n",
+			);
+			writeFileSync(
+				join(fixtureRepo, "tsconfig.mutation.json"),
+				JSON.stringify({
+					compilerOptions: { sourceMap: true, module: "nodenext" },
+					files: ["src/empty.ts"],
+				}),
+			);
+			writeFileSync(join(fixtureRepo, "src", "empty.ts"), "export {};\n");
+			writeFileSync(
+				join(fixtureRepo, "scripts", "thing.mjs"),
+				"export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 2;\n}\n",
+			);
+			writeFileSync(
+				join(fixtureRepo, "tests", "scripts", "thing.test.ts"),
+				'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("uses the unchanged function", () => {\n\texpect(used()).toBe(1);\n});\n',
+			);
+			symlinkSync(
+				join(repositoryRoot, "node_modules"),
+				join(fixtureRepo, "node_modules"),
+			);
+			const git = (args: string[]) =>
+				gitExecFileSync(
+					[
+						"-c",
+						"user.email=pi-lens-test@example.com",
+						"-c",
+						"user.name=pi-lens-test",
+						...args,
+					],
+					{ cwd: fixtureRepo },
+				);
+			git(["init", "-q", "-b", "main"]);
+			git(["add", "."]);
+			git(["commit", "-qm", "base"]);
+			git(["checkout", "-qb", "feature"]);
+			writeFileSync(
+				join(fixtureRepo, "scripts", "thing.mjs"),
+				"export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 3;\n}\n",
+			);
+			git(["commit", "-qam", "change the function nobody calls"]);
+
+			const output = execFileSync(
+				process.execPath,
+				[driverPath, "--base", "main"],
+				{ cwd: fixtureRepo, encoding: "utf8", timeout: 120_000 },
+			);
+
+			expect(output).toContain("related 1 → covering 0 → kept 0");
+			expect(output).toContain("no mutants evaluated");
+			const report = JSON.parse(
+				readFileSync(
+					join(fixtureRepo, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(report.piLensMutationDiff.zeroMutants.reason).toContain(
+				"no related test executes a changed line",
+			);
+			expect(report.piLensMutationDiff.testSelection).toEqual({
+				mode: "coverage",
+				pool: 1,
+				covering: 0,
+				kept: 0,
+				dropped: 0,
+				own: 0,
+				unknown: 0,
+			});
+		} finally {
+			rmSync(fixtureRepo, { recursive: true, force: true });
+		}
+	}, 150_000);
 });
 
 describe("stryker diff selection", () => {
