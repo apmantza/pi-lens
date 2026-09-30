@@ -70,16 +70,21 @@ const workflow = readFileSync(
 );
 
 // lane: mutation (advisory) -- dry run and mutant runs. That lane mutates the
-// driver in place (stryker.config.mjs `inPlace: true`), and Stryker sets
-// STRYKER_MUTATOR_WORKER in every test-runner process it starts (child-process-
-// proxy.ts). Every expression of an instrumented file is rewritten to
-// `stryMutAct_<ns>("<id>") ? <mutant> : (stryCov_<ns>("<id>"), <original>)`,
-// so a text pin on a changed driver line false-reds the dry run (#3108) and the
-// lane reports "dry run failed" for any PR that edits the driver. The pins stay
-// live in the ordinary Unit tests lane, where the variable is never set; the
-// behaviour they stand for is pinned by the spawned driver test above, which
-// runs the instrumented driver itself and so also kills its mutants.
-const underStryker = process.env.STRYKER_MUTATOR_WORKER !== undefined;
+// driver in place (stryker.config.mjs `inPlace: true`) and every expression of
+// an instrumented file is rewritten to
+// `stryMutAct_<ns>("<id>") ? <mutant> : (stryCov_<ns>("<id>"), <original>)`
+// under a `function stryNS_<ns>()` header, so a text pin on a changed driver
+// line false-reds the lane's own dry run (#3108) and the lane reports "dry run
+// failed" for any PR that edits the driver. The pins stay live in the ordinary
+// Unit tests lane, where the driver is plain source; the behaviour they stand
+// for is pinned by the spawned driver test above, which runs the instrumented
+// driver itself and so also kills its mutants. The condition is the
+// instrumentation's own header, read from the very text being pinned: a skip
+// keyed on the STRYKER_MUTATOR_WORKER environment variable did not skip on CI
+// run 36787524136 (the pins ran against the instrumented driver and red the
+// dry run).
+const isInstrumented = (text: string) => /\bstryNS_\w+/.test(text);
+const underStryker = isInstrumented(driver);
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const driverPath = join(repositoryRoot, "scripts", "stryker-diff.mjs");
@@ -156,6 +161,18 @@ describe("driver early-exit paths, spawned for real (#3592 round 2 F1)", () => {
 		} finally {
 			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("instrumentation detection (#3810)", () => {
+	// Recurrence: a skip condition that is always true switches the wiring pins
+	// off in the ordinary lane without a red; one that is never true lets them
+	// red the mutation lane's dry run (CI run 36787524136).
+	it("recognises Stryker's instrumentation header and not plain source", () => {
+		expect(isInstrumented("function stryNS_9fa48() {\n}\nconst a = 1;")).toBe(
+			true,
+		);
+		expect(isInstrumented("const a = 1; // no header here")).toBe(false);
 	});
 });
 
