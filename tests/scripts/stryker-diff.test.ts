@@ -502,6 +502,61 @@ describe("stryker diff wall-clock budget", () => {
 	});
 });
 
+describe("mutation concurrency is pinned to its CI measurement (#3810 item 3)", () => {
+	// Recurrence: a bare `concurrency: N` drifts from the evidence that chose it,
+	// and Stryker kills a mutant run at timeoutMS + 1.5 x the dry run: a value
+	// whose per-mutant time reaches that bound turns load into Timeout mutants.
+	const measurement = JSON.parse(
+		readFileSync(
+			resolve(
+				import.meta.dirname,
+				"../fixtures/mutation-concurrency-measurement.json",
+			),
+			"utf8",
+		),
+	);
+	type Arm = {
+		concurrency?: number;
+		driverWallSeconds: number;
+		mutationPhaseSeconds: number;
+		dryRunNetMs: number;
+		mutantsEvaluated: number;
+		counts: Record<string, number>;
+	};
+	const arms = Object.values(measurement.arms as Record<string, Arm>).filter(
+		(arm) => arm.concurrency !== undefined,
+	);
+	const chosen = arms.find(
+		(arm) => arm.concurrency === measurement.recommendedConcurrency,
+	) as Arm;
+
+	it("runs Stryker at the measured concurrency", () => {
+		expect(config).toContain(
+			`concurrency: ${measurement.recommendedConcurrency},`,
+		);
+	});
+
+	it("chose an arm within 1% of the fastest, with no Timeout and a round inside Stryker's kill bound", () => {
+		const fastest = Math.min(...arms.map((arm) => arm.driverWallSeconds));
+		expect(chosen.driverWallSeconds / fastest).toBeLessThanOrEqual(1.01);
+		for (const arm of arms) expect(arm.counts.Timeout ?? 0).toBe(0);
+		const rounds = Math.ceil(chosen.mutantsEvaluated / chosen.concurrency!);
+		const killBoundSeconds =
+			(measurement.strykerTimeout.timeoutMS +
+				measurement.strykerTimeout.timeoutFactor * chosen.dryRunNetMs) /
+			1000;
+		expect(chosen.mutationPhaseSeconds / rounds).toBeLessThan(killBoundSeconds);
+		// The bound above uses the fixture's copy of Stryker's two timeout knobs;
+		// they must still be the config's.
+		expect(measurement.strykerTimeout.timeoutMS).toBe(
+			Number(/timeoutMS: (\d+)/.exec(config)?.[1]),
+		);
+		expect(measurement.strykerTimeout.timeoutFactor).toBe(
+			Number(/timeoutFactor: ([\d.]+)/.exec(config)?.[1]),
+		);
+	});
+});
+
 describe("coverage selection and incremental cache wiring (#3810)", () => {
 	// Stated exception (same as the resample-loop pin above): the driver is a
 	// top-level script this suite cannot import. The decision points are pinned

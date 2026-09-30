@@ -529,8 +529,9 @@ export function parseDryRunCost(output) {
 /**
  * How many mutants the remaining budget affords, from a real measured dry
  * run. Vitest runners are CPU-bound in this lane: the #3649 measurement saw
- * only 1.11x wall-clock speedup at Stryker concurrency 2, so this estimator
- * deliberately models one effective worker. `safetyFactor` (< 1) reserves
+ * only 1.11x wall-clock speedup at Stryker concurrency 2 (#3810 measured the
+ * CI runner again: concurrency 3 and 4 ran the mutation phase 1.10x and 1.13x
+ * faster than 2), so this estimator deliberately models one effective worker. `safetyFactor` (< 1) reserves
  * headroom for timing variance and fixed run overhead.
  *
  * @param {{remainingMs: number, dryRunMs: number, fixedOverheadMs?: number, safetyFactor?: number}} args

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-09-30",
+  "source": "GitHub Actions run 36781857490 (throwaway probe PR #3857, closed unmerged), four jobs in parallel on ubuntu-latest: 4 vCPU, 15989 MB",
+  "diff": "PR #3794 head 50843f7cde092070708fefcdc3d106f4ff9ea8a3 against master: 3 mutation sources, 32 ranges, 111 measured mutants, --max-ranges 12",
+  "strykerTimeout": {
+    "timeoutMS": 60000,
+    "timeoutFactor": 1.5,
+    "note": "Stryker kills a mutant run at timeoutMS + timeoutFactor x the net dry-run time"
+  },
+  "arms": {
+    "old-c2": {
+      "driver": "master's driver and capRelatedTests (alphabetical cap), concurrency 2",
+      "driverWallSeconds": 1325,
+      "mutationPhaseSeconds": 1300,
+      "dryRunNetMs": 13187,
+      "testsKept": 47,
+      "mutantsEvaluated": 111,
+      "counts": { "Killed": 24, "Survived": 87 },
+      "peakUsedMemoryMb": 3610
+    },
+    "new-c2": {
+      "concurrency": 2,
+      "driverWallSeconds": 856,
+      "mutationPhaseSeconds": 559,
+      "dryRunNetMs": 72597,
+      "testsKept": 47,
+      "mutantsEvaluated": 10,
+      "counts": { "Killed": 9, "Survived": 1 },
+      "peakUsedMemoryMb": 3938
+    },
+    "new-c3": {
+      "concurrency": 3,
+      "driverWallSeconds": 789,
+      "mutationPhaseSeconds": 508,
+      "dryRunNetMs": 70226,
+      "testsKept": 47,
+      "mutantsEvaluated": 10,
+      "counts": { "Killed": 9, "Survived": 1 },
+      "peakUsedMemoryMb": 4870
+    },
+    "new-c4": {
+      "concurrency": 4,
+      "driverWallSeconds": 787,
+      "mutationPhaseSeconds": 493,
+      "dryRunNetMs": 72237,
+      "testsKept": 47,
+      "mutantsEvaluated": 10,
+      "counts": { "Killed": 9, "Survived": 1 },
+      "peakUsedMemoryMb": 5957
+    }
+  },
+  "recommendedConcurrency": 3,
+  "reason": "3 and 4 tie on driver wall (789 s against 787 s, 0.3%) and both beat 2 by 8%; at 4 each mutant round takes 164 s against a 168 s Stryker kill bound, at 3 it takes 127 s against 165 s. No arm saw a timeout or a differing survivor; the sample is 10 mutants per arm."
+}
