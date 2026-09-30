@@ -46,7 +46,7 @@ export function coveredChangedLines(entry, ranges) {
 	for (const statement of statements) {
 		startHit.set(
 			statement.start,
-			(startHit.get(statement.start) ?? false) || statement.hit,
+			startHit.get(statement.start) || statement.hit,
 		);
 	}
 	let covered = 0;
@@ -348,7 +348,7 @@ export function decideIncrementalReuse({
  * scope, so without this a survivor on a line the PR no longer changes keeps
  * rendering on the PR.
  *
- * @param {{files?: Record<string, {mutants?: Array<{location: {start: {line: number}, end: {line: number}}}>}>}} report
+ * @param {{files: Record<string, {mutants: Array<{location: {start: {line: number}, end: {line: number}}}>}>}} report
  * @param {string[]} patterns `file:start-end`
  */
 export function pruneIncrementalReport(report, patterns) {
@@ -361,12 +361,12 @@ export function pruneIncrementalReport(report, patterns) {
 		rangesByFile.set(match[1], ranges);
 	}
 	const files = {};
-	for (const [file, entry] of Object.entries(report.files ?? {})) {
+	for (const [file, entry] of Object.entries(report.files)) {
 		const ranges = rangesByFile.get(file);
 		if (!ranges) continue;
 		files[file] = {
 			...entry,
-			mutants: (entry.mutants ?? []).filter((mutant) =>
+			mutants: entry.mutants.filter((mutant) =>
 				ranges.some(
 					([start, end]) =>
 						mutant.location.start.line >= start &&

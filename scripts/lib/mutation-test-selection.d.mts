@@ -72,10 +72,10 @@ export declare function decideIncrementalReuse(args: {
 };
 export declare function pruneIncrementalReport<
 	T extends {
-		files?: Record<
+		files: Record<
 			string,
 			{
-				mutants?: Array<{
+				mutants: Array<{
 					location: { start: { line: number }; end: { line: number } };
 				}>;
 			}
