@@ -30,6 +30,10 @@ function metaTable(meta) {
 	if ((meta.filesUncovered?.length ?? 0) > 0) {
 		rows.push(["No covering test", meta.filesUncovered.join(", ")]);
 	}
+	const selectionRow = testSelectionRow(meta);
+	if (selectionRow) rows.push(selectionRow);
+	const incrementalRow = incrementalRowOf(meta);
+	if (incrementalRow) rows.push(incrementalRow);
 	const rendered = rows.map(([k, v]) => `- **${k}:** ${v}`);
 	if ((meta.testsExcluded?.length ?? 0) > 0) {
 		rendered.push(
@@ -42,17 +46,69 @@ function metaTable(meta) {
 	return rendered.join("\n");
 }
 
+/**
+ * The `related N → covering M → kept K` line the driver logs and the report's
+ * metadata table shows (#3810). `covering` is null when no coverage probe was
+ * usable and the kept set came from the import graph alone.
+ *
+ * @param {{pool: number, covering: number | null, kept: number, own?: number, unknown?: number}} selection
+ */
+export function formatTestSelection(selection) {
+	const covering =
+		selection.covering === null
+			? "coverage unavailable (import-graph ranking)"
+			: String(selection.covering);
+	const extras = [
+		selection.own > 0 ? `${selection.own} own` : null,
+		selection.unknown > 0 ? `${selection.unknown} probe failed` : null,
+	].filter(Boolean);
+	return `related ${selection.pool} → covering ${covering} → kept ${selection.kept}${extras.length > 0 ? ` (${extras.join(", ")})` : ""}`;
+}
+
+function validTestSelection(meta) {
+	const selection = meta.testSelection;
+	return selection &&
+		typeof selection.pool === "number" &&
+		typeof selection.kept === "number" &&
+		typeof selection.dropped === "number" &&
+		(selection.covering === null || typeof selection.covering === "number")
+		? selection
+		: null;
+}
+
+function testSelectionRow(meta) {
+	const selection = validTestSelection(meta);
+	return selection ? ["Test selection", formatTestSelection(selection)] : null;
+}
+
+const INCREMENTAL_STATES = {
+	"cold-no-cache": "cold (no restored cache)",
+	"cold-inputs-changed":
+		"cold (a kept test or another changed file differs from the cached run)",
+};
+
+function incrementalRowOf(meta) {
+	const incremental = meta.incremental;
+	if (!incremental) return null;
+	if (incremental.state === "warm") {
+		return [
+			"Incremental",
+			typeof incremental.reused === "number" &&
+			typeof incremental.total === "number"
+				? `${incremental.reused} of ${incremental.total} mutant result(s) reused from the previous push`
+				: "restored cache accepted (reuse count unavailable)",
+		];
+	}
+	const text = INCREMENTAL_STATES[incremental.state];
+	return text ? ["Incremental", text] : null;
+}
+
+// Only a DROPPED test makes the population truncated: kept < covering is not
+// the test, since a PR's own tests are kept whether or not they cover a line.
 function testCapNotice(meta) {
-	const cap = meta.testCap;
-	if (
-		!cap ||
-		typeof cap.selected !== "number" ||
-		typeof cap.total !== "number" ||
-		typeof cap.dropped !== "number" ||
-		cap.dropped <= 0
-	)
-		return null;
-	return `**Bounded evidence:** ${cap.selected} of ${cap.total} related tests selected; ${cap.dropped} dropped. The score is from a truncated test population.`;
+	const selection = validTestSelection(meta);
+	if (!selection || selection.dropped <= 0) return null;
+	return `**Bounded evidence:** ${selection.dropped} ${selection.covering === null ? "related" : "covering"} test(s) dropped by the test cap (${selection.kept} kept). The score is from a truncated test population.`;
 }
 
 /**

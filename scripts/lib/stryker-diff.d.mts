@@ -22,15 +22,6 @@ export declare function formatCapNotice(
 	totalCount: number,
 	skipped: string[],
 ): string;
-export declare function formatTestCapNotice(
-	selectedCount: number,
-	totalCount: number,
-): string;
-export declare function capRelatedTests(
-	tests: string[],
-	maxTests?: number,
-	priorities?: Map<string, number>,
-): { selected: string[]; dropped: string[] };
 export declare const isScriptMutationFile: (file: string) => boolean;
 export declare const isCompiledMutationSource: (file: string) => boolean;
 export declare const isMutationSourceFile: (file: string) => boolean;
@@ -94,7 +85,7 @@ export declare function extractSnippet(
 ): string | undefined;
 export declare function buildRunConfig(
 	baseConfig: Record<string, unknown> & { commandRunner?: object },
-	options: { command: string },
+	options: { command: string; reuse?: boolean },
 ): Record<string, unknown>;
 export declare function parseDryRunCost(
 	output: string,

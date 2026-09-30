@@ -55,7 +55,35 @@ jobs:
       # an actual PR commit, and it silently breaks the "the same PR head
       # always samples the same subset" reproducibility claim the whole
       # deterministic-seed design rests on.
+      #
+      # #3810: the incremental results of the previous push of THIS pull request
+      # against THIS base. The exact key carries the head sha (a cache entry is
+      # immutable, so each push saves a new one); `restore-keys` is the PR number
+      # plus the base sha, so a later push restores the newest entry of the same
+      # PR and base and a moved base starts cold. The driver decides whether the
+      # restored file may be read (scripts/lib/mutation-test-selection.mjs:
+      # `decideIncrementalReuse`): a changed test or other non-mutated file
+      # starts cold, because Stryker's own differ would reuse a stale result.
+      - name: Restore the incremental mutation cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .stryker/incremental.json
+            .stryker/incremental.fingerprint
+          key: mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          restore-keys: |
+            mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-
       - run: node scripts/stryker-diff.mjs --base "origin/${{ github.base_ref }}" --max-files 6 --head-sha "${{ github.event.pull_request.head.sha }}"
+      # Saved even when the driver exits non-zero: a budget kill leaves the
+      # partial results Stryker wrote, and the next push resumes from them.
+      - name: Save the incremental mutation cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .stryker/incremental.json
+            .stryker/incremental.fingerprint
+          key: mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
       # Always runs, even when the step above exited non-zero (a 0-mutant run
       # is not a step failure by itself, but the driver still exits 1 for a
       # genuine Stryker failure such as a budget timeout) -- #3531's "a 0-

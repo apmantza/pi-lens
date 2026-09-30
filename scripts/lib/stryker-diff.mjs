@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { normalizeEphemeralMapKey } from "../../clients/path-utils.js";
 import { mapGeneratedLineToOriginal } from "./mutation-source-map.mjs";
 
 const IMPORT_SPECIFIER_RE =
@@ -325,56 +324,6 @@ export function formatCapNotice(selectedCount, totalCount, skipped) {
 	return `capped: ${selectedCount} of ${totalCount} changed files mutated; skipped: ${skipped.join(", ")}`;
 }
 
-export function formatTestCapNotice(selectedCount, totalCount) {
-	return `capped: ${selectedCount} of ${totalCount} related tests selected; dropped: ${totalCount - selectedCount}`;
-}
-
-/**
- * Bound the test population without changing any under-cap selection. Sibling
- * tests are first, then tests with a direct import, then any future incidental
- * relations. Ties use the normalized path and then the original index for
- * exact duplicate paths, making a capped selection reproducible even when
- * directory enumeration changes.
- *
- * @param {string[]} tests
- * @param {number} maxTests
- * @param {Map<string, number>} [priorities]
- */
-export function capRelatedTests(
-	tests,
-	maxTests = DEFAULT_MAX_TESTS,
-	priorities = new Map(),
-) {
-	if (!Number.isInteger(maxTests) || maxTests < 0) {
-		throw new RangeError("maxTests must be a non-negative integer");
-	}
-	if (tests.length <= maxTests) return { selected: tests, dropped: [] };
-	const ranked = tests
-		.map((test, index) => ({
-			test,
-			index,
-			pathKey: normalizeEphemeralMapKey(test),
-			priority: priorities.get(test) ?? 2,
-		}))
-		.sort(
-			(a, b) =>
-				a.priority - b.priority ||
-				(a.pathKey < b.pathKey ? -1 : a.pathKey > b.pathKey ? 1 : 0) ||
-				a.index - b.index,
-		);
-	const selectedSet = new Set(
-		ranked.slice(0, maxTests).map(({ test }) => test),
-	);
-	return {
-		selected: ranked
-			.filter(({ test }) => selectedSet.has(test))
-			.map(({ test }) => test),
-		dropped: ranked
-			.filter(({ test }) => !selectedSet.has(test))
-			.map(({ test }) => test),
-	};
-}
-
 /**
  * The conventional test-file location a mutation source's basename maps to,
  * mirroring the file's top-level directory: `scripts/lib/ci-checks.mjs` ->
@@ -492,20 +441,25 @@ export function mapRelatedTests(
  * during sandbox init, BEFORE `buildCommand` runs, so the base config's
  * `"npm run build"` would silently discard every mutant for a compiled
  * target before a single test executes (see scripts/lib/mutation-touch-
- * build.mjs's own header). `force: true` keeps `incremental` enabled (so a
- * budget-killed run still saves a partial report, round 2 S2) while never
- * reading a STALE `.stryker/incremental.json` left by an earlier, unrelated
- * local run (round 2 T4) -- `force` makes Stryker treat any existing
- * incremental file as absent on the read side, without disabling the
- * write-on-interrupt behavior that depends on `options.incremental` alone.
+ * build.mjs's own header). `force` keeps `incremental` enabled (so a
+ * budget-killed run still saves a partial report, round 2 S2) while making
+ * Stryker treat any existing incremental file as absent on the read side,
+ * without disabling the write-on-interrupt behavior that depends on
+ * `options.incremental` alone. It is true unless the caller proved the file
+ * belongs to this run's tests and inputs (`reuse`, #3810): otherwise a STALE
+ * `.stryker/incremental.json` from an earlier, unrelated local run (round 2
+ * T4) or an earlier push with different tests would be read. `fileLogLevel`
+ * makes Stryker write its "N of M mutant result(s) are reused" line to
+ * `stryker.log`, the only place the reuse count exists.
  *
  * @param {object} baseConfig stryker.config.mjs's default export
- * @param {{command: string}} options the per-run test command
+ * @param {{command: string, reuse?: boolean}} options the per-run test command
  */
-export function buildRunConfig(baseConfig, { command }) {
+export function buildRunConfig(baseConfig, { command, reuse = false }) {
 	return {
 		...baseConfig,
-		force: true,
+		force: !reuse,
+		fileLogLevel: "info",
 		buildCommand: "node scripts/lib/mutation-touch-build.mjs",
 		commandRunner: { ...baseConfig.commandRunner, command },
 	};

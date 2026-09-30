@@ -5,3 +5,10 @@ export declare function renderStaleMarkdown(context?: {
 	runUrl?: string;
 	upstreamResult?: string;
 }): string;
+export declare function formatTestSelection(selection: {
+	pool: number;
+	covering: number | null;
+	kept: number;
+	own?: number;
+	unknown?: number;
+}): string;

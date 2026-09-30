@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -6,12 +7,12 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
+import { availableParallelism } from "node:os";
 import base from "../stryker.config.mjs";
 import {
 	augmentAndSummarize,
 	buildRunConfig,
 	capMutationFiles,
-	capRelatedTests,
 	compiledJsPath,
 	decideMutationOutcome,
 	dedupePatterns,
@@ -21,11 +22,11 @@ import {
 	describeStrykerFailure,
 	estimateAffordableMutants,
 	formatCapNotice,
-	formatTestCapNotice,
 	isCompiledMutationSource,
 	isMutationSourceFile,
 	isScriptMutationFile,
 	mapRelatedTests,
+	mutationLaneExclusion,
 	DEFAULT_MAX_TESTS,
 	DEFAULT_MUTATION_FIXED_OVERHEAD_MS,
 	MUTATION_BUDGET_MINUTES,
@@ -35,6 +36,19 @@ import {
 	planResample,
 	sampleRangesDeterministically,
 } from "./lib/stryker-diff.mjs";
+import {
+	buildCoverageProbeArgs,
+	ownTestFiles,
+	decideIncrementalReuse,
+	fingerprintEntries,
+	fingerprintPaths,
+	parseIncrementalReuse,
+	probeAllTests,
+	probeTestCoverage,
+	pruneIncrementalReport,
+	selectMutationTests,
+} from "./lib/mutation-test-selection.mjs";
+import { formatTestSelection } from "./lib/mutation-report-render.mjs";
 import {
 	buildLineIndex,
 	countLines,
@@ -57,6 +71,19 @@ const MUTATION_TEST_TIMEOUT_MS = 30_000;
 const MUTATION_TSCONFIG = "tsconfig.mutation.json";
 const REPORT_PATH = "reports/mutation/mutation.json";
 const INCREMENTAL_PATH = ".stryker/incremental.json";
+// Written beside the incremental file (and cached with it by the workflow):
+// the hash of everything a reused result depends on that Stryker itself does
+// not watch -- see fingerprintPaths in scripts/lib/mutation-test-selection.mjs.
+const FINGERPRINT_PATH = ".stryker/incremental.fingerprint";
+// Stryker's own file log (enabled by buildRunConfig), cwd-relative and not
+// configurable; the driver reads the reuse count from it and deletes it.
+const STRYKER_LOG_PATH = "stryker.log";
+const PROBE_DIRECTORY = ".stryker/coverage";
+// One vitest process per related test file, run side by side: bounded by the
+// runner's cores, and by the share of the budget the probes may spend.
+const PROBE_CONCURRENCY = Math.max(1, Math.min(4, availableParallelism()));
+const PROBE_TIMEOUT_MS = 180_000;
+const PROBE_BUDGET_SHARE = 0.25;
 function argumentValue(name, fallback) {
 	let value = fallback;
 	for (let index = 0; index < process.argv.length - 1; index += 1) {
@@ -92,6 +119,22 @@ function changedMutationFiles() {
 			.map((file) => file.trim())
 			.filter(Boolean)
 			.filter(isMutationSourceFile);
+	} catch (error) {
+		console.error(
+			`mutation diff: could not read ${baseRef}...HEAD: ${error.message}`,
+		);
+		process.exit(1);
+	}
+}
+
+function changedPaths() {
+	try {
+		return execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
+			encoding: "utf8",
+		})
+			.split("\n")
+			.map((file) => file.trim())
+			.filter(Boolean);
 	} catch (error) {
 		console.error(
 			`mutation diff: could not read ${baseRef}...HEAD: ${error.message}`,
@@ -141,7 +184,7 @@ function shellQuote(value) {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function writeRunConfig(testFiles) {
+function writeRunConfig(testFiles, { reuse = false } = {}) {
 	mkdirSync(".stryker", { recursive: true });
 	const command = [
 		"node_modules/.bin/vitest",
@@ -152,7 +195,7 @@ function writeRunConfig(testFiles) {
 		String(MUTATION_TEST_TIMEOUT_MS),
 		...testFiles.map(shellQuote),
 	].join(" ");
-	const config = buildRunConfig(base, { command });
+	const config = buildRunConfig(base, { command, reuse });
 	const file = ".stryker/diff.config.mjs";
 	// A plain object with no functions (verified: every stryker.config.mjs
 	// field is JSON-serializable) -- see buildRunConfig's own header for why
@@ -196,7 +239,8 @@ function writeReport(strykerReport, meta) {
 // with a `zeroMutants` report (reproduced live at 69413b03e -- see
 // "no PR-changed lines" in the spawn test below).
 let costEstimate = null;
-let relatedTestCapMeta = null;
+let testSelectionMeta = null;
+let incrementalMeta = null;
 
 function baseMeta(extra) {
 	return {
@@ -216,7 +260,8 @@ function baseMeta(extra) {
 		// zero-mutant paths above) or when Stryker's dry-run output could not
 		// be parsed (`parseDryRunCost` returned null).
 		measuredTotalMutants: costEstimate?.totalMutants ?? null,
-		testCap: relatedTestCapMeta,
+		testSelection: testSelectionMeta,
+		incremental: incrementalMeta,
 		...extra,
 	};
 }
@@ -230,6 +275,7 @@ function logSurvivors(mutants) {
 	}
 }
 
+const allChangedPaths = changedPaths();
 const allFiles = changedMutationFiles();
 const { selected: files, skipped } = capMutationFiles(allFiles, maxFiles);
 if (skipped.length > 0) {
@@ -247,8 +293,21 @@ if (files.length === 0) {
 }
 
 let selection;
+const ownTests = [];
 try {
 	selection = mapRelatedTests(files);
+	// #3810 item 4: the PR's own test files are never dropped -- they are the
+	// tests whose survivors the author can act on. A file carrying the
+	// mutation-lane exclusion marker is excluded for its registered reason, same
+	// as a related one.
+	for (const file of ownTestFiles(allChangedPaths)) {
+		if (!existsSync(file)) continue;
+		const exclusion = mutationLaneExclusion(file);
+		if (!exclusion) ownTests.push(file);
+		else if (!selection.excluded.some((entry) => entry.file === file)) {
+			selection.excluded.push(exclusion);
+		}
+	}
 } catch (error) {
 	const reason = `mutation diff: invalid mutation-lane exclusion registry (${error.name ?? "Error"}): ${error.message}`;
 	console.error(reason);
@@ -259,20 +318,6 @@ try {
 	process.exit(1);
 }
 const { covered, uncovered, excluded } = selection;
-const relatedTestCap = capRelatedTests(
-	selection.tests,
-	DEFAULT_MAX_TESTS,
-	selection.priorities,
-);
-const tests = relatedTestCap.selected;
-relatedTestCapMeta = {
-	selected: tests.length,
-	total: selection.tests.length,
-	dropped: relatedTestCap.dropped.length,
-};
-if (relatedTestCap.dropped.length > 0) {
-	console.log(formatTestCapNotice(tests.length, selection.tests.length));
-}
 for (const { file, reason } of excluded) {
 	console.log(
 		`mutation diff: excluding ${file} from dry-run gating (${reason})`,
@@ -332,10 +377,8 @@ if (build.error || build.status !== 0) {
 // instrumentation of scripts/check-pr-body.mjs alone is 2075 mutants, and every
 // mutant reruns the related tests, so advisory run 36098718085 evaluated none of
 // its 2220 before the 90-minute cap cancelled the job.
-const scriptPatterns = mutationRangePatterns(
-	coveredScripts,
-	changedLineRanges(coveredScripts),
-);
+const scriptRanges = changedLineRanges(coveredScripts);
+const scriptPatterns = mutationRangePatterns(coveredScripts, scriptRanges);
 
 // jsFile -> { index, tsFile }, kept for the reverse (survivor .js:line -> .ts:line)
 // mapping after the Stryker run; `index.tracer` (round 2 S3) makes that
@@ -400,6 +443,125 @@ if (allPatterns.length === 0) {
 
 function remainingBudgetMs() {
 	return Math.max(0, budgetMs - (Date.now() - startedAt));
+}
+
+// #3810 item 1: keep only the test files that execute a changed line. The
+// import graph (`selection.tests`) is the candidate pool; one vitest process
+// per candidate measures which changed lines it executes, in the coordinates of
+// the PR diff (a compiled `.js` reports the `.ts` lines through its source
+// map, built above). Coverage is taken on the clean tree, before Stryker
+// instruments anything.
+const probeRanges = new Map(scriptRanges);
+const probeInclude = [...scriptRanges.keys()];
+for (const tsFile of coveredCompiled) {
+	if (!compiledIndexByJsFile.has(compiledJsPath(tsFile))) continue;
+	probeRanges.set(tsFile, compiledRanges.get(tsFile) ?? []);
+	probeInclude.push(compiledJsPath(tsFile));
+}
+
+function probeDirectoryOf(test) {
+	return `${PROBE_DIRECTORY}/${createHash("sha256").update(test).digest("hex").slice(0, 12)}`;
+}
+
+function runProbeProcess(test) {
+	return new Promise((resolveRun) => {
+		const child = spawn(
+			"node_modules/.bin/vitest",
+			buildCoverageProbeArgs(test, probeInclude, probeDirectoryOf(test), {
+				testTimeoutMs: MUTATION_TEST_TIMEOUT_MS,
+			}),
+			{ stdio: "ignore" },
+		);
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGTERM");
+		}, PROBE_TIMEOUT_MS);
+		child.on("error", () => {
+			clearTimeout(timer);
+			resolveRun({ status: null, timedOut });
+		});
+		child.on("close", (status) => {
+			clearTimeout(timer);
+			resolveRun({ status, timedOut });
+		});
+	});
+}
+
+function readProbeCoverage(test) {
+	const directory = probeDirectoryOf(test);
+	const file = `${directory}/coverage-final.json`;
+	try {
+		return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+}
+
+rmSync(PROBE_DIRECTORY, { recursive: true, force: true });
+const probePool = [...new Set([...selection.tests, ...ownTests])];
+console.log(
+	`mutation diff: measuring which of ${probePool.length} candidate test file(s) execute a changed line (${PROBE_CONCURRENCY} at a time)`,
+);
+const probeLines = await probeAllTests(
+	probePool,
+	(test) =>
+		probeTestCoverage(test, {
+			run: runProbeProcess,
+			readCoverage: readProbeCoverage,
+			rangesByFile: probeRanges,
+		}),
+	{
+		concurrency: PROBE_CONCURRENCY,
+		signal: AbortSignal.timeout(
+			Math.round(remainingBudgetMs() * PROBE_BUDGET_SHARE),
+		),
+	},
+);
+const choice = selectMutationTests({
+	related: selection.tests,
+	ownTests,
+	priorities: selection.priorities,
+	lines: probeLines,
+	maxTests: DEFAULT_MAX_TESTS,
+});
+const tests = choice.kept;
+testSelectionMeta = {
+	mode: choice.mode,
+	pool: choice.pool,
+	covering: choice.covering,
+	kept: choice.kept.length,
+	dropped: choice.dropped.length,
+	own: choice.own.length,
+	unknown: choice.unknown.length,
+};
+console.log(`mutation diff: ${formatTestSelection(testSelectionMeta)}`);
+if (choice.dropped.length > 0) {
+	console.log(
+		`mutation diff: capped at ${DEFAULT_MAX_TESTS} tests; dropped, by covered changed lines: ${choice.dropped.join(", ")}`,
+	);
+}
+if (choice.unknown.length > 0) {
+	console.log(
+		`mutation diff: no coverage answer for: ${choice.unknown.join(", ")}`,
+	);
+}
+if (tests.length === 0) {
+	// Never hand vitest an empty file list: `vitest run` with no filter runs the
+	// whole suite.
+	const reason =
+		"no related test executes a changed line, so every mutant would survive by construction; add a test that runs the changed code";
+	console.log(`mutation diff: no mutants evaluated; ${reason}`);
+	writeReport(
+		null,
+		baseMeta({
+			zeroMutants: { reason },
+			filesSkippedOverCap: skipped,
+			filesUncovered: uncovered,
+			testsExcluded: excluded,
+		}),
+	);
+	process.exit(0);
 }
 
 // round 2 S2: measure the REAL dry-run cost (a fixed range count, however
@@ -534,7 +696,44 @@ if (!cost) {
 	}
 }
 
-const configFile = writeRunConfig(tests);
+// #3810 item 2: may the incremental file restored by the workflow's cache be
+// handed to Stryker? Only when the fingerprint of everything a reused result
+// depends on matches the one stored beside it (see fingerprintPaths for why
+// Stryker's own differ cannot be trusted with the command runner).
+function readOrAbsent(file) {
+	try {
+		return readFileSync(file, "utf8");
+	} catch {
+		return "<absent>";
+	}
+}
+function gitRevision(ref) {
+	try {
+		return execFileSync("git", ["rev-parse", ref], { encoding: "utf8" }).trim();
+	} catch {
+		return "<unresolved>";
+	}
+}
+const fingerprint = fingerprintEntries([
+	["base", gitRevision(baseRef)],
+	["node", process.version],
+	["stryker.config.mjs", readOrAbsent("stryker.config.mjs")],
+	["package-lock.json", readOrAbsent("package-lock.json")],
+	...fingerprintPaths({
+		changedFiles: allChangedPaths,
+		mutatedFiles: files,
+		keptTests: tests,
+	}).map((file) => [file, readOrAbsent(file)]),
+]);
+const incrementalDecision = decideIncrementalReuse({
+	hasIncrementalFile: existsSync(INCREMENTAL_PATH),
+	previous: existsSync(FINGERPRINT_PATH)
+		? readFileSync(FINGERPRINT_PATH, "utf8").trim()
+		: null,
+	current: fingerprint,
+});
+incrementalMeta = { state: incrementalDecision.state };
+console.log(`mutation diff: incremental cache ${incrementalDecision.state}`);
 
 // round 2 R2-1: a deterministic sample can land entirely on ranges Stryker's
 // mutator set has none for -- a real #3579 replay at a 15-minute budget
@@ -553,18 +752,43 @@ let attempt = 0;
 for (;;) {
 	for (const pattern of patterns) triedPatternSet.add(pattern);
 	triedPatterns = [...triedPatternSet];
-	// The incremental file is rewritten below regardless (force:true, round 2
-	// T4), but clearing it before every attempt means neither a run that never
+	// The incremental file is rewritten below regardless (force, round 2 T4),
+	// but clearing it before every attempt means neither a run that never
 	// reaches Stryker nor a PRIOR (empty) attempt in this same resample loop
 	// leaves a STALE file for the next attempt, or some later, unrelated local
-	// invocation, to trip over.
-	rmSync(INCREMENTAL_PATH, { force: true });
+	// invocation, to trip over. The one exception is the first attempt when the
+	// restored file's fingerprint matched: it is pruned to this run's ranges
+	// and kept, and the fingerprint stored beside it is renewed.
+	const reuse = attempt === 0 && incrementalDecision.reuse;
+	if (reuse) {
+		try {
+			writeFileSync(
+				INCREMENTAL_PATH,
+				JSON.stringify(
+					pruneIncrementalReport(
+						JSON.parse(readFileSync(INCREMENTAL_PATH, "utf8")),
+						patterns,
+					),
+				),
+			);
+		} catch {
+			rmSync(INCREMENTAL_PATH, { force: true });
+			incrementalMeta = { state: "cold-no-cache" };
+		}
+	} else {
+		rmSync(INCREMENTAL_PATH, { force: true });
+	}
+	writeFileSync(FINGERPRINT_PATH, fingerprint);
+	const configFile = writeRunConfig(tests, {
+		reuse: reuse && incrementalMeta.state === "warm",
+	});
+	rmSync(STRYKER_LOG_PATH, { force: true });
 
 	console.log(`mutation diff: mutating ${patterns.join(", ")}`);
 	const testSummary =
 		tests.join(", ").length <= 240 ? `; selected: ${tests.join(", ")}` : "";
 	console.log(
-		`mutation diff: running ${tests.length} of ${selection.tests.length} related tests${testSummary}`,
+		`mutation diff: running ${tests.length} test file(s), ${formatTestSelection(testSelectionMeta)}${testSummary}`,
 	);
 	console.log(`mutation diff: budget ${budgetMinutes} minute(s)`);
 	const result = spawnSync(
@@ -577,6 +801,17 @@ for (;;) {
 			killSignal: "SIGTERM",
 		},
 	);
+
+	if (incrementalMeta.state === "warm") {
+		const log = existsSync(STRYKER_LOG_PATH)
+			? readFileSync(STRYKER_LOG_PATH, "utf8")
+			: "";
+		incrementalMeta = {
+			state: "warm",
+			...(parseIncrementalReuse(log) ?? { reused: null, total: null }),
+		};
+	}
+	rmSync(STRYKER_LOG_PATH, { force: true });
 
 	if (result.error || result.status !== 0) {
 		// round 2 S2: a budget kill (or any other interrupt) can still leave a
