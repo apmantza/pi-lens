@@ -716,15 +716,21 @@ function readOrAbsent(file) {
 		return "<absent>";
 	}
 }
-function gitRevision(ref) {
+// Where the PR forked from the base, not the base's tip: the tip moves with
+// every merge to master while the PR stands still (a merge train moves it every
+// few minutes), which would make every push cold. A rebase or a merge of the
+// base into the PR moves the fork point, and that does start cold.
+function gitForkPoint(ref, head) {
 	try {
-		return execFileSync("git", ["rev-parse", ref], { encoding: "utf8" }).trim();
+		return execFileSync("git", ["merge-base", ref, head], {
+			encoding: "utf8",
+		}).trim();
 	} catch {
 		return "<unresolved>";
 	}
 }
 const fingerprint = fingerprintEntries([
-	["base", gitRevision(baseRef)],
+	["fork-point", gitForkPoint(baseRef, headShaArg ?? "HEAD")],
 	["node", process.version],
 	["stryker.config.mjs", readOrAbsent("stryker.config.mjs")],
 	["package-lock.json", readOrAbsent("package-lock.json")],

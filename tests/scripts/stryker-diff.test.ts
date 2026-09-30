@@ -752,6 +752,10 @@ describe.skipIf(underStryker)(
 			expect(code).toMatch(
 				/if \(attempt > 0\) incrementalMeta = \{ state: "\s*" \};/,
 			);
+			// The fork point, not the base tip: a merge train moves the tip every few
+			// minutes and would make every push cold.
+			expect(code).toContain("gitForkPoint(baseRef, headShaArg ??");
+			expect(code).not.toContain("gitRevision(");
 			expect(code).toContain("pruneIncrementalReport(");
 			expect(code).toContain("reuse: reuse && incrementalMeta.state");
 			expect(code).toContain("keptTests: tests,");
