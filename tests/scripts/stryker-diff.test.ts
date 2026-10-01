@@ -84,11 +84,16 @@ const workflow = readFileSync(
 // Unit tests lane, where the driver is plain source; the behaviour they stand
 // for is pinned by the spawned driver test above, which runs the instrumented
 // driver itself and so also kills its mutants. The condition is the
-// instrumentation's own header, read from the very text being pinned: a skip
-// keyed on the STRYKER_MUTATOR_WORKER environment variable did not skip on CI
-// run 36787524136 (the pins ran against the instrumented driver and red the
-// dry run).
-const isInstrumented = (text: string) => /\bstryNS_\w+/.test(text);
+// instrumentation's own marks, read from the very text being pinned: the
+// `function stryNS_<ns>()` header (a file that holds mutants) or the
+// `// @ts-nocheck` line Stryker's preprocessor prepends to every file it
+// rewrites (also a file whose ranges held none, which it still re-prints). A
+// skip keyed on the STRYKER_MUTATOR_WORKER environment variable did not skip on
+// CI run 36787524136 (the pins ran against the instrumented driver and red the
+// dry run), and one keyed on the header alone missed the no-mutant case on run
+// 36805707289.
+const isInstrumented = (text: string) =>
+	/^\s*\/\/ @ts-nocheck\b/.test(text) || /\bstryNS_\w+/.test(text);
 const underStryker = isInstrumented(driver);
 
 const repositoryRoot = resolve(import.meta.dirname, "../..");
@@ -177,7 +182,14 @@ describe("instrumentation detection (#3810)", () => {
 		expect(isInstrumented("function stryNS_9fa48() {\n}\nconst a = 1;")).toBe(
 			true,
 		);
+		// A file the lane rewrote but placed no mutant in (its ranges held none) has
+		// no header, only the `// @ts-nocheck` Stryker's preprocessor prepends, and
+		// its text is still re-printed (CI run 36805707289 red the dry run on it).
+		expect(isInstrumented('// @ts-nocheck\nimport x from "y";')).toBe(true);
 		expect(isInstrumented("const a = 1; // no header here")).toBe(false);
+		expect(isInstrumented('import x from "y"; // @ts-nocheck later')).toBe(
+			false,
+		);
 	});
 });
 
