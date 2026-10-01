@@ -846,7 +846,9 @@ describe.skipIf(underStryker)(
 			// Only the first attempt may read the restored file (a resample retry
 			// runs different ranges against a file the previous attempt rewrote):
 			// planIncrementalAttempt owns that rule and the driver must ask it.
-			expect(code).toContain("planIncrementalAttempt({");
+			expect(code).toMatch(
+				/planIncrementalAttempt\(\{\s*attempt,\s*decision: incrementalDecision,/,
+			);
 			expect(code).toContain("decision: incrementalDecision,");
 			expect(code).toContain("prepareIncrementalFile({");
 			expect(code).toContain("writeRunConfig(tests, { reuse })");
