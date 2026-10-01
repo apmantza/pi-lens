@@ -1,29 +1,30 @@
 --------------------------- MODULE SnapshotPromotion ---------------------------
 (***************************************************************************)
 (* Worker-thread persist and promotion of the project snapshot body        *)
-(* (clients/project-snapshot.ts, #958 item 2) for ONE project cache dir,   *)
+(* (clients/project-snapshot.ts saveProjectSnapshot, #958 item 2) for ONE  *)
+(* project cache dir,                                                      *)
 (* shared by N pi-lens processes (a pi session and the MCP server, or two  *)
 (* pi sessions in one checkout).                                           *)
 (*                                                                         *)
 (* Actors, per process p:                                                  *)
 (*  - Advance(p): p's view of the tree moves to a newer seq                *)
 (*    (runtime.projectSeq; views only grow inside one process).            *)
-(*  - Save(p): saveProjectSnapshot (~1780-1880). Admission writes the      *)
-(*    meta sidecar FIRST when the durable meta's seq differs (~1815),      *)
-(*    picks the generation (same seq -> same generation, ~1849-1854), and  *)
+(*  - Save(p): saveProjectSnapshot. Admission writes the                   *)
+(*    meta sidecar FIRST when the durable meta's seq differs,              *)
+(*    picks the generation (same seq -> same generation), and              *)
 (*    dispatches, or queues behind the one active persist for the key      *)
-(*    (~1867-1875, _activeSnapshotPersists / _queuedSnapshotPersists).     *)
+(*    (_activeSnapshotPersists / _queuedSnapshotPersists).                 *)
 (*  - Stage(p, r): the worker (gzip-stage-write.ts writeGzipStageFile)     *)
 (*    renames its tmp to the per-generation stage file                     *)
 (*    `<gz>.stage-<pid>-<gen>`. A same-named stage is replaced.            *)
-(*  - Promote(p, r): handleSnapshotWorkerResult (~1474-1580): the          *)
-(*    generation gate (~1502), then renameSync(stage, gz) (~1555). A       *)
+(*  - Promote(p, r): handleSnapshotWorkerResult: the                       *)
+(*    generation gate, then renameSync(stage, gz). A                       *)
 (*    missing stage (ENOENT) falls back to the synchronous main-thread     *)
-(*    writer (~1573-1578), which writes the same body.                     *)
+(*    writer, which writes the same body.                                  *)
 (*  - Finalize(p, r): finalizeProjectSnapshotMeta writes the meta for the  *)
-(*    promoted body (~1557-1561), then completeSnapshotPersist dispatches  *)
+(*    promoted body, then completeSnapshotPersist dispatches               *)
 (*    the queued request.                                                  *)
-(*  - Sweep(p): sweepStaleSnapshotStageFiles (~1719-1736), once per        *)
+(*  - Sweep(p): sweepStaleSnapshotStageFiles, once per                     *)
 (*    process after its first save, removes every stage file whose name    *)
 (*    does not carry p's own pid.                                          *)
 (*  - Crash(p): the process dies; its stage files stay on disk.            *)
@@ -120,7 +121,7 @@ WriteBody(p, ver, seq) ==
 Blocking(p) == {x \in active[p] : ~x.det}
 
 \* completeSnapshotPersist: drop r; if r is the key's active persist,
-\* dispatch the queued request (~1335-1343). A detached request's completion
+\* dispatch the queued request. A detached request's completion
 \* returns early (`_activeSnapshotPersists.get(key) !== pending`).
 Complete(p, r) ==
     IF ~r.det /\ queued[p] /= NoReq
@@ -143,7 +144,7 @@ Save(p) ==
        IN /\ saves' = [saves EXCEPT ![p] = @ + 1]
           /\ lastSaved' = [lastSaved EXCEPT ![p] = s]
           /\ genSeq' = [genSeq EXCEPT ![p] = [g |-> g, s |-> s]]
-          \* meta-first for a new seq (~1815)
+          \* meta-first for a new seq
           /\ meta' = IF meta /= s /\ (~AdmissionCAS \/ meta < s) THEN s ELSE meta
           /\ IF SingleActive /\ Blocking(p) /= {}
              THEN /\ queued' = [queued EXCEPT ![p] = r]
@@ -172,7 +173,7 @@ CASRefuses(r) == PromoteCAS /\ (RefuseAll \/ meta > r.seq)
 Promote(p, r) ==
     /\ alive[p] /\ ~Busy(p) /\ r \in active[p] /\ r.phase = "staged"
     /\ IF Superseded(p, r)
-       THEN \* stale stage removed, request completed (~1502-1510)
+       THEN \* stale stage removed, request completed
             /\ stages' = DropStage(p, r.g)
             /\ Complete(p, r)
             /\ UNCHANGED <<body, meta, hi, promoted, inprocBad, lostStage, staleProm>>
@@ -263,17 +264,17 @@ InProcessLatestWins == ~inprocBad
 \* tree view than one already promoted.
 NoRegression == body.seq >= hi
 
-\* project-snapshot.ts ~1797-1808: meta-first ordering exists so the meta is
+\* project-snapshot.ts saveProjectSnapshot: meta-first ordering exists so the meta is
 \* never BEHIND the body ("an old-seq meta sitting over a freshly written body
 \* ... throwing away a genuinely fresh snapshot").
 MetaNotBehindBody == meta >= body.seq
 
 \* A live process's staged body is never removed by someone else before it
 \* promotes it (a removal forces the synchronous main-thread gzip, the
-\* degraded +656MB path, ~1573-1578).
+\* degraded +656MB path).
 NoLiveStageLoss == lostStage = FALSE
 
-\* The generation gate's promise (~1498-1510, #1322): a process never
+\* The generation gate's promise (#1322): a process never
 \* promotes a view it has already superseded by a newer admitted save, not
 \* even transiently.
 NoSupersededPromotion == staleProm = FALSE

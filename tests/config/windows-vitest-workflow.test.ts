@@ -75,7 +75,6 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 		expect(raw).toContain("Windows Vitest subset step outcome:");
 		expect(raw).toContain("windows_vitest=$outcome");
 		expect(raw).toContain("PI_LENS_TEST_TIMEOUT_SCALE: '3'");
-		expect(raw).toContain("Validate merge-train dispatch payload");
 	});
 
 	it("pins the sibling action revisions and the isolated home", () => {

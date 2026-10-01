@@ -11,6 +11,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import {
 	type AvailabilityCause,
@@ -513,11 +514,10 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 			}
 
 			const hasErrors = diagnostics.some((d) => d.severity === "error");
-			return {
+			return findingsResult(diagnostics, {
 				status: hasErrors ? "failed" : "succeeded",
-				diagnostics,
 				semantic: hasErrors ? "blocking" : "warning",
-			};
+			});
 		} finally {
 			await fs.unlink(tmpScript).catch(() => {});
 		}

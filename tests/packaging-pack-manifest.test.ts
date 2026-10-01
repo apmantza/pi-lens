@@ -28,7 +28,7 @@ import {
 } from "../scripts/strip-dev-deps-for-pack.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
 /**
  * #2652: `npm pack` strips the LIVE checkout's manifest in prepack and puts
@@ -82,7 +82,21 @@ const pkg = JSON.parse(
 	devDependencies?: Record<string, string>;
 	dependencies?: Record<string, string>;
 	scripts: Record<string, string>;
+	packageManager?: string;
 };
+// #3885: run the real pack through the repo's pinned npm -- the same
+// `npx -y "npm@<packageManager>"` argv `release.yml` and `ci.yml` publish and
+// install with. A host on npm 9 (pacote@13) does not forward `script-shell` to
+// the `prepare` lifecycle `npm pack` runs for a directory (`pacote/lib/dir.js`
+// `_prepareDir` builds its runScript options without `scriptShell`), so the
+// #2652 forced-failure wrapper below is inert and the pack wrongly exits 0.
+// npm 10+ forwards it. Pinning the npm keeps the test's observation on the
+// toolchain the project ships with instead of the host's npm.
+const npmPin = String(pkg.packageManager ?? "").replace(/^npm@/, "");
+
+function pinnedPackArgs(extra: string[]): string[] {
+	return ["-y", `npm@${npmPin}`, "pack", ...extra];
+}
 
 describe("published manifest carries no devDependencies", () => {
 	beforeAll(attachPackSignal);
@@ -116,6 +130,9 @@ describe("published manifest carries no devDependencies", () => {
 		expect(
 			pkg.devDependencies && Object.keys(pkg.devDependencies).length,
 		).toBeGreaterThan(0);
+		// The pack cases below invoke `npm@<pin>`; pin the shape so a missing or
+		// floating `packageManager` cannot silently resolve npm latest (#3885).
+		expect(pkg.packageManager).toMatch(/^npm@\d+\.\d+\.\d+$/);
 	});
 
 	it(
@@ -144,7 +161,7 @@ describe("published manifest carries no devDependencies", () => {
 			try {
 				expect(() =>
 					packWithRestore(() =>
-						execFileSync(npm, ["pack", "--pack-destination", scratch], {
+						execFileSync(npx, pinnedPackArgs(["--pack-destination", scratch]), {
 							cwd: root,
 							encoding: "utf8",
 							shell: process.platform === "win32",
@@ -229,7 +246,7 @@ describe("published manifest carries no devDependencies", () => {
 			// Not `--json`: `prepare` also runs on pack and its scripts write to stdout
 			// (setup-git-hooks on a fresh CI checkout), which corrupts the JSON payload.
 			packWithRestore(() =>
-				execFileSync(npm, ["pack", "--pack-destination", tmp], {
+				execFileSync(npx, pinnedPackArgs(["--pack-destination", tmp]), {
 					cwd: root,
 					encoding: "utf8",
 					shell: process.platform === "win32",

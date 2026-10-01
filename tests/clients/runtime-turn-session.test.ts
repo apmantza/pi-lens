@@ -1419,7 +1419,13 @@ describe("unresolved inline blocker re-surfacing", () => {
 			"turn-end-findings",
 			env.tmpDir,
 		);
-		expect(injected?.data?.content).toBeUndefined();
+		const content = injected?.data?.content ?? "";
+		// #3218 criterion 2: the cleared blocker is NOT re-injected at full
+		// authority, but the turn now names the file as resolved (one delivery).
+		// Before that feature this assertion read `content` undefined.
+		expect(content).toContain("Resolved this turn: src/bar.ts");
+		expect(content).not.toContain("Unresolved from this turn");
+		expect(content).not.toContain("🔴 STOP");
 
 		env.cleanup();
 	});

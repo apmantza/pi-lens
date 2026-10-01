@@ -85,3 +85,52 @@ export function mergeServerCapabilitiesDoc(
 	priorText: string,
 	freshText: string,
 ): { text: string; preservedCount: number };
+
+/** #3401: elapsed days after the first miss before a `direct` `first-publish` cell expires. */
+export const FIRST_PUBLISH_EXPIRY_DAYS: number;
+
+/** #3401: consecutive agreeing runs before a `clean-behavior`/`tier` change is written. */
+export const TIER_CHANGE_AGREE_RUNS: number;
+
+export interface MatrixObservation {
+	lang: string;
+	firstPublish?: string | null;
+	cleanBehavior?: string | null;
+	tier?: string | null;
+}
+
+export interface RefreshState {
+	"first-publish"?: Record<string, { firstMissed: string }>;
+	"clean-behavior"?: Record<
+		string,
+		{ pendingBehavior: string; pendingTier: string; runs: number }
+	>;
+}
+
+export function parseRefreshState(text: string): RefreshState;
+
+export function refreshCapabilityMatrix(
+	text: string,
+	observations: readonly MatrixObservation[],
+	opts?: {
+		src?: string;
+		marker?: string;
+		agreeRuns?: number;
+		expireDays?: number;
+		/** The injected clock; default is the real one. */
+		now?: Date | number | string;
+		/** A subset probe's langs; a lang outside it keeps its bookkeeping. */
+		probedLangs?: Iterable<string>;
+	},
+): {
+	text: string;
+	changed: boolean;
+	reason?: string;
+	expired: number;
+	pending: number;
+	committed: number;
+	/** The langs behind each count, in table order (named in the step log). */
+	expiredLangs: string[];
+	pendingLangs: string[];
+	committedLangs: string[];
+};

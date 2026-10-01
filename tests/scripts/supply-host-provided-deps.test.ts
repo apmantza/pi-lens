@@ -6,6 +6,7 @@
 // F1).
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -31,9 +32,9 @@ const root = path.resolve(
 );
 const scriptPath = path.join(root, "scripts", "supply-host-provided-deps.mjs");
 
-function runInstallArgs(): string {
-	return execFileSync(process.execPath, [scriptPath, "--install-args"], {
-		cwd: root,
+function runInstallArgs(script = scriptPath, cwd = root): string {
+	return execFileSync(process.execPath, [script, "--install-args"], {
+		cwd,
 		encoding: "utf8",
 	});
 }
@@ -57,23 +58,49 @@ describe("supply-host-provided-deps.mjs --install-args (#2586 review F1)", () =>
 	});
 
 	it("preserves a range's internal space as ONE token, not split further", () => {
-		// The regression this guards: a peer range containing a space (like the
-		// pi-tui OR-form range) must survive as a single argv entry once split
-		// on newlines — proving the delimiter choice, not just the count, is
+		// The regression this guards: a peer range containing a space (an OR-form
+		// semver range) must survive as a single argv entry once split on
+		// newlines -- proving the delimiter choice, not just the count, is
 		// correct (a coincidental count match wouldn't catch a shuffled split).
-		const pkg = JSON.parse(
-			fs.readFileSync(path.join(root, "package.json"), "utf8"),
-		) as { peerDependencies?: Record<string, string> };
+		// pi-lens's own pi-tui peer is "*" since #3805, so the spaced range is a
+		// fixture: a scratch root holding copies of the script and a manifest
+		// that carries one. The script resolves its root from its own location.
 		const tui = "@earendil-works/pi-tui";
-		const range = pkg.peerDependencies?.[tui];
-		expect(range, "peerDependencies must declare pi-tui").toBeTruthy();
-		expect(
-			range?.includes(" "),
-			"this guard only proves something when the range actually contains a space; update the fixture range if this ever changes",
-		).toBe(true);
-
-		const output = runInstallArgs();
-		const tokens = output.split("\n").filter((line) => line.length > 0);
-		expect(tokens).toContain(`${tui}@${range}`);
+		const range = "^0.84.1 || ^0.85.0";
+		const fixtureRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-supply-spaced-range-"),
+		);
+		try {
+			fs.mkdirSync(path.join(fixtureRoot, "scripts", "lib"), {
+				recursive: true,
+			});
+			for (const rel of [
+				"supply-host-provided-deps.mjs",
+				path.join("lib", "host-provided-deps.mjs"),
+			]) {
+				fs.copyFileSync(
+					path.join(root, "scripts", rel),
+					path.join(fixtureRoot, "scripts", rel),
+				);
+			}
+			const peers = Object.fromEntries(
+				HOST_PROVIDED_RUNTIME_PACKAGES.map((name) => [
+					name,
+					name === tui ? range : "*",
+				]),
+			);
+			fs.writeFileSync(
+				path.join(fixtureRoot, "package.json"),
+				JSON.stringify({ peerDependencies: peers }),
+			);
+			const output = runInstallArgs(
+				path.join(fixtureRoot, "scripts", "supply-host-provided-deps.mjs"),
+				fixtureRoot,
+			);
+			const tokens = output.split("\n").filter((line) => line.length > 0);
+			expect(tokens).toContain(`${tui}@${range}`);
+		} finally {
+			fs.rmSync(fixtureRoot, { recursive: true, force: true });
+		}
 	});
 });

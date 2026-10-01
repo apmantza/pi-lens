@@ -27,9 +27,11 @@ import {
 	changedFilesSince,
 	findingSignature,
 	findingsInChangedFiles,
+	findingsInTrackedFiles,
 	loadBaseline,
 	runSelfScan,
 	selfScanRuleIds,
+	trackedSelfScanFileSet,
 	writeBaseline,
 } from "./lib/astgrep-self-scan.mjs";
 
@@ -91,16 +93,29 @@ function main() {
 	);
 
 	let result;
+	const explicitScanPaths = scanPathArgs.length > 0;
 	try {
 		result = runSelfScan({
 			ruleIds,
-			...(scanPathArgs.length > 0 ? { scanPaths: scanPathArgs } : {}),
+			// Directory roots, the same invocation CI uses -- never a file list
+			// (Windows cmd.exe/CreateProcess line limits, #3886 r3). Tracked-only
+			// filtering happens after the scan: an untracked working-tree scratch
+			// file must not gate a push CI would never run it in. An explicit path
+			// argument (the wrapper's own tests) still wins.
+			scanPaths: explicitScanPaths ? scanPathArgs : ["clients", "tests"],
 			...(sgConfigOverride ? { sgConfigPath: sgConfigOverride } : {}),
 		});
 	} catch (e) {
 		console.error(`[astgrep-self-scan] scan failed to run: ${e?.message ?? e}`);
 		process.exit(1);
 	}
+
+	// Untracked findings are dropped for the default directory scan, so an
+	// untracked plant cannot gate. --update-baseline keeps the whole tree so
+	// triaging before `git add` writes a complete baseline (#3886 r3).
+	const tracked =
+		explicitScanPaths || updateBaseline ? undefined : trackedSelfScanFileSet();
+	const findings = findingsInTrackedFiles(result.findings, tracked);
 
 	// Shape 10: an empty finding list must be distinguishable from a scan that
 	// silently matched nothing. scannedFileCount is ast-grep's own count of
@@ -113,7 +128,7 @@ function main() {
 		process.exit(1);
 	}
 	console.log(
-		`[astgrep-self-scan] scanned ${result.scannedFileCount} file(s) with ${result.effectiveRuleCount ?? "?"} effective rule(s); ${result.findings.length} raw finding(s), ${result.advisoryFindings.length} advisory`,
+		`[astgrep-self-scan] scanned ${result.scannedFileCount} file(s) with ${result.effectiveRuleCount ?? "?"} effective rule(s); ${findings.length} raw finding(s), ${result.advisoryFindings.length} advisory`,
 	);
 	// #3684: advisory (severity: info) hits never gate and are never
 	// baselined. They are printed only for files changed against the diff
@@ -122,7 +137,7 @@ function main() {
 	reportAdvisory(result.advisoryFindings);
 
 	if (updateBaseline) {
-		const signatures = result.findings.map(findingSignature);
+		const signatures = findings.map(findingSignature);
 		const p = writeBaseline(signatures);
 		console.log(
 			`[astgrep-self-scan] wrote ${signatures.length} allowed finding(s) to ${p}`,
@@ -131,7 +146,7 @@ function main() {
 	}
 
 	const baseline = loadBaseline();
-	const newFindings = result.findings.filter(
+	const newFindings = findings.filter(
 		(f) => !baseline.has(findingSignature(f)),
 	);
 
@@ -151,7 +166,7 @@ function main() {
 	}
 
 	console.log(
-		`[astgrep-self-scan] clean: ${result.findings.length} finding(s), all present in the baseline (${baseline.size} allowed entries).`,
+		`[astgrep-self-scan] clean: ${findings.length} finding(s), all present in the baseline (${baseline.size} allowed entries).`,
 	);
 }
 

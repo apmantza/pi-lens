@@ -608,6 +608,111 @@ describe("runner status/semantic edge cases", () => {
 		}
 	});
 
+	it("repeats a scanner coverage notice on every pull without consuming the push latch (#3791)", async () => {
+		// #3791: the same session latch dedupes the scanner-partial notice class
+		// too, so a warm `pilens_analyze` pull of a file with a silent scanner
+		// also read as a clean result on the second call. A pull dispatch
+		// (`dedupeCoverageNotice: false`) must emit it every time and must leave
+		// the push latch intact.
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-pull-coverage-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["opengrep"],
+				}),
+			);
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			const groups = [{ mode: "all" as const, runnerIds: ["lsp"] }];
+			const notice = "coverage: opengrep silent";
+			const pull = () =>
+				dispatchForFile(
+					ctx(filePath, env.tmpDir) as never,
+					groups,
+					registry,
+					undefined,
+					{ dedupeCoverageNotice: false },
+				);
+
+			// Pay the push latch first, so the pull has to ignore a set key.
+			const pushFirst = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				groups,
+				registry,
+			);
+			expect(pushFirst.output).toContain(notice);
+			const pushSecond = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				groups,
+				registry,
+			);
+			expect(pushSecond.output).not.toContain(notice);
+
+			expect((await pull()).output).toContain(notice);
+			expect((await pull()).output).toContain(notice);
+
+			// The pulls did not write the latch either: the next push stays silent.
+			const pushThird = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				groups,
+				registry,
+			);
+			expect(pushThird.output).not.toContain(notice);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a fresh scanner push notice after two pulls (#3791 F2)", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
+			await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-fresh-push-coverage-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			clearCoverageNoticeState();
+			touchFile.mockResolvedValue(
+				diagsResult([], {
+					confirmation: "partial",
+					unconfirmedServerIds: ["opengrep"],
+				}),
+			);
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			const groups = [{ mode: "all" as const, runnerIds: ["lsp"] }];
+			const notice = "coverage: opengrep silent";
+			const pull = () =>
+				dispatchForFile(
+					ctx(filePath, env.tmpDir) as never,
+					groups,
+					registry,
+					undefined,
+					{ dedupeCoverageNotice: false },
+				);
+
+			expect((await pull()).output).toContain(notice);
+			expect((await pull()).output).toContain(notice);
+			const firstPush = await dispatchForFile(
+				ctx(filePath, env.tmpDir) as never,
+				groups,
+				registry,
+			);
+			expect(firstPush.output).toContain(notice);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("renders a primary diagnostic and its scanner coverage marker together (#1867 F2)", async () => {
 		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
 			.default;

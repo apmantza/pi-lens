@@ -18,7 +18,7 @@ export interface WardenCheckRun {
 
 // REQUIRED_CHECKS and resolveCheckRuns moved to ./ci-checks.mjs (#2539 round
 // 2, F2) as REQUIRED_CHECKS / resolveLatestByName -- the shared seam for
-// this file, merge-train-lane.mjs, and ci-verdict.mjs.
+// this file and ci-verdict.mjs.
 
 export interface WardenPr {
 	number: number;

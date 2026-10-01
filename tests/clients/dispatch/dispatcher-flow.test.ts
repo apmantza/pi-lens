@@ -269,6 +269,134 @@ describe("Dispatch Flow", () => {
 			);
 		}, 30000);
 
+		it("repeats the coverage notice for a pull dispatch and leaves the push latch untouched (#3791)", async () => {
+			// #3791: the pi push surface latches the notice once per session (the
+			// sibling test above). A pull surface (`pilens_analyze`, connected by
+			// `dedupeCoverageNotice: false`) must say so on every call, and must
+			// not consume the latch a later push still needs.
+			registerRunner({
+				id: "lsp",
+				appliesTo: ["go"],
+				priority: 4,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "go-vet",
+				appliesTo: ["go"],
+				priority: 12,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "golangci-lint",
+				appliesTo: ["go"],
+				priority: 14,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "tree-sitter",
+				appliesTo: ["go"],
+				priority: 20,
+				async run() {
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+
+			const ctx = createMockContext("main.go");
+			const groups: RunnerGroup[] = [
+				{
+					mode: "all",
+					runnerIds: ["lsp", "go-vet", "golangci-lint", "tree-sitter"],
+				},
+			];
+			const notice = "Pi-lens go analysis unavailable";
+			const pull = () =>
+				runDispatchForFile(ctx, groups, registry, undefined, {
+					dedupeCoverageNotice: false,
+				});
+
+			// Pay the push latch first so the pull call has to ignore it, not just
+			// start from a clean session.
+			const pushFirst = await runDispatchForFile(ctx, groups, registry);
+			expect(pushFirst.output).toContain(notice);
+			const pushSecond = await runDispatchForFile(ctx, groups, registry);
+			expect(pushSecond.output).not.toContain(notice);
+
+			const pullFirst = await pull();
+			expect(pullFirst.output).toContain(notice);
+			expect(pullFirst.warnings.map((w) => w.message)).toContainEqual(
+				expect.stringContaining(notice),
+			);
+			const pullSecond = await pull();
+			expect(pullSecond.output).toContain(notice);
+			expect(pullSecond.warnings.map((w) => w.message)).toContainEqual(
+				expect.stringContaining(notice),
+			);
+
+			// The pull runs did not write the latch: the next push is still
+			// suppressed, exactly as it would have been without the pulls.
+			const pushThird = await runDispatchForFile(ctx, groups, registry);
+			expect(pushThird.output).not.toContain(notice);
+		}, 30000);
+
+		it("does not let pull dispatches consume a fresh push notice (#3791 F2)", async () => {
+			registerRunner({
+				id: "lsp",
+				appliesTo: ["go"],
+				priority: 4,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "go-vet",
+				appliesTo: ["go"],
+				priority: 12,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "golangci-lint",
+				appliesTo: ["go"],
+				priority: 14,
+				async run() {
+					return { status: "skipped", diagnostics: [], semantic: "none" };
+				},
+			});
+			registerRunner({
+				id: "tree-sitter",
+				appliesTo: ["go"],
+				priority: 20,
+				async run() {
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+
+			const ctx = createMockContext("main.go");
+			const groups: RunnerGroup[] = [
+				{
+					mode: "all",
+					runnerIds: ["lsp", "go-vet", "golangci-lint", "tree-sitter"],
+				},
+			];
+			const notice = "Pi-lens go analysis unavailable";
+			const pull = () =>
+				runDispatchForFile(ctx, groups, registry, undefined, {
+					dedupeCoverageNotice: false,
+				});
+
+			expect((await pull()).output).toContain(notice);
+			expect((await pull()).output).toContain(notice);
+			const firstPush = await runDispatchForFile(ctx, groups, registry);
+			expect(firstPush.output).toContain(notice);
+		});
+
 		it("does not let unrelated runner coverage suppress missing-tool notices", async () => {
 			registerRunner({
 				id: "lsp",

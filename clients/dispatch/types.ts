@@ -178,9 +178,15 @@ export interface RunnerResult {
 	 * When status==="failed", a short machine-readable reason that separates a
 	 * genuine runner breakage from "the check ran and found blocking issues".
 	 * Conventional values: "timeout", "exception" (thrown/aborted), "server_error"
-	 * (LSP/tool process failed), "blocking_diagnostics" (the file has blocking
-	 * findings — not a runner fault). Consumers (e.g. the log-smell analyzer)
-	 * use this to avoid counting found-errors as crashes.
+	 * (LSP/tool process failed), "blocking_diagnostics" (the check completed and
+	 * its findings, by the runner's own threshold, failed it — not a runner
+	 * fault). Every `failed` built from findings carries "blocking_diagnostics"
+	 * through `findingsResult` (#3781), so a `failed` without it means the runner
+	 * produced no usable result. A runner may also report findings, blocking ones
+	 * included, as `succeeded`; `status` is not a severity channel, and severity
+	 * lives in `semantic` and the diagnostics. Consumers (the log-smell
+	 * analyzer, latency.log, the MCP analyze row) use this to avoid counting
+	 * found-errors as crashes.
 	 */
 	failureKind?: string;
 	/** Optional short human-readable detail for the failure (truncated). */
@@ -195,6 +201,64 @@ export interface RunnerResult {
 	 * the rest of that set has no delivery path and reads as silent.
 	 */
 	deferredServerIds?: readonly string[];
+}
+
+/**
+ * The `failureKind` that says a `failed` run completed its check and its own
+ * findings failed it — not a runner fault (#3781). `findingsResult` stamps it,
+ * and {@link hasUsableResult} is the one reader of the coverage rule.
+ */
+export const BLOCKING_DIAGNOSTICS_FAILURE_KIND = "blocking_diagnostics";
+
+/**
+ * The result of a run that COMPLETED with findings (#3781).
+ *
+ * A runner reports `failed` for findings when its own threshold says they fail
+ * the check. The threshold differs per tool: a blocking diagnostic, an error
+ * severity, any finding at all, or a nonzero exit. `status` is left as the
+ * runner decided, because a multi-member fallback group continues past a
+ * `failed` member (dispatcher.ts runGroup). The `failureKind` is what tells a
+ * consumer (the log analyzer, latency.log, the MCP analyze row) that this
+ * `failed` is findings and not a runner that broke. A broken run never comes
+ * through here: its arm returns `failed` with its own kind, or with none.
+ */
+export function findingsResult(
+	diagnostics: Diagnostic[],
+	verdict: Pick<RunnerResult, "status" | "semantic">,
+): RunnerResult {
+	if (verdict.status === "failed") {
+		return {
+			...verdict,
+			diagnostics,
+			failureKind: BLOCKING_DIAGNOSTICS_FAILURE_KIND,
+		};
+	}
+	return { ...verdict, diagnostics };
+}
+
+/**
+ * Whether a runner result is usable coverage of the bytes it ran on (#3867).
+ *
+ * A `succeeded` run reached a verdict about the file. A `failed` run reached
+ * one only when `failureKind` is `"blocking_diagnostics"` — the check
+ * completed and its own findings failed it, per the `RunnerResult.failureKind`
+ * contract above. Any other `failureKind`, or none, means the runner broke or
+ * never ran (timeout, spawn failure, server error) and covered nothing, so a
+ * caller must not read it as "the file was analysed".
+ *
+ * The parameter accepts the wider latency-row status set (`when_skipped`,
+ * `pending`, and `deferred`) so the dispatcher asks this one owner instead of
+ * comparing `status`/`failureKind` itself.
+ */
+export function hasUsableResult(result: {
+	status: string;
+	failureKind?: string;
+}): boolean {
+	return (
+		result.status === "succeeded" ||
+		(result.status === "failed" &&
+			result.failureKind === BLOCKING_DIAGNOSTICS_FAILURE_KIND)
+	);
 }
 
 // --- Dispatch Context ---

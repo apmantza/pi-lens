@@ -7,6 +7,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 
 // fish_indent ships with fish — not separately installable, no managed fallback
@@ -57,7 +58,10 @@ const fishIndentRunner: RunnerDefinition = {
 					rule: "fish-indent-parse-error",
 				},
 			];
-			return { status: "failed", diagnostics, semantic: "blocking" };
+			return findingsResult(diagnostics, {
+				status: "failed",
+				semantic: "blocking",
+			});
 		}
 
 		// Clean stderr — file just needs formatting

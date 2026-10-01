@@ -1,0 +1,112 @@
+name: PR metadata
+
+# #3838: the PR-metadata checks (title, body, close-keyword syntax) in ONE
+# workflow. They read the live PR title and body, so they must re-run when the
+# PR is edited; the rest of the PR checks read the tree and must not. While
+# `edited` lived on lint.yml, every retitle re-ran that workflow's whole job
+# graph (62 of 167 Lint PR runs in the 2026-09-30 window, 446 jobs) to refresh
+# three of them. Check-run names are unchanged (`PR title`, `PR body
+# (advisory)`, `Close-keyword syntax`): consumers key on the job name, never
+# on the workflow that hosts it.
+#
+# Default pull_request types omit "edited". Without it, retitling a PR to fix
+# a title-lint failure replays the STALE payload from the original "opened"
+# event instead of re-running against the new title (#1917 review F3, #2640).
+# Merged-PR close verification is a different event (`pull_request_target:
+# closed`, with write access) and stays in close-keyword-verification.yml.
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, edited]
+
+# An edit must not cancel the run for the pushed head (#3716): the `-edited`
+# suffix keeps an edited event's group apart from opened / synchronize /
+# reopened, which share one group and so still cancel each other.
+concurrency:
+  group: pr-metadata-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' && '-edited' || '' }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  pr-title-lint:
+    name: PR title
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Validate PR title (conventional prefix + issue ref)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-pr-title.mjs
+
+  pr-body-lint:
+    name: PR body (advisory)
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    # Runs on synchronize too (#3802): the TLA+ coverage rule reads the diff, so
+    # a push that adds a mapped-file change or the missing .cfg must re-evaluate
+    # (PR #3864 F2; #3030 had skipped synchronize for the body alone). The
+    # `-edited` concurrency suffix above keeps an edit run and a push run from
+    # cancelling each other.
+    # Advisory to start: this job is not in required-checks branch protection.
+    # A finding stays visible as a red check without blocking a merge.
+    # Promotion bound (#2904): it stays advisory until it has been green on ten
+    # consecutive merged PRs; only then is it a candidate for required checks.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Validate PR body structure
+        run: node scripts/check-pr-body.mjs
+
+  close-keyword-lint:
+    name: Close-keyword syntax
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    # refs #3123: bounds a hang against GitHub's 360-min default. This job runs
+    # on pull_request so --branch master matched no runs; measured max over the
+    # last 10 successful runs regardless of branch: 14s; timeout = floor of
+    # 10 min.
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+
+      - name: Validate per-issue close keywords
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-close-keywords.mjs --lint-pr

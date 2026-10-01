@@ -50,6 +50,10 @@ export declare function lintLocalPrBody(
 	git?: (args: string[], options?: Record<string, unknown>) => string,
 	options?: { title?: string; ref?: string },
 ): { valid: boolean; errors: string[] };
+export declare function lintTlaCoverage(
+	body?: string,
+	options?: { diff?: string; cwd?: string },
+): { errors: string[]; advisories: string[] };
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl: typeof fetch,

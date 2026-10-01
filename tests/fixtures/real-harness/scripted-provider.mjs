@@ -1,7 +1,16 @@
 import { readFileSync, appendFileSync } from "node:fs";
-import {
-	createAssistantMessageEventStream,
-} from "../../../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js";
+import { pathToFileURL } from "node:url";
+
+// release-qa (#3805) drives a pi that is not this repo's devDependency, so it
+// names that pi's own pi-ai here; the default is the repo's dev baseline.
+const { createAssistantMessageEventStream } = await import(
+	process.env.REAL_PI_HARNESS_PI_AI_INDEX
+		? pathToFileURL(process.env.REAL_PI_HARNESS_PI_AI_INDEX).href
+		: new URL(
+				"../../../node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js",
+				import.meta.url,
+			).href
+);
 
 const scriptPath = process.env.REAL_PI_HARNESS_SCRIPT;
 const observationPath = process.env.REAL_PI_HARNESS_PROVIDER_LOG;
@@ -87,7 +96,17 @@ export default function scriptedProvider(pi) {
 					surfaceBytes: Buffer.byteLength(tool.description ?? "") +
 						Buffer.byteLength(JSON.stringify(tool.parameters ?? {})),
 				})) ?? [];
-				appendFileSync(observationPath, `${JSON.stringify({ turn: turn - 1, tools })}\n`);
+				// What the model would SEE as user text, so a row can witness an injected
+				// turn_end check (the `context` hook adds it to this request only).
+				const userMessages = (context?.messages ?? [])
+					.filter((message) => message?.role === "user")
+					.map((message) =>
+						(typeof message.content === "string"
+							? message.content
+							: JSON.stringify(message.content)
+						).slice(0, 2000),
+					);
+				appendFileSync(observationPath, `${JSON.stringify({ turn: turn - 1, tools, userMessages })}\n`);
 			}
 			(async () => {
 				const output = {

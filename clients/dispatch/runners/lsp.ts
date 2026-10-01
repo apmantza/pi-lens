@@ -27,6 +27,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { convertLspDiagnostics } from "../utils/lsp-diagnostics.js";
 import { demoteInferredProjectDiagnostics } from "../../lsp/inferred-project.js";
 import {
@@ -437,16 +438,16 @@ const lspRunner: RunnerDefinition = {
 				: "none";
 
 		return {
-			status: hasErrors
-				? "failed"
-				: deferredServerIds.length > 0
-					? "deferred"
-					: "succeeded",
 			// "failed" here means the file has blocking type errors — the check ran
-			// fine. Tag it so the smell analyzer doesn't read it as a runner crash.
-			failureKind: hasErrors ? "blocking_diagnostics" : undefined,
-			diagnostics: keptDiagnostics,
-			semantic: resultSemantic,
+			// fine; findingsResult tags it so it never reads as a runner crash.
+			...findingsResult(keptDiagnostics, {
+				status: hasErrors
+					? "failed"
+					: deferredServerIds.length > 0
+						? "deferred"
+						: "succeeded",
+				semantic: resultSemantic,
+			}),
 			...(unconfirmedServerIds.length > 0 && {
 				unconfirmedServerIds: [...unconfirmedServerIds],
 			}),

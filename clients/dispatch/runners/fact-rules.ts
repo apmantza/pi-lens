@@ -13,6 +13,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import { evaluateRules } from "../fact-rule-runner.js";
 
@@ -32,11 +33,10 @@ const factRulesRunner: RunnerDefinition = {
 			(d) => d.semantic === "blocking" || d.severity === "error",
 		);
 
-		return {
+		return findingsResult(diagnostics, {
 			status: hasBlocking ? "failed" : "succeeded",
-			diagnostics,
 			semantic: hasBlocking ? "blocking" : "warning",
-		};
+		});
 	},
 };
 

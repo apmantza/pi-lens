@@ -28,10 +28,17 @@ import {
 	formatTmpHygieneOwnerSummary,
 	realTmpHygieneProcessProbe,
 	touchTmpHygieneOwnerMarker,
+	TMP_HYGIENE_HOME,
 	TMP_HYGIENE_OWNER_STALE_MS,
+	TMP_HYGIENE_WORKER_HOME,
+	newRepoRootEntries,
+	repoRootBaseline,
+	unadmittedRepoRootEntries,
+	untrackedUnignoredEntries,
 	type TmpHygieneProcessProbe,
 } from "../support/vitest-setup.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
+import { getLatencyLogPath } from "../../clients/latency-logger.js";
 import {
 	buildProjectSnapshotFromRuntime,
 	getProjectSnapshotPath,
@@ -50,7 +57,7 @@ const REPO_ROOT = path.resolve(
 // case of the liveness suite compares the live mtime against it to prove the
 // heartbeat hooks are actually registered, not merely defined.
 const OWN_MARKER_PATH = path.join(
-	process.env.PI_LENS_HOME as string,
+	TMP_HYGIENE_HOME,
 	"tmp-hygiene-owners",
 	`${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}-${process.pid}.json`,
 );
@@ -365,6 +372,23 @@ function ownerForTmpEntry(
 	return owner;
 }
 
+/** The `tests/` files whose source names the literal head of a repo-root entry
+ *  (`mkdtempSync` appends six random characters): a best-effort pointer so a
+ *  leak names a suspect, never a verdict (#3715). */
+function repoRootEntryCandidates(entry: string): string[] {
+	const head = entry.length > 6 ? entry.slice(0, -6) : entry;
+	const hits: string[] = [];
+	for (const { file, source } of readWalkedFiles(
+		listSourceFiles(path.join(REPO_ROOT, "tests"), {
+			extensions: [".ts", ".mjs"],
+		}),
+	))
+		// Comments blanked: a docblock naming the head is not a producer.
+		if (stripSource(source, { strings: "keep" }).includes(head))
+			hits.push(path.relative(REPO_ROOT, file).replace(/\\/g, "/"));
+	return hits;
+}
+
 describe("tmp-fixture-hygiene", () => {
 	afterAll(async () => {
 		const scan = await tmpHygieneWaitForOwnerDrain();
@@ -389,10 +413,27 @@ describe("tmp-fixture-hygiene", () => {
 			const owner = ownerForTmpEntry(entry);
 			return `${entry} (owner: tests/${owner ?? "unknown"})`;
 		});
+		// #3715: the repo root is a second namespace the tmp census does not see.
+		const rootCensus = unadmittedRepoRootEntries(repoRootBaseline());
+		if (rootCensus.unknown)
+			process.stderr.write(
+				`[tmp-hygiene] repo-root census could not run: ${rootCensus.unknown}\n`,
+			);
 		try {
 			expect(
 				attributable,
 				`[tmp-hygiene] tests/${testFile} leaked ${attributable.length} top-level entries: ${described.join(",")}; live owners: ${[...liveOwners].join(",") || "none"}`,
+			).toEqual([]);
+			expect(
+				rootCensus.leaked,
+				`[tmp-hygiene] this run left ${rootCensus.leaked.length} new untracked, unignored entries in the repo root: ${rootCensus.leaked
+					.map(
+						(entry) =>
+							`${entry} (candidate owners: ${repoRootEntryCandidates(entry).join(", ") || "unknown"})`,
+					)
+					.join(
+						"; ",
+					)}. Remove them and fix the producer: a fixture belongs under os.tmpdir() or in a directory the file removes.`,
 			).toEqual([]);
 		} finally {
 			const reaped = cleanupTmpHygiene(otherInvocation);
@@ -492,6 +533,91 @@ describe("tmp-fixture-hygiene", () => {
 	// stale arm, `oldForeign` had no remover at all: a run-id-only sweep cleans
 	// only itself, so every targeted invocation that excludes this file left one
 	// more stamped directory under the persistent home for ever.
+	// #3715: the repo root is observed. Four cells, each through the shipped read:
+	// the diff is by name against the run's baseline, git (not a name list)
+	// decides what is a leak, an entry git cannot classify is reported as
+	// unknown rather than clean, and the REAL baseline is live.
+	it("names the entries a run added to the repo root, and only those", () => {
+		const env = setupTestEnvironment("pi-lens-3715-root-diff-");
+		try {
+			for (const name of ["kept", "added-dir", ".added-dot"])
+				fs.mkdirSync(path.join(env.tmpDir, name));
+			expect(newRepoRootEntries(["kept", "gone-since"], env.tmpDir)).toEqual([
+				".added-dot",
+				"added-dir",
+			]);
+			expect(newRepoRootEntries(undefined, env.tmpDir)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("classifies a new repo-root entry by git: an untracked stray is a leak; a tracked or ignored one is not", () => {
+		const stray = `.probe-3715-stray-${process.pid}`;
+		const ignored = `probe-3715-${process.pid}-ignored.js`;
+		fs.mkdirSync(path.join(REPO_ROOT, stray));
+		fs.writeFileSync(path.join(REPO_ROOT, ignored), "");
+		try {
+			expect(
+				untrackedUnignoredEntries(
+					[stray, ignored, "package.json", ".probe-home"],
+					REPO_ROOT,
+				),
+			).toEqual([stray]);
+		} finally {
+			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
+			fs.rmSync(path.join(REPO_ROOT, ignored), { force: true });
+		}
+	});
+
+	it("reports unknown, never clean, when git cannot classify, and when the baseline predates the census", () => {
+		const env = setupTestEnvironment("pi-lens-3715-no-git-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, "stray"));
+			expect(untrackedUnignoredEntries(["stray"], env.tmpDir)).toBeUndefined();
+			const unknown = unadmittedRepoRootEntries([], env.tmpDir);
+			expect(unknown.leaked).toEqual([]);
+			expect(unknown.unknown).toContain("stray");
+			expect(unadmittedRepoRootEntries(undefined).unknown).toContain(
+				"predates",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("the run's real baseline sees a stray planted in the repo root, and not once it is removed", () => {
+		const stray = `.probe-3715-live-${process.pid}`;
+		fs.mkdirSync(path.join(REPO_ROOT, stray));
+		try {
+			const during = unadmittedRepoRootEntries(repoRootBaseline());
+			expect(during.unknown).toBeUndefined();
+			expect(during.leaked).toContain(stray);
+		} finally {
+			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
+		}
+		expect(unadmittedRepoRootEntries(repoRootBaseline()).leaked).not.toContain(
+			stray,
+		);
+	});
+
+	// #3721 (the #3880 flake): the log sinks bind their path from PI_LENS_HOME at
+	// module load, and one home for every worker made the 33 files that run with
+	// PI_LENS_TEST_MODE=0 share one `latency.log`. Observed through the REAL
+	// sink path rather than the env string: this worker's `latency.log` must live
+	// in a directory only this process owns. Reverted to the run-shared home,
+	// test-runner-python-environment beside session-root-config-eviction at 4
+	// workers failed 15 of 15 runs ("got 1", "got 2").
+	it("binds every worker's log sink to a home no other worker shares", () => {
+		const runId = process.env.PI_LENS_TMP_HYGIENE_RUN_ID;
+		expect(TMP_HYGIENE_WORKER_HOME).not.toBe(TMP_HYGIENE_HOME);
+		expect(path.dirname(TMP_HYGIENE_WORKER_HOME)).toBe(TMP_HYGIENE_HOME);
+		expect(path.basename(TMP_HYGIENE_WORKER_HOME)).toBe(
+			`worker-home-${runId}-${process.pid}`,
+		);
+		expect(path.dirname(getLatencyLogPath())).toBe(TMP_HYGIENE_WORKER_HOME);
+	});
+
 	it("sweeps this run's private backstop directories and spares a sibling invocation's", () => {
 		const fixture = path.join(
 			process.env.PI_LENS_HOME as string,
@@ -509,6 +635,21 @@ describe("tmp-fixture-hygiene", () => {
 				path.join(dir, "nested", "stamp.json"),
 				JSON.stringify({ lastSweepAt: 1 }),
 			);
+		}
+		// #3721: the per-worker `PI_LENS_HOME` directories follow the same two
+		// arms. `mineWorker` stands in for a home a deferred writer recreated after
+		// its worker removed it (this run's prefix, swept on the prefix alone);
+		// `oldForeignWorker` for a killed run's; `liveForeignWorker` for a live
+		// sibling invocation's, which its own owner removes.
+		const mineWorker = path.join(
+			fixture,
+			`worker-home-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}-4242`,
+		);
+		const liveForeignWorker = path.join(fixture, "worker-home-0000000000-7");
+		const oldForeignWorker = path.join(fixture, "worker-home-0000000001-7");
+		for (const dir of [mineWorker, liveForeignWorker, oldForeignWorker]) {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, "latency.log"), "{}\n");
 		}
 		// Round 4 F4, second half: root-level residue is reclaimed on the same
 		// window. It is a FILE, which is why the seam's directory-only sweep
@@ -554,6 +695,7 @@ describe("tmp-fixture-hygiene", () => {
 		// worst-case vitest invocation the window is sized against.
 		const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 		fs.utimesSync(oldForeign, dayAgo, dayAgo);
+		fs.utimesSync(oldForeignWorker, dayAgo, dayAgo);
 		fs.utimesSync(oldRoot, dayAgo, dayAgo);
 		fs.utimesSync(oldBaseline, dayAgo, dayAgo);
 		fs.utimesSync(oldFiles, dayAgo, dayAgo);
@@ -565,8 +707,12 @@ describe("tmp-fixture-hygiene", () => {
 		// the prefix alone, so no clock comparison may enter it.
 		const soon = new Date(Date.now() + 2_000);
 		fs.utimesSync(mine, soon, soon);
+		fs.utimesSync(mineWorker, soon, soon);
 		try {
 			removeRunBackstopDirs(fixture, fixture);
+			expect(fs.existsSync(mineWorker)).toBe(false);
+			expect(fs.existsSync(liveForeignWorker)).toBe(true);
+			expect(fs.existsSync(oldForeignWorker)).toBe(false);
 			expect(fs.existsSync(mine)).toBe(false);
 			expect(fs.existsSync(liveForeign)).toBe(true);
 			expect(fs.existsSync(oldForeign)).toBe(false);
@@ -595,7 +741,9 @@ describe("tmp-fixture-hygiene", () => {
 	// shipped ones. Both directions matter — the second is the guarantee round 3
 	// had and must not lose: a producer writing DURING the run is still named.
 	it("names only root backstop residue this run is answerable for", () => {
-		const home = process.env.PI_LENS_HOME as string;
+		// The run-shared root, which `unadmittedRootBackstopEntries` reads by default
+		// (a worker's own PI_LENS_HOME is not it since #3721).
+		const home = TMP_HYGIENE_HOME;
 		const planted = `orphan-backstop-round4-guard-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}`;
 		const file = path.join(home, planted);
 		fs.writeFileSync(file, "{}");

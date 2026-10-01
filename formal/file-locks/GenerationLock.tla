@@ -1,6 +1,7 @@
 ---------------------------- MODULE GenerationLock ----------------------------
 (***************************************************************************)
-(* Candidate redesign for the pid-file locks in FileLock.tla, #3447.       *)
+(* The generation lock of clients/generation-lock.ts, shipped by #3476 and *)
+(* modelled here. It replaced the pid-file locks in FileLock.tla, #3447.    *)
 (*                                                                         *)
 (* The lock is a series of files lock.1, lock.2, ... in one directory.     *)
 (* The holder is whoever created the highest generation, and that file is  *)
@@ -10,11 +11,38 @@
 (*                                                                         *)
 (*  - acquire: list the directory, take the highest generation g; if it is *)
 (*    free (released, owner dead, or aged out), create lock.(g+1) with     *)
-(*    "wx" from a fully written temp file (link), then list again and back *)
-(*    off if a higher generation exists (a stale listing can re-create a   *)
-(*    name that cleanup removed).                                          *)
+(*    "wx", then list again and back off if a higher generation exists (a  *)
+(*    stale listing can re-create a name that cleanup removed).            *)
 (*  - release: create the marker lock.g.released.                          *)
 (*  - cleanup: a holder may delete generations below its predecessor.      *)
+(*                                                                         *)
+(* Lease and heartbeat (#3515). `AllowExpiry` is the lease: an aged-out    *)
+(* generation reads as free. A live holder may legitimately outlive its    *)
+(* lease (an ERESOLVE npm install runs two 120 s attempts inside the       *)
+(* installer's 180 s lease), so the holder heartbeats the generation's     *)
+(* mtime every heartbeatIntervalMs(lease) = lease/4                        *)
+(* (`startGenerationHeartbeat`, clients/generation-lock.ts). The model has *)
+(* no clock, so `Heartbeat` rides the renewal and `HeartbeatStall` is the  *)
+(* stall in which the renewal fails to land long enough for the lease to   *)
+(* lapse (the interval is lease/4, so a single miss is not enough; the     *)
+(* model collapses the consecutive misses into the flag). A renewal that   *)
+(* lands keeps a live holder fresh, so without a stall `Expire` never      *)
+(* fires.                                                                  *)
+(*                                                                         *)
+(* Ownership re-check (#3515). A taker that judged a generation stale      *)
+(* before a renewal still creates the next generation, so a superseded     *)
+(* but live holder must not write beside it: `ownsTopGeneration`           *)
+(* (clients/generation-lock.ts) is read right before the critical write    *)
+(* (`assertOwnsLock`, clients/installer/index.ts). `OwnsTop` gates that    *)
+(* re-check, and it gates only `CsWrite`: a superseded holder can still be *)
+(* in `cs_read` when the taker enters, so `MutualExclusion`, which counts  *)
+(* the read, is violated under a stall and the re-check does not restore   *)
+(* it. What the re-check protects is `NoLostRegistration`: the superseded  *)
+(* holder does not overwrite the taker's `reg` with its stale `snap`.      *)
+(* The model collapses the re-check, the spawn it guards and the write     *)
+(* into `CsWrite`, so it does not explore a taker landing during the spawn *)
+(* itself; the check is a point in time, and the spawn runs for up to      *)
+(* 120 s after it (review r1 F5), the real-code residual on #3553.         *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -26,7 +54,10 @@ CONSTANTS
     Cleanup,        \* holders delete generations below their predecessor
     Recheck,        \* the post-create listing; FALSE shows why it is needed
     Rounds,         \* acquisitions per writer
-    ListedMarker    \* judge as clients/generation-lock.ts does (see Free)
+    ListedMarker,   \* judge as clients/generation-lock.ts does (see Free)
+    Heartbeat,      \* the #3515 lease renewal is wired
+    HeartbeatStall, \* the renewal misses long enough that the lease lapses
+    OwnsTop         \* the #3515 ownership re-check before the critical write
 
 Gens == 1..MaxGen
 None == 0
@@ -105,10 +136,10 @@ GiveUp(p) ==
     /\ pc' = [pc EXCEPT ![p] = "timeout"]
     /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
-\* Exclusive create (link from a written temp file): fails if lock.(v+1) exists.
-\* clients/generation-lock.ts creates with "wx" and writes the pid after; a
-\* judge that reads the empty file holds it live until it ages out, which only
-\* makes Free false in more states than this atomic step does.
+\* Exclusive create with "wx": fails if lock.(v+1) exists.
+\* clients/generation-lock.ts writes the pid in the same call; a judge that
+\* reads the file before its pid is written holds it live until it ages out,
+\* which only makes Free false in more states than this atomic step does.
 Create(p) ==
     /\ pc[p] = "create"
     /\ LET g == view[p] + 1 IN
@@ -138,12 +169,27 @@ CsRead(p) ==
     /\ pc' = [pc EXCEPT ![p] = "cs_write"]
     /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, committed, crashes, rounds, seen>>
 
+\* The #3515 ownership re-check, as `ownsTopGeneration` reads it: the holder
+\* is still the live top generation, neither released nor superseded. A build
+\* without the re-check has OwnsTop = FALSE.
+OwnsTopNow(p) ==
+    ~OwnsTop \/ (mine[p] = Top /\ ~released[mine[p]])
+
 CsWrite(p) ==
     /\ pc[p] = "cs_write"
+    /\ OwnsTopNow(p)
     /\ reg' = snap[p] \cup {p}
     /\ committed' = [committed EXCEPT ![p] = TRUE]
     /\ pc' = [pc EXCEPT ![p] = "release"]
     /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, snap, crashes, rounds, seen>>
+
+\* The re-check fails: a taker created a higher generation after judging p's
+\* stale. p abandons the critical write instead of racing the taker.
+LoseLock(p) ==
+    /\ pc[p] = "cs_write"
+    /\ ~OwnsTopNow(p)
+    /\ pc' = [pc EXCEPT ![p] = "release"]
+    /\ UNCHANGED <<alive, exists, owner, released, expired, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 \* Writers acquire again after each release, up to Rounds (every heartbeat is
 \* a registry write), so generations advance and cleanup has work to do.
@@ -175,17 +221,34 @@ Crash(p) ==
     /\ crashes' = crashes + 1
     /\ UNCHANGED <<pc, exists, owner, released, expired, view, mine, reg, snap, committed, rounds, seen>>
 
+\* The lease renewal (#3515), the `startGenerationHeartbeat` mtime touch: a
+\* live holder refreshes its generation, clearing a stale judgement so no
+\* contender can take it over. The real interval is a quarter of the lease
+\* (`heartbeatIntervalMs`), so several consecutive misses are needed to let
+\* the lease lapse; TLC has no clock, so `Expire` is enabled only in a
+\* `HeartbeatStall` interval. The merged config sets `HeartbeatStall = TRUE`
+\* so both `Expire` and this action are reached (review r1 F2).
+HeartbeatTick(p) ==
+    /\ Heartbeat
+    /\ alive[p]
+    /\ mine[p] /= None
+    /\ expired[mine[p]]
+    /\ expired' = [expired EXCEPT ![mine[p]] = FALSE]
+    /\ UNCHANGED <<pc, alive, exists, owner, released, view, mine, reg, snap, committed, crashes, rounds, seen>>
+
 Expire ==
     /\ AllowExpiry
     /\ Top /= None
     /\ ~expired[Top]
+    /\ (~Heartbeat \/ HeartbeatStall)
     /\ expired' = [expired EXCEPT ![Top] = TRUE]
     /\ UNCHANGED <<pc, alive, exists, owner, released, view, mine, reg, snap, committed, crashes, rounds, seen>>
 
 Step(p) ==
     /\ alive[p]
     /\ \/ List(p) \/ Judge(p) \/ GiveUp(p) \/ Create(p) \/ Recheck_(p)
-       \/ CsRead(p) \/ CsWrite(p) \/ Release(p) \/ Clean(p)
+       \/ CsRead(p) \/ CsWrite(p) \/ LoseLock(p) \/ Release(p) \/ Clean(p)
+       \/ HeartbeatTick(p)
 
 Next ==
     \/ \E p \in Procs : Step(p) \/ Crash(p)
@@ -209,4 +272,16 @@ HoldStates == CS \cup {"recheck", "release"}
 NoOrphanLock ==
     (Top /= None /\ ~released[Top] /\ ~expired[Top] /\ alive[owner[Top]])
       => pc[owner[Top]] \in HoldStates
+
+\* A live holder is never taken over: a generation that exists, is not
+\* released, and is owned by a live process is never judged stale. The lease
+\* (`AllowExpiry`) is the only way a live holder's generation reads as free
+\* to `tryAcquireGeneration`'s stale judgement, so the heartbeat that keeps
+\* the lease from lapsing is what makes this hold (#3515). A stalled
+\* heartbeat breaks it (`GenerationHeartbeatStall.cfg`); the ownership
+\* re-check that follows protects `NoLostRegistration`, not this invariant
+\* (review r1 F1).
+NoLiveTakeover ==
+    \A g \in Gens :
+        (exists[g] /\ ~released[g] /\ alive[owner[g]]) => ~expired[g]
 =======================================================================================

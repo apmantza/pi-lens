@@ -1,4 +1,7 @@
 {
+  "tests/mcp/analyze-coverage-repeat.smoke.test.ts": {
+    "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
+  },
   "tests/mcp/analyze-graph.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },

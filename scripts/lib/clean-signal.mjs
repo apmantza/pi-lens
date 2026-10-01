@@ -429,6 +429,58 @@ export function classifyFirstPublish(dirtyPublishes) {
 export const COMPARABLE_FIRST_PUBLISH = new Set(["empty-first", "direct"]);
 
 /**
+ * The matrix `clean-behavior` values that are a measurement of anything.
+ * `unknown` is evidence in neither direction (the #240 doctrine), so it never
+ * enters a comparison. Shared by `scripts/probe-clean-signal.mjs` (through
+ * `buildMatrixObservations` and its row filter) and
+ * `tests/config/lsp-clean-behavior-census.test.ts` (the marker census), which
+ * previously kept two independent spellings of the same set (#3401).
+ * `scripts/lib/md-matrix.mjs` deliberately does NOT import it: that writer is
+ * copied alone into a scratch checkout by `tests/scripts/release-qa.test.ts`,
+ * so it stays dependency-free and receives already-classified observations.
+ */
+export const MEASURED_CLEAN_BEHAVIORS = new Set([
+	"publishes-versioned",
+	"publishes-unversioned",
+	"silent",
+]);
+
+/**
+ * The matrix lang a probe fixture writes to: a `clean: true` fixture
+ * (`typescript-clean`) resolves onto its base lang's row (`typescript`). One
+ * spelling for the row resolution and for scoping a subset probe (#3401), so a
+ * `probe-clean-signal.mjs typescript-clean` run scopes to the row it writes.
+ *
+ * @param {string} lang
+ * @param {boolean} [clean]
+ * @returns {string}
+ */
+export function targetLangForFixture(lang, clean) {
+	return clean ? lang.replace(/-clean$/, "") : lang;
+}
+
+/**
+ * Map the probe's resolved per-lang rows onto the observations
+ * `refreshCapabilityMatrix` consumes (#3401). Only a COMPARABLE axis is passed
+ * through; every other value is `null`, so an `empty-only`/`unknown` run can
+ * never blank a prior good cell (the #3310/#390 merge-guard rule, which now
+ * lives at this seam instead of inline in the probe script).
+ *
+ * @param {Array<{ targetLang: string, firstPublish?: string, behavior?: string, tierLabel?: string, tier?: number }>} targetLangRows
+ * @returns {Array<{ lang: string, firstPublish: string | null, cleanBehavior: string | null, tier: string }>}
+ */
+export function buildMatrixObservations(targetLangRows) {
+	return targetLangRows.map((r) => ({
+		lang: r.targetLang,
+		firstPublish: COMPARABLE_FIRST_PUBLISH.has(r.firstPublish)
+			? r.firstPublish
+			: null,
+		cleanBehavior: MEASURED_CLEAN_BEHAVIORS.has(r.behavior) ? r.behavior : null,
+		tier: r.tierLabel || String(r.tier),
+	}));
+}
+
+/**
  * Fixture `lang` → `SERVER_DIAGNOSTIC_STRATEGIES` key, for the few fixtures
  * whose lang is not the server id (a language-alias fixture). Anything absent
  * falls back to identity, which covers the core set. Shared by

@@ -1,7 +1,7 @@
 /**
- * Bounded REST paging for the merge-train scripts (review round 1, F6).
+ * Bounded REST paging for the warden (review round 1, F6).
  *
- * The marker-based comment dedupe in both the warden and the merge lane read
+ * The marker-based comment dedupe in the warden reads
  * only the FIRST page of `issues/{n}/comments`, so a PR past 100 comments
  * would stop finding its own marker and start repeating notices.
  *

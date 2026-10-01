@@ -29,6 +29,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveRunnerCwd,
@@ -159,11 +160,10 @@ const spellcheckRunner: RunnerDefinition = {
 			return { status: "succeeded", diagnostics: [], semantic: "none" };
 		}
 
-		return {
+		return findingsResult(diagnostics, {
 			status: "failed",
-			diagnostics,
 			semantic: "warning",
-		};
+		});
 	},
 };
 

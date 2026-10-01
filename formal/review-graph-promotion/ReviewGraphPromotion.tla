@@ -1,44 +1,45 @@
 ------------------------- MODULE ReviewGraphPromotion -------------------------
 (***************************************************************************)
 (* Worker-thread persist and promotion of the review-graph snapshot        *)
-(* (clients/review-graph/builder.ts ~1961-2920, persist-worker.ts) for ONE  *)
+(* (clients/review-graph/builder.ts persistGraph, persist-worker.ts        *)
+(* serveGzipStageWorker) for ONE                                           *)
 (* project cache dir, shared by N pi-lens processes (a pi session and the  *)
 (* MCP server, or two pi sessions in one checkout).                        *)
 (*                                                                         *)
 (* Adapted from the project-snapshot promotion model of #3509. What        *)
 (* differs for the review graph:                                           *)
 (*  - there is no meta sidecar: the signatures travel INSIDE the body      *)
-(*    (PersistedGraphData.signature / fileSignatures, ~1752-1767), so the  *)
+(*    (PersistedGraphData.signature / fileSignatures), so the              *)
 (*    body/meta pair of #3509 does not exist;                              *)
-(*  - every persistGraph call takes a fresh generation (~2830-2836);       *)
+(*  - every persistGraph call takes a fresh generation;                    *)
 (*    there is no one-active queue. Several requests can be in the worker  *)
-(*    at once and only the current generation promotes (~2376-2377);      *)
-(*  - a debounced `pending` slot coalesces admissions (~2002, ~2912-2922); *)
-(*  - the sweep checks pid liveness (isStaleReviewGraphStageFile ~2728);   *)
-(*  - builds that differ in changedFiles are NOT deduped (buildCacheKey    *)
-(*    ~5967), so two builds of one workspace can run at once in one        *)
-(*    process, and persistGraph runs at build END (~5138, ~5357, ~5889).   *)
+(*    at once and only the current generation promotes;                    *)
+(*  - a debounced `pending` slot coalesces admissions;                     *)
+(*  - the sweep checks pid liveness (isStaleStageFile);                    *)
+(*  - builds that differ in changedFiles are NOT deduped (buildCacheKey)   *)
+(*    so two builds of one workspace can run at once in one                *)
+(*    process, and persistGraph runs at build END.                         *)
 (*                                                                         *)
 (* Actors, per process p:                                                  *)
 (*  - Advance(p): p's tree view moves to a newer seq (stat time).          *)
 (*  - BuildStart(p): a build captures the current view (its signatures    *)
-(*    are statted at the start: sourceSignatureMapAsync ~5559).            *)
+(*    are statted at the start: sourceSignatureMapAsync).                  *)
 (*  - BuildEnd(p, b): persistGraph: generation+1, replace `pending`.       *)
-(*  - Dispatch(p): the debounce timer fires: writePending (~2619-2657)     *)
+(*  - Dispatch(p): the debounce timer fires: writePending                  *)
 (*    posts to the worker, or writes synchronously if the worker is gone.  *)
 (*  - Stage(p, r): the worker writes `<gz>.stage-<pid>-<gen>`.             *)
-(*  - Promote(p, r): handleWorkerResult (~2360-2459): generation gate,     *)
+(*  - Promote(p, r): handleWorkerResult: generation gate,                  *)
 (*    then renameSync(stage, gz); a missing stage falls back to the        *)
 (*    synchronous writer with the same payload.                            *)
-(*  - WorkerDeath(p): handleWorkerDeath (~2511-2552): the current-gen      *)
+(*  - WorkerDeath(p): handleWorkerDeath: the current-gen                   *)
 (*    request is written synchronously, the rest are dropped; later        *)
 (*    dispatches write synchronously.                                      *)
-(*  - Flush(p): flushReviewGraphPersist (CLI / exit hook, ~3485-3550):     *)
+(*  - Flush(p): flushReviewGraphPersist (CLI / exit hook):                 *)
 (*    newest of pending+in-flight, every in-flight request forgotten       *)
 (*    (late results are only rm'd); since #3536 a candidate older than the *)
 (*    current generation is dropped unwritten, else the generation is      *)
 (*    bumped past it and it is written synchronously.                      *)
-(*  - Sweep(p): sweepStaleStageFiles, once per cache dir (~2737-2748).     *)
+(*  - Sweep(p): sweepStaleStageFiles, once per cache dir.                  *)
 (*  - Crash(p): the process dies; stage files stay on disk.                *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
@@ -127,7 +128,7 @@ BuildStart(p) ==
     /\ UNCHANGED <<view, alive, gen, pending, inflight, workerOK, swept,
                    stages, body>> /\ UNCHANGED hist
 
-\* persistGraph (~2754-2923): fresh generation, replaces the pending slot.
+\* persistGraph: fresh generation, replaces the pending slot.
 BuildEnd(p, b) ==
     /\ alive[p] /\ b \in builds[p]
     /\ builds' = [builds EXCEPT ![p] = @ \ {b}]
@@ -136,7 +137,7 @@ BuildEnd(p, b) ==
     /\ UNCHANGED <<view, alive, nbuilds, inflight, workerOK, swept, stages,
                    body>> /\ UNCHANGED hist
 
-\* writePending (~2619-2657).
+\* writePending.
 Dispatch(p) ==
     /\ alive[p] /\ pending[p] /= NoReq
     /\ pending' = [pending EXCEPT ![p] = NoReq]
@@ -155,7 +156,7 @@ Stage(p, r) ==
     /\ UNCHANGED <<view, alive, nbuilds, builds, gen, pending, workerOK,
                    swept, body>> /\ UNCHANGED hist
 
-\* handleWorkerResult (~2360-2459). Synchronous: one step.
+\* handleWorkerResult. Synchronous: one step.
 Promote(p, r) ==
     /\ alive[p] /\ r \in inflight[p] /\ r.phase = "staged"
     /\ inflight' = [inflight EXCEPT ![p] = @ \ {r}]
@@ -167,7 +168,7 @@ Promote(p, r) ==
             /\ staleProm' = (staleProm \/ gen[p] /= r.g)
     /\ UNCHANGED <<view, alive, nbuilds, builds, gen, pending, workerOK, swept>>
 
-\* handleWorkerDeath (~2511-2552): the current generation is written on the
+\* handleWorkerDeath: the current generation is written on the
 \* main thread; superseded requests are dropped; their stage files stay.
 WorkerDeath(p) ==
     /\ AllowWorkerDeath /\ alive[p] /\ workerOK[p]
@@ -180,7 +181,7 @@ WorkerDeath(p) ==
        ELSE UNCHANGED <<body>> /\ UNCHANGED hist
     /\ UNCHANGED <<view, alive, nbuilds, builds, gen, pending, swept, stages>>
 
-\* flushReviewGraphPersist (~3485-3530): newest of pending + in-flight;
+\* flushReviewGraphPersist: newest of pending + in-flight;
 \* generation bumped past it; in-flight requests forgotten; sync write.
 Flush(p) ==
     /\ alive[p]
@@ -207,7 +208,7 @@ Flush(p) ==
                   /\ staleProm' = (staleProm \/ top.g /= gen[p])
     /\ UNCHANGED <<view, alive, nbuilds, builds, workerOK, swept>>
 
-\* sweepStaleStageFiles (~2737-2748): once, from the first persistGraph.
+\* sweepStaleStageFiles: once, from the first persistGraph.
 Sweep(p) ==
     /\ alive[p] /\ ~swept[p] /\ gen[p] > 0
     /\ swept' = [swept EXCEPT ![p] = TRUE]

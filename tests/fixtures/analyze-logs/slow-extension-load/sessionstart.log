@@ -1,0 +1,19 @@
+[2026-09-30T06:27:41.836Z] pi-lens loaded: 5608ms after process start (from dist)
+[2026-09-30T06:27:42.258Z] session_start fired
+[2026-09-30T07:26:19.853Z] pi-lens loaded: 310ms after process start (from dist)
+[2026-09-30T10:03:45.191Z] pi-lens loaded: 375ms after process start (from dist)
+[2026-09-30T10:03:45.684Z] session_start fired
+[2026-09-30T10:07:18.603Z] pi-lens loaded: 6013ms after process start (from dist)
+[2026-09-30T12:25:38.171Z] pi-lens loaded: 6123ms after process start (from dist)
+[2026-09-30T12:25:38.619Z] session_start fired
+[2026-09-30T20:46:26.459Z] pi-lens loaded: 1136ms after process start (from dist)
+[2026-09-30T20:51:32.499Z] pi-lens loaded: 596ms after process start (from dist)
+[2026-09-30T20:51:33.141Z] session_start fired
+[2026-09-30T21:55:09.752Z] pi-lens loaded: 2260ms after process start (from dist)
+# synthetic: the 60 s window edges; no real slow load has a session start exactly 0 ms, 60000 ms or 60001 ms after it.
+[2026-09-30T22:00:00.000Z] pi-lens loaded: 2000ms after process start (from dist)
+[2026-09-30T22:00:00.000Z] session_start fired
+[2026-09-30T23:00:00.000Z] pi-lens loaded: 3000ms after process start (from dist)
+[2026-09-30T23:01:00.000Z] session_start fired
+[2026-09-30T23:30:00.000Z] pi-lens loaded: 3000ms after process start (from dist)
+[2026-09-30T23:31:00.001Z] session_start fired

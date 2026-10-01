@@ -70,7 +70,7 @@ import { deferRunnerFindings } from "./pending-runner-findings.js";
 
 import { applyRulePolicy, rulePolicyMapFromConfig } from "./rule-policy.js";
 import { getToolProfile } from "./tool-profile.js";
-import { isRunnerSkipReason } from "./types.js";
+import { hasUsableResult, isRunnerSkipReason } from "./types.js";
 
 const dispatcherProbeFlights = createAvailabilityProbeFlight<
 	Awaited<ReturnType<typeof probeToolAsync>>
@@ -87,7 +87,10 @@ import type {
 	RunnerResult,
 	RunnerSkipReason,
 } from "./types.js";
-import { formatDiagnostics } from "./utils/format-utils.js";
+import {
+	DELTA_UNUSED_PROMOTION_NOTE,
+	formatDiagnostics,
+} from "./utils/format-utils.js";
 
 // --- Runner Registry ---
 
@@ -537,14 +540,6 @@ function isUnusedValueDiagnostic(d: Diagnostic): boolean {
 	);
 }
 
-/**
- * #3218: why a delta-promoted unused finding blocks. Carried on the promoted
- * diagnostic so the STOP renderers print the reason once beneath the banner
- * instead of each re-deriving why the tier changed.
- */
-const DELTA_UNUSED_PROMOTION_NOTE =
-	"new in this edit → blocks in delta mode; pre-existing unused declarations only advise.";
-
 function promoteDeltaUnusedToBlockers(diagnostics: Diagnostic[]): Diagnostic[] {
 	return diagnostics.map((d) => {
 		if (!isUnusedValueDiagnostic(d)) return d;
@@ -589,6 +584,8 @@ export interface RunnerLatency {
 		| "pending";
 	diagnosticCount: number;
 	semantic: string;
+	/** The runner's own `failureKind`, when it set one (#3781). */
+	failureKind?: string;
 	skipReason?: RunnerSkipReason;
 	unconfirmedServerIds?: readonly string[];
 	deferredServerIds?: readonly string[];
@@ -607,9 +604,22 @@ export interface DispatchLatencyReport {
 	warnings: number;
 }
 
+/**
+ * Build the synthetic coverage notice for this dispatch, or `undefined` when
+ * the runners covered the file.
+ *
+ * `dedupe` is the push/pull axis, always supplied by the sole caller
+ * (`dispatchForFile`). `true` is the pi push surface, where the session-scoped
+ * `coverageNoticeSeen` latch keeps a per-edit notice from repeating on every
+ * keystroke. A pull surface (`pilens_analyze`) passes `false`: each call is an
+ * independent question, so the notice must come back every time, and the latch
+ * is left untouched so a later push still gets its once-per-session notice
+ * (refs #3791).
+ */
 function buildCoverageNotice(
 	ctx: DispatchContext,
 	runnerLatencies: RunnerLatency[],
+	dedupe: boolean,
 ): Diagnostic | undefined {
 	if (!ctx.kind) return undefined;
 	const lspEnabled = !ctx.pi.getFlag("no-lsp");
@@ -665,8 +675,10 @@ function buildCoverageNotice(
 		// scanner that recovered a delivery path (or lost one) kept the stale
 		// wording for the rest of the session.
 		const onceKey = `${ctx.kind}:${ctx.filePath}:${dedupeSet(silentServerIds)}|${dedupeSet(deferredServerIds)}`;
-		if (coverageNoticeSeen.has(onceKey)) return undefined;
-		coverageNoticeSeen.add(onceKey);
+		if (dedupe) {
+			if (coverageNoticeSeen.has(onceKey)) return undefined;
+			coverageNoticeSeen.add(onceKey);
+		}
 		const coverageParts: string[] = [];
 		if (deferredServerIds.length > 0) {
 			coverageParts.push(
@@ -688,19 +700,21 @@ function buildCoverageNotice(
 		};
 	}
 
-	// Check primary runners first
-	const primaryHasCoverage = relevant.some(
-		(r) => r.status === "succeeded" || r.status === "failed",
-	);
+	// A runner covers the file when it reached a verdict about these bytes:
+	// `succeeded`, or `failed` whose own findings failed the check
+	// (`failureKind: "blocking_diagnostics"`). A timed-out or spawn-failed
+	// primary produced no usable result and must not suppress the notice
+	// (#3867). `hasUsableResult` owns that rule in dispatch/types.ts.
+	const primaryHasCoverage = relevant.some(hasUsableResult);
 	if (primaryHasCoverage) return undefined;
 
-	const allPrimarySkipped = relevant.every(
-		(r) =>
-			r.status === "skipped" ||
-			r.status === "when_skipped" ||
-			r.status === "test_file_skipped",
+	// A primary still in flight (collect-later) may deliver findings at turn
+	// end, so it withholds the notice. A skipped or broken primary produced
+	// nothing for these bytes, so it falls through to the fallback check.
+	const primaryStillInFlight = relevant.some(
+		(r) => r.status === "pending" || r.status === "deferred",
 	);
-	if (!allPrimarySkipped) return undefined;
+	if (primaryStillInFlight) return undefined;
 
 	const plan = getToolPlan(ctx.kind);
 	const fallbackRunnerIds = new Set(
@@ -728,17 +742,19 @@ function buildCoverageNotice(
 		(r) =>
 			fallbackRunnerIds.has(r.runnerId) &&
 			!STRUCTURAL_RUNNERS.has(r.runnerId) &&
-			(r.status === "succeeded" || r.status === "failed"),
+			hasUsableResult(r),
 	);
 	if (anyLinterHasCoverage) return undefined;
 
 	const onceKey = `${ctx.kind}:${ctx.filePath}`;
-	if (coverageNoticeSeen.has(onceKey)) return undefined;
-	coverageNoticeSeen.add(onceKey);
+	if (dedupe) {
+		if (coverageNoticeSeen.has(onceKey)) return undefined;
+		coverageNoticeSeen.add(onceKey);
+	}
 
 	return {
 		id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
-		message: `Pi-lens ${ctx.kind} analysis unavailable — language tools are missing or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).`,
+		message: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).`,
 		filePath: ctx.filePath,
 		severity: "warning",
 		semantic: "warning",
@@ -1107,6 +1123,9 @@ async function runGroup(
 			status: result.status,
 			diagnosticCount: result.diagnostics.length,
 			semantic: result.semantic ?? semantic,
+			...(result.failureKind !== undefined && {
+				failureKind: result.failureKind,
+			}),
 			...(skipReason !== undefined && {
 				skipReason,
 			}),
@@ -1180,6 +1199,12 @@ export async function dispatchForFile(
 	groups: RunnerGroup[],
 	registry: RunnerRegistryContract,
 	onRunnerResult?: RunnerResultSink,
+	/**
+	 * Push/pull coverage-notice dedupe (refs #3791). Defaults to `true` (the pi
+	 * push surface's once-per-session latch). A pull surface passes `false` so
+	 * every call carries the notice — see {@link buildCoverageNotice}.
+	 */
+	options?: { dedupeCoverageNotice?: boolean },
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
 	if (ctx.fileRole === "generated") {
@@ -1416,7 +1441,11 @@ export async function dispatchForFile(
 
 	const inlineBlockers = blockers;
 	const inlineFixed = fixedItems;
-	const coverageNotice = buildCoverageNotice(ctx, runnerLatencies);
+	const coverageNotice = buildCoverageNotice(
+		ctx,
+		runnerLatencies,
+		options?.dedupeCoverageNotice ?? true,
+	);
 
 	// Format output — only blocking issues shown inline
 	// Warnings tracked but not shown (noise) — surfaced via lens_diagnostics

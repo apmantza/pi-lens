@@ -22,6 +22,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeFilePath } from "./path-utils.js";
+import { isTestProcessTargetingRealHome } from "./probe-home-state.js";
 import { redactSecrets } from "./redact/secrets.js";
 
 /** A queued write ("line") or an in-band truncate op (latency clear). */
@@ -150,6 +151,17 @@ interface NdjsonWriterState {
 	rotationRetryAfterMs: number;
 	/** Whether this shared writer has seen a rotation-policy conflict this session. */
 	optionConflictRecorded: boolean;
+	/**
+	 * `truncate()` calls refused this session because a test process aimed them
+	 * at the real machine-global home (#3721, see `isTestProcessTargetingRealHome`).
+	 * In-memory, pulled at READ time by `getSinkTruncateRefusals()` for the same
+	 * import-cycle reason as `writeFailures`: this module may not call
+	 * `recordDegradationOnce`, and a record WRITTEN through the very sink whose
+	 * truncation was refused would be a write into the real log from a test
+	 * process, the harm the refusal prevents. Reset at session_start via
+	 * `resetSinkRotations()` (catalog shape 17).
+	 */
+	truncateRefusals: number;
 }
 
 const NDJSON_GLOBAL_STATE_SCHEMA = "pi-lens.ndjson-logger.state";
@@ -359,12 +371,37 @@ export function resetSinkRotations(): void {
 		state.rotationFailures = 0;
 		state.rotationRetryAfterMs = 0;
 		state.optionConflictRecorded = false;
+		state.truncateRefusals = 0;
 	}
 }
 
 export interface SinkOptionConflictSummary {
 	/** Canonicalized absolute path whose rotation policy differed across graphs. */
 	file: string;
+}
+
+export interface SinkTruncateRefusalSummary {
+	/** Canonicalized absolute path of the sink whose truncation was refused. */
+	file: string;
+	/** `truncate()` calls refused this session (#3721). */
+	refusedCount: number;
+}
+
+/**
+ * Snapshot of refused truncations, one entry per sink that has any (#3721).
+ * Pure in-memory read, folded into `getDegradationSummary()` as
+ * `log-sink-truncate-refused`; one row per sink however many calls were
+ * refused, so a `beforeEach` that clears a log never fans out per call.
+ */
+export function getSinkTruncateRefusals(): SinkTruncateRefusalSummary[] {
+	if (!ndjsonGlobalState) return [];
+	const result: SinkTruncateRefusalSummary[] = [];
+	for (const state of ndjsonGlobalState.writers.values()) {
+		if (state.truncateRefusals > 0) {
+			result.push({ file: state.file, refusedCount: state.truncateRefusals });
+		}
+	}
+	return result;
 }
 
 /** Pure read-time view for the degradation ledger; never logs through this sink. */
@@ -501,6 +538,9 @@ function createWriterState(
 			existing.rotationRetryAfterMs = 0;
 		if (typeof existing.optionConflictRecorded !== "boolean")
 			existing.optionConflictRecorded = false;
+		// A state adopted from a pre-#3721 module graph predates this field.
+		if (typeof existing.truncateRefusals !== "number")
+			existing.truncateRefusals = 0;
 		const optionsDiffer =
 			existing.maxBytes !== maxBytes || existing.backupPath !== backupPath;
 		if (optionsDiffer) {
@@ -535,6 +575,7 @@ function createWriterState(
 	state.rotationFailures = 0;
 	state.rotationRetryAfterMs = 0;
 	state.optionConflictRecorded = false;
+	state.truncateRefusals = 0;
 	globalState.writers.set(file, state);
 	registerWriter(state);
 	return state;
@@ -934,6 +975,29 @@ export function createNdjsonLogger(options: NdjsonLoggerOptions): NdjsonLogger {
 			enqueue({ kind: "line", line: `${redactSecrets(line)}\n` });
 		},
 		truncate(): void {
+			// #3721: the one rule, asked of its owner. A test process never cuts a
+			// log out of the real home; the refusal is counted, not written into the
+			// sink. One warning on the 0 -> 1 edge, so the vitest process that
+			// triggers it sees the refusal (#3892 review F1). `emitWarning` is the
+			// only terminal channel a `clients/` module may use (#1333; a raw
+			// `process.stderr.write` reds `extension-terminal-silence.test.ts`).
+			const state = stateForCall();
+			if (isTestProcessTargetingRealHome(state.file)) {
+				if (state.truncateRefusals === 0) {
+					try {
+						process.emitWarning(
+							`pi-lens refused to truncate the real-home log ${state.file} ` +
+								"from a test process (pin PI_LENS_HOME for this file)",
+							{ code: "PI_LENS_LOG_SINK_TRUNCATE_REFUSED" },
+						);
+					} catch {
+						// The refusal is already counted; a warning that cannot be
+						// emitted must not propagate into a test's clear helper.
+					}
+				}
+				state.truncateRefusals += 1;
+				return;
+			}
 			enqueue({ kind: "truncate" });
 		},
 		async flush(): Promise<void> {

@@ -14,35 +14,36 @@ session-1 strays), #3568 (the handler's capture at entry).
 - **Replacement in the same cwd** (`/new`, fork, or resume into the same
   cwd). pi caches the extension module per cwd (`loader.js`
   `loadExtensionModule`, `useExtensionCacheCwd`), so the module-level
-  `runtime` (`index.ts:566`) is one object for both sessions.
+  `runtime` (`index.ts` `runtime`) is one object for both sessions.
 - **session_start, split at its awaits.**
-  1. The admission key is set first (`index.ts:2077`).
+  1. The admission key is set first (`index.ts` `lastSessionStartIdentity`).
   2. The pre-handler resets run.
   3. Then it awaits `configureWarmAttach` and `ensureLSPConfigInitialized`.
   4. Only then does `handleSessionStart` clear the tier-3 touch registry and
-     bump the generation, in one tick (`runtime-session.ts:2407-2408`). The
-     bump also clears the cascade state (`runtime-coordinator.ts:434-443`).
+     bump the generation, in one tick (`runtime-session.ts` `handleSessionStart`). The
+     bump also clears the cascade state (`runtime-coordinator.ts` `resetForSession`).
 - **The session-1 quiet window.** It is fire-and-forget from `agent_settled`
-  (`index.ts:3568`). `runQuietWindow` runs its tasks in sequence and captures
-  the session generation as each task starts (`quiet-window.ts:174`), at the
+  (`index.ts` `runQuietWindow`). `runQuietWindow` runs its tasks in sequence and captures
+  the session generation as each task starts (`quiet-window.ts`), at the
   same instant the task snapshots its state:
-  - `cascade_carry_over_settle` (`quiet-window.ts:225`) calls
+  - `cascade_carry_over_settle` (`quiet-window.ts`) calls
     `settleCascadeRuns`. That takes `_pendingCascadeRuns`, awaits up to
     `PI_LENS_QUIET_WINDOW_WAIT_MS` (15 s), then appends the settled runs and
-    re-parks the rest (`runtime-coordinator.ts:1025-1092`).
-  - The cascade-tier reconcile (`cascade-tier.ts:479`) drains the touch
+    re-parks the rest (`runtime-coordinator.ts` `settleCascadeRuns`).
+  - The cascade-tier reconcile (`clients/lsp/cascade-tier.ts`
+    `reconcileOutstandingCascadeTouches`) drains the touch
     registry synchronously, awaits per entry, then calls `onResolvedFound`,
-    which appends a run (`index.ts:3380-3389`).
+    which appends a run (`index.ts` `onResolvedFound`).
 - **The overflow admission path** (`Overflow`, #3512). Past 32 unsettled
   computes, `appendCascadePromise` appends a settled run from a detached
-  `.then` (`runtime-coordinator.ts:1021-1023`) that the reset cannot reach.
+  `.then` (`runtime-coordinator.ts` `appendCascadePromise`) that the reset cannot reach.
   Under `Overflow` the session-1 compute takes this path, and session 2 admits
   one of its own past the cap (`Admit2`, `Resolve2`).
 - **The admission's generation is the one captured at dispatch**
   (`Dispatch1Gen`, #3512 r1). The classified `tool_result` handler captures
-  `writeSession` (`runtime-tool-result.ts:2217`) before it awaits the
+  `writeSession` (`runtime-tool-result.ts` `handleToolResult`) before it awaits the
   pipeline, and hands that one handle to the pipeline (the tier-3 touch) and
-  to `appendCascadePromise` (`runtime-tool-result.ts:2515`). The admission
+  to `appendCascadePromise` (`runtime-tool-result.ts` `handleToolResult`). The admission
   drops on a stale handle on both branches, and the overflow `.then` reuses
   it.
 - **The late admission** (`LateAdmit`, #3512 r1). `index.ts` wraps the handler
@@ -55,11 +56,12 @@ session-1 strays), #3568 (the handler's capture at entry).
   its claim join. It then dispatches in any phase (`Dispatch1`), and its
   compute, admission and stray touch follow the dispatch.
 - **Session 2's own tier-3 touches**, split into the dispatch, which captures
-  the generation, and the record (`integration.ts:2045`). Session 2's own quiet window reconciles them. That
+  the generation, and the record (`clients/dispatch/integration.ts`
+  `computeCascadeForFile`). Session 2's own quiet window reconciles them. That
   window cannot start while session 1's is still in progress
   (`_inProgress`).
 - **Session 2's turn_end** consumes and delivers
-  (`runtime-turn.ts:1147`). Its supersede filter is
+  (`runtime-turn.ts` `consumeCascadeRuns`). Its supersede filter is
   `getFilesChangedSince(origin.projectSeq)`. `projectSeq` restarts at the
   reset, so a session-1 run is never superseded.
 - **Strays** (`Strays`, #3512). A still-running session-1 cascade compute
@@ -69,7 +71,7 @@ session-1 strays), #3568 (the handler's capture at entry).
   it.
 - **The duplicate session_start** (#2890). pi RPC awaits `rebindSession`
   twice. The gate suppresses an identical `(reason, session id)` unless the
-  live tool plan changed (`index.ts:2057-2077`).
+  live tool plan changed (`index.ts` `lastSessionStartIdentity`).
 
 `FixParts` selects the guards:
 
@@ -103,7 +105,7 @@ and `{}` is the code before #3499. `entryCapture` matters only under
 
 - `NoCrossSessionState`: after session 2's reset, no session-1 run or parked
   compute is in the runtime. This is the promise "Session reset still clears
-  it" (`runtime-coordinator.ts:615-616`).
+  it" (`runtime-coordinator.ts` `resetForSession`).
 - `NoCrossSessionDelivery`: a run computed in session 1 is never delivered by
   session 2's turn_end.
 - `NoDropFreshTouch`: no guard drops session 2's own tier-3 touch (catalog

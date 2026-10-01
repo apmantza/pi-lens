@@ -73,6 +73,7 @@ import {
 import {
 	adoptHandoff,
 	beginScope,
+	discardHandoff,
 	type LineageHandle,
 	logScopeTransition,
 	retireScope,
@@ -1839,6 +1840,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 			return undefined;
 		}
 	};
+	// #3819: a file-less hand-off slot's ticket is bound to pi's session
+	// manager. A stale ctx throws on the read.
+	const getSessionManager = (ctx: unknown): unknown => {
+		try {
+			return (ctx as { sessionManager?: unknown }).sessionManager;
+		} catch {
+			return undefined;
+		}
+	};
 	// pi RPC can announce the same replacement twice. Keep one admission key for
 	// the complete session_start mutation pass so every downstream reset observes
 	// the same (reason, session file) identity. A different file remains a real
@@ -2297,6 +2307,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 								// best-effort observability — never fail session_start
 							});
 						}
+						// #3819 r2: a demoted real successor (a row-17 start holds the
+						// primary registration) discards the slot left for it, so the
+						// session cannot take it stale once it classifies primary again.
+						discardHandoff({
+							reason: sessionReason,
+							sessionFile: getSessionFile(ctx),
+							sessionManager: getSessionManager(ctx),
+						});
 						// #3611: a secondary's own scope. The coordinator, and so the
 						// primary's generation, stays untouched (#473).
 						scope = beginScope({ role: "secondary" });
@@ -3734,6 +3752,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					reason: shutdownReason,
 					sessionFile: getSessionFile(ctx),
 					targetSessionFile: shutdownEvent?.targetSessionFile,
+					// #3819: a file-less successor finds this slot's ticket through
+					// the session manager pi hands it.
+					sessionManager: getSessionManager(ctx),
 				}) &&
 				runtime.hasStableSessionId
 			) {

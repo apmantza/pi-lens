@@ -29,7 +29,7 @@ contract names.
 5. Steering audit: every no-op line names the decision it changed or is
    deleted.
 6. Record one mistake row per distinct mistake in
-   `.claude/skills/merge-train/SKILL.md` ("Common mistakes").
+   `docs/pi-lens-merge-policy.md` ("Common mistakes").
 7. Report the fixed-shape table (Finding, Evidence, Class, Deliverable,
    Status) ordered by severity, and the list of changes made or filed. When
    delegated without Git authority, hand off through `RETRO.md` at the
@@ -40,5 +40,5 @@ contract names.
 - Ship a check without its red transcript.
 - Write a rule for a mechanical mistake.
 - Create a new home for rules; the catalog, the role contracts, and the
-  merge-train mistake table are the only three.
+  merge-policy mistake table are the only three.
 - Mix the retro with implementation or review in one delegation.

@@ -283,6 +283,200 @@ preflight` (#3468's rejected `build:` title), and a spawn-count ratchet
 pre-push never selects (#3472). Each is a row in the merge-train mistake
 table.
 
+## 2026-10-01 — one home per role rule (narratives moved from the contracts)
+
+The Claude playbooks (`.claude/agents/pi-lens-{fixer,reviewer,investigator}.md`)
+became thin wrappers over `docs/pi-lens-*.md`, and the contracts stopped
+restating the engineering principles and `AGENTS.md`. The live rules kept a
+one-line form and their references; the incident record behind them moved
+here. The full pre-change playbooks are at `ad4f0f8a5` (for example
+`git show ad4f0f8a5:.claude/agents/pi-lens-fixer.md`).
+
+### Fixer and shared-worker record
+
+- **Commit before evidence (#3268).** A worker was settled mid-evidence-pass
+  and the orchestrator had to commit its tree.
+- **Exact-pin sweeps on the merge (2026-09-23).** Two green PRs merged red:
+  #3279's pins predated #3283, leaving master red until #3288. #3284 was red on
+  its own `path` count changes (cue-vet 5→6, dart-analyze 6→4) until an
+  orchestrator trailing commit re-pinned.
+- **Failure list before code.** #3252 r1 shipped an exit table whose inverse
+  direction (nonzero WITH findings) was never listed; the reviewer caught it.
+- **Rounds do not deepen.** #3254 and #3256 stayed inside their briefs; #3178's
+  four rounds showed the cost of not doing so.
+- **Guards name their recurrence (#2582, 2026-09-04).**
+- **Mutation both directions.** On 2026-09-03 six of six first-round PRs
+  shipped a guard whose removal left the suite green. A single direction
+  proved only that direction (#3156 r2, #3168 r1). The `Mutation diff`
+  head-match rule is #3531 and #3779.
+- **Measured platform skips (#3159 r2).** Fixer and reviewer both asserted an
+  APFS case-variant skip that redded EEXIST on the first real macOS run.
+- **Premise first (#2490).** A cwd fold for a path-only key that is always
+  absolute in production broke the cascade in every monorepo.
+- **Worktree isolation (#2007).** On 2026-09-06 two fixers chose the same
+  `agent-6a12353d` name and one destroyed the other's uncommitted edits; ten
+  ad-hoc `pi-lens-wt-*` trees accumulated outside the reaper's sweep the same
+  day. Fixers without a linked `node_modules` reported `pi-host-contract` and
+  `console-capture-window-coverage` red as "environment", and once that label
+  hid a real regression (#2654's `sweep-floor-coverage`). A forced
+  `git worktree remove` followed the symlink and emptied the main checkout's
+  install twice on 2026-09-16 (#2704 class).
+- **Lost work.** #2358's tree was removed by a prune that saw a branch with no
+  commits; #2518 r2's edits died under a `git checkout --` meant for a
+  mutation; a `git reset --soft origin/master` while master moved staged a
+  revert of #2646 into #2662's tree. Three agents lost work to checkout-based
+  proofs in one night, and `git checkout HEAD -- clients tests` wiped #3166
+  r2's own tests.
+- **Stated red-first exception (shape 7, 2026-09-06).** #1114's mock lacked
+  `.once` and `.killed`; #1759 shipped seventeen suite-disabled no-op tests.
+- **Verbatim quotes.** A worker attributed its local numbers to CI as a
+  fabricated log quote; the local branch graph and CI's merge-ref graph differ.
+- **Test selection.** `npm run test:targeted` is #2435. PR #2107 had two sweeps
+  fire in CI that a symbol grep missed; #2470 r3 shipped red because its
+  eleven-file governance set omitted `generation-guard-sweep`; #2511 r2 missed
+  `extension-terminal-silence` and the hermeticity suites, which matched none
+  of the old six glob words; #2438 was a scripts-only PR that read the
+  `clients/` list as not applying. On 2026-09-03 three fixers backgrounded the
+  shared slot and parked; two agents went idle waiting on a backgrounded full
+  `npm test`.
+- **Whole-repo sweeps (#2550).** A PR declared "no consolidation opportunity"
+  while `scripts/lib/merge-train-warden.mjs` exported a byte-identical
+  `REQUIRED_CHECKS` with a stricter tie policy; the sweep had looked only in
+  `clients/`.
+- **Changelog.** `npm run changelog:check` passing proved nothing about a
+  fragment (#2456 r4). Two fixers hand-edited `CHANGELOG.md` on 2026-09-09 and
+  the orchestrator reverted both. Four of six Luna PRs on 2026-09-23 redded the
+  PR-body and changelog gates on their first head; every fix was mechanical.
+- **CI reads.** The tail of `gh pr checks` hid a failed Unit tests behind a
+  passing Lint (#2527 r2). A PR can go green and turn conflicting afterwards
+  with its old green runs still attached (#2539 r3 F1). Polling loops were
+  killed by stall watchdogs; a looping reviewer was a zombie the maintainer had
+  to notice (#2707 r3, 2026-09-07).
+- **External contracts (#2432).** A hashline adapter parsed decimal line
+  numbers because the issue said "anchor"; the real extension sends 3-character
+  content hashes, so the adapter hard-blocked every call while the PR's own
+  tests, encoding the same guess, stayed green.
+- **Stale fragments (#3155 r2).** A fragment still narrated a withdrawn round-1
+  story.
+- **Mirrored scope changes (2026-09-07).** The #2698 fixer declined two
+  mirrored additions (jscpd, then yamllint, typos, and taplo); the four tools
+  were re-filed as #2706.
+- **Prescriptions are hypotheses (#2642 r3).** The reviewer prescribed a
+  one-word per-caller normalization; the fixer's key-derivation table showed
+  two direct `loadLSPConfig` callers it never reached, and mutation M7b (the
+  prescription as written) redded the two-loaders case. #2649 r3's table of
+  sink and timer calls with throw and never-return columns also found sites the
+  patch would have missed.
+- **Fabricated ids (2026-09-10).** #2877 r3 and #2868 r3 each shipped a 48- to
+  72-cell table with zero real test ids.
+- **Round exemptions (#2654 r2).** The round added `sweep-floor-coverage` and
+  `generation-guard-sweep` exemptions; #2649 r1 added one and #2647 r1 bumped a
+  pin.
+- **Shapes 28–36 harvest (2026-08-26).** Each cost a review round on
+  2026-09-03; they are now `AGENTS.md` catalog lines.
+- **Leaf agents.** On 2026-09-06 the #2588 fixer spawned three fixer
+  sub-agents (two forked again) and the #2607 reviewer spawned a
+  general-purpose agent; prose did not hold, the tool grant does. A fixer that
+  spawned two helpers (#2526, 2026-09-03) returned an empty report while its
+  children ran on.
+- **Standing probes (2026-09-02).** Every first attempt that day lost an Opus
+  review round to a probe the fixer could have run in a minute.
+- **Probe hygiene (#2506).** On 2026-09-02 two review probes wrote 42 rows of
+  `/p/.pi-lens.json` fixture garbage into the real telemetry. #3178 r3 excluded
+  `tests/tools/lsp-diagnostics-cache.test.ts` as "environmental" when an
+  exported home override had redded it. #3180 killed a Stryker run and left
+  about 1,924 instrumented files.
+- **`git add -A` (2026-09-12).** Three lanes tracked a gitignored `PR_BODY.md`
+  in one day, each costing a trailing untrack commit.
+- **Daemon OOM (2026-09-19).** One fixer's fan-out (16 forks on a 32-core host
+  plus the language servers its probes spawned, alongside a previous worker's
+  unkilled servers) took the plegma unit to 64 GB; systemd-oomd killed the
+  daemon and every live worker died with it.
+- **Before-the-report record (2026-09-06).** #2585 r1 shipped 28 laundered
+  call sites and dead `keys` plumbing; #2583 r2 shipped two mutation-inert
+  branches under a ticked box; #2595 r1 shipped an axis no manifest can reach.
+  #2599 was the positive case: four `omit` entries deleted because mutation
+  showed they did nothing. #2583 r3's home-ceiling test went vacuous when the
+  new gate subsumed its fixture.
+- **The reviewer's first five (2026-09-06).** #2642, #2643, #2647, #2649, and
+  #2654 all went back for a round on the same five shapes. Observability:
+  #2642 named a `config_resolved` row a once-per-session claim swallowed,
+  #2649's only record was the failure path, #2654 wrote a per-touched-file row
+  on seven healthy languages, and #2647 quoted a `durationMs` that excluded the
+  spawn it added. Inverse mutation: #2643's git-guard gate, #2647's ladder
+  position, and #2644's allow reason were green under the inverse. Shape
+  sweeps: #2643 missed a third predicate twenty lines from its helper, and
+  #2654 rebuilt machinery `skills-resolver.ts` already had. Behavioural
+  sentences: #2643's docstring said `failed` is 0 whenever `error` is set,
+  though the pytest parser sets them independently; #2654 cited a memo that did
+  not exist; #2642 kept a registry justification its own diff obsoleted.
+  Lifetime: #2654's ast-grep row was wiped by `resetDegradationLedger()` and
+  never re-recorded, and #2649's failsafe anchored to the first hold's epoch
+  and released every later healthy call.
+- **Borrowed rules (2026-09-07).** "Every changed line traces to the brief"
+  came from the "surgical changes" rule in aromanarguello/roman-skills
+  `coding-guidelines`; the reviewer's security confidence floor came from that
+  repository's `final-review` lens, which reports only findings it is over 80
+  percent sure are exploitable. On 2026-09-06 four PRs with `closes` only in
+  the title needed hand-closing.
+- **Artifact paths (#3648).** The linter half of the `git check-ignore` rule
+  landed in #3464; the measured-constant rule is M3648-3.
+
+### Reviewer record
+
+- **`REVIEW.md` on disk.** PR #3261 r3 and PR #3264 r3 delivered the review
+  only in the answer text.
+- **Neighbourhood reads (2026-09-06).** The strongest findings came from it: 16
+  un-migrated doubles on #2585, the cargo twin of the uv matcher on #2583, and
+  the 42 doubles that redded #2568's deletion ask ("drop the `?.`", 2026-09-04,
+  two red CI runs, reverted).
+- **Probe scripts in the tree (#2865 verify v3, 2026-09-10).** An untracked
+  `.mjs` fell into oxlint's self-lint scope and redded
+  `tests/scripts/lint-js.test.ts`.
+- **Pull-only observability (#2513, #2526).** #2513 named `configProvenance`
+  in health output; the dogfood monitor read the logs, and the config refactor
+  left no trace.
+- **Vacuous guard (#1887).** A guard whose removal kept the suite green.
+- **Fix rounds introduce defects.** In one night #2098 r2 introduced a leak and
+  a stale-pull hole, #2107 r2 opened a commit-gate bypass, #2120 F3 shipped a
+  crash on the exact race it was added to handle, and #2119 r2 was vacuous at
+  the shipped seam while hiding an inversion.
+- **Inverted direction (#2983).** Round 1 demoted an inline blocker on any
+  mtime move, so a `touch` walked a finding out of turn-end rendering; round 2
+  added `size`-tier content confirmation, and a one-character same-length edit
+  then kept a genuinely stale blocker authoritative.
+- **Clean local runs (#2955).** Round 13 ran the full 1,095-file population
+  clean while CI was red on the family it had just fixed; round 14 instrumented
+  the tick sequence, said plainly it could not reproduce the recreation
+  locally, and reasoned from the CI observation.
+- **Narrowing prescriptions (#3155 r2).** The S4 prescription narrowed a
+  markdown misfire; its residual surfaced only in verify. #2642 r2's
+  per-caller normalization missed two direct `loadLSPConfig` callers.
+- **Contract-only rounds** were exempted from re-verification by the
+  merge-train round routing of 2026-09-06.
+- **Master facts (#2693 r1 F6, 2026-09-07).** A review reported an `AGENTS.md`
+  catalog row missing that had merged an hour earlier.
+- **Shared checkout (2026-09-07).** The shared checkout was switched under
+  other agents four times (`pr-2703-r2`, `pr-2703-verify`, `pr-2707`,
+  `pr-2725`), each switch invalidating in-flight commands. A #2704 review probe
+  given the shared tree as its root purged its 473 build artifacts. The
+  scratchpad ban is #3526 (tmpfs `/tmp`).
+- **Curated suite lists (#3622).** A seven-file run cleared the registry seam
+  while omitting `tests/clients/lsp/service-crash-respawn.test.ts` and
+  `tests/clients/lsp/service-notify-per-server.test.ts`, the two idle-eviction
+  suites, both red on the required Unit tests.
+
+### Investigator and monitor record
+
+- **Log span.** One measurement put the `latency.log` pair at 7.4 hours of
+  coverage under active dogfooding.
+- **Already-shipped check (2026-09-22).** The primitives brief named three
+  scanner filter blocks as the #1461 first slice although #1622, #1625, and
+  #1628 had already removed them; the fixer found the premise error in PR #3264
+  and the #1892 comment on 2026-09-23.
+- **Monitor premise (2026-09-09).** A readout mis-named a suppression window as
+  a trailing debounce; the correction cost a round.
+
 ## Archived pre-trim agent context (2026-09-14)
 
 The detailed incident narratives, closed decisions, and subsystem evidence below

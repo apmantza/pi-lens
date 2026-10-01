@@ -131,7 +131,7 @@
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "^0.84.1 || ^0.85.0",
+		"@earendil-works/pi-tui": "*",
 		"typebox": "^1.0.0"
 	},
 	"peerDependenciesMeta": {
@@ -150,32 +150,32 @@
 		"web-tree-sitter": "0.25.10"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.10",
-		"@earendil-works/pi-coding-agent": "^0.87.1",
-		"@earendil-works/pi-tui": "^0.85.1",
+		"@biomejs/biome": "^2.5.15",
+		"@earendil-works/pi-coding-agent": "^0.99.2",
+		"@earendil-works/pi-tui": "^0.99.2",
 		"@jridgewell/sourcemap-codec": "^1.6.0",
 		"@jridgewell/trace-mapping": "^0.3.31",
 		"@stryker-mutator/core": "10.0.0",
 		"@taplo/cli": "0.7.0",
-		"@types/node": "^26.0.0",
+		"@types/node": "^26.6.3",
 		"@types/pidusage": "^2.0.5",
 		"@types/semver": "^7.8.0",
-		"@vitest/coverage-v8": "^5.0.0",
-		"dependency-cruiser": "^18.2.0",
+		"@vitest/coverage-v8": "^5.0.3",
+		"dependency-cruiser": "^18.5.0",
 		"fast-check": "^4.10.2",
 		"husky": "^9.1.7",
-		"jscpd": "5.3.2",
+		"jscpd": "5.4.0",
 		"json5": "^2.2.3",
-		"knip": "6.38.0",
-		"oxfmt": "0.68.0",
-		"oxlint": "1.85.0",
+		"knip": "6.39.0",
+		"oxfmt": "0.71.0",
+		"oxlint": "1.86.0",
 		"oxlint-tsgolint": "7.0.2003",
 		"publint": "0.3.24",
 		"semver": "^7.8.0",
 		"typebox": "^1.0.0",
 		"typescript": "^7.0.2",
 		"typescript-language-server": "5.3.0",
-		"vitest": "^5.0.0"
+		"vitest": "^5.0.3"
 	},
 	"pi": {
 		"extensions": [

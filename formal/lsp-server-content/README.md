@@ -11,22 +11,23 @@ Issues: #3480 (the debounce fingerprint), #3481 (the stale cascade touch).
 ## What the model covers
 
 - **Agent writes** `w1`/`w2`: the write tool lands its bytes (a new mtime).
-  Then that edit's pipeline reads the file (`pipeline.ts` ~1349
-  `readFileSync`) and calls `touchFile` (~1102, `lsp_sync`, scope
-  `primary`). `write-ordering-guard.ts` ~6-13 allows two same-turn pipelines
+  Then that edit's pipeline reads the file (`pipeline.ts`
+  `readFileSync`) and calls `touchFile` (`lsp_sync`, scope
+  `primary`). `clients/write-ordering-guard.ts` `WriteOrderingGuard` allows two same-turn pipelines
   for one file to run concurrently.
-- **The cascade neighbour reader** `cas`: `integration.ts` ~1972 reads the
+- **The cascade neighbour reader** `cas`: `clients/dispatch/integration.ts`
+  `computeCascadeForFile` reads the
   file, awaits `getCapabilitySnapshots`/`getClientForFile`, and then calls
-  `touchFile` with what it read (~2009 tier-aware, ~2099 full wait).
+  `touchFile` with what it read (tier-aware, then a full wait).
 - **`LSPService.touchFile`** (`lsp/index.ts`):
-  - `startedAt` is taken when the call starts (~4640);
+  - `startedAt` is taken when the call starts;
   - there is a per-server debounce check (`shouldSkipNotify`), with a
     1500 ms window and a whole-content fingerprint
-    (`fingerprintDocumentContent`, `document-drift.ts` ~76; before #3480 it
+    (`fingerprintDocumentContent`, `document-drift.ts`; before #3480 it
     was length plus the first 48 and last 48 chars);
   - then `notify.open`;
-  - after the write lands, `markTouched` (~5173) runs, and then
-    `recordFullyCoveredSync(startedAt)` (~5199). A touch that skips the
+  - after the write lands, `markTouched` runs, and then
+    `recordFullyCoveredSync(startedAt)`. A touch that skips the
     notify records nothing: the record call is inside `if (!notifySkipped)`.
 - **The notify queue** (`client.ts` `enqueueDocumentNotify`):
   - the last enqueued entry replaces the unstarted one, and its waiters are
@@ -38,7 +39,7 @@ Issues: #3480 (the debounce fingerprint), #3481 (the stale cascade touch).
     one settles;
   - waiters resolve in FIFO order;
   - the check and the send are one step.
-- **The drift sweep** (`document-drift.ts` `runSweep` ~306-540):
+- **The drift sweep** (`document-drift.ts` `runSweep`):
   - a file is a candidate if `size` changed or `floor(mtime) > syncedAt`;
   - a candidate is read. If its fingerprint equals the record's, the record
     is re-stamped and nothing is sent. Otherwise the sweep calls `touchFile`

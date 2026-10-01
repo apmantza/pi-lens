@@ -115,6 +115,18 @@ describe("result contract across registered tool surfaces", () => {
 			effective_config: { file: "fixture.ts" },
 		};
 
+		// #3749: the MCP dispatcher reports any argument key a tool's schema does
+		// not declare, and that report leads the result text. Send each MCP tool
+		// only the keys it advertises, so the parity comparison below stays a
+		// comparison of the two surfaces' renderings.
+		const advertised = (
+			(await mcp.request(99, "tools/list", {})).result as {
+				tools: {
+					name: string;
+					inputSchema: { properties?: Record<string, unknown> };
+				}[];
+			}
+		).tools;
 		for (const entry of TOOL_REGISTRY) {
 			if (!entry.piName || !entry.mcpName) continue;
 			const args = fixtures[entry.name];
@@ -138,7 +150,18 @@ describe("result contract across registered tool surfaces", () => {
 				"tools/call",
 				{
 					name: entry.mcpName,
-					arguments: { ...args, ...(args.path ? { file: args.path } : {}) },
+					arguments: Object.fromEntries(
+						Object.entries({
+							...args,
+							...(args.path ? { file: args.path } : {}),
+						}).filter(([key]) =>
+							Object.hasOwn(
+								advertised.find((tool) => tool.name === entry.mcpName)
+									?.inputSchema.properties ?? {},
+								key,
+							),
+						),
+					),
 				},
 			);
 			const mcpText = (mcpResult.result as ToolResult).content?.[0]?.text;

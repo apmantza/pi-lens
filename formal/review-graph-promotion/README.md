@@ -1,8 +1,8 @@
 # Review-graph promotion model
 
 A TLA+ model of the worker-thread persist of the review-graph snapshot
-(`clients/review-graph/builder.ts` ~1961-2923 and `persist-worker.ts`) for one
-project cache directory that N pi-lens processes share. It is adapted from
+(`clients/review-graph/builder.ts` `persistGraph` and `persist-worker.ts`
+`serveGzipStageWorker`) for one project cache directory that N pi-lens processes share. It is adapted from
 the project-snapshot promotion model of #3509. The `TLA+ models` CI job
 (`node scripts/check-tla-models.mjs`) checks every config here against its
 `\* expect:` line.
@@ -12,19 +12,19 @@ Issue: #3536.
 ## How it differs from the project-snapshot model
 
 - There is no meta sidecar. `signature` and `fileSignatures` travel inside the
-  body (`PersistedGraphData`, ~1752), so the body/meta pair of #3509 does not
+  body (`PersistedGraphData`), so the body/meta pair of #3509 does not
   exist.
-- Every `persistGraph` call takes a fresh generation (~2830-2836), and there
+- Every `persistGraph` call takes a fresh generation, and there
   is no one-active queue. Several requests can be in the worker at once, and
   the worker serves them concurrently: `serveGzipStageWorker` runs an async
-  closure per message (`clients/gzip-stage-write.ts` ~178). Only the current
-  generation promotes (~2376).
-- A debounced `pending` slot coalesces persists (~2002).
-- The sweep checks pid liveness (`isStaleReviewGraphStageFile`, ~2728).
-- Builds whose `changedFiles` differ are not deduped (`buildCacheKey`, ~5967),
+  closure per message (`clients/gzip-stage-write.ts` `serveGzipStageWorker`). Only the current
+  generation promotes.
+- A debounced `pending` slot coalesces persists.
+- The sweep checks pid liveness (`isStaleStageFile`).
+- Builds whose `changedFiles` differ are not deduped (`buildCacheKey`),
   so one process can run two builds of one workspace at once, and
   `persistGraph` runs at build end.
-- `flushReviewGraphPersist` (the CLI and the exit hook, ~3485) forces a
+- `flushReviewGraphPersist` (the CLI and the exit hook) forces a
   synchronous write of the newest pending or in-flight generation. Since
   #3536 it writes that candidate only when it is the current generation, and
   otherwise drops it unwritten.

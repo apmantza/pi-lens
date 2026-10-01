@@ -78,6 +78,8 @@ function rule(id: string, capture: string): TreeSitterQuery {
  */
 async function trapPatternCount(state: {
 	on: (captureNames: string[]) => boolean;
+	/** What the matching compile throws; a wasm trap unless stated. */
+	error?: () => Error;
 }) {
 	const { Query } = await loadWebTreeSitter();
 	const realPatternCount = Query.prototype.patternCount;
@@ -86,7 +88,7 @@ async function trapPatternCount(state: {
 		this: InstanceType<typeof Query>,
 	) {
 		calls++;
-		if (state.on(this.captureNames)) throw trap();
+		if (state.on(this.captureNames)) throw (state.error ?? trap)();
 		return realPatternCount.call(this);
 	});
 	return { calls: () => calls };
@@ -368,6 +370,34 @@ describe("batches that did not trap are still cached (#3707)", () => {
 		expect(compiles.calls()).toBe(afterFirst);
 	});
 
+	// Recurrence (#3780, #3731 survivor): `classifyTreeSitterWasmError(err) ===
+	// "trap"` on the combined-compile catch replaced by `true` left the suite
+	// green. Then a deterministic, non-trap failure of the combined compile (a
+	// grammar error in the joined source) was never negative-cached, so every
+	// scan paid the per-rule probes and the failing combined compile again.
+	it("caches a batch whose combined compile fails without a wasm trap", async () => {
+		const { client } = await liveClient();
+		const compiles = await trapPatternCount({
+			on: (names) => names.includes("a_cap") && names.includes("b_cap"),
+			error: () => new Error("Query error at position 0"),
+		});
+		const file = pythonFile();
+		const set = [rule("a", "a_cap"), rule("b", "b_cap")];
+
+		// The failed combined compile falls back to one walk per rule.
+		expect(ids(await client.runQueriesOnFile(set, file, "python"))).toEqual([
+			"a",
+			"b",
+		]);
+		const afterFirst = compiles.calls();
+		await client.runQueriesOnFile(set, file, "python");
+		await client.runQueriesOnFile(set, file, "python");
+
+		// Two probes and the one combined compile, once.
+		expect(afterFirst).toBe(3);
+		expect(compiles.calls()).toBe(afterFirst);
+	});
+
 	it("hashes no input while a healthy batch builds and hits the cache", async () => {
 		const { client, evict } = await liveClient();
 		const key = vi.spyOn(
@@ -383,5 +413,84 @@ describe("batches that did not trap are still cached (#3707)", () => {
 		await client.runQueriesOnFile(set, file, "python");
 
 		expect(key).not.toHaveBeenCalled();
+	});
+});
+
+describe("a single-rule consumer is keyed by rule id and query text (#3678 F4)", () => {
+	// Recurrence (#3780, #3706 survivor): the `${id}\0${query}` consumer key
+	// of `runQueryOnFile` replaced by the bare rule id left all 29 related test
+	// files green. Two rules sharing an id (a project rule overriding a bundled
+	// one with an edited query) then shared one consumer identity, so the
+	// healthy rule's success decayed the trapping rule's entry. Each trap then
+	// looked like a first trap and spent budget until the runtime aborted.
+	it("does not let a healthy rule decay a same-id rule's trap entry", async () => {
+		const { client, onAbort } = await liveClient();
+		const { Query } = await loadWebTreeSitter();
+		const realMatches = Query.prototype.matches;
+		vi.spyOn(Query.prototype, "matches").mockImplementation(function (
+			this: InstanceType<typeof Query>,
+			...args: Parameters<typeof realMatches>
+		) {
+			if (this.captureNames.includes("trap_me")) throw trap();
+			return realMatches.apply(this, args);
+		});
+		const file = pythonFile();
+		const poisoned = rule("shared-id", "trap_me");
+		const healthy = rule("shared-id", "fn");
+
+		// Round 0: the poisoned query traps, then the healthy one succeeds on the
+		// same file and tries to decay the entry that trap left.
+		expect(await client.runQueryOnFile(poisoned, file, "python")).toEqual([]);
+		expect(await client.runQueryOnFile(healthy, file, "python")).toHaveLength(
+			1,
+		);
+		// Later rounds: the entry survived, so the second trap is charged to the
+		// file's content and the parse is skipped from then on (healthy included).
+		for (let round = 1; round < 6; round++) {
+			await client.runQueryOnFile(poisoned, file, "python");
+			await client.runQueryOnFile(healthy, file, "python");
+		}
+
+		// One unit for the poisoned query; its later traps are charged to it.
+		expect(onAbort).not.toHaveBeenCalled();
+		expect(wasmTrapReasons().some((r) => r.startsWith("input charged:"))).toBe(
+			true,
+		);
+		expect(remainingBudget(client)).toBe(2);
+	});
+
+	// Recurrence (#3780 verify F2): reducing the consumer key to the bare query
+	// text stayed green because the first test shares a capture name, not a
+	// query. Two rules with one query text still consume differently when one
+	// carries a post_filter: its `applyPostFilter` can trap where the plain
+	// rule's consume cannot, and a shared identity lets the plain rule's success
+	// decay that trap entry.
+	it("does not let a plain rule decay the trap entry of a same-query rule with a post_filter", async () => {
+		const { client, onAbort } = await liveClient();
+		vi.spyOn(
+			client as unknown as { applyPostFilter: () => boolean },
+			"applyPostFilter",
+		).mockImplementation(() => {
+			throw trap();
+		});
+		const file = pythonFile();
+		const filtered = {
+			...rule("filtered-id", "fn"),
+			post_filter: "any_filter",
+		};
+		const plain = rule("plain-id", "fn");
+
+		expect(await client.runQueryOnFile(filtered, file, "python")).toEqual([]);
+		expect(await client.runQueryOnFile(plain, file, "python")).toHaveLength(1);
+		for (let round = 1; round < 6; round++) {
+			await client.runQueryOnFile(filtered, file, "python");
+			await client.runQueryOnFile(plain, file, "python");
+		}
+
+		expect(onAbort).not.toHaveBeenCalled();
+		expect(wasmTrapReasons().some((r) => r.startsWith("input charged:"))).toBe(
+			true,
+		);
+		expect(remainingBudget(client)).toBe(2);
 	});
 });

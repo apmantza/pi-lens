@@ -2105,6 +2105,55 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// Recurrence (#3780, #3673/#3679 survivors): the "persisted graph coverage
+	// is incomplete" advisory was replaced by "" with every test green, because
+	// the only partial-coverage case set `sourceFilesTruncated` and so never
+	// reached the arm. Coverage that is partial for any OTHER reason (a
+	// persisted-entry cap) must still say why, not hand the turn-end seam an
+	// empty advisory.
+	it("names incomplete persisted coverage when the graph is partial without a truncated source walk", async () => {
+		const env = setupTestEnvironment("cascade-persist-partial-");
+		try {
+			const primary = path.join(env.tmpDir, "primary.ts");
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			mocks.buildOrUpdateGraph.mockResolvedValue({
+				...emptyGraph(),
+				persistCoverage: {
+					partial: true,
+					cap: 500_000,
+					totalNodes: 10,
+					totalEdges: 10,
+					persistedNodes: 5,
+					persistedEdges: 5,
+					totalFiles: 2,
+					persistedFiles: 1,
+				},
+			});
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, []));
+			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
+				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } =
+				await import("../../clients/dispatch/integration.js");
+			const run = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			expect(run.result).toBeUndefined();
+			expect(run.skipReason).toBe("indeterminate");
+			expect(run.indeterminate?.reason).toBe("graph_degraded");
+			expect(run.indeterminate?.detail).toBe(
+				"review graph partial — persisted graph coverage is incomplete",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #1023: a SIZE-SKIPPED graph (getLastGraphBuildInfo().mode === "skipped",
 	// too_many_files) — the ALREADY-KNOWN degraded state is threaded onto the
 	// result at the compute site. Every edit computes zero neighbors against the

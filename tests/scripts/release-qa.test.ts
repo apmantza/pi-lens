@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — four spawns, each pinning something no
+// flake-shape: real-process-spawn — five spawns, each pinning something no
 // in-process double can reach. (1) `npm pack` of a two-line fixture package
 // whose `prepare` writes through `os.homedir()`: the F1 defect was npm
 // IGNORING the env it was handed, so an assertion on scratchEnv()'s OUTPUT
@@ -7,7 +7,11 @@
 // the test process can only ever report the ambient home. (3) the real
 // release-qa CLI, run out of a throwaway dirty tree, because main()'s CALL to
 // the dirty-checkout refusal is reachable only through the process entry
-// point (#2619 review N3, MP-E).
+// point (#2619 review N3, MP-E). (5) the codemode row's latency-log wait
+// (#3805): it is a standalone program pi's own bash tool runs, so what the row
+// reads is that real process's stdout and exit; `process.exit` and the
+// `POLL_COMPLETE`/`POLL_EXPIRED` line cannot be observed from an in-process
+// import (its expiry cases use a cap in the past, so none waits on the clock).
 /**
  * #2606 — the release-QA runner's pure core.
  *
@@ -71,6 +75,15 @@ import {
 	shipVerdict,
 	verdictExitCode,
 	GLOBAL_CONFIG_LOCATION_SERVER,
+	CODEMODE_NESTED_ROW_ID,
+	CODEMODE_POLL_SCRIPT,
+	buildCodemodeScenario,
+	classifyCodemodeNested,
+	locatePiAiIndex,
+	parsePiVersion,
+	planCodemodeRow,
+	runCodemodeNestedProbe,
+	summarizeToolEnds,
 } from "../../scripts/release-qa.mjs";
 import { effectiveConfig } from "../../clients/effective-config.js";
 import { renderToolText } from "../../tools/render-compact.js";
@@ -1658,3 +1671,420 @@ describe("release-QA argument parsing (#2606)", () => {
 	});
 });
 // flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+
+describe("release-QA codemode nested guard row (#3805)", () => {
+	// Recurrence it guards: pi 0.99's codemode tool runs `tools.edit/read/bash`
+	// from a script. Nothing drove a NESTED call through pi-lens's hooks before
+	// #3805, so a pi (or pi-lens) change that let a nested edit skip read-guard,
+	// or swallowed the turn_end check behind a script, would have shipped
+	// green: the unit suite never sees `parentToolCallId`.
+	type Call = {
+		id: string;
+		nested: boolean;
+		toolName: string;
+		isError: boolean;
+		text: string;
+	};
+	type Witness = {
+		nested: Call[];
+		topLevel: Call[];
+		providerRows: Array<{ turn: number; userMessages: string[] }>;
+		files: { b: string | null; c: string | null };
+	};
+	// A witness runCodemodeNestedProbe wrote against a real pi 0.99.2 (see its
+	// `_provenance`). Every mutation below starts from it, so the classifier is
+	// held to the shape pi really emits, not one this file typed.
+	const real = (): Witness =>
+		JSON.parse(
+			fs.readFileSync(
+				path.join(
+					REPO_ROOT,
+					"tests",
+					"fixtures",
+					"release-qa",
+					"codemode-nested-pi-0.99.2.witness.json",
+				),
+				"utf8",
+			),
+		);
+	const callAt = (w: Witness, id: string) => {
+		const call = [...w.nested, ...w.topLevel].find((c) => c.id === id);
+		if (!call) throw new Error(`fixture has no call ${id}`);
+		return call;
+	};
+	// c1/4 is the nested edit of the unread c.ts; c1/6 the licensed edit of
+	// b.ts; c1/7 the nested dispatch wait; t1 the top-level turn_end wait.
+
+	it("documents the row and implements its probe", () => {
+		const { rows } = parseBaselineRows(baselineText());
+		expect(rows.find((r) => r.id === CODEMODE_NESTED_ROW_ID)).toBeDefined();
+		expect(implementedRowIds()).toContain(CODEMODE_NESTED_ROW_ID);
+	});
+
+	it("passes the witness a real pi 0.99.2 wrote", () => {
+		const verdict = classifyCodemodeNested(real());
+		expect(verdict.status, verdict.detail).toBe("pass");
+		expect(verdict.shows).toContain("c1/4");
+		expect(verdict.shows).toContain("turn 2");
+	});
+
+	it("fails when the nested edit-without-read was not blocked", () => {
+		const w = real();
+		Object.assign(callAt(w, "c1/4"), {
+			isError: false,
+			text: "Successfully replaced 1 block(s) in c.ts.",
+		});
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain("no nested edit was blocked");
+	});
+
+	it("fails when read-guard's text came back but c.ts was written anyway", () => {
+		const w = real();
+		w.files.c = "export const c = 2;\n";
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain("c.ts on disk changed");
+	});
+
+	it("fails when the block is about a different file than c.ts", () => {
+		const w = real();
+		callAt(w, "c1/4").text = callAt(w, "c1/4").text.replaceAll("c.ts", "d.ts");
+		expect(classifyCodemodeNested(w).status).toBe("fail");
+	});
+
+	it("does not read another error on c.ts as read-guard's block", () => {
+		const w = real();
+		callAt(w, "c1/4").text = "EACCES: permission denied, open c.ts";
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain("no nested edit was blocked");
+	});
+
+	it("fails when the licensed nested edit of b.ts was blocked too", () => {
+		const w = real();
+		Object.assign(callAt(w, "c1/6"), {
+			isError: true,
+			text: "🔄 RETRYABLE — Edit without read: you have not read b.ts",
+		});
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain("blocked a licensed edit");
+	});
+
+	it("fails when b.ts never received the edit", () => {
+		const w = real();
+		w.files.b = "export const b = 1;\n";
+		expect(classifyCodemodeNested(w).detail).toContain("debugger;=false");
+	});
+
+	it("fails, naming the cause, when no nested call ran at all", () => {
+		const w = real();
+		w.nested = [];
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain("codemode tool did not run");
+	});
+
+	it.each([
+		["the nested dispatch wait expired", "c1/7", "POLL_EXPIRED b.ts\n"],
+		["the turn_end wait expired", "t1", "POLL_EXPIRED turn_end\n"],
+		["the turn_end wait never ran", "t1", ""],
+		["the b.ts dispatch wait never ran", "c1/7", "POLL_COMPLETE d.ts\n"],
+		[
+			"the warm-up wait expired while b.ts completed",
+			"c1/7",
+			"POLL_EXPIRED d.ts\nPOLL_COMPLETE b.ts\n",
+		],
+	])("is UNTESTED, never PASS, when %s", (_name, id, text) => {
+		const w = real();
+		callAt(w, id).text = text;
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("expired");
+		expect(classifyRowOutcome(verdict).outcome).toBe("UNTESTED");
+	});
+
+	it.each([
+		[
+			"no provider request carries a check",
+			(t: string) => t.replace("[pi-lens automated check", "[note"),
+		],
+		["the check names no file", (t: string) => t.replaceAll("b.ts", "x.ts")],
+		[
+			"the check names no debugger blocker",
+			(t: string) => t.replace(/debugger/gi, "thing"),
+		],
+	])("fails when %s", (_name, edit) => {
+		const w = real();
+		for (const row of w.providerRows) {
+			row.userMessages = row.userMessages.map(edit);
+		}
+		const verdict = classifyCodemodeNested(w);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.detail).toContain(
+			"no provider request carried a turn_end check",
+		);
+	});
+
+	it("reports no provider requests when the provider log is empty", () => {
+		const w = real();
+		w.providerRows = [];
+		expect(classifyCodemodeNested(w).detail).toContain(
+			"no provider requests recorded",
+		);
+	});
+
+	describe("reading pi's RPC event stream", () => {
+		// Real `tool_execution_*` events from pi 0.99.2 (nested calls carry
+		// `parentToolCallId`; the codemode call that made them does not).
+		const events = fs
+			.readFileSync(
+				path.join(
+					REPO_ROOT,
+					"tests",
+					"fixtures",
+					"release-qa",
+					"codemode-tool-execution-events-pi-0.99.2.ndjson",
+				),
+				"utf8",
+			)
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line));
+
+		it("keeps pi's parentToolCallId as the nested marker", () => {
+			const { nested, topLevel } = summarizeToolEnds(events);
+			expect(nested.map((c) => c.id)).toEqual(["c1/1", "c1/4"]);
+			expect(topLevel.map((c) => c.id)).toEqual(["c1"]);
+			expect(nested.find((c) => c.id === "c1/4")).toMatchObject({
+				toolName: "edit",
+				isError: true,
+			});
+			expect(nested.find((c) => c.id === "c1/4")?.text).toContain(
+				"Edit without read",
+			);
+		});
+
+		it("ignores events that are not tool_execution_end", () => {
+			const all = summarizeToolEnds(events);
+			expect(all.nested.length + all.topLevel.length).toBe(3);
+		});
+
+		it("reads an empty stream as no calls", () => {
+			expect(summarizeToolEnds([])).toEqual({ nested: [], topLevel: [] });
+		});
+	});
+
+	describe("reachability is decided before the run", () => {
+		it.each([
+			["pi 0.99.0", true],
+			["0.99.2", true],
+			["pi 1.0.0", true],
+			["0.98.9", false],
+			["0.85.1", false],
+			["0.80.10", false],
+			["not a version", false],
+		])("%s reachable=%s", (text, reachable) => {
+			expect(
+				planCodemodeRow({
+					piVersionText: text,
+					piAiIndex: "/x/pi-ai/dist/index.js",
+				}).reachable,
+			).toBe(reachable);
+		});
+
+		it("is unreachable without the host's own pi-ai, naming why", () => {
+			const plan = planCodemodeRow({
+				piVersionText: "0.99.2",
+				piAiIndex: null,
+			});
+			expect(plan.reachable).toBe(false);
+			expect(plan.reason).toContain("pi-ai");
+		});
+
+		it("reads the first x.y.z out of a --version line", () => {
+			expect(parsePiVersion("pi 0.99.2")).toEqual([0, 99, 2]);
+			expect(parsePiVersion("v1.2.3-beta.4")).toEqual([1, 2, 3]);
+			expect(parsePiVersion("")).toBeNull();
+		});
+
+		it("drives no pi and skips, without leaving the run INCONCLUSIVE, on an old pi", async () => {
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-codemode-old-pi-"),
+			);
+			try {
+				const fakePi = path.join(dir, "fake-pi.mjs");
+				fs.writeFileSync(
+					fakePi,
+					"#!/usr/bin/env node\nconsole.log('0.98.9');\n",
+				);
+				fs.chmodSync(fakePi, 0o755);
+				const probe = await runCodemodeNestedProbe({
+					piBin: fakePi,
+					env: { PATH: process.env.PATH },
+					scratchRoot: dir,
+				});
+				expect(probe).toMatchObject({
+					status: "unreachable",
+					unmeasured: false,
+				});
+				expect(probe.detail).toContain("no built-in codemode tool");
+				expect(classifyRowOutcome(probe).outcome).toBe("SKIPPED");
+				expect(isUnmeasured(probe)).toBe(false);
+			} finally {
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	describe("locating the pi binary's own pi-ai", () => {
+		const layout = (hoisted: boolean) => {
+			const root = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-pi-ai-locate-"),
+			);
+			const pkg = path.join(
+				root,
+				"node_modules",
+				"@earendil-works",
+				"pi-coding-agent",
+			);
+			fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+			fs.writeFileSync(
+				path.join(pkg, "package.json"),
+				JSON.stringify({ name: "@earendil-works/pi-coding-agent" }),
+			);
+			fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+			const piAi = hoisted
+				? path.join(root, "node_modules", "@earendil-works", "pi-ai")
+				: path.join(pkg, "node_modules", "@earendil-works", "pi-ai");
+			fs.mkdirSync(path.join(piAi, "dist"), { recursive: true });
+			fs.writeFileSync(path.join(piAi, "dist", "index.js"), "");
+			return { root, pkg, index: path.join(piAi, "dist", "index.js") };
+		};
+
+		it.each([
+			["nested under the host", false],
+			["hoisted beside the host", true],
+		])("finds pi-ai %s", (_name, hoisted) => {
+			const { root, pkg, index } = layout(hoisted);
+			try {
+				expect(locatePiAiIndex(path.join(pkg, "dist", "cli.js"), {})).toBe(
+					index,
+				);
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("resolves a bare binary name through PATH", () => {
+			const { root, pkg, index } = layout(false);
+			try {
+				expect(
+					locatePiAiIndex("cli.js", { PATH: path.join(pkg, "dist") }),
+				).toBe(index);
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("is null when the binary is not inside a pi-coding-agent package", () => {
+			const root = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-pi-ai-none-"),
+			);
+			try {
+				fs.writeFileSync(path.join(root, "pi"), "");
+				expect(locatePiAiIndex(path.join(root, "pi"), {})).toBeNull();
+				expect(locatePiAiIndex("no-such-binary", { PATH: root })).toBeNull();
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+	});
+
+	describe("the scripted scenario", () => {
+		const turns = () =>
+			buildCodemodeScenario({
+				pollScriptPath: "/s/poll.mjs",
+				latencyLogPath: "/s/latency.log",
+				capMs: 1234,
+			});
+
+		it("is a codemode call, a turn_end wait, then a closing text turn", () => {
+			const [first, second, third] = turns();
+			expect(first[0]).toMatchObject({
+				type: "toolCall",
+				name: "codemode",
+				id: "c1",
+			});
+			expect(second[0]).toMatchObject({ type: "toolCall", name: "bash" });
+			expect(
+				(second[0] as { arguments: { command: string } }).arguments.command,
+			).toContain("turn_end 1234");
+			expect(third).toEqual([{ type: "text", text: "done" }]);
+		});
+
+		it("carries a codemode script that compiles", () => {
+			const { code } = (turns()[0][0] as { arguments: { code: string } })
+				.arguments;
+			const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+			expect(() => new AsyncFunction("tools", "text", code)).not.toThrow();
+		});
+	});
+
+	describe("the latency-log wait the scenario runs", () => {
+		const run = (rows: unknown[], key: string, capMs: number) => {
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-codemode-poll-"),
+			);
+			try {
+				const script = path.join(dir, "poll.mjs");
+				const log = path.join(dir, "latency.log");
+				fs.writeFileSync(script, CODEMODE_POLL_SCRIPT);
+				fs.writeFileSync(
+					log,
+					`${rows.map((row) => JSON.stringify(row)).join("\n")}\nnot json\n`,
+				);
+				return spawnSync(process.execPath, [script, log, key, String(capMs)], {
+					encoding: "utf8",
+				}).stdout.trim();
+			} finally {
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		};
+		const dispatch = {
+			type: "tool_result",
+			result: "dispatch_complete",
+			filePath: "/p/b.ts",
+		};
+		const turnEnd = {
+			type: "tool_result",
+			toolName: "turn_end",
+			result: "clean",
+		};
+
+		it("completes on the named file's dispatch_complete row", () => {
+			expect(run([dispatch], "b.ts", 5000)).toBe("POLL_COMPLETE b.ts");
+		});
+
+		it("does not complete on another file's dispatch", () => {
+			expect(run([{ ...dispatch, filePath: "/p/d.ts" }], "b.ts", -1)).toBe(
+				"POLL_EXPIRED b.ts",
+			);
+		});
+
+		it("completes turn_end only on the pipeline's tool_result row, not a phase row", () => {
+			expect(run([turnEnd], "turn_end", 5000)).toBe("POLL_COMPLETE turn_end");
+			expect(
+				run(
+					[{ type: "phase", toolName: "turn_end", phase: "knip" }],
+					"turn_end",
+					-1,
+				),
+			).toBe("POLL_EXPIRED turn_end");
+		});
+
+		it("expires, rather than completes, when the row never arrives", () => {
+			expect(run([], "b.ts", -1)).toBe("POLL_EXPIRED b.ts");
+		});
+	});
+});

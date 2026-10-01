@@ -41,6 +41,10 @@ import {
 	vi,
 } from "vitest";
 import extension from "../index.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../clients/degradation-ledger.js";
 import { getProjectDataDir } from "../clients/file-utils.js";
 import {
 	clearLatencyLog,
@@ -55,24 +59,14 @@ import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js"
 import {
 	cleanupTestEnvironmentsDrained,
 	drainBackgroundWritesForTests,
-	removeTempDirSync,
 	setupTestEnvironment,
 } from "./clients/test-utils.js";
 
-// Every vitest worker shares one PI_LENS_HOME (tests/support/vitest-setup.ts),
-// and this file runs 25 real session_starts with PI_LENS_TEST_MODE=0: each
-// appends the config-resolution lines to sessionstart.log and a
-// config_resolved row to latency.log, and beforeEach truncates latency.log.
-// On a shared home that fed rows into, and truncated rows out of, a
-// concurrently running reader: tests/clients/config-resolved-phase.test.ts
-// failed on PR #3669's first Unit tests run. The loggers fix their paths when
-// they load, so the redirect runs hoisted, before any import.
-const witnessHome = vi.hoisted(() => {
-	const previous = process.env.PI_LENS_HOME;
-	const home = `${previous ?? "."}/pi-lens-3521-witness-home-${process.pid}`;
-	process.env.PI_LENS_HOME = home;
-	return { home, previous };
-});
+// This file runs 25 real session_starts with PI_LENS_TEST_MODE=0: each appends
+// the config-resolution lines to sessionstart.log and a `config_resolved` row
+// to latency.log, and beforeEach truncates latency.log. The harness's
+// per-worker PI_LENS_HOME (#3721) keeps those writes off every other worker's
+// sink; the loggers bind their paths at load, so the home is the harness's.
 
 const FLAGS = new Map<string, boolean>([
 	["no-lsp", true],
@@ -149,10 +143,6 @@ afterEach(async () => {
 
 afterAll(async () => {
 	await cleanupTestEnvironmentsDrained(TMP_PREFIX);
-	await flushLatencyLog();
-	removeTempDirSync(witnessHome.home);
-	if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
-	else process.env.PI_LENS_HOME = witnessHome.previous;
 });
 
 async function startRuntime(
@@ -1139,7 +1129,7 @@ async function activateTools(
 		{ tools } as never,
 		undefined,
 		undefined,
-		runtime.session.extensionRunner.createContext(),
+		runtime.session.extensionRunner.createToolContext(id, undefined),
 	);
 }
 
@@ -1540,5 +1530,199 @@ describe("#3612 a queued agent advisory follows /reload", () => {
 		await runtime.newSession();
 
 		expect(await contextText(runtime)).not.toContain("lost edit in a.rs");
+	});
+
+	/**
+	 * #3819 (TLC `H3FileLess`): a file-less slot matched on its reason alone.
+	 * An in-process subagent that binds in the primary's replacement gap
+	 * (declined, #3662) and then reloads or forks itself sends a non-startup
+	 * start with no primary registered, so it classifies primary (#3668 row
+	 * 17). The recurrence: that start took the primary's slot and adopted its
+	 * lazy-tool activations, its queued advisory and its authorship.
+	 */
+	describe("#3819 a gap subagent's own /reload or /fork takes nothing of the primary's", () => {
+		async function gapSubagentReplaces(kind: "reload" | "fork") {
+			const seen = coordinators();
+			let subagent: AgentSessionRuntime | undefined;
+			const replaceInGap = (pi: ExtensionAPI) => {
+				pi.on("session_shutdown", async (event) => {
+					if ((event as { reason?: string }).reason !== kind || subagent)
+						return;
+					subagent = await startRuntime(SessionManager.inMemory(cwd));
+					if (kind === "reload") {
+						await reload(subagent);
+						return;
+					}
+					const s = conversation(subagent);
+					s.user("subagent prompt 1");
+					s.done();
+					const su2 = s.user("subagent prompt 2");
+					s.done();
+					await subagent.fork(su2);
+				});
+			};
+			const primary = await startRuntime(SessionManager.inMemory(cwd), [
+				replaceInGap,
+			]);
+			const c = conversation(primary);
+			const written = path.join(cwd, "authored.conf");
+			const a = fixture("a.conf", 6);
+			c.user("prompt 1");
+			expect(await c.write("call_write", written, "w1\nw2\nw3")).toBe("ALLOW");
+			await c.read("call_read_a", a);
+			c.done();
+			await activateTools(primary, "act", ["ast_grep_search"]);
+			queueAgentAdvisory(
+				"lost edit in a.rs",
+				seen[0]!.captureSessionGeneration(),
+			);
+			const u2 = c.user("prompt 2");
+			c.done();
+			resetDegradationLedger();
+
+			if (kind === "reload") await reload(primary);
+			else await primary.fork(u2);
+
+			expect(subagent).toBeDefined();
+			return { subagent: subagent!, written, a };
+		}
+
+		function subjects(kind: string): string[] {
+			return getDegradationSummary()
+				.filter((group) => group.kind === kind)
+				.flatMap((group) => group.latestReasons.map((r) => r.subject));
+		}
+		const missedSubjects = () => subjects("session-scope-handoff-missed");
+
+		for (const kind of ["reload", "fork"] as const) {
+			it(`gives a subagent's own ${kind} in the gap none of the primary's activations, advisories or authorship`, async () => {
+				const { subagent, written, a } = await gapSubagentReplaces(kind);
+				const s = conversation(subagent);
+
+				expect.soft(activeSituational(subagent)).toEqual([]);
+				expect
+					.soft(await contextText(subagent))
+					.not.toContain("lost edit in a.rs");
+				expect
+					.soft(await s.editLine("sub_written", written, 2, "Y", false))
+					.toEqual(ZERO_READ);
+				// Reads never crossed: the read guard imports only the records
+				// whose tool call is on the adopting session's branch.
+				expect
+					.soft(await s.editLine("sub_a", a, 2, "Y", false))
+					.toEqual(ZERO_READ);
+				// Each crossing is its own soft assertion, so a red names every
+				// store that crossed. The subagent's start found no slot of its
+				// own and recorded it.
+				expect.soft(missedSubjects()).toEqual([kind]);
+			});
+		}
+
+		/**
+		 * TLC's 5-step `HandoffOnce` trace (the #3835 review): the ticket key
+		 * alone left the primary's reload slot in place, because the gap
+		 * subagent's own fork took nothing. That subagent, now primary, runs
+		 * /new; in its gap the session it demoted reloads itself, classifies
+		 * primary, and took the stale slot its own predecessor never left.
+		 */
+		for (const store of ["file-backed", "in-memory"] as const) {
+			it(`never lets a later reload of the demoted ${store} session take its predecessor's slot`, async () => {
+				let primary: AgentSessionRuntime | undefined;
+				let subagent: AgentSessionRuntime | undefined;
+				let demotedReloaded = false;
+				const reloadDemotedInNewGap = (pi: ExtensionAPI) => {
+					pi.on("session_shutdown", async (event) => {
+						if ((event as { reason?: string }).reason !== "new") return;
+						if (demotedReloaded) return;
+						demotedReloaded = true;
+						await reload(primary!);
+					});
+				};
+				const forkInGap = (pi: ExtensionAPI) => {
+					pi.on("session_shutdown", async (event) => {
+						if ((event as { reason?: string }).reason !== "reload") return;
+						if (subagent) return;
+						subagent = await startRuntime(SessionManager.inMemory(cwd), [
+							reloadDemotedInNewGap,
+						]);
+						const s = conversation(subagent);
+						s.user("subagent prompt 1");
+						s.done();
+						const su2 = s.user("subagent prompt 2");
+						s.done();
+						await subagent.fork(su2);
+					});
+				};
+				primary = await startRuntime(
+					store === "file-backed"
+						? SessionManager.create(cwd, sessionsDir)
+						: SessionManager.inMemory(cwd),
+					[forkInGap],
+				);
+
+				// The reload leaves its slot; in its gap the subagent's own fork
+				// classifies primary and the real successor is demoted.
+				await reload(primary);
+				// The demoted successor discarded the slot left for it (#3819 r2).
+				expect(subjects("session-scope-handoff-discarded")).toEqual(["reload"]);
+				// The subagent's /new leaves no slot; in its gap the demoted
+				// session reloads itself and classifies primary.
+				await subagent!.newSession();
+
+				expect(demotedReloaded).toBe(true);
+				const reloadStarts = (await scopeTransitionRows()).filter(
+					(row) => row.transition === "start" && row.reason === "reload",
+				);
+				expect(
+					reloadStarts.map((row) => [row.role, row.handoffSource]),
+				).toEqual([
+					["secondary", undefined],
+					// The sidecar the first reload's shutdown saved, not the slot
+					// that shutdown left for the start it demoted.
+					["primary", "own-sidecar"],
+				]);
+			});
+		}
+
+		/**
+		 * The r1 review's F1 probe: option (a) cleared the slot at every
+		 * primary start. A gap subagent's own /reload classifies primary (row
+		 * 17), takes nothing, and quits inside the gap, so the real successor
+		 * still classifies primary. The recurrence: that start found the slot
+		 * cleared, and an in-memory /fork lost its activations.
+		 */
+		for (const store of ["in-memory", "file-backed"] as const) {
+			it(`keeps an in-memory /fork's activations when a gap subagent (${store}) reloads itself and quits inside the gap`, async () => {
+				let subagent: AgentSessionRuntime | undefined;
+				const reloadAndQuitInGap = (pi: ExtensionAPI) => {
+					pi.on("session_shutdown", async (event) => {
+						if ((event as { reason?: string }).reason !== "fork") return;
+						if (subagent) return;
+						subagent = await startRuntime(
+							store === "in-memory"
+								? SessionManager.inMemory(cwd)
+								: SessionManager.create(cwd, sessionsDir),
+						);
+						await reload(subagent);
+						await subagent.dispose();
+						runtimes.splice(runtimes.indexOf(subagent), 1);
+					});
+				};
+				const primary = await startRuntime(SessionManager.inMemory(cwd), [
+					reloadAndQuitInGap,
+				]);
+				const c = conversation(primary);
+				c.user("prompt 1");
+				c.done();
+				await activateTools(primary, "act", ["ast_grep_search"]);
+				const u2 = c.user("prompt 2");
+				c.done();
+
+				await primary.fork(u2);
+
+				expect(subagent).toBeDefined();
+				expect(activeSituational(primary)).toEqual(["ast_grep_search"]);
+			});
+		}
 	});
 });

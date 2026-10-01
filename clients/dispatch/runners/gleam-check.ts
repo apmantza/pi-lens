@@ -10,6 +10,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 
 const gleam = createAvailabilityChecker("gleam", ".exe");
@@ -185,11 +186,10 @@ const gleamCheckRunner: RunnerDefinition = {
 			return { status: "succeeded", diagnostics: [], semantic: "none" };
 		}
 
-		return {
+		return findingsResult(diagnostics, {
 			status: "failed",
-			diagnostics,
 			semantic: "blocking",
-		};
+		});
 	},
 };
 

@@ -1,0 +1,12 @@
+# redaction exception: `.plegma/work` is kept on the next line because the default exclude glob **/.plegma/work/** keys on it.
+[2026-09-15T16:30:03.797Z] session_start config_resolution_pending session=4d6-mu11evwm-2 root=/home/user/.plegma/work/fix-3038-luna
+[2026-09-30T06:27:42.258Z] session_start fired
+[2026-09-30T06:27:42.259Z] session_start: build identity — commit=64163cc9 entryMtime=2026-09-27T09:46:48.932Z version=4.3.0
+[2026-09-30T10:03:45.684Z] session_start fired
+[2026-09-30T10:03:45.684Z] session_start: build identity — commit=4b6a3f53 entryMtime=2026-09-30T10:03:36.969Z version=4.3.0
+[2026-09-30T12:25:38.619Z] session_start fired
+[2026-09-30T12:25:38.620Z] session_start: build identity — commit=4b6a3f53 entryMtime=2026-09-30T10:03:36.969Z version=4.3.0
+[2026-09-30T20:51:33.141Z] session_start fired
+[2026-09-30T20:51:33.142Z] session_start: build identity — commit=cf1b548e entryMtime=2026-09-30T20:51:15.664Z version=4.3.0
+[2026-09-30T20:51:33.144Z] session_start config_resolution_pending session=1wp4j-muokyzkn-2 root=/home/user/Desktop/proj
+[2026-09-30T20:51:33.145Z] config resolved documents=0 legacy=0 records=0 deniedServers=0 resolveMs=1 session=1wp4j-muokyzkn-2 root=/home/user/Desktop/proj

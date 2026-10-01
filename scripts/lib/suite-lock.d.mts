@@ -2,6 +2,7 @@
 // #1101; shared slots #2435.
 
 export const DEFAULT_SHARED_SLOTS: number;
+export const MAX_SHARED_SLOTS: number;
 
 export function getLockPath(): string;
 

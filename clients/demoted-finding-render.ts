@@ -26,6 +26,8 @@
  * re-derivation-vs-correlation screen).
  */
 
+import { DELTA_UNUSED_PROMOTION_NOTE } from "./dispatch/utils/format-utils.js";
+
 /** Suffix that replaces a cited coordinate the file no longer has. */
 export const DEAD_LINE_ANNOTATION = "(line no longer exists)";
 
@@ -71,6 +73,18 @@ export interface DegradedFindingBody {
 
 /** `  L310: message` / `L310 message` at the head of a rendered row. */
 const CITED_LINE_RE = /^([^\S\n]*)L(\d+)\b/;
+
+/**
+ * #3748 item 3: the exact row {@link formatPromotionNotes} appends
+ * (`clients/dispatch/utils/format-utils.ts`). A demoted record must not carry
+ * it: the note says the finding blocks because the agent's edit introduced it,
+ * which is false once the record left the authoritative channel.
+ *
+ * Keyed to the seam-owned constant rather than a copy of the sentence, so a
+ * reword of the promotion note cannot leave a stale row behind in a demoted
+ * body.
+ */
+const PROMOTION_NOTE_ROW = `  ℹ️ ${DELTA_UNUSED_PROMOTION_NOTE}`;
 
 /**
  * Split a rendered body into its BANNER region and its CONTENT region
@@ -145,10 +159,15 @@ export function degradeDemotedFindingBody(
 		return rewritten;
 	});
 
-	let body = degradedLines.join("\n");
+	// #3748 item 3: the promotion rationale is a claim about the live blocker
+	// tier. A demoted row has left that tier, so the claim is false and the row
+	// is dropped with the authority it asserted.
+	const keptLines = degradedLines.filter((line) => line !== PROMOTION_NOTE_ROW);
+
+	let body = keptLines.join("\n");
 	const deadLinesAnnotated: number[] = [];
 	if (deadLines.size > 0) {
-		body = degradedLines
+		body = keptLines
 			.map((line) => {
 				const hit = CITED_LINE_RE.exec(line);
 				if (!hit) return line;

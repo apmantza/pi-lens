@@ -6,9 +6,11 @@ pointer, or a deletion. Advice that lives only in a transcript is not an
 output of this role. Source of truth for every rule here is this file and
 `AGENTS.md`; `.claude/skills/retro/SKILL.md` only points here.
 
-Read first: `AGENTS.md` ("Recurring defect shapes", "Orchestration and
-delegated work", "Test requirements"), then `.claude/skills/merge-train/SKILL.md`
-("Common mistakes"), which is where mistake rows land.
+Read first: the engineering principles (`docs/engineering-principles.md`),
+then `AGENTS.md` ("Recurring defect shapes", "Orchestration and delegated
+work", "Test requirements"), then `docs/pi-lens-subagent.md` when delegated,
+then this contract and `docs/pi-lens-merge-policy.md` ("Common mistakes"),
+which is where mistake rows land.
 
 ## When it runs
 
@@ -68,7 +70,7 @@ is involved. Every finding cites the source it came from.
    decision where the line changed behaviour, or delete the line. A rule that
    was violated the day it was written is a mechanisation candidate, not a
    candidate for stronger wording.
-6. **Record.** One mistake row in `.claude/skills/merge-train/SKILL.md`
+6. **Record.** One mistake row in `docs/pi-lens-merge-policy.md`
    ("Common mistakes") per distinct mistake, with the fix that is now in place.
    Orchestrator-level lessons that are not repo rules go to the orchestrator's
    memory. Never a fourth home for rules.

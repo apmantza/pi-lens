@@ -10,7 +10,8 @@
 (*    v, unless the #1459 gate defers the write. The aux-grace wait later  *)
 (*    decides the outcome from per-path publication evidence (any publish  *)
 (*    since the pre-notify baseline = "answered") and, with no evidence,   *)
-(*    marks the pair with markedAtMs = Date.now() (index.ts ~6025). A      *)
+(*    marks the pair with markedAtMs = Date.now() (clients/lsp/index.ts    *)
+(*    touchFile). A                                                        *)
 (*    producer re-mark of an existing pair moves the baseline              *)
 (*    (pending-aux-coverage.ts markPendingAuxiliaryCoverage, #2027);       *)
 (*  - external edits (another session, a shell write): the disk changes,   *)
@@ -18,7 +19,8 @@
 (*  - the scanner (opengrep): scans what it was sent, in order, and        *)
 (*    publishes WITHOUT a version. The client stores the publish with      *)
 (*    ts = receipt time; isSupersededPush cannot drop a version-less push  *)
-(*    (client.ts ~2440-2480). It may skip a superseded scan (AllowCancel); *)
+(*    (clients/lsp/client.ts isSupersededPush). It may skip a superseded   *)
+(*    scan (AllowCancel);                                                  *)
 (*  - opengrep's rule refresh (#3490, opengrep@1a5fd9d                     *)
 (*    Scan_helpers.refresh_rules): `semgrep/rulesRefreshed`, then one      *)
 (*    SURPLUS publish per file with a recorded scan. It answers no send.   *)
@@ -39,7 +41,7 @@
 (*    the reopen, so they count toward the new lifetime. The fix           *)
 (*    ("span"): the counts span the close, and a publish dropped while     *)
 (*    closed is counted;                                                   *)
-(*  - the turn_end drain (runtime-turn.ts ~3895-4220):                     *)
+(*  - the turn_end drain (runtime-turn.ts handleTurnEnd):                  *)
 (*      DrainStart   drainPendingAuxiliaryCoverage (sync)                  *)
 (*      DrainRead    await readCachedDiagnosticsForServers, then the sync  *)
 (*                   `publishedAt <= markedAtMs` -> re-arm check           *)
@@ -69,7 +71,7 @@ CONSTANTS
     CountBind,        \* candidate fix: pair records the scanner's backlog at
                       \* mark; deliver only once that many publishes landed
     MarkAtNotify,     \* candidate fix: markedAtMs = the touch's notify time,
-                      \* not Date.now() after the grace wait (index.ts ~6028)
+                      \* not Date.now() after the grace wait (lsp/index.ts touchFile)
     ExtDuringGrace,   \* external edits may land inside a touch's aux-grace wait
     Refresh,          \* "none" | "answered" | "outstanding": one
                       \* semgrep/rulesRefreshed, arriving after v0's first
@@ -282,7 +284,7 @@ ClosePublish ==
                    delivered, sentCount, lastSent, refreshVars, closed, closesLeft>>
 
 \* Aux-grace outcome and mark: evidence check, filter and mark run in one
-\* continuation (index.ts ~5920-6030), so one step.
+\* continuation (clients/lsp/index.ts touchFile), so one step.
 GraceEnd ==
     /\ touch = "grace"
     /\ touch' = "idle"
@@ -413,7 +415,7 @@ Next == AgentTouch \/ Close \/ GraceEnd \/ ExternalEdit \/ Publish \/ CancelSupe
 Spec == Init /\ [][Next]_vars
 
 -----------------------------------------------------------------------------
-\* The comment's promise (runtime-turn.ts ~4070, ~4132): "a changed file
+\* The comment's promise (runtime-turn.ts handleTurnEnd): "a changed file
 \* cannot resurrect stale data". Findings delivered were computed on the
 \* content that was on disk when the drain checked it.
 NoStaleFindings == \A d \in delivered : d.ver = d.disk

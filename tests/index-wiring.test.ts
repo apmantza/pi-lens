@@ -1944,6 +1944,32 @@ describe("hook handler crash surfacing (#2884)", () => {
 		expect(takeHandoff("reload", undefined)).toBeUndefined();
 	});
 
+	// #3819: the primary shutdown reads the session manager that a
+	// file-less slot's ticket is bound to. The recurrence: that read,
+	// unguarded, throwing a stale ctx's error into pi's teardown.
+	it("tears down a primary reload whose ctx went stale before the slot's session manager was read", async () => {
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		await pi.emit(
+			"session_start",
+			makeSessionStartEvent(),
+			makeCtx({ cwd: tmp }),
+		);
+		const stale = makeCtx({ cwd: tmp });
+		Object.defineProperty(stale, "sessionManager", {
+			configurable: true,
+			get() {
+				throw new Error(
+					"This extension ctx is stale after session replacement or reload",
+				);
+			},
+		});
+
+		await expect(
+			pi.emit("session_shutdown", { reason: "reload" }, stale),
+		).resolves.toBeUndefined();
+	});
+
 	it("surfaces a crashed observed_settled_sweep under the test runner and records it", async () => {
 		handlerCrashInjection.site = "observed_settled_sweep";
 		const pi = createPiMock();

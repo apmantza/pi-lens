@@ -419,22 +419,41 @@ export function snapshotSessionStores(
 
 /**
  * The slot is keyed by the transition it was left for: the start reason and
- * the successor's session file (F2). A file-less session keys on `undefined`,
- * so its reason carries the match.
+ * the successor's session file (F2). A file-less session has no file, so its
+ * key is the ticket of the scope that left the slot (#3819), bound to the
+ * session manager it left from. pi hands a file-less `/reload` or in-memory
+ * `/fork` successor that same manager, so the successor finds the ticket; a
+ * subagent's own start, on a manager no primary shutdown left a slot from,
+ * does not.
  */
 interface Handoff {
 	reason: StartReason;
-	sessionFile: string | undefined;
+	/** The successor's session file; file-less, the stashing scope's ticket. */
+	key: string | number;
 	stores: Record<string, unknown>;
 }
 
 const HANDOFF_FAMILY = "session-scope.handoff";
-/** Bump when {@link Handoff}'s shape changes. */
-const HANDOFF_VERSION = 1;
+/** Bump when {@link Handoff}'s or the cell's shape changes. */
+const HANDOFF_VERSION = 2;
 
-function handoffSlot(): { handoff: Handoff | undefined } {
+interface HandoffCell {
+	handoff: Handoff | undefined;
+	/** A pi session manager to the ticket of the last slot left from it. */
+	left: WeakMap<object, number>;
+}
+
+/** A session manager is a WeakMap key only when it is an object. */
+function asManager(sessionManager: unknown): object | undefined {
+	return typeof sessionManager === "object" && sessionManager !== null
+		? sessionManager
+		: undefined;
+}
+
+function handoffSlot(): HandoffCell {
 	return getProcessSingleton(HANDOFF_FAMILY, HANDOFF_VERSION, () => ({
 		handoff: undefined,
+		left: new WeakMap<object, number>(),
 	}));
 }
 
@@ -450,33 +469,74 @@ export function stashHandoff(
 		reason: string | undefined;
 		sessionFile: string | undefined;
 		targetSessionFile: string | undefined;
+		/** The session's pi session manager, which binds a file-less slot's ticket. */
+		sessionManager?: unknown;
 	},
 ): boolean {
 	// `quit` and a missing reason have no successor: they read as `startup`.
 	const reason = toStartReason(args.reason);
 	if (!SOURCES[reason].includes("slot")) return false;
-	handoffSlot().handoff = {
+	const cell = handoffSlot();
+	const manager = asManager(args.sessionManager);
+	if (manager !== undefined) cell.left.set(manager, scope.scopeId);
+	cell.handoff = {
 		reason,
-		sessionFile: args.targetSessionFile ?? args.sessionFile,
+		key: args.targetSessionFile ?? args.sessionFile ?? scope.scopeId,
 		stores: snapshotSessionStores(scope),
 	};
 	return true;
 }
 
 /**
- * Consume the slot only when its key equals this start's (F2); a slot left
- * for another start stays in place.
+ * Consume the slot only when its key equals this start's (F2): its session
+ * file, or, file-less, its predecessor's ticket. A slot left for another
+ * start stays in place.
  */
 export function takeHandoff(
 	reason: StartReason,
-	sessionFile: string | undefined,
+	key: string | number | undefined,
 ): Record<string, unknown> | undefined {
 	const slot = handoffSlot();
 	const handoff = slot.handoff;
-	if (handoff?.reason !== reason || handoff.sessionFile !== sessionFile)
-		return undefined;
+	if (handoff?.reason !== reason || handoff.key !== key) return undefined;
 	slot.handoff = undefined;
 	return handoff.stores;
+}
+
+/**
+ * A start's slot key: its session file, or, file-less, the ticket its session
+ * manager left (#3819). pi hands a file-less `/reload` or in-memory `/fork`
+ * successor its predecessor's manager.
+ */
+function startKey(
+	sessionFile: string | undefined,
+	sessionManager: unknown,
+): string | number | undefined {
+	const manager = asManager(sessionManager);
+	return sessionFile ?? (manager && handoffSlot().left.get(manager));
+}
+
+/**
+ * A declined (demoted) `session_start` (#3819 r2): discard, without adopting,
+ * the slot left for it. A row-17 start demoted the real successor, which can
+ * return later as a primary start of the same conversation and must not take
+ * the stale slot then. Only the start the slot was left for can match it, so
+ * no other start's slot is lost. True when a slot was discarded.
+ */
+export function discardHandoff(args: {
+	reason: string | undefined;
+	sessionFile: string | undefined;
+	sessionManager: unknown;
+}): boolean {
+	const reason = toStartReason(args.reason);
+	if (!takeHandoff(reason, startKey(args.sessionFile, args.sessionManager)))
+		return false;
+	recordDegradationOnce({
+		kind: "session-scope-handoff-discarded",
+		subject: reason,
+		reason: `a demoted ${reason} start discarded the hand-off slot left for it, so a later start of its conversation cannot take it stale`,
+	});
+	return true;
 }
 
 export interface PersistedStores {
@@ -501,12 +561,16 @@ export async function adoptHandoff(
 	},
 ): Promise<StartSource> {
 	const reason = toStartReason(args.reason);
+	// Only a fork or reload slot is ever left, so no other reason matches.
+	const slotted = takeHandoff(
+		reason,
+		startKey(args.sessionFile, args.sessionManager),
+	);
 	let source: StartSource = "none";
 	let found: { savedAt?: number; stores: Record<string, unknown> } | undefined;
 	for (const candidate of SOURCES[reason]) {
 		if (candidate === "slot") {
-			const stores = takeHandoff(reason, args.sessionFile);
-			found = stores && { stores };
+			found = slotted && { stores: slotted };
 		} else if (candidate === "own-sidecar") {
 			found = await args.loadOwnSidecar();
 		} else {
@@ -521,7 +585,7 @@ export async function adoptHandoff(
 		recordDegradationOnce({
 			kind: "session-scope-handoff-missed",
 			subject: reason,
-			reason: `a ${reason} start found no hand-off slot left for its session file; it started from ${source}`,
+			reason: `a ${reason} start found no hand-off slot keyed by its session file or its predecessor's ticket; it started from ${source}`,
 		});
 	for (const spec of sessionStores.values()) {
 		const action = spec.policy[reason];

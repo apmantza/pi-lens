@@ -42,4 +42,23 @@ describe("commentFactProvider", () => {
 	it("returns empty on empty content", async () => {
 		expect(await run("")).toEqual([]);
 	});
+
+	// Recurrence (#3780, #3706 survivor): the degrade defaults passed to
+	// `extractFactsFromTree` were replaced by `["Stryker was here"]` and every
+	// test stayed green, because `run()` above reads the fact through `?? []`
+	// and always supplies parseable content. A file the provider cannot read must
+	// publish an EMPTY comment list, never a fabricated one.
+	it.each([
+		["no file.content fact", "/tmp/c.ts", undefined],
+		["a path no grammar parses", "/tmp/c.unparseable", "// hi\nconst a = 1;\n"],
+	])(
+		"publishes an empty comment list for %s",
+		async (_label, filePath, content) => {
+			const facts = new FactStore();
+			if (content !== undefined)
+				facts.setFileFact(filePath, "file.content", content);
+			await commentFactProvider.run({ filePath } as never, facts);
+			expect(facts.getFileFact(filePath, "file.comments")).toEqual([]);
+		},
+	);
 });

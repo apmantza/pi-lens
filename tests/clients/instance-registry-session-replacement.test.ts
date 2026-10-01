@@ -100,23 +100,24 @@ async function expectSessionTwoRegistersAlone(): Promise<void> {
 	});
 }
 
+// Shared by both describes below: a fresh registry dir and module graph per case.
+beforeEach(async () => {
+	dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-instreg-"));
+	vi.resetModules();
+	registry = await import("../../clients/instance-registry.js");
+	ledger = await import("../../clients/degradation-ledger.js");
+});
+
+afterEach(async () => {
+	vi.restoreAllMocks();
+	peerReleases();
+	// The tail is a process singleton: settle it here so nothing queued by
+	// one case lands in the next case's directory.
+	await registry._settleRegistryMutationsForTests();
+	removeTempDirSync(dir);
+});
+
 describe("instance registry across a session replacement (#3498)", () => {
-	beforeEach(async () => {
-		dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-instreg-3498-"));
-		vi.resetModules();
-		registry = await import("../../clients/instance-registry.js");
-		ledger = await import("../../clients/degradation-ledger.js");
-	});
-
-	afterEach(async () => {
-		vi.restoreAllMocks();
-		peerReleases();
-		// The tail is a process singleton: settle it here so nothing queued by
-		// one case lands in the next case's directory.
-		await registry._settleRegistryMutationsForTests();
-		removeTempDirSync(dir);
-	});
-
 	/**
 	 * session_shutdown arrives while the heartbeat's read of the registry is in
 	 * flight, i.e. while the heartbeat holds the registry lock. The sync
@@ -366,4 +367,109 @@ describe("instance registry across a session replacement (#3498)", () => {
 		// synchronous lock spin before its lease-waiting lock.
 		expect(degradationCount("instance-registry-lock-timeout")).toBe(0);
 	}, 15_000);
+});
+
+/**
+ * #3780 (the #3657 mutation survivors): what a scoped root removal decides,
+ * observed through the real registry, its ledger and the heartbeat's repair.
+ * The recurrence guarded: `planRootRemoval` kept every branch of its decision
+ * alive under mutation because each case above reads only the happy outcome
+ * (the entry lost its root) and never the records, the peer entries beside it,
+ * or the intent a removal of a root that was never served must leave alone.
+ */
+describe("a scoped root removal's decision (#3587)", () => {
+	function landedReasons(): string[] {
+		return (
+			ledger
+				.getDegradationSummary()
+				.find((group) => group.kind === "instance-registry-deregister-landed")
+				?.latestReasons.map((row) => row.reason) ?? []
+		);
+	}
+
+	it("says it updated this process's entry when a served root was removed", async () => {
+		await registry.registerInstance(ROOT_A);
+		await registry.registerInstanceRoot(ROOT_SECONDARY);
+
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY);
+
+		expect(landedReasons()).toEqual([
+			expect.stringContaining("updated this process's entry"),
+		]);
+	});
+
+	it("says there was nothing left to remove, and writes nothing, for a root never served", async () => {
+		await registry.registerInstance(ROOT_A);
+		const before = fs.readFileSync(registryFilePath(), "utf8");
+
+		await registry.deregisterInstanceRoot(ROOT_B);
+
+		expect(landedReasons()).toEqual([
+			expect.stringContaining("nothing left to remove"),
+		]);
+		expect(fs.readFileSync(registryFilePath(), "utf8")).toBe(before);
+	});
+
+	it("leaves a peer's entry alone when it rewrites this process's entry", async () => {
+		await registry.registerInstance(ROOT_A);
+		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		const file = JSON.parse(fs.readFileSync(registryFilePath(), "utf8")) as {
+			instances: Array<Record<string, unknown>>;
+		};
+		const peer = {
+			...file.instances[0],
+			pid: process.ppid,
+			processStart: "a-peer",
+			projectRoot: "/repo/peer",
+			projectRoots: ["/repo/peer", "/repo/peer-second"],
+		};
+		file.instances.push(peer);
+		fs.writeFileSync(registryFilePath(), JSON.stringify(file));
+
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY);
+
+		const after = JSON.parse(fs.readFileSync(registryFilePath(), "utf8")) as {
+			instances: Array<{ pid: number; projectRoots: string[] }>;
+		};
+		expect(after.instances.find((e) => e.pid === process.ppid)).toEqual(peer);
+		expect(ownEntry()?.projectRoots).toEqual([normalizeFilePath(ROOT_A)]);
+	});
+
+	describe("when this process's entry is already gone", () => {
+		async function entryGoneAfterRegistering(): Promise<void> {
+			await registry.registerInstance(ROOT_A);
+			fs.writeFileSync(registryFilePath(), JSON.stringify({ instances: [] }));
+		}
+
+		it("stops the heartbeat from re-registering the root that was just removed", async () => {
+			await entryGoneAfterRegistering();
+
+			await registry.deregisterInstanceRoot(ROOT_A);
+			await registry.updateHeartbeat();
+			await registry._settleRegistryMutationsForTests();
+
+			expect(ownEntry()).toBeUndefined();
+		});
+
+		it("keeps the heartbeat's repair intent when the removed root is another one", async () => {
+			await entryGoneAfterRegistering();
+
+			await registry.deregisterInstanceRoot(ROOT_B);
+			await registry.updateHeartbeat();
+			await registry._settleRegistryMutationsForTests();
+
+			expect(ownEntry()?.projectRoots).toEqual([normalizeFilePath(ROOT_A)]);
+		});
+
+		it("lands the removal with no intent to consult", async () => {
+			await registry.registerInstance(ROOT_A);
+			registry.deregisterInstance();
+
+			await registry.deregisterInstanceRoot(ROOT_B);
+
+			expect(landedReasons()).toEqual([
+				expect.stringContaining("nothing left to remove"),
+			]);
+		});
+	});
 });

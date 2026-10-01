@@ -6,9 +6,9 @@ import {
 } from "../../../clients/dispatch/facts/import-facts.js";
 
 // Minimal FactStore stub for testing the provider in isolation
-function makeStore(content: string) {
+function makeStore(content: string | undefined) {
 	const facts = new Map<string, unknown>();
-	facts.set("file.content", content);
+	if (content !== undefined) facts.set("file.content", content);
 	return {
 		getFileFact: <T>(_file: string, key: string) =>
 			facts.get(key) as T | undefined,
@@ -20,12 +20,13 @@ function makeStore(content: string) {
 }
 
 // The provider parses via the shared tree-sitter client, so run() is async now.
-async function runProvider(filePath: string, content: string) {
+async function runProvider(filePath: string, content: string | undefined) {
 	const store = makeStore(content);
 	await importFactProvider.run({ filePath } as any, store as any);
 	return {
 		imports: (store.getAll("file.imports") as ImportEntry[]) ?? [],
 		reexports: (store.getAll("file.reexports") as ReExportEntry[]) ?? [],
+		coverage: store.getAll("file.importFactsCoverage") as string | undefined,
 	};
 }
 
@@ -313,5 +314,127 @@ describe("importFactProvider — appliesTo", () => {
 		);
 		expect(reexports).toHaveLength(1);
 		expect(reexports[0].source).toBe("./utils.js");
+	});
+});
+
+// #3780 (survivor audit of #3706): the replays of these mutants stayed green
+// because no test fed the provider a file that must NOT yield an import or a
+// re-export, or read the moduleType/names payload of a dynamic or require entry.
+// Recurrence each block prevents is named on the block.
+describe("importFactProvider — inputs that yield no import or re-export (#3780)", () => {
+	// Recurrence: `export_statement` test replaced by `true` (#3706 survivor) made
+	// the directive prologue's string a phantom re-export and flipped hasEsm.
+	it("does not read a use strict directive as a re-export", async () => {
+		const { reexports, imports } = await runProvider(
+			"f.ts",
+			`"use strict";\nconst m = await import("./d.js");\n`,
+		);
+		expect(reexports).toEqual([]);
+		// hasEsm stays false, so the lone dynamic import is still "unknown".
+		expect(imports).toStrictEqual([
+			{ source: "./d.js", names: [], isDynamic: true, moduleType: "unknown" },
+		]);
+	});
+
+	// Recurrence: the callee tests of the call_expression arm replaced by `true`
+	// (or `&&` by `||`) made every call with a string argument a require import,
+	// i.e. a phantom graph edge to whatever string any function was called with.
+	it.each([
+		["a plain call", `foo("x");`],
+		["a member call named require", `a.require("x");`],
+		["a parenthesised require", `(require)("x");`],
+		["require of a non-literal", `const name = "x"; require(name);`],
+	])("does not read %s as an import", async (_label, source) => {
+		const { imports, reexports, coverage } = await runProvider("f.ts", source);
+		// "complete": the file parsed, so the empty result is a verdict, not a
+		// degrade (an unavailable grammar also leaves both lists empty).
+		expect(coverage).toBe("complete");
+		expect(imports).toEqual([]);
+		expect(reexports).toEqual([]);
+	});
+
+	// Recurrence: `if (entry)` replaced by `true` pushed the null that
+	// `parseStaticImport` returns for an `import x = require()` clause, and
+	// review-graph/builder.ts then read `entry.source` off null in its imports
+	// loop (TypeError on any file with that statement).
+	it("yields no entry, and no null, for an import-equals require statement", async () => {
+		const { imports, reexports } = await runProvider(
+			"f.ts",
+			`import fs = require("fs");\nconst m = await import("./d.js");\n`,
+		);
+		expect(imports).toStrictEqual([
+			{ source: "./d.js", names: [], isDynamic: true, moduleType: "esm" },
+		]);
+		expect(reexports).toEqual([]);
+	});
+
+	// Recurrence: `prop?.text` without the `?.` threw a TypeError inside the
+	// walk for `module.#x`, whose member has no `property_identifier` child, so
+	// the whole file lost its imports.
+	it("keeps extracting imports past a module.#x private member", async () => {
+		const { imports } = await runProvider(
+			"f.ts",
+			`class C {\n  #x = 1;\n  read(module: C) {\n    return module.#x;\n  }\n}\nconst m = await import("./d.js");\n`,
+		);
+		expect(imports).toStrictEqual([
+			{ source: "./d.js", names: [], isDynamic: true, moduleType: "unknown" },
+		]);
+	});
+});
+
+describe("importFactProvider — moduleType of a dynamic import (#3780)", () => {
+	// Recurrence: #3706's replays of each module-type arm (export clause,
+	// `module.exports`, require) stayed green because every existing assertion
+	// read moduleType off a static import, where hasEsm alone decides it. A
+	// trailing `import()` is the entry whose moduleType is the file's verdict.
+	it.each([
+		["module.exports marks the file cjs", `module.exports = {};`, "cjs"],
+		["another object's .exports is not cjs", `x.exports = 1;`, "unknown"],
+		["another module property is not cjs", `module.id;`, "unknown"],
+		[
+			"a namespace named module.exports is not cjs",
+			`namespace module.exports {}`,
+			"unknown",
+		],
+		[
+			"a require call marks the file cjs",
+			`const r = require("./r.js");`,
+			"cjs",
+		],
+		["an exported declaration is not ESM", `export const a = 1;`, "unknown"],
+		["a star re-export marks the file ESM", `export * from "./a.js";`, "esm"],
+		[
+			"a named re-export marks the file ESM",
+			`export { a } from "./a.js";`,
+			"esm",
+		],
+		["a local export clause marks the file ESM", `export { a };`, "esm"],
+		["a static import marks the file ESM", `import "./a.js";`, "esm"],
+	])("%s", async (_label, prefix, expected) => {
+		const { imports } = await runProvider(
+			"f.ts",
+			`${prefix}\nconst m = await import("./d.js");\n`,
+		);
+		expect(imports.find((i) => i.source === "./d.js")).toStrictEqual({
+			source: "./d.js",
+			names: [],
+			isDynamic: true,
+			moduleType: expected,
+		});
+	});
+
+	// Recurrence: the payload of the two dynamic-entry literals (`names: []`,
+	// the `kind === "import"` split) had no assertion; no production consumer
+	// reads them yet, so a drift would only show up in the IR copy.
+	it("shapes a require entry as cjs with empty names and no isDynamic", async () => {
+		const { imports } = await runProvider(
+			"f.ts",
+			`import x from "./x.js";\nconst r = require("./r.js");\n`,
+		);
+		expect(imports.find((i) => i.source === "./r.js")).toStrictEqual({
+			source: "./r.js",
+			names: [],
+			moduleType: "cjs",
+		});
 	});
 });

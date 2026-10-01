@@ -40,6 +40,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import {
 	calculateRuleComplexity,
 	isOverlyBroadPattern,
@@ -1493,11 +1494,10 @@ const astGrepNapiRunner: RunnerDefinition = {
 		} else if (diagnostics.length > 0) {
 			semantic = "warning";
 		}
-		return {
+		return findingsResult(diagnostics, {
 			status: hasBlocking ? "failed" : "succeeded",
-			diagnostics,
 			semantic,
-		};
+		});
 	},
 };
 

@@ -178,6 +178,8 @@ const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 	_readGuard: "reset",
 	_readWidenings: "reset",
 	_reportedThisTurn: "reset",
+	_resolvedBlockerFilesDropped: "reset",
+	_resolvedBlockerFilesThisTurn: "reset",
 	_scope: "reset",
 	_sessionStartedAt: "reset",
 	_startupScansInFlight: "reset",

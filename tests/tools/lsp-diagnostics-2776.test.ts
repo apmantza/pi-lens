@@ -38,9 +38,16 @@ fs.writeFileSync(
 		),
 );
 
-process.env.PI_LENS_HOME = path.join(root, ".pi-lens-home");
-process.env.FAKE_LSP_NOTIFY_BACKLOG_WEDGE = "1";
-process.env.PROBE_IGNORE_PULL = "1";
+// #3715: module-scope pins, restored in afterAll so nothing here outlives the file.
+const ENV_PINS = {
+	PI_LENS_HOME: path.join(root, ".pi-lens-home"),
+	FAKE_LSP_NOTIFY_BACKLOG_WEDGE: "1",
+	PROBE_IGNORE_PULL: "1",
+};
+const previousEnv = Object.fromEntries(
+	Object.keys(ENV_PINS).map((key) => [key, process.env[key]]),
+);
+Object.assign(process.env, ENV_PINS);
 
 describe("#2776 custom primary diagnostic provenance", () => {
 	const workspace = path.join(root, "workspace");
@@ -72,6 +79,10 @@ describe("#2776 custom primary diagnostic provenance", () => {
 	});
 
 	afterAll(async () => {
+		for (const [key, value] of Object.entries(previousEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
 		await service?.shutdown();
 		probe.cleanup();
 	});

@@ -24,7 +24,8 @@ const mocked = vi.hoisted(() => ({ service: null as unknown }));
 const { getServersForFileWithConfig } = vi.hoisted(() => ({
 	getServersForFileWithConfig: vi.fn(),
 }));
-vi.mock("../../clients/lsp/config.js", () => ({
+vi.mock("../../clients/lsp/config.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/lsp/config.js")>()),
 	getServersForFileWithConfig,
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 	primaryServerId: (fp: string) => getServersForFileWithConfig(fp)[0]?.id,

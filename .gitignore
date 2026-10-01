@@ -91,6 +91,7 @@ migrate-*.js
 !docs/pi-lens-retro.md
 !docs/pi-lens-reviewer.md
 !docs/pi-lens-investigator.md
+!docs/pi-lens-merge-policy.md
 !docs/pi-lens-warden.md
 !docs/pi-lens-monitor.md
 !docs/real-harness.md

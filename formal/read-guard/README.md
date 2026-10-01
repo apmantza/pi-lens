@@ -1,14 +1,14 @@
 # Read-guard model
 
-A TLA+ model of the read-before-edit guard (`clients/read-guard.ts`) for one
+A TLA+ model of the read-before-edit guard (`clients/read-guard.ts` `checkEdit`) for one
 file. It covers the agent's reads and edits, pi-lens' own writes (the
 immediate autofix, the deferred `agent_end` format), another writer, and
 session boundaries. The `TLA+ models` CI job
 (`node scripts/check-tla-models.mjs`) checks every config here against its
 `\* expect:` line.
 
-Issues: #3519, #3521, #3522, #3523 and #3524 are fixed in the code and modelled
-as such. The configs for #3520 and #3525 still document their bugs against the
+Issues: #3519, #3521, #3522, #3523, #3524 and #3525 are fixed in the code and
+modelled as such. The configs for #3520 still document its bug against the
 current code (`violated`).
 
 ## Scope
@@ -16,7 +16,7 @@ current code (`violated`).
 The model covers **positional** edits: `oldRange`, `edits[].range`, and the
 hashline adapters. The guard fully enforces only this class. An `oldText` edit
 is content-validated by the host, so `checkEdit` gets `skipSnapshotCheck` and
-`oldTextResolved` (`runtime-tool-call.ts` ~1575). For such an edit, FileTime and
+`oldTextResolved` (`clients/runtime-tool-call.ts` `handleToolCall`). For such an edit, FileTime and
 the snapshot are skipped and out-of-range is only a warning. The only checks
 left are zero-read and the bridge content binding.
 
@@ -28,27 +28,41 @@ change.
 
 - **The agent**, one tool at a time (pi awaits each handler):
   - **read** (full or ranged): the tool_call provisional record, which takes
-    a FileTime stamp (`runtime-tool-call.ts` ~1054), the host read, then the
-    tool_result record that supersedes it (`runtime-tool-result.ts` ~1797).
+    a FileTime stamp (`clients/runtime-tool-call.ts` `handleToolCall`), the host read, then the
+    tool_result record that supersedes it (`clients/runtime-tool-result.ts` `handleToolResult`).
     Since #3524, when the file moved after the tool_call's stamp, that record
     is hashed and sized from the delivered text and keeps the stamp;
-  - **positional edit** of 1 or 2 lines: `checkEdit` at tool_call (~1572),
-    optional relocation (~1585), the host apply, then `recordWritten` at
-    tool_result (~2367). Since #3523, an edit the guard allowed unrelocated
-    (`markToolCallEditInPlace`, ~1628) is recorded as a read of the lines it
-    wrote, hashed from its `newText` (`runtime-tool-result.ts` ~2316);
+  - **positional edit** of 1 or 2 lines: `checkEdit` at tool_call,
+    optional relocation, the host apply, then `recordWritten` at
+    tool_result. Since #3523, an edit the guard allowed unrelocated
+    (`markToolCallEditInPlace`) is recorded as a read of the lines it
+    wrote, hashed from its `newText` (`clients/runtime-tool-result.ts`
+    `handleToolResult`). Only a
+    single `edits[].range` replacement is recorded (#3760): a multi-range
+    batch, an `oldRange` edit and a hashline edit keep being refused on a
+    re-edit, and a relocated edit is never recorded (`OwnEditRelocInsert`);
   - **write**: `noteCreatedFile` at tool_call, the host write, and
-    `recordWritten`, which injects the creation read from disk
-    (`read-guard.ts` `injectCreationRead`, ~1568). The turn's first write then
-    runs the immediate autofix (`pipeline.ts`), calls `recordWritten` again
-    (`runtime-tool-result.ts` ~1107), and attaches the post-fix bytes as
-    "authoritative" (~2871). Since #3519 the attachment, when delivered, is
-    recorded as a whole-file read hashed from the attached bytes (~2934).
+    `recordWritten`, which injects the creation read (`read-guard.ts`
+    `injectCreationRead`). Since #3524's remainder it is hashed from the
+    write's executed `content`, not from disk. The turn's first write then
+    runs the immediate autofix (`clients/pipeline.ts` `runAutofix`), calls `recordWritten` again
+    (`clients/runtime-tool-result.ts` `handleToolResult`), and attaches the post-fix bytes as
+    "authoritative". Since #3519 the attachment, when delivered, is
+    recorded as a whole-file read hashed from the attached bytes.
 - **Another writer** (an external editor, a second pi-lens instance, git):
   changes the file between any two steps. With `ExtPhases` it can land inside
   a tool call.
 - **The deferred `agent_end` format drain**: rewrites the file, then calls
-  `recordWritten` (`runtime-agent-end.ts`). With `DrainMode = "atomic"` it
+  `recordWritten` (`clients/runtime-agent-end.ts` `handleAgentEnd`). Since #3525 that call credits
+  authorship (`written`) and leaves FileTime where it was
+  (`stampFileTime: false`): the agent never saw those bytes. The format
+  service's own FileTime is its own table (`format-service.ts`, keyed
+  `<session>:format`) since #3785 review round 2. Before that it was built
+  with the guard's session id, and a `FileTime` is keyed by session id, so
+  its stamp before formatting (`pipeline.ts` `runFormatPhase`) and after
+  (`FormatService.formatFile`) landed in the guard's table: production
+  was `FormatStamp = TRUE` (`UnhashedFormatStampOn`) even with
+  `stampFileTime: false`. With `DrainMode = "atomic"` it
   runs inside the turn boundary. Otherwise it is queued at `Settle` (pi's
   `agent_settled`, when pi already accepts `/tree`) and lands in `Drain`,
   possibly after a `/tree`, or an aborted or failed drain puts it back
@@ -79,9 +93,9 @@ edits and writes, and the authoritative attachment.
 ## Switches
 
 The current code is `HandlerEvidence = FALSE`, `CreationHandlerEvidence =
-TRUE`, `RecordAuthoritative = TRUE`, `RecordOwnEdit = TRUE`,
-`OwnEditSkipsReloc = TRUE`, `MtimeAuthored = TRUE`, `OwnEditRescue = TRUE`,
-`BranchFilter = TRUE`, `FormatStamp = TRUE`, `SpanSnapshot = TRUE`,
+FALSE`, `RecordAuthoritative = TRUE`, `RecordOwnEdit = TRUE`,
+`OwnEditSkipsReloc = TRUE`, `MtimeAuthored = TRUE`, `OwnEditRescue = FALSE`,
+`BranchFilter = TRUE`, `FormatStamp = FALSE`, `SpanSnapshot = TRUE`,
 `RelocFromLatest = TRUE`, `WholeVouchesPastEnd = FALSE`, `ForkAtBoundary = FALSE`,
 `DrainMode = "fenced"` (every config before #3521 round 2 keeps `"atomic"`,
 its old shape). `ForkImport` is read only when `BranchFilter = FALSE`; the code before #3521
@@ -94,7 +108,7 @@ needs it.
 A config that turns one of these off either names the bug it isolates (for
 example `MtimeAuthored = FALSE` in `Guarded`, so bug 2 does not mask the rest)
 or is a mutant of a fix (`*NoRecord`, `EvidenceAtResultHandler`,
-`OwnEditRelocRecorded`, `SpanSnapshotFixAnyReloc`, `SpanSnapshotFixNoOwnRecord`).
+`OwnEditRelocInsertRecorded`, `SpanSnapshotFixAnyReloc`, `SpanSnapshotFixNoOwnRecord`).
 
 ## Guard (as coded)
 
@@ -102,8 +116,9 @@ The model follows `checkEdit` step by step:
 
 - **Zero-read.** `wasWrittenThisSession`: `writtenThisSession`, or
   `mtime >= sessionStartMs`.
-- **FileTime.** Whole-file mtime/ctime/size. The rescues are
-  `canTreatStalenessAsOwnPriorEdit` and `canIgnoreStalenessByHashes`.
+- **FileTime.** Whole-file mtime/ctime/size. The rescue is
+  `canIgnoreStalenessByHashes` (`canTreatStalenessAsOwnPriorEdit` is gone
+  since #3525).
 - **Coverage.** `checkCoverage`: the union of non-provisional ranges, widened
   by `contextLines`.
 - **Snapshot.** `validateRangeSnapshot`: each line of the range against the
@@ -159,11 +174,13 @@ head that added this model. It is not checked in CI.
 | `OwnReEdit` | #3523 fixed: the agent re-edits a line it just wrote | pass | 2,036 |
 | `OwnReEditNoRecord` | the same without the own-edit record (the code before #3523) | violated `NoFalseBlock` | 327 |
 | `OwnEditReloc` | #3523 fixed: a relocated edit is not recorded; write + autofix, an other-writer insert, a relocated edit, then an edit | pass | 1,608 |
-| `OwnEditRelocRecorded` | the same with a relocated edit recorded: the #3522 rule now refuses that stale allow itself | pass | 1,592 |
+| `OwnEditRelocInsert` | #3760: ranged reads, another writer's insert, an own edit, a relocated two-line edit, then an edit at the agent's numbering; the relocated edit is not recorded | pass | 609,580 |
+| `OwnEditRelocInsertRecorded` | the same with the relocated edit recorded at the lines it wrote: the next edit passes on the wrong line of the agent's own text | violated `NoStaleAllow` | 39,157 |
 | `EvidenceAtResult` | #3524 fixed: another writer lands between the host read and the tool_result | pass | 23,571 |
 | `EvidenceAtResultHandler` | the same with the read taken from disk at tool_result (the code before #3524) | violated `NoStaleAllow` | 316 |
 | `EvidenceFromDelivered` | #3524 fixed, another writer anywhere, replace/delete/insert | pass | 93,904 |
-| `CreationAtResult` | remainder of #3524: the injected creation read still hashes the disk | violated `NoStaleAllow` | 1,291 |
+| `CreationAtResult` | #3524 remainder fixed: the injected creation read is hashed from the write's content | pass | 1,592 |
+| `CreationAtResultHandler` | the same hashed from disk at tool_result (the code before it) | violated `NoStaleAllow` | 907 |
 | `Guarded` | current code, reads, one-line edits, another writer between tool calls, three agent ops (#3572) | pass (all three invariants) | 69,531 |
 | `GuardedNoCoverage` / `GuardedNoSnapshot` | `Guarded` without `checkCoverage` / `validateRangeSnapshot` | violated `NoBlindAllow` / `NoStaleAllow` | 100 / 3,830 |
 | `NewSession` | current code across `/new` | pass | 316,790 |
@@ -173,7 +190,7 @@ head that added this model. It is not checked in CI.
 | `TreeFilter` | #3521 fixed: `/tree` with reads, ranged reads, edits and writes | pass | 50,413 |
 | `TreeFilterMtime` | the same with the #3520 mtime fallback on: the re-anchored `born` | pass | 50,413 |
 | `TreeFilterExt` | #3521 fixed, another writer anywhere | pass | 344,765 |
-| `TreeFilterUnhashed` | #3521 fixed without hashes (the #3525 rescue off, as in `Unhashed`) | pass | 1,174 |
+| `TreeFilterUnhashed` | #3521 fixed without hashes | pass | 1,174 |
 | `TreeCarriesReads` | the same as `TreeFilter`'s base with `BranchFilter = FALSE` (the code before #3521: no handler) | violated `NoBlindAllow` | 337 |
 | `ForkFilter` | #3521 fixed: `/fork` | pass | 50,036 |
 | `ForkFilterUnhashed` | #3521 fixed at `/fork` without hashes | pass | 1,150 |
@@ -185,21 +202,23 @@ head that added this model. It is not checked in CI.
 | `ContextSuppress`, `SpanAcrossReads` | #3522 fixed: a newer context-only read, and an edit spanning two reads | pass | 232,543 / 146,000 |
 | `SpanSnapshotFix` | #3522 fixed, one- and two-line edits, contextLines 1, another writer (replace/delete/insert), three agent ops | pass | 98,195 |
 | `SpanSnapshotFixAnyReloc` | the same relocating from any read that hashes the range | violated `NoStaleAllow` | 24,987 |
-| `SpanSnapshotFixNoOwnRecord` | the same without the own-edit read record (the code before #3523) | violated `NoStaleAllow` | 6,945 |
-| `UnhashedOwnEditRescue`, `UnhashedFormatStamp` | #3525 | violated `NoStaleAllow` | 449 / 160 |
+| `SpanSnapshotFixNoOwnRecord` | the same without the own-edit read record (the code before #3523, rescue on) | violated `NoStaleAllow` | 6,945 |
+| `UnhashedOwnEditRescue`, `UnhashedFormatStamp` | #3525 fixed: no own-edit rescue; the drain credits authorship only | pass | 1,338 / 245 |
+| `UnhashedOwnEditRescueOn`, `UnhashedFormatStampOn` | the same with the rescue / the drain's FileTime stamp back (the code before #3525) | violated `NoStaleAllow` | 437 / 101 |
 
-`OwnEditReloc` and `OwnEditRelocRecorded` set `CreationHandlerEvidence =
+`OwnEditReloc` sets `CreationHandlerEvidence =
 FALSE`, so the creation-read race `CreationAtResult` documents cannot mask the
 relocation check.
 
-The investigation's configs for the candidate fixes of #3520 and #3525
-(`AllFixes`, `AllFixesCtx`, `UnhashedFix`, `NoMtimeAuthored`, `ForkAtBoundary`,
-`ForkImportWholeRecord`, `OwnEditRecorded*`, `OwnEditRescueContext`) are not
-here; each arrives with its fix. The four-op `SpanSnapshotFix` (1,676,422
-distinct states, 42 s) was checked once, at the head that added it, and is not
-in CI. All of them keep their verdicts under this version of the model.
-`OwnEditRescueContext` (#3525's hashed case, a hybrid with the #3522 fix on)
-passes once #3523's own-edit record is on.
+The investigation's configs for the candidate fixes of #3520
+(`AllFixes`, `AllFixesCtx`, `NoMtimeAuthored`, `ForkAtBoundary`,
+`ForkImportWholeRecord`, `OwnEditRecorded*`) are not here; each arrives with
+its fix. #3525's `UnhashedFix` is the flipped `UnhashedOwnEditRescue` and
+`UnhashedFormatStamp`; its `OwnEditRescueContext` (the hashed case, a hybrid
+with the #3522 fix on) is not added, since `SpanSnapshotFix` now checks
+contextLines 1 with another writer and the rescue off. The four-op
+`SpanSnapshotFix` (1,676,422 distinct states, 42 s) was checked once, at the
+head that added it, and is not in CI.
 
 ## Replays
 
@@ -217,11 +236,35 @@ the `#3522` block of the same file.
   autofix-versus-concurrent-edit race.
 - FileTime detects every write. Real mtime/ctime/size can miss an equal-size
   rewrite inside one timestamp tick.
-- No clock: `canTreatStalenessAsOwnPriorEdit`'s 120 s window is always open,
-  and its `latest.timestamp < lastReadTimestamp` check is not modelled. In the
-  code, an own-edit record made in the same millisecond as the edit's verdict
-  leaves the rescue on, and the range-stale 60 s grace then warns instead of
-  blocking (#3525).
+- No clock. The own-edit rescue (its 120 s window and its same-millisecond
+  tie, #3523) and the range-stale 60 s grace it enabled are deleted (#3525);
+  `OwnEditRescue = TRUE` models the rescue with its window always open.
+- An own edit's `recordWritten` stamps FileTime here (`EditRW`). Since #3525
+  the code skips that stamp when FileTime had moved at the edit's check
+  (`ReadGuard.fileTimeMoved`, carried as `ToolCallAttribution.fileTimeStale`),
+  so the model explores more fresh-FileTime states than the code reaches.
+  With `Hashes` global the stamp only decides whether a later edit meets the
+  FileTime gate or the per-line gate, and those agree on every allow; it can
+  make a relocation reachable, which is content-verified. OldText edits, where
+  it decides an allow, are out of scope (above);
+  `tests/clients/read-guard-conversation-evidence.test.ts` replays that case
+  ("keeps another writer's change stale after an oldText edit passed it
+  (R4)").
+- Not modelled, and covered by replays in
+  `tests/clients/read-guard-conversation-evidence.test.ts` only: R4 (the
+  own-edit stamp decided by `fileTimeMoved` at the check; see above), the
+  own-edit read's `stampFileTime: false`, the debounce carrying that
+  decision (`_ownWriteStamp`), the partial apply's decision taken at its
+  preflight, and the settled sweep. Bash writes, LSP rename and code-action
+  applies on the direct branch (the no-context bridge fallback still stamps
+  until #3865) and the format service credit authorship and leave FileTime:
+  for FileTime and hashes that is the model's "another writer", and the
+  `written` they add is not modelled for them. The mutation bridge's other
+  producers (`observed`, `ast_grep_replace`, co-process extensions) and the
+  read bridge still stamp FileTime; they are not modelled either.
+- The immediate autofix's `recordWritten` still stamps FileTime (`WriteRW2`),
+  including when the attachment was withheld (the agent never saw the
+  post-fix bytes). Its unhashed stale allow is a named residual of #3525.
 - The attachment record and the `recordWritten` before it are one step here.
   In the code they are separated by the pipeline's analysis; the record
   leaves FileTime to `recordWritten`, which the replays pin.
@@ -239,10 +282,8 @@ the `#3522` block of the same file.
   pi's real runtime in `tests/index-3521-fork-tree-witness.test.ts`. The
   accepted residual there, a provider that reuses tool-call ids across
   branches, is not modelled. Clearing the edit history at a move
-  (`lastEditOk' = FALSE`) is inert in every config here, because the
-  snapshot check already refuses a hashed stale edit and the unhashed
-  configs turn the rescue off; `tests/clients/read-guard-branch.test.ts`
-  pins it on the code.
+  (`lastEditOk' = FALSE`) only mattered to the own-edit rescue, which #3525
+  deleted.
 - `SettleDue` keeps every boundary out until `Settle` has captured the
   branch epoch: pi marks the run inactive and then invokes the
   `agent_settled` handlers, so pi-lens's handler captures before any `/tree`
@@ -250,4 +291,5 @@ the `#3522` block of the same file.
   pi-lens's and awaits long enough for a `/tree` breaks that ordering, and
   the drain's stamp is then credited (mutating the gate away violates
   `TreeDrainFenced`). The settled sweep is one more deferred writer with the
-  same fence; the model's drain stands for both.
+  same fence and, since #3525, the same authorship-only `recordWritten`; the
+  model's drain stands for both.

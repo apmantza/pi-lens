@@ -86,8 +86,21 @@ describe("#3748 agent advisory queue is drained per scope", () => {
 		expect(dropped()).toEqual([
 			expect.objectContaining({
 				subject: `scope-retired:${retiring.scopeId}`,
+				reason: expect.stringContaining("session scope retired"),
 			}),
 		]);
+	});
+
+	// #3780 (#3757 survivors): the queue entry leaves on delivery, so a second
+	// `context` call of the same scope does not repeat the advisory.
+	it("delivers an advisory once: a second context call of the scope gets nothing", () => {
+		const runtime = new RuntimeCoordinator();
+		queueAgentAdvisory("lost edit", runtime.captureSessionGeneration());
+
+		expect(
+			texts(consumeAgentNudge(undefined, runtime.sessionScope)),
+		).toHaveLength(1);
+		expect(consumeAgentNudge(undefined, runtime.sessionScope)).toBeUndefined();
 	});
 
 	it("does not let a retired scope's advisories occupy the cap", () => {
@@ -112,7 +125,10 @@ describe("#3748 agent advisory queue is drained per scope", () => {
 
 		expect(consumeAgentNudge(undefined, runtime.sessionScope)).toBeUndefined();
 		expect(dropped()).toEqual([
-			expect.objectContaining({ subject: `scope-retired:${stale.scopeId}` }),
+			expect.objectContaining({
+				subject: `scope-retired:${stale.scopeId}`,
+				reason: expect.stringContaining("session scope retired"),
+			}),
 		]);
 	});
 
@@ -130,5 +146,8 @@ describe("#3748 agent advisory queue is drained per scope", () => {
 				reason: expect.stringContaining("(count: 2)"),
 			}),
 		]);
+		// The cap row says why it fired (not the retired-scope wording).
+		expect(dropped()[0]?.reason).toContain("8 were already queued");
+		expect(dropped()[0]?.reason).not.toContain("session scope retired");
 	});
 });

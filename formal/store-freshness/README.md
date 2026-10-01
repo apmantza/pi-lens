@@ -67,6 +67,7 @@ The clock is explicit, one tick is about 25 ms, and events can share a tick.
 | workspace-diagnostics cache, dependency axis | per-file `scannedAt`, taken before the file's read (a pull: before its request; `lsp_diagnostics`: before its stat) (#3505) | before | mtime | the same unlatched mtime gate as the widget row: `WidgetOwnLateStamp` / `MutWidgetOwnLateStamp` |
 | project-diagnostics snapshot | size+sha256 per file; `scannedAt` after the loop only for rows without a fingerprint. A fresh scan is checked too before its rows reach the widget (#3573) | at the read | content | not committed (see below) |
 | advisory-provenance (gitleaks/trivy/opengrep/govulncheck `scannedAt`) | `new Date()` at `runScan` entry | before the spawn | mtime | not committed (see below) |
+| analyzer lane rows (knip, jscpd, madge, dead-code, gitleaks/trivy/opengrep/govulncheck) through `pilens_analyze` and the project-diagnostics fresh fetch | the lane's own `scannedAt`, stamped at the top of the client's run body, or the run's `startMs` when it carries none; a caller that joins an in-flight run inherits the initiator's stamp (#3600, #3690) | before the lane's read | mtime | same shape as `BlockerDepLateStamp` (`NoStaleServeBeyondTol`); the lanes are not separately configured |
 | late-aux drain | `markedAtMs` | see `formal/late-aux-drain` | | |
 | freshness-cadence | a TTL, not a reference stamp | | | not modelled |
 

@@ -155,6 +155,34 @@ export function getGlobalPiLensLogDir(): string {
 }
 
 /**
+ * True when a vitest process is about to DESTROY a log under the REAL
+ * machine-global home, `<os.homedir()>/.pi-lens` (#3721). The one rule every
+ * truncating helper asks: `createNdjsonLogger`'s `truncate()` (behind
+ * `clearLatencyLog`) refuses when this holds.
+ *
+ * The recurrence: a test that calls `clearLatencyLog()` in a checkout whose
+ * home pin is missing resolves the real path at module load and cut 76 minutes
+ * of rows out of a maintainer's real `latency.log` (2026-09-30). Production
+ * never truncates a log (no `clients/` caller of `clearLatencyLog` exists), so
+ * a test process is the only caller this can refuse.
+ *
+ * Deliberately `process.env.VITEST`, not `isTestMode()`: the #3521 witness runs
+ * with `PI_LENS_TEST_MODE=0`, which turns `isTestMode()` off in exactly the
+ * process that does the damage. `os.homedir()` is read per call (a hermetic
+ * test points HOME at a fixture, and a hot-path cost does not exist: truncation
+ * is rare), and both sides go through `realpath` so a linked home cannot spell
+ * the same directory differently. The parent directory is resolved rather than
+ * the file, so a log that does not exist yet still resolves.
+ */
+export function isTestProcessTargetingRealHome(file: string): boolean {
+	if (!process.env.VITEST) return false;
+	return isUnderRealDir(
+		path.dirname(path.resolve(file)),
+		path.join(os.homedir(), ".pi-lens"),
+	);
+}
+
+/**
  * Resolve the probe-home redirect at most ONCE per process, caching both the
  * "yes, here" and the "no redirect" answers (#2506 round 3, F5). Round 2 read
  * `process.cwd()` live on every call, which gave a single process up to three

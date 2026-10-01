@@ -122,6 +122,8 @@ import {
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
 import { exceedsLspSyncLimits } from "./lsp/content-limits.js";
+import { surfaceHandlerCrash } from "./session-event-guard.js";
+import type { DriftDisposition } from "./lsp/document-drift.js";
 
 const LSP_SPAWN_BUDGET_MS = RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs;
 const AUTOFIX_CHANGED_FILE_SCAN_LIMIT = 5000;
@@ -1249,10 +1251,70 @@ export type LspResyncOutcome =
  * session may already hold the file (a read-warm touch), and the drain's write
  * would otherwise leave that document behind the disk until the next drift
  * sweep. `resyncGitChangedFiles` owns the held-only filter and the drift read.
+ *
+ * #3828 r3: the drain wrote these bytes, so the push is a save, as in
+ * `resyncLspFile` (#3405: a save-triggered server recompiles on didSave and on
+ * nothing else). The answer is the drift pass's disposition of F, or
+ * `no-service` when no current service exists to hold it.
  */
-export async function resyncHeldLspDocument(filePath: string): Promise<void> {
-	const lsp = await loadLspService();
-	await lsp.peekLSPService()?.resyncGitChangedFiles([filePath]);
+export async function resyncHeldLspDocument(
+	filePath: string,
+): Promise<DriftDisposition | "no-service"> {
+	const service = (await loadLspService()).peekLSPService();
+	if (!service) return "no-service";
+	const dispositions = await service.resyncGitChangedFiles([filePath], {
+		saved: true,
+	});
+	// Empty only from a destroyed service, which `resetLSPService` unpublishes
+	// before it shuts it down.
+	return dispositions.get(filePath) ?? "no-service";
+}
+
+/**
+ * #3828, #3858: a formatter its bound gave up on writes F when its child
+ * settles, after the caller synced the bytes from before. Chain one
+ * `resyncHeldLspDocument` onto `settled` (the run's `FormatSummary.abandoned`):
+ * a reaction on a promise the formatter already owns, so it parks no awaiting
+ * task and holds no queue entry or timer, and a run that never settles leaves
+ * it inert. Held-only in every case, current session or not: it opens no file
+ * and spawns no server, and it reads no ambient abort signal (another turn's
+ * Escape must not stop it). It never stamps the read guard or a `FileTime`,
+ * so the formatter's bytes stay unseen by the agent. The row names what
+ * happened to F; a throw is one bounded `hook-handler-crash` and no rethrow:
+ * nothing awaits this.
+ */
+export function chainLateFormatResync(
+	settled: Promise<unknown>,
+	which: "deferred" | "inband",
+	row: { toolName: string; filePath: string; startedAt: number },
+	dbg: PipelineContext["dbg"],
+): void {
+	const inband = which === "inband";
+	const logLate = (outcome: string) => {
+		const common = {
+			type: "phase" as const,
+			toolName: row.toolName,
+			filePath: row.filePath,
+			durationMs: Date.now() - row.startedAt,
+			metadata: { outcome },
+		};
+		// One row per caller (#3828 the deferred drain, #3858 the in-band
+		// pipeline): they share one stated meaning, what became of F.
+		if (inband) logLatency({ ...common, phase: "inband_format_late_resync" });
+		else logLatency({ ...common, phase: "deferred_format_late_resync" });
+	};
+	void settled
+		.then(async () => {
+			logLate(await resyncHeldLspDocument(row.filePath));
+		})
+		.catch((err) => {
+			surfaceHandlerCrash(
+				inband ? "inband-format-late-resync" : "deferred-format-late-resync",
+				err,
+				{ dbg, rethrow: false },
+			);
+			logLate("failed");
+		});
 }
 
 export async function resyncLspFile(
@@ -1744,6 +1806,15 @@ async function analysePipeline(
 			undefined,
 			writeHold,
 		);
+		// #3858: a formatter the budget (or Escape) gave up on writes F later,
+		// after the sync below pushed the bytes from before. Sync that write too.
+		if (formatResult.abandoned)
+			chainLateFormatResync(
+				formatResult.abandoned,
+				"inband",
+				{ toolName, filePath, startedAt: pipelineStart },
+				dbg,
+			);
 		formatChanged = formatResult.formatChanged;
 		formattersUsed = formatResult.formattersUsed;
 		formatFailures = formatResult.formatFailures;

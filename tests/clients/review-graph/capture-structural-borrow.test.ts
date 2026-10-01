@@ -45,6 +45,19 @@ async function storeDerivedFrom(
 	return store;
 }
 
+// Content whose three derived facts are each visibly non-empty: a borrowed
+// store missing one of them reads back `[]` for it, a derived one does not.
+const V_C =
+	'import { alpha } from "./alpha.js";\nexport { gamma } from "./gamma.js";\nexport function beta() { return alpha(); }\n';
+
+const DERIVED_FACTS = [
+	"file.imports",
+	"file.reexports",
+	"file.functionSummaries",
+	"file.functionFactsCoverage",
+	"file.importFactsCoverage",
+] as const;
+
 function structuralOf(
 	result: Awaited<ReturnType<typeof captureReviewGraphStructuralIr>>,
 ) {
@@ -125,4 +138,40 @@ describe("captureReviewGraphStructuralIr borrow (#3552)", () => {
 			env.cleanup();
 		}
 	});
+
+	// #3780 (#3746 survivors): the borrow needs ALL THREE derived facts. A store
+	// that matches the bytes but lacks one of them is not borrowed: its absent
+	// fact would read back as `[]` and the captured IR would silently drop it.
+	for (const missing of [
+		"file.imports",
+		"file.reexports",
+		"file.functionSummaries",
+	] as const) {
+		it(`does not borrow a store that lacks ${missing}, even with matching file.content`, async () => {
+			const env = setupTestEnvironment("pi-lens-3780-partial-");
+			try {
+				const file = path.join(env.tmpDir, "a.ts");
+				const whole = await storeDerivedFrom(file, env.tmpDir, V_C);
+				const partial = new FactStore("3780-partial");
+				partial.setFileFact(file, "file.content", V_C);
+				for (const fact of DERIVED_FACTS) {
+					if (fact === missing) continue;
+					partial.setFileFact(file, fact, whole.getFileFact(file, fact));
+				}
+
+				const ir = structuralOf(
+					await captureReviewGraphStructuralIr(file, env.tmpDir, V_C, partial),
+				);
+
+				expect(ir.imports.map((entry) => entry.source)).toEqual(["./alpha.js"]);
+				expect(ir.reexports.map((entry) => entry.source)).toEqual([
+					"./gamma.js",
+				]);
+				expect(ir.functionSummaries.map((fn) => fn.name)).toEqual(["beta"]);
+				expect(partial.hasFileFact(file, missing)).toBe(false);
+			} finally {
+				env.cleanup();
+			}
+		});
+	}
 });

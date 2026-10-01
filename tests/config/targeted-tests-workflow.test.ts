@@ -186,8 +186,6 @@ const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"governance sweep over a specific production module or target that import resolution already selects; not a broad production-population scanner",
 	"tests/config/gitignore-tracked-shadow.test.ts":
 		"real-git fixture behavior cases over a temp repository, not a tracked-source population scan",
-	"tests/config/knip-entry-coverage.test.ts":
-		"reads one production file as an input fixture for behavior assertions, not a production population scan",
 	"tests/config/lsp-advertised-capability-senders.test.ts":
 		"governance sweep over a specific production module or target that import resolution already selects; not a broad production-population scanner",
 	"tests/config/lsp-service-double-sweep.test.ts":

@@ -549,20 +549,19 @@ describe("close-keyword-verification.yml carries GITHUB_TOKEN (#2267 F1)", () =>
 	it("sets GITHUB_TOKEN on the syntax-lint step", () => {
 		const workflowPath = path.join(
 			REPO_ROOT,
-			".github/workflows/close-keywords.yml",
+			".github/workflows/pr-metadata.yml",
 		);
 		type WorkflowStep = { run?: string; env?: Record<string, string> };
 		type Workflow = {
-			jobs: { lint: { steps: WorkflowStep[] } };
+			jobs: { "close-keyword-lint": { steps: WorkflowStep[] } };
 		};
 		const workflow = yaml.load(
 			fs.readFileSync(workflowPath, "utf8"),
 		) as Workflow;
-		const step = workflow.jobs.lint.steps.find((s) =>
+		const step = workflow.jobs["close-keyword-lint"].steps.find((s) =>
 			(s.run ?? "").includes("check-close-keywords.mjs"),
 		);
-		if (!step)
-			throw new Error("syntax-lint step not found in close-keywords.yml");
+		if (!step) throw new Error("syntax-lint step not found in pr-metadata.yml");
 		// Mutation-proof: without this workflow wiring the strict live fetch
 		// fails before it can inspect the current PR body.
 		expect(step.env?.GITHUB_TOKEN).toBeTruthy();

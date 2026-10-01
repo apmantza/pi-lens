@@ -237,6 +237,25 @@ jobs:
           set -o pipefail
           node scripts/smoke-tools.mjs --lsp-gate --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-lsp-gate.log"
 
+      # #3401: the matrix refresh keeps its expiry/hysteresis bookkeeping in
+      # docs/lsp-capability-matrix.md. This checkout is master, and the refresh
+      # PR below is force-rebuilt from master every night, so an unmerged
+      # `bot/lsp-docs-refresh` would otherwise lose that bookkeeping nightly.
+      # Start the night from the bot branch's doc when it is ahead of master and
+      # built on master's current doc; otherwise keep master's (absent branch,
+      # squash-merged, hand-edited since). Fail-open: any error leaves master's
+      # doc and the step exits 0. Scoped like the PR step below, so a branch
+      # dispatch never swaps a PR branch's own doc for the bot's. Closing the
+      # bot PR unmerged does NOT reset the bookkeeping (the branch is kept,
+      # `delete-branch: false`, and keeps seeding); only deleting
+      # `bot/lsp-docs-refresh` does. `timeout-minutes` bounds a hung fetch,
+      # which `continue-on-error` does not.
+      - name: Seed the capability matrix from the last unmerged refresh
+        if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: node scripts/seed-matrix-from-bot-branch.mjs
+
       # Diagnostic-mode matrix (#240): spawn each server and record its
       # advertised mode (pull vs push) — the first cut of the affirmative-clean
       # -signal classification (docs/lsp-capability-matrix.md). Best-effort: the

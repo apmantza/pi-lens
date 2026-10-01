@@ -11,6 +11,7 @@ import { logLatency } from "./latency-logger.js";
 import {
 	getSinkRotations,
 	getSinkOptionConflicts,
+	getSinkTruncateRefusals,
 	getSinkWriteFailures,
 	resetSinkRotations,
 	resetSinkWriteFailures,
@@ -506,6 +507,14 @@ export type DegradationKind =
 	| "log-sink-option-conflict"
 	| "log-sink-rotate-failed"
 	| "log-sink-rotated"
+	/**
+	 * A test process called `truncate()` (behind `clearLatencyLog`) on a log
+	 * under the real `~/.pi-lens` and was refused (#3721). Folded in at READ time
+	 * like the other `log-sink-*` kinds: writing it through the sink would be a
+	 * write into the real log from the very process the refusal guards against.
+	 * One row per sink; `count` is the refused calls.
+	 */
+	| "log-sink-truncate-refused"
 	| "log-sink-write-failure"
 	| "lsp-breaker"
 	| "lsp-capability-skip"
@@ -756,6 +765,12 @@ export type DegradationKind =
 	| "managed-tool-refresh"
 	/** A complete MCP result exceeded the hard input budget (#2848). */
 	| "mcp-complete-result-budget-exceeded"
+	/**
+	 * An MCP `tools/call` carried argument keys the tool's schema does not
+	 * declare (#3749). Counted, not once: the subject is the tool name, the
+	 * group count is the exact number of such calls, the reason the latest keys.
+	 */
+	| "mcp-ignored-arguments"
 	/**
 	 * A shell-out linter/analyzer runner (knip, vulture, jscpd, trivy-config, …)
 	 * produced no usable output — empty stdout, unparseable stdout (e.g. a
@@ -1123,8 +1138,14 @@ export type DegradationKind =
 	| "self-drift-hash-budget-exhausted"
 	| "self-drift-unverifiable"
 	/**
+	 * #3819 r2: a demoted `/fork` or `/reload` start (a row-17 start held the
+	 * primary registration) discarded the hand-off slot left for it, so the
+	 * session cannot take it stale later. Once per start reason.
+	 */
+	| "session-scope-handoff-discarded"
+	/**
 	 * #3612: a `/fork` or `/reload` start found no hand-off slot left for its
-	 * session file, so it started from a sidecar or from nothing. Once per
+	 * session file (file-less: its predecessor's ticket, #3819), so it started from a sidecar or from nothing. Once per
 	 * start reason.
 	 */
 	| "session-scope-handoff-missed"
@@ -1417,6 +1438,23 @@ export type DegradationKind =
 	 */
 	/** The host context could not provide a stable session identity (#2815). */
 	| "turn-context-identity-fallback"
+	/**
+	 * turn_end did not run knip in a checkout whose edit it was handed (#3872):
+	 * the per-turn root cap was reached, or an earlier scan had already spent
+	 * the turn_end budget. The subject is the reason (`root-cap` | `budget`);
+	 * counted, because the number of skipped roots is the observability question
+	 * and a busy orchestrator session would otherwise write one row per turn.
+	 */
+	| "turn-end-knip-root-skipped"
+	/**
+	 * turn_end started no tests for a target in a linked worktree (#3871). The
+	 * subject is the reason: `no-runner-install` (the worktree has no
+	 * `node_modules/.bin`, venv or `vendor/bin` of its own, so running would
+	 * fetch through `npx` or use another environment). Counted, because a plegma
+	 * session edits many fresh worktrees and would otherwise write one row per
+	 * turn.
+	 */
+	| "turn-end-test-root-skipped"
 	/**
 	 * #2504 review round 8 (S1): a carried-forward deferred file entry was
 	 * dropped from an IN-BAND `turn_end` publish (`clients/actionable-warnings.ts`)
@@ -1834,6 +1872,25 @@ export function getDegradationSummary(): DegradationGroup[] {
 				subject: truncateForLedger(sink.file),
 				reason: truncateForLedger(
 					"shared writer rotation options differed across module graphs; first writer retained ownership",
+				),
+			})),
+		});
+	}
+	// #3721, same read-time fold: a refused truncation of a real-home log by a
+	// test process is visible without writing a row through that sink.
+	const truncateRefusals = getSinkTruncateRefusals();
+	if (truncateRefusals.length > 0) {
+		summary.push({
+			kind: "log-sink-truncate-refused",
+			count: truncateRefusals.reduce(
+				(total, sink) => total + sink.refusedCount,
+				0,
+			),
+			droppedCount: 0,
+			latestReasons: truncateRefusals.map((sink) => ({
+				subject: truncateForLedger(sink.file),
+				reason: truncateForLedger(
+					`${sink.refusedCount} truncate call(s) refused: a test process aimed them at the real ~/.pi-lens`,
 				),
 			})),
 		});

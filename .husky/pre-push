@@ -13,4 +13,6 @@ case "$PI_LENS_TEST_LOCK_TIMEOUT_MS" in
   ''|*[!0-9]*|0*) PI_LENS_TEST_LOCK_TIMEOUT_MS=120000 ;;
 esac
 export PI_LENS_TEST_LOCK_TIMEOUT_MS
+# The ast-grep self-scan runs inside the wrapper after its build (#3886), so an
+# unbuilt tree builds before the scan imports compiled clients/ modules.
 node scripts/pre-push-targeted-tests.mjs

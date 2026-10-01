@@ -13,6 +13,7 @@ export type DenyRule =
 	| "sharedKill"
 	| "tmpCheckout"
 	| "checkUngated"
+	| "ciVerdictStatus"
 	| "hookBypass";
 
 export const RULE_MESSAGES: Readonly<Record<DenyRule, string>>;

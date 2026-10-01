@@ -126,6 +126,10 @@ async function piRead(
 		isError?: boolean;
 		/** A later tool_call handler re-targeting the read after pi-lens. */
 		afterCall?: (input: { offset?: number; limit?: number }) => void;
+		/** pi 0.99's codemode value on the tool_result event (#3832). */
+		structuredContent?: unknown;
+		/** The recorded call attribution was evicted before the result. */
+		evictAttribution?: boolean;
 	} = {},
 ) {
 	const toolCallId =
@@ -136,6 +140,8 @@ async function piRead(
 		treeSitter: opts.treeSitter,
 	});
 	opts.afterCall?.(input);
+	if (opts.evictAttribution && toolCallId !== undefined)
+		runtime.takeToolCallAttribution(toolCallId);
 	const tool = createReadToolDefinition(runtime.projectRoot);
 	const executed = await tool.execute(
 		toolCallId ?? "no-id",
@@ -152,6 +158,9 @@ async function piRead(
 			content: executed.content,
 			details: executed.details,
 			...(opts.isError ? { isError: true } : {}),
+			...(opts.structuredContent !== undefined
+				? { structuredContent: opts.structuredContent }
+				: {}),
 		},
 		getFlag,
 		dbg: () => {},
@@ -161,11 +170,12 @@ async function piRead(
 		readGuard: runtime.readGuard,
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",
-	} as never)) as { content: Content } | undefined;
+	} as never)) as { content: Content; structuredContent?: unknown } | undefined;
 	return {
 		input,
 		host: executed.content as Content,
 		content: result?.content ?? (executed.content as Content),
+		structuredContent: result?.structuredContent,
 	};
 }
 
@@ -522,6 +532,50 @@ describe("#3555: an unwidened read carries no note", () => {
 			);
 			expect([read.input.offset, read.input.limit]).toEqual([1, 31]);
 			expect(read.content).toEqual(read.host);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// #3832 recurrence: pi 0.99 drops `structuredContent` from any rewritten
+// result that omits it, so a rewrite that prepends the widening note must hand
+// it back. Two returns prepend the note: the not-a-mutation exit (an absolute
+// path) and the unattributed-relative-path exit.
+describe("#3832: a widened read keeps the host's structuredContent", () => {
+	const structuredContent = { output: "host value" };
+
+	it("forwards it on the not-a-mutation return", async () => {
+		const env = setupTestEnvironment("rw-3832-absolute-");
+		try {
+			const file = path.join(env.tmpDir, "notes.md");
+			fs.writeFileSync(file, ["## Tareas", ...lines(30)].join("\n"));
+			const read = await piRead(
+				newRuntime(env.tmpDir),
+				{ path: file, offset: 10, limit: 2 },
+				{ structuredContent },
+			);
+			expect(read.content[0]?.text).toMatch(NOTE);
+			expect(read.structuredContent).toEqual(structuredContent);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("forwards it on the unattributed-relative-path return", async () => {
+		const env = setupTestEnvironment("rw-3832-relative-");
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "notes.md"),
+				["## Tareas", ...lines(30)].join("\n"),
+			);
+			const read = await piRead(
+				newRuntime(env.tmpDir),
+				{ path: "notes.md", offset: 10, limit: 2 },
+				{ structuredContent, evictAttribution: true },
+			);
+			expect(read.content[0]?.text).toMatch(NOTE);
+			expect(read.structuredContent).toEqual(structuredContent);
 		} finally {
 			env.cleanup();
 		}

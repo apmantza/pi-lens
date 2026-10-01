@@ -5,6 +5,12 @@ export declare const EXIT_DIRTY: number;
 export declare const EXIT_PENDING: number;
 export declare const EXIT_USAGE: number;
 export declare const EXIT_TRANSPORT: number;
+export declare function formatExitLine(result: {
+	code: number;
+	kind: string;
+}): string;
+export declare function transportExit(): { code: number; kind: string };
+export declare function crashExit(): { code: number; kind: string };
 export declare const ABSENT_REQUIRED_REARM_MINUTES: number;
 export declare function formatAbsentRequiredReason(
 	sha: string,
@@ -332,7 +338,7 @@ export declare function run(args?: {
 		sha: string;
 		verdict: Verdict;
 	}) => void;
-}): Promise<number>;
+}): Promise<{ code: number; kind: string }>;
 
 export declare function callWithTransientRetry<T>(
 	call: (remainingMs: number | undefined) => T | Promise<T>,

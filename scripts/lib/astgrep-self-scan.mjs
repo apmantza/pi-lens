@@ -176,7 +176,17 @@ export function findingSignature(finding) {
 export function loadBaseline(root = repoRoot()) {
 	const p = baselinePath(root);
 	if (!fs.existsSync(p)) return new Set();
-	const raw = JSON.parse(fs.readFileSync(p, "utf8"));
+	let raw;
+	try {
+		raw = JSON.parse(fs.readFileSync(p, "utf8"));
+	} catch (e) {
+		// A malformed baseline must stay loud: an empty set would resurface
+		// every triaged finding as new instead of naming the bad file.
+		throw new Error(
+			`[astgrep-self-scan] baseline ${p} is not valid JSON: ${e?.message ?? e}`,
+			{ cause: e },
+		);
+	}
 	return new Set(Array.isArray(raw.allowed) ? raw.allowed : []);
 }
 
@@ -195,6 +205,54 @@ export function writeBaseline(signatures, root = repoRoot()) {
 	};
 	fs.writeFileSync(p, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 	return p;
+}
+
+/** The set of tracked files under the scan roots, from `git ls-files`, or
+ * `undefined` when git cannot list them (not a work tree, git unavailable).
+ * The self-scan still runs over the directory roots -- the same argv CI uses --
+ * and drops findings outside this set, so an untracked working-tree scratch file
+ * cannot gate a push CI would never run it in and no file list reaches
+ * ast-grep's argv (Windows cmd.exe/CreateProcess line limits, #3886 r3). A
+ * caller that sees `undefined` keeps the whole directory result. */
+export function trackedSelfScanFileSet(
+	root = repoRoot(),
+	roots = ["clients", "tests"],
+) {
+	try {
+		const out = String(
+			gitExecFileSync(["ls-files", "-z", "--", ...roots], {
+				cwd: root,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}),
+		);
+		const files = out
+			.split("\0")
+			.map((line) => line.trim())
+			.filter(Boolean);
+		// git ls-files emits forward-slash repo-relative paths on every
+		// platform, so only the finding side needs normalization.
+		return new Set(files);
+	} catch {
+		// Not a git work tree (or git unavailable): fall back to no filter.
+		return undefined;
+	}
+}
+
+/** Drops findings whose file is not in `tracked` (a set from
+ * `trackedSelfScanFileSet`); an undefined set is a no-op, so a scan that
+ * cannot enumerate tracked files keeps its whole directory result. Finding
+ * paths are normalized so a Windows-shaped finding from ast-grep still
+ * matches git's forward-slash path. (#3886) */
+export function findingsInTrackedFiles(findings, tracked) {
+	if (!tracked) return findings;
+	return findings.filter((f) =>
+		tracked.has(normalizeFindingPath(String(f.file ?? ""))),
+	);
+}
+
+function normalizeFindingPath(file) {
+	return file.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
 /** Absolute (real) paths of files changed between

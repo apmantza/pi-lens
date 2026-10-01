@@ -61,6 +61,8 @@ const fake = vi.hoisted(() => ({
 	clippy: undefined as undefined | ((cwd: string) => Promise<number>),
 	/** The body of the fake `dart fix --apply`. */
 	dartFix: undefined as undefined | ((cwd: string) => Promise<number>),
+	/** What `dart fix` was spawned with: the argv and the directory it ran in. */
+	dartFixCalls: [] as Array<{ args: readonly string[]; cwd?: string }>,
 }));
 
 vi.mock("../../clients/safe-spawn.js", async (importOriginal) => {
@@ -85,6 +87,7 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => {
 					return { stdout: "Dart SDK version: 3.5.0", stderr: "", status: 0 };
 				}
 				if (command === "dart" && args[0] === "fix") {
+					fake.dartFixCalls.push({ args: [...args], cwd: options?.cwd });
 					const status = (await fake.dartFix?.(options?.cwd ?? "")) ?? 0;
 					return { stdout: "", stderr: "", status };
 				}
@@ -174,6 +177,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 	afterEach(() => {
 		fake.clippy = undefined;
 		fake.dartFix = undefined;
+		fake.dartFixCalls.length = 0;
 		if (previousDebounce === undefined)
 			delete process.env.PI_LENS_TOOL_RESULT_DEBOUNCE_MS;
 		else process.env.PI_LENS_TOOL_RESULT_DEBOUNCE_MS = previousDebounce;
@@ -1077,6 +1081,57 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 
 		expect(fs.readFileSync(aDart, "utf-8")).toBe("int a() => AGENT;\n");
 		expect(overwrittenCount()).toBe(1);
+	});
+
+	// #3780 (#3741 survivors, pipeline.ts `tryDartFix`): the Dart run is pinned
+	// by what it is spawned with and what it hashes, not only by the restore
+	// outcome. The restore test above keys the double on `args[0] === "fix"`
+	// alone, so a dropped `--apply`, a dropped cwd, or a run that hashed every
+	// file of the package (its pubspec.yaml too) all kept it green.
+	it("spawns `dart fix --apply` in the pubspec directory and hashes only its .dart files", async () => {
+		const pkgDir = path.join(tmpDir, "pkg");
+		const libDir = path.join(pkgDir, "lib");
+		fs.mkdirSync(libDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(pkgDir, "pubspec.yaml"),
+			"name: fixture\nenvironment:\n  sdk: ^3.5.0\n",
+		);
+		fs.writeFileSync(path.join(tmpDir, "pubspec.yaml"), "name: root\n");
+		const mainDart = path.join(libDir, "main.dart");
+		fs.writeFileSync(mainDart, "void main() {}\n");
+		fs.writeFileSync(path.join(libDir, "a.dart"), "int a() => 1;\n");
+		const spy = vi.spyOn(latencyLogger, "logLatency");
+		try {
+			fake.dartFix = async () => 0;
+			await runPipeline(pipelineContext(mainDart), pipelineDeps());
+
+			expect(fake.dartFixCalls).toEqual([
+				{ args: ["fix", "--apply"], cwd: pkgDir },
+			]);
+			const rows = spy.mock.calls
+				.map(([row]) => row)
+				.filter((row) => row.phase === "fix_run_hash");
+			expect(rows).toHaveLength(1);
+			// main.dart and a.dart; the package's pubspec.yaml is not a Dart file.
+			expect(rows[0]?.metadata).toMatchObject({
+				tool: "dart-analyze",
+				files: 2,
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	// #3780 (#3741 survivors, pipeline.ts `autofixLostFiles` / `autofixPossiblyLostFiles`
+	// initial values): an autofix phase that never ran (deferred to agent_end)
+	// lost nothing, so the tool result carries no loss notice.
+	it("appends no fix-run loss notice when the autofix phase was deferred", async () => {
+		const result = await runPipeline(
+			{ ...pipelineContext(mainRs), autofixMode: "deferred" },
+			pipelineDeps(),
+		);
+
+		expect(result.output).not.toContain("auto-fix run");
 	});
 });
 

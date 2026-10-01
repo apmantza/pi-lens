@@ -51,13 +51,8 @@
 		// lane's generated per-run config -- a string in a JSON-serialized
 		// object, never a static import knip's graph can trace.
 		"scripts/lib/mutation-touch-build.mjs",
-		// scripts/lib/merge-train-dispatch-validation.mjs — the one
-		// scripts/lib/*.mjs a workflow `run:` step invokes directly — is
-		// NOT listed here despite that: it's already reached through
-		// tests/scripts/merge-train-warden.test.ts's import (knip's own
-		// "redundant entry pattern" hint caught this). Every other
-		// scripts/lib/*.mjs is reached the same way import graphs normally
-		// work: via a scripts/*.mjs entry's own import, or a test's.
+		// Every other scripts/lib/*.mjs is reached the way import graphs
+		// normally work: via a scripts/*.mjs entry's own import, or a test's.
 		// Doesn't exist yet (#2697 item 1 adds it); the glob costs nothing
 		// today and needs no follow-up edit once hook scripts land there.
 		"scripts/hooks/**/*.mjs",

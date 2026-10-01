@@ -103,7 +103,7 @@ export interface SyncedDocumentRecord {
 	readonly syncedAt: number;
 }
 
-type DriftDisposition =
+export type DriftDisposition =
 	/** Stat diverged, the content really changed, and the resync completed. */
 	| "resynced"
 	/** The resync was attempted and threw; the old record is kept for a retry. */
@@ -136,6 +136,13 @@ export interface DriftSweepResult {
 	readonly unheld: number;
 	/** Tracked documents at the start of the pass. */
 	readonly tracked: number;
+	/**
+	 * #3828 r3: what this pass did to each queued target it took: `resynced`,
+	 * `failed` or `deferred` (still queued), `vanished` or `unheld` (dropped).
+	 * A target queued after the pass took its snapshot is absent, and is still
+	 * queued for the next pass.
+	 */
+	readonly queued: ReadonlyMap<string, DriftDisposition>;
 }
 
 const SKIPPED: DriftSweepResult = {
@@ -148,6 +155,7 @@ const SKIPPED: DriftSweepResult = {
 	vanished: 0,
 	unheld: 0,
 	tracked: 0,
+	queued: new Map(),
 };
 
 /** Documents stat'd per pass. Bounds the per-pass cost on a large workspace. */
@@ -185,6 +193,11 @@ export interface DriftSweepDeps {
 		driftAgeMs: number,
 		/** #3481: `performance.now()` taken before the sweep read `content`. */
 		readStamp?: number,
+		/**
+		 * #3828 r3: the target was queued as a save (see `enqueueResync`). Unset
+		 * for every resync the stat backstop finds on its own.
+		 */
+		saved?: boolean,
 	): Promise<boolean>;
 	/**
 	 * Does a live language server still hold this document open? A record for a
@@ -208,8 +221,12 @@ export interface DriftSweepDeps {
 export class DocumentDriftTracker {
 	/** Insertion-ordered; the sweep cursor walks it round-robin. */
 	private readonly synced = new Map<string, SyncedDocumentRecord>();
-	/** Git/external recovery targets waiting for the same paced resync budget. */
-	private readonly pendingResync = new Set<string>();
+	/**
+	 * Git/external recovery targets waiting for the same paced resync budget,
+	 * each with whether its push is a save (#3828 r3). The save lives and dies
+	 * with the queue entry, so a deferred target keeps it and a sent one drops it.
+	 */
+	private readonly pendingResync = new Map<string, boolean>();
 	private lastSweepAt = 0;
 	private cursor = 0;
 	/**
@@ -231,10 +248,21 @@ export class DocumentDriftTracker {
 		return this.synced.get(normalizeMapKey(filePath));
 	}
 
-	/** Queue known-open targets for the next ordinary paced drift pass. */
-	enqueueResync(filePaths: readonly string[]): void {
+	/**
+	 * Queue known-open targets for the next ordinary paced drift pass.
+	 * `saved` (#3828 r3): the caller wrote these bytes to disk, so the push is a
+	 * save (#3405). A later enqueue without it keeps a save still queued.
+	 */
+	enqueueResync(
+		filePaths: readonly string[],
+		options: { saved?: boolean } = {},
+	): void {
 		for (const filePath of filePaths) {
-			this.pendingResync.add(normalizeMapKey(filePath));
+			const key = normalizeMapKey(filePath);
+			this.pendingResync.set(
+				key,
+				this.pendingResync.get(key) === true || options.saved === true,
+			);
 		}
 	}
 
@@ -407,11 +435,13 @@ export class DocumentDriftTracker {
 				mtimeMs: entry.stat.mtimeMs,
 			});
 		}
-		const queued = [...this.pendingResync];
+		const queued = [...this.pendingResync.keys()];
+		const queuedDispositions = new Map<string, DriftDisposition>();
 		for (const key of queued) {
 			if (deps.holdsDocument && !deps.holdsDocument(key)) {
 				this.pendingResync.delete(key);
 				unheld += 1;
+				queuedDispositions.set(key, "unheld");
 				continue;
 			}
 		}
@@ -425,6 +455,7 @@ export class DocumentDriftTracker {
 			if (!this.pendingResync.has(key)) continue;
 			if (resynced >= DRIFT_RESYNC_BATCH) {
 				deferred += 1;
+				queuedDispositions.set(key, "deferred");
 				deps.onDrift?.({
 					filePath: key,
 					driftAgeMs: 0,
@@ -441,16 +472,24 @@ export class DocumentDriftTracker {
 			} catch {
 				this.pendingResync.delete(key);
 				vanished += 1;
+				queuedDispositions.set(key, "vanished");
 				continue;
 			}
 			let landed = false;
 			try {
-				landed = await deps.resync(key, content, 0, readStamp);
+				landed = await deps.resync(
+					key,
+					content,
+					0,
+					readStamp,
+					this.pendingResync.get(key),
+				);
 			} catch {
 				landed = false;
 			}
 			if (!landed) {
 				failed += 1;
+				queuedDispositions.set(key, "failed");
 				deps.onDrift?.({
 					filePath: key,
 					driftAgeMs: 0,
@@ -463,6 +502,7 @@ export class DocumentDriftTracker {
 			this.pendingResync.delete(key);
 			resynced += 1;
 			resyncedKeys.add(key);
+			queuedDispositions.set(key, "resynced");
 			deps.onDrift?.({
 				filePath: key,
 				driftAgeMs: 0,
@@ -567,6 +607,7 @@ export class DocumentDriftTracker {
 			vanished,
 			unheld,
 			tracked,
+			queued: queuedDispositions,
 		};
 	}
 }

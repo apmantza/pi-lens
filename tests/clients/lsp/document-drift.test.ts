@@ -570,3 +570,150 @@ describe("DocumentDriftTracker (#1783)", () => {
 		expect(a).toBe(b);
 	});
 });
+
+/**
+ * #3828 r3: a drain's held-only resync is a save (#3405: a save-triggered
+ * server such as Expert recompiles on didSave and on nothing else), so the
+ * queued target carries its save to whichever pass sends it. Recurrences: the
+ * r2 late resync synced F without the save (VERIFY r2 F6); the r2 late row
+ * could not tell a sync from a no-op (F7). The saved flag must stay on the
+ * queued target alone: the stat backstop's own resyncs are background reads
+ * and a save there is the recompile storm the `saved` docblock forbids.
+ */
+describe("DocumentDriftTracker queued saves and dispositions (#3828 r3)", () => {
+	const clock = SYNCED_AT + 1_000;
+	const now = () => clock;
+
+	function savesOf(files: Map<string, FakeFile>) {
+		const { deps } = makeDeps(files, now);
+		const pushes: Array<{ filePath: string; saved: boolean | undefined }> = [];
+		return {
+			pushes,
+			deps: {
+				...deps,
+				resync: async (
+					filePath: string,
+					_content: string,
+					_age: number,
+					_readStamp?: number,
+					saved?: boolean,
+				) => {
+					pushes.push({ filePath, saved });
+					return true;
+				},
+			},
+		};
+	}
+
+	it("pushes a target queued as a save as a save, and the stat backstop's own resync as none", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/drain.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+			[k("/repo/bash.ts"), { content: "v1\n", mtimeMs: SYNCED_AT + 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/drain.ts"), "v0\n", SYNCED_AT);
+		tracker.recordSynced(k("/repo/bash.ts"), "v0\n", SYNCED_AT);
+		tracker.enqueueResync([k("/repo/drain.ts")], { saved: true });
+		const { deps, pushes } = savesOf(files);
+
+		await tracker.sweep(deps, { force: true });
+
+		expect(pushes).toEqual([
+			{ filePath: k("/repo/drain.ts"), saved: true },
+			{ filePath: k("/repo/bash.ts"), saved: undefined },
+		]);
+	});
+
+	it("keeps a queued save when the same path is queued again without one before the pass", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/f.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/f.ts"), "v0\n", SYNCED_AT);
+		tracker.enqueueResync([k("/repo/f.ts")], { saved: true });
+		// A Git-recovery resync of the same path lands before the pass.
+		tracker.enqueueResync([k("/repo/f.ts")]);
+		const { deps, pushes } = savesOf(files);
+
+		await tracker.sweep(deps, { force: true });
+
+		expect(pushes).toEqual([{ filePath: k("/repo/f.ts"), saved: true }]);
+	});
+
+	it("sends a save the pass budget deferred as a save on the later pass", async () => {
+		const others = Array.from({ length: DRIFT_RESYNC_BATCH }, (_, i) =>
+			k(`/repo/other-${i}.ts`),
+		);
+		const files = new Map<string, FakeFile>(
+			[...others, k("/repo/f.ts")].map((key) => [
+				key,
+				{ content: "v1\n", mtimeMs: SYNCED_AT - 5 },
+			]),
+		);
+		const tracker = new DocumentDriftTracker();
+		for (const key of files.keys())
+			tracker.recordSynced(key, "v0\n", SYNCED_AT);
+		tracker.enqueueResync(others);
+		tracker.enqueueResync([k("/repo/f.ts")], { saved: true });
+		const { deps, pushes } = savesOf(files);
+
+		const first = await tracker.sweep(deps, { force: true });
+		expect(first.queued.get(k("/repo/f.ts"))).toBe("deferred");
+		expect(pushes.map((p) => p.filePath)).not.toContain(k("/repo/f.ts"));
+
+		const second = await tracker.sweep(deps, { force: true });
+		expect(second.queued.get(k("/repo/f.ts"))).toBe("resynced");
+		expect(pushes.at(-1)).toEqual({ filePath: k("/repo/f.ts"), saved: true });
+	});
+
+	it("drops the save with the queued target, so the next plain enqueue of the path is no save", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/f.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		tracker.recordSynced(k("/repo/f.ts"), "v0\n", SYNCED_AT);
+		tracker.enqueueResync([k("/repo/f.ts")], { saved: true });
+		const { deps, pushes } = savesOf(files);
+		await tracker.sweep(deps, { force: true });
+		tracker.enqueueResync([k("/repo/f.ts")]);
+
+		await tracker.sweep(deps, { force: true });
+
+		expect(pushes).toEqual([
+			{ filePath: k("/repo/f.ts"), saved: true },
+			{ filePath: k("/repo/f.ts"), saved: false },
+		]);
+	});
+
+	it("names what the pass did to each queued target", async () => {
+		const files = new Map<string, FakeFile>([
+			[k("/repo/sent.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+			[k("/repo/closed.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+			[k("/repo/lost.ts"), { content: "v1\n", mtimeMs: SYNCED_AT - 5 }],
+		]);
+		const tracker = new DocumentDriftTracker();
+		for (const key of [...files.keys(), k("/repo/gone.ts")]) {
+			tracker.recordSynced(key, "v0\n", SYNCED_AT);
+		}
+		tracker.enqueueResync(
+			["sent", "closed", "lost", "gone"].map((n) => k(`/repo/${n}.ts`)),
+		);
+		const { deps } = makeDeps(files, now);
+
+		const result = await tracker.sweep(
+			{
+				...deps,
+				holdsDocument: (filePath) => filePath !== k("/repo/closed.ts"),
+				resync: async (filePath) => filePath !== k("/repo/lost.ts"),
+			},
+			{ force: true },
+		);
+
+		expect(Object.fromEntries(result.queued)).toEqual({
+			[k("/repo/sent.ts")]: "resynced",
+			[k("/repo/closed.ts")]: "unheld",
+			[k("/repo/lost.ts")]: "failed",
+			[k("/repo/gone.ts")]: "vanished",
+		});
+	});
+});

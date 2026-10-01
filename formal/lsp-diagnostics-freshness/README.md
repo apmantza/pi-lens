@@ -12,30 +12,30 @@ Issue: #3484.
 
 - **Touch A** (`LSPService.touchFile`, the pipeline's `lsp_sync` touch):
   - it reads the per-path baseline (`getDiagnosticsVersionForPath`,
-    `clients/lsp/index.ts` ~4870);
-  - then `notify.open` → `handleNotifyOpenOnce` (`client.ts` ~4029). The
+    `clients/lsp/index.ts`);
+  - then `notify.open` → `handleNotifyOpenOnce` (`clients/lsp/client.ts`). The
     document is open, so in one tick it bumps `documentVersions`, calls
     `clearDiagnosticsForPath` (unless `preserveDiagnostics`) and sends
     `didChange`;
-  - `markTouched` runs after the send resolves (`index.ts` ~5173).
+  - `markTouched` runs after the send resolves (`clients/lsp/index.ts` `touchFile`).
 - **The waiter**, in one of two forms:
   - `SkippedWait = FALSE`: A itself waits, with `minVersion` set to its
-    baseline (`index.ts` ~5713);
+    baseline (`clients/lsp/index.ts` `touchFile`);
   - `SkippedWait = TRUE`: the dispatch runner's touch B, with the same
-    content. `shouldSkipNotify` (~1952) finds A's `markTouched` entry, so B
-    sends nothing and waits with no baseline (~5727).
-- **`clientWaitForDiagnostics`** (`client.ts` ~3797):
+    content. `shouldSkipNotify` finds A's `markTouched` entry, so B
+    sends nothing and waits with no baseline.
+- **`clientWaitForDiagnostics`** (`clients/lsp/client.ts`):
   - the early return: fresh, not `isVersionStale`, and a non-empty cache;
   - otherwise it registers a listener. `onDiagnostics` re-checks those
     conditions and (re)arms a quiet-window timer, which resolves the wait
     without checking again;
   - a timeout also resolves the wait;
-  - `touchFile` reads `getDiagnostics` later, after more awaits (~6583).
-- **The `publishDiagnostics` handler** (`client.ts` ~2322–2578):
+  - `touchFile` reads `getDiagnostics` later, after more awaits.
+- **The `publishDiagnostics` handler** (`clients/lsp/client.ts` `setupIncomingHandlers`):
   - seed-first-push stores the first push at once, with an `isSupersededPush`
     check;
   - otherwise it uses a per-path debounce timer, which checks
-    `isSupersededPush` when it fires. A clear cancels that timer (~1825).
+    `isSupersededPush` when it fires. A clear cancels that timer.
 - **The server** reads client messages in order. It publishes for the content
   it last read, stamped with the version if `VersionedServer`. With
   `AsyncServer` it may also publish for the content before that (an analysis
@@ -111,7 +111,7 @@ set `Fence = TRUE` in all three):
 2. The server, still on content 0 (a slow analysis of the previous edit),
    publishes for it with no version.
 3. The client receives the publish after the clear. `isSupersededPush`
-   returns false because `docVersion === undefined` (~2479), so the debounce
+   returns false because `docVersion === undefined`, so the debounce
    timer is armed and fires. The handler caches the content-0 diagnostics,
    bumps the per-path stamp to 1, and leaves `diagnosticDocVersions` unset.
 4. The wait starts. With no baseline, `hasFreshDiagnostics` is trivially
@@ -145,9 +145,9 @@ diagnostics.
 - `isVersionStale` stops them from *settling* the wait (`VersionedPreserve`
   passes).
 - A wait that times out still reads them. This is the "#1095 note" at
-  `client.ts` ~4052: the binding then reads `boundToCurrentDisk: false`.
+  `clients/lsp/client.ts` `handleNotifyOpenOnce`: the binding then reads `boundToCurrentDisk: false`.
 - `touchFile`'s own notify never passes `preserveDiagnostics`. The only
-  caller that passes `true` is the rename path (`index.ts` ~8274).
+  caller that passes `true` is the rename path (`clients/lsp/index.ts` `renameFile`).
 
 ## Replay on the real client
 

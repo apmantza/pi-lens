@@ -88,6 +88,28 @@ export function classifyFirstPublish(
 
 export const COMPARABLE_FIRST_PUBLISH: Set<string>;
 
+/** #3401: the `clean-behavior` values that are a measurement of anything. */
+export const MEASURED_CLEAN_BEHAVIORS: Set<string>;
+
+/** #3401: the matrix lang a probe fixture writes to (`x-clean` -> `x`). */
+export function targetLangForFixture(lang: string, clean?: boolean): string;
+
+/** #3401: resolved probe rows -> `refreshCapabilityMatrix` observations. */
+export function buildMatrixObservations(
+	targetLangRows: ReadonlyArray<{
+		targetLang: string;
+		firstPublish?: string;
+		behavior?: string;
+		tierLabel?: string;
+		tier?: number;
+	}>,
+): Array<{
+	lang: string;
+	firstPublish: string | null;
+	cleanBehavior: string | null;
+	tier: string;
+}>;
+
 export const LANG_TO_STRATEGY_KEY: Record<string, string>;
 
 export function strategyKeyForLang(lang: string): string;

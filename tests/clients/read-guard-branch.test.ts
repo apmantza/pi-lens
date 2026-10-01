@@ -27,6 +27,7 @@ import {
 	readSessionHeaderId,
 } from "../../clients/read-guard-branch.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
+import { sanitizeCorrelationId } from "../../clients/read-guard-logger.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const LONG_AGO = new Date("2000-01-01T00:00:00Z");
@@ -146,21 +147,6 @@ describe("ReadGuard.retainBranch (#3521)", () => {
 		const big = oldFile("big.ts", 3100);
 		const guard = createReadGuard("retain-unhashed");
 		guard.recordRead(fullRead(big, 3100, "call_big"));
-		expect(verdict(guard, big, 2)).toBe("allow");
-
-		guard.retainBranch(new Set(["call_big"]));
-
-		expect(verdict(guard, big, 2)).toMatch(
-			/^block: .*File modified since read/,
-		);
-	});
-
-	it("clears the edit history, so an old allowed edit cannot rescue an unhashed record", () => {
-		const big = oldFile("big.ts", 3100);
-		const guard = createReadGuard("retain-edits");
-		guard.recordRead(fullRead(big, 3100, "call_big"));
-		// An edit allowed on the abandoned branch: canTreatStalenessAsOwnPriorEdit
-		// would read it as "the staleness is our own write".
 		expect(verdict(guard, big, 2)).toBe("allow");
 
 		guard.retainBranch(new Set(["call_big"]));
@@ -291,6 +277,31 @@ describe("ReadGuard.importBranch (#3521, replaces #1041's importState)", () => {
 
 		expect(verdict(guard, a, 2)).toBe("allow");
 		expect(verdict(guard, b, 2)).toMatch(/^block: .*Edit without read/);
+	});
+
+	it("drops a pre-#3833 record that holds the sliced form of a long id, and keeps one under the new form (#3833)", () => {
+		// Sidecars written before #3833 stored `slice(0, 64)` of a long call id.
+		// They still parse; they no longer name a tool result on the branch, so
+		// the read is dropped (fail closed: a re-read, never a blind allow).
+		const longId = `call_${"x".repeat(40)}|fc_${"y".repeat(45)}`;
+		const a = oldFile("a.ts", 6);
+		const b = oldFile("b.ts", 6);
+		const legacyId = longId.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 64);
+		const currentId = sanitizeCorrelationId(longId) as string;
+		expect(legacyId).not.toBe(currentId);
+		const state = exported([
+			fullRead(a, 6, legacyId),
+			fullRead(b, 6, currentId),
+		]);
+		const onBranch = new Set([currentId]);
+
+		const guard = createReadGuard("import-legacy-long-id");
+		expect(guard.importBranch(state, onBranch)).toEqual({
+			imported: 1,
+			dropped: 1,
+		});
+		expect(verdict(guard, a, 2)).toMatch(/^block: .*Edit without read/);
+		expect(verdict(guard, b, 2)).toBe("allow");
 	});
 
 	it("keeps a changed record whole: the changed line blocks, an untouched line passes", () => {
@@ -432,6 +443,23 @@ describe("branchToolResultIds (#3521)", () => {
 		expect(branchToolResultIds(sm).ids).toEqual(new Set(["call_a"]));
 		sm.branch(callC);
 		expect(branchToolResultIds(sm).ids.has("call_c")).toBe(false);
+	});
+
+	it("keeps two long call ids that share their first 64 characters apart (#3833)", () => {
+		const parent = `call_${"x".repeat(40)}|fc_${"y".repeat(45)}`;
+		const sm = SessionManager.inMemory(env.tmpDir);
+		sm.appendMessage({ role: "user", content: "p1", timestamp: 1 } as never);
+		result(sm, `${parent}/1`);
+		result(sm, `${parent}/2`);
+
+		const { ids } = branchToolResultIds(sm);
+		expect(ids.size).toBe(2);
+		expect(ids).toEqual(
+			new Set([
+				sanitizeCorrelationId(`${parent}/1`),
+				sanitizeCorrelationId(`${parent}/2`),
+			]),
+		);
 	});
 
 	it("reports an unreadable session manager as no ids", () => {

@@ -30,6 +30,7 @@ import {
 import { captureLspServiceGeneration } from "./lsp/server.js";
 import {
 	type LspResyncOutcome,
+	chainLateFormatResync,
 	resyncHeldLspDocument,
 	resyncLspFile,
 	runAutofix,
@@ -71,7 +72,8 @@ const DEFERRED_FORMAT_CONCURRENCY = 3;
  * post-exit resync waits for the formatter the hook bound gave up on under
  * this same budget, so a command resolution that outlives it (an auto-install
  * has no leaf bound) settles as an abandoned resync instead of parking the
- * detached task forever (#3599).
+ * detached task forever (#3599). The formatter's later write is then synced by
+ * a continuation chained onto its settlement (#3828).
  */
 const DEFERRED_FORMAT_BUDGET_MS = 30_000;
 
@@ -561,9 +563,11 @@ export async function handleAgentEnd({
 						source: "autofix",
 						dbg,
 					});
+					// #3525: bytes the agent never saw; authorship, not FileTime.
 					if (!getFlag("no-read-guard"))
 						runtime.readGuard.recordWritten(changedPath, {
 							branchEpoch: queuedBranchEpoch,
+							stampFileTime: false,
 						});
 					const content = nodeFs.readFileSync(changedPath, "utf-8");
 					cacheManager.addModifiedRange(
@@ -738,22 +742,32 @@ export async function handleAgentEnd({
 								// formatter under the drain's own budget instead of forever. A
 								// wait that expires is a degradation, recorded once by
 								// `bounded()` as `off_hook:deferred-format-post-exit-resync`.
-								const formatterSettled = await bounded(
-									phase
-										.then((summary) => summary.abandoned)
-										.then(() => true as const),
-									{
-										ms: DEFERRED_FORMAT_BUDGET_MS,
-										signal: ambientSignal,
-										hook: "off_hook",
-										label: "deferred-format-post-exit-resync",
-									},
-								);
+								const formatterSettling = phase
+									.then((summary) => summary.abandoned)
+									.then(() => true as const);
+								const formatterSettled = await bounded(formatterSettling, {
+									ms: DEFERRED_FORMAT_BUDGET_MS,
+									signal: ambientSignal,
+									hook: "off_hook",
+									label: "deferred-format-post-exit-resync",
+								});
 								if (formatterSettled === undefined) {
-									// The formatter is still running; its later write cannot be
-									// synced from here, and a read now could publish bytes it is
-									// about to replace. Report the resync as abandoned.
+									// The formatter is still running, so a read now could publish
+									// bytes it is about to replace. Report this resync as abandoned
+									// and chain the same resync onto the formatter's settlement
+									// instead (#3828): it parks no awaiting task and holds no
+									// resource, it is one more reaction on a promise the formatter
+									// already owns.
 									outcome = "abandoned";
+									// Held-only in every case (#3828): the install can outlive
+									// the client (idle eviction), and this must never open a
+									// file or spawn for it.
+									chainLateFormatResync(
+										formatterSettling,
+										"deferred",
+										{ toolName: "agent_end", filePath, startedAt: fileStart },
+										dbg,
+									);
 								} else {
 									// #3528 r1 F1, #3576: a replaced session or a retired LSP
 									// service gets no touch that would spawn a server.
@@ -911,9 +925,11 @@ export async function handleAgentEnd({
 						source: "format",
 						dbg,
 					});
+					// #3525: bytes the agent never saw; authorship, not FileTime.
 					if (!getFlag("no-read-guard")) {
 						runtime.readGuard.recordWritten(filePath, {
 							branchEpoch: queuedBranchEpoch,
+							stampFileTime: false,
 						});
 					}
 					try {
@@ -1141,8 +1157,12 @@ export async function handleAgentEnd({
 					readGuard: getFlag("no-read-guard")
 						? undefined
 						: {
+								// #3525: bytes the agent never saw; authorship, not FileTime.
 								recordWritten: (filePath: string) =>
-									runtime.readGuard.recordWritten(filePath, { branchEpoch }),
+									runtime.readGuard.recordWritten(filePath, {
+										branchEpoch,
+										stampFileTime: false,
+									}),
 							},
 					// #3576: a /new during the pass stops it and its bookkeeping.
 					session,

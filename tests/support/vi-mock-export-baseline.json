@@ -316,7 +316,6 @@
 	"tests/tools/lens-diagnostics-mode-all-freshness.test.ts:../../clients/project-diagnostics/fresh-fetch.js:[\"fetchFreshProjectDiagnostics\"]": 1,
 	"tests/tools/lens-diagnostics-rule-policy.test.ts:../../clients/project-diagnostics/cache.js:[\"PROJECT_DIAGNOSTICS_CACHE_VERSION\",\"loadProjectDiagnosticsDeltaReport\",\"loadProjectDiagnosticsSnapshot\",\"reconcileProjectDiagnosticsSnapshot\"]": 1,
 	"tests/tools/lens-diagnostics.test.ts:../../clients/project-diagnostics/cache.js:[\"PROJECT_DIAGNOSTICS_CACHE_VERSION\",\"loadProjectDiagnosticsDeltaReport\",\"loadProjectDiagnosticsSnapshot\",\"reconcileProjectDiagnosticsSnapshot\"]": 1,
-	"tests/tools/lsp-diagnostics-cache.test.ts:../../clients/lsp/config.js:[\"getServerInitOverride\",\"getServersForFileWithConfig\",\"primaryServerId\"]": 1,
 	"tests/tools/lsp-diagnostics-cache.test.ts:../../clients/lsp/index.js:[\"getLSPService\"]": 14,
 	"tests/tools/lsp-diagnostics-cache.test.ts:../../clients/widget-state.js:[\"reconcileScanDiagnostics\"]": 2,
 	"tests/tools/lsp-diagnostics-inferred-project.test.ts:../../clients/lsp/index.js:[\"getLSPService\"]": 14,

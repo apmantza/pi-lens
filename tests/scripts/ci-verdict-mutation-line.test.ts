@@ -137,7 +137,7 @@ const commentCalls = (w: World) =>
 
 async function cli(argv: string[], w: World) {
 	const lines: string[] = [];
-	const exitCode = await run({
+	const { code: exitCode } = await run({
 		argv,
 		ghExec: ghFor(w),
 		stdout: (line: string) => lines.push(line),
@@ -322,7 +322,7 @@ describe("run --wait — the MUTATION read is charged to the --wait budget (#377
 		const gh = ghFor(w);
 		let reads = 0;
 		let clock = Date.parse("2026-09-30T12:00:00Z");
-		const exitCode = await run({
+		const { code: exitCode } = await run({
 			argv: ["3755", "--wait", "40"],
 			ghExec: (args: string[], options?: { timeoutMs?: number }) => {
 				if (/check-runs/.test(args[1] ?? "") && (reads += 1) === 1)

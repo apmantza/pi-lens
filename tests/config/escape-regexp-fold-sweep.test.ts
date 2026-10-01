@@ -33,17 +33,15 @@
  * build artifact as a second "copy" of its own body).
  *
  * It deliberately does NOT flag a bare inline `value.replace(<escape>)` that
- * is not itself a function/arrow body — e.g. `const escapedSha =
- * mergeSha.replace(...)` in `scripts/lib/merge-train-lane.mjs`, and the same
- * shape in `scripts/rollup-changelog.mjs`, `scripts/run-all-ts-rules-posthog.mjs`,
+ * is not itself a function/arrow body — e.g. the shape in
+ * `scripts/rollup-changelog.mjs`, `scripts/run-all-ts-rules-posthog.mjs`,
  * and `scripts/lib/compat-contracts.mjs`: each is a single one-off
- * computation at its own call site, not a copy-pasted HELPER. These four
- * specifically stay un-folded (not merely un-flagged) because
- * `merge-train-lane.mjs`'s workflow (`.github/workflows/merge-train-lane.yml`)
- * runs `node scripts/merge-train-lane.mjs` directly with no `npm install`/
- * `npm run build` step before it, so importing the compiled
- * `clients/string-utils.js` there would 404 that job; the other three keep
- * the same one-off shape for consistency rather than for their own
+ * computation at its own call site, not a copy-pasted HELPER. (A fourth, in
+ * `scripts/lib/merge-train-lane.mjs`, went away with the lane in #3837; it
+ * stayed un-folded because its workflow ran the script with no `npm
+ * install`/`npm run build` step, so importing the compiled
+ * `clients/string-utils.js` there would have 404ed that job.) The three that
+ * remain keep the same one-off shape for consistency rather than for their own
  * build-order reason. (Round 2 F3: three PLAIN test-side one-offs that
  * looked like the same case — `tests/clients/deps-centralization.test.ts`,
  * `tests/clients/config-deprecation-registry.test.ts`,

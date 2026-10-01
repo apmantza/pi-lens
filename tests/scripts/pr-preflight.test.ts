@@ -41,6 +41,21 @@ describe("pr preflight", () => {
 			CI_JOB_NAMES.KNIP,
 		);
 	});
+	it("gates the self-scan just after the build and mirrors Unit tests (#3886)", async () => {
+		const { GATES } = await import("../../scripts/pr-preflight.mjs");
+		const names = GATES.map(([name]) => name);
+		// The scan imports compiled `clients/` modules, so it must follow the
+		// build; CI runs it in the Unit-tests job (ci.yml "Ast-grep self-scan").
+		expect(names.indexOf("self-scan")).toBe(names.indexOf("build") + 1);
+		expect(GATES.find(([name]) => name === "self-scan")?.[1]).toEqual([
+			"npm",
+			"run",
+			"astgrep:self-scan",
+		]);
+		expect(GATES.find(([name]) => name === "self-scan")?.[2]).toBe(
+			CI_JOB_NAMES.UNIT_TESTS,
+		);
+	});
 	it("parses only and skip selectors", () => {
 		expect(parseArgs(["--only", "lint"])).toEqual({
 			only: "lint",

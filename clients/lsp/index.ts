@@ -45,6 +45,7 @@ import {
 import {
 	DocumentDriftTracker,
 	fingerprintDocumentContent,
+	type DriftDisposition,
 	type DriftSweepResult,
 } from "./document-drift.js";
 import {
@@ -766,11 +767,14 @@ export interface LSPTouchFileOptions {
 	 * #3405: this touch's content IS the file's saved on-disk state and the
 	 * caller wants that file diagnosed now, so each server whose
 	 * `textDocumentSync.save` asked for it gets a `textDocument/didSave` after
-	 * its content notification lands. Two callers set it, both one-file and
+	 * its content notification lands. Three callers set it, each one-file and
 	 * caller-initiated: the post-write sync (`clients/pipeline.ts`
-	 * `resyncLspFile`) and the explicit `lsp_diagnostics` query
+	 * `resyncLspFile`), the held-only resync of a file the deferred drain wrote
+	 * (`resyncHeldLspDocument`, #3828 r3: through the drift queue, for that one
+	 * path only) and the explicit `lsp_diagnostics` query
 	 * (`tools/lsp-diagnostics.ts`). Warm-ups, cascade neighbour reads, the drift
-	 * resync and the workspace sweep deliberately leave it unset — a save is a
+	 * backstop's own resyncs, the importers a Git-change resync adds and the
+	 * workspace sweep deliberately leave it unset — a save is a
 	 * recompile trigger on a save-triggered server (Expert schedules a whole
 	 * project compile), so one per background read would be a storm, and none of
 	 * those callers is answering "is this file clean right now".
@@ -3737,10 +3741,24 @@ export class LSPService {
 	 * Re-sync the open views affected by one recovered Git tree change. The
 	 * recovery seam already owns the changed-path set, so this deliberately
 	 * reads only the cached reverse-import index and never runs another diff.
+	 *
+	 * #3828 r3: `saved` makes the push of each changed path a save (the caller
+	 * wrote it); the importers added here are never saves. The answer names
+	 * what this pass did to each changed path, keyed as given: `unheld` when no
+	 * live client holds it, `deferred` when the pass did not reach it (it stays
+	 * queued, with its save), else the pass's own disposition.
 	 */
-	async resyncGitChangedFiles(changedPaths: readonly string[]): Promise<void> {
-		if (this.checkDestroyed() || changedPaths.length === 0) return;
+	async resyncGitChangedFiles(
+		changedPaths: readonly string[],
+		options: { saved?: boolean } = {},
+	): Promise<ReadonlyMap<string, DriftDisposition>> {
+		const dispositions = new Map<string, DriftDisposition>();
+		if (this.checkDestroyed() || changedPaths.length === 0) {
+			return dispositions;
+		}
 		const targets = new Set<string>();
+		/** Each changed path as given, to the target it resolves to. */
+		const changed = new Map<string, string>();
 		for (const changedPath of changedPaths) {
 			const resolved = path.resolve(changedPath);
 			for (const server of getServersForFileWithConfig(resolved)) {
@@ -3754,11 +3772,19 @@ export class LSPService {
 				}
 			}
 			targets.add(resolved);
+			changed.set(changedPath, resolved);
 		}
 		const openTargets = [...targets].filter((filePath) =>
 			this.hasLiveClientHoldingDocument(filePath),
 		);
-		this.documentDrift.enqueueResync(openTargets);
+		const written = new Set(changed.values());
+		this.documentDrift.enqueueResync(
+			openTargets.filter((filePath) => !written.has(filePath)),
+		);
+		this.documentDrift.enqueueResync(
+			openTargets.filter((filePath) => written.has(filePath)),
+			{ saved: options.saved === true },
+		);
 		const pass = await this.sweepDocumentDrift({ force: true });
 		logLatency({
 			type: "phase",
@@ -3771,6 +3797,15 @@ export class LSPService {
 				deferred: pass?.deferred ?? this.documentDrift.pendingResyncCount,
 			},
 		});
+		for (const [changedPath, resolved] of changed) {
+			dispositions.set(
+				changedPath,
+				openTargets.includes(resolved)
+					? (pass?.queued.get(normalizeMapKey(resolved)) ?? "deferred")
+					: "unheld",
+			);
+		}
+		return dispositions;
 	}
 
 	/**
@@ -3800,7 +3835,7 @@ export class LSPService {
 		if (this.checkDestroyed()) return undefined;
 		return this.documentDrift.sweep(
 			{
-				resync: async (filePath, content, _driftAgeMs, readStamp) => {
+				resync: async (filePath, content, _driftAgeMs, readStamp, saved) => {
 					// Reuse the normal touch path so the resync inherits the existing
 					// per-server notify-write budget, the #743 backpressure demotion and
 					// the client-lease machinery. diagnostics:"none" keeps it a pure
@@ -3820,6 +3855,8 @@ export class LSPService {
 						clientScope: "all",
 						excludeServerIds: await this.serverIdsNotHoldingDocument(filePath),
 						readStamp,
+						// #3828 r3: only a target its caller queued as a save.
+						saved: saved === true,
 					});
 					// touchFile swallows a rejected or timed-out notify write so the
 					// caller's edit keeps moving, so its return proves nothing about
@@ -10627,7 +10664,7 @@ export async function notifyExternalFileChange(
 
 export async function resyncGitChangedFiles(
 	changedPaths: readonly string[],
-): Promise<void> {
+): Promise<ReadonlyMap<string, DriftDisposition>> {
 	return getLSPService().resyncGitChangedFiles(changedPaths);
 }
 

@@ -11,8 +11,18 @@
 (*    isClientAlive() is false from then on (setupConnectionLifecycle).    *)
 (*    Nothing resolves the client's pending waiters early; the registry    *)
 (*    entry stays until the next attach notices it;                        *)
-(*  - capacity eviction (makeCapacityForClient): shuts down                *)
-(*    an idle client with no lease and deletes it from the registry;       *)
+(*  - capacity eviction (makeCapacityForClient) and idle eviction          *)
+(*    (scheduleIdleEviction, widened by #3622): shut down an idle client   *)
+(*    with no lease and delete it from the registry. Idle eviction retires *)
+(*    the client before awaiting teardown, so a request that arrives while *)
+(*    the shutdown is in flight spawns a fresh one;                        *)
+(*  - retirement also drops the per-generation derived state (#3672,       *)
+(*    #3584): retireClient is the one helper every path uses, and it        *)
+(*    forgets the aux-notify inflight count (noteAuxNotifyIssued), the     *)
+(*    drained-barrier latency EWMA (noteAuxNotifyDrainLatency) and the     *)
+(*    consecutive write-timeout streak (recordNotifyWriteBackpressure),    *)
+(*    which registration (forgetReadiness) drops a second time.            *)
+(*    DerivedIsCurrent checks that none outlives its generation;           *)
 (*  - touches of the one file (LSPService.touchFile), sequential or        *)
 (*    concurrent, with the same content:                                   *)
 (*      "sync"    - the pipeline's lsp_sync touch, no diagnostics;         *)
@@ -38,7 +48,8 @@ CONSTANTS
     Silent,         \* the server is silentOnClean (marksman, lua): tier3 confirm applies
     MaxCrashes,     \* crashes the model may inject
     Uptimes,        \* subset of {"early","mid","long"}: lifetime class of a crash
-    MaxEvicts,      \* capacity evictions the model may inject
+    MaxEvicts,      \* capacity evictions, idle evictions and notify-stall
+                    \* demotions the model may inject (one shared budget)
     LeaseCheck,     \* eviction skips a leased client (FALSE = mutant)
     PingGuard,      \* the silent-clean confirm requires pingLiveness() (FALSE = mutant)
     WaitTimeout,    \* waitForDiagnostics has its own timeout (FALSE = mutant)
@@ -58,7 +69,7 @@ CONSTANTS
                     \* round 1; FALSE = mutant: a dead client's late answer marks
                     \* the key its replacement now holds)
     Trip,           \* BROKEN_PERMANENT_AFTER = RUNTIME_EXIT_WINDOW_TRIP_COUNT (5 in code)
-    Fix             \* "bind" (code since #3501: an entry is valid only for the
+    Fix,            \* "bind" (code since #3501: an entry is valid only for the
                     \* client instance it was written to), "none" (the
                     \* pre-#3501 code: no client identity), "clear" (entry
                     \* deleted when a dead client is detected and when a client
@@ -67,6 +78,24 @@ CONSTANTS
                     \* client's notify resolving false; since #3543 every
                     \* value resolves false, so it is the same model as
                     \* "clear")
+    DerivedMissPath, \* "off": the older configs, which do not depend on the
+                    \* per-generation derived state; its actions are disabled.
+                    \* "none": the code since #3672/#3584, every retirement
+                    \* path drops every derived fact. "capacity"|"idle"|
+                    \* "stall"|"respawn"|"all": a mutant in which that
+                    \* path (or every path) fails to drop the kinds in
+                    \* DerivedMissKinds. "pre3584" and "pre3672": the exact
+                    \* per-kind drop tables of those trees (ClearedKinds).
+    DerivedMissKinds, \* subset of {"ewma","inflight","streak"}: the kinds a
+                    \* mutant path fails to drop ({} unless DerivedMissPath
+                    \* names a path or "all")
+    RegStreak,      \* registering a client forgets the key's write-timeout
+                    \* streak (TRUE = code since #3537/#3584, forgetReadiness
+                    \* in registration; FALSE = mutant, or the pre-#3584 tree)
+    DeriveGuard     \* a derived write lands only while its touch's client is
+                    \* still the registered one (TRUE = code for the streak,
+                    \* #3584 (b), and the EWMA; FALSE = mutant, and the code's
+                    \* noteAuxNotifyIssued, which has no registry check)
 
 \* "S" sync, "C" collect, "W" ensureWarmForSweep's warm-up touch: it waits
 \* for a verdict, and a failed one caches the key cold (demonstratedCold).
@@ -80,6 +109,34 @@ MaxGen == MaxCrashes + MaxEvicts
 Gens == 0..MaxGen
 None == -1
 
+\* The per-client-generation derived facts #3672/#3584 consolidate onto
+\* retireClient clients/lsp/index.ts: the aux-notify inflight count
+\* (noteAuxNotifyIssued), the drained-barrier latency EWMA
+\* (noteAuxNotifyDrainLatency) and the consecutive write-timeout streak
+\* (recordNotifyWriteBackpressure, cleared through forgetReadiness). A
+\* retirement that forgets one lets the replacement read its predecessor's
+\* value; DerivedIsCurrent is the guard.
+DerivedKinds == {"ewma", "inflight", "streak"}
+
+DerivedOn == DerivedMissPath # "off"
+
+\* The kinds retirement path `path` drops. Code since #3672: all three, on
+\* every path. The pre trees are read off clients/lsp/index.ts at their
+\* parents: 5be1dda35^ (pre-#3584) dropped the streak and the aux backlog in
+\* demoteForNotifyStall only and never the EWMA; 625aa8018^ (pre-#3672)
+\* dropped the streak on every path (forgetReadiness, #3537), the aux backlog
+\* in demoteForNotifyStall only, and never the EWMA.
+ClearedKinds(path) ==
+    CASE DerivedMissPath = "pre3584" ->
+           IF path = "stall" THEN {"streak", "inflight"} ELSE {}
+      [] DerivedMissPath = "pre3672" ->
+           IF path = "stall" THEN {"streak", "inflight"} ELSE {"streak"}
+      [] DerivedMissPath \in {path, "all"} -> DerivedKinds \ DerivedMissKinds
+      [] OTHER -> DerivedKinds
+
+\* registration's forgetReadiness drops the streak
+AfterRegistration(d) == IF RegStreak THEN d \ {"streak"} ELSE d
+
 VARIABLES
     gen,        \* generation of the newest client in the registry
     registry,   \* "live" | "dead" (crashed, not yet detected) | "empty"
@@ -92,11 +149,14 @@ VARIABLES
     loopRespawns,   \* ghost: respawns that followed an early/mid death
     ready, readyGen,  \* demonstratedReady for the server key, and (ghost) which generation earned it
     cold, coldGen,    \* demonstratedCold for the server key, and (ghost) which generation it judged
+    derived,    \* per-generation derived facts present: subset of DerivedKinds
+    derivedGen, \* the generation derived describes, or None
     pc, tg, skip, wrote, verdict,
     evictUnderLease
 
 vars == <<gen, registry, held, pub, rt, crashes, evicts, uptime, earlyStreak,
           windowDeaths, permBroken, cooling, loopRespawns, ready, readyGen, cold, coldGen,
+          derived, derivedGen,
           pc, tg, skip, wrote, verdict, evictUnderLease>>
 
 Init ==
@@ -108,6 +168,7 @@ Init ==
     /\ loopRespawns = 0
     /\ ready = FALSE /\ readyGen = None
     /\ cold = FALSE /\ coldGen = None
+    /\ derived = {} /\ derivedGen = None
     /\ pc = [i \in T |-> "idle"]
     /\ tg = [i \in T |-> None]
     /\ skip = [i \in T |-> FALSE]
@@ -120,6 +181,17 @@ Leased == \E i \in T : pc[i] \in {"decide", "write", "mark", "wait", "gate"}
 Touching == <<pc, tg, skip, wrote, verdict>>
 Breaker == <<earlyStreak, windowDeaths, permBroken, cooling, loopRespawns>>
 
+\* The facts left after a drop, tagged with the generation they describe.
+SetDerived(d) ==
+    /\ derived' = d
+    /\ derivedGen' = IF d = {} THEN None ELSE derivedGen
+
+\* retireClient's derived-state drop, for one retirement path.
+DerivedAfterRetire(path) == derived \ ClearedKinds(path)
+
+RetireDerived(path) == SetDerived(DerivedAfterRetire(path))
+
+
 -----------------------------------------------------------------------------
 \* The server process dies (SIGKILL, OOM, a crash on the new content).
 Crash ==
@@ -128,7 +200,7 @@ Crash ==
     /\ crashes' = crashes + 1
     /\ \E u \in Uptimes : uptime' = u
     /\ UNCHANGED <<gen, held, pub, rt, evicts, Breaker, ready, readyGen, cold, coldGen,
-                   Touching, evictUnderLease>>
+                   derived, derivedGen, Touching, evictUnderLease>>
 
 \* makeCapacityForClient: an idle, unleased client is shut down and removed.
 \* Deletes demonstratedReady/demonstratedCold, like every retirement path.
@@ -141,7 +213,43 @@ Evict ==
     /\ ready' = FALSE /\ readyGen' = None
     /\ cold' = FALSE /\ coldGen' = None
     /\ rt' = IF Fix \in {"clear", "clearDeadFalse"} THEN None ELSE rt
+    /\ RetireDerived("capacity")
     /\ UNCHANGED <<gen, held, pub, crashes, uptime, Breaker, Touching>>
+
+\* scheduleIdleEviction (#3622): an idle, unleased, transparent server's
+\* timer fires; retireClient publishes the cold state synchronously before
+\* the awaited teardown, so a request during the shutdown waits on the spawn
+\* gate instead of receiving the retiring client.
+IdleEvict ==
+    /\ DerivedOn
+    /\ registry = "live" /\ evicts < MaxEvicts
+    /\ LeaseCheck => ~Leased
+    /\ registry' = "empty"
+    /\ evicts' = evicts + 1
+    /\ evictUnderLease' = (evictUnderLease \/ Leased)
+    /\ ready' = FALSE /\ readyGen' = None
+    /\ cold' = FALSE /\ coldGen' = None
+    /\ rt' = IF Fix \in {"clear", "clearDeadFalse"} THEN None ELSE rt
+    /\ RetireDerived("idle")
+    /\ UNCHANGED <<gen, held, pub, crashes, uptime, Breaker, Touching>>
+
+\* demoteForNotifyStall: the consecutive write-timeout streak reached its
+\* threshold, so the client is retired. The code also sets the key's breaker
+\* cooldown (state.broken); the model leaves Breaker unchanged, so a
+\* replacement may spawn at once. The retirement drops the derived facts.
+StallDemote ==
+    /\ DerivedOn
+    /\ registry = "live"
+    /\ "streak" \in derived /\ derivedGen = gen
+    /\ evicts < MaxEvicts
+    /\ registry' = "empty"
+    /\ evicts' = evicts + 1
+    /\ ready' = FALSE /\ readyGen' = None
+    /\ cold' = FALSE /\ coldGen' = None
+    /\ rt' = IF Fix \in {"clear", "clearDeadFalse"} THEN None ELSE rt
+    /\ RetireDerived("stall")
+    /\ UNCHANGED <<gen, held, pub, crashes, uptime, Breaker, Touching,
+                   evictUnderLease>>
 
 \* The breaker cooldown lapses (state.broken entry in the past).
 CooldownExpire ==
@@ -149,21 +257,24 @@ CooldownExpire ==
     /\ cooling' = FALSE
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
                    earlyStreak, windowDeaths, permBroken, loopRespawns, ready,
-                   readyGen, cold, coldGen, Touching, evictUnderLease>>
+                   readyGen, cold, coldGen, derived, derivedGen, Touching,
+                   evictUnderLease>>
 
 \* The TOUCH_DEBOUNCE_MS window of the recentTouches entry elapses.
 RtExpire ==
     /\ rt # None
     /\ rt' = None
     /\ UNCHANGED <<gen, registry, held, pub, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, cold, coldGen, Touching, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, derived, derivedGen, Touching,
+                   evictUnderLease>>
 
 \* The server of generation g publishes the file's diagnostics.
 Publish(g) ==
     /\ Live(g) /\ held[g] /\ ~pub[g]
     /\ pub' = [pub EXCEPT ![g] = TRUE]
     /\ UNCHANGED <<gen, registry, held, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, cold, coldGen, Touching, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, derived, derivedGen, Touching,
+                   evictUnderLease>>
 
 -----------------------------------------------------------------------------
 \* Touch i may start.
@@ -224,7 +335,8 @@ Acquire(i) ==
     /\ CASE registry = "live" ->
               /\ tg' = [tg EXCEPT ![i] = gen]
               /\ pc' = [pc EXCEPT ![i] = "decide"]
-              /\ UNCHANGED <<gen, registry, rt, uptime, Breaker, ready, readyGen, cold, coldGen, verdict>>
+              /\ UNCHANGED <<gen, registry, rt, uptime, Breaker, ready, readyGen, cold, coldGen,
+                             derived, derivedGen, verdict>>
          [] registry = "dead" ->
               \* detection: breaker, then the state.broken check, then spawn.
               /\ earlyStreak' = NewStreak(uptime)
@@ -243,13 +355,17 @@ Acquire(i) ==
               /\ IF NewCooling(uptime)
                    THEN /\ registry' = "empty" /\ Unavailable(i)
                         /\ UNCHANGED <<gen, loopRespawns>>
+                        /\ RetireDerived("respawn")
                    ELSE /\ SpawnFor(i, uptime \in {"early", "mid"})
                         /\ UNCHANGED verdict
+                        \* retireClient's drop, then the replacement registers
+                        /\ SetDerived(AfterRegistration(DerivedAfterRetire("respawn")))
          [] registry = "empty" ->
               /\ IF cooling
                    THEN /\ Unavailable(i) /\ UNCHANGED <<gen, registry, loopRespawns>>
-                        /\ UNCHANGED <<ready, readyGen, cold, coldGen>>
+                        /\ UNCHANGED <<ready, readyGen, cold, coldGen, derived, derivedGen>>
                    ELSE /\ SpawnFor(i, FALSE) /\ UNCHANGED verdict
+                        /\ SetDerived(AfterRegistration(derived))
                         \* #3502 verify round 3: registration forgets a verdict
                         \* cached while no client was registered.
                         /\ IF RegClear
@@ -270,7 +386,7 @@ WarmupNoClient(i) ==
     /\ verdict' = [verdict EXCEPT ![i] = "unavailable"]
     /\ MarkCold(i)
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
-                   Breaker, tg, skip, wrote, evictUnderLease>>
+                   Breaker, tg, skip, wrote, derived, derivedGen, evictUnderLease>>
 
 \* shouldSkipNotify: the entry is within its window with the same fingerprint,
 \* and (#3501, Fix = "bind") it was written by this touch's client instance.
@@ -279,7 +395,8 @@ Decide(i) ==
     /\ skip' = [skip EXCEPT ![i] = (rt # None /\ (Fix = "bind" => rt = tg[i]))]
     /\ pc' = [pc EXCEPT ![i] = "write"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, cold, coldGen, tg, wrote, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, derived, derivedGen,
+                   tg, wrote, verdict, evictUnderLease>>
 
 \* notify.open. A skipped server is not written. A dead client resolves
 \* `false` since #3543: the queued run that finds the client dead returns
@@ -299,7 +416,8 @@ Write(i) ==
                      /\ UNCHANGED held
     /\ pc' = [pc EXCEPT ![i] = "mark"]
     /\ UNCHANGED <<gen, registry, pub, rt, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, cold, coldGen, tg, skip, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, derived, derivedGen,
+                   tg, skip, verdict, evictUnderLease>>
 
 \* `if (wrote === true) markTouched(...)` - a later microtask than the write.
 Mark(i) ==
@@ -307,7 +425,24 @@ Mark(i) ==
     /\ rt' = IF wrote[i] THEN tg[i] ELSE rt
     /\ pc' = [pc EXCEPT ![i] = IF Kinds[i] = "sync" THEN "done" ELSE "wait"]
     /\ UNCHANGED <<gen, registry, held, pub, crashes, evicts, uptime, Breaker,
-                   ready, readyGen, cold, coldGen, tg, skip, wrote, verdict, evictUnderLease>>
+                   ready, readyGen, cold, coldGen, derived, derivedGen,
+                   tg, skip, wrote, verdict, evictUnderLease>>
+
+\* A live client's touch produces the per-generation derived facts: the
+\* notify issue count (noteAuxNotifyIssued), a drained-barrier latency
+\* sample (noteAuxNotifyDrainLatency) and a timeout strike
+\* (recordNotifyWriteBackpressure). One action writes all three; a
+\* retirement path drops the kinds ClearedKinds names. DeriveGuard is the
+\* write-side generation check: recordNotifyWriteBackpressure (#3584 (b)) and
+\* noteAuxNotifyDrainLatency have it; noteAuxNotifyIssued does not.
+Derive(i) ==
+    /\ DerivedOn
+    /\ pc[i] = "mark" /\ wrote[i]
+    /\ DeriveGuard => Live(tg[i])
+    /\ derived' = DerivedKinds
+    /\ derivedGen' = tg[i]
+    /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime, Breaker,
+                   ready, readyGen, cold, coldGen, Touching, evictUnderLease>>
 
 \* The wait on client tg settles on its cache (a publish landed, possibly
 \* before that client died: the dead client's cache is still read).
@@ -317,7 +452,7 @@ Answered(i) ==
     /\ verdict' = [verdict EXCEPT ![i] = "dirty"]
     /\ MarkReady(i)
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
-                   Breaker, tg, skip, wrote, evictUnderLease>>
+                   Breaker, tg, skip, wrote, derived, derivedGen, evictUnderLease>>
 
 \* The wait's own timeout. Budget assumption: a live server that holds the
 \* document publishes inside the budget (a slow-but-alive server is the
@@ -329,8 +464,8 @@ TimedOut(i) ==
     /\ pc[i] = "wait" /\ TimeoutGuard(i)
     /\ pc' = [pc EXCEPT ![i] = "gate"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
-                   Breaker, ready, readyGen, cold, coldGen, tg, skip, wrote, verdict,
-                   evictUnderLease>>
+                   Breaker, ready, readyGen, cold, coldGen, derived, derivedGen,
+                   tg, skip, wrote, verdict, evictUnderLease>>
 
 \* #799 silent-clean confirm: tier3-silent + pingLiveness() on the touch's
 \* own client object (dead or shut down -> false: the client's pingLiveness).
@@ -343,13 +478,13 @@ Gate(i) ==
              ELSE UNCHANGED <<ready, readyGen, cold, coldGen>>
     /\ pc' = [pc EXCEPT ![i] = "done"]
     /\ UNCHANGED <<gen, registry, held, pub, rt, crashes, evicts, uptime,
-                   Breaker, tg, skip, wrote, evictUnderLease>>
+                   Breaker, tg, skip, wrote, derived, derivedGen, evictUnderLease>>
 
 Next ==
-    \/ Crash \/ Evict \/ CooldownExpire \/ RtExpire
+    \/ Crash \/ Evict \/ IdleEvict \/ StallDemote \/ CooldownExpire \/ RtExpire
     \/ \E g \in Gens : Publish(g)
-    \/ \E i \in T : Acquire(i) \/ WarmupNoClient(i) \/ Decide(i) \/ Write(i) \/ Mark(i)
-                    \/ Answered(i) \/ TimedOut(i) \/ Gate(i)
+    \/ \E i \in T : Acquire(i) \/ WarmupNoClient(i) \/ Derive(i) \/ Decide(i) \/ Write(i)
+                    \/ Mark(i) \/ Answered(i) \/ TimedOut(i) \/ Gate(i)
 
 Spec == Init /\ [][Next]_vars
 
@@ -358,6 +493,8 @@ TypeOK ==
     /\ gen \in Gens
     /\ registry \in {"live", "dead", "empty"}
     /\ rt \in Gens \cup {None}
+    /\ derived \subseteq DerivedKinds
+    /\ derivedGen \in Gens \cup {None}
     /\ pc \in [T -> {"idle", "decide", "write", "mark", "wait", "gate", "done"}]
     /\ verdict \in [T -> {"none", "clean", "dirty", "inconclusive", "unavailable"}]
 
@@ -391,6 +528,13 @@ ReadyIsCurrent == ready => (readyGen = gen /\ registry # "empty")
 \* The key's demonstratedCold verdict is about the client now in the registry,
 \* or about the absence of one while none is registered.
 ColdIsCurrent == cold => (registry = "empty" \/ coldGen = gen)
+
+\* Every retained derived fact describes the client now in the registry, or
+\* the absence of one a retirement leaves before a replacement spawns. A
+\* retirement that forgets its drop leaves the predecessor's generation
+\* behind, and the replacement reads it.
+DerivedIsCurrent ==
+    derived = {} \/ (derivedGen # None /\ (registry = "empty" \/ derivedGen = gen))
 
 \* Eviction never takes a client out from under an in-flight touch.
 NoEvictUnderLease == ~evictUnderLease

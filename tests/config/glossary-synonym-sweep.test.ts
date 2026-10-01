@@ -520,6 +520,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/debug-handles.ts": 1,
 		"clients/debug-heap.ts": 1,
 		"clients/degradation-ledger.ts": 2,
+		// 0 -> 1 (#3218): the demotion path now drops the promotion-note row as
+		// part of degrading a demoted body, one `Array.prototype.filter` use.
+		"clients/demoted-finding-render.ts": 1,
 		// 9 -> 7 (#3436): deleting `parseMadgeSkips` removed its two
 		// `Array.prototype.filter` uses; `localSkips`/the skip channel it served
 		// were structurally always zero under `--json`.
@@ -591,7 +594,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/config.ts": 3,
 		"clients/lsp/diagnostic-binding.ts": 1,
 		"clients/lsp/edits.ts": 1,
-		"clients/lsp/index.ts": 48,
+		// 48 → 50 (#3828 r3): `resyncGitChangedFiles` splits its held targets
+		// into the changed paths (queued as a save) and their importers (not).
+		"clients/lsp/index.ts": 50,
 		"clients/lsp/inferred-project.ts": 2,
 		"clients/lsp/jvm-runtime.ts": 3,
 		"clients/lsp/language.ts": 1,
@@ -675,6 +680,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/render-compact.ts": 3,
 		"mcp/analyze-cli.ts": 1,
 		"mcp/server.ts": 9,
+		"mcp/tool-arguments.ts": 3,
 		"index.ts": 21,
 	},
 	ignore: {
@@ -918,7 +924,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/path-utils.ts": 34,
 		"clients/php-cs-fixer-config.ts": 4,
 		"clients/pipeline.ts": 28,
-		"clients/probe-home-state.ts": 7,
+		"clients/probe-home-state.ts": 10,
 		"clients/project-changes.ts": 5,
 		"clients/project-conventions.ts": 5,
 		"clients/project-diagnostics/cache.ts": 4,
@@ -951,11 +957,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ruff-client.ts": 4,
 		"clients/rules-scanner.ts": 8,
 		"clients/runtime-agent-end.ts": 12,
-		"clients/runtime-coordinator.ts": 27,
+		// 27 -> 28 (#3218): the retire seam reads the removed record with
+		// `path.resolve(filePath)` before naming it resolved.
+		"clients/runtime-coordinator.ts": 28,
 		"clients/runtime-session.ts": 15,
 		"clients/runtime-tool-call.ts": 22,
 		"clients/runtime-tool-result.ts": 22,
-		"clients/runtime-turn.ts": 25,
+		// 25 -> 27 (#3218): the resolved-blocker filter keys both the current
+		// blocker set and each resolved entry with `path.resolve`.
+		"clients/runtime-turn.ts": 27,
 		"clients/rust-client.ts": 5,
 		"clients/safe-spawn.ts": 26,
 		"clients/sanitize.ts": 2,
@@ -1040,10 +1050,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/read-guard.ts": 20,
 		"clients/runtime-agent-end.ts": 56,
 		"clients/runtime-context.ts": 2,
-		"clients/runtime-coordinator.ts": 17,
+		// 17 -> 23 (#3218): `noteResolvedBlockerFile` reads the removed
+		// `InlineBlockerRecord` (param, path, count, write index).
+		"clients/runtime-coordinator.ts": 23,
 		"clients/runtime-tool-call.ts": 1,
 		"clients/runtime-tool-result.ts": 5,
-		"clients/runtime-turn.ts": 6,
+		// 6 -> 8 (#3218): the resolved-blocker filter keys each current blocker
+		// record.
+		"clients/runtime-turn.ts": 8,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
 		"clients/test-runner-delivery.ts": 15,
@@ -1091,6 +1105,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/server.ts": 22,
 	},
 	status: {
+		// #3867 moved the coverage decision onto `hasUsableResult`: dispatcher.ts
+		// no longer compares the bare `status` field at four sites (37 -> 32), and
+		// the predicate that owns the rule names it once in types.ts (2 -> 5).
 		"clients/actionable-warnings.ts": 5,
 		"clients/advisory-provenance.ts": 5,
 		"clients/ast-grep-client.ts": 7,
@@ -1102,7 +1119,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/child-unref.ts": 6,
 		"clients/config-resolve.ts": 11,
 		"clients/dead-code-client.ts": 3,
-		"clients/dispatch/dispatcher.ts": 37,
+		"clients/dispatch/dispatcher.ts": 32,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 2,
@@ -1160,7 +1177,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/vale.ts": 4,
 		"clients/dispatch/runners/yamllint.ts": 2,
 		"clients/dispatch/runners/zig-check.ts": 3,
-		"clients/dispatch/types.ts": 1,
+		"clients/dispatch/types.ts": 5,
 		"clients/file-utils.ts": 2,
 		"clients/finding-delivery-gate.ts": 3,
 		"clients/formatters.ts": 8,

@@ -4,7 +4,12 @@
  */
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
 import { truncateForLedger } from "../../../ledger-bounds.js";
-import type { Diagnostic, DispatchContext, RunnerResult } from "../../types.js";
+import {
+	type Diagnostic,
+	type DispatchContext,
+	findingsResult,
+	type RunnerResult,
+} from "../../types.js";
 import {
 	type ClassifyRunOutcomeInput,
 	classifyRunOutcome,
@@ -308,7 +313,9 @@ export function parseToolRun<D>(
  * Semantics:
  * - findings present        → `classify` decides (default: any blocking
  *                             diagnostic → `failed`/`blocking`, else
- *                             `succeeded`/`warning`).
+ *                             `succeeded`/`warning`). A `failed` verdict
+ *                             carries `failureKind: "blocking_diagnostics"`
+ *                             (`findingsResult` in types.ts, #3781).
  * - no findings, exit 0     → clean: `succeeded`/`none`.
  * - no findings, nonzero exit,
  *   bytes emitted           → `failed` + one parse-error warning diagnostic.
@@ -366,12 +373,11 @@ export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
 
 	const mapped = input.classify?.(input.diagnostics);
 	if (mapped) {
-		return { ...mapped, diagnostics: input.diagnostics };
+		return findingsResult(input.diagnostics, mapped);
 	}
 	const hasBlocking = input.diagnostics.some((d) => d.semantic === "blocking");
-	return {
+	return findingsResult(input.diagnostics, {
 		status: hasBlocking ? "failed" : "succeeded",
-		diagnostics: input.diagnostics,
 		semantic: hasBlocking ? "blocking" : "warning",
-	};
+	});
 }

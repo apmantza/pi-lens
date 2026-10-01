@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	aggregateDriftRows,
+	buildMatrixObservations,
 	checkCleanSignalDrift,
 	classifyCleanBehavior,
 	classifyFirstPublish,
@@ -26,6 +27,7 @@ import {
 	findCleanSignalDrift,
 	resolveProbeServerId,
 	strategyKeyForLang,
+	targetLangForFixture,
 } from "../../scripts/lib/clean-signal.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -706,5 +708,93 @@ describe("drift keyed by server, not fixture (#3444)", () => {
 				fixtures: ["ast-grep", "ast-grep-baseline"],
 			}),
 		]);
+	});
+});
+
+describe("buildMatrixObservations (#3401, review F3)", () => {
+	// Recurrence: a probe run whose first-publish came back `empty-only` or whose
+	// clean-behavior came back `unknown` must not reach the writer as a value, or
+	// it blanks a prior good cell (the #3310/#390 regression). The mapping used to
+	// sit inline in probe-clean-signal.mjs's `updateMatrix`, where no test could
+	// reach it: passing `r.firstPublish`/`r.behavior` unfiltered left the suite
+	// green.
+	const row = (over: Record<string, unknown>) => ({
+		targetLang: "x",
+		firstPublish: "direct",
+		behavior: "silent",
+		tierLabel: "3",
+		tier: 3,
+		...over,
+	});
+
+	it("passes a comparable first-publish and clean-behavior through with the tier label", () => {
+		expect(
+			buildMatrixObservations([
+				row({
+					targetLang: "ast-grep",
+					firstPublish: "empty-first",
+					behavior: "publishes-unversioned",
+					tierLabel: "2*",
+					tier: 2,
+				}),
+			]),
+		).toEqual([
+			{
+				lang: "ast-grep",
+				firstPublish: "empty-first",
+				cleanBehavior: "publishes-unversioned",
+				tier: "2*",
+			},
+		]);
+	});
+
+	it.each(["empty-only", "unknown", "TBD", undefined])(
+		"nulls a non-comparable first-publish (%s) so it cannot blank a prior cell",
+		(firstPublish) => {
+			expect(
+				buildMatrixObservations([row({ firstPublish })])[0].firstPublish,
+			).toBeNull();
+		},
+	);
+
+	it.each(["unknown", "no-lsp", undefined])(
+		"nulls a non-measured clean-behavior (%s)",
+		(behavior) => {
+			expect(
+				buildMatrixObservations([row({ behavior })])[0].cleanBehavior,
+			).toBeNull();
+		},
+	);
+
+	it("filters the two axes independently", () => {
+		expect(
+			buildMatrixObservations([
+				row({ firstPublish: "direct", behavior: "unknown" }),
+				row({ firstPublish: "empty-only", behavior: "publishes-versioned" }),
+			]).map((o) => [o.firstPublish, o.cleanBehavior]),
+		).toEqual([
+			["direct", null],
+			[null, "publishes-versioned"],
+		]);
+	});
+
+	it("falls back to the numeric tier when there is no tier label", () => {
+		expect(
+			buildMatrixObservations([row({ tierLabel: "", tier: 3 })])[0].tier,
+		).toBe("3");
+	});
+});
+
+describe("targetLangForFixture (#3401)", () => {
+	// Recurrence: a subset probe scopes its bookkeeping to the langs it probed;
+	// `typescript-clean` writes the `typescript` row, so scoping it by the raw
+	// fixture lang would leave the row it just measured outside the scope.
+	it("maps a clean fixture onto its base lang and leaves other langs alone", () => {
+		expect(targetLangForFixture("typescript-clean", true)).toBe("typescript");
+		expect(targetLangForFixture("typescript", false)).toBe("typescript");
+		expect(targetLangForFixture("typescript7-clean", true)).toBe("typescript7");
+		expect(targetLangForFixture("ast-grep-baseline")).toBe("ast-grep-baseline");
+		// Only a clean fixture is renamed: a dirty fixture keeps its own name.
+		expect(targetLangForFixture("x-clean", false)).toBe("x-clean");
 	});
 });

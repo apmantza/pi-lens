@@ -8,6 +8,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
@@ -79,7 +80,10 @@ const shfmtRunner: RunnerDefinition = {
 					rule: "shfmt-parse-error",
 				},
 			];
-			return { status: "failed", diagnostics, semantic: "blocking" };
+			return findingsResult(diagnostics, {
+				status: "failed",
+				semantic: "blocking",
+			});
 		}
 
 		// Needs formatting (exit 1). Only warn if the project opted into shfmt via

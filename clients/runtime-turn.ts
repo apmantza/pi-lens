@@ -51,7 +51,12 @@ import { isSecretWarning, secretLocationKey } from "./secret-findings.js";
 import { govulncheckLane } from "./turn-end/lanes/govulncheck.js";
 import { secretsLane } from "./turn-end/lanes/secrets.js";
 import type { TurnEndLaneContext } from "./turn-end/lane.js";
+import { isHardFailureSummary } from "./hard-failure-summary.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
+import {
+	MAX_KNIP_ROOTS_PER_TURN,
+	resolveKnipScanRoots,
+} from "./knip-scan-roots.js";
 import type { DeadCodeClient, DeadCodeResult } from "./dead-code-client.js";
 import {
 	deadCodeIssueKey,
@@ -77,7 +82,10 @@ import { updateHeartbeat } from "./instance-registry.js";
 import { emitLensTurnFindings } from "./lens-events.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { isSubagentSession } from "./subagent-mode.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import type {
+	ResolvedBlockerFile,
+	RuntimeCoordinator,
+} from "./runtime-coordinator.js";
 import type { TurnStateOwner } from "./cache-manager.js";
 import type { LensToolHost } from "./tool-config.js";
 import { formatRunDurationMs } from "./run-duration.js";
@@ -88,6 +96,7 @@ import {
 	type TestResult,
 	type TestRunnerClient,
 } from "./test-runner-client.js";
+import { createTurnEndTestRoots } from "./test-target-roots.js";
 import {
 	MAX_ADVISORY_AFFECTED_FILES,
 	gateFindingsByPathFreshness,
@@ -658,10 +667,71 @@ function capTurnEndMessage(content: string): string {
 		out = `${lines.slice(0, maxLines).join("\n")}\n... (truncated)`;
 	}
 	if (out.length > maxChars) {
-		out = `${out.slice(0, maxChars)}\n... (truncated)`;
+		out = `${sliceAtCodePointBoundaries(out, 0, maxChars)}\n... (truncated)`;
 	}
 
 	return out;
+}
+
+function sliceAtCodePointBoundaries(
+	value: string,
+	start: number,
+	end: number,
+): string {
+	if (
+		start > 0 &&
+		start < value.length &&
+		isLowSurrogate(value.charCodeAt(start)) &&
+		isHighSurrogate(value.charCodeAt(start - 1))
+	) {
+		start += 1;
+	}
+	if (
+		end > 0 &&
+		end < value.length &&
+		isLowSurrogate(value.charCodeAt(end)) &&
+		isHighSurrogate(value.charCodeAt(end - 1))
+	) {
+		end -= 1;
+	}
+	return value.slice(start, end);
+}
+
+function isHighSurrogate(codeUnit: number): boolean {
+	return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
+}
+
+function isLowSurrogate(codeUnit: number): boolean {
+	return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
+}
+
+/**
+ * #3218 criterion 2: the turn-end "Resolved" section's share of the message
+ * cap. It rides first (the cap must never cut a consumed line) but is never
+ * the whole cap: a cleanup report must not crowd the live blockers out
+ * (review-3776-r3 W1). At most 40% of the chars and 5 lines, one of them kept
+ * for the "… and N more" tail.
+ */
+const RESOLVED_SHARE_OF_CHARS = 0.4;
+const RESOLVED_MAX_LINES = 5;
+
+/**
+ * #3218 criterion 2: "1st", "2nd", "3rd", "4th" … for a retiring write's
+ * index in the "Resolved this turn" line. A bare `${n}th` reads as "1th".
+ */
+function formatWriteOrdinal(n: number): string {
+	const mod100 = n % 100;
+	if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+	switch (n % 10) {
+		case 1:
+			return `${n}st`;
+		case 2:
+			return `${n}nd`; // spellchecker:disable-line
+		case 3:
+			return `${n}rd`;
+		default:
+			return `${n}th`;
+	}
 }
 
 export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
@@ -861,7 +931,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			});
 		}
 		resetFormatService();
-		if (pendingRunnerFindingsSize() === 0) return;
+		// #3218 criterion 2: a retirement nobody has reported (a
+		// `lens_diagnostics` confirmation lands on exactly this turn) falls
+		// through to the composer like a carried runner finding.
+		if (pendingRunnerFindingsSize() === 0 && !runtime.hasResolvedBlockerFiles())
+			return;
 	}
 
 	// Cancel any pending idle reset since we're actively working. #1618: also
@@ -1613,10 +1687,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		},
 	});
 
-	const t2 = Date.now();
-	let knipMeta: {
+	type KnipTurnMeta = {
 		skipped?: boolean;
-		execution?: "executed" | "cache";
+		/** `deferred`: the scan outlived the turn_end budget and runs on, off-hook (#3872). */
+		execution?: "executed" | "cache" | "deferred";
 		success?: boolean;
 		totalIssues?: number;
 		newIssues?: number;
@@ -1628,172 +1702,240 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		failureKind?: string;
 		/** True when a failed run left the previous good cache in place (#1467). */
 		cacheKept?: boolean;
-	} = {};
-	if (runtime.isStartupScanInFlight("knip")) {
-		dbg("turn_end: skipping knip (startup scan still in flight)");
-		knipMeta = { skipped: true };
-	} else {
-		// Let KnipClient resolve/validate a real JS project root before probing or
-		// auto-installing knip. Non-JS repos (for example Unity projects) should not
-		// run tool checks every turn. Also back off after a timeout/kill so every
-		// agent turn does not spend 30s launching another heavyweight knip process.
-		const prevKnip = cacheManager.readCache<KnipResult>("knip", cwd);
-		// An availability failure is NOT a hard knip failure: knip never ran, so
-		// there is nothing to back off from, and backing off would make an
-		// expiring probe verdict permanent again (#1467).
-		const previousFailedHard =
-			prevKnip &&
-			!prevKnip.data.success &&
-			!prevKnip.data.failureKind &&
-			/(timed out|killed|SIGTERM|SIGKILL|SIGABRT)/i.test(prevKnip.data.summary);
-
-		if (previousFailedHard) {
+		/** The hook's own signal fired while the scan was awaited (Escape). */
+		aborted?: boolean;
+	};
+	// #3872: knip runs in the checkout that owns each edit. A linked worktree is
+	// its own project; the session root would walk it as a nested copy of the
+	// whole tree (live: +300 issues per worktree, a 7 s scan past a 3 s budget).
+	const knipScan = resolveKnipScanRoots(cwd, files);
+	for (const root of knipScan.overCap) {
+		incrementDegradationCount({
+			kind: "turn-end-knip-root-skipped",
+			subject: "root-cap",
+			reason: `${toRunnerDisplayPath(cwd, root)} not scanned: more than ${MAX_KNIP_ROOTS_PER_TURN} checkouts edited this turn`,
+		});
+	}
+	/** One checkout's finished scan: cache write, delta, delivery. `scanRoot === cwd` is the session checkout. */
+	const applyKnipResult = (
+		scanRoot: string,
+		prevKnip: CacheEntry<KnipResult> | null,
+		knipResult: KnipResult,
+	): KnipTurnMeta => {
+		// Never overwrite a good scan with a failure (#925, #1467): the last
+		// good result stays until a new successful scan replaces it.
+		const knipWouldPoison = wouldPoisonCache(prevKnip, knipResult);
+		if (knipWouldPoison) {
 			dbg(
-				`turn_end: skipping knip after recent failure: ${prevKnip.data.summary}`,
+				`turn_end: keeping last good knip cache; this run failed: ${knipResult.summary}`,
 			);
-			knipMeta = { skipped: true, reason: prevKnip.data.summary };
 		} else {
-			const knipResult = await knipClient.analyze(
-				cwd,
-				getKnipIgnorePatterns(),
-				{
-					projectSeq: runtime.projectSeq,
-				},
-			);
-			// Never overwrite a good scan with a failure (#925, #1467): the last
-			// good result stays until a new successful scan replaces it.
-			const knipWouldPoison = wouldPoisonCache(prevKnip, knipResult);
-			if (knipWouldPoison) {
-				dbg(
-					`turn_end: keeping last good knip cache; this run failed: ${knipResult.summary}`,
+			cacheManager.writeCache("knip", knipResult, scanRoot);
+		}
+		const knipMeta: KnipTurnMeta = {
+			execution: knipResult.execution ?? "executed",
+			success: knipResult.success,
+			totalIssues: knipResult.issues.length,
+			newIssues: 0,
+			blockerIssues: 0,
+			// #3248: bounded per-turn, on the row this lane already writes —
+			// never one record per finding.
+			dispositionSuppressed: 0,
+			...(!knipResult.success && { reason: knipResult.summary }),
+			...(knipResult.failureKind && { failureKind: knipResult.failureKind }),
+			...(knipWouldPoison && { cacheKept: true }),
+		};
+
+		if (knipResult.success && knipResult.issues.length > 0) {
+			// Deliberately excludes the line number — see stableFindingKey's
+			// doc comment (#1483: mirrors the dead-code fix in #1477).
+			const issueKey = (i: KnipIssue) =>
+				stableFindingKey(i.type, i.file, i.name, i.package);
+			const prevKeys = new Set((prevKnip?.data?.issues ?? []).map(issueKey));
+			const modifiedSet = new Set(files.map((f) => resolveRunnerPath(cwd, f)));
+
+			const newIssues = knipResult.issues.filter((issue) => {
+				if (prevKeys.has(issueKey(issue))) return false;
+				if (!issue.file) return false;
+				const abs = resolveRunnerPath(scanRoot, issue.file);
+				return modifiedSet.has(abs);
+			});
+			knipMeta.newIssues = newIssues.length;
+			if (newIssues.length > 0) {
+				projectDiagnosticsDelta.push(
+					...knipIssuesToProjectDiagnostics(scanRoot, newIssues),
 				);
-			} else {
-				cacheManager.writeCache("knip", knipResult, cwd);
+				projectDiagnosticsSources.add("knip");
 			}
-			knipMeta = {
-				execution: knipResult.execution ?? "executed",
-				success: knipResult.success,
-				totalIssues: knipResult.issues.length,
-				newIssues: 0,
-				blockerIssues: 0,
-				// #3248: bounded per-turn, on the row this lane already writes —
-				// never one record per finding.
-				dispositionSuppressed: 0,
-				...(!knipResult.success && { reason: knipResult.summary }),
-				...(knipResult.failureKind && { failureKind: knipResult.failureKind }),
-				...(knipWouldPoison && { cacheKept: true }),
+
+			// #3248: what the agent READS goes through the same stored-
+			// disposition filter every other findings surface applies, keyed off
+			// knip's OWN `ProjectDiagnostic` adapter — the identity
+			// `lens_diagnostics` surfaces and `lens_diagnostic_mark` anchors
+			// against — so a marked finding stops re-reporting here. The
+			// `projectDiagnosticsDelta` push above deliberately keeps the
+			// UNFILTERED set: that record is what the scan found, and its reader
+			// (`lens_diagnostics`) applies dispositions on read, so filtering it
+			// here would apply the same policy twice on one lane.
+			// Paired through `flatMap` rather than indexing the adapter's array:
+			// `knipIssuesToProjectDiagnostics` is a straight `issues.map(...)`
+			// (one diagnostic per issue, never empty), so this keeps the pairing
+			// total while staying honest under `noUncheckedIndexedAccess`.
+			const knipPaired = newIssues.flatMap((issue) =>
+				knipIssuesToProjectDiagnostics(scanRoot, [issue]).map((diagnostic) => ({
+					issue,
+					diagnostic,
+				})),
+			);
+			const knipFiltered = filterFindingsByDisposition(
+				knipPaired,
+				cwd,
+				(pair) => pair.diagnostic,
+			);
+			const knipDeliverable = {
+				kept: knipFiltered.kept.map((pair) => pair.issue),
+				suppressed: knipFiltered.suppressed,
 			};
+			knipMeta.dispositionSuppressed = knipDeliverable.suppressed;
+			// Issue files are relative to the scan root; the agent reads paths
+			// relative to the session.
+			const displayPath = (issue: KnipIssue): string =>
+				issue.file
+					? toRunnerDisplayPath(cwd, resolveRunnerPath(scanRoot, issue.file))
+					: "(unknown)";
 
-			if (knipResult.success && knipResult.issues.length > 0) {
-				// Deliberately excludes the line number — see stableFindingKey's
-				// doc comment (#1483: mirrors the dead-code fix in #1477).
-				const issueKey = (i: KnipIssue) =>
-					stableFindingKey(i.type, i.file, i.name, i.package);
-				const prevKeys = new Set((prevKnip?.data?.issues ?? []).map(issueKey));
-				const modifiedSet = new Set(
-					files.map((f) => resolveRunnerPath(cwd, f)),
-				);
-
-				const newIssues = knipResult.issues.filter((issue) => {
-					if (prevKeys.has(issueKey(issue))) return false;
-					if (!issue.file) return false;
-					const abs = resolveRunnerPath(cwd, issue.file);
-					return modifiedSet.has(abs);
-				});
-				knipMeta.newIssues = newIssues.length;
-				if (newIssues.length > 0) {
-					projectDiagnosticsDelta.push(
-						...knipIssuesToProjectDiagnostics(cwd, newIssues),
-					);
-					projectDiagnosticsSources.add("knip");
+			const blockerIssues = knipDeliverable.kept.filter(
+				(i) => i.type === "unlisted" || i.type === "bin",
+			);
+			knipMeta.blockerIssues = blockerIssues.length;
+			if (blockerIssues.length > 0) {
+				let report =
+					"🔴 New unresolved imports/deps in modified code (Knip):\n";
+				let firstPath: string | null = null;
+				for (const issue of blockerIssues.slice(0, 5)) {
+					const display = displayPath(issue);
+					if (!firstPath && display !== "(unknown)") firstPath = display;
+					report += `  ${display}${issue.line ? `:${issue.line}` : ""} — ${issue.type}: ${issue.name}\n`;
 				}
-
-				// #3248: what the agent READS goes through the same stored-
-				// disposition filter every other findings surface applies, keyed off
-				// knip's OWN `ProjectDiagnostic` adapter — the identity
-				// `lens_diagnostics` surfaces and `lens_diagnostic_mark` anchors
-				// against — so a marked finding stops re-reporting here. The
-				// `projectDiagnosticsDelta` push above deliberately keeps the
-				// UNFILTERED set: that record is what the scan found, and its reader
-				// (`lens_diagnostics`) applies dispositions on read, so filtering it
-				// here would apply the same policy twice on one lane.
-				// Paired through `flatMap` rather than indexing the adapter's array:
-				// `knipIssuesToProjectDiagnostics` is a straight `issues.map(...)`
-				// (one diagnostic per issue, never empty), so this keeps the pairing
-				// total while staying honest under `noUncheckedIndexedAccess`.
-				const knipPaired = newIssues.flatMap((issue) =>
-					knipIssuesToProjectDiagnostics(cwd, [issue]).map((diagnostic) => ({
-						issue,
-						diagnostic,
-					})),
-				);
-				const knipFiltered = filterFindingsByDisposition(
-					knipPaired,
-					cwd,
-					(pair) => pair.diagnostic,
-				);
-				const knipDeliverable = {
-					kept: knipFiltered.kept.map((pair) => pair.issue),
-					suppressed: knipFiltered.suppressed,
-				};
-				knipMeta.dispositionSuppressed = knipDeliverable.suppressed;
-
-				const blockerIssues = knipDeliverable.kept.filter(
-					(i) => i.type === "unlisted" || i.type === "bin",
-				);
-				knipMeta.blockerIssues = blockerIssues.length;
-				if (blockerIssues.length > 0) {
-					let report =
-						"🔴 New unresolved imports/deps in modified code (Knip):\n";
-					let firstPath: string | null = null;
-					for (const issue of blockerIssues.slice(0, 5)) {
-						const display = issue.file
-							? toRunnerDisplayPath(cwd, issue.file)
-							: "(unknown)";
-						if (!firstPath && display !== "(unknown)") firstPath = display;
-						report += `  ${display}${issue.line ? `:${issue.line}` : ""} — ${issue.type}: ${issue.name}\n`;
-					}
-					if (firstPath) {
-						report += `  First location: ${firstPath}\n`;
-					}
-					// @delivery-surface: runtime-turn:knip-blocker
-					blockerParts.push(report);
+				if (firstPath) {
+					report += `  First location: ${firstPath}\n`;
 				}
+				// @delivery-surface: runtime-turn:knip-blocker
+				blockerParts.push(report);
+			}
 
-				// Turn-end injects only this turn's HIGH-CONFIDENCE, ATTRIBUTABLE
-				// delta: symbols in files the agent just edited that became unused
-				// (weren't flagged in the previous scan) — low-volume and actionable
-				// now. The FULL project-wide dead-code picture is deliberately NOT
-				// injected per turn (hundreds of mostly-pre-existing findings would
-				// drown the blockers and burn context every turn); it's available
-				// on demand via lens_diagnostics. The delta also feeds the session-slop
-				// record (`projectDiagnosticsDelta`) above.
-				const unusedExportDelta = knipDeliverable.kept.filter(
-					(i) => i.type === "export" || i.type === "enumMember",
-				);
-				if (unusedExportDelta.length > 0) {
-					let report =
-						"⚠️ Newly unused exports in files you edited — check if callers need updating (Knip):\n";
-					for (const issue of unusedExportDelta.slice(0, 5)) {
-						const display = issue.file
-							? toRunnerDisplayPath(cwd, issue.file)
-							: "(unknown)";
-						report += `  ${display}${issue.line ? `:${issue.line}` : ""} — ${issue.name}\n`;
-					}
-					// @delivery-surface: runtime-turn:knip-advisory
-					advisoryParts.push(report);
+			// Turn-end injects only this turn's HIGH-CONFIDENCE, ATTRIBUTABLE
+			// delta: symbols in files the agent just edited that became unused
+			// (weren't flagged in the previous scan) — low-volume and actionable
+			// now. The FULL project-wide dead-code picture is deliberately NOT
+			// injected per turn (hundreds of mostly-pre-existing findings would
+			// drown the blockers and burn context every turn); it's available
+			// on demand via lens_diagnostics. The delta also feeds the session-slop
+			// record (`projectDiagnosticsDelta`) above.
+			const unusedExportDelta = knipDeliverable.kept.filter(
+				(i) => i.type === "export" || i.type === "enumMember",
+			);
+			if (unusedExportDelta.length > 0) {
+				let report =
+					"⚠️ Newly unused exports in files you edited — check if callers need updating (Knip):\n";
+				for (const issue of unusedExportDelta.slice(0, 5)) {
+					const display = displayPath(issue);
+					report += `  ${display}${issue.line ? `:${issue.line}` : ""} — ${issue.name}\n`;
 				}
+				// @delivery-surface: runtime-turn:knip-advisory
+				advisoryParts.push(report);
 			}
 		}
+		return knipMeta;
+	};
+	const logKnipRow = (
+		root: string,
+		startedAt: number,
+		metadata: KnipTurnMeta,
+	): void =>
+		logLatency({
+			type: "phase",
+			toolName: "turn_end",
+			filePath: root,
+			phase: "knip",
+			durationMs: Date.now() - startedAt,
+			metadata,
+		});
+	if (runtime.isStartupScanInFlight("knip")) {
+		dbg("turn_end: skipping knip (startup scan still in flight)");
+		logKnipRow(cwd, Date.now(), { skipped: true });
+	} else {
+		let budgetSpent = false;
+		for (const scanRoot of knipScan.roots) {
+			if (budgetSpent) {
+				incrementDegradationCount({
+					kind: "turn-end-knip-root-skipped",
+					subject: "budget",
+					reason: `${toRunnerDisplayPath(cwd, scanRoot)} not scanned: an earlier knip scan spent the turn_end budget`,
+				});
+				continue;
+			}
+			const startedAt = Date.now();
+			// Let KnipClient resolve/validate a real JS project root before probing or
+			// auto-installing knip. Non-JS repos (for example Unity projects) should not
+			// run tool checks every turn. Also back off after a timeout/kill so every
+			// agent turn does not spend 30s launching another heavyweight knip process.
+			const prevKnip = cacheManager.readCache<KnipResult>("knip", scanRoot);
+			// An availability failure is NOT a hard knip failure: knip never ran, so
+			// there is nothing to back off from, and backing off would make an
+			// expiring probe verdict permanent again (#1467).
+			const previousFailedHard =
+				prevKnip &&
+				!prevKnip.data.success &&
+				!prevKnip.data.failureKind &&
+				isHardFailureSummary(prevKnip.data.summary);
+			// #3872: an abandoned scan that later timed out wrote no cache row, so the
+			// client that saw it settle is asked as well (optional: test doubles).
+			const abandonedFailure = previousFailedHard
+				? null
+				: (knipClient.recentHardFailure?.(scanRoot) ?? null);
+			let metadata: KnipTurnMeta;
+			if (previousFailedHard || abandonedFailure !== null) {
+				const reason = previousFailedHard
+					? prevKnip.data.summary
+					: (abandonedFailure ?? "");
+				dbg(`turn_end: skipping knip after recent failure: ${reason}`);
+				metadata = { skipped: true, reason };
+			} else {
+				// #3872: the scan is awaited under the turn_end budget that is LEFT,
+				// and the hook's signal. `bounded()` abandons the await, never the
+				// process: knip keeps its own 30 s timeout and single-flight slot, so
+				// the scan finishes off-hook and warms knip's own cache for the next
+				// turn. Its late result is never written or delivered here -- the turn
+				// it was computed for has already ended.
+				const scanned = await bounded(
+					knipClient.analyze(scanRoot, getKnipIgnorePatterns(), {
+						projectSeq: runtime.projectSeq,
+					}),
+					{
+						ms: Math.max(
+							0,
+							HOOK_WALL_BUDGET_MS.turn_end - (Date.now() - turnEndStart),
+						),
+						signal: deps.signal,
+						hook: "turn_end",
+						label: "knip",
+					},
+				);
+				if (scanned === undefined) {
+					dbg(`turn_end: knip for ${scanRoot} outlived the turn_end budget`);
+					metadata = {
+						execution: "deferred",
+						aborted: deps.signal?.aborted === true,
+					};
+				} else {
+					metadata = applyKnipResult(scanRoot, prevKnip, scanned);
+				}
+			}
+			budgetSpent = metadata.execution === "deferred";
+			logKnipRow(scanRoot, startedAt, metadata);
+		}
 	}
-	logLatency({
-		type: "phase",
-		toolName: "turn_end",
-		filePath: cwd,
-		phase: "knip",
-		durationMs: Date.now() - t2,
-		metadata: knipMeta,
-	});
 
 	// Cross-file dead-code (#127) for non-JS/TS languages, on knip's contract:
 	// re-scan only when this turn touched a file the client owns, then inject the
@@ -1853,7 +1995,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				if (
 					prev &&
 					!prev.data.success &&
-					/(timed out|killed|SIGTERM|SIGKILL|SIGABRT)/i.test(prev.data.summary)
+					isHardFailureSummary(prev.data.summary)
 				) {
 					dbg(
 						`turn_end: skipping dead-code after failure: ${prev.data.summary}`,
@@ -2320,6 +2462,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			Omit<TurnEndTestTarget, "strategy"> & {
 				strategy: TurnEndTestTarget["strategy"] | "deferred";
 				sourceFile: string;
+				/**
+				 * The checkout root this target is selected and run in (#3871): the
+				 * session cwd, or the linked worktree that owns it. Not persisted;
+				 * a carried target re-derives it from its path.
+				 */
+				testRoot: string;
 				fileSeqAtRun?: number;
 				/** Cut-batch count carried in from the cache, for the cap below. */
 				deferralAttempts?: number;
@@ -2333,6 +2481,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// LSP cascade-diagnostics merge — no second reverse-dependency walk, and the
 		// neighbor set inherits whatever budget the cascade compute already applied
 		// (CASCADE_NEIGHBOUR_BUDGET), so this can't turn into unbounded per-edit work.
+		// #3871: which checkout root owns each target. One resolver per turn so
+		// its per-directory memo is shared by the carried-over targets and this
+		// turn's candidates.
+		const testRootFor = createTurnEndTestRoots(cwd);
 		const candidates: Array<{
 			display: string;
 			abs: string;
@@ -2528,9 +2680,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// A RunnerConfig carries functions, so the cache stores the runner KEY
 			// and the config is re-resolved here from the single registry.
 			const config = RUNNERS[carried.runner];
+			const carriedRoot = testRootFor(testFile);
 			if (
 				!config ||
-				isExcludedTestTarget(testFile, cwd) ||
+				isExcludedTestTarget(testFile, carriedRoot) ||
 				!fs.existsSync(testFile)
 			) {
 				resolvedDeferralKeys.add(carriedKey);
@@ -2560,6 +2713,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				runner: carried.runner,
 				config,
 				strategy: "deferred",
+				testRoot: carriedRoot,
 				deferralAttempts: attempts,
 			});
 			dbg(
@@ -2610,9 +2764,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		let excludedTargets = 0;
 		let retiredSkips = 0;
 		for (const { display, abs, isNeighbor } of candidates) {
+			// #3871: select in the checkout that owns the edit. For an edit the
+			// session owns this is `cwd`, exactly as before.
+			const testRoot = testRootFor(abs);
 			const target = testRunnerClient.getTestRunTarget(
 				abs,
-				cwd,
+				testRoot,
 				runtime.turnIndex,
 			);
 			const targetKey = target ? normalizeMapKey(target.testFile) : "";
@@ -2638,7 +2795,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// Cache admission and retirement reject foreign-checkout failures;
 				// this gate still covers self/related discovery and deferred targets.
 				// The log must not claim a specific cause from a boolean verdict.
-				if (isExcludedTestTarget(target.testFile, cwd)) {
+				if (isExcludedTestTarget(target.testFile, testRoot)) {
 					excludedTargets++;
 					dbg(
 						`turn_end: ${display} → test target excluded by the built-in turn-end policy, skipping spawn (${path.relative(cwd, target.testFile)})`,
@@ -2661,7 +2818,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					overCapTargets++;
 					continue;
 				}
-				targets.push({ ...target, sourceFile: abs });
+				targets.push({ ...target, sourceFile: abs, testRoot });
 				dbg(
 					`turn_end: ${display} → test ${target.runner} ${path.relative(cwd, target.testFile)} (${target.strategy}${isNeighbor ? ", cascade-neighbor" : ""})`,
 				);
@@ -2743,7 +2900,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// abort signal the rest of the spawn layer already honours.
 				signal: getAmbientAbortSignal(),
 				run: (t, batchSignal) =>
-					testRunnerClient.runTestFileAsync(t.testFile, cwd, {
+					testRunnerClient.runTestFileAsync(t.testFile, t.testRoot, {
 						runner: t.runner,
 						config: t.config,
 						turnIndex: firedAtTurn,
@@ -2751,13 +2908,42 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						// budget kills this spawn rather than letting it run out its
 						// own 60s timeout behind a batch that has already returned.
 						signal: batchSignal,
+						// #3871 r2: a failure in a linked worktree reads relative to the
+						// session checkout (`.worktrees/x/tests/a.test.ts:12`), which
+						// may hold a file at the worktree-relative path.
+						displayRoot: cwd,
+						// A worktree root without its own runner install is skipped, not
+						// run through `npx` (a network fetch) or a bare interpreter.
+						requireOwnInstall: t.testRoot !== cwd,
 					}),
 			})
-				.then(({ results, deferred, stopReason }) => {
-					const settledResults = results as Array<
+				.then(({ results: batchResults, deferred, stopReason }) => {
+					const settledResults = batchResults as Array<
 						PromiseSettledResult<TestResult>
 					>;
-					const verdicts = settledResults.flatMap((result) => {
+					// #3871 r2: a target the client refused to start is neither a pass
+					// nor a failure. Counted here, then taken out of everything below
+					// so a batch of refusals never publishes a clean run.
+					const results: Array<PromiseSettledResult<TestResult>> = [];
+					for (const result of settledResults) {
+						if (!("value" in result) || !result.value.notRun) {
+							results.push(result);
+							continue;
+						}
+						const skippedRoot =
+							targets.find(
+								(candidate) => candidate.testFile === result.value.file,
+							)?.testRoot ?? cwd;
+						incrementDegradationCount({
+							kind: "turn-end-test-root-skipped",
+							subject: result.value.notRun,
+							reason: `${toRunnerDisplayPath(cwd, skippedRoot)} has no ${result.value.runner} install of its own; its tests were skipped rather than fetched through npx or run in another environment`,
+						});
+						dbg(
+							`turn_end: skipped ${toRunnerDisplayPath(cwd, result.value.file)}: ${result.value.notRun} in ${toRunnerDisplayPath(cwd, skippedRoot)}`,
+						);
+					}
+					const verdicts = results.flatMap((result) => {
 						if (result.status === "rejected") return [];
 						const target = targets.find(
 							(candidate) => candidate.testFile === result.value.file,
@@ -3765,6 +3951,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	/** #3248: bounded per-turn on this lane's own row, never per finding. */
 	let runnerFindingsDispositionSuppressed = 0;
 	const runnerFindingsDeliveredIds: string[] = [];
+	/** #3796: late parts carrying a blocking finding — never "no action required". */
+	const unlabeledAdvisoryParts = new Set<string>();
 	for (const pending of pendingRunnerFindings) {
 		const result = pending.result;
 		if (!result) continue;
@@ -3776,14 +3964,23 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			Date.now() - pending.markedAtMs,
 			pending.writeIndex,
 		);
-		if (result.status === "failed") {
+		// #3796: a runner whose findings fail its check reports `failed` WITH
+		// diagnostics and no fault kind (or `blocking_diagnostics`); that goes
+		// through the freshness gate and delivery like a success. A failed result
+		// with no diagnostics, or with a fault kind (timeout, server_error), is a
+		// broken runner: the note is kept and any partial findings still deliver.
+		if (
+			result.status === "failed" &&
+			(result.diagnostics.length === 0 ||
+				(result.failureKind !== undefined &&
+					result.failureKind !== "blocking_diagnostics"))
+		) {
 			runnerFindingsFailed += 1;
 			const detail = result.failureMessage ? `: ${result.failureMessage}` : "";
 			// @delivery-surface: runtime-turn:late-runner-findings
 			advisoryParts.push(
 				`❌ Deferred runner ${pending.runnerId} failed (${result.failureKind ?? "unknown"})${detail}`,
 			);
-			continue;
 		}
 		const findings = result.diagnostics;
 		if (findings.length === 0) continue;
@@ -3849,10 +4046,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			runnerSuppressedHere > 0
 				? `; suppressed by disposition: ${runnerSuppressedHere} finding(s)`
 				: "";
-		// @delivery-surface: runtime-turn:late-runner-findings
-		advisoryParts.push(
-			`⏱️ Late runner diagnostics (${pending.runnerId} completed after the edit${runnerSuppressedNote}):\n${lines.join("\n")}`,
+		const lateBlocking = runnerKept.some(
+			(finding) => finding.semantic === "blocking",
 		);
+		const lateRunnerPart = `⏱️ Late runner diagnostics (${pending.runnerId} completed after the edit${runnerSuppressedNote}${lateBlocking ? "; blocking: fix before continuing" : ""}):\n${lines.join("\n")}`;
+		if (lateBlocking) unlabeledAdvisoryParts.add(lateRunnerPart);
+		// @delivery-surface: runtime-turn:late-runner-findings
+		advisoryParts.push(lateRunnerPart);
 	}
 	logLatency({
 		type: "phase",
@@ -4289,12 +4489,115 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		});
 	}
 
-	const labeledAdvisoryParts = advisoryParts.map(
-		(p) => `ℹ️ Advisory — no action required this turn:\n${p}`,
+	// #3218 criterion 2: files whose inline blocker a fresh clean verdict
+	// retired during the turn. The coordinator's retire seam recorded which
+	// file, how many blockers, and the retiring write; this composer only
+	// formats them. Consumed HERE, once, so a retire is delivered exactly once
+	// (the coordinator clears its list and the line cannot re-serve).
+	const unresolvedKeys = new Set(
+		unresolvedBlockers.map((record) =>
+			normalizeMapKey(path.resolve(record.filePath)),
+		),
+	);
+	// A file this message still lists under `Unresolved` is HELD for the next
+	// turn_end, not dropped: a retire that landed after the snapshot above
+	// (the awaits between it and here) is real, and discarding it leaves the
+	// agent holding a STOP block for a file that is clean.
+	const formatResolvedTail = (dropped: number) => `… and ${dropped} more`;
+	const resolvedTailMax = formatResolvedTail(Number.MAX_SAFE_INTEGER).length;
+	const resolvedShareChars =
+		Math.floor(RUNTIME_CONFIG.turnEnd.maxChars * RESOLVED_SHARE_OF_CHARS) -
+		resolvedTailMax;
+	const formatResolvedLine = (entry: ResolvedBlockerFile): string => {
+		const clause = entry.confirmedClean
+			? " confirmed clean"
+			: entry.writeIndex === undefined
+				? ""
+				: ` cleared by the ${formatWriteOrdinal(entry.writeIndex)} write`;
+		// "This turn" only for a retire from this turn; an entry a turn_end
+		// that delivered nothing left behind is "since the last report".
+		const label =
+			entry.turnIndex === runtime.turnIndex
+				? "Resolved this turn"
+				: "Resolved since the last report";
+		const head = `${label}: `;
+		const tail = ` (${entry.blockerCount} blocker(s)${clause})`;
+		let display = toRunnerDisplayPath(cwd, entry.filePath);
+		// review-3776-r3 W2: no line is wider than the share, so the one line
+		// the floor below always takes can never be the part the cap cuts. The
+		// path loses its middle; both ends (root and file name) stay.
+		const room = resolvedShareChars - 1 - head.length - tail.length;
+		if (display.length > room) {
+			const keepHead = Math.ceil((room - 1) / 2);
+			display = `${sliceAtCodePointBoundaries(display, 0, keepHead)}…${sliceAtCodePointBoundaries(display, display.length - (room - 1 - keepHead), display.length)}`;
+		}
+		return `${head}${display}${tail}`;
+	};
+	// review-3776-verify V1 + review-3776-r3 W1: the section rides FIRST in
+	// the message and is sized BEFORE anything is consumed, on both of
+	// `capTurnEndMessage`'s axes, to what the live blockers after it leave
+	// (their text plus the `\n\n` joining them), never past its share. Room
+	// for the widest tail is kept on both axes. So the cap cuts neither a
+	// consumed line nor a blocker. A line that does not fit is HELD for the
+	// next turn_end; the first is always taken, so the held list drains.
+	const blockerText = blockerParts.join("\n\n");
+	const blockerChars = blockerParts.length > 0 ? blockerText.length + 2 : 0;
+	const blockerLines =
+		blockerParts.length > 0 ? blockerText.split("\n").length + 1 : 0;
+	const resolvedCharBudget = Math.min(
+		resolvedShareChars,
+		RUNTIME_CONFIG.turnEnd.maxChars - blockerChars - resolvedTailMax,
+	);
+	const resolvedLineBudget =
+		Math.min(
+			RESOLVED_MAX_LINES,
+			RUNTIME_CONFIG.turnEnd.maxLines - blockerLines,
+		) - 1;
+	let resolvedChars = 0;
+	let resolvedCount = 0;
+	const {
+		files: resolvedBlockerFileList,
+		dropped: resolvedBlockerFilesDropped,
+	} = runtime.consumeResolvedBlockerFiles((entry) => {
+		if (unresolvedKeys.has(normalizeMapKey(path.resolve(entry.filePath))))
+			return true;
+		const cost = formatResolvedLine(entry).length + 1;
+		if (
+			resolvedCount > 0 &&
+			(resolvedCount >= resolvedLineBudget ||
+				resolvedChars + cost > resolvedCharBudget)
+		)
+			return true;
+		resolvedChars += cost;
+		resolvedCount += 1;
+		return false;
+	});
+	const resolvedLines = resolvedBlockerFileList.map(formatResolvedLine);
+	if (resolvedBlockerFilesDropped > 0) {
+		resolvedLines.push(formatResolvedTail(resolvedBlockerFilesDropped));
+	}
+	// ONE section, `\n`-joined: ten separate `\n\n`-separated sections would
+	// spend 19 of the turn-end message's 20-line budget on blank separators
+	// and let `capTurnEndMessage` truncate the overflow line away.
+	const resolvedParts =
+		resolvedLines.length > 0 ? [resolvedLines.join("\n")] : [];
+
+	const labeledAdvisoryParts = advisoryParts.map((p) =>
+		unlabeledAdvisoryParts.has(p)
+			? p
+			: `ℹ️ Advisory — no action required this turn:\n${p}`,
 	);
 	// Stale-secret parts sit between the two tiers and are NOT relabelled — they
 	// ship the imperative preamble they were built with (#1622 review M2).
 	const findingParts = [
+		// #3218 criterion 2: the resolution lines ride FIRST, inside their
+		// sized share, so the cap cuts neither a consumed retirement
+		// (review-3776-verify V1) nor a live blocker (review-3776-r3 W1).
+		// They are not a finding tier (no gate applies to a just-cleared
+		// verdict), only a status line, and they are part of the block content
+		// so an otherwise empty turn still delivers them ONCE (the coordinator
+		// consumed them).
+		...resolvedParts,
 		...blockerParts,
 		...staleSecretParts,
 		...labeledAdvisoryParts,
@@ -4462,6 +4765,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			getFlag("lens-guard") &&
 			advisoryParts.length === 0 &&
 			staleSecretParts.length === 0 &&
+			// #3218 criterion 2: a resolved line is content worth delivering,
+			// so it must not be erased by the no-blockers clean-up. The
+			// reader clears it after delivery because `hasBlockers` is false.
+			resolvedParts.length === 0 &&
 			!runtime.gitGuardHasBlockers
 		) {
 			const guardRecord = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
@@ -4511,6 +4818,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			blockerSections: blockerParts.length,
 			staleSecretSections: staleSecretParts.length,
 			advisorySections: advisoryParts.length,
+			// #3218 criterion 2: how many files this turn LISTED as resolved
+			// (held-back entries are not counted), and how many retire events
+			// fell past the cap. The line itself is in the delivered content;
+			// these make the feature visible in latency.log even when the block
+			// is suppressed or the agent reads only telemetry.
+			resolvedBlockerFiles: resolvedBlockerFileList.length,
+			resolvedBlockerFilesDropped,
 			// #1944 AC3: an empty advisory section on its own cannot say whether
 			// the turn had nothing to report or dropped something. This counter
 			// answers that from latency.log even when the payload is empty, and

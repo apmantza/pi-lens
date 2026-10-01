@@ -58,6 +58,25 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 	return { ...actual, runPipeline: vi.fn() };
 });
 
+// #3785 review r1 F1: the #3521 format cases run the real FormatService,
+// whose FileTime shared the read guard's; only the formatter child is
+// doubled there, per case. Every other case doubles the service itself.
+vi.mock("../../clients/formatters.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/formatters.js")>();
+	return {
+		...actual,
+		getFormattersForFile: vi.fn(actual.getFormattersForFile),
+		formatFile: vi.fn(actual.formatFile),
+	};
+});
+import { getFormatService } from "../../clients/format-service.js";
+import {
+	type FormatterInfo,
+	formatFile as runFormatter,
+	getFormattersForFile,
+} from "../../clients/formatters.js";
+
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
 		await cleanupTestEnvironmentsDrained("pi-lens-agent-end-");
@@ -2317,6 +2336,14 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 				const { getDegradationSummary, resetDegradationLedger } =
 					await import("../../clients/degradation-ledger.js");
 				resetDegradationLedger();
+				vi.mocked(getFormattersForFile).mockResolvedValueOnce([
+					{ name: "biome" } as FormatterInfo,
+				]);
+				vi.mocked(runFormatter).mockImplementationOnce(async (fp: string) => {
+					if (moved) runtime.readGuard.retainBranch(new Set());
+					settle(fp, "const x = 1;\n");
+					return { success: true, changed: true, outcome: "formatted" };
+				});
 				await handleAgentEnd({
 					ctxCwd: env.tmpDir,
 					getFlag: (name) => name === "no-lsp",
@@ -2324,21 +2351,12 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 					dbg: () => {},
 					runtime,
 					cacheManager: { addModifiedRange: () => {} } as any,
+					// As `index.ts` builds it for the drain: the guard's session id.
 					getFormatService: () =>
-						({
-							recordRead: () => {},
-							formatFile: async (fp: string) => {
-								if (moved) runtime.readGuard.retainBranch(new Set());
-								settle(fp, "const x = 1;\n");
-								return {
-									filePath: fp,
-									formatters: [{ name: "biome", success: true, changed: true }],
-									anyChanged: true,
-									allSucceeded: true,
-								};
-							},
-						}) as any,
+						getFormatService(runtime.telemetrySessionId, true),
 				});
+				// #3525: the agent never saw these bytes: authorship, not FileTime.
+				expect(runtime.readGuard.fileTimeMoved(filePath)).toBe(true);
 				expect(zeroRead(runtime, filePath)).toBe(moved ? "block" : "allow");
 				// The refused write leaves one counted, discriminating record.
 				expect(
@@ -2408,6 +2426,8 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 					getFormatService: () =>
 						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
 				});
+				// #3525: the agent never saw these bytes: authorship, not FileTime.
+				expect(runtime.readGuard.fileTimeMoved(filePath)).toBe(true);
 				expect(zeroRead(runtime, filePath)).toBe(moved ? "block" : "allow");
 			} finally {
 				env.cleanup();
@@ -2503,6 +2523,8 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
 				});
 				expect(applyConservativeActionableWarningFixesMock).toHaveBeenCalled();
+				// #3525: the agent never saw these bytes: authorship, not FileTime.
+				expect(runtime.readGuard.fileTimeMoved(filePath)).toBe(true);
 				expect(zeroRead(runtime, filePath)).toBe(moved ? "block" : "allow");
 			} finally {
 				applyConservativeActionableWarningFixesMock.mockReset();

@@ -3,9 +3,10 @@
 Keep every pull request moving through review, fix, verification, and merge.
 
 The warden is a read-only workflow controller. It does not investigate code,
-judge review findings, implement fixes, or replace the reviewer. Read the
-repository instructions and shared delegated worker contract before every
-audit.
+judge review findings, implement fixes, or replace the reviewer. Read first,
+before every audit: the engineering principles
+(`docs/engineering-principles.md`), then `AGENTS.md`, then
+`docs/pi-lens-subagent.md`, then this contract.
 
 Build the ledger from GitHub and registered worktree evidence. For every pull
 request, record the exact head SHA, matching worktree, dirty or unpushed state,
@@ -29,10 +30,10 @@ and next owner on the pull request or another shared ledger. Chat-only results
 cannot drive a later audit. Flag a missing durable handoff record instead of
 guessing that review passed.
 
-Assign an owner and next action whenever the state changes. Reuse the same
-fixer for correction rounds and the same reviewer for verification rounds. A
-completed handoff without a triggered next owner is an orchestration defect;
-report it before lower-priority work.
+Assign an owner and next action whenever the state changes (same fixer and
+reviewer across rounds, per `AGENTS.md`). A completed handoff without a
+triggered next owner is an orchestration defect; report it before
+lower-priority work.
 
 Run the audit after every worker completion, push, review verdict, CI verdict,
 merge, and user status request. Poll GitHub and persistent external-worker

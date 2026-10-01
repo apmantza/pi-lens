@@ -12,16 +12,17 @@
 // is not on PATH the whole describe is skipped. `npm test`/`npm run` put
 // node_modules/.bin on PATH, which is how the CLI resolves in CI and locally
 // without a global install.
-import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { safeSpawn } from "../../clients/safe-spawn.js";
-import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import {
 	findingSignature,
+	findingsInTrackedFiles,
 	loadBaseline,
 	repoRoot,
 	runSelfScan,
@@ -421,5 +422,207 @@ d("pi-lens self-scan (#1718)", () => {
 				}
 			});
 		});
+	});
+});
+
+// #3886 r3: the wrapper passes the directory roots CI uses -- never a file
+// list, so Windows' cmd.exe/CreateProcess line limits cannot fail a push --
+// and drops findings whose file is not in `git ls-files`. A stub `ast-grep`
+// records the argv it receives and emits findings only for the paths it was
+// asked to scan, so both the argv shape and the tracked filter are observable
+// without the real binary. An untracked plant must not gate; --update-baseline
+// must keep the whole tree so triaging before `git add` writes a complete
+// baseline.
+describe("self-scan argv and tracked filter (#3886 r3)", () => {
+	const roots: string[] = [];
+	afterEach(() => {
+		for (const root of roots.splice(0))
+			fs.rmSync(root, { recursive: true, force: true });
+	});
+
+	function git(root: string, ...args: string[]): string {
+		return String(
+			gitExecFileSync(
+				[
+					"-c",
+					"user.name=t",
+					"-c",
+					"user.email=t@example.com",
+					"-c",
+					"commit.gpgsign=false",
+					...args,
+				],
+				{ cwd: root, encoding: "utf8" },
+			),
+		).trim();
+	}
+
+	function put(root: string, rel: string, content: string) {
+		const full = path.join(root, rel);
+		fs.mkdirSync(path.dirname(full), { recursive: true });
+		fs.writeFileSync(full, content, "utf8");
+	}
+
+	// Emits a finding only for a spec file that a directory root contains or
+	// that is named directly in argv, so a pre-fix file-list invocation cannot
+	// see an untracked file and a directory invocation can.
+	const STUB = [
+		"#!/usr/bin/env node",
+		'import fs from "node:fs";',
+		"const args = process.argv.slice(2);",
+		"fs.writeFileSync(process.env.STUB_ASTGREP_ARGV_FILE, JSON.stringify(args));",
+		'const filterIdx = args.indexOf("--filter");',
+		'const jsonIdx = args.indexOf("--json=compact");',
+		"const paths = args.slice(filterIdx + 2, jsonIdx);",
+		'const spec = JSON.parse(process.env.STUB_ASTGREP_FINDINGS || "[]");',
+		"const out = [];",
+		"for (const f of spec) {",
+		"  const scanned = paths.some((p) => {",
+		"    try {",
+		'      if (fs.statSync(p).isDirectory()) return f.file === p || f.file.startsWith(p.endsWith("/") ? p : p + "/");',
+		"    } catch {}",
+		"    return p === f.file;",
+		"  });",
+		'  if (scanned) out.push({ ruleId: "no-raw-json-store-write", file: f.file, range: { start: { line: (f.line || 0) } }, severity: "warning", message: "stub" });',
+		"}",
+		'process.stderr.write("scannedFileCount=" + Math.max(paths.length, 1) + "\\neffectiveRuleCount=1\\n");',
+		"process.stdout.write(JSON.stringify(out));",
+	].join("\n");
+
+	function makeFixture() {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-selfscan-stub-"),
+		);
+		roots.push(root);
+		for (const rel of [
+			"scripts/run-astgrep-pi-lens.mjs",
+			"scripts/lib/astgrep-self-scan.mjs",
+			"scripts/lib/git-fixture-env.mjs",
+		])
+			put(root, rel, fs.readFileSync(path.join(repoRoot(), rel), "utf8"));
+		for (const rel of ["clients/safe-spawn.js", "clients/string-utils.js"]) {
+			fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+			fs.symlinkSync(path.join(repoRoot(), rel), path.join(root, rel));
+		}
+		put(root, "rules/ast-grep-rules/.sgconfig.yml", "ruleDirs:\n  - ./rules\n");
+		put(
+			root,
+			"rules/ast-grep-rules/rules/no-raw-json-store-write.yml",
+			[
+				"id: no-raw-json-store-write",
+				"language: TypeScript",
+				"severity: warning",
+				"metadata:",
+				"  category: pi-lens-self-scan",
+				"message: stub",
+				"rule:",
+				"  pattern: writeFileSync($$$A)",
+				"",
+			].join("\n"),
+		);
+		put(root, "clients/tracked.ts", "export const tracked = 1;\n");
+		put(root, "tests/clean.test.ts", "export const t = 1;\n");
+		put(root, "clients/untracked.ts", "export const untracked = 1;\n");
+		put(root, "bin/ast-grep", STUB);
+		fs.chmodSync(path.join(root, "bin/ast-grep"), 0o755);
+		git(root, "init", "-q");
+		git(
+			root,
+			"add",
+			"rules",
+			"scripts",
+			"clients/tracked.ts",
+			"tests/clean.test.ts",
+		);
+		git(root, "commit", "-q", "-m", "base");
+		return { root, argvFile: path.join(root, "argv.json") };
+	}
+
+	function runStubWrapper(
+		root: string,
+		findings: Array<{ file: string; line?: number }>,
+		args: string[] = [],
+	) {
+		return spawnSync(
+			process.execPath,
+			[path.join(root, "scripts/run-astgrep-pi-lens.mjs"), ...args],
+			{
+				cwd: root,
+				encoding: "utf8",
+				env: {
+					...envFor(root),
+					PATH: `${path.join(root, "bin")}:${process.env.PATH ?? ""}`,
+					STUB_ASTGREP_ARGV_FILE: path.join(root, "argv.json"),
+					STUB_ASTGREP_FINDINGS: JSON.stringify(findings),
+					PI_LENS_SELF_SCAN_SGCONFIG: path.join(
+						root,
+						"rules/ast-grep-rules/.sgconfig.yml",
+					),
+				},
+			},
+		);
+	}
+
+	it("passes directory roots to ast-grep, never a file list", () => {
+		const fx = makeFixture();
+		const run = runStubWrapper(fx.root, [{ file: "clients/tracked.ts" }]);
+		const argv = JSON.parse(fs.readFileSync(fx.argvFile, "utf8")) as string[];
+		expect(argv).toContain("clients");
+		expect(argv).toContain("tests");
+		expect(argv.filter((arg) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(arg))).toEqual(
+			[],
+		);
+		// The scan really ran (not a dead scan) and the tracked finding gated.
+		expect(run.status).toBe(1);
+		expect(run.stderr).toMatch(/no-raw-json-store-write clients\/tracked\.ts/);
+	});
+
+	it("gates a tracked finding and ignores an untracked one", () => {
+		const findings = [
+			{ file: "clients/tracked.ts" },
+			{ file: "clients/untracked.ts" },
+		];
+		const fx = makeFixture();
+		const run = runStubWrapper(fx.root, findings);
+		expect(run.status).toBe(1);
+		expect(run.stderr).toMatch(/no-raw-json-store-write clients\/tracked\.ts/);
+		expect(`${run.stdout}\n${run.stderr}`).not.toMatch(
+			/clients\/untracked\.ts/,
+		);
+	});
+
+	it("matches tracked findings across path spellings", () => {
+		// ast-grep emits Windows-shaped paths on Windows; git ls-files always
+		// emits forward slashes. The filter must match both.
+		const tracked = new Set(["clients/tracked.ts"]);
+		const findings = [
+			{ file: "clients/tracked.ts" },
+			{ file: "clients\\tracked.ts" },
+			{ file: "./clients/tracked.ts" },
+			{ file: "clients/untracked.ts" },
+		];
+		expect(
+			findingsInTrackedFiles(findings, tracked).map((f) => f.file),
+		).toEqual([
+			"clients/tracked.ts",
+			"clients\\tracked.ts",
+			"./clients/tracked.ts",
+		]);
+	});
+
+	it("--update-baseline includes untracked findings from the whole-tree scan", () => {
+		const findings = [{ file: "clients/untracked.ts", line: 2 }];
+		const fx = makeFixture();
+		const run = runStubWrapper(fx.root, findings, ["--update-baseline"]);
+		expect(run.status, run.stdout + run.stderr).toBe(0);
+		const baseline = JSON.parse(
+			fs.readFileSync(
+				path.join(fx.root, "rules/ast-grep-rules/self-scan-baseline.json"),
+				"utf8",
+			),
+		) as { allowed: string[] };
+		expect(baseline.allowed).toContain(
+			"no-raw-json-store-write::clients/untracked.ts::2",
+		);
 	});
 });

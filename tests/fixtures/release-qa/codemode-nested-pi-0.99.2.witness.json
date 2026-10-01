@@ -1,0 +1,109 @@
+{
+  "_provenance": "Witness written by scripts/release-qa.mjs runCodemodeNestedProbe against real pi 0.99.2 (scripted provider, defaultTools +codemode); scratch paths rewritten to /scratch. Regenerate with the same probe, never hand-edit.",
+  "pi": "pi 0.99.2",
+  "settings": {
+    "npmCommand": [
+      "npm"
+    ],
+    "defaultTools": [
+      "+codemode"
+    ],
+    "packages": [
+      "<installed pi-lens>"
+    ]
+  },
+  "runOk": true,
+  "runReason": null,
+  "nested": [
+    {
+      "id": "c1/1",
+      "nested": true,
+      "toolName": "read",
+      "isError": false,
+      "text": "export const d = 1;\nexport function f_d(): number {\n\treturn d;\n}\n"
+    },
+    {
+      "id": "c1/2",
+      "nested": true,
+      "toolName": "edit",
+      "isError": false,
+      "text": "Successfully replaced 1 block(s) in d.ts.\n✓ JavaScript/TypeScript clean · 7502ms"
+    },
+    {
+      "id": "c1/3",
+      "nested": true,
+      "toolName": "bash",
+      "isError": false,
+      "text": "POLL_COMPLETE d.ts\n"
+    },
+    {
+      "id": "c1/4",
+      "nested": true,
+      "toolName": "edit",
+      "isError": true,
+      "text": "🔄 RETRYABLE — Edit without read: you have not read `/scratch/codemode-proj/c.ts` in this conversation. Read it first, then retry: `read path=\"/scratch/codemode-proj/c.ts\"`."
+    },
+    {
+      "id": "c1/5",
+      "nested": true,
+      "toolName": "read",
+      "isError": false,
+      "text": "export const b = 1;\nexport function f_b(): number {\n\treturn b;\n}\n"
+    },
+    {
+      "id": "c1/6",
+      "nested": true,
+      "toolName": "edit",
+      "isError": false,
+      "text": "Successfully replaced 1 block(s) in b.ts.\n\n\n🔴 STOP — 2 issue(s) must be fixed:\n  L2: Debugger statement — remove before committing (debugger_statement)\n      → debugger;\n      💡 remove this statement\n  L2: This is an unexpected use of the debugger statement.\n      → debugger;\n\n⏳ Pending runners (reported at turn end): oxlint\n"
+    },
+    {
+      "id": "c1/7",
+      "nested": true,
+      "toolName": "bash",
+      "isError": false,
+      "text": "POLL_COMPLETE b.ts\n"
+    }
+  ],
+  "topLevel": [
+    {
+      "id": "c1",
+      "nested": false,
+      "toolName": "codemode",
+      "isError": false,
+      "text": "Script completed\nWall time 8.4 seconds\nOutput:\n\n{\"output\":\"POLL_COMPLETE d.ts\\n\",\"truncated\":false,\"exit_code\":0,\"wall_time_seconds\":0.1}\nNESTED_EDIT_REJECTED 🔄 RETRYABLE — Edit without read: you have not read `/scratch/codemode-proj/c.ts` in this conversation. Read it first, then retry: `read path=\"/scratch/codemode-proj/c.ts\"`.\n{\"output\":\"POLL_COMPLETE b.ts\\n\",\"truncated\":false,\"exit_code\":0,\"wall_time_seconds\":0.1}"
+    },
+    {
+      "id": "t1",
+      "nested": false,
+      "toolName": "bash",
+      "isError": false,
+      "text": "POLL_COMPLETE turn_end\n"
+    }
+  ],
+  "providerRows": [
+    {
+      "turn": 0,
+      "userMessages": [
+        "[{\"type\":\"text\",\"text\":\"go\"}]"
+      ]
+    },
+    {
+      "turn": 1,
+      "userMessages": [
+        "[{\"type\":\"text\",\"text\":\"go\"}]"
+      ]
+    },
+    {
+      "turn": 2,
+      "userMessages": [
+        "[{\"type\":\"text\",\"text\":\"go\"}]",
+        "[pi-lens automated check — not a user request] Address 🔴 blockers before continuing; ℹ️ advisories are informational only.\n\nUnresolved from this turn — b.ts:\n🔴 STOP — 2 issue(s) must be fixed:\n  L2: Debugger statement — remove before committing\n    💡 Fix: remove this statement\n  L2: This is an unexpected use of the debugger statement."
+      ]
+    }
+  ],
+  "files": {
+    "b": "export const b = 2;\ndebugger;\nexport function f_b(): number {\n\treturn b;\n}\n",
+    "c": "export const c = 1;\nexport function f_c(): number {\n\treturn c;\n}\n"
+  }
+}

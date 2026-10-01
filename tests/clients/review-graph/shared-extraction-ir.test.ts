@@ -6,6 +6,7 @@ import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { scanProjectDiagnostics } from "../../../clients/project-diagnostics/scanner.js";
 import {
 	buildOrUpdateGraph,
+	captureReviewGraphStructuralIr,
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
 } from "../../../clients/review-graph/builder.js";
@@ -138,6 +139,42 @@ describe("scanner to review-graph structural IR (#939)", () => {
 			),
 		).toBe(true);
 		expect(getReviewGraphIrStats()).toEqual({ accepted: 8, rejected: 1 });
+	});
+
+	// #3780 (#3746 survivors, builder.ts `sharedIr?.kind === "jsts"`): a graph
+	// build that accepts a fresh IR must INGEST it, not re-derive the file. Every
+	// other case here is graph-equivalent to a cold parse, so a build that threw
+	// the accepted IR away and re-parsed passed them all. The IR is captured from
+	// version X by the real capture path and published under the hash of the
+	// bytes on disk (version Y): only an ingest shows X's symbol in the graph.
+	it("ingests an accepted jsts IR instead of re-deriving the file", async () => {
+		const root = fixture(93940);
+		const file = path.join(root, "src", "f3.ts");
+		const captured = await captureReviewGraphStructuralIr(
+			file,
+			root,
+			'import { fromIr } from "./ir-only";\nexport function sharedSymbol() { return fromIr(); }\n',
+			new FactStore(),
+		);
+		expect(captured.complete).toBe(true);
+		expect(captured.structural?.kind).toBe("jsts");
+		const onDisk = fs.readFileSync(file, "utf8");
+		publishReviewGraphFileIr(root, {
+			filePath: file,
+			contentHash: reviewGraphIrContentHash(onDisk),
+			complete: true,
+			structural: captured.structural,
+		});
+
+		resetReviewGraphIrStats();
+		const graph = await buildOrUpdateGraph(root, [], new FactStore());
+
+		const symbols = [...graph.nodes.values()]
+			.filter((node) => node.kind === "symbol")
+			.map((node) => node.symbolName);
+		expect(getReviewGraphIrStats().accepted).toBe(1);
+		expect(symbols).toContain("sharedSymbol");
+		expect(symbols).not.toContain("value3");
 	});
 
 	it("keeps the no-scan cold path unchanged", async () => {

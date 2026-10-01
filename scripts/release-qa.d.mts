@@ -69,6 +69,57 @@ export const BASELINE_TABLE_MARKER: string;
 export const BASELINE_COLUMNS: readonly string[];
 export const TOOL_SMOKE_INSTALL_ROW_ID: string;
 export const PUBLISH_TOOLCHAIN_ROW_ID: string;
+export const CODEMODE_NESTED_ROW_ID: string;
+export const CODEMODE_POLL_SCRIPT: string;
+
+export interface CodemodeCall {
+	id?: string;
+	toolName?: string;
+	isError?: boolean;
+	text?: string;
+}
+
+/** The `codemode-nested-guard` row's verdict from what a real pi did (#3805). */
+export function classifyCodemodeNested(observed: {
+	nested?: CodemodeCall[];
+	topLevel?: CodemodeCall[];
+	providerRows?: Array<{ turn?: number; userMessages?: string[] }>;
+	files?: { b?: string | null; c?: string | null };
+}): { status: string; detail: string; shows?: string };
+export function summarizeToolEnds(
+	events: ReadonlyArray<Record<string, unknown>>,
+): {
+	nested: Array<CodemodeCall & { nested: boolean }>;
+	topLevel: Array<CodemodeCall & { nested: boolean }>;
+};
+export function parsePiVersion(text: string): [number, number, number] | null;
+export function planCodemodeRow(plan: {
+	piVersionText?: string;
+	piAiIndex?: string | null;
+}): { reachable: boolean; reason: string };
+export function locatePiAiIndex(
+	piBin: string,
+	env?: NodeJS.ProcessEnv,
+): string | null;
+/** Drive the `codemode-nested-guard` row against the installed candidate. */
+export function runCodemodeNestedProbe(ctx: {
+	piBin: string;
+	env: NodeJS.ProcessEnv;
+	scratchRoot: string;
+	installedPkgDir?: string;
+	pollCapMs?: number;
+}): Promise<{
+	status: string;
+	detail: string;
+	shows?: string;
+	unmeasured?: boolean;
+	witness?: { ext: string; content: string };
+}>;
+export function buildCodemodeScenario(plan: {
+	pollScriptPath: string;
+	latencyLogPath: string;
+	capMs: number;
+}): Array<Array<Record<string, unknown>>>;
 export const OUTCOME: {
 	readonly PASS: "PASS";
 	readonly FAIL: "FAIL";

@@ -118,6 +118,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 
 const cue = createAvailabilityChecker("cue", ".exe", ["version"]);
@@ -482,7 +483,7 @@ const cueVetRunner: RunnerDefinition = {
 			return { status: "succeeded", diagnostics: [], semantic: "none" };
 		}
 
-		return { status: "failed", diagnostics: filtered, semantic: "blocking" };
+		return findingsResult(filtered, { status: "failed", semantic: "blocking" });
 	},
 };
 

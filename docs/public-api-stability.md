@@ -343,6 +343,47 @@ provenance map alone and never reads the resolved value, so no un-redacted view
 exists. Validation records are bounded and structural — a reason names a key, a
 type, and a count, never a value or a source snippet.
 
+### The MCP tool input contract
+
+The MCP tool mirror's input contract is: a tool reads the keys its advertised
+`inputSchema` declares. Since #3749 a call carrying undeclared top-level keys is
+answered with a report (leading `Ignored unknown argument(s) for <tool>: ...`
+line, `structuredContent.ignoredArguments`, and the `mcp-ignored-arguments`
+degradation row). The match key for the line is its `Ignored unknown
+argument(s)` prefix; the prose after it may change.
+
+**Two conditions turn the report into an error (the call does not run), and they
+are part of the contract, so the predicate is named here** (`refusalMatches` in
+`mcp/tool-arguments.ts`; pinned by the live-schema sweep in
+`tests/mcp/server.smoke.test.ts`):
+
+1. an ignored key leaves a schema-`required` input missing; or
+2. an ignored key is a declared parameter that the call did not send, written
+   another way. Precisely: split both names into lower-case tokens (camelCase,
+   snake_case and kebab-case boundaries) and drop one trailing plural `s` from
+   each token. The declared key matches when its tokens equal the ignored key's
+   tokens joined (`Path`, `PATH` for `path`; `Server_Scope` for `serverScope`),
+   or are the **trailing** tokens of the ignored key, its head noun (`filePath`
+   and `file_path` for `path`; `paths` and `path` for each other). A folded-equal
+   match decides alone. If the call sent any matching key (`path` or `paths`),
+   nothing is refused.
+
+Everything else stays a warning and the tool runs, exactly as it did before: a
+misspelled mode name, an abbreviation (`max`), a substring or reverse containment
+(`files` for `maxLspFiles`, `file` for `path`), a leading or middle word
+(`sourcePath` is not `source`). Such keys still get the `did you mean` hint, which
+is a separate, looser scorer and is advice only; retuning it cannot change
+which calls run. Changing the predicate above flips calls between running and
+refusing and is a change to this contract.
+
+Only top-level keys are checked: keys inside a nested object argument
+(`callHierarchyItem`, `rule`, `flags`) are not. A non-object `arguments` is a
+JSON-RPC `-32602` error; `arguments` absent, `null` or `[]` means no arguments.
+
+**Rejecting every unknown key outright is deliberately not done:** callers that
+pass extra keys today would break, so it needs a major, through the removal
+checklist in section 4.
+
 ## Where each policy point is enforced
 
 | Policy point | Data | Test |

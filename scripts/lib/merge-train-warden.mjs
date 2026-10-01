@@ -12,9 +12,7 @@
  * - "re-run workflow" for a run this sweep classified as STARVED (#2184) --
  *   at most once per run, keyed on GitHub's own `run_attempt` counter.
  *
- * Merging stays out of this file by construction; the label-gated merge lane
- * lives in scripts/lib/merge-train-lane.mjs with its own workflow and its own
- * permissions (#2185).
+ * Merging stays out of this file by construction.
  */
 
 import {
@@ -51,9 +49,8 @@ const BENIGN_HTTP_STATUSES = new Set([404, 409, 422]);
 // (#2190 -- PR #2191's own head listed six names twice; PR #2190 listed
 // `Unit tests` as both IN_PROGRESS and COMPLETED/SUCCESS at once). The
 // resolution policy itself now lives in ci-checks.mjs (#2539 round 2, F2) as
-// `resolveLatestByName`, imported above, so this file, merge-train-lane.mjs's
-// gate, and ci-verdict.mjs share exactly one implementation instead of three
-// copies that could drift.
+// `resolveLatestByName`, imported above, so this file and ci-verdict.mjs share
+// exactly one implementation instead of copies that could drift.
 
 const PR_QUERY = `
 query($owner: String!, $name: String!, $after: String) {
@@ -211,8 +208,8 @@ export const DUPLICATE_REPORT_CAP = 5;
  * -- never throw out of this function (review round 1, F6).
  *
  * Returns `errors` as `{ message, benign }` RECORDS, not strings (#2192).
- * Both consumers -- `runWarden` below and the merge lane -- used to map every
- * list error to `benign: false` on the way in, which is exactly the bug: a
+ * The warden used to map every list error to `benign: false` on the way in,
+ * which is exactly the bug: a
  * cross-page duplicate is routine, not fatal. The query orders by UPDATED_AT
  * desc, so any open PR touched mid-pagination shifts the window and pushes a
  * PR from page N onto page N+1. On a 10-minute cadence that is expected noise,

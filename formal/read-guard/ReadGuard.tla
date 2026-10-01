@@ -1,10 +1,11 @@
 ------------------------------ MODULE ReadGuard ------------------------------
 (***************************************************************************)
-(* The read-before-edit guard (clients/read-guard.ts) for one file F, seen *)
+(* The read-before-edit guard (clients/read-guard.ts checkEdit) for one    *)
+(* file F, seen                                                            *)
 (* from a POSITIONAL edit tool (oldRange / edits[].range / hashline): the  *)
 (* class of edit the guard fully enforces. An oldText edit is content-     *)
 (* validated by the host and skips FileTime, snapshot and (as a block)     *)
-(* coverage (runtime-tool-call.ts ~1545 skipSnapshotCheck/oldTextResolved),*)
+(* coverage (runtime-tool-call.ts skipSnapshotCheck/oldTextResolved),      *)
 (* so it is out of scope.                                                  *)
 (*                                                                         *)
 (* A file is a sequence of line tokens. Every write mints fresh tokens, so *)
@@ -13,27 +14,34 @@
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - the agent (one tool at a time; pi awaits each handler):              *)
-(*      read   : tool_call provisional record (runtime-tool-call.ts ~1017, *)
+(*      read   : tool_call provisional record (runtime-tool-call.ts,       *)
 (*               hashes + FileTime taken at tool_call), host read, then    *)
-(*               the tool_result record (runtime-tool-result.ts ~1797)     *)
+(*               the tool_result record (runtime-tool-result.ts            *)
+(*               handleToolResult)                                         *)
 (*               that supersedes it (from the delivered bytes when the     *)
 (*               file moved after the tool_call's stamp, #3524);           *)
 (*      edit   : positional edit of 1 or 2 lines; checkEdit at tool_call   *)
-(*               (runtime-tool-call.ts ~1543), optional relocation (~1560) *)
+(*               (runtime-tool-call.ts handleToolCall), optional           *)
+(*               relocation                                                *)
 (*               then host apply, then recordWritten at tool_result        *)
-(*               (runtime-tool-result.ts ~2305), with the written lines    *)
-(*               recorded as read when not relocated (#3523, ~2254);       *)
-(*      write  : noteCreatedFile at tool_call (~1123), host write,         *)
-(*               recordWritten (injects the creation read, read-guard.ts   *)
-(*               ~1305-1331), the turn's first write runs the immediate    *)
-(*               autofix (pipeline.ts ~1527), recordWritten again          *)
-(*               (runtime-tool-result.ts ~1083-1094), and the post-fix     *)
-(*               bytes are attached as "authoritative" (~2814) and         *)
-(*               recorded as a whole-file read (#3519, ~2874).             *)
+(*               (runtime-tool-result.ts handleToolResult), with the       *)
+(*               written lines                                             *)
+(*               recorded as read when not relocated (#3523);              *)
+(*      write  : noteCreatedFile at tool_call, host write,                 *)
+(*               recordWritten (injects the creation read,                 *)
+(*               read-guard.ts).                                           *)
+(*               The turn's first write runs the immediate                 *)
+(*               autofix (pipeline.ts runAutofix), recordWritten again     *)
+(*               (runtime-tool-result.ts handleToolResult), and the        *)
+(*               post-fix                                                  *)
+(*               bytes are attached as "authoritative" and                 *)
+(*               recorded as a whole-file read (#3519).                    *)
 (*  - another writer (external editor, second pi-lens instance, git):      *)
 (*    changes F between any two steps.                                     *)
-(*  - pi-lens' deferred agent_end format drain (runtime-agent-end.ts ~710):*)
-(*    rewrites F, then recordWritten.                                      *)
+(*  - pi-lens' deferred agent_end format drain (runtime-agent-end.ts       *)
+(*  handleAgentEnd):                                                       *)
+(*    rewrites F, then recordWritten: authorship only since #3525, which   *)
+(*    leaves FileTime where it was (FormatStamp).                          *)
 (*  - boundaries: user turn (kTurn = what the agent knew before the        *)
 (*    prompt), /new (fresh guard), /fork (the conversation restarts BEFORE *)
 (*    a chosen user message) and /tree (the conversation moves). Since     *)
@@ -63,12 +71,13 @@ CONSTANTS
     Ctx,            \* contextLines (DEFAULT_CONFIG: 3)
     \* ---- current-code switches ----
     HandlerEvidence,\* TRUE (pre-#3524 code): a native read's hashes, range and FileTime come from disk at tool_result
-    CreationHandlerEvidence, \* TRUE (code): the injected creation read is hashed from disk at tool_result
+    CreationHandlerEvidence, \* TRUE (code before #3524's remainder): the injected creation read is hashed from disk at tool_result
     MtimeAuthored,  \* TRUE (code): zero-read allow when mtime >= guard construction
-    OwnEditRescue,  \* TRUE (code): canTreatStalenessAsOwnPriorEdit
+    OwnEditRescue,  \* TRUE (code before #3525): canTreatStalenessAsOwnPriorEdit
     ForkImport,     \* FALSE (code before #3521): pi re-runs the factory for a fork, so the closure stash died and the fork imported nothing
     SuppressByNewerContext, \* TRUE (code before #3522): a newer context-only candidate cancels a snapshot mismatch; read only when SpanSnapshot = FALSE
-    FormatStamp,    \* TRUE (code): the agent_end format drain calls recordWritten
+    FormatStamp,    \* TRUE (code before #3525): the agent_end format drain's recordWritten also stamps FileTime
+                    \* (FALSE: it credits authorship, `written`, only)
     \* ---- candidate fixes ----
     RecordAuthoritative, \* record the attached post-autofix bytes as a full read (code since #3519)
     RecordOwnEdit,       \* record the lines an allowed positional edit wrote as read (code since #3523)
@@ -143,9 +152,9 @@ KnowAll(c) == [l \in Lines |-> IF l <= Len(c) THEN c[l] ELSE 0]
 AddRec(S, r, whole) == Append(S, [r EXCEPT !.whole = whole])
 
 ----------------------------------------------------------------------------
-\* Guard predicates (read-guard.ts). Record order in `reads` is timestamp order.
+\* Guard predicates (read-guard.ts checkEdit). Record order in `reads` is timestamp order.
 Max(a, b) == IF a > b THEN a ELSE b
-\* readCoversRange (~1600): the effective range widened by contextLines.
+\* readCoversRange: the effective range widened by contextLines.
 CtxCovers(r, lo, hi) == Max(1, r.lo - Ctx) <= lo /\ hi <= r.hi + Ctx
 EffCovers(r, lo, hi) == r.lo <= lo /\ hi <= r.hi
 HashesMatch(r, lo, hi) ==                                       \* readRangeHashesStillMatch
@@ -156,18 +165,18 @@ AllHashesMatch(r) ==                                            \* readHashesSti
 Idx(S) == 1..Len(S)
 LastIdx(S) == IF S = {} THEN 0 ELSE CHOOSE i \in S : \A j \in S : j <= i
 
-\* checkCoverage (~1867): the union of non-provisional, context-widened ranges.
+\* checkCoverage: the union of non-provisional, context-widened ranges.
 Covered(lo, hi) ==
     \A l \in lo..hi : \E i \in Idx(reads) :
         ~reads[i].prov /\ Max(1, reads[i].lo - Ctx) <= l /\ l <= reads[i].hi + Ctx
 
-\* canIgnoreStalenessByHashes (~1567).
+\* canIgnoreStalenessByHashes.
 HashRescueCode(lo, hi) == \E i \in Idx(reads) : CtxCovers(reads[i], lo, hi) /\ HashesMatch(reads[i], lo, hi)
 
-\* validateRangeSnapshot (~1618). A candidate is "checked" when it delivered
+\* validateRangeSnapshot. A candidate is "checked" when it delivered
 \* and hashed every line of the range (currentLinesMatchReadSnapshot);
 \* otherwise it is "unavailable". The block is suppressed when an unavailable
-\* candidate is newer than the newest mismatch (~1690-1697).
+\* candidate is newer than the newest mismatch.
 Cands(lo, hi) == {i \in Idx(reads) : CtxCovers(reads[i], lo, hi)}
 Checked(lo, hi) ==
     {i \in Cands(lo, hi) : EffCovers(reads[i], lo, hi) /\ \A l \in lo..hi : reads[i].h[l] # 0}
@@ -198,7 +207,7 @@ HashRescue(lo, hi) ==
                              /\ reads[NewestDeliv(l)].h[l] = disk[l]
       ELSE HashRescueCode(lo, hi)
 
-\* findRelocation (~1770): newest read with hashes for the whole range; its
+\* findRelocation: newest read with hashes for the whole range; its
 \* sequence must occur exactly once in the current file (the window is wider
 \* than the file here).
 HasSeq(i, lo, hi) == \A l \in lo..hi : reads[i].h[l] # 0
@@ -216,7 +225,7 @@ Reloc(lo, hi) ==
                  IN IF Cardinality(M) = 1 /\ (CHOOSE s \in M : TRUE) # lo
                       THEN CHOOSE s \in M : TRUE ELSE 0
 
-\* checkEdit (~927) for a positional edit of lo..hi.
+\* checkEdit for a positional edit of lo..hi.
 \* Returns [act |-> "allow"|"block"|"reloc", to |-> start, inject |-> BOOLEAN].
 Verdict(lo, hi) ==
     IF Len(reads) = 0
@@ -420,9 +429,8 @@ Turn ==
     /\ Idle /\ "turn" \in Bounds /\ nb < MaxBounds /\ ~SettleDue
     /\ IF DrainMode = "atomic" /\ FormatDrain # "none" /\ mutatedTurn /\ ModOk(FormatDrain, disk, 1)
          THEN /\ disk' = Mod(FormatDrain, disk, 1, tok) /\ rev' = rev + 1 /\ tok' = tok + 1
-              /\ IF FormatStamp                               \* recordWritten after the format
-                   THEN ft' = rev + 1 /\ written' = TRUE
-                   ELSE UNCHANGED <<ft, written>>
+              /\ written' = TRUE                              \* recordWritten after the format
+              /\ ft' = IF FormatStamp THEN rev + 1 ELSE ft
          ELSE UNCHANGED <<disk, rev, tok, ft, written>>
     /\ kTurn' = know /\ turnNo' = turnNo + 1
     /\ fixedTurn' = FALSE /\ mutatedTurn' = FALSE /\ nb' = nb + 1
@@ -455,8 +463,9 @@ Drain ==
     /\ dr' = [dr EXCEPT !.q = FALSE]
     /\ IF ModOk(FormatDrain, disk, 1)
          THEN /\ disk' = Mod(FormatDrain, disk, 1, tok) /\ rev' = rev + 1 /\ tok' = tok + 1
-              /\ IF FormatStamp /\ (DrainMode = "unfenced" \/ dr.ep = dr.cur)
-                   THEN ft' = rev + 1 /\ written' = TRUE
+              /\ IF DrainMode = "unfenced" \/ dr.ep = dr.cur
+                   THEN /\ written' = TRUE
+                        /\ ft' = IF FormatStamp THEN rev + 1 ELSE ft
                    ELSE UNCHANGED <<ft, written>>
          ELSE UNCHANGED <<disk, rev, tok, ft, written>>
     /\ UNCHANGED <<know, kTurn, reads, pendCreate, lastEditOk, born, turnNo, pc, pend,

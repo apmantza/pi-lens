@@ -1,0 +1,321 @@
+{
+  "$comment": "Checked-in coverage map for #3802 rule 2, produced by the #3803 phase-1 audit (2026-09-30, master 1f41157ca), landed by #3802. Key = source glob relative to the repo root. Value = the formal/ families whose spec models behaviour in that file, or the string \"unmodelled\" for a lifecycle/timing/identity/concurrency file that no family models yet. A row is ANY-OF: a PR touching a mapped file must also touch a formal/<family>/*.tla or *.cfg file for ANY ONE of the row's families, or carry a `TLA+ unaffected: <family> — <reason>` line in the PR body for any one of them. A row listing 4 or more families (a hub file such as index.ts) is too coarse for file-level matching, so an unmet hub row prints a note and never fails. `unmodelled` entries print an advisory and never gate; they keep the gap visible. Every formal/<dir> must be listed in `families` and named by at least one row; a TLA lane that adds a family adds its row in the same PR. `notes` explains the non-obvious rows and the hot files deliberately left out. Paths were checked to exist on master at audit time.",
+  "version": 0,
+  "families": [
+    "dispatch-pipeline",
+    "file-locks",
+    "format-drain",
+    "instance-reaper",
+    "late-aux-drain",
+    "lsp-crash",
+    "lsp-diagnostics-freshness",
+    "lsp-document-lifecycle",
+    "lsp-idle-reset",
+    "lsp-rename-edit",
+    "lsp-server-content",
+    "read-guard",
+    "review-graph-promotion",
+    "review-graph-signatures",
+    "session-lifecycle",
+    "session-registry",
+    "session-straddle",
+    "snapshot-freshness",
+    "snapshot-promotion",
+    "store-freshness",
+    "tree-sitter-trap-budget"
+  ],
+  "map": {
+    "clients/read-guard.ts": [
+      "read-guard",
+      "session-lifecycle"
+    ],
+    "clients/read-guard-branch.ts": [
+      "read-guard",
+      "session-lifecycle"
+    ],
+    "clients/runtime-tool-call.ts": [
+      "read-guard",
+      "dispatch-pipeline"
+    ],
+    "clients/runtime-tool-result.ts": [
+      "read-guard",
+      "session-straddle",
+      "session-lifecycle",
+      "dispatch-pipeline",
+      "store-freshness"
+    ],
+    "clients/runtime-agent-end.ts": [
+      "format-drain",
+      "read-guard",
+      "session-lifecycle"
+    ],
+    "clients/search-read-registration.ts": [
+      "read-guard"
+    ],
+    "clients/session-scope.ts": [
+      "session-lifecycle"
+    ],
+    "clients/session-state-store.ts": [
+      "session-lifecycle"
+    ],
+    "clients/session-lifecycle.ts": [
+      "session-lifecycle"
+    ],
+    "clients/session-event-guard.ts": [
+      "session-lifecycle"
+    ],
+    "clients/generation-guard.ts": [
+      "session-lifecycle",
+      "session-straddle",
+      "format-drain"
+    ],
+    "clients/runtime-coordinator.ts": [
+      "session-lifecycle",
+      "session-straddle",
+      "dispatch-pipeline",
+      "snapshot-freshness"
+    ],
+    "clients/runtime-session.ts": [
+      "session-lifecycle",
+      "session-straddle",
+      "snapshot-freshness"
+    ],
+    "clients/mutation-bridge.ts": [
+      "session-lifecycle",
+      "read-guard"
+    ],
+    "clients/observed-mutation.ts": [
+      "session-lifecycle"
+    ],
+    "clients/mutating-tool.ts": [
+      "session-lifecycle"
+    ],
+    "clients/widget-state.ts": [
+      "session-lifecycle",
+      "dispatch-pipeline"
+    ],
+    "clients/write-ordering-guard.ts": [
+      "session-lifecycle",
+      "dispatch-pipeline"
+    ],
+    "clients/tool-set-policy.ts": [
+      "session-lifecycle"
+    ],
+    "clients/agent-nudge.ts": [
+      "session-lifecycle"
+    ],
+    "clients/mcp/session.ts": "unmodelled",
+    "clients/dispatch/pending-runner-findings.ts": "unmodelled",
+    "clients/quiet-window.ts": [
+      "session-straddle"
+    ],
+    "clients/lsp/cascade-tier.ts": [
+      "session-straddle"
+    ],
+    "clients/dispatch/integration.ts": [
+      "session-straddle",
+      "lsp-idle-reset",
+      "store-freshness"
+    ],
+    "clients/pipeline.ts": [
+      "dispatch-pipeline",
+      "format-drain",
+      "lsp-server-content"
+    ],
+    "clients/file-mutation-queue.ts": [
+      "dispatch-pipeline",
+      "format-drain"
+    ],
+    "clients/format-service.ts": [
+      "format-drain"
+    ],
+    "clients/formatters.ts": [
+      "format-drain"
+    ],
+    "clients/lsp/diagnostic-binding.ts": [
+      "format-drain"
+    ],
+    "clients/fix-run-restore.ts": "unmodelled",
+    "clients/lsp/edits.ts": [
+      "lsp-rename-edit"
+    ],
+    "clients/lsp-mutation.ts": "unmodelled",
+    "tools/lsp-navigation.ts": [
+      "lsp-rename-edit"
+    ],
+    "clients/instance-registry.ts": [
+      "session-registry",
+      "instance-reaper",
+      "file-locks"
+    ],
+    "clients/instance-registry-tail.ts": [
+      "session-registry"
+    ],
+    "clients/instance-registry-lock.ts": [
+      "file-locks"
+    ],
+    "clients/generation-lock.ts": [
+      "file-locks",
+      "snapshot-promotion"
+    ],
+    "clients/bounded-pid-file-lock.ts": [
+      "file-locks"
+    ],
+    "clients/actionable-warnings.ts": [
+      "file-locks"
+    ],
+    "clients/diagnostic-dispositions.ts": [
+      "file-locks"
+    ],
+    "clients/installer/index.ts": [
+      "file-locks"
+    ],
+    "clients/instance-reaper.ts": [
+      "instance-reaper",
+      "review-graph-promotion",
+      "snapshot-promotion"
+    ],
+    "clients/process-snapshot.ts": [
+      "instance-reaper"
+    ],
+    "clients/lsp-budget.ts": [
+      "instance-reaper"
+    ],
+    "clients/lsp/launch.ts": [
+      "instance-reaper"
+    ],
+    "clients/lsp/index.ts": [
+      "lsp-crash",
+      "lsp-idle-reset",
+      "late-aux-drain",
+      "lsp-diagnostics-freshness",
+      "lsp-server-content",
+      "store-freshness"
+    ],
+    "clients/lsp/client.ts": [
+      "lsp-crash",
+      "lsp-document-lifecycle",
+      "lsp-diagnostics-freshness",
+      "late-aux-drain",
+      "lsp-server-content"
+    ],
+    "clients/lsp/server.ts": [
+      "session-lifecycle",
+      "format-drain",
+      "lsp-idle-reset"
+    ],
+    "clients/lsp/tsserver-sync.ts": [
+      "lsp-crash"
+    ],
+    "clients/lsp/pending-aux-coverage.ts": [
+      "late-aux-drain"
+    ],
+    "clients/lsp/document-drift.ts": [
+      "lsp-server-content"
+    ],
+    "clients/lsp/wait-policy/strategies.ts": [
+      "late-aux-drain",
+      "lsp-diagnostics-freshness"
+    ],
+    "clients/warm-attach.ts": [
+      "lsp-idle-reset"
+    ],
+    "clients/runtime-turn.ts": [
+      "lsp-idle-reset",
+      "late-aux-drain",
+      "session-straddle"
+    ],
+    "clients/freshness.ts": [
+      "store-freshness"
+    ],
+    "clients/blocker-freshness.ts": [
+      "store-freshness"
+    ],
+    "clients/lsp/workspace-diagnostics-cache.ts": [
+      "store-freshness"
+    ],
+    "clients/project-diagnostics/fresh-fetch.ts": [
+      "store-freshness"
+    ],
+    "clients/mcp/analyze.ts": [
+      "store-freshness"
+    ],
+    "tools/lsp-diagnostics.ts": [
+      "store-freshness"
+    ],
+    "tools/lens-diagnostics.ts": [
+      "store-freshness"
+    ],
+    "clients/knip-client.ts": [
+      "store-freshness"
+    ],
+    "clients/jscpd-client.ts": [
+      "store-freshness"
+    ],
+    "clients/dead-code-client.ts": [
+      "store-freshness"
+    ],
+    "clients/dependency-checker.ts": [
+      "store-freshness"
+    ],
+    "clients/project-snapshot.ts": [
+      "snapshot-freshness",
+      "snapshot-promotion"
+    ],
+    "clients/project-changes.ts": [
+      "snapshot-freshness"
+    ],
+    "clients/word-index.ts": [
+      "snapshot-promotion"
+    ],
+    "clients/gzip-stage-write.ts": [
+      "snapshot-promotion",
+      "review-graph-promotion"
+    ],
+    "clients/review-graph/builder.ts": [
+      "review-graph-promotion",
+      "review-graph-signatures"
+    ],
+    "clients/dispatch/fact-store.ts": [
+      "review-graph-signatures"
+    ],
+    "clients/tree-sitter-client.ts": [
+      "tree-sitter-trap-budget"
+    ],
+    "clients/tree-sitter-shared.ts": "unmodelled",
+    "clients/tree-sitter-symbol-extractor.ts": [
+      "tree-sitter-trap-budget"
+    ],
+    "clients/workspace-topology.ts": "unmodelled",
+    "clients/test-runner-client.ts": "unmodelled",
+    "index.ts": [
+      "session-lifecycle",
+      "session-straddle",
+      "session-registry",
+      "format-drain",
+      "read-guard",
+      "late-aux-drain",
+      "dispatch-pipeline"
+    ]
+  },
+  "notes": {
+    "index.ts": "Every hook handler lives here, so a file-level glob makes most PRs carry a `TLA+ unaffected` line. Phase 2 should narrow this row to hook anchors (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_settled, tool_call, tool_result, context) once #3802's checker can match hunks, not files (#3878).",
+    "clients/installer/index.ts": "Only the install lock (tryAcquireInstallLock, acquireInstallLock, assertOwnsLock, the generation heartbeat) is modelled, and only partly: file-locks has no heartbeat or ownership recheck (#3553). The rest of the installer is not lifecycle.",
+    "clients/lsp/server.ts": "The LSP service generation (captureLspServiceGeneration, lspServiceGenerationCell, #3755) is session-lifecycle's `svc`, format-drain's ServiceGen and lsp-idle-reset's reset. The server registry table (idleEviction policy data, #3622) is not lifecycle.",
+    "clients/lsp/index.ts": "Per-client retirement (retireClient, #3672), capacity and idle eviction (#3622) map to lsp-crash `Evict`; per-generation derived state (EWMA, aux inflight, write-timeout streak) is not modelled yet (#3672, #3584). applyWorkspaceEdit callers are unmodelled (clients/lsp/edits.ts).",
+    "clients/agent-nudge.ts": "The agent-advisories store (#3757, carried on /reload by #3777) belongs to session-lifecycle, which does not model it yet. The `_touched` accumulator is unscoped (#3758 class).",
+    "clients/session-lifecycle.ts": "Primary/secondary classification. session-lifecycle's SecStart assumes a correct classifier; the #3662 gap classification (#3668, successor-pending marker, 60 s TTL) is not modelled.",
+    "clients/dispatch/fact-store.ts": "review-graph-signatures' Extract is atomic, which assumes the #3746 private-store property; the pre-#3746 shared store is below its abstraction.",
+    "clients/tree-sitter-client.ts": "Wasm trap budget, per-input trap entries with first-trap identity, decay on success, batch-compile keys (#3673, #3706, #3731). Modelled by tree-sitter-trap-budget (#3829).",
+    "clients/fix-run-restore.ts": "Whole-package fixer vs concurrent agent sibling edits, capture and compare-then-write restore outside pi's queue (#3741). Proposed: extend dispatch-pipeline.",
+    "clients/lsp/edits.ts": "applyWorkspaceEdit under every path's queue (#3610) and the rename staleness capture (#3736, #3747, #3734). Modelled by lsp-rename-edit (#3826).",
+    "tools/lsp-navigation.ts": "See clients/lsp/edits.ts.",
+    "clients/lsp-mutation.ts": "LSP fallback bridge producer; carries no lineage and stays fail-open (#3763 residual).",
+    "clients/mcp/session.ts": "MCP session refresh calls handleSessionStart (scope 'superseded'); session-lifecycle states the MCP host is out of scope.",
+    "clients/dispatch/pending-runner-findings.ts": "Drains unscoped at turn end (#3758).",
+    "clients/workspace-topology.ts": "Marker-walk miss cache keyed by start-dir mtime plus the 2 s cadence (#3456). Low value; store-freshness could host it as a gate kind.",
+    "clients/knip-client.ts": "The four heavyweight analyzers stamp scannedAt at the top of their run body, before the first read (#3690); a joined run inherits the initiator's read stamp. That is store-freshness' Stamp = \"start\" rule.",
+    "unlisted": "Runtime files touched by the 151 audited PRs and deliberately not mapped (no lifecycle, timing, identity or concurrency behaviour): bounded-telemetry, cache-observability, complexity-client, dispatch/dispatcher, dispatch/types, dispatch/utils/format-utils, install-diagnostics, lens-config, lsp/config, lsp/session-roots, lsp/wait-policy/capability-snapshot, module-report, path-utils, persistent-reverify, probe-home-state, project-diagnostics/types, project-lens-config, python-environment, read-expansion, review-graph-logger, tool-agreement, tools/module-report. Also deliberately unmapped because nearly every PR touches them for non-lifecycle reasons: clients/degradation-ledger.ts (the DegradationKind registry; touched by most runtime PRs for a record kind, never lifecycle behaviour); clients/latency-logger.ts (telemetry sink); clients/hook-budgets.ts (budget table (data); #2523 governs it); clients/dispatch/runners/** (runner outcome parsing; the fix-run restore seam is mapped at clients/fix-run-restore.ts); clients/dispatch/facts/** (pure extractors; their tree-sitter trap accounting lives in clients/tree-sitter-client.ts).",
+    "clients/test-runner-client.ts": "Per-checkout isolation of automatic test selection (#3649). Identity keying without interleaving; unit tests suffice, listed only so the gap is visible."
+  }
+}

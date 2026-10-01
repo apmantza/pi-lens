@@ -9,6 +9,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveToolCommandWithInstallFallback,
@@ -212,11 +213,10 @@ const swiftlintRunner: RunnerDefinition = {
 
 		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
 
-		return {
+		return findingsResult(diagnostics, {
 			status: hasBlocking ? "failed" : "succeeded",
-			diagnostics,
 			semantic: hasBlocking ? "blocking" : "warning",
-		};
+		});
 	},
 };
 

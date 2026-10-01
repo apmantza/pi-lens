@@ -4718,7 +4718,6 @@ async function addFileToGraph(
 		if (sharedIr?.kind === "jsts") {
 			run.setFileFact(file, "file.content", contentOverride ?? "");
 			run.setFileFact(file, "file.imports", sharedIr.imports);
-			run.setFileFact(file, "file.reexports", sharedIr.reexports);
 			run.setFileFact(
 				file,
 				"file.functionSummaries",

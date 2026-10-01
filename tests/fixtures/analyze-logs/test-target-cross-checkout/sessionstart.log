@@ -1,0 +1,28 @@
+[2026-09-20T22:00:11.849Z] session_start fired
+[2026-09-20T22:45:11.576Z] turn_end: .worktrees/425-resume-pin/tests/unit/probe-425-resume-refusal.test.ts → test vitest .worktrees/425-resume-pin/tests/unit/probe-425-resume-refusal.test.ts (failed-first)
+[2026-09-21T00:23:05.016Z] turn_end: src/backends/codex.ts → test vitest .worktrees/427-quota-flight/tests/contract/codex.contract.test.ts (failed-first)
+[2026-09-21T00:28:04.389Z] turn_end: .worktrees/427-quota-flight/tests/contract/codex.contract.test.ts → test vitest .worktrees/427-quota-flight/tests/contract/codex.contract.test.ts (failed-first)
+[2026-09-21T02:10:56.645Z] turn_end: src/mcp/tools.ts → test vitest .worktrees/429-mcp-typing/tests/contract/mcp-surface.test.ts (failed-first)
+[2026-09-21T02:12:32.053Z] turn_end: .worktrees/429-mcp-typing/tests/contract/mcp-surface.test.ts → test vitest .worktrees/429-mcp-typing/tests/contract/mcp-surface.test.ts (failed-first)
+[2026-09-21T04:41:08.712Z] turn_end: .worktrees/433-harvest/tests/unit/mcp-description-routing.test.ts → test vitest .worktrees/433-harvest/tests/unit/mcp-description-routing.test.ts (failed-first)
+[2026-09-21T05:05:11.028Z] turn_end: src/backends/opencode.ts → test vitest .worktrees/434-force-settle/tests/unit/opencode-events.test.ts (failed-first)
+[2026-09-21T06:06:58.073Z] turn_end: src/backends/opencode.ts → test vitest .worktrees/434-force-settle/tests/unit/opencode-events.test.ts (failed-first)
+[2026-09-21T17:53:08.201Z] session_start fired
+[2026-09-21T19:41:35.215Z] turn_end: .worktrees/405-if-pushed/tests/unit/control-plane.test.ts → test vitest .worktrees/405-if-pushed/tests/unit/control-plane.test.ts (failed-first)
+[2026-09-21T19:45:40.630Z] turn_end: .worktrees/405-if-pushed/tests/unit/control-plane.test.ts → test vitest .worktrees/405-if-pushed/tests/unit/control-plane.test.ts (failed-first)
+[2026-09-21T19:47:48.316Z] turn_end: .worktrees/405-if-pushed/src/control/plane.ts → test vitest .worktrees/405-if-pushed/tests/unit/control-plane.test.ts (failed-first)
+[2026-09-21T19:50:16.262Z] turn_end: .worktrees/405-if-pushed/src/control/plane.ts → test vitest .worktrees/405-if-pushed/tests/unit/control-plane.test.ts (failed-first)
+[2026-09-22T19:43:07.265Z] session_start fired
+[2026-09-22T19:43:54.695Z] turn_end: .worktrees/435-home-reap/src/state-reaper.ts → test vitest .worktrees/243-ref-ownership/tests/unit/workspace.test.ts (failed-first)
+# subset cut: the B2 run below keeps its first 6 cross-checkout failed-first lines and its one same-checkout line (35 of 36 are cross in the full run).
+[2026-09-30T10:03:45.684Z] session_start fired
+[2026-09-30T10:15:39.017Z] turn_end: .worktrees/450-merge-into/tests/unit/workspace.test.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:21:12.652Z] turn_end: .worktrees/442-ws-placeholder/tests/unit/mcp-surface-budget.test.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:21:24.523Z] turn_end: .worktrees/442-ws-placeholder/tests/unit/mcp-surface-budget.test.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:21:29.257Z] turn_end: .worktrees/442-ws-placeholder/tests/unit/mcp-surface-budget.test.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:21:34.751Z] turn_end: .worktrees/442-ws-placeholder/tests/unit/mcp-surface-budget.test.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:59:27.031Z] turn_end: .worktrees/470-git-init-guard/src/git-guard-policy.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+[2026-09-30T10:59:30.697Z] turn_end: .worktrees/470-git-init-guard/src/git-guard-policy.ts → test vitest .worktrees/450-merge-into/tests/unit/workspace.test.ts (failed-first)
+# synthetic: a cross-checkout vitest run whose mode is not failed-first must not count (B43 failed-first filter)
+[2026-09-30T11:00:00.000Z] session_start fired
+[2026-09-30T11:00:05.000Z] turn_end: .worktrees/490-a/src/a.ts → test vitest .worktrees/491-b/tests/unit/a.test.ts (safety)

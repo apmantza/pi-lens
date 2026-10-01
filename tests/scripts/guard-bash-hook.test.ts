@@ -231,6 +231,40 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 		"npx vitest run tests/foo.test.ts 2>&1 | grep -iE 'error|fail'; git add -A && git commit -m x && git push origin y",
 		"chained",
 	],
+	// #3883: a pipeline reads the pipe's status, not ci-verdict's status;
+	// the final `ci-verdict: exit` line is the authoritative status instead.
+	["node scripts/ci-verdict.mjs 1 | tail; echo $?", "ci-verdict"],
+	// #3883 F6: wrappers and spellings the round-1 rule missed.
+	["timeout 600 node scripts/ci-verdict.mjs 1 | tail; echo $?", "ci-verdict"],
+	[
+		"timeout --foreground 600 node scripts/ci-verdict.mjs 1 | tail; echo $?",
+		"ci-verdict",
+	],
+	["node --no-warnings scripts/ci-verdict.mjs 1 | tail; echo $?", "ci-verdict"],
+	["node scripts/ci-verdict.mjs 1 | tail; echo ${?}", "ci-verdict"],
+	["node scripts/ci-verdict.mjs 1 |& tail; echo $?", "ci-verdict"],
+	// #3883 R2: `timeout`'s own options take arguments (`-s KILL`, `-k 5`), so
+	// the duration read must not land on the signal.
+	[
+		"timeout -s KILL 600 node scripts/ci-verdict.mjs 1 | tail; echo $?",
+		"ci-verdict",
+	],
+	[
+		"timeout -k 5 600 node scripts/ci-verdict.mjs 1 | tail; echo $?",
+		"ci-verdict",
+	],
+	// #3883 R2: the single-quote stripper must not treat an apostrophe inside a
+	// double-quoted string as opening a single-quote span that hides `$?`.
+	[
+		"node scripts/ci-verdict.mjs 1 | tail; echo \"it's $? ok it's\"",
+		"ci-verdict",
+	],
+	// #3883 R2: `set +o pipefail` DISABLES pipefail, so the pipeline's `$?` is
+	// the filter's status again.
+	[
+		"set +o pipefail; node scripts/ci-verdict.mjs 1 | tail; echo $?",
+		"ci-verdict",
+	],
 ];
 
 // Every allow string the issue lists, which must stay green.
@@ -244,6 +278,22 @@ const ALLOW_CASES: string[] = [
 	'echo "git stash"',
 	"PI_LENS_HOME=/x node -e \"require('./clients/foo.js')\"",
 	"node scripts/ci-verdict.mjs 1",
+	// #3883: piping output without reading `$?` is a valid way to inspect the
+	// command's output; only `| tail` shows the final `ci-verdict: exit`
+	// line, and this `| head` form reads no status either way.
+	"node scripts/ci-verdict.mjs 1 | head",
+	// #3883: capture `$?` before sending the captured status through a pipe.
+	"node scripts/ci-verdict.mjs 1; echo $? | tail",
+	// #3883 F5: a `;`-separated segment between ci-verdict and the `$?` read is
+	// not a pipe, so the status is still ci-verdict's own.
+	"node scripts/ci-verdict.mjs 1; git status; echo $?",
+	// #3883 F6: `set -o pipefail` makes the pipeline's status the real one.
+	"set -o pipefail; node scripts/ci-verdict.mjs 1 | tail; echo $?",
+	// #3883 R2: a later `set +o pipefail` disables it, and re-enabling after a
+	// disable still makes the pipeline's status the real one.
+	"set +o pipefail; set -o pipefail; node scripts/ci-verdict.mjs 1 | tail; echo $?",
+	// #3883 F6: a single-quoted `'$?'` is literal text, not the status.
+	"node scripts/ci-verdict.mjs 1 | tail; echo '$?'",
 	// #3723: the sanctioned form of the worktree open/close sequence the
 	// hook's worktreeSymlink rule otherwise denies -- a node script, not a
 	// hand-typed `git worktree remove`, and it loads no clients/ or dist/ code.
@@ -494,6 +544,15 @@ const EXPECTED_TRANSCRIPT_DENIES = new Set([
 	"830516326aef8a7961d80c8b2ebcf53243a6c3408a2120f4bb6dcfc3386b3650",
 	"f8e25082d8aab77f62006719b1a214b65cb87af7faeb8d5baf12574d9480c366",
 	"cad4314ec40a34fb85ae43f865f96b5862397f363e26003cc814e87dfafceebf",
+	// #3883 (round 2): six real historical `ci-verdict … | tail; echo "exit=$?"`
+	// reads the new rule flags. Each was read in full; the `$?` is the tail's
+	// status, not ci-verdict's verdict, and none enables `pipefail` first.
+	"71eeb73974cf43c002ee51e46d0ad68a98243e20ded231956f12bf8948c547ab",
+	"c9d112f10e0bc11cad5f0fdf866da6237cb90a92d0c8dbf70fcf189cbfb6e870",
+	"e2cc62fdb1cd8355b95d36151544d43a77e35678b98007dddd206c77fe5cedf2",
+	"a22ad5af048cb1448818b448f7c18287dbfeea08df29e05b0bf05e254ca0eaba",
+	"94854ee02d361bd93e7e8b4020fb49cb30573937b576e435abffb6a1734827dd",
+	"6ffdccbc34f482d728a5d85c70a93409ce0fd45ebf315a0fb8c931ef2aa4d4d5",
 ]);
 
 const EXPECTED_TRANSCRIPT_ALLOWS = new Set([
@@ -506,6 +565,13 @@ describe("scripts/hooks/guard-bash.mjs -- deny list (#2699)", () => {
 		const result = runHook(command);
 		expect(result.status).toBe(2);
 		expect(result.stderr.toLowerCase()).toContain(ruleNeedle);
+	});
+
+	it("explains the pipe-safe final line for #3883", () => {
+		const result = runHook("node scripts/ci-verdict.mjs 1 | tail; echo $?");
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("final `ci-verdict: exit <N> (<kind>)`");
+		expect(result.stderr).toContain("; echo $?` before the pipe");
 	});
 });
 
@@ -551,6 +617,13 @@ describe("scripts/hooks/guard-bash.mjs -- rule declarations (review round 2 T1)"
 		// Same guard, for #3471's ninth rule.
 		const rule: DenyRule = "checkUngated";
 		expect(RULE_MESSAGES[rule]).toContain("&&");
+	});
+
+	it("declares ciVerdictStatus in the DenyRule union", () => {
+		const rule: DenyRule = "ciVerdictStatus";
+		expect(RULE_MESSAGES[rule]).toContain(
+			"final `ci-verdict: exit <N> (<kind>)`",
+		);
 	});
 });
 
@@ -720,7 +793,7 @@ describe("scripts/hooks/guard-bash.mjs -- round-2 survey corpus (#2705)", () => 
 			} else {
 				expect(result.status, command).toBe(2);
 				expect(result.stderr.toLowerCase(), command).toMatch(
-					/stash|reset|worktree|probe|tmpdir|tmp|pkill|chained/,
+					/stash|reset|worktree|probe|tmpdir|tmp|pkill|chained|ci-verdict/,
 				);
 			}
 		},

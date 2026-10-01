@@ -11,6 +11,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 
@@ -198,11 +199,10 @@ const detektRunner: RunnerDefinition = {
 		}
 
 		const hasErrors = diagnostics.some((d) => d.severity === "error");
-		return {
+		return findingsResult(diagnostics, {
 			status: hasErrors ? "failed" : "succeeded",
-			diagnostics,
 			semantic: hasErrors ? "blocking" : "warning",
-		};
+		});
 	},
 };
 

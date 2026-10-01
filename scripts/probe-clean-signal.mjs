@@ -47,21 +47,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	COMPARABLE_FIRST_PUBLISH,
 	DRIFT_SUMMARY_PATH,
+	MEASURED_CLEAN_BEHAVIORS,
+	buildMatrixObservations,
 	createPublishTraceDrainer,
 	findCleanSignalDrift,
 	strategyKeyForLang,
+	targetLangForFixture,
 } from "./lib/clean-signal.mjs";
 import {
 	bootstrapFixtureWorkspace,
 	withScratchHome,
 } from "./lib/lsp-fixture-workspace.mjs";
 import { createProbeFixture } from "./lib/probe-fixture.mjs";
-import {
-	mergeRows,
-	mergeSrc,
-	parseTable,
-	replaceTable,
-} from "./lib/md-matrix.mjs";
+import { refreshCapabilityMatrix } from "./lib/md-matrix.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -96,7 +94,9 @@ const { SERVER_DIAGNOSTIC_STRATEGIES } = await imp(
 	"dist/clients/lsp/wait-policy/strategies.js",
 );
 let ensureTool;
-if (install) ({ ensureTool } = await imp("dist/clients/installer/index.js"));
+if (install) {
+	({ ensureTool } = await imp("dist/clients/installer/index.js"));
+}
 
 // #529/#541/#558 drift check: wait-policy/strategies.ts keys its table by SERVER
 // ID, which usually equals the fixture's `lang`, but a few fixtures use a
@@ -387,32 +387,28 @@ try {
 } catch {}
 process.exit(0);
 
-// Resolve a `clean: true` fixture (e.g. typescript-clean) onto its base lang's
-// row (typescript), winning over the dirty fixture's diagnostic-neutral-edit
-// approximation for the same base lang — the ONE resolution rule shared by the
-// console drift report and the matrix merge, so they never disagree. Only rows
-// with a comparable classification are kept (mirrors `measurable` below).
+// Resolve a `clean: true` fixture onto its base lang's row (clean fixture wins)
+// and keep only rows with at least one comparable axis. Shared by the console
+// drift report and the matrix refresh, so they never disagree (#3310). The
+// matrix writer itself stays dependency-free; this classification lives here.
 function resolveTargetLangRows(measuredRows) {
-	// #3310: the two axes are independently measurable — a server can produce a
-	// classifiable first-publish class while its clean-behavior comes back
-	// `unknown` (and vice versa). A row is in the population when EITHER axis
-	// says something; each column below is written only when its OWN axis is
-	// comparable, so an unmeasured axis never blanks a prior good value.
 	const measurable = measuredRows.filter(
 		(r) =>
-			r.behavior === "publishes-versioned" ||
-			r.behavior === "publishes-unversioned" ||
-			r.behavior === "silent" ||
+			MEASURED_CLEAN_BEHAVIORS.has(r.behavior) ||
 			COMPARABLE_FIRST_PUBLISH.has(r.firstPublish),
 	);
 	const byTargetLang = new Map();
 	for (const r of measurable) {
-		const targetLang = r.cleanFixture ? r.lang.replace(/-clean$/, "") : r.lang;
+		const targetLang = targetLangForFixture(r.lang, r.cleanFixture);
 		const prev = byTargetLang.get(targetLang);
 		if (prev && prev.cleanFixture && !r.cleanFixture) continue; // clean fixture wins
 		byTargetLang.set(targetLang, { ...r, lang: targetLang, targetLang });
 	}
 	return [...byTargetLang.values()];
+}
+
+function nameList(langs) {
+	return langs.length ? langs.join(", ") : "none";
 }
 
 function updateMatrix(measuredRows) {
@@ -424,73 +420,44 @@ function updateMatrix(measuredRows) {
 		return;
 	}
 	const text = fs.readFileSync(docPath, "utf8");
-	const marker = "| lang | server |";
-	const tbl = parseTable(text, marker);
-	if (!tbl) {
-		console.error("matrix update skipped: capability table not found in doc");
-		return;
-	}
-	// Only classifications we're confident in are authoritative — resolveTargetLangRows
-	// already filters to rows with at least one comparable axis (#3310) and applies
-	// the clean-fixture-wins rule (a `clean: true` fixture like typescript-clean writes
-	// to its BASE lang's row (typescript): a genuinely clean file is the authoritative
-	// clean→clean observation, and typescript measurably re-publishes while dirty but
-	// goes silent once clean — the clean-file behavior is the one #458 (and the
-	// production budget-wait) cares about). `unknown`/`n/a (pull)`/`no-lsp` are NOT
-	// written — don't clobber a prior dev-measured value with a CI non-result.
-	const keyIdx = tbl.header.indexOf("lang");
-	const srcIdx = tbl.header.indexOf("src");
-	const existingByLang = new Map(tbl.rows.map((c) => [c[keyIdx], c]));
+	// #529/#541/#558 drift footnote: same targetLangRows the table merge below
+	// uses (clean fixture wins), so the footnote and the row it's about agree.
+	// NEVER a CI gate — this only rewrites a footnote section in the doc. #558:
+	// native-ts7 rows are compared too, against an explicit `false` expectation
+	// (see the drift-check comment above), not classic's marker.
 	const targetLangRows = resolveTargetLangRows(measuredRows);
-	const measured = targetLangRows.map((r) => {
-		const prior = existingByLang.get(r.targetLang);
-		const behaviorComparable =
-			r.behavior === "publishes-versioned" ||
-			r.behavior === "publishes-unversioned" ||
-			r.behavior === "silent";
-		return {
-			lang: r.targetLang,
-			...(behaviorComparable
+	let out = writeDriftFootnote(
+		text,
+		findCleanSignalDrift(targetLangRows, lookupSilentOnClean),
+	);
+	// #3401: the table merge, the `first-publish` expiry, and the
+	// clean-behavior/tier hysteresis all live in the shared refresh entry so
+	// they can be driven with recorded run inputs in tests (no LSP spawn).
+	const result = refreshCapabilityMatrix(
+		out,
+		buildMatrixObservations(targetLangRows),
+		{
+			src,
+			// A subset run (`probe-clean-signal.mjs typescript`) says nothing about
+			// the langs it did not probe: their expiry clock and tier holds stand.
+			...(langs.length
 				? {
-						"clean-behavior": r.behavior,
-						tier: r.tierLabel || String(r.tier),
+						probedLangs: fixtures.map((f) =>
+							targetLangForFixture(f.lang, f.clean),
+						),
 					}
 				: {}),
-			// #3310: only a CLASSIFIABLE first-publish observation is written, so an
-			// `empty-only`/`unknown` run never blanks a prior measured class (the
-			// same merge-guard rule the clean-behavior column follows, #390).
-			...(COMPARABLE_FIRST_PUBLISH.has(r.firstPublish)
-				? { "first-publish": r.firstPublish }
-				: {}),
-			src: mergeSrc(prior ? prior[srcIdx] : "", src),
-		};
-	});
-	const merged = mergeRows(
-		tbl.rows,
-		tbl.header,
-		measured,
-		"lang",
-		["clean-behavior", "first-publish", "tier", "src"],
-		{ updateOnly: true },
+		},
 	);
-	let out = replaceTable(text, marker, tbl.header, tbl.sep, merged);
-	if (!out) out = text;
-
-	// #529/#541/#558 drift footnote: same targetLangRows the table merge above
-	// just used (clean fixture wins), so the footnote and the row it's about
-	// agree. NEVER a CI gate — this only rewrites a footnote section in the doc.
-	// #558: native-ts7 rows are compared too, against an explicit `false`
-	// expectation (see the drift-check comment above), not classic's marker.
-	const footnoteWarnings = findCleanSignalDrift(
-		targetLangRows,
-		lookupSilentOnClean,
-	);
-	out = writeDriftFootnote(out, footnoteWarnings);
-
+	if (result.reason) {
+		console.error(`matrix update skipped: ${result.reason}`);
+		return;
+	}
+	out = result.text;
 	if (out !== text) {
 		fs.writeFileSync(docPath, out);
 		console.error(
-			`Updated docs/lsp-capability-matrix.md clean-behavior column (${measured.length} servers classified, ${tbl.rows.length} rows preserved).`,
+			`Updated docs/lsp-capability-matrix.md (committed: ${nameList(result.committedLangs)}; pending: ${nameList(result.pendingLangs)}; expired: ${nameList(result.expiredLangs)}).`,
 		);
 	} else {
 		console.error("matrix clean-behavior column: no changes.");

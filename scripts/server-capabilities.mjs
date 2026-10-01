@@ -48,7 +48,9 @@ const { getLSPService, resetLSPService } = await imp(
 );
 const { initLSPConfig } = await imp("dist/clients/lsp/config.js");
 let ensureTool;
-if (install) ({ ensureTool } = await imp("dist/clients/installer/index.js"));
+if (install) {
+	({ ensureTool } = await imp("dist/clients/installer/index.js"));
+}
 
 const fixtures = langs.length
 	? LSP_FIXTURES.filter((f) => langs.includes(f.lang))

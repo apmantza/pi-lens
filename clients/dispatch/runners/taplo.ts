@@ -12,6 +12,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	lspPrimaryCoversFile,
@@ -203,7 +204,10 @@ const taploRunner: RunnerDefinition = {
 			return { status: "succeeded", diagnostics: [], semantic: "none" };
 		}
 
-		return { status: "failed", diagnostics, semantic: "blocking" };
+		return findingsResult(diagnostics, {
+			status: "failed",
+			semantic: "blocking",
+		});
 	},
 };
 

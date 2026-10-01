@@ -1,0 +1,50 @@
+name: CodeQL
+
+# Advanced setup (#3801). PR-time analysis is the advisory `codeql` job in
+# ci.yml (it waits on the required jobs, and `needs:` cannot cross workflows).
+# This file keeps the default-branch baseline and the weekly re-scan.
+on:
+  push:
+    branches: [master]
+    paths-ignore: ["**/*.md", ".changelog/**", "docs/**"]
+  schedule:
+    - cron: "17 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    # The `(advisory)` suffix is what scripts/lib/ci-checks.mjs reads; the
+    # `baseline` word keeps this name distinct from ci.yml's PR-time job.
+    name: CodeQL baseline (${{ matrix.language }}) (advisory)
+    runs-on: ubuntu-latest
+    # refs #3123: bounds a hang against GitHub's 360-min default.
+    # Measured max over the last 6 default-setup runs (javascript-typescript,
+    # the slowest language): 479s; timeout = ~2.5x.
+    timeout-minutes: 20
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config: |
+            paths-ignore:
+              - cases
+              - tests/fixtures
+              - dist
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: "/language:${{ matrix.language }}"

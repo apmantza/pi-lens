@@ -25,6 +25,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_SHARED_SLOTS,
+	MAX_SHARED_SLOTS,
 	acquireSharedSlot,
 	acquireTestLock,
 	getSlotPath,
@@ -190,6 +191,55 @@ describe("shared vs exclusive", () => {
 		await exclusivePromise;
 		expect(events).toEqual(["shared-released", "exclusive-acquired"]);
 		await exclusiveHandle!.release();
+	});
+
+	// #3839 review F1 recurrence: the exclusive drain scanned only the slots ITS
+	// env resolved (default 2), so a shared run started with `--shared=3` (or
+	// PI_LENS_TEST_SHARED_SLOTS=3) in slot 2 was never inspected and a full suite
+	// ran beside it. The drain must cover every slot an acquirer can take.
+	it("an exclusive acquisition waits for a shared holder in a slot above its own slot count", async () => {
+		const held = [
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+		];
+		expect(held.map((slot) => slot.slotIndex)).toEqual([0, 1, 2]);
+		await held[0].release();
+		await held[1].release();
+		try {
+			await expect(
+				acquireTestLock({ lockPath, slots: 2, ...FAST, timeoutMs: 100 }),
+			).rejects.toThrow(
+				/timed out after 100ms waiting for test-suite lock: 1 of \d+ shared slot\(s\) still busy/,
+			);
+		} finally {
+			await held[2].release();
+		}
+	});
+
+	it("the exclusive drain covers the last slot an acquirer can take", async () => {
+		// resolveSharedSlots clamps to MAX_SHARED_SLOTS, so index MAX - 1 is the
+		// highest slot file that can exist; an off-by-one in the scan bound
+		// would miss exactly it.
+		writeLock(getSlotPath(lockPath, MAX_SHARED_SLOTS - 1), process.pid);
+		await expect(
+			acquireTestLock({ lockPath, slots: 2, ...FAST, timeoutMs: 100 }),
+		).rejects.toThrow(/1 of \d+ shared slot\(s\) still busy/);
+	});
+
+	it("reports a denominator that covers every busy slot when more are held than its own count", async () => {
+		const held = [
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+			await acquireSharedSlot({ lockPath, slots: 3, ...FAST }),
+		];
+		try {
+			await expect(
+				acquireTestLock({ lockPath, slots: 2, ...FAST, timeoutMs: 100 }),
+			).rejects.toThrow(/3 of 3 shared slot\(s\) still busy/);
+		} finally {
+			for (const slot of held) await slot.release();
+		}
 	});
 
 	it("an exclusive acquisition drains a slot whose PID is dead without waiting", async () => {

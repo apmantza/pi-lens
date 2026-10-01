@@ -111,14 +111,11 @@ describe("#3753 sharded Unit tests workflow contract", () => {
 		expect(owner.env?.PI_LENS_TMP_HYGIENE_RUN_ID).toBe(undefined);
 	});
 
-	// Recurrence: install-test and the post-merge recorder were written
-	// against the single `test` job; they must still wait for EVERY shard.
+	// Recurrence: install-test was written against the single `test` job; it
+	// must still wait for EVERY shard.
 	it("keeps the downstream jobs waiting on the shard job", () => {
 		const jobs = CI();
 		expect(asList(jobs["install-test"].needs)).toContain("test");
-		expect(asList(jobs["record-post-merge-validation"].needs)).toContain(
-			"test",
-		);
 	});
 
 	// Recurrence: the shard artifact names are the nightly rollup's input

@@ -297,6 +297,48 @@ function startTurnEndStub(
 	);
 }
 
+function startWarmAnalyzeStub(
+	cwd: string,
+	response: Record<string, unknown>,
+): Promise<TurnEndStub> {
+	const endpoint = ipcPathForCwd(cwd);
+	if (process.platform !== "win32") {
+		try {
+			fs.unlinkSync(endpoint);
+		} catch {
+			/* none */
+		}
+	}
+	const sockets: net.Socket[] = [];
+	const requests: unknown[] = [];
+	const server = net.createServer((socket) => {
+		sockets.push(socket);
+		socket.setEncoding("utf8");
+		let replied = false;
+		socket.on("data", (chunk: string) => {
+			if (replied) return;
+			replied = true;
+			requests.push(JSON.parse(chunk.trim()));
+			socket.end(`${JSON.stringify({ result: response })}\n`);
+		});
+	});
+	return new Promise((resolve) =>
+		server.listen(endpoint, () =>
+			resolve({
+				sockets,
+				requests,
+				close: () =>
+					new Promise<void>((done) => {
+						(
+							server as net.Server & { closeAllConnections?: () => void }
+						).closeAllConnections?.();
+						server.close(() => done());
+					}),
+			}),
+		),
+	);
+}
+
 // Built from the producer's real constant so a wording change in
 // runtime-context.ts cannot silently diverge from what the bin strips.
 const FRAMED_ADVISORY = `${AUTOMATION_FRAMING}Address 🔴 blockers before continuing; ℹ️ advisories are informational only.
@@ -599,4 +641,50 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 		expect(stdout).toContain("🔎 pi-lens turn-end");
 		expect(stub.requests).toHaveLength(1);
 	}, 20_000);
+});
+
+describe("pi-lens-analyze warm hook route", { retry: 2 }, () => {
+	it("repeats the warm coverage notice on every PostToolUse hook (#3791 F1)", async () => {
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-cli-warm-hook-"),
+		);
+		const file = path.join(cwd, "main.go");
+		fs.writeFileSync(file, "package main\n");
+		const stub = await startWarmAnalyzeStub(cwd, {
+			filePath: file,
+			cwd,
+			counts: {
+				diagnostics: 1,
+				blockers: 0,
+				warnings: 1,
+				advisories: 0,
+				fixed: 0,
+			},
+			diagnostics: [
+				{
+					line: 1,
+					semantic: "warning",
+					tool: "coverage",
+					message: "coverage: go scanner silent",
+				},
+			],
+		});
+		try {
+			const first = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
+			const second = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
+			for (const run of [first, second]) {
+				expect(run.code).toBe(0);
+				const parsed = JSON.parse(run.stdout) as {
+					hookSpecificOutput?: { additionalContext?: string };
+				};
+				expect(parsed.hookSpecificOutput?.additionalContext).toContain(
+					"coverage: go scanner silent",
+				);
+			}
+			expect(stub.requests).toHaveLength(2);
+		} finally {
+			await stub.close();
+			removeTempDirSync(cwd);
+		}
+	}, 45_000);
 });

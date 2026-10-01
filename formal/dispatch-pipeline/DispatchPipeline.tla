@@ -2,7 +2,8 @@
 (***************************************************************************)
 (* One file F on the post-write dispatch path: the agent's edits, the      *)
 (* tool_result handler and pipeline run each edit starts, the per-file     *)
-(* stores those runs write, and pi-lens' own in-place autofix writer.      *)
+(* stores those runs write, and pi-lens' own writers of F: the in-place    *)
+(* autofix and the LSP workspace edit.                                     *)
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - the agent: edits 1..Edits of F, in order. Each edit is a read-modify *)
@@ -12,34 +13,46 @@
 (*    handler is still running (agent-loop.js executeToolCallsParallel);   *)
 (*    otherwise pi awaits the handler (afterToolCall) before the next      *)
 (*    tool, unless the handler was abandoned by its 10 s bound (Orphan:    *)
-(*    index.ts ~2733 `bounded(handleToolResult(...))`, deadline-utils.ts   *)
+(*    index.ts ~2723 `bounded(handleToolResult(...))`, deadline-utils.ts   *)
 (*    `bounded`: "The promise is not cancelled").                          *)
 (*  - handler/pipeline i (runtime-tool-result.ts handleToolResult,         *)
 (*    dispatchPipelineAnalysis; pipeline.ts runPipeline):                  *)
-(*      Hash:    postWriteStateHash = sha(disk) (~2072), claim             *)
-(*               (claimPipelineDispatch ~436: in-flight dedupe on          *)
+(*      Hash:    postWriteStateHash = sha(disk) (~2365), claim             *)
+(*               (claimPipelineDispatch ~449: in-flight dedupe on          *)
 (*               (file, hash), then the already-analysed latch),           *)
-(*               writeIndex = nextWriteIndex() (~2185);                    *)
-(*      Gap:     (ClaimGap) `await bounded(classifiedClients)` (~2324),    *)
+(*               writeIndex = nextWriteIndex() (~2529);                    *)
+(*      Gap:     (ClaimGap) `await bounded(classifiedClients)` (~2462),    *)
 (*               reached only when bootstrap clients are not resident;     *)
-(*      Start:   registerInFlightPipeline (~918), runPipeline's            *)
-(*               admitWidgetDiagnosticsWrite (pipeline.ts ~1435) and       *)
-(*               readFileSync (~1449) -- all synchronous with the claim    *)
+(*      Start:   registerInFlightPipeline (~950), runPipeline's            *)
+(*               admitWidgetDiagnosticsWrite (pipeline.ts ~1688) and       *)
+(*               readFileSync (~1711) -- all synchronous with the claim    *)
 (*               unless ClaimGap;                                          *)
 (*      FixRead/FixWrite: the in-place fixer (biome `lint --write`,        *)
-(*               eslint --fix, ...; pipeline.ts runAutofix ~726) reads     *)
+(*               eslint --fix, ...; pipeline.ts runAutofix ~867) reads     *)
 (*               the file, then writes its fix of what it read;            *)
-(*      Refresh: before/after compare (biome-client.ts ~409), content      *)
-(*               refresh and postWriteStateHash (pipeline.ts ~1560-1600);  *)
+(*      Refresh: before/after compare (biome-client.ts ~410), content      *)
+(*               refresh and postWriteStateHash (pipeline.ts ~1843-1880);  *)
 (*      Analyse: dispatchLintWithResult returns; recordDiagnostics into    *)
 (*               the widget store under its WriteOrderingGuard             *)
-(*               (widget-state.ts ~315, ~858);                             *)
-(*      Release: releaseInFlightPipeline (~995, deletes by hash key) and   *)
-(*               the already-analysed latch (~1054);                       *)
+(*               (widget-state.ts ~317, ~868);                             *)
+(*      Release: releaseInFlightPipeline (~1027, by hash key) and          *)
+(*               the already-analysed latch (~1087);                       *)
 (*      Record:  handler records/clears the turn-end inline-blocker        *)
-(*               record (~2540 recordInlineBlockers / ~2553                *)
-(*               clearInlineBlockers; runtime-coordinator.ts ~1097), which *)
-(*               the git-guard latch aggregates (~530).                    *)
+(*               record (~2888 recordInlineBlockers / ~2909                *)
+(*               clearInlineBlockers; runtime-coordinator.ts ~1354), which *)
+(*               the git-guard latch aggregates (~653).                    *)
+(*  - the LSP workspace edit (lsp/edits.ts applyWorkspaceEdit ~1430,       *)
+(*    #3541, #3610):                                                       *)
+(*      LspRead/LspWrite: withHostFileMutationQueues (~1475) takes pi's    *)
+(*               queue for every path the edit writes; the preflight read  *)
+(*               and the write of each text operation run inside it.       *)
+(*               Callers: lsp/index.ts ~8381 ~8520, lsp/client.ts ~2947,   *)
+(*               tools/lsp-navigation.ts ~1613, actionable-warnings.ts     *)
+(*               ~2159.                                                    *)
+(*    An LSP edit starts no pipeline handler here, so the widget and       *)
+(*    inline-blocker invariants (WidgetNewest, WidgetExact, InlineNewest,  *)
+(*    InlineExact) are not claimed for LspEdits > 0: those configs check   *)
+(*    NoLostEdit, NoForeignAttribution and NoDoubleDispatch only.          *)
 (*                                                                         *)
 (* Content is the set of agent edits it contains plus a "fixed" bit, so a  *)
 (* fixer write of stale bytes shows as a missing edit. Blocker verdicts    *)
@@ -63,7 +76,9 @@ CONSTANTS
     FixQueueRefresh,\* candidate fix, part 2: the queue is held through the after-read, refresh and postWriteStateHash
     FixReToken,     \* candidate fix, part 3: a post-autofix content refresh takes a fresh writeIndex (token = when the analysed bytes were read)
     WriterBound,    \* TRUE: the pipeline's own bound on the writer (FormatService's per-file budget) can give up on it while its child runs on
-    FixHoldWriter   \* review-round-1 fix: the hold is released only once an abandoned writer has settled
+    FixHoldWriter,  \* review-round-1 fix: the hold is released only once an abandoned writer has settled
+    LspEdits,       \* number of LSP workspace edits (applyWorkspaceEdit) of F; 0 leaves the writer out
+    LspQueue        \* TRUE: applyWorkspaceEdit reads and writes F inside pi's per-file mutation queue (#3541)
 
 Pipes == 1..Edits
 NoC == [e |-> {0}, f |-> FALSE]          \* "no hash yet"
@@ -78,11 +93,12 @@ VARIABLES
     nextWi, regMap, latch,
     widget, wSeen,
     inl, itok,
-    orphanW
+    orphanW,
+    lpc, lbuf, lN
 
 vars == <<disk, applied, blk, agentI, agentPc, abuf, qlock, hpc, hsh, wi, ct,
           fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
-          inl, itok, orphanW>>
+          inl, itok, orphanW, lpc, lbuf, lN>>
 
 Blocker(c) == MaxE(c.e) \in blk
 
@@ -98,6 +114,7 @@ Init ==
     /\ widget = Init0 /\ wSeen = 0
     /\ inl = [has |-> FALSE, c |-> Init0, tok |-> 0] /\ itok = 0
     /\ orphanW = [i \in Pipes |-> FALSE]
+    /\ lpc = "idle" /\ lbuf = Init0 /\ lN = 0
 
 HandlerReturned(i) == hpc[i] = "done" \/ aband[i]
 
@@ -110,7 +127,7 @@ AgentRead ==
     /\ abuf' = disk /\ qlock' = "agent" /\ agentPc' = "write"
     /\ UNCHANGED <<disk, applied, blk, agentI, hpc, hsh, wi, ct, fbuf, fixedBy, fh,
                    aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 AgentWrite ==
     /\ agentPc = "write"
@@ -122,7 +139,7 @@ AgentWrite ==
     /\ agentPc' = IF agentI = Edits THEN "done" ELSE "read"
     /\ UNCHANGED <<blk, abuf, hsh, wi, ct, fbuf, fixedBy, fh, aband, jt, nextWi,
                    regMap, latch, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 ----------------------------------------------------------------------------
 \* registerInFlightPipeline: filePipelines.set(stateHash, pipeline) -- a
@@ -156,7 +173,7 @@ Hash(i) ==
                          /\ hpc' = [hpc EXCEPT ![i] = AfterStart(i)]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, fbuf, fixedBy,
                    fh, aband, latch, widget, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* After the clients await: register, admit, read.
 Start(i) ==
@@ -167,7 +184,7 @@ Start(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = AfterStart(i)]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, fbuf,
                    fixedBy, fh, aband, jt, nextWi, latch, widget, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* The in-place fixer reads F (inside the queue under FixQueue).
 FixRead(i) ==
@@ -178,7 +195,7 @@ FixRead(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "fixwrite"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fixedBy,
                    fh, aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* ... and writes its fix of what it read.
 FixWrite(i) ==
@@ -188,7 +205,7 @@ FixWrite(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "refresh"]
     /\ UNCHANGED <<applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fbuf, fixedBy,
                    fh, aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* After-read compare, content refresh and postWriteStateHash.
 Refresh(i) ==
@@ -207,7 +224,7 @@ Refresh(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "analyse"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, fbuf,
                    aband, jt, regMap, latch, widget, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* dispatchLintWithResult returns; recordDiagnostics (widget store).
 Analyse(i) ==
@@ -219,7 +236,7 @@ Analyse(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "release"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* releaseInFlightPipeline (by hash key) and the already-analysed latch.
 Release(i) ==
@@ -229,7 +246,7 @@ Release(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "record"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* The handler records (blocker) or clears (clean) the inline-blocker record.
 \* An abandoned handler returned already and records nothing.
@@ -246,7 +263,7 @@ Record(i) ==
     /\ hpc' = [hpc EXCEPT ![i] = "done"]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* A joined duplicate awaits the pipeline it joined, then returns.
 JoinDone(i) ==
@@ -256,7 +273,7 @@ JoinDone(i) ==
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hsh, wi, ct,
                    fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
                    inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* The handler's 10 s bound fires; the pipeline keeps running.
 Abandon(i) ==
@@ -265,7 +282,7 @@ Abandon(i) ==
     /\ aband' = [aband EXCEPT ![i] = TRUE]
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, qlock, hpc, hsh, wi, ct,
                    fbuf, fixedBy, fh, jt, nextWi, regMap, latch, widget, wSeen, inl, itok>>
-    /\ UNCHANGED orphanW
+    /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* The writer's own bound gives up on it (format-service.ts
 \* runFormattersWithConcurrency: `bounded`, per-file budget 10 s) while its
@@ -279,7 +296,7 @@ WriterAbandon(i) ==
     /\ qlock' = IF FixQueue /\ ~FixQueueRefresh THEN "none" ELSE qlock
     /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hsh, wi, ct, fbuf,
                    fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
-                   inl, itok>>
+                   inl, itok, lpc, lbuf, lN>>
 
 \* The abandoned child writes its fix of what it read. Under FixHoldWriter
 \* the hold its pipeline already released waits for this settle
@@ -292,10 +309,39 @@ OrphanWrite(i) ==
                  THEN "none" ELSE qlock
     /\ UNCHANGED <<applied, blk, agentI, agentPc, abuf, hpc, hsh, wi, ct, fbuf,
                    fixedBy, fh, aband, jt, nextWi, regMap, latch, widget, wSeen,
-                   inl, itok>>
+                   inl, itok, lpc, lbuf, lN>>
+
+\* The LSP workspace-edit writer (#3541, #3610; lsp/edits.ts applyWorkspaceEdit):
+\* after the server answers, `withHostFileMutationQueues` takes pi's queue for
+\* every path the edit writes, and the preflight read and the write of each
+\* text operation both run inside it. LspEdit k applies its edit on top of the
+\* bytes it read and adds the id Edits + k to the content, so NoLostEdit
+\* covers it like an agent edit. Without LspQueue (a host with no queue, or
+\* the code before #3541) the read-write pair has a gap an agent edit, or the
+\* fixer, can land in.
+LspRead ==
+    /\ lpc = "idle" /\ lN < LspEdits
+    /\ LspQueue => qlock = "none"
+    /\ lbuf' = disk
+    /\ qlock' = IF LspQueue THEN "lsp" ELSE qlock
+    /\ lpc' = "write"
+    /\ lN' = lN + 1
+    /\ UNCHANGED <<disk, applied, blk, agentI, agentPc, abuf, hpc, hsh, wi, ct,
+                   fbuf, fixedBy, fh, aband, jt, nextWi, regMap, latch, widget,
+                   wSeen, inl, itok, orphanW>>
+
+LspWrite ==
+    /\ lpc = "write"
+    /\ disk' = [e |-> lbuf.e \cup {Edits + lN}, f |-> lbuf.f]
+    /\ applied' = applied \cup {Edits + lN}
+    /\ qlock' = IF LspQueue THEN "none" ELSE qlock
+    /\ lpc' = "idle"
+    /\ UNCHANGED <<blk, agentI, agentPc, abuf, hpc, hsh, wi, ct, fbuf, fixedBy,
+                   fh, aband, jt, nextWi, regMap, latch, widget, wSeen, inl, itok,
+                   orphanW, lbuf, lN>>
 
 Next ==
-    \/ AgentRead \/ AgentWrite
+    \/ AgentRead \/ AgentWrite \/ LspRead \/ LspWrite
     \/ \E i \in Pipes :
          Hash(i) \/ Start(i) \/ FixRead(i) \/ FixWrite(i) \/ Refresh(i)
          \/ Analyse(i) \/ Release(i) \/ Record(i) \/ JoinDone(i) \/ Abandon(i)
@@ -304,19 +350,22 @@ Next ==
 Spec == Init /\ [][Next]_vars
 
 ----------------------------------------------------------------------------
-Quiescent == agentPc = "done" /\ \A i \in Pipes : hpc[i] = "done" /\ ~orphanW[i]
+Quiescent == /\ agentPc = "done"
+             /\ \A i \in Pipes : hpc[i] = "done" /\ ~orphanW[i]
+             /\ lpc = "idle" /\ lN = LspEdits
 
-\* An autofix never overwrites an agent edit (pi-coding-agent docs/extensions.md
-\* ~1925: a file-mutating extension must use withFileMutationQueue).
+\* No pi-lens writer -- the autofix, or an LSP workspace edit -- overwrites an
+\* agent edit or another writer's edit (pi-coding-agent docs/extensions.md
+\* ~135: a file-mutating tool must wrap its read-modify-write in withFileMutationQueue).
 NoLostEdit == \A i \in applied : i \in disk.e
 
 \* What the pipeline reports as its own autofix write (fileModified, the
 \* "pi-lens applied autofix ... authoritative" attachment, the change-log
 \* `autofix` receipt, postWriteStateHash -> the already-analysed latch) holds no
-\* agent edit the fixer did not read (pipeline.ts ~1576-1600).
+\* agent edit the fixer did not read (pipeline.ts ~1861-1880).
 NoForeignAttribution == \A i \in Pipes : fixedBy[i] => fh[i].e = fbuf[i].e
 
-\* The widget store ends on the newest revision (widget-state.ts ~305-315).
+\* The widget store ends on the newest revision (widget-state.ts ~309-317).
 WidgetNewest == Quiescent => widget.e = disk.e
 
 \* Stronger: the widget ends on exactly the bytes on disk, including pi-lens'
@@ -325,7 +374,7 @@ WidgetExact == Quiescent => widget = disk
 
 \* The turn-end inline-blocker record (and the git-guard latch built from it)
 \* ends on the newest revision: "a slow old clean ... must not erase" a newer
-\* blocker (runtime-coordinator.ts ~158-163, ~1353-1356, #1198 invariants 1-2).
+\* blocker (runtime-coordinator.ts ~198-203, ~1636-1641, #1198 invariants 1-2).
 InlineNewest ==
     Quiescent => /\ inl.has = Blocker(disk)
                  /\ inl.has => inl.c.e = disk.e
@@ -336,7 +385,7 @@ InlineExact ==
                  /\ inl.has => inl.c = disk
 
 \* No two pipelines analyse one (file, state) concurrently
-\* (runtime-tool-result.ts ~402-431: the claim is atomic with registration).
+\* (runtime-tool-result.ts ~420-448: the claim is atomic with registration).
 Running(i) == hpc[i] \in {"gap", "fixread", "fixwrite", "refresh", "analyse", "release"}
 NoDoubleDispatch ==
     \A i, j \in Pipes : (i # j /\ Running(i) /\ Running(j)) => hsh[i] # hsh[j]

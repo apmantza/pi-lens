@@ -896,7 +896,9 @@ describe("#2464 — the observed-settle path also dispatches pipeline analysis",
 			).toEqual(["agent-tool:patch_retry", "agent-tool:patch_retry"]);
 			// 1. The staleness stamp is re-taken over the file the pipeline itself
 			//    rewrote, so the agent's next edit is judged by read coverage.
-			expect(recordWritten).toHaveBeenCalledWith(path.resolve(filePath));
+			expect(recordWritten).toHaveBeenCalledWith(path.resolve(filePath), {
+				stampFileTime: true,
+			});
 			// 2. The #2402 record is re-stamped with the POST-pipeline hash, so an
 			//    identical retry against the formatted bytes is still recognized as
 			//    already applied instead of escalating the oldText ladder.

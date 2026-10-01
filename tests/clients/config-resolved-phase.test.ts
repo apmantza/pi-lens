@@ -35,15 +35,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	afterAll,
-	afterEach,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { resetIgnoredConfigWarnCache } from "../../clients/config-warn.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -60,19 +52,11 @@ import {
 import { normalizeFilePath } from "../../clients/path-utils.js";
 import { removeTempDirSync } from "./test-utils.js";
 
-// Every vitest worker shares one PI_LENS_HOME (tests/support/vitest-setup.ts).
-// This file truncates and reads the shared latency.log and reads
-// sessionstart.log by byte offset; a concurrent real session_start writer
-// appends its own `config_resolved` rows and `config resolved` lines, so a
-// neighbouring file made this one red in 3 of 5 overlapping runs (#3682). The
-// loggers fix their paths when they load, so pin a private home before any
-// import and remove it after the file.
-const phaseHome = vi.hoisted(() => {
-	const previous = process.env.PI_LENS_HOME;
-	const home = `${previous ?? "."}/pi-lens-3682-config-phase-home-${process.pid}`;
-	process.env.PI_LENS_HOME = home;
-	return { home, previous };
-});
+// This file truncates and reads latency.log and reads sessionstart.log by byte
+// offset; a concurrent real session_start writer appends its own rows, which
+// made a neighbouring file red under the pre-#3721 shared home. The harness's
+// per-worker PI_LENS_HOME keeps those writers off this file's sink; the loggers
+// bind their paths at load, so the home is the harness's.
 
 interface ConfigResolvedMetadata {
 	sessionId: string;
@@ -204,14 +188,6 @@ afterEach(async () => {
 		await import("../../clients/lsp/config.js");
 	resetLSPConfigStateForTests();
 	for (const dir of roots.splice(0)) removeTempDirSync(dir);
-});
-
-afterAll(async () => {
-	await flushLatencyLog();
-	await flushSessionStartLog();
-	removeTempDirSync(phaseHome.home);
-	if (phaseHome.previous === undefined) delete process.env.PI_LENS_HOME;
-	else process.env.PI_LENS_HOME = phaseHome.previous;
 });
 
 /** A workspace whose only config document is the canonical `.pi-lens.json`. */

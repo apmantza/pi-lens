@@ -326,6 +326,11 @@ const lspSpawnHeavyInclude = [
 	// initialize handshake plus a two-publish diagnostics sequence per case —
 	// the same #1022/#2332 contention class as its lane siblings.
 	"tests/tools/lsp-diagnostics-empty-first-publish-3310.test.ts",
+	// #3750: launches the fake server THROUGH the production `RustServer`,
+	// `OCamlServer` and `GoServer` entries (PATH shims) and waits on a real
+	// initialize handshake plus a pull round trip per case -- the same
+	// #1022/#2332 contention class as its lane siblings.
+	"tests/tools/lsp-diagnostics-root-fallback-3750.test.ts",
 ];
 
 // Real pi RPC sessions execute the built extension and a real host tool. Keep
@@ -410,8 +415,12 @@ export const wallClockBudgetInclude = [
 	// synchronous matcher cost and belongs in the quiet serialized phase.
 	"tests/clients/read-guard-glob-nonbacktracking.test.ts",
 	"tests/clients/runtime-session-scan-cache.test.ts",
+	// #3872: real `git worktree add` children are the fixture (flake-shape admission).
+	"tests/clients/runtime-turn-knip-checkout-root.test.ts",
 	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).
 	"tests/clients/runtime-turn-test-runner-bounds.test.ts",
+	// #3871: real `git worktree add` / `git submodule add` children are the fixture (flake-shape admission).
+	"tests/clients/runtime-turn-test-worktree-root.test.ts",
 	"tests/clients/safe-spawn-ambient-signal.test.ts",
 	"tests/clients/safe-spawn-failure-taxonomy.test.ts",
 	"tests/clients/safe-spawn-input.test.ts",
@@ -443,12 +452,18 @@ export const wallClockBudgetInclude = [
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
+	// #3870: every detector test drives the analyzer's real CLI entry point
+	// (a real node subprocess) over redacted fixture logs (flake-shape admission).
+	"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
 	// #3684: the wrapper's advisory scope is a real `git diff` against a real
 	// fixture repo, spawned through the real CLI (flake-shape admission).
 	"tests/scripts/astgrep-self-scan.test.ts",
 	// #2807 review F1/F4: the checker must be exercised through its real local
 	// CLI and a real shallow clone, not an in-process substitute.
 	"tests/scripts/check-pr-body.test.ts",
+	// #3883 F3: the final `ci-verdict: exit` line is emitted by the real
+	// `main()` process; the spawn is the only faithful proof of that boundary.
+	"tests/scripts/ci-verdict.test.ts",
 	// #2668 review F2: two real `node --import <fetch-stub>` child-process
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
@@ -512,6 +527,10 @@ export const wallClockBudgetInclude = [
 	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
 	// write are the subject under test; no in-process double is faithful.
 	"tests/scripts/resolve-newest-in-range-host.test.ts",
+	// #3401: the seed script's default git path (depth-2 fetch, refspec, blob
+	// specs) against real throwaway repos and a depth-1 clone (flake-shape
+	// admission).
+	"tests/scripts/seed-matrix-from-bot-branch-real-git.test.ts",
 	// #3674: real git worktrees and the real hook script (flake-shape admission).
 	"tests/scripts/setup-git-hooks.test.ts",
 	// #2369: the fixture-ordering defect lives in the CLI's own module-load

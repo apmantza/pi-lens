@@ -18,6 +18,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 
 const goVetRunner: RunnerDefinition = {
@@ -113,7 +114,7 @@ const goVetRunner: RunnerDefinition = {
 		// Edited file clean → succeeded: a sibling-file error no longer flags
 		// the edited file's turn (it surfaces when that file is itself edited).
 		return diagnostics.length > 0
-			? { status: "failed", diagnostics, semantic: "warning" }
+			? findingsResult(diagnostics, { status: "failed", semantic: "warning" })
 			: { status: "succeeded", diagnostics: [], semantic: "none" };
 	},
 };

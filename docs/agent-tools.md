@@ -39,6 +39,46 @@ actually sent: `usage tokens=<n> elapsed-ms=<n> bytes=<n> truncated=<true|false>
 A rejected call (e.g. MCP's "Unknown or disabled tool") is rendered through the
 same gate rather than bypassing it.
 
+**MCP argument handling (#3749).** The MCP `tools/call` dispatcher compares the
+call's argument keys with the `inputSchema` the tool advertises in `tools/list`
+(`findIgnoredArguments`, `mcp/tool-arguments.ts`), once, for every tool. An
+undeclared top-level key is never silently dropped (keys inside a nested
+object argument such as `callHierarchyItem`, `rule` or `flags` are not checked):
+
+- the result's first line is ``Ignored unknown argument(s) for <tool>: `key`
+  (did you mean `nearest`?). They had no effect on this call.`` (the suggestion
+  appears only when a declared key is near), followed by the tool's own result;
+- the result carries `structuredContent: { ignoredArguments: [...],
+  ignoredArgumentCount: N }` (at most 8 keys, each cut at 64 characters; the
+  count is exact);
+- when an ignored key leaves the call without something it needed, the tool
+  does not run and the result is an error whose first line is the same
+  sentence, followed by `Not run: ...`. That is the case when a
+  schema-`required` input is missing (``Not run: required argument(s) `file`
+  missing.``), or when the ignored key is a declared parameter the call did not
+  send, written another way: a case or punctuation variant, a plural, or a key
+  whose last word is the parameter (`filePath`, `file_path` and `Path` for the
+  optional `path` of `pilens_diagnostics`: ``Not run: `filePath` looks like a
+  mistyped `path`, which was not sent.``). The exact predicate is named in
+  [public-api-stability.md](public-api-stability.md). Anything looser (a typo,
+  an abbreviation, `files` for `maxLspFiles`) stays a warning with the hint;
+- each such call adds one count to the `mcp-ignored-arguments` degradation
+  group (subject: the tool name), visible in `pilens_health`.
+
+Unknown keys are still not rejected outright: a caller that passes an extra key
+that is not a declared parameter written another way (or that comes with the
+parameter it resembles) keeps getting its answer, with the report above. Hard rejection is a change to the
+public MCP input contract and is owned by the stability policy
+([public-api-stability.md](public-api-stability.md)). A schema declares only
+what the tool reads, so `cwd` on a tool whose handler never reads it
+(`pilens_health`, `pilens_latency`, `pilens_session_end`, `pilens_rebuild`;
+the dispatcher uses it only to decide whether the tool is enabled) is reported
+as an ignored key, a warning, because nothing it resembles is missing. The
+retired `pilens_lsp_diagnostics` name is checked against `pilens_diagnostics`'s
+schema; the retired `pilens_ast_grep_dump` name has no schema and is not
+checked. A non-object `arguments` is a JSON-RPC `-32602` error; absent, `null`
+and `[]` mean no arguments.
+
 ## Per-edit
 
 - **`lens_diagnostics`** — Session-cache or LSP-probe diagnostic state, selected

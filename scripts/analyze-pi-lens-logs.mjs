@@ -79,6 +79,7 @@ async function main() {
 		analyzeActionableWarnings(files.actionableWarnings, state),
 		analyzeAstGrepTools(files.astGrepTools, state),
 		analyzeWorklog(files.worklog, state),
+		analyzeExtension(files.extension, state),
 	]);
 
 	const report = buildReport(state);
@@ -165,16 +166,32 @@ function discoverLogFiles(logRoot, archived) {
 		});
 
 	return {
-		latency: byPrefix("latency"),
-		sessionStart: byPrefix("sessionstart"),
-		cascade: byPrefix("cascade"),
-		readGuard: byPrefix("read-guard"),
-		treeSitter: byPrefix("tree-sitter"),
-		actionableWarnings: byPrefix("actionable-warnings"),
-		astGrepTools: byPrefix("ast-grep-tools"),
+		latency: chronologicalFiles(byPrefix("latency")),
+		sessionStart: chronologicalFiles(byPrefix("sessionstart")),
+		cascade: chronologicalFiles(byPrefix("cascade")),
+		readGuard: chronologicalFiles(byPrefix("read-guard")),
+		treeSitter: chronologicalFiles(byPrefix("tree-sitter")),
+		actionableWarnings: chronologicalFiles(byPrefix("actionable-warnings")),
+		astGrepTools: chronologicalFiles(byPrefix("ast-grep-tools")),
+		extension: chronologicalFiles(byPrefix("extension")),
 		diagnostics: dailyLogs,
 		worklog: worklogs,
 	};
+}
+
+/**
+ * Rotated siblings (`x.log.1`) carry older rows than the active `x.log`. The
+ * run-splitting detectors (D3/D4/D5) and the read-guard evidence walk (D10)
+ * only read correctly in chronological order, so order every multi-file stream
+ * oldest-first with the active file last.
+ */
+function chronologicalFiles(files) {
+	return [...files].sort((a, b) => {
+		const activeA = path.basename(a).endsWith(".log");
+		const activeB = path.basename(b).endsWith(".log");
+		if (activeA !== activeB) return activeA ? 1 : -1;
+		return a.localeCompare(b);
+	});
 }
 
 function safeReaddir(dir) {
@@ -205,6 +222,45 @@ function createState(files) {
 			toolResults: counter(),
 			phaseCounts: counter(),
 			phaseTimeouts: counter(),
+			// D1: every latency row timestamp (ms) in window, for the coverage-gap
+			// scan. Sorted after all files are read.
+			rowTs: [],
+			cascadeTs: [],
+			// D2: real-log pollution — rows whose filePath points at a test
+			// home, grouped by pid.
+			scratchRows: new Map(),
+			// D5: test_runner_delivery outcomes per session, joined with the
+			// sessionstart firing/stale text into one delivery-health verdict.
+			testRunnerDelivery: new Map(),
+			// D6: `phase: knip` executed rows per pid, for the drift and cost rules.
+			knip: new Map(),
+			// D7: hook-await-exceeded overruns plus the per-pid degradation census.
+			hookAwaitExceeded: [],
+			degradationKinds: new Map(),
+			// D8: turn_end `tool_result` summaries per pid, and the retained-state text.
+			turnEndTools: new Map(),
+			retainingNewerTurn: [],
+			// D9: empty-candidate LSP waits, edit touches that saw no client, and
+			// warm-reuse selections, joined into the wait/contradiction verdict.
+			lspWaitEmpty: new Map(),
+			lspTouchEdit: new Map(),
+			lspTouchNoClients: [],
+			lspClientSelectedWarm: [],
+			// D11: read-set carry outcomes at a restart boundary.
+			carryRestart: [],
+			// D12: nudges and scope transitions, joined by pid + wall clock.
+			agentNudges: [],
+			sessionScopeTransitions: [],
+			// D13: deferred runner failures joined to their delivery row by (pid, turnId).
+			deferredRunnerFailed: [],
+			lateRunnerFindings: [],
+			// D14: auxiliary stuck pair (pid, filePath, serverId) recurrence.
+			auxStuck: new Map(),
+			// D15: advisory provenance decisions with unknown provenance.
+			advisoryProvenance: [],
+			// D8/D15: first latency row timestamp per pid (lifetime base).
+			pidFirstTs: new Map(),
+			pidLastTs: new Map(),
 			workspace: {
 				started: 0,
 				completed: 0,
@@ -280,6 +336,24 @@ function createState(files) {
 			staleRanges: [],
 			zeroReads: [],
 			unavailableSnapshots: [],
+			// E2: the block/warn split. These rows do not carry a host-side
+			// decision, so the analyzer must not invent one.
+			blocks: [],
+			warns: [],
+			blockByKind: counter(),
+			bypassedMismatch: 0,
+			// D10: per-(session,file) evidence that a read or a committed edit
+			// happened earlier in the session, so a later `zero_read` block is a
+			// lost read-set rather than a genuine cold edit.
+			fileEvidence: new Map(),
+			stateLost: [],
+			genuineZeroRead: [],
+		},
+		extension: {
+			// D2: extension.log rows whose payload names a test home
+			// directory, grouped by pid, plus the warn/error census.
+			scratchRows: new Map(),
+			warnErrorGroups: counter(),
 		},
 		treeSitter: {
 			phases: counter(),
@@ -292,12 +366,26 @@ function createState(files) {
 		session: {
 			starts: 0,
 			cwds: counter(),
+			// E4: per-start build identity (`commit=`), so every rate can be split
+			// by build. Keyed by commit, with the start timestamps that carried it.
+			commits: counter(),
 			slowStarts: [],
 			slowTasks: [],
 			toolNoise: counter(),
 			lspNoise: counter(),
 			errors: [],
-			rotations: counter(),
+			// D1: every sessionstart line timestamp (ms) in window.
+			rowTs: [],
+			// D16: `pi-lens loaded: Nms` lines, with their wall clock so a short
+			// lived pid can be marked.
+			slowLoads: [],
+			// D16: the wall clock of every `session_start fired`, so a load with no
+			// session start within 60 s (a short-lived pid) is visible.
+			firedTs: [],
+			// D3/D4/D5/D8: one run per `session_start fired`. Run splitting is the
+			// only way to attribute a turn-end test decision to the session that made it.
+			runs: [],
+			currentRun: newRun(),
 		},
 		actionable: {
 			events: counter(),
@@ -335,7 +423,8 @@ async function analyzeLatency(files, state) {
 			const ts = dateOf(entry.ts);
 			if (!inWindow(ts)) return;
 			state.seen.inc("latency");
-			trackProject(state, entry.filePath);
+			trackLatencyProject(state, entry);
+			trackLatencySignals(state, entry, ts);
 
 			if (entry.type === "runner") {
 				const status = entry.status ?? "unknown";
@@ -543,6 +632,7 @@ async function analyzeCascade(files, state) {
 			const ts = dateOf(entry.ts);
 			if (!inWindow(ts)) return;
 			state.seen.inc("cascade");
+			if (ts) state.latency.cascadeTs.push(ts.getTime());
 			trackProject(state, entry.filePath);
 			const phase = entry.phase ?? "unknown";
 			state.cascade.phases.inc(phase);
@@ -589,24 +679,76 @@ async function analyzeReadGuard(files, state) {
 	for (const file of files) {
 		await forEachJsonLine(file, "read-guard", state, (entry) => {
 			const ts = dateOf(entry.ts);
-			if (!inWindow(ts)) return;
+			if (!inWindow(ts)) {
+				// D10 needs evidence that may precede a live-monitor window.
+				// Keep this lookback state private; outside rows never affect counts.
+				if (hasReadEvidence(entry)) {
+					const key = `${readGuardSessionOf(entry) ?? "?"}\u0000${entry.filePath ?? "?"}`;
+					state.readGuard.fileEvidence.set(key, true);
+				}
+				return;
+			}
 			state.seen.inc("read-guard");
 			trackProject(state, entry.filePath);
 			const event = entry.event ?? "unknown";
+			const md = entry.metadata ?? {};
 			state.readGuard.events.inc(event);
 			state.readGuard.byFile.inc(shortPath(entry.filePath));
-			const reasonKind = entry.metadata?.reasonKind;
+			const reasonKind = md.reasonKind;
 			if (reasonKind) state.readGuard.byReason.inc(reasonKind);
+
+			// D10: evidence that this file was read or edited earlier in the
+			// SAME session. Read before this row's own evidence is recorded, so a
+			// later `zero_read` block sees only the prior rows. An
+			// `edit_batch_summary` carries no sessionId, so its session is the
+			// turnId prefix before the last `:`.
+			const evidenceKey = `${readGuardSessionOf(entry) ?? "?"}\u0000${entry.filePath ?? "?"}`;
+			const hadEvidence =
+				state.readGuard.fileEvidence.get(evidenceKey) === true;
+
 			if (event === "edit_preflight_blocked") {
 				state.readGuard.preflightReasons.inc(reasonKind ?? "unknown");
+				registerBlock(state, entry, "preflight");
+			}
+			if (event === "edit_blocked") {
+				const summary = registerBlock(state, entry, "blocked");
+				if (reasonKind === "zero_read") {
+					pushTop(state.readGuard.zeroReads, summary, limit * 3, byLine);
+					if (hadEvidence) {
+						pushTop(
+							state.readGuard.stateLost,
+							{ ...summary, classification: "state-lost" },
+							limit * 3,
+							byLine,
+						);
+					} else {
+						pushTop(
+							state.readGuard.genuineZeroRead,
+							{ ...summary, classification: "genuine" },
+							limit * 3,
+							byLine,
+						);
+					}
+				}
+			}
+			if (event === "edit_warned") {
+				pushTop(
+					state.readGuard.warns,
+					summarizeReadGuard(entry),
+					limit * 3,
+					byLine,
+				);
 			}
 			if (event === "range_snapshot_validation") {
-				const status = entry.metadata?.status ?? "unknown";
+				const status = md.status ?? "unknown";
+				const outcome = String(md.outcome ?? "");
 				state.readGuard.snapshotStatus.inc(status);
 				state.readGuard.snapshotEnforcement.inc(
-					entry.metadata?.enforced ? "enforced" : "not_enforced",
+					md.enforced ? "enforced" : "not_enforced",
 				);
-				if (status === "mismatch") {
+				// E3: `bypassed-content-match` is an allowed edit, not a stale
+				// read. Only a mismatch the caller did NOT bypass is a smell.
+				if (status === "mismatch" && !outcome.startsWith("bypassed")) {
 					state.smellTotals.inc("read-guard-stale-ranges");
 					pushTop(
 						state.readGuard.staleRanges,
@@ -614,6 +756,8 @@ async function analyzeReadGuard(files, state) {
 						limit * 3,
 						byLine,
 					);
+				} else if (status === "mismatch") {
+					state.readGuard.bypassedMismatch += 1;
 				} else if (status === "unavailable") {
 					pushTop(
 						state.readGuard.unavailableSnapshots,
@@ -623,21 +767,11 @@ async function analyzeReadGuard(files, state) {
 					);
 				}
 			}
-			if (event === "edit_blocked" || event === "edit_warned") {
-				state.smellTotals.inc("read-guard-friction");
-				const summary = summarizeReadGuard(entry);
-				pushTop(state.readGuard.blocked, summary, limit * 3, byLine);
-				if (reasonKind === "zero_read") {
-					pushTop(state.readGuard.zeroReads, summary, limit * 3, byLine);
-				}
-			}
 			if (
 				event === "oldtext_not_found" ||
 				event === "oldtext_duplicate" ||
-				event === "touched_lines_missing" ||
-				event === "edit_preflight_blocked"
+				event === "touched_lines_missing"
 			) {
-				state.smellTotals.inc("read-guard-friction");
 				pushTop(
 					state.readGuard.oldTextIssues,
 					summarizeReadGuard(entry),
@@ -645,8 +779,46 @@ async function analyzeReadGuard(files, state) {
 					byLine,
 				);
 			}
+
+			if (hasReadEvidence(entry))
+				state.readGuard.fileEvidence.set(evidenceKey, true);
 		});
 	}
+}
+
+/** D10: a row proving the file was read or edited earlier in its session. */
+function hasReadEvidence(entry) {
+	const md = entry.metadata ?? {};
+	return (
+		entry.event === "edit_batch_summary" ||
+		(entry.event === "range_snapshot_validation" &&
+			Number(md.candidateReadCount ?? 0) > 0) ||
+		(entry.event === "edit_warned" && Number(md.readCount ?? 0) > 0)
+	);
+}
+
+/**
+ * D10: the session a read-guard row belongs to. `edit_batch_summary` rows carry
+ * no `sessionId`, so fall back to the turnId prefix before the last `:` (the
+ * report's own join instruction).
+ */
+function readGuardSessionOf(entry) {
+	if (typeof entry.sessionId === "string" && entry.sessionId)
+		return entry.sessionId;
+	const turnId = entry.turnId;
+	if (typeof turnId === "string" && turnId.includes(":"))
+		return turnId.slice(0, turnId.lastIndexOf(":"));
+	return null;
+}
+
+/** E2: one blocked edit. Host/model provenance is not present on this row. */
+function registerBlock(state, entry, source) {
+	const summary = summarizeReadGuard(entry);
+	pushTop(state.readGuard.blocks, summary, limit * 3, byLine);
+	state.readGuard.blockByKind.inc(
+		`${source}:${entry.metadata?.reasonKind ?? "unknown"}`,
+	);
+	return summary;
 }
 
 async function analyzeTreeSitter(files, state) {
@@ -704,19 +876,46 @@ async function analyzeSessionStart(files, state) {
 			const match = lineRe.exec(line);
 			if (!match) return;
 			const ts = dateOf(match[1]);
-			if (!inWindow(ts)) return;
 			const message = match[2];
+			if (!inWindow(ts)) {
+				// A --since window can begin after the session_start that owns its
+				// rows. Carry only that run anchor into the visible window.
+				if (message.startsWith("session_start fired")) {
+					state.session.currentRun = newRun();
+					state.session.currentRun.startTs = iso(ts);
+				}
+				return;
+			}
 			if (isExcludedText(message)) {
 				state.excludedRows++;
 				return;
 			}
 			state.seen.inc("sessionstart");
+			if (ts) state.session.rowTs.push(ts.getTime());
+
+			// E4: starts are counted from `session_start fired`, which every mode
+			// writes, instead of the dead `session_start cwd:` full-mode line. The
+			// same line opens a D3/D4/D5/D8 run.
+			if (message.startsWith("session_start fired")) {
+				state.session.starts++;
+				if (ts) state.session.firedTs.push(ts.getTime());
+				state.session.runs.push(state.session.currentRun);
+				state.session.currentRun = newRun();
+				state.session.currentRun.startTs = iso(ts);
+			}
 
 			const cwd = /session_start cwd:\s*(.*)$/.exec(message)?.[1];
 			if (cwd) {
-				state.session.starts++;
 				state.session.cwds.inc(projectOf(cwd));
 				trackProject(state, cwd);
+			}
+
+			// E4: build identity for the session that just started.
+			const buildIdentity =
+				/session_start: build identity [—-] commit=(\w+)/.exec(message);
+			if (buildIdentity) {
+				state.session.commits.inc(buildIdentity[1]);
+				state.session.currentRun.commit = buildIdentity[1];
 			}
 
 			// #2526 R3 S1: this session's config-resolution PENDING mark, published
@@ -780,8 +979,49 @@ async function analyzeSessionStart(files, state) {
 				);
 			}
 
-			if (message.includes("log_cleanup: rotated"))
-				state.session.rotations.inc(message.replace(/^log_cleanup:\s*/, ""));
+			// D16: extension load time is invisible to `slow-session-start`, which
+			// reads `session_start total:` (a quick-mode total of tens of ms).
+			const load = /pi-lens loaded: (\d+)ms after process start/.exec(message);
+			if (load) {
+				state.session.slowLoads.push({
+					ts: iso(ts),
+					ms: ts ? ts.getTime() : null,
+					durationMs: Number(load[1]),
+					message,
+				});
+			}
+
+			const run = state.session.currentRun;
+			const modified = /turn_end: (\d+) file\(s\) modified/.exec(message);
+			if (modified) run.edits += 1;
+			if (message.includes("excluded by the built-in turn-end policy")) {
+				run.excluded += 1;
+				const excludedPath = /turn_end:\s*(\S+)\s+→ test target excluded/.exec(
+					message,
+				)?.[1];
+				if (excludedPath) run.excludedTestFiles.push(excludedPath);
+			}
+			if (message.includes("→ no test file found")) run.noTestFile += 1;
+			const vitest =
+				/^turn_end:\s+(.+?)\s+→\s+test vitest\s+(\S+)\s+\(([^)]+)\)/.exec(
+					message,
+				);
+			if (vitest) {
+				run.ran += 1;
+				const [, src, tgt, mode] = vitest;
+				if (mode.includes("failed-first")) {
+					run.failedFirst += 1;
+					const a = checkoutOf(src);
+					const b = checkoutOf(tgt);
+					if (a && b && a !== b) run.crossCheckout += 1;
+				}
+			}
+			if (/turn_end: firing \d+ test target\(s\) async/.test(message))
+				run.testFirings += 1;
+			if (/\(stale\s*[—-]\s*turn advanced while tests ran\)/.test(message))
+				run.testStale += 1;
+			if (/turn_end: retaining newer turn state/.test(message))
+				run.retainingNewerTurn += 1;
 
 			const lower = message.toLowerCase();
 			if (
@@ -792,8 +1032,16 @@ async function analyzeSessionStart(files, state) {
 				state.smellTotals.inc("tool-install-noise");
 				state.session.toolNoise.inc(normalizeSessionNoise(message));
 			}
+			// E1: anchor to the production failure emitters so a worktree name
+			// such as `468-wait-timeout` inside a `cwd=`/`command=` token cannot
+			// match (the 20 false positives in the live session). Every emitter
+			// puts the failure word before any `key=` token: `lsp spawn <id>:
+			// unavailable|failed` (clients/lsp/index.ts) and `lsp launch
+			// candidate|managed|bundle|tree-bin failed` (clients/lsp/server.ts).
+			// `lsp read warm unavailable` is informational, and `lsp process
+			// <cmd>:` only ever logs `spawn-error` or `closed` (clients/lsp/launch.ts).
 			if (
-				/lsp .*?(unavailable|failed|timeout|skipped_broken|exited immediately|binary not found)/i.test(
+				/^lsp (?:spawn [^:]+: (?:unavailable|failed)|launch (?:candidate|managed|bundle|tree-bin) failed)/.test(
 					message,
 				)
 			) {
@@ -814,6 +1062,9 @@ async function analyzeSessionStart(files, state) {
 			}
 		});
 	}
+	// Close the final run so the last `session_start fired` block is analyzed.
+	if (state.session.currentRun.startTs)
+		state.session.runs.push(state.session.currentRun);
 }
 
 async function analyzeActionableWarnings(files, state) {
@@ -984,12 +1235,18 @@ function pathValues(value, key = "") {
 }
 
 function isExcludedText(text) {
+	// E4: the old match only ever saw the dead `session_start cwd:` line. The
+	// live cwd/root carriers are the pending-resolution mark and the spawn lines.
+	const values = [];
 	const cwd = /session_start cwd:\s*(.*)$/.exec(text)?.[1];
-	return cwd
-		? excludeGlobs.some((glob) =>
-				minimatch(normalizePath(cwd), glob, { nocase: true, dot: true }),
-			)
-		: false;
+	if (cwd) values.push(cwd);
+	for (const match of text.matchAll(/\b(?:cwd|root)=(\S+)/g))
+		values.push(match[1]);
+	return values.some((value) =>
+		excludeGlobs.some((glob) =>
+			minimatch(normalizePath(value), glob, { nocase: true, dot: true }),
+		),
+	);
 }
 
 async function forEachLine(file, visitor) {
@@ -1200,19 +1457,18 @@ function summarizeCascade(entry) {
 }
 
 function summarizeReadGuard(entry) {
+	const md = entry.metadata ?? {};
+	// R2: the old offset/limit/symbol fields were undefined on 100% of rows.
+	// `touchedLines[0]`/`range[0]` are the real line identity the rows carry.
+	const touched = Array.isArray(md.touchedLines) ? md.touchedLines : [];
+	const range = Array.isArray(md.range) ? md.range : [];
 	return {
 		ts: entry.ts,
 		event: entry.event,
 		filePath: shortPath(entry.filePath),
 		project: projectOf(entry.filePath),
-		requestedOffset: entry.requestedOffset,
-		requestedLimit: entry.requestedLimit,
-		effectiveOffset: entry.effectiveOffset,
-		effectiveLimit: entry.effectiveLimit,
-		symbol: entry.symbol,
-		symbolKind: entry.symbolKind,
-		line: entry.symbolStartLine,
-		metadata: entry.metadata,
+		line: touched[0] ?? range[0],
+		metadata: md,
 	};
 }
 
@@ -1295,9 +1551,612 @@ function normalizePath(filePath) {
 	return String(filePath).replace(/\\/g, "/");
 }
 
+/** One D3/D4/D5/D8 run, opened by a `session_start fired` line. */
+function newRun() {
+	return {
+		startTs: null,
+		commit: null,
+		edits: 0,
+		ran: 0,
+		failedFirst: 0,
+		crossCheckout: 0,
+		excluded: 0,
+		excludedTestFiles: [],
+		noTestFile: 0,
+		retainingNewerTurn: 0,
+		testFirings: 0,
+		testStale: 0,
+	};
+}
+
+/** The checkout a turn-end path belongs to (`.worktrees/<id>/` or the main `src/`). */
+function checkoutOf(p) {
+	const m = /\.worktrees\/([^/]+)\//.exec(p);
+	if (m) return m[1];
+	if (/^(?:src|tests?)\//.test(p)) return "main";
+	return null;
+}
+
+/**
+ * D2: the markers only a test home carries: the #3521 fork-tree witness home
+ * and the suite's `pi-lens-test-*` temp dirs. `pi-lens-worktrees`,
+ * `pi-lens-orchestrator/tmp` and `.probe-home/` are not markers: real
+ * sessions edit there (the orchestrator writes its task files under
+ * `.probe-home/orchestration/`).
+ */
+const SCRATCH_PATH_RE = /(witness-home|pi-lens-test-)/;
+
+/**
+ * E5/D2: the `opaque_mutation_*` phases log the bash command as `filePath`
+ * (clients/runtime-tool-call.ts, clients/runtime-tool-result.ts), except
+ * `opaque_mutation_recovered`, which logs the recovered paths.
+ */
+function isCommandTextRow(entry) {
+	const phase = String(entry.phase ?? "");
+	return (
+		phase.startsWith("opaque_mutation_") &&
+		phase !== "opaque_mutation_recovered"
+	);
+}
+
+/** E5: track a latency row's project unless its `filePath` is a shell command. */
+function trackLatencyProject(state, entry) {
+	const filePath = entry?.filePath;
+	if (typeof filePath !== "string" || filePath.length === 0) return;
+	if (isCommandTextRow(entry)) return;
+	// The `<pi-lens>` sentinel is never a project path.
+	if (filePath.startsWith("<")) return;
+	state.projects.inc(projectOf(filePath));
+}
+
+function trackLatencyPollution(state, entry) {
+	if (isCommandTextRow(entry)) return;
+	const hit = pathValues(entry).some((value) => SCRATCH_PATH_RE.test(value));
+	if (!hit) return;
+	const pid = String(entry.pid ?? "unknown");
+	state.latency.scratchRows.set(
+		pid,
+		(state.latency.scratchRows.get(pid) ?? 0) + 1,
+	);
+}
+
+/**
+ * Every latency signal the D5/D6/D7/D9/D11-D15 detectors read. Kept in one
+ * function so the streaming visitor stays a thin fan-out.
+ */
+function trackLatencySignals(state, entry, ts) {
+	const ms = ts instanceof Date ? ts.getTime() : null;
+	if (ms != null && Number.isFinite(ms)) state.latency.rowTs.push(ms);
+	const pid = String(entry.pid ?? "unknown");
+	if (ms != null && Number.isFinite(ms)) {
+		const first = state.latency.pidFirstTs.get(pid);
+		if (first == null || ms < first) state.latency.pidFirstTs.set(pid, ms);
+		const last = state.latency.pidLastTs.get(pid);
+		if (last == null || ms > last) state.latency.pidLastTs.set(pid, ms);
+	}
+	trackLatencyPollution(state, entry);
+
+	if (entry.type === "runner") {
+		const md = entry.metadata ?? {};
+		if (
+			entry.status === "failed" &&
+			md.tier === "collect-later" &&
+			Number(entry.diagnosticCount ?? 0) > 0
+		) {
+			state.latency.deferredRunnerFailed.push({
+				ts: entry.ts,
+				ms,
+				pid,
+				turnId: entry.turnId,
+				runnerId: entry.runnerId,
+				diagnosticCount: Number(entry.diagnosticCount ?? 0),
+				filePath: entry.filePath,
+			});
+		}
+		return;
+	}
+
+	if (entry.type === "tool_result") {
+		// D8: the turn_end summary row carries `blockerSections`; the existing
+		// tool_result branch only counts `result`, so it never saw this duration.
+		if (entry.metadata && entry.metadata.blockerSections != null) {
+			const rows = state.latency.turnEndTools.get(pid) ?? [];
+			rows.push({
+				ts: entry.ts,
+				ms,
+				durationMs: Number(entry.durationMs ?? 0),
+			});
+			state.latency.turnEndTools.set(pid, rows);
+		}
+		return;
+	}
+	if (entry.type !== "phase") return;
+
+	const phase = entry.phase ?? "unknown";
+	const md = entry.metadata ?? {};
+	const nowIso = entry.ts;
+
+	if (phase === "test_runner_delivery") {
+		const sid = md.sessionId ?? pid;
+		const c = state.latency.testRunnerDelivery.get(sid) ?? counter();
+		c.inc(md.outcome ?? "unknown");
+		state.latency.testRunnerDelivery.set(sid, c);
+	} else if (phase === "knip") {
+		if (
+			md.execution === "executed" &&
+			Number.isFinite(Number(md.totalIssues))
+		) {
+			const rows = state.latency.knip.get(pid) ?? [];
+			rows.push({
+				ts: nowIso,
+				ms,
+				durationMs: Number(entry.durationMs ?? 0),
+				totalIssues: Number(md.totalIssues),
+			});
+			state.latency.knip.set(pid, rows);
+		}
+	} else if (phase === "degradation_ledger") {
+		const kind = md.kind ?? "unknown";
+		const perPid = state.latency.degradationKinds.get(pid) ?? new Map();
+		perPid.set(kind, Math.max(perPid.get(kind) ?? 0, Number(md.count ?? 0)));
+		state.latency.degradationKinds.set(pid, perPid);
+		if (kind === "hook-await-exceeded") {
+			const budgetMs = Number(md.budgetMs);
+			const elapsedMs = Number(md.elapsedMs);
+			state.latency.hookAwaitExceeded.push({
+				ts: nowIso,
+				pid,
+				hook: md.hook,
+				label: md.label,
+				budgetMs,
+				elapsedMs,
+				cause: md.cause,
+				ratio: budgetMs > 0 ? elapsedMs / budgetMs : 0,
+			});
+		}
+	} else if (phase === "lsp_client_wait_timeout") {
+		const serverIds = Array.isArray(md.serverIds) ? md.serverIds : [];
+		if (serverIds.length === 0) {
+			const cur = state.latency.lspWaitEmpty.get(pid) ?? { ms: 0, rows: 0 };
+			cur.ms += Number(entry.durationMs ?? 0);
+			cur.rows += 1;
+			state.latency.lspWaitEmpty.set(pid, cur);
+		}
+	} else if (phase === "lsp_touch_file") {
+		const cur = state.latency.lspTouchEdit.get(pid) ?? {
+			rows: 0,
+			noClients: 0,
+		};
+		if (md.source === "tool_call:edit") {
+			cur.rows += 1;
+			if (md.failureKind === "no_clients_none_spawning") cur.noClients += 1;
+		}
+		state.latency.lspTouchEdit.set(pid, cur);
+		if (
+			md.source === "tool_call:edit" &&
+			md.failureKind === "no_clients_none_spawning"
+		) {
+			state.latency.lspTouchNoClients.push({
+				ts: nowIso,
+				ms,
+				pid,
+				filePath: entry.filePath,
+			});
+		}
+	} else if (phase === "lsp_client_selected") {
+		if (md.outcome === "warm-reuse") {
+			state.latency.lspClientSelectedWarm.push({
+				ts: nowIso,
+				ms,
+				pid,
+				filePath: entry.filePath,
+			});
+		}
+	} else if (phase === "read_guard_branch_retained") {
+		state.latency.carryRestart.push({
+			ts: nowIso,
+			pid,
+			trigger: md.trigger,
+			source: md.source,
+			kept: Number(md.kept ?? 0),
+			dropped: Number(md.dropped ?? 0),
+			branchToolResults: Number(md.branchToolResults ?? 0),
+			branchReadable: md.branchReadable === true,
+		});
+	} else if (phase === "agent_nudge") {
+		state.latency.agentNudges.push({
+			ts: nowIso,
+			ms,
+			pid,
+			originCrossProcess: Number(md.originCrossProcess ?? 0),
+			originLocal: Number(md.originLocal ?? 0),
+			reasonMix: md.reasonMix,
+		});
+	} else if (phase === "session_scope_transition") {
+		state.latency.sessionScopeTransitions.push({
+			ts: nowIso,
+			ms,
+			pid,
+			handoffSource: md.handoffSource,
+			sessionId: md.sessionId,
+		});
+	} else if (phase === "late_runner_findings") {
+		state.latency.lateRunnerFindings.push({
+			ts: nowIso,
+			ms,
+			pid,
+			turnId: entry.turnId,
+			failed: Number(md.failed ?? 0),
+			delivered: Number(md.delivered ?? 0),
+			dropped: Number(md.dropped ?? 0),
+			pending: Number(md.pending ?? 0),
+		});
+	} else if (phase === "late_auxiliary_findings") {
+		const pairs = Array.isArray(md.stuckPairs) ? md.stuckPairs : [];
+		for (const pair of pairs) {
+			if (!pair?.filePath || !pair?.serverId) continue;
+			const key = `${pid}\u0000${pair.filePath}\u0000${pair.serverId}`;
+			state.latency.auxStuck.set(
+				key,
+				(state.latency.auxStuck.get(key) ?? 0) + 1,
+			);
+		}
+	} else if (phase === "advisory_provenance_decision") {
+		const reasons = Array.isArray(md.reasons) ? md.reasons : [];
+		// The malformed reason implies decision "historical": the validator
+		// returns status "unknown" with it (clients/advisory-provenance.ts) and
+		// the row logs every non-current status as historical
+		// (clients/runtime-context.ts), so the reason alone is the rule.
+		if (reasons.includes("malformed-or-legacy-provenance")) {
+			state.latency.advisoryProvenance.push({
+				ts: nowIso,
+				ms,
+				pid,
+				reasons,
+				provenanceStamp: md.provenanceStamp,
+				advisoryKind: md.advisoryKind,
+			});
+		}
+	}
+}
+
+/** D2: extension.log rows that name a test home. */
+async function analyzeExtension(files, state) {
+	for (const file of files) {
+		await forEachJsonLine(file, "extension", state, (entry) => {
+			const ts = dateOf(entry.ts);
+			if (!inWindow(ts)) return;
+			state.seen.inc("extension");
+			if (SCRATCH_PATH_RE.test(JSON.stringify(entry))) {
+				const pid = String(entry.pid ?? "unknown");
+				state.extension.scratchRows.set(
+					pid,
+					(state.extension.scratchRows.get(pid) ?? 0) + 1,
+				);
+			}
+			const level = String(entry.level ?? "").toLowerCase();
+			if (level === "warn" || level === "error") {
+				const message = String(entry.message ?? "").slice(0, 80);
+				state.extension.warnErrorGroups.inc(
+					`${entry.subsystem ?? "unknown"}: ${message}`,
+				);
+			}
+		});
+	}
+}
+
+function countBetween(sorted, a, b) {
+	let n = 0;
+	for (const value of sorted) {
+		if (value > a && value < b) n += 1;
+		else if (value >= b) break;
+	}
+	return n;
+}
+
+/** D1: latency gaps >= 10 min that a live session filled with >= 20 rows. */
+function computeCoverageGaps(state) {
+	const lat = [...state.latency.rowTs].sort((a, b) => a - b);
+	const ss = [...state.session.rowTs].sort((a, b) => a - b);
+	const cas = [...state.latency.cascadeTs].sort((a, b) => a - b);
+	const gaps = [];
+	for (let i = 1; i < lat.length; i += 1) {
+		const a = lat[i - 1];
+		const b = lat[i];
+		const minutes = (b - a) / 60000;
+		if (minutes < 10) continue;
+		const sessionstartRows = countBetween(ss, a, b);
+		if (sessionstartRows < 20) continue;
+		gaps.push({
+			start: new Date(a).toISOString(),
+			end: new Date(b).toISOString(),
+			minutes: Math.round(minutes),
+			sessionstartRows,
+			cascadeRows: countBetween(cas, a, b),
+		});
+	}
+	return gaps;
+}
+
+/** D5: per-session firing/stale text and per-session delivery outcomes. */
+function computeTestRunnerHealth(state) {
+	const runs = state.session.runs.map((r) => ({
+		startTs: r.startTs,
+		firings: r.testFirings,
+		stale: r.testStale,
+	}));
+	const staleRuns = runs.filter(
+		(r) => r.firings >= 10 && r.stale / r.firings >= 0.5,
+	);
+	const firings = runs.reduce((n, r) => n + r.firings, 0);
+	const stale = runs.reduce((n, r) => n + r.stale, 0);
+	const sessions = [];
+	for (const [sessionId, c] of state.latency.testRunnerDelivery) {
+		const total = c.entries().reduce((n, [, v]) => n + v, 0);
+		const delivered = c.get("delivered");
+		sessions.push({
+			sessionId,
+			total,
+			staged: c.get("staged"),
+			eligible: c.get("eligible"),
+			delivered,
+			superseded: c.get("superseded"),
+			deliveredShare: total ? delivered / total : 0,
+		});
+	}
+	const lowDelivery = sessions.filter(
+		(s) => s.total >= 10 && s.deliveredShare < 0.25,
+	);
+	return {
+		firings,
+		stale,
+		staleShare: firings ? stale / firings : 0,
+		staleRuns,
+		sessions,
+		lowDelivery,
+	};
+}
+
+/** D6: scanner issue-count drift and turn-end knip wall cost, per pid. */
+function computeKnip(state) {
+	const drift = [];
+	const cost = [];
+	for (const [pid, rowsRaw] of state.latency.knip) {
+		const rows = [...rowsRaw]
+			.filter((r) => r.ms != null)
+			.sort((a, b) => a.ms - b.ms);
+		if (rows.length >= 10) {
+			const issues = rows.map((r) => r.totalIssues);
+			let increments = 0;
+			for (let i = 1; i < issues.length; i += 1)
+				if (issues[i] - issues[i - 1] >= 100) increments += 1;
+			const min = Math.min(...issues);
+			const max = Math.max(...issues);
+			const spread = min > 0 ? (max - min) / min : 0;
+			if (increments >= 5 || spread >= 0.25)
+				drift.push({ pid, rows: rows.length, increments, min, max, spread });
+		}
+		const first = state.latency.pidFirstTs.get(pid);
+		const last = state.latency.pidLastTs.get(pid);
+		const hours = first != null && last != null ? (last - first) / 3600000 : 0;
+		const totalMs = rows.reduce((n, r) => n + r.durationMs, 0);
+		const maxRow = rows.reduce((n, r) => Math.max(n, r.durationMs), 0);
+		// A lifetime under an hour counts as one hour, so a short pid's few
+		// seconds of knip cannot extrapolate to a large hourly rate.
+		const perHour = totalMs / Math.max(hours, 1);
+		if (perHour >= 30000 || maxRow >= 5000)
+			cost.push({ pid, rows: rows.length, totalMs, hours, perHour, maxRow });
+	}
+	return { drift, cost };
+}
+
+/** D7: hook deopts that overran their budget, plus the degradation census. */
+function computeHookAwait(state) {
+	const rows = [...state.latency.hookAwaitExceeded].sort((a, b) =>
+		String(b.ts).localeCompare(String(a.ts)),
+	);
+	const census = [];
+	for (const [pid, kinds] of state.latency.degradationKinds) {
+		census.push({
+			pid,
+			kinds: [...kinds.entries()]
+				.sort((a, b) => b[1] - a[1])
+				.slice(0, 12)
+				.map(([kind, count]) => `${kind}=${count}`),
+		});
+	}
+	return { rows, over: rows.filter((r) => r.ratio >= 1.1).length, census };
+}
+
+/** D8: turn_end hook duration per pid, and the retained-turn-state runs. */
+function computeTurnEndSlow(state) {
+	const flagged = [];
+	for (const [pid, rows] of state.latency.turnEndTools) {
+		const slow = rows.filter((r) => r.durationMs > 3000).length;
+		const max = rows.reduce((n, r) => Math.max(n, r.durationMs), 0);
+		const share = rows.length ? slow / rows.length : 0;
+		if ((rows.length >= 20 && share >= 0.1) || max >= 8000)
+			flagged.push({ pid, rows: rows.length, slow, share, max });
+	}
+	const retainRuns = state.session.runs
+		.filter((r) => r.retainingNewerTurn >= 5)
+		.map((r) => ({ start: r.startTs, count: r.retainingNewerTurn }));
+	return { flagged, retainRuns };
+}
+
+/** D9: empty-candidate waits, edit touches with no client, warm-reuse clashes. */
+function computeLspWait(state) {
+	const empty = [];
+	for (const [pid, cur] of state.latency.lspWaitEmpty)
+		if (cur.ms >= 5000) empty.push({ pid, ms: cur.ms, rows: cur.rows });
+	const noClients = [];
+	for (const [pid, cur] of state.latency.lspTouchEdit)
+		if (cur.rows >= 20 && cur.noClients / cur.rows >= 0.2)
+			noClients.push({
+				pid,
+				rows: cur.rows,
+				noClients: cur.noClients,
+				share: cur.noClients / cur.rows,
+			});
+	const contradictions = [];
+	for (const touch of state.latency.lspTouchNoClients) {
+		const match = state.latency.lspClientSelectedWarm.find(
+			(w) =>
+				w.pid === touch.pid &&
+				w.filePath === touch.filePath &&
+				touch.ms != null &&
+				w.ms != null &&
+				Math.abs(w.ms - touch.ms) <= 500,
+		);
+		if (match)
+			contradictions.push({
+				pid: touch.pid,
+				filePath: touch.filePath,
+				touchTs: touch.ts,
+				selectedTs: match.ts,
+			});
+	}
+	const pids = new Set([
+		...empty.map((e) => e.pid),
+		...noClients.map((e) => e.pid),
+		...contradictions.map((c) => c.pid),
+	]);
+	return { empty, noClients, contradictions, pidCount: pids.size };
+}
+
+/** D11: a restart kept nothing while the branch held a populated read set. */
+function computeCarryRestart(state) {
+	return state.latency.carryRestart.filter(
+		(r) =>
+			["startup", "resume", "fork", "reload"].includes(r.trigger) &&
+			r.source !== "none" &&
+			r.kept + r.dropped === 0 &&
+			r.branchToolResults >= 50 &&
+			r.branchReadable,
+	);
+}
+
+/** D12: a cross-process nudge right after a sidecar handoff (suspect grade). */
+function computeRestartSelfNudge(state) {
+	const flags = [];
+	for (const nudge of state.latency.agentNudges) {
+		if (nudge.originCrossProcess < 1) continue;
+		const transition = state.latency.sessionScopeTransitions.find(
+			(t) =>
+				t.pid === nudge.pid &&
+				["own-sidecar", "parent-sidecar"].includes(t.handoffSource) &&
+				nudge.ms != null &&
+				t.ms != null &&
+				nudge.ms >= t.ms &&
+				nudge.ms - t.ms <= 300000,
+		);
+		if (transition) flags.push({ ...nudge, transitionTs: transition.ts });
+	}
+	return flags;
+}
+
+/** D13: a collect-later runner failed with findings and nothing was delivered. */
+function computeDeferredRunner(state) {
+	const flags = [];
+	for (const runner of state.latency.deferredRunnerFailed) {
+		const delivery = state.latency.lateRunnerFindings.find(
+			(f) =>
+				f.pid === runner.pid &&
+				f.turnId === runner.turnId &&
+				(runner.ms == null || f.ms == null || f.ms >= runner.ms),
+		);
+		if (
+			delivery &&
+			delivery.failed >= 1 &&
+			delivery.delivered === 0 &&
+			delivery.dropped === 0
+		)
+			flags.push({
+				...runner,
+				deliveryTs: delivery.ts,
+				pending: delivery.pending,
+			});
+	}
+	return flags;
+}
+
+/** D14: an auxiliary (file, server) pair stuck in two or more turn ends. */
+function computeAuxStuck(state) {
+	const flagged = [];
+	for (const [key, count] of state.latency.auxStuck) {
+		if (count < 2) continue;
+		const [pid, filePath, serverId] = key.split("\u0000");
+		flagged.push({ pid, filePath, serverId, count });
+	}
+	flagged.sort((a, b) => b.count - a.count);
+	return flagged;
+}
+
+/** D15: `historical` provenance with a malformed/legacy stamp. */
+function computeAdvisoryProvenance(state) {
+	return state.latency.advisoryProvenance.map((row) => {
+		const first = state.latency.pidFirstTs.get(row.pid);
+		const seconds =
+			first != null && row.ms != null
+				? Math.round((row.ms - first) / 1000)
+				: null;
+		return { ...row, secondsSinceFirstRow: seconds };
+	});
+}
+
+/** D16: `pi-lens loaded: Nms` loads over 2 s. A load with no
+ * `session_start fired` within the next 60 s is a short-lived pid. */
+function computeSlowExtensionLoad(state) {
+	const fired = state.session.firedTs;
+	return state.session.slowLoads
+		.filter((l) => l.durationMs >= 2000)
+		.map((l) => ({
+			...l,
+			shortLived: !(
+				Number.isFinite(l.ms) &&
+				fired.some((f) => f >= l.ms && f - l.ms <= 60000)
+			),
+		}));
+}
+
 function buildReport(state) {
 	const smells = [];
 	const smellCount = (id) => state.smellTotals.get(id);
+
+	// D1-D16 detector computations. Kept out of the smell list so every value
+	// they produce is assertable on its own, not only through a smell count.
+	const coverageGaps = computeCoverageGaps(state);
+	const testRunnerHealth = computeTestRunnerHealth(state);
+	const knip = computeKnip(state);
+	const hookAwait = computeHookAwait(state);
+	const turnEndSlow = computeTurnEndSlow(state);
+	const lspWait = computeLspWait(state);
+	const carryRestart = computeCarryRestart(state);
+	const restartSelfNudge = computeRestartSelfNudge(state);
+	const deferredRunner = computeDeferredRunner(state);
+	const auxStuck = computeAuxStuck(state);
+	const advisoryProvenance = computeAdvisoryProvenance(state);
+	const slowExtensionLoad = computeSlowExtensionLoad(state);
+	const latencyScratch = [...state.latency.scratchRows.values()].reduce(
+		(n, v) => n + v,
+		0,
+	);
+	const extensionScratch = [...state.extension.scratchRows.values()].reduce(
+		(n, v) => n + v,
+		0,
+	);
+	const d3Runs = state.session.runs.filter((r) => {
+		const excludedTest = r.excludedTestFiles.some((p) =>
+			/\.(test|spec)\.|\/tests?\//.test(p),
+		);
+		return (r.excluded >= 1 && excludedTest) || (r.edits >= 10 && r.ran === 0);
+	});
+	const d4Cross = state.session.runs.reduce(
+		(n, r) => n + (r.crossCheckout >= 3 ? r.crossCheckout : 0),
+		0,
+	);
+	const testRunnerSmellCount =
+		testRunnerHealth.staleRuns.length + testRunnerHealth.lowDelivery.length;
 	addSmell(
 		smells,
 		"diagnostic-blockers",
@@ -1407,19 +2266,17 @@ function buildReport(state) {
 	);
 	addSmell(
 		smells,
-		"read-guard-friction",
-		smellCount("read-guard-friction"),
-		"Read-guard blocked/warned edits or exact replacement misses",
-		[...state.readGuard.blocked, ...state.readGuard.oldTextIssues].slice(
-			0,
-			limit,
-		),
+		"read-guard-blocks",
+		state.readGuard.events.get("edit_blocked") +
+			state.readGuard.events.get("edit_preflight_blocked"),
+		"Read-guard blocked edits; host/model provenance is not present on the block rows, and warns and exact-replacement misses are informational",
+		state.readGuard.blocks.slice(0, limit),
 	);
 	addSmell(
 		smells,
 		"read-guard-stale-ranges",
 		smellCount("read-guard-stale-ranges"),
-		"Covered edit ranges whose read snapshot no longer matched current content",
+		`Enforced range mismatches whose read snapshot no longer matched (bypassed-content-match ${state.readGuard.bypassedMismatch} excluded as an allowed edit)`,
 		state.readGuard.staleRanges.slice(0, limit),
 	);
 	addSmell(
@@ -1477,6 +2334,258 @@ function buildReport(state) {
 				? ` — by reason: ${unconfirmedReasonBreakdown}`
 				: ""),
 		ws.sweeps.slice(0, limit),
+	);
+
+	// D1: a latency gap a live session filled.
+	addSmell(
+		smells,
+		"log-coverage-gap",
+		coverageGaps.length,
+		"Latency stream gap >= 10 min that a live session filled with >= 20 sessionstart rows",
+		coverageGaps.slice(0, limit).map((g) => ({
+			ts: g.start,
+			message: `${g.minutes} min gap ${g.start} -> ${g.end}; sessionstartRows=${g.sessionstartRows}; cascadeRows=${g.cascadeRows}`,
+		})),
+	);
+	// D2: test home markers in a real log. Never added to the
+	// default denylist so the pollution stays visible.
+	addSmell(
+		smells,
+		"real-log-test-pollution",
+		latencyScratch + extensionScratch,
+		`Rows naming a test home (witness-home, pi-lens-test-*) (latency ${latencyScratch}, extension ${extensionScratch}); these never belong in a real log`,
+		[
+			...[...state.latency.scratchRows.entries()].map(([pid, count]) => ({
+				key: `latency pid ${pid}`,
+				count,
+			})),
+			...[...state.extension.scratchRows.entries()].map(([pid, count]) => ({
+				key: `extension pid ${pid}`,
+				count,
+			})),
+		].slice(0, limit),
+	);
+	addSmell(
+		smells,
+		"extension-warn-errors",
+		state.extension.warnErrorGroups.size,
+		"extension.log warn/error groups by subsystem and message prefix",
+		state.extension.warnErrorGroups.top(limit),
+	);
+	// D3: a run that excluded its own test files, or edited without running one.
+	addSmell(
+		smells,
+		"turn-end-tests-excluded",
+		d3Runs.length,
+		"Turn-end runs that skipped test files by policy, or edited >= 10 files and ran no test",
+		d3Runs.slice(0, limit).map((r) => ({
+			ts: r.startTs,
+			message: `edits=${r.edits} ran=${r.ran} excluded=${r.excluded} noTestFile=${r.noTestFile}${
+				r.excludedTestFiles.length ? `: ${r.excludedTestFiles.join(", ")}` : ""
+			}`,
+		})),
+	);
+	// D4: a failed-first target that resolved to a different checkout (#3649).
+	addSmell(
+		smells,
+		"test-target-cross-checkout",
+		d4Cross,
+		"Failed-first test targets resolved to a different checkout than the edited source (regression guard for #3649)",
+		state.session.runs
+			.filter((r) => r.crossCheckout >= 3)
+			.slice(0, limit)
+			.map((r) => ({
+				ts: r.startTs,
+				message: `${r.crossCheckout} cross-checkout of ${r.failedFirst} failed-first`,
+			})),
+	);
+	// D5: sessions whose turn-end verdicts went stale, or were rarely delivered.
+	addSmell(
+		smells,
+		"test-runner-stale-verdicts",
+		testRunnerSmellCount,
+		`Sessions with >= 10 test firings and >= 50% stale (${testRunnerHealth.staleRuns.length}), or >= 10 delivery rows and < 25% delivered (${testRunnerHealth.lowDelivery.length}); window firings ${testRunnerHealth.firings}, stale ${testRunnerHealth.stale}`,
+		[
+			...testRunnerHealth.staleRuns.map((r) => ({
+				ts: r.startTs,
+				count: r.stale,
+				message: `firings=${r.firings} stale=${r.stale}`,
+			})),
+			...testRunnerHealth.lowDelivery.map((s) => ({
+				key: s.sessionId,
+				count: s.delivered,
+				message: `delivered ${s.delivered}/${s.total} (${Math.round(
+					s.deliveredShare * 100,
+				)}%), staged ${s.staged}, eligible ${s.eligible}, superseded ${s.superseded}`,
+			})),
+		].slice(0, limit),
+	);
+	// D6: scanner-count drift and knip wall cost.
+	addSmell(
+		smells,
+		"scanner-count-drift",
+		knip.drift.length,
+		"knip totalIssues rose by >= 100 between consecutive executed runs at least 5 times, or its spread >= 25% (pids with >= 10 executed runs)",
+		knip.drift.slice(0, limit).map((d) => ({
+			key: `pid ${d.pid}`,
+			count: d.increments,
+			message: `issues ${d.min} -> ${d.max} (+${Math.round(
+				d.spread * 100,
+			)}%), ${d.increments} increments >= 100`,
+		})),
+	);
+	addSmell(
+		smells,
+		"turn-end-knip-cost",
+		knip.cost.length,
+		"knip consumed >= 30 s per hour of pid lifetime (a lifetime under an hour counts as one hour), or a single run took >= 5 s",
+		knip.cost.slice(0, limit).map((c) => ({
+			key: `pid ${c.pid}`,
+			count: Math.round(c.perHour),
+			message: `${c.totalMs}ms over ${c.hours.toFixed(2)}h = ${Math.round(
+				c.perHour,
+			)}ms/h, max ${c.maxRow}ms`,
+		})),
+	);
+	// D7: hook deopts that overran their budget.
+	addSmell(
+		smells,
+		"hook-await-exceeded",
+		hookAwait.rows.length,
+		`Hook awaits that overran their budget (${hookAwait.over} with ratio >= 1.1)`,
+		hookAwait.rows.slice(0, limit).map((r) => ({
+			ts: r.ts,
+			message: `${r.hook}:${r.label} ${r.elapsedMs}/${r.budgetMs}ms (${r.ratio.toFixed(
+				3,
+			)}) pid=${r.pid} cause=${r.cause}`,
+		})),
+	);
+	// D8: turn_end hook duration and retained-state churn.
+	addSmell(
+		smells,
+		"turn-end-slow",
+		turnEndSlow.flagged.length,
+		"turn_end hook duration over budget (a pid with >= 10% of summaries > 3 s, or one >= 8 s)",
+		turnEndSlow.flagged.slice(0, limit).map((f) => ({
+			key: `pid ${f.pid}`,
+			count: f.slow,
+			message: `${f.slow}/${f.rows} over 3s (${Math.round(
+				f.share * 100,
+			)}%), max ${f.max}ms`,
+		})),
+	);
+	addSmell(
+		smells,
+		"turn-end-retained-state",
+		turnEndSlow.retainRuns.length,
+		"Turn-end retained newer turn state at least 5 times in one session",
+		turnEndSlow.retainRuns.slice(0, limit).map((r) => ({
+			ts: r.start,
+			count: r.count,
+		})),
+	);
+	// D9: empty-candidate waits and no-client/edit warm-reuse contradictions.
+	addSmell(
+		smells,
+		"lsp-wait-empty-candidates",
+		lspWait.pidCount,
+		`LSP touch saw no client while a warm client was selected, or waited with an empty candidate set (empty ${lspWait.empty.length}, noClients ${lspWait.noClients.length}, contradictions ${lspWait.contradictions.length})`,
+		[
+			...lspWait.empty.map((e) => ({
+				key: `pid ${e.pid}`,
+				count: e.rows,
+				message: `${e.ms}ms waiting with no candidate server`,
+			})),
+			...lspWait.noClients.map((e) => ({
+				key: `pid ${e.pid}`,
+				count: Math.round(e.share * 100),
+				message: `${e.noClients}/${e.rows} edits saw no client (${Math.round(
+					e.share * 100,
+				)}%)`,
+			})),
+			...lspWait.contradictions.map((c) => ({
+				key: `pid ${c.pid}`,
+				count: 1,
+				message: `${c.filePath}: no-client touch at ${c.touchTs}, warm-reuse at ${c.selectedTs}`,
+			})),
+		].slice(0, limit),
+	);
+	// D10: a zero_read block that contradicts earlier read/edit evidence.
+	addSmell(
+		smells,
+		"resume-state-loss",
+		state.readGuard.stateLost.length,
+		`zero_read edits blocked despite earlier read/edit evidence in the same session (genuine ${state.readGuard.genuineZeroRead.length})`,
+		state.readGuard.stateLost.slice(0, limit),
+	);
+	// D11: a restart whose read-set carry was empty while the branch was populated.
+	addSmell(
+		smells,
+		"carry-empty-restart",
+		carryRestart.length,
+		"Restart carry kept and dropped nothing while the branch held a populated read set",
+		carryRestart.slice(0, limit).map((r) => ({
+			key: `pid ${r.pid}`,
+			count: r.branchToolResults,
+			message: `trigger=${r.trigger} source=${r.source} kept=${r.kept} dropped=${r.dropped} branchToolResults=${r.branchToolResults}`,
+		})),
+	);
+	// D12: a cross-process nudge right after a sidecar handoff (suspect until O7).
+	addSmell(
+		smells,
+		"restart-self-nudge",
+		restartSelfNudge.length,
+		"Cross-process nudge within 300 s of a sidecar handoff (suspect-grade until the nudge carries a file id, O7)",
+		restartSelfNudge.slice(0, limit).map((r) => ({
+			key: `pid ${r.pid}`,
+			count: r.originCrossProcess,
+			message: `${JSON.stringify(r.reasonMix)} crossProcess=${r.originCrossProcess} after ${r.transitionTs}`,
+		})),
+	);
+	// D13: a collect-later runner failed with findings and none were delivered.
+	addSmell(
+		smells,
+		"deferred-runner-failed-undelivered",
+		deferredRunner.length,
+		"collect-later runner failed with findings and the delivery row shows failed>=1, delivered=0, dropped=0 (#3796 witness)",
+		deferredRunner.slice(0, limit).map((r) => ({
+			ts: r.ts,
+			message: `${r.runnerId} pid=${r.pid} turnId=${r.turnId} diagnostics=${r.diagnosticCount} delivery=${r.deliveryTs}`,
+		})),
+	);
+	// D14: an auxiliary (file, server) pair stuck in >= 2 turn ends.
+	addSmell(
+		smells,
+		"aux-stuck-pair",
+		auxStuck.length,
+		"Auxiliary (file, server) pair stuck in >= 2 turn ends",
+		auxStuck.slice(0, limit).map((p) => ({
+			key: p.serverId,
+			count: p.count,
+			message: `${p.filePath} pid=${p.pid}`,
+		})),
+	);
+	// D15: historical provenance with a malformed/legacy stamp.
+	addSmell(
+		smells,
+		"advisory-provenance-unknown",
+		advisoryProvenance.length,
+		"Advisory provenance resolved to historical with a malformed-or-legacy stamp",
+		advisoryProvenance.slice(0, limit).map((r) => ({
+			ts: r.ts,
+			message: `${r.provenanceStamp} (${r.advisoryKind}) ${r.secondsSinceFirstRow}s after pid start`,
+		})),
+	);
+	// D16: extension load time over 2 s.
+	addSmell(
+		smells,
+		"slow-extension-load",
+		slowExtensionLoad.length,
+		"pi-lens loaded >= 2000ms after process start (short-lived: no session_start fired within 60 s)",
+		slowExtensionLoad.slice(0, limit).map((l) => ({
+			...l,
+			message: `${l.message}${l.shortLived ? " [short-lived]" : ""}`,
+		})),
 	);
 
 	return {
@@ -1549,6 +2658,12 @@ function buildReport(state) {
 				0,
 				limit,
 			),
+			// E2/D10: the block/warn split and the lost-read-set classification.
+			warns: state.readGuard.warns.slice(0, limit),
+			blockByKind: state.readGuard.blockByKind.toJSON(),
+			bypassedMismatch: state.readGuard.bypassedMismatch,
+			stateLost: state.readGuard.stateLost.slice(0, limit),
+			genuineZeroRead: state.readGuard.genuineZeroRead.slice(0, limit),
 		},
 		treeSitter: {
 			phases: state.treeSitter.phases.toJSON(),
@@ -1559,7 +2674,8 @@ function buildReport(state) {
 		session: {
 			starts: state.session.starts,
 			cwds: state.session.cwds.top(limit),
-			rotations: state.session.rotations.toJSON(),
+			commits: state.session.commits.toJSON(),
+			slowLoads: state.session.slowLoads.slice(0, limit),
 			errors: state.session.errors.slice(0, limit),
 		},
 		// #2526: the positive-observability counters behind the
@@ -1601,6 +2717,43 @@ function buildReport(state) {
 				}))
 				.sort((a, b) => b.total - a.total)
 				.slice(0, limit * 3),
+		},
+		// D1-D16: the per-detector values behind the smells above, so a test can
+		// pin the rule (not only the rendered count) and a reader can see WHY.
+		detectors: {
+			logCoverageGap: { gaps: coverageGaps },
+			realLogTestPollution: {
+				latencyByPid: Object.fromEntries(state.latency.scratchRows),
+				extensionByPid: Object.fromEntries(state.extension.scratchRows),
+				latencyTotal: latencyScratch,
+				extensionTotal: extensionScratch,
+			},
+			turnEndTestsExcluded: {
+				runs: d3Runs.map((r) => ({ ...r })),
+			},
+			testTargetCrossCheckout: {
+				runs: state.session.runs.map((r) => ({
+					startTs: r.startTs,
+					crossCheckout: r.crossCheckout,
+					failedFirst: r.failedFirst,
+				})),
+			},
+			testRunnerStaleVerdicts: testRunnerHealth,
+			knip,
+			hookAwait,
+			turnEndSlow,
+			lspWait,
+			resumeStateLoss: {
+				stateLost: state.readGuard.stateLost,
+				genuine: state.readGuard.genuineZeroRead,
+			},
+			carryEmptyRestart: carryRestart,
+			restartSelfNudge,
+			deferredRunnerFailedUndelivered: deferredRunner,
+			auxStuckPairs: auxStuck,
+			advisoryProvenanceUnknown: advisoryProvenance,
+			slowExtensionLoad,
+			extensionWarnErrors: state.extension.warnErrorGroups.toJSON(),
 		},
 	};
 }
@@ -1647,6 +2800,60 @@ function printReport(report) {
 			for (const ex of smell.examples.slice(0, Math.min(5, limit)))
 				console.log(`    - ${formatExample(ex)}`);
 		}
+	}
+
+	// D1/D2/D5/D6/D7: the non-smell breakdown behind the new detectors.
+	const det = report.detectors ?? {};
+	const gap = det.logCoverageGap;
+	if (gap?.gaps?.length) {
+		console.log("\nLog coverage");
+		for (const g of gap.gaps ?? [])
+			console.log(
+				`  gap ${g.minutes}min ${g.start} → ${g.end} sessionstart=${g.sessionstartRows} cascade=${g.cascadeRows}`,
+			);
+	}
+	const warnErrors = Object.entries(det.extensionWarnErrors ?? {});
+	if (warnErrors.length) {
+		console.log("\nExtension diagnostics");
+		for (const [k, v] of warnErrors.slice(0, limit))
+			console.log(`  ${String(v).padStart(5)}  ${k}`);
+	}
+	const deg = det.hookAwait?.census ?? [];
+	if (deg.length) {
+		console.log("\nDegradation ledger census (max count per pid)");
+		for (const row of deg.slice(0, limit))
+			console.log(`  pid ${row.pid}: ${row.kinds.join(", ")}`);
+	}
+	const delivery = det.testRunnerStaleVerdicts;
+	if (delivery) {
+		console.log("\nTest-runner delivery");
+		console.log(
+			`  firings=${delivery.firings} stale=${delivery.stale} (${(
+				delivery.staleShare * 100
+			).toFixed(1)}%)`,
+		);
+		for (const s of delivery.sessions ?? [])
+			console.log(
+				`  ${s.sessionId}: delivered ${s.delivered}/${s.total} staged=${s.staged} eligible=${s.eligible} superseded=${s.superseded}`,
+			);
+	}
+	const knip = det.knip;
+	if (knip && (knip.drift.length || knip.cost.length)) {
+		console.log("\nknip drift and cost");
+		for (const d of knip.drift)
+			console.log(
+				`  pid ${d.pid}: issues ${d.min} → ${d.max} (${d.increments} increments >= 100)`,
+			);
+		for (const c of knip.cost)
+			console.log(
+				`  pid ${c.pid}: ${Math.round(c.perHour)}ms/h, max ${c.maxRow}ms`,
+			);
+	}
+	const extLoads = det.slowExtensionLoad ?? [];
+	if (extLoads.length) {
+		const shortLived = extLoads.filter((l) => l.shortLived).length;
+		console.log("\nExtension loads");
+		console.log(`  slow=${extLoads.length} shortLived=${shortLived}`);
 	}
 
 	section(
@@ -1705,7 +2912,7 @@ function printReport(report) {
 		report.latency.testRunnerVerdicts ?? {},
 	);
 	if (verdictSessions.length) {
-		console.log("\nTest-runner stale verdicts per session");
+		console.log("\nTest-runner stale verdicts per session (verdict rows only)");
 		for (const [sessionId, summary] of verdictSessions) {
 			console.log(
 				`  ${sessionId}: ${summary.stale}/${summary.total} stale (${(summary.rate * 100).toFixed(1)}%)`,

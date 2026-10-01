@@ -63,7 +63,9 @@ export interface FormatSummary {
 	/**
 	 * #3506: settles once every formatter a bound gave up on has settled. The
 	 * bound returns while the in-place child runs on and writes later, so a
-	 * caller holding the file's mutation queue keeps it until then.
+	 * caller holding the file's mutation queue keeps it until then. #3858:
+	 * present only when a bound gave up on one, so its presence is how a caller
+	 * knows a late write is coming (it syncs that write to the LSP).
 	 */
 	abandoned?: Promise<void>;
 }
@@ -75,7 +77,10 @@ export class FormatService {
 	private enabled: boolean;
 
 	constructor(sessionID: string, enabled: boolean = true) {
-		this.fileTime = new FileTime(sessionID);
+		// Its own table: a `FileTime` is keyed by session id, and the read
+		// guard's is the session's. Sharing it let every stamp here vouch for
+		// bytes the agent never saw (#3525).
+		this.fileTime = new FileTime(`${sessionID}:format`);
 		this.enabled = enabled;
 	}
 
@@ -170,7 +175,9 @@ export class FormatService {
 			})),
 			anyChanged,
 			allSucceeded,
-			abandoned: Promise.allSettled(abandoned).then(() => {}),
+			...(abandoned.length === 0
+				? {}
+				: { abandoned: Promise.allSettled(abandoned).then(() => {}) }),
 		};
 	}
 

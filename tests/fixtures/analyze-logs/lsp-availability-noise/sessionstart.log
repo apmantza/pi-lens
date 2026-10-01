@@ -1,0 +1,15 @@
+[2026-09-15T15:56:01.421Z] lsp process /home/user/.pi-lens/bin/marksman: closed code=143 command=/home/user/.pi-lens/bin/marksman args=["server"] cwd=/home/user/Desktop/pi-lens pid=4158142 stderr=[18:47:09 INF] <LSP Entry> Starting Marksman LSP server: {"arch": "X64", "os": "Ubuntu 26.04.1 LTS", "version": "2026-02-08"} [18:47:10 INF] <Folder> Loading folder documents: {"uri": "file:///home/user/Desktop/pi-lens"}
+[2026-09-15T15:57:08.497Z] lsp launch candidate failed tool=vscode-json-language-server idx=0 command=vscode-json-language-server error=Cannot spawn vscode-json-language-server: tool not found (spawn vscode-json-language-server ENOENT)
+[2026-09-15T16:30:41.300Z] lsp read warm unavailable: pi-lens-warden.md (no LSP client ready)
+[2026-09-15T18:21:02.732Z] lsp spawn opengrep: failed (15151ms) error=Timeout after 15000ms
+[2026-09-30T12:43:13.419Z] lsp launch: command=/home/user/.pi-lens/tools/node_modules/.bin/typescript-language-server resolved=/home/user/.pi-lens/tools/node_modules/.bin/typescript-language-server args=["--stdio"] cwd=/home/user/Desktop/proj/.worktrees/468-wait-timeout shell=false pid=294524
+[2026-09-30T12:47:38.641Z] lsp launch: command=/home/user/.pi-lens/bin/opengrep resolved=/home/user/.pi-lens/bin/opengrep args=["lsp","--experimental"] cwd=/home/user/Desktop/proj/.worktrees/468-wait-timeout shell=false pid=384054
+[2026-09-30T12:47:38.626Z] lsp spawn opengrep: start root=/home/user/Desktop/proj/.worktrees/468-wait-timeout install=enabled file=/home/user/Desktop/proj/.worktrees/468-wait-timeout/src/server.ts
+[2026-09-30T12:47:38.655Z] lsp launch: command=/home/user/.pi-lens/bin/typos-lsp resolved=/home/user/.pi-lens/bin/typos-lsp args=[] cwd=/home/user/Desktop/proj/.worktrees/468-wait-timeout shell=false pid=384055
+[2026-09-30T12:47:38.627Z] lsp launch candidate attempt tool=opengrep idx=0/1 command=/home/user/.pi-lens/bin/opengrep cwd=/home/user/Desktop/proj/.worktrees/468-wait-timeout
+[2026-09-30T21:09:35.690Z] lsp spawn marksman: failed (15299ms) error=Timeout after 15000ms
+# synthetic: production shapes with no real occurrence in the logs (clients/lsp/index.ts `lsp spawn ${server.id}: unavailable`, clients/lsp/server.ts `lsp launch managed|bundle|tree-bin failed`); each must count.
+[2026-09-30T22:00:00.000Z] lsp spawn yaml: unavailable (12ms)
+[2026-09-30T22:00:01.000Z] lsp launch managed failed tool=marksman command=/home/user/.pi-lens/bin/marksman error=spawn EACCES
+[2026-09-30T22:00:02.000Z] lsp launch bundle failed tool=vscode-langservers runtime=node error=bundle entry missing
+[2026-09-30T22:00:03.000Z] lsp launch tree-bin failed tool=pyright bin=/home/user/Desktop/proj/node_modules/.bin/pyright-langserver error=spawn ENOENT

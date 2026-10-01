@@ -166,7 +166,7 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** @typedef {"stash"|"reset"|"worktreeForce"|"worktreeSymlink"|"probe"|"tmpdirCollision"|"sharedKill"|"tmpCheckout"|"checkUngated"|"hookBypass"} DenyRule */
+/** @typedef {"stash"|"reset"|"worktreeForce"|"worktreeSymlink"|"probe"|"tmpdirCollision"|"sharedKill"|"tmpCheckout"|"checkUngated"|"ciVerdictStatus"|"hookBypass"} DenyRule */
 
 /** @type {Record<DenyRule, string>} */
 export const RULE_MESSAGES = {
@@ -190,6 +190,8 @@ export const RULE_MESSAGES = {
 		"bypassing git hooks (`--no-verify`, `git commit -n`, `-c core.hooksPath=`, `git config core.hooksPath`, `HUSKY=0`, `PI_LENS_SKIP_HOOKS=`) is forbidden (#3778; #3703 pushed `--no-verify` and put 56 red files into CI) -- hooks always run; for a red that looks unrelated, prove it with `node scripts/red-on-base.mjs` and, unless it says RED-ON-BASE, fix it; if it does, stop and hand back its output instead of pushing past it; to repair a wrong `core.hooksPath`, run `node scripts/setup-git-hooks.mjs`.",
 	checkUngated:
 		"a `git commit`/`git push` chained after a check (`npm run lint`/`build`/`test`/`fmt:check`/`preflight`, `npx vitest`, `tsc`, `node scripts/check-*.mjs`) through `;` or a pipe, rather than `&&`, is forbidden (#3471) -- the check's exit code gates nothing that way, so a real failure can still get committed or pushed; gate it with `&&`, or read the check's result in its own separate call.",
+	ciVerdictStatus:
+		"ci-verdict's exit status is lost through a pipe -- read the final `ci-verdict: exit <N> (<kind>)` line, or run `; echo $?` before the pipe; do not read `$?` after `ci-verdict.mjs … | …` (#3883).",
 };
 
 /**
@@ -2032,6 +2034,113 @@ function findUngatedWriteInChain(segments) {
 }
 
 /**
+ * #3883: a pipeline's `$?` is the status of its last command, not
+ * ci-verdict's verdict. Recognize both orderings that make that mistake look
+ * plausible: `ci-verdict | tail; echo $?`. Capturing with
+ * `ci-verdict; echo $? | tail` happens before the pipe and remains allowed.
+ *
+ * F6 (round 2): also recognize the `timeout N node …` and
+ * `node --flag …` wrappers, the `${?}` spelling, and `|&`; allow a
+ * pipe-polluted `$?` once `set -o pipefail` is in force before the pipeline,
+ * and allow a single-quoted `'$?'` (literal text to bash).
+ *
+ * @param {Array<{ text: string; sep: string | null }>} segments
+ * @returns {DenyRule | null}
+ */
+function findPipedCiVerdictStatusRead(segments) {
+	const isCiVerdict = (text) => {
+		const words = stripCommandGroupAndRunnerPrefixes(splitWords(text));
+		// `env FOO=bar` / `FOO=bar` before the wrapper still parse as prefixes.
+		let { rest } = stripEnvAssignments(words);
+		// `timeout <duration> node …` runs the node command it wraps; drop the
+		// wrapper and its options/duration before looking for `node` (#3883 F6).
+		// `-s`/`--signal` and `-k`/`--kill-after` each take their own argument,
+		// so consume it too or the duration read lands on the signal
+		// (`timeout -s KILL 600 node …`, #3883 R2).
+		if (rest[0] === "timeout") {
+			const takesArgument = (word) =>
+				word === "-s" ||
+				word === "--signal" ||
+				word === "-k" ||
+				word === "--kill-after";
+			let i = 1;
+			while (i < rest.length && rest[i].startsWith("-")) {
+				i += takesArgument(rest[i]) ? 2 : 1;
+			}
+			i += 1; // the duration argument
+			rest = rest.slice(i);
+		}
+		if (rest[0] !== "node" && rest[0] !== "nodejs") return false;
+		// A node flag before the script path (`node --no-warnings …`) must not
+		// hide it: the script is a non-flag word ending in the ci-verdict path.
+		return rest
+			.slice(1)
+			.some(
+				(word) =>
+					!word.startsWith("-") &&
+					/(?:^|[/\\])scripts[/\\]ci-verdict\.mjs$/.test(word),
+			);
+	};
+	// A `$?` inside single quotes is literal text to bash, not the status; the
+	// `${?}` spelling still reads it in every other context (#3883 F6). The
+	// scan tracks double quotes too, so an apostrophe INSIDE a double-quoted
+	// string (`echo "it's $? ok"`) does not open a phantom single-quote span
+	// that hides the expansion (#3883 R2).
+	const readsStatus = (text) => {
+		let unquoted = "";
+		let inSingle = false;
+		let inDouble = false;
+		for (const ch of text) {
+			if (ch === "'" && !inDouble) {
+				inSingle = !inSingle;
+				continue;
+			}
+			if (ch === '"' && !inSingle) {
+				inDouble = !inDouble;
+				unquoted += ch;
+				continue;
+			}
+			if (!inSingle) unquoted += ch;
+		}
+		return unquoted.includes("$?") || unquoted.includes("${?}");
+	};
+	// `set -o pipefail` makes the pipeline's `$?` the real status, so a command
+	// that enables it before the pipeline is not the mistake this rule exists
+	// for; `set +o pipefail` DISABLES it again, and a later disable undoes an
+	// earlier enable (#3883 F6, R2).
+	const pipefailSetting = (text) => {
+		const { rest } = stripEnvAssignments(
+			stripCommandGroupAndRunnerPrefixes(splitWords(text)),
+		);
+		if (rest[0] !== "set") return null;
+		for (let j = 1; j < rest.length; j++) {
+			const token = rest[j];
+			if (!/^[-+][A-Za-z]*o$/.test(token)) continue;
+			if (rest[j + 1] !== "pipefail") continue;
+			return token[0] === "-";
+		}
+		return null;
+	};
+	let pipefail = false;
+	for (let i = 0; i < segments.length; i++) {
+		if (!isCiVerdict(segments[i].text)) {
+			const setting = pipefailSetting(segments[i].text);
+			if (setting !== null) pipefail = setting;
+			continue;
+		}
+		// Only a pipefail in force BEFORE this command changes what `$?` means.
+		if (pipefail) continue;
+		for (let pipe = i + 1; pipe < segments.length; pipe++) {
+			const sep = segments[pipe].sep;
+			if (sep !== "|" && sep !== "|&") continue;
+			if (segments.slice(pipe + 1).some((segment) => readsStatus(segment.text)))
+				return "ciVerdictStatus";
+		}
+	}
+	return null;
+}
+
+/**
  * Scan a full Bash command for the first denied rule: every executable
  * region {@link scannableRegions} found, split into segments and
  * classified. The top-level region runs first and accumulates `export`ed
@@ -2054,6 +2163,8 @@ export function findDeny(commandText, cwd) {
 		const env = index === 0 ? sharedEnv : { ...sharedEnv };
 		let effectiveCwd = cwd;
 		const segments = splitSegmentsWithSeparators(regions[index]);
+		const ciVerdictRule = findPipedCiVerdictStatusRead(segments);
+		if (ciVerdictRule) return ciVerdictRule;
 		const chainRule = findUngatedWriteInChain(segments);
 		if (chainRule) return chainRule;
 		for (const { text: segment } of segments) {

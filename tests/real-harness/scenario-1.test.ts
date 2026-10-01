@@ -54,6 +54,11 @@ describe("real pi harness: load and tool-set restore", () => {
 				await pi.newSession();
 				await pi.prompt("run the scripted turn");
 				await pi.awaitAssistantTurn();
+				// release-qa's codemode row reads the user text a request carried to
+				// witness an injected turn_end check; the provider must record it.
+				expect(
+					JSON.stringify(pi.providerObservations().at(-1)?.userMessages),
+				).toContain("run the scripted turn");
 				const active = observedRoster(pi);
 				expect(
 					active

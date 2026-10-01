@@ -69,8 +69,9 @@ interface PullRequestContext {
 
 // A job is PR-reachable if ANY of these makes its `if:` true. Two rows,
 // because one cannot serve both: `clear-stale-verdict-labels` requires
-// action `synchronize` while `pr-body-lint` requires action != synchronize,
-// and both are genuinely PR-reachable.
+// action `synchronize`, and a job restricted to other actions (as
+// `pr-body-lint` was before #3864 F2) needs a non-synchronize row; both kinds
+// are genuinely PR-reachable.
 const PR_CONTEXTS: readonly PullRequestContext[] = [
 	{
 		label: "pull_request / opened",
@@ -375,16 +376,10 @@ const EXEMPTIONS: Readonly<Record<string, string>> = {
 		"workflow_run-triggered classifier: it reads a COMPLETED CI run's log, which by definition does not exist while that run is still going. Its own if: truth table is evaluated pre-merge, row by row, in tests/config/ci-infra-kill-rerun-gate.test.ts",
 	".github/workflows/ci-infra-kill-rerun.yml::finalize-rerun":
 		"workflow_run-triggered terminal-label swap, same lane and same reason as classify above; its if: is evaluated pre-merge in tests/config/ci-infra-kill-rerun-gate.test.ts",
-	".github/workflows/ci.yml::record-post-merge-validation":
-		"repository_dispatch post-merge recorder: the merge-train lane dispatches it AFTER a merge, so a pre-merge run is not a narrower version of this job, it is a contradiction",
 	".github/workflows/close-keyword-verification.yml::verify":
 		"pull_request_target gated on github.event.pull_request.merged == true: it verifies what the close keywords DID once the PR is merged, which cannot be observed before the merge",
 	".github/workflows/install-smoke.yml::host-latest-smoke":
 		"advisory nightly drift lane: it installs the newest published host to detect upstream drift on a schedule, a signal about the ecosystem's state at a point in time rather than about the PR's diff (#2613)",
-	".github/workflows/install-smoke.yml::record-post-merge-validation":
-		"repository_dispatch post-merge recorder, same shape and same reason as ci.yml's above",
-	".github/workflows/lint.yml::record-post-merge-validation":
-		"repository_dispatch post-merge recorder, same shape and same reason as ci.yml's above",
 };
 
 describe("every PR-triggerable workflow job is reachable on a pull request (#3043)", () => {

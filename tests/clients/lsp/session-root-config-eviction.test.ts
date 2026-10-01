@@ -42,6 +42,11 @@ import {
 import { normalizeFilePath } from "../../../clients/path-utils.js";
 import { removeTempDirSync } from "../test-utils.js";
 
+// #3721: the log sinks bind their path from PI_LENS_HOME at module load, so the
+// per-case homes below cannot isolate them. The harness gives this worker its
+// own PI_LENS_HOME before any import, so the sinks stay off every other
+// worker's file.
+
 const DENIED_SERVER = "typos";
 const dirs: string[] = [];
 let previousHome: string | undefined;

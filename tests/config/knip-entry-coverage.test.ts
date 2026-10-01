@@ -134,17 +134,6 @@ function windowsVitestFiles(): string[] {
 	return getWin32LaneFiles(repoRoot);
 }
 
-/**
- * Scripts or lane files deliberately not in knip.jsonc's `entry` list because
- * Knip's own "redundant entry pattern" hint proves they are already reached.
- */
-const ALREADY_REACHED: Readonly<Record<string, string>> = {
-	"scripts/lib/merge-train-dispatch-validation.mjs":
-		"already reached through tests/scripts/merge-train-warden.test.ts's " +
-		"import — knip's own 'redundant entry pattern' hint caught this " +
-		"when it was added as an explicit entry",
-};
-
 const LANE_ALREADY_REACHED: Readonly<Record<string, string>> = {
 	"tests/mcp/turn-end-route.smoke.test.ts":
 		"already reached through the Vitest config's default project graph; " +
@@ -205,25 +194,11 @@ describe("knip entry coverage (#2698)", () => {
 			sweepName: "knip entry coverage",
 			flagged: invoked,
 			registered: covered,
-			exemptions: ALREADY_REACHED,
 			scannedCount: invoked.size,
 			minScanned: 1,
-			remediation:
-				"add an entry pattern to knip.jsonc, or (only if knip's own " +
-				"'redundant entry pattern' hint says the file is already " +
-				"reached another way) a documented ALREADY_REACHED exemption",
+			remediation: "add an entry pattern to knip.jsonc",
 		});
 		expect(audit.problems, audit.problems.join("\n")).toEqual([]);
-	});
-
-	it("keeps each documented already-reached exemption honest", () => {
-		const importer = "tests/scripts/merge-train-warden.test.ts";
-		const needle = "merge-train-dispatch-validation";
-		const importerSource = readFileSync(resolve(repoRoot, importer), "utf8");
-		expect(
-			importerSource.includes(needle),
-			`${importer} no longer imports scripts/lib/${needle}.mjs — remove its ALREADY_REACHED exemption and add it to knip.jsonc's entry list instead`,
-		).toBe(true);
 	});
 
 	it("covers every test file admitted by the Vitest and Windows lanes (#2837)", () => {

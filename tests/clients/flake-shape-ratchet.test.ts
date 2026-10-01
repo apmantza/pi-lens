@@ -381,6 +381,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the provider wire roster is produced by a real pi host loading the built extension; an in-process double cannot certify tools.<name>.enabled",
 	},
+	// #3870: the detector tests drive the analyzer's real CLI entry point as a
+	// real node subprocess over redacted fixture logs; an in-process call could
+	// not prove the --root/--json/--since argv or the JSON report boundary.
+	"real-process-spawn:scripts/analyze-pi-lens-logs-detectors.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the tests spawn the analyzer's real CLI over fixture logs; an in-process call cannot prove the --root/--json argv or the JSON report boundary (same seam as analyze-pi-lens-logs.test.ts)",
+	},
 	// #3684: the advisory scope is the wrapper's own `git diff` against a real
 	// throwaway fixture repo; an in-process call cannot prove the git boundary
 	// or the wrapper's argv/env (GITHUB_BASE_REF) handling.
@@ -395,6 +403,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the exact local CLI, shallow checkout and `git check-ignore` (#2904) are the subjects; an in-process double cannot prove any of those command boundaries",
+	},
+	"real-process-spawn:scripts/ci-verdict.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#3883 F3: the final exit line and process status live at the real main() boundary; only a spawned CLI observes them",
 	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
@@ -512,6 +525,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT side effect are unobservable from an in-process stub",
+	},
+	// #3401: the seed script's default git argv (depth-2 fetch, refspec, blob
+	// specs) only means something against a real repo and a depth-1 clone.
+	"real-process-spawn:scripts/seed-matrix-from-bot-branch-real-git.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the fetch depth, refspec and rev-parse specs are the subject; an in-memory git restates them instead of proving them against real git",
 	},
 	// #3674: git's own per-worktree resolution of core.hooksPath and the real
 	// husky binary are the subject; a double would restate the path it wrote.

@@ -28,6 +28,7 @@ import {
 	stripSource,
 } from "../support/sweep-kit.js";
 import { removeTempDirSync } from "./test-utils.js";
+import { TMP_HYGIENE_HOME } from "../support/vitest-setup.js";
 
 import { EventEmitter } from "node:events";
 import { waitFor } from "./interleaving-kit.js";
@@ -47,7 +48,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 import extension from "../../index.js";
 import { _resetSessionLifecycleForTests } from "../../clients/session-lifecycle.js";
 
-const sharedHome = process.env.PI_LENS_HOME!;
+// #3721: inside a worker PI_LENS_HOME is the worker's own home; the run-shared
+// directory the #3083 backstop redirect and the cases below are about is the
+// harness's.
+const workerHome = process.env.PI_LENS_HOME!;
+const sharedHome = TMP_HYGIENE_HOME;
 
 const realGlobalDir = path.join(os.homedir(), ".pi-lens");
 const realRegistryPath = path.join(realGlobalDir, "instances.json");
@@ -64,7 +69,7 @@ describe("machine-global writers route through PI_LENS_HOME, never the real home
 
 	afterEach(() => {
 		removeTempDirSync(overrideDir);
-		process.env.PI_LENS_HOME = sharedHome;
+		process.env.PI_LENS_HOME = workerHome;
 	});
 
 	it("getGlobalPiLensDir resolves to PI_LENS_HOME", async () => {
@@ -1249,6 +1254,9 @@ describe("transitive session_start backstop isolation", () => {
 	}
 
 	it("session_start keeps the backstop stamp and transient lock out of the run-shared home", async () => {
+		// Name the run-shared home explicitly: a worker's own PI_LENS_HOME is no
+		// longer it (#3721), and the redirect under test answers for it.
+		vi.stubEnv("PI_LENS_HOME", sharedHome);
 		const { lockPaths, stamp, startedAt } = await driveSessionStartSweep();
 		expect(
 			JSON.parse(fs.readFileSync(stamp, "utf8")).lastSweepAt,

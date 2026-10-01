@@ -243,6 +243,108 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		);
 	});
 
+	// #3828 r3: the drain's held-only resync is a save for the file it wrote
+	// and for nothing else. Recurrences: VERIFY r2 F6 (the late resync sent no
+	// didSave, so a save-triggered server kept the pre-format diagnostics), and
+	// the storm the `saved` docblock forbids if the save rode onto the
+	// importers this seam adds.
+	it("carries a save on the changed path only, never on its importers, and names its disposition (#3828 r3)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const openDocuments = new Set<string>();
+		const changed = path.join(dir, "dependency.ts");
+		const importer = path.join(dir, "consumer.ts");
+		await fs.writeFile(changed, "export const v = 1;\n", "utf-8");
+		await fs.writeFile(
+			importer,
+			"import { v } from './dependency';\n",
+			"utf-8",
+		);
+		const client = makeClient(openDocuments);
+		getServersForFileWithConfig.mockReturnValue([makeServer(dir)]);
+		loadReverseDependencyIndexFromSnapshot.mockReturnValue({} as any);
+		getReverseDepsFromIndex.mockReturnValue([importer]);
+		createLSPClient.mockResolvedValue(client);
+		for (const target of [changed, importer]) {
+			await service.touchFile(target, await fs.readFile(target, "utf-8"), {
+				diagnostics: "none",
+				clientScope: "primary",
+				source: "lsp_sync",
+			});
+		}
+		// Both moved on disk, so neither push is a debounced repeat.
+		await fs.writeFile(changed, "export const v = 2;\n", "utf-8");
+		await fs.writeFile(importer, "import { v } from './dependency'; // 2\n");
+		const before = client.notify.open.mock.calls.length;
+
+		const dispositions = await service.resyncGitChangedFiles([changed], {
+			saved: true,
+		});
+
+		const saves = Object.fromEntries(
+			(client.notify.open.mock.calls as unknown[][])
+				.slice(before)
+				.map((call) => [path.basename(String(call[0])), call[5]]),
+		);
+		expect(saves).toEqual({ "dependency.ts": true, "consumer.ts": false });
+		expect(Object.fromEntries(dispositions)).toEqual({ [changed]: "resynced" });
+	});
+
+	it("reads a target a joined pass never reached as deferred, and sends its save on the next pass (#3828 r3)", async () => {
+		const { service, client } = await primeService();
+		const late = path.join(dir, "late.ts");
+		await fs.writeFile(late, "export const late = 1;\n", "utf-8");
+		await service.touchFile(late, "export const late = 1;\n", {
+			diagnostics: "none",
+			clientScope: "primary",
+			source: "lsp_sync",
+		});
+		// Same length, mtime in the past: only the queue can reach it, never
+		// the stat backstop of the pass below.
+		await fs.writeFile(late, "export const late = 2;\n", "utf-8");
+		const past = new Date(Date.now() - 60_000);
+		await fs.utimes(late, past, past);
+		// A pass already running when the drain's resync arrives: it is parked
+		// in its push of another drifted document, past its queue snapshot.
+		await bulkEditOnDisk();
+		let parked!: () => void;
+		const isParked = new Promise<void>((resolve) => {
+			parked = resolve;
+		});
+		let release!: () => void;
+		const released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		client.notify.open.mockImplementationOnce(async () => {
+			parked();
+			await released;
+		});
+		let forcedSweeps = 0;
+		let joined!: () => void;
+		const isJoined = new Promise<void>((resolve) => {
+			joined = resolve;
+		});
+		const sweep = service.sweepDocumentDrift.bind(service);
+		vi.spyOn(service, "sweepDocumentDrift").mockImplementation((options) => {
+			if (options?.force && ++forcedSweeps === 2) joined();
+			return sweep(options);
+		});
+		const running = service.sweepDocumentDrift({ force: true });
+		await isParked;
+		const resync = service.resyncGitChangedFiles([late], { saved: true });
+		await isJoined;
+		release();
+		await running;
+
+		expect(Object.fromEntries(await resync)).toEqual({ [late]: "deferred" });
+		const before = client.notify.open.mock.calls.length;
+		await sweep({ force: true });
+		const next = (client.notify.open.mock.calls as unknown[][]).slice(before);
+		expect(
+			next.map((call) => [path.basename(String(call[0])), call[5]]),
+		).toEqual([["late.ts", true]]);
+	});
+
 	it("emits a bounded record naming the file and the drift age", async () => {
 		const { service } = await primeService();
 		const { getDegradationSummary, resetDegradationLedger } =

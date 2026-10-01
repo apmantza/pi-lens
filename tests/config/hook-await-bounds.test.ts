@@ -1415,16 +1415,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"read, the same double-count the secrets lane's entry below avoids.",
 		owner: "#3274",
 	},
-	"clients/runtime-turn.ts#5b570c81~b2f3321c": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`knipClient.analyze` — #2523's turn_end list " +
-			"(runtime-turn.ts:1355): the 30s timeout lives INSIDE the " +
-			"spawn, so anything that wedges before the spawn is unreachable " +
-			"by it.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-turn.ts#756411f6~249e7096": {
 		family: "hook-await",
 		site: "turn_end",
@@ -2405,7 +2395,15 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// spawn, and the outcome helper awaits the project diff once where the two
 	// branches awaited it separately (net +1). The fixer's spawn was already
 	// awaited under the same hold and the restore is bounded local file work.
-	"clients/pipeline.ts": 63,
+	// 63 -> 64 (#3858): `chainLateFormatResync` is #3828's late-resync
+	// continuation moved out of `handleAgentEnd` (its exemption row is gone) so
+	// the in-band pipeline shares it: a detached reaction on the abandoned
+	// formatter's settlement that parks no awaiting task and holds no queue
+	// entry or timer, so a formatter that never settles leaves it inert. It
+	// reaches the LSP only through `resyncHeldLspDocument`: a document a live
+	// client of the current service already holds, one bounded notify write
+	// (a save, #3828 r3), never a spawn; its answer is the late row's outcome.
+	"clients/pipeline.ts": 64,
 	"clients/project-changes.ts": 2,
 	"clients/project-snapshot.ts": 2,
 	"clients/quiet-window.ts": 6,
@@ -2622,6 +2620,15 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"promise per store, so the three turn-end stores spend one budget each " +
 		"per delivery however many lanes await them, and an abandoned read " +
 		"yields null — a cold cache to every lane — never a stale envelope.",
+	"call:clients/runtime-turn.ts#2b57f8b9~df074468":
+		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
+		"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
+		"wall budget is still live. #3872: this is `knipClient.analyze`, awaited " +
+		"under the budget LEFT after the phases before it (not a fresh 3000 ms), " +
+		"so a slow scan releases the handler instead of holding it past " +
+		"`hook-await-exceeded`. It replaces the #2523 exemption for the same " +
+		"await; the scan itself is abandoned, not cancelled, and finishes off-hook " +
+		"under knip's own 30 s spawn timeout and single-flight slot.",
 	"call:clients/runtime-turn.ts#4da1e4ca~7e52ce49":
 		"`getAmbientAbortSignal(): AbortSignal | undefined` (clients/safe-spawn.ts) " +
 		"— the turn's registered abort signal, set from the host's `ctx.signal` " +

@@ -28,8 +28,8 @@
  * surface where a path becomes a map key. `scripts/` is deliberately out:
  * its `.mjs` helpers run before `npm run build` in workflows that never
  * install, so they cannot import the compiled seam (the same build-order
- * constraint `tests/config/escape-regexp-fold-sweep.test.ts` documents for
- * `merge-train-lane.mjs`), and none of them derives a map key.
+ * constraint `tests/config/escape-regexp-fold-sweep.test.ts` documents),
+ * and none of them derives a map key.
  *
  * Both shapes are matched against CODE ONLY, under
  * `stripSource(..., { strings: "blank" })`: comments, string literals AND

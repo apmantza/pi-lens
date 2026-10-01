@@ -5,7 +5,7 @@ description: Run the pi-lens release-readiness QA pass â€” witness the feature Ã
 
 # Release QA
 
-The pass that runs before a release is cut. Sibling of `merge-train`: that skill
+The pass that runs before a release is cut. Sibling of the merge policy (`docs/pi-lens-merge-policy.md`): that policy
 decides whether one PR may land, this one decides whether the accumulated result
 may ship.
 

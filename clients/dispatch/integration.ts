@@ -2874,6 +2874,12 @@ export async function dispatchLintWithResult(
 		 * DispatchContext.telemetryModel's doc. */
 		telemetryModel?: string;
 		telemetryProvider?: string;
+		/**
+		 * Pull surface (`pilens_analyze`): emit the coverage notice on every call
+		 * instead of latching it once per session (refs #3791). Leave unset for
+		 * the pi push surface, which keeps the once-per-session latch.
+		 */
+		dedupeCoverageNotice?: boolean;
 	},
 ): Promise<DispatchResult> {
 	// Default true preserves the per-edit fast path (errors only). Callers that
@@ -2930,7 +2936,19 @@ export async function dispatchLintWithResult(
 		}
 
 		await runProviders(ctx);
-		const result = await dispatchForFile(ctx, groups, sessionRunnerRegistry);
+		const result = await dispatchForFile(
+			ctx,
+			groups,
+			sessionRunnerRegistry,
+			undefined,
+			// exactOptionalPropertyTypes: omit the key rather than pass
+			// `undefined`, which the target option type rejects (#3791).
+			{
+				...(options?.dedupeCoverageNotice !== undefined && {
+					dedupeCoverageNotice: options.dedupeCoverageNotice,
+				}),
+			},
+		);
 		trackSessionSlopStats(ctx, result.diagnostics);
 
 		// Schedule debounced ast-grep warning scan for jsts files.

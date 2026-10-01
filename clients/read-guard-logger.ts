@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
+import { hashText } from "./finding-identity.js";
 import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
@@ -80,13 +81,29 @@ export interface ReadGuardEditBatchSummary {
 
 let generatedCorrelationCounter = 0;
 
+const CORRELATION_ID_MAX = 64;
+const CORRELATION_ID_HASH_LENGTH = 16;
+
+/**
+ * Bound a host call id to {@link CORRELATION_ID_MAX} characters WITHOUT
+ * merging distinct ids (#3833). Every map and ledger keyed by a tool-call id
+ * (the attribution map, read widenings, the read-guard branch filter) trusts
+ * this to be injective. A plain `slice(0, 64)` was not: pi 0.99 codemode names
+ * nested calls `<parent>/<n>` and an OpenAI Responses parent id is ~80 chars,
+ * so `<parent>/1` and `<parent>/2` shared one key. Over the cap the id keeps a
+ * prefix (readable in logs) plus a hash of the FULL raw id. The result is
+ * itself <= 64 chars of the allowed alphabet, so re-sanitizing it is a no-op.
+ * Ids of 64 chars or fewer are unchanged.
+ */
 export function sanitizeCorrelationId(value: unknown): string | undefined {
 	if (typeof value !== "string" && typeof value !== "number") return undefined;
-	const sanitized = String(value)
-		.trim()
-		.replace(/[^a-zA-Z0-9._:-]/g, "_")
-		.slice(0, 64);
-	return sanitized.length > 0 ? sanitized : undefined;
+	const trimmed = String(value).trim();
+	const sanitized = trimmed.replace(/[^a-zA-Z0-9._:-]/g, "_");
+	if (sanitized.length <= CORRELATION_ID_MAX) {
+		return sanitized.length > 0 ? sanitized : undefined;
+	}
+	const prefixLength = CORRELATION_ID_MAX - CORRELATION_ID_HASH_LENGTH - 1;
+	return `${sanitized.slice(0, prefixLength)}-${hashText(trimmed, CORRELATION_ID_HASH_LENGTH)}`;
 }
 
 /** Prefer the host call token; otherwise create a bounded per-process token. */

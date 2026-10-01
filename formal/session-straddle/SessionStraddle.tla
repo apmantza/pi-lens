@@ -2,42 +2,43 @@
 (***************************************************************************)
 (* Session-scoped runtime state across a same-process session replacement *)
 (* (pi's /new or /resume in the same cwd: the extension module is cached,  *)
-(* so the module-level `runtime` (index.ts:566) is shared by both          *)
+(* so the module-level `runtime` (index.ts) is shared by both              *)
 (* sessions).                                                              *)
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - the host: session 1's agent_settled, session_shutdown, session 2's   *)
 (*    session_start (split at its awaits: the #2890 admission key is set   *)
-(*    first, index.ts:2077; the generation bump and the clear of           *)
-(*    _cascadeRuns/_pendingCascadeRuns happen later, in                    *)
-(*    handleSessionStart -> runtime.resetForSession,                       *)
-(*    runtime-session.ts:2408, runtime-coordinator.ts:434-443), a          *)
-(*    duplicate session_start for the same (reason, id) (#2890), and       *)
-(*    session 2's turn_end, which consumes and delivers the cascade runs   *)
-(*    (consumeCascadeRuns, runtime-turn.ts:1147);                          *)
-(*  - a session-1 cascade compute admitted by appendCascadePromise        *)
-(*    (runtime-coordinator.ts:998), resolving at any time. It is parked in *)
-(*    _pendingCascadeRuns or, past the 32-compute cap (Overflow, #3512),   *)
-(*    appended by a detached .then that the reset cannot reach. Its        *)
-(*    handler can admit it after the reset (LateAdmit, #3512 r1), with the *)
-(*    generation it captured at dispatch (Dispatch1Gen);                   *)
+(*    first, index.ts (lastSessionStartIdentity); the generation bump and  *)
+(*    the clear of _cascadeRuns/_pendingCascadeRuns happen later, in       *)
+(*    handleSessionStart -> runtime.resetForSession, runtime-session.ts,   *)
+(*    runtime-coordinator.ts), a duplicate session_start for the same      *)
+(*    (reason, id) (#2890), and session 2's turn_end, which consumes and   *)
+(*    delivers the cascade runs (consumeCascadeRuns, runtime-turn.ts);     *)
+(*  - a session-1 cascade compute admitted by appendCascadePromise         *)
+(*    (runtime-coordinator.ts appendCascadePromise), resolving at any time.*)
+(*    It is parked in _pendingCascadeRuns or, past the 32-compute cap      *)
+(*    (Overflow, #3512), appended by a detached .then that the reset cannot*)
+(*    reach. Its handler can admit it after the reset (LateAdmit, #3512    *)
+(*    r1), with the generation it captured at dispatch (Dispatch1Gen);     *)
 (*  - session 1's quiet window, fire-and-forget from agent_settled         *)
-(*    (index.ts:3568). runQuietWindow captures the session generation      *)
-(*    as each task starts (quiet-window.ts:174, #3499) and runs its        *)
-(*    tasks in sequence: "cascade_carry_over_settle" (quiet-window.ts:225) *)
-(*    runs settleCascadeRuns, which takes the pending list, awaits up to   *)
-(*    15 s, then appends the settled runs and re-parks the rest            *)
-(*    (runtime-coordinator.ts:1025-1092); then the cascade-tier reconcile  *)
-(*    (cascade-tier.ts:479), whose onResolvedFound appends a run after its *)
-(*    own await (index.ts:3380-3389). The reconcile drains the tier-3      *)
-(*    touch registry, which the reset clears in the same tick as the       *)
-(*    generation bump (runtime-session.ts:2407-2408).                      *)
-(*  - session 2's cascade lane: a dispatch (runtime-tool-result.ts:904    *)
-(*    captures the generation) whose compute records its own tier-3 touch, *)
-(*    and, under Overflow, a compute session 2 admits past the cap;        *)
-(*    session 2's own quiet window reconciles the touch;                   *)
+(*    (index.ts runQuietWindow). runQuietWindow captures the session       *)
+(*    generation as each task starts (quiet-window.ts, #3499) and runs its *)
+(*    tasks in sequence: "cascade_carry_over_settle" (quiet-window.ts      *)
+(*    runQuietWindow) runs settleCascadeRuns, which takes the pending list,*)
+(*    awaits up to 15 s, then appends the settled runs and re-parks the    *)
+(*    rest (runtime-coordinator.ts settleCascadeRuns); then the            *)
+(*    cascade-tier reconcile (clients/lsp/cascade-tier.ts                  *)
+(*    reconcileOutstandingCascadeTouches), whose onResolvedFound appends a *)
+(*    run after its own await (index.ts onResolvedFound). The reconcile    *)
+(*    drains the tier-3 touch registry, which the reset clears in the same *)
+(*    tick as the generation bump (runtime-session.ts resetForSession).    *)
+(*  - session 2's cascade lane: a dispatch (runtime-tool-result.ts         *)
+(*    handleToolResult captures the generation) whose compute records its  *)
+(*    own tier-3 touch, and, under Overflow, a compute session 2 admits    *)
+(*    past the cap; session 2's own quiet window reconciles the touch;     *)
 (*  - optionally (Strays, #3512), the still-running session-1 compute,     *)
-(*    which records a touch after the reset (integration.ts:2045).         *)
+(*    which records a touch after the reset (integration.ts                *)
+(*    recordOutstandingCascadeTouch).                                      *)
 (* FixParts selects the guards. The shipped code is                        *)
 (* {"settle","reconcile","reconcileTaskCapture","admission","stray"};      *)
 (* {} is the code before #3499. The model has no clock: it cannot see a    *)
@@ -329,7 +330,7 @@ StartBegin ==
     /\ UNCHANGED Rest3512
 
 \* resetCascadeTierSessionState() and runtime.resetForSession(), in one tick
-\* (runtime-session.ts:2407-2408).
+\* (runtime-session.ts handleSessionStart).
 ResetForSession ==
     /\ gen' = gen + 1
     /\ resets' = [resets EXCEPT ![2] = @ + 1]
@@ -357,7 +358,7 @@ DupStart ==
                    drained, dropped, rec2, strayed, delivered>>
     /\ UNCHANGED Rest3512
 
-\* The tier-3 record site (integration.ts:2045). Under "stray" it drops a
+\* The tier-3 record site (clients/dispatch/integration.ts recordOutstandingCascadeTouch). Under "stray" it drops a
 \* touch whose dispatch-captured generation g is no longer current.
 RecordTouch(o, g) ==
     IF "stray" \in FixParts /\ g # gen
@@ -367,7 +368,7 @@ RecordTouch(o, g) ==
            /\ UNCHANGED dropped
 
 \* Session 2's tool_result dispatches the pipeline and captures the session
-\* generation (runtime-tool-result.ts:904); its compute then runs detached.
+\* generation (runtime-tool-result.ts handleToolResult); its compute then runs detached.
 Dispatch2 ==
     /\ phase = "s2" /\ rec2 = "idle"
     /\ rec2' = "dispatched"
@@ -432,7 +433,7 @@ Spec == Init /\ [][Next]_vars
 (* A run computed for session 1 is never delivered in session 2. *)
 NoCrossSessionDelivery == \A d \in delivered : d[1] = d[2]
 
-(* "Session reset still clears it" (runtime-coordinator.ts:615-616): once
+(* "Session reset still clears it" (runtime-coordinator.ts resetForSession): once
    session 2's reset has run, no session-1 run or parked compute is in the
    runtime. *)
 NoCrossSessionState ==

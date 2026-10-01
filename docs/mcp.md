@@ -112,7 +112,7 @@ New files:
 
 | tool | maps to | purpose |
 |------|---------|---------|
-| `pilens_analyze` | `analyzeFile` (warm) / worker (fresh) | run the per-edit pipeline on a file; returns diagnostics + timing. `mode: warm\|fresh`. **Correctness + mechanism probe.** |
+| `pilens_analyze` | `analyzeFile` (warm) / worker (fresh) | run the per-edit pipeline on a file; returns diagnostics + timing. `mode: warm\|fresh`. **Correctness + mechanism probe.** Each `latency.runners[]` row carries `failureKind` when the runner set one: `failed` + `blocking_diagnostics` is a run whose findings failed the check; `failed` with any other kind, or none, is a runner that produced no usable result. |
 | `pilens_ast_grep_search` | `ast_grep_search` | AST-aware structural search. |
 | `pilens_ast_grep_replace` | `ast_grep_replace` | AST-aware structural replace. |
 | `pilens_diagnostics` | `lens_diagnostics` | session or LSP diagnostics, selected by `source`, `scope`, and `severity`. |
@@ -130,6 +130,17 @@ New files:
 | `pilens_session_start` | session lifecycle | initialize session state and caches. |
 | `pilens_symbol_search` | `symbol_search` | search the persisted symbol index. |
 | `pilens_turn_end` | turn lifecycle | settle turn-end work and return findings. |
+
+Every tool's `inputSchema` (from `tools/list`) is also the set of argument keys
+the dispatcher accepts without comment: an undeclared key is reported in the
+result (a leading `Ignored unknown argument(s) ...` line, plus
+`structuredContent.ignoredArguments`). An ignored key that leaves a required
+input missing, or that is a declared parameter the call did not send written
+another way (`pilens_diagnostics {"filePath": ...}` for `path`; predicate in
+[public-api-stability.md](public-api-stability.md)), turns the call into an error
+instead of a run on defaults; a looser "did you mean" stays a warning (#3749;
+details in [agent-tools.md](agent-tools.md)). The check is the one seam in
+`mcp/server.ts` `tools/call`, through `mcp/tool-arguments.ts`.
 
 ## Packaging / wiring
 

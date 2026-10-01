@@ -125,6 +125,222 @@ it("does not dispatch an edit when analyzer bootstrap is unavailable (#2939 M9)"
 });
 
 describe("bash grep searchReads registration", () => {
+	// #3832 recurrence: pi 0.99 codemode hands a script `structuredContent`
+	// (`{output, exit_code}`) and drops it from any rewritten result that omits
+	// it, so a decorated non-zero bash threw instead of resolving to its object.
+	// A real decorated bash is unclassified, so it leaves `handleToolResult` at
+	// the `mutation === undefined` return carrying the synthetic-write notes,
+	// never at the host-failure return (that one is pinned separately below).
+	it.each([
+		{ exitCode: 3, isError: true },
+		{ exitCode: 0, isError: false },
+	])(
+		"forwards structuredContent on a decorated bash tool_result that gains pipeline notes, exit $exitCode (#3832)",
+		async ({ exitCode, isError }) => {
+			const env = setupTestEnvironment("pi-lens-3832-structured-content-");
+			try {
+				const { runPipeline } = await import("../../clients/pipeline.js");
+				vi.mocked(runPipeline).mockResolvedValue({
+					output: "PIPELINE-NOTE",
+					hasBlockers: false,
+					isError: false,
+					fileModified: false,
+				});
+				const filePath = path.join(env.tmpDir, "changed.ts");
+				fs.writeFileSync(filePath, "export const before = true;\n");
+				const command = `sed -i 's/before/after/' ${filePath}; exit ${exitCode}`;
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				const cacheManager = new CacheManager(false);
+				await handleToolCall({
+					event: {
+						toolName: "bash",
+						toolCallId: "3832-bash",
+						input: { command },
+					},
+					ctx: { cwd: env.tmpDir },
+					lensEnabled: true,
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager,
+					ensureLSPConfigInitialized: async () => {},
+					updateLspStatus: () => {},
+					resetLSPService: () => {},
+				} as any);
+				// The host ran the command between tool_call and tool_result.
+				fs.writeFileSync(filePath, "export const after = true;\n");
+				const structuredContent = {
+					output: "",
+					truncated: false,
+					exit_code: exitCode,
+				};
+
+				const rewritten = await handleToolResult({
+					event: {
+						toolName: "bash",
+						toolCallId: "3832-bash",
+						input: { command },
+						content: [{ type: "text", text: `host exit ${exitCode}` }],
+						isError,
+						// pi 0.99 supplies this before the tool_result extension hook.
+						structuredContent,
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager,
+					resetLSPService: () => {},
+					readGuard: runtime.readGuard,
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as any);
+
+				expect(rewritten?.structuredContent).toEqual(structuredContent);
+				expect(rewritten?.content[0]).toEqual({
+					type: "text",
+					text: `host exit ${exitCode}`,
+				});
+				expect(JSON.stringify(rewritten?.content)).toContain("PIPELINE-NOTE");
+				// The host's own status must stay the host's: forcing it would change
+				// what the script sees.
+				expect(rewritten).not.toHaveProperty("isError");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
+	it("forwards structuredContent on the host-failure return of a classified tool (#3832)", async () => {
+		const env = setupTestEnvironment("pi-lens-3832-host-failure-");
+		try {
+			const filePath = path.join(env.tmpDir, "changed.ts");
+			fs.writeFileSync(filePath, "export const value = true;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const rewritten = await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					content: [{ type: "text", text: "host failed" }],
+					isError: true,
+					structuredContent: { exit_code: 3 },
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(rewritten).toEqual({
+				content: [{ type: "text", text: "host failed" }],
+				isError: true,
+				structuredContent: { exit_code: 3 },
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("forwards structuredContent on the pipeline-crash response (#3832)", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockRejectedValueOnce(new Error("boom"));
+		const env = setupTestEnvironment("pi-lens-3832-crash-");
+		try {
+			const filePath = path.join(env.tmpDir, "changed.ts");
+			fs.writeFileSync(filePath, "export const value = true;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			const rewritten = await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const value = true;" },
+					content: [{ type: "text", text: "ok" }],
+					structuredContent: { result: "structured" },
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(rewritten).toEqual(
+				expect.objectContaining({
+					isError: true,
+					structuredContent: { result: "structured" },
+				}),
+			);
+			expect(rewritten?.content.length).toBeGreaterThan(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("preserves structuredContent on pipeline rewrites (#3832)", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		const env = setupTestEnvironment("pi-lens-3832-pipeline-content-");
+		try {
+			const filePath = path.join(env.tmpDir, "changed.ts");
+			fs.writeFileSync(filePath, "export const value = true;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const base = {
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					content: [{ type: "text", text: "ok" }],
+					structuredContent: { result: "structured" },
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any;
+
+			vi.mocked(runPipeline).mockResolvedValueOnce({
+				output: "pipeline warning",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+			});
+			expect(await handleToolResult(base)).toEqual(
+				expect.objectContaining({
+					structuredContent: { result: "structured" },
+				}),
+			);
+
+			runtime.beginTurn();
+			vi.mocked(runPipeline).mockResolvedValueOnce({
+				output: "pipeline error",
+				hasBlockers: false,
+				isError: true,
+				fileModified: false,
+			});
+			expect(await handleToolResult(base)).toEqual(
+				expect.objectContaining({
+					isError: true,
+					structuredContent: { result: "structured" },
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("supersedes the provisional native read before checkEdit", async () => {
 		const env = setupTestEnvironment("pi-lens-2802-native-supersession-");
 		try {
@@ -2375,9 +2591,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					.mock.calls.filter(([ctx]) => ctx.allowAutonomousWriters === false),
 			).toHaveLength(2);
 			expect(runtime.pendingDeferredMutationCount).toBe(1);
-			expect(recordWritten).toHaveBeenCalledWith(directPath);
-			expect(recordWritten).not.toHaveBeenCalledWith(existingPath);
-			expect(recordWritten).not.toHaveBeenCalledWith(createdPath);
+			// Authorship for the recognized write, never a FileTime stamp (#3525).
+			expect(recordWritten).toHaveBeenCalled();
+			for (const call of recordWritten.mock.calls)
+				expect(call).toEqual([directPath, { stampFileTime: false }]);
 			for (const [filePath, bytes] of opaqueBytesBeforePipeline) {
 				expect(fs.readFileSync(filePath)).toEqual(bytes);
 			}
@@ -4240,6 +4457,84 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 			expect(fs.existsSync(fileB)).toBe(true);
 			expect(runtime.takeToolCallAttribution("call-A")).toBeUndefined();
 			expect(runtime.takeToolCallAttribution("call-B")).toBeUndefined();
+		} finally {
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+			env.cleanup();
+		}
+	});
+
+	it("keeps parallel nested codemode calls apart under an 86-char parent id (#3833)", async () => {
+		// pi 0.99 codemode names nested calls `<parent>/<n>`; an OpenAI
+		// Responses parent id (`call_id|item.id`) is ~80 chars, so the old
+		// 64-char slice in sanitizeCorrelationId cut BOTH ids to the same key:
+		// the second tool_call overwrote the first's attribution, the first
+		// result took the wrong one, the second found none and refused with
+		// path_attribution_missing -> a false-clean turn_end while both files
+		// held blockers. Recurrence: two ids differing only after char 64.
+		const env = setupTestEnvironment("pi-lens-nested-long-id-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const fileB = createTempFile(env.tmpDir, "b.ts", "debugger;\n");
+			const fileC = createTempFile(env.tmpDir, "c.ts", "debugger;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const parent = `call_${"x".repeat(40)}|fc_${"y".repeat(40)}`;
+			expect(parent.length).toBeGreaterThan(80);
+
+			const dbg = vi.fn();
+			const callDeps = (toolCallId: string, relPath: string) => ({
+				event: {
+					toolCallId,
+					toolName: "write",
+					input: { path: relPath, content: "debugger;\n" },
+				},
+				ctx: { cwd: env.tmpDir },
+				lensEnabled: true,
+				getFlag: (name: string) => name === "no-lsp",
+				dbg,
+				runtime,
+				cacheManager: new CacheManager(false),
+				ensureLSPConfigInitialized: async () => {},
+				updateLspStatus: () => {},
+				resetLSPService: () => {},
+			});
+			const resultDeps = (toolCallId: string, relPath: string) => ({
+				event: {
+					toolCallId,
+					toolName: "write",
+					input: { path: relPath, content: "debugger;\n" },
+					content: [],
+				},
+				getFlag: () => false,
+				dbg,
+				runtime,
+				cacheManager: new CacheManager(false),
+				biomeClient: {},
+				ruffClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			});
+
+			await handleToolCall(callDeps(`${parent}/1`, "b.ts") as any);
+			await handleToolCall(callDeps(`${parent}/2`, "c.ts") as any);
+			await handleToolResult(resultDeps(`${parent}/1`, "b.ts") as any);
+			await handleToolResult(resultDeps(`${parent}/2`, "c.ts") as any);
+
+			expect(dbg).not.toHaveBeenCalledWith(
+				expect.stringContaining("path_attribution_missing"),
+			);
+			const queued = runtime
+				.consumeDeferredFormatFiles()
+				.map((record) => path.resolve(record.filePath));
+			expect(queued).toContain(path.resolve(fileB));
+			expect(queued).toContain(path.resolve(fileC));
 		} finally {
 			if (previousDataDir === undefined) {
 				delete process.env.PILENS_DATA_DIR;

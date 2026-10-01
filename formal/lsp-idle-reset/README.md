@@ -1,7 +1,7 @@
 # LSP idle-reset model
 
 A TLA+ model of the detached LSP idle-reset timer
-(`scheduleLSPIdleReset`, `clients/runtime-turn.ts:516-589`) against LSP work
+(`scheduleLSPIdleReset`, `clients/runtime-turn.ts`) against LSP work
 that is still in flight when it fires. Every config here states its expected
 verdict on its first line (see `formal/file-locks/README.md`), and the
 `TLA+ models` CI job checks them all.
@@ -11,29 +11,29 @@ Issue: #3483.
 ## What the model covers
 
 - **The idle timer.** When it fires it calls `isWorkspaceSweepActive()`
-  (`runtime-turn.ts:560`). If a hold is live, it parks a fresh re-arm on
-  `runWhenWorkspaceSweepIdle`. Otherwise it calls `resetFn()` (`:577`) in the
+  (`clients/runtime-turn.ts` `scheduleLSPIdleReset`). If a hold is live, it parks a fresh re-arm on
+  `runWhenWorkspaceSweepIdle`. Otherwise it calls `resetFn()` in the
   same tick.
 - **What a reset does.** `resetLSPService` marks the service destroyed:
-  `shutdown()` sets `isDestroyed` before its first await (`clients/lsp/index.ts:10020`).
-  It also nulls the singleton (`:10378`), so the next `getLSPService()`
+  `shutdown()` sets `isDestroyed` before its first await (`clients/lsp/index.ts`).
+  It also nulls the singleton, so the next `getLSPService()`
   builds a new generation. The clients are torn down in a later step.
 - **The workspace sweep** (`runWorkspaceDiagnostics`). It holds the sweep hold
-  for its whole run (`index.ts:8871`). Before each file it calls
+  for its whole run (`clients/lsp/index.ts` `runWorkspaceDiagnostics`). Before each file it calls
   `checkDestroyed()`. Every file it has not reached yet is marked
-  `service_destroyed` (`:9212-9227`, `:9620-9626`).
-- **Hold reaping** (`reapStaleHolds`, `workspace-sweep-hold.ts:101-122`).
+  `service_destroyed`.
+- **Hold reaping** (`reapStaleHolds`, `workspace-sweep-hold.ts`).
   Only a sweep that overran its own wall-clock ceiling (`SweepOverrun`) can
   own a hold that is past its max age.
 - **A cascade compute** (`computeCascadeForFile`,
-  `clients/dispatch/integration.ts`). It reads `getLSPService()` once
-  (`:1671`), then touches each neighbour (`:2099`). It takes no hold.
-- **A warm-attach touch** (`clients/warm-attach.ts:131-141`). It calls
+  `clients/dispatch/integration.ts`). It reads `getLSPService()` once,
+  then touches each neighbour. It takes no hold.
+- **A warm-attach touch** (`clients/warm-attach.ts` `tryWarmAttachedDiagnostics`). It calls
   `getLSPService()` and `touchFile` in the same tick for each request. It
   takes no hold.
 - **`touchFile`**, as three steps separated by awaits:
-  - Entry: `checkDestroyed()` → `undefined`, logged `failureKind: destroyed` (`:4619`).
-  - Acquire: `getClientForFile` on a destroyed service → `undefined` (`:2941`),
+  - Entry: `checkDestroyed()` → `undefined`, logged `failureKind: destroyed`.
+  - Acquire: `getClientForFile` on a destroyed service → `undefined`,
     so `touchFile` returns `undefined`, logged `no_clients_none_spawning`.
   - Answer: an answer that arrives after the teardown is `inconclusive`.
     Before the teardown, the real answer comes back.
@@ -42,9 +42,9 @@ Each caller handles an `undefined` touch result differently:
 
 | Caller | Handling of `undefined` | Recorded? |
 |---|---|---|
-| sweep | `timedOut`, `unconfirmedReason: "budget"` (`index.ts:9356`) | yes (label is wrong) |
-| warm attach | `fresh: false` on the IPC answer (`warm-attach.ts:171`) | yes |
-| cascade | `if (!rawDiags) return undefined` (`integration.ts:2107`), then `if (result.value) neighbors.push` (`:2233`): the neighbour is dropped | **no** (latency.log row only) |
+| sweep | `timedOut`, `unconfirmedReason: "budget"` (`clients/lsp/index.ts` `runWorkspaceDiagnostics`) | yes (label is wrong) |
+| warm attach | `fresh: false` on the IPC answer (`clients/warm-attach.ts` `tryWarmAttachedDiagnostics`) | yes |
+| cascade | `if (!rawDiags) return undefined` (`clients/dispatch/integration.ts` `computeCascadeForFile`), then `if (result.value) neighbors.push`: the neighbour is dropped | **no** (latency.log row only) |
 
 ## Invariants
 
@@ -113,14 +113,15 @@ cascade, n1 clean:        run.skipReason "clean", no indeterminate, nothing rend
 ```
 
 The reset is called directly, not through the timer. That is what the timer's
-`resetFn` calls (`index.ts:3306-3308`), and the #1618 test does the same.
+`resetFn` calls (`index.ts` `resetLSPService`), and the #1618 test does the same.
 
 ## Candidate fix
 
 `FixParts = {"entry","acquire"}`: a cascade touch that comes back
 `undefined` from a destroyed service is kept as an unconfirmed neighbour
 (`inconclusive`, `lspTouched: true`, reason `service_destroyed`), not
-dropped. The simplest form is one change at `integration.ts:2107`. Another form
+dropped. The simplest form is one change at `clients/dispatch/integration.ts`
+(`computeCascadeForFile`). Another form
 is `touchFile` returning an explicit
 `{diags:[], inconclusive:true, inconclusiveReason:"service-destroyed"}` from
 both destroyed returns.

@@ -6,24 +6,24 @@
 (* Actors:                                                                 *)
 (*  - touch A, the pipeline's lsp_sync touch (LSPService.touchFile,        *)
 (*    clients/lsp/index.ts). It reads the per-path baseline                *)
-(*    (getDiagnosticsVersionForPath, ~4873), then notify.open ->           *)
-(*    handleNotifyOpenOnce (client.ts ~4029): the document is open, so it  *)
+(*    (getDiagnosticsVersionForPath), then notify.open ->                  *)
+(*    handleNotifyOpenOnce (client.ts): the document is open, so it        *)
 (*    bumps documentVersions, clears the path's diagnostics and sends      *)
-(*    didChange in ONE tick (~4050-4108); markTouched runs after the send  *)
-(*    resolves (index.ts ~5173);                                           *)
+(*    didChange in ONE tick; markTouched runs after the send               *)
+(*    resolves (lsp/index.ts);                                             *)
 (*  - the waiter. SkippedWait = FALSE: A itself waits with minVersion =    *)
-(*    its baseline (index.ts ~5713). SkippedWait = TRUE: the dispatch      *)
+(*    its baseline (lsp/index.ts). SkippedWait = TRUE: the dispatch        *)
 (*    runner's touch B, same content, finds A's markTouched entry          *)
-(*    (shouldSkipNotify ~1952), sends nothing, and waits with no baseline  *)
-(*    (index.ts ~5727);                                                    *)
-(*  - clientWaitForDiagnostics (client.ts ~3797): the early return         *)
+(*    (shouldSkipNotify), sends nothing, and waits with no baseline        *)
+(*    (lsp/index.ts);                                                      *)
+(*  - clientWaitForDiagnostics (client.ts): the early return               *)
 (*    (fresh && !isVersionStale && non-empty cache), else a listener whose *)
 (*    onDiagnostics re-checks and (re)arms a quiet-window timer that       *)
 (*    resolves the wait; a timeout also resolves it. touchFile then reads  *)
-(*    getDiagnostics (index.ts ~6583) after further awaits;                *)
-(*  - the publishDiagnostics handler (client.ts ~2322-2578): seed-first-   *)
+(*    getDiagnostics (lsp/index.ts) after further awaits;                  *)
+(*  - the publishDiagnostics handler (client.ts): seed-first-              *)
 (*    push stores at once, otherwise a per-path debounce timer that checks *)
-(*    isSupersededPush when it fires; a clear cancels that timer (~1825);  *)
+(*    isSupersededPush when it fires; a clear cancels that timer;          *)
 (*  - the server: reads client messages in order; publishes diagnostics    *)
 (*    for the content it last read (or, AsyncServer, for the one before:   *)
 (*    an analysis that started before the latest change), stamped with the *)
@@ -105,26 +105,26 @@ Init ==
 -----------------------------------------------------------------------------
 \* Client-side predicates, as the code computes them.
 
-\* isSupersededPush (client.ts ~2479). documentVersions always has the path here.
+\* isSupersededPush (client.ts). documentVersions always has the path here.
 Superseded(dv) == Mutant \notin {"noSuperseded", "noGuards"} /\ dv # NONE /\ dv < cliVer
 
 \* The waiter's minVersion: A's baseline, or undefined for the skipped touch.
 MinV == IF SkippedWait THEN NONE ELSE baseline
 
-\* hasFreshDiagnostics (client.ts ~3813), over a given stamp.
+\* hasFreshDiagnostics (client.ts), over a given stamp.
 FreshAt(st) == MinV = NONE \/ st > MinV
 
-\* isVersionStale (client.ts ~3826), over a given recorded version.
+\* isVersionStale (client.ts), over a given recorded version.
 StaleAt(rec) == Mutant \notin {"noVersionStale", "noGuards"} /\ rec # NONE /\ rec < cliVer
 
-\* clearDiagnosticsForPath (client.ts ~1812): cache, pending timer,
+\* clearDiagnosticsForPath (client.ts): cache, pending timer,
 \* diagnosticDocVersions and the per-path stamp.
 ClearVars == /\ cache' = Empty
              /\ timer' = NoTimer
              /\ docVerRec' = NONE
              /\ stamp' = 0
 
-\* Store + emit (client.ts ~2560-2574): cache the publish, record its version
+\* Store + emit (client.ts, setupIncomingHandlers): cache the publish, record its version
 \* (only when it carries one), bump the stamp, and run the waiter's
 \* onDiagnostics synchronously: it (re)arms the quiet-window timer when fresh
 \* and not stale; otherwise it returns and leaves an armed timer armed.
@@ -141,7 +141,7 @@ Store(p) ==
 -----------------------------------------------------------------------------
 \* Touch A.
 
-\* touchFile reads the per-path baseline before its notify (index.ts ~4870).
+\* touchFile reads the per-path baseline before its notify (clients/lsp/index.ts).
 Baseline ==
     /\ phase = "start"
     /\ phase' = "based"
@@ -167,7 +167,7 @@ RunnerStart ==
               /\ UNCHANGED fencing
     /\ UNCHANGED <<baseline, gctr, srvVer, srvPrev, pubs, npubs, w, how, result>>
 
-\* The send resolves; markTouched records A's content (index.ts ~5173).
+\* The send resolves; markTouched records A's content (clients/lsp/index.ts).
 RunnerFinish ==
     /\ phase = "sent"
     /\ phase' = "done"
@@ -183,7 +183,7 @@ RunnerFinish ==
 \* The waiter: A after its notify, or the skipped touch B after A's markTouched.
 
 \* clientWaitForDiagnostics entry: the early return, or register the
-\* listener, in one synchronous tick (client.ts ~3905-3945).
+\* listener, in one synchronous tick (client.ts, clientWaitForDiagnostics).
 WaitStart ==
     /\ w = "idle"
     /\ phase = "done"
@@ -211,7 +211,7 @@ WaitTimeout ==
     /\ UNCHANGED <<phase, baseline, cliVer, cache, docVerRec, stamp, gctr, timer,
                    fencing, wire, srvVer, srvPrev, pubs, npubs, result>>
 
-\* touchFile reads getDiagnostics after further awaits (index.ts ~6583).
+\* touchFile reads getDiagnostics after further awaits (clients/lsp/index.ts).
 Read ==
     /\ w = "resolved"
     /\ w' = "read"
@@ -248,7 +248,7 @@ ServerPublish ==
                    fencing, wire, srvVer, srvPrev, w, how, result>>
 
 -----------------------------------------------------------------------------
-\* The publishDiagnostics handler (client.ts ~2322-2578).
+\* The publishDiagnostics handler (client.ts).
 
 ClientReceive ==
     /\ pubs # << >>

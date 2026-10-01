@@ -1,7 +1,15 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import type {
 	SafeSpawnOptions,
 	SpawnResult,
@@ -12,6 +20,20 @@ type SafeSpawnAsync = (
 	args: string[],
 	options?: SafeSpawnOptions,
 ) => Promise<SpawnResult>;
+
+const { isolatedPiLensHome, previousPiLensHome } = await vi.hoisted(
+	async () => {
+		const nodeFs = await import("node:fs");
+		const nodeOs = await import("node:os");
+		const nodePath = await import("node:path");
+		const home = nodeFs.mkdtempSync(
+			nodePath.join(nodeOs.tmpdir(), "pi-lens-3884-home-"),
+		);
+		const previous = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = home;
+		return { isolatedPiLensHome: home, previousPiLensHome: previous };
+	},
+);
 
 const { findGlobalBinary, safeSpawnAsync } = vi.hoisted(() => ({
 	findGlobalBinary: vi.fn(async () => undefined),
@@ -157,6 +179,12 @@ afterEach(() => {
 	}
 });
 
+afterAll(() => {
+	fs.rmSync(isolatedPiLensHome, { recursive: true, force: true });
+	if (previousPiLensHome === undefined) delete process.env.PI_LENS_HOME;
+	else process.env.PI_LENS_HOME = previousPiLensHome;
+});
+
 describe("pytest project environment", () => {
 	it("runs pytest with an unactivated project .venv", async () => {
 		const { root, testFile, pythonPath, binDir } = createProject(true);
@@ -184,7 +212,9 @@ describe("pytest project environment", () => {
 
 	it("records capped member globs through the UV consumer and real sink", async () => {
 		// F7 recurrence: a consumer test that stopped at the in-memory summary
-		// stayed green when the durable degradation sink was suppressed.
+		// stayed green when the durable degradation sink was suppressed. #3880
+		// The sink is shared with the Cargo/LSP consumer, so assert this test's
+		// own workspace-glob-cap records instead of counting unrelated phases.
 		const previousTestMode = process.env.PI_LENS_TEST_MODE;
 		process.env.PI_LENS_TEST_MODE = "0";
 		clearLatencyLog();
@@ -230,7 +260,11 @@ describe("pytest project environment", () => {
 							metadata?: Record<string, unknown>;
 						},
 				)
-				.filter((row) => row.phase === "degradation_ledger");
+				.filter(
+					(row) =>
+						row.phase === "degradation_ledger" &&
+						row.metadata?.kind === "workspace-glob-cap",
+				);
 			expect(rows).toHaveLength(3);
 			expect(rows.map((row) => row.metadata)).toEqual(
 				expect.arrayContaining([

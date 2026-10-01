@@ -115,6 +115,15 @@ export const TOOL_SMOKE_INSTALL_ROW_ID = "tool-smoke-install";
 export const PUBLISH_TOOLCHAIN_ROW_ID = "publish-toolchain-pinned";
 
 /**
+ * The baseline row that witnesses pi's built-in `codemode` tool (#3805): a
+ * script's nested `tools.edit` goes through pi-lens's `tool_call` and
+ * `tool_result` hooks like a top-level call, so the read guard still blocks an
+ * edit with no read and the turn_end check still reaches the next request.
+ * Reachable only on a pi that ships codemode (0.99.0 and later).
+ */
+export const CODEMODE_NESTED_ROW_ID = "codemode-nested-guard";
+
+/**
  * Short, schema-stable marker for the baseline's matrix table. Deliberately the
  * first two columns only: a marker naming a column that a later revision adds
  * or renames would stop finding the table and the runner would silently report
@@ -399,8 +408,9 @@ export function shipVerdict(results, options = {}) {
  * entries.
  *
  * NEWLINE-delimited, never whitespace-delimited. A peer range can legitimately
- * contain a space — `@earendil-works/pi-tui@^0.84.1 || ^0.85.0` after #2586 —
- * and the upstream script emits one entry per line for exactly that reason.
+ * contain a space — an OR-form range such as `^0.84.1 || ^0.85.0`, which
+ * pi-tui's peer was until #3805 — and the upstream script emits one entry per
+ * line for exactly that reason.
  * A `/\s+/` split explodes such a range into three argv entries and hands
  * `npm install` the tokens `||` and `^0.85.0` as package names. This runner
  * shipped that split for one commit; the OR-form range arrived from master in
@@ -870,6 +880,572 @@ export function runPublishToolchainProbe(ctx) {
 				`$ npx -y "npm@${pin}" --version\n${reportedVersion}\n` +
 				`$ npx -y "npm@${pin}" publish --dry-run (exit ${dryRunExitCode})\n${dryRunOutput}`,
 		},
+	};
+}
+
+/** pi's first release with the built-in `codemode` tool. */
+const CODEMODE_MIN_PI_VERSION = Object.freeze([0, 99, 0]);
+
+/** The text pi-lens's read guard puts on an edit of a file the agent never read. */
+const READ_GUARD_EDIT_NEEDLE = "Edit without read";
+
+/** How `runCodemodeNestedProbe` names a turn_end check in a provider request. */
+const TURN_END_CHECK_NEEDLE = "[pi-lens automated check";
+
+/**
+ * The first `x.y.z` in a `pi --version` line, as numbers, or null.
+ *
+ * @param {string} text
+ * @returns {[number, number, number] | null}
+ */
+export function parsePiVersion(text) {
+	const match = /(\d+)\.(\d+)\.(\d+)/.exec(String(text ?? ""));
+	return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+/**
+ * Is the `codemode-nested-guard` row reachable on this pi? Decided BEFORE the
+ * run (hard rule 2): a pi older than 0.99.0 has no codemode tool, and a pi
+ * whose pi-ai the scripted provider cannot be pointed at (a compiled binary
+ * carries no node_modules) cannot be given a scripted turn. Either way the row
+ * is SKIPPED with the reason, never a PASS that measured nothing.
+ *
+ * @param {{ piVersionText?: string, piAiIndex?: string | null }} plan
+ * @returns {{ reachable: boolean, reason: string }}
+ */
+export function planCodemodeRow(plan) {
+	const version = parsePiVersion(plan?.piVersionText ?? "");
+	if (!version) {
+		return {
+			reachable: false,
+			reason: `could not read a pi version from ${JSON.stringify(plan?.piVersionText ?? "")}`,
+		};
+	}
+	const [major, minor, patch] = version;
+	const [minMajor, minMinor, minPatch] = CODEMODE_MIN_PI_VERSION;
+	const old =
+		major !== minMajor
+			? major < minMajor
+			: minor !== minMinor
+				? minor < minMinor
+				: patch < minPatch;
+	if (old) {
+		return {
+			reachable: false,
+			reason: `pi ${version.join(".")} has no built-in codemode tool (added in ${CODEMODE_MIN_PI_VERSION.join(".")})`,
+		};
+	}
+	if (!plan?.piAiIndex) {
+		return {
+			reachable: false,
+			reason:
+				"the pi binary's own pi-ai could not be located (a compiled pi carries no node_modules), so the scripted provider cannot be loaded into it",
+		};
+	}
+	return { reachable: true, reason: "" };
+}
+
+/**
+ * The pi-ai entry that belongs to the pi binary under test, or null.
+ *
+ * Walks up from the REAL path of the binary to the `pi-coding-agent` package
+ * and takes its nested `pi-ai`, else the hoisted sibling -- the two layouts
+ * npm produces. Never this repo's own devDependency: a scripted provider built
+ * on a different pi-ai than the host's would witness the wrong host.
+ *
+ * @param {string} piBin
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {string | null}
+ */
+export function locatePiAiIndex(piBin, env = process.env) {
+	let bin = piBin;
+	if (!path.isAbsolute(bin) && !/[\\/]/.test(bin)) {
+		const dirs = String(env.PATH ?? env.Path ?? "")
+			.split(path.delimiter)
+			.filter(Boolean);
+		const exts =
+			process.platform === "win32" ? ["", ".cmd", ".exe", ".ps1"] : [""];
+		bin =
+			dirs
+				.flatMap((dir) => exts.map((ext) => path.join(dir, `${piBin}${ext}`)))
+				.find((candidate) => fs.existsSync(candidate)) ?? "";
+	}
+	if (!bin) return null;
+	let dir;
+	try {
+		dir = path.dirname(fs.realpathSync(bin));
+	} catch {
+		return null;
+	}
+	for (;;) {
+		const manifest = path.join(dir, "package.json");
+		if (fs.existsSync(manifest)) {
+			try {
+				if (
+					JSON.parse(fs.readFileSync(manifest, "utf8")).name ===
+					"@earendil-works/pi-coding-agent"
+				) {
+					return (
+						[
+							path.join(dir, "node_modules", "@earendil-works", "pi-ai"),
+							path.join(dir, "..", "pi-ai"),
+						]
+							.map((pkg) => path.join(pkg, "dist", "index.js"))
+							.find((candidate) => fs.existsSync(candidate)) ?? null
+					);
+				}
+			} catch {}
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+/**
+ * The scripted provider's turns for the `codemode-nested-guard` row. ONE
+ * codemode call does three things through `tools.*`:
+ *   1. `edit` of `c.ts`, which the script never read: read-guard must block it;
+ *   2. `read` then `edit` of `b.ts`, adding a `debugger;` statement: the
+ *      licensed edit must go through and dispatch must flag it;
+ *   3. a nested `bash` that waits for that dispatch to finish
+ *      (`pollScriptPath`). Dispatch racing turn_end's bounded wait is its own
+ *      seam (#3796); this row asks whether a nested edit reaches turn_end, not
+ *      whether a loaded box is fast, and the wait is itself capped and
+ *      witnessed, so an expired wait reads UNTESTED.
+ * Turn 1 is a top-level `bash` that waits for the turn_end pipeline to finish:
+ * pi does not hold the next request for it, so the check rides a LATER
+ * request, and turn 2 (plain text) is the request that must carry it.
+ *
+ * @param {{ pollScriptPath: string, latencyLogPath: string, capMs: number }} plan
+ */
+export function buildCodemodeScenario(plan) {
+	const waitCommand = (file) =>
+		JSON.stringify(
+			`node ${JSON.stringify(plan.pollScriptPath)} ${JSON.stringify(plan.latencyLogPath)} ${file} ${plan.capMs}`,
+		);
+	const code = [
+		"const waitFor = async (file) => {",
+		"  const out = await tools.bash({ command: file === 'd.ts' ? " +
+			waitCommand("d.ts") +
+			" : " +
+			waitCommand("b.ts") +
+			" });",
+		"  text(typeof out === 'string' ? out : JSON.stringify(out));",
+		"};",
+		// Warm-up: pi-lens's first dispatch in a fresh session pays cold-start
+		// costs that can exceed tool_result's bounded wait on a loaded box.
+		"await tools.read({ path: 'd.ts' });",
+		"await tools.edit({ path: 'd.ts', edits: [{ oldText: 'export const d = 1;', newText: 'export const d = 2;' }] });",
+		"await waitFor('d.ts');",
+		"try {",
+		"  await tools.edit({ path: 'c.ts', edits: [{ oldText: 'export const c = 1;', newText: 'export const c = 2;' }] });",
+		"  text('NESTED_EDIT_APPLIED');",
+		"} catch (err) { text('NESTED_EDIT_REJECTED ' + String((err && err.message) || err)); }",
+		"await tools.read({ path: 'b.ts' });",
+		"await tools.edit({ path: 'b.ts', edits: [{ oldText: 'export const b = 1;', newText: 'export const b = 2;\\ndebugger;' }] });",
+		"await waitFor('b.ts');",
+	].join("\n");
+	return [
+		[
+			{
+				type: "toolCall",
+				id: "c1",
+				name: "codemode",
+				arguments: { code },
+			},
+		],
+		[
+			{
+				type: "toolCall",
+				id: "t1",
+				name: "bash",
+				arguments: {
+					command: `node ${JSON.stringify(plan.pollScriptPath)} ${JSON.stringify(plan.latencyLogPath)} turn_end ${plan.capMs}`,
+				},
+			},
+		],
+		[{ type: "text", text: "done" }],
+	];
+}
+
+/**
+ * The script the row's `bash` calls run: poll the pi-lens latency log until a
+ * dispatch for the file named by `key` completed (`b.ts`), or until a turn_end
+ * pipeline finished (`turn_end`), or the cap expires. Prints exactly one of
+ * `POLL_COMPLETE <key>` / `POLL_EXPIRED <key>`.
+ */
+export const CODEMODE_POLL_SCRIPT = `import fs from "node:fs";
+const [log, key, capMs] = process.argv.slice(2);
+const deadline = Date.now() + Number(capMs);
+const matches = (row) =>
+	key === "turn_end"
+		? row.type === "tool_result" && row.toolName === "turn_end"
+		: row.result === "dispatch_complete" && String(row.filePath ?? "").endsWith(key);
+const complete = () => {
+	let text = "";
+	try { text = fs.readFileSync(log, "utf8"); } catch { return false; }
+	return text.split("\\n").some((line) => {
+		try { return matches(JSON.parse(line)); } catch { return false; }
+	});
+};
+while (!complete()) {
+	if (Date.now() > deadline) { console.log("POLL_EXPIRED " + key); process.exit(0); }
+	await new Promise((resolve) => setTimeout(resolve, 250));
+}
+console.log("POLL_COMPLETE " + key);
+`;
+
+/**
+ * The `codemode-nested-guard` row's verdict, from what a real pi did.
+ *
+ * `nested` is every `tool_execution_end` carrying a `parentToolCallId` (pi's
+ * own marker of a call a script made) and `topLevel` the rest; `providerRows`
+ * are the scripted provider's per-request observations; `files` are read back
+ * from disk.
+ * Four conditions, each the whole defect at some point:
+ *   - the nested edit-without-read was BLOCKED by read-guard AND `c.ts` on
+ *     disk is untouched (a block message over a written file is not a block);
+ *   - the licensed nested read-then-edit of `b.ts` went through (a guard that
+ *     blocks everything would pass the first condition alone);
+ *   - both waits (the nested edit's dispatch, then the turn_end pipeline)
+ *     reached a terminal state (an expired wait measured nothing about
+ *     turn_end: UNTESTED, never PASS);
+ *   - a later provider request carries the turn_end check naming `b.ts`'s
+ *     `debugger` blocker.
+ *
+ * @param {{
+ *   nested?: Array<{ id?: string, toolName?: string, isError?: boolean, text?: string }>,
+ *   topLevel?: Array<{ id?: string, toolName?: string, isError?: boolean, text?: string }>,
+ *   providerRows?: Array<{ turn?: number, userMessages?: string[] }>,
+ *   files?: { b?: string, c?: string },
+ * }} observed
+ */
+export function classifyCodemodeNested(observed) {
+	const nested = observed?.nested ?? [];
+	const done = (status, detail) => ({ status, detail, shows: detail });
+	if (nested.length === 0) {
+		return done(
+			"fail",
+			"no nested tool call was observed (no tool_execution_end with a parentToolCallId): the codemode tool did not run",
+		);
+	}
+	const edits = nested.filter((call) => call.toolName === "edit");
+	const blocked = edits.find(
+		(call) =>
+			call.isError === true &&
+			call.text?.includes(READ_GUARD_EDIT_NEEDLE) &&
+			call.text.includes("c.ts"),
+	);
+	const cUntouched = String(observed?.files?.c ?? "").includes(
+		"export const c = 1;",
+	);
+	if (!blocked || !cUntouched) {
+		return done(
+			"fail",
+			blocked
+				? `read-guard's block text came back but c.ts on disk changed: ${JSON.stringify(observed?.files?.c ?? null)}`
+				: `no nested edit was blocked with "${READ_GUARD_EDIT_NEEDLE}" (${edits.length} nested edit(s): ${edits.map((call) => `${call.id} isError=${call.isError}`).join(", ") || "none"}); c.ts reads ${JSON.stringify(observed?.files?.c ?? null)}`,
+		);
+	}
+	const licensed = edits.find(
+		(call) => call.isError === false && call.text?.includes("b.ts"),
+	);
+	const bEdited = String(observed?.files?.b ?? "").includes("debugger;");
+	if (!licensed || !bEdited) {
+		return done(
+			"fail",
+			`the nested read-then-edit of b.ts did not go through (edit isError=${licensed?.isError ?? "absent"}, b.ts carries debugger;=${bEdited}): the guard blocked a licensed edit`,
+		);
+	}
+	const waits = [...nested, ...(observed?.topLevel ?? [])]
+		.filter((call) => call.toolName === "bash")
+		.map((call) => call.text ?? "")
+		.join("\n");
+	if (
+		waits.includes("POLL_EXPIRED") ||
+		!waits.includes("POLL_COMPLETE b.ts") ||
+		!waits.includes("POLL_COMPLETE turn_end")
+	) {
+		return {
+			status: "expired",
+			detail: `a wait inside the scenario did not reach a terminal state inside the cap (bash said ${JSON.stringify(waits.slice(0, 160))}), so turn_end was not measured`,
+		};
+	}
+	const check = (observed?.providerRows ?? []).find((row) =>
+		(row.userMessages ?? []).some(
+			(text) =>
+				text.includes(TURN_END_CHECK_NEEDLE) &&
+				text.includes("b.ts") &&
+				/debugger/i.test(text),
+		),
+	);
+	if (!check) {
+		const seen = (observed?.providerRows ?? [])
+			.map(
+				(row) =>
+					`turn ${row.turn}: ${(row.userMessages ?? []).filter((text) => text.includes(TURN_END_CHECK_NEEDLE)).length} check message(s)`,
+			)
+			.join("; ");
+		return done(
+			"fail",
+			`no provider request carried a turn_end check naming b.ts's debugger blocker after the nested edit (${seen || "no provider requests recorded"})`,
+		);
+	}
+	const shows =
+		`nested edit ${blocked.id} of unread c.ts blocked ("${READ_GUARD_EDIT_NEEDLE}", c.ts unchanged); ` +
+		`nested read+edit ${licensed.id} of b.ts applied; ` +
+		`turn_end check naming b.ts's debugger blocker reached provider request turn ${check.turn}`;
+	return { status: "pass", detail: shows, shows };
+}
+
+/**
+ * Split an RPC event stream's `tool_execution_end` events into the calls a
+ * script made (pi marks them with `parentToolCallId`) and the top-level ones,
+ * each reduced to the fields the classifier reads. The marker is the row's
+ * whole notion of "nested": a stream where it moved would leave `nested`
+ * empty and the row FAILED, never PASSED.
+ *
+ * @param {Array<Record<string, any>>} events
+ */
+export function summarizeToolEnds(events) {
+	const ends = (events ?? [])
+		.filter((event) => event?.type === "tool_execution_end")
+		.map((event) => ({
+			id: event.toolCallId,
+			nested: typeof event.parentToolCallId === "string",
+			toolName: event.toolName,
+			isError: event.isError === true,
+			text: (event.result?.content ?? [])
+				.map((block) => block?.text ?? "")
+				.join("\n"),
+		}));
+	return {
+		nested: ends.filter((call) => call.nested),
+		topLevel: ends.filter((call) => !call.nested),
+	};
+}
+
+/**
+ * Drive one scripted turn through a real `pi --mode rpc` and return its event
+ * stream. Bounded: the wait for `agent_settled` has a cap, and expiry is
+ * reported rather than read as a finished run.
+ */
+function driveCodemodeRpc({ piBin, cwd, env, providerPath, capMs }) {
+	return new Promise((resolve) => {
+		let child;
+		try {
+			child = spawn(
+				piBin,
+				[
+					"--mode",
+					"rpc",
+					"--no-session",
+					"--no-lsp",
+					"--provider",
+					"scripted",
+					"--model",
+					"harness",
+					"-e",
+					providerPath,
+				],
+				{ cwd, stdio: ["pipe", "pipe", "pipe"], env },
+			);
+		} catch (err) {
+			resolve({ ok: false, reason: `spawn failed: ${err?.message || err}` });
+			return;
+		}
+		const events = [];
+		const stderr = [];
+		let buf = "";
+		let settled = false;
+		const finish = (value) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			try {
+				child.kill("SIGKILL");
+			} catch {}
+			resolve({ events, stderr: stderr.join(""), ...value });
+		};
+		const timer = setTimeout(
+			() =>
+				finish({
+					ok: false,
+					reason: `no agent_settled event within ${capMs}ms`,
+				}),
+			capMs,
+		);
+		child.stderr.on("data", (chunk) => stderr.push(chunk.toString()));
+		child.stdout.on("data", (chunk) => {
+			buf += chunk.toString();
+			let i = buf.indexOf("\n");
+			while (i >= 0) {
+				const line = buf.slice(0, i).replace(/\r$/, "");
+				buf = buf.slice(i + 1);
+				i = buf.indexOf("\n");
+				if (!line.trim()) continue;
+				let message;
+				try {
+					message = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				events.push(message);
+				if (message.type === "agent_settled") finish({ ok: true });
+			}
+		});
+		child.on("error", (err) =>
+			finish({ ok: false, reason: `pi error: ${err?.message || err}` }),
+		);
+		child.on("exit", (code) =>
+			finish({ ok: false, reason: `pi exited early (code ${code})` }),
+		);
+		// Extensions register asynchronously; prompt once they have had a moment.
+		setTimeout(() => {
+			try {
+				child.stdin.write(
+					`${JSON.stringify({ id: "qa", type: "prompt", message: "go" })}\n`,
+				);
+			} catch {}
+		}, 3000);
+	});
+}
+
+/**
+ * Drive the `codemode-nested-guard` row against the installed candidate.
+ *
+ * Runs in a row-private HOME so enabling codemode (`defaultTools: +codemode`,
+ * off by default in pi) touches no other row's session. The model is a
+ * scripted provider, not a stub of pi: the tool pipeline under test is the
+ * real pi's, and the provider only emits the tool call a model would.
+ *
+ * @param {any} ctx
+ */
+export async function runCodemodeNestedProbe(ctx) {
+	const piVersionText = describePi(ctx.piBin, ctx.env);
+	const piAiIndex = locatePiAiIndex(ctx.piBin, ctx.env);
+	const plan = planCodemodeRow({ piVersionText, piAiIndex });
+	if (!plan.reachable) {
+		return { status: "unreachable", unmeasured: false, detail: plan.reason };
+	}
+	const { home, env } = rowHomeEnv(ctx, "codemode", {
+		REAL_PI_HARNESS_PI_AI_INDEX: piAiIndex,
+	});
+	const agentDir = path.join(home, ".pi", "agent");
+	fs.mkdirSync(agentDir, { recursive: true });
+	const settingsPath = path.join(agentDir, "settings.json");
+	fs.writeFileSync(
+		settingsPath,
+		JSON.stringify({ npmCommand: ["npm"], defaultTools: ["+codemode"] }),
+	);
+	const projectDir = path.join(ctx.scratchRoot, "codemode-proj");
+	fs.mkdirSync(projectDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(projectDir, "package.json"),
+		'{ "name": "release-qa-codemode", "version": "1.0.0", "type": "module" }\n',
+	);
+	for (const name of ["b", "c", "d"]) {
+		fs.writeFileSync(
+			path.join(projectDir, `${name}.ts`),
+			`export const ${name} = 1;\nexport function f_${name}(): number {\n\treturn ${name};\n}\n`,
+		);
+	}
+	gitExecFileSync(["init", "-q"], { cwd: projectDir });
+	gitExecFileSync(["config", "user.email", "t@t.t"], { cwd: projectDir });
+	gitExecFileSync(["config", "user.name", "t"], { cwd: projectDir });
+	gitExecFileSync(["add", "-A"], { cwd: projectDir });
+	gitExecFileSync(["commit", "-qm", "init"], { cwd: projectDir });
+	execFileSync(ctx.piBin, ["install", ctx.installedPkgDir], {
+		cwd: projectDir,
+		encoding: "utf8",
+		env,
+		timeout: 600_000,
+	});
+	const pollScriptPath = path.join(ctx.scratchRoot, "codemode-poll.mjs");
+	fs.writeFileSync(pollScriptPath, CODEMODE_POLL_SCRIPT);
+	const scriptPath = path.join(ctx.scratchRoot, "codemode-script.json");
+	const providerLog = path.join(ctx.scratchRoot, "codemode-provider.jsonl");
+	fs.writeFileSync(
+		scriptPath,
+		JSON.stringify(
+			buildCodemodeScenario({
+				pollScriptPath,
+				latencyLogPath: path.join(env.PI_LENS_HOME, "latency.log"),
+				capMs: ctx.pollCapMs,
+			}),
+		),
+	);
+	const run = await driveCodemodeRpc({
+		piBin: ctx.piBin,
+		cwd: projectDir,
+		env: {
+			...env,
+			REAL_PI_HARNESS_SCRIPT: scriptPath,
+			REAL_PI_HARNESS_PROVIDER_LOG: providerLog,
+		},
+		providerPath: path.join(
+			REPO_ROOT,
+			"tests",
+			"fixtures",
+			"real-harness",
+			"scripted-provider.mjs",
+		),
+		// The scripted turn can legitimately wait the whole poll cap inside its
+		// nested bash, then needs the next request and the settle.
+		capMs: ctx.pollCapMs + 90_000,
+	});
+	const read = (file) => {
+		try {
+			return fs.readFileSync(file, "utf8");
+		} catch {
+			return null;
+		}
+	};
+	const providerRows = String(read(providerLog) ?? "")
+		.split(/\r?\n/)
+		.flatMap((line) => {
+			try {
+				return line.trim() ? [JSON.parse(line)] : [];
+			} catch {
+				return [];
+			}
+		});
+	const { nested, topLevel } = summarizeToolEnds(run.events);
+	const files = {
+		b: read(path.join(projectDir, "b.ts")),
+		c: read(path.join(projectDir, "c.ts")),
+	};
+	const witness = {
+		ext: "json",
+		content: JSON.stringify(
+			{
+				pi: piVersionText,
+				settings: read(settingsPath),
+				runOk: run.ok,
+				runReason: run.reason ?? null,
+				nested,
+				topLevel,
+				providerRows: providerRows.map((row) => ({
+					turn: row.turn,
+					userMessages: row.userMessages,
+				})),
+				files,
+			},
+			null,
+			2,
+		),
+	};
+	if (!run.ok) {
+		return {
+			status: "expired",
+			detail: `the scripted turn did not settle: ${run.reason}${run.stderr ? ` (stderr tail: ${run.stderr.slice(-200)})` : ""}`,
+			witness,
+		};
+	}
+	return {
+		...classifyCodemodeNested({ nested, topLevel, providerRows, files }),
+		witness,
 	};
 }
 
@@ -2136,6 +2712,13 @@ const ROW_PROBES = {
 	// the argv it pins.
 	[PUBLISH_TOOLCHAIN_ROW_ID]: async (ctx) => {
 		return runPublishToolchainProbe(ctx);
+	},
+
+	// #3805: pi 0.99's codemode tool calls edit/read/bash from a script. The
+	// hooks still fire per nested call; this row drives a real pi to show the
+	// read guard and the turn_end check are not lost on that path.
+	[CODEMODE_NESTED_ROW_ID]: async (ctx) => {
+		return runCodemodeNestedProbe(ctx);
 	},
 };
 

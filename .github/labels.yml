@@ -52,7 +52,7 @@
 
 # Priority labels
 # NOTE (#2553): .github/workflows/labels.yml runs the label syncer with
-# prune: true on every merge-train post-merge dispatch — it DELETES any live
+# prune: true on every master push that touches this file — it DELETES any live
 # label that is not listed in THIS file. A label added by hand (`gh label
 # create`) or only through the GitHub UI is removed on the next sync. Add a
 # label by editing this file, never by any other means.
@@ -103,9 +103,3 @@
 - name: ci:real
   color: e11d21
   description: CI failure classified as a real assertion or build failure
-- name: train:approved
-  color: 0e8a16
-  description: Maintainer review verdict - the merge train may land this PR once its current head concludes green
-- name: train:squash
-  color: 1d76db
-  description: Merge train - squash instead of the default merge commit

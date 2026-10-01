@@ -91,6 +91,7 @@ import {
 	resetLSPCaseSensitivityState,
 	resolveLspServerCwd,
 	type LSPServerInfo,
+	type LspRootFallback,
 } from "./server.js";
 
 // --- Types ---
@@ -857,14 +858,24 @@ export function primaryServerId(filePath: string): string | undefined {
  * with no primary LSP server, so the caller must handle the absent case
  * instead of rendering it (the N1 `cwd=undefined` row becomes structurally
  * impossible).
+ *
+ * #3750: `onRootFallback` fires when the primary's root resolution fell back
+ * (the `lsp:server-root-*` degradation), so a verdict can name it.
  */
 export async function resolveLspCwdForFile(
 	filePath: string,
 	sessionCwd: string,
+	onRootFallback?: (fallback: LspRootFallback) => void,
 ): Promise<string | undefined> {
 	const primary = primaryServerEntry(filePath);
 	if (!primary) return undefined;
-	return resolveLspServerCwd(primary, filePath, sessionCwd);
+	return resolveLspServerCwd(
+		primary,
+		filePath,
+		sessionCwd,
+		undefined,
+		onRootFallback,
+	);
 }
 
 /**

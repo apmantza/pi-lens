@@ -7,7 +7,10 @@ Every config here states its expected verdict on its first line (see
 `formal/file-locks/README.md`), and the `TLA+ models` CI job checks them all.
 
 Issues: #3501 (the touch debounce outlives its client), #3502
-(`demonstratedReady` survives a crash-respawn).
+(`demonstratedReady` survives a crash-respawn), #3672 (`retireClient` is the
+one retirement helper and drops the per-generation derived state), #3584 (the
+write-timeout streak belongs to one client), #3622 (idle eviction is a
+retirement path).
 
 ## What the model covers
 
@@ -17,6 +20,23 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   entry stays until the next attach notices the death.
 - **Capacity eviction** (`makeCapacityForClient`): an idle client with no
   lease is shut down and removed from the registry.
+- **Idle eviction** (`scheduleIdleEviction`, widened by #3622): an idle,
+  unleased `transparent` client's timer fires. `retireClient` publishes the
+  cold state before the awaited teardown, so a request during the shutdown
+  waits on the spawn gate.
+- **Notify-stall demotion** (`demoteForNotifyStall`): the consecutive
+  write-timeout streak reaches its threshold and the client is retired. The
+  code also sets the key's breaker cooldown; the model leaves `Breaker`
+  unchanged (see Scope).
+- **The per-generation derived state** (#3672, #3584): one touch writes the
+  aux-notify inflight count (`noteAuxNotifyIssued`), a drained-barrier
+  latency sample (`noteAuxNotifyDrainLatency`) and a timeout strike
+  (`recordNotifyWriteBackpressure`) for its client generation. `retireClient`
+  drops all of them on capacity eviction, idle eviction, notify-stall
+  demotion and the dead-client respawn, per kind (`ClearedKinds`).
+  Registration drops the streak a second time (`forgetReadiness` at spawn,
+  `RegStreak`). A replacement that reads a predecessor's value is the defect
+  `DerivedIsCurrent` rejects.
 - **Touches** of the one file (`LSPService.touchFile`) with the same content,
   sequential or concurrent: `"S"` is the pipeline's `lsp_sync` touch (no
   diagnostics), `"C"` the dispatch runner's collecting touch, and `"W"`
@@ -52,6 +72,10 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   the registry.
 - `ColdIsCurrent`: the key's `demonstratedCold` describes the client now in
   the registry, or the absence of one while none is registered.
+- `DerivedIsCurrent`: the key's derived facts (aux inflight count, drain
+  latency EWMA, write-timeout streak) describe the client now in the
+  registry, or the absence of one a retirement leaves before a replacement
+  spawns.
 - `NoEvictUnderLease`: eviction never takes a client out from under an
   in-flight touch.
 
@@ -81,6 +105,60 @@ Issues: #3501 (the touch debounce outlives its client), #3502
   its replacement now holds.
 - `PingGuard`, `WaitTimeout`, `LeaseCheck`, `FastPath`, `WindowTrip`: `TRUE`
   is the code; `FALSE` is a guard mutant.
+- `DerivedMissPath`: `"off"` disables the per-generation derived-state
+  actions (the older configs, whose verdicts do not depend on them).
+  `"none"` is the code since #3672: every retirement path drops every derived
+  kind. `"capacity"`, `"idle"`, `"stall"` and `"respawn"` make that one path
+  miss the kinds in `DerivedMissKinds`; `"all"` makes every path miss them.
+  `"pre3584"` and `"pre3672"` are the exact per-kind drop tables of those
+  trees, read off `clients/lsp/index.ts` at `5be1dda35^` and `625aa8018^`:
+  - pre-#3584: only `demoteForNotifyStall` dropped the streak and the aux
+    backlog; nothing dropped the EWMA; registration did not drop the streak.
+  - pre-#3672: `forgetReadiness` dropped the streak on every path and at
+    registration (#3584); only `demoteForNotifyStall` dropped the aux
+    backlog; nothing dropped the EWMA.
+- `DerivedMissKinds`: the subset of `{"ewma","inflight","streak"}` a mutant
+  path fails to drop (`{}` in every config that does not name a path or
+  `"all"`).
+- `RegStreak`: `TRUE` is the code since #3584: registering a client drops the
+  write-timeout streak (`forgetReadiness`). `FALSE` is that mutant, and the
+  pre-#3584 tree. The streak therefore has two defences, the path drop and
+  the registration drop, and no path's streak drop is load-bearing alone:
+  `DerivedStreakPathsRedundant` (every path forgets it, registration drops
+  it) passes and `DerivedStreakRegRedundant` (registration forgets it, every
+  path drops it) passes; `MutDerivedLeakStreak` (both forgotten) violates.
+  The EWMA and the aux inflight count have only the path drop, so each
+  path's drop is load-bearing for each of them (`MutDerivedLeak<Path>Ewma`,
+  `MutDerivedLeak<Path>Inflight`).
+- `DeriveGuard`: `TRUE` is the code for the streak
+  (`recordNotifyWriteBackpressure`, #3584 (b)) and the EWMA
+  (`noteAuxNotifyDrainLatency` checks the record's client): a derived write
+  lands only while the touch's client is still the registered one. `FALSE`
+  is `MutDeriveStale`. `noteAuxNotifyIssued` has no such check in the code
+  (it is called after awaits and recreates the record for a retired client);
+  the model assumes it away for the inflight count as well. Harm unproven:
+  readers other than `auxNotifyWedgeBudgetMs` check the record's client.
+
+## Source anchors (master)
+
+The derived-state wires in `clients/lsp/index.ts`, at the lines current on
+master. The symbols are authoritative; the line numbers drift.
+
+- `notifyWriteBackpressureStreak` field: 1489
+- `auxNotifyDrainLatencyEwma` field: 1505
+- `auxNotifyInflight` field: 1528
+- `makeCapacityForClient` (capacity eviction): 1844
+- `retireClient` (the one retirement helper): 1905
+- `scheduleIdleEviction` (idle eviction, #3622): 1931
+- `forgetReadiness` (the streak drop): 2103
+- `forgetReadiness` at registration (the streak's second drop): 4566
+- `recordNotifyWriteBackpressure` (the streak, generation-checked): 2133
+- `NOTIFY_BACKPRESSURE_BROKEN_AFTER` (the streak threshold): 350
+- `auxNotifyWedgeBudgetMs` (reads the EWMA): 2272
+- `demoteForNotifyStall` (stall demotion): 2290
+- `noteAuxNotifyIssued` (the inflight count): 2357
+- `noteAuxNotifyDrainLatency` (the EWMA): 2375
+- `LSPService.shutdown` (clears the EWMA and inflight maps): 10291
 
 ## Results
 
@@ -117,6 +195,26 @@ Issues: #3501 (the touch debounce outlives its client), #3502
 | `MutWarmupColdNoGuard` (the cold cache without its guard) | violated `ColdIsCurrent` | violated | 799 | 3.3 |
 | `WarmupColdNoClient` (code, #3502 verify round 3) | pass | pass | 249 | 3.2 |
 | `MutWarmupColdNoRegClear` (registration keeps the no-client verdict) | violated `ColdIsCurrent` | violated | 184 | 3.5 |
+| `DerivedCurrent` (code, #3672/#3584) | pass | pass | 7851 | 2.1 |
+| `DerivedCurrentConcurrent` (code, overlapping touches) | pass | pass | 5383 | 2.3 |
+| `DerivedStreakPathsRedundant` (no path drops the streak, registration does) | pass | pass | 8467 | 2.7 |
+| `DerivedStreakRegRedundant` (registration keeps the streak, every path drops it) | pass | pass | 7851 | 2.3 |
+| `MutDerivedLeakCapacity` (capacity drops none of the three) | violated `DerivedIsCurrent` | violated | 54 | 1.8 |
+| `MutDerivedLeakCapacityEwma` (capacity keeps the EWMA) | violated `DerivedIsCurrent` | violated | 54 | 2.1 |
+| `MutDerivedLeakCapacityInflight` (capacity keeps the inflight count) | violated `DerivedIsCurrent` | violated | 54 | 2.0 |
+| `MutDerivedLeakIdle` (idle eviction drops none of the three) | violated `DerivedIsCurrent` | violated | 54 | 1.9 |
+| `MutDerivedLeakIdleEwma` (idle eviction keeps the EWMA) | violated `DerivedIsCurrent` | violated | 54 | 1.8 |
+| `MutDerivedLeakIdleInflight` (idle eviction keeps the inflight count) | violated `DerivedIsCurrent` | violated | 54 | 1.8 |
+| `MutDerivedLeakStall` (stall demotion drops none of the three) | violated `DerivedIsCurrent` | violated | 54 | 2.3 |
+| `MutDerivedLeakStallEwma` (stall demotion keeps the EWMA) | violated `DerivedIsCurrent` | violated | 54 | 1.9 |
+| `MutDerivedLeakStallInflight` (stall demotion keeps the inflight count) | violated `DerivedIsCurrent` | violated | 54 | 2.1 |
+| `MutDerivedLeakRespawn` (respawn drops none of the three) | violated `DerivedIsCurrent` | violated | 142 | 2.0 |
+| `MutDerivedLeakRespawnEwma` (respawn keeps the EWMA) | violated `DerivedIsCurrent` | violated | 142 | 2.1 |
+| `MutDerivedLeakRespawnInflight` (respawn keeps the inflight count) | violated `DerivedIsCurrent` | violated | 142 | 2.0 |
+| `MutDerivedLeakStreak` (no path and no registration drops the streak) | violated `DerivedIsCurrent` | violated | 228 | 2.0 |
+| `MutDeriveStale` (a derived write has no generation check) | violated `DerivedIsCurrent` | violated | 81 | 1.7 |
+| `PreFix3672DerivedLeak` (pre-#3672 tree) | violated `DerivedIsCurrent` | violated | 232 | 3.5 |
+| `PreFix3584DerivedLeak` (pre-#3584 tree) | violated `DerivedIsCurrent` | violated | 232 | 2.4 |
 
 State counts of a violated config vary between runs: TLC stops at the first
 counterexample its workers reach.
@@ -143,6 +241,29 @@ counterexample its workers reach.
   key; the warm-up then caches the key cold, and B is skipped from the cache
   on every later sweep. Since #3502's verify round 2 the cache is taken only
   for the client the warm-up judged.
+- **`MutDerivedLeak<Path>`, `MutDerivedLeak<Path>Ewma` and
+  `MutDerivedLeak<Path>Inflight`**: one touch writes the three derived facts,
+  then the named retirement path retires the client without dropping all of
+  them (the bare name), or all but the EWMA, or all but the inflight count,
+  and the next touch spawns a replacement. The retained fact still names the
+  old generation, so `DerivedIsCurrent` is false. The four paths are capacity
+  eviction, idle eviction, notify-stall demotion and the dead-client respawn.
+  Each path's drop is load-bearing for the EWMA and for the inflight count.
+  The bare-name mutants also leak the streak, but registration drops it
+  again, so their red comes from the other two kinds.
+- **The streak** has two defences, the path drop and the registration drop.
+  `DerivedStreakPathsRedundant` and `DerivedStreakRegRedundant` each remove
+  one and still pass; `MutDerivedLeakStreak` removes both and violates
+  (#3584's defect). So no path's streak drop is load-bearing on its own,
+  and the model does not say otherwise.
+- **`PreFix3584DerivedLeak` and `PreFix3672DerivedLeak`**: the exact drop
+  tables of the trees before #3584 and before #3672 (`DerivedMissPath`
+  above). Both violate: the first leaks everything on capacity, idle and
+  respawn, the second still leaks the EWMA and the inflight count.
+- **`MutDeriveStale`**: a touch whose client was demoted writes its derived
+  facts after the retirement (no `DeriveGuard`), and the replacement spawns
+  over them. The code has that check for the streak since #3584 (b).
+  `DerivedCurrentConcurrent` pins the guard under overlapping touches.
 - **`MutWarmupColdNoRegClear`**: a warm-up finds the key in its breaker
   cooldown and caches it cold with no client; after the cooldown a touch
   spawns a client, which keeps the cached verdict and is skipped from the
@@ -197,6 +318,25 @@ The throwaway replays became the regression tests:
 
 Not modelled:
 - one file, one server key, primary scope only;
+- the three derived facts are written by one action (`Derive`) rather than at
+  their real write points (notify issue, drained barrier, timeout); only their
+  generation and their retirement are modelled. `Derive` makes the streak
+  present after one write, where the code needs `NOTIFY_BACKPRESSURE_BROKEN_AFTER`
+  (3) consecutive timeouts, and `StallDemote` needs only that streak: an
+  over-approximation;
+- `DeriveGuard = TRUE` assumes every derived write is generation-checked.
+  `noteAuxNotifyIssued` is not: it has no registry check and runs after
+  awaits, so a retired client's late issue can recreate its inflight record.
+  Harm unproven (no reachable interleaving found in review where the stale
+  record prices a live replacement's wedge window);
+- the healthy-write streak clear, the late-landing retract and `paceAuxNotify`'s
+  record deletes: they only remove facts, so omitting them is conservative;
+- `LSPService.shutdown()` (the session reset): it clears the EWMA and inflight
+  maps wholesale but not the streak, which only the registration drop then
+  removes;
+- `StallDemote` does not set the key's breaker cooldown (`state.broken`, as
+  the code does), so the model's replacement may spawn at once, which is
+  conservative;
 - the warm-up's retry: a `"W"` touch is one attempt, and its verdict is that
   attempt's (the code snapshots the registered client after attempt 1 and
   checks it after the retry). The no-client verdict is reached only from the

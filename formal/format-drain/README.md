@@ -9,12 +9,15 @@ line (see `formal/file-locks/README.md`). The `TLA+ models` CI job
 
 Issues: #3527 (the drain outside pi's mutation queue), #3528 (the drain
 writes the next session's state), #3529 (the drain's LSP sync), #3576 (the
-retire without a session bump, and the held resync R1).
+retire without a session bump, and the held resync R1), #3558 and #3610 (the
+formatter enters pi's queue after its command resolution), #3599 and #3728
+(the bounded post-exit wait), #3828 (the late resync after that bound gave up),
+#3858 (the same late resync for the in-band `--immediate-format` caller).
 
 ## What the model covers
 
 - **The agent.** It reads F and edits it. A read sends its read-warm touch:
-  a stamped LSP sync of the bytes it read (`runtime-tool-call.ts` ~833), outside
+  a stamped LSP sync of the bytes it read (`runtime-tool-call.ts`, the read-warm touch), outside
   pi's queue, which opens F again in a service `/new` retired (#3576 R1). Each
   edit is a read-modify-write under pi's per-file `withFileMutationQueue`.
   After the write it records its own write in the read guard, queues a
@@ -25,23 +28,37 @@ retire without a session bump, and the held resync R1).
   polls `isStreaming` does not wait (`Overlap`). `/new` runs from the editor
   callback while the drain runs, and the drain has no abort signal then.
 - **The drain.** It captures the session generation and claims the record
-  (`runtime-agent-end.ts` ~147). The format phase (`pipeline.ts`
+  (`handleAgentEnd`). The format phase (`pipeline.ts`
   `runFormatPhase`, `formatters.ts` `formatFile`) then:
-  1. reads `contentBefore`;
-  2. spawns an in-place formatter child, which reads F and writes its format
+  1. resolves the formatter's command (`resolveCommand`; an auto-install runs
+     here, outside pi's queue: `DStart`, `SubResolved`);
+  2. enters pi's queue (`SubEnter`, #3610) and reads `contentBefore`;
+  3. spawns an in-place formatter child, which reads F and writes its format
      of what it read;
-  3. reads `contentAfter`, then `fileContent` with its stamp.
+  4. reads `contentAfter`, then `fileContent` with its stamp.
 
   The apply loop then records the format (change log, `recordWritten`,
   modified range, turn summary) and resyncs the LSP.
 
   - The hook bound is `bounded(…, 10 s)`. When it gives up, the handler
-    requeues the record and moves on, while the child runs on and writes
-    later (`Orphan`).
-  - With `FixQueue`, #3561's format hold covers steps 1-3; it is released
-    when the phase settles.
+    requeues the record and moves on, while the formatter run goes on, in any
+    of its steps, and writes later (`Orphan`, `Abandon`).
+  - With `FixQueue`, #3561's format hold covers steps 2-4; it is released
+    when the phase settles. `EnterAfterResolve` (#3610) puts its entry after
+    step 1.
   - With `FixQueueHold`, an abandoned child keeps the hold until it has
     written.
+  - The post-exit resync waits for the abandoned run under
+    `DEFERRED_FORMAT_BUDGET_MS`. With `OrphanSyncBound` (#3728) the wait gives
+    up while the run is alive (`OrphanGiveUp`); `OrphanLateSync` (#3828) then
+    chains the resync onto the run's settlement (`gaveUp` in `SubWrite`).
+  - With `InBand` (#3858) the caller is the tool_result pipeline
+    (`analysePipeline`, `--immediate-format`), which waits for nothing after the
+    bound: `Abandon` reports no format, requeues nothing and sets `gaveUp`, and
+    the pipeline goes on to its tail, `DFc` and `DApply` (the `fileContent` read
+    and the LSP send of the bytes from before the run's write), while the run is
+    alive and keeps its own queue entry. The run's late write is then synced
+    only with `OrphanLateSync`: the same chain at its second call site.
 - **`/new`** (or fork, resume) resets the session state and retires the
   LSP service (`resetLSPService`). The next touch opens a fresh document, so
   a drain touch after the reset would spawn a server for the next session
@@ -60,11 +77,15 @@ bit. So a formatter that writes back stale bytes shows up as a missing edit.
 
 | Constant | Code |
 |---|---|
-| `FixQueue` | #3561: `holdFileMutationQueue` in the drain's format worker (`runtime-agent-end.ts` ~588), acquired in `runFormatPhase` before `contentBefore` |
-| `FixQueueHold` | #3561: the hold's release follows the phase, not the bound (`runtime-agent-end.ts` ~590), and waits for `FormatSummary.abandoned` |
+| `FixQueue` | #3561: `holdFileMutationQueue` in the drain's format worker (`handleAgentEnd`); the run enters it (`FormatService.formatFile`, `writeHold`) before `contentBefore` |
+| `FixQueueHold` | #3561: the hold's release follows the phase, not the bound (`handleAgentEnd`), and waits for `FormatSummary.abandoned` |
 | `FixGen` | #3528: `captureSessionGeneration` before the claim; the requeue, autofix and format bookkeeping go through `guardedWrite` |
 | `FixStamp` | #3529: the apply loop passes `result.fileReadStamp` to `resyncLspFile`; the post-exit send carries its own read's stamp |
-| `FixOrphanSync` | #3529: once an abandoned phase and its abandoned formatters have settled, a fresh stamped read of F is resynced (`runtime-agent-end.ts` ~614). The read and the send are separate steps, as in the code |
+| `EnterAfterResolve` | #3610 (#3558): `formatFile` calls `enter` after `resolveCommand`, so an install holds no queue entry; without it the hold is taken before the resolution |
+| `FixOrphanSync` | #3529: once an abandoned phase and its abandoned formatters have settled, a fresh stamped read of F is resynced (`handleAgentEnd`, the post-exit resync). The read and the send are separate steps, as in the code |
+| `OrphanSyncBound` | not a fix: #3599/#3728 bound that wait by `DEFERRED_FORMAT_BUDGET_MS`, so it can give up while the run is alive |
+| `OrphanLateSync` | #3828, #3858: a give-up chains a resync onto the abandoned run's settlement (`chainLateFormatResync`, called by `handleAgentEnd` as `deferred_format_late_resync` and by `analysePipeline` as `inband_format_late_resync`); it needs `FixOrphanSync`. In the code it is held-only in every case (`resyncHeldLspDocument`, #3828 r2): the model has no action that closes a document, so a current-session send to a held F and a held-only one are the same step here, and the no-spawn half is pinned by the replays, not by TLC |
+| `InBand` | #3858: not a fix: the run's caller is the in-band pipeline, so the bound's expiry leaves the pipeline's tail running (`Abandon`, `DFc`, `DApply`) instead of requeueing and ending the caller's work |
 | `LspGen` | #3528 r1 F1: the drain's LSP sends (the in-hook format and autofix resyncs and the post-exit resync) run only while its session is current |
 | `StartGen` | #3528 r1 F1: after `/new`, the format worker and the autofix loop start no new file; that write's sync would be skipped |
 | `ServiceGen` | #3576: the drain's LSP sends also check the LSP service generation it captured (`captureLspServiceGeneration`), so a retire without a session bump stops them too |
@@ -75,13 +96,14 @@ bit. So a formatter that writes back stale bytes shows up as a missing edit.
 
 | Invariant | Promise |
 |---|---|
-| `NoLostEdit` | the drain never overwrites an agent edit (pi `docs/extensions.md` ~1925) |
+| `NoLostEdit` | the drain never overwrites an agent edit (pi `docs/extensions.md`, the file mutation queue) |
 | `HonestFormatClaim` | what the drain reports as its format (`summary.changed`, the notice, the `fixes` provenance, `recordWritten`) holds no agent edit |
 | `LspMatchesDisk` | once quiet, an open LSP document holds the bytes on disk; this is also the no-drop direction of the stamp filter and of the session guard on the drain's sends. A retired service has no open document until its session's next touch |
 | `NoBlindAllow` | an edit is admitted only after this session showed the agent F |
 | `NoCrossSessionWrite` | a drain claimed in one session writes none of the next session's state (catalog shape 22), and opens no document in its fresh LSP service. The R1 resync of a document the next session already holds is not such a write |
 | `NoDrainRespawn` | a drain never opens a document on an LSP service retired since it started (#234, #3576) |
 | `NoOwnDrop` | a drain still in its own session keeps every session write (shape 54, the generation guard's no-drop direction) |
+| `NoInstallHold` | an agent edit never waits on pi's queue while the formatter only resolves its command (#3558, #3610) |
 
 ## Results
 
@@ -91,36 +113,47 @@ change that drops it turns the check red.
 
 | Config | Models | Expect | Distinct states |
 |---|---|---|---|
-| `Sequential` | before the fixes, interactive host | pass | 341 |
-| `SequentialWide` | the same, wider bounds | pass | 2,540 |
-| `OverlapLostEdit` | fixed code (#3527), next run overlaps the drain | pass | 642 |
-| `OverlapClaim` | fixed code (#3527) | pass | 642 |
-| `OrphanLostEdit` | fixed code (#3527), the bound abandons the child | pass | 933 |
-| `OverlapLsp` | fixed code (#3529) | pass | 642 |
-| `OrphanLsp` | fixed code (#3529) | pass | 933 |
-| `Straddle` | fixed code (#3528), `/new` during the drain | pass | 922 |
-| `StraddleState` | fixed code (#3528), `/new` and an abandoned child | pass | 2,611 |
-| `Fix` | all fix parts; overlap, orphan, `/new` and a retire without a session bump on | pass | 13,959 |
-| `FixWide` | all fix parts, 3 edits, 6 ops, 3 runs | pass | 122,040 |
-| `FixNoQueue` | without `FixQueue` (the drain before #3561) | violated `NoLostEdit` | 830 |
-| `FixNoQueueClaim` | the same, checking the claim | violated `HonestFormatClaim` | 631 |
-| `FixNoHold` | the hold released at the bound | violated `NoLostEdit` | 1,026 |
-| `FixNoGen` | without `FixGen` (the code before #3528) | violated `NoBlindAllow` | 1,448 |
-| `FixNoGenState` | the same, checking session state | violated `NoCrossSessionWrite` | 265 |
-| `FixNoLspGen` | without `LspGen` or `ServiceGen` (the round-0 code of #3528) | violated `NoCrossSessionWrite` | 830 |
-| `FixNoStartGen` | without `StartGen` or `HeldResync`: the old drain formats a file the new session has open | violated `LspMatchesDisk` | 1,275 |
-| `FixNoHeldResync` | without `HeldResync` (the code before #3576): the #3528 R1 trace | violated `LspMatchesDisk` | 1,305 |
-| `FixNoServiceGen` | without `ServiceGen` (the code before #3576): a retire without a session bump | violated `NoDrainRespawn` | 2,336 |
-| `MutGenDropsAll` | the guard drops every write | violated `NoOwnDrop` | 243 |
-| `MutGenDropsAllLsp` | the guard drops every drain send, the held resync included | violated `LspMatchesDisk` | 673 |
-| `FixNoStamp` | without `FixStamp` (the code before #3529) | violated `LspMatchesDisk` | 1,844 |
-| `FixNoOrphanSync` | without `FixOrphanSync` (the code before #3529) | violated `LspMatchesDisk` | 400 |
-| `MutNoReset` | non-vacuity: `/new` keeps the read guard | violated `NoBlindAllow` | 556 |
-| `FixMtime` | residual #3520: the mtime fallback on | violated `NoBlindAllow` | 560 |
+| `Sequential` | before the fixes, interactive host | pass | 363 |
+| `SequentialWide` | the same, wider bounds | pass | 2,723 |
+| `OverlapLostEdit` | fixed code (#3527), next run overlaps the drain | pass | 698 |
+| `OverlapClaim` | fixed code (#3527) | pass | 698 |
+| `OrphanLostEdit` | fixed code (#3527, #3610), the bound abandons the run; checks `NoInstallHold` | pass | 1,787 |
+| `OverlapLsp` | fixed code (#3529) | pass | 698 |
+| `OrphanLsp` | fixed code (#3529, #3728, #3828): the post-exit wait gives up and still resyncs the late write | pass | 1,787 |
+| `Straddle` | fixed code (#3528), `/new` during the drain | pass | 978 |
+| `StraddleState` | fixed code (#3528), `/new` and an abandoned child | pass | 4,865 |
+| `Fix` | all fix parts; overlap, orphan, `/new` and a retire without a session bump on | pass | 24,230 |
+| `FixWide` | all fix parts, 3 edits, 6 ops, 3 runs | pass | 229,214 |
+| `FixNoQueue` | without `FixQueue` (the drain before #3561) | violated `NoLostEdit` | 1,256 |
+| `FixNoQueueClaim` | the same, checking the claim | violated `HonestFormatClaim` | 664 |
+| `FixNoHold` | the hold released at the bound | violated `NoLostEdit` | 1,773 |
+| `FixNoGen` | without `FixGen` (the code before #3528) | violated `NoBlindAllow` | 2,359 |
+| `FixNoGenState` | the same, checking session state | violated `NoCrossSessionWrite` | 226 |
+| `FixNoLspGen` | without `LspGen` or `ServiceGen` (the round-0 code of #3528) | violated `NoCrossSessionWrite` | 1,289 |
+| `FixNoStartGen` | without `StartGen` or `HeldResync`: the old drain formats a file the new session has open | violated `LspMatchesDisk` | 1,935 |
+| `FixNoHeldResync` | without `HeldResync` (the code before #3576): the #3528 R1 trace | violated `LspMatchesDisk` | 1,979 |
+| `FixNoServiceGen` | without `ServiceGen` (the code before #3576): a retire without a session bump | violated `NoDrainRespawn` | 3,821 |
+| `MutGenDropsAll` | the guard drops every write | violated `NoOwnDrop` | 198 |
+| `MutGenDropsAllLsp` | the guard drops every drain send, the held resync included | violated `LspMatchesDisk` | 1,150 |
+| `FixNoStamp` | without `FixStamp` (the code before #3529) | violated `LspMatchesDisk` | 2,796 |
+| `OrphanNoLateSync` | without `OrphanLateSync` (the code merged in #3728): the give-up reports `abandoned` and the late write is never synced (#3828) | violated `LspMatchesDisk` | 327 |
+| `FixNoLateSync` | the same on the full model (`/new`, retire, overlap) | violated `LspMatchesDisk` | 2,136 |
+| `InBandLsp` | fixed code (#3858): the in-band caller's bound gives up, its tail sends the bytes from before the write, and the late write is resynced | pass | 2,598 |
+| `FixInBand` | all fix parts on the in-band caller; overlap, orphan, `/new` and a retire on | pass | 83,918 |
+| `InBandNoLateSync` | without `OrphanLateSync` at the in-band call site (the code before #3858) | violated `LspMatchesDisk` | 370 |
+| `FixInBandNoLateSync` | the same on the full model | violated `LspMatchesDisk` | 3,230 |
+| `InBandNoStamp` | without `FixStamp` on the in-band caller: the tail's unstamped send can land after the late resync | violated `LspMatchesDisk` | 593 |
+| `FixEnterEarly` | without `EnterAfterResolve` (the code before #3610): an install holds pi's queue | violated `NoInstallHold` | 164 |
+| `FixNoOrphanSync` | without `FixOrphanSync` (the code before #3529) | violated `LspMatchesDisk` | 594 |
+| `MutNoReset` | non-vacuity: `/new` keeps the read guard | violated `NoBlindAllow` | 601 |
+| `FixMtime` | residual #3520: the mtime fallback on | violated `NoBlindAllow` | 660 |
 | `FixExtProcess` | residual: another pi-lens process formats F | violated `NoLostEdit` | 160 |
 
 Distinct states at the violation for the violated configs. #3576 made every
 count grow: the agent's read now sends, and the service generation is state.
+#3828 grew them again: the run's start is three steps (`DStart`,
+`SubResolved`, `SubEnter`), the bound can abandon a run in any of them, and
+the give-up (`OrphanGiveUp`) is state (`gaveUp`).
 
 Two fix parts now overlap in the model, and the code keeps both:
 
@@ -135,6 +168,19 @@ Two fix parts now overlap in the model, and the code keeps both:
 
 ## What the model does not cover
 
+- **The in-band caller's start (#3858).** `InBand` changes only what the
+  bound's expiry does. The run still starts at `EndRun` as the model's one run;
+  the real in-band caller starts it inside the agent's own `tool_result`, which
+  holds that turn, so the agent cannot overlap it. The model's agent can
+  overlap a run (`Overlap`), a superset of that. The pipeline's other
+  phases (autofix, dispatch) are not modelled; its LSP send of the final read
+  is `DApply`.
+- **A run that never settles** (an install without a leaf bound). The late
+  resync is chained on the run's settlement, so a run that never settles is
+  never synced, and owes nothing: it never writes. Without fairness the model
+  cannot show that the continuation parks no task; the replay
+  `AbandonedInstall (#3599)` in `tests/clients/format-drain-formal.test.ts`
+  pins that the give-up leaves one `abandoned` row and no late row.
 - **The hold's release (liveness).** The model has no fairness, so a hold
   that is never released cannot show up as a violation. The code mutation
   that never releases it reds five cases in

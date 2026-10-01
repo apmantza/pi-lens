@@ -9,6 +9,7 @@ import {
 	HOST_PROVIDED_TYPE_ONLY_PACKAGES,
 	LAZY_NATIVE_PACKAGES,
 } from "../scripts/lib/host-provided-deps.mjs";
+import yaml from "../clients/deps/js-yaml.js";
 import { USER_PROFILE_PATH_RE } from "./support/user-profile-path-pattern.js";
 
 // These tests pin the published-package contract: pi-lens ships a precompiled
@@ -391,62 +392,77 @@ describe("host-provided packages are not vendored (#1926)", () => {
 	});
 });
 
-// #2586: `^0.84.1` on a 0.x host version pins the minor (npm's caret on a
-// pre-1.0 version only floats the patch), so a real pi-coding-agent/pi-tui
-// 0.85.x host was excluded by declaration even though the nightly real-pi
-// compat smoke already runs green against it and pi-tui 0.85.1 still exports
-// every symbol `clients/deps/pi-tui.ts` consumes. The declared peer range
-// must accept every host version this repo has actually verified — no more,
-// no less: broadening past what is tested (e.g. asserting 0.86.0 is accepted)
-// would silently re-open the same gap the next incompatible minor creates.
-describe("pi-tui peer range covers every tested host version (#2586)", () => {
-	const peerRange = pkg.peerDependencies?.["@earendil-works/pi-tui"];
+// #2682 / #3805: pi-coding-agent and pi-tui are HOST-PROVIDED peers, so both
+// declare `"*"` -- pi's own rule (its resource loader warns when an extension
+// lists a host package anywhere but `peerDependencies` with a `*` range). The
+// recurrence: #2586 narrowed pi-tui to `^0.84.1 || ^0.85.0`, and on pi 0.99 a
+// raw `npm i` with pi-tui at the top level is a hard ERESOLVE (npm 9.2.0
+// treats even an optional peer conflict as fatal), while `pi install` runs
+// `--legacy-peer-deps` and shows the user nothing -- the range only ever cost
+// developers and CI. The window pi-lens actually supports is enforced where it
+// is measured: `PI_HOST_SUPPORTED_RANGE` in install-smoke.yml, below.
+describe("host-provided peers are open; the supported window lives in install-smoke (#2682, #3805)", () => {
+	for (const name of [
+		"@earendil-works/pi-coding-agent",
+		"@earendil-works/pi-tui",
+	]) {
+		it(`declares ${name} as the open peer "*"`, () => {
+			expect(pkg.peerDependencies?.[name]).toBe("*");
+		});
+	}
 
-	// Derived from the lockfile so this list cannot silently drift from what
-	// the unit suite actually installs and runs against; "0.85.1" is also
-	// named literally per the issue's acceptance criterion, even though it
-	// coincides with the lockfile-derived entry after the devDependency bump.
-	// "0.84.1" pins the LOW end of the range explicitly (#2586 review F3):
-	// the lockfile-derived entry alone dedupes to a single 0.85.1 value once
-	// the devDependency is bumped, so a mutation that silently drops 0.84.x
-	// support (e.g. narrowing the range to "^0.85.0") would stay green
-	// without it. #257's install-selftest.mjs cites 0.84.1 as a version this
-	// repo already verified pi's package-manager resolver against, so it's
-	// not an arbitrary floor.
-	const lockVersion =
-		lock.packages?.["node_modules/@earendil-works/pi-tui"]?.version;
-	const testedVersions = [
-		...new Set([lockVersion, "0.85.1", "0.84.1"].filter(Boolean)),
-	] as string[];
+	const workflow = yaml.load(
+		fs.readFileSync(
+			path.join(root, ".github", "workflows", "install-smoke.yml"),
+			"utf8",
+		),
+	) as { env?: Record<string, string> };
+	const window = workflow.env?.PI_HOST_SUPPORTED_RANGE ?? "";
+	const floor = workflow.env?.PI_HOST_FLOOR_VERSION ?? "";
 
-	it("lists at least one tested version to guard", () => {
-		// Guards the guard: an emptied testedVersions would make the loop below
-		// vacuously pass.
-		expect(testedVersions.length).toBeGreaterThan(0);
-	});
+	// Hosts release-qa has actually passed. NOT derived from the lockfile: the
+	// lockfile carries the unit suite's dev baseline (0.99.2 after #3805), which
+	// is a test host, not a promise. When release-qa passes on a newer host, add
+	// it here and widen PI_HOST_SUPPORTED_RANGE in the same change, never before.
+	const RELEASE_QA_VERIFIED_HOSTS = ["0.80.10", "0.84.1", "0.85.1"];
 
-	it("declares a peer range", () => {
+	it("declares a window at all", () => {
 		expect(
-			peerRange,
-			"peerDependencies must declare @earendil-works/pi-tui",
-		).toBeTruthy();
+			semver.validRange(window),
+			`window ${JSON.stringify(window)}`,
+		).not.toBe(null);
+		expect(semver.valid(floor), `floor ${JSON.stringify(floor)}`).not.toBe(
+			null,
+		);
 	});
 
-	for (const version of testedVersions) {
-		it(`accepts tested host version ${version}`, () => {
+	for (const version of RELEASE_QA_VERIFIED_HOSTS) {
+		it(`admits the release-qa verified host ${version}`, () => {
 			expect(
-				semver.satisfies(version, peerRange ?? ""),
-				`peerDependencies["@earendil-works/pi-tui"] (${peerRange}) must accept ${version}`,
+				semver.satisfies(version, window),
+				`PI_HOST_SUPPORTED_RANGE (${window}) must admit ${version}`,
 			).toBe(true);
 		});
 	}
 
-	it("does not broaden acceptance past a tested minor (0.86.0 stays out)", () => {
-		// #2586's fix widens the range to cover exactly the 0.84.x/0.85.x hosts
-		// this repo has compat evidence for. Asserting a not-yet-released,
-		// not-yet-tested 0.86.0 is accepted would mask the exact declaration
-		// gap this suite exists to catch the next time pi ships a new minor.
-		expect(semver.satisfies("0.86.0", peerRange ?? "")).toBe(false);
+	it("starts exactly at the promised floor", () => {
+		expect(semver.satisfies(floor, window)).toBe(true);
+		expect(semver.satisfies(semver.inc(floor, "patch") ?? "", window)).toBe(
+			true,
+		);
+		expect(
+			semver.satisfies(
+				`0.${semver.minor(floor)}.${semver.patch(floor) - 1}`,
+				window,
+			),
+		).toBe(false);
+	});
+
+	it("does not admit a host release-qa has not passed (0.86.0 stays out)", () => {
+		// Widening past the verified set re-opens the gap #2586 and #2682 name:
+		// the newest-in-range lane would then certify a minor nothing witnessed.
+		expect(semver.satisfies("0.86.0", window)).toBe(false);
+		expect(semver.satisfies("0.99.2", window)).toBe(false);
 	});
 });
 

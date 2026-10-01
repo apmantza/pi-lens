@@ -79,6 +79,7 @@
  * READ time via `summary.push({ kind: ... })`
  * rather than through the three names above (`log-sink-write-failure`,
  * `log-sink-rotated`, `log-sink-rotate-failed`, `log-sink-option-conflict`,
+ * `log-sink-truncate-refused`,
  * `process-singleton-reset`, `global-dir-probe-redirect` — each one's own
  * `DegradationKind` doc comment explains why it cannot go through
  * `recordDegradation`). #3140: `process-singleton-reset` was live at this

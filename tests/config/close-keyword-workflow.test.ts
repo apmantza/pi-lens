@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const WORKFLOW_PATH = ".github/workflows/close-keywords.yml";
+// #3838: the close-keyword syntax job moved into pr-metadata.yml, next to the
+// other checks that read the live PR title/body.
+const WORKFLOW_PATH = ".github/workflows/pr-metadata.yml";
 
 type Workflow = {
 	name?: string;
@@ -29,20 +31,22 @@ function loadWorkflow(source?: string): Workflow {
 describe("close-keywords workflow contract (#2640)", () => {
 	it("re-gates title edits and keeps the check-run name stable", () => {
 		const workflow = loadWorkflow();
-		expect(workflow.name).toBe("Close-keyword syntax");
+		expect(workflow.name).toBe("PR metadata");
 		expect(workflow.on?.pull_request?.types).toEqual([
 			"opened",
 			"synchronize",
 			"reopened",
 			"edited",
 		]);
-		expect(workflow.jobs?.lint?.name).toBe("Close-keyword syntax");
+		expect(workflow.jobs?.["close-keyword-lint"]?.name).toBe(
+			"Close-keyword syntax",
+		);
 	});
 
 	it("requires only pull-request reads and runs the live PR lint", () => {
 		const workflow = loadWorkflow();
-		expect(workflow.permissions).toEqual({ "pull-requests": "read" });
-		const job = workflow.jobs?.lint;
+		expect(workflow.permissions).toEqual({});
+		const job = workflow.jobs?.["close-keyword-lint"];
 		expect(job?.permissions).toEqual({ "pull-requests": "read" });
 		const step = job?.steps?.find((candidate) =>
 			(candidate.run ?? "").includes("check-close-keywords.mjs"),

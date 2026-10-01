@@ -15,7 +15,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { normalizeFilePath, walkUpDirs } from "../path-utils.js";
+import { dirname, join, resolve } from "node:path";
+import { normalizeFilePath, pathsEqual, walkUpDirs } from "../path-utils.js";
 
 export interface GitIdentity {
 	/** Resolved HEAD commit SHA (detached or resolved from a symbolic ref). */
@@ -117,6 +118,98 @@ function getResolvedGitDir(cwd: string): ResolvedGitDir | null {
 		resolved = null;
 	}
 	return resolved;
+}
+
+/**
+ * `dir` with its symlinks followed (#3872); the input spelling when it cannot
+ * be resolved. Checkout identity is compared by real location: a session whose
+ * cwd is a link to the repository is the same checkout as the real path git
+ * wrote into every linked worktree's `.git` file.
+ */
+export function canonicalDirectory(dir: string): string {
+	try {
+		return fs.realpathSync.native(dir);
+	} catch {
+		return dir;
+	}
+}
+
+export interface GitCheckout {
+	/** The checkout's top-level directory (parent of its `.git` entry), real path: its identity. */
+	root: string;
+	/**
+	 * The same top-level directory in the path spelling `startPath` used (the
+	 * directory the upward walk found `.git` in). Anything compared with paths
+	 * spelled like `startPath` derives from this, never from `root` (#3872 r3).
+	 */
+	spelledRoot: string;
+	/** The shared commondir, real path: equal for a repository and every linked worktree of it. */
+	commonDir: string;
+}
+
+/**
+ * The checkout that owns `startPath` (#3872), by reading files only. `null`
+ * for anything that is not, or cannot be confidently resolved as, a git
+ * checkout; callers treat that as "ownership unknown", never as a verdict.
+ * Two paths belong to the same repository exactly when their `commonDir`s are
+ * equal (compare through `normalizeFilePath`).
+ */
+export function resolveGitCheckout(startPath: string): GitCheckout | null {
+	const resolved = getResolvedGitDir(startPath);
+	return resolved
+		? {
+				root: canonicalDirectory(resolved.worktreeRoot),
+				spelledRoot: resolved.worktreeRoot,
+				commonDir: canonicalDirectory(resolved.commonDir),
+			}
+		: null;
+}
+
+/**
+ * The linked worktree of `session`'s repository that owns `absoluteFile`, or
+ * `null` when the session checkout owns it, its owner is a different
+ * repository (a submodule, a nested clone), or no owner can be resolved (#3871,
+ * #3872). Same commondir plus a different top level is the whole rule; every
+ * "which checkout owns this edit" decision in turn_end asks here, so the knip
+ * scan root and the test runner root cannot disagree about a file.
+ */
+export function resolveLinkedWorktreeOwner(
+	session: GitCheckout,
+	absoluteFile: string,
+): GitCheckout | null {
+	const owner = resolveGitCheckout(dirname(absoluteFile));
+	return owner !== null &&
+		!pathsEqual(owner.root, session.root) &&
+		pathsEqual(owner.commonDir, session.commonDir)
+		? owner
+		: null;
+}
+
+/**
+ * The top-level directory of every linked worktree registered in `commonDir`
+ * (`<commonDir>/worktrees/<name>/gitdir` names each one's `.git` file). Files
+ * only, no `git` subprocess; unreadable entries are skipped, so a pruned or
+ * half-removed worktree can only make the answer shorter.
+ */
+export function listLinkedWorktreeRoots(commonDir: string): string[] {
+	const roots: string[] = [];
+	let names: string[];
+	try {
+		names = fs.readdirSync(join(commonDir, "worktrees"));
+	} catch {
+		return roots;
+	}
+	for (const name of names) {
+		try {
+			const entryDir = join(commonDir, "worktrees", name);
+			const gitFile = fs.readFileSync(join(entryDir, "gitdir"), "utf-8").trim();
+			if (gitFile)
+				roots.push(canonicalDirectory(dirname(resolve(entryDir, gitFile))));
+		} catch {
+			/* a worktree whose registration is unreadable is not listed */
+		}
+	}
+	return roots;
 }
 
 function resolveRefToSha(commonDir: string, ref: string): string | null {

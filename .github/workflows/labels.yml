@@ -7,78 +7,15 @@ on:
       - ".github/labels.yml"
       - ".github/workflows/labels.yml"
   workflow_dispatch:
-  repository_dispatch:
-    types: [merge-train-post-merge]
 
 concurrency:
-  group: labels-${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
-  cancel-in-progress: true
+  group: labels-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
 jobs:
-  validate-merge-train-dispatch:
-    name: Validate merge-train dispatch
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 6 successful master runs (fewer than 10 exist):
-    # 4s; timeout = floor of 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: github.event_name == 'repository_dispatch'
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Validate merge-train dispatch ancestry
-        if: github.event_name == 'repository_dispatch'
-        env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
-          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
-          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
-          PAYLOAD_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
-        run: node scripts/lib/merge-train-dispatch-validation.mjs
-
-  record-post-merge-validation:
-    name: Record post-merge validation
-    if: always() && github.event_name == 'repository_dispatch' && needs.validate-merge-train-dispatch.result == 'success'
-    needs: [validate-merge-train-dispatch, sync]
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default. No successful
-    # run found -- its 3 runs all failed on a 403 from the comment POST, fixed
-    # in #3151 -- defaulted to the floor of 10 min for this single-step job.
-    timeout-minutes: 10
-    permissions:
-      # #3151: the comment target is a pull request; `issues: write` alone
-      # was refused with 403 "Resource not accessible by integration".
-      pull-requests: write
-    steps:
-      - name: Record exact-SHA terminal state
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
-          PAYLOAD_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
-          SYNC_RESULT: ${{ needs.sync.result }}
-        run: |
-          set -euo pipefail
-          if [[ "$SYNC_RESULT" == success ]]; then state=succeeded;
-          elif [[ "$SYNC_RESULT" == failure ]]; then state=failed;
-          else exit 0; fi
-          marker="<!-- merge-train-post-merge:sha=$PAYLOAD_SHA:workflow=labels.yml:state=$state -->"
-          body="Post-merge validation $state for $PAYLOAD_SHA.\n\n$marker"
-          curl --fail-with-body --silent --show-error \
-            --request POST \
-            --header "Authorization: Bearer $GITHUB_TOKEN" \
-            --header "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PAYLOAD_PR_NUMBER/comments" \
-            --data "$(jq -n --arg body "$body" '{body:$body}')"
-
   sync:
-    needs: validate-merge-train-dispatch
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 10 successful master runs: 29s; timeout = floor of
@@ -91,30 +28,8 @@ jobs:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+          ref: ${{ github.ref }}
           persist-credentials: false
-
-
-      - name: Validate merge-train dispatch payload
-        if: github.event_name == 'repository_dispatch'
-        env:
-          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
-          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
-        run: |
-          set -euo pipefail
-          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
-            echo "::error::repository_dispatch repository does not match this repository"
-            exit 1
-          fi
-          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::repository_dispatch SHA must be a 40-hex commit"
-            exit 1
-          fi
-          checked_sha="$(git rev-parse --verify HEAD)"
-          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
-            echo "::error::checkout does not match the repository_dispatch SHA"
-            exit 1
-          fi
 
       # #2614: the syncer below DELETES labels with `prune: true`, and its
       # deletions are otherwise silent — run 34042925533 logged "label:

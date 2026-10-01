@@ -1043,3 +1043,61 @@ describe("mutation bridge registration", () => {
 		).toBe(true);
 	});
 });
+
+/**
+ * #3525: the settled sweep replays drift no tool_result described, whoever
+ * wrote it (an external editor, a second pi-lens instance), and the agent was
+ * never shown those bytes. Recurrence: its `recordWritten` re-stamped FileTime,
+ * the only staleness check a line without a hash has, so an edit of a line
+ * another writer changed passed on a record past READ_HASH_MAX_LINES.
+ */
+describe("mutation bridge FileTime credit (#3525)", () => {
+	const LONG_AGO = new Date("2000-01-01T00:00:00Z");
+	for (const provenance of ["settled-sweep", "observed"] as const) {
+		it(`${provenance === "settled-sweep" ? "does not stamp" : "stamps"} FileTime for a ${provenance} replay`, () => {
+			const env = setupTestEnvironment("pi-lens-3525-bridge-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = path.join(env.tmpDir, "big.ts");
+				const big = Array.from({ length: 3100 }, (_, i) => `line${i + 1}`);
+				fs.writeFileSync(filePath, big.join("\n"));
+				fs.utimesSync(filePath, LONG_AGO, LONG_AGO);
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				// A whole-file read past READ_HASH_MAX_LINES: no line hashes.
+				runtime.readGuard.recordRead({
+					filePath,
+					requestedOffset: 1,
+					requestedLimit: big.length,
+					effectiveOffset: 1,
+					effectiveLimit: big.length,
+					expandedByLsp: false,
+					turnIndex: 0,
+					writeIndex: 0,
+					timestamp: Date.now(),
+				});
+				big[10] = "EXTERNAL11";
+				fs.writeFileSync(filePath, big.join("\n"));
+				expect(
+					recordMutationThroughSeam(
+						{ filePath, kind: "edit", touchedLines: [11, 11], provenance },
+						makeDeps({
+							tmpDir: env.tmpDir,
+							runtime,
+							cacheManager: new CacheManager(false),
+						}),
+					),
+				).toBe(true);
+				expect(runtime.readGuard.checkEdit(filePath, [11, 11]).action).toBe(
+					provenance === "settled-sweep" ? "block" : "allow",
+				);
+			} finally {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+				env.cleanup();
+			}
+		});
+	}
+});

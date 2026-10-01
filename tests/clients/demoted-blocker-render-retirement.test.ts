@@ -37,6 +37,8 @@ import {
 	degradeDemotedFindingBody,
 	formatRetirementNote,
 } from "../../clients/demoted-finding-render.js";
+import type { Diagnostic } from "../../clients/dispatch/types.js";
+import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { _resetSharedLineCountCacheForTests } from "../../clients/diagnostic-line-freshness.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -62,6 +64,23 @@ const BLOCKER_SUMMARY = [
 	"    💡 Fix: remove the binding",
 	"  L376: Unreachable code detected.",
 ].join("\n");
+
+/**
+ * A delta-promoted unused finding, exactly as `promoteDeltaUnusedToBlockers`
+ * stamps it (#3218 criterion 1). Its rendered STOP body ends with the
+ * seam-owned promotion note.
+ */
+const PROMOTED_UNUSED: Diagnostic = {
+	id: "promoted-unused",
+	message: "'tmpdir' is imported but never used",
+	filePath: "a.ts",
+	line: 12,
+	severity: "hint",
+	semantic: "none",
+	tool: "lsp",
+	promotionNote:
+		"new in this edit → blocks in delta mode; pre-existing unused declarations only advise.",
+};
 
 function makeTurnEndDeps(
 	runtime: RuntimeCoordinator,
@@ -211,6 +230,20 @@ describe("degradeDemotedFindingBody (#1944)", () => {
 		);
 	});
 
+	it("drops a delta-promotion note from a demoted body (#3748 item 3)", () => {
+		// Recurrence: PR #3744's STOP renderer appends the promotion rationale
+		// AFTER the first cited row, which is the content region this module
+		// deliberately never rewrites — so a demoted record still claimed it
+		// blocked "new in this edit" after it had left the blocker channel.
+		const summary = formatDiagnostics([PROMOTED_UNUSED], "blocking").trim();
+		expect(summary).toContain("blocks in delta mode");
+
+		const result = degradeDemotedFindingBody(summary, { deadLines: [12] });
+		expect(result.body).not.toContain("blocks in delta mode");
+		// Demote, never drop: the finding's own message survives.
+		expect(result.body).toContain("'tmpdir' is imported but never used");
+	});
+
 	it("leaves a body with no authority vocabulary alone", () => {
 		const plain = "  L4: something mild.";
 		const result = degradeDemotedFindingBody(plain);
@@ -227,18 +260,13 @@ describe("turn-end demoted blocker (#1944)", () => {
 	function seedShrunkBlocker(
 		runtime: RuntimeCoordinator,
 		tmpDir: string,
+		summary = BLOCKER_SUMMARY,
 	): string {
 		const target = path.join(tmpDir, "provider-helper.ts");
 		// 3 lines now; the record cites 310 and 376.
 		fs.writeFileSync(target, "const a = 1;\nconst b = 2;\nexport { a, b };\n");
 		runtime.bumpFileSeq(target);
-		runtime.recordInlineBlockers(
-			target,
-			BLOCKER_SUMMARY,
-			1,
-			["lsp"],
-			[310, 376],
-		);
+		runtime.recordInlineBlockers(target, summary, 1, ["lsp"], [310, 376]);
 		return target;
 	}
 
@@ -361,6 +389,70 @@ describe("turn-end demoted blocker (#1944)", () => {
 			expect(
 				cacheManager.readCache("turn-end-findings-last", env.tmpDir),
 			).toBeFalsy();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("drops the promotion note from the delivered advisory (#3748 item 3)", async () => {
+		const env = setupTestEnvironment("pi-lens-3748-note-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "s-3748-note" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const summary = formatDiagnostics([PROMOTED_UNUSED], "blocking").trim();
+			const target = seedShrunkBlocker(runtime, env.tmpDir, summary);
+			markTurnModified(cacheManager, target, env.tmpDir, "s-3748-note");
+
+			await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, env.tmpDir));
+
+			const content =
+				cacheManager.readCache<{ content: string }>(
+					"turn-end-findings",
+					env.tmpDir,
+				)?.data?.content ?? "";
+			expect(content).toContain("[stale — re-run to confirm]");
+			expect(content).not.toContain("blocks in delta mode");
+			// The finding survives under the advisory label.
+			expect(content).toContain("'tmpdir' is imported but never used");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps the promotion note on a LIVE promoted STOP block (#3748 item 3)", async () => {
+		// Recurrence guard for the drop above: the note is true of a live
+		// blocker, so only the demotion seam may remove it. A drop applied in
+		// `handleTurnEnd` for every row would strip the rationale from a block
+		// that really does block in delta mode.
+		const env = setupTestEnvironment("pi-lens-3748-live-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "s-3748-live" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const summary = formatDiagnostics([PROMOTED_UNUSED], "blocking").trim();
+			const target = path.join(env.tmpDir, "live-promoted.ts");
+			// Line 12 exists, so the past-EOF gate leaves the record live.
+			fs.writeFileSync(
+				target,
+				`${Array.from({ length: 20 }, (_, i) => `const v${i} = ${i};`).join("\n")}\n`,
+			);
+			runtime.bumpFileSeq(target);
+			runtime.recordInlineBlockers(target, summary, 1, ["lsp"], [12]);
+			markTurnModified(cacheManager, target, env.tmpDir, "s-3748-live");
+
+			await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, env.tmpDir));
+
+			const content =
+				cacheManager.readCache<{ content: string }>(
+					"turn-end-findings",
+					env.tmpDir,
+				)?.data?.content ?? "";
+			expect(content).toContain("Unresolved from this turn");
+			expect(content).not.toContain("[stale — re-run to confirm]");
+			expect(content).toContain("blocks in delta mode");
 		} finally {
 			env.cleanup();
 		}

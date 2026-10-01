@@ -182,7 +182,7 @@ describe("analyzeFile", () => {
 		const coverageNotice = {
 			id: "coverage-unavailable:go:main.go",
 			message:
-				"Pi-lens go analysis unavailable — language tools are missing or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).",
+				"Pi-lens go analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).",
 			filePath: "main.go",
 			severity: "warning" as const,
 			semantic: "warning" as const,
@@ -298,6 +298,65 @@ describe("analyzeFile", () => {
 					diagnosticCount: 0,
 				},
 			],
+		});
+	});
+
+	// #3781: the row names why a runner failed. Before, `status` alone could not
+	// tell an agent a broken runner from a run that found blocking problems.
+	it("surfaces each runner's failureKind so findings are not read as a broken runner (#3781)", async () => {
+		const row = (
+			runnerId: string,
+			status: "succeeded" | "failed",
+			failureKind?: string,
+		) => ({
+			runnerId,
+			startTime: 0,
+			endTime: 10,
+			durationMs: 10,
+			status,
+			diagnosticCount: status === "failed" ? 1 : 0,
+			semantic: "warning",
+			...(failureKind !== undefined && { failureKind }),
+		});
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			latencyReport: {
+				filePath: tsFile,
+				fileKind: "jsts",
+				overallStartMs: 0,
+				overallEndMs: 10,
+				totalDurationMs: 10,
+				runners: [
+					row("lsp", "failed", "blocking_diagnostics"),
+					row("eslint", "failed", "blocking_diagnostics"),
+					row("oxlint", "failed", "timeout"),
+					row("tree-sitter", "succeeded"),
+				],
+				stoppedEarly: false,
+				totalDiagnostics: 2,
+				blockers: 1,
+				warnings: 1,
+			},
+		});
+
+		const result = await analyzeFile(tsFile, tmpDir);
+
+		expect(
+			result.latency?.runners.map((runner) => [
+				runner.runnerId,
+				runner.status,
+				runner.failureKind,
+			]),
+		).toEqual([
+			["lsp", "failed", "blocking_diagnostics"],
+			["eslint", "failed", "blocking_diagnostics"],
+			["oxlint", "failed", "timeout"],
+			["tree-sitter", "succeeded", undefined],
+		]);
+		// The headline `lsp` summary carries the same answer (#3800 review F3).
+		expect(result.lsp).toMatchObject({
+			status: "failed",
+			failureKind: "blocking_diagnostics",
 		});
 	});
 

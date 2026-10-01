@@ -89,6 +89,7 @@ PR's packed tarball (#2700, the check #2587 was missing). `attw`
 | config-shadow-record | a lower-precedence global config file beside the winner is recorded once per session | mcp-stdio | `tools/call` `pilens_effective_config` then `pilens_health` twice, on a real MCP server whose env has BOTH `~/.pi-lens/config.json` and `PI_CODING_AGENT_DIR/extensions/pi-lens.json` present | health carries a `config-location-shadowed: 1` line naming the shadowed agent-dir file, and the count stays 1 on a second health read after a further config load | the two health tool result texts | `clients/degradation-ledger.ts` `recordDegradationOnce` and `tests/clients/global-config-location.test.ts`; no smoke asserts the record end to end | #1605 lane 2 (availability-lifecycle): the degradation-recorded half, as `degradation-visible`; this row additionally pins the once-per-session count across two loads |
 | git-install-loads | a `git:` install of a pushed ref builds and loads in a real pi | git-install | `pi install git:github.com/apmantza/pi-lens@<ref>` then `get_commands` | at least 1 `lens-*` command and at least 4 skills | get_commands response JSON | `scripts/rpc-load-check.mjs` assertion, re-run against the git layout | — |
 | publish-toolchain-pinned | the RELEASE WORKFLOW's publish job runs the npm it pins, and that npm validates the tarball | npm-pack | `npx -y "npm@<packageManager pin>" --version` then `npx -y "npm@<packageManager pin>" publish --dry-run`, both in the scratch export | the pinned invocation reports the pin version AND the dry run exits 0, or npm reports the version is already published after packing; a pinned invocation resolution or registry failure leaves the row UNMEASURED | the two commands with their output | new — `tests/config/release-npm-pin-gate.test.ts` pins release.yml's TEXT; this row is the only thing that RUNS the publish job's toolchain before a tag exists (#2940) | — |
+| codemode-nested-guard | a nested edit-without-read made through pi's codemode tool is blocked by read-guard, and the turn_end check for a licensed nested edit still reaches a later request | pi-rpc | `pi --mode rpc --no-session --no-lsp --provider scripted --model harness -e tests/fixtures/real-harness/scripted-provider.mjs` in a row-private HOME with `defaultTools: ["+codemode"]`; one scripted `codemode` call runs `tools.edit` on an unread `c.ts`, then `tools.read` + `tools.edit` (adding `debugger;`) on `b.ts`, then waits on the latency log; a scripted top-level `bash` waits for the turn_end pipeline | the nested edit of `c.ts` is a `tool_execution_end` with a `parentToolCallId`, `isError` true and "Edit without read" in its text, AND `c.ts` on disk is unchanged; the nested edit of `b.ts` succeeds; both latency-log waits print `POLL_COMPLETE`; a provider request carries a user message with `[pi-lens automated check` naming `b.ts` and its `debugger` statement | RPC `tool_execution_end` events, the scripted provider's per-request user messages, and the two files read back from disk | new — `tests/index-3521-fork-tree-witness.test.ts` drives the real runtime without codemode; nothing drove a nested call through the hooks until #3805 | — |
 | tool-smoke-install | every npm/pip entry in the installer registry resolves on a real install | npm-install | `node <export>/scripts/smoke-tools.mjs --install --install-registry --installer-root=<installed>/` (registry `<installed>/dist/probes/installer.js`; about 1m 29s cold on this box for 33 entries; harness from export root) | the report shows every npm/pip entry resolved or a named legitimate skip (toolchain absent, declined), and no genuine install failure; a registry-unreachable classification leaves the lane UNMEASURED; requires network access to the npm and pip registries | install-registry JSON report | `classifyInstallOutcome` from the #2661 fixture lanes — this lane sweeps the whole npm/pip registry, where fixture lanes exercise only the entries their fixtures name | — |
 
 ## Why `publish-toolchain-pinned` runs on every candidate
@@ -111,6 +112,49 @@ whole defect; gating the row on the workflow file would reproduce it one
 The row is SKIPPED — never a verdict — under `--from npm:<version>`: there is
 no exported tree to publish, and a dry-run publish fires this package's own
 `prepack`/`prepare`, so it may only ever run in the scratch export.
+
+## Why `codemode-nested-guard` needs a scripted turn, and what it does not time
+
+Every other row is model-free. This one cannot be: a nested call exists only
+inside a model's `codemode` tool call, and pi's hooks for it (`tool_call`,
+`tool_result`, `parentToolCallId`) are reachable no other way. The model is the
+repo's scripted provider (`tests/fixtures/real-harness/scripted-provider.mjs`),
+loaded into the REAL pi with `-e`; it emits the tool calls a model would, and
+everything under test -- codemode's script host, pi's tool pipeline, pi-lens's
+hooks -- is the shipped code. The provider is not a stub of pi-lens's own
+assumption: a pi that stopped routing nested calls through the hooks fails the
+row.
+
+The row is SKIPPED, never PASS, on a pi older than 0.99.0 (no codemode tool) and
+on a pi whose own `pi-ai` cannot be located from the binary (the provider must be
+built on the host's stream class, not this repo's devDependency).
+
+What it deliberately does not time: pi-lens's dispatch races turn_end's bounded
+wait on a loaded box (#3796), for top-level edits as much as nested ones. The
+scenario therefore warms the first dispatch up with a throwaway edit of `d.ts`
+and waits, inside the scenario, for the `b.ts` dispatch and then for the
+turn_end pipeline by reading the latency log; both waits are capped, and an
+expired wait is UNTESTED, never PASS. pi does not hold the next request for
+turn_end either, so the check is required on a LATER request (the turn after a
+scripted `bash` that waits for turn_end), not the immediate next one.
+
+## The supported pi window (#2682, #3805)
+
+pi-lens declares both host packages, `@earendil-works/pi-coding-agent` and
+`@earendil-works/pi-tui`, as optional peers with the range `"*"`. That is
+intentional and is pi's own rule for host-provided packages: pi warns when an
+extension lists one any other way, and a narrower pi-tui range turned a raw
+`npm i` with a current pi-tui at the top level into a hard ERESOLVE while
+`pi install` (which runs `--legacy-peer-deps`) showed users nothing.
+
+The window pi-lens actually supports is therefore not in `package.json`. It is
+`PI_HOST_SUPPORTED_RANGE` in `.github/workflows/install-smoke.yml` (the
+newest-in-range lane reads it, bounded above so `"*"` can never mean
+`@latest`), and `tests/packaging.test.ts` pins it against the hosts this
+matrix has passed on. A newer host enters the window in ONE change: run this
+matrix on it, add it to that test's verified list, and move the workflow's
+ceiling together. The window is contiguous, so a ceiling past an unrun minor
+claims that minor too.
 
 ## Why `skills-registered` pins the registrar
 
@@ -204,11 +248,13 @@ a warning and 1/3/4 as failures.
 
 ## Deliberately out of scope
 
-- **Anything needing a model turn.** Every row above is model-free by
-  construction; `get_commands` and the MCP tool calls never reach a provider. A
-  row that needs a real LLM turn cannot be a release gate on an unfunded key,
-  and a stubbed turn would be a double that mirrors our own assumption
-  (AGENTS.md, external contracts).
+- **Anything needing a real model turn.** Every row above is model-free by
+  construction except `codemode-nested-guard`, whose turn is scripted (see "Why
+  `codemode-nested-guard` needs a scripted turn"); `get_commands` and the MCP
+  tool calls never reach a provider. A row that needs a real LLM turn cannot be a
+  release gate on an unfunded key, and a stubbed turn that stands in for pi-lens's
+  own behaviour would be a double that mirrors our own assumption (AGENTS.md,
+  external contracts).
 - **The `concurrent_session_bind` guard.** Observing it needs a second in-process
   `createAgentSession()`, which needs model config. `docs/subagent-compat.md`
   carries the same TODO; duplicating it here would add a row that can only ever

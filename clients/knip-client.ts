@@ -15,7 +15,17 @@ import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
-import { findNearestMarkerRoot } from "./path-utils.js";
+import { isHardFailureSummary } from "./hard-failure-summary.js";
+import {
+	findNearestMarkerRoot,
+	normalizeEphemeralMapKey,
+	normalizeFilePath,
+} from "./path-utils.js";
+import {
+	canonicalDirectory,
+	listLinkedWorktreeRoots,
+	resolveGitCheckout,
+} from "./review-graph/git-identity.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import {
 	createAvailabilityChecker,
@@ -105,6 +115,13 @@ const EMPTY_RESULT: Omit<KnipResult, "summary"> = {
 };
 
 const ANALYSIS_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a recorded hard failure keeps a root off the turn_end path: the
+ * cache row that carried this back-off before #3872 lived exactly as long as
+ * the cache's default max age (`DEFAULT_MAX_AGE_MS`, `clients/cache-manager.ts`).
+ */
+const HARD_FAILURE_BACKOFF_MS = 30 * 60 * 1000;
 
 /**
  * Every package name referenced as a KEY (at any nesting depth — npm's
@@ -255,6 +272,40 @@ function readKnipShimVersion(binary: string): string | null {
 	}
 }
 
+/**
+ * Whether a knip-reported file lies inside a linked worktree nested under
+ * `targetDir` (#3872). knip reads the checkout's `.gitignore` and nothing
+ * else, so a `.worktrees/*` directory the project never ignored is walked as
+ * project files: live, `totalIssues` rose by about 300 per worktree
+ * (9256 -> 16187 over 55 worktrees) and each first touch read as one new issue.
+ * A worktree is a separate checkout with its own scan root, never a part of
+ * this one. A knip config cannot be extended from here without replacing the
+ * project's own (#1721), so the scan cost stays and the verdict is corrected.
+ *
+ * knip reports files relative to its cwd. The nested roots are normalized
+ * once; each issue then costs one lexical key and a prefix compare, not a
+ * realpath (a 16 000-issue result against 55 worktrees is ~880 000 compares).
+ */
+function nestedWorktreeMatcher(
+	targetDir: string,
+): (file: string | undefined) => boolean {
+	const checkout = resolveGitCheckout(targetDir);
+	if (!checkout) return () => false;
+	const base = normalizeFilePath(canonicalDirectory(targetDir));
+	const baseKey = normalizeEphemeralMapKey(base);
+	const prefixes: string[] = [];
+	for (const root of listLinkedWorktreeRoots(checkout.commonDir)) {
+		const key = normalizeEphemeralMapKey(normalizeFilePath(root));
+		if (key.startsWith(`${baseKey}/`)) prefixes.push(`${key}/`);
+	}
+	if (prefixes.length === 0) return () => false;
+	return (file) => {
+		if (!file) return false;
+		const key = normalizeEphemeralMapKey(`${base}/${file}`);
+		return prefixes.some((prefix) => key.startsWith(prefix));
+	};
+}
+
 /** Distinct toolchain records kept per client instance (bounded telemetry). */
 const MAX_RECORDED_TOOLCHAINS = 32;
 
@@ -296,6 +347,17 @@ export class KnipClient {
 	 */
 	private inFlight = new Map<string, Promise<KnipResult>>();
 
+	/**
+	 * Per project root, the last run that died to a timeout or kill (#3872).
+	 * Set where the scan SETTLES, so a scan turn_end abandoned at its budget and
+	 * that later timed out still leaves the failure the next turn must see:
+	 * the turn's own cache row only exists for a scan that settled inside it.
+	 */
+	private readonly hardFailures = new Map<
+		string,
+		{ at: number; summary: string }
+	>();
+
 	/** Last successful result per project and runtime content generation. */
 	private completedByProject = new Map<
 		string,
@@ -315,6 +377,7 @@ export class KnipClient {
 	/** Re-arm content-keyed reuse at the session boundary. */
 	resetSessionState(): void {
 		this.completedByProject.clear();
+		this.hardFailures.clear();
 	}
 
 	/**
@@ -415,6 +478,26 @@ export class KnipClient {
 	}
 
 	/**
+	 * The summary of this root's last timeout or kill, while it is recent
+	 * enough (30 minutes) to keep turn_end from launching another heavyweight
+	 * knip (#1467, #3872); `null` when there is none. The root is resolved the
+	 * way `analyze` resolves it, so a subdirectory and its project root agree.
+	 */
+	recentHardFailure(cwd: string): string | null {
+		// `resolveProjectRoot` returns an already-resolved directory, which is the
+		// key `analyze` stamps under.
+		const key = this.resolveProjectRoot(cwd);
+		if (!key) return null;
+		const failure = this.hardFailures.get(key);
+		if (!failure) return null;
+		if (Date.now() - failure.at > HARD_FAILURE_BACKOFF_MS) {
+			this.hardFailures.delete(key);
+			return null;
+		}
+		return failure.summary;
+	}
+
+	/**
 	 * Run knip analysis on the project.
 	 *
 	 * Async (uses `safeSpawnAsync`) so it never blocks the event loop —
@@ -484,6 +567,10 @@ export class KnipClient {
 		}
 
 		const promise = this.runAnalyze(key).then((result) => {
+			if (result.success) this.hardFailures.delete(key);
+			else if (isHardFailureSummary(result.summary)) {
+				this.hardFailures.set(key, { at: Date.now(), summary: result.summary });
+			}
 			const executed = { ...result, execution: "executed" as const };
 			if (result.success && options.projectSeq !== undefined) {
 				this.completedByProject.set(key, {
@@ -698,7 +785,10 @@ export class KnipClient {
 		}
 
 		return {
-			...this.dropOverridePinnedDeps(this.parseOutput(output), targetDir),
+			...this.dropOverridePinnedDeps(
+				this.parseOutput(output, nestedWorktreeMatcher(targetDir)),
+				targetDir,
+			),
 			scannedAt,
 		};
 	}
@@ -833,7 +923,10 @@ export class KnipClient {
 
 	// --- Internal ---
 
-	private parseOutput(output: string): KnipResult {
+	private parseOutput(
+		output: string,
+		isInNestedWorktree: (file: string | undefined) => boolean = () => false,
+	): KnipResult {
 		try {
 			const data = JSON.parse(output);
 			const issues: KnipIssue[] = [];
@@ -843,6 +936,7 @@ export class KnipClient {
 			const unlistedDeps: KnipIssue[] = [];
 
 			const addIssue = (issue: KnipIssue) => {
+				if (isInNestedWorktree(issue.file)) return;
 				issues.push(issue);
 				if (issue.type === "export" || issue.type === "enumMember") {
 					unusedExports.push(issue);

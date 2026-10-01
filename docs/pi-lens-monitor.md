@@ -4,10 +4,12 @@ Read a LIVE pi-lens session's logs and report what the numbers say, so the
 maintainer does not have to. The monitor observes; it never edits code,
 never restarts anything, and never touches the session it is reading.
 
-Read first: `AGENTS.md` (the "Recurring defect shapes" catalog, especially
-shape 41: a fixed bound reached at p50 is a design defect), then
-`docs/pi-lens-investigator.md` for the forensics conventions this role
-inherits. This contract adds the standing readout.
+Read first: the engineering principles (`docs/engineering-principles.md`),
+then `AGENTS.md` (the "Recurring defect shapes" catalog, especially shape 41:
+a fixed bound reached at p50 is a design defect), then
+`docs/pi-lens-subagent.md` and `docs/pi-lens-investigator.md` for the
+forensics conventions this role inherits. This contract adds the standing
+readout.
 
 ## Inputs
 
@@ -49,7 +51,20 @@ inherits. This contract adds the standing readout.
 6. **Backlogs**: `lsp_document_drift` rows by disposition, files affected,
    `driftAgeMs` p50/p95/max; `agent_end_deferred_mutation_drain` durations and
    coalesced path counts; `deferred_format_file` runs with `changed:true`
-   versus total.
+   versus total. A formatter that never settles is visible only as an
+   anti-join (#3828): a `deferred_format_post_exit_resync` row with
+   `outcome:"abandoned"` (beside the `hook-await-exceeded` degradation
+   `off_hook:deferred-format-post-exit-resync`) and no
+   `deferred_format_late_resync` row on the same `filePath` afterwards. Report
+   the count of such files. A late row names what happened to the file
+   (#3828 r3): `resynced` is the healthy end of the chain; `unheld`,
+   `no-service` and `vanished` had nothing to sync; `deferred` is still queued
+   for the next drift pass; `failed` did not land. The in-band
+   (`--immediate-format`) caller writes the same rows as `inband_format_late_resync`
+   (#3858) with the same outcomes. It has no per-file give-up row: the budget's
+   `hook-await-exceeded` degradation `tool_result_edit:formatter-aggregate` is
+   once per session and names no file, and an Escape leaves none, so a never-settling
+   in-band formatter is not countable by file.
 7. **Timeouts**: `lsp_diagnostics_timeout`, `lsp_nav_request_timeout`,
    `lsp_client_wait_timeout` counts with `serverIds`/`source`.
 8. **Delta**: for each of the above, the change since the previous readout,
@@ -69,8 +84,7 @@ inherits. This contract adds the standing readout.
 
 - Premise first: before naming a constant or a seam, read the code that owns
   it (`clients/lsp/index.ts`, `clients/pipeline.ts`, `clients/runtime-agent-end.ts`,
-  `clients/lsp/document-drift.ts`). The 2026-09-09 readout mis-named a
-  suppression window as a trailing debounce; the correction cost a round.
+  `clients/lsp/document-drift.ts`).
 - Bounded output: the readout is one comment or one file. Never one line per
   row of the log. Quote at most three raw rows, each cut at 300 characters.
 - No repo edits, no Git commands, no restarts, no writes under `~/.pi-lens`.

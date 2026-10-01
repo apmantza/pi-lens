@@ -33,17 +33,18 @@ import { removeTempDirSync } from "./clients/test-utils.js";
  *    liveness on every path the sweep takes, whatever the runner's process
  *    table says about that number.
  *
- * 2. THE REGISTRY FILE. Since #2912 `PI_LENS_HOME` is ONE directory for the
- *    whole vitest run (`<repo>/.probe-home`), not a per-worker temp dir, so
- *    `instances.json` and its `.lock` are shared by every test file running
- *    concurrently. The reaper's prune is best-effort: it gives up after
- *    `withInstanceRegistryLock`'s 500 ms deadline and returns
- *    "could-not-acquire", which `instance-reaper.ts` discards. Asserting
- *    that write against the run-shared registry therefore reds whenever
- *    sibling forks happen to hold the lock — #3042, reproduced with
- *    `PRUNE-RESULT could-not-acquire` under eight concurrent holders. Each
- *    case below runs against its OWN `PI_LENS_HOME` instead, which also
- *    stops this fixture clobbering the registry those siblings are using.
+ * 2. THE REGISTRY FILE. Since #2912 `PI_LENS_HOME` lived at
+ *    `<repo>/.probe-home` for the whole vitest run, so `instances.json` and
+ *    its `.lock` were shared by every test file running concurrently; since
+ *    #3721 each worker has its own home (`<run-shared home>/worker-home-<run>-
+ *    <pid>`), so concurrent forks no longer share either file. The reaper's
+ *    prune is still best-effort: it gives up after `withInstanceRegistryLock`'s
+ *    500 ms deadline and returns "could-not-acquire", which `instance-reaper.ts`
+ *    discards. #3042 reproduced that with `PRUNE-RESULT could-not-acquire`
+ *    under eight concurrent holders. Each case below still runs against its
+ *    OWN `PI_LENS_HOME`: a late write from the previous case must not land in
+ *    this one's registry, and the per-case home keeps this fixture from
+ *    clobbering the worker registry its sibling files use.
  */
 
 vi.mock("../clients/bootstrap.js", async () => {
