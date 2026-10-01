@@ -3,12 +3,18 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	buildCoverageProbeArgs,
+	buildFingerprint,
 	coveredChangedLines,
 	coveredChangedLinesInReport,
 	decideIncrementalReuse,
 	fingerprintEntries,
 	fingerprintPaths,
+	INCREMENTAL_FINGERPRINT_PATH,
+	PROBE_REPORTS_ROOT,
+	probeReportsDirectory,
 	ownTestFiles,
+	partitionOwnTests,
+	probeConcurrency,
 	parseIncrementalReuse,
 	probeAllTests,
 	probeTestCoverage,
@@ -536,6 +542,83 @@ describe("ownTestFiles", () => {
 	});
 });
 
+describe("partitionOwnTests", () => {
+	const exclusion = (file: string) => ({
+		file,
+		reason: "scheduling-sensitive",
+	});
+
+	it("keeps an existing own test, skips one the PR deleted, and routes a marked one to the exclusions (item 4)", () => {
+		const result = partitionOwnTests(
+			[
+				"tests/scripts/kept.test.ts",
+				"tests/scripts/deleted.test.ts",
+				"tests/scripts/marked.test.ts",
+				"scripts/not-a-test.mjs",
+			],
+			{
+				exists: (file) => file !== "tests/scripts/deleted.test.ts",
+				exclusionOf: (file) =>
+					file === "tests/scripts/marked.test.ts" ? exclusion(file) : null,
+			},
+		);
+		expect(result.own).toEqual(["tests/scripts/kept.test.ts"]);
+		expect(result.excluded).toEqual([
+			exclusion("tests/scripts/marked.test.ts"),
+		]);
+	});
+
+	it("does not report a file twice that the related-test scan already excluded", () => {
+		const result = partitionOwnTests(["tests/scripts/marked.test.ts"], {
+			exists: () => true,
+			exclusionOf: exclusion,
+			alreadyExcluded: [{ file: "tests/scripts/marked.test.ts" }],
+		});
+		expect(result.own).toEqual([]);
+		expect(result.excluded).toEqual([]);
+	});
+
+	it("reports an excluded file that only the own-test scan found", () => {
+		const result = partitionOwnTests(["tests/scripts/marked.test.ts"], {
+			exists: () => true,
+			exclusionOf: exclusion,
+			alreadyExcluded: [{ file: "tests/scripts/other.test.ts" }],
+		});
+		expect(result.excluded).toEqual([
+			exclusion("tests/scripts/marked.test.ts"),
+		]);
+	});
+});
+
+describe("probe and cache paths", () => {
+	it("keeps each probe's coverage report in its own directory under the scratch root", () => {
+		// Recurrence: two concurrent probes writing coverage-final.json to one
+		// directory read each other's report.
+		const a = probeReportsDirectory("tests/a.test.ts");
+		const b = probeReportsDirectory("tests/b.test.ts");
+		expect(a).toMatch(/^\.stryker\/coverage\/[0-9a-f]{12}$/);
+		expect(a.startsWith(`${PROBE_REPORTS_ROOT}/`)).toBe(true);
+		expect(a).not.toBe(b);
+		expect(probeReportsDirectory("tests/a.test.ts")).toBe(a);
+	});
+
+	it("writes the fingerprint beside the incremental file", () => {
+		expect(INCREMENTAL_FINGERPRINT_PATH).toBe(
+			".stryker/incremental.fingerprint",
+		);
+	});
+});
+
+describe("probeConcurrency", () => {
+	it("is the core count, at least one and at most four", () => {
+		expect(probeConcurrency(0)).toBe(1);
+		expect(probeConcurrency(1)).toBe(1);
+		expect(probeConcurrency(2)).toBe(2);
+		expect(probeConcurrency(4)).toBe(4);
+		expect(probeConcurrency(64)).toBe(4);
+	});
+});
+
 describe("recorded #3794 selection (real coverage, real import graph)", () => {
 	const fixture = JSON.parse(
 		readFileSync(
@@ -661,6 +744,89 @@ describe("incremental cache rules", () => {
 				["tests/b.test.ts", "expect(1)"],
 			]),
 		).not.toBe(same);
+	});
+
+	describe("buildFingerprint", () => {
+		const files: Record<string, string> = {
+			"stryker.config.mjs": "config",
+			"package-lock.json": "lock",
+			"tests/kept.test.ts": "kept",
+			"scripts/helper.mjs": "helper",
+			"scripts/mutated.mjs": "mutated",
+		};
+		const args = {
+			forkPoint: "abc123",
+			nodeVersion: "v22.0.0",
+			read: (file: string) => files[file] ?? "<absent>",
+			changedFiles: ["scripts/helper.mjs", "scripts/mutated.mjs"],
+			mutatedFiles: ["scripts/mutated.mjs"],
+			keptTests: ["tests/kept.test.ts"],
+		};
+		const base = buildFingerprint(args);
+
+		it("is stable for the same inputs", () => {
+			expect(buildFingerprint({ ...args })).toBe(base);
+		});
+
+		it.each([
+			["the fork point (a rebase)", { forkPoint: "def456" }],
+			["the node version", { nodeVersion: "v24.0.0" }],
+			[
+				"the Stryker config",
+				{
+					read: (f: string) =>
+						f === "stryker.config.mjs" ? "other" : (files[f] ?? "<absent>"),
+				},
+			],
+			[
+				"the lockfile (vitest, Stryker)",
+				{
+					read: (f: string) =>
+						f === "package-lock.json" ? "other" : (files[f] ?? "<absent>"),
+				},
+			],
+			[
+				"a kept test",
+				{
+					read: (f: string) =>
+						f === "tests/kept.test.ts" ? "weaker" : (files[f] ?? "<absent>"),
+				},
+			],
+			[
+				"another changed file",
+				{
+					read: (f: string) =>
+						f === "scripts/helper.mjs" ? "edited" : (files[f] ?? "<absent>"),
+				},
+			],
+		])("changes when %s changes (C1, C2, C3)", (_name, change) => {
+			expect(buildFingerprint({ ...args, ...change })).not.toBe(base);
+		});
+
+		it("does not change when only the mutated source does (Stryker diffs it itself)", () => {
+			expect(
+				buildFingerprint({
+					...args,
+					read: (f: string) =>
+						f === "scripts/mutated.mjs" ? "edited" : (files[f] ?? "<absent>"),
+				}),
+			).toBe(base);
+		});
+
+		it("tells a config change from a same-content change of a differently named file", () => {
+			// The label is part of the entry: swapping two files' contents is a change.
+			const swapped: Record<string, string> = {
+				...files,
+				"stryker.config.mjs": "lock",
+				"package-lock.json": "config",
+			};
+			expect(
+				buildFingerprint({
+					...args,
+					read: (f: string) => swapped[f] ?? "<absent>",
+				}),
+			).not.toBe(base);
+		});
 	});
 
 	it("reuses only a restored file whose fingerprint matches (C1, C3, C6)", () => {

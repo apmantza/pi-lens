@@ -106,6 +106,23 @@ export function coveredChangedLinesInReport(
 }
 
 /**
+ * Written beside `.stryker/incremental.json` (the workflow caches both): the
+ * fingerprint of the inputs that file's results were computed under.
+ */
+export const INCREMENTAL_FINGERPRINT_PATH = ".stryker/incremental.fingerprint";
+
+export const PROBE_REPORTS_ROOT = ".stryker/coverage";
+
+/**
+ * One scratch directory per probed test file, for its coverage report.
+ *
+ * @param {string} test repo-relative test file
+ */
+export function probeReportsDirectory(test) {
+	return `${PROBE_REPORTS_ROOT}/${sha256(test).slice(0, 12)}`;
+}
+
+/**
  * The vitest command line that measures one test file's coverage of the
  * changed files. `autoAttachSubprocess` is load-bearing: a test that reaches
  * the script only through `spawnSync(process.execPath, [script])` executes it in
@@ -205,6 +222,47 @@ export function ownTestFiles(changedPaths) {
 	return changedPaths.filter((file) =>
 		/^tests\/(?!fixtures\/).*\.test\.ts$/.test(file),
 	);
+}
+
+/**
+ * Split the PR's own test files into those the run keeps and those the
+ * mutation-lane exclusion registry excludes (for its registered reason). A file
+ * the related-test scan already excluded is not reported twice; a file deleted
+ * by the PR is neither.
+ *
+ * @param {string[]} changedPaths
+ * @param {{
+ *   exists: (file: string) => boolean,
+ *   exclusionOf: (file: string) => {file: string, reason: string} | null,
+ *   alreadyExcluded?: Array<{file: string}>,
+ * }} deps
+ * @returns {{own: string[], excluded: Array<{file: string, reason: string}>}}
+ */
+export function partitionOwnTests(
+	changedPaths,
+	{ exists, exclusionOf, alreadyExcluded = [] },
+) {
+	const own = [];
+	const excluded = [];
+	for (const file of ownTestFiles(changedPaths)) {
+		if (!exists(file)) continue;
+		const exclusion = exclusionOf(file);
+		if (!exclusion) own.push(file);
+		else if (!alreadyExcluded.some((entry) => entry.file === file)) {
+			excluded.push(exclusion);
+		}
+	}
+	return { own, excluded };
+}
+
+/**
+ * How many coverage probes run side by side: the runner's cores, at most four
+ * (each is a whole vitest process), at least one.
+ *
+ * @param {number} cpus
+ */
+export function probeConcurrency(cpus) {
+	return Math.max(1, Math.min(4, cpus));
 }
 
 /**
@@ -319,6 +377,41 @@ export function fingerprintEntries(entries) {
 			.map(([label, content]) => `${label}\0${sha256(content)}`)
 			.join("\n"),
 	);
+}
+
+/**
+ * The fingerprint of everything a reused result depends on that Stryker does
+ * not watch: where the PR forked from the base, the node version, the Stryker
+ * config and the lockfile (vitest and Stryker versions), the kept tests, and
+ * every other changed file. `read` returns a file's text, or a marker for a
+ * missing one.
+ *
+ * @param {{
+ *   forkPoint: string,
+ *   nodeVersion: string,
+ *   read: (file: string) => string,
+ *   changedFiles: string[],
+ *   mutatedFiles: string[],
+ *   keptTests: string[],
+ * }} args
+ */
+export function buildFingerprint({
+	forkPoint,
+	nodeVersion,
+	read,
+	changedFiles,
+	mutatedFiles,
+	keptTests,
+}) {
+	return fingerprintEntries([
+		["fork-point", forkPoint],
+		["node", nodeVersion],
+		["stryker.config.mjs", read("stryker.config.mjs")],
+		["package-lock.json", read("package-lock.json")],
+		...fingerprintPaths({ changedFiles, mutatedFiles, keptTests }).map(
+			(file) => [file, read(file)],
+		),
+	]);
 }
 
 /**

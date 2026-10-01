@@ -14,6 +14,9 @@ export declare function coveredChangedLinesInReport(
 	rangesByFile: Map<string, ChangedRanges>,
 	root?: string,
 ): number;
+export declare const INCREMENTAL_FINGERPRINT_PATH: string;
+export declare const PROBE_REPORTS_ROOT: string;
+export declare function probeReportsDirectory(test: string): string;
 export declare function buildCoverageProbeArgs(
 	test: string,
 	includeFiles: string[],
@@ -38,6 +41,15 @@ export declare function probeAllTests(
 	options: { concurrency: number; signal?: AbortSignal },
 ): Promise<Map<string, number | null>>;
 export declare function ownTestFiles(changedPaths: string[]): string[];
+export declare function partitionOwnTests(
+	changedPaths: string[],
+	deps: {
+		exists: (file: string) => boolean;
+		exclusionOf: (file: string) => { file: string; reason: string } | null;
+		alreadyExcluded?: Array<{ file: string }>;
+	},
+): { own: string[]; excluded: Array<{ file: string; reason: string }> };
+export declare function probeConcurrency(cpus: number): number;
 export type TestSelection = {
 	mode: "coverage" | "import-graph";
 	pool: number;
@@ -62,6 +74,14 @@ export declare function fingerprintPaths(args: {
 export declare function fingerprintEntries(
 	entries: Array<[string, string]>,
 ): string;
+export declare function buildFingerprint(args: {
+	forkPoint: string;
+	nodeVersion: string;
+	read: (file: string) => string;
+	changedFiles: string[];
+	mutatedFiles: string[];
+	keptTests: string[];
+}): string;
 export declare function decideIncrementalReuse(args: {
 	hasIncrementalFile: boolean;
 	previous: string | null;

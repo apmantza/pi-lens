@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { INCREMENTAL_FINGERPRINT_PATH } from "../../scripts/lib/mutation-test-selection.mjs";
 import {
 	augmentAndSummarize,
 	buildRunConfig,
@@ -718,7 +719,7 @@ describe.skipIf(underStryker)(
 		const code = stripSource(driver);
 
 		it("feeds the PR's own tests and the import-graph priorities into the selector, with probed coverage", () => {
-			expect(code).toContain("ownTestFiles(allChangedPaths)");
+			expect(code).toContain("partitionOwnTests(allChangedPaths,");
 			expect(code).toContain("selectMutationTests({");
 			expect(code).toContain("ownTests,");
 			expect(code).toContain("priorities: selection.priorities,");
@@ -809,19 +810,21 @@ describe("mutation workflow incremental cache (#3810 item 2)", () => {
 		expect(save?.key).toBe(restore?.key);
 	});
 
-	it.skipIf(underStryker)(
-		"caches exactly the incremental file and its fingerprint, both ways",
-		() => {
-			for (const index of [restoreIndex, saveIndex]) {
-				expect(steps[index]?.with?.path?.trim().split("\n")).toEqual([
-					".stryker/incremental.json",
-					".stryker/incremental.fingerprint",
-				]);
-			}
-			expect(driverCachePaths()).toEqual([
+	it("caches exactly the incremental file and the fingerprint the driver writes beside it", () => {
+		for (const index of [restoreIndex, saveIndex]) {
+			expect(steps[index]?.with?.path?.trim().split("\n")).toEqual([
 				".stryker/incremental.json",
-				".stryker/incremental.fingerprint",
+				INCREMENTAL_FINGERPRINT_PATH,
 			]);
+		}
+	});
+
+	it.skipIf(underStryker)(
+		"has the driver read and write the same incremental file the workflow caches",
+		() => {
+			expect(/INCREMENTAL_PATH = "([^"]+)"/.exec(driver)?.[1]).toBe(
+				".stryker/incremental.json",
+			);
 		},
 	);
 
@@ -833,14 +836,6 @@ describe("mutation workflow incremental cache (#3810 item 2)", () => {
 		}
 	});
 });
-
-function driverCachePaths(): string[] {
-	// The driver's constants are the other half of the contract: the workflow
-	// caches what the driver reads and writes.
-	const inc = /INCREMENTAL_PATH = "([^"]+)"/.exec(driver)?.[1];
-	const fp = /FINGERPRINT_PATH = "([^"]+)"/.exec(driver)?.[1];
-	return [inc ?? "", fp ?? ""];
-}
 
 describe("compiled-source mutation targets (#3531 rescope)", () => {
 	it("classifies clients/tools/mcp .ts sources and the root index.ts, excluding tests and .d.ts", () => {

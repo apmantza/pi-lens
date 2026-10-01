@@ -1,5 +1,4 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -39,10 +38,13 @@ import {
 } from "./lib/stryker-diff.mjs";
 import {
 	buildCoverageProbeArgs,
-	ownTestFiles,
+	INCREMENTAL_FINGERPRINT_PATH,
+	probeReportsDirectory,
+	PROBE_REPORTS_ROOT,
+	partitionOwnTests,
+	probeConcurrency,
+	buildFingerprint,
 	decideIncrementalReuse,
-	fingerprintEntries,
-	fingerprintPaths,
 	parseIncrementalReuse,
 	probeAllTests,
 	probeTestCoverage,
@@ -72,17 +74,12 @@ const MUTATION_TEST_TIMEOUT_MS = 30_000;
 const MUTATION_TSCONFIG = "tsconfig.mutation.json";
 const REPORT_PATH = "reports/mutation/mutation.json";
 const INCREMENTAL_PATH = ".stryker/incremental.json";
-// Written beside the incremental file (and cached with it by the workflow):
-// the hash of everything a reused result depends on that Stryker itself does
-// not watch -- see fingerprintPaths in scripts/lib/mutation-test-selection.mjs.
-const FINGERPRINT_PATH = ".stryker/incremental.fingerprint";
 // Stryker's own file log (enabled by buildRunConfig), cwd-relative and not
 // configurable; the driver reads the reuse count from it and deletes it.
 const STRYKER_LOG_PATH = "stryker.log";
-const PROBE_DIRECTORY = ".stryker/coverage";
 // One vitest process per related test file, run side by side: bounded by the
 // runner's cores, and by the share of the budget the probes may spend.
-const PROBE_CONCURRENCY = Math.max(1, Math.min(4, availableParallelism()));
+const PROBE_CONCURRENCY = probeConcurrency(availableParallelism());
 const PROBE_TIMEOUT_MS = 180_000;
 const PROBE_BUDGET_SHARE = 0.25;
 function argumentValue(name, fallback) {
@@ -301,21 +298,20 @@ if (files.length === 0) {
 }
 
 let selection;
-const ownTests = [];
+let ownTests = [];
 try {
 	selection = mapRelatedTests(files);
 	// #3810 item 4: the PR's own test files are never dropped -- they are the
 	// tests whose survivors the author can act on. A file carrying the
 	// mutation-lane exclusion marker is excluded for its registered reason, same
 	// as a related one.
-	for (const file of ownTestFiles(allChangedPaths)) {
-		if (!existsSync(file)) continue;
-		const exclusion = mutationLaneExclusion(file);
-		if (!exclusion) ownTests.push(file);
-		else if (!selection.excluded.some((entry) => entry.file === file)) {
-			selection.excluded.push(exclusion);
-		}
-	}
+	const partition = partitionOwnTests(allChangedPaths, {
+		exists: existsSync,
+		exclusionOf: (file) => mutationLaneExclusion(file),
+		alreadyExcluded: selection.excluded,
+	});
+	ownTests = partition.own;
+	selection.excluded.push(...partition.excluded);
 } catch (error) {
 	const reason = `mutation diff: invalid mutation-lane exclusion registry (${error.name ?? "Error"}): ${error.message}`;
 	console.error(reason);
@@ -467,15 +463,11 @@ for (const tsFile of coveredCompiled) {
 	probeInclude.push(compiledJsPath(tsFile));
 }
 
-function probeDirectoryOf(test) {
-	return `${PROBE_DIRECTORY}/${createHash("sha256").update(test).digest("hex").slice(0, 12)}`;
-}
-
 function runProbeProcess(test) {
 	return new Promise((resolveRun) => {
 		const child = spawn(
 			"node_modules/.bin/vitest",
-			buildCoverageProbeArgs(test, probeInclude, probeDirectoryOf(test), {
+			buildCoverageProbeArgs(test, probeInclude, probeReportsDirectory(test), {
 				testTimeoutMs: MUTATION_TEST_TIMEOUT_MS,
 			}),
 			{ stdio: "ignore" },
@@ -497,7 +489,7 @@ function runProbeProcess(test) {
 }
 
 function readProbeCoverage(test) {
-	const directory = probeDirectoryOf(test);
+	const directory = probeReportsDirectory(test);
 	const file = `${directory}/coverage-final.json`;
 	try {
 		return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
@@ -506,7 +498,7 @@ function readProbeCoverage(test) {
 	}
 }
 
-rmSync(PROBE_DIRECTORY, { recursive: true, force: true });
+rmSync(PROBE_REPORTS_ROOT, { recursive: true, force: true });
 const probePool = [...new Set([...selection.tests, ...ownTests])];
 console.log(
 	`mutation diff: measuring which of ${probePool.length} candidate test file(s) execute a changed line (${PROBE_CONCURRENCY} at a time)`,
@@ -729,21 +721,18 @@ function gitForkPoint(ref, head) {
 		return "<unresolved>";
 	}
 }
-const fingerprint = fingerprintEntries([
-	["fork-point", gitForkPoint(baseRef, headShaArg ?? "HEAD")],
-	["node", process.version],
-	["stryker.config.mjs", readOrAbsent("stryker.config.mjs")],
-	["package-lock.json", readOrAbsent("package-lock.json")],
-	...fingerprintPaths({
-		changedFiles: allChangedPaths,
-		mutatedFiles: files,
-		keptTests: tests,
-	}).map((file) => [file, readOrAbsent(file)]),
-]);
+const fingerprint = buildFingerprint({
+	forkPoint: gitForkPoint(baseRef, headShaArg ?? "HEAD"),
+	nodeVersion: process.version,
+	read: readOrAbsent,
+	changedFiles: allChangedPaths,
+	mutatedFiles: files,
+	keptTests: tests,
+});
 const incrementalDecision = decideIncrementalReuse({
 	hasIncrementalFile: existsSync(INCREMENTAL_PATH),
-	previous: existsSync(FINGERPRINT_PATH)
-		? readFileSync(FINGERPRINT_PATH, "utf8").trim()
+	previous: existsSync(INCREMENTAL_FINGERPRINT_PATH)
+		? readFileSync(INCREMENTAL_FINGERPRINT_PATH, "utf8").trim()
 		: null,
 	current: fingerprint,
 });
@@ -796,7 +785,7 @@ for (;;) {
 	} else {
 		rmSync(INCREMENTAL_PATH, { force: true });
 	}
-	writeFileSync(FINGERPRINT_PATH, fingerprint);
+	writeFileSync(INCREMENTAL_FINGERPRINT_PATH, fingerprint);
 	const configFile = writeRunConfig(tests, {
 		reuse: reuse && incrementalMeta.state === "warm",
 	});

@@ -472,6 +472,80 @@ describe("renderMutationMarkdown", () => {
 		expect(truncated).toContain("25 related test(s) dropped by the test cap");
 	});
 
+	it("renders the exact selection line: bare without extras, comma-joined with both", () => {
+		const render = (extra: object) =>
+			renderMutationMarkdown({
+				files: {},
+				piLensMutationDiff: {
+					counts: { Killed: 1 },
+					score: "100.00",
+					testSelection: {
+						mode: "coverage",
+						pool: 72,
+						covering: 16,
+						kept: 16,
+						dropped: 0,
+						own: 0,
+						unknown: 0,
+						...extra,
+					},
+				},
+			});
+		expect(render({})).toMatch(
+			/^- \*\*Test selection:\*\* related 72 → covering 16 → kept 16$/m,
+		);
+		expect(render({ own: 3, unknown: 2 })).toMatch(
+			/^- \*\*Test selection:\*\* .* kept 16 \(3 own, 2 probe failed\)$/m,
+		);
+	});
+
+	it.each([
+		["pool", { pool: "72" }],
+		["kept", { kept: "16" }],
+		["dropped", { dropped: "0" }],
+		["covering", { covering: "16" }],
+	])("ignores a selection whose %s is not a number", (_field, bad) => {
+		// Each of the four fields is validated on its own: a selection that is
+		// well-formed except for one must not render NaN or "undefined".
+		const markdown = renderMutationMarkdown({
+			files: {},
+			piLensMutationDiff: {
+				counts: { Killed: 1 },
+				score: "100.00",
+				testSelection: {
+					pool: 72,
+					covering: 16,
+					kept: 16,
+					dropped: 4,
+					own: 0,
+					unknown: 0,
+					...bad,
+				},
+			},
+		});
+		expect(markdown).not.toContain("Test selection");
+		expect(markdown).not.toContain("dropped by the test cap");
+	});
+
+	it("needs both reuse counts to claim a count, and says so when only one is a number", () => {
+		const render = (incremental: object) =>
+			renderMutationMarkdown({
+				files: {},
+				piLensMutationDiff: {
+					counts: { Killed: 1 },
+					score: "100.00",
+					incremental,
+				},
+			});
+		const unavailable = "restored cache accepted (reuse count unavailable)";
+		expect(render({ state: "warm", reused: 5, total: null })).toContain(
+			unavailable,
+		);
+		expect(render({ state: "warm", reused: null, total: 6 })).toContain(
+			unavailable,
+		);
+	});
+
 	it("ignores a malformed test selection instead of rendering NaN", () => {
 		const markdown = renderMutationMarkdown({
 			files: {},
