@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import {
@@ -333,6 +333,46 @@ describe("selectConfigs (#3918)", () => {
 		expect(() =>
 			selectConfigs(["--shard", `${total}/${total}`], REPO_ROOT),
 		).toThrow(/selects no formal/);
+	});
+});
+
+describe("entry guard order (#3920)", () => {
+	it("reports an unknown flag, not the JAR lookup, through the real entry module", async () => {
+		const scriptPath = path.join(REPO_ROOT, "scripts", "check-tla-models.mjs");
+		const missingJar = path.join(REPO_ROOT, "does-not-exist-tla2tools.jar");
+		const savedArgv = process.argv;
+		const savedExitCode = process.exitCode;
+		const messages: string[] = [];
+		const errorSpy = vi
+			.spyOn(console, "error")
+			.mockImplementation((...args) => {
+				messages.push(args.map(String).join(" "));
+			});
+		process.argv = [
+			process.execPath,
+			scriptPath,
+			"--jar",
+			missingJar,
+			"--shadr",
+			"1/4",
+		];
+		process.exitCode = undefined;
+		try {
+			// A unique query re-evaluates the module body, so the production
+			// entry guard runs its private `main` rather than handing back the
+			// instance the test file imported statically.
+			await import(
+				`${pathToFileURL(scriptPath).href}?entry-guard=${Date.now()}`
+			);
+			await flushMicrotasks();
+		} finally {
+			errorSpy.mockRestore();
+			process.argv = savedArgv;
+			process.exitCode = savedExitCode;
+		}
+		const output = messages.join("\n");
+		expect(output).toContain("Unknown option '--shadr'");
+		expect(output).not.toContain("does not exist");
 	});
 });
 
