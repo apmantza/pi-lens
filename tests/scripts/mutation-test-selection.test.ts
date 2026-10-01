@@ -534,13 +534,20 @@ describe("selectMutationTests", () => {
 	});
 
 	it("drops an unknown test before a covering one when the cap binds", () => {
-		const selection = selectMutationTests({
-			related: ["tests/flaky.test.ts", "tests/hit.test.ts"],
-			lines: lines({ "tests/flaky.test.ts": null, "tests/hit.test.ts": 1 }),
-			maxTests: 1,
-		});
-		expect(selection.kept).toEqual(["tests/hit.test.ts"]);
-		expect(selection.dropped).toEqual(["tests/flaky.test.ts"]);
+		// The path hash alone puts q (the probe that failed) before p (which
+		// covers one changed line), so only the rank can keep p.
+		for (const related of [
+			["tests/q.test.ts", "tests/p.test.ts"],
+			["tests/p.test.ts", "tests/q.test.ts"],
+		]) {
+			const selection = selectMutationTests({
+				related,
+				lines: lines({ "tests/q.test.ts": null, "tests/p.test.ts": 1 }),
+				maxTests: 1,
+			});
+			expect(selection.kept).toEqual(["tests/p.test.ts"]);
+			expect(selection.dropped).toEqual(["tests/q.test.ts"]);
+		}
 	});
 
 	it("falls back to the import-graph ranking when no probe produced an answer (S11)", () => {
@@ -985,6 +992,13 @@ describe("fingerprint changes and file format", () => {
 				{ a: "1", b: "X", d: "4", e: "5" },
 			),
 		).toEqual(["b", "c", "e"]);
+		// Sorted whatever order the two records list their inputs in.
+		expect(
+			changedFingerprintInputs(
+				{ z: "1", m: "1", b: "1" },
+				{ z: "2", m: "2", b: "2", a: "9" },
+			),
+		).toEqual(["a", "b", "m", "z"]);
 		expect(changedFingerprintInputs({ a: "1" }, { a: "1" })).toEqual([]);
 		expect(changedFingerprintInputs({}, {})).toEqual([]);
 	});
