@@ -414,7 +414,7 @@ export function buildFingerprint({
 			return ABSENT_FILE;
 		}
 	};
-	return fingerprintEntries([
+	const entries = [
 		["fork-point", forkPoint],
 		["node", nodeVersion],
 		["stryker.config.mjs", read("stryker.config.mjs")],
@@ -422,7 +422,57 @@ export function buildFingerprint({
 		...fingerprintPaths({ changedFiles, mutatedFiles, keptTests }).map(
 			(file) => [file, read(file)],
 		),
-	]);
+	];
+	return {
+		digest: fingerprintEntries(entries),
+		inputs: Object.fromEntries(
+			entries.map(([label, content]) => [label, sha256(content)]),
+		),
+	};
+}
+
+/**
+ * The inputs whose hash differs between two fingerprints (changed, added or
+ * removed), sorted: what to name when a restored cache is refused, so a cold
+ * run says WHY (a hot file master also edits, a runner image's node) instead
+ * of only that something differs.
+ *
+ * @param {Record<string, string>} previous
+ * @param {Record<string, string>} current
+ * @returns {string[]}
+ */
+export function changedFingerprintInputs(previous, current) {
+	return [...new Set([...Object.keys(previous), ...Object.keys(current)])]
+		.filter((label) => previous[label] !== current[label])
+		.sort();
+}
+
+/**
+ * The fingerprint file the driver writes beside the incremental file.
+ *
+ * @param {{digest: string, inputs: Record<string, string>}} fingerprint
+ */
+export function serializeFingerprint({ digest, inputs }) {
+	return JSON.stringify({ digest, inputs });
+}
+
+/**
+ * @param {string} text the fingerprint file's text
+ * @returns {{digest: string, inputs: Record<string, string>} | null} null for
+ *   anything but what `serializeFingerprint` wrote (an older format, a
+ *   truncated file): the restored cache is then not trusted
+ */
+export function parseFingerprint(text) {
+	try {
+		const parsed = JSON.parse(text);
+		return typeof parsed.digest === "string" &&
+			parsed.inputs !== null &&
+			typeof parsed.inputs === "object"
+			? { digest: parsed.digest, inputs: parsed.inputs }
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -601,12 +651,18 @@ export function selectionNotes(choice, maxTests) {
  * meta that says so. A resample retry runs against a file the previous attempt
  * cleared, so it is cold whatever the first attempt's decision was.
  *
- * @param {{attempt: number, decision: {reuse: boolean, state: string}}} args
- * @returns {{reuse: boolean, meta: {state: string}}}
+ * @param {{attempt: number, decision: {reuse: boolean, state: string, changed?: string[]}}} args
+ * @returns {{reuse: boolean, meta: {state: string, changed?: string[]}}}
  */
 export function planIncrementalAttempt({ attempt, decision }) {
 	if (attempt > 0) return { reuse: false, meta: { state: "cold-no-cache" } };
-	return { reuse: decision.reuse, meta: { state: decision.state } };
+	return {
+		reuse: decision.reuse,
+		meta: {
+			state: decision.state,
+			...(decision.changed?.length ? { changed: decision.changed } : {}),
+		},
+	};
 }
 
 /**

@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	buildCoverageProbeArgs,
 	buildFingerprint,
+	changedFingerprintInputs,
+	parseFingerprint,
+	serializeFingerprint,
 	coveredChangedLines,
 	coveredChangedLinesInReport,
 	decideIncrementalReuse,
@@ -975,6 +978,38 @@ describe("forkPointOf and parseNameList", () => {
 	});
 });
 
+describe("fingerprint changes and file format", () => {
+	it("names the inputs that changed, were added or were removed, sorted", () => {
+		expect(
+			changedFingerprintInputs(
+				{ a: "1", b: "2", c: "3", d: "4" },
+				{ a: "1", b: "X", d: "4", e: "5" },
+			),
+		).toEqual(["b", "c", "e"]);
+		expect(changedFingerprintInputs({ a: "1" }, { a: "1" })).toEqual([]);
+		expect(changedFingerprintInputs({}, {})).toEqual([]);
+	});
+
+	it("round-trips the fingerprint file", () => {
+		const fingerprint = { digest: "abc", inputs: { node: "22", a: "h" } };
+		expect(parseFingerprint(serializeFingerprint(fingerprint))).toEqual(
+			fingerprint,
+		);
+	});
+
+	it.each([
+		["not json", "{nope"],
+		["an older bare digest", "0123abcd\n"],
+		["no digest", '{"inputs":{}}'],
+		["a non-string digest", '{"digest":1,"inputs":{}}'],
+		["no inputs", '{"digest":"x"}'],
+		["null inputs", '{"digest":"x","inputs":null}'],
+		["non-object inputs", '{"digest":"x","inputs":"y"}'],
+	])("does not trust a fingerprint file that is %s", (_name, text) => {
+		expect(parseFingerprint(text)).toBeNull();
+	});
+});
+
 describe("incremental attempt helpers", () => {
 	it("lets only the first attempt read the restored file, and calls every retry cold", () => {
 		const warm = { reuse: true, state: "warm" };
@@ -988,6 +1023,32 @@ describe("incremental attempt helpers", () => {
 				decision: { reuse: false, state: "cold-inputs-changed" },
 			}),
 		).toEqual({ reuse: false, meta: { state: "cold-inputs-changed" } });
+		expect(
+			planIncrementalAttempt({
+				attempt: 0,
+				decision: {
+					reuse: false,
+					state: "cold-inputs-changed",
+					changed: ["node", "tests/a.test.ts"],
+				},
+			}),
+		).toEqual({
+			reuse: false,
+			meta: {
+				state: "cold-inputs-changed",
+				changed: ["node", "tests/a.test.ts"],
+			},
+		});
+		expect(
+			planIncrementalAttempt({
+				attempt: 1,
+				decision: {
+					reuse: false,
+					state: "cold-inputs-changed",
+					changed: ["node"],
+				},
+			}),
+		).toEqual({ reuse: false, meta: { state: "cold-no-cache" } });
 		expect(planIncrementalAttempt({ attempt: 1, decision: warm })).toEqual({
 			reuse: false,
 			meta: { state: "cold-no-cache" },
@@ -1297,10 +1358,12 @@ describe("incremental cache rules", () => {
 			mutatedFiles: ["scripts/mutated.mjs"],
 			keptTests: ["tests/kept.test.ts"],
 		};
-		const base = buildFingerprint(args);
+		const digest = (a: Parameters<typeof buildFingerprint>[0]) =>
+			buildFingerprint(a).digest;
+		const base = digest(args);
 
 		it("is stable for the same inputs", () => {
-			expect(buildFingerprint({ ...args })).toBe(base);
+			expect(digest({ ...args })).toBe(base);
 		});
 
 		it.each([
@@ -1335,7 +1398,7 @@ describe("incremental cache rules", () => {
 				},
 			],
 		])("changes when %s changes (C1, C2, C3)", (_name, change) => {
-			expect(buildFingerprint({ ...args, ...change })).not.toBe(base);
+			expect(digest({ ...args, ...change })).not.toBe(base);
 		});
 
 		it("fingerprints a file that cannot be read as absent, not as empty and not as a crash", () => {
@@ -1343,17 +1406,17 @@ describe("incremental cache rules", () => {
 				if (f === "tests/kept.test.ts") throw new Error("ENOENT");
 				return files[f] ?? "<absent>";
 			};
-			const absent = buildFingerprint({ ...args, read: unreadable });
+			const absent = digest({ ...args, read: unreadable });
 			// Same as a file whose text is the marker, different from an empty file.
 			expect(absent).toBe(
-				buildFingerprint({
+				digest({
 					...args,
 					read: (f: string) =>
 						f === "tests/kept.test.ts" ? "<absent>" : (files[f] ?? "<absent>"),
 				}),
 			);
 			expect(absent).not.toBe(
-				buildFingerprint({
+				digest({
 					...args,
 					read: (f: string) =>
 						f === "tests/kept.test.ts" ? "" : (files[f] ?? "<absent>"),
@@ -1362,9 +1425,33 @@ describe("incremental cache rules", () => {
 			expect(absent).not.toBe(base);
 		});
 
-		it("does not change when only the mutated source does (Stryker diffs it itself)", () => {
+		it("names every input with the hash of its content, so a refusal can say which one changed", () => {
+			const { inputs } = buildFingerprint(args);
+			expect(Object.keys(inputs).sort()).toEqual([
+				"fork-point",
+				"node",
+				"package-lock.json",
+				"scripts/helper.mjs",
+				"stryker.config.mjs",
+				"tests/kept.test.ts",
+			]);
 			expect(
 				buildFingerprint({
+					...args,
+					read: (f: string) =>
+						f === "scripts/helper.mjs" ? "edited" : (files[f] ?? "<absent>"),
+				}).inputs,
+			).toEqual({
+				...inputs,
+				"scripts/helper.mjs": expect.not.stringMatching(
+					new RegExp(`^${inputs["scripts/helper.mjs"]}$`),
+				),
+			});
+		});
+
+		it("does not change when only the mutated source does (Stryker diffs it itself)", () => {
+			expect(
+				digest({
 					...args,
 					read: (f: string) =>
 						f === "scripts/mutated.mjs" ? "edited" : (files[f] ?? "<absent>"),
@@ -1380,7 +1467,7 @@ describe("incremental cache rules", () => {
 				"package-lock.json": "config",
 			};
 			expect(
-				buildFingerprint({
+				digest({
 					...args,
 					read: (f: string) => swapped[f] ?? "<absent>",
 				}),

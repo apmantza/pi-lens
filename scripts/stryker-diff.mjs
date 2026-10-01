@@ -39,9 +39,11 @@ import {
 import {
 	buildCoverageProbeArgs,
 	buildFingerprint,
+	changedFingerprintInputs,
 	decideIncrementalReuse,
 	forkPointOf,
 	INCREMENTAL_FINGERPRINT_PATH,
+	parseFingerprint,
 	parseNameList,
 	partitionOwnTests,
 	planIncrementalAttempt,
@@ -55,6 +57,7 @@ import {
 	runProbeProcess,
 	selectionNotes,
 	selectMutationTests,
+	serializeFingerprint,
 	withReuseCount,
 } from "./lib/mutation-test-selection.mjs";
 import { formatTestSelection } from "./lib/mutation-report-render.mjs";
@@ -696,21 +699,33 @@ const fingerprint = buildFingerprint({
 		baseRef,
 		headShaArg ?? "HEAD",
 	),
-	nodeVersion: process.version,
+	// The major only: a runner image's patch release of node is not an input.
+	nodeVersion: process.versions.node.split(".")[0],
 	read: (file) => readFileSync(file, "utf8"),
 	changedFiles: allChangedPaths,
 	mutatedFiles: files,
 	keptTests: tests,
 });
-const incrementalDecision = decideIncrementalReuse({
-	hasIncrementalFile: existsSync(INCREMENTAL_PATH),
-	previous: existsSync(INCREMENTAL_FINGERPRINT_PATH)
-		? readFileSync(INCREMENTAL_FINGERPRINT_PATH, "utf8").trim()
-		: null,
-	current: fingerprint,
-});
-incrementalMeta = { state: incrementalDecision.state };
-console.log(`mutation diff: incremental cache ${incrementalDecision.state}`);
+const restoredFingerprint = existsSync(INCREMENTAL_FINGERPRINT_PATH)
+	? parseFingerprint(readFileSync(INCREMENTAL_FINGERPRINT_PATH, "utf8"))
+	: null;
+const incrementalDecision = {
+	...decideIncrementalReuse({
+		hasIncrementalFile: existsSync(INCREMENTAL_PATH),
+		previous: restoredFingerprint?.digest ?? null,
+		current: fingerprint.digest,
+	}),
+	changed: [],
+};
+if (incrementalDecision.state === "cold-inputs-changed") {
+	incrementalDecision.changed = changedFingerprintInputs(
+		restoredFingerprint.inputs,
+		fingerprint.inputs,
+	);
+}
+console.log(
+	`mutation diff: incremental cache ${incrementalDecision.state}${incrementalDecision.changed.length > 0 ? ` (${incrementalDecision.changed.join(", ")})` : ""}`,
+);
 
 // round 2 R2-1: a deterministic sample can land entirely on ranges Stryker's
 // mutator set has none for -- a real #3579 replay at a 15-minute budget
@@ -750,7 +765,10 @@ for (;;) {
 	});
 	if (incrementalPlan.reuse && !reuse)
 		incrementalMeta = { state: "cold-no-cache" };
-	writeFileSync(INCREMENTAL_FINGERPRINT_PATH, fingerprint);
+	writeFileSync(
+		INCREMENTAL_FINGERPRINT_PATH,
+		serializeFingerprint(fingerprint),
+	);
 	const configFile = writeRunConfig(tests, { reuse });
 	rmSync(STRYKER_LOG_PATH, { force: true });
 

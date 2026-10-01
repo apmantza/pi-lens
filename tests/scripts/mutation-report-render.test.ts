@@ -550,6 +550,45 @@ describe("renderMutationMarkdown", () => {
 		);
 	});
 
+	it("names the inputs that made the cache cold, five at most", () => {
+		const render = (changed: unknown) =>
+			renderMutationMarkdown({
+				files: {},
+				piLensMutationDiff: {
+					counts: { Killed: 1 },
+					score: "100.00",
+					incremental: { state: "cold-inputs-changed", changed },
+				},
+			});
+		const plain =
+			"- **Incremental:** cold (a kept test or another changed file differs from the cached run)";
+		expect(render(["node", "tests/a.test.ts"])).toContain(
+			`${plain}: \`node\`, \`tests/a.test.ts\``,
+		);
+		const six = ["a", "b", "c", "d", "e", "f"];
+		expect(render(six)).toMatch(/: `a`, `b`, `c`, `d`, `e` and 1 more$/m);
+		expect(render(["a", "b", "c", "d", "e"])).toMatch(/`d`, `e`$/m);
+		expect(render(["a", 7, null])).toMatch(/: `a`$/m);
+		for (const none of [[], undefined, "node", [7]]) {
+			expect(render(none)).toMatch(
+				new RegExp(`${plain.replace(/[()*]/g, "\\$&")}$`, "m"),
+			);
+		}
+	});
+
+	it("does not name changed inputs for a state that is not cold-inputs-changed", () => {
+		const markdown = renderMutationMarkdown({
+			files: {},
+			piLensMutationDiff: {
+				counts: { Killed: 1 },
+				score: "100.00",
+				incremental: { state: "cold-no-cache", changed: ["node"] },
+			},
+		});
+		expect(markdown).toContain("**Incremental:** cold (no restored cache)");
+		expect(markdown).not.toContain("`node`");
+	});
+
 	it("ignores a malformed test selection instead of rendering NaN", () => {
 		const markdown = renderMutationMarkdown({
 			files: {},

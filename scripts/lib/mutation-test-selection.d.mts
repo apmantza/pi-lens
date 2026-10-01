@@ -74,6 +74,7 @@ export declare function fingerprintPaths(args: {
 export declare function fingerprintEntries(
 	entries: Array<[string, string]>,
 ): string;
+export type Fingerprint = { digest: string; inputs: Record<string, string> };
 export declare function buildFingerprint(args: {
 	forkPoint: string;
 	nodeVersion: string;
@@ -81,7 +82,13 @@ export declare function buildFingerprint(args: {
 	changedFiles: string[];
 	mutatedFiles: string[];
 	keptTests: string[];
-}): string;
+}): Fingerprint;
+export declare function changedFingerprintInputs(
+	previous: Record<string, string>,
+	current: Record<string, string>,
+): string[];
+export declare function serializeFingerprint(fingerprint: Fingerprint): string;
+export declare function parseFingerprint(text: string): Fingerprint | null;
 export declare function decideIncrementalReuse(args: {
 	hasIncrementalFile: boolean;
 	previous: string | null;
@@ -138,8 +145,8 @@ export declare function selectionNotes(
 ): string[];
 export declare function planIncrementalAttempt(args: {
 	attempt: number;
-	decision: { reuse: boolean; state: string };
-}): { reuse: boolean; meta: { state: string } };
+	decision: { reuse: boolean; state: string; changed?: string[] };
+}): { reuse: boolean; meta: { state: string; changed?: string[] } };
 export declare function prepareIncrementalFile(args: {
 	reuse: boolean;
 	patterns: string[];

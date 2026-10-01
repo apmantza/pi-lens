@@ -841,6 +841,12 @@ describe.skipIf(underStryker)(
 			// The fork point, not the base tip: a merge train moves the tip every few
 			// minutes and would make every push cold.
 			expect(code).toContain("forkPointOf(");
+			expect(code).toContain("parseFingerprint(");
+			expect(code).toContain("serializeFingerprint(fingerprint)");
+			expect(code).toContain("changedFingerprintInputs(");
+			// The node MAJOR: a runner image's patch release is not an input (CI runs
+			// 36802587909 and 36803778786 differed only in v22.23.3 against v22.23.2).
+			expect(code).toMatch(/process\.versions\.node\.split\("\s*"\)\[0\]/);
 			expect(code).toMatch(/headShaArg \?\? "\s*"/);
 			expect(code).not.toContain("gitRevision(");
 			expect(code).toContain("keptTests: tests,");

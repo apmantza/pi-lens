@@ -100,7 +100,16 @@ function incrementalRowOf(meta) {
 		];
 	}
 	const text = INCREMENTAL_STATES[incremental.state];
-	return text ? ["Incremental", text] : null;
+	if (!text) return null;
+	const changed = Array.isArray(incremental.changed)
+		? incremental.changed.filter((input) => typeof input === "string")
+		: [];
+	if (incremental.state !== "cold-inputs-changed" || changed.length === 0) {
+		return ["Incremental", text];
+	}
+	const shown = changed.slice(0, 5).map((input) => `\`${input}\``);
+	const more = changed.length > 5 ? ` and ${changed.length - 5} more` : "";
+	return ["Incremental", `${text}: ${shown.join(", ")}${more}`];
 }
 
 // Only a DROPPED test makes the population truncated: kept < covering is not
