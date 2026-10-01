@@ -9,6 +9,7 @@ import {
 	classifyTlcOutput,
 	computeConcurrency,
 	listModelConfigs,
+	parseCliArgs,
 	parseConcurrencyArg,
 	parseModelHeader,
 	parseShardArg,
@@ -254,6 +255,47 @@ describe("selectShard (#3918)", () => {
 	});
 });
 
+describe("parseCliArgs (#3920)", () => {
+	it("accepts the space form and the equals form identically for every flag", () => {
+		expect(parseCliArgs(["--shard", "1/4"])).toEqual({ shard: "1/4" });
+		expect(parseCliArgs(["--shard=1/4"])).toEqual({ shard: "1/4" });
+		expect(parseCliArgs(["--jar", "/tmp/tla2tools.jar"])).toEqual({
+			jar: "/tmp/tla2tools.jar",
+		});
+		expect(parseCliArgs(["--jar=/tmp/tla2tools.jar"])).toEqual({
+			jar: "/tmp/tla2tools.jar",
+		});
+		expect(parseCliArgs(["--concurrency", "2"])).toEqual({ concurrency: "2" });
+		expect(parseCliArgs(["--concurrency=2"])).toEqual({ concurrency: "2" });
+	});
+
+	it("returns no options for an empty argv", () => {
+		expect(parseCliArgs([])).toEqual({});
+	});
+
+	// Recurrence: `indexOf` ignored a misspelled flag, so the run fell back to
+	// the whole population instead of failing. Unknown flags must throw here.
+	it.each(["--shrad", "--Shard", "--jar-file", "-s", "shards"])(
+		"rejects the unknown flag %j",
+		(flag) => {
+			expect(() => parseCliArgs([flag, "1/4"])).toThrow(
+				/Unknown option|positional/,
+			);
+		},
+	);
+
+	it.each(["--shard", "--jar", "--concurrency"])(
+		"rejects the missing value for %s",
+		(flag) => {
+			expect(() => parseCliArgs([flag])).toThrow(/argument missing/);
+		},
+	);
+
+	it("rejects a bare positional value instead of ignoring it", () => {
+		expect(() => parseCliArgs(["1/4"])).toThrow(/positional|Unexpected/);
+	});
+});
+
 describe("selectConfigs (#3918)", () => {
 	it("returns every config without --shard", () => {
 		expect(selectConfigs([], REPO_ROOT)).toEqual(listModelConfigs(REPO_ROOT));
@@ -264,6 +306,24 @@ describe("selectConfigs (#3918)", () => {
 		expect(selectConfigs(["--shard", "1/2"], REPO_ROOT)).toEqual(
 			all.filter((_, position) => position % 2 === 0),
 		);
+	});
+
+	// Recurrence: `indexOf("--shard")` missed both the equals form and a
+	// misspelled flag, so the run silently selected the whole population.
+	it("narrows to the shard with the --shard= equals form", () => {
+		const all = listModelConfigs(REPO_ROOT);
+		expect(selectConfigs(["--shard=1/2"], REPO_ROOT)).toEqual(
+			all.filter((_, position) => position % 2 === 0),
+		);
+	});
+
+	it.each([
+		["a misspelled flag", ["--shrad", "1/2"]],
+		["a `--shard` with no value", ["--shard"]],
+		["a value-less `--concurrency`", ["--concurrency"]],
+		["a bare positional value", ["1/2"]],
+	])("does not silently select every config on %s", (_label, argv) => {
+		expect(() => selectConfigs(argv, REPO_ROOT)).toThrow();
 	});
 
 	// Recurrence: more shards than configs would leave a runner green on

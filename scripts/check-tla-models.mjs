@@ -35,6 +35,10 @@
  * stepping through the list spreads each directory across the shards.
  *
  * Usage: node scripts/check-tla-models.mjs [--jar <tla2tools.jar>] [--concurrency <n>] [--shard <i/N>]
+ * Every flag's value may use the space or the equals form (`--shard 1/4` and
+ * `--shard=1/4` are the same). An unknown flag, a missing value, or a
+ * positional argument is rejected before any download or JVM spawn, so a typo
+ * can never silently run the full, unsharded population (#3920).
  * Without --jar, the pinned release is downloaded to .cache/ and verified.
  * Without --concurrency, the pool is sized to the host's CPU count.
  */
@@ -44,6 +48,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs as parseNodeArgs } from "node:util";
 
 export const TLA_TOOLS = Object.freeze({
 	release: "v1.7.4",
@@ -141,23 +146,45 @@ export function selectShard(configs, { index, total }) {
 	return configs.filter((_, position) => position % total === index - 1);
 }
 
+const CLI_OPTIONS = Object.freeze({
+	jar: { type: "string" },
+	concurrency: { type: "string" },
+	shard: { type: "string" },
+});
+
+/**
+ * Parse the checker's flags strictly. Every flag takes a value, so the
+ * `--shard 1/4` and `--shard=1/4` forms are equivalent; `node:util`'s parser
+ * handles both, leaving no second spelling to drift. `strict` rejects an
+ * unknown flag, a missing value, and a positional argument, each by throwing.
+ * `main()` calls this before the network or a JVM starts, so a typo can never
+ * silently fall through to the full, unsharded population (#3920).
+ */
+export function parseCliArgs(argv) {
+	const { values } = parseNodeArgs({
+		args: [...argv],
+		options: CLI_OPTIONS,
+		strict: true,
+		allowPositionals: false,
+	});
+	return { ...values };
+}
+
 /**
  * The configs one run covers: every `.cfg` under `formal/`, narrowed by `--shard`
  * when present. Throws on an empty selection so a shard with nothing to run
  * (more shards than configs) is loud, not a green no-op.
  */
 export function selectConfigs(argv, root) {
-	const shardIndex = argv.indexOf("--shard");
+	const { shard } = parseCliArgs(argv);
 	const all = listModelConfigs(root);
 	const configs =
-		shardIndex === -1
-			? all
-			: selectShard(all, parseShardArg(argv[shardIndex + 1]));
+		shard === undefined ? all : selectShard(all, parseShardArg(shard));
 	if (configs.length === 0)
 		throw new Error(
-			shardIndex === -1
+			shard === undefined
 				? "no formal/*/*.cfg found"
-				: `--shard ${argv[shardIndex + 1]} selects no formal/*/*.cfg`,
+				: `--shard ${shard} selects no formal/*/*.cfg`,
 		);
 	return configs;
 }
@@ -311,14 +338,14 @@ export async function runPool(items, concurrency, task) {
 
 async function main() {
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-	const argv = process.argv;
-	const jarIndex = argv.indexOf("--jar");
-	const jar = await ensureJar(
-		jarIndex === -1 ? undefined : argv[jarIndex + 1],
-		root,
-	);
-	const concurrencyIndex = argv.indexOf("--concurrency");
-	const shardIndex = argv.indexOf("--shard");
+	const argv = process.argv.slice(2);
+	// Every flag is parsed and validated before any download or JVM spawn
+	// (#3920): a typo must fail loudly here, never run the full population.
+	const {
+		jar: jarArg,
+		concurrency: concurrencyRaw,
+		shard,
+	} = parseCliArgs(argv);
 	const configs = selectConfigs(argv, root);
 
 	const availableParallelism =
@@ -326,9 +353,10 @@ async function main() {
 			? os.availableParallelism()
 			: os.cpus().length;
 	const concurrency =
-		concurrencyIndex === -1
+		concurrencyRaw === undefined
 			? computeConcurrency(configs.length, availableParallelism)
-			: parseConcurrencyArg(argv[concurrencyIndex + 1]);
+			: parseConcurrencyArg(concurrencyRaw);
+	const jar = await ensureJar(jarArg, root);
 
 	const wallStarted = Date.now();
 	const outcomes = await runPool(configs, concurrency, async (config) => {
@@ -365,7 +393,7 @@ async function main() {
 		);
 	console.log("");
 	console.log(
-		`${configs.length} configs${shardIndex === -1 ? "" : ` (shard ${argv[shardIndex + 1]})`}, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`,
+		`${configs.length} configs${shard === undefined ? "" : ` (shard ${shard})`}, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`,
 	);
 	console.log("Per-directory TLC time (summed, not wall time):");
 	for (const line of dirLines) console.log(line);

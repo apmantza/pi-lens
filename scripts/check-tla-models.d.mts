@@ -37,6 +37,11 @@ export declare function selectShard<Item>(
 	configs: readonly Item[],
 	shard: { index: number; total: number },
 ): Item[];
+export declare function parseCliArgs(argv: readonly string[]): {
+	jar?: string;
+	concurrency?: string;
+	shard?: string;
+};
 export declare function selectConfigs(
 	argv: readonly string[],
 	root: string,
