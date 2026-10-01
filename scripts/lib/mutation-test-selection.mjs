@@ -496,11 +496,15 @@ export function decideIncrementalReuse({
 }
 
 /**
- * Drop the restored results Stryker would carry into the report although the
- * current `--mutate` ranges no longer hold them (a reverted hunk, a range the
- * sample left out): its differ re-adds every old mutant outside the mutated
- * scope, so without this a survivor on a line the PR no longer changes keeps
- * rendering on the PR.
+ * Drop the results Stryker carries into a report although the current
+ * `--mutate` ranges no longer hold them (a reverted hunk, a range the sample
+ * left out): its differ re-adds every old mutant outside the mutated scope, so
+ * without this a survivor on a line the PR no longer changes keeps rendering
+ * on the PR. Run it on the REPORT Stryker wrote, never on the file it is about
+ * to read: only the mutants Stryker placed this run carry current line numbers,
+ * and pruning the old file by the new ranges drops every result a line shift
+ * above it would have let Stryker reuse (CI-shaped repro: one comment line
+ * added above the mutated lines read "0 of 5 mutant result(s) are reused").
  *
  * @param {{files: Record<string, {mutants: Array<{location: {start: {line: number}, end: {line: number}}}>}>}} report
  * @param {string[]} patterns `file:start-end`
@@ -663,39 +667,6 @@ export function planIncrementalAttempt({ attempt, decision }) {
 			...(decision.changed?.length ? { changed: decision.changed } : {}),
 		},
 	};
-}
-
-/**
- * Leave the incremental file ready for the attempt: pruned to the attempt's
- * ranges when it may be read, removed otherwise (or when it cannot be pruned,
- * which starts cold). Returns whether Stryker may read what is left.
- *
- * @param {{
- *   reuse: boolean,
- *   patterns: string[],
- *   read: () => string,
- *   write: (text: string) => void,
- *   remove: () => void,
- * }} args
- */
-export function prepareIncrementalFile({
-	reuse,
-	patterns,
-	read,
-	write,
-	remove,
-}) {
-	if (!reuse) {
-		remove();
-		return false;
-	}
-	try {
-		write(JSON.stringify(pruneIncrementalReport(JSON.parse(read()), patterns)));
-		return true;
-	} catch {
-		remove();
-		return false;
-	}
 }
 
 /**

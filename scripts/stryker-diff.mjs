@@ -47,12 +47,12 @@ import {
 	parseNameList,
 	partitionOwnTests,
 	planIncrementalAttempt,
-	prepareIncrementalFile,
 	probeAllTests,
 	probeConcurrency,
 	probeReportsDirectory,
 	PROBE_REPORTS_ROOT,
 	probeTestCoverage,
+	pruneIncrementalReport,
 	readProbeCoverage,
 	runProbeProcess,
 	selectionNotes,
@@ -756,15 +756,8 @@ for (;;) {
 		decision: incrementalDecision,
 	});
 	incrementalMeta = incrementalPlan.meta;
-	const reuse = prepareIncrementalFile({
-		reuse: incrementalPlan.reuse,
-		patterns,
-		read: () => readFileSync(INCREMENTAL_PATH, "utf8"),
-		write: (text) => writeFileSync(INCREMENTAL_PATH, text),
-		remove: () => rmSync(INCREMENTAL_PATH, { force: true }),
-	});
-	if (incrementalPlan.reuse && !reuse)
-		incrementalMeta = { state: "cold-no-cache" };
+	const reuse = incrementalPlan.reuse;
+	if (!reuse) rmSync(INCREMENTAL_PATH, { force: true });
 	writeFileSync(
 		INCREMENTAL_FINGERPRINT_PATH,
 		serializeFingerprint(fingerprint),
@@ -810,7 +803,10 @@ for (;;) {
 		let partialScore = "n/a";
 		if (existsSync(INCREMENTAL_PATH)) {
 			try {
-				partialReport = JSON.parse(readFileSync(INCREMENTAL_PATH, "utf8"));
+				partialReport = pruneIncrementalReport(
+					JSON.parse(readFileSync(INCREMENTAL_PATH, "utf8")),
+					patterns,
+				);
 				({
 					mutants: partialMutants,
 					counts: partialCounts,
@@ -892,7 +888,14 @@ for (;;) {
 
 	let strykerReport;
 	try {
-		strykerReport = JSON.parse(readFileSync(REPORT_PATH, "utf8"));
+		// Stryker re-adds every old result whose mutant is outside this run's
+		// ranges (a hunk since reverted, a range the sample left out); only the
+		// mutants it just placed carry current line numbers, so the filter must run
+		// on the report, not on the file it read.
+		strykerReport = pruneIncrementalReport(
+			JSON.parse(readFileSync(REPORT_PATH, "utf8")),
+			patterns,
+		);
 	} catch (error) {
 		console.error(`mutation diff: report unreadable: ${error.message}`);
 		process.exit(1);

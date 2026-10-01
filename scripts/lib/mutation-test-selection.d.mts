@@ -147,13 +147,6 @@ export declare function planIncrementalAttempt(args: {
 	attempt: number;
 	decision: { reuse: boolean; state: string; changed?: string[] };
 }): { reuse: boolean; meta: { state: string; changed?: string[] } };
-export declare function prepareIncrementalFile(args: {
-	reuse: boolean;
-	patterns: string[];
-	read: () => string;
-	write: (text: string) => void;
-	remove: () => void;
-}): boolean;
 export declare function withReuseCount<M extends { state: string }>(
 	meta: M,
 	log: string,

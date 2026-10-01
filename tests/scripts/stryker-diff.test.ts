@@ -848,7 +848,11 @@ describe.skipIf(underStryker)(
 				/planIncrementalAttempt\(\{\s*attempt,\s*decision: incrementalDecision,/,
 			);
 			expect(code).toContain("decision: incrementalDecision,");
-			expect(code).toContain("prepareIncrementalFile({");
+			// The restored file is read by Stryker as is (or removed), and the REPORT is
+			// filtered to this run's ranges: a pre-filter on the old file dropped every
+			// result a line shift above it let Stryker reuse.
+			expect(code).toContain("if (!reuse) rmSync(INCREMENTAL_PATH");
+			expect(code.match(/pruneIncrementalReport\(/g)).toHaveLength(2);
 			expect(code).toContain("writeRunConfig(tests, { reuse })");
 			// The fork point, not the base tip: a merge train moves the tip every few
 			// minutes and would make every push cold.

@@ -16,7 +16,6 @@ import {
 	forkPointOf,
 	parseNameList,
 	planIncrementalAttempt,
-	prepareIncrementalFile,
 	readProbeCoverage,
 	runProbeProcess,
 	selectionNotes,
@@ -1060,83 +1059,6 @@ describe("incremental attempt helpers", () => {
 			reuse: false,
 			meta: { state: "cold-no-cache" },
 		});
-	});
-
-	function io(initial: string | null) {
-		let text = initial;
-		const removed: number[] = [];
-		return {
-			state: () => text,
-			removed,
-			read: () => {
-				if (text === null) throw new Error("ENOENT");
-				return text;
-			},
-			write: (next: string) => {
-				text = next;
-			},
-			remove: () => {
-				removed.push(1);
-				text = null;
-			},
-		};
-	}
-
-	it("prunes the file it may read, keeps it, and says it can be read", () => {
-		const files = io(
-			JSON.stringify({
-				files: {
-					"a.js": {
-						mutants: [
-							{ id: "in", location: { start: { line: 5 }, end: { line: 5 } } },
-							{
-								id: "out",
-								location: { start: { line: 50 }, end: { line: 50 } },
-							},
-						],
-					},
-				},
-			}),
-		);
-		expect(
-			prepareIncrementalFile({
-				reuse: true,
-				patterns: ["a.js:1-10"],
-				...files,
-			}),
-		).toBe(true);
-		expect(
-			JSON.parse(files.state() as string).files["a.js"].mutants.map(
-				(m: { id: string }) => m.id,
-			),
-		).toEqual(["in"]);
-		expect(files.removed).toEqual([]);
-	});
-
-	it("removes the file when it may not be read, even a perfectly readable one", () => {
-		const files = io(JSON.stringify({ files: {} }));
-		expect(
-			prepareIncrementalFile({ reuse: false, patterns: [], ...files }),
-		).toBe(false);
-		expect(files.state()).toBeNull();
-		expect(files.removed).toEqual([1]);
-	});
-
-	it("removes a restored file it cannot parse and starts cold", () => {
-		const files = io("{not json");
-		expect(
-			prepareIncrementalFile({ reuse: true, patterns: ["a.js:1-2"], ...files }),
-		).toBe(false);
-		expect(files.state()).toBeNull();
-		expect(files.removed).toEqual([1]);
-	});
-
-	it("removes a restored file that is missing the shape Stryker writes", () => {
-		const files = io('{"schemaVersion":"2"}');
-		expect(
-			prepareIncrementalFile({ reuse: true, patterns: ["a.js:1-2"], ...files }),
-		).toBe(false);
-		expect(files.removed).toEqual([1]);
 	});
 
 	it("adds Stryker's logged reuse count to a warm meta only", () => {
