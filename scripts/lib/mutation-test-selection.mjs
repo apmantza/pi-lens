@@ -262,7 +262,7 @@ export function partitionOwnTests(
  * @param {number} cpus
  */
 export function probeConcurrency(cpus) {
-	return Math.max(1, Math.min(4, cpus));
+	return Math.min(4, Math.max(1, cpus));
 }
 
 /**
