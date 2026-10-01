@@ -841,7 +841,7 @@ describe("incremental cache rules", () => {
 			decideIncrementalReuse({
 				hasIncrementalFile: true,
 				previous: "abc",
-				current: "abd",
+				current: "changed",
 			}),
 		).toEqual({ reuse: false, state: "cold-inputs-changed" });
 		expect(
