@@ -543,7 +543,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/stryker-diff.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the defect is a temporal-dead-zone crash in the driver's own top-level execution order; no source-text or in-process substitute reproduces it. #3810: the selection stage (real tsc, real v8 coverage probe, real selector, zero-mutant exit) is likewise only observable by running the top-level driver, and a text pin on it false-reds the mutation lane's own dry run",
+			"the defect is a temporal-dead-zone crash in the driver's own top-level execution order; no source-text or in-process substitute reproduces it",
 	},
 	// 2026-09-06 (#2586 review F1): proves the actual delimiter
 	// supply-host-provided-deps.mjs prints in its own stdout bytes; an

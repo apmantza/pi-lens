@@ -99,6 +99,29 @@ const underStryker = isInstrumented(driver);
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const driverPath = join(repositoryRoot, "scripts", "stryker-diff.mjs");
 
+/** git in a throwaway fixture repo, with an identity so a commit works. */
+function fixtureGit(cwd: string, args: string[]) {
+	return gitExecFileSync(
+		[
+			"-c",
+			"user.email=pi-lens-test@example.com",
+			"-c",
+			"user.name=pi-lens-test",
+			...args,
+		],
+		{ cwd },
+	);
+}
+
+/** One real run of the driver against a fixture repo: this file's only spawn of it. */
+function runDriver(cwd: string, args: string[], timeout: number) {
+	return execFileSync(process.execPath, [driverPath, ...args], {
+		cwd,
+		encoding: "utf8",
+		timeout,
+	});
+}
+
 describe("driver early-exit paths, spawned for real (#3592 round 2 F1)", () => {
 	// Recurrence this guards: `baseMeta` (called from four early-exit paths --
 	// no changed mutation source, no covering test, a source-map build
@@ -125,26 +148,11 @@ describe("driver early-exit paths, spawned for real (#3592 round 2 F1)", () => {
 			// branch (`files.length === 0`), the earliest of the four vulnerable
 			// call sites.
 			writeFileSync(join(fixtureRepo, "README.md"), "fixture\n");
-			gitExecFileSync(["init", "-q"], { cwd: fixtureRepo });
-			gitExecFileSync(["add", "README.md"], { cwd: fixtureRepo });
-			gitExecFileSync(
-				[
-					"-c",
-					"user.email=pi-lens-test@example.com",
-					"-c",
-					"user.name=pi-lens-test",
-					"commit",
-					"-qm",
-					"fixture",
-				],
-				{ cwd: fixtureRepo },
-			);
+			fixtureGit(fixtureRepo, ["init", "-q"]);
+			fixtureGit(fixtureRepo, ["add", "README.md"]);
+			fixtureGit(fixtureRepo, ["commit", "-qm", "fixture"]);
 
-			const result = execFileSync(
-				process.execPath,
-				[driverPath, "--base", "HEAD"],
-				{ cwd: fixtureRepo, encoding: "utf8", timeout: 30_000 },
-			);
+			const result = runDriver(fixtureRepo, ["--base", "HEAD"], 30_000);
 
 			expect(result).toContain("no mutants evaluated");
 			expect(result).not.toContain("ReferenceError");
@@ -279,17 +287,7 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				join(repositoryRoot, "node_modules"),
 				join(fixtureRepo, "node_modules"),
 			);
-			const git = (args: string[]) =>
-				gitExecFileSync(
-					[
-						"-c",
-						"user.email=pi-lens-test@example.com",
-						"-c",
-						"user.name=pi-lens-test",
-						...args,
-					],
-					{ cwd: fixtureRepo },
-				);
+			const git = (args: string[]) => fixtureGit(fixtureRepo, args);
 			git(["init", "-q", "-b", "main"]);
 			git(["add", "."]);
 			git(["commit", "-qm", "base"]);
@@ -308,10 +306,10 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			);
 			git(["commit", "-qam", "change the function nobody calls"]);
 
-			const output = execFileSync(
-				process.execPath,
-				[driverPath, "--base", "main", "--max-files", "1"],
-				{ cwd: fixtureRepo, encoding: "utf8", timeout: 120_000 },
+			const output = runDriver(
+				fixtureRepo,
+				["--base", "main", "--max-files", "1"],
+				120_000,
 			);
 
 			expect(output).toContain("related 2 → covering 0 → kept 0");
