@@ -317,8 +317,9 @@ export function selectMutationTests({
 		(known(b) ?? -1) - (known(a) ?? -1) ||
 		(priorities.get(a) ?? 2) - (priorities.get(b) ?? 2) ||
 		compareText(sha256(a), sha256(b));
+	// A null answer (no probe, or a failed one) is not 0: only a proven zero drops.
 	const candidates = pool.filter(
-		(test) => ownSet.has(test) || lines === null || known(test) !== 0,
+		(test) => ownSet.has(test) || known(test) !== 0,
 	);
 	const own = candidates.filter((test) => ownSet.has(test)).sort(rank);
 	const rest = candidates.filter((test) => !ownSet.has(test)).sort(rank);
@@ -379,12 +380,14 @@ export function fingerprintEntries(entries) {
 	);
 }
 
+const ABSENT_FILE = "<absent>";
+
 /**
  * The fingerprint of everything a reused result depends on that Stryker does
  * not watch: where the PR forked from the base, the node version, the Stryker
  * config and the lockfile (vitest and Stryker versions), the kept tests, and
- * every other changed file. `read` returns a file's text, or a marker for a
- * missing one.
+ * every other changed file. `read` returns a file's text and throws for a
+ * missing one, which is fingerprinted as absent.
  *
  * @param {{
  *   forkPoint: string,
@@ -398,11 +401,18 @@ export function fingerprintEntries(entries) {
 export function buildFingerprint({
 	forkPoint,
 	nodeVersion,
-	read,
+	read: readFile,
 	changedFiles,
 	mutatedFiles,
 	keptTests,
 }) {
+	const read = (file) => {
+		try {
+			return readFile(file);
+		} catch {
+			return ABSENT_FILE;
+		}
+	};
 	return fingerprintEntries([
 		["fork-point", forkPoint],
 		["node", nodeVersion],
@@ -483,4 +493,165 @@ const REUSED_RESULTS_RE = /(\d+) of (\d+) mutant result\(s\) are reused/;
 export function parseIncrementalReuse(log) {
 	const match = REUSED_RESULTS_RE.exec(log);
 	return match ? { reused: Number(match[1]), total: Number(match[2]) } : null;
+}
+
+/**
+ * Where the PR forked from the base, not the base's tip: the tip moves with
+ * every merge to master while the PR stands still (a merge train moves it every
+ * few minutes), which would make every push cold. A rebase or a merge of the
+ * base into the PR moves the fork point, and that does start cold.
+ *
+ * @param {(args: string[]) => string} git runs git, returns stdout
+ * @param {string} ref the base ref
+ * @param {string} head the PR head
+ */
+export function forkPointOf(git, ref, head) {
+	try {
+		return git(["merge-base", ref, head]).trim();
+	} catch {
+		return "<unresolved>";
+	}
+}
+
+/**
+ * The lines of `git diff --name-only` output: no blank, no padding.
+ *
+ * @param {string} output
+ */
+export function parseNameList(output) {
+	return output
+		.split("\n")
+		.map((line) => line.trim())
+		.filter(Boolean);
+}
+
+/**
+ * Run one coverage probe and say how it ended: the exit status, and whether the
+ * time limit (not the test) ended it. A spawn error is no status at all.
+ *
+ * @param {{
+ *   spawn: (command: string, args: string[], options: object) => {
+ *     on: (event: string, listener: (...args: any[]) => void) => unknown,
+ *     kill: (signal: string) => unknown,
+ *   },
+ *   command: string,
+ *   args: string[],
+ *   timeoutMs: number,
+ * }} options
+ * @returns {Promise<{status: number | null, timedOut: boolean}>}
+ */
+export function runProbeProcess({ spawn, command, args, timeoutMs }) {
+	return new Promise((resolve) => {
+		const child = spawn(command, args, { stdio: "ignore" });
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGTERM");
+		}, timeoutMs);
+		child.on("error", () => {
+			clearTimeout(timer);
+			resolve({ status: null, timedOut });
+		});
+		child.on("close", (status) => {
+			clearTimeout(timer);
+			resolve({ status, timedOut });
+		});
+	});
+}
+
+/**
+ * One probe's coverage report, or null when vitest wrote none; the probe's
+ * scratch directory is removed either way, even when the report is unreadable.
+ *
+ * @param {{exists: (file: string) => boolean, read: (file: string) => string, remove: (directory: string) => void}} io
+ * @param {string} directory
+ */
+export function readProbeCoverage({ exists, read, remove }, directory) {
+	const file = `${directory}/coverage-final.json`;
+	try {
+		return exists(file) ? JSON.parse(read(file)) : null;
+	} finally {
+		remove(directory);
+	}
+}
+
+/**
+ * The log lines that explain a selection beyond its counts.
+ *
+ * @param {{dropped: string[], unknown: string[]}} choice
+ * @param {number} maxTests
+ * @returns {string[]}
+ */
+export function selectionNotes(choice, maxTests) {
+	const notes = [];
+	if (choice.dropped.length > 0) {
+		notes.push(
+			`capped at ${maxTests} tests; dropped, by covered changed lines: ${choice.dropped.join(", ")}`,
+		);
+	}
+	if (choice.unknown.length > 0) {
+		notes.push(`no coverage answer for: ${choice.unknown.join(", ")}`);
+	}
+	return notes;
+}
+
+/**
+ * Whether one Stryker attempt may read the restored incremental file, and the
+ * meta that says so. A resample retry runs against a file the previous attempt
+ * cleared, so it is cold whatever the first attempt's decision was.
+ *
+ * @param {{attempt: number, decision: {reuse: boolean, state: string}}} args
+ * @returns {{reuse: boolean, meta: {state: string}}}
+ */
+export function planIncrementalAttempt({ attempt, decision }) {
+	if (attempt > 0) return { reuse: false, meta: { state: "cold-no-cache" } };
+	return { reuse: decision.reuse, meta: { state: decision.state } };
+}
+
+/**
+ * Leave the incremental file ready for the attempt: pruned to the attempt's
+ * ranges when it may be read, removed otherwise (or when it cannot be pruned,
+ * which starts cold). Returns whether Stryker may read what is left.
+ *
+ * @param {{
+ *   reuse: boolean,
+ *   patterns: string[],
+ *   read: () => string,
+ *   write: (text: string) => void,
+ *   remove: () => void,
+ * }} args
+ */
+export function prepareIncrementalFile({
+	reuse,
+	patterns,
+	read,
+	write,
+	remove,
+}) {
+	if (!reuse) {
+		remove();
+		return false;
+	}
+	try {
+		write(JSON.stringify(pruneIncrementalReport(JSON.parse(read()), patterns)));
+		return true;
+	} catch {
+		remove();
+		return false;
+	}
+}
+
+/**
+ * The incremental meta after the run: a warm attempt gains the reuse count
+ * Stryker logged (null when the line is missing), any other state is unchanged.
+ *
+ * @param {{state: string}} meta
+ * @param {string} log Stryker's file log
+ */
+export function withReuseCount(meta, log) {
+	if (meta.state !== "warm") return meta;
+	return {
+		state: "warm",
+		...(parseIncrementalReuse(log) ?? { reused: null, total: null }),
+	};
 }

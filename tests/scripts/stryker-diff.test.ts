@@ -195,6 +195,7 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			mkdirSync(join(fixtureRepo, "scripts"));
 			mkdirSync(join(fixtureRepo, "src"));
 			mkdirSync(join(fixtureRepo, "tests", "scripts"), { recursive: true });
+			mkdirSync(join(fixtureRepo, "tests", "config"));
 			writeFileSync(join(fixtureRepo, "package.json"), '{"type":"module"}\n');
 			// Its own vitest config: without one vitest walks up to the repo's,
 			// whose globalSetup belongs to the repo's suite, not this fixture.
@@ -225,6 +226,19 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				join(fixtureRepo, "tests", "scripts", "thing.test.ts"),
 				'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("uses the unchanged function", () => {\n\texpect(used()).toBe(1);\n});\n',
 			);
+			// A PR-own test the exclusion registry excludes for a reason.
+			writeFileSync(
+				join(fixtureRepo, "tests", "scripts", "own.test.ts"),
+				'// mutation-lane: exclude\nimport { it } from "vitest";\nit("is scheduling-sensitive", () => {});\n',
+			);
+			writeFileSync(
+				join(fixtureRepo, "tests", "config", "stryker-diff-exclusions.json"),
+				JSON.stringify({
+					"tests/scripts/own.test.ts": {
+						reason: "fixture: scheduling-sensitive",
+					},
+				}),
+			);
 			symlinkSync(
 				join(repositoryRoot, "node_modules"),
 				join(fixtureRepo, "node_modules"),
@@ -252,6 +266,10 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				join(fixtureRepo, "scripts", "a-reflowed.mjs"),
 				"  export const a = 1;\n  export const b = 2;\n  export const c = 3;\n  export const d = 4;\n  export const e = 5;\n",
 			);
+			writeFileSync(
+				join(fixtureRepo, "tests", "scripts", "own.test.ts"),
+				'// mutation-lane: exclude\nimport { it } from "vitest";\nit("is scheduling-sensitive", () => {});\n// touched by the PR\n',
+			);
 			git(["commit", "-qam", "change the function nobody calls"]);
 
 			const output = execFileSync(
@@ -273,6 +291,12 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			);
 			expect(report.piLensMutationDiff.filesSkippedOverCap).toEqual([
 				"scripts/a-reflowed.mjs",
+			]);
+			expect(report.piLensMutationDiff.testsExcluded).toEqual([
+				{
+					file: "tests/scripts/own.test.ts",
+					reason: "fixture: scheduling-sensitive",
+				},
 			]);
 			expect(report.piLensMutationDiff.testSelection).toEqual({
 				mode: "coverage",
@@ -392,6 +416,30 @@ describe("stryker diff selection", () => {
 		expect(
 			capMutationFiles(["scripts/b.mjs", "scripts/a.mjs"], 1).selected,
 		).toEqual(["scripts/a.mjs"]);
+	});
+
+	it("orders equal-weight files by path whatever order they arrive in", () => {
+		// Enough shuffled entries to make the engine ask the comparator in both
+		// directions: a tie-break that only works one way sorts [b, a] right and
+		// a longer shuffled list wrong.
+		const names = [
+			"q",
+			"b",
+			"m",
+			"a",
+			"z",
+			"c",
+			"x",
+			"d",
+			"k",
+			"e",
+			"t",
+			"f",
+		].map((n) => `scripts/${n}.mjs`);
+		const sorted = [...names].sort();
+		for (const input of [names, [...names].reverse()]) {
+			expect(capMutationFiles(input, input.length).selected).toEqual(sorted);
+		}
 	});
 
 	it("weighs a file by the lines its diff changed, counting a deletion-only hunk as one line", () => {
@@ -720,6 +768,9 @@ describe.skipIf(underStryker)(
 
 		it("feeds the PR's own tests and the import-graph priorities into the selector, with probed coverage", () => {
 			expect(code).toContain("partitionOwnTests(allChangedPaths,");
+			// A test both related and own is reported once: the partition must see what
+			// the related scan already excluded.
+			expect(code).toContain("alreadyExcluded: selection.excluded,");
 			expect(code).toContain("selectMutationTests({");
 			expect(code).toContain("ownTests,");
 			expect(code).toContain("priorities: selection.priorities,");
@@ -745,20 +796,18 @@ describe.skipIf(underStryker)(
 
 		it("reads the restored incremental file only through the fingerprint decision, pruned to the current ranges", () => {
 			expect(code).toContain("decideIncrementalReuse({");
-			// Only the first attempt may read the restored file: a resample retry
-			// runs different ranges against a file the previous attempt rewrote.
-			expect(code).toContain(
-				"const reuse = attempt === 0 && incrementalDecision.reuse;",
-			);
-			expect(code).toMatch(
-				/if \(attempt > 0\) incrementalMeta = \{ state: "\s*" \};/,
-			);
+			// Only the first attempt may read the restored file (a resample retry
+			// runs different ranges against a file the previous attempt rewrote):
+			// planIncrementalAttempt owns that rule and the driver must ask it.
+			expect(code).toContain("planIncrementalAttempt({");
+			expect(code).toContain("decision: incrementalDecision,");
+			expect(code).toContain("prepareIncrementalFile({");
+			expect(code).toContain("writeRunConfig(tests, { reuse })");
 			// The fork point, not the base tip: a merge train moves the tip every few
 			// minutes and would make every push cold.
-			expect(code).toContain("gitForkPoint(baseRef, headShaArg ??");
+			expect(code).toContain("forkPointOf(");
+			expect(code).toMatch(/headShaArg \?\? "\s*"/);
 			expect(code).not.toContain("gitRevision(");
-			expect(code).toContain("pruneIncrementalReport(");
-			expect(code).toContain("reuse: reuse && incrementalMeta.state");
 			expect(code).toContain("keptTests: tests,");
 			expect(code).toContain("mutatedFiles: files,");
 		});

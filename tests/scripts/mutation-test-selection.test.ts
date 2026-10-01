@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import {
 	buildCoverageProbeArgs,
 	buildFingerprint,
@@ -9,6 +10,14 @@ import {
 	decideIncrementalReuse,
 	fingerprintEntries,
 	fingerprintPaths,
+	forkPointOf,
+	parseNameList,
+	planIncrementalAttempt,
+	prepareIncrementalFile,
+	readProbeCoverage,
+	runProbeProcess,
+	selectionNotes,
+	withReuseCount,
 	INCREMENTAL_FINGERPRINT_PATH,
 	PROBE_REPORTS_ROOT,
 	probeReportsDirectory,
@@ -119,6 +128,42 @@ describe("coveredChangedLines", () => {
 	});
 });
 
+describe("coveredChangedLines, nesting and shape", () => {
+	it("reads an entry with no hit counts as nothing executed", () => {
+		expect(
+			coveredChangedLines(
+				{ statementMap: { "0": { start: { line: 1 }, end: { line: 1 } } } },
+				[[1, 1]],
+			),
+		).toBe(0);
+	});
+
+	it("takes the innermost statement whatever order the report lists them in", () => {
+		// The unexecuted inner body (3-8) sits inside an executed outer (1-10); the
+		// verdict for line 5 is the inner one, listed first or last.
+		const inner = { start: 3, end: 8, hits: 0 };
+		const outer = { start: 1, end: 10, hits: 1 };
+		expect(coveredChangedLines(entryOf([inner, outer]), [[5, 5]])).toBe(0);
+		expect(coveredChangedLines(entryOf([outer, inner]), [[5, 5]])).toBe(0);
+	});
+
+	it("takes the statement that ends first when two start on the same line", () => {
+		const long = { start: 2, end: 10, hits: 1 };
+		const short = { start: 2, end: 6, hits: 0 };
+		expect(coveredChangedLines(entryOf([long, short]), [[4, 4]])).toBe(0);
+		expect(coveredChangedLines(entryOf([short, long]), [[4, 4]])).toBe(0);
+		// Past the short one the long one decides.
+		expect(coveredChangedLines(entryOf([short, long]), [[8, 8]])).toBe(1);
+	});
+
+	it("takes the later-starting of two nested statements, not the earlier", () => {
+		const outer = { start: 1, end: 9, hits: 0 };
+		const mid = { start: 2, end: 9, hits: 1 };
+		expect(coveredChangedLines(entryOf([mid, outer]), [[5, 5]])).toBe(1);
+		expect(coveredChangedLines(entryOf([outer, mid]), [[5, 5]])).toBe(1);
+	});
+});
+
 describe("coveredChangedLinesInReport", () => {
 	const ranges = new Map<string, Array<[number, number]>>([
 		["clients/a.ts", [[1, 2]]],
@@ -147,6 +192,26 @@ describe("coveredChangedLinesInReport", () => {
 		);
 	});
 
+	it("matches a Windows-style report key (backslashes) against the repo-relative path", () => {
+		const report = {
+			"/repo/clients\\a.ts": entryOf([
+				{ start: 1, hits: 1 },
+				{ start: 2, hits: 1 },
+			]),
+		};
+		expect(coveredChangedLinesInReport(report, ranges, "/repo")).toBe(2);
+	});
+
+	it("only calls a compiled sibling unmapped when the entry is the `.js` file itself", () => {
+		// `a.jsx` is not the compiled form of `a.tsx`'s sibling `.ts` rule: the
+		// name must END in `.js`.
+		const tsx = new Map<string, Array<[number, number]>>([
+			["clients/a.tsx", [[1, 1]]],
+		]);
+		const report = { "/repo/clients/a.jsx": entryOf([{ start: 1, hits: 1 }]) };
+		expect(coveredChangedLinesInReport(report, tsx, "/repo")).toBe(0);
+	});
+
 	it("does not mistake an unrelated .js file for an unmapped changed .ts", () => {
 		const report = {
 			"/repo/clients/other.js": entryOf([{ start: 1, hits: 1 }]),
@@ -164,6 +229,20 @@ describe("buildCoverageProbeArgs", () => {
 
 	it("attaches to spawned children (S8: a script run only through spawnSync reads 0 of 51 statements without it)", () => {
 		expect(args).toContain("--coverage.autoAttachSubprocess=true");
+	});
+
+	it("starts as `vitest run --configLoader runner --testTimeout <ms> <test>`", () => {
+		expect(args.slice(0, 6)).toEqual([
+			"run",
+			"--configLoader",
+			"runner",
+			"--testTimeout",
+			"30000",
+			"tests/x.test.ts",
+		]);
+		expect(
+			buildCoverageProbeArgs("t", [], "d", { testTimeoutMs: 45_000 })[4],
+		).toBe("45000");
 	});
 
 	it("names the test, every changed file and the report directory, and reports json", () => {
@@ -525,6 +604,59 @@ describe("selectMutationTests", () => {
 	});
 });
 
+describe("selectMutationTests ordering and bounds", () => {
+	const lines = (entries: Record<string, number | null>) =>
+		new Map(Object.entries(entries));
+
+	it("accepts a cap of zero (own tests only) and says why a negative one is refused", () => {
+		const selection = selectMutationTests({
+			related: ["tests/a.test.ts"],
+			ownTests: ["tests/own.test.ts"],
+			lines: lines({ "tests/a.test.ts": 3, "tests/own.test.ts": 1 }),
+			maxTests: 0,
+		});
+		expect(selection.kept).toEqual(["tests/own.test.ts"]);
+		expect(selection.dropped).toEqual(["tests/a.test.ts"]);
+		expect(() =>
+			selectMutationTests({ related: [], lines: null, maxTests: -1 }),
+		).toThrow("maxTests must be a non-negative integer");
+	});
+
+	it("orders the PR's own tests by covered changed lines too", () => {
+		const selection = selectMutationTests({
+			related: [],
+			ownTests: ["tests/few.test.ts", "tests/many.test.ts"],
+			lines: lines({ "tests/few.test.ts": 1, "tests/many.test.ts": 9 }),
+			maxTests: 5,
+		});
+		expect(selection.kept).toEqual(["tests/many.test.ts", "tests/few.test.ts"]);
+		expect(selection.own).toEqual(["tests/many.test.ts", "tests/few.test.ts"]);
+	});
+
+	it("ranks a test with an import-graph priority ahead of one without (the default is the weakest)", () => {
+		const selection = selectMutationTests({
+			related: ["tests/unranked.test.ts", "tests/importer.test.ts"],
+			priorities: new Map([["tests/importer.test.ts", 1]]),
+			lines: lines({
+				"tests/unranked.test.ts": 4,
+				"tests/importer.test.ts": 4,
+			}),
+			maxTests: 1,
+		});
+		expect(selection.kept).toEqual(["tests/importer.test.ts"]);
+	});
+
+	it("reports no probe failures when there was no probe", () => {
+		const selection = selectMutationTests({
+			related: ["tests/a.test.ts"],
+			lines: null,
+			maxTests: 5,
+		});
+		expect(selection.unknown).toEqual([]);
+		expect(selection.mode).toBe("import-graph");
+	});
+});
+
 describe("ownTestFiles", () => {
 	it("selects changed test files and not fixtures, sources or other test-like paths", () => {
 		// Recurrence: naming tests/fixtures/** to vitest is "No test files found"
@@ -616,6 +748,354 @@ describe("probeConcurrency", () => {
 		expect(probeConcurrency(2)).toBe(2);
 		expect(probeConcurrency(4)).toBe(4);
 		expect(probeConcurrency(64)).toBe(4);
+	});
+});
+
+describe("runProbeProcess", () => {
+	function fakeSpawn() {
+		const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+		const spawn = vi.fn(() => child);
+		return { child, spawn };
+	}
+
+	it("spawns the command with ignored stdio and reports the exit status", async () => {
+		const { child, spawn } = fakeSpawn();
+		const done = runProbeProcess({
+			spawn,
+			command: "vitest",
+			args: ["run", "x"],
+			timeoutMs: 1000,
+		});
+		child.emit("close", 0);
+		await expect(done).resolves.toEqual({ status: 0, timedOut: false });
+		expect(spawn).toHaveBeenCalledWith("vitest", ["run", "x"], {
+			stdio: "ignore",
+		});
+	});
+
+	it("reports a failing exit and no status for a spawn error", async () => {
+		const failing = fakeSpawn();
+		const exit = runProbeProcess({
+			spawn: failing.spawn,
+			command: "c",
+			args: [],
+			timeoutMs: 1000,
+		});
+		failing.child.emit("close", 3);
+		await expect(exit).resolves.toEqual({ status: 3, timedOut: false });
+		const broken = fakeSpawn();
+		const error = runProbeProcess({
+			spawn: broken.spawn,
+			command: "c",
+			args: [],
+			timeoutMs: 1000,
+		});
+		broken.child.emit("error", new Error("ENOENT"));
+		await expect(error).resolves.toEqual({ status: null, timedOut: false });
+	});
+
+	it("terminates a probe that outlives its limit and says the limit ended it", async () => {
+		vi.useFakeTimers();
+		try {
+			const { child, spawn } = fakeSpawn();
+			const done = runProbeProcess({
+				spawn,
+				command: "c",
+				args: [],
+				timeoutMs: 5000,
+			});
+			vi.advanceTimersByTime(4999);
+			expect(child.kill).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+			child.emit("close", null);
+			await expect(done).resolves.toEqual({ status: null, timedOut: true });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not kill a probe that finished before its limit", async () => {
+		vi.useFakeTimers();
+		try {
+			const { child, spawn } = fakeSpawn();
+			const done = runProbeProcess({
+				spawn,
+				command: "c",
+				args: [],
+				timeoutMs: 5000,
+			});
+			child.emit("close", 0);
+			await done;
+			vi.advanceTimersByTime(60_000);
+			expect(child.kill).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not kill a probe that failed to spawn", async () => {
+		vi.useFakeTimers();
+		try {
+			const { child, spawn } = fakeSpawn();
+			const done = runProbeProcess({
+				spawn,
+				command: "c",
+				args: [],
+				timeoutMs: 5000,
+			});
+			child.emit("error", new Error("EACCES"));
+			await done;
+			vi.advanceTimersByTime(60_000);
+			expect(child.kill).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe("readProbeCoverage", () => {
+	it("parses the report and removes the probe's directory", () => {
+		const removed: string[] = [];
+		const coverage = readProbeCoverage(
+			{
+				exists: (file) => file === ".stryker/coverage/ab/coverage-final.json",
+				read: () => '{"a.ts":{"s":{}}}',
+				remove: (directory) => removed.push(directory),
+			},
+			".stryker/coverage/ab",
+		);
+		expect(coverage).toEqual({ "a.ts": { s: {} } });
+		expect(removed).toEqual([".stryker/coverage/ab"]);
+	});
+
+	it("returns null when vitest wrote none, still removing the directory", () => {
+		const removed: string[] = [];
+		expect(
+			readProbeCoverage(
+				{
+					exists: () => false,
+					read: () => {
+						throw new Error("never read");
+					},
+					remove: (directory) => removed.push(directory),
+				},
+				".stryker/coverage/ab",
+			),
+		).toBeNull();
+		expect(removed).toEqual([".stryker/coverage/ab"]);
+	});
+
+	it("removes the directory even when the report is unreadable", () => {
+		const removed: string[] = [];
+		expect(() =>
+			readProbeCoverage(
+				{
+					exists: () => true,
+					read: () => "{not json",
+					remove: (directory) => removed.push(directory),
+				},
+				".stryker/coverage/ab",
+			),
+		).toThrow(SyntaxError);
+		expect(removed).toEqual([".stryker/coverage/ab"]);
+	});
+});
+
+describe("selectionNotes", () => {
+	it("says nothing for a complete selection", () => {
+		expect(selectionNotes({ dropped: [], unknown: [] }, 47)).toEqual([]);
+	});
+
+	it("names the cap and the dropped tests, and the tests with no coverage answer", () => {
+		expect(
+			selectionNotes(
+				{ dropped: ["tests/a.test.ts", "tests/b.test.ts"], unknown: [] },
+				47,
+			),
+		).toEqual([
+			"capped at 47 tests; dropped, by covered changed lines: tests/a.test.ts, tests/b.test.ts",
+		]);
+		expect(
+			selectionNotes(
+				{ dropped: [], unknown: ["tests/c.test.ts", "tests/d.test.ts"] },
+				47,
+			),
+		).toEqual(["no coverage answer for: tests/c.test.ts, tests/d.test.ts"]);
+		expect(
+			selectionNotes(
+				{ dropped: ["tests/a.test.ts"], unknown: ["tests/c.test.ts"] },
+				3,
+			),
+		).toEqual([
+			"capped at 3 tests; dropped, by covered changed lines: tests/a.test.ts",
+			"no coverage answer for: tests/c.test.ts",
+		]);
+	});
+});
+
+describe("forkPointOf and parseNameList", () => {
+	it("asks git for the merge-base of the base and the head and trims the answer", () => {
+		const calls: string[][] = [];
+		expect(
+			forkPointOf(
+				(args) => {
+					calls.push(args);
+					return "abc123\n";
+				},
+				"origin/master",
+				"deadbeef",
+			),
+		).toBe("abc123");
+		expect(calls).toEqual([["merge-base", "origin/master", "deadbeef"]]);
+	});
+
+	it("falls back to a marker when git cannot say", () => {
+		expect(
+			forkPointOf(
+				() => {
+					throw new Error("fatal: no merge base");
+				},
+				"origin/master",
+				"HEAD",
+			),
+		).toBe("<unresolved>");
+	});
+
+	it("reads git's name list without blanks or padding", () => {
+		expect(parseNameList("a.ts\n  b.ts \n\nc.mjs\n")).toEqual([
+			"a.ts",
+			"b.ts",
+			"c.mjs",
+		]);
+		expect(parseNameList("")).toEqual([]);
+	});
+});
+
+describe("incremental attempt helpers", () => {
+	it("lets only the first attempt read the restored file, and calls every retry cold", () => {
+		const warm = { reuse: true, state: "warm" };
+		expect(planIncrementalAttempt({ attempt: 0, decision: warm })).toEqual({
+			reuse: true,
+			meta: { state: "warm" },
+		});
+		expect(
+			planIncrementalAttempt({
+				attempt: 0,
+				decision: { reuse: false, state: "cold-inputs-changed" },
+			}),
+		).toEqual({ reuse: false, meta: { state: "cold-inputs-changed" } });
+		expect(planIncrementalAttempt({ attempt: 1, decision: warm })).toEqual({
+			reuse: false,
+			meta: { state: "cold-no-cache" },
+		});
+	});
+
+	function io(initial: string | null) {
+		let text = initial;
+		const removed: number[] = [];
+		return {
+			state: () => text,
+			removed,
+			read: () => {
+				if (text === null) throw new Error("ENOENT");
+				return text;
+			},
+			write: (next: string) => {
+				text = next;
+			},
+			remove: () => {
+				removed.push(1);
+				text = null;
+			},
+		};
+	}
+
+	it("prunes the file it may read, keeps it, and says it can be read", () => {
+		const files = io(
+			JSON.stringify({
+				files: {
+					"a.js": {
+						mutants: [
+							{ id: "in", location: { start: { line: 5 }, end: { line: 5 } } },
+							{
+								id: "out",
+								location: { start: { line: 50 }, end: { line: 50 } },
+							},
+						],
+					},
+				},
+			}),
+		);
+		expect(
+			prepareIncrementalFile({
+				reuse: true,
+				patterns: ["a.js:1-10"],
+				...files,
+			}),
+		).toBe(true);
+		expect(
+			JSON.parse(files.state() as string).files["a.js"].mutants.map(
+				(m: { id: string }) => m.id,
+			),
+		).toEqual(["in"]);
+		expect(files.removed).toEqual([]);
+	});
+
+	it("removes the file when it may not be read", () => {
+		const files = io("{}");
+		expect(
+			prepareIncrementalFile({ reuse: false, patterns: [], ...files }),
+		).toBe(false);
+		expect(files.state()).toBeNull();
+		expect(files.removed).toEqual([1]);
+	});
+
+	it("removes a restored file it cannot parse and starts cold", () => {
+		const files = io("{not json");
+		expect(
+			prepareIncrementalFile({ reuse: true, patterns: ["a.js:1-2"], ...files }),
+		).toBe(false);
+		expect(files.state()).toBeNull();
+		expect(files.removed).toEqual([1]);
+	});
+
+	it("removes a restored file that is missing the shape Stryker writes", () => {
+		const files = io('{"schemaVersion":"2"}');
+		expect(
+			prepareIncrementalFile({ reuse: true, patterns: ["a.js:1-2"], ...files }),
+		).toBe(false);
+		expect(files.removed).toEqual([1]);
+	});
+
+	it("adds Stryker's logged reuse count to a warm meta only", () => {
+		const log = "Result:\t\t5 of 6 mutant result(s) are reused.";
+		expect(withReuseCount({ state: "warm" }, log)).toEqual({
+			state: "warm",
+			reused: 5,
+			total: 6,
+		});
+		expect(withReuseCount({ state: "warm" }, "")).toEqual({
+			state: "warm",
+			reused: null,
+			total: null,
+		});
+		expect(withReuseCount({ state: "cold-no-cache" }, log)).toEqual({
+			state: "cold-no-cache",
+		});
+	});
+});
+
+describe("ownTestFiles anchors", () => {
+	it("matches only paths that start at tests/ and end in .test.ts", () => {
+		expect(
+			ownTestFiles([
+				"vendor/tests/a.test.ts",
+				"tests/a.test.ts.bak",
+				"tests/a.test.tsx",
+				"tests/a.test.ts",
+			]),
+		).toEqual(["tests/a.test.ts"]);
 	});
 });
 
@@ -723,6 +1203,58 @@ describe("incremental cache rules", () => {
 			"tests/unchanged.test.ts",
 			"vitest.config.ts",
 		]);
+	});
+
+	it("ignores only top-level .changelog entries and files ending in .md", () => {
+		// Recurrence C4: the prose filter must not swallow a source file whose path
+		// merely contains `.changelog/` or whose extension merely starts with `.md`.
+		expect(
+			fingerprintPaths({
+				changedFiles: [
+					".changelog/entry.md",
+					"docs/.changelog/helper.ts",
+					"notes.md",
+					"data.mdx",
+				],
+				mutatedFiles: [],
+				keptTests: [],
+			}),
+		).toEqual(["data.mdx", "docs/.changelog/helper.ts"]);
+	});
+
+	it("sorts any input order into one order", () => {
+		const names = [
+			"q.ts",
+			"b.ts",
+			"m.ts",
+			"a.ts",
+			"z.ts",
+			"c.ts",
+			"x.ts",
+			"d.ts",
+		];
+		const expected = [...names].sort();
+		expect(
+			fingerprintPaths({
+				changedFiles: names,
+				mutatedFiles: [],
+				keptTests: [],
+			}),
+		).toEqual(expected);
+		expect(
+			fingerprintPaths({
+				changedFiles: [...names].reverse(),
+				mutatedFiles: [],
+				keptTests: [],
+			}),
+		).toEqual(expected);
+		expect(
+			fingerprintEntries(names.map((name) => [name, "x"] as [string, string])),
+		).toBe(
+			fingerprintEntries(
+				[...names].reverse().map((name) => [name, "x"] as [string, string]),
+			),
+		);
 	});
 
 	it("changes the fingerprint when any one input changes and not when only the order does (C1)", () => {
@@ -891,6 +1423,29 @@ describe("incremental cache rules", () => {
 		expect(
 			(pruned.files["clients/a.js"] as { language: string }).language,
 		).toBe("javascript");
+	});
+
+	it("keeps a mutant that falls in either of two ranges of the same file", () => {
+		const mutant = (line: number) => ({
+			id: String(line),
+			location: { start: { line }, end: { line } },
+		});
+		const report = {
+			files: {
+				"a.js": { mutants: [mutant(2), mutant(5), mutant(20), mutant(21)] },
+			},
+		};
+		const pruned = pruneIncrementalReport(report, ["a.js:1-3", "a.js:20-22"]);
+		expect(pruned.files["a.js"].mutants.map((m) => m.id)).toEqual([
+			"2",
+			"20",
+			"21",
+		]);
+	});
+
+	it("rejects a pattern with text after the range", () => {
+		const report = { files: { "a.js": { mutants: [] } } };
+		expect(pruneIncrementalReport(report, ["a.js:1-9x"]).files).toEqual({});
 	});
 
 	it("ignores a pattern that is not file:start-end", () => {

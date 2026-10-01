@@ -38,18 +38,24 @@ import {
 } from "./lib/stryker-diff.mjs";
 import {
 	buildCoverageProbeArgs,
-	INCREMENTAL_FINGERPRINT_PATH,
-	probeReportsDirectory,
-	PROBE_REPORTS_ROOT,
-	partitionOwnTests,
-	probeConcurrency,
 	buildFingerprint,
 	decideIncrementalReuse,
-	parseIncrementalReuse,
+	forkPointOf,
+	INCREMENTAL_FINGERPRINT_PATH,
+	parseNameList,
+	partitionOwnTests,
+	planIncrementalAttempt,
+	prepareIncrementalFile,
 	probeAllTests,
+	probeConcurrency,
+	probeReportsDirectory,
+	PROBE_REPORTS_ROOT,
 	probeTestCoverage,
-	pruneIncrementalReport,
+	readProbeCoverage,
+	runProbeProcess,
+	selectionNotes,
 	selectMutationTests,
+	withReuseCount,
 } from "./lib/mutation-test-selection.mjs";
 import { formatTestSelection } from "./lib/mutation-report-render.mjs";
 import {
@@ -127,12 +133,11 @@ function changedMutationFiles() {
 
 function changedPaths() {
 	try {
-		return execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
-			encoding: "utf8",
-		})
-			.split("\n")
-			.map((file) => file.trim())
-			.filter(Boolean);
+		return parseNameList(
+			execFileSync("git", ["diff", "--name-only", `${baseRef}...HEAD`], {
+				encoding: "utf8",
+			}),
+		);
 	} catch (error) {
 		console.error(
 			`mutation diff: could not read ${baseRef}...HEAD: ${error.message}`,
@@ -463,39 +468,30 @@ for (const tsFile of coveredCompiled) {
 	probeInclude.push(compiledJsPath(tsFile));
 }
 
-function runProbeProcess(test) {
-	return new Promise((resolveRun) => {
-		const child = spawn(
-			"node_modules/.bin/vitest",
-			buildCoverageProbeArgs(test, probeInclude, probeReportsDirectory(test), {
-				testTimeoutMs: MUTATION_TEST_TIMEOUT_MS,
-			}),
-			{ stdio: "ignore" },
-		);
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			child.kill("SIGTERM");
-		}, PROBE_TIMEOUT_MS);
-		child.on("error", () => {
-			clearTimeout(timer);
-			resolveRun({ status: null, timedOut });
-		});
-		child.on("close", (status) => {
-			clearTimeout(timer);
-			resolveRun({ status, timedOut });
-		});
+function runProbe(test) {
+	return runProbeProcess({
+		spawn,
+		command: "node_modules/.bin/vitest",
+		args: buildCoverageProbeArgs(
+			test,
+			probeInclude,
+			probeReportsDirectory(test),
+			{ testTimeoutMs: MUTATION_TEST_TIMEOUT_MS },
+		),
+		timeoutMs: PROBE_TIMEOUT_MS,
 	});
 }
 
-function readProbeCoverage(test) {
-	const directory = probeReportsDirectory(test);
-	const file = `${directory}/coverage-final.json`;
-	try {
-		return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
-	} finally {
-		rmSync(directory, { recursive: true, force: true });
-	}
+function readCoverageOf(test) {
+	return readProbeCoverage(
+		{
+			exists: existsSync,
+			read: (file) => readFileSync(file, "utf8"),
+			remove: (directory) =>
+				rmSync(directory, { recursive: true, force: true }),
+		},
+		probeReportsDirectory(test),
+	);
 }
 
 rmSync(PROBE_REPORTS_ROOT, { recursive: true, force: true });
@@ -507,8 +503,8 @@ const probeLines = await probeAllTests(
 	probePool,
 	(test) =>
 		probeTestCoverage(test, {
-			run: runProbeProcess,
-			readCoverage: readProbeCoverage,
+			run: runProbe,
+			readCoverage: readCoverageOf,
 			rangesByFile: probeRanges,
 		}),
 	{
@@ -536,15 +532,8 @@ testSelectionMeta = {
 	unknown: choice.unknown.length,
 };
 console.log(`mutation diff: ${formatTestSelection(testSelectionMeta)}`);
-if (choice.dropped.length > 0) {
-	console.log(
-		`mutation diff: capped at ${DEFAULT_MAX_TESTS} tests; dropped, by covered changed lines: ${choice.dropped.join(", ")}`,
-	);
-}
-if (choice.unknown.length > 0) {
-	console.log(
-		`mutation diff: no coverage answer for: ${choice.unknown.join(", ")}`,
-	);
+for (const note of selectionNotes(choice, DEFAULT_MAX_TESTS)) {
+	console.log(`mutation diff: ${note}`);
 }
 if (tests.length === 0) {
 	// Never hand vitest an empty file list: `vitest run` with no filter runs the
@@ -701,30 +690,14 @@ if (!cost) {
 // handed to Stryker? Only when the fingerprint of everything a reused result
 // depends on matches the one stored beside it (see fingerprintPaths for why
 // Stryker's own differ cannot be trusted with the command runner).
-function readOrAbsent(file) {
-	try {
-		return readFileSync(file, "utf8");
-	} catch {
-		return "<absent>";
-	}
-}
-// Where the PR forked from the base, not the base's tip: the tip moves with
-// every merge to master while the PR stands still (a merge train moves it every
-// few minutes), which would make every push cold. A rebase or a merge of the
-// base into the PR moves the fork point, and that does start cold.
-function gitForkPoint(ref, head) {
-	try {
-		return execFileSync("git", ["merge-base", ref, head], {
-			encoding: "utf8",
-		}).trim();
-	} catch {
-		return "<unresolved>";
-	}
-}
 const fingerprint = buildFingerprint({
-	forkPoint: gitForkPoint(baseRef, headShaArg ?? "HEAD"),
+	forkPoint: forkPointOf(
+		(args) => execFileSync("git", args, { encoding: "utf8" }),
+		baseRef,
+		headShaArg ?? "HEAD",
+	),
 	nodeVersion: process.version,
-	read: readOrAbsent,
+	read: (file) => readFileSync(file, "utf8"),
 	changedFiles: allChangedPaths,
 	mutatedFiles: files,
 	keptTests: tests,
@@ -763,32 +736,22 @@ for (;;) {
 	// invocation, to trip over. The one exception is the first attempt when the
 	// restored file's fingerprint matched: it is pruned to this run's ranges
 	// and kept, and the fingerprint stored beside it is renewed.
-	const reuse = attempt === 0 && incrementalDecision.reuse;
-	// A resample retry runs against a file the previous attempt cleared: it is
-	// cold whatever the decision for the first attempt was.
-	if (attempt > 0) incrementalMeta = { state: "cold-no-cache" };
-	if (reuse) {
-		try {
-			writeFileSync(
-				INCREMENTAL_PATH,
-				JSON.stringify(
-					pruneIncrementalReport(
-						JSON.parse(readFileSync(INCREMENTAL_PATH, "utf8")),
-						patterns,
-					),
-				),
-			);
-		} catch {
-			rmSync(INCREMENTAL_PATH, { force: true });
-			incrementalMeta = { state: "cold-no-cache" };
-		}
-	} else {
-		rmSync(INCREMENTAL_PATH, { force: true });
-	}
-	writeFileSync(INCREMENTAL_FINGERPRINT_PATH, fingerprint);
-	const configFile = writeRunConfig(tests, {
-		reuse: reuse && incrementalMeta.state === "warm",
+	const incrementalPlan = planIncrementalAttempt({
+		attempt,
+		decision: incrementalDecision,
 	});
+	incrementalMeta = incrementalPlan.meta;
+	const reuse = prepareIncrementalFile({
+		reuse: incrementalPlan.reuse,
+		patterns,
+		read: () => readFileSync(INCREMENTAL_PATH, "utf8"),
+		write: (text) => writeFileSync(INCREMENTAL_PATH, text),
+		remove: () => rmSync(INCREMENTAL_PATH, { force: true }),
+	});
+	if (incrementalPlan.reuse && !reuse)
+		incrementalMeta = { state: "cold-no-cache" };
+	writeFileSync(INCREMENTAL_FINGERPRINT_PATH, fingerprint);
+	const configFile = writeRunConfig(tests, { reuse });
 	rmSync(STRYKER_LOG_PATH, { force: true });
 
 	console.log(`mutation diff: mutating ${patterns.join(", ")}`);
@@ -809,15 +772,10 @@ for (;;) {
 		},
 	);
 
-	if (incrementalMeta.state === "warm") {
-		const log = existsSync(STRYKER_LOG_PATH)
-			? readFileSync(STRYKER_LOG_PATH, "utf8")
-			: "";
-		incrementalMeta = {
-			state: "warm",
-			...(parseIncrementalReuse(log) ?? { reused: null, total: null }),
-		};
-	}
+	incrementalMeta = withReuseCount(
+		incrementalMeta,
+		existsSync(STRYKER_LOG_PATH) ? readFileSync(STRYKER_LOG_PATH, "utf8") : "",
+	);
 	rmSync(STRYKER_LOG_PATH, { force: true });
 
 	if (result.error || result.status !== 0) {

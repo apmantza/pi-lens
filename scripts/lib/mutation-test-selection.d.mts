@@ -105,3 +105,49 @@ export declare function pruneIncrementalReport<
 export declare function parseIncrementalReuse(
 	log: string,
 ): { reused: number; total: number } | null;
+export declare function forkPointOf(
+	git: (args: string[]) => string,
+	ref: string,
+	head: string,
+): string;
+export declare function parseNameList(output: string): string[];
+export declare function runProbeProcess(options: {
+	spawn: (
+		command: string,
+		args: string[],
+		options: object,
+	) => {
+		on: (event: string, listener: (...args: any[]) => void) => unknown;
+		kill: (signal: string) => unknown;
+	};
+	command: string;
+	args: string[];
+	timeoutMs: number;
+}): Promise<{ status: number | null; timedOut: boolean }>;
+export declare function readProbeCoverage(
+	io: {
+		exists: (file: string) => boolean;
+		read: (file: string) => string;
+		remove: (directory: string) => void;
+	},
+	directory: string,
+): Record<string, object> | null;
+export declare function selectionNotes(
+	choice: { dropped: string[]; unknown: string[] },
+	maxTests: number,
+): string[];
+export declare function planIncrementalAttempt(args: {
+	attempt: number;
+	decision: { reuse: boolean; state: string };
+}): { reuse: boolean; meta: { state: string } };
+export declare function prepareIncrementalFile(args: {
+	reuse: boolean;
+	patterns: string[];
+	read: () => string;
+	write: (text: string) => void;
+	remove: () => void;
+}): boolean;
+export declare function withReuseCount<M extends { state: string }>(
+	meta: M,
+	log: string,
+): M | { state: "warm"; reused: number | null; total: number | null };
