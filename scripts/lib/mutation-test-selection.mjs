@@ -315,10 +315,15 @@ export function selectMutationTests({
 	const known = (test) => lines?.get(test) ?? null;
 	const rank = (a, b) =>
 		(known(b) ?? -1) - (known(a) ?? -1) ||
-		(priorities.get(a) ?? 2) - (priorities.get(b) ?? 2) ||
-		compareText(sha256(a), sha256(b));
+		(priorities.get(a) ?? 2) - (priorities.get(b) ?? 2);
+	// Tests the rank cannot separate keep the order of a hash of their path:
+	// the sort below is stable, so this pre-order is the tie-break.
+	const byPathHash = pool
+		.map((test) => `${sha256(test)}\0${test}`)
+		.sort()
+		.map((entry) => entry.slice(entry.indexOf("\0") + 1));
 	// A null answer (no probe, or a failed one) is not 0: only a proven zero drops.
-	const candidates = pool.filter(
+	const candidates = byPathHash.filter(
 		(test) => ownSet.has(test) || known(test) !== 0,
 	);
 	const own = candidates.filter((test) => ownSet.has(test)).sort(rank);
@@ -336,10 +341,6 @@ export function selectMutationTests({
 		own,
 		unknown: lines === null ? [] : pool.filter((test) => known(test) === null),
 	};
-}
-
-function compareText(a, b) {
-	return a === b ? 0 : a < b ? -1 : 1;
 }
 
 const IGNORED_FOR_FINGERPRINT = /^\.changelog\/|\.md$/;
@@ -365,7 +366,7 @@ export function fingerprintPaths({ changedFiles, mutatedFiles, keptTests }) {
 				(file) => !mutated.has(file) && !IGNORED_FOR_FINGERPRINT.test(file),
 			),
 		]),
-	].sort(compareText);
+	].sort();
 }
 
 /**
@@ -373,9 +374,9 @@ export function fingerprintPaths({ changedFiles, mutatedFiles, keptTests }) {
  */
 export function fingerprintEntries(entries) {
 	return sha256(
-		[...entries]
-			.sort(([a], [b]) => compareText(a, b))
+		entries
 			.map(([label, content]) => `${label}\0${sha256(content)}`)
+			.sort()
 			.join("\n"),
 	);
 }

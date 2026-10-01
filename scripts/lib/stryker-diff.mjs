@@ -155,11 +155,10 @@ export function capMutationFiles(
 	if (!Number.isInteger(maxFiles) || maxFiles < 0) {
 		throw new RangeError("maxFiles must be a non-negative integer");
 	}
-	const ordered = [...files].sort(
-		(a, b) =>
-			(weights.get(b) ?? 0) - (weights.get(a) ?? 0) ||
-			(a < b ? -1 : a > b ? 1 : 0),
-	);
+	// Path order first, then a stable sort by weight: equal weights keep it.
+	const ordered = [...files]
+		.sort()
+		.sort((a, b) => (weights.get(b) ?? 0) - (weights.get(a) ?? 0));
 	return {
 		selected: ordered.slice(0, maxFiles),
 		skipped: ordered.slice(maxFiles),

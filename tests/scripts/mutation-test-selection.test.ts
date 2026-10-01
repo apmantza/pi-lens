@@ -634,16 +634,19 @@ describe("selectMutationTests ordering and bounds", () => {
 	});
 
 	it("ranks a test with an import-graph priority ahead of one without (the default is the weakest)", () => {
-		const selection = selectMutationTests({
-			related: ["tests/unranked.test.ts", "tests/importer.test.ts"],
-			priorities: new Map([["tests/importer.test.ts", 1]]),
-			lines: lines({
-				"tests/unranked.test.ts": 4,
-				"tests/importer.test.ts": 4,
-			}),
-			maxTests: 1,
-		});
-		expect(selection.kept).toEqual(["tests/importer.test.ts"]);
+		// The path hash alone puts q before p, so only the priority can put p first.
+		for (const related of [
+			["tests/q.test.ts", "tests/p.test.ts"],
+			["tests/p.test.ts", "tests/q.test.ts"],
+		]) {
+			const selection = selectMutationTests({
+				related,
+				priorities: new Map([["tests/p.test.ts", 1]]),
+				lines: lines({ "tests/q.test.ts": 4, "tests/p.test.ts": 4 }),
+				maxTests: 1,
+			});
+			expect(selection.kept).toEqual(["tests/p.test.ts"]);
+		}
 	});
 
 	it("reports no probe failures when there was no probe", () => {
@@ -1042,8 +1045,8 @@ describe("incremental attempt helpers", () => {
 		expect(files.removed).toEqual([]);
 	});
 
-	it("removes the file when it may not be read", () => {
-		const files = io("{}");
+	it("removes the file when it may not be read, even a perfectly readable one", () => {
+		const files = io(JSON.stringify({ files: {} }));
 		expect(
 			prepareIncrementalFile({ reuse: false, patterns: [], ...files }),
 		).toBe(false);
@@ -1333,6 +1336,30 @@ describe("incremental cache rules", () => {
 			],
 		])("changes when %s changes (C1, C2, C3)", (_name, change) => {
 			expect(buildFingerprint({ ...args, ...change })).not.toBe(base);
+		});
+
+		it("fingerprints a file that cannot be read as absent, not as empty and not as a crash", () => {
+			const unreadable = (f: string) => {
+				if (f === "tests/kept.test.ts") throw new Error("ENOENT");
+				return files[f] ?? "<absent>";
+			};
+			const absent = buildFingerprint({ ...args, read: unreadable });
+			// Same as a file whose text is the marker, different from an empty file.
+			expect(absent).toBe(
+				buildFingerprint({
+					...args,
+					read: (f: string) =>
+						f === "tests/kept.test.ts" ? "<absent>" : (files[f] ?? "<absent>"),
+				}),
+			);
+			expect(absent).not.toBe(
+				buildFingerprint({
+					...args,
+					read: (f: string) =>
+						f === "tests/kept.test.ts" ? "" : (files[f] ?? "<absent>"),
+				}),
+			);
+			expect(absent).not.toBe(base);
 		});
 
 		it("does not change when only the mutated source does (Stryker diffs it itself)", () => {
