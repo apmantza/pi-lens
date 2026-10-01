@@ -473,7 +473,7 @@ describe("renderMutationMarkdown", () => {
 	});
 
 	it("renders the exact selection line: bare without extras, comma-joined with both", () => {
-		const render = (extra: object) =>
+		const render = (extra: { own?: number; unknown?: number }) =>
 			renderMutationMarkdown({
 				files: {},
 				piLensMutationDiff: {
@@ -528,7 +528,11 @@ describe("renderMutationMarkdown", () => {
 	});
 
 	it("needs both reuse counts to claim a count, and says so when only one is a number", () => {
-		const render = (incremental: object) =>
+		const render = (incremental: {
+			state: string;
+			reused?: number | null;
+			total?: number | null;
+		}) =>
 			renderMutationMarkdown({
 				files: {},
 				piLensMutationDiff: {

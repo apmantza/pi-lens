@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -18,7 +19,10 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
-import { INCREMENTAL_FINGERPRINT_PATH } from "../../scripts/lib/mutation-test-selection.mjs";
+import {
+	INCREMENTAL_FINGERPRINT_PATH,
+	probeReportsDirectory,
+} from "../../scripts/lib/mutation-test-selection.mjs";
 import {
 	augmentAndSummarize,
 	buildRunConfig,
@@ -226,6 +230,26 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				join(fixtureRepo, "tests", "scripts", "thing.test.ts"),
 				'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("uses the unchanged function", () => {\n\texpect(used()).toBe(1);\n});\n',
 			);
+			// A second related test: the probes run side by side, and a pool of one
+			// cannot tell a bounded pool from a broken one.
+			writeFileSync(
+				join(fixtureRepo, "tests", "scripts", "thing-other.test.ts"),
+				'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("also uses the unchanged function", () => {\n\texpect(used() + 1).toBe(2);\n});\n',
+			);
+			// A probe directory a killed earlier run left behind.
+			mkdirSync(join(fixtureRepo, ".stryker", "coverage", "stale"), {
+				recursive: true,
+			});
+			writeFileSync(
+				join(
+					fixtureRepo,
+					".stryker",
+					"coverage",
+					"stale",
+					"coverage-final.json",
+				),
+				"{}",
+			);
 			// A PR-own test the exclusion registry excludes for a reason.
 			writeFileSync(
 				join(fixtureRepo, "tests", "scripts", "own.test.ts"),
@@ -278,7 +302,7 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 				{ cwd: fixtureRepo, encoding: "utf8", timeout: 120_000 },
 			);
 
-			expect(output).toContain("related 1 → covering 0 → kept 0");
+			expect(output).toContain("related 2 → covering 0 → kept 0");
 			expect(output).toContain("no mutants evaluated");
 			const report = JSON.parse(
 				readFileSync(
@@ -292,6 +316,17 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			expect(report.piLensMutationDiff.filesSkippedOverCap).toEqual([
 				"scripts/a-reflowed.mjs",
 			]);
+			// Every probe's scratch directory is gone, and so is the stale one.
+			for (const gone of [
+				join(fixtureRepo, ".stryker", "coverage", "stale"),
+				join(fixtureRepo, probeReportsDirectory("tests/scripts/thing.test.ts")),
+				join(
+					fixtureRepo,
+					probeReportsDirectory("tests/scripts/thing-other.test.ts"),
+				),
+			]) {
+				expect(existsSync(gone), gone).toBe(false);
+			}
 			expect(report.piLensMutationDiff.testsExcluded).toEqual([
 				{
 					file: "tests/scripts/own.test.ts",
@@ -300,7 +335,7 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			]);
 			expect(report.piLensMutationDiff.testSelection).toEqual({
 				mode: "coverage",
-				pool: 1,
+				pool: 2,
 				covering: 0,
 				kept: 0,
 				dropped: 0,
