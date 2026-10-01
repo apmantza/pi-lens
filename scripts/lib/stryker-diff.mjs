@@ -207,7 +207,7 @@ export function changedLineWeights(rangesByFile) {
 	return new Map(
 		[...rangesByFile].map(([file, ranges]) => [
 			file,
-			ranges.reduce((sum, [start, end]) => sum + (end - start + 1), 0),
+			ranges.reduce((sum, [start, end]) => sum + (1 + end - start), 0),
 		]),
 	);
 }
