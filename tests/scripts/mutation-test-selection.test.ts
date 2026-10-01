@@ -642,6 +642,24 @@ describe("selectMutationTests ordering and bounds", () => {
 		expect(selection.own).toEqual(["tests/many.test.ts", "tests/few.test.ts"]);
 	});
 
+	it("orders the PR's own tests with a proven zero ahead of one whose probe failed, from either side of the comparison", () => {
+		// The path hash puts q before p; own tests are all kept, so only the order
+		// shows whether `null` ranks below 0. Both cases are needed: the sort asks
+		// the comparator with the later test first.
+		for (const [zero, unknown] of [
+			["tests/q.test.ts", "tests/p.test.ts"],
+			["tests/p.test.ts", "tests/q.test.ts"],
+		]) {
+			const selection = selectMutationTests({
+				related: [],
+				ownTests: [unknown, zero],
+				lines: lines({ [zero]: 0, [unknown]: null, "tests/other.test.ts": 3 }),
+				maxTests: 5,
+			});
+			expect(selection.own).toEqual([zero, unknown]);
+		}
+	});
+
 	it("ranks a test with an import-graph priority ahead of one without (the default is the weakest)", () => {
 		// The path hash alone puts q before p, so only the priority can put p first.
 		for (const related of [
