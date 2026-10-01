@@ -1049,6 +1049,13 @@ describe("incremental attempt helpers", () => {
 				},
 			}),
 		).toEqual({ reuse: false, meta: { state: "cold-no-cache" } });
+		// An empty list of changed inputs says nothing and is not carried.
+		expect(
+			planIncrementalAttempt({
+				attempt: 0,
+				decision: { reuse: false, state: "cold-inputs-changed", changed: [] },
+			}),
+		).toEqual({ reuse: false, meta: { state: "cold-inputs-changed" } });
 		expect(planIncrementalAttempt({ attempt: 1, decision: warm })).toEqual({
 			reuse: false,
 			meta: { state: "cold-no-cache" },
