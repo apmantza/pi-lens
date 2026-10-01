@@ -8,7 +8,7 @@ sibling file of a whole-package fixer and its restore. The
 `TLA+ models` CI job (`node scripts/check-tla-models.mjs`) checks every
 config here against its `\* expect:` line.
 
-Issues: #3506, #3507, #3508, #3541, #3598, #3741; model lane L5 of #3803.
+Issues: #3506, #3507, #3508, #3541, #3598, #3741, #3830; model lane L5 of #3803.
 
 ## What the model covers
 
@@ -192,16 +192,18 @@ abandoned writer. `MutLspEditNoQueue` is the same configuration with
 committed config), so the writer is what turns it red.
 
 **Sibling restore** (`SiblingRestore.tla`, `clients/fix-run-restore.ts`,
-#3598, #3741). One sibling file S of a whole-package fixer (`cargo clippy
+#3598, #3741, #3830). One sibling file S of a whole-package fixer (`cargo clippy
 --fix`, `dart fix --apply`). The tool reads and writes S outside pi's queue.
 The agent edits S under S's queue. pi-lens sees each edit twice: `SACall`
 (`noteAgentCallStart`, "in flight") and `SANote` (`noteAgentCallEnd`, then
 `noteAgentMutation`, which keeps S's bytes as the capture, checked against
-the edit's own stated text). `Finish` is `finish()`: the run leaves `active`,
-and `settle` copies the in-flight set. `RRead`, `RRecheck` and `RWrite` are
-`settle`'s stat and read with its decision table, its re-stat, and
-`writeFileAtomicAsync`; compare and write are two steps because pi's queue for
-S is not held.
+the edit's own stated text). `Finish` is the tool's exit: `finish()` returns
+the `agentEdited` list and the `restore` thunk. `RLock`, `RRead`, `RRecheck`
+and `RWrite` are `restore`'s queue entry for S, its read with the decision
+table, its re-read before the write (the model's version counter stands for
+the byte compare), and `writeFileAtomicAsync`. Without `RestoreQueue` compare
+and write are separate steps with pi's queue for S not held (the code before
+#3830).
 
 | Invariant | Promise |
 |---|---|
@@ -209,53 +211,78 @@ S is not held.
 | `EveryEditSurvives` | stronger: at the end every agent edit of S is on disk |
 | `NoRestoreOverNewer` | the restore never writes over an agent edit newer than its capture; it is the union of the three below |
 | `NoRestoreOverReadEdit` | ... already on disk when the restore read S but not in the capture |
-| `NoRestoreOverPreCheckEdit` | ... that landed between the restore's read and its re-stat |
-| `NoRestoreOverGapEdit` | ... that landed after the re-stat |
+| `NoRestoreOverPreCheckEdit` | ... that landed between the restore's read and its re-check |
+| `NoRestoreOverGapEdit` | ... that landed after the re-check |
+| `Deadlock` (TLC's deadlock check, `CHECK_DEADLOCK TRUE`) | no state with a step pending has no enabled step: the restore, the pipeline's hold on F and an LSP multi-path edit never wait on each other in a cycle |
 | `NoNoopRestore` | the restore writes nothing when S already holds the capture's bytes (`fix-run-restore.ts` `if (unchanged) continue`) |
 
 Constants: `SConcurrent` (an agent edit of S can run while the run is open: pi's
 parallel tools, or a handler abandoned at 10 s while the tool's own timeout is
 30 s), `SAtomic` (no agent edit straddles a tool or restore step; `FALSE` lets
-one), `SCallInRun` (every agent `tool_call` of S reaches pi-lens while the run
-is open; `FALSE` lets one come before `beginFixRun`), `SRestore` (`FALSE`: the
-code before #3598), `RestoreInFlight` (settle leaves a file with a call in
-flight alone) and `RestoreRecheck` (the re-stat; both #3741 round 2), and two
-candidate fixes that are not in the code:
+one, which the lock-order configs need: an edit waiting for a queue entry is
+mid-call), `SCallInRun` (every agent `tool_call` of S reaches pi-lens while the
+run is open; `FALSE` lets one come before `beginFixRun`), `SRestore` (`FALSE`:
+the code before #3598), `RestoreInFlight` (the restore leaves a file with a
+call in flight alone) and `RestoreRecheck` (the re-check before the write; both
+#3741 round 2), and the two parts of #3830's fix, both in the code now:
 `SettleCapture` (the run stays registered through the restore) and
-`RestoreQueue` (the re-stat and the write run inside pi's queue for S);
-`RestoreNoCapInFlight` is a third candidate, for finding B (a file with no
-capture and a call in flight is named possibly lost), there so the
-`overwritten` verdict can be observed. The model has no hold on the target, so
-none of the candidates is checked for lock order: `settle` runs inside the
-target's hold (`clients/pipeline.ts` `tryRustClippyFix`, `tryDartFix`), and a
-queue entry for S taken there is the lock-order break option 1 was rejected
-for (#3830).
+`RestoreQueue` (the restore's read, decision, re-check and write run inside
+pi's queue entry for S). `RestoreNoCapInFlight` is a candidate for finding B (a
+file with no capture and a call in flight is named possibly lost), there so the
+`overwritten` verdict can be observed.
+
+Lock order (#3830): the model has the target F's entry (`fq`, `TargetHold`: the
+pipeline takes it at `Begin` and keeps it, #3506) and an LSP multi-path edit
+(`LspMulti`: S's entry, then F's, keys sorted and S first, waiting for F while
+it holds S; it writes nothing, so it is a lock-order actor only).
+`RestoreGatesHold` says whether F's release (`RelF`) waits for the restore:
+`FALSE` is the code (`runWithFixRestore` starts `restore` after the caller's scan of the tool's changes and
+returns it as a promise; the tool_result pipeline never awaits it and queues
+the loss notice as an advisory, the `agent_end` drain awaits it only after it
+released F; the handler's own liveness is not modelled), `TRUE` is the rejected shape, where the pipeline holds
+F until the restore has ended. The statement the code keeps: a queue entry is
+requested by something that holds no other entry, except the multi-path LSP
+edit, which requests in ascending key order; the restore holds one S entry at a
+time and does file I/O only inside it; nothing that holds an entry awaits the
+restore. Not modelled: a second pipeline with its own F (each restore still
+holds nothing while it waits, and nothing awaits it under a hold), and a second
+sibling.
 
 | Config | Models | Expect | Distinct states |
 |---|---|---|---|
 | `SiblingSequential` | pi's sequential tools; **vacuous for the restore**: no capture is taken, nothing is restored, reported or in flight, and it means something only beside the concurrent configs (`SConcurrent`) | pass | 72 |
 | `SiblingRestoreOneEdit` | merged restore, one concurrent edit (`EveryEditSurvives` too) | pass | 62 |
 | `MutSiblingNoRestore` | the code before #3598 | violated `NoSilentLoss` | 34 (at the violation) |
-| `SiblingRestoreRecheck` | merged restore, two edits: the re-stat holds its claim | pass | 278 |
-| `MutSiblingNoRecheck` | #3741 round 1, before the re-stat | violated `NoRestoreOverPreCheckEdit` | 272 (at the violation) |
-| `SiblingRestoreMerged` | **defect 2** on the merged restore: an edit lands between the re-stat and the write | violated `NoRestoreOverGapEdit` | 271 (at the violation) |
+| `SiblingRestoreRecheck` | merged restore, two edits: the re-check holds its claim | pass | 278 |
+| `MutSiblingNoRecheck` | #3741 round 1, before the re-check | violated `NoRestoreOverPreCheckEdit` | 272 (at the violation) |
+| `SiblingRestoreMerged` | **defect 2** on the merged restore: an edit lands between the re-check and the write | violated `NoRestoreOverGapEdit` | 271 (at the violation) |
 | `SiblingRestoreGap` | defect 2 alone: with `SettleCapture` the other windows below are closed, and this one is left | violated `NoRestoreOverNewer` | 246 (at the violation) |
-| `SiblingRestoreQueued` | defect 2's fix shape: `SettleCapture` and `RestoreQueue` (also checks `NoNoopRestore`); lock order not checked | pass | 252 |
-| `SiblingRestoreLostVerdict` | the `overwritten` verdict, observed with finding B closed by `RestoreNoCapInFlight` | pass | 82 |
-| `SiblingRestoreInFlightHeld` | the in-flight check, with the other windows closed and every call reaching pi-lens during the run | pass | 581 |
-| `MutSiblingNoInFlight` | the same without the in-flight check (the restore before #3741 round 2) | violated `NoRestoreOverNewer` | 523 (at the violation) |
+| `SiblingRestoreQueued` | **the code (#3830)**: `SettleCapture` and `RestoreQueue`, the restore started after the caller's scan, with F still held and not waiting for it, an LSP multi-path edit (checks `NoNoopRestore`, `CHECK_DEADLOCK TRUE`) | pass | 3,202 |
+| `SiblingRestoreQueuedInHold` | the rejected shape: the same, with the pipeline holding F until the restore has ended (`RestoreGatesHold = TRUE`) | violated `Deadlock` | 77 (at the violation) |
+| `SiblingRestoreQueuedInHoldNoLsp` | the same without the LSP edit: no cycle, so the edit is the cycle's third edge | pass | 859 |
+| `MutSiblingNoRestoreQueue` | `SiblingRestoreQueued` without the queue entry | violated `NoRestoreOverNewer` | 2,093 (at the violation) |
+| `MutSiblingNoSettleCapture` | `SiblingRestoreQueued` without `SettleCapture` (window A) | violated `NoRestoreOverNewer` | 3,160 (at the violation) |
+| `SiblingRestoreLostVerdict` | the `overwritten` verdict, observed with finding B closed by `RestoreNoCapInFlight` | pass | 93 |
+| `SiblingRestoreInFlightHeld` | the in-flight check, with the other windows closed and every call reaching pi-lens during the run | pass | 612 |
+| `MutSiblingNoInFlight` | the same without the in-flight check (the restore before #3741 round 2) | violated `NoRestoreOverNewer` | 493 (at the violation) |
 | `SiblingRestoreDeregistered` | finding A | violated `NoRestoreOverReadEdit` | 252 (at the violation) |
 | `SiblingRestoreInFlight` | finding B | violated `NoSilentLoss` | 129 (at the violation) |
-| `SiblingRestoreQueuedSilent` | finding C, left after defect 2's fix shape | violated `NoSilentLoss` | 225 (at the violation) |
-| `SiblingRestoreCallBeforeRun` | finding D: `SiblingRestoreInFlightHeld` with `SCallInRun = FALSE` | violated `NoRestoreOverNewer` | 1,327 (at the violation) |
+| `SiblingRestoreQueuedSilent` | finding C, left after defect 2's fix | violated `NoSilentLoss` | 245 (at the violation) |
+| `SiblingRestoreCallBeforeRun` | finding D: `SiblingRestoreInFlightHeld` with `SCallInRun = FALSE` | violated `NoRestoreOverNewer` | 1,261 (at the violation) |
 
 Non-vacuity: the restore is load-bearing (`MutSiblingNoRestore` against
-`SiblingRestoreOneEdit`); the re-stat is load-bearing (`MutSiblingNoRecheck`
+`SiblingRestoreOneEdit`); the re-check is load-bearing (`MutSiblingNoRecheck`
 against `SiblingRestoreRecheck`); `SiblingSequential` is the same
 configuration as a concurrent one, so `SConcurrent` is what opens the windows
 (on its own it exercises no restore path);
-the queue is what closes the gap (`SiblingRestoreGap` against
-`SiblingRestoreQueued`, which differ only in `RestoreQueue`); the in-flight
+the queue is what closes the gap (`MutSiblingNoRestoreQueue` against
+`SiblingRestoreQueued`, which differ only in `RestoreQueue`); keeping the run
+registered through the restore is what closes window A (`MutSiblingNoSettleCapture`
+against `SiblingRestoreQueued`, which differ only in `SettleCapture`); the
+release order is what closes the cycle (`SiblingRestoreQueuedInHold` against
+`SiblingRestoreQueued`, which differ only in `RestoreGatesHold`), and the LSP
+edit is what makes it a cycle (`SiblingRestoreQueuedInHoldNoLsp` against
+`SiblingRestoreQueuedInHold`, which differ only in `LspMulti`); the in-flight
 check is load-bearing (`MutSiblingNoInFlight` against
 `SiblingRestoreInFlightHeld`, which differ only in `RestoreInFlight`); the
 equal-bytes skip is observed by `NoNoopRestore` in `SiblingRestoreQueued`
@@ -266,31 +293,39 @@ One survivor: the verdict's routing (`continue` after reporting `lost`) is
 reached only in `SiblingRestoreCallBeforeRun`, which is red for finding D
 either way.
 
-**Defect 2 (the stated residual, #3741).** `fix-run-restore.ts`'s "Residual,
-stated": the restore is compare-then-write outside pi's queue. The window is an
-agent edit of S landing between the re-stat and `writeFileAtomicAsync`. The
-trace, from `SiblingRestoreMerged`: edit 1 is captured; the tool writes S
-from older bytes; `Finish`, `RRead`, `RRecheck`; edit 2 lands; `RWrite` puts
-edit 1's capture over it. The report says `restored`, so nothing names the
-lost edit 2. Tracked in #3830 (p2). The fix shape the model accepts is
-`SiblingRestoreQueued`: a queue entry for S around the re-stat and the write
-only. The model has no hold on the target, so it does not show that shape is
-lock-order safe: `settle` runs inside the target's hold, and a queue entry for
-S taken there can wait behind a multi-path LSP edit that holds S and waits for
-the target (#3830 states the lock order).
+**Defect 2 (the stated residual, #3741), fixed by #3830.** The restore was
+compare-then-write outside pi's queue. The window was an agent edit of S
+landing between the re-check and `writeFileAtomicAsync`. The trace, from
+`SiblingRestoreMerged`: edit 1 is captured; the tool writes S from older bytes;
+`Finish`, `RRead`, `RRecheck`; edit 2 lands; `RWrite` puts edit 1's capture
+over it. The report said `restored`, so nothing named the lost edit 2.
+
+The first model passed the queued restore (`SiblingRestoreQueued`) without a
+target hold, so it could not see that a queue entry for S taken inside the
+pipeline's hold on F closes a cycle with a multi-path LSP edit: the edit holds S
+and waits for F, the pipeline holds F and waits for the restore, the restore
+waits for S (`SiblingRestoreQueuedInHold`, red under `CHECK_DEADLOCK`, found by
+the #3844 review's probe through the real queue). The code starts the restore
+after the caller's scan of the tool's changes and awaits it only after the pipeline has released F, so F's
+release never waits for it. `SiblingRestoreQueued`, with the hold and the LSP
+edit in, passes. The restore reads and compares inside S's
+entry, and the run stays registered until it ends, so window A (below) is
+closed by the same change.
 
 **Findings the model showed on the merged code (not in the header).** Four,
 each reproduced against the real `beginFixRun` / `noteAgentMutation` /
 `finish` with a scratch probe (see the PR body for its output).
 
-- **A, `SiblingRestoreDeregistered`.** `finish()` runs `active.delete(run)`
-  before `settle` reads any file, so an agent edit whose `tool_call` comes
-  after that is neither in flight nor captured, and `noteAgentMutation` is a
-  no-op for it. The restore reads the file, finds it differs from the older
-  capture, re-stats it unchanged, and writes the capture over the edit. The
-  window runs from `finish()` to that file's read, which grows with the
-  number of captured files settled before it; the header's "one syscall gap"
-  understates it.
+- **A, `SiblingRestoreDeregistered`, fixed by #3830.** `finish()` ran
+  `active.delete(run)` before `settle` read any file, so an agent edit whose
+  `tool_call` comes after that was neither in flight nor captured, and
+  `noteAgentMutation` was a no-op for it. The restore read the file, found it
+  differed from the older capture, re-statted it unchanged, and wrote the
+  capture over the edit. The window ran from `finish()` to that file's read,
+  which grows with the number of captured files settled before it; the
+  header's "one syscall gap" understated it. The run now stays registered until
+  `restore` ends (`SettleCapture`; `MutSiblingNoSettleCapture` is red without
+  it).
 - **B, `SiblingRestoreInFlight`.** `settle` skips a file with no capture
   (`if (!capture) continue`) before it looks at the in-flight set. An agent
   edit whose `tool_result` has not arrived when the tool exits has no capture.
@@ -336,7 +371,7 @@ Assumptions:
 - A fixer writes a fix of the bytes it read.
 - A blocker verdict is a function of the newest agent edit in the content.
 - Handlers of one batch run in the order their edits executed.
-- Sibling restore: identity is a perfect version counter. The code's identity
-  is mtime + size + inode (`clients/fix-run-restore.ts` `sameIdentity`), and an
-  in-place agent edit keeps the inode, so the re-stat cannot see a same-size
-  edit that lands within one mtime tick; the model does not show that.
+- Sibling restore: identity is a perfect version counter. The code before #3830
+  compared mtime + size + inode, which an in-place same-size edit inside one
+  mtime tick passes; it now compares bytes before the write, and the model does
+  not show the difference (`tests/clients/fix-run-restore.test.ts` pins it).

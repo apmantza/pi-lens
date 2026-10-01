@@ -1,0 +1,9 @@
+diff --git a/clients/fix-run-restore.ts b/clients/fix-run-restore.ts
+index a52533e34..6ae97db92 100644
+--- a/clients/fix-run-restore.ts
++++ b/clients/fix-run-restore.ts
+@@ -71,2 +71,2 @@
+- *   is neither seen nor restored over; on a file the tool DID touch it is the
+- *   unverifiable case above.
++ *   is neither seen nor restored over when no capture exists for the file;
++ *   on a file the tool DID touch it is the unverifiable case above.

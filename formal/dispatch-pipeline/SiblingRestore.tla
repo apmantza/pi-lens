@@ -2,11 +2,25 @@
 (***************************************************************************)
 (* One SIBLING file S of a whole-package fixer (`cargo clippy --fix`,      *)
 (* `dart fix --apply`), and the restore that puts the agent's edits of S   *)
-(* back over the tool's write (clients/fix-run-restore.ts, #3598, #3741).  *)
-(* The pipeline's hold on pi's mutation queue covers only the edit's own   *)
-(* target, so the tool reads and writes S outside the queue. settle runs   *)
-(* inside that hold (pipeline.ts tryRustClippyFix, tryDartFix); the model  *)
-(* has no target hold, so it cannot see a lock-order cycle (#3830).        *)
+(* back over the tool's write (clients/fix-run-restore.ts, #3598, #3741,   *)
+(* #3830). The pipeline's hold on pi's mutation queue covers only the      *)
+(* edit's own target F, so the tool reads and writes S outside the queue.  *)
+(*                                                                         *)
+(* Lock order (#3830). Two queue entries are modelled: S's (`sq`) and the  *)
+(* target F's (`fq`). With TargetHold the pipeline takes F's entry at      *)
+(* Begin and keeps it until its work is done (RelF), as `runPipeline` does *)
+(* (#3506). An LSP multi-path edit (LspMulti, `applyWorkspaceEdit` ->      *)
+(* `withHostFileMutationQueues`) takes S, then F: its keys are sorted, and *)
+(* S sorts first. It writes nothing here: it is a lock-order actor only    *)
+(* (what an LSP edit writes is LspEditQueue's question). A restore that    *)
+(* takes S's entry (RestoreQueue) while the pipeline holds F and waits for *)
+(* the restore to end (RestoreGatesHold = TRUE) closes a cycle with that   *)
+(* edit, and TLC's deadlock check finds it (SiblingRestoreQueuedInHold).   *)
+(* The code does not wait: `runWithFixRestore` starts `restore` once the   *)
+(* caller has scanned the tool's changes and returns it as a promise,      *)
+(* awaited only after the pipeline has released F (RestoreGatesHold =      *)
+(* FALSE), so F's release never depends on the restore and the restore     *)
+(* holds nothing while it waits for S's entry.                             *)
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - the agent: edits 1..SEdits of S, in order, each a read-modify-write  *)
@@ -18,18 +32,21 @@
 (*    between them are the bash branch.                                    *)
 (*  - the tool: Begin (beginFixRun: hash the set, register the run), TRead *)
 (*    and TWrite (reads S, later writes its fix of what it read, outside   *)
-(*    the queue), Finish (finish(): `active.delete(run)`, then settle).    *)
-(*  - the restore (settle): RRead (stat + readFile, and the decision       *)
-(*    table of the module header), RRecheck (re-stat: same identity as the *)
-(*    read, #3741 round 2), RWrite (writeFileAtomicAsync of the capture).  *)
-(*    Compare and write are two steps: pi's queue for S is not held.       *)
+(*    the queue), Finish (the tool exited; `finish()` returns the          *)
+(*    agentEdited list and the `restore` thunk).                           *)
+(*  - the restore: RLock (S's queue entry, RestoreQueue), RRead (readFile  *)
+(*    and the decision table of the module header), RRecheck (the content  *)
+(*    re-read before the write; the model's version counter is a perfect   *)
+(*    identity), RWrite (writeFileAtomicAsync of the capture). Without     *)
+(*    RestoreQueue, compare and write are separate steps with S's queue    *)
+(*    not held: the code before #3830.                                     *)
 (*                                                                         *)
 (* A content is the set of agent edits it holds plus a "fixed" bit, so a   *)
 (* stale write by the tool shows as a missing edit. Identity is a version  *)
-(* counter bumped by every write: a perfect identity. The code's identity  *)
-(* is mtime + size + inode, and an in-place agent edit keeps the inode, so *)
-(* a same-size edit inside one mtime tick is invisible to it; the model    *)
-(* does not see that. The report is one set for the file.                  *)
+(* counter bumped by every write: a perfect identity. The code compares    *)
+(* bytes before the write (the stat identity it replaced, mtime + size +   *)
+(* inode, was blind to a same-size edit inside one mtime tick); the model  *)
+(* does not see that difference. The report is one set for the file.       *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -43,7 +60,10 @@ CONSTANTS
     RestoreNoCapInFlight, \* candidate fix for finding B: a file with no capture and a call in flight is named possibly lost
     RestoreInFlight,\* TRUE: settle leaves a file with a call in flight alone (#3741 round 2)
     RestoreRecheck, \* TRUE: the re-stat before the write (#3741 round 2)
-    RestoreQueue    \* candidate fix: the recheck and the write run inside pi's queue for S (a per-sibling entry taken only for the restore). The model has no hold on the target, so it cannot check the lock order: settle runs inside that hold (#3830)
+    RestoreQueue,   \* the restore's read, decision, re-check and write run inside pi's queue entry for S (a per-sibling entry taken only for the restore, #3830)
+    TargetHold,     \* TRUE: the pipeline holds the target F's queue entry from Begin until its work is done (#3506)
+    RestoreGatesHold, \* TRUE (the rejected shape): the pipeline releases F's entry only after the restore has ended. FALSE (the code, #3830): the restore starts once the caller has scanned the tool's changes and F's release does not wait for it
+    LspMulti        \* TRUE: an LSP multi-path edit takes S's entry, then F's (keys sorted, S first), and waits for F while it holds S
 
 SIds == 1..SEdits
 C0 == [e |-> {}, f |-> FALSE]
@@ -52,10 +72,11 @@ NoCap == [has |-> FALSE, b |-> C0, v |-> "verified"]
 VARIABLES
     sdisk, sver, sq, sapplied, sa, sabuf,
     infl, cap, tpc, tbuf,
-    rpc, rbuf, rv, rcap, rc, rep, wk
+    rpc, rbuf, rv, rcap, rc, rep, wk,
+    fq, lpc
 
 vars == <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
-          rpc, rbuf, rv, rcap, rc, rep, wk>>
+          rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 Init ==
     /\ sdisk = C0 /\ sver = 0 /\ sq = "none" /\ sapplied = {}
@@ -63,6 +84,7 @@ Init ==
     /\ infl = {} /\ cap = NoCap /\ tpc = "none" /\ tbuf = C0
     /\ rpc = "idle" /\ rbuf = C0 /\ rv = 0 /\ rcap = NoCap /\ rc = 0
     /\ rep = {} /\ wk = {}
+    /\ fq = "none" /\ lpc = "idle"
 
 \* SAtomic: no agent edit is mid-call. Gates every tool and restore step.
 Quiet == SAtomic => \A i \in SIds : sa[i] \in {"idle", "done"}
@@ -92,7 +114,7 @@ SACall(i) ==
     /\ sa' = [sa EXCEPT ![i] = "called"]
     /\ infl' = IF Registered THEN infl \cup {i} ELSE infl
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sabuf, cap, tpc, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 \* pi's edit: read S inside S's queue ...
 SARead(i) ==
@@ -101,7 +123,7 @@ SARead(i) ==
     /\ sabuf' = sdisk /\ sq' = "agent"
     /\ sa' = [sa EXCEPT ![i] = "read"]
     /\ UNCHANGED <<sdisk, sver, sapplied, infl, cap, tpc, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 \* ... and write it back with edit i applied.
 SAWrite(i) ==
@@ -112,7 +134,7 @@ SAWrite(i) ==
     /\ sq' = "none"
     /\ sa' = [sa EXCEPT ![i] = "written"]
     /\ UNCHANGED <<sabuf, infl, cap, tpc, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 \* tool_result: noteAgentCallEnd, then noteAgentMutation reads S now. The
 \* verdict checks the agent's own stated write (verdictFor): edit i's text is
@@ -126,19 +148,22 @@ SANote(i) ==
                 ELSE cap
     /\ sa' = [sa EXCEPT ![i] = "done"]
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sabuf, tpc, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 ----------------------------------------------------------------------------
 \* beginFixRun: hash the files, register the run. Under pi's sequential tool
 \* execution no agent edit of S is mid-call here: the run is inside the
-\* handler pi awaits.
+\* handler pi awaits. With TargetHold the pipeline has taken F's entry first
+\* (`writeHold.acquire()` precedes `snapshotProjectFiles`), so Begin waits for it.
 Begin ==
     /\ SEdits > 0 /\ rpc = "idle"
     /\ Quiet
     /\ ~SConcurrent => \A i \in SIds : sa[i] \in {"idle", "done"}
+    /\ TargetHold => fq = "none"
+    /\ fq' = IF TargetHold THEN "pipe" ELSE fq
     /\ rpc' = "run"
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc,
-                   tbuf, rbuf, rv, rcap, rc, rep, wk>>
+                   tbuf, rbuf, rv, rcap, rc, rep, wk, lpc>>
 
 \* The tool reads S, later writes its fix of what it read, outside the queue.
 TRead ==
@@ -146,7 +171,7 @@ TRead ==
     /\ Quiet
     /\ tbuf' = sdisk /\ tpc' = "read"
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 TWrite ==
     /\ rpc = "run" /\ tpc = "read"
@@ -155,17 +180,46 @@ TWrite ==
     /\ sver' = sver + 1
     /\ tpc' = "wrote"
     /\ UNCHANGED <<sq, sapplied, sa, sabuf, infl, cap, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
-\* The tool exited: finish() leaves `active` and settle copies the in-flight set.
+\* The tool exited: `finish()` returns the agentEdited list and the `restore`
+\* thunk, which `runWithFixRestore` starts once the caller has scanned the
+\* tool's changes (the scan touches neither S nor a queue entry, so the model
+\* folds it into Finish). Without SettleCapture the run left `active` here (the
+\* code before #3830).
 Finish ==
     /\ rpc = "run" /\ tpc # "read"
     /\ Quiet
-    /\ rpc' = IF SRestore THEN "rread" ELSE "done"
+    /\ rpc' = IF ~SRestore THEN "done"
+              ELSE IF RestoreQueue THEN "rlock"
+              ELSE "rread"
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
-                   rbuf, rv, rcap, rc, rep, wk>>
+                   rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
-\* stat + readFile of S, then the decision table of fix-run-restore.ts.
+\* The pipeline's work on F is over and `runPipeline` releases F's entry. The
+\* pipeline's other work after the tool's exit (its reads of F) touches neither
+\* S nor a queue entry and is not modelled, so this can happen any time after
+\* Finish; with RestoreGatesHold it waits for the restore.
+RelF ==
+    /\ TargetHold /\ fq = "pipe"
+    /\ rpc \notin {"idle", "run"}
+    /\ RestoreGatesHold => rpc = "done"
+    /\ fq' = "none"
+    /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
+                   rpc, rbuf, rv, rcap, rc, rep, wk, lpc>>
+
+\* RestoreQueue: enter pi's queue for S (waits for an edit or an LSP edit that
+\* holds it). It holds no other entry; F's may still be held by the pipeline,
+\* which does not wait for the restore (unless RestoreGatesHold).
+RLock ==
+    /\ rpc = "rlock" /\ sq = "none"
+    /\ Quiet
+    /\ sq' = "restore" /\ rpc' = "rread"
+    /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
+                   rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
+
+\* readFile of S, then the decision table of fix-run-restore.ts. With
+\* RestoreQueue it runs inside S's entry and a skip leaves the entry.
 RRead ==
     /\ rpc = "rread"
     /\ Quiet
@@ -175,7 +229,7 @@ RRead ==
              ELSE IF cap.v = "overwritten" THEN "done"
              ELSE IF RestoreInFlight /\ InFl # {} THEN "done"
              ELSE IF sdisk = cap.b THEN "done"
-             ELSE IF RestoreQueue THEN "rlock" ELSE "rrecheck"
+             ELSE "rrecheck"
            named ==
              IF ~cap.has /\ RestoreNoCapInFlight /\ InFl # {} THEN {"possibly"}
              ELSE IF cap.has /\ cap.v = "overwritten" THEN {"lost"}
@@ -183,19 +237,13 @@ RRead ==
              ELSE {}
        IN /\ rpc' = next
           /\ rep' = rep \cup named
-    /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc,
-                   tbuf, rc, wk>>
+          /\ sq' = IF RestoreQueue /\ next = "done" THEN "none" ELSE sq
+    /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc,
+                   tbuf, rc, wk, fq, lpc>>
 
-\* RestoreQueue: enter pi's queue for S (waits for an edit mid-call).
-RLock ==
-    /\ rpc = "rlock" /\ sq = "none"
-    /\ Quiet
-    /\ sq' = "restore" /\ rpc' = "rrecheck"
-    /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
-                   rbuf, rv, rcap, rc, rep, wk>>
-
-\* The re-stat: identity as at the read, else the file moved again and is not
-\* ours to overwrite. Without RestoreRecheck (#3741 round 1) the write goes on.
+\* The re-check before the write: unchanged since the read, else the file moved
+\* again and is not ours to overwrite. Without RestoreRecheck (#3741 round 1)
+\* the write goes on.
 RRecheck ==
     /\ rpc = "rrecheck"
     /\ Quiet
@@ -205,7 +253,7 @@ RRecheck ==
          ELSE /\ rpc' = "done" /\ rep' = rep \cup {"possibly"}
               /\ sq' = IF RestoreQueue THEN "none" ELSE sq
     /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
-                   rbuf, rv, rcap, wk>>
+                   rbuf, rv, rcap, wk, fq, lpc>>
 
 \* writeFileAtomicAsync of the capture. `wk` records, from the variables the
 \* steps kept, whether the bytes replaced held an agent edit newer than the
@@ -223,12 +271,43 @@ RWrite ==
     /\ sq' = IF RestoreQueue THEN "none" ELSE sq
     /\ rpc' = "done"
     /\ UNCHANGED <<sapplied, sa, sabuf, infl, cap, tpc, tbuf,
-                   rbuf, rv, rcap, rc>>
+                   rbuf, rv, rcap, rc, fq, lpc>>
+
+\* The LSP multi-path edit: S's entry, then F's, in key order (S sorts first).
+\* It holds S while it waits for F.
+LGetS ==
+    /\ LspMulti /\ lpc = "idle" /\ sq = "none"
+    /\ sq' = "lsp" /\ lpc' = "holdS"
+    /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
+                   rpc, rbuf, rv, rcap, rc, rep, wk, fq>>
+
+LGetF ==
+    /\ lpc = "holdS" /\ fq = "none"
+    /\ fq' = "lsp" /\ lpc' = "holdBoth"
+    /\ UNCHANGED <<sdisk, sver, sq, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
+                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+
+LDone ==
+    /\ lpc = "holdBoth"
+    /\ sq' = "none" /\ fq' = "none" /\ lpc' = "done"
+    /\ UNCHANGED <<sdisk, sver, sapplied, sa, sabuf, infl, cap, tpc, tbuf,
+                   rpc, rbuf, rv, rcap, rc, rep, wk>>
+
+\* Everything that will happen has happened: TLC's deadlock check (CHECK_DEADLOCK
+\* TRUE) must not flag this state, and flags every other state with no step. An
+\* edit still idle is not stuck: with SCallInRun its tool_call can no longer
+\* come, and without it SACall is enabled, so the state has a step anyway.
+Finished ==
+    /\ rpc = "done" /\ \A i \in SIds : sa[i] \in {"idle", "done"}
+    /\ fq # "pipe" /\ lpc \in {"idle", "done"}
+    /\ UNCHANGED vars
 
 Next ==
-    \/ Begin \/ TRead \/ TWrite \/ Finish
+    \/ Begin \/ TRead \/ TWrite \/ Finish \/ RelF
     \/ RRead \/ RLock \/ RRecheck \/ RWrite
+    \/ LGetS \/ LGetF \/ LDone
     \/ \E i \in SIds : SACall(i) \/ SARead(i) \/ SAWrite(i) \/ SANote(i)
+    \/ Finished
 
 Spec == Init /\ [][Next]_vars
 

@@ -70,6 +70,12 @@ jobs:
     # A finding stays visible as a red check without blocking a merge.
     # Promotion bound (#2904): it stays advisory until it has been green on ten
     # consecutive merged PRs; only then is it a candidate for required checks.
+    # No tool tracks the streak: the orchestrator counts it from this job's row
+    # in `scripts/ci-verdict.mjs` for each merged PR. Demotion (#3875): the
+    # first refusal of a decision-branch Observability lint on a merged PR
+    # that its reviewer judges not a decision moves that refusal to a
+    # `::notice::` advisory until a fixture pins the shape
+    # (`docs/pi-lens-reviewer.md` "Record read-back").
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:

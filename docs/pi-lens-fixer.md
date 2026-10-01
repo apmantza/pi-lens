@@ -82,6 +82,9 @@ are not repeated here.
   partial, or absent comment in the body, never read it as clean, and run
   `node scripts/stryker-diff.mjs --base origin/master --max-files 6`, then
   `node scripts/mutation-report.mjs` on `reports/mutation/mutation.json`.
+  The `mutation` job starts only after every required check passed on the head
+  (#3801): until then the `MUTATION` line reads `PENDING`, and after a red
+  required check or a red gate it reads `NOT RUN` with the reason.
 - Every record the `Observability` section names is asserted by a test in the
   diff and quoted in the body (#2642, #2647, #2649, #2654).
 - Every behavioural sentence (a docstring invariant, a memo, a registry
@@ -146,11 +149,12 @@ rigor (#2599).
   heading present in order: `## Why` (one sentence), `## Notes for the
   reviewer`, `## Change outline`, `## Summary`, `## Type of change`,
   `## Area`, `## Checklist`, `## Tests`, `## Blast radius`,
-  `## Observability` (a record literal from the runtime diff, or exactly
-  `No new failure path; no record added.`), `## Class sweep`, and
-  `## Test assessment`. A brief that names only some headings does not
-  shorten this list. The closing keyword lives in the body; GitHub ignores it
-  in a title.
+  `## Observability` (a record literal from the runtime diff, `none: <reason>`,
+  or exactly `No new failure path; no record added.`, which a new decision
+  branch on a session, lifecycle or delivery seam refuses, #3875),
+  `## Class sweep`, and `## Test assessment`. A brief that names only some
+  headings does not shorten this list. The closing keyword lives in the body;
+  GitHub ignores it in a title.
 - Run `node scripts/check-pr-body.mjs --lint-local PR_BODY.md` and
   `node scripts/check-changelog-fragments.mjs` before the hand-back; both
   must pass, and the hand-back quotes them. A red `PR body (advisory)` check is

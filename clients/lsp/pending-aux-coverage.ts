@@ -197,6 +197,21 @@ export function isPendingAuxiliaryPastRearmTtl(
 	return nowMs - anchor >= readLateAuxRearmTtlMs();
 }
 
+/**
+ * Whether a pair may be re-armed again: inside its re-arm TTL and below the
+ * re-arm ceiling. The one statement of the bound, shared by every drain branch
+ * and by the turn-end hold that re-arms a part the cap cut (#3813).
+ */
+export function canRearmPendingAuxiliary(
+	pair: PendingAuxCoverageEntry,
+	nowMs: number = Date.now(),
+): boolean {
+	return (
+		!isPendingAuxiliaryPastRearmTtl(pair, nowMs) &&
+		(pair.rearmCount ?? 0) < MAX_LATE_AUX_REARMS
+	);
+}
+
 const pending = new BoundedFifoMap<string, PendingAuxCoverageEntry>(
 	MAX_PENDING_AUX_ENTRIES,
 );

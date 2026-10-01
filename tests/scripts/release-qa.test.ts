@@ -1,5 +1,5 @@
-// flake-shape: real-process-spawn — five spawns, each pinning something no
-// in-process double can reach. (1) `npm pack` of a two-line fixture package
+// flake-shape: real-process-spawn — six spawn sites, each pinning something
+// no in-process double can reach. (1) `npm pack` of a two-line fixture package
 // whose `prepare` writes through `os.homedir()`: the F1 defect was npm
 // IGNORING the env it was handed, so an assertion on scratchEnv()'s OUTPUT
 // passed throughout the defect's life (#2619 review N1). (2) a `node -e` child
@@ -7,11 +7,15 @@
 // the test process can only ever report the ambient home. (3) the real
 // release-qa CLI, run out of a throwaway dirty tree, because main()'s CALL to
 // the dirty-checkout refusal is reachable only through the process entry
-// point (#2619 review N3, MP-E). (5) the codemode row's latency-log wait
-// (#3805): it is a standalone program pi's own bash tool runs, so what the row
-// reads is that real process's stdout and exit; `process.exit` and the
-// `POLL_COMPLETE`/`POLL_EXPIRED` line cannot be observed from an in-process
-// import (its expiry cases use a cap in the past, so none waits on the clock).
+// point (#2619 review N3, MP-E). (4) the real release-qa CLI run out of a
+// throwaway tree with a fake npm and pi, because main()'s npm-pack CALL to
+// parseNpmPackJson is reachable only through the process entry point; a revert
+// there leaves the exported parser's own tests green (#3887 F1).
+// (5) the codemode row's latency-log wait (#3805): it is a standalone program
+// pi's own bash tool runs, so what the row reads is that real process's stdout
+// and exit; `process.exit` and the `POLL_COMPLETE`/`POLL_EXPIRED` line cannot be
+// observed from an in-process import (its expiry cases use a cap in the past,
+// so none waits on the clock).
 /**
  * #2606 — the release-QA runner's pure core.
  *
@@ -55,6 +59,7 @@ import {
 	dirtyCheckoutRefusal,
 	finalizeRowOutcome,
 	npm,
+	parseNpmPackJson,
 	parseBaselineRows,
 	parseSupplyArgs,
 	PINNED_ENV_KEYS,
@@ -98,12 +103,59 @@ const REPO_ROOT = path.resolve(
 );
 const BASELINE_PATH = path.join(REPO_ROOT, "docs", "release-qa-baseline.md");
 
+describe("release-QA npm pack output parsing (#3877)", () => {
+	it("finds the npm JSON after lifecycle noise", () => {
+		const listing = parseNpmPackJson(
+			"[setup-git-hooks] skipped (not a checkout).\n" +
+				'[{"filename":"pi-lens-4.3.0.tgz","files":[{"path":"package.json"}]}]\n',
+		);
+		expect(listing.filename).toBe("pi-lens-4.3.0.tgz");
+		expect(listing.files).toEqual([{ path: "package.json" }]);
+	});
+
+	it("requires the pack-listing shape, not just a parseable array", () => {
+		// A lifecycle line can itself be valid JSON without being a pack listing
+		// (and `[1]` is valid JSON). Only the `filename`/`files` shape check keeps
+		// such a line from being returned as the listing (#3887 F1 mutation b).
+		const listing = parseNpmPackJson(
+			'[{"event":"postpack","ok":true}]\n' +
+				'[{"filename":"pi-lens-4.3.0.tgz","files":[{"path":"package.json"}]}]\n',
+		);
+		expect(listing.filename).toBe("pi-lens-4.3.0.tgz");
+		expect(listing.files).toEqual([{ path: "package.json" }]);
+	});
+
+	it("tolerates trailing stdout after the pack listing", () => {
+		// npm writes the JSON array, then a later lifecycle step can print after
+		// it. Slicing to the end of stdout rejected that trailing line (#3887 F2).
+		const listing = parseNpmPackJson(
+			'[{"filename":"pi-lens-4.3.0.tgz","files":[{"path":"package.json"}]}]\n' +
+				"[postpack] restored the manifest.\n",
+		);
+		expect(listing.filename).toBe("pi-lens-4.3.0.tgz");
+	});
+
+	it("names the stdout head when no pack listing exists", () => {
+		// A DO-NOT-SHIP parse is diagnosed from the message, so the old parser's
+		// stdout head survives the shape-aware rewrite (#3887 minor).
+		expect(() => parseNpmPackJson("npm notice\nnot json\n")).toThrow(
+			/stdout head: "npm notice not json"/,
+		);
+	});
+});
+
 /** A throwaway git repo, through the helper the git-fixture governance requires. */
-function gitInit(dir: string): void {
+function gitInit(dir: string, commit = false): void {
 	for (const args of [
 		["init", "-q"],
 		["config", "user.email", "t@t.t"],
 		["config", "user.name", "t"],
+		...(commit
+			? [
+					["add", "-A"],
+					["commit", "-qm", "init"],
+				]
+			: []),
 	]) {
 		gitExecFileSync(args, { cwd: dir });
 	}
@@ -1513,6 +1565,113 @@ describe("release-QA host-provided peer args (#2586 recombination)", () => {
 		expect(parseSupplyArgs("  a@1 \n\n b@2\n\n")).toEqual(["a@1", "b@2"]);
 		expect(parseSupplyArgs("")).toEqual([]);
 	});
+});
+
+describe("release-QA pack call site (#3887 F1)", () => {
+	it("parses lifecycle noise through main()'s npm pack call", () => {
+		// F1 mutation (a): reverting main() to
+		// `JSON.parse(packJson.slice(packJson.indexOf("[")))` never reaches the
+		// `installing <filename>` log. Driving the real CLI out of a throwaway
+		// tree with a fake npm and pi proves the call site, not only the exported
+		// parser.
+		const parent = fs.mkdtempSync(
+			path.join(REPO_ROOT, ".probe-home", "release-qa-packcall-"),
+		);
+		const root = path.join(parent, "tree");
+		const binDir = path.join(parent, "bin");
+		const scratchRoot = path.join(parent, "scratch");
+		const fakePi = path.join(parent, "fake-pi.mjs");
+		try {
+			fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
+			fs.mkdirSync(binDir, { recursive: true });
+			for (const rel of [
+				"scripts/release-qa.mjs",
+				"scripts/lib/md-matrix.mjs",
+				"scripts/lib/git-fixture-env.mjs",
+				"scripts/supply-host-provided-deps.mjs",
+				"scripts/lib/host-provided-deps.mjs",
+				"package.json",
+			]) {
+				fs.copyFileSync(path.join(REPO_ROOT, rel), path.join(root, rel));
+			}
+			gitInit(root, true);
+
+			// `ci` succeeds; `pack --json` writes lifecycle noise (including a
+			// valid-JSON non-listing line) then the pack listing; any other npm
+			// subcommand fails, ending the run just after the listing is logged.
+			const fakeNpm = path.join(binDir, "npm");
+			fs.writeFileSync(
+				fakeNpm,
+				[
+					"#!/usr/bin/env node",
+					"const args = process.argv.slice(2);",
+					'if (args[0] === "ci") process.exit(0);',
+					'if (args[0] === "pack") {',
+					'\tprocess.stdout.write("[setup-git-hooks] skipped (not a checkout).\\n");',
+					'\tprocess.stdout.write(\'[{"event":"postpack"}]\' + "\\n");',
+					'\tprocess.stdout.write(\'[{"filename":"pi-lens-4.3.0.tgz","files":[{"path":"package.json"}]}]\' + "\\n");',
+					"\tprocess.exit(0);",
+					"}",
+					"process.exit(1);",
+					"",
+				].join("\n"),
+			);
+			fs.chmodSync(fakeNpm, 0o755);
+
+			// The boot probe answers; `pi install` fails, so the run stops before
+			// any real MCP session or row probe.
+			fs.writeFileSync(
+				fakePi,
+				[
+					"#!/usr/bin/env node",
+					"const args = process.argv.slice(2);",
+					'if (args[0] === "install") process.exit(1);',
+					'process.stdin.setEncoding("utf8");',
+					'let buf = "";',
+					'process.stdin.on("data", (chunk) => {',
+					"\tbuf += chunk;",
+					'\tif (buf.includes("get_commands")) {',
+					'\t\tprocess.stdout.write(JSON.stringify({ type: "response", command: "get_commands", data: { commands: [] } }) + "\\n");',
+					'\t\tbuf = "";',
+					"\t}",
+					"});",
+					"process.stdin.resume();",
+					"",
+				].join("\n"),
+			);
+			fs.chmodSync(fakePi, 0o755);
+
+			const result = spawnSync(
+				process.execPath,
+				[
+					path.join(root, "scripts", "release-qa.mjs"),
+					"--pi",
+					fakePi,
+					"--from",
+					"tree",
+					"--baseline",
+					BASELINE_PATH,
+					"--scratch-root",
+					scratchRoot,
+					"--out",
+					path.join(parent, "out"),
+				],
+				{
+					cwd: root,
+					encoding: "utf8",
+					timeout: 120_000,
+					env: {
+						...process.env,
+						PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+					},
+				},
+			);
+			expect(result.error, String(result.error)).toBeUndefined();
+			expect(result.stdout).toContain("pi-lens-4.3.0.tgz");
+		} finally {
+			fs.rmSync(parent, { recursive: true, force: true, maxRetries: 5 });
+		}
+	}, 150_000);
 });
 
 describe("release-QA dirty-checkout refusal (#2619 review F1)", () => {

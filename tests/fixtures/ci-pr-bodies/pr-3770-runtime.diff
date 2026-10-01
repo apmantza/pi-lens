@@ -1,0 +1,254 @@
+diff --git a/clients/installer/index.ts b/clients/installer/index.ts
+index 5650fa081..1d0ea5a6d 100644
+--- a/clients/installer/index.ts
++++ b/clients/installer/index.ts
+@@ -59 +59 @@ import fs from "node:fs/promises";
+-import { randomUUID } from "node:crypto";
++import { createHash, randomUUID } from "node:crypto";
+@@ -470,0 +471,23 @@ export interface ArchiveSpec {
++	/**
++	 * Lowercase-hex sha256 of every archive this spec can resolve, KEYED BY THE
++	 * RESOLVED URL (#3400). An archive install has no `--version` verdict, so the
++	 * bytes are checked against this pin before anything is extracted; a missing
++	 * key is a refusal, never an unchecked install. Keying by URL (not by a
++	 * parallel `(platform, arch)` resolver) means bumping a URL without its pin
++	 * reds `tests/clients/installer/tool-registry-consistency.test.ts` offline,
++	 * and a wrong pin reds the nightly tool-smoke row that downloads the archive.
++	 * Refresh a pin from the release: `gh api repos/<o>/<r>/releases/tags/<tag>
++	 * --jq '.assets[]|[.name,.digest]|@tsv'` (GitHub publishes `sha256:<hex>`).
++	 */
++	sha256?: Record<string, string>;
++	/**
++	 * Command the extracted launcher needs at run time (`java` for a JVM launcher
++	 * script), checked spawn-free BEFORE the download so a box without it is
++	 * `unavailable` rather than holding an 87 MB tree that cannot start. The
++	 * check is "the executable under the runtime's home env var when that is set
++	 * and non-empty (it decides alone, as the launcher's own does), else a
++	 * non-empty file named `runtime` on PATH" (`ARCHIVE_RUNTIME_HOMES`). It is a presence check, not a
++	 * working-JDK check: stock macOS ships `/usr/bin/java` as a stub, so there the
++	 * precheck passes and the download still happens.
++	 */
++	runtime?: string;
+@@ -513 +536,7 @@ export interface ToolDefinition {
+-	 * a verdict (#2722).
++	 * a verdict (#2722). `"tree-manifest"` is the same spawn-free stance for an
++	 * ARCHIVE whose launcher starts a JVM/BEAM on any argument: it is verified AT
++	 * INSTALL by the pinned archive sha256 plus the launcher/marker found on disk
++	 * by `installArchiveTool` (later resolution only checks the shim exists), and
++	 * no `--version` is ever spawned: not after a refresh, not on the PATH rung,
++	 * not in the `/lens-tools` listing (#3400). The
++	 * initialize handshake stays in the nightly tool-smoke.
+@@ -515 +544 @@ export interface ToolDefinition {
+-	verification?: "package-entry";
++	verification?: "package-entry" | "tree-manifest";
+@@ -1336,0 +1366,34 @@ export const TOOLS: ToolDefinition[] = [
++			sha256: {
++				"https://github.com/spotbugs/spotbugs/releases/download/4.10.2/spotbugs-4.10.2.tgz":
++					"63d7687c35fba12cbc8e55ec2a889a2bbf1b9be299dea91f2b0d351dc285308a",
++			},
++		},
++	},
++	{
++		// kotlin-language-server (fwcd, #3400) — a platform-agnostic launcher ZIP
++		// (`server/{bin,lib}`, 87 MB) whose `bin/kotlin-language-server` script
++		// starts a JVM on ANY argument and has no stable `--version`, so it is
++		// verified at install by manifest, not by spawn: the pinned sha256, the
++		// launcher on disk with an exec bit, and `java` on PATH or JAVA_HOME before
++		// the download (`verification: "tree-manifest"`). The 2025 release publishes
++		// no digest, so its pin is trust-on-first-use (the hash of the download). The initialize handshake is the nightly
++		// tool-smoke `kotlin` row. fwcd 1.3.13 (2025-01-18) rather than JetBrains'
++		// kotlin-lsp (v263.4702.0): its CDN ships the macOS standalone archives as
++		// `.sit`, which this installer's tar/unzip/Expand-Archive paths cannot
++		// extract, and its six per-platform archives would need six pins.
++		id: "kotlin-language-server",
++		name: "Kotlin Language Server",
++		checkCommand: "kotlin-language-server",
++		checkArgs: ["--version"],
++		installStrategy: "archive",
++		binaryName: "kotlin-language-server",
++		verification: "tree-manifest",
++		archive: {
++			url: "https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip",
++			kind: "zip",
++			launcher: "bin/kotlin-language-server",
++			runtime: "java",
++			sha256: {
++				"https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip":
++					"4fe7d71d087b307c7869036171bd9d8c6a4284cd7c25b89098b0a24eb2d9b6d2",
++			},
+@@ -1362,0 +1426,4 @@ export const TOOLS: ToolDefinition[] = [
++			sha256: {
++				"https://github.com/PowerShell/PowerShellEditorServices/releases/download/v4.6.0/PowerShellEditorServices.zip":
++					"0d91898f73d4faeb64291336f6386f0c890a933df012827571adf7008480a04a",
++			},
+@@ -1396,0 +1464,8 @@ export const TOOLS: ToolDefinition[] = [
++			sha256: {
++				"https://github.com/clangd/clangd/releases/download/22.1.0/clangd-linux-22.1.0.zip":
++					"c54e57dbff3ccc9e8352367ddb7030ad3f624073ec58c7477424e7919f578572",
++				"https://github.com/clangd/clangd/releases/download/22.1.0/clangd-mac-22.1.0.zip":
++					"71eddc5303da9a5bc5e8b509488b5b2c5acf45f20e33b8394e71a12a56d67198",
++				"https://github.com/clangd/clangd/releases/download/22.1.0/clangd-windows-22.1.0.zip":
++					"e31e271fe11f6dcd7cf87ca74be4a12788ff8ce5a0b07762583e335c058e939a",
++			},
+@@ -1438,0 +1514,12 @@ export const TOOLS: ToolDefinition[] = [
++			sha256: {
++				"https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-linux-arm64.tar.gz":
++					"273af33f26f4a1143f27c96d9f9e1188aba619c71e0807042134f66b4bd27f24",
++				"https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-linux-x64.tar.gz":
++					"ca71415dd19f19e30aaa35a4915aefca9fdb5fec31b98331cc3d77f778d539c5",
++				"https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-darwin-arm64.tar.gz":
++					"cec99d70b1f612acec4a10a79a03664e3aa0c229d4d8a586cb3f928ec37d509e",
++				"https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-darwin-x64.tar.gz":
++					"e26cfefe423dd7326fc7c649539e4d4aaa4f35f34d2fefd8af2ed7090b72c556",
++				"https://github.com/LuaLS/lua-language-server/releases/download/3.18.2/lua-language-server-3.18.2-win32-x64.zip":
++					"a4439a8f5e8e9e6505c11f045a7bf45db602124a1e246371c1dbe34924f3cf71",
++			},
+@@ -2898,6 +2985,12 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
+-			const probe = await probeToolAsync(tool.checkCommand, ["--version"], {
+-				timeout: 5000,
+-			});
+-			status.version =
+-				`${probe.stdout}${probe.stderr}`.trim().split("\n")[0]?.slice(0, 30) ||
+-				undefined;
++			// #3400: a `tree-manifest` launcher answers any argument by starting a
++			// JVM, so `--version` is no probe there; the listing shows no version.
++			if (tool.verification !== "tree-manifest") {
++				const probe = await probeToolAsync(tool.checkCommand, ["--version"], {
++					timeout: 5000,
++				});
++				status.version =
++					`${probe.stdout}${probe.stderr}`
++						.trim()
++						.split("\n")[0]
++						?.slice(0, 30) || undefined;
++			}
+@@ -3310,0 +3404,4 @@ async function getToolPathResolved(
++		// #3400: a `tree-manifest` launcher answers any argument by starting a JVM,
++		// so `checkArgs` is no verdict here either — a nonzero exit from that probe
++		// would drop a working PATH install for a managed one.
++		if (tool.verification === "tree-manifest") return tool.checkCommand;
+@@ -4777 +4874,4 @@ async function verifyRefreshedArtifact(
+-	if (tool.installStrategy === "archive" && !tool.archive?.launcher) {
++	if (
++		tool.installStrategy === "archive" &&
++		(!tool.archive?.launcher || tool.verification === "tree-manifest")
++	) {
+@@ -5179,0 +5280,37 @@ export async function swapExtractedDir(
++/**
++ * Where a launcher's runtime lives when it is not on PATH: the home env var the
++ * launcher itself honours and the dir under it that holds the executable (#3400).
++ * fwcd's Gradle launcher resolves `$JAVA_HOME/bin/java`, so a JAVA_HOME-only box
++ * can run it and must not be refused. A new runtime (OmniSharp's dotnet) adds a
++ * row here, not a branch.
++ */
++const ARCHIVE_RUNTIME_HOMES: Record<string, { env: string; dir: string }> = {
++	java: { env: "JAVA_HOME", dir: "bin" },
++};
++
++/**
++ * The runtime's home-env verdict, or `undefined` when that env var is unset or
++ * empty (fall back to PATH). A NON-EMPTY home decides ALONE: fwcd's launcher
++ * treats a set JAVA_HOME as authoritative and dies with "JAVA_HOME is set to an
++ * invalid directory" when `$JAVA_HOME/bin/java` is not executable, whatever
++ * `java` PATH would have found. So the verdict is "a non-empty regular file,
++ * with an exec bit on POSIX" at that one path (#3400).
++ */
++function runtimeHomeVerdict(runtime: string): boolean | undefined {
++	const home = ARCHIVE_RUNTIME_HOMES[runtime];
++	const root = home ? process.env[home.env] : undefined;
++	if (!home || !root) return undefined;
++	const windows = installerPlatform() === "win32";
++	const names = windows ? [`${runtime}.exe`, runtime] : [runtime];
++	return names.some((name) => {
++		try {
++			const stat = statSync(path.join(root, home.dir, name));
++			return (
++				stat.isFile() && stat.size > 0 && (windows || (stat.mode & 0o111) !== 0)
++			);
++		} catch {
++			return false;
++		}
++	});
++}
++
+@@ -5210,0 +5348,24 @@ async function installArchiveTool(
++	// #3400: an archive has no `--version`, so the pinned sha256 is the only
++	// integrity evidence there is — checked BEFORE a byte reaches the extractor,
++	// and failing closed on a URL with no pin. Its own ledger subject (not the
++	// extraction one): `recordDegradationOnce` keys on kind+subject, so sharing
++	// `${id}:${format}` would let an earlier extraction row swallow this one.
++	const pinned = spec.sha256?.[url];
++	const digest = createHash("sha256").update(archiveBuffer).digest("hex");
++	if (digest !== pinned) {
++		const reason = pinned === undefined ? "sha256-unpinned" : "sha256-mismatch";
++		recordDegradationOnce({
++			kind: "managed-tool-install",
++			subject: `${tool.id}:${archiveKind}:integrity`,
++			reason: `archive integrity ${reason}`,
++		});
++		installFailureReasons.set(
++			tool.id,
++			`archive integrity ${reason} (${archiveBuffer.length} bytes from ${url})`,
++		);
++		logSessionStart(
++			`archive-install ${tool.id}: refused ${reason} (got ${digest}, pinned ${pinned ?? "none"}) — keeping installed version`,
++		);
++		return undefined;
++	}
++
+@@ -5350 +5511 @@ async function installArchiveTool(
+-				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBuffer.length} bytes)`,
++				`archive-install ${tool.id}: installed tree bundle → ${extractDir} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+@@ -5379,0 +5541,24 @@ async function installArchiveTool(
++		// #3400: "present" is not "runnable" — an empty file, a directory, or a
++		// launcher whose exec bit did not stick (a zip entry extracted without it,
++		// or a chmod that silently did nothing, e.g. FAT) would otherwise be shimmed
++		// and recorded as a successful install. This reads the mode bits: it cannot
++		// see a noexec mount.
++		const launcherStat = await fs.stat(tmpResolvedInner).catch(() => undefined);
++		const launcherRunnable =
++			launcherStat?.isFile() === true &&
++			launcherStat.size > 0 &&
++			(isWindows || (launcherStat.mode & 0o111) !== 0);
++		if (!launcherRunnable) {
++			recordArchiveExtractionDegradation(
++				tool.id,
++				archiveKind,
++				"launcher-invalid",
++			);
++			logSessionStart(
++				`archive-install ${tool.id}: ${archiveKind} launcher is empty or not executable — keeping installed version`,
++			);
++			await fs
++				.rm(tmpExtractDir, { recursive: true, force: true })
++				.catch(() => {});
++			return undefined;
++		}
+@@ -5409 +5594 @@ async function installArchiveTool(
+-			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBuffer.length} bytes)`,
++			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBuffer.length} bytes, sha256 verified ${digest})`,
+@@ -6326,0 +6512,14 @@ export async function installTool(
++				// #3400: a launcher that needs a runtime (java) is `unavailable`
++				// without it, decided BEFORE the download, no spawn. A set home env
++				// var (JAVA_HOME) decides alone; otherwise a PATH walk.
++				const runtime = tool.archive.runtime;
++				const viaHome = runtime ? runtimeHomeVerdict(runtime) : undefined;
++				if (runtime && !(viaHome ?? (await isCommandAvailable(runtime)))) {
++					const reason =
++						viaHome === undefined
++							? `runtime ${runtime} not found on PATH`
++							: `runtime ${runtime} is not an executable file under ${ARCHIVE_RUNTIME_HOMES[runtime]?.env}`;
++					noteInstallAttempt(tool.id, "unavailable", reason);
++					logSessionStart(`auto-install ${tool.id}: ${reason}`);
++					return false;
++				}
+diff --git a/clients/lsp/server.ts b/clients/lsp/server.ts
+index faa76efb9..37421a9b2 100644
+--- a/clients/lsp/server.ts
++++ b/clients/lsp/server.ts
+@@ -3242,0 +3243,5 @@ export const KotlinServer: LSPServerInfo = {
++				// #3400: a managed fwcd install when no PATH candidate launches. The
++				// managed shim is consulted FIRST, but only exists once no PATH
++				// candidate answered, so a PATH `kotlin-lsp` wins on a box that had
++				// it before the managed install; one added afterwards does not.
++				managedToolId: "kotlin-language-server",

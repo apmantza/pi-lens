@@ -397,6 +397,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the wrapper's advisory scope runs a real `git diff` in a throwaway fixture repo and reads argv/env; an in-process double proves neither boundary",
 	},
+	// #3795: the one-fragment-per-PR check diffs a real fixture repo through
+	// real `git` (`git diff` plus `git ls-files --others`); that command
+	// boundary is the subject, and no in-process double reproduces git's own
+	// tracked-vs-untracked split.
+	"real-process-spawn:scripts/changelog-entries.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the PR-diff fragment count shells out to real `git` against a fixture repo; an in-process double cannot prove git's tracked-vs-untracked split",
+	},
 	// #2807 review F1/F4: the local CLI's exact argv and a shallow checkout's
 	// missing diff are the subjects; an in-process call cannot prove either.
 	"real-process-spawn:scripts/check-pr-body.test.ts": {
@@ -516,7 +525,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/release-qa.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI exit code are each unobservable in-process",
+			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI pack call site and exit code are each unobservable in-process",
 	},
 	// 2026-09-07 (#2613): the CLI's real exit code (2 vs. 4) and its
 	// GITHUB_OUTPUT write are the subject under test; header on the file

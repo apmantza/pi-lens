@@ -18,6 +18,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import yaml from "../../clients/deps/js-yaml.js";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import {
 	INCREMENTAL_FINGERPRINT_PATH,
@@ -53,7 +54,6 @@ import {
 	planResample,
 	sampleRangesDeterministically,
 } from "../../scripts/lib/stryker-diff.mjs";
-import yaml from "../../clients/deps/js-yaml.js";
 import { stripSource } from "../support/sweep-kit.js";
 import {
 	buildLineIndex,
@@ -69,10 +69,17 @@ const driver = readFileSync(
 	resolve(import.meta.dirname, "../../scripts/stryker-diff.mjs"),
 	"utf8",
 );
-const workflow = readFileSync(
-	resolve(import.meta.dirname, "../../.github/workflows/mutation.yml"),
-	"utf8",
-);
+// #3801: the `mutation (advisory)` job moved from mutation.yml into ci.yml (so
+// `needs:` can hold it behind the required checks); the cap is read from that
+// job, never from the first `timeout-minutes:` in the file.
+const mutationJob = (
+	yaml.load(
+		readFileSync(
+			resolve(import.meta.dirname, "../../.github/workflows/ci.yml"),
+			"utf8",
+		),
+	) as { jobs: Record<string, { "timeout-minutes"?: number }> }
+).jobs.mutation;
 
 // lane: mutation (advisory) -- dry run and mutant runs. That lane mutates the
 // driver in place (stryker.config.mjs `inPlace: true`) and every expression of
@@ -660,7 +667,7 @@ describe("stryker diff wall-clock budget", () => {
 		// timeout-minutes, so the driver never regained control and its
 		// "no mutants evaluated" message never printed. The driver's own bound
 		// must leave the job room to report it.
-		const cap = Number(/timeout-minutes:\s*(\d+)/.exec(workflow)?.[1]);
+		const cap = Number(mutationJob?.["timeout-minutes"]);
 
 		expect(cap).toBeGreaterThan(0);
 		expect(MUTATION_BUDGET_MINUTES).toBeLessThan(cap);
@@ -885,7 +892,12 @@ describe("mutation workflow incremental cache (#3810 item 2)", () => {
 		with?: { path?: string; key?: string; "restore-keys"?: string };
 	};
 	const steps = (
-		yaml.load(workflow) as { jobs: { mutation: { steps: Step[] } } }
+		yaml.load(
+			readFileSync(
+				resolve(import.meta.dirname, "../../.github/workflows/ci.yml"),
+				"utf8",
+			),
+		) as { jobs: { mutation: { steps: Step[] } } }
 	).jobs.mutation.steps;
 	const restoreIndex = steps.findIndex((step) =>
 		step.uses?.startsWith("actions/cache/restore@"),

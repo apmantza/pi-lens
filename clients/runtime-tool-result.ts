@@ -1,7 +1,10 @@
 import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
+import {
+	noteAuthoritativeContentAttachment,
+	queueAgentAdvisory,
+} from "./agent-nudge.js";
 import {
 	captureFileStats,
 	type CaptureOptions,
@@ -24,7 +27,6 @@ import {
 	type SearchReadLocation,
 } from "./search-read-registration.js";
 import type { CacheManager } from "./cache-manager.js";
-import type { GenerationHandle } from "./generation-guard.js";
 import { publishFormatQueued } from "./format-events-publish.js";
 import {
 	invalidateProjectIgnoreMatcherForPath,
@@ -842,7 +844,7 @@ async function dispatchPipelineAnalysis(args: {
 	 * touch and the caller's later admission of that cascade both drop
 	 * through it once the session is replaced.
 	 */
-	sessionGeneration: GenerationHandle;
+	sessionGeneration: LineageHandle;
 	/**
 	 * #3525: false when the agent's own edit passed a moved FileTime, so the
 	 * post-pipeline re-stamp of `filePath` must not credit those bytes.
@@ -938,6 +940,9 @@ async function dispatchPipelineAnalysis(args: {
 				scheduleWordIndexPersist(dispatchCwd, index, dbg);
 			},
 			sessionGeneration,
+			// #3830: a whole-package fixer's restore ends after this result, so its
+			// loss notice is queued for the session this dispatch belongs to.
+			onFixRunLoss: (notice) => queueAgentAdvisory(notice, sessionGeneration),
 			// #3559: the re-token's turn, read when it is drawn.
 			nextWriteIndex: () => ({
 				turnIndex: runtime.turnIndex,

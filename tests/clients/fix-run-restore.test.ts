@@ -16,6 +16,8 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+// pi's real per-file queue, the one its `edit`/`write` tools run under.
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import * as latencyLogger from "../../clients/latency-logger.js";
@@ -43,8 +45,13 @@ import {
 	beginFixRun,
 	expectationFromToolInput,
 	FIX_RUN_MAX_FILE_BYTES,
+	noteAgentMutation,
 	runWithFixRestore,
 } from "../../clients/fix-run-restore.js";
+import {
+	setHostFileMutationQueueLoader,
+	withHostFileMutationQueues,
+} from "../../clients/file-mutation-queue.js";
 import { getProcessSingleton } from "../../clients/process-singletons.js";
 import { beginScope } from "../../clients/session-scope.js";
 import {
@@ -54,6 +61,7 @@ import {
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { waitFor } from "./interleaving-kit.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const fake = vi.hoisted(() => ({
@@ -120,6 +128,29 @@ function gate() {
 	return { p, open };
 }
 
+/** The registry of runs whose restore has not ended (`fix-run-restore.ts`). */
+function activeFixRuns(): Set<unknown> {
+	return getProcessSingleton<{ active: Set<unknown> }>(
+		"fix-run-restore",
+		1,
+		() => ({ active: new Set() }),
+	).active;
+}
+
+/**
+ * The restore ends after the pipeline's result (#3830), so a test that reads
+ * what it wrote, or the notice it queued, waits for the registry to empty and
+ * then lets the notice's promise chain run.
+ */
+async function restoreSettled(): Promise<void> {
+	await waitFor(
+		() => activeFixRuns().size,
+		(size) => size === 0,
+		{ timeoutMs: 3000 },
+	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 const ORIGINAL = "pub fn f() { let x = 1; }\n";
 const TOOL_FIXED = "pub fn f() { let _x = 1; }\n";
 const KIND = "fix-run-agent-edit-overwritten";
@@ -132,6 +163,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 	let previousDebounce: string | undefined;
 
 	beforeEach(() => {
+		notices = [];
 		resetDegradationLedger();
 		_resetAgentNudgeForTests();
 		previousDebounce = process.env.PI_LENS_TOOL_RESULT_DEBOUNCE_MS;
@@ -202,6 +234,10 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		} as PipelineDeps;
 	}
 
+	/** The loss notices the pipeline handed to its host (the advisory queue's seam). */
+	let notices: string[] = [];
+	const noticeText = () => notices.join("\n");
+
 	function pipelineContext(filePath: string): PipelineContext {
 		return {
 			filePath,
@@ -209,7 +245,17 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			toolName: "write",
 			getFlag: () => false,
 			dbg: () => {},
+			onFixRunLoss: (notice) => notices.push(notice),
 		};
+	}
+
+	/** `runPipeline`, then the restore it detached from its result (#3830). */
+	async function runPipelineSettled(
+		...args: Parameters<typeof runPipeline>
+	): Promise<Awaited<ReturnType<typeof runPipeline>>> {
+		const result = await runPipeline(...args);
+		await restoreSettled();
+		return result;
 	}
 
 	/**
@@ -230,6 +276,8 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			input?: Record<string, unknown>;
 			/** Correlates `start` and `deliver`, as pi's tool_call/tool_result do. */
 			toolCallId?: string;
+			/** A write runs the immediate autofix: leave it on for a test about it. */
+			autofix?: boolean;
 		} = {},
 	) {
 		const runtime = new RuntimeCoordinator();
@@ -242,6 +290,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 				? { path: file, content: `${newText}\n` }
 				: { path: file, edits: [{ oldText: "let x = 1;", newText }] });
 		return {
+			runtime,
 			write: () => fs.writeFileSync(file, opts.bytes ?? `${newText}\n`),
 			/** pi's tool_call for this edit: the host tool is about to run. */
 			start: async () => {
@@ -274,7 +323,8 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 					},
 					// A write runs the immediate autofix, which would start a second
 					// fake clippy inside this delivery.
-					getFlag: (flag: string) => kind === "write" && flag === "no-autofix",
+					getFlag: (flag: string) =>
+						kind === "write" && !opts.autofix && flag === "no-autofix",
 					dbg: () => {},
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -307,7 +357,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -333,7 +383,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -356,7 +406,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -385,7 +435,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		await created$.p;
 		// The agent edits the tool's new file during the run. It was not in the
@@ -413,7 +463,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 101;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -438,7 +488,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		for (const file of [aRs, bRs]) {
 			const edit = agentEdit(file, "let AGENT = 1;");
@@ -463,7 +513,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		// The agent's host tool wrote a.rs; the fixer then wrote its stale-based
 		// content; only THEN does pi-lens's tool_result read the file.
@@ -472,12 +522,50 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		fs.writeFileSync(aRs, TOOL_FIXED);
 		await edit.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
-		expect(result.output).toContain("a.rs");
-		expect(result.output).toContain("re-apply");
+		expect(noticeText()).toContain("a.rs");
+		expect(noticeText()).toContain("re-apply");
 		expect(overwrittenCount()).toBe(1);
+	});
+
+	// Recurrence: AGENTS.md shape 53. The notice is delivered from a detached
+	// promise chain (#3830), so a host callback that throws would be an unhandled
+	// rejection, which kills the pi host. It is a debug line instead.
+	it("survives a loss-notice callback that throws", async () => {
+		const aRs = path.join(srcDir, "a.rs");
+		const started = gate();
+		const proceed = gate();
+		fake.clippy = async () => {
+			started.open();
+			await proceed.p;
+			return 0;
+		};
+		const dbg = vi.fn();
+		const run = runPipelineSettled(
+			{
+				...pipelineContext(mainRs),
+				dbg,
+				onFixRunLoss: () => {
+					throw new Error("advisory queue exploded");
+				},
+			},
+			pipelineDeps(),
+		);
+		await started.p;
+		const edit = agentEdit(aRs, "let AGENT = 1;");
+		edit.write();
+		fs.writeFileSync(aRs, TOOL_FIXED);
+		await edit.deliver();
+		proceed.open();
+		await run;
+
+		expect(dbg).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"fix-run loss notice failed: advisory queue exploded",
+			),
+		);
 	});
 
 	it("warns at agent_end when the deferred fix run overwrote an edit it could not restore", async () => {
@@ -592,7 +680,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const write = agentEdit(aRs, "let AGENT = 1;", "write");
 		write.write();
@@ -600,9 +688,9 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		fs.writeFileSync(aRs, TOOL_FIXED);
 		await write.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
-		expect(result.output).toContain("a.rs");
+		expect(noticeText()).toContain("a.rs");
 		expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
 	});
 
@@ -616,16 +704,16 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		// The tool fixed a.rs; the agent's edit of it then failed (nothing written).
 		fs.writeFileSync(aRs, TOOL_FIXED);
 		const failed = agentEdit(aRs, "let AGENT = 1;", "edit", true);
 		await failed.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
-		expect(result.output ?? "").not.toContain("re-apply");
+		expect(noticeText()).not.toContain("re-apply");
 		expect(overwrittenCount()).toBe(0);
 		expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
 	});
@@ -650,7 +738,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let a = 1;\n    let b = 2;", "edit", false, {
 			bytes: agentBytes,
@@ -658,10 +746,10 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		edit.write();
 		await edit.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe(agentBytes);
-		expect(result.output ?? "").not.toContain("re-apply");
+		expect(noticeText()).not.toContain("re-apply");
 		expect(overwrittenCount()).toBe(1);
 	});
 
@@ -676,7 +764,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let a = 1;\n    let b = 2;", "edit", false, {
 			bytes: "pub fn f() {\r\n    let a = 1;\r\n    let b = 2;\r\n}\r\n",
@@ -685,9 +773,9 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		fs.writeFileSync(aRs, "pub fn f() {\r\n    let _x = 1;\r\n}\r\n");
 		await edit.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
-		expect(result.output).toContain("a.rs");
+		expect(noticeText()).toContain("a.rs");
 	});
 
 	it("does not recreate a file the agent deleted after its edit", async () => {
@@ -700,7 +788,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -724,7 +812,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let AGENT = 1;");
 		edit.write();
@@ -747,7 +835,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const first = agentEdit(aRs, "let ONE = 1;");
 		first.write();
@@ -760,11 +848,18 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		await second.start();
 		second.write();
 		proceed.open();
-		const result = await run;
+		await run;
 		await second.deliver();
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe("let TWO = 1;\n");
-		expect(result.output).toContain("a.rs");
+		expect(noticeText()).toContain("a.rs");
+		// #3830: the skip is counted once, so an operator can see how often a
+		// newer edit won.
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "fix-run-restore-skipped-newer-edit",
+			)?.count,
+		).toBe(1);
 	});
 
 	it("restores after a second edit whose tool_result was delivered", async () => {
@@ -779,7 +874,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const second = agentEdit(aRs, "let TWO = 1;", "write", false, {
 			toolCallId: "delivered-2",
@@ -805,7 +900,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const first = agentEdit(aRs, "let ONE = 1;");
 		first.write();
@@ -818,10 +913,10 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		const verdict = await blocked.start();
 		expect(verdict).toMatchObject({ block: true });
 		proceed.open();
-		const result = await run;
+		await run;
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe("let ONE = 1;\n");
-		expect(result.output ?? "").not.toContain("cannot confirm");
+		expect(noticeText()).not.toContain("cannot confirm");
 	});
 
 	it("does not write over a newer edit that lands while the restore is reading", async () => {
@@ -835,7 +930,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "let ONE = 1;");
 		edit.write();
@@ -855,9 +950,9 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			});
 		try {
 			proceed.open();
-			const result = await run;
+			await run;
 			expect(fs.readFileSync(aRs, "utf-8")).toBe("let NEWER = 1;\n");
-			expect(result.output).toContain("a.rs");
+			expect(noticeText()).toContain("a.rs");
 		} finally {
 			spy.mockRestore();
 		}
@@ -874,7 +969,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		fs.writeFileSync(aRs, "let BRIDGED = 1;\n");
 		const runtime = new RuntimeCoordinator();
@@ -894,10 +989,10 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			},
 		);
 		proceed.open();
-		const result = await run;
+		await run;
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe("let BRIDGED = 1;\n");
-		expect(result.output).toContain("a.rs");
+		expect(noticeText()).toContain("a.rs");
 	});
 
 	it("reports a deletion-only edit the tool overwrote before the capture", async () => {
@@ -911,7 +1006,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		const edit = agentEdit(aRs, "", "edit", false, {
 			bytes: "pub fn f() {  }\n",
@@ -920,16 +1015,16 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		fs.writeFileSync(aRs, `${ORIGINAL}// tool\n`);
 		await edit.deliver();
 		proceed.open();
-		const result = await run;
+		await run;
 
-		expect(result.output).toContain("a.rs");
+		expect(noticeText()).toContain("a.rs");
 	});
 
 	it("records one cost row for the pre-run hash", async () => {
 		const spy = vi.spyOn(latencyLogger, "logLatency");
 		try {
 			fake.clippy = async () => 0;
-			await runPipeline(pipelineContext(mainRs), pipelineDeps());
+			await runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 			const rows = spy.mock.calls
 				.map(([row]) => row)
 				.filter((row) => row.phase === "fix_run_hash");
@@ -959,7 +1054,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		// An observed or third-party producer: no tool input, so the capture is
 		// taken unverified, and it still survives the fixer's later write.
@@ -998,7 +1093,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainRs), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 		await started.p;
 		// An edit whose result equals the pre-run bytes is not a change to protect.
 		const edit = agentEdit(aRs, "let x = 1;");
@@ -1021,7 +1116,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		await runPipeline(pipelineContext(mainRs), pipelineDeps());
+		await runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
 
 		expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
 		expect(overwrittenCount()).toBe(0);
@@ -1050,7 +1145,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			return 0;
 		};
 
-		const run = runPipeline(pipelineContext(mainDart), pipelineDeps());
+		const run = runPipelineSettled(pipelineContext(mainDart), pipelineDeps());
 		await started.p;
 		fs.writeFileSync(aDart, "int a() => AGENT;\n");
 		const runtime = new RuntimeCoordinator();
@@ -1077,10 +1172,13 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			formatBehaviorWarnings: () => "",
 		} as unknown as Parameters<typeof handleToolResult>[0]);
 		proceed.open();
-		await run;
+		const result = await run;
 
 		expect(fs.readFileSync(aDart, "utf-8")).toBe("int a() => AGENT;\n");
 		expect(overwrittenCount()).toBe(1);
+		// #3914 r1 F5: the restored sibling is the agent's change, not the fixer's
+		// (`tryDartFix` hands the diff its `agentEdited`, as `tryRustClippyFix` does).
+		expect(result.changedFiles ?? []).not.toContain(aDart);
 	});
 
 	// #3780 (#3741 survivors, pipeline.ts `tryDartFix`): the Dart run is pinned
@@ -1103,7 +1201,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 		const spy = vi.spyOn(latencyLogger, "logLatency");
 		try {
 			fake.dartFix = async () => 0;
-			await runPipeline(pipelineContext(mainDart), pipelineDeps());
+			await runPipelineSettled(pipelineContext(mainDart), pipelineDeps());
 
 			expect(fake.dartFixCalls).toEqual([
 				{ args: ["fix", "--apply"], cwd: pkgDir },
@@ -1126,12 +1224,533 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 	// initial values): an autofix phase that never ran (deferred to agent_end)
 	// lost nothing, so the tool result carries no loss notice.
 	it("appends no fix-run loss notice when the autofix phase was deferred", async () => {
-		const result = await runPipeline(
+		const result = await runPipelineSettled(
 			{ ...pipelineContext(mainRs), autofixMode: "deferred" },
 			pipelineDeps(),
 		);
 
 		expect(result.output).not.toContain("auto-fix run");
+		expect(noticeText()).toBe("");
+	});
+
+	/**
+	 * #3830: the restore runs under pi's queue for the sibling, the way the
+	 * agent's own `edit` does. pi's queue is the real one; the interleavings are
+	 * pinned by parking the restore's own filesystem calls.
+	 */
+	describe("the restore and pi's per-file queue (#3830)", () => {
+		beforeEach(() => {
+			setHostFileMutationQueueLoader(async () => ({ withFileMutationQueue }));
+		});
+		afterEach(() => {
+			setHostFileMutationQueueLoader(undefined);
+			vi.restoreAllMocks();
+		});
+
+		/** pi's edit tool shape: a read-modify-write inside the file's queue. */
+		function agentAppend(file: string, line: string) {
+			let wrote = false;
+			const done = withFileMutationQueue(file, async () => {
+				fs.writeFileSync(file, `${fs.readFileSync(file, "utf8")}${line}`);
+				wrote = true;
+			});
+			return { done, wrote: () => wrote };
+		}
+
+		/**
+		 * Resolves once every queue call made before it has registered: pi chains
+		 * registrations through one promise, so a call on another path registers
+		 * after them, and a call whose file is free has run by then.
+		 */
+		function afterQueueRegistration(): Promise<void> {
+			return withFileMutationQueue(
+				path.join(tmpDir, "registration-barrier"),
+				async () => {},
+			);
+		}
+
+		/** Parks the first atomic write of `target` between its staging write and its rename. */
+		function parkRenameOf(target: string) {
+			const parked = gate();
+			const resume = gate();
+			const realRename = fs.promises.rename;
+			let armed = true;
+			vi.spyOn(fs.promises, "rename").mockImplementation(
+				async (...args: Parameters<typeof realRename>) => {
+					if (armed && String(args[1]) === target) {
+						armed = false;
+						parked.open();
+						await resume.p;
+					}
+					return realRename(...args);
+				},
+			);
+			return { parked: parked.p, resume: resume.open };
+		}
+
+		/** Runs `after` once, right after the restore's first read of `target` returns. */
+		function afterFirstReadOf(target: string, after: () => void) {
+			const realRead = fs.promises.readFile;
+			let armed = true;
+			vi.spyOn(fs.promises, "readFile").mockImplementation(
+				async (...args: Parameters<typeof realRead>) => {
+					const bytes = await realRead(...args);
+					if (armed && String(args[0]) === target) {
+						armed = false;
+						after();
+					}
+					return bytes;
+				},
+			);
+		}
+
+		// Recurrence: defect 2 of #3741 (the stated residual). The restore's
+		// compare and write ran outside pi's queue, so an agent edit that landed
+		// between them was overwritten by the older capture, and the report said
+		// "restored".
+		it("an agent edit made while the restore writes survives it", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
+			await started.p;
+			const first = agentEdit(aRs, "let ONE = 1;");
+			first.write();
+			await first.deliver();
+			const park = parkRenameOf(aRs);
+			proceed.open();
+			await park.parked;
+			// The agent's next edit of a.rs, through pi's queue, while the restore
+			// is between its compare and its write.
+			const late = agentAppend(aRs, "// AGENT-LATE\n");
+			await afterQueueRegistration();
+			const enteredWhileRestoring = late.wrote();
+			park.resume();
+			await run;
+			await late.done;
+
+			expect(fs.readFileSync(aRs, "utf-8")).toBe(
+				"let ONE = 1;\n// AGENT-LATE\n",
+			);
+			expect(enteredWhileRestoring).toBe(false);
+		});
+
+		// Recurrence: window A of #3830. `finish()` deregistered the run before
+		// `settle` read any file, so an agent edit whose tool_call came after the
+		// tool exited was neither in flight nor captured, and the restore wrote
+		// the older capture over it while the report said "restored". This pins
+		// the NEWER edit only: an older edit the tool erased and a later capture
+		// replaced is window C, still open (#3914 r1 F3).
+		it("an edit whose tool_call comes after the tool exited is not overwritten", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const bRs = path.join(srcDir, "b.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				fs.writeFileSync(bRs, TOOL_FIXED);
+				return 0;
+			};
+			const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
+			await started.p;
+			for (const file of [aRs, bRs]) {
+				const edit = agentEdit(file, "let ONE = 1;");
+				edit.write();
+				await edit.deliver();
+			}
+			// The restore is busy with a.rs when the agent's next edit of b.rs runs
+			// from tool_call to tool_result.
+			const parked = gate();
+			const resume = gate();
+			const realRead = fs.promises.readFile;
+			let armed = true;
+			vi.spyOn(fs.promises, "readFile").mockImplementation(
+				async (...args: Parameters<typeof realRead>) => {
+					if (armed && String(args[0]) === aRs) {
+						armed = false;
+						parked.open();
+						await resume.p;
+					}
+					return realRead(...args);
+				},
+			);
+			proceed.open();
+			await parked.p;
+			const second = agentEdit(bRs, "let TWO = 1;", "write", false, {
+				toolCallId: "after-exit-2",
+			});
+			await second.start();
+			second.write();
+			await second.deliver();
+			resume.open();
+			await run;
+
+			expect(fs.readFileSync(bRs, "utf-8")).toBe("let TWO = 1;\n");
+			expect(fs.readFileSync(aRs, "utf-8")).toBe("let ONE = 1;\n");
+		});
+
+		// Recurrence: the #3844 review's forced-mtime probe. The re-stat compared
+		// mtime, size and inode, and an in-place edit keeps the inode, so a
+		// same-size edit inside one mtime tick passed it and was overwritten
+		// (`restored: 1`). The write compares bytes.
+		it("skips the write, and records it, when a same-size edit with the same mtime landed after the read", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			// One whole second: the mtime the tool leaves and the later edit sets are
+			// equal to the bit, as two writes inside one filesystem tick are.
+			const TICK = 1_700_000_000;
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				fs.utimesSync(aRs, TICK, TICK);
+				return 0;
+			};
+			const run = runPipelineSettled(pipelineContext(mainRs), pipelineDeps());
+			await started.p;
+			const first = agentEdit(aRs, "let ONE = 1;");
+			first.write();
+			await first.deliver();
+			const NEWER = "pub fn f() { let _y = 2; }\n";
+			expect(NEWER.length).toBe(TOOL_FIXED.length);
+			afterFirstReadOf(aRs, () => {
+				fs.writeFileSync(aRs, NEWER);
+				fs.utimesSync(aRs, TICK, TICK);
+			});
+			proceed.open();
+			await run;
+
+			expect(fs.readFileSync(aRs, "utf-8")).toBe(NEWER);
+			expect(noticeText()).toContain("a.rs");
+			const skipped = getDegradationSummary().find(
+				(group) => group.kind === "fix-run-restore-skipped-newer-edit",
+			);
+			expect(skipped?.count).toBe(1);
+			expect(skipped?.latestReasons[0]?.reason).toContain(
+				"restore left 1 file(s) alone",
+			);
+		});
+
+		// Recurrence: the lock-order cycle of #3830. The restore's `settle` ran
+		// inside the target F's hold. A queue entry for the sibling S taken there
+		// waits behind an LSP multi-path edit that holds S and waits for F (the
+		// edit's keys are sorted, and S sorts first): the edit waits for the
+		// pipeline, the pipeline for the restore, the restore for the edit. The
+		// restore takes S's entry only after the pipeline has left F.
+		it("does not deadlock with an LSP multi-path edit that holds the sibling and waits for the target", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const events: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: async <T>(
+					file: string,
+					fn: () => Promise<T>,
+				): Promise<T> =>
+					withFileMutationQueue(file, async () => {
+						events.push(`enter ${path.basename(file)}`);
+						try {
+							return await fn();
+						} finally {
+							events.push(`exit ${path.basename(file)}`);
+						}
+					}),
+			}));
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			let settled = false;
+			const run = runPipeline(pipelineContext(mainRs), pipelineDeps()).then(
+				(result) => {
+					settled = true;
+					return result;
+				},
+			);
+			await started.p;
+			const first = agentEdit(aRs, "let ONE = 1;");
+			first.write();
+			await first.deliver();
+			// a.rs sorts before main.rs: the edit holds a.rs and waits for main.rs,
+			// which the pipeline holds while clippy runs.
+			let lspRan = false;
+			const lsp = withHostFileMutationQueues([mainRs, aRs], async () => {
+				lspRan = true;
+			});
+			await waitFor(
+				() => events,
+				(seen) => seen.includes("enter a.rs"),
+			);
+			proceed.open();
+			await waitFor(
+				() => settled,
+				(done) => done,
+				{ timeoutMs: 3000 },
+			);
+			await lsp;
+			await run;
+			await restoreSettled();
+
+			expect(lspRan).toBe(true);
+			expect(fs.readFileSync(aRs, "utf-8")).toBe("let ONE = 1;\n");
+		});
+
+		// Recurrence: the same cycle at the second caller. The `agent_end` drain
+		// holds the target F while its fixer runs, and awaits the restore after
+		// releasing it. An await moved under that hold survived the whole suite
+		// (#3914 r1, F1).
+		it("does not deadlock the agent_end drain with an LSP multi-path edit that holds the sibling", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const events: string[] = [];
+			setHostFileMutationQueueLoader(async () => ({
+				withFileMutationQueue: async <T>(
+					file: string,
+					fn: () => Promise<T>,
+				): Promise<T> =>
+					withFileMutationQueue(file, async () => {
+						events.push(`enter ${path.basename(file)}`);
+						try {
+							return await fn();
+						} finally {
+							events.push(`exit ${path.basename(file)}`);
+						}
+					}),
+			}));
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = tmpDir;
+			runtime.deferMutation(mainRs, tmpDir, "edit", tmpDir, "autofix");
+			let settled = false;
+			const drain = handleAgentEnd({
+				ctxCwd: tmpDir,
+				getFlag: (name: string) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: vi.fn() } as never,
+				biomeClient: {} as never,
+				ruffClient: {} as never,
+				getFormatService: () =>
+					({
+						recordRead: () => {},
+						formatFile: async (filePath: string) => ({
+							filePath,
+							formatters: [],
+							anyChanged: false,
+							allSucceeded: true,
+						}),
+					}) as never,
+			}).then(() => {
+				settled = true;
+			});
+			await started.p;
+			const first = agentEdit(aRs, "let ONE = 1;");
+			first.write();
+			await first.deliver();
+			let lspRan = false;
+			const lsp = withHostFileMutationQueues([mainRs, aRs], async () => {
+				lspRan = true;
+			});
+			await waitFor(
+				() => events,
+				(seen) => seen.includes("enter a.rs"),
+			);
+			proceed.open();
+			await waitFor(
+				() => settled,
+				(done) => done,
+				{ timeoutMs: 3000 },
+			);
+			await lsp;
+			await drain;
+			await restoreSettled();
+
+			expect(lspRan).toBe(true);
+			expect(fs.readFileSync(aRs, "utf-8")).toBe("let ONE = 1;\n");
+		});
+
+		// Recurrence: #3914 r1, F2. The handler awaited the restore at its end, so
+		// F's own diagnostics and blockers waited for whoever held a sibling's
+		// queue entry (another pipeline's hold, an LSP edit): on master the restore
+		// was unqueued and F never waited on S.
+		it("settles F's result while a third party holds the sibling's queue entry", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			let settled = false;
+			const run = runPipeline(pipelineContext(mainRs), pipelineDeps()).then(
+				(result) => {
+					settled = true;
+					return result;
+				},
+			);
+			await started.p;
+			const first = agentEdit(aRs, "let ONE = 1;");
+			first.write();
+			await first.deliver();
+			const release = gate();
+			const entered = gate();
+			const holder = withFileMutationQueue(aRs, async () => {
+				entered.open();
+				await release.p;
+			});
+			await entered.p;
+			proceed.open();
+			await waitFor(
+				() => settled,
+				(done) => done,
+				{ timeoutMs: 3000 },
+			);
+			// The restore is still waiting for the sibling, and F is long done.
+			expect(fs.readFileSync(aRs, "utf-8")).toBe(TOOL_FIXED);
+			release.open();
+			await holder;
+			await run;
+			await restoreSettled();
+
+			expect(fs.readFileSync(aRs, "utf-8")).toBe("let ONE = 1;\n");
+		});
+
+		// Recurrence: #3830's loss notice moved off the tool result. The restore
+		// ends after the pipeline returned, so the notice reaches the agent through
+		// the host's advisory queue, wired in `handleToolResult`.
+		it("queues the loss notice as an advisory for the session that dispatched the write", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			const edit = agentEdit(mainRs, "let MAIN = 1;", "write", false, {
+				autofix: true,
+			});
+			edit.write();
+			const delivery = edit.deliver();
+			await started.p;
+			// The tool erased this edit before pi-lens captured it: a stale write.
+			const sibling = agentEdit(aRs, "let AGENT = 1;");
+			sibling.write();
+			fs.writeFileSync(aRs, TOOL_FIXED);
+			await sibling.deliver();
+			proceed.open();
+			await delivery;
+			await restoreSettled();
+
+			const nudge = consumeAgentNudge(undefined, edit.runtime.sessionScope);
+			expect(nudge?.messages[0]?.content).toContain("a.rs");
+		});
+
+		// Recurrence: #3914 r2, F6. `onFixRunLoss` closes over the `writeSession`
+		// the tool_result handler captured at entry (#3568), not the session
+		// current when the restore ends. A `/new` between the write's dispatch and
+		// the restore's notice retires the notice with its own session; it must
+		// never reach the successor (the `agent_end` twin is #3748).
+		it("does not hand the loss notice to the session that replaced the write's own (#3748)", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			const edit = agentEdit(mainRs, "let MAIN = 1;", "write", false, {
+				autofix: true,
+			});
+			edit.write();
+			const delivery = edit.deliver();
+			await started.p;
+			// The tool erased this edit before pi-lens captured it: a stale write.
+			const sibling = agentEdit(aRs, "let AGENT = 1;");
+			sibling.write();
+			fs.writeFileSync(aRs, TOOL_FIXED);
+			await sibling.deliver();
+			// Hold the sibling's queue entry so the restore cannot end before /new.
+			const release = gate();
+			const entered = gate();
+			const holder = withFileMutationQueue(aRs, async () => {
+				entered.open();
+				await release.p;
+			});
+			await entered.p;
+			proceed.open();
+			await delivery;
+			// `/new` lands after the write's handler returned, while its detached
+			// restore still waits for the sibling.
+			edit.runtime.resetForSession();
+			release.open();
+			await holder;
+			await restoreSettled();
+
+			expect(
+				consumeAgentNudge(undefined, edit.runtime.sessionScope),
+			).toBeUndefined();
+		});
+
+		// Recurrence: #3914 r2, C3. The loss notice was attached after dispatch, so
+		// a dispatch throw ended the pipeline before the detached restore could
+		// report the lost edit. Attaching it right after the fix run keeps the
+		// notice (the ledger row always landed; the agent was not told).
+		it("queues the loss notice when dispatch throws after a lossy fix", async () => {
+			const aRs = path.join(srcDir, "a.rs");
+			const started = gate();
+			const proceed = gate();
+			fake.clippy = async () => {
+				started.open();
+				await proceed.p;
+				fs.writeFileSync(aRs, TOOL_FIXED);
+				return 0;
+			};
+			const edit = agentEdit(mainRs, "let MAIN = 1;", "write", false, {
+				autofix: true,
+			});
+			edit.write();
+			const delivery = edit.deliver();
+			await started.p;
+			// The tool erased this edit before pi-lens captured it: a stale write.
+			const sibling = agentEdit(aRs, "let AGENT = 1;");
+			sibling.write();
+			fs.writeFileSync(aRs, TOOL_FIXED);
+			await sibling.deliver();
+			// The sibling's pipeline has settled; the next dispatch is the write's.
+			vi.mocked(dispatchLintWithResult).mockRejectedValueOnce(
+				new Error("dispatch exploded"),
+			);
+			proceed.open();
+			await delivery;
+			await restoreSettled();
+
+			const nudge = consumeAgentNudge(undefined, edit.runtime.sessionScope);
+			expect(nudge?.messages[0]?.content).toContain("a.rs");
+		});
 	});
 });
 
@@ -1157,22 +1776,18 @@ describe("what a native write or edit says it wrote (#3598)", () => {
 });
 
 describe("fix-run registry (#3598)", () => {
-	function activeRuns(): Set<unknown> {
-		return getProcessSingleton<{ active: Set<unknown> }>(
-			"fix-run-restore",
-			1,
-			() => ({ active: new Set() }),
-		).active;
-	}
+	const activeRuns = activeFixRuns;
 
 	it("unregisters the run when the fixer settles and when it throws", async () => {
 		const before = activeRuns().size;
-		await runWithFixRestore(
+		const { restoring } = await runWithFixRestore(
 			{ tool: "rust-clippy", extension: ".rs", candidates: [] },
 			async () => {
 				expect(activeRuns().size).toBe(before + 1);
 			},
+			async () => {},
 		);
+		await restoring;
 		expect(activeRuns().size).toBe(before);
 		await expect(
 			runWithFixRestore(
@@ -1180,9 +1795,221 @@ describe("fix-run registry (#3598)", () => {
 				async () => {
 					throw new Error("spawn exploded");
 				},
+				async () => {},
 			),
 		).rejects.toThrow("spawn exploded");
 		expect(activeRuns().size).toBe(before);
+	});
+
+	// Recurrence: window A of #3830. The run left `active` when the tool exited,
+	// before the restore read any file. It now stays registered until the
+	// restore ends, which waits for pi's queue entry of each sibling, and the
+	// restore still runs when the tool throws.
+	describe("while the restore waits for a sibling's queue entry (#3830)", () => {
+		let dir: string;
+		let cleanup: () => void;
+		let sibling: string;
+		beforeEach(() => {
+			resetDegradationLedger();
+			const env = setupTestEnvironment("pi-lens-fix-run-registry-");
+			dir = env.tmpDir;
+			cleanup = env.cleanup;
+			sibling = path.join(dir, "a.rs");
+			fs.writeFileSync(sibling, "fn a() {}\n");
+			setHostFileMutationQueueLoader(async () => ({ withFileMutationQueue }));
+		});
+		afterEach(() => {
+			setHostFileMutationQueueLoader(undefined);
+			cleanup();
+		});
+
+		/** An agent edit of the sibling, in pi's queue, that holds it until `open`. */
+		async function holdSibling() {
+			const open = gate();
+			const entered = gate();
+			const holder = withFileMutationQueue(sibling, async () => {
+				entered.open();
+				await open.p;
+			});
+			await entered.p;
+			return { release: open.open, holder };
+		}
+
+		/** The tool's run: an agent edit lands and is captured, then the tool writes. */
+		const toolRun = async () => {
+			fs.writeFileSync(sibling, "fn agent() {}\n");
+			noteAgentMutation(sibling);
+			fs.writeFileSync(sibling, "fn tool() {}\n");
+		};
+
+		it("stays registered until the restore has written, and then restores", async () => {
+			const before = activeRuns().size;
+			const held = await holdSibling();
+			const { restoring } = await runWithFixRestore(
+				{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+				toolRun,
+				async () => {},
+			);
+			expect(activeRuns().size).toBe(before + 1);
+			expect(fs.readFileSync(sibling, "utf-8")).toBe("fn tool() {}\n");
+			held.release();
+			await held.holder;
+			const report = await restoring;
+			expect(report.restored).toEqual([sibling]);
+			expect(fs.readFileSync(sibling, "utf-8")).toBe("fn agent() {}\n");
+			expect(activeRuns().size).toBe(before);
+		});
+
+		// Recurrence: #3914 r1 F4. The restore waits for the sibling's entry, and an
+		// edit that lands meanwhile replaces the capture. A capture read before the
+		// wait would write the older edit over the newer one.
+		it("reads the capture inside the queue entry, after any wait for it", async () => {
+			const held = await holdSibling();
+			const { restoring } = await runWithFixRestore(
+				{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+				toolRun,
+				async () => {},
+			);
+			fs.writeFileSync(sibling, "fn edit2() {}\n");
+			noteAgentMutation(sibling, { content: "fn edit2() {}\n" });
+			held.release();
+			await held.holder;
+			const report = await restoring;
+
+			expect(report.restored).toEqual([]);
+			expect(fs.readFileSync(sibling, "utf-8")).toBe("fn edit2() {}\n");
+		});
+
+		// Recurrence: #3914 r1 C2. The restore waits for pi's queue entries, so the
+		// wait is the number to watch; one row per run that had a capture.
+		it("records one latency row for the restore, with the time it waited for the queue", async () => {
+			let clock = 1_000;
+			const rows: Array<{
+				phase?: string;
+				metadata?: Record<string, unknown>;
+			}> = [];
+			const latency = vi
+				.spyOn(latencyLogger, "logLatency")
+				.mockImplementation((row) => {
+					rows.push(row as (typeof rows)[number]);
+				});
+			const held = await holdSibling();
+			const now = vi.spyOn(Date, "now").mockImplementation(() => {
+				clock += 7;
+				return clock;
+			});
+			try {
+				const { restoring } = await runWithFixRestore(
+					{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+					toolRun,
+					async () => {},
+				);
+				held.release();
+				await held.holder;
+				await restoring;
+			} finally {
+				now.mockRestore();
+				latency.mockRestore();
+			}
+			const restoreRows = rows.filter((row) => row.phase === "fix_run_restore");
+			expect(restoreRows).toHaveLength(1);
+			expect(restoreRows[0]?.metadata).toMatchObject({
+				tool: "rust-clippy",
+				files: 1,
+				restored: 1,
+				lost: 0,
+				// The capture states nothing to check it against, so it is named.
+				possiblyLost: 1,
+			});
+			expect(restoreRows[0]?.metadata?.queueWaitMs).toBeGreaterThan(0);
+		});
+
+		it("still restores when the tool throws", async () => {
+			const before = activeRuns().size;
+			const held = await holdSibling();
+			await expect(
+				runWithFixRestore(
+					{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+					async () => {
+						await toolRun();
+						throw new Error("spawn exploded");
+					},
+					async () => {},
+				),
+			).rejects.toThrow("spawn exploded");
+			expect(activeRuns().size).toBe(before + 1);
+			held.release();
+			await held.holder;
+			await waitFor(
+				() => fs.readFileSync(sibling, "utf-8"),
+				(bytes) => bytes === "fn agent() {}\n",
+				{ timeoutMs: 2000 },
+			);
+			await waitFor(
+				() => activeRuns().size,
+				(size) => size === before,
+				{ timeoutMs: 2000 },
+			);
+		});
+
+		// Recurrence: the pipeline scans the project right after the tool (the
+		// mtime-and-size diff of what the tool changed). A restore running during
+		// that scan stages `<file>.tmp-*` beside the sibling and renames it, and the
+		// scan can report the staging file, or the restored file, as the tool's.
+		it("starts the restore after the caller's scan of the tool's changes, not during it", async () => {
+			const realRead = fs.promises.readFile;
+			let siblingReads = 0;
+			const spy = vi
+				.spyOn(fs.promises, "readFile")
+				.mockImplementation(async (...args: Parameters<typeof realRead>) => {
+					if (String(args[0]) === sibling) siblingReads += 1;
+					return realRead(...args);
+				});
+			try {
+				let readsDuringScan = -1;
+				let seenDuringScan = "";
+				const { restoring } = await runWithFixRestore(
+					{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+					toolRun,
+					async () => {
+						const readsBefore = siblingReads;
+						// Let a restore that had started reach its queue registration; a queue
+						// call on another path then registers after the restore's own, and a
+						// free file's entry has run by then.
+						await new Promise<void>((resolve) => setImmediate(resolve));
+						await withFileMutationQueue(
+							path.join(dir, "registration-barrier"),
+							async () => {},
+						);
+						readsDuringScan = siblingReads - readsBefore;
+						seenDuringScan = fs.readFileSync(sibling, "utf-8");
+					},
+				);
+				await restoring;
+				expect(readsDuringScan).toBe(0);
+				expect(seenDuringScan).toBe("fn tool() {}\n");
+				expect(fs.readFileSync(sibling, "utf-8")).toBe("fn agent() {}\n");
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it("still restores when the caller's scan throws", async () => {
+			await expect(
+				runWithFixRestore(
+					{ tool: "rust-clippy", extension: ".rs", candidates: [sibling] },
+					toolRun,
+					async () => {
+						throw new Error("scan exploded");
+					},
+				),
+			).rejects.toThrow("scan exploded");
+			await waitFor(
+				() => fs.readFileSync(sibling, "utf-8"),
+				(bytes) => bytes === "fn agent() {}\n",
+				{ timeoutMs: 2000 },
+			);
+		});
 	});
 });
 
@@ -1210,7 +2037,7 @@ describe("fix-run hash scope (#3598)", () => {
 			extension: ".rs",
 			candidates: [rs, big, md],
 		});
-		const report = await run.finish();
+		const report = await run.finish().restore();
 
 		expect(report).toEqual({
 			restored: [],
@@ -1236,7 +2063,7 @@ describe("fix-run hash scope (#3598)", () => {
 			candidates: files,
 			byteBudget: 16,
 		});
-		await run.finish();
+		await run.finish().restore();
 
 		const cut = getDegradationSummary().find(
 			(group) => group.kind === "fix-run-scope-truncated",

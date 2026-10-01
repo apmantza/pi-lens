@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-09-30 on linux; 46 registry servers: 26 eligible, 0 vetoed, 4 inconclusive, 16 unavailable (0 not reached: budget)._
+_Last generated: 2026-10-01 on linux; 46 registry servers: 32 eligible, 0 vetoed, 2 inconclusive, 12 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -36,7 +36,7 @@ step log only, because it flaps.
 | server | role | declared | result | reason | respawn | coverage |
 |---|---|---|---|---|---|---|
 | ast-grep | auxiliary | unmeasured | eligible | · | ok | preserved |
-| bash | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
+| bash | primary | unmeasured | eligible | · | ok | preserved |
 | clojure | primary | unmeasured | eligible | · | ok | preserved |
 | cmake | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
 | cpp | primary | unmeasured | eligible | · | ok | preserved |
@@ -47,8 +47,8 @@ step log only, because it flaps.
 | deno | primary | unmeasured | eligible | · | ok | preserved |
 | docker | primary | unmeasured | eligible | · | ok | preserved |
 | elixir | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| expert | primary | unmeasured | unavailable | setup-failed | n/a | n/a |
-| fish | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
+| expert | primary | unmeasured | eligible | · | ok | preserved |
+| fish | primary | unmeasured | eligible | · | ok | preserved |
 | fsharp | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | gleam | primary | unmeasured | eligible | · | ok | preserved |
 | go | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
@@ -56,7 +56,7 @@ step log only, because it flaps.
 | html | primary | unmeasured | eligible | · | ok | preserved |
 | java | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | json | primary | unmeasured | eligible | · | ok | preserved |
-| kotlin | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
+| kotlin | primary | unmeasured | eligible | · | ok | preserved |
 | lua | primary | unmeasured | eligible | · | ok | preserved |
 | marksman | primary | transparent | eligible | · | ok | preserved |
 | nix | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
@@ -64,12 +64,12 @@ step log only, because it flaps.
 | omnisharp | primary | unmeasured | unavailable | no-fixture | n/a | n/a |
 | opengrep | auxiliary | transparent | eligible | · | ok | preserved |
 | php | primary | unmeasured | eligible | · | ok | preserved |
-| powershell | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
+| powershell | primary | unmeasured | eligible | · | ok | preserved |
 | prisma | primary | unmeasured | eligible | · | ok | preserved |
 | python | primary | transparent | eligible | · | ok | preserved |
 | python-jedi | primary | unmeasured | eligible | · | ok | preserved |
 | ruby | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| rust | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
+| rust | primary | unmeasured | eligible | · | ok | preserved |
 | svelte | primary | unmeasured | eligible | · | ok | preserved |
 | swift | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | terraform | primary | unmeasured | eligible | · | ok | preserved |
@@ -89,19 +89,25 @@ or `info` line is for a maintainer to act on in a follow-up; this run changed
 nothing.
 
 - **ast-grep** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **bash** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **clojure** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **cpp** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **css** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **cue** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **deno** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **docker** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **expert** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **fish** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **gleam** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **html** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **json** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **kotlin** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **lua** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **php** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **powershell** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **prisma** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **python-jedi** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **rust** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **svelte** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **terraform** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **tinymist** [proposal] declared unmeasured but eviction and respawn preserved its findings

@@ -32,6 +32,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { setupTestEnvironment } from "./test-utils.js";
@@ -2355,5 +2356,277 @@ describe("#2504 r7 F2/F3 — the advisory AND the telemetry both read the merged
 
 		// Drain turn N+1's own deferred loop so nothing outlives the test.
 		await settlesWithin(_awaitDeferredLspPullForTest(), 8_000);
+	});
+});
+
+/**
+ * #3676 — the quick fix credits its writes with the branch epoch of the report
+ * entries it acts on, so every entry has to carry the epoch its own build
+ * began on, through every producer and every merge.
+ *
+ * Recurrence (#3669 round-3 verify F-A): a report built on branch X survived a
+ * /tree (it moves neither `projectSeqEnd` nor any `fileSeq`) and the settle on
+ * branch Y credited its fix with Y's epoch. A report-level stamp would have
+ * moved the same defect into the merge: one carried-forward entry from X would
+ * age every entry Y's own turn published, for as long as the carry chain ran.
+ */
+describe("#3676 — each report entry carries the branch epoch its build began on", () => {
+	const epochOf = (
+		report: ActionableWarningsReport | undefined,
+		filePath: string,
+	): number | undefined =>
+		report?.files.find((entry) => entry.filePath === filePath)?.branchEpoch;
+
+	const persistedReport = (cacheManager: CacheManager) =>
+		cacheManager.readCache<ActionableWarningsReport>(
+			"actionable-warnings",
+			env.tmpDir,
+			Number.MAX_SAFE_INTEGER,
+		)?.data;
+
+	const scopeOf = (
+		report: ActionableWarningsReport | undefined,
+		filePath: string,
+	): string | undefined =>
+		report?.files.find((entry) => entry.filePath === filePath)?.branchScope;
+
+	function entry(
+		filePath: string,
+		branchEpoch: number | undefined,
+		extra: Partial<ActionableWarningsReport["files"][number]> = {},
+	): ActionableWarningsReport["files"][number] {
+		return {
+			filePath,
+			displayPath: path.basename(filePath),
+			generatedAt: new Date(2_000_000).toISOString(),
+			branchEpoch,
+			branchScope: "guard-A",
+			warnings: [
+				{
+					id: `aw:${path.basename(filePath)}`,
+					filePath,
+					displayPath: path.basename(filePath),
+					line: 1,
+					severity: "warning",
+					tool: "typescript",
+					message: "unused",
+					actions: [],
+					suppressed: false,
+					origin: "lsp",
+				},
+			],
+			...extra,
+		};
+	}
+
+	function report(
+		files: ActionableWarningsReport["files"],
+		over: Partial<ActionableWarningsReport> = {},
+	): ActionableWarningsReport {
+		return {
+			generatedAt: new Date(2_000_000).toISOString(),
+			scope: "turn_delta",
+			sessionId: "lens-test",
+			turnIndex: 1,
+			projectSeqEnd: 1,
+			deltaOnly: true,
+			includeLspCodeActions: true,
+			files,
+			summary: {
+				warnings: files.length,
+				unsuppressed: files.length,
+				byTier: { warning: files.length, info: 0, hint: 0 },
+				suppressed: 0,
+				files: files.length,
+				actions: 0,
+				autoFixEligible: 0,
+			},
+			...over,
+		};
+	}
+
+	it("stamps each turn's entries with the live epoch, and keeps a carried entry's own", async () => {
+		const { _awaitDeferredLspPullForTest } = await loadWarnings();
+		const { handleTurnEnd } = await import("../../clients/runtime-turn.js");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const [first, second] = makeSources(2);
+
+		// Turn N, on epoch 0: the cold pull defers and lands off the hook.
+		runtime.beginTurn();
+		cacheManager.addModifiedRange(
+			first,
+			{ start: 1, end: 1 },
+			false,
+			env.tmpDir,
+			runtime.telemetrySessionId,
+		);
+		armOneActionableWarning(path.basename(first));
+		// biome-ignore lint/suspicious/noExplicitAny: minimal turn_end deps
+		await handleTurnEnd(turnEndDeps(runtime, cacheManager) as any);
+		await settlesWithin(_awaitDeferredLspPullForTest(), 8_000);
+		expect(epochOf(persistedReport(cacheManager), first)).toBe(0);
+
+		// A /tree moves the branch; turn N+1 touches another file on epoch 1.
+		runtime.readGuard.retainBranch(new Set());
+		expect(runtime.readGuard.currentBranchEpoch).toBe(1);
+		runtime.beginTurn();
+		cacheManager.addModifiedRange(
+			second,
+			{ start: 1, end: 1 },
+			false,
+			env.tmpDir,
+			runtime.telemetrySessionId,
+		);
+		armOneActionableWarning(path.basename(second));
+		// biome-ignore lint/suspicious/noExplicitAny: minimal turn_end deps
+		await handleTurnEnd(turnEndDeps(runtime, cacheManager) as any);
+		await settlesWithin(_awaitDeferredLspPullForTest(), 8_000);
+
+		const persisted = persistedReport(cacheManager);
+		// The premise: turn N's entry was carried into turn N+1's report.
+		expect(persisted?.files.map((f) => f.filePath).sort()).toEqual(
+			[first, second].sort(),
+		);
+		// Its observation was made on epoch 0, whatever report now holds it.
+		expect(epochOf(persisted, first)).toBe(0);
+		expect(epochOf(persisted, second)).toBe(1);
+		// Both were built under the one guard: its lineage key rides every entry.
+		expect(scopeOf(persisted, first)).toBe(runtime.readGuard.lineageKey);
+		expect(scopeOf(persisted, second)).toBe(runtime.readGuard.lineageKey);
+	});
+
+	for (const [persistedEpoch, incomingEpoch] of [
+		[1, 0],
+		[0, 1],
+	] as const) {
+		it(`ages a deferred upsert into an entry to the older epoch (persisted ${persistedEpoch}, deferred ${incomingEpoch})`, async () => {
+			const { publishActionableWarningsReport } = await loadWarnings();
+			const cacheManager = new CacheManager(false);
+			const [file] = makeSources(1);
+			cacheManager.writeCache(
+				"actionable-warnings",
+				report([entry(file, persistedEpoch)]),
+				env.tmpDir,
+			);
+
+			publishActionableWarningsReport(
+				cacheManager,
+				env.tmpDir,
+				report([entry(file, incomingEpoch)]),
+				{ origin: "deferred" },
+			);
+
+			expect(epochOf(persistedReport(cacheManager), file)).toBe(0);
+		});
+	}
+
+	it("ages an in-band entry that absorbs a carried-forward one to the older epoch", async () => {
+		const { publishActionableWarningsReport } = await loadWarnings();
+		const cacheManager = new CacheManager(false);
+		const [file] = makeSources(1);
+		cacheManager.writeCache(
+			"actionable-warnings",
+			report([entry(file, 0, { origin: "deferred" })]),
+			env.tmpDir,
+		);
+
+		publishActionableWarningsReport(
+			cacheManager,
+			env.tmpDir,
+			report([entry(file, 1)], { turnIndex: 2 }),
+			{ origin: "in-band" },
+		);
+
+		expect(epochOf(persistedReport(cacheManager), file)).toBe(0);
+	});
+
+	// F12. Recurrence (#3912 review r1 F2): an entry that absorbed one built
+	// under another guard must not vouch for either: the epoch counts in one
+	// guard only.
+	for (const [label, persistedScope, incomingScope, merged] of [
+		["another guard's", "guard-B", "guard-A", undefined],
+		["the same guard's", "guard-A", "guard-A", "guard-A"],
+	] as const) {
+		it(`leaves an entry that absorbed ${label} entry ${merged ? "its scope" : "without a scope"}`, async () => {
+			const { publishActionableWarningsReport } = await loadWarnings();
+			const cacheManager = new CacheManager(false);
+			const [file] = makeSources(1);
+			cacheManager.writeCache(
+				"actionable-warnings",
+				report([entry(file, 0, { branchScope: persistedScope })]),
+				env.tmpDir,
+			);
+
+			publishActionableWarningsReport(
+				cacheManager,
+				env.tmpDir,
+				report([entry(file, 0, { branchScope: incomingScope })]),
+				{ origin: "deferred" },
+			);
+
+			expect(scopeOf(persistedReport(cacheManager), file)).toBe(merged);
+		});
+	}
+
+	// A cache file written before #3676 is still readable for ten minutes. Its
+	// entries carry no epoch (the real producer, given no epoch, writes exactly
+	// that shape), and an entry that absorbed one must not vouch for any branch.
+	it("leaves an entry that absorbed a pre-#3676 entry without an epoch", async () => {
+		const { buildActionableWarningsReport, publishActionableWarningsReport } =
+			await loadWarnings();
+		const cacheManager = new CacheManager(false);
+		const [file] = makeSources(1);
+		primedByFile.set(path.basename(file), [
+			{
+				severity: 2,
+				message: "v0 is declared but its value is never read.",
+				range: {
+					start: { line: 0, character: 13 },
+					end: { line: 0, character: 15 },
+				},
+				source: "ts",
+				code: 6133,
+			},
+		]);
+		codeActions = [
+			{
+				title: "Remove unused declaration for v0",
+				kind: "quickfix",
+				edit: { changes: {} },
+			},
+		];
+		const legacy = await buildActionableWarningsReport({
+			cwd: env.tmpDir,
+			sessionId: "lens-test",
+			turnIndex: 1,
+			files: [file],
+			modifiedRangesByFile: new Map([
+				[normalizeMapKey(file), [{ start: 1, end: 1 }]],
+			]),
+			dispatchWarnings: [],
+			includeLspCodeActions: true,
+		});
+		expect(legacy.files).toHaveLength(1);
+		expect(legacy.files[0]?.branchEpoch).toBeUndefined();
+		cacheManager.writeCache(
+			"actionable-warnings",
+			{
+				...legacy,
+				files: legacy.files.map((f) => ({ ...f, origin: "deferred" as const })),
+			},
+			env.tmpDir,
+		);
+
+		publishActionableWarningsReport(
+			cacheManager,
+			env.tmpDir,
+			report([entry(file, 1)], { turnIndex: 2 }),
+			{ origin: "in-band" },
+		);
+
+		const persisted = persistedReport(cacheManager);
+		expect(persisted?.files.map((f) => f.filePath)).toEqual([file]);
+		expect(epochOf(persisted, file)).toBeUndefined();
 	});
 });

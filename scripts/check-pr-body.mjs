@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import {
 	evaluateTlaCoverage,
 	loadCoverageMap,
+	matchGlob,
 	parseChangedFiles,
 } from "./lib/tla-coverage.mjs";
 import {
@@ -291,42 +292,98 @@ function isRuntimeObservabilityPath(name) {
 	);
 }
 
+// #3875: a decision branch on a session, lifecycle or delivery seam is not a
+// failure path, so the failure-path test above let `if (adopt) ... else reset`
+// pass with "No new failure path; no record added." and the S2/S3 fixes of
+// 2026-09-30 shipped with no record to read back (#3873). The seam is every
+// row of the checked-in `formal/coverage-map.json` (the lifecycle, timing and
+// identity files #3802 maintains), hub and `unmodelled` rows included: the
+// 50-PR calibration in the #3875 body flagged nothing extra for them.
+const DECISION_BRANCH_G = /\bif\s*\(|\belse\b|\bswitch\s*\(|\bcase\b/g;
+
+function loadSeamMap(cwd = REPO_ROOT) {
+	try {
+		return loadCoverageMap(cwd);
+	} catch {
+		// lintTlaCoverage already reports an unreadable map as an error.
+		return null;
+	}
+}
+
+function isSeamFile(file, map) {
+	return Object.keys(map?.map ?? {}).some((glob) => matchGlob(glob, file));
+}
+
+// `git diff --unified=0` hands the lexer a block comment's continuation lines
+// without the opener it needs, so prose such as `case` in a JSDoc body read as
+// a `case` label (#3774), and a backtick in one opened a template string that
+// hid the code after it. oxfmt keeps a continuation line's `*` first, so those
+// orphan lines are dropped. A whole block is dropped too, opener and closer
+// together: dropping the closer alone left an unterminated comment that hid
+// every later line (#3905 r1 F1; #3770's `catch` blocks). Text after a
+// closer, and a block that opens and closes on one line, stay for the blanker.
+// One call covers one hunk, so a block left open at a hunk's end cannot hide
+// the next hunk.
+function withoutCommentContinuations(text) {
+	let inBlock = false;
+	const kept = [];
+	for (const line of text.split("\n")) {
+		if (inBlock) {
+			const close = line.indexOf("*/");
+			if (close === -1) continue;
+			inBlock = false;
+			kept.push(line.slice(close + 2));
+		} else if (/^\s*\/\*/.test(line) && !line.includes("*/")) inBlock = true;
+		else if (/^\s*\*/.test(line)) {
+			const close = line.indexOf("*/");
+			if (close !== -1) kept.push(line.slice(close + 2));
+		} else kept.push(line);
+	}
+	return kept.join("\n");
+}
+
+function newHunk(file) {
+	return { file, lines: [], added: new Set(), text: "" };
+}
+
 // Records are harvested from each hunk's post-image (added plus context
 // lines), because a new call whose closing braces are unchanged context has
 // its literal split across both (#2915). Only a call whose span contains an
 // added line counts, so an untouched record in the context never passes as
 // new. The failure-path test still reads added lines alone.
-function runtimeObservabilityFromDiff(diff = "") {
+function runtimeObservabilityFromDiff(diff, seamMap) {
 	const records = new Set();
 	let runtime = false;
-	let added = "";
 	let currentRuntime = false;
+	let currentFile = "";
 	const hunks = [];
 	let hunk = null;
 	for (const line of String(diff).split(/\r?\n/)) {
 		const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
 		if (header) {
 			currentRuntime = [header[1], header[2]].some(isRuntimeObservabilityPath);
+			currentFile = header[2];
 			runtime ||= currentRuntime;
-			hunk = currentRuntime ? { lines: [], added: new Set() } : null;
+			hunk = currentRuntime ? newHunk(currentFile) : null;
 			if (hunk) hunks.push(hunk);
 			continue;
 		}
 		if (!currentRuntime) continue;
 		if (line.startsWith("@@")) {
-			hunk = { lines: [], added: new Set() };
+			hunk = newHunk(currentFile);
 			hunks.push(hunk);
 			continue;
 		}
 		if (/^\+(?!\+\+)/.test(line)) {
-			added += `${line.slice(1)}\n`;
+			hunk.text += `${line.slice(1)}\n`;
 			hunk.lines.push(line.slice(1));
 			hunk.added.add(hunk.lines.length);
 		} else if (line.startsWith(" ") || line === "") {
 			hunk.lines.push(line.slice(1));
 		}
 	}
-	if (!runtime) return { runtime: false, records, failurePath: false };
+	if (!runtime)
+		return { runtime: false, records, failurePath: false, seamBranches: [] };
 	for (const { lines, added: addedLines } of hunks) {
 		if (!addedLines.size) continue;
 		for (const {
@@ -342,14 +399,29 @@ function runtimeObservabilityFromDiff(diff = "") {
 			}
 		}
 	}
-	const blanked = blankCommentsAndStrings(added).text;
+	// Each hunk lexes alone: lexer state must not leak from one hunk's added
+	// lines into the next, and a file's seam count is the sum over its hunks.
+	let failurePath = false;
+	const branchesByFile = new Map();
+	for (const { file, text } of hunks) {
+		const blanked = blankCommentsAndStrings(
+			withoutCommentContinuations(text),
+		).text;
+		failurePath ||=
+			/\bcatch\b|\brecordDegradationOnce\b|\bthrow\b|\breturn\s+null\b/.test(
+				blanked,
+			);
+		const count = isSeamFile(file, seamMap)
+			? (blanked.match(DECISION_BRANCH_G)?.length ?? 0)
+			: 0;
+		if (count)
+			branchesByFile.set(file, (branchesByFile.get(file) ?? 0) + count);
+	}
 	return {
 		runtime: true,
 		records,
-		failurePath:
-			/\bcatch\b|\brecordDegradationOnce\b|\bthrow\b|\breturn\s+null\b/.test(
-				blanked,
-			),
+		failurePath,
+		seamBranches: [...branchesByFile].map(([file, count]) => ({ file, count })),
 	};
 }
 
@@ -771,19 +843,59 @@ export function splitMarkdownUnits(body = "") {
 	return units;
 }
 
-function bodyLinesOutsideFences(body) {
+// `commonMark` also treats `~~~` fences and 4-space or tab indented lines as
+// code; only the garble lint asks for it. The citation and test-reference
+// lints keep the backtick-only view, so a citation in a nested bullet is still
+// checked (#3795 verify r3).
+function bodyLinesOutsideFences(body, { commonMark = false } = {}) {
 	let fence;
+	const fenceMarker = commonMark ? /^\s*(`{3,}|~{3,})/ : /^\s*(```+)/;
 	return String(body ?? "")
 		.split(/\r?\n/)
 		.map((line) => {
-			const marker = line.match(/^\s*(```+)/)?.[1];
+			if (commonMark && !fence && /^(?: {4}|\t)/.test(line)) return "";
+			const marker = line.match(fenceMarker)?.[1];
 			if (marker) {
 				if (!fence) fence = marker;
-				else if (marker.length >= fence.length) fence = undefined;
+				else if (marker[0] === fence[0] && marker.length >= fence.length)
+					fence = undefined;
 				return "";
 			}
 			return fence ? "" : line;
 		});
+}
+
+// #3795: `gh pr edit --body "... `name` ..."` runs the backtick as a command
+// substitution, so the name disappears and the raw `npm run lint` output
+// (the `> pkg@version script` banner and the oxlint command line) lands in the
+// body outside any fence. Two worker bodies shipped this way and the
+// structural lint accepted both.
+function lintShellExpansionGarble(body) {
+	const errors = [];
+	for (const line of bodyLinesOutsideFences(body, { commonMark: true })) {
+		const text = line.trim();
+		if (!text) continue;
+		const emptySpan = /(`+)([\s\S]*?)\1/g;
+		for (const match of text.matchAll(emptySpan)) {
+			if (match[2].trim() === "") {
+				errors.push(
+					`PR body has an empty inline code span outside a fenced block ("${text}"); a shell-expanded name left nothing between the backticks -- restore the name or drop the backticks.`,
+				);
+				break;
+			}
+		}
+		const masked = codeSpanMasked(text).trim();
+		if (!masked) continue;
+		if (/^>\s*[^\s@]+@\d+\.\d+\.\d+\s+\S/.test(masked))
+			errors.push(
+				`PR body pastes an npm-script banner outside a fenced block ("${masked}"); wrap tool output in a \`\`\`text fence.`,
+			);
+		else if (/\boxlint\b/.test(masked) && /--deny-warnings/.test(masked))
+			errors.push(
+				`PR body pastes an oxlint command line outside a fenced block ("${masked}"); wrap tool output in a \`\`\`text fence.`,
+			);
+	}
+	return errors;
 }
 
 function pathLineReferences(text) {
@@ -1075,7 +1187,7 @@ function lintMasterClaims(body) {
 }
 
 function lintRuntimeObservability(lines, headings, diff, cwd = process.cwd()) {
-	const observation = runtimeObservabilityFromDiff(diff);
+	const observation = runtimeObservabilityFromDiff(diff, loadSeamMap());
 	if (!observation.runtime) return [];
 	const content = observabilitySectionContent(lines, headings);
 	if ([...observation.records].some((record) => content.includes(record)))
@@ -1115,18 +1227,68 @@ function lintRuntimeObservability(lines, headings, diff, cwd = process.cwd()) {
 			// Fall through to the existing strict error.
 		}
 	}
-	if (
-		!observation.failurePath &&
-		content.includes("No new failure path; no record added.")
-	)
-		return [];
 	if (observation.failurePath)
 		return [
 			`PR body Observability must name a record literal from the runtime diff${observation.records.size ? ` (${[...observation.records].join(", ")})` : ""}; "No new failure path; no record added." is not valid when the added lines contain a failure path.`,
 		];
+	// #3875: `none: <reason>` is valid for any diff without a failure path; the
+	// exact no-record sentence is valid only while the diff adds no decision
+	// branch on a seam either.
+	if (
+		hasNoRecordReason(
+			content,
+			observation.seamBranches.map(({ file }) => file),
+		)
+	)
+		return [];
+	if (observation.seamBranches.length)
+		return [
+			`PR body Observability must name the record of each new decision branch (${observation.seamBranches.map(({ file, count }) => `${file}: ${count}`).join(", ")}) as a record literal from the diff or \`covered by existing record <kind> at <file>:<line>\`, or write \`none: <reason>\` naming each file above by basename; "No new failure path; no record added." is not valid when the added lines contain a decision branch on a session, lifecycle or delivery seam.`,
+		];
+	if (content.includes("No new failure path; no record added.")) return [];
 	return [
 		'PR body Observability must name a record literal present in the runtime diff, or state exactly "No new failure path; no record added.".',
 	];
+}
+
+// A reason made only of these words says nothing (`none: not applicable
+// here`). Anchored at both ends: an honest reason that merely starts or ends
+// with one (`none of ...`, `... is not applicable here`) stays valid.
+const PLACEHOLDER_REASON =
+	/^(?:(?:n\/?a|none|not|applicable|tbd|todo|here|later|ok)\b[\s.,;:!-]*)+$/i;
+
+// `none: <reason>` lines: each reason is at least three words, not the
+// template's `<reason>`, not placeholder words only. Together they must name
+// every flagged file by basename, so the line answers each file, not the PR
+// once (#3905 r1 F2). Records are deliberately not bound to files.
+function hasNoRecordReason(content, files) {
+	const reasons = [];
+	for (const line of content.split("\n")) {
+		const reason = /^\s*(?:[-*+]\s+)?\**none:\**\s*(\S.*)$/i
+			.exec(line)?.[1]
+			?.trim();
+		if (
+			reason &&
+			reason.split(/\s+/).length >= 3 &&
+			!reason.includes("<reason>") &&
+			!PLACEHOLDER_REASON.test(reason)
+		)
+			reasons.push(reason);
+	}
+	// R-a (#3905 r2): a plain substring let `lsp-server.ts` satisfy a flagged
+	// `clients/lsp/server.ts`. Match the basename as its own path component:
+	// the character before it must not continue it (`[\w.-]`) and the one
+	// after it must not extend it (`\w`), so `lsp-server.ts`,
+	// `tree-sitter-client.ts` and `rootindex.ts` do not satisfy `server.ts`,
+	// `client.ts` and `index.ts`.
+	const text = reasons.join("\n");
+	return (
+		reasons.length > 0 &&
+		files.every((file) => {
+			const base = basename(file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+			return new RegExp(`(?<![\\w.-])${base}(?!\\w)`).test(text);
+		})
+	);
 }
 
 /** Detect the high-confidence shape produced when a worker flattens a body. */
@@ -1402,6 +1564,7 @@ export function lintPrBody(body = "", options = {}) {
 	errors.push(...lintCodeCitations(body, options));
 	errors.push(...lintTestReferences(body, options));
 	errors.push(...lintMasterClaims(body));
+	errors.push(...lintShellExpansionGarble(body));
 	return { valid: errors.length === 0, errors };
 }
 

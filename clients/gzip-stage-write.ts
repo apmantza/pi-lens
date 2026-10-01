@@ -22,8 +22,8 @@ export interface GzipStageWriteMetrics {
 }
 
 export interface GzipStageWriteOptions {
-	/** Runs on the worker thread after JSON serialization, never on the caller. */
-	semanticFingerprint?: (json: string) => string;
+	/** Runs on the worker thread over the serialized body, never on the caller. */
+	semanticFingerprint?: (body: string | Uint8Array) => string;
 	/** Return before gzip/write when the derived digest equals one of these. */
 	skipIfFingerprints?: readonly string[];
 }
@@ -34,6 +34,13 @@ export interface GzipStageWorkerRequest {
 	id: number;
 	generation: number;
 	stagePath: string;
+	/**
+	 * Either an object the worker serializes itself (the structured clone of the
+	 * whole graph rides the message), or already-serialized JSON as UTF-8 bytes
+	 * whose `ArrayBuffer` the caller lists in `postMessage`'s transfer list, so
+	 * the body crosses the thread boundary zero-copy (#3789). The project
+	 * snapshot uses the bytes form; the review graph still sends objects.
+	 */
 	data: unknown;
 	testDelayMs?: number;
 }
@@ -56,7 +63,8 @@ export interface GzipStageWorkerResult {
 
 /**
  * Shared worker-thread body-persist core (#958, single source of truth #883):
- * `JSON.stringify` → chunked `createGzip` pipeline → a per-call staging file
+ * `JSON.stringify` (or pre-serialized bytes, #3789) → chunked `createGzip`
+ * pipeline → a per-call staging file
  * from `atomic-write.ts`'s {@link stagePathFor} → atomic rename to
  * `stagePath`, returning byte/timing metrics. Both
  * `clients/review-graph/persist-worker.ts` and
@@ -103,10 +111,11 @@ export async function writeGzipStageFile(
 			await new Promise((resolve) => setTimeout(resolve, testDelayMs));
 		}
 		const serializeStarted = performance.now();
-		const json = JSON.stringify(data);
+		// Pre-serialized bytes cost the worker no stringify and no copy (#3789).
+		const body = data instanceof Uint8Array ? data : JSON.stringify(data);
 		const serializeMs = performance.now() - serializeStarted;
-		const rawBytes = Buffer.byteLength(json);
-		const semanticFingerprint = options?.semanticFingerprint?.(json);
+		const rawBytes = Buffer.byteLength(body);
+		const semanticFingerprint = options?.semanticFingerprint?.(body);
 		if (
 			semanticFingerprint !== undefined &&
 			options?.skipIfFingerprints?.includes(semanticFingerprint)
@@ -125,9 +134,11 @@ export async function writeGzipStageFile(
 		const writeStarted = performance.now();
 		await fs.promises.mkdir(path.dirname(stagePath), { recursive: true });
 		const chunks = function* () {
-			const chunkChars = 256 * 1024;
-			for (let offset = 0; offset < json.length; offset += chunkChars) {
-				yield json.slice(offset, offset + chunkChars);
+			const chunkSize = 256 * 1024;
+			for (let offset = 0; offset < body.length; offset += chunkSize) {
+				yield typeof body === "string"
+					? body.slice(offset, offset + chunkSize)
+					: body.subarray(offset, offset + chunkSize);
 			}
 		};
 		await pipeline(
@@ -167,7 +178,7 @@ export function serveGzipStageWorker<
 >(
 	buildBaseResult: (request: Req) => Base,
 	options?: {
-		semanticFingerprint?: (request: Req, json: string) => string;
+		semanticFingerprint?: (request: Req, body: string | Uint8Array) => string;
 		skipIfFingerprints?: (request: Req) => readonly string[] | undefined;
 	},
 ): void {
@@ -188,7 +199,7 @@ export function serveGzipStageWorker<
 					request.testDelayMs,
 					{
 						semanticFingerprint: fingerprint
-							? (json) => fingerprint(request, json)
+							? (body) => fingerprint(request, body)
 							: undefined,
 						skipIfFingerprints: options?.skipIfFingerprints?.(request),
 					},

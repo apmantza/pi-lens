@@ -95,7 +95,12 @@ export type SuccessfulClassifierRun = ClassifierDecision & {
 	jobName: string;
 	supersededByCommentId?: number;
 };
-export type SkippedClassifierRun = { skipped: true; reason: string };
+export type SkippedClassifierRun = {
+	skipped: true;
+	reason: string;
+	advisoryOnly?: true;
+};
+export declare const ADVISORY_ONLY_MARKER: string;
 export declare function runClassifier(
 	args: RunClassifierArgs & { skipMissingJob?: false },
 ): Promise<SuccessfulClassifierRun>;

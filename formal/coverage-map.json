@@ -135,7 +135,9 @@
     "clients/lsp/diagnostic-binding.ts": [
       "format-drain"
     ],
-    "clients/fix-run-restore.ts": "unmodelled",
+    "clients/fix-run-restore.ts": [
+      "dispatch-pipeline"
+    ],
     "clients/lsp/edits.ts": [
       "lsp-rename-edit"
     ],
@@ -307,7 +309,7 @@
     "clients/session-lifecycle.ts": "Primary/secondary classification. session-lifecycle's SecStart assumes a correct classifier; the #3662 gap classification (#3668, successor-pending marker, 60 s TTL) is not modelled.",
     "clients/dispatch/fact-store.ts": "review-graph-signatures' Extract is atomic, which assumes the #3746 private-store property; the pre-#3746 shared store is below its abstraction.",
     "clients/tree-sitter-client.ts": "Wasm trap budget, per-input trap entries with first-trap identity, decay on success, batch-compile keys (#3673, #3706, #3731). Modelled by tree-sitter-trap-budget (#3829).",
-    "clients/fix-run-restore.ts": "Whole-package fixer vs concurrent agent sibling edits, capture and compare-then-write restore outside pi's queue (#3741). Proposed: extend dispatch-pipeline.",
+    "clients/fix-run-restore.ts": "Whole-package fixer vs concurrent agent sibling edits: capture, the restore under pi's queue for the sibling after the target's hold is released, and the lock order against multi-path LSP edits (#3741, #3830). Modelled by dispatch-pipeline `SiblingRestore.tla`.",
     "clients/lsp/edits.ts": "applyWorkspaceEdit under every path's queue (#3610) and the rename staleness capture (#3736, #3747, #3734). Modelled by lsp-rename-edit (#3826).",
     "tools/lsp-navigation.ts": "See clients/lsp/edits.ts.",
     "clients/lsp-mutation.ts": "LSP fallback bridge producer; carries no lineage and stays fail-open (#3763 residual).",

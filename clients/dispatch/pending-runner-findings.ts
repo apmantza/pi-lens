@@ -62,6 +62,28 @@ export function deferRunnerFindings(
 			tracked.settled = true;
 		},
 	);
+	track(tracked);
+}
+
+/**
+ * #3813: hand a drained, settled result back for the next turn end because the
+ * turn-end cap cut the part that carried it. It re-enters through the same
+ * bounded store as a fresh deferral (same cap, same eviction record) and the
+ * next drain re-gates it for freshness against its original `markedAtMs`.
+ */
+export function requeueRunnerFindings(
+	entry: PendingRunnerFindings & { result: RunnerResult },
+): void {
+	const { result, ...owned } = entry;
+	track({
+		...owned,
+		promise: Promise.resolve(result),
+		settled: true,
+		result,
+	});
+}
+
+function track(tracked: PendingRunnerPromise): void {
 	pending.push(tracked);
 	if (pending.length > MAX_PENDING_RUNNER_FINDINGS) {
 		const evicted = pending.shift();

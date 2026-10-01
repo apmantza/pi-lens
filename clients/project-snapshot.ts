@@ -1006,6 +1006,8 @@ interface PendingSnapshotBody {
 	generation: number;
 	durablePersist?: SnapshotPersistRecord;
 	dedupeFingerprints: string[];
+	/** Main-thread serialize time of the worker dispatch (#3789); the worker's own is 0. */
+	serializeMs?: number;
 }
 
 interface SnapshotPersistRecord {
@@ -1539,6 +1541,25 @@ function promoteSnapshotBody(
 	return false;
 }
 
+/**
+ * The one place a pending snapshot becomes its stored JSON, as UTF-8 bytes
+ * (#3789). The worker path transfers these bytes instead of structured-cloning
+ * the object graph into the worker heap (the clone's several-hundred-MB RSS
+ * jump); the synchronous writer gzips the same bytes. A fresh `TextEncoder`
+ * buffer is never one of Node's pooled `Buffer` slabs, so it is always
+ * transferable.
+ */
+function serializeSnapshotBody(snapshot: ProjectSnapshot): {
+	bytes: Uint8Array<ArrayBuffer>;
+	serializeMs: number;
+} {
+	const started = performance.now();
+	const bytes = new TextEncoder().encode(
+		JSON.stringify(storedSnapshot(snapshot)),
+	);
+	return { bytes, serializeMs: performance.now() - started };
+}
+
 function writeSnapshotBodyOnMainThread(
 	pending: PendingSnapshotBody,
 	reason?: string,
@@ -1567,12 +1588,10 @@ function writeSnapshotBodyOnMainThread(
 		});
 	}
 	try {
-		const serializeStarted = performance.now();
-		const json = JSON.stringify(storedSnapshot(pending.snapshot));
-		const serializeMs = performance.now() - serializeStarted;
-		const rawBytes = Buffer.byteLength(json);
+		const { bytes, serializeMs } = serializeSnapshotBody(pending.snapshot);
+		const rawBytes = bytes.byteLength;
 		const fingerprint = fingerprintProjectSnapshotJson(
-			json,
+			bytes,
 			pending.snapshot.generatedAt,
 		);
 		if (pending.dedupeFingerprints.includes(fingerprint)) {
@@ -1609,7 +1628,7 @@ function writeSnapshotBodyOnMainThread(
 			// same contract as deletion-before-dispatch.
 		}
 		const writeStarted = performance.now();
-		const gzip = gzipSync(json);
+		const gzip = gzipSync(bytes);
 		fs.mkdirSync(path.dirname(pending.gzPath), { recursive: true });
 		const promoted = promoteSnapshotBody(
 			pending,
@@ -1757,7 +1776,7 @@ function handleSnapshotWorkerResult(
 		logSnapshotPersistSuccess(pending, result.semanticFingerprint, {
 			rawBytes: result.rawBytes,
 			gzBytes: result.gzBytes,
-			serializeMs: result.serializeMs,
+			serializeMs: pending.serializeMs ?? result.serializeMs,
 			writeMs: result.writeMs,
 			offloaded: true,
 		});
@@ -1789,13 +1808,32 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 		dispatchMainThreadWriteThroughSeam(pending, "persist worker unavailable");
 		return;
 	}
+	let serialized: ReturnType<typeof serializeSnapshotBody>;
+	try {
+		serialized = serializeSnapshotBody(pending.snapshot);
+	} catch (err) {
+		// The worker would have failed on the same stringify. Nothing was handed
+		// off, so there is no stage to clean and no fallback worth a second
+		// attempt: record the failure and free the active slot for the queue.
+		const message = err instanceof Error ? err.message : String(err);
+		incrementDegradationCount({
+			kind: "project-snapshot-serialize-failed",
+			subject: pending.gzPath,
+			reason: `snapshot body serialization failed: ${message}`,
+		});
+		recordSnapshotPersistFailure(pending, message);
+		completeSnapshotPersist(pending);
+		return;
+	}
+	pending.serializeMs = serialized.serializeMs;
 	const id = ++_snapshotWorkerRequestId;
 	_snapshotWorkerRequests.set(id, pending);
 	const request: ProjectSnapshotPersistWorkerRequest = {
 		id,
 		generation: pending.generation,
 		stagePath: pending.stagePath,
-		data: storedSnapshot(pending.snapshot),
+		data: serialized.bytes,
+		generatedAt: pending.snapshot.generatedAt,
 		priorFingerprints: pending.dedupeFingerprints,
 		testDelayMs:
 			process.env.NODE_ENV === "test"
@@ -1804,7 +1842,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 				: undefined,
 	};
 	try {
-		worker.postMessage(request);
+		worker.postMessage(request, [serialized.bytes.buffer]);
 	} catch (err) {
 		_snapshotWorkerRequests.delete(id);
 		dispatchMainThreadWriteThroughSeam(

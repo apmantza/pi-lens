@@ -27,7 +27,14 @@
  * it is the only source of concurrency, and TLC's own threading never
  * competes with it for the same cores.
  *
- * Usage: node scripts/check-tla-models.mjs [--jar <tla2tools.jar>] [--concurrency <n>]
+ * `--shard i/N` (#3918) runs only the configs at sorted positions p with
+ * p % N === i - 1, so N CI jobs together run every config exactly once
+ * (ci.yml `tla-shards`; `tests/config/tla-models-shard-workflow.test.ts`
+ * pins the partition). Round-robin over the sorted list, not contiguous
+ * blocks: the slow models cluster in a few `formal/` directories, and
+ * stepping through the list spreads each directory across the shards.
+ *
+ * Usage: node scripts/check-tla-models.mjs [--jar <tla2tools.jar>] [--concurrency <n>] [--shard <i/N>]
  * Without --jar, the pinned release is downloaded to .cache/ and verified.
  * Without --concurrency, the pool is sized to the host's CPU count.
  */
@@ -72,6 +79,10 @@ export function parseModelHeader(text) {
 export function classifyTlcOutput(output) {
 	const violated = /Error: Invariant (\w+) is violated/.exec(output);
 	if (violated) return { status: "violated", invariant: violated[1] };
+	// A config with `CHECK_DEADLOCK TRUE` (a lock-order model, #3830) reports a
+	// cycle as `Error: Deadlock reached.`; a config expects it as `violated Deadlock`.
+	if (/^Error: Deadlock reached\./m.test(output))
+		return { status: "violated", invariant: "Deadlock" };
 	if (/Model checking completed\. No error has been found\./.test(output))
 		return { status: "pass" };
 	const errorLine = output
@@ -106,6 +117,49 @@ export function listModelConfigs(root) {
 		}
 	}
 	return configs.sort();
+}
+
+/**
+ * Validates a `--shard i/N` value: integers with 1 <= i <= N. A malformed
+ * value must throw here, never fall back to "all configs": a sharded CI job
+ * that silently ran everything would not fail, it would just stop being a
+ * shard.
+ */
+export function parseShardArg(raw) {
+	const match = /^(\d+)\/(\d+)$/.exec(String(raw));
+	const index = match ? Number(match[1]) : 0;
+	const total = match ? Number(match[2]) : 0;
+	if (index < 1 || index > total)
+		throw new Error(
+			`--shard must be i/N with 1 <= i <= N, got ${JSON.stringify(raw)}`,
+		);
+	return { index, total };
+}
+
+/** Shard `index` (1-based) of `total`: round-robin over the given order. */
+export function selectShard(configs, { index, total }) {
+	return configs.filter((_, position) => position % total === index - 1);
+}
+
+/**
+ * The configs one run covers: every `.cfg` under `formal/`, narrowed by `--shard`
+ * when present. Throws on an empty selection so a shard with nothing to run
+ * (more shards than configs) is loud, not a green no-op.
+ */
+export function selectConfigs(argv, root) {
+	const shardIndex = argv.indexOf("--shard");
+	const all = listModelConfigs(root);
+	const configs =
+		shardIndex === -1
+			? all
+			: selectShard(all, parseShardArg(argv[shardIndex + 1]));
+	if (configs.length === 0)
+		throw new Error(
+			shardIndex === -1
+				? "no formal/*/*.cfg found"
+				: `--shard ${argv[shardIndex + 1]} selects no formal/*/*.cfg`,
+		);
+	return configs;
 }
 
 /**
@@ -264,8 +318,8 @@ async function main() {
 		root,
 	);
 	const concurrencyIndex = argv.indexOf("--concurrency");
-	const configs = listModelConfigs(root);
-	if (configs.length === 0) throw new Error("no formal/*/*.cfg found");
+	const shardIndex = argv.indexOf("--shard");
+	const configs = selectConfigs(argv, root);
 
 	const availableParallelism =
 		typeof os.availableParallelism === "function"
@@ -311,7 +365,7 @@ async function main() {
 		);
 	console.log("");
 	console.log(
-		`${configs.length} configs, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`,
+		`${configs.length} configs${shardIndex === -1 ? "" : ` (shard ${argv[shardIndex + 1]})`}, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`,
 	);
 	console.log("Per-directory TLC time (summed, not wall time):");
 	for (const line of dirLines) console.log(line);

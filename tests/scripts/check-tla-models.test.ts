@@ -11,8 +11,11 @@ import {
 	listModelConfigs,
 	parseConcurrencyArg,
 	parseModelHeader,
+	parseShardArg,
 	resolveJarPath,
 	runPool,
+	selectConfigs,
+	selectShard,
 	verdictMatches,
 } from "../../scripts/check-tla-models.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
@@ -44,6 +47,13 @@ Model checking completed. No error has been found.
 178 states generated, 74 distinct states found, 0 states left on queue.`;
 const TLC_VIOLATED = `TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
 Error: Invariant MutualExclusion is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>`;
+// Trimmed from a real TLC 2.19 run of formal/dispatch-pipeline
+// SiblingRestoreQueuedInHold (CHECK_DEADLOCK TRUE).
+const TLC_DEADLOCK = `TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Finished computing initial states: 1 distinct state generated at 2026-10-01 06:52:13.
+Error: Deadlock reached.
 Error: The behavior up to this point is:
 State 1: <Initial predicate>`;
 const TLC_PARSE_ERROR = `TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
@@ -99,6 +109,23 @@ describe("classifyTlcOutput (#3447)", () => {
 		expect(classifyTlcOutput(TLC_VIOLATED)).toEqual({
 			status: "violated",
 			invariant: "MutualExclusion",
+		});
+	});
+
+	// Recurrence: #3830. A lock-order model checks for deadlock; without this the
+	// config's `violated Deadlock` expectation would read as a tool error.
+	it("reads a deadlock as a violation named Deadlock", () => {
+		expect(classifyTlcOutput(TLC_DEADLOCK)).toEqual({
+			status: "violated",
+			invariant: "Deadlock",
+		});
+		expect(
+			parseModelHeader(
+				"\\* expect: violated Deadlock\n\\* module: SiblingRestore\n",
+			),
+		).toEqual({
+			module: "SiblingRestore",
+			expect: { status: "violated", invariant: "Deadlock" },
 		});
 	});
 
@@ -195,6 +222,57 @@ describe("parseConcurrencyArg (#3572)", () => {
 		expect(() => parseConcurrencyArg("0")).toThrow();
 		expect(() => parseConcurrencyArg("-1")).toThrow();
 		expect(() => parseConcurrencyArg("2.5")).toThrow();
+	});
+});
+
+describe("parseShardArg (#3918)", () => {
+	it("reads i/N", () => {
+		expect(parseShardArg("2/4")).toEqual({ index: 2, total: 4 });
+	});
+
+	// Recurrence: a typo'd `--shard` that fell back to "all configs" would not
+	// fail CI, the shard would just stop being a shard and rerun everything.
+	it.each(["", "0/4", "5/4", "1/0", "2", "a/b", "1/2/3", "-1/4", "1.5/4"])(
+		"throws on %j",
+		(raw) => {
+			expect(() => parseShardArg(raw)).toThrow(/--shard must be i\/N/);
+		},
+	);
+
+	it("throws when the value is missing", () => {
+		expect(() => parseShardArg(undefined)).toThrow(/--shard must be i\/N/);
+	});
+});
+
+describe("selectShard (#3918)", () => {
+	const items = ["a", "b", "c", "d", "e", "f", "g"];
+
+	it("steps through the list round-robin, so a directory's configs spread across shards", () => {
+		expect(selectShard(items, { index: 1, total: 3 })).toEqual(["a", "d", "g"]);
+		expect(selectShard(items, { index: 2, total: 3 })).toEqual(["b", "e"]);
+		expect(selectShard(items, { index: 3, total: 3 })).toEqual(["c", "f"]);
+	});
+});
+
+describe("selectConfigs (#3918)", () => {
+	it("returns every config without --shard", () => {
+		expect(selectConfigs([], REPO_ROOT)).toEqual(listModelConfigs(REPO_ROOT));
+	});
+
+	it("narrows to the shard's configs with --shard", () => {
+		const all = listModelConfigs(REPO_ROOT);
+		expect(selectConfigs(["--shard", "1/2"], REPO_ROOT)).toEqual(
+			all.filter((_, position) => position % 2 === 0),
+		);
+	});
+
+	// Recurrence: more shards than configs would leave a runner green on
+	// nothing; it must fail loudly.
+	it("throws when the shard selects nothing", () => {
+		const total = listModelConfigs(REPO_ROOT).length + 1;
+		expect(() =>
+			selectConfigs(["--shard", `${total}/${total}`], REPO_ROOT),
+		).toThrow(/selects no formal/);
 	});
 });
 
@@ -325,7 +403,9 @@ describe("formal/ models (#3447)", () => {
 		);
 		expect(
 			runs.some((run) =>
-				/^\s*node scripts\/check-tla-models\.mjs\s*$/m.test(run),
+				/^\s*node scripts\/check-tla-models\.mjs(?: --shard .+)?\s*$/m.test(
+					run,
+				),
 			),
 		).toBe(true);
 		expect(TLA_TOOLS.url).toContain(`/download/${TLA_TOOLS.release}/`);

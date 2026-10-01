@@ -1768,6 +1768,51 @@ function log(message) {
 }
 
 /**
+ * Parse npm's JSON pack listing even when a lifecycle script writes to stdout.
+ * Npm's JSON document is the first parseable array with the pack-listing
+ * shape; a lifecycle message such as `[setup-git-hooks] skipped ...` is not
+ * JSON and must not determine the slice (#3877). Each candidate array is
+ * bounded at a closing `]` rather than sliced to the end of stdout, so a
+ * trailing lifecycle line after the JSON does not break the parse (#3887 F2).
+ */
+export function parseNpmPackJson(text) {
+	for (
+		let start = text.indexOf("[");
+		start >= 0;
+		start = text.indexOf("[", start + 1)
+	) {
+		for (
+			let end = text.indexOf("]", start);
+			end >= 0;
+			end = text.indexOf("]", end + 1)
+		) {
+			try {
+				const parsed = JSON.parse(text.slice(start, end + 1));
+				const listing = parsed?.[0];
+				if (
+					Array.isArray(parsed) &&
+					listing &&
+					typeof listing === "object" &&
+					typeof listing.filename === "string" &&
+					Array.isArray(listing.files)
+				) {
+					return listing;
+				}
+			} catch {
+				// Try a later `]`, then the next `[` in lifecycle output.
+			}
+		}
+	}
+	// Keep a bounded stdout head: a DO-NOT-SHIP pack parse is diagnosed from
+	// the message alone, and the old parser at least named the bytes it saw.
+	const head = text.slice(0, 200).replace(/\s+/g, " ").trim();
+	throw new Error(
+		`npm pack --json printed no JSON pack listing; stdout head: ` +
+			JSON.stringify(text.length > 200 ? `${head}…` : head),
+	);
+}
+
+/**
  * Shell-free `npm` with an argv array, under the PINNED env.
  *
  * `env` is required, not optional (#2619 review F1). It used to be absent, so
@@ -2886,17 +2931,14 @@ async function main() {
 				env,
 			);
 			log(`packing the exported ${exported.commit} (npm pack --json)`);
-			// --pack-destination keeps the tarball out of the export too, and the
-			// JSON is sliced from the first `[` because the `prepare` script
-			// legitimately writes progress to stdout ahead of it (#376's break).
+			// --pack-destination keeps the tarball out of the export too. Lifecycle
+			// scripts may write progress to stdout ahead of the JSON (#3877).
 			const packJson = npm(
 				["pack", "--json", "--pack-destination", scratchRoot],
 				exported.dir,
 				env,
 			);
-			const jsonStart = packJson.indexOf("[");
-			if (jsonStart < 0) throw new Error("npm pack --json printed no JSON");
-			packListing = JSON.parse(packJson.slice(jsonStart))[0];
+			packListing = parseNpmPackJson(packJson);
 			installSource = path.join(scratchRoot, packListing.filename);
 		} else if (opts.from.startsWith("npm:")) {
 			installSource = opts.from.slice("npm:".length);

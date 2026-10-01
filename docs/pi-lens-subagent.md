@@ -51,6 +51,11 @@ and tracking one reds `tests/config/gitignore-tracked-shadow.test.ts`. Read
 `git ls-files | grep -E 'PR_BODY|COMMIT_MSG'` prints nothing. Build output,
 `.probe-home/`, and scratch fixtures stay out of the diff.
 
+When updating a lane from the moving base, master is merged in, never rebased.
+Force-pushes are not a recovery path: use a normal push, and require
+explicit orchestrator authorization for
+`--force-with-lease=<branch>:<sha>`.
+
 Until plegma #474 lands, push with `git -c credential.helper= -c
 credential.helper='!gh auth git-credential' push origin HEAD:refs/heads/<branch>`.
 Before `gh pr create` or `gh pr edit`, lint the body with

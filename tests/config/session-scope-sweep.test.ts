@@ -132,6 +132,8 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 	ownedSessionRole: "this activation's primary or secondary role (#1996)",
 	renderInvalidator: "this activation's widget repaint callback",
 	scope: "this activation's session scope (#3611)",
+	startInFlight:
+		"this activation's primary session_start until it returns, so a shutdown that lands before the start adopted hands on the slot left for it (#3881)",
 	widgetMountFailureLogged: "a once-per-activation log latch for the mount",
 };
 

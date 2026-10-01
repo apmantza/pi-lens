@@ -41,6 +41,7 @@ import {
 	adoptHandoff,
 	beginScope,
 	discardHandoff,
+	forwardHandoff,
 	nextOrderTurn,
 	type PersistedStores,
 	retireScope,
@@ -568,6 +569,78 @@ describe("#3612 adoptHandoff", () => {
 				.filter((group) => group.kind === "session-scope-handoff-discarded")
 				.flatMap((group) => group.latestReasons.map((r) => r.subject)),
 		).toEqual(["reload"]);
+	});
+
+	// #3881: a primary shutdown that lands while its own start is still in
+	// flight hands on the slot left for that start, re-keyed to its own
+	// transition. The recurrence: it stashed its empty scope over that slot,
+	// and the next start took the empty one.
+	it("forwards the slot left for an interrupted start to that session's next start, and no other slot", async () => {
+		const manager = {};
+		const cases = [
+			// [stash reason, stash file, stash target, manager, start's file]
+			["reload", "/s/a.jsonl", undefined, undefined, "/s/a.jsonl"],
+			["fork", "/s/a.jsonl", "/s/f.jsonl", undefined, "/s/f.jsonl"],
+			["reload", undefined, undefined, manager, undefined],
+			["fork", undefined, undefined, manager, undefined],
+		] as const;
+		for (const [reason, sessionFile, target, sessionManager, file] of cases) {
+			stashHandoff(scopeWith(["ast_grep_search"]), {
+				reason,
+				sessionFile,
+				targetSessionFile: target,
+				sessionManager,
+			});
+			const interrupted = (shutdown: string, startReason: string) => ({
+				startReason,
+				reason: shutdown,
+				sessionFile: file,
+				targetSessionFile: undefined,
+				sessionManager,
+			});
+
+			// Not the slot left for this start, or a shutdown no start reads
+			// a slot after: the slot stays as it was.
+			expect(forwardHandoff(interrupted("reload", "new"))).toBe(false);
+			expect(forwardHandoff(interrupted("quit", reason))).toBe(false);
+			expect(
+				forwardHandoff({
+					...interrupted("reload", reason),
+					sessionFile: file && "/s/other.jsonl",
+					sessionManager: sessionManager && {},
+				}),
+			).toBe(false);
+			expect(forwardHandoff(interrupted("reload", reason))).toBe(true);
+
+			const next = start("reload", file, undefined, undefined, sessionManager);
+			expect(await next.source).toBe("slot");
+			expect([...getRememberedLazyTools(next.scope)]).toEqual([
+				"ast_grep_search",
+			]);
+		}
+		// An inner fork re-keys to pi's target file.
+		stashHandoff(scopeWith(["ast_grep_search"]), {
+			reason: "reload",
+			sessionFile: "/s/a.jsonl",
+			targetSessionFile: undefined,
+		});
+		expect(
+			forwardHandoff({
+				startReason: "reload",
+				reason: "fork",
+				sessionFile: "/s/a.jsonl",
+				targetSessionFile: "/s/g.jsonl",
+				sessionManager: undefined,
+			}),
+		).toBe(true);
+		expect(takeHandoff("fork", "/s/g.jsonl")).toMatchObject({
+			"lazy-tool-memory": ["ast_grep_search"],
+		});
+		expect(
+			getDegradationSummary()
+				.filter((group) => group.kind === "session-scope-handoff-interrupted")
+				.flatMap((group) => group.latestReasons.map((r) => r.subject)),
+		).toEqual(["new", "reload", "fork"]);
 	});
 
 	it("starts `pi --fork` (a startup with a parent) from the parent's sidecar", async () => {

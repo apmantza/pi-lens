@@ -292,4 +292,11 @@ the `#3522` block of the same file.
   the drain's stamp is then credited (mutating the gate away violates
   `TreeDrainFenced`). The settled sweep is one more deferred writer with the
   same fence and, since #3525, the same authorship-only `recordWritten`; the
-  model's drain stands for both.
+  model's drain stands for both. The actionable-warning quick fix is a third
+  (#3676): it acts on report entries, so its work is "queued" when the entry
+  is built (its epoch is the entry's, aged to the oldest across a merge), and
+  a settle that skips it (a cold LSP) is `Requeue`. Before #3676 it took the
+  epoch at the settle that applied it, which is `DrainMode = "settle"`
+  (`TreeDrainRequeue`, violated `NoBlindAllow`); since, it is `"fenced"`
+  (`TreeDrainFenced`). The oldest-epoch merge and the unstamped-entry case are
+  not modelled; both only withhold credit.

@@ -15,7 +15,12 @@
 // module turns "read the log, decide" into a function a human or an
 // orchestrator can call on a run id.
 
-import { CI_JOB_NAMES, isUnitTestsShardJobName } from "./ci-checks.mjs";
+import {
+	CI_JOB_NAMES,
+	isAdvisoryCheck,
+	isBlockingConclusion,
+	isUnitTestsShardJobName,
+} from "./ci-checks.mjs";
 
 /** Strips the ANSI color/cursor codes vitest's reporter and GitHub Actions
  * both wrap every line in. Every pattern below matches against the stripped
@@ -762,9 +767,20 @@ async function fetchRunAndFailedJob({ fetcher, owner, repo, runId, jobName }) {
 		: jobs.filter((job) => job.conclusion === "failure").slice(0, 1);
 	const failedJob = failedJobs[0];
 	if (!failedJob) {
-		throw new Error(
-			`run ${runId} has no failed job${jobName ? ` named "${jobName}"` : ""}`,
+		// #3801 (verify r2 V3): a CI run that failed ONLY on advisory jobs (a
+		// not-ready `Heavy advisory gate`, the Windows run) is not a `real`
+		// failure of the change; the caller must not label the PR `ci:real`.
+		// Every job with a BLOCKING conclusion (failure, timed_out, cancelled, ...)
+		// must be advisory: a required job that timed out beside a red gate is
+		// not "only advisory" (verify r3 V6).
+		const blocking = jobs.filter((job) => isBlockingConclusion(job.conclusion));
+		const advisoryOnly =
+			blocking.length > 0 && blocking.every((job) => isAdvisoryCheck(job.name));
+		const error = new Error(
+			`run ${runId} has no failed job${jobName ? ` named "${jobName}"` : ""}${advisoryOnly ? `; ${ADVISORY_ONLY_MARKER} (${blocking.map((job) => job.name).join(", ")})` : ""}`,
 		);
+		error.advisoryOnly = advisoryOnly;
+		throw error;
 	}
 	const prNumber = run.pull_requests?.[0]?.number ?? null;
 	return {
@@ -804,6 +820,13 @@ async function fetchJobLog({ fetcher, owner, repo, jobId }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	return fetchText(fetcher, `${base}/actions/jobs/${jobId}/logs`);
 }
+
+/**
+ * The phrase a skipped classification carries when every failed job of the run
+ * is advisory. ci-infra-kill-rerun.yml's label step greps the CLI output for
+ * it (tests/config/ci-infra-kill-rerun-gate.test.ts pins the two together).
+ */
+export const ADVISORY_ONLY_MARKER = "only advisory jobs failed";
 
 /**
  * Find this PR's existing classifier comment, if any -- there is at most one
@@ -978,7 +1001,11 @@ export async function runClassifier({
 			error instanceof Error &&
 			error.message.includes("has no failed job")
 		) {
-			return { skipped: true, reason: error.message };
+			return {
+				skipped: true,
+				reason: error.message,
+				...(error.advisoryOnly === true ? { advisoryOnly: true } : {}),
+			};
 		}
 		await commentClassificationFailure({
 			fetcher,

@@ -81,6 +81,15 @@
 (*                       so the demoted session cannot take it stale when  *)
 (*                       it later classifies primary; no other start       *)
 (*                       removes a slot except by taking it                *)
+(*   "forwardUnadopted"  #3881: a primary shutdown that lands while its    *)
+(*                       own start is in flight, before adoptHandoff,      *)
+(*                       re-keys the slot left for that start to its own   *)
+(*                       /reload and stashes nothing of its scope;         *)
+(*                       without it, it stashes the scope's empty snapshot *)
+(*   "forwardPolicy"     #3881 r2: the forwarded slot keeps only the       *)
+(*                       stores its own start's reason adopts; without it, *)
+(*                       every store, so the successor's /reload policy    *)
+(*                       carries a /fork start's advisory (AD fork: none)  *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
@@ -88,7 +97,8 @@ CONSTANTS
     Transitions,    \* the host transitions this config enables, a subset of
                     \*   {"New","Resume","Fork","Clone","CancelFork","Reload",
                     \*    "Quit","PiFork","Tree","IdleReset","SecStart",
-                    \*    "SecEnd","SecTurn","SecReload","SecFork","Dup"}
+                    \*    "SecEnd","SecTurn","SecReload","SecFork","Dup",
+                    \*    "Interrupt"}
     Writers,        \* the writers in play, a subset of
                     \*   {"read","secRead","heartbeat","lsp","widget",
                     \*    "advisory","activate"}
@@ -570,6 +580,59 @@ BeginDemoted ==
                    prevMax, ownDrop, recorded, resets, dupDone, landed, reads,
                    lzV, adV, steps, used>>
 
+\* #3881: the replacement's primary session_start begins (resetForSession
+\* draws its ticket; the module-level runtime serves it) and, before
+\* adoptHandoff, the activation's own /reload shutdown lands: a handler
+\* ordered before pi-lens scheduled AgentSession.reload(), which pi does not
+\* stop while it awaits the start's emit. One step: the start never adopts
+\* (the code returns before adoptHandoff once its shutdown ran) and never
+\* registers. Its shutdown saves no sidecar either way: the coordinator's
+\* session id is not pinned yet (persistScope's hasStableSessionId gate).
+\* Under "forwardUnadopted" it re-keys the slot left for the start to its
+\* own /reload (forwardHandoff); without it, it stashes the empty scope.
+\* Registry and LSP writers are out of scope for this step.
+\* forwardHandoff's store filter: a store stays in the forwarded slot when
+\* the interrupted start's reason k adopts it (the model's adopt rows are
+\* every action but reset and none).
+Keeps(s, k) == ~Has("forwardPolicy") \/ Policy(s, k) \notin {"reset", "none"}
+
+Interrupt ==
+    /\ "Interrupt" \in Transitions /\ "interrupt" \notin used
+    /\ ~RegOn /\ ~LspOn
+    /\ pend.k \in {"new", "resume", "fork", "clone", "reload"}
+    /\ primary = 0 /\ steps < MaxSteps
+    /\ LET k == pend.k
+           t == nxt
+           f == NewFile(k)
+           left == SR(k) \in SlotReasons /\ SlotMatch(SR(k), f, Via(k, pend.from))
+       IN
+       /\ st' = [st EXCEPT ![t] = "retired"]
+       /\ role' = [role EXCEPT ![t] = "primary"]
+       /\ sess' = [sess EXCEPT ![t] = f]
+       /\ why' = [why EXCEPT ![t] = "reload"]
+       /\ last' = t /\ nxt' = t + 1
+       /\ branch' = [branch EXCEPT ![f] = NewBranch(k)]
+       /\ lin' = NewLin(k, t)
+       /\ predOf' = [predOf EXCEPT ![t] = pend.from]
+       /\ resets' = [resets EXCEPT ![t] = 1]
+       /\ slot' = IF Has("forwardUnadopted")
+                  THEN IF left
+                       THEN [slot EXCEPT !.from = t, !.reason = "reload",
+                                         !.file = Key(f),
+                                         !.facts = IF Keeps("RG", k) THEN @ ELSE {},
+                                         !.act = IF Keeps("LZ", k) THEN @ ELSE {},
+                                         !.adv = IF Keeps("AD", k) THEN @ ELSE {}]
+                       ELSE slot
+                  ELSE [has |-> TRUE, from |-> t, reason |-> "reload",
+                        file |-> Key(f), facts |-> {}, act |-> {}, adv |-> {}]
+       /\ pend' = [k |-> "reload", from |-> t, file |-> f, target |-> "-"]
+       /\ steps' = steps + 1
+       /\ used' = used \cup {"interrupt"}
+    /\ UNCHANGED <<ep, primary, forking, cell, imp, taken, side, sideAct, wr,
+                   entry, intent, reg, svc, fleet, turn, begun, turns,
+                   procTurn, evalTurn, wgTok, wgDone, lastTok, prevMax,
+                   ownDrop, recorded, dupDone, landed, reads, lzV, adV>>
+
 \* pi --fork <path>: a new process after this one quit. The header names the
 \* parent; the parent's sidecar is the only channel ("startup" reads its own
 \* sidecar, which a new file lacks, then the parent's).
@@ -994,6 +1057,7 @@ Next ==
     \/ \E k \in {"new", "resume", "fork", "clone", "reload", "quit"} : Retire(k)
     \/ Begin
     \/ BeginDemoted
+    \/ Interrupt
     \/ PiFork
     \/ Tree
     \/ IdleReset
@@ -1128,6 +1192,12 @@ NoLostActivation ==
 \* #3748: an advisory reaches only a context call of its own conversation.
 NoCrossSessionDelivery ==
     \A d \in advOut : d.o \in lin[sess[d.to]]
+
+\* #3881 r2: an advisory reaches only a context call on its producer's
+\* session file. Only /reload carries an advisory to a successor (AD's
+\* policy), and /reload keeps the file, so a delivery across files crossed a
+\* /fork, /clone or resume.
+AdvisoryStaysInSession == \A d \in advOut : sess[d.o] = sess[d.to]
 
 \* S2 (#3612): an advisory still queued when its scope retired by /reload is
 \* not lost: once the successor started, it is queued again, and so is

@@ -157,6 +157,11 @@ jobs:
           if [[ -n "$PR_NUMBER" ]]; then
             if grep -q -- '-> infra-' <<<"$output"; then
               gh pr edit "$PR_NUMBER" --add-label 'ci:infra' --remove-label 'ci:real'
+            elif grep -q -- '^CI failure classifier skipped:.*only advisory jobs failed' <<<"$output"; then
+              # #3801: a run that failed only on advisory jobs (a not-ready heavy
+              # gate, the Windows run) is neither infra nor a real failure of the
+              # change: neither verdict label, and any stale one is cleared.
+              gh pr edit "$PR_NUMBER" --remove-label 'ci:real' --remove-label 'ci:infra'
             else
               gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
             fi

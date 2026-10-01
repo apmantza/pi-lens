@@ -29,6 +29,18 @@ export declare function computeConcurrency(
 	availableParallelism: number,
 ): number;
 export declare function parseConcurrencyArg(raw: string | undefined): number;
+export declare function parseShardArg(raw: string | undefined): {
+	index: number;
+	total: number;
+};
+export declare function selectShard<Item>(
+	configs: readonly Item[],
+	shard: { index: number; total: number },
+): Item[];
+export declare function selectConfigs(
+	argv: readonly string[],
+	root: string,
+): string[];
 export declare function buildJavaArgs(
 	jar: string,
 	metadir: string,

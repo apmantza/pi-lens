@@ -22,6 +22,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	type AgentSessionRuntime,
 	type ExtensionAPI,
@@ -41,6 +42,7 @@ import {
 	vi,
 } from "vitest";
 import extension from "../index.js";
+import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -67,6 +69,23 @@ import {
 // to latency.log, and beforeEach truncates latency.log. The harness's
 // per-worker PI_LENS_HOME (#3721) keeps those writes off every other worker's
 // sink; the loggers bind their paths at load, so the home is the harness's.
+
+/**
+ * #3676: the LSP service is the one process boundary the quick fix's real
+ * apply path crosses. Armed only by the #3676 describe; every other test in
+ * this file sees the real service.
+ */
+const lspDouble = vi.hoisted(() => ({ service: undefined as unknown }));
+vi.mock("../clients/lsp/index.js", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("../clients/lsp/index.js")>();
+	return {
+		...original,
+		getLSPService: () =>
+			(lspDouble.service as ReturnType<typeof original.getLSPService>) ??
+			original.getLSPService(),
+	};
+});
 
 const FLAGS = new Map<string, boolean>([
 	["no-lsp", true],
@@ -148,6 +167,8 @@ afterAll(async () => {
 async function startRuntime(
 	sessionManager: SessionManager,
 	alongside: Array<(pi: ExtensionAPI) => void> = [],
+	/** Factories whose handlers pi runs before pi-lens's (#3881). */
+	ahead: Array<(pi: ExtensionAPI) => void> = [],
 ): Promise<AgentSessionRuntime> {
 	const runtime = await createAgentSessionRuntime(
 		async ({ cwd: runtimeCwd, sessionManager: sm, sessionStartEvent }) => {
@@ -156,7 +177,7 @@ async function startRuntime(
 				agentDir,
 				extensionFlagValues: FLAGS,
 				resourceLoaderOptions: {
-					extensionFactories: [extension, ...alongside],
+					extensionFactories: [...ahead, extension, ...alongside],
 				},
 			});
 			return {
@@ -375,7 +396,10 @@ async function sidecarSettled(sessionId: string): Promise<void> {
 }
 
 /** pi-lens persists its sidecar at turn_end; emit one the way pi does. */
-async function turnEnd(runtime: AgentSessionRuntime): Promise<void> {
+async function turnEnd(
+	runtime: AgentSessionRuntime,
+	awaitSidecar = true,
+): Promise<void> {
 	await runtime.session.extensionRunner.emit({
 		type: "turn_end",
 		turnIndex: 0,
@@ -391,7 +415,8 @@ async function turnEnd(runtime: AgentSessionRuntime): Promise<void> {
 		},
 		toolResults: [],
 	} as never);
-	await sidecarSettled(runtime.session.sessionManager.getSessionId());
+	if (awaitSidecar)
+		await sidecarSettled(runtime.session.sessionManager.getSessionId());
 }
 
 describe("#3521 /tree keeps only the reads on the new branch", () => {
@@ -685,6 +710,181 @@ describe("#3521 a /tree during agent_settled work gets no credit from it (shape 
 	});
 });
 
+describe("#3676 the quick fix is credited to the branch its report was produced on", () => {
+	// Recurrence: #3669 round-3 verify F-A. The report the quick fix acts on
+	// survives a /tree (it moves neither projectSeq nor fileSeq), and a read-only
+	// turn on the new branch publishes no report over it. The settle then applied
+	// the fix and credited it with the settle's own epoch, so branch Y's agent
+	// could edit a file it had never read.
+	const ACTIONABLE_FLAGS = [
+		"lens-actionable-warnings",
+		"lens-actionable-warning-actions",
+		"lens-actionable-warning-all",
+		"lens-actionable-warning-autofix",
+	];
+
+	beforeEach(() => {
+		for (const flag of ACTIONABLE_FLAGS) FLAGS.set(flag, true);
+	});
+
+	afterEach(() => {
+		for (const flag of ACTIONABLE_FLAGS) FLAGS.delete(flag);
+		lspDouble.service = undefined;
+	});
+
+	/** The LSP boundary: a warning with a preferred quick fix, served while warm. */
+	function armLsp(file: string, warm: () => boolean) {
+		const range = {
+			start: { line: 0, character: 0 },
+			end: { line: 0, character: 5 },
+		};
+		lspDouble.service = makeLspServiceDouble({
+			supportsLSP: () => warm(),
+			openFile: async () => undefined,
+			getLastKnownDiagnostics: () => [
+				{
+					severity: 2,
+					message: "replace this value",
+					code: "fix-value",
+					source: "eslint",
+					serverId: "eslint",
+					range,
+				},
+			],
+			codeAction: async () => [
+				{
+					title: "Fix it",
+					kind: "quickfix",
+					isPreferred: true,
+					edit: {
+						changes: {
+							[pathToFileURL(file).href]: [{ range, newText: "FIXED" }],
+						},
+					},
+				},
+			],
+		});
+	}
+
+	const settle = (runtime: AgentSessionRuntime) =>
+		runtime.session.extensionRunner.emit({ type: "agent_settled" } as never);
+	const turnStart = (runtime: AgentSessionRuntime) =>
+		runtime.session.extensionRunner.emit({
+			type: "turn_start",
+			turnIndex: 0,
+			timestamp: Date.now(),
+		} as never);
+
+	/** The conversation moves pi can make between X's report and Y's settle. */
+	type Move = "tree" | "fork" | "new" | "resume" | "clone" | "reload";
+
+	/**
+	 * Branch X reads and rewrites `f`, ends its turn (the report is built and
+	 * persisted) and settles while the LSP is cold, so the pass skips. The
+	 * conversation makes `move` to a branch that never read `f` (a clone at the
+	 * leaf and a reload keep X's reads), takes a read-only turn (no report is
+	 * published over X's), and settles with the LSP warm. Returns the zero-read
+	 * probe on the new branch.
+	 */
+	async function reportOnXFixOnY(
+		fixOnY = true,
+		move: Move = "tree",
+	): Promise<string> {
+		fs.writeFileSync(
+			path.join(cwd, "package.json"),
+			'{"devDependencies":{"eslint":"^9.0.0"}}',
+		);
+		fs.writeFileSync(
+			path.join(cwd, "package-lock.json"),
+			'{"packages":{"node_modules/eslint":{"version":"9.0.0"}}}',
+		);
+		const f = fixture("fix.conf", 4);
+		let warm = true;
+		armLsp(f, () => warm);
+		const runtime = await startRuntime(
+			move === "tree"
+				? SessionManager.inMemory(cwd)
+				: SessionManager.create(cwd, sessionsDir),
+		);
+		const c = conversation(runtime);
+		let otherSession: string | undefined;
+		if (move === "resume") {
+			// The session a resume lands on: it never read `f`.
+			c.user("prompt on the other session");
+			c.done();
+			otherSession = c.S().sessionManager.getSessionFile()!;
+			await runtime.newSession();
+		}
+		const u1 = c.user("prompt on X");
+		await turnStart(runtime);
+		await c.read("x_read_f", f);
+		expect(
+			await c.write("x_write_f", f, "value = 1;\nline2\nline3\nline4"),
+		).toBe("ALLOW");
+		c.done();
+		await turnEnd(runtime);
+		warm = false;
+		await settle(runtime);
+		expect(fs.readFileSync(f, "utf8")).not.toContain("FIXED");
+
+		if (move === "tree") await c.S().navigateTree(u1);
+		else if (move === "fork") await runtime.fork(u1);
+		else if (move === "new") await runtime.newSession();
+		else if (move === "resume") await runtime.switchSession(otherSession!);
+		else if (move === "clone")
+			await runtime.fork(c.S().sessionManager.getLeafId()!, {
+				position: "at",
+			});
+		else await reload(runtime);
+		warm = fixOnY;
+		c.user("a question on Y, no file touched");
+		c.done();
+		await turnStart(runtime);
+		// A read-only turn on a moved session writes no sidecar to wait for.
+		await turnEnd(runtime, false);
+		await settle(runtime);
+		expect(fs.readFileSync(f, "utf8").includes("FIXED")).toBe(fixOnY);
+		// Isolate the authorship credit from the mtime fallback (#3520).
+		const old = (Date.now() - 3_600_000) / 1000;
+		fs.utimesSync(f, old, old);
+		return c.editLine("y_edit_f", f, 3, "Y", false);
+	}
+
+	it("does not credit a quick fix applied on a branch the report was not produced on", async () => {
+		expect(await reportOnXFixOnY()).toEqual(ZERO_READ);
+	});
+
+	// The control: the same moves with the fix never applied on Y. Without it
+	// the case above could be answered by anything but the fix's credit.
+	it("blocks the same zero-read edit when no fix was applied on the new branch", async () => {
+		expect(await reportOnXFixOnY(false)).toEqual(ZERO_READ);
+	});
+
+	// Recurrence (#3912 review r1 F2): a new ReadGuard restarts its branch epoch
+	// at 0, so an entry the parent stamped 0 equals the live 0 of a fork, a /new
+	// session or a resume, and the report (one cache file per project) crossed
+	// the move with its credit.
+	for (const move of ["fork", "new", "resume"] as const) {
+		it(`does not credit a quick fix applied after a ${move}`, async () => {
+			expect(await reportOnXFixOnY(true, move)).toEqual(ZERO_READ);
+		});
+
+		it(`blocks the same zero-read edit after a ${move} when no fix was applied`, async () => {
+			expect(await reportOnXFixOnY(false, move)).toEqual(ZERO_READ);
+		});
+	}
+
+	// The moves that keep X's reads keep their legitimate allow: the reads, not
+	// the quick fix's credit, vouch for the edit.
+	for (const move of ["clone", "reload"] as const) {
+		for (const fixOnY of [true, false]) {
+			it(`keeps the allow its kept reads give after a ${move} (fix ${fixOnY ? "applied" : "not applied"})`, async () => {
+				expect(await reportOnXFixOnY(fixOnY, move)).toBe("ALLOW");
+			});
+		}
+	}
+});
+
 describe("#3521 every read producer carries its tool call across a move", () => {
 	// Keep-side witnesses: each record below is on the kept branch, so a
 	// producer that stops stamping its tool call would turn a read the
@@ -970,7 +1170,7 @@ describe("#3521 a resumed session keeps only its branch's reads", () => {
 });
 
 /** The `session_scope_transition` rows (#3611), in write order. */
-async function scopeTransitionRows(): Promise<Record<string, unknown>[]> {
+async function latencyRows(phase: string): Promise<Record<string, unknown>[]> {
 	await flushLatencyLog();
 	const text = fs.existsSync(getLatencyLogPath())
 		? fs.readFileSync(getLatencyLogPath(), "utf8")
@@ -979,8 +1179,12 @@ async function scopeTransitionRows(): Promise<Record<string, unknown>[]> {
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as Record<string, unknown>)
-		.filter((row) => row.phase === "session_scope_transition")
+		.filter((row) => row.phase === phase)
 		.map((row) => row.metadata as Record<string, unknown>);
+}
+
+function scopeTransitionRows(): Promise<Record<string, unknown>[]> {
+	return latencyRows("session_scope_transition");
 }
 
 /**
@@ -1533,6 +1737,77 @@ describe("#3612 a queued agent advisory follows /reload", () => {
 	});
 
 	/**
+	 * #3881 r2 F1: a forwarded slot keeps the store policy of the start it
+	 * was left for. The recurrence: a /fork start interrupted by a reload
+	 * handed its slot on as a reload slot, so the fork adopted the parent's
+	 * authorship and its queued advisory, which a clean /fork resets and
+	 * leaves to the parent ("does not carry the parent's authorship into a
+	 * /fork", "still drops an advisory whose session ended with /new").
+	 */
+	describe("#3881 an interrupted /fork keeps the fork's store policy", () => {
+		for (const store of ["in-memory", "file-backed"] as const) {
+			it(`gives a ${store} /fork interrupted by a reload none of the parent's authorship or advisories`, async () => {
+				const seen = coordinators();
+				let runtime: AgentSessionRuntime | undefined;
+				let inner: Promise<void> | undefined;
+				const reloadDuringFork = (pi: ExtensionAPI) => {
+					pi.on("session_start", (event) => {
+						if ((event as { reason?: string }).reason !== "fork" || inner)
+							return;
+						inner = new Promise<void>((resolve, reject) =>
+							setImmediate(() =>
+								runtime!.session.reload().then(resolve, reject),
+							),
+						);
+					});
+				};
+				runtime = await startRuntime(
+					store === "file-backed"
+						? SessionManager.create(cwd, sessionsDir)
+						: SessionManager.inMemory(cwd),
+					[],
+					[reloadDuringFork],
+				);
+				const c = conversation(runtime);
+				const written = path.join(cwd, "authored.conf");
+				c.user("prompt 1");
+				expect(await c.write("call_write", written, "w1\nw2\nw3")).toBe(
+					"ALLOW",
+				);
+				c.done();
+				await activateTools(runtime, "act", ["ast_grep_search"]);
+				queueAgentAdvisory(
+					"lost edit in a.rs",
+					seen[0]!.captureSessionGeneration(),
+				);
+				const u2 = c.user("prompt 2");
+				c.done();
+
+				await runtime.fork(u2);
+				expect(inner).toBeDefined();
+				await inner;
+
+				// As on a clean /fork: the activation crosses; the parent's
+				// authorship and its queued advisory do not.
+				expect.soft(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+				expect
+					.soft(await c.editLine("post_written", written, 2, "Y", false))
+					.toEqual(ZERO_READ);
+				expect
+					.soft(await contextText(runtime))
+					.not.toContain("lost edit in a.rs");
+				const starts = (await scopeTransitionRows()).filter(
+					(row) => row.transition === "start",
+				);
+				expect(starts.at(-1)).toMatchObject({
+					reason: "reload",
+					handoffSource: "slot",
+				});
+			});
+		}
+	});
+
+	/**
 	 * #3819 (TLC `H3FileLess`): a file-less slot matched on its reason alone.
 	 * An in-process subagent that binds in the primary's replacement gap
 	 * (declined, #3662) and then reloads or forks itself sends a non-startup
@@ -1724,5 +1999,231 @@ describe("#3612 a queued agent advisory follows /reload", () => {
 				expect(activeSituational(primary)).toEqual(["ast_grep_search"]);
 			});
 		}
+	});
+});
+
+/**
+ * #3881: pi awaiting the `session_start` emit does not stop a concurrent
+ * `AgentSession.reload()`. A handler ordered before pi-lens schedules one, so
+ * the inner reload's `session_shutdown` lands while pi-lens's start of the
+ * same session is still awaiting, before `adoptHandoff`. The recurrence: that
+ * shutdown stashed its own empty scope over the slot left for its start, and
+ * the inner reload's start took the empty slot, so the conversation lost its
+ * lazy-tool activations. A resume start has no slot: its shutdown also
+ * saved that empty scope over the sidecar the inner reload's start reads.
+ *
+ * "continuing": an extension ordered after pi-lens holds the inner shutdown
+ * until the interrupted start's pi-lens handler has settled, so that start
+ * runs on with a ctx pi has not yet invalidated. The recurrence: it took the
+ * slot its own shutdown handed on, and the inner reload's start missed it.
+ */
+describe("#3881 an interrupted session_start hands on the slot left for it", () => {
+	for (const kind of ["reload", "fork", "resume"] as const) {
+		for (const store of ["in-memory", "file-backed"] as const) {
+			// pi resumes a session from its file.
+			if (kind === "resume" && store === "in-memory") continue;
+			for (const continuing of [false, true]) {
+				it(`keeps a ${store} session's activations when a reload interrupts its ${kind} start before it adopts${continuing ? ", and the start runs on" : ""}`, async () => {
+					let runtime: AgentSessionRuntime | undefined;
+					let inner: Promise<void> | undefined;
+					const reloadDuringStart = (pi: ExtensionAPI) => {
+						pi.on("session_start", (event) => {
+							if ((event as { reason?: string }).reason !== kind || inner)
+								return;
+							inner = new Promise<void>((resolve, reject) =>
+								setImmediate(() =>
+									runtime!.session.reload().then(resolve, reject),
+								),
+							);
+						});
+					};
+					let startSettled = () => {};
+					const settled = new Promise<void>((resolve) => {
+						startSettled = resolve;
+					});
+					const holdShutdownForStart = (pi: ExtensionAPI) => {
+						// Ordered after pi-lens: pi reaches it once pi-lens's handler
+						// for the interrupted start has settled.
+						pi.on("session_start", () => {
+							if (inner) startSettled();
+						});
+						pi.on("session_shutdown", async () => {
+							if (inner) await settled;
+						});
+					};
+					runtime = await startRuntime(
+						store === "file-backed"
+							? SessionManager.create(cwd, sessionsDir)
+							: SessionManager.inMemory(cwd),
+						continuing ? [holdShutdownForStart] : [],
+						[reloadDuringStart],
+					);
+					const c = conversation(runtime);
+					c.user("prompt 1");
+					c.done();
+					await activateTools(runtime, "act", ["ast_grep_search"]);
+					const u2 = c.user("prompt 2");
+					c.done();
+					if (kind === "resume") await turnEnd(runtime);
+					resetDegradationLedger();
+
+					if (kind === "reload") await reload(runtime);
+					else if (kind === "fork") await runtime.fork(u2);
+					else
+						await runtime.switchSession(c.S().sessionManager.getSessionFile()!);
+					expect(inner).toBeDefined();
+					await inner;
+
+					expect(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+					const rows = await scopeTransitionRows();
+					const shutdowns = rows.filter((row) => row.transition === "shutdown");
+					const starts = rows.filter((row) => row.transition === "start");
+					// The interrupted start retired a scope it never logged a start
+					// for: its shutdown landed after its scope began (t1), before it
+					// adopted, and it never adopted later. Its successor, the inner
+					// reload, took the slot (a resume left none: the sidecar).
+					const interrupted = shutdowns.at(-1)!.scopeId;
+					expect(starts.some((row) => row.scopeId === interrupted)).toBe(false);
+					expect(starts.at(-1)).toMatchObject({
+						reason: "reload",
+						role: "primary",
+						handoffSource: kind === "resume" ? "own-sidecar" : "slot",
+					});
+					// One bounded record names the interrupted start (#3873 O1). The
+					// inner reload's start resets the in-memory ledger, so read the
+					// record's durable row.
+					expect(
+						(await latencyRows("degradation_ledger")).filter(
+							(row) => row.kind === "session-scope-handoff-interrupted",
+						),
+					).toEqual([
+						expect.objectContaining({
+							subject: kind,
+							shutdownReason: "reload",
+							outcome: kind === "resume" ? "no-slot" : "forwarded",
+						}),
+					]);
+				});
+			}
+		}
+	}
+
+	/**
+	 * #3881 r2 F2: a reload scheduled one microtask hop after the fork's
+	 * `session_start` emit lands in t0, after pi-lens's handler was entered
+	 * and before it set its scope. The recurrence: a mark set after the
+	 * start's first await (r1's M3b) left that shutdown with no mark and no
+	 * scope, so the `(fork, key)` slot stayed and the inner reload's start
+	 * missed it.
+	 */
+	it("keeps an in-memory session's activations when a microtask-scheduled reload interrupts its fork start before its scope began", async () => {
+		let runtime: AgentSessionRuntime | undefined;
+		let inner: Promise<void> | undefined;
+		const reloadNextMicrotask = (pi: ExtensionAPI) => {
+			pi.on("session_start", (event) => {
+				if ((event as { reason?: string }).reason !== "fork" || inner) return;
+				// One hop: zero hops lands before pi-lens's handler is entered
+				// (t-1, a pre-existing loss named in #3898's Remainder).
+				inner = Promise.resolve()
+					.then(() => undefined)
+					.then(() => runtime!.session.reload());
+			});
+		};
+		runtime = await startRuntime(
+			SessionManager.inMemory(cwd),
+			[],
+			[reloadNextMicrotask],
+		);
+		const c = conversation(runtime);
+		c.user("prompt 1");
+		c.done();
+		await activateTools(runtime, "act", ["ast_grep_search"]);
+		const u2 = c.user("prompt 2");
+		c.done();
+		resetDegradationLedger();
+
+		await runtime.fork(u2);
+		expect(inner).toBeDefined();
+		await inner;
+
+		expect(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+		const rows = await scopeTransitionRows();
+		// t0: the interrupted start had no scope yet, so only the parent's
+		// fork shutdown retired one.
+		expect(
+			rows
+				.filter((row) => row.transition === "shutdown")
+				.map((row) => row.reason),
+		).toEqual(["fork"]);
+		expect(
+			rows.filter((row) => row.transition === "start").at(-1),
+		).toMatchObject({ reason: "reload", handoffSource: "slot" });
+		expect(
+			(await latencyRows("degradation_ledger")).filter(
+				(row) => row.kind === "session-scope-handoff-interrupted",
+			),
+		).toEqual([
+			expect.objectContaining({ subject: "fork", outcome: "forwarded" }),
+		]);
+	});
+
+	/**
+	 * #3881 r3: a #2890 duplicate `session_start` admitted while the first
+	 * start is in flight runs a second primary start in this activation
+	 * (`liveToolPlan.changed` lets it through). The first start adopts the
+	 * fork's slot and becomes the activation's scope. The recurrence: r2's
+	 * guarded `finally` kept the duplicate's in-flight mark, so the later
+	 * reload's shutdown forwarded (finding no slot) instead of stashing the
+	 * adopted scope, and the inner reload started without the activation.
+	 */
+	it("keeps an in-memory /fork's activations when a duplicate start is admitted mid-flight and a reload follows", async () => {
+		let runtime: AgentSessionRuntime | undefined;
+		let armed = false;
+		let dup: Promise<unknown> | undefined;
+		let inner: Promise<void> | undefined;
+		const duplicateStart = (pi: ExtensionAPI) => {
+			pi.on("session_start", (event) => {
+				const reason = (event as { reason?: string }).reason;
+				if (!armed || reason !== "fork" || dup) return;
+				const runner = runtime!.session.extensionRunner;
+				dup = Promise.resolve().then(() =>
+					runner.emit({ type: "session_start", reason } as never),
+				);
+			});
+		};
+		const reloadAfterStart = (pi: ExtensionAPI) => {
+			pi.on("session_start", () => {
+				if (dup && !inner) inner = runtime!.session.reload();
+			});
+		};
+		runtime = await startRuntime(
+			SessionManager.inMemory(cwd),
+			[reloadAfterStart],
+			[duplicateStart],
+		);
+		const c = conversation(runtime);
+		c.user("prompt 1");
+		c.done();
+		await activateTools(runtime, "act", ["ast_grep_search"]);
+		const u2 = c.user("prompt 2");
+		c.done();
+		// The saved sidecar keeps the duplicate in flight until the reload's
+		// shutdown lands (without it the duplicate settles first).
+		await turnEnd(runtime);
+		resetDegradationLedger();
+
+		armed = true;
+		await runtime.fork(u2);
+		expect(dup).toBeDefined();
+		await dup;
+		expect(inner).toBeDefined();
+		await inner;
+
+		expect(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+		expect(
+			(await scopeTransitionRows())
+				.filter((row) => row.transition === "start")
+				.at(-1),
+		).toMatchObject({ reason: "reload", handoffSource: "slot" });
 	});
 });

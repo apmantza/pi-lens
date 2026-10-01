@@ -18,7 +18,10 @@ Issues: #3509 (cross-process promotion), #3510 (the stage sweep).
   the same generation). It dispatches the request, or queues it behind the one
   active persist for the key.
 - **The worker** (`writeGzipStageFile` in `gzip-stage-write.ts`). It writes a
-  tmp file and renames it to `<gz>.stage-<pid>-<gen>`.
+  tmp file and renames it to `<gz>.stage-<pid>-<gen>`. Since #3789 the
+  dispatcher serializes the snapshot and transfers the bytes, so the worker
+  gzips what it is given. Where the stringify runs moves; the stage name, the
+  generation and the promotion order the model checks do not.
 - **Promotion** (`handleSnapshotWorkerResult`, then `promoteSnapshotBody`),
   in this order:
   1. the generation gate;

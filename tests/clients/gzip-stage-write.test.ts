@@ -115,6 +115,61 @@ describe("writeGzipStageFile", () => {
 });
 
 /**
+ * #3789: the project-snapshot dispatcher serializes once and transfers UTF-8
+ * bytes, so the worker core must accept bytes (and still the object form the
+ * review graph sends). Recurrence: a core that re-stringified bytes, or that
+ * chunked a view by its whole backing buffer, would publish a corrupt stage
+ * file the load path then rejects.
+ */
+describe("writeGzipStageFile with pre-serialized bytes (#3789)", () => {
+	// Non-ASCII so byte length and string length differ, over several 256 KiB
+	// chunks so a chunk-boundary slip corrupts the stream.
+	const value = {
+		generatedAt: "2026-09-21T14:13:20.000Z",
+		text: "é日本語\u2028".repeat(120_000),
+	};
+	const json = JSON.stringify(value);
+
+	function viewOf(bytes: Uint8Array): Uint8Array {
+		// A view at a non-zero offset of a larger buffer: gzipping `view.buffer`
+		// instead of the view would include the padding.
+		const backing = new Uint8Array(bytes.byteLength + 64).fill(0x20);
+		backing.set(bytes, 32);
+		return backing.subarray(32, 32 + bytes.byteLength);
+	}
+
+	it("gzips exactly the bytes it was given across chunk boundaries", async () => {
+		const stagePath = path.join(dir, "snapshot.json.gz.stage-1-0");
+		const bytes = viewOf(new TextEncoder().encode(json));
+		const metrics = await writeGzipStageFile(bytes, stagePath);
+
+		expect(Buffer.byteLength(json)).toBeGreaterThan(256 * 1024 * 2);
+		expect(gunzipSync(fs.readFileSync(stagePath)).toString("utf-8")).toBe(json);
+		expect(metrics.rawBytes).toBe(Buffer.byteLength(json));
+		expect(metrics.gzBytes).toBe(fs.statSync(stagePath).size);
+	});
+
+	it("hands the semantic fingerprint the bytes and skips gzip on a match", async () => {
+		const stagePath = path.join(dir, "snapshot.json.gz.stage-1-0");
+		const bytes = viewOf(new TextEncoder().encode(json));
+		const seen: unknown[] = [];
+		const metrics = await writeGzipStageFile(bytes, stagePath, undefined, {
+			semanticFingerprint: (body) => {
+				seen.push(body);
+				return "same-body";
+			},
+			skipIfFingerprints: ["same-body"],
+		});
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toBeInstanceOf(Uint8Array);
+		expect(Buffer.from(seen[0] as Uint8Array).toString("utf-8")).toBe(json);
+		expect(metrics.skippedUnchanged).toBe(true);
+		expect(fs.existsSync(stagePath)).toBe(false);
+	});
+});
+
+/**
  * The #1217 acceptance case: two concurrent calls on the SAME `stagePath`.
  * Pre-fix both staged into one `${stagePath}.tmp-${pid}` inode — the first
  * rename published it while the second was still streaming gzip into it, so

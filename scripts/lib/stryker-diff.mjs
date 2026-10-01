@@ -68,7 +68,7 @@ export const DEFAULT_MAX_TESTS = 47;
 
 /**
  * Wall-clock bound the driver puts on the Stryker child, in minutes. It must
- * stay strictly below .github/workflows/mutation.yml's `timeout-minutes`, or
+ * stay strictly below .github/workflows/ci.yml's `mutation` job `timeout-minutes`, or
  * the runner cancels the job first and the driver never gets to say that it
  * evaluated nothing (advisory run 36098718085). The margin also covers
  * `npm ci`, `npm run build`, Stryker's in-place sandbox restore on SIGTERM,

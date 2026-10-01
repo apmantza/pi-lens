@@ -1,0 +1,853 @@
+{
+  "schemaVersion": 1,
+  "issue": 3789,
+  "measuredAt": "2026-10-01",
+  "purpose": "Raw before/after output of scripts/bench-snapshot-persist.mjs on one synthetic 68 MB snapshot, pinned by tests/clients/snapshot-persist-measurement.test.ts (measured-constant rule, #3648).",
+  "command": "node scripts/bench-snapshot-persist.mjs --persists 5 --label <before|after> --out <round.json>",
+  "protocol": "Rounds alternate before, after, before, after, before, after. Each switch restores only clients/gzip-stage-write.ts, project-snapshot-fingerprint.ts, project-snapshot-persist-worker.ts, project-snapshot.ts and degradation-ledger.ts from the named tree (git checkout <tree> -- <paths>) and runs npm run build. Each round spawns one fresh child per mode; persist 0 warms the worker and is excluded from the summary medians.",
+  "trees": {
+    "before": "clients/ at 846fe4446 (4.3.0, origin/master when the lane opened)",
+    "after": "clients/ at 62dfa0dec (perf: transfer snapshot bytes to worker)"
+  },
+  "environment": "Shared dev box with other agents running; each result's loadavg1mAtStart records the 1-minute load before its child started. Absolute RSS differs from the issue's field numbers (791 MB worker, 308 MB sync on a 68 MB project); the shape and ratios are what this artifact pins.",
+  "rounds": {
+    "before": [
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "before",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 409,
+                "maxEventLoopStallMs": 410.9,
+                "persistWallMs": 2406.7,
+                "rssJumpMB": 390,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 336.6,
+                "maxEventLoopStallMs": 336.1,
+                "persistWallMs": 2331.7,
+                "rssJumpMB": 306.3,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 370.2,
+                "maxEventLoopStallMs": 369.6,
+                "persistWallMs": 2344.8,
+                "rssJumpMB": 295.5,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 336.7,
+                "maxEventLoopStallMs": 336.4,
+                "persistWallMs": 2350.9,
+                "rssJumpMB": 302.4,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 338.9,
+                "maxEventLoopStallMs": 338.4,
+                "persistWallMs": 2393.9,
+                "rssJumpMB": 170.9,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 303.3,
+                "maxEventLoopStallMs": 303,
+                "persistWallMs": 2271.9,
+                "rssJumpMB": 171.4,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 7.48,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 336.7,
+              "medianMaxEventLoopStallMs": 336.4,
+              "medianPersistWallMs": 2344.8,
+              "medianRssJumpMB": 295.5,
+              "maxRssJumpMB": 306.3
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1535.7,
+                "maxEventLoopStallMs": 1535.3,
+                "persistWallMs": 1535.8,
+                "rssJumpMB": 165.6,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1546.4,
+                "maxEventLoopStallMs": 1545.8,
+                "persistWallMs": 1546.5,
+                "rssJumpMB": 165.6,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1642.4,
+                "maxEventLoopStallMs": 1641.8,
+                "persistWallMs": 1642.5,
+                "rssJumpMB": 165.1,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1621.2,
+                "maxEventLoopStallMs": 1620.6,
+                "persistWallMs": 1621.2,
+                "rssJumpMB": 133.1,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1627.8,
+                "maxEventLoopStallMs": 1627.1,
+                "persistWallMs": 1627.9,
+                "rssJumpMB": 165,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1540.1,
+                "maxEventLoopStallMs": 1539.6,
+                "persistWallMs": 1540.1,
+                "rssJumpMB": 165,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 9.85,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1621.2,
+              "medianMaxEventLoopStallMs": 1620.6,
+              "medianPersistWallMs": 1621.2,
+              "medianRssJumpMB": 165,
+              "maxRssJumpMB": 165.6
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "before",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 510.9,
+                "maxEventLoopStallMs": 512.2,
+                "persistWallMs": 3022.6,
+                "rssJumpMB": 391.7,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 431.3,
+                "maxEventLoopStallMs": 430.7,
+                "persistWallMs": 2700.7,
+                "rssJumpMB": 303,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 428,
+                "maxEventLoopStallMs": 427.4,
+                "persistWallMs": 2835,
+                "rssJumpMB": 299.6,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 543,
+                "maxEventLoopStallMs": 542.6,
+                "persistWallMs": 3146,
+                "rssJumpMB": 295.5,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 546.5,
+                "maxEventLoopStallMs": 546.2,
+                "persistWallMs": 2960.5,
+                "rssJumpMB": 171.3,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 480,
+                "maxEventLoopStallMs": 479.6,
+                "persistWallMs": 2865.1,
+                "rssJumpMB": 170.9,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 15.42,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 480,
+              "medianMaxEventLoopStallMs": 479.6,
+              "medianPersistWallMs": 2865.1,
+              "medianRssJumpMB": 295.5,
+              "maxRssJumpMB": 303
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1689.5,
+                "maxEventLoopStallMs": 1689.1,
+                "persistWallMs": 1689.5,
+                "rssJumpMB": 166.1,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1646.5,
+                "maxEventLoopStallMs": 1645.9,
+                "persistWallMs": 1646.6,
+                "rssJumpMB": 165.3,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1690.1,
+                "maxEventLoopStallMs": 1689.5,
+                "persistWallMs": 1690.2,
+                "rssJumpMB": 165.6,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1693.7,
+                "maxEventLoopStallMs": 1693,
+                "persistWallMs": 1693.7,
+                "rssJumpMB": 164.3,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1611.8,
+                "maxEventLoopStallMs": 1611.1,
+                "persistWallMs": 1611.8,
+                "rssJumpMB": 165.1,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1616,
+                "maxEventLoopStallMs": 1615.5,
+                "persistWallMs": 1616.1,
+                "rssJumpMB": 164.8,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 16.59,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1646.5,
+              "medianMaxEventLoopStallMs": 1645.9,
+              "medianPersistWallMs": 1646.6,
+              "medianRssJumpMB": 165.1,
+              "maxRssJumpMB": 165.6
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "before",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 429,
+                "maxEventLoopStallMs": 430.4,
+                "persistWallMs": 2658.3,
+                "rssJumpMB": 390.6,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 353.2,
+                "maxEventLoopStallMs": 352.7,
+                "persistWallMs": 2297.9,
+                "rssJumpMB": 310.5,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 402.2,
+                "maxEventLoopStallMs": 401.7,
+                "persistWallMs": 2766.4,
+                "rssJumpMB": 227.1,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 415.3,
+                "maxEventLoopStallMs": 415,
+                "persistWallMs": 2698,
+                "rssJumpMB": 172.2,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 333.1,
+                "maxEventLoopStallMs": 332.6,
+                "persistWallMs": 2363,
+                "rssJumpMB": 170.5,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 325.1,
+                "maxEventLoopStallMs": 324.6,
+                "persistWallMs": 2400.2,
+                "rssJumpMB": 171.2,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 16.95,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 353.2,
+              "medianMaxEventLoopStallMs": 352.7,
+              "medianPersistWallMs": 2400.2,
+              "medianRssJumpMB": 172.2,
+              "maxRssJumpMB": 310.5
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1731.1,
+                "maxEventLoopStallMs": 1730.7,
+                "persistWallMs": 1731.1,
+                "rssJumpMB": 164.9,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1595.7,
+                "maxEventLoopStallMs": 1595.1,
+                "persistWallMs": 1595.8,
+                "rssJumpMB": 166.1,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1618.4,
+                "maxEventLoopStallMs": 1617.8,
+                "persistWallMs": 1618.5,
+                "rssJumpMB": 165.5,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1637.3,
+                "maxEventLoopStallMs": 1636.6,
+                "persistWallMs": 1637.4,
+                "rssJumpMB": 164.4,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1636.7,
+                "maxEventLoopStallMs": 1636.1,
+                "persistWallMs": 1636.8,
+                "rssJumpMB": 164.7,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1670.3,
+                "maxEventLoopStallMs": 1669.8,
+                "persistWallMs": 1670.3,
+                "rssJumpMB": 165.2,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 17.01,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1636.7,
+              "medianMaxEventLoopStallMs": 1636.1,
+              "medianPersistWallMs": 1636.8,
+              "medianRssJumpMB": 165.2,
+              "maxRssJumpMB": 166.1
+            }
+          }
+        ]
+      }
+    ],
+    "after": [
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "after",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 279.7,
+                "maxEventLoopStallMs": 280.6,
+                "persistWallMs": 1724.6,
+                "rssJumpMB": 171.8,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 280.1,
+                "maxEventLoopStallMs": 279.6,
+                "persistWallMs": 1709.3,
+                "rssJumpMB": 130.2,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 280.7,
+                "maxEventLoopStallMs": 280.2,
+                "persistWallMs": 1690.4,
+                "rssJumpMB": 131.8,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 262.7,
+                "maxEventLoopStallMs": 262.2,
+                "persistWallMs": 1697.9,
+                "rssJumpMB": 130,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 317,
+                "maxEventLoopStallMs": 316.3,
+                "persistWallMs": 1770.6,
+                "rssJumpMB": 131.3,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 318.5,
+                "maxEventLoopStallMs": 318.1,
+                "persistWallMs": 1811.3,
+                "rssJumpMB": 130.1,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 9.75,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 280.7,
+              "medianMaxEventLoopStallMs": 280.2,
+              "medianPersistWallMs": 1709.3,
+              "medianRssJumpMB": 130.2,
+              "maxRssJumpMB": 131.8
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1546.8,
+                "maxEventLoopStallMs": 1546.7,
+                "persistWallMs": 1547,
+                "rssJumpMB": 101.3,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1581.3,
+                "maxEventLoopStallMs": 1580.8,
+                "persistWallMs": 1581.4,
+                "rssJumpMB": 101.4,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1590.9,
+                "maxEventLoopStallMs": 1590.4,
+                "persistWallMs": 1591,
+                "rssJumpMB": 68,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1793,
+                "maxEventLoopStallMs": 1793.1,
+                "persistWallMs": 1793,
+                "rssJumpMB": 68.5,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1812,
+                "maxEventLoopStallMs": 1811.4,
+                "persistWallMs": 1812.1,
+                "rssJumpMB": 71.6,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1712,
+                "maxEventLoopStallMs": 1711.5,
+                "persistWallMs": 1712,
+                "rssJumpMB": 69.6,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 9.79,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1712,
+              "medianMaxEventLoopStallMs": 1711.5,
+              "medianPersistWallMs": 1712,
+              "medianRssJumpMB": 69.6,
+              "maxRssJumpMB": 101.4
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "after",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 405.5,
+                "maxEventLoopStallMs": 407,
+                "persistWallMs": 2007.7,
+                "rssJumpMB": 170.5,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 355.8,
+                "maxEventLoopStallMs": 355.2,
+                "persistWallMs": 2225,
+                "rssJumpMB": 131.8,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 339.3,
+                "maxEventLoopStallMs": 338.8,
+                "persistWallMs": 1938.4,
+                "rssJumpMB": 130.6,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 357.2,
+                "maxEventLoopStallMs": 357,
+                "persistWallMs": 2030.5,
+                "rssJumpMB": 130.9,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 326.7,
+                "maxEventLoopStallMs": 327.5,
+                "persistWallMs": 2018.7,
+                "rssJumpMB": 130.2,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 266.3,
+                "maxEventLoopStallMs": 265.9,
+                "persistWallMs": 1707.2,
+                "rssJumpMB": 130.3,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 16.32,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 339.3,
+              "medianMaxEventLoopStallMs": 338.8,
+              "medianPersistWallMs": 2018.7,
+              "medianRssJumpMB": 130.6,
+              "maxRssJumpMB": 131.8
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1562.2,
+                "maxEventLoopStallMs": 1561.8,
+                "persistWallMs": 1562.3,
+                "rssJumpMB": 101,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1616.8,
+                "maxEventLoopStallMs": 1617.3,
+                "persistWallMs": 1616.9,
+                "rssJumpMB": 101.8,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1657.1,
+                "maxEventLoopStallMs": 1656.6,
+                "persistWallMs": 1657.2,
+                "rssJumpMB": 101.9,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1702.1,
+                "maxEventLoopStallMs": 1702.1,
+                "persistWallMs": 1702.2,
+                "rssJumpMB": 101.6,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1643.5,
+                "maxEventLoopStallMs": 1643.1,
+                "persistWallMs": 1643.6,
+                "rssJumpMB": 68.6,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1593.5,
+                "maxEventLoopStallMs": 1593.1,
+                "persistWallMs": 1593.6,
+                "rssJumpMB": 99.2,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 17.53,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1643.5,
+              "medianMaxEventLoopStallMs": 1643.1,
+              "medianPersistWallMs": 1643.6,
+              "medianRssJumpMB": 101.6,
+              "maxRssJumpMB": 101.9
+            }
+          }
+        ]
+      },
+      {
+        "schemaVersion": 1,
+        "measuredAt": "2026-10-01",
+        "command": "node scripts/bench-snapshot-persist.mjs --modes worker,sync --files 11500 --persists 5",
+        "node": "v22.22.1",
+        "platform": "linux 7.0.0-34-generic x64",
+        "cpus": 32,
+        "label": "after",
+        "results": [
+          {
+            "mode": "worker",
+            "fileCount": 11500,
+            "rawBytes": 68484844,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 427.5,
+                "maxEventLoopStallMs": 428.6,
+                "persistWallMs": 1991.7,
+                "rssJumpMB": 171.5,
+                "gzBytes": 15148333
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 373.5,
+                "maxEventLoopStallMs": 373,
+                "persistWallMs": 1901.2,
+                "rssJumpMB": 131.5,
+                "gzBytes": 15148336
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 391.2,
+                "maxEventLoopStallMs": 390.8,
+                "persistWallMs": 2088.7,
+                "rssJumpMB": 130.7,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 479.2,
+                "maxEventLoopStallMs": 478.9,
+                "persistWallMs": 2213.2,
+                "rssJumpMB": 130.4,
+                "gzBytes": 15148334
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 402.6,
+                "maxEventLoopStallMs": 402.1,
+                "persistWallMs": 2032.6,
+                "rssJumpMB": 130.8,
+                "gzBytes": 15148332
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 350.5,
+                "maxEventLoopStallMs": 350,
+                "persistWallMs": 1967.4,
+                "rssJumpMB": 130.4,
+                "gzBytes": 15148332
+              }
+            ],
+            "loadavg1mAtStart": 16.67,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 391.2,
+              "medianMaxEventLoopStallMs": 390.8,
+              "medianPersistWallMs": 2032.6,
+              "medianRssJumpMB": 130.7,
+              "maxRssJumpMB": 131.5
+            }
+          },
+          {
+            "mode": "sync",
+            "fileCount": 11500,
+            "rawBytes": 68009254,
+            "runs": [
+              {
+                "persist": 0,
+                "syncCallMs": 1698.1,
+                "maxEventLoopStallMs": 1697.7,
+                "persistWallMs": 1698.2,
+                "rssJumpMB": 100.4,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 1,
+                "syncCallMs": 1625.6,
+                "maxEventLoopStallMs": 1625.6,
+                "persistWallMs": 1625.6,
+                "rssJumpMB": 101.4,
+                "gzBytes": 15142530
+              },
+              {
+                "persist": 2,
+                "syncCallMs": 1692,
+                "maxEventLoopStallMs": 1691.7,
+                "persistWallMs": 1692.1,
+                "rssJumpMB": 101.5,
+                "gzBytes": 15142533
+              },
+              {
+                "persist": 3,
+                "syncCallMs": 1676.8,
+                "maxEventLoopStallMs": 1676.8,
+                "persistWallMs": 1676.8,
+                "rssJumpMB": 71.6,
+                "gzBytes": 15142538
+              },
+              {
+                "persist": 4,
+                "syncCallMs": 1589.9,
+                "maxEventLoopStallMs": 1589.4,
+                "persistWallMs": 1590,
+                "rssJumpMB": 69,
+                "gzBytes": 15142544
+              },
+              {
+                "persist": 5,
+                "syncCallMs": 1566,
+                "maxEventLoopStallMs": 1565.5,
+                "persistWallMs": 1566,
+                "rssJumpMB": 71.4,
+                "gzBytes": 15142544
+              }
+            ],
+            "loadavg1mAtStart": 17.11,
+            "summary": {
+              "steadyPersists": 5,
+              "medianSyncCallMs": 1625.6,
+              "medianMaxEventLoopStallMs": 1625.6,
+              "medianPersistWallMs": 1625.6,
+              "medianRssJumpMB": 71.6,
+              "maxRssJumpMB": 101.5
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

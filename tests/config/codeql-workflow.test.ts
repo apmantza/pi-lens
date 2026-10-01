@@ -63,12 +63,8 @@ function ifClauses(condition: string): string[] {
 }
 
 const codeqlIfClauses = [
-	"!cancelled()",
 	"github.event_name == 'pull_request'",
-	"needs.install-test.result == 'success'",
-	"needs.lint-and-typecheck.result == 'success'",
-	"needs.tla-models.result == 'success'",
-	"needs.unit-tests.result == 'success'",
+	"needs.heavy-gate.outputs.ready == 'true'",
 ].sort();
 
 describe("#3801 CodeQL advanced-setup workflow contract", () => {
@@ -139,16 +135,14 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 		expect(ifClauses(condition)).toEqual(codeqlIfClauses);
 	});
 
-	// Recurrence: GitHub's default for a job whose `needs` did not all pass is
-	// SKIPPED, and the job must also survive a skipped dependency, so the
-	// condition is `!cancelled()` plus an explicit `success` for EVERY need.
-	// Dropping one clause runs CodeQL behind a red required check; dropping
-	// `!cancelled()` skips it silently whenever a dependency is skipped.
-	it("waits on the required jobs and runs only when every one of them succeeded", () => {
+	// Recurrence (#3807 second lander): the PR-time analysis is one of the heavy
+	// advisory jobs behind `heavy-gate`. A `needs:` on the four required jobs
+	// directly would start CodeQL beside the heavy gate's other jobs, on a docs-only
+	// diff (the gate is skipped there) and without the gate's lint.yml check;
+	// a missing `ready` clause would run it on a not-ready gate.
+	it("waits on heavy-gate only and runs for a ready gate on pull_request", () => {
 		const job = codeqlJob();
-		expect(asList(job.needs).sort()).toEqual(
-			["install-test", "lint-and-typecheck", "tla-models", "unit-tests"].sort(),
-		);
+		expect(asList(job.needs)).toEqual(["heavy-gate"]);
 		const condition = String(job.if);
 		expect(condition).not.toContain("||");
 		expect(ifClauses(condition)).toEqual(codeqlIfClauses);

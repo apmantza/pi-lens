@@ -20,6 +20,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { ADVISORY_ONLY_MARKER } from "../../scripts/lib/ci-failure-classifier.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/ci-infra-kill-rerun.yml";
@@ -295,6 +296,70 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 		const stepRun = readClassifyStepRun();
 		expect(stepRun).toContain('"$RUN_EVENT" == "push"');
 		expect(stepRun).toContain('"$RUN_EVENT" == "repository_dispatch"');
+	});
+});
+
+// #3801 (verify r2 V3): a not-ready `Heavy advisory gate` exits 1, which fails
+// the CI run with every required check green. The classifier skips such a run
+// (no failed `Unit tests` job) and the label step used to read "skipped" as
+// "not infra" and put `ci:real` on the green PR. A run whose failed jobs are
+// all advisory (the classifier prints ADVISORY_ONLY_MARKER) must label nothing
+// and clear stale verdict labels; every other skip keeps `ci:real`.
+describe("ci-infra-kill-rerun.yml classify label step for an advisory-only failure (#3801)", () => {
+	const run = () => {
+		const job = (loadWorkflow().jobs as Record<string, WorkflowJob>).classify;
+		return String(
+			(job.steps as WorkflowStep[]).find((step) =>
+				String(step.run).includes("gh pr edit"),
+			)?.run,
+		);
+	};
+	it("greps the classifier's own advisory-only phrase and adds no label in that branch", () => {
+		const text = run();
+		expect(text).toContain(ADVISORY_ONLY_MARKER);
+		const branch =
+			/elif grep -q -- '[^']*only advisory jobs failed' <<<"\$output"; then([\s\S]*?)\n\s*else/.exec(
+				text,
+			)?.[1];
+		expect(branch).toBeDefined();
+		expect(branch).toContain("--remove-label 'ci:real'");
+		expect(branch).toContain("--remove-label 'ci:infra'");
+		expect(branch).not.toContain("--add-label");
+	});
+
+	// Recurrence (verify r3 V5): the grep read the WHOLE CLI stdout, which on the
+	// real-failure path carries log-derived text (the first failing assertion
+	// line). A genuine red `Unit tests` shard whose assertion text contained the
+	// phrase lost its `ci:real` label. The pattern is anchored to the CLI's own
+	// skip line, and this evaluates the pattern the workflow really uses.
+	it("anchors the phrase to the classifier's skip line, so log text cannot trigger it", () => {
+		const pattern =
+			/grep -q -- '([^']*only advisory jobs failed)' <<<"\$output"/.exec(
+				run(),
+			)?.[1];
+		expect(pattern).toBeDefined();
+		const regex = new RegExp(pattern as string, "m");
+		const skipLine = `CI failure classifier skipped: run 9 has no failed job named "Unit tests"; ${ADVISORY_ONLY_MARKER} (Heavy advisory gate (advisory))`;
+		expect(regex.test(skipLine)).toBe(true);
+		// a real failure: the CLI's result line, then the sticky comment body
+		// carrying the failing assertion line verbatim
+		const realFailure = [
+			"PR #42 sha=abc job=Unit tests (shard 2/4) -> real",
+			"<!-- ci-classifier -->",
+			`AssertionError: expected "${ADVISORY_ONLY_MARKER}" to be logged`,
+			`  ${skipLine}`,
+		].join("\n");
+		expect(regex.test(realFailure)).toBe(false);
+	});
+
+	it("keeps ci:infra first and ci:real as the fall-through", () => {
+		const text = run();
+		const infra = text.indexOf("-> infra-");
+		const advisory = text.indexOf(ADVISORY_ONLY_MARKER);
+		const real = text.indexOf("--add-label 'ci:real'");
+		expect(infra).toBeGreaterThan(-1);
+		expect(infra).toBeLessThan(advisory);
+		expect(advisory).toBeLessThan(real);
 	});
 });
 

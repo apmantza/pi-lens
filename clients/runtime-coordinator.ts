@@ -1639,17 +1639,41 @@ export class RuntimeCoordinator {
 		filePath: string,
 		deadLines: readonly number[],
 	): boolean {
-		if (deadLines.length === 0) return false;
+		const key = this.pastEofRetireKey(filePath, deadLines);
+		if (key === undefined) return false;
+		this._pendingInlineBlockers.delete(key);
+		return true;
+	}
+
+	/**
+	 * #3813: the retire rule of {@link retireDemotedPastEofBlocker}, without
+	 * the delete. The turn-end composer asks it at render time (to word the
+	 * retirement note) and only retires once the cap has let the delivery
+	 * through; the rule stays here, in one place.
+	 */
+	wouldRetireDemotedPastEofBlocker(
+		filePath: string,
+		deadLines: readonly number[],
+	): boolean {
+		return this.pastEofRetireKey(filePath, deadLines) !== undefined;
+	}
+
+	/** The store key of the record the past-EOF retire rule admits, if any. */
+	private pastEofRetireKey(
+		filePath: string,
+		deadLines: readonly number[],
+	): string | undefined {
+		if (deadLines.length === 0) return undefined;
 		const key = path.resolve(filePath);
 		const existing = this._pendingInlineBlockers.get(key);
-		if (!existing) return false;
+		if (!existing) return undefined;
 		// Only this gate's own demotion. A dependency-drift demotion (#1631)
 		// keeps in-bounds coordinates the agent CAN re-run against, so it stays
 		// in the store until a fresh verdict clears it.
-		if (!existing.stale) return false;
-		if ((existing.staleReason ?? "past-eof") !== "past-eof") return false;
-		this._pendingInlineBlockers.delete(key);
-		return true;
+		if (!existing.stale) return undefined;
+		return (existing.staleReason ?? "past-eof") === "past-eof"
+			? key
+			: undefined;
 	}
 
 	/**

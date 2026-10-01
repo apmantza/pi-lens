@@ -1631,6 +1631,17 @@ export class ReadGuard {
 	}
 
 	/**
+	 * #3676: which guard lifetime {@link currentBranchEpoch} counts in. The epoch
+	 * restarts at 0 in every new guard (`/fork`, `/new`, a resume), so a stamp
+	 * that outlives its guard, in a cache file for instance, carries this beside
+	 * the epoch. The scope ticket is drawn from a per-process counter that starts
+	 * at 1 in every process, so the pid is part of the key.
+	 */
+	get lineageKey(): string {
+		return `${process.pid}:${this.scope.scopeId}`;
+	}
+
+	/**
 	 * Load a persisted read-set (#1041) for the branch this session starts on
 	 * (#3521): a resume, `pi --fork`, or the fork/clone hand-off. The same rule
 	 * as {@link retainBranch}: a record is imported, whole, only when its

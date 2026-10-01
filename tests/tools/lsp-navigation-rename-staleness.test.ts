@@ -305,6 +305,40 @@ describe("#3601: lsp_navigation's rename refuses an edit on a file that changed"
 		expect(staleRows()).toEqual([expect.objectContaining({ count: 1 })]);
 	});
 
+	it("a file first opened after the request is refused when its client reports no start, and renamed when it was quiet since the start", async () => {
+		// Recurrence guarded: #3827 review r1 F1. The first-open exemption is a
+		// claim about the file's mtime against the client's start; a client that
+		// cannot make it (a double, an older client) keeps the stamp check.
+		ageFile(fileB, 3_600_000);
+		const firstOpen = (clientStartedAtMs?: number) => ({
+			hash: hashDiagnosticContent("const = 2;\n"),
+			changedAtMs: Date.now() + 60_000,
+			openedAtMs: Date.now() + 60_000,
+			openedHash: hashDiagnosticContent("const = 2;\n"),
+			clientStartedAtMs,
+		});
+		const run = async (clientStartedAtMs?: number) => {
+			lsp.service = makeLspServiceDouble({
+				supportsLSP: () => true,
+				hasLSP: async () => true,
+				getTrackedContent: vi.fn((p: string) =>
+					sameFile(p, fileB) ? firstOpen(clientStartedAtMs) : undefined,
+				),
+				rename: async () => twoFileEdit(),
+			});
+			return runRename();
+		};
+
+		const unknown = await run(undefined);
+		expect(unknown.isError).toBe(true);
+		expect(resultText(unknown)).toContain(path.basename(fileB));
+		expect(fs.readFileSync(fileB, "utf8")).toBe("const = 2;\n");
+
+		const quiet = await run(Date.now() - 60_000);
+		expect(quiet.isError).toBeUndefined();
+		expect(fs.readFileSync(fileB, "utf8")).toBe("let = 2;\n");
+	});
+
 	it("an unopened non-target file whose mtime is inside the margin is refused, naming the file", async () => {
 		// Written 1.5 s before the request, inside the 2 s margin: the server
 		// may have read either side of that write.

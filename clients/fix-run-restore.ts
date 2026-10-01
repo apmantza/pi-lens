@@ -23,20 +23,49 @@
  * 5. An edit pi-lens cannot show survived is reported by file name, so the
  *    agent can re-apply it.
  *
- * ## The restore invariant (#3741 round 2)
+ * ## The restore invariant (#3741 round 2, #3830)
  *
  * The restore never writes over content NEWER than the capture, and never
  * recreates a file that is absent at restore time. It writes only a file the
- * tool demonstrably rewrote after the capture. For each captured file, at
- * settle:
+ * tool demonstrably rewrote after the capture. For each captured file, inside
+ * pi's queue entry for it, the restore reads the file and decides:
  *
- * | at settle                                   | outcome                     |
+ * | at the restore                              | outcome                     |
  * | ------------------------------------------- | --------------------------- |
  * | absent (agent deleted or renamed it)        | nothing; never recreated    |
  * | an agent call on it is still in flight      | not written; possibly lost  |
  * | bytes equal the capture                     | nothing                     |
- * | changed again while the restore was reading | not written; possibly lost  |
+ * | changed again before the write (re-read)    | not written; possibly lost  |
  * | otherwise (the tool rewrote it after)       | capture written back        |
+ *
+ * ## Lock order (#3830)
+ *
+ * The restore takes pi's queue entry for a sibling S, so an agent `edit` of S
+ * cannot land between the restore's compare and its write. The pipeline holds
+ * the target F's entry while the tool runs, through its own after-reads
+ * (#3506), and the restore starts after the caller's scan of the tool's
+ * changes, so it can wait for S's entry while F is held. That is safe because
+ * nothing waits for the restore while it holds an entry:
+ *
+ * - A queue entry is requested by something that holds no other entry, with
+ *   one exception: the multi-path LSP edit (`withHostFileMutationQueues`)
+ *   requests its keys in ascending order.
+ * - The restore holds one S entry at a time and does file I/O only inside it.
+ * - {@link runWithFixRestore} returns the restore as a promise and awaits
+ *   nothing on it. A caller awaits it only after it has released the target's
+ *   hold, and the tool_result pipeline does not await it at all: F's
+ *   diagnostics and blockers must not wait on whoever holds a sibling, so its
+ *   loss notice goes to the agent through the advisory queue
+ *   (`PipelineContext.onFixRunLoss`). A restore awaited INSIDE F's hold closes a cycle: an LSP edit of
+ *   [S, F] holds S and waits for F, the pipeline holds F and waits for the
+ *   restore, the restore waits for S (`formal/dispatch-pipeline`
+ *   `SiblingRestoreQueuedInHold`, checked with CHECK_DEADLOCK;
+ *   `tests/clients/fix-run-restore.test.ts` runs the same cycle through pi's
+ *   real queue).
+ *
+ * The run stays registered until the restore ends, so an agent call that
+ * starts after the tool exited is tracked (in flight, then captured) and the
+ * restore does not write over it.
  *
  * ## What the capture can prove
  *
@@ -61,15 +90,18 @@
  *
  * ## Residual, stated
  *
- * - The restore is a compare-then-write outside pi's queue for that file.
- *   Taking a second queue while the pipeline holds the target's is the lock
- *   order break option 1 was rejected for. The re-stat just before the write
- *   narrows the window to one syscall gap; it does not close it.
+ * - The write is guarded by pi's queue and a content re-read; a writer outside
+ *   the queue (bash, a bridged producer) that lands between the re-read and
+ *   the rename is still overwritten.
  * - "In flight" is known only for calls that pass pi-lens's tool_call seam with
- *   a correlation id. A bash or bridged producer whose write lands during the
- *   run and whose bytes were never captured, on a file the tool did not touch,
- *   is neither seen nor restored over when no capture exists for the file;
- *   on a file the tool DID touch it is the unverifiable case above.
+ *   a correlation id while a run is registered; a call made before
+ *   `beginFixRun` is not seen (#3830, window D). A bash or bridged producer
+ *   whose write lands during the run and whose bytes were never captured, on a
+ *   file the tool did not touch, is neither seen nor restored over when no
+ *   capture exists for the file; on a file the tool DID touch it is the
+ *   unverifiable case above. A later capture replaces an earlier one (#3830,
+ *   window C), and a file with no capture is skipped before the in-flight
+ *   check (window B).
  */
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
@@ -79,6 +111,7 @@ import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
+import { withHostFileMutationQueue } from "./file-mutation-queue.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { getProcessSingleton } from "./process-singletons.js";
@@ -102,12 +135,6 @@ export interface AgentWriteExpectation {
 
 /** `verified`: bytes match the agent's stated write. `overwritten`: they do not. */
 type CaptureVerdict = "verified" | "overwritten" | "unverifiable";
-
-interface StatIdentity {
-	mtimeMs: number;
-	size: number;
-	ino: number;
-}
 
 interface Capture {
 	bytes: Buffer;
@@ -138,27 +165,45 @@ export interface FixRunReport {
 }
 
 export interface FixRun {
-	finish(): Promise<FixRunReport>;
+	/**
+	 * The tool has exited. `agentEdited` is what the capture holds now;
+	 * `restore` writes the captures back and ends the run. It takes pi's queue
+	 * entry for each file, so never await it while holding one (#3830). It
+	 * never rejects.
+	 */
+	finish(): { agentEdited: string[]; restore(): Promise<FixRunReport> };
 }
 
 /**
  * Run `run` (the fixer's spawn) with the pre-run hash set and the capture in
- * place, and settle the run whether `run` returns or throws: a tool that exits
- * nonzero or times out has usually already rewritten files.
+ * place, then `afterRun` (the caller's own scan of what the tool changed, given
+ * the files an agent edit was captured for: the tool's changes to them are not
+ * its own), and restore whether `run` returns or throws: a tool that exits
+ * nonzero or times out has usually already rewritten files. The restore starts
+ * after `afterRun`, so it never writes while the caller scans, and is NOT
+ * awaited here (see "Lock order" above); the run stays registered until it ends.
  */
-export async function runWithFixRestore<T>(
+export async function runWithFixRestore<T, R>(
 	args: Parameters<typeof beginFixRun>[0],
 	run: () => Promise<T>,
-): Promise<{ value: T; report: FixRunReport }> {
+	afterRun: (value: T, agentEdited: string[]) => Promise<R>,
+): Promise<{ result: R; restoring: Promise<FixRunReport> }> {
 	const fixRun = await beginFixRun(args);
-	let value: T;
+	let finished: ReturnType<FixRun["finish"]> | undefined;
+	let outcome: { result: R } | { failure: unknown };
 	try {
-		value = await run();
+		const value = await run();
+		finished = fixRun.finish();
+		outcome = { result: await afterRun(value, finished.agentEdited) };
 	} catch (failure) {
-		await fixRun.finish();
-		throw failure;
+		outcome = { failure };
 	}
-	return { value, report: await fixRun.finish() };
+	const restoring = (finished ?? fixRun.finish()).restore();
+	if ("failure" in outcome) {
+		void restoring;
+		throw outcome.failure;
+	}
+	return { result: outcome.result, restoring };
 }
 
 interface Registry {
@@ -182,18 +227,10 @@ function sha256(bytes: Buffer): string {
 	return createHash("sha256").update(bytes).digest("hex");
 }
 
-function identityOf(stat: fs.Stats): StatIdentity {
-	return { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino };
-}
-
-function sameIdentity(a: StatIdentity, b: StatIdentity): boolean {
-	return a.mtimeMs === b.mtimeMs && a.size === b.size && a.ino === b.ino;
-}
-
 /**
  * Hash the tool's rewritable files and start capturing agent mutations of
  * them. Never throws: a file that cannot be read is simply not covered.
- * Always pair with `finish()` in a `finally`, or the run stays registered.
+ * Always call `finish()` and then its `restore()`, or the run stays registered.
  */
 export async function beginFixRun(args: {
 	tool: string;
@@ -265,66 +302,78 @@ export async function beginFixRun(args: {
 	const { active } = registry();
 	active.add(run);
 	return {
-		async finish(): Promise<FixRunReport> {
-			active.delete(run);
-			return settle(args.tool, run);
+		finish() {
+			return {
+				agentEdited: [...files.values()].flatMap((file) =>
+					file.capture ? [file.filePath] : [],
+				),
+				restore: () => restoreRun(args.tool, run, active),
+			};
 		},
 	};
 }
 
-async function settle(tool: string, run: ActiveRun): Promise<FixRunReport> {
+/**
+ * Write the captures back, one queue entry at a time, and end the run. The run
+ * stays in `active` until the last file is done, so a call that starts or an
+ * edit that lands while the restore works is tracked (#3830, window A).
+ */
+async function restoreRun(
+	tool: string,
+	run: ActiveRun,
+	active: Set<ActiveRun>,
+): Promise<FixRunReport> {
 	const report: FixRunReport = {
 		restored: [],
 		lost: [],
 		possiblyLost: [],
 		agentEdited: [],
 	};
-	const inFlight = new Set(run.calls.values());
-	for (const [key, file] of run.files) {
-		const capture = file.capture;
-		if (!capture) continue;
-		report.agentEdited.push(file.filePath);
-		let before: fs.Stats;
-		let current: Buffer;
-		try {
-			before = await fs.promises.stat(file.filePath);
-			current = await fs.promises.readFile(file.filePath);
-		} catch {
-			// Deleted or renamed by the agent (the tool never deletes): the path is
-			// not this run's to recreate.
-			continue;
-		}
-		if (capture.verdict === "overwritten") {
-			report.lost.push(file.filePath);
-			continue;
-		}
-		const unchanged = current.equals(capture.bytes);
-		if (inFlight.has(key)) {
-			// A newer agent write may already be on disk with its tool_result still
-			// to come: the capture is older than the file, so it must not be written.
-			if (!unchanged || capture.verdict === "unverifiable")
-				report.possiblyLost.push(file.filePath);
-			continue;
-		}
-		if (capture.verdict === "unverifiable")
-			report.possiblyLost.push(file.filePath);
-		if (unchanged) continue;
-		try {
-			// Something newer than the bytes read above (a second edit, or a
-			// deletion) is not the tool's write and is not ours to overwrite.
-			const after = await fs.promises.stat(file.filePath);
-			if (!sameIdentity(identityOf(after), identityOf(before))) {
-				if (!report.possiblyLost.includes(file.filePath))
-					report.possiblyLost.push(file.filePath);
-				continue;
+	const skipped: string[] = [];
+	const startedAt = Date.now();
+	let queueWaitMs = 0;
+	try {
+		for (const [key, file] of run.files) {
+			if (!file.capture) continue;
+			report.agentEdited.push(file.filePath);
+			const requestedAt = Date.now();
+			try {
+				await withHostFileMutationQueue(file.filePath, () => {
+					queueWaitMs += Date.now() - requestedAt;
+					return restoreFile(run, key, file, report, skipped);
+				});
+			} catch {
+				report.lost.push(file.filePath);
 			}
-			await writeFileAtomicAsync(file.filePath, capture.bytes, {
-				bestEffort: false,
-			});
-			report.restored.push(file.filePath);
-		} catch {
-			report.lost.push(file.filePath);
 		}
+	} finally {
+		active.delete(run);
+	}
+	if (report.agentEdited.length > 0) {
+		// One row per run that had a capture: `queueWaitMs` is the time spent
+		// behind other holders of the siblings' queue entries, the number to watch
+		// now that the restore waits for them (#3830).
+		logLatency({
+			type: "phase",
+			filePath: "<pi-lens>",
+			phase: "fix_run_restore",
+			durationMs: Date.now() - startedAt,
+			metadata: {
+				tool,
+				files: report.agentEdited.length,
+				restored: report.restored.length,
+				lost: report.lost.length,
+				possiblyLost: report.possiblyLost.length,
+				queueWaitMs,
+			},
+		});
+	}
+	if (skipped.length > 0) {
+		incrementDegradationCount({
+			kind: "fix-run-restore-skipped-newer-edit",
+			subject: tool,
+			reason: `${tool}'s restore left ${skipped.length} file(s) alone because a newer agent edit may have won, and named them as possibly lost (${skipped.slice(0, 5).join(", ")})`,
+		});
 	}
 	if (
 		report.restored.length > 0 ||
@@ -341,6 +390,62 @@ async function settle(tool: string, run: ActiveRun): Promise<FixRunReport> {
 		});
 	}
 	return report;
+}
+
+/** The decision table of the module header, run inside the file's queue entry. */
+async function restoreFile(
+	run: ActiveRun,
+	key: string,
+	file: CoveredFile,
+	report: FixRunReport,
+	skipped: string[],
+): Promise<void> {
+	const capture = file.capture;
+	if (!capture) return;
+	let current: Buffer;
+	try {
+		current = await fs.promises.readFile(file.filePath);
+	} catch {
+		// Deleted or renamed by the agent (the tool never deletes): the path is
+		// not this run's to recreate.
+		return;
+	}
+	if (capture.verdict === "overwritten") {
+		report.lost.push(file.filePath);
+		return;
+	}
+	const unchanged = current.equals(capture.bytes);
+	if ([...run.calls.values()].includes(key)) {
+		// A newer agent write may already be on disk with its tool_result still
+		// to come: the capture is older than the file, so it must not be written.
+		if (!unchanged || capture.verdict === "unverifiable")
+			report.possiblyLost.push(file.filePath);
+		if (!unchanged) skipped.push(file.filePath);
+		return;
+	}
+	if (capture.verdict === "unverifiable")
+		report.possiblyLost.push(file.filePath);
+	if (unchanged) return;
+	// pi's queue keeps the agent's `edit` out; this re-read catches a writer
+	// outside it (bash, a bridged producer). It compares bytes, not mtime and
+	// size: an in-place edit keeps the inode, and a same-size edit inside one
+	// mtime tick is invisible to a stat.
+	let again: Buffer;
+	try {
+		again = await fs.promises.readFile(file.filePath);
+	} catch {
+		return;
+	}
+	if (!again.equals(current)) {
+		if (!report.possiblyLost.includes(file.filePath))
+			report.possiblyLost.push(file.filePath);
+		skipped.push(file.filePath);
+		return;
+	}
+	await writeFileAtomicAsync(file.filePath, capture.bytes, {
+		bestEffort: false,
+	});
+	report.restored.push(file.filePath);
 }
 
 /**

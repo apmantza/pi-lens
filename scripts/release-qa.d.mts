@@ -24,6 +24,11 @@ export interface ProbeReport {
 	detail?: string;
 }
 
+export interface NpmPackListing {
+	filename: string;
+	files: ReadonlyArray<{ path: string }>;
+}
+
 export interface RowResult {
 	id: string;
 	outcome: string;
@@ -128,6 +133,7 @@ export const OUTCOME: {
 };
 
 export function parseBaselineRows(text: string): ParsedBaseline;
+export function parseNpmPackJson(text: string): NpmPackListing;
 export function classifyRowOutcome(probe: ProbeReport | null | undefined): {
 	outcome: string;
 	detail: string;

@@ -62,6 +62,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+	ADVISORY_ONLY_MARKER,
 	buildCommentBody,
 	buildMarker,
 	classifyFailureLog,
@@ -1214,6 +1215,143 @@ describe("runClassifier orchestration against a mocked, STATEFUL GitHub API (#21
 		});
 		expect(api.comments).toHaveLength(0);
 		expect(api.rerunCallCount).toBe(0);
+	});
+
+	// #3801 recurrence (verify r2 V3): a not-ready `Heavy advisory gate` exits 1,
+	// which fails the CI run even with every required check green. The label
+	// step read "skipped" as "not infra" and put `ci:real` on a green PR. A run
+	// whose failed jobs are ALL advisory is marked so the caller labels nothing;
+	// one non-advisory failure alongside keeps the plain skip (Lint red stays
+	// `ci:real` through the workflow's else branch).
+	it("marks a skipped run advisory-only when every failed job is advisory", async () => {
+		const api = makeStatefulApi();
+		const jobsFetcher =
+			(jobs: Array<{ id: number; name: string; conclusion: string }>) =>
+			async (url: string, init?: RequestInit) => {
+				if (url.endsWith("/actions/runs/999/jobs"))
+					return jsonResponse({ jobs });
+				return api.fetcher(url, init);
+			};
+		const run = (
+			jobs: Array<{ id: number; name: string; conclusion: string }>,
+		) =>
+			runClassifier({
+				fetcher: jobsFetcher(jobs),
+				owner: "acme",
+				repo: "repo",
+				runId: 999,
+				jobName: "Unit tests",
+				skipMissingJob: true,
+			});
+		const gate = {
+			id: 1,
+			name: "Heavy advisory gate (advisory)",
+			conclusion: "failure",
+		};
+		const windows = {
+			id: 2,
+			name: "Unit tests Windows (advisory)",
+			conclusion: "failure",
+		};
+		const advisory = await run([
+			{ id: 3, name: "Unit tests", conclusion: "success" },
+			gate,
+			windows,
+		]);
+		expect(advisory).toEqual({
+			skipped: true,
+			advisoryOnly: true,
+			reason: `run 999 has no failed job named "Unit tests"; ${ADVISORY_ONLY_MARKER} (Heavy advisory gate (advisory), Unit tests Windows (advisory))`,
+		});
+		const mixed = await run([
+			gate,
+			{ id: 4, name: "Lint & type-check", conclusion: "failure" },
+		]);
+		expect(mixed).toEqual({
+			skipped: true,
+			reason: 'run 999 has no failed job named "Unit tests"',
+		});
+		// Verify r3 V6: a required job that ended `timed_out` (or cancelled)
+		// beside a red advisory job is not advisory-only; an ADVISORY job with a
+		// non-`failure` blocking conclusion still is.
+		const required = await run([
+			{ id: 7, name: "Dependency boundaries", conclusion: "timed_out" },
+			gate,
+		]);
+		expect(required).toEqual({
+			skipped: true,
+			reason: 'run 999 has no failed job named "Unit tests"',
+		});
+		const advisoryCancelled = await run([
+			{ id: 8, name: "Unit tests Windows (advisory)", conclusion: "cancelled" },
+			gate,
+		]);
+		expect(advisoryCancelled).toMatchObject({
+			skipped: true,
+			advisoryOnly: true,
+		});
+		// A run that failed with NO job concluding `failure` (a timed-out or
+		// cancelled job) is not "only advisory jobs failed": vacuous truth of
+		// `every` over an empty list must not read as advisory-only.
+		const none = await run([
+			{ id: 5, name: "Unit tests", conclusion: "success" },
+			{ id: 6, name: "Install test (ubuntu-latest)", conclusion: "timed_out" },
+		]);
+		// No blocking job at all (every job green or skipped, the run failed for
+		// another reason): vacuous truth of `every` must not read advisory-only.
+		const green = await run([
+			{ id: 9, name: "Unit tests", conclusion: "success" },
+			{ id: 10, name: "Heavy advisory gate (advisory)", conclusion: "skipped" },
+		]);
+		expect(green).toEqual({
+			skipped: true,
+			reason: 'run 999 has no failed job named "Unit tests"',
+		});
+		expect(none).toEqual({
+			skipped: true,
+			reason: 'run 999 has no failed job named "Unit tests"',
+		});
+		expect(api.comments).toHaveLength(0);
+		expect(api.rerunCallCount).toBe(0);
+	});
+
+	// Verify r3 V5: log text that happens to contain the advisory-only phrase
+	// must not make a REAL failing shard read as skipped/advisory (the workflow
+	// label step keys on the CLI's skip line; this pins the classifier side: a
+	// failing shard is classified, never skipped, whatever its log says).
+	it("classifies a failing shard whose log carries the advisory-only phrase as a real failure", async () => {
+		const api = makeStatefulApi();
+		const fetcher = async (url: string, init?: RequestInit) => {
+			if (url.endsWith("/actions/runs/999/jobs"))
+				return jsonResponse({
+					jobs: [
+						{ id: 301, name: "Unit tests (shard 2/4)", conclusion: "failure" },
+						{
+							id: 302,
+							name: "Heavy advisory gate (advisory)",
+							conclusion: "failure",
+						},
+					],
+				});
+			if (/\/actions\/jobs\/301\/logs$/.test(url))
+				return textResponse(
+					`AssertionError: expected "${ADVISORY_ONLY_MARKER}" to be logged\n`,
+				);
+			return api.fetcher(url, init);
+		};
+		const result = await runClassifier({
+			fetcher,
+			owner: "acme",
+			repo: "repo",
+			runId: 999,
+			jobName: "Unit tests",
+			skipMissingJob: true,
+			prNumber: 42,
+			sha: "deadbeef",
+		});
+		expect("skipped" in result).toBe(false);
+		if ("skipped" in result) return;
+		expect(result.classification.kind).toBe("real");
 	});
 
 	// #3753 recurrence: `Unit tests` is an aggregate over `Unit tests (shard

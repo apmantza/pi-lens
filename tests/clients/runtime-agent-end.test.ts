@@ -2458,6 +2458,9 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 						{
 							filePath,
 							displayPath: "src/app.ts",
+							// #3676: the quick fix credits the epoch its entry was built on.
+							branchEpoch: runtime.readGuard.currentBranchEpoch,
+							branchScope: runtime.readGuard.lineageKey,
 							warnings: [
 								{
 									id: "aw:3521",
@@ -2533,11 +2536,12 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 		});
 	}
 
-	// #3521 round-3 verify F-B: onAgentSettled captures the epoch before the
-	// sweep awaits and passes it in. A /tree that lands before the drain starts
-	// must still refuse the quick fix's write; a drain that re-read the current
-	// epoch at its own entry would credit it to the new branch.
-	it("does not credit a quick fix when the /tree landed before the drain started", async () => {
+	// #3521 round-3 verify F-B, reshaped by #3676 (F-A): a /tree that lands
+	// before the drain starts must still refuse the quick fix's write. The
+	// report was built before the move, so it carries the old epoch; a drain
+	// that credited the epoch current at its own entry would credit it to the
+	// new branch.
+	it("does not credit a quick fix whose report predates a /tree that landed before the drain started", async () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-branch-aw-entry-");
 		try {
 			const filePath = createTempFile(
@@ -2561,6 +2565,8 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 					{
 						filePath,
 						displayPath: "src/app.ts",
+						branchEpoch: runtime.readGuard.currentBranchEpoch,
+						branchScope: runtime.readGuard.lineageKey,
 						warnings: [
 							{
 								id: "aw:3521-entry",
@@ -2608,8 +2614,7 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 					};
 				},
 			);
-			// The settle captured epoch 0; the /tree lands while the sweep awaits.
-			const settleEpoch = runtime.readGuard.currentBranchEpoch;
+			// The report was built at epoch 0; the /tree lands while the sweep awaits.
 			runtime.readGuard.retainBranch(new Set());
 			await handleAgentEnd({
 				ctxCwd: env.tmpDir,
@@ -2626,7 +2631,6 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 				} as any,
 				getFormatService: () =>
 					({ recordRead: () => {}, formatFile: vi.fn() }) as any,
-				readGuardBranchEpoch: settleEpoch,
 			});
 			expect(applyConservativeActionableWarningFixesMock).toHaveBeenCalled();
 			expect(zeroRead(runtime, filePath)).toBe("block");
@@ -2635,6 +2639,242 @@ describe("runtime-agent-end deferred writes across a /tree (#3521)", () => {
 			env.cleanup();
 		}
 	});
+
+	// #3676. The quick fix is credited with the oldest branch epoch among the
+	// entries it fixes. Recurrence: a cache file written before the stamp
+	// existed (readable for ten minutes), a malformed epoch, or one entry older
+	// than its neighbours must not be credited to whichever branch the settle
+	// runs on. The fix is still applied; only its credit is withheld, and the
+	// row says why. The probed file is `a`; `b` is a neighbour in the same pass.
+	// `scopes` overrides the guard lineage each entry was built under (default:
+	// the live guard's), `neighbour` makes `b` something the pass cannot fix.
+	const quickFixPass = async (
+		epochs: readonly [unknown, unknown],
+		opts: {
+			moved?: boolean;
+			scopes?: readonly [unknown, unknown];
+			neighbour?: "fixable" | "not eligible" | "suppressed";
+			/** The pid the process presents when the pass runs (a resume elsewhere). */
+			pidAtSettle?: number;
+		} = {},
+	) => {
+		const { moved = true, neighbour = "fixable" } = opts;
+		const env = setupTestEnvironment("pi-lens-agent-end-branch-aw-pass-");
+		try {
+			const a = createTempFile(env.tmpDir, "src/a.ts", "const x = 1;\n");
+			const b = createTempFile(env.tmpDir, "src/b.ts", "const y = 1;\n");
+			for (const file of [a, b]) fs.utimesSync(file, LONG_AGO, LONG_AGO);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.seedProjectSequence(1);
+			if (moved) runtime.readGuard.retainBranch(new Set());
+			const { getDegradationSummary, resetDegradationLedger } =
+				await import("../../clients/degradation-ledger.js");
+			resetDegradationLedger();
+			const scopes = opts.scopes ?? [
+				runtime.readGuard.lineageKey,
+				runtime.readGuard.lineageKey,
+			];
+			const entry = (
+				filePath: string,
+				branchEpoch: unknown,
+				branchScope: unknown,
+				kind: "fixable" | "not eligible" | "suppressed" = "fixable",
+			) => ({
+				filePath,
+				displayPath: path.basename(filePath),
+				branchEpoch,
+				branchScope,
+				warnings: [
+					{
+						id: `aw:3676:${path.basename(filePath)}`,
+						filePath,
+						displayPath: path.basename(filePath),
+						severity: "warning",
+						tool: "typescript",
+						message: "unused var",
+						suppressed: kind === "suppressed",
+						origin: "dispatch",
+						actions: [
+							{
+								title: "Remove unused var",
+								hasEdit: true,
+								hasCommand: false,
+								autoFixEligible: kind !== "not eligible",
+							},
+						],
+					},
+				],
+			});
+			const report = {
+				generatedAt: new Date().toISOString(),
+				scope: "turn_delta",
+				sessionId: "s1",
+				turnIndex: 1,
+				projectSeqEnd: 1,
+				deltaOnly: true,
+				includeLspCodeActions: true,
+				files: [
+					entry(a, epochs[0], scopes[0]),
+					entry(b, epochs[1], scopes[1], neighbour),
+				],
+				summary: {
+					warnings: 2,
+					unsuppressed: 2,
+					suppressed: 0,
+					files: 2,
+					actions: 2,
+					autoFixEligible: 2,
+				},
+			} as unknown as ActionableWarningsReport;
+			applyConservativeActionableWarningFixesMock.mockImplementationOnce(
+				async (args: {
+					mutationContext: {
+						readGuard?: { recordWritten: (filePath: string) => void };
+					};
+				}) => {
+					settle(a, "const x = 2;\n");
+					args.mutationContext.readGuard?.recordWritten(a);
+					return {
+						considered: 1,
+						applied: 1,
+						changedFiles: [a],
+						skipped: [],
+					};
+				},
+			);
+			// `process.pid` is a data property, so `vi.spyOn(process, "pid", "get")`
+			// has no getter to spy on: swap the descriptor and restore it below.
+			const pidDescriptor = Object.getOwnPropertyDescriptor(process, "pid")!;
+			if (opts.pidAtSettle !== undefined)
+				Object.defineProperty(process, "pid", {
+					...pidDescriptor,
+					value: opts.pidAtSettle,
+				});
+			try {
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" ||
+						name === "lens-actionable-warnings" ||
+						name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => ({ data: report }),
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+			} finally {
+				Object.defineProperty(process, "pid", pidDescriptor);
+			}
+			expect(applyConservativeActionableWarningFixesMock).toHaveBeenCalled();
+			expect(fs.readFileSync(a, "utf8")).toBe("const x = 2;\n");
+			return {
+				verdict: zeroRead(runtime, a),
+				rows: getDegradationSummary().filter(
+					(group) => group.kind === "actionable-warnings-quickfix-uncredited",
+				),
+				subject: env.tmpDir,
+			};
+		} finally {
+			applyConservativeActionableWarningFixesMock.mockReset();
+			env.cleanup();
+		}
+	};
+
+	for (const [label, epoch] of [
+		["no branchEpoch", undefined],
+		["a negative branchEpoch", -1],
+		["a fractional branchEpoch", 1.5],
+		["a string branchEpoch", "1"],
+	] as const) {
+		it(`applies a quick fix from an entry with ${label} and credits it to no branch`, async () => {
+			const { verdict, rows, subject } = await quickFixPass([epoch, 1]);
+			expect(verdict).toBe("block");
+			expect(rows).toEqual([
+				expect.objectContaining({
+					count: 1,
+					latestReasons: [expect.objectContaining({ subject })],
+				}),
+			]);
+		});
+	}
+
+	// F10/F11. Recurrence (#3912 review r1 F2): a new guard restarts the epoch at
+	// 0, so an entry another guard stamped 0 equals the live 0 of a fork, a /new
+	// session or a resume. The live epoch is 0 here, as in a fresh guard.
+	for (const [label, scope] of [
+		["another process's guard", `${process.pid + 1}:${1}`],
+		["another scope of this process", "scope-from-a-dead-guard"],
+		["no scope (a cache file from before the stamp)", undefined],
+	] as const) {
+		it(`applies a quick fix from an entry built under ${label} and credits it to no branch`, async () => {
+			const { verdict, rows, subject } = await quickFixPass([0, 0], {
+				moved: false,
+				scopes: [scope, scope],
+			});
+			expect(verdict).toBe("block");
+			expect(rows).toEqual([
+				expect.objectContaining({
+					count: 1,
+					latestReasons: [expect.objectContaining({ subject })],
+				}),
+			]);
+		});
+	}
+
+	// F11, the pid term of `lineageKey`. A resume in another process presents the
+	// same guard ticket (the counter restarts at 1 in each process) and the same
+	// epoch 0; only the pid differs. The report is built under the real pid, then
+	// the process presents another one when the pass runs.
+	it("applies a quick fix from an entry the same ticket and epoch stamped in another process and credits it to no branch", async () => {
+		const { verdict, rows, subject } = await quickFixPass([0, 0], {
+			moved: false,
+			pidAtSettle: process.pid + 1,
+		});
+		expect(verdict).toBe("block");
+		expect(rows).toEqual([
+			expect.objectContaining({
+				count: 1,
+				latestReasons: [expect.objectContaining({ subject })],
+			}),
+		]);
+	});
+
+	it("credits a quick fix pass whose entries were built under the live guard at epoch 0", async () => {
+		expect((await quickFixPass([0, 0], { moved: false })).verdict).toBe(
+			"allow",
+		);
+	});
+
+	// M12/M13. The pass is credited over the entries it can fix. A neighbour it
+	// cannot fix (no eligible action, or suppressed) is not part of the evidence,
+	// however old: crediting over every enabled entry would withhold a credit the
+	// probed file's own entry earns.
+	for (const neighbour of ["not eligible", "suppressed"] as const) {
+		it(`ignores an older neighbour entry the pass cannot fix (${neighbour})`, async () => {
+			expect((await quickFixPass([1, 0], { neighbour })).verdict).toBe("allow");
+		});
+	}
+
+	// The live epoch is 1 (a /tree ran). The pass is credited with the oldest of
+	// its entries' epochs, in whichever order they come, and an entry without
+	// one withholds the credit however many of its neighbours have one.
+	for (const [label, epochs, verdict] of [
+		["both entries on the live branch", [1, 1], "allow"],
+		["an older neighbour after it", [1, 0], "block"],
+		["an older neighbour before it", [0, 1], "block"],
+		["an unstamped neighbour after it", [1, undefined], "block"],
+		["an unstamped neighbour before it", [undefined, 1], "block"],
+	] as const) {
+		it(`credits a quick fix pass with its oldest entry: ${label}`, async () => {
+			expect((await quickFixPass(epochs)).verdict).toBe(verdict);
+		});
+	}
 });
 
 // #3521 round-2 verify R2-F1 (catalog shape 22): the branch epoch was taken
@@ -2707,7 +2947,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 			await handleAgentEnd({
 				...base,
 				runtime,
-				readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 				...args.secondSettle,
 			});
 			return runtime.readGuard.checkEdit(filePath, [1, 1]).action;
@@ -2732,7 +2971,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 			...base,
 			runtime,
 			signal: aborted.signal,
-			readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 		});
 		expect(runtime.pendingDeferredMutationCount).toBe(1);
 	};
@@ -2748,7 +2986,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 		await handleAgentEnd({
 			...base,
 			runtime,
-			readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 			getFormatService: () =>
 				({
 					recordRead: () => {},
@@ -2771,7 +3008,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 		await handleAgentEnd({
 			...base,
 			runtime,
-			readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 		});
 		expect(runtime.pendingDeferredMutationCount).toBe(1);
 	};
@@ -2948,7 +3184,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 					moved,
 					onY: (runtime, filePath, cwd) =>
 						sweepReplay(runtime, filePath, cwd, 0),
-					secondSettle: { readGuardBranchEpoch: 0 },
 				}),
 			).toBe(moved ? "block" : "allow");
 		});
@@ -2964,7 +3199,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 					await handleAgentEnd({
 						...base,
 						runtime,
-						readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 						getFormatService: () =>
 							({
 								recordRead: () => {},
@@ -2995,7 +3229,6 @@ describe("runtime-agent-end deferred records queued before a /tree (#3521 R2-F1)
 					await handleAgentEnd({
 						...base,
 						runtime,
-						readGuardBranchEpoch: runtime.readGuard.currentBranchEpoch,
 						getFormatService: () =>
 							({
 								recordRead: () => {},

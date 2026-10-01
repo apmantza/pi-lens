@@ -398,7 +398,7 @@ describe("every PR-triggerable workflow job is reachable on a pull request (#304
 			// Calibration, measured on 2026-09-16 by raising both floors until
 			// the audit printed its own counts, and re-measured in round 2 with
 			// the `on:`-reader fixed: 20 workflow files walked, 9 of them
-			// PR-triggerable (greetings.yml and mutation.yml carry no
+			// PR-triggerable (greetings.yml and the former mutation.yml carried no
 			// job-level `if:` at all), 13 job-level `if:` expressions examined
 			// in those 9, 7 of them unreachable from a pull request. Floors are
 			// half, rounded down, so an accidental narrowing of the walk (a

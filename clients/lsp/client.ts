@@ -548,9 +548,15 @@ export interface LSPClientInfo {
 	 * from state already held in memory. Optional for the same reason
 	 * `openDocumentPaths` is.
 	 */
-	getSentContent?(
-		filePath: string,
-	): { hash: string; changedAtMs?: number | undefined } | undefined;
+	getSentContent?(filePath: string):
+		| {
+				hash: string;
+				changedAtMs?: number | undefined;
+				openedAtMs?: number | undefined;
+				openedHash?: string | undefined;
+				clientStartedAtMs?: number | undefined;
+		  }
+		| undefined;
 	/** Whether this client currently has an LSP request in flight. */
 	isBusy?(): boolean;
 	/** URI spelling used when this document was opened. */
@@ -1059,6 +1065,16 @@ export interface LSPClientState {
 			 *  on the server (a re-send of the same bytes keeps it), so a caller
 			 *  can tell whether the server's copy changed after a request it made. */
 			changedAtMs?: number | undefined;
+			/** #3827: `Date.now()` of the FIRST send in this record's life (a
+			 *  re-send and a change keep it; a close drops the record). A caller
+			 *  that asks what the server held at an earlier instant reads it to
+			 *  tell a file this client first opened after that instant: the
+			 *  server's copy then was not this client's send. */
+			openedAtMs?: number | undefined;
+			/** #3827 verify r2: the hash of that first send's bytes, kept with
+			 *  `openedAtMs`. A record whose `hash` differs from it changed after
+			 *  its first send, which the first send's own stamp cannot show. */
+			openedHash?: string | undefined;
 			text?: string;
 			lastLine?: LastLinePosition;
 		}
@@ -1241,6 +1257,12 @@ export interface LSPClientState {
 	mutationContextOwner?: LspMutationContext;
 	activeMutationDepth?: number;
 	readonly serverId: string;
+	/** #3827: `Date.now()` when `createLSPClient` built this state, before the
+	 *  `initialize` handshake, so before the server could read any project file.
+	 *  A file whose mtime sits before it (by more than the filesystem's timestamp
+	 *  granularity) holds bytes the server could only have read as they are now.
+	 *  Optional for mock states; unset means no such claim. */
+	readonly startedAtMs?: number;
 	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts). Undefined =
 	 *  single-variant server or not yet reported. */
 	readonly launchVariant?: "classic" | "native-ts7";
@@ -2209,6 +2231,8 @@ function recordSentContent(
 		version,
 		hash,
 		changedAtMs: previous?.hash === hash ? previous.changedAtMs : Date.now(),
+		openedAtMs: previous?.openedAtMs ?? Date.now(),
+		openedHash: previous === undefined ? hash : previous.openedHash,
 		// #1669: retain the full text only for Incremental — the sole reader
 		// (`buildContentChanges`) needs it to compute the NEXT change against
 		// what the server last saw; Full/None never read this field.
@@ -2252,6 +2276,8 @@ function recordSentContent(
 				version: binding.version,
 				hash: binding.hash,
 				changedAtMs: binding.changedAtMs,
+				openedAtMs: binding.openedAtMs,
+				openedHash: binding.openedHash,
 			});
 			state.incrementalTextRetainedEntries = Math.max(
 				0,
@@ -5942,6 +5968,7 @@ export async function createLSPClient(options: {
 	const state: LSPClientState = {
 		isConnected: true,
 		isDestroyed: false,
+		startedAtMs: Date.now(),
 		shutdownRequested: false,
 		shutdownPromise: undefined,
 		shutdownOptions: undefined,
@@ -6473,7 +6500,15 @@ export async function createLSPClient(options: {
 
 		getSentContent(filePath) {
 			const sent = state.documentContentHashes.get(normalizeMapKey(filePath));
-			return sent && { hash: sent.hash, changedAtMs: sent.changedAtMs };
+			return (
+				sent && {
+					hash: sent.hash,
+					changedAtMs: sent.changedAtMs,
+					openedAtMs: sent.openedAtMs,
+					openedHash: sent.openedHash,
+					clientStartedAtMs: state.startedAtMs,
+				}
+			);
 		},
 
 		isBusy() {

@@ -754,6 +754,18 @@ const RENAME_MTIME_MARGIN_MS = 2000;
  *   external write older than the margin that the server's own file watching
  *   missed, or a write that keeps the old mtime, is applied at the server's
  *   offsets (#3747).
+ * - a file the client first opened at or after `requestedAtMs` (#3827): the
+ *   server answered from its own copy, and that first `didOpen` stamps the
+ *   file as changed although no byte did. It takes the unopened rule only when
+ *   its mtime is older than the client's start by the margin: then the server
+ *   could only have read the bytes it holds now, and the first open adds none.
+ *   Only that first send's stamp is skipped: the disk must still hash to the
+ *   last send, and the record must still hold the first send's bytes, or the
+ *   file is refused (a write that keeps the old mtime after the first open).
+ *   A file written after the client started (a pi write whose sync lands as
+ *   that first open, say) keeps the send check and its stamp, which refuses it:
+ *   the server may hold the load-time copy, not these bytes. A client that
+ *   reports no start makes no such claim.
  * The read that passed either check is the content the apply is then held to.
  * A file the edit creates, or one that cannot be read, is left out of the map,
  * matching every other `expectedContent` caller.
@@ -792,7 +804,19 @@ function captureRenameExpectedContent(
 			expected.set(realPath, targetContent);
 			continue;
 		}
-		const sent = lspService.getTrackedContent(diskPath, cwd);
+		const tracked = lspService.getTrackedContent(diskPath, cwd);
+		// #3827: a file this client first opened at or after the request, and
+		// that nobody wrote since the client started, was unopened when the
+		// server answered and held the bytes the disk holds: the first open adds
+		// none, so its stamp is skipped. The disk must still hold the first
+		// open's bytes, then the unopened rule below applies.
+		const firstOpenedAfterRequest =
+			tracked !== undefined && (tracked.openedAtMs ?? 0) >= requestedAtMs;
+		const quietSinceClientStart =
+			tracked?.clientStartedAtMs !== undefined &&
+			mtimeMs < tracked.clientStartedAtMs - RENAME_MTIME_MARGIN_MS;
+		const sent =
+			firstOpenedAfterRequest && quietSinceClientStart ? undefined : tracked;
 		if (sent !== undefined) {
 			if (
 				sent.hash !== hashDiagnosticContent(content) ||
@@ -803,6 +827,19 @@ function captureRenameExpectedContent(
 					"it changed after the language server computed the rename from it",
 				);
 			}
+		} else if (
+			tracked !== undefined &&
+			(tracked.hash !== hashDiagnosticContent(content) ||
+				tracked.openedHash !== tracked.hash)
+		) {
+			// #3827 verify r2 F4: the exemption skips only the first open's own
+			// stamp. A disk that no longer holds the last send, or a record whose
+			// bytes changed after its first send, was written after that open
+			// although the mtime says otherwise (#3747's mtime-kept write).
+			refuseStaleWorkspaceEdit(
+				diskPath,
+				"it changed after the language client first opened it, after the rename was requested",
+			);
 		} else if (mtimeMs >= requestedAtMs) {
 			refuseStaleWorkspaceEdit(
 				diskPath,

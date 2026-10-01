@@ -278,6 +278,14 @@ export interface PipelineContext {
 		modelId?: string;
 		provider?: string;
 	};
+	/**
+	 * #3830: receives the notice for agent edits a whole-package fixer
+	 * overwrote and its restore could not put back. It fires after the pipeline
+	 * has returned, because the restore waits for pi's queue entries; the host
+	 * queues it as an advisory for the agent's next turn. Absent: the notice is
+	 * dropped, the degradation record still lands.
+	 */
+	onFixRunLoss?: (notice: string) => void;
 	/** pi.getFlag accessor */
 	getFlag: (name: string, filePath?: string) => boolean | string | undefined;
 	/**
@@ -774,12 +782,51 @@ async function tryOxlintFix(
 	);
 }
 
+/** What a whole-package fixer's restore could not put back, as display paths (#3598). */
+interface FixRunLoss {
+	lost: string[];
+	possiblyLost: string[];
+}
+
+function displayLoss(
+	cwd: string,
+	restoring: Promise<FixRunReport>,
+): Promise<FixRunLoss> {
+	return restoring.then((report) => ({
+		lost: report.lost.map((f) => toRunnerDisplayPath(cwd, f)),
+		possiblyLost: report.possiblyLost.map((f) => toRunnerDisplayPath(cwd, f)),
+	}));
+}
+
+/**
+ * Hand a settled restore's loss to `ctx.onFixRunLoss`, detached from the
+ * pipeline's result. Total: a callback that throws is a debug line, never an
+ * unhandled rejection (AGENTS.md shape 53).
+ */
+function deliverFixRunLoss(
+	restoring: Promise<FixRunLoss>,
+	ctx: Pick<PipelineContext, "onFixRunLoss" | "dbg">,
+): void {
+	void restoring
+		.then((loss) => {
+			if (loss.lost.length > 0 || loss.possiblyLost.length > 0)
+				ctx.onFixRunLoss?.(renderFixRunLoss(loss));
+		})
+		.catch((failure: unknown) =>
+			ctx.dbg(
+				`fix-run loss notice failed: ${failure instanceof Error ? failure.message : String(failure)}`,
+			),
+		);
+}
+
 interface WholePackageFixOutcome {
 	changedFiles: string[];
-	/** Files whose agent edit the fixer overwrote and pi-lens could not restore (#3598). */
-	lostFiles: string[];
-	/** Files whose agent edit pi-lens cannot show survived (#3598). */
-	possiblyLostFiles: string[];
+	/**
+	 * The restore of agent edits the fixer overwrote (#3598). It started after
+	 * the project diff and takes pi's queue entry for each sibling (#3830), so
+	 * the caller awaits it only after the target's hold is released.
+	 */
+	restoring?: Promise<FixRunReport>;
 }
 
 /**
@@ -787,34 +834,23 @@ interface WholePackageFixOutcome {
  * agent-edited file is the agent's change, restored or not; counting it would
  * report a restored file as an autofix result.
  */
-async function wholePackageFixOutcome(
+async function wholePackageChangedFiles(
 	root: string,
 	before: FileSnapshot,
 	result: Awaited<ReturnType<typeof safeSpawnAsync>>,
-	report: FixRunReport,
-): Promise<WholePackageFixOutcome> {
-	if (result.error || result.status !== 0)
-		return {
-			changedFiles: [],
-			lostFiles: report.lost,
-			possiblyLostFiles: report.possiblyLost,
-		};
-	const agentEdited = new Set(report.agentEdited);
+	agentEdited: readonly string[],
+): Promise<string[]> {
+	if (result.error || result.status !== 0) return [];
+	const edited = new Set(agentEdited);
 	const changed = await diffProjectSnapshot(root, before);
-	return {
-		changedFiles: changed.flatMap((file) =>
-			agentEdited.has(file) ? [] : [file],
-		),
-		lostFiles: report.lost,
-		possiblyLostFiles: report.possiblyLost,
-	};
+	return changed.flatMap((file) => (edited.has(file) ? [] : [file]));
 }
 
 async function tryRustClippyFix(
 	filePath: string,
 	writeHold?: FileMutationHold,
 ): Promise<WholePackageFixOutcome> {
-	const none = { changedFiles: [], lostFiles: [], possiblyLostFiles: [] };
+	const none = { changedFiles: [] };
 	const check = await probeToolAsync("cargo", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return none;
 
@@ -825,7 +861,7 @@ async function tryRustClippyFix(
 	if (writeHold) await writeHold.acquire();
 
 	const before = await snapshotProjectFiles(cargoDir);
-	const { value: result, report } = await runWithFixRestore(
+	const { result: changedFiles, restoring } = await runWithFixRestore(
 		{ tool: "rust-clippy", extension: ".rs", candidates: before.keys() },
 		() =>
 			safeSpawnAsync(
@@ -833,15 +869,17 @@ async function tryRustClippyFix(
 				["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
 				{ timeout: 30000, cwd: cargoDir },
 			),
+		(result, agentEdited) =>
+			wholePackageChangedFiles(cargoDir, before, result, agentEdited),
 	);
-	return wholePackageFixOutcome(cargoDir, before, result, report);
+	return { changedFiles, restoring };
 }
 
 async function tryDartFix(
 	filePath: string,
 	writeHold?: FileMutationHold,
 ): Promise<WholePackageFixOutcome> {
-	const none = { changedFiles: [], lostFiles: [], possiblyLostFiles: [] };
+	const none = { changedFiles: [] };
 	const check = await probeToolAsync("dart", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return none;
 
@@ -853,15 +891,17 @@ async function tryDartFix(
 	if (writeHold) await writeHold.acquire();
 
 	const before = await snapshotProjectFiles(pubspecDir);
-	const { value: result, report } = await runWithFixRestore(
+	const { result: changedFiles, restoring } = await runWithFixRestore(
 		{ tool: "dart-analyze", extension: ".dart", candidates: before.keys() },
 		() =>
 			safeSpawnAsync("dart", ["fix", "--apply"], {
 				timeout: 30000,
 				cwd: pubspecDir,
 			}),
+		(result, agentEdited) =>
+			wholePackageChangedFiles(pubspecDir, before, result, agentEdited),
 	);
-	return wholePackageFixOutcome(pubspecDir, before, result, report);
+	return { changedFiles, restoring };
 }
 
 // --- Pipeline phase helpers ---
@@ -880,10 +920,13 @@ export async function runAutofix(
 	attemptedTools: string[];
 	changedFiles: string[];
 	needsContentRefresh: boolean;
-	/** Display paths of files a whole-package fixer overwrote an agent edit of, unrestorable (#3598). */
-	lostFiles?: string[];
-	/** Display paths of files where an agent edit may not have survived (#3598). */
-	possiblyLostFiles?: string[];
+	/**
+	 * Display paths of files a whole-package fixer overwrote an agent edit of
+	 * (unrestorable), or where one may not have survived (#3598). The restore
+	 * takes pi's queue entry for each sibling (#3830): await this only after
+	 * `writeHold` is released.
+	 */
+	restoring?: Promise<FixRunLoss> | undefined;
 	skipReason?: string;
 }> {
 	const { biomeClient, ruffClient, fixedThisTurn } = deps;
@@ -892,8 +935,7 @@ export async function runAutofix(
 	const autofixTools: string[] = [];
 	const attemptedTools: string[] = [];
 	const changedFiles = new Set<string>();
-	const lostFiles: string[] = [];
-	const possiblyLostFiles: string[] = [];
+	const restorings: Promise<FixRunLoss>[] = [];
 	const markTargetChanged = () => changedFiles.add(path.resolve(filePath));
 	let needsContentRefresh = false;
 
@@ -1100,12 +1142,7 @@ export async function runAutofix(
 		if (toolName === "rust-clippy") {
 			const clippy = await tryRustClippyFix(filePath, writeHold);
 			const clippyChangedFiles = clippy.changedFiles;
-			lostFiles.push(
-				...clippy.lostFiles.map((f) => toRunnerDisplayPath(cwd, f)),
-			);
-			possiblyLostFiles.push(
-				...clippy.possiblyLostFiles.map((f) => toRunnerDisplayPath(cwd, f)),
-			);
+			if (clippy.restoring) restorings.push(displayLoss(cwd, clippy.restoring));
 			if (clippyChangedFiles.length > 0) {
 				fixedCount += clippyChangedFiles.length;
 				autofixTools.push(`rust-clippy:${clippyChangedFiles.length}`);
@@ -1123,10 +1160,7 @@ export async function runAutofix(
 		if (toolName === "dart-analyze") {
 			const dart = await tryDartFix(filePath, writeHold);
 			const dartChangedFiles = dart.changedFiles;
-			lostFiles.push(...dart.lostFiles.map((f) => toRunnerDisplayPath(cwd, f)));
-			possiblyLostFiles.push(
-				...dart.possiblyLostFiles.map((f) => toRunnerDisplayPath(cwd, f)),
-			);
+			if (dart.restoring) restorings.push(displayLoss(cwd, dart.restoring));
 			if (dartChangedFiles.length > 0) {
 				fixedCount += dartChangedFiles.length;
 				autofixTools.push(`dart-analyze:${dartChangedFiles.length}`);
@@ -1218,8 +1252,13 @@ export async function runAutofix(
 		attemptedTools,
 		changedFiles: [...changedFiles],
 		needsContentRefresh,
-		lostFiles,
-		possiblyLostFiles,
+		restoring:
+			restorings.length > 0
+				? Promise.all(restorings).then((losses) => ({
+						lost: losses.flatMap((loss) => loss.lost),
+						possiblyLost: losses.flatMap((loss) => loss.possiblyLost),
+					}))
+				: undefined,
 	};
 }
 
@@ -1859,8 +1898,7 @@ async function analysePipeline(
 	let autofixTools: string[] = [];
 	let attemptedTools: string[] = [];
 	let autofixChangedFiles: string[] = [];
-	let autofixLostFiles: string[] = [];
-	let autofixPossiblyLostFiles: string[] = [];
+	let autofixRestoring: Promise<FixRunLoss> | undefined;
 	let fixRefresh = false;
 	let autofixSkipReason: string | undefined;
 	if (!allowAutonomousWriters) {
@@ -1876,8 +1914,7 @@ async function analysePipeline(
 			attemptedTools,
 			changedFiles: autofixChangedFiles,
 			needsContentRefresh: fixRefresh,
-			lostFiles: autofixLostFiles = [],
-			possiblyLostFiles: autofixPossiblyLostFiles = [],
+			restoring: autofixRestoring,
 			skipReason: autofixSkipReason,
 		} = await runAutofix(
 			filePath,
@@ -1888,6 +1925,13 @@ async function analysePipeline(
 			getFlagSource,
 			writeHold,
 		));
+	// The restore waits for pi's queue entries (#3830), so this result never
+	// waits for it: F's diagnostics and blockers must not wait on whoever holds a
+	// sibling. Attach its loss notice here, immediately after the fix run, so a
+	// later dispatch throw cannot drop it. It ends on its own, and a loss it
+	// finds goes to the agent through the advisory queue, like the `agent_end`
+	// drain's.
+	if (autofixRestoring) deliverFixRunLoss(autofixRestoring, ctx);
 	for (const changedFile of autofixChangedFiles) {
 		piChangedFiles.add(path.resolve(changedFile));
 	}
@@ -2176,12 +2220,6 @@ async function analysePipeline(
 		const detail =
 			autofixTools.length > 0 ? ` (${autofixTools.join(", ")})` : "";
 		output += `\n\n✅ Auto-fixed ${fixedCount} issue(s)${detail}`;
-	}
-	if (autofixLostFiles.length > 0 || autofixPossiblyLostFiles.length > 0) {
-		output += `\n\n${renderFixRunLoss({
-			lost: autofixLostFiles,
-			possiblyLost: autofixPossiblyLostFiles,
-		})}`;
 	}
 	if (formatFailures.length > 0) {
 		const details = formatFailures.slice(0, 3).join("; ");

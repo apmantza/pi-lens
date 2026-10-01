@@ -3024,7 +3024,15 @@ export class LSPService {
 	getTrackedContent(
 		filePath: string,
 		cwd: string,
-	): { hash: string; changedAtMs?: number | undefined } | undefined {
+	):
+		| {
+				hash: string;
+				changedAtMs?: number | undefined;
+				openedAtMs?: number | undefined;
+				openedHash?: string | undefined;
+				clientStartedAtMs?: number | undefined;
+		  }
+		| undefined {
 		const priorityServerIds = getServersForFileWithConfig(filePath).map(
 			(server) => server.id,
 		);

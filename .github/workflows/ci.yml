@@ -11,6 +11,52 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # #3801: classify the diff once. `code` is false ONLY for a pull_request whose
+  # every changed path is on the strict docs allowlist (root *.md, docs/**,
+  # .changelog/**; scripts/ci-changed-files.mjs), and then the HEAVY ADVISORY
+  # jobs (mutation, the Windows run) do not start. The Unit shards, the Install
+  # tests and every other test job still run for a docs-only diff: a docs edit
+  # can red tests/clients and tests/scripts (docs/public-api-stability.md,
+  # docs/*_rules_catalog.md are read by them), so the suite is never skipped.
+  # `formal` is true when the diff touches formal/ (or what runs it), and then
+  # `TLA+ models` model-checks. Push and any other event
+  # get code=true formal=true, so master keeps the full suite, and every doubt
+  # (unreadable or empty file list, API cap) resolves to the full suite too.
+  #
+  # `TLA+ models` is a REQUIRED check and never skips at job level: a job `if:`
+  # that evaluates false reports `skipped`, which GitHub counts as passing, but
+  # ci-verdict and the merge train demand a literal `success` on a required row
+  # (#2618). It always starts and skips its STEPS. The name ends in
+  # `(advisory)`: this job reports, never gates.
+  changes:
+    name: Changed files (advisory)
+    runs-on: ubuntu-latest
+    # A sparse checkout, one API read and a script: 10 min is the repo's floor
+    # (refs #3123).
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      formal: ${{ steps.classify.outputs.formal }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+      - name: Classify the changed files
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci-changed-files.mjs --event "$EVENT_NAME" --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER"
+
   dependency-boundaries:
     name: Dependency boundaries
     runs-on: ubuntu-latest
@@ -62,50 +108,98 @@ jobs:
           ref: ${{ github.ref }}
           persist-credentials: false
 
-      - name: Validate changelog fragments
-        run: node scripts/check-changelog-fragments.mjs
+      - name: Fetch the PR base for the fragment-diff check
+        run: git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
 
-  tla-models:
-    name: TLA+ models
+      # The checkout is the depth-1 pull_request merge ref, which already
+      # contains the base, so `--merge-ref` diffs from the base itself.
+      - name: Validate changelog fragments
+        run: node scripts/check-changelog-fragments.mjs --base "${{ github.event.pull_request.base.sha }}" --merge-ref
+
+  # #3918: TLC over formal/*/*.cfg runs as parallel `--shard i/N` jobs, N being
+  # the matrix length (`strategy.job-total`, so the count has ONE source). The
+  # single job reached its 12-minute cap at 514 configs (master 623 s; PR heads
+  # cancelled at 736 s, 881 s and 12m15s), because the population outgrew the
+  # estimate this comment used to carry. The job id `tla-models` and the check
+  # name `TLA+ models` stay with the aggregate below (CodeQL `needs:` it, and
+  # the ruleset requires that name); the shard jobs are `tla-shards`.
+  # scripts/check-tla-models.mjs partitions the sorted config list round-robin,
+  # and tests/config/tla-models-shard-workflow.test.ts pins that every config
+  # lands in exactly one shard. Measured per-shard times: PENDING this PR's run.
+  tla-shards:
+    name: TLA+ models (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: changes
+    # #3801 (verify r2 V1): failed classification must not skip the model
+    # shards. Empty `formal` output runs every config; only a proven 'false'
+    # skips model-checking steps. The strict aggregate below stays unchanged.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    # refs #3572, #3517: TLC over formal/*/*.cfg (330 configs as of this
-    # change), run through a CPU-sized concurrency pool instead of one at a
-    # time (scripts/check-tla-models.mjs). Master's serial run was cancelled
-    # at this job's old 10-minute cap on 551415b28 (job 108489017472, run
-    # 36272506689) at 320 configs: the step ran 598s, and the last config
-    # (store-freshness/WorkspaceOwnStatAfterRead) actually finished 30ms
-    # before the cancel landed — so CI's own dedicated 4-vCPU runner does a
-    # full serial pass of this population in about 600s. #3591 raised this
-    # job to 20 minutes as a stopgap pending this fix.
-    # Estimating the pooled time from that CI evidence rather than from a
-    # local run alone (this box is shared with other agents and swings from
-    # near-idle to load average 45): scaling CI's ~600s serial figure by this
-    # session's own local pooled/serial ratio (measured at ~0.48, i.e. 530s
-    # pooled vs. 1099s serial for the same 320 configs) projects a CI pooled
-    # time of about 290s; the CPU floor (total measured CPU-time, ~1200 CPU-s,
-    # scaled to CI's serial speed and spread over 4 lanes) is about 165s. 12
-    # minutes (720s) gives roughly 2.4x headroom over the 290s estimate — keep
-    # 12; re-tune from a real CI run once this lands.
+    strategy:
+      # One red shard must not cancel its siblings: the log of every red shard
+      # then names its own mismatched models.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    # refs #3572, #3517: each shard runs its configs through the CPU-sized
+    # concurrency pool in scripts/check-tla-models.mjs, one TLC worker per
+    # config (deterministic first violation).
     timeout-minutes: 12
     permissions:
       contents: read
 
     steps:
+      # #3801: the models depend only on formal/ and the checker, so a diff that
+      # touches neither (the `changes` job) skips the model check at STEP level
+      # and this required check still concludes success. `!= 'false'`: only a
+      # proven-unchanged formal/ skips; an unreadable classification runs it.
+      - name: Skip the model check (formal/ unchanged)
+        if: needs.changes.outputs.formal == 'false'
+        run: echo "formal/ and scripts/check-tla-models.mjs are unchanged in this diff; model checking skipped (runs on every formal change, on master pushes and on merge-train replays)"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.formal != 'false'
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        if: needs.changes.outputs.formal != 'false'
         with:
           node-version: '22'
 
       # The runner image ships a JDK on PATH; the checker downloads the pinned
       # tla2tools.jar and verifies its sha256 before running it.
       - name: Model-check formal/ against each config's expected verdict
+        if: needs.changes.outputs.formal != 'false'
         run: |
           java -version
-          node scripts/check-tla-models.mjs
+          node scripts/check-tla-models.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  # #3918: the ONE check-run named exactly `TLA+ models`, the name branch
+  # protection requires. A job whose `needs` failed is SKIPPED by default, and
+  # GitHub counts a skipped required check as passing, so `if: always()` is
+  # what makes a red or cancelled shard red here instead of green-by-skip.
+  # `needs.tla-shards.result` must be exactly `success`: skipped, cancelled and
+  # failure all fail this job.
+  tla-models:
+    name: TLA+ models
+    needs: tla-shards
+    if: always()
+    runs-on: ubuntu-latest
+    # Runs one `echo` and a comparison; 10 min is the repo's floor (refs #3123).
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SHARDS_RESULT: ${{ needs.tla-shards.result }}
+    steps:
+      - name: Require every TLA+ models shard to succeed
+        run: |
+          echo "TLA+ models shard jobs (tla-shards): ${SHARDS_RESULT}"
+          if [[ "${SHARDS_RESULT}" != "success" ]]; then
+            echo "::error::a TLA+ models shard did not succeed (${SHARDS_RESULT}); the mismatched models are in that shard's own log, check-run 'TLA+ models (shard k/N)'"
+            exit 1
+          fi
 
   lint-and-typecheck:
     name: Lint & type-check
@@ -210,18 +304,31 @@ jobs:
 
   # #3753: the suite runs as parallel `vitest --shard=k/N` jobs, N being the
   # matrix length (`strategy.job-total`, so the count has ONE source). This job
-  # id stays `test` (install-test and record-post-merge-validation `needs:` it,
-  # and a matrix job's `needs.test.result` is success only when EVERY shard
+  # id stays `test` (record-post-merge-validation `needs:` it, and a matrix
+  # job's `needs.test.result` is success only when EVERY shard
   # succeeded). The check-run the ruleset requires is the `unit-tests`
   # aggregate below, named exactly `Unit tests`.
   #
-  # Why five: vitest assigns files to shards by sha1 of the path in equal COUNTS,
-  # not equal duration, and the serialized projects (wall-clock-budget,
-  # real-harness, lsp-spawn-heavy) are a fixed per-shard floor. Measured on this
-  # PR's own run with three shards: 150 s / 333 s / 400 s for `Run tests`, so
-  # the slowest shard barely beat the old single job. A model over those
-  # per-file durations (every file's real sha1 shard for N = 2..9) put the
-  # slowest shard at 267 s for N=3 and 157 s for N=5, then flat beyond.
+  # Why four, and why balanced (#3771, #3801): vitest's own `--shard` assigns
+  # files by sha1 of the path in equal COUNTS, not equal duration, and the
+  # serialized projects (wall-clock-budget, real-harness, lsp-spawn-heavy) are a
+  # per-shard floor, so #3756's five shards ran `Run tests` from 107 s to 252 s
+  # (max/mean 1.4). vitest.config.ts now installs a sequencer that packs the
+  # files by recorded per-file seconds (scripts/test-shard-weights.json,
+  # scripts/lib/test-shard-assignment.mjs). Measured on the same runner pool
+  # (scratch run 36776021055 of branch ci/3801-exp-shards, the `test` job
+  # copied at N = 3, 4, 5; slowest shard job / max over mean of `Run tests` /
+  # total runner-minutes):
+  #
+  #   N=3  390 s  1.10  17.8 min
+  #   N=4  301 s  1.09  18.4 min
+  #   N=5  248 s  1.07  19.2 min   (hash-count N=5 before: 274-292 s, 1.4, 19.2 min)
+  #
+  # Four is the fewest shards that put the slowest job at the 5-minute bar the
+  # sharding was opened for (#3753): three misses it by 90 s. The repo sits at
+  # the 20-concurrent-job cap, where every extra job is its own queue wait, so
+  # the count stays as low as that bar allows. Raising it to five buys 53 s of
+  # critical path for one more job and 0.8 more runner-minutes per push.
   test:
     name: Unit tests (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
@@ -230,7 +337,7 @@ jobs:
       # failing tests of every red shard, not just the first to finish.
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4]
     # Bounds the job so a reader that is alive but never drains (e.g. an
     # unbounded stdout stall in the mem-watch wrapper, #3106) cannot hold the
     # runner for GitHub's 360-minute default. Sized at measured-max x2 plus margin
@@ -501,11 +608,68 @@ jobs:
             exit 1
           fi
 
+  # #3801: the heavy ADVISORY jobs (mutation, the Windows Vitest subset) start
+  # only after every required check passed on this head. A runner-slot pool
+  # shared by 10+ PRs made them compete with the required jobs for slots
+  # (about 40 jobs per push against about 20 concurrent slots), and on a head
+  # whose required checks are red they were pure waste.
+  #
+  # `needs:` reaches the required checks this workflow hosts (`lint-and-typecheck`,
+  # `tla-models`, the `unit-tests` aggregate, and every `install-test` leg); it
+  # cannot reach lint.yml, which hosts `knip` and `oxfmt format check`, so the
+  # script reads those two from the head's check-runs (a cheap poll; both
+  # finish in well under a minute and are long done by the time this job is
+  # reached). If any needed job is red or skipped this job is skipped and so
+  # are its dependents. If the check-runs show a red or never-finished lint.yml
+  # check, the gate step reports `ready=false` and FAILS, so the row is red and a
+  # run that was deferred for that reason is visible and distinguishable from a
+  # dropped one (ci-verdict reads it). The job name ends in `(advisory)` so
+  # ci-verdict and the merge train never gate on it, red or not.
+  heavy-gate:
+    name: Heavy advisory gate (advisory)
+    needs:
+      - changes
+      - lint-and-typecheck
+      - tla-models
+      - unit-tests
+      - install-test
+    # #3801: only a code diff starts the heavy jobs: a docs-only pull request
+    # runs every test job but not mutation, CodeQL or the Windows run. Every
+    # needed job must have succeeded (the implicit `success()`), so a red or
+    # skipped one skips the gate.
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # Polls at most 300 s (the script's deadline) after a few seconds of setup;
+    # 10 min is the repo's floor (refs #3123).
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      ready: ${{ steps.gate.outputs.ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: '22'
+      - name: Require the lint.yml required checks, then release the heavy advisory jobs
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci-heavy-gate.mjs --repo "$GITHUB_REPOSITORY" --sha "$HEAD_SHA" --context knip --context "oxfmt format check"
+
   # Windows coverage starts as advisory because the repository has no prior Windows Vitest signal.
   # Promote this job to gating once the Run Windows Vitest subset step outcome has been success
   # on 7 consecutive master/PR runs.
   unit-tests-windows:
     name: Unit tests Windows (advisory)
+    needs: heavy-gate
+    if: needs.heavy-gate.outputs.ready == 'true'
     runs-on: windows-latest
     outputs:
       windows_vitest: ${{ steps.windows-vitest.outcome }}
@@ -764,7 +928,11 @@ jobs:
     # which is not covered by the measurement above. The value is left alone
     # and re-measured from the first green macOS legs before it is resized.
     timeout-minutes: 15
-    needs: [lint-and-typecheck, test]
+    # #3801: Install no longer waits for `lint-and-typecheck` or the Unit shards.
+    # That `needs:` was a cost gate, not a data dependency (the legs pack and
+    # install the repo's own tarball), and it made Install the LAST required
+    # check in 35 of 37 green runs, landing a median 3.5 minutes after Unit
+    # tests. `record-post-merge-validation` still waits for every job.
     permissions:
       contents: read
     strategy:
@@ -1014,21 +1182,179 @@ jobs:
           }
           echo "Startup loads from dist ✓"
 
-  # #3801: PR-time CodeQL (advanced setup), advisory. It runs only after every
-  # required job succeeded on this head, so a red required check never also
-  # pays for two CodeQL runners; `needs:` cannot cross workflows, which is why
-  # this lives here and codeql.yml covers master pushes and the weekly scan.
-  # `!cancelled()` replaces GitHub's implicit success() so the job is never
-  # skipped silently; the explicit `success` per need then keeps it from
-  # running behind a red or skipped required job.
+  # #3801: the former `Mutation diff` workflow (mutation.yml), deferred behind
+  # `heavy-gate` above. The runtime ceiling below is unchanged.
+  mutation:
+    name: mutation (advisory)
+    needs: heavy-gate
+    # #3801: moved here from the former mutation.yml so `needs:` can hold it
+    # until the required checks passed (a separate workflow cannot). The
+    # `pull_request`-only scope is unchanged.
+    if: github.event_name == 'pull_request' && needs.heavy-gate.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    # refs #3123: bounds a hang against GitHub's 360-min default. This job runs
+    # on pull_request so --branch master matched no runs; measured max over the
+    # last 8 successful runs regardless of branch: 2184s (36m24s, run 35117203202,
+    # the stryker-diff.mjs step itself); sized at ~2x + margin.
+    timeout-minutes: 90
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      # The driver mutates only the diff's changed lines and bounds its Stryker
+      # child at MUTATION_BUDGET_MINUTES (60), which must stay strictly below
+      # this job's timeout-minutes (90): run 36098718085 was cancelled by the
+      # runner at the cap, so the driver never regained control and its
+      # "no mutants evaluated" report never printed. The 30-minute margin covers
+      # npm ci, npm run build, Stryker's in-place sandbox restore on SIGTERM, and
+      # the report upload. tests/scripts/stryker-diff.test.ts pins the relation.
+      #
+      # #3531 rescope: the driver also mutates clients/**/*.ts, tools/**/*.ts,
+      # mcp/**/*.ts and index.ts (through their compiled .js -- see
+      # scripts/stryker-diff.mjs), building its own tsconfig.mutation.json
+      # source maps internally; no separate build step is needed here for that.
+      #
+      # --head-sha (round 2 T6): a `pull_request` checkout's `git rev-parse
+      # HEAD` is the CI MERGE-REF commit, not the PR's own head -- neither
+      # stable across re-runs once master moves, nor matchable by a reader to
+      # an actual PR commit, and it silently breaks the "the same PR head
+      # always samples the same subset" reproducibility claim the whole
+      # deterministic-seed design rests on.
+      #
+      # #3810: the incremental results of the previous push of THIS pull request
+      # against THIS base. The exact key carries the head sha (a cache entry is
+      # immutable, so each push saves a new one); `restore-keys` is the PR number
+      # plus the base sha, so a later push restores the newest entry of the same
+      # PR and base and a moved base starts cold. The driver decides whether the
+      # restored file may be read (scripts/lib/mutation-test-selection.mjs:
+      # `decideIncrementalReuse`): a changed test or other non-mutated file
+      # starts cold, because Stryker's own differ would reuse a stale result.
+      - name: Restore the incremental mutation cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .stryker/incremental.json
+            .stryker/incremental.fingerprint
+          key: mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+          restore-keys: |
+            mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-
+      - run: node scripts/stryker-diff.mjs --base "origin/${{ github.base_ref }}" --max-files 6 --head-sha "${{ github.event.pull_request.head.sha }}"
+      # Saved even when the driver exits non-zero: a budget kill leaves the
+      # partial results Stryker wrote, and the next push resumes from them.
+      - name: Save the incremental mutation cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .stryker/incremental.json
+            .stryker/incremental.fingerprint
+          key: mutation-incremental-${{ github.event.pull_request.number }}-${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}
+      # Always runs, even when the step above exited non-zero (a 0-mutant run
+      # is not a step failure by itself, but the driver still exits 1 for a
+      # genuine Stryker failure such as a budget timeout) -- #3531's "a 0-
+      # mutant run must never read as a clean pass" applies to a run that
+      # never got this far too, so the summary has to render regardless.
+      - name: Render job summary
+        if: always()
+        run: node scripts/mutation-report.mjs --out "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation/mutation.json
+          if-no-files-found: ignore
+
+  mutation-comment:
+    name: mutation comment (advisory)
+    needs: mutation
+    # Fork PRs: a fork PR's default GITHUB_TOKEN is read-only against this repo
+    # regardless of the `permissions:` block below, so `gh api` POST/PATCH
+    # below would just 403. Skip the whole job rather than let it fail loudly
+    # for something it cannot do; the mutation job's own job summary (written
+    # unconditionally, no token scope needed) still covers a fork PR.
+    #
+    # #3801: `needs.mutation.result != 'skipped'` -- mutation is skipped when
+    # the required checks did not all pass (or this is not a pull_request), and
+    # then there is no run to report on or mark stale. The previous head's
+    # comment keeps its own `Head:` line, and ci-verdict's MUTATION line reads
+    # that as STALE against the current head.
+    if: always() && needs.mutation.result != 'skipped' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      # #3151 (install-smoke.yml): the comment target is a pull request;
+      # `issues: write` alone was refused with 403 "Resource not accessible
+      # by integration".
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutation-report
+          path: reports/mutation
+        # `mutation`'s own upload step already runs with `if: always()` and
+        # `if-no-files-found: ignore` -- this download step failing (or
+        # finding nothing) means the mutation job produced NO artifact at all
+        # (a crash before writeReport, or the job hit its own 90-minute cap
+        # outright), not that this step should abort.
+        continue-on-error: true
+      - name: Post or update the sticky mutation comment
+        if: hashFiles('reports/mutation/mutation.json') != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/mutation-pr-comment.mjs --pr "${{ github.event.pull_request.number }}"
+      # round 2 T6: when the artifact never existed, the step above never ran
+      # and an EARLIER head's comment -- now about a commit this PR no longer
+      # is -- would otherwise just stay up with nothing marking it stale.
+      #
+      # round 2 R2-4: `needs.mutation.result` (success/failure/cancelled/
+      # skipped) is the one signal this job actually has for WHY the artifact
+      # is missing -- a `mutation` job the new per-PR concurrency group
+      # cancelled reads "cancelled" here, distinct from a genuine crash or
+      # time-cap failure, which reads "failure". This job itself runs either
+      # way (`if: always()` on the job overrides the default needs-skip).
+      - name: Mark the sticky comment stale (no report was produced for this head)
+        if: hashFiles('reports/mutation/mutation.json') == ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          node scripts/mutation-pr-comment.mjs --pr "${{ github.event.pull_request.number }}" --stale \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --upstream-result "${{ needs.mutation.result }}"
+
+  # #3801: PR-time CodeQL (advanced setup), advisory. It is one of the heavy
+  # advisory jobs behind `heavy-gate`: it starts only after every required check
+  # passed on this head and only for a code diff, so a red required check never
+  # also pays for two CodeQL runners. `needs:` cannot cross workflows, which is
+  # why this lives here and codeql.yml covers master pushes and the weekly scan.
   # No fork-PR guard on purpose: a fork's read-only token refuses the SARIF
   # upload and the job goes red, which the `(advisory)` suffix makes
   # non-gating; a silent skip would hide that CodeQL never ran.
-  # When #3807's `heavy-gate` lands, `needs:` becomes `heavy-gate`.
   codeql:
     name: CodeQL (${{ matrix.language }}) (advisory)
-    needs: [lint-and-typecheck, unit-tests, install-test, tla-models]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.lint-and-typecheck.result == 'success' && needs.unit-tests.result == 'success' && needs.install-test.result == 'success' && needs.tla-models.result == 'success' }}
+    needs: heavy-gate
+    if: github.event_name == 'pull_request' && needs.heavy-gate.outputs.ready == 'true'
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over the last 6 default-setup runs (javascript-typescript,

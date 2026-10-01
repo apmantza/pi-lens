@@ -197,6 +197,9 @@ import {
 	stripLineTimestamps,
 } from "./lib/ci-failure-classifier.mjs";
 import {
+	CHANGES_CHECK,
+	DEFERRED_ADVISORY_CHECKS,
+	HEAVY_GATE_CHECK,
 	isAdvisoryCheck,
 	isBlockingConclusion,
 	isUncertainConclusion,
@@ -380,6 +383,36 @@ export function resolveGithubApiBase(env = process.env) {
  */
 export function isPrNumber(arg) {
 	return /^\d+$/.test(String(arg ?? "").trim());
+}
+
+/**
+ * The state of a deferred heavy job that has no check-run, from the heavy
+ * gate's own check-run (see ci-checks.mjs `HEAVY_GATE_CHECK`).
+ *
+ * @param {{ status?: string|null, conclusion?: string|null }|undefined} gate
+ * @returns {{ deferredState: "PENDING"|"NOT RUN", deferredWhy: string }}
+ */
+function deferredStateFor(gate) {
+	if (!gate || gate.status !== "completed")
+		return {
+			deferredState: "PENDING",
+			deferredWhy: "waiting for the required checks",
+		};
+	if (gate.conclusion === "success")
+		return {
+			deferredState: "PENDING",
+			deferredWhy: "the gate passed and the job is about to be queued",
+		};
+	if (gate.conclusion === "skipped")
+		return {
+			deferredState: "NOT RUN",
+			deferredWhy:
+				"the heavy gate was skipped (a required check did not succeed, or the diff is docs-only)",
+		};
+	return {
+		deferredState: "NOT RUN",
+		deferredWhy: `the heavy gate concluded ${gate.conclusion} (a lint.yml required check was red or unfinished at its deadline)`,
+	};
 }
 
 /**
@@ -626,9 +659,27 @@ export function computeVerdict(
 				? `post-merge noise, not a failure: ${noiseRows.map((row) => row.name).join(", ")} could not fetch refs/pull/N/merge after the PR merged; every other gating check concluded success`
 				: "every gating check concluded success";
 	}
+	// #3801: the heavy advisory jobs do not exist as check-runs until the
+	// required checks passed (ci.yml's `heavy-gate`). Each absent one is listed
+	// with its REAL state, read off the gate's own check-run, both while the
+	// verdict is pending and after it turns success (when the merger starts
+	// reading): PENDING while the gate has not concluded or has just passed,
+	// NOT RUN when the gate was skipped or went red. A head with neither the
+	// gate nor the `changes` row is of an older workflow, which this must not
+	// relabel, so it lists them only while pending. The rows are advisory
+	// (`gating: false`), so no exit code reads them.
+	const gate = byName.get(HEAVY_GATE_CHECK);
+	const gatedShape = gate !== undefined || byName.has(CHANGES_CHECK);
+	const deferredState = deferredStateFor(gate);
+	const deferredRows =
+		gatedShape || kind === "pending"
+			? DEFERRED_ADVISORY_CHECKS.filter((name) => !byName.has(name)).map(
+					(name) => ({ ...buildRow(name), deferred: true, ...deferredState }),
+				)
+			: [];
 	return {
 		exitCode,
-		rows,
+		rows: [...rows, ...deferredRows],
 		reason,
 		mergeState,
 		kind,
@@ -669,7 +720,11 @@ export function formatVerdictTable(rows) {
 	const header = ["CHECK", "STATUS", "CONCLUSION", "URL"];
 	const data = rows.map((row) => [
 		row.name,
-		row.present ? (row.status ?? "unknown") : "absent",
+		row.present
+			? (row.status ?? "unknown")
+			: row.deferred
+				? row.deferredState
+				: "absent",
 		row.present ? (row.conclusion ?? "-") : "-",
 		row.present ? (row.url ?? "-") : "-",
 	]);
@@ -1438,13 +1493,38 @@ function readStickyBody(body) {
  * @param {Array<{name: string, status: string|null, conclusion?: string|null}>} rows
  */
 export function formatMutationLine(comments, prHead, rows = []) {
-	const job = rows.find((row) => row.name === MUTATION_CHECK);
-	const inFlight = job && job.status !== "completed";
+	const found = rows.find((row) => row.name === MUTATION_CHECK);
+	// #3801 (verify r2 V2): once the heavy gate is red or skipped, GitHub writes a
+	// completed `skipped` check-run for the mutation job, so it is never an absent
+	// row. Name the cause from the gate's row the way an absent row does.
+	const gate = rows.find((row) => row.name === HEAVY_GATE_CHECK);
+	const job =
+		found?.present === true &&
+		found.status === "completed" &&
+		found.conclusion === "skipped" &&
+		gate?.present === true &&
+		gate.status === "completed"
+			? {
+					...found,
+					deferred: true,
+					...(gate.conclusion === "success"
+						? {
+								deferredState: "NOT RUN",
+								deferredWhy:
+									"the job was skipped although the heavy gate passed",
+							}
+						: deferredStateFor(gate)),
+				}
+			: found;
+	const notRun = job?.deferred === true && job.deferredState === "NOT RUN";
+	const inFlight = job && job.status !== "completed" && !notRun;
 	const id = findStickyCommentId(comments, STICKY_MARKER);
 	if (id === null)
-		return inFlight || !job
-			? `${MUTATION_PREFIX} PENDING -- no Mutation diff comment on this PR yet`
-			: `${MUTATION_PREFIX} no report (job ${job.conclusion}) -- no Mutation diff comment on this PR`;
+		return notRun
+			? `${MUTATION_PREFIX} NOT RUN -- ${job.deferredWhy}; no Mutation diff comment on this PR`
+			: inFlight || !job
+				? `${MUTATION_PREFIX} PENDING -- no Mutation diff comment on this PR yet`
+				: `${MUTATION_PREFIX} no report (job ${job.conclusion}) -- no Mutation diff comment on this PR`;
 	const { head, count } = readStickyBody(
 		comments.find((comment) => comment.id === id)?.body ?? "",
 	);
@@ -1452,8 +1532,10 @@ export function formatMutationLine(comments, prHead, rows = []) {
 	if (prHead.startsWith(covers))
 		return `${MUTATION_PREFIX} ${count}, head ${covers}`;
 	const prShort = prHead.slice(0, 12);
+	if (notRun)
+		return `${MUTATION_PREFIX} NOT RUN -- ${job.deferredWhy}; the last comment covers ${covers}, STALE (PR head is ${prShort})`;
 	if (inFlight)
-		return `${MUTATION_PREFIX} PENDING -- the mutation job is ${job.status} on PR head ${prShort}; the last comment covers ${covers}`;
+		return `${MUTATION_PREFIX} PENDING -- the mutation job is ${job.deferred ? job.deferredWhy : job.status} on PR head ${prShort}; the last comment covers ${covers}`;
 	return `${MUTATION_PREFIX} ${count}, head ${covers}, STALE (PR head is ${prShort})`;
 }
 

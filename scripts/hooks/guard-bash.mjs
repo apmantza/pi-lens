@@ -31,6 +31,10 @@
  *     `--dry-run`), `-c core.hooksPath=…`, a `git config core.hooksPath`
  *     write, and the `HUSKY=0` / `PI_LENS_SKIP_HOOKS` env prefixes the repo's
  *     husky hooks honour -- see {@link classifyHookBypass}
+ *   - force pushes and `+refspec` pushes; an exact
+ *     `--force-with-lease=<branch>:<sha>` is the only force form allowed
+ *   - rebase starts and completion forms. Recovery with `--abort` or `--quit`
+ *     remains available; merge `origin/master` instead of starting a rebase.
  *
  * ## Contract source
  *
@@ -166,7 +170,7 @@ import {
 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** @typedef {"stash"|"reset"|"worktreeForce"|"worktreeSymlink"|"probe"|"tmpdirCollision"|"sharedKill"|"tmpCheckout"|"checkUngated"|"ciVerdictStatus"|"hookBypass"} DenyRule */
+/** @typedef {"stash"|"reset"|"worktreeForce"|"worktreeSymlink"|"probe"|"tmpdirCollision"|"sharedKill"|"tmpCheckout"|"checkUngated"|"hookBypass"|"forcePush"|"ciVerdictStatus"|"rebase"} DenyRule */
 
 /** @type {Record<DenyRule, string>} */
 export const RULE_MESSAGES = {
@@ -190,6 +194,10 @@ export const RULE_MESSAGES = {
 		"bypassing git hooks (`--no-verify`, `git commit -n`, `-c core.hooksPath=`, `git config core.hooksPath`, `HUSKY=0`, `PI_LENS_SKIP_HOOKS=`) is forbidden (#3778; #3703 pushed `--no-verify` and put 56 red files into CI) -- hooks always run; for a red that looks unrelated, prove it with `node scripts/red-on-base.mjs` and, unless it says RED-ON-BASE, fix it; if it does, stop and hand back its output instead of pushing past it; to repair a wrong `core.hooksPath`, run `node scripts/setup-git-hooks.mjs`.",
 	checkUngated:
 		"a `git commit`/`git push` chained after a check (`npm run lint`/`build`/`test`/`fmt:check`/`preflight`, `npx vitest`, `tsc`, `node scripts/check-*.mjs`) through `;` or a pipe, rather than `&&`, is forbidden (#3471) -- the check's exit code gates nothing that way, so a real failure can still get committed or pushed; gate it with `&&`, or read the check's result in its own separate call.",
+	forcePush:
+		"force-pushing is forbidden -- merge `origin/master` instead; force-push needs explicit orchestrator authorization with `--force-with-lease=<branch>:<expected-sha>`.",
+	rebase:
+		"`git rebase` is forbidden -- merge `origin/master` instead; recovery may use `git rebase --abort` or `--quit`.",
 	ciVerdictStatus:
 		"ci-verdict's exit status is lost through a pipe -- read the final `ci-verdict: exit <N> (<kind>)` line, or run `; echo $?` before the pipe; do not read `$?` after `ci-verdict.mjs … | …` (#3883).",
 };
@@ -1168,9 +1176,83 @@ function classifyHookBypass(args, i, env) {
  * @returns {DenyRule | null}
  */
 function classifyGit(args, cwd, env = {}) {
+	const isRebaseFalseValue = (value) =>
+		["false", "no", "0", "off"].includes(value.toLowerCase());
 	const i = gitSubcommandIndex(args);
 	const subcommand = args[i];
 	if (classifyHookBypass(args, i, env)) return "hookBypass";
+	if (subcommand === "rebase") {
+		const rest = args.slice(i + 1);
+		return rest.length === 1 && (rest[0] === "--abort" || rest[0] === "--quit")
+			? null
+			: "rebase";
+	}
+	if (subcommand === "pull") {
+		const rest = args.slice(i + 1);
+		if (
+			rest.some(
+				(a) =>
+					a === "-r" ||
+					(/^-[^-]*r/.test(a) && a !== "--rebase") ||
+					a === "--rebase" ||
+					(a.startsWith("--rebase=") &&
+						!isRebaseFalseValue(a.slice("--rebase=".length))),
+			)
+		)
+			return "rebase";
+	}
+	if (subcommand === "config") {
+		const rest = args.slice(i + 1);
+		const keyIndex = rest.findIndex((a) => a.toLowerCase() === "pull.rebase");
+		if (
+			keyIndex >= 0 &&
+			rest[keyIndex + 1] !== undefined &&
+			!isRebaseFalseValue(rest[keyIndex + 1])
+		)
+			return "rebase";
+		const branchKeyIndex = rest.findIndex((a) =>
+			/^branch\..+\.rebase$/i.test(a),
+		);
+		if (
+			branchKeyIndex >= 0 &&
+			rest[branchKeyIndex + 1] !== undefined &&
+			!isRebaseFalseValue(rest[branchKeyIndex + 1])
+		)
+			return "rebase";
+	}
+	if (
+		args.slice(0, i).some((a) => {
+			const match = /^pull\.rebase=(.*)$/i.exec(a);
+			return match !== null && !isRebaseFalseValue(match[1]);
+		})
+	)
+		return "rebase";
+	if (subcommand === "push") {
+		const rest = args.slice(i + 1);
+		const hasExplicitLease = rest.some((a) =>
+			/^--force-with-lease=[^:]+:[0-9a-fA-F]{4,64}$/.test(a),
+		);
+		const hasForce = rest.some(
+			(a) => a === "--force" || a === "-f" || /^-[^-]*f/.test(a),
+		);
+		const hasLease = rest.some(
+			(a) =>
+				a === "--force-with-lease" ||
+				a.startsWith("--force-with-lease=") ||
+				a === "--force-w" ||
+				a === "--force-with",
+		);
+		const hasPlusRefspec = rest.some((a) => a.startsWith("+"));
+		if (
+			rest.includes("--mirror") ||
+			rest.includes("--mirr") ||
+			(hasLease
+				? !hasExplicitLease || hasForce || hasPlusRefspec
+				: hasForce || hasPlusRefspec)
+		)
+			return "forcePush";
+		return null;
+	}
 	if (subcommand === "stash") return "stash";
 	if (subcommand === "reset") {
 		const rest = args.slice(i + 1);

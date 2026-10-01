@@ -74,6 +74,7 @@ import {
 	adoptHandoff,
 	beginScope,
 	discardHandoff,
+	forwardHandoff,
 	type LineageHandle,
 	logScopeTransition,
 	retireScope,
@@ -766,6 +767,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// session_start and retired at its session_shutdown. Activation equals
 	// session (pi re-runs this factory on every transition except /tree).
 	let scope: SessionScope | undefined;
+	// #3881: this activation's primary session_start is still in flight
+	// (before its hand-off adoption ran), with its start reason. pi does not
+	// stop a concurrent reload while it awaits the start's emit.
+	let startInFlight:
+		| { reason: string | undefined; shutDown: boolean }
+		| undefined;
 	const classifyOwnedSessionEmission = (
 		ctx: unknown,
 		sessionId: string | undefined,
@@ -2327,6 +2334,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 						return;
 					}
 
+					// #3881: set before this path's first await; the finally clears it.
+					const inFlight = { reason: sessionReason, shutDown: false };
+					startInFlight = inFlight;
 					// #2319: this process-singleton tally belongs to the primary
 					// session that owns the session-end rollup. A concurrent secondary
 					// must not erase a live primary's count before this decision.
@@ -2533,6 +2543,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// resume or a `pi --session` launch (a launch fires "startup", not
 					// "resume"), the parent's for `pi --fork` and a fork whose slot
 					// is gone. `/new` resets.
+					// #3881: this activation shut down while the start was in flight
+					// (another extension's shutdown handler kept pi from invalidating
+					// the ctx yet). That shutdown handed the slot on; adopt nothing.
+					if (inFlight.shutDown) return;
 					const stateCwd = ctx.cwd ?? process.cwd();
 					const handoffSource = await adoptHandoff(scope, {
 						reason: sessionReason,
@@ -2596,6 +2610,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// sibling catches below cannot drift from it.
 					surfaceHandlerCrash("session_start", sessionErr, { dbg });
 				} finally {
+					startInFlight = undefined;
 					// #3653: primary and secondary alike, after the hand-off
 					// restored this scope's activations, and even when a step above
 					// threw, so a session never keeps every lazy tool active.
@@ -3020,7 +3035,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 	async function runDeferredMutationDrain(
 		ctx: DeferredDrainCtx,
-		readGuardBranchEpoch: number,
 	): Promise<void> {
 		const currentSessionId = getStableSessionId(ctx);
 		// #791 defense-in-depth: mirrors how session_start already skips
@@ -3062,7 +3076,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 				return { biomeClient, ruffClient };
 			},
 			currentSessionId,
-			readGuardBranchEpoch,
 		});
 		if (ctx.ui?.setStatus && ctx.ui.theme) {
 			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
@@ -3528,8 +3541,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const onAgentSettled = async (_event: unknown, ctx: DeferredDrainCtx) => {
 		if (!lensEnabled) return;
 		// #3521: pi marks the run inactive before it awaits this handler, so a
-		// /tree can land while the sweep and drain below await. Captured before
-		// the first await: their writes from before the move are not credited.
+		// /tree can land while the sweep below awaits. Captured before the first
+		// await: its replayed writes from before the move are not credited. The
+		// drain carries its own epochs: a record's queue-time epoch, and the
+		// quick fix's report epoch (#3676).
 		const settleBranchEpoch = runtime.readGuard.currentBranchEpoch;
 		// Keep the activation-owned live ctx current for the detached delivery
 		// task. It must probe idleness and append through this run's host seam.
@@ -3571,7 +3586,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					settleBranchEpoch,
 					settleSession,
 				);
-				await runDeferredMutationDrain(ctx, settleBranchEpoch);
+				await runDeferredMutationDrain(ctx);
 				// The drain just wrote formatted/autofixed bytes to files pi-lens
 				// itself owns. Re-baseline them, or the NEXT settle reads our own
 				// formatter output as unexplained third-party drift and requeues the
@@ -3746,7 +3761,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// continues its conversation (`/reload`, `/fork`, `/clone`), before
 			// any teardown below. Sync: this hook may not await (#2523). The
 			// slot's sidecar save is its fallback (a fork's parent sidecar).
-			if (
+			// #3881: a start still in flight never adopted; the slot left for it
+			// is the conversation's state, so hand that on instead.
+			if (startInFlight) {
+				startInFlight.shutDown = true;
+				forwardHandoff({
+					startReason: startInFlight.reason,
+					reason: shutdownReason,
+					sessionFile: getSessionFile(ctx),
+					targetSessionFile: shutdownEvent?.targetSessionFile,
+					sessionManager: getSessionManager(ctx),
+				});
+			} else if (
 				scope &&
 				stashHandoff(scope, {
 					reason: shutdownReason,

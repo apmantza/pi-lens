@@ -252,3 +252,13 @@ marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
 _None observed as of the last probe run._
+
+## Capability matrix refresh state (nightly-generated)
+
+Bookkeeping for the date-based `direct` `first-publish` expiry (#3401) and
+the two-run `clean-behavior` hysteresis. Regenerated every run; never a
+measurement.
+
+```json
+{"first-publish":{"vue":{"firstMissed":"2026-10-01"}}}
+```

@@ -1403,6 +1403,13 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 
 	const EXPECTED_ADVISORY = new Set([
 		"Unit tests Windows (advisory)",
+		// #3801: the job that releases the heavy advisory jobs after the required
+		// checks pass; it reports ready=false rather than failing, and must never
+		// gate a merge whatever it concludes.
+		"Heavy advisory gate (advisory)",
+		// #3801: classifies the diff for the docs-only skip; it falls back to the
+		// full suite on any doubt and must never gate a merge.
+		"Changed files (advisory)",
 		"PR body (advisory)",
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
@@ -1660,9 +1667,11 @@ describe("formatVerdictTable", () => {
 	it("shows an absent required check as 'absent' with no conclusion or URL", () => {
 		const verdict = computeVerdict({ check_runs: [] });
 		const table = formatVerdictTable(verdict.rows);
-		for (const line of table.split("\n").slice(1)) {
-			expect(line).toContain("absent");
-		}
+		const lines = table.split("\n").slice(1);
+		// The two required rows come first; #3801's deferred advisory rows
+		// follow and read PENDING, never "absent".
+		for (const line of lines.slice(0, 2)) expect(line).toContain("absent");
+		for (const line of lines.slice(2)) expect(line).toContain("PENDING");
 	});
 });
 

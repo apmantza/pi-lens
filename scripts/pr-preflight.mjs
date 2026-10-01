@@ -13,7 +13,12 @@ export const GATES = [
 	["changelog:check", ["npm", "run", "changelog:check"], "Unit tests"],
 	[
 		"check-changelog-fragments",
-		[process.execPath, "scripts/check-changelog-fragments.mjs"],
+		[
+			process.execPath,
+			"scripts/check-changelog-fragments.mjs",
+			"--base",
+			"origin/master",
+		],
 		CI_JOB_NAMES.CHANGELOG_FRAGMENT,
 	],
 	[

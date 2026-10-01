@@ -56,6 +56,15 @@ export type DegradationKind =
 	 */
 	| "actionable-warnings-inband-superseded"
 	/**
+	 * #3676: a report entry the settle's quick fix acted on was built under
+	 * another read guard (a /fork, /new or resume) or carried no valid branch
+	 * stamp (a cache file from before it, or a malformed value), so the pass
+	 * was applied and credited to no branch: the read guard then
+	 * asks for a re-read before the agent's next edit of that file. Subject is
+	 * the project root; once per session.
+	 */
+	| "actionable-warnings-quickfix-uncredited"
+	/**
 	 * #3748: a model-facing advisory (`clients/agent-nudge.ts`'s queue) never
 	 * reached a `context` call. Subject `cap:<scope id>`: the queue already held
 	 * its bound. Subject `scope-retired:<scope id>`: the scope that queued it
@@ -252,6 +261,13 @@ export type DegradationKind =
 	 * Subject is the tool.
 	 */
 	| "fix-run-agent-edit-overwritten"
+	/**
+	 * #3830: a whole-package fixer's restore left a file alone, and named it
+	 * possibly lost, because a newer agent edit may have won (a call in flight,
+	 * or the bytes moved between the restore's read and its write). Recorded
+	 * ONCE per run, however many files. Subject is the tool.
+	 */
+	| "fix-run-restore-skipped-newer-edit"
 	/**
 	 * #3598: the pre-run hash set for a whole-package fixer was cut (unreadable
 	 * file, file over the size cap, or the byte budget), so an agent edit to an
@@ -501,6 +517,13 @@ export type DegradationKind =
 	 * Without this row the fallback is indistinguishable from a healthy run.
 	 */
 	| "kill-ownership-unverifiable"
+	/**
+	 * #3813: a late auxiliary pair whose findings the turn-end cap cut was past
+	 * its re-arm TTL or ceiling, so it was NOT put back for the next turn (a pair
+	 * within its bound is re-armed and counted under `turn-end-sections-held`).
+	 * Counted; subject is `late-auxiliary:<serverId>`, a small fixed set.
+	 */
+	| "late-auxiliary-held-dropped"
 	/** A didChange content mirror was recorded behind a newer document version. */
 	| "lens-diagnostics-analysis-root-rejected"
 	/** Cross-graph rotation options disagreed; the first writer retained ownership. */
@@ -912,6 +935,12 @@ export type DegradationKind =
 	 */
 	| "project-snapshot-lock-unavailable"
 	/**
+	 * #3789: serializing the project snapshot body on the main thread (the step
+	 * before the worker hand-off) threw, so the persist was dropped as failed.
+	 * Subject is the gz body path; reason carries the error message.
+	 */
+	| "project-snapshot-serialize-failed"
+	/**
 	 * The orphan backstop's OWN process-table scanner blew the scan timeout and
 	 * had to be tree-killed (#1864 review F3). Reason carries the kill verdict,
 	 * so a scanner that survived its own sweep's escalation — an orphan sweep
@@ -1143,6 +1172,12 @@ export type DegradationKind =
 	 * session cannot take it stale later. Once per start reason.
 	 */
 	| "session-scope-handoff-discarded"
+	/**
+	 * #3881: a primary shutdown landed while its own `session_start` was still
+	 * in flight, before it adopted; it forwarded the slot left for that start
+	 * (or found none) and stashed nothing of its scope. Once per start reason.
+	 */
+	| "session-scope-handoff-interrupted"
 	/**
 	 * #3612: a `/fork` or `/reload` start found no hand-off slot left for its
 	 * session file (file-less: its predecessor's ticket, #3819), so it started from a sidecar or from nothing. Once per
@@ -1446,6 +1481,15 @@ export type DegradationKind =
 	 * and a busy orchestrator session would otherwise write one row per turn.
 	 */
 	| "turn-end-knip-root-skipped"
+	/**
+	 * #3813: the turn-end cap cut a part whose producer holds one-shot state
+	 * (a past-EOF retirement, a dependency-drift delivery count, a cascade
+	 * run, a settled runner result, a late auxiliary pair), so that state
+	 * stayed pending for the next turn instead of being consumed unseen. One
+	 * counted row per turn that held anything, never one per held part; the
+	 * turn's `heldSections` latency field carries the per-turn number.
+	 */
+	| "turn-end-sections-held"
 	/**
 	 * turn_end started no tests for a target in a linked worktree (#3871). The
 	 * subject is the reason: `no-runner-install` (the worktree has no
@@ -1985,6 +2029,10 @@ const INFORMATIONAL_DEGRADATION_KINDS: ReadonlySet<string> = new Set([
 	// #3498: a queued registry removal that landed is the retry working; the
 	// `instance-registry-deregister-queued` beside it is the line that stands out.
 	"instance-registry-deregister-landed",
+	// #3813: a part the cap cut was kept pending for the next turn, which is
+	// the cap and its re-offer working together; the agent's message carries
+	// the "N held" note, and the ledger needs only the tally.
+	"turn-end-sections-held",
 ]);
 
 export function renderDegradationLines(

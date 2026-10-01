@@ -116,6 +116,17 @@ Run every probe the diff can trip and say which ran and what each returned.
   `logSessionStart`, the degradation ledger), and the diff contains that
   literal. A pull-only surface is a gap (#2513, #2526). A new or replaced seam
   also needs a success-path record.
+- **Record read-back (#3875).** Every new decision branch on a session,
+  lifecycle or delivery seam names its record (sink plus kind), cites an
+  existing one, or says `none: <reason>` naming each file. A test reads the
+  record back through the real seam (the diff's own, or the cited record's
+  existing one); `none:` has no record to read, so the reviewer checks the
+  reason instead. The lint is a prompt, never proof. Demotion: the first
+  refusal on a merged PR that its reviewer judges not a decision moves the
+  seam refusal to a `::notice::` advisory until a fixture pins that shape;
+  the orchestrator counts the ten-green promotion streak (`pr-metadata.yml`)
+  from each merged PR's `PR body (advisory)` row in `ci-verdict`
+  (recurrence: #3873).
 - **Changelog fragment.** Front matter `section:` is one of Added, Changed,
   Deprecated, Removed, Fixed, or Security, followed by exactly one top-level
   entry. Bullet style and a bold or plain title are the author's choice

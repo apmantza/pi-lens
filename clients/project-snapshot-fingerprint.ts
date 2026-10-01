@@ -1,45 +1,68 @@
 import { createHash } from "node:crypto";
 
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const OPEN_BRACE = 0x7b;
+const CLOSE_BRACE = 0x7d;
+
 /**
  * Hash serialized project-snapshot JSON while replacing only the top-level
- * volatile `generatedAt` value with a stable sentinel. Production calls this
- * on the persistence worker after stringify. The main-thread caller uses it
- * only on the explicit synchronous fallback path, where serialization already
- * happened and no second object walk is added.
+ * volatile `generatedAt` value with a stable sentinel. The persist worker calls
+ * this on the UTF-8 bytes the dispatcher serialized (#3789), so no second copy
+ * of the body is decoded into a string; the synchronous fallback passes the
+ * bytes it already holds. The scan reads only ASCII structure (quotes,
+ * backslashes, braces), which never occurs inside a UTF-8 multibyte sequence,
+ * and the hash covers the same bytes the string form encoded, so a digest a
+ * released writer stored in the meta sidecar still matches (fixture corpus
+ * `tests/fixtures/snapshot-persist/released-4.3.0`).
  */
 export function fingerprintProjectSnapshotJson(
-	json: string,
+	json: string | Uint8Array,
 	generatedAt: string,
 ): string {
-	const marker = `"generatedAt":${JSON.stringify(generatedAt)}`;
+	const bytes =
+		typeof json === "string"
+			? Buffer.from(json)
+			: Buffer.from(json.buffer, json.byteOffset, json.byteLength);
+	const marker = Buffer.from(`"generatedAt":${JSON.stringify(generatedAt)}`);
 	let markerIndex = -1;
 	let depth = 0;
 	let inString = false;
 	let escaped = false;
-	for (let index = 0; index < json.length; index++) {
-		const char = json[index];
+	for (let index = 0; index < bytes.length; index++) {
+		const byte = bytes[index];
 		if (inString) {
 			if (escaped) escaped = false;
-			else if (char === "\\") escaped = true;
-			else if (char === '"') inString = false;
+			else if (byte === BACKSLASH) escaped = true;
+			else if (byte === QUOTE) inString = false;
 			continue;
 		}
-		if (char === '"') {
-			if (depth === 1 && json.startsWith(marker, index)) {
+		if (byte === QUOTE) {
+			if (
+				depth === 1 &&
+				index + marker.length <= bytes.length &&
+				bytes.compare(
+					marker,
+					0,
+					marker.length,
+					index,
+					index + marker.length,
+				) === 0
+			) {
 				markerIndex = index;
 				break;
 			}
 			inString = true;
-		} else if (char === "{") depth++;
-		else if (char === "}") depth--;
+		} else if (byte === OPEN_BRACE) depth++;
+		else if (byte === CLOSE_BRACE) depth--;
 	}
 	const hash = createHash("sha256");
 	if (markerIndex < 0) {
-		hash.update(json);
+		hash.update(bytes);
 	} else {
-		hash.update(json.slice(0, markerIndex));
+		hash.update(bytes.subarray(0, markerIndex));
 		hash.update('"generatedAt":""');
-		hash.update(json.slice(markerIndex + marker.length));
+		hash.update(bytes.subarray(markerIndex + marker.length));
 	}
 	return hash.digest("hex");
 }

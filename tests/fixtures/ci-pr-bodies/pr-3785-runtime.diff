@@ -1,0 +1,132 @@
+diff --git a/clients/read-guard.ts b/clients/read-guard.ts
+index 7a90a079b..b4a6590ef 100644
+--- a/clients/read-guard.ts
++++ b/clients/read-guard.ts
+@@ -203,8 +202,0 @@ const DEFAULT_CONFIG: ReadGuardConfig = {
+-const OWN_EDIT_STALE_GRACE_MS = Math.max(
+-	0,
+-	Number.parseInt(
+-		process.env.PI_LENS_READ_GUARD_OWN_EDIT_GRACE_MS ?? "120000",
+-		10,
+-	) || 120000,
+-);
+-
+@@ -323,2 +315 @@ function enforceRecordCapForFile(records: ReadRecord[]): RecordCapTrimResult {
+- * reach, so trimming is inert: `canTreatStalenessAsOwnPriorEdit` reads only the
+- * last record, and `findRelocation`'s window saturates at
++ * reach, so trimming is inert: `findRelocation`'s window saturates at
+@@ -967,0 +959,10 @@ export class ReadGuard {
++	/**
++	 * #3525: whether the disk may hold bytes no read or own write accounts
++	 * for: FileTime moved since its stamp, or there is none. An edit that
++	 * passes `checkEdit` then did so on other evidence (line hashes, a
++	 * resolved oldText), and its own write must not re-stamp FileTime.
++	 */
++	fileTimeMoved(filePath: string): boolean {
++		return this.fileTime.hasChanged(this.key(filePath));
++	}
++
+@@ -1113 +1113,0 @@ export class ReadGuard {
+-		let ignoredOwnEditStaleness = false;
+@@ -1124,4 +1123,0 @@ export class ReadGuard {
+-			} else if (
+-				this.canTreatStalenessAsOwnPriorEdit(filePath, lastRead.timestamp)
+-			) {
+-				ignoredOwnEditStaleness = true;
+@@ -1216,10 +1211,0 @@ export class ReadGuard {
+-				// Grace period: when the snapshot is stale because THIS session's own
+-				// earlier edit shifted line numbers (ignoredOwnEditStaleness), and
+-				// the agent read the file recently, downgrade to a warning rather
+-				// than blocking. The agent has fresh context — they just don't
+-				// know the exact new line numbers after the shift.
+-				const RANGE_STALE_GRACE_MS = 60_000;
+-				const lastRead = fileReads[fileReads.length - 1];
+-				const graceActive =
+-					ignoredOwnEditStaleness &&
+-					Date.now() - lastRead.timestamp < RANGE_STALE_GRACE_MS;
+@@ -1258 +1244 @@ export class ReadGuard {
+-					graceActive ? "warn" : effectiveMode,
++					effectiveMode,
+@@ -1271 +1256,0 @@ export class ReadGuard {
+-					graceActive,
+@@ -1288 +1272,0 @@ export class ReadGuard {
+-			ignoredOwnEditStaleness,
+@@ -1410 +1394,15 @@ export class ReadGuard {
+-	recordWritten(rawFilePath: string, opts?: { branchEpoch?: number }): void {
++	recordWritten(
++		rawFilePath: string,
++		opts?: {
++			branchEpoch?: number;
++			/**
++			 * False when the written bytes are not the agent's own call's, or
++			 * when the disk already held bytes no read accounts for: the stamp
++			 * is left where it was, so the next edit is judged by line hashes
++			 * (#3525).
++			 */
++			stampFileTime?: boolean;
++			/** The bytes a `write` wrote: its creation read's evidence (#3524). */
++			writtenContent?: string;
++		},
++	): void {
+@@ -1428 +1426 @@ export class ReadGuard {
+-		this.fileTime.read(filePath);
++		if (opts?.stampFileTime !== false) this.fileTime.read(filePath);
+@@ -1445,0 +1444 @@ export class ReadGuard {
++				opts?.writtenContent,
+@@ -1690,0 +1690,6 @@ export class ReadGuard {
++	/**
++	 * `writtenContent`, when the write's bytes are known, is the agent's view
++	 * of the file: hashed from it, not from a disk another writer may have
++	 * moved before this handler ran (#3524). Without it (the `session_authored`
++	 * path, #3520) the disk is all there is.
++	 */
+@@ -1695,0 +1701 @@ export class ReadGuard {
++		writtenContent?: string,
+@@ -1697 +1703 @@ export class ReadGuard {
+-		let lineCount = 0;
++		let evidence: ReturnType<typeof deliveredLineEvidence>;
+@@ -1699 +1705,7 @@ export class ReadGuard {
+-			lineCount = splitLines(fs.readFileSync(filePath, "utf-8")).length;
++			evidence =
++				writtenContent !== undefined
++					? deliveredLineEvidence(writtenContent, 1)
++					: {
++							lineCount: splitLines(fs.readFileSync(filePath, "utf-8")).length,
++							lineHashes: undefined,
++						};
+@@ -1702,0 +1715 @@ export class ReadGuard {
++		const { lineCount, lineHashes } = evidence;
+@@ -1710,0 +1724 @@ export class ReadGuard {
++			...(lineHashes && { lineHashes }),
+@@ -1731,13 +1744,0 @@ export class ReadGuard {
+-	private canTreatStalenessAsOwnPriorEdit(
+-		filePath: string,
+-		lastReadTimestamp: number,
+-	): boolean {
+-		const edits = this.edits.get(filePath) ?? [];
+-		const latest = edits.at(-1);
+-		if (!latest) return false;
+-		if (latest.verdict !== "allowed" && latest.verdict !== "warned")
+-			return false;
+-		if (latest.timestamp < lastReadTimestamp) return false;
+-		return Date.now() - latest.timestamp <= OWN_EDIT_STALE_GRACE_MS;
+-	}
+-
+diff --git a/clients/runtime-tool-call.ts b/clients/runtime-tool-call.ts
+index 1c9651a6a..5912311c5 100644
+--- a/clients/runtime-tool-call.ts
++++ b/clients/runtime-tool-call.ts
+@@ -1451,0 +1452,4 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
++					// #3525: the same fresh-at-check rule as a whole edit.
++					const partialStamp = {
++						stampFileTime: readGuard.fileTimeMoved?.(filePath) !== true,
++					};
+@@ -1493,0 +1498 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
++									_ownWriteStamp: partialStamp,
+@@ -1578,0 +1584,2 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
++			// #3525: read before the verdict, whose session_authored path stamps.
++			const fileTimeMoved = readGuard.fileTimeMoved?.(filePath) === true;
+@@ -1585,0 +1593,3 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
++			// #3525: an edit that passes a moved FileTime leaves it moved.
++			if (fileTimeMoved && toolCallId !== undefined)
++				runtime.markToolCallFileTimeStale(toolCallId);
