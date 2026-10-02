@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A language server that crashes or is evicted between two touches of the

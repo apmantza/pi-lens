@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - `pi-lens build-graph` now prints a degraded line naming how many files a

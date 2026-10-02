@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **opengrep's save rescan and a scan queued across a rename no longer answer a later edit (refs #3482)** —

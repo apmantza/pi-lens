@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	EMPTY_UNRELEASED,
+	INTERNAL_HEADING,
 	extractSection,
 	lintSectionBody,
 } from "./lib/changelog.mjs";
@@ -15,6 +16,14 @@ export const CHANGELOG_SECTIONS = [
 	"Fixed",
 	"Security",
 ];
+
+// `user` entries land in their section and in the release notes; `internal`
+// entries (CI, tests, formal/, contributor docs, orchestration, refactors with
+// no observable change) land in the collapsed Internal block (#3852).
+const AUDIENCES = ["user", "internal"];
+
+const AUDIENCE_HINT =
+	"user = anything a pi-lens user or an agent using pi-lens can observe (tools, diagnostics, messages, config, install, performance, a fixed bug they could hit); internal = CI, tests, formal/, contributor docs, orchestration, refactors with no observable change";
 
 export function isEntryBullet(line) {
 	return /^[-*]\s+\S/.test(line);
@@ -36,6 +45,19 @@ export function parseEntry(text, file = "entry") {
 	const section = marker.replace(/^section:\s*/, "");
 	if (!CHANGELOG_SECTIONS.includes(section)) {
 		fail(file, `section must be one of ${CHANGELOG_SECTIONS.join(", ")}`);
+	}
+	const audienceMarker = lines
+		.slice(1, end)
+		.find((line) => /^audience:\s*\S+\s*$/.test(line));
+	if (!audienceMarker) {
+		fail(
+			file,
+			`missing audience marker; add \`audience: user\` or \`audience: internal\` to the front matter next to \`section:\` (${AUDIENCE_HINT})`,
+		);
+	}
+	const audience = audienceMarker.replace(/^audience:\s*/, "").trim();
+	if (!AUDIENCES.includes(audience)) {
+		fail(file, `audience must be one of ${AUDIENCES.join(", ")}`);
 	}
 	const body = lines
 		.slice(end + 1)
@@ -62,7 +84,7 @@ export function parseEntry(text, file = "entry") {
 				: "keep the complete bold entry title on one physical line";
 		fail(file, `${problem.kind} at body line ${problem.line}: ${hint}`);
 	}
-	return { section, entry: body };
+	return { section, audience, entry: body };
 }
 
 function readEntries(entriesDir) {
@@ -88,8 +110,17 @@ export function validateChangelogEntries({
 	return readEntries(path.join(rootDir, ".changelog"));
 }
 
+// Sections CHANGELOG.md can hold per release: the Keep a Changelog ones, then
+// the Internal block for `audience: internal` fragments (#3852).
+const RELEASE_SECTIONS = [...CHANGELOG_SECTIONS, INTERNAL_HEADING];
+
+// The wrapper renderBody puts around Internal entries; bucketing strips it so a
+// re-roll of an existing version re-wraps once instead of nesting.
+const INTERNAL_WRAPPER_LINE =
+	/^(<details>|<\/details>|<summary>.*<\/summary>)$/;
+
 function bucketSectionBody(body) {
-	const buckets = new Map(CHANGELOG_SECTIONS.map((section) => [section, []]));
+	const buckets = new Map(RELEASE_SECTIONS.map((section) => [section, []]));
 	if (!body) return buckets;
 	let section;
 	let lines = [];
@@ -102,10 +133,11 @@ function bucketSectionBody(body) {
 		const heading = line.match(/^###\s+(.+?)\s*$/);
 		if (heading) {
 			flush();
-			section = CHANGELOG_SECTIONS.find(
-				(candidate) => candidate === heading[1],
-			);
-		} else if (section) {
+			section = RELEASE_SECTIONS.find((candidate) => candidate === heading[1]);
+		} else if (
+			section &&
+			!(section === INTERNAL_HEADING && INTERNAL_WRAPPER_LINE.test(line.trim()))
+		) {
 			lines.push(line);
 		}
 	}
@@ -113,16 +145,26 @@ function bucketSectionBody(body) {
 	return buckets;
 }
 
+function renderInternal(entries) {
+	// Chunks, not entries: one chunk can hold several bullets after a bucketing.
+	const count = entries.join("\n").split(/\r?\n/).filter(isEntryBullet).length;
+	const summary = `${count} internal ${count === 1 ? "change" : "changes"}: tests, CI, tooling, and refactors`;
+	return `### ${INTERNAL_HEADING}\n\n<details>\n<summary>${summary}</summary>\n\n${entries.join("\n\n")}\n\n</details>`;
+}
+
 function renderBody(...bodies) {
-	const combined = new Map(CHANGELOG_SECTIONS.map((section) => [section, []]));
+	const combined = new Map(RELEASE_SECTIONS.map((section) => [section, []]));
 	for (const body of bodies) {
 		const buckets = bucketSectionBody(body);
-		for (const section of CHANGELOG_SECTIONS)
+		for (const section of RELEASE_SECTIONS)
 			combined.get(section).push(...buckets.get(section));
 	}
-	return CHANGELOG_SECTIONS.map((section) => {
+	return RELEASE_SECTIONS.map((section) => {
 		const content = combined.get(section).filter(Boolean);
-		return content.length ? `### ${section}\n\n${content.join("\n\n")}` : "";
+		if (!content.length) return "";
+		return section === INTERNAL_HEADING
+			? renderInternal(content)
+			: `### ${section}\n\n${content.join("\n\n")}`;
 	})
 		.filter(Boolean)
 		.join("\n\n");
@@ -153,10 +195,15 @@ export function rollupChangelog(
 		return { version, files: [], changelogPath };
 	}
 
+	// An internal entry leaves its Keep a Changelog section for the Internal block.
 	const entryBody = renderBody(
-		...CHANGELOG_SECTIONS.map((section) => {
+		...RELEASE_SECTIONS.map((section) => {
 			const content = entries
-				.filter((entry) => entry.section === section)
+				.filter((entry) =>
+					section === INTERNAL_HEADING
+						? entry.audience === "internal"
+						: entry.audience === "user" && entry.section === section,
+				)
 				.map((entry) => entry.entry);
 			return content.length ? `### ${section}\n\n${content.join("\n\n")}` : "";
 		}),

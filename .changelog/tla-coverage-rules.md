@@ -1,5 +1,6 @@
 ---
 section: Added
+audience: internal
 ---
 
 - `formal/coverage-map.json` maps runtime source globs to TLA+ model families,

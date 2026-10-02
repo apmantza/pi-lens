@@ -10,13 +10,20 @@ entry in any of the repository's existing styles:
 ```markdown
 ---
 section: Fixed
+audience: user
 ---
 
 - **Short title (closes #1321)** — Explain the user-visible change.
 ```
 
 `section` must be `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or
-`Security`. The entry may use a `-` or `*` bullet, bold or plain text, and an
+`Security`. `audience` is required: `user` for anything a pi-lens user or an
+agent using pi-lens can observe (tools, diagnostics, messages, config, install,
+performance, a fixed bug they could hit), `internal` for CI, tests, `formal/`,
+contributor docs, orchestration and refactors with no observable change. The
+GitHub release body lists only `user` entries plus a one-line internal count;
+`CHANGELOG.md` keeps the `internal` ones in a collapsed `### Internal` block.
+The entry may use a `-` or `*` bullet, bold or plain text, and an
 em dash, period, or no title separator. Continuation lines and nested bullets
 are preserved; each file must contain exactly one top-level entry.
 

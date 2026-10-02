@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: internal
 ---
 
 - **`flake-shape-ratchet`'s admission-gate case no longer times out under load (refs #3546)** —

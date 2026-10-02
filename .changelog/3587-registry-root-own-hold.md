@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A declined secondary worktree's root no longer stays in the instance

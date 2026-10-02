@@ -1,5 +1,8 @@
 // Type declarations for changelog.mjs (untyped .mjs imported from .ts tests).
 
+/** Per-release heading for `audience: internal` fragments (#3852). */
+export const INTERNAL_HEADING: string;
+
 export interface ChangelogSection {
 	label: string;
 	heading: string;

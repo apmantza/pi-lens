@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A heartbeat landing between session_start's registration and its own

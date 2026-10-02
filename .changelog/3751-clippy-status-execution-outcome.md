@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **rust-clippy reports the execution outcome in `status` (closes #3751)** — a

@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - On Linux and macOS, a language server orphaned by a crashed session is

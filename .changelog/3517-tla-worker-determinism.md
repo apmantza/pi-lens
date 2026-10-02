@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: internal
 ---
 
 - `scripts/check-tla-models.mjs` no longer runs any TLA+ config with TLC's

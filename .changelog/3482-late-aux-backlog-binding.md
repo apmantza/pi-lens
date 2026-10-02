@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - Late auxiliary findings (a slow scanner such as opengrep answering after its

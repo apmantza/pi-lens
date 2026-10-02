@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A language server respawned after a crash, or back from a notify-stall

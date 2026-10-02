@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **Persisting the project snapshot no longer copies the whole object graph into the persist worker (refs #3789, reported by Renzo Oliveira)** — the default worker path structured-cloned the snapshot into the worker heap, then stringified it a second time there, so every persist on a large project jumped the process RSS by several hundred MB. The snapshot is now serialized once on the main thread and the UTF-8 bytes are transferred to the worker without a copy; the worker only fingerprints and gzips them, and the stored body, fingerprint and meta sidecar are byte-identical to what 4.3.0 wrote. On a 68 MB synthetic snapshot the worker path's RSS jump fell from about 300 MB to about 130 MB (`node scripts/bench-snapshot-persist.mjs`; raw output in `tests/fixtures/snapshot-persist-measurement.json`), and the main thread still holds the loop for roughly the stringify time (about 0.3 s here, against about 1.6 s for `PI_LENS_SNAPSHOT_PERSIST_SYNC=1`). A snapshot that cannot be serialized is dropped as a failed persist with a `project_snapshot_persist_failed` row and one `project-snapshot-serialize-failed` degradation count, and the key's queue keeps draining. The review-graph persist still sends objects to its worker.

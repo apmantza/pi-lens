@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - The shared tools install lock no longer lets two sessions install at once

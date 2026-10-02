@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - When pi replaces a session inside the same process (for example, resuming a
