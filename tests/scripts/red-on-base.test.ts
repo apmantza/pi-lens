@@ -131,19 +131,26 @@ function run(
 	argv: string[],
 	extraEnv: Record<string, string> = {},
 ) {
+	const env: NodeJS.ProcessEnv = {
+		...gitFixtureEnv(repo.root),
+		PATH: `${repo.bin}${path.delimiter}${process.env.PATH}`,
+		TMPDIR: repo.tmp,
+		PI_LENS_HOME: repo.ambientHome,
+		PROBE_LOG: repo.probeLog,
+		CLEANUP_LOG: repo.cleanupLog,
+		...extraEnv,
+	};
+	// A hermetic fixture: the ambient runner's test-lock bypass (CI sets
+	// `PI_LENS_TEST_NO_LOCK=1` for an isolated box) must not leak into the
+	// child, or the #3853 exclusive-holder arm silently skips the lock it
+	// exists to prove. The bypass stays production behavior; a test that wants
+	// it passes it through `extraEnv`.
+	if (!("PI_LENS_TEST_NO_LOCK" in extraEnv)) delete env.PI_LENS_TEST_NO_LOCK;
 	return spawnSync(process.execPath, [CLI, ...argv, "--test-command", FAKE], {
 		cwd: repo.root,
 		encoding: "utf8",
 		timeout: 120_000,
-		env: {
-			...gitFixtureEnv(repo.root),
-			PATH: `${repo.bin}${path.delimiter}${process.env.PATH}`,
-			TMPDIR: repo.tmp,
-			PI_LENS_HOME: repo.ambientHome,
-			PROBE_LOG: repo.probeLog,
-			CLEANUP_LOG: repo.cleanupLog,
-			...extraEnv,
-		},
+		env,
 	});
 }
 
