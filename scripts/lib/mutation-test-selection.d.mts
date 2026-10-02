@@ -119,18 +119,16 @@ export declare function forkPointOf(
 ): string;
 export declare function parseNameList(output: string): string[];
 export declare function runProbeProcess(options: {
-	spawn: (
+	spawnAsync?: (
 		command: string,
 		args: string[],
-		options: object,
-	) => {
-		on: (event: string, listener: (...args: any[]) => void) => unknown;
-		kill: (signal: string) => unknown;
-	};
+		options: Record<string, unknown>,
+	) => Promise<{ status: number | null; failure?: string }>;
 	command: string;
 	args: string[];
 	timeoutMs: number;
-}): Promise<{ status: number | null; timedOut: boolean }>;
+	signal?: AbortSignal;
+}): Promise<{ status: number | null; timedOut: boolean; aborted: boolean }>;
 export declare function readProbeCoverage(
 	io: {
 		exists: (file: string) => boolean;

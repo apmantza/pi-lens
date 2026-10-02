@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { mapWithConcurrency } from "../../clients/map-with-concurrency.js";
+import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 
 /**
  * Coverage-based test selection and the incremental-cache rules for the
@@ -172,6 +173,7 @@ export async function probeTestCoverage(
 ) {
 	const result = await run(test);
 	if (result.timedOut) return { unknown: "probe timed out" };
+	if (result.aborted) return { unknown: "probe aborted" };
 	if (result.status !== 0) {
 		return { unknown: `probe exited ${result.status}` };
 	}
@@ -582,36 +584,37 @@ export function parseNameList(output) {
 
 /**
  * Run one coverage probe and say how it ended: the exit status, and whether the
- * time limit (not the test) ended it. A spawn error is no status at all.
+ * time limit or the caller's abort ended it. Spawning goes through the shared
+ * bounded subprocess seam (`safeSpawnAsync`), which escalates SIGTERM to
+ * SIGKILL and tree-kills the child, so a probe that ignores SIGTERM cannot park
+ * this promise forever (#3810 F2, review r1). `spawnAsync` is the
+ * process-boundary seam a test doubles; production always uses the shared seam.
  *
  * @param {{
- *   spawn: (command: string, args: string[], options: object) => {
- *     on: (event: string, listener: (...args: any[]) => void) => unknown,
- *     kill: (signal: string) => unknown,
- *   },
+ *   spawnAsync?: (command: string, args: string[], options: object) => Promise<{status: number | null, failure?: string}>,
  *   command: string,
  *   args: string[],
  *   timeoutMs: number,
+ *   signal?: AbortSignal,
  * }} options
- * @returns {Promise<{status: number | null, timedOut: boolean}>}
+ * @returns {Promise<{status: number | null, timedOut: boolean, aborted: boolean}>}
  */
-export function runProbeProcess({ spawn, command, args, timeoutMs }) {
-	return new Promise((resolve) => {
-		const child = spawn(command, args, { stdio: "ignore" });
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			child.kill("SIGTERM");
-		}, timeoutMs);
-		child.on("error", () => {
-			clearTimeout(timer);
-			resolve({ status: null, timedOut });
-		});
-		child.on("close", (status) => {
-			clearTimeout(timer);
-			resolve({ status, timedOut });
-		});
+export async function runProbeProcess({
+	spawnAsync = safeSpawnAsync,
+	command,
+	args,
+	timeoutMs,
+	signal,
+}) {
+	const result = await spawnAsync(command, args, {
+		timeout: timeoutMs,
+		signal,
 	});
+	return {
+		status: result.status,
+		timedOut: result.failure === "timeout",
+		aborted: result.failure === "aborted",
+	};
 }
 
 /**

@@ -5,6 +5,13 @@ import { mapGeneratedLineToOriginal } from "./mutation-source-map.mjs";
 
 const IMPORT_SPECIFIER_RE =
 	/(?:from\s+|import\s*(?:\(\s*)?|require\(\s*)["']([^"']+)["']/g;
+// A test can reach a mutation source through `path.resolve(...)`/`path.join(...)`
+// instead of an import specifier (e.g. analyze-pi-lens-logs-detectors.test.ts).
+// The argument window runs to end of line, so a nested `path.dirname(...)` does
+// not hide the relative literal that follows it.
+const PATH_RESOLVER_LINE_RE =
+	/(?:\bpath\s*\.\s*)?\b(?:resolve|join)\s*\(([^\n]*)/g;
+const STRING_LITERAL_RE = /["']([^"']+)["']/g;
 const MUTATION_LANE_EXCLUSION_RE = /^\s*\/\/\s*mutation-lane:\s*exclude\s*$/m;
 const MUTATION_LANE_EXCLUSIONS_PATH =
 	"tests/config/stryker-diff-exclusions.json";
@@ -126,6 +133,17 @@ function extractRelativeSpecifiers(content) {
 	while (match) {
 		if (match[1].startsWith(".")) specifiers.push(match[1]);
 		match = IMPORT_SPECIFIER_RE.exec(content);
+	}
+	PATH_RESOLVER_LINE_RE.lastIndex = 0;
+	let call = PATH_RESOLVER_LINE_RE.exec(content);
+	while (call) {
+		STRING_LITERAL_RE.lastIndex = 0;
+		let literal = STRING_LITERAL_RE.exec(call[1]);
+		while (literal) {
+			if (literal[1].startsWith(".")) specifiers.push(literal[1]);
+			literal = STRING_LITERAL_RE.exec(call[1]);
+		}
+		call = PATH_RESOLVER_LINE_RE.exec(content);
 	}
 	return specifiers;
 }
@@ -380,12 +398,14 @@ function conventionalTestSibling(file) {
 /**
  * Select tests that cover changed mutation sources (scripts/**\/*.mjs and
  * the compiled-source classes in isCompiledMutationSource) through one-hop
- * relative imports or the conventional tests/<dir>/<name>.test.ts sibling.
- * Compiled sources are matched the same way scripts are: test files import
- * them with a relative specifier (typically ending in `.js`, since that is
- * what TypeScript's `nodenext` resolution and the repo's own tests use to
- * reach a compiled `clients/*.ts` module -- e.g. `tests/index-wiring.test.ts`
- * imports `../index.js`), which `normalized()` compares extension-agnostically.
+ * relative imports, the conventional tests/<dir>/<name>.test.ts sibling, a
+ * `<name>-*.test.ts` sibling beside it, or a relative literal a test resolves
+ * by path (`path.resolve`/`path.join`). Compiled sources are matched the same
+ * way scripts are: test files import them with a relative specifier (typically
+ * ending in `.js`, since that is what TypeScript's `nodenext` resolution and
+ * the repo's own tests use to reach a compiled `clients/*.ts` module -- e.g.
+ * `tests/index-wiring.test.ts` imports `../index.js`), which `normalized()`
+ * compares extension-agnostically.
  *
  * @param {string[]} changedFiles
  * @param {{ testFiles?: string[], readFile?: (file: string) => string }} [options]
@@ -418,15 +438,18 @@ export function mapRelatedTests(
 
 	for (const file of sources) {
 		const sibling = conventionalTestSibling(file);
-		const siblingEntry = testContents.find(
-			([test]) => normalized(test) === normalized(sibling),
-		);
-		if (siblingEntry) {
-			const siblingExclusion = siblingEntry[2];
-			if (siblingExclusion) excluded.set(sibling, siblingExclusion);
+		const siblingKey = normalized(sibling);
+		const prefixKey = siblingKey.replace(/\.test$/, "") + "-";
+		for (const [test, , exclusion] of testContents) {
+			const testKey = normalized(test);
+			const isSibling =
+				testKey === siblingKey ||
+				(testKey.startsWith(prefixKey) && testKey.endsWith(".test"));
+			if (!isSibling) continue;
+			if (exclusion) excluded.set(test, exclusion);
 			else {
-				related.get(file).add(sibling);
-				priorities.set(sibling, 0);
+				related.get(file).add(test);
+				priorities.set(test, 0);
 			}
 		}
 		const target = normalized(file);

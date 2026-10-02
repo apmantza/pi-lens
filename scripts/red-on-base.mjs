@@ -20,6 +20,7 @@ import {
 	SCRATCH_DIR_ROOT,
 	sweepScratchDirs,
 } from "./lib/scratch-dir.mjs";
+import { acquireSharedSlot } from "./lib/suite-lock.mjs";
 
 // Verdicts are PER TEST (file + full name from vitest's JSON report), never per
 // file: a red test that also fails on base must not hide a sibling test in the
@@ -332,7 +333,19 @@ export async function main(argv = process.argv.slice(2)) {
 		};
 	}
 
+	// #3853: the whole red-on-base run (every comparison and repeat run, plus
+	// the two builds) takes ONE shared test-suite slot. Several agents may run
+	// targeted suites concurrently, but none may overlap a full-suite run. The
+	// slot is acquired once here, not per spawn, so there is no recursive
+	// acquisition; `PI_LENS_TEST_NO_LOCK=1` (the same bypass with-test-lock
+	// honors) skips it when the caller already holds one.
+	let lock = null;
 	try {
+		if (process.env.PI_LENS_TEST_NO_LOCK !== "1") {
+			lock = await acquireSharedSlot({
+				log: (message) => console.error(`red-on-base: ${message}`),
+			});
+		}
 		console.log(`HEAD ${headSha}`);
 		console.log(`BASE ${base} ${baseSha}`);
 
@@ -420,6 +433,7 @@ export async function main(argv = process.argv.slice(2)) {
 		process.removeListener("SIGTERM", onSigterm);
 		if (added) removeWorktree(cwd, worktree);
 		rmSync(runRoot, { recursive: true, force: true });
+		if (lock) await lock.release();
 	}
 }
 

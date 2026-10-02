@@ -7,7 +7,7 @@
 // `baseMeta` before it ran was safe). Only spawning the real script against
 // a real, throwaway git fixture reproduces the actual TDZ ordering bug.
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -20,6 +20,7 @@ import {
 import { join, resolve } from "node:path";
 import yaml from "../../clients/deps/js-yaml.js";
 import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { acquireTestLock, getLockPath } from "../../scripts/lib/suite-lock.mjs";
 import {
 	INCREMENTAL_FINGERPRINT_PATH,
 	probeReportsDirectory,
@@ -412,6 +413,56 @@ describe("stryker diff selection", () => {
 			"tests/scripts/ci-verdict.test.ts",
 			"tests/scripts/guard-bash.test.ts",
 		]);
+	});
+
+	it("admits a `<script>-*.test.ts` sibling beside the conventional one (F1)", () => {
+		// #3810 F1 (from the #3879 verify): scripts/analyze-pi-lens-logs.mjs has
+		// two suites, only one named after the script. Candidate discovery kept
+		// just the exact sibling, so the detector suite was never probed -- and
+		// coverage ranking cannot recover a test that is never admitted.
+		const result = mapRelatedTests(["scripts/analyze-pi-lens-logs.mjs"], {
+			testFiles: [
+				"tests/scripts/analyze-pi-lens-logs.test.ts",
+				"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
+				"tests/scripts/unrelated.test.ts",
+			],
+			readFile: () => "",
+		});
+
+		expect(result.related.get("scripts/analyze-pi-lens-logs.mjs")).toEqual(
+			new Set([
+				"tests/scripts/analyze-pi-lens-logs.test.ts",
+				"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
+			]),
+		);
+		expect(result.uncovered).toEqual([]);
+	});
+
+	it("admits a test that resolves the script by path instead of importing it (F1)", () => {
+		// The detector suite reaches the script through
+		// `path.resolve(HERE, \"../../scripts/analyze-pi-lens-logs.mjs\")`, which the
+		// import-specifier scan alone misses.
+		const result = mapRelatedTests(["scripts/analyze-pi-lens-logs.mjs"], {
+			testFiles: ["tests/scripts/resolver.test.ts"],
+			readFile: () =>
+				'const SCRIPT = process.env.SCRIPT ?? path.resolve(HERE, "../../scripts/analyze-pi-lens-logs.mjs");',
+		});
+
+		expect(result.related.get("scripts/analyze-pi-lens-logs.mjs")).toEqual(
+			new Set(["tests/scripts/resolver.test.ts"]),
+		);
+	});
+
+	it("finds the real detector suite for the real logs script through the real discovery", () => {
+		// End-to-end acceptance for F1: the real test tree, the real default
+		// reader. Normalise separators so the assertion holds on Windows too.
+		const result = mapRelatedTests(["scripts/analyze-pi-lens-logs.mjs"]);
+		const found = [
+			...(result.related.get("scripts/analyze-pi-lens-logs.mjs") ?? []),
+		].map((test) => test.split("\\").join("/"));
+		expect(found).toContain(
+			"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
+		);
 	});
 
 	it("reports changed scripts with no covering test instead of silently selecting none", () => {
@@ -828,9 +879,12 @@ describe.skipIf(underStryker)(
 			expect(code).toContain("priorities: selection.priorities,");
 			expect(code).toContain("lines: probeLines,");
 			expect(code).toContain("probeAllTests(");
-			// The probes share the job's budget; they must not be able to eat it all.
-			expect(code).toContain("signal: AbortSignal.timeout(");
+			// The probes share the job's budget; they must not be able to eat it all,
+			// and both the first probe (alone) and the concurrent pass get that same
+			// signal so an over-budget probe is cancelled and tree-killed (F2).
+			expect(code).toContain("const probeSignal = AbortSignal.timeout(");
 			expect(code).toContain("PROBE_BUDGET_SHARE");
+			expect(code.match(/signal: probeSignal,/g)).toHaveLength(2);
 		});
 
 		it("caps the changed files by changed-line weight with whitespace-only lines ignored (#3797 review)", () => {
@@ -1822,5 +1876,48 @@ describe("augmentAndSummarize (#3531 round 2: shared by the complete AND the par
 			fileName: "clients/fixture.ts",
 			line: 1,
 		});
+	});
+});
+
+describe("shared test-suite slot (#3853)", () => {
+	it("waits behind a live exclusive holder and refuses to run the Stryker child", async () => {
+		// The driver forks vitest pools, so it takes one shared slot for its whole
+		// run. A full-suite (exclusive) holder must make it wait and then refuse,
+		// never run concurrently: a real in-process store plus the real spawned
+		// CLI, no mocked lock.
+		const fixtureRepo = mkdtempSync(
+			join(repositoryRoot, ".tmp-stryker-diff-lock-"),
+		);
+		const home = join(fixtureRepo, "home");
+		mkdirSync(home, { recursive: true });
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = home;
+		const exclusive = await acquireTestLock({
+			lockPath: getLockPath(),
+			slots: 2,
+			pollIntervalMs: 10,
+			heartbeatIntervalMs: 5_000,
+		});
+		try {
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				PI_LENS_HOME: home,
+				PI_LENS_TEST_LOCK_TIMEOUT_MS: "250",
+			};
+			delete env.PI_LENS_TEST_NO_LOCK;
+			const result = spawnSync(
+				process.execPath,
+				[driverPath, "--base", "HEAD"],
+				{ cwd: fixtureRepo, encoding: "utf8", timeout: 30_000, env },
+			);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain("exclusive test-suite lock held by PID");
+			expect(result.stdout).not.toContain("no mutants evaluated");
+		} finally {
+			await exclusive.release();
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			rmSync(fixtureRepo, { recursive: true, force: true });
+		}
 	});
 });

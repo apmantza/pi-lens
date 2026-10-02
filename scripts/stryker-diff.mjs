@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -7,6 +7,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { availableParallelism } from "node:os";
+import { readJsonCache } from "../clients/json-cache-read.js";
 import base from "../stryker.config.mjs";
 import {
 	augmentAndSummarize,
@@ -68,6 +69,7 @@ import {
 	decodeSourceMapRows,
 	mapRangesToGenerated,
 } from "./lib/mutation-source-map.mjs";
+import { acquireSharedSlot } from "./lib/suite-lock.mjs";
 
 const startedAt = Date.now();
 
@@ -114,6 +116,27 @@ const budgetMs = Math.round(budgetMinutes * 60_000);
 // `github.event.pull_request.head.sha` from the workflow; local runs (no
 // PR event) fall back to `git rev-parse HEAD`.
 const headShaArg = argumentValue("--head-sha", null);
+
+// #3853: the driver forks vitest pools for the coverage probes and again inside
+// Stryker, so its whole run takes ONE shared test-suite slot, acquired once
+// (never per spawn -- no recursive acquisition). The slot covers the Stryker
+// child the issue names. `PI_LENS_TEST_NO_LOCK=1`, the same bypass
+// with-test-lock honors, skips it when the caller already holds one.
+let mutationLock = null;
+if (process.env.PI_LENS_TEST_NO_LOCK !== "1") {
+	try {
+		mutationLock = await acquireSharedSlot({
+			log: (message) => console.error(`mutation diff: ${message}`),
+		});
+	} catch (error) {
+		console.error(`mutation diff: ${error.message}`);
+		process.exit(1);
+	}
+	// Stryker runs vitest, and this PR's own driver tests spawn the driver
+	// again; the slot above already covers those descendants, so tell them not
+	// to re-acquire. Without this the nested driver would wait on its parent.
+	process.env.PI_LENS_TEST_NO_LOCK = "1";
+}
 
 function changedMutationFiles() {
 	try {
@@ -411,7 +434,19 @@ for (const tsFile of coveredCompiled) {
 		);
 		continue;
 	}
-	const rawMap = JSON.parse(readFileSync(mapFile, "utf8"));
+	const rawMap = readJsonCache(
+		mapFile,
+		(parsed) => parsed,
+		(error) => {
+			console.log(
+				`mutation diff: unreadable source map for ${tsFile} (${error.message}); skipping`,
+			);
+		},
+	);
+	if (rawMap === undefined) {
+		compiledSkippedNoMap.push(tsFile);
+		continue;
+	}
 	const rows = decodeSourceMapRows(rawMap);
 	const index = { ...buildLineIndex(rows), tracer: createTracer(rawMap) };
 	const jsContent = readFileSync(jsFile, "utf8");
@@ -471,9 +506,12 @@ for (const tsFile of coveredCompiled) {
 	probeInclude.push(compiledJsPath(tsFile));
 }
 
+const probeSignal = AbortSignal.timeout(
+	Math.round(remainingBudgetMs() * PROBE_BUDGET_SHARE),
+);
+
 function runProbe(test) {
 	return runProbeProcess({
-		spawn,
 		command: "node_modules/.bin/vitest",
 		args: buildCoverageProbeArgs(
 			test,
@@ -482,6 +520,7 @@ function runProbe(test) {
 			{ testTimeoutMs: MUTATION_TEST_TIMEOUT_MS },
 		),
 		timeoutMs: PROBE_TIMEOUT_MS,
+		signal: probeSignal,
 	});
 }
 
@@ -512,9 +551,7 @@ const probeLines = await probeAllTests(
 		}),
 	{
 		concurrency: PROBE_CONCURRENCY,
-		signal: AbortSignal.timeout(
-			Math.round(remainingBudgetMs() * PROBE_BUDGET_SHARE),
-		),
+		signal: probeSignal,
 	},
 );
 const choice = selectMutationTests({
@@ -993,3 +1030,4 @@ for (;;) {
 }
 
 console.log("mutation diff: completed");
+if (mutationLock) await mutationLock.release();

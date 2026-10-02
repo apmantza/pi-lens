@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
 	buildCoverageProbeArgs,
@@ -782,105 +781,62 @@ describe("probeConcurrency", () => {
 });
 
 describe("runProbeProcess", () => {
-	function fakeSpawn() {
-		const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
-		const spawn = vi.fn(() => child);
-		return { child, spawn };
-	}
-
-	it("spawns the command with ignored stdio and reports the exit status", async () => {
-		const { child, spawn } = fakeSpawn();
-		const done = runProbeProcess({
-			spawn,
+	it("passes the declared timeout and abort signal to the bounded subprocess seam (F2)", async () => {
+		// F2 (#3810): the old private lifecycle installed its own SIGTERM timer and
+		// ignored the caller's abort signal, so a probe that ignored SIGTERM never
+		// settled. It now delegates to the shared bounded seam with the timeout and
+		// signal it was handed.
+		const spawnAsync = vi.fn(async () => ({ status: 0 }));
+		const controller = new AbortController();
+		const done = await runProbeProcess({
+			spawnAsync,
 			command: "vitest",
 			args: ["run", "x"],
 			timeoutMs: 1000,
+			signal: controller.signal,
 		});
-		child.emit("close", 0);
-		await expect(done).resolves.toEqual({ status: 0, timedOut: false });
-		expect(spawn).toHaveBeenCalledWith("vitest", ["run", "x"], {
-			stdio: "ignore",
+		expect(done).toEqual({ status: 0, timedOut: false, aborted: false });
+		expect(spawnAsync).toHaveBeenCalledWith("vitest", ["run", "x"], {
+			timeout: 1000,
+			signal: controller.signal,
 		});
 	});
 
 	it("reports a failing exit and no status for a spawn error", async () => {
-		const failing = fakeSpawn();
-		const exit = runProbeProcess({
-			spawn: failing.spawn,
+		const exit = await runProbeProcess({
+			spawnAsync: async () => ({ status: 3 }),
 			command: "c",
 			args: [],
 			timeoutMs: 1000,
 		});
-		failing.child.emit("close", 3);
-		await expect(exit).resolves.toEqual({ status: 3, timedOut: false });
-		const broken = fakeSpawn();
-		const error = runProbeProcess({
-			spawn: broken.spawn,
+		expect(exit).toEqual({ status: 3, timedOut: false, aborted: false });
+		const broken = await runProbeProcess({
+			spawnAsync: async () => ({ status: null, failure: "spawn" }),
 			command: "c",
 			args: [],
 			timeoutMs: 1000,
 		});
-		broken.child.emit("error", new Error("ENOENT"));
-		await expect(error).resolves.toEqual({ status: null, timedOut: false });
+		expect(broken).toEqual({ status: null, timedOut: false, aborted: false });
 	});
 
-	it("terminates a probe that outlives its limit and says the limit ended it", async () => {
-		vi.useFakeTimers();
-		try {
-			const { child, spawn } = fakeSpawn();
-			const done = runProbeProcess({
-				spawn,
-				command: "c",
-				args: [],
-				timeoutMs: 5000,
-			});
-			vi.advanceTimersByTime(4999);
-			expect(child.kill).not.toHaveBeenCalled();
-			vi.advanceTimersByTime(1);
-			expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-			child.emit("close", null);
-			await expect(done).resolves.toEqual({ status: null, timedOut: true });
-		} finally {
-			vi.useRealTimers();
-		}
+	it("says the seam's time limit ended a probe, not the test", async () => {
+		const done = await runProbeProcess({
+			spawnAsync: async () => ({ status: null, failure: "timeout" }),
+			command: "c",
+			args: [],
+			timeoutMs: 5000,
+		});
+		expect(done).toEqual({ status: null, timedOut: true, aborted: false });
 	});
 
-	it("does not kill a probe that finished before its limit", async () => {
-		vi.useFakeTimers();
-		try {
-			const { child, spawn } = fakeSpawn();
-			const done = runProbeProcess({
-				spawn,
-				command: "c",
-				args: [],
-				timeoutMs: 5000,
-			});
-			child.emit("close", 0);
-			await done;
-			vi.advanceTimersByTime(60_000);
-			expect(child.kill).not.toHaveBeenCalled();
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	it("does not kill a probe that failed to spawn", async () => {
-		vi.useFakeTimers();
-		try {
-			const { child, spawn } = fakeSpawn();
-			const done = runProbeProcess({
-				spawn,
-				command: "c",
-				args: [],
-				timeoutMs: 5000,
-			});
-			child.emit("error", new Error("EACCES"));
-			await done;
-			vi.advanceTimersByTime(60_000);
-			expect(child.kill).not.toHaveBeenCalled();
-		} finally {
-			vi.useRealTimers();
-		}
+	it("says the caller's abort ended a probe", async () => {
+		const done = await runProbeProcess({
+			spawnAsync: async () => ({ status: null, failure: "aborted" }),
+			command: "c",
+			args: [],
+			timeoutMs: 5000,
+		});
+		expect(done).toEqual({ status: null, timedOut: false, aborted: true });
 	});
 });
 

@@ -568,11 +568,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// early-exit call sites) only exists in the real module's own top-level
 	// execution order; a source-text assertion on the driver already passed
 	// under the crash, so only spawning the actual script against a real,
-	// throwaway git fixture reproduces it.
+	// throwaway git fixture reproduces it. The count moved 3 -> 4 with the
+	// #3853 lock test: whether the real driver waits behind a live exclusive
+	// holder (and refuses to fork vitest) is only observable by spawning the
+	// real script, since the lock lives in the driver's own top-level order.
 	"real-process-spawn:scripts/stryker-diff.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the defect is a temporal-dead-zone crash in the driver's own top-level execution order; no source-text or in-process substitute reproduces it",
+			"the defect is a temporal-dead-zone crash in the driver's own top-level execution order, and the #3853 lock wait/refusal is only observable by spawning the real script; no source-text or in-process substitute reproduces either",
 	},
 	// 2026-09-06 (#2586 review F1): proves the actual delimiter
 	// supply-host-provided-deps.mjs prints in its own stdout bytes; an
