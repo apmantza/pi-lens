@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - The read-before-edit guard now follows the conversation across `/tree`,

@@ -114,6 +114,10 @@ interface World {
 	listThrows?: boolean;
 	listTransientFailures?: number;
 	prStateThrows?: boolean;
+	/** #3754: whether master has a merge queue (the GraphQL `mergeQueue{id}` read). */
+	mergeQueueEnabled?: boolean;
+	/** #3754: an unreadable queue read (`readMergeQueueState` returns null). */
+	graphqlThrows?: boolean;
 	/** closing issues per merged PR number, and each issue's state. */
 	closing?: Record<number, number[]>;
 	issueStates?: Record<number, string>;
@@ -154,6 +158,17 @@ function ghFor(w: World) {
 	) => {
 		w.calls.push(args.join(" "));
 		if (args[0] === "repo") return `${w.owner}/pi-lens`;
+		if (args[0] === "api" && args[1] === "graphql") {
+			if (w.graphqlThrows) throw new Error("HTTP 502: graphql unavailable");
+			return JSON.stringify({
+				data: {
+					repository: {
+						mergeQueue: w.mergeQueueEnabled ? { id: "MQ_test" } : null,
+						pullRequest: { isInMergeQueue: false, mergeQueueEntry: null },
+					},
+				},
+			});
+		}
 		if (args[0] === "run" && args[1] === "rerun") {
 			w.mutations.push(args.join(" "));
 			if (w.rerunThrows) throw new Error("HTTP 403: rerun refused");
@@ -620,6 +635,40 @@ describe("run — rerun and update-branch remedies (#3700)", () => {
 		expect(out).toContain(
 			`hint: master moved since this failure's merge base (${UNIT_FAIL_MERGE_BASE.slice(0, 9)} -> bbbbbbbbb): gh run rerun replays the old merge commit and cannot pick up what master gained -- use gh pr update-branch 3688`,
 		);
+	});
+
+	// #3754 recurrence: the update-branch hint told the orchestrator to push to a
+	// PR that a merge queue tests on the latest master anyway; the push re-runs
+	// every check and ejects a queued PR.
+	it("withdraws the update-branch hint when master has a merge queue", async () => {
+		const unit = UNIT_FAIL();
+		const w = world({
+			prs: [{ number: 3688, checkRuns: [jobRow(unit), GREEN[1]] }],
+			jobs: [unit],
+			master: "b".repeat(40),
+			mergeQueueEnabled: true,
+		});
+		const { out } = await cli(["3688"], w);
+		expect(out).toContain(
+			`hint: master moved since this failure's merge base (${UNIT_FAIL_MERGE_BASE.slice(0, 9)} -> bbbbbbbbb): the merge queue tests the PR on the latest master, so do not update-branch 3688`,
+		);
+		expect(out).not.toContain("use gh pr update-branch 3688");
+	});
+
+	// #3754: the queue read is optional; an unreadable one (`?.enabled` on null)
+	// must keep the pre-queue update-branch hint instead of throwing the verdict
+	// into a transport error.
+	it("keeps the update-branch hint when the queue read is unreadable", async () => {
+		const unit = UNIT_FAIL();
+		const w = world({
+			prs: [{ number: 3688, checkRuns: [jobRow(unit), GREEN[1]] }],
+			jobs: [unit],
+			master: "b".repeat(40),
+			graphqlThrows: true,
+		});
+		const { exitCode, out } = await cli(["3688"], w);
+		expect(exitCode).toBe(EXIT_FAILURE);
+		expect(out).toContain("use gh pr update-branch 3688");
 	});
 
 	it("gives no update-branch hint when the merge base is still master's head", async () => {

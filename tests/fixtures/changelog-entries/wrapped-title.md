@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **A wrapped changelog title

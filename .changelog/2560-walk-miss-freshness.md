@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A file with no project marker (no `package.json`, `Cargo.toml` and the like

@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: internal
 ---
 
 - **Pre-push no longer times out on `vi-domock-undo` and `flake-shape-ratchet` under load (closes #3514)** —

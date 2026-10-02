@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **typos' close-triggered publish no longer answers an in-flight scan, and can no longer overwrite a real answer after a reopen (refs #3548)** —

@@ -112,6 +112,20 @@ describe("merge-train warden decision logic (#1844)", () => {
 		).not.toContainEqual({ type: "update-branch" });
 	});
 
+	// #3754 recurrence: a queued PR that the warden pushes an update-branch
+	// commit to is re-tested from scratch and ejected from the queue; and with a
+	// queue on master, BEHIND is no reason to push at all.
+	it("never kicks update-branch for a PR in the merge queue, or anywhere master has a queue", () => {
+		const behind = { mergeStateStatus: "BEHIND", autoMergeEnabled: true };
+		expect(
+			decideActions(pr({ ...behind, inMergeQueue: true })),
+		).not.toContainEqual({ type: "update-branch" });
+		expect(
+			decideActions(pr({ ...behind, mergeQueueEnabled: true })),
+		).not.toContainEqual({ type: "update-branch" });
+		expect(decideActions(pr(behind))).toContainEqual({ type: "update-branch" });
+	});
+
 	it("labels and comments once when a required check fails, naming it with its run link", () => {
 		const actions = decideActions(
 			pr({
@@ -454,6 +468,35 @@ describe("merge-train warden GraphQL fetch + REST apply (#1844)", () => {
 		const { prs } = await fetchOpenPullRequests(fetcher, "acme", "repo");
 		expect(prs[0].failingRequiredChecks).toEqual([]);
 		expect(prs[0].unresolvedRequiredChecks).toEqual(REQUIRED_CHECKS);
+	});
+
+	// #3754: the queue fields come from GraphQL: `repository.mergeQueue{id}`
+	// (real shape: tests/fixtures/ci-verdict/merge-group-runs.real.json) and the
+	// PR's `isInMergeQueue` / `mergeQueueEntry{state position}`.
+	it("reads the merge-queue state of master and of each PR", async () => {
+		const page = graphqlPage([
+			prNode({
+				number: 7,
+				isInMergeQueue: true,
+				mergeQueueEntry: { state: "AWAITING_CHECKS", position: 1 },
+			}),
+			prNode({ number: 8, isInMergeQueue: false, mergeQueueEntry: null }),
+		]);
+		page.data.repository = {
+			...page.data.repository,
+			mergeQueue: { id: "MQ_kwDOC01lZ80xjw" },
+		} as typeof page.data.repository;
+		const { fetcher } = fakeGithub({ "POST /graphql": page });
+		const { prs } = await fetchOpenPullRequests(fetcher, "acme", "repo");
+		expect(prs.map((entry) => entry.inMergeQueue)).toEqual([true, false]);
+		expect(prs[0].mergeQueueState).toBe("AWAITING_CHECKS");
+		expect(prs.map((entry) => entry.mergeQueueEnabled)).toEqual([true, true]);
+		const noQueue = await fetchOpenPullRequests(
+			fakeGithub({ "POST /graphql": graphqlPage([prNode()]) }).fetcher,
+			"acme",
+			"repo",
+		);
+		expect(noQueue.prs[0].mergeQueueEnabled).toBe(false);
 	});
 
 	it("labels a failing non-advisory check when the required pair is green", async () => {

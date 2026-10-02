@@ -55,6 +55,7 @@ const BENIGN_HTTP_STATUSES = new Set([404, 409, 422]);
 const PR_QUERY = `
 query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
+    mergeQueue(branch: "master") { id }
     pullRequests(states: OPEN, first: ${PAGE_SIZE}, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
       pageInfo { hasNextPage endCursor }
       nodes {
@@ -62,6 +63,8 @@ query($owner: String!, $name: String!, $after: String) {
         url
         mergeStateStatus
         autoMergeRequest { enabledAt }
+        isInMergeQueue
+        mergeQueueEntry { state position }
         isCrossRepository
         labels(first: 50) { nodes { name } }
         commits(last: 1) {
@@ -107,7 +110,7 @@ async function graphql(fetcher, query, variables) {
 	return response.json();
 }
 
-function normalizePr(node) {
+function normalizePr(node, mergeQueueEnabled = false) {
 	const labels = new Set((node.labels?.nodes ?? []).map((l) => l.name));
 	const headCommit = node.commits?.nodes?.[0]?.commit;
 	const rollup = headCommit?.statusCheckRollup;
@@ -178,6 +181,13 @@ function normalizePr(node) {
 		headCommittedDate: headCommit?.committedDate ?? null,
 		mergeStateStatus: node.mergeStateStatus,
 		autoMergeEnabled: Boolean(node.autoMergeRequest),
+		// #3754: GitHub's merge queue tests a queued PR on the latest master
+		// itself. `inMergeQueue` is this PR's entry; `mergeQueueEnabled` is
+		// whether master has a queue at all (a repository-level answer, carried
+		// onto every PR so `decideActions` stays a pure function of one record).
+		inMergeQueue: Boolean(node.isInMergeQueue),
+		mergeQueueState: node.mergeQueueEntry?.state ?? null,
+		mergeQueueEnabled,
 		// isCrossRepository is GitHub's own fork signal: true when the PR's head
 		// repository differs from this (base) repository. update-branch's PUT
 		// creates a commit ON the head branch, so a fork-owned head is the
@@ -259,7 +269,7 @@ export async function fetchOpenPullRequests(fetcher, owner, name) {
 				continue;
 			}
 			seenNumbers.add(node.number);
-			prs.push(normalizePr(node));
+			prs.push(normalizePr(node, Boolean(payload.data.repository.mergeQueue)));
 		}
 
 		const hasNextPage = Boolean(connection.pageInfo?.hasNextPage);
@@ -338,7 +348,15 @@ export function decideActions(pr) {
 	// mergeStateStatus: UNKNOWN + label present falls through both branches
 	// above: no action either direction, by construction.
 
-	if (pr.autoMergeEnabled && pr.mergeStateStatus === "BEHIND") {
+	// #3754: with a merge queue on master the queue tests the PR against the
+	// latest master itself, so BEHIND is no longer a reason to push a merge
+	// commit -- and a push to a QUEUED PR re-runs every check and ejects it.
+	if (
+		pr.autoMergeEnabled &&
+		pr.mergeStateStatus === "BEHIND" &&
+		!pr.mergeQueueEnabled &&
+		!pr.inMergeQueue
+	) {
 		actions.push({ type: "update-branch" });
 	}
 

@@ -128,8 +128,11 @@ Run every probe the diff can trip and say which ran and what each returned.
   from each merged PR's `PR body (advisory)` row in `ci-verdict`
   (recurrence: #3873).
 - **Changelog fragment.** Front matter `section:` is one of Added, Changed,
-  Deprecated, Removed, Fixed, or Security, followed by exactly one top-level
-  entry. Bullet style and a bold or plain title are the author's choice
+  Deprecated, Removed, Fixed, or Security, and `audience:` is `user` or
+  `internal` (`user` = a pi-lens user or agent can observe it; `internal` = CI,
+  tests, `formal/`, contributor docs, orchestration, refactors), followed by
+  exactly one top-level entry. A missing or unknown `audience` is an error.
+  Bullet style and a bold or plain title are the author's choice
   (`.changelog/README.md`). `CHANGELOG.md` changes only in the rollups
   `npm run changelog:release` generates.
 - **Sort comparators.** Every new `.sort()` or `.toSorted()` has an explicit

@@ -1,0 +1,344 @@
+{
+ "source": "github/docs (public repo with a merge queue on main); GET /repos/github/docs/actions/runs?event=merge_group&status=failure|success and /actions/runs/<id>/jobs, trimmed to the fields scripts/ci-verdict.mjs reads",
+ "fetchedAt": "2026-09-30",
+ "graphqlMergeQueue": {
+  "data": {
+   "repository": {
+    "mergeQueue": {
+     "id": "MQ_kwDOC01lZ80xjw",
+     "entries": {
+      "nodes": []
+     }
+    }
+   }
+  }
+ },
+ "graphqlNote": "queue was empty when fetched; the entry fields state and position come from schema introspection of MergeQueueEntry (QUEUED AWAITING_CHECKS MERGEABLE UNMERGEABLE LOCKED)",
+ "workflow_runs": [
+  {
+   "id": 22461279900,
+   "name": "Test",
+   "event": "merge_group",
+   "head_branch": "gh-readonly-queue/main/pr-43130-25c75ff4824c0de8e7e604cbff3d3352dfe2a480",
+   "head_sha": "27a0fcf8dd4d2d3a77a422a1c6faec0b43e22e7d",
+   "conclusion": "failure",
+   "status": "completed",
+   "created_at": "2026-02-26T21:08:33Z",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900"
+  },
+  {
+   "id": 22460727028,
+   "name": "Test",
+   "event": "merge_group",
+   "head_branch": "gh-readonly-queue/main/pr-43130-25c75ff4824c0de8e7e604cbff3d3352dfe2a480",
+   "head_sha": "cb9f31f0c22fa7926507e09f2258c21e80eb48ab",
+   "conclusion": "failure",
+   "status": "completed",
+   "created_at": "2026-02-26T20:52:25Z",
+   "html_url": "https://github.com/github/docs/actions/runs/22460727028"
+  },
+  {
+   "id": 35877506091,
+   "name": "Headless Tests",
+   "event": "merge_group",
+   "head_branch": "gh-readonly-queue/main/pr-46026-9596303607b98b0570b5738387851c266d732136",
+   "head_sha": "cde218e106a64ec318eb0e0567c9538983ff3a1f",
+   "conclusion": "success",
+   "status": "completed",
+   "created_at": "2026-09-23T14:53:28Z",
+   "html_url": "https://github.com/github/docs/actions/runs/35877506091"
+  }
+ ],
+ "failedRunJobs": [
+  {
+   "id": 65055965527,
+   "run_id": 22461279900,
+   "name": "color-schemes",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965527",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:22Z"
+  },
+  {
+   "id": 65055965543,
+   "run_id": 22461279900,
+   "name": "automated-pipelines",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965543",
+   "started_at": "2026-02-26T21:08:51Z",
+   "completed_at": "2026-02-26T21:11:06Z"
+  },
+  {
+   "id": 65055965551,
+   "run_id": 22461279900,
+   "name": "article-api",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965551",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:45Z"
+  },
+  {
+   "id": 65055965552,
+   "run_id": 22461279900,
+   "name": "changelogs",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965552",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:21Z"
+  },
+  {
+   "id": 65055965557,
+   "run_id": 22461279900,
+   "name": "assets",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965557",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:11Z"
+  },
+  {
+   "id": 65055965559,
+   "run_id": 22461279900,
+   "name": "audit-logs",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965559",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:34Z"
+  },
+  {
+   "id": 65055965571,
+   "run_id": 22461279900,
+   "name": "data-directory",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965571",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:13Z"
+  },
+  {
+   "id": 65055965574,
+   "run_id": 22461279900,
+   "name": "archives",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965574",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:29Z"
+  },
+  {
+   "id": 65055965575,
+   "run_id": 22461279900,
+   "name": "content-render",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965575",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:11Z"
+  },
+  {
+   "id": 65055965577,
+   "run_id": 22461279900,
+   "name": "fixtures",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965577",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:32Z"
+  },
+  {
+   "id": 65055965579,
+   "run_id": 22461279900,
+   "name": "learning-track",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965579",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:19Z"
+  },
+  {
+   "id": 65055965581,
+   "run_id": 22461279900,
+   "name": "rest",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965581",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:33Z"
+  },
+  {
+   "id": 65055965583,
+   "run_id": 22461279900,
+   "name": "shielding",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965583",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:14Z"
+  },
+  {
+   "id": 65055965592,
+   "run_id": 22461279900,
+   "name": "products",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965592",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:18Z"
+  },
+  {
+   "id": 65055965596,
+   "run_id": 22461279900,
+   "name": "workflows",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965596",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:21Z"
+  },
+  {
+   "id": 65055965597,
+   "run_id": 22461279900,
+   "name": "events",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965597",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:17Z"
+  },
+  {
+   "id": 65055965603,
+   "run_id": 22461279900,
+   "name": "versions",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965603",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:40Z"
+  },
+  {
+   "id": 65055965604,
+   "run_id": 22461279900,
+   "name": "content-linter",
+   "status": "completed",
+   "conclusion": "failure",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965604",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:17Z"
+  },
+  {
+   "id": 65055965608,
+   "run_id": 22461279900,
+   "name": "landings",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965608",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:18Z"
+  },
+  {
+   "id": 65055965609,
+   "run_id": 22461279900,
+   "name": "webhooks",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965609",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:28Z"
+  },
+  {
+   "id": 65055965612,
+   "run_id": 22461279900,
+   "name": "early-access",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965612",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:14Z"
+  },
+  {
+   "id": 65055965614,
+   "run_id": 22461279900,
+   "name": "secret-scanning",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965614",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:24Z"
+  },
+  {
+   "id": 65055965617,
+   "run_id": 22461279900,
+   "name": "frame",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965617",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:22Z"
+  },
+  {
+   "id": 65055965619,
+   "run_id": 22461279900,
+   "name": "graphql",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965619",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:29Z"
+  },
+  {
+   "id": 65055965623,
+   "run_id": 22461279900,
+   "name": "redirects",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965623",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:38Z"
+  },
+  {
+   "id": 65055965625,
+   "run_id": 22461279900,
+   "name": "search",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965625",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:59Z"
+  },
+  {
+   "id": 65055965626,
+   "run_id": 22461279900,
+   "name": "release-notes",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965626",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:32Z"
+  },
+  {
+   "id": 65055965630,
+   "run_id": 22461279900,
+   "name": "github-apps",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965630",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:23Z"
+  },
+  {
+   "id": 65055965634,
+   "run_id": 22461279900,
+   "name": "observability",
+   "status": "completed",
+   "conclusion": "success",
+   "html_url": "https://github.com/github/docs/actions/runs/22461279900/job/65055965634",
+   "started_at": "2026-02-26T21:08:50Z",
+   "completed_at": "2026-02-26T21:10:17Z"
+  }
+ ]
+}

@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A forced review-graph persist (the exit hook and `pi-lens build-graph`) no

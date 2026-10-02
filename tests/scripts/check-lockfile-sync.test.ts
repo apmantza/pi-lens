@@ -284,7 +284,10 @@ describe("package-lock identity guard (#2043)", () => {
 			"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- pending\n",
 		);
 		const fragment = path.join(root, ".changelog", "pending.md");
-		fs.writeFileSync(fragment, "---\nsection: Fixed\n---\n\n- pending\n");
+		fs.writeFileSync(
+			fragment,
+			"---\nsection: Fixed\naudience: user\n---\n\n- pending\n",
+		);
 		const beforeChangelog = fs.readFileSync(
 			path.join(root, "CHANGELOG.md"),
 			"utf8",
@@ -312,7 +315,7 @@ describe("package-lock identity guard (#2043)", () => {
 		);
 		fs.writeFileSync(
 			path.join(root, ".changelog", "pending.md"),
-			"---\nsection: Fixed\n---\n\n- pending\n",
+			"---\nsection: Fixed\naudience: user\n---\n\n- pending\n",
 		);
 
 		const result = run(RELEASE, root, ["--root-dir", root]);

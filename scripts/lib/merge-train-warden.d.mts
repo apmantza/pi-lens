@@ -27,6 +27,9 @@ export interface WardenPr {
 	headCommittedDate: string | null;
 	mergeStateStatus: string;
 	autoMergeEnabled: boolean;
+	inMergeQueue?: boolean;
+	mergeQueueState?: string | null;
+	mergeQueueEnabled?: boolean;
 	isFork: boolean;
 	labels: Set<string>;
 	checksUnknown: boolean;

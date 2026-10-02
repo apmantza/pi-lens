@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A pi-lens session whose instance-registry entry went missing — its

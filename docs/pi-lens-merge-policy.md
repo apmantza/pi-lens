@@ -101,6 +101,48 @@ moved lines; include only structural views that changed.
    `.claude/worktrees/agent-*`, and on 2026-09-06 twenty-one merged trees
    were still standing at the regroup.
 
+## Merge queue (once the maintainer enables it, #3754)
+
+The repository merges through GitHub's merge queue after the maintainer applies
+the settings in `docs/merge-queue-rollout.md`. Until then every rule above is
+unchanged. With the queue on:
+
+- **Enqueue, do not merge.** `gh pr merge <N> --merge` (add `--auto` while
+  checks are still pending) enqueues the PR: `gh` routes through the queue when
+  the base branch requires one, and a direct merge is refused (step 5). The queue tests the PR merged onto the
+  LATEST master in a `gh-readonly-queue/master/pr-<N>-<sha>` ref via a
+  `merge_group` run of `ci.yml` and `lint.yml`, then merges it with a merge
+  commit.
+- **In the queue is a state, not absent and not done.** `ci-verdict <pr>` on a
+  queued PR with a green head exits 3, kind `in-queue`, naming the queue state
+  and position (`--wait` keeps waiting). A PR that was ejected after a FAILED
+  queue run exits 1, kind `failed`, reason `merge queue run failed and ejected
+  the PR`, with the failing job, step and test lines read from the
+  `merge_group` run. Treat that exactly as a red PR run: fix, push, enqueue
+  again. A failure from before the head's last push is an earlier head's and is
+  ignored. The queue read is one GraphQL call each time a poll finds the head's
+  own checks green (a red or still-running head costs none); an in-queue PR
+  stays pending, so under `--wait` the queue is re-read once per poll until it
+  merges or ejects. Without a queue on master it is the only extra call.
+- **Retire update-branch and BEHIND.** The queue tests against the latest
+  master itself, so `gh pr update-branch`, "not up to date" retries, and the
+  `gh run rerun` replays-the-old-merge-commit workaround are moot. Worse, any
+  push to a queued PR re-runs every check and EJECTS it. The warden no longer
+  kicks update-branch for a PR in the queue or anywhere master has a queue, and
+  ci-verdict's update-branch hint reads "do not update-branch" when master has a
+  queue. The pre-queue rules for retargeting (push to re-arm CI) still apply to
+  the PR's own `pull_request` run.
+- **What still gates enqueueing.** The PR's own head must still be green:
+  the same exit-0 merge gate as step 4, then enqueue. The `merge_group` run
+  re-checks the same required checks on the merge commit; a check that is
+  required but never reports there (a workflow without a `merge_group`
+  trigger) stalls the queue, which `tests/config/merge-queue-workflows.test.ts`
+  pins.
+- **No competing merge lane.** The `train:approved` lane that merged through
+  the REST merge API was retired (#3837); every merge now goes through
+  `gh pr merge` (auto-merge or direct), which the queue intercepts when the
+  base branch requires one.
+
 ## Queue ordering
 
 Order by dependency, not age: a PR whose schema/API another PR must consume
@@ -229,7 +271,7 @@ operator's private notes, so a different orchestrator can run the same train.
   | a new fixture under `tests/fixtures/` | the fixture-contract sweeps for that directory (style-preserving, population guards) — #2782 r2 |
   | a change that touches identifier uses of a glossary-retired synonym | run `tests/config/glossary-synonym-sweep.test.ts` on the head AND on the merge with `origin/master`, then re-pin in the PR from the sweep's own `UNPINNED`/`STALE` output — #3279, #3283, #3284, #3288 |
   | a new `vi.mock` in a test file | run `tests/config/vi-mock-export-sweep.test.ts`; whole-module mocks of a production module must spread `importOriginal` — PR #3268's CI red, fixed by trailing commit `621d61c5c` |
-  | a changelog fragment | front matter `section: <Section>` and exactly one top-level `- **Title (refs #N)** —` entry, never `CHANGELOG.md`, validated by `node scripts/check-changelog-fragments.mjs` — PR #3268 r1 shipped `category:` and a paragraph |
+  | a changelog fragment | front matter `section: <Section>` plus `audience: user` or `audience: internal` and exactly one top-level `- **Title (refs #N)** —` entry, never `CHANGELOG.md`, validated by `node scripts/check-changelog-fragments.mjs` — PR #3268 r1 shipped `category:` and a paragraph |
   | a PR body | the header gate: exactly one-sentence `## Why`, `## Notes for the reviewer`, `## Change outline`, plus Summary / Tests with `### Test assessment` / Blast radius / Class sweep / Observability; run `node scripts/check-pr-body.mjs --lint-local` before pushing — three PRs this week needed orchestrator body edits |
   | a whole-tree docs restructure of `AGENTS.md` | every governance test that reads `AGENTS.md`, with markers on their own lines — PR #3265 r1 |
   | a raw poll in a test | the flake-shape ratchet; the fix is the governed wait, never a header admission — #2781 r1 |

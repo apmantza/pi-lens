@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - `analyzeFile`'s MCP result now consumes the exact latency report carried by

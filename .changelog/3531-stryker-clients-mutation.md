@@ -1,5 +1,6 @@
 ---
 section: Changed
+audience: internal
 ---
 
 - **Mutation diff now mutates product code, not just scripts (closes #3531)** —

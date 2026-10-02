@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - The quarantine lock (the probe cache, the tool-refresh state and the orphan

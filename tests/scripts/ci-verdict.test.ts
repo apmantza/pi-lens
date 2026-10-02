@@ -26,6 +26,7 @@ import {
 	EXIT_TRANSPORT,
 	EXIT_USAGE,
 	fetchCheckRunsPayload,
+	fetchFailedQueueRuns,
 	formatAbsentRequiredReason,
 	formatExitLine,
 	formatVerdictTable,
@@ -36,6 +37,7 @@ import {
 	POLL_INTERVAL_SECONDS,
 	parseArgs,
 	pollVerdict,
+	readMergeQueueState,
 	resolveClassification,
 	resolveGhTimeoutMs,
 	resolveHeadSha,
@@ -2211,6 +2213,16 @@ describe("run --wait — transient gh errors back off instead of exiting 70 (#29
 					comments: [],
 				});
 			if (String(args[1]).endsWith("/protection")) throw ghError("HTTP 404");
+			// #3754: the green head's one merge-queue read (a repository with no queue).
+			if (args[1] === "graphql")
+				return JSON.stringify({
+					data: {
+						repository: {
+							mergeQueue: null,
+							pullRequest: { isInMergeQueue: false, mergeQueueEntry: null },
+						},
+					},
+				});
 			// #3779: the advisory MUTATION read is not a check-runs call.
 			if (String(args[1]).endsWith("/comments")) return "[]";
 			checkRunsCalls += 1;
@@ -2900,5 +2912,681 @@ describe("run — absent-required re-arm message (#3694)", () => {
 		expect(calls.some((call) => call.includes("/actions/runs"))).toBe(false);
 		expect(calls.some((call) => call.includes("autoMergeRequest"))).toBe(false);
 		expect(calls.some((call) => call.includes("/check-suites"))).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #3754: the GitHub merge queue. The fixture is REAL: the `merge_group` runs
+// and jobs of github/docs (a public repo with a queue on `main`), fetched
+// 2026-09-30, so `head_branch` is the real `gh-readonly-queue/<base>/pr-<N>-<sha>`
+// shape and `mergeQueue{id}` is the real GraphQL answer. The queue was empty
+// when fetched, so the entry's `state`/`position` come from schema
+// introspection of MergeQueueEntry (see the fixture's own `graphqlNote`).
+// ---------------------------------------------------------------------------
+const MERGE_GROUP = JSON.parse(
+	readFileSync(
+		join(process.cwd(), "tests/fixtures/ci-verdict/merge-group-runs.real.json"),
+		"utf8",
+	),
+);
+const QUEUE_PR = "43130";
+const QUEUE_SHA = "c0ffee".padEnd(40, "0");
+const FAILED_JOB = MERGE_GROUP.failedRunJobs.find(
+	(job: { conclusion: string }) => job.conclusion === "failure",
+);
+// github/docs queues onto `main`; this repository's queue is on `master`, so
+// only the base segment of the real branch name is rewritten.
+const QUEUE_RUNS = MERGE_GROUP.workflow_runs.map(
+	(candidate: { head_branch: string }) => ({
+		...candidate,
+		head_branch: candidate.head_branch.replace(
+			"gh-readonly-queue/main/",
+			"gh-readonly-queue/master/",
+		),
+	}),
+);
+
+interface QueueFake {
+	enabled?: boolean;
+	/** The authoritative `isInMergeQueue` flag; defaults to `entry !== null`. */
+	inQueue?: boolean;
+	entry?: unknown;
+	runs?: unknown[];
+	pushedAt?: string;
+	checkRuns?: unknown;
+}
+function ghQueue({
+	enabled = true,
+	inQueue,
+	entry = null,
+	runs = [],
+	pushedAt = "2026-02-26T20:00:00Z",
+	checkRuns = BOTH_SUCCESS,
+}: QueueFake = {}) {
+	const isInMergeQueue = inQueue ?? entry !== null;
+	const calls: string[] = [];
+	const ghExec = (args: string[]) => {
+		calls.push(args.join(" "));
+		if (args[0] === "repo") return "acme/repo";
+		if (args[0] === "pr" && args.includes("autoMergeRequest"))
+			return JSON.stringify({ autoMergeRequest: {} });
+		if (args[0] === "pr" && args.includes("headRefOid,labels,comments"))
+			return JSON.stringify({
+				headRefOid: QUEUE_SHA,
+				labels: [],
+				comments: [],
+			});
+		if (args[0] === "pr")
+			return JSON.stringify({ headRefOid: QUEUE_SHA, mergeable: "MERGEABLE" });
+		if (args[1] === "graphql")
+			return JSON.stringify({
+				data: {
+					repository: {
+						mergeQueue: enabled ? { id: "MQ_kwDOC01lZ80xjw" } : null,
+						pullRequest: {
+							isInMergeQueue,
+							mergeQueueEntry: entry,
+						},
+					},
+				},
+			});
+		const endpoint = String(args.at(-1));
+		if (endpoint.endsWith("/protection")) throw new Error("HTTP 404");
+		if (endpoint.includes("/check-runs")) return JSON.stringify(checkRuns);
+		if (endpoint.includes("/check-suites"))
+			return JSON.stringify({ check_suites: [{ created_at: pushedAt }] });
+		if (endpoint.includes("/actions/runs?event=merge_group"))
+			return JSON.stringify({ workflow_runs: runs });
+		if (
+			endpoint.endsWith(`/actions/runs/${QUEUE_RUNS[0].id}/jobs?per_page=100`)
+		)
+			return JSON.stringify({ jobs: MERGE_GROUP.failedRunJobs });
+		if (/\/actions\/runs\/\d+\/jobs/.test(endpoint))
+			return JSON.stringify({ jobs: [] });
+		if (endpoint.endsWith(`/actions/jobs/${FAILED_JOB.id}`))
+			return JSON.stringify({
+				steps: [{ name: "Run content linter", conclusion: "failure" }],
+			});
+		if (endpoint.endsWith(`/actions/jobs/${FAILED_JOB.id}/logs`))
+			return " FAIL  default  tests/content/linter.test.ts > flags a broken link\n";
+		throw new Error(`unmocked gh call: ${args.join(" ")}`);
+	};
+	return { ghExec, calls };
+}
+async function runQueue(options: QueueFake = {}) {
+	const { ghExec, calls } = ghQueue(options);
+	const lines: string[] = [];
+	const { code: exitCode, kind } = await run({
+		argv: [QUEUE_PR],
+		ghExec,
+		stdout: (line: string) => lines.push(line),
+		stderr: () => {},
+	});
+	return {
+		exitCode,
+		kind,
+		out: lines.join("\n"),
+		reason: lines.at(-1) ?? "",
+		calls,
+	};
+}
+const graphqlCalls = (calls: string[]) =>
+	calls.filter((call) => call.startsWith("api graphql")).length;
+
+describe("run — merge queue states (#3754)", () => {
+	// Recurrence it prevents: with the queue on, a PR that was enqueued still
+	// shows a green head, so a reader concluded "done" (exit 0) while the
+	// merge_group run, the thing that actually merges it, was still running.
+	it("reports a PR in the queue as pending with its queue state, not as success", async () => {
+		const { exitCode, kind, reason } = await runQueue({
+			entry: { state: "AWAITING_CHECKS", position: 2 },
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		// F2: the plain `ci-verdict <pr>` line must carry this kind, not `pending`.
+		expect(kind).toBe("in-queue");
+		expect(reason).toContain(
+			"in the merge queue (awaiting_checks, position 2)",
+		);
+		expect(reason).toContain("neither absent nor done");
+	});
+
+	// #3765 F1: `isInMergeQueue` is the authoritative state; a null
+	// `mergeQueueEntry` (or absent/garbage metadata) must not read green again.
+	it("reports a queued PR as in-queue when the entry object is absent", async () => {
+		const { exitCode, kind, reason } = await runQueue({
+			inQueue: true,
+			entry: null,
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(kind).toBe("in-queue");
+		expect(reason).toContain("in the merge queue (queued)");
+	});
+
+	it("reads broken entry metadata defensively without leaving the queue", async () => {
+		const { exitCode, kind, reason } = await runQueue({
+			inQueue: true,
+			entry: { state: 42, position: "behind" },
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(kind).toBe("in-queue");
+		expect(reason).toContain("in the merge queue (queued)");
+		expect(reason).not.toContain("position");
+	});
+
+	it("ignores a stray entry object when the flag is false", async () => {
+		const { exitCode, kind } = await runQueue({
+			inQueue: false,
+			entry: { state: "AWAITING_CHECKS", position: 2 },
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(kind).toBe("green");
+	});
+
+	// #3765 F2: the named `in-queue` kind is the one exception to the coarse
+	// exit-code table; `cancelled` and `infra-rerun` still read `pending`.
+	it("keeps the coarse exit-line kind for non-queue verdicts", async () => {
+		const pending = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({
+						name: "Unit tests",
+						status: "in_progress",
+						conclusion: null,
+					}),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(pending.kind).toBe("pending");
+		const red = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(red.kind).toBe("red");
+	});
+
+	// Recurrence: a failed queue run ejects the PR, leaving a green head and no
+	// queue entry -- indistinguishable from "eligible" without reading the
+	// merge_group run. It must be a FAIL event that names the failing job and
+	// test, like any red PR run.
+	it("reports a failed queue run of this head as FAIL, naming the failing job and test", async () => {
+		const { exitCode, out, reason } = await runQueue({
+			runs: QUEUE_RUNS.filter(
+				(candidate: { conclusion: string }) =>
+					candidate.conclusion === "failure",
+			),
+		});
+		expect(exitCode).toBe(EXIT_FAILURE);
+		expect(reason).toContain("merge queue run failed and ejected the PR");
+		expect(reason).toContain(QUEUE_RUNS[0].html_url);
+		expect(out).toContain(
+			`${FAILED_JOB.name} (job ${FAILED_JOB.id}): failed step: Run content linter`,
+		);
+		expect(out).toContain("  FAIL  default  tests/content/linter.test.ts");
+	});
+
+	// Recurrence: a queue failure from BEFORE the head's last push belongs to an
+	// earlier head; counting it would fail every PR that was ever ejected.
+	it("ignores a failed queue run that began before this head was pushed", async () => {
+		const { exitCode } = await runQueue({
+			runs: QUEUE_RUNS,
+			pushedAt: "2026-09-30T00:00:00Z",
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+	});
+
+	// Recurrence: a PR queued twice (ejected, fixed, re-queued) has failed runs
+	// on TWO queue branches; naming the older attempt's run as current sends the
+	// reader to a log the latest head never produced.
+	it("names only the latest queue attempt's failed runs", async () => {
+		const older = {
+			...QUEUE_RUNS[1],
+			id: 1,
+			html_url: "https://github.com/acme/repo/actions/runs/1",
+			head_branch: "gh-readonly-queue/master/pr-43130-aaaaaaaa",
+			created_at: "2026-02-26T20:10:00Z",
+		};
+		const { exitCode, reason } = await runQueue({
+			runs: [older, QUEUE_RUNS[0]],
+		});
+		expect(exitCode).toBe(EXIT_FAILURE);
+		expect(reason).toContain(QUEUE_RUNS[0].html_url);
+		expect(reason).not.toContain(older.html_url);
+	});
+
+	// Recurrence: branch-prefix matching by bare `pr-<N>`: `pr-4313` must not
+	// claim PR 43130's queue run.
+	it("does not claim another PR's queue run (pr-4313 vs pr-43130)", async () => {
+		const { ghExec } = ghQueue({ runs: QUEUE_RUNS });
+		const lines: string[] = [];
+		const { code: exitCode } = await run({
+			argv: ["4313"],
+			ghExec: (args: string[]) =>
+				args[0] === "pr" && args.includes("headRefOid,labels,comments")
+					? JSON.stringify({ headRefOid: QUEUE_SHA, labels: [], comments: [] })
+					: ghExec(args),
+			stdout: (line: string) => lines.push(line),
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+	});
+
+	// #3694's cost guard, kept: a repository with no queue pays exactly the one
+	// GraphQL read on a green head, and nothing on a red or pending one.
+	it("costs one GraphQL read on a green head without a queue, and none on a red or pending head", async () => {
+		const green = await runQueue({ enabled: false });
+		expect(green.exitCode).toBe(EXIT_SUCCESS);
+		expect(graphqlCalls(green.calls)).toBe(1);
+		expect(green.calls.some((call) => call.includes("/actions/runs"))).toBe(
+			false,
+		);
+		expect(green.calls.some((call) => call.includes("/check-suites"))).toBe(
+			false,
+		);
+		const red = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(red.exitCode).toBe(EXIT_FAILURE);
+		expect(graphqlCalls(red.calls)).toBe(0);
+		const pending = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({
+						name: "Unit tests",
+						status: "in_progress",
+						conclusion: null,
+					}),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(pending.exitCode).toBe(EXIT_PENDING);
+		expect(graphqlCalls(pending.calls)).toBe(0);
+	});
+
+	// Recurrence: an unreadable queue answer must not turn a green head red or
+	// pending: every queue read fails open to the pre-queue verdict.
+	it("fails open to success when the queue read is unreadable", async () => {
+		const { ghExec } = ghQueue();
+		const { code: exitCode } = await run({
+			argv: [QUEUE_PR],
+			ghExec: (args: string[]) => {
+				if (args[1] === "graphql") throw new Error("HTTP 502");
+				return ghExec(args);
+			},
+			stdout: () => {},
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+	});
+
+	// Same guard for the second queue read: a failed `merge_group` runs lookup
+	// must not turn a green head into a transport error (exit 70).
+	it("fails open to success when the merge_group runs read fails", async () => {
+		const { ghExec } = ghQueue({ runs: QUEUE_RUNS });
+		const { code: exitCode } = await run({
+			argv: [QUEUE_PR],
+			ghExec: (args: string[]) => {
+				if (String(args.at(-1)).includes("event=merge_group"))
+					throw new Error("HTTP 502");
+				return ghExec(args);
+			},
+			stdout: () => {},
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+	});
+
+	// The real GraphQL answer of a repository whose queue is empty must parse to
+	// "enabled, not in the queue".
+	it("parses the real GraphQL mergeQueue answer", () => {
+		const state = readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+			JSON.stringify(MERGE_GROUP.graphqlMergeQueue),
+		);
+		expect(state).toEqual({ enabled: true, entry: null });
+		expect(readMergeQueueState("abc1234", "acme/repo", () => "{}")).toBeNull();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #3754: the two queue reads and the queue branch as units. The `run`-level
+// cases above prove the verdict; these pin the internal contract of each read
+// (its exact argv and record shape) and the queue branch's `kind`, so a mutant
+// that only changes a field, a flag, or a boundary has a witness.
+// ---------------------------------------------------------------------------
+const NONE_QUEUE = { failedRuns: [], failedRows: [] };
+const QUEUE_RUN_URL = "https://github.com/acme/repo/actions/runs/555";
+const queueRun = (overrides: Record<string, unknown> = {}) => ({
+	id: 555,
+	html_url: QUEUE_RUN_URL,
+	head_branch: `gh-readonly-queue/master/pr-${QUEUE_PR}-abc`,
+	conclusion: "failure",
+	created_at: "2026-02-26T20:30:00Z",
+	...overrides,
+});
+const QUEUE_JOBS = [
+	{
+		id: 9,
+		name: "Unit tests",
+		conclusion: "failure",
+		html_url: "https://github.com/acme/repo/actions/runs/555/job/9",
+	},
+	{
+		id: 10,
+		name: "Lint",
+		conclusion: "success",
+		html_url: "https://github.com/acme/repo/actions/runs/555/job/10",
+	},
+];
+
+interface ArgCall {
+	args: string[];
+	options?: { timeoutMs?: number; maxBuffer?: number };
+}
+
+function argCaptured(answer: (args: string[]) => string): {
+	calls: ArgCall[];
+	ghExec: (args: string[], options?: { timeoutMs?: number }) => string;
+} {
+	const calls: ArgCall[] = [];
+	return {
+		calls,
+		ghExec: (args, options) => {
+			calls.push({ args, options });
+			return answer(args);
+		},
+	};
+}
+
+describe("readMergeQueueState — the queue read's exact shape (#3754)", () => {
+	it("asks one GraphQL read with typed -F numbers and -f strings", () => {
+		const { calls, ghExec } = argCaptured(() =>
+			JSON.stringify({
+				data: {
+					repository: {
+						mergeQueue: { id: "MQ_x" },
+						pullRequest: { isInMergeQueue: false, mergeQueueEntry: null },
+					},
+				},
+			}),
+		);
+		readMergeQueueState(QUEUE_PR, "acme/repo", ghExec, 1234);
+		expect(calls).toHaveLength(1);
+		const { args, options } = calls[0];
+		expect(args.slice(0, 3)).toEqual(["api", "graphql", "-f"]);
+		expect(args[3].startsWith("query=")).toBe(true);
+		expect(args[3]).toContain("mergeQueue(branch:");
+		expect(args.slice(4)).toEqual([
+			"-f",
+			"owner=acme",
+			"-f",
+			"name=repo",
+			"-f",
+			"branch=master",
+			"-F",
+			"number=43130",
+		]);
+		expect(options).toEqual({ timeoutMs: 1234 });
+	});
+
+	it("returns null without a read for a non-PR target", () => {
+		const { calls, ghExec } = argCaptured(() => "{}");
+		expect(readMergeQueueState("abc1234", "acme/repo", ghExec)).toBeNull();
+		expect(calls).toEqual([]);
+	});
+
+	it("returns null for unreadable, shapeless, and null-repository answers", () => {
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () => "not json"),
+		).toBeNull();
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				JSON.stringify({ data: {} }),
+			),
+		).toBeNull();
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				JSON.stringify({ data: { repository: null } }),
+			),
+		).toBeNull();
+	});
+
+	it("reads an enabled queue and a PR's entry", () => {
+		const state = readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+			JSON.stringify({
+				data: {
+					repository: {
+						mergeQueue: { id: "MQ_x" },
+						pullRequest: {
+							isInMergeQueue: true,
+							mergeQueueEntry: { state: "AWAITING_CHECKS", position: 2 },
+						},
+					},
+				},
+			}),
+		);
+		expect(state).toEqual({
+			enabled: true,
+			entry: { state: "AWAITING_CHECKS", position: 2 },
+		});
+	});
+
+	// #3765 F1: the entry is derived from the authoritative `isInMergeQueue`
+	// flag, never gated on the nullable `mergeQueueEntry` object.
+	it("derives the entry from isInMergeQueue, not from mergeQueueEntry", () => {
+		const answer = (pullRequest: unknown) =>
+			JSON.stringify({
+				data: { repository: { mergeQueue: { id: "MQ_x" }, pullRequest } },
+			});
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				answer({ isInMergeQueue: true, mergeQueueEntry: null }),
+			),
+		).toEqual({ enabled: true, entry: { state: null, position: null } });
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				answer({
+					isInMergeQueue: false,
+					mergeQueueEntry: { state: "AWAITING_CHECKS", position: 1 },
+				}),
+			),
+		).toEqual({ enabled: true, entry: null });
+	});
+});
+
+describe("fetchFailedQueueRuns — the failed-queue-run read (#3754)", () => {
+	const pushMs = Date.parse("2026-02-26T20:00:00Z");
+	const runsAnswer = (runs: unknown[]) => (args: string[]) =>
+		String(args.at(-1)).includes("event=merge_group")
+			? JSON.stringify({ workflow_runs: runs })
+			: JSON.stringify({ jobs: QUEUE_JOBS });
+
+	it("returns the exact empty record and makes no call for a non-PR or unreadable age", () => {
+		const { calls, ghExec } = argCaptured(() => "{}");
+		expect(
+			fetchFailedQueueRuns("abc1234", "acme/repo", pushMs, ghExec),
+		).toEqual(NONE_QUEUE);
+		expect(
+			fetchFailedQueueRuns(QUEUE_PR, "acme/repo", Number.NaN, ghExec),
+		).toEqual(NONE_QUEUE);
+		expect(calls).toEqual([]);
+	});
+
+	it("reads the merge_group runs and the failed job names, with exact argv", () => {
+		const { calls, ghExec } = argCaptured(runsAnswer([queueRun()]));
+		const result = fetchFailedQueueRuns(
+			QUEUE_PR,
+			"acme/repo",
+			pushMs,
+			ghExec,
+			4321,
+		);
+		expect(result.failedRuns).toEqual([{ id: 555, url: QUEUE_RUN_URL }]);
+		expect(result.failedRows).toHaveLength(1);
+		expect(result.failedRows[0]).toEqual({
+			name: "Unit tests",
+			present: true,
+			id: 9,
+			status: "completed",
+			conclusion: "failure",
+			url: "https://github.com/acme/repo/actions/runs/555/job/9",
+			detailsUrl: "https://github.com/acme/repo/actions/runs/555/job/9",
+			gating: true,
+		});
+		expect(calls[0].args).toEqual([
+			"api",
+			"repos/acme/repo/actions/runs?event=merge_group&status=completed&per_page=50",
+		]);
+		expect(calls[0].options).toEqual({ timeoutMs: 4321 });
+		expect(calls[1].args).toEqual([
+			"api",
+			"repos/acme/repo/actions/runs/555/jobs?per_page=100",
+		]);
+		expect(calls[1].options).toEqual({ timeoutMs: 4321 });
+	});
+
+	it("excludes a run that succeeded and returns no rows when every job succeeded", () => {
+		const successRun = argCaptured(
+			runsAnswer([queueRun({ conclusion: "success" })]),
+		);
+		expect(
+			fetchFailedQueueRuns(QUEUE_PR, "acme/repo", pushMs, successRun.ghExec),
+		).toEqual(NONE_QUEUE);
+		// A failing run whose every job succeeded yields no failing rows, so the
+		// function returns the exact empty record, not a run with empty rows.
+		const noFailedJobs = argCaptured((args) =>
+			String(args.at(-1)).includes("event=merge_group")
+				? JSON.stringify({ workflow_runs: [queueRun()] })
+				: JSON.stringify({
+						jobs: [{ ...QUEUE_JOBS[1], conclusion: "success" }],
+					}),
+		);
+		expect(
+			fetchFailedQueueRuns(QUEUE_PR, "acme/repo", pushMs, noFailedJobs.ghExec),
+		).toEqual(NONE_QUEUE);
+	});
+
+	it("includes a failure created at exactly the push time and excludes an earlier one", () => {
+		const atPush = queueRun({ created_at: new Date(pushMs).toISOString() });
+		const before = queueRun({
+			id: 556,
+			created_at: new Date(pushMs - 1).toISOString(),
+		});
+		const { ghExec } = argCaptured(runsAnswer([atPush, before]));
+		const result = fetchFailedQueueRuns(QUEUE_PR, "acme/repo", pushMs, ghExec);
+		expect(result.failedRuns.map((run) => run.id)).toEqual([555]);
+	});
+
+	it("returns the exact empty record when the read throws", () => {
+		expect(
+			fetchFailedQueueRuns(QUEUE_PR, "acme/repo", pushMs, () => {
+				throw new Error("HTTP 502");
+			}),
+		).toEqual(NONE_QUEUE);
+	});
+});
+
+describe("computeVerdict — queue context shapes (#3754)", () => {
+	const verdictWith = (
+		queueContext:
+			| { entry?: { state: string | null; position: number | null } }
+			| { failedRows?: unknown[] }
+			| (() => unknown)
+			| null,
+	) =>
+		computeVerdict(
+			BOTH_SUCCESS,
+			["Unit tests", "Lint & type-check"],
+			"MERGEABLE",
+			null,
+			null,
+			null,
+			null,
+			queueContext as never,
+		);
+
+	it("names the in-queue kind", () => {
+		const verdict = verdictWith(() => ({
+			entry: { state: "AWAITING_CHECKS", position: 2 },
+		}));
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.kind).toBe("in-queue");
+		expect(verdict.reason).toContain("position 2");
+	});
+
+	it("names the failed kind, carries the queue rows, and joins runs and names", () => {
+		const failedRows = [
+			{
+				name: "Unit tests",
+				present: true,
+				id: 9,
+				status: "completed",
+				conclusion: "failure",
+				url: "u",
+				gating: true,
+			},
+			{
+				name: "Lint & type-check",
+				present: true,
+				id: 10,
+				status: "completed",
+				conclusion: "failure",
+				url: "v",
+				gating: true,
+			},
+		];
+		const verdict = verdictWith(() => ({
+			failedRuns: [
+				{ id: 1, url: "r1" },
+				{ id: 2, url: "r2" },
+			],
+			failedRows,
+		}));
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+		expect(verdict.kind).toBe("failed");
+		expect(verdict.failingRows).toBe(failedRows);
+		expect(verdict.reason).toContain("r1, r2");
+		expect(verdict.reason).toContain("Unit tests, Lint & type-check");
+	});
+
+	it("treats a queue context with no entry and no failed rows as success", () => {
+		const verdict = verdictWith(() => ({}));
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		expect(verdict.kind).toBe("success");
+	});
+
+	it("formats a null queue state without a position", () => {
+		const verdict = verdictWith(() => ({
+			entry: { state: null, position: null },
+		}));
+		expect(verdict.reason).toContain("in the merge queue (queued)");
+	});
+
+	it("joins multiple post-merge noise rows", () => {
+		const verdict = computeVerdict(
+			{
+				check_runs: [
+					checkRun({ name: "flake watch", id: 11 }),
+					checkRun({ name: "nightly smoke", id: 12 }),
+				],
+			},
+			[],
+			"MERGEABLE",
+			null,
+			null,
+			null,
+			new Set([11, 12]),
+		);
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		expect(verdict.reason).toContain("flake watch, nightly smoke");
 	});
 });

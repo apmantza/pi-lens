@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: internal
 ---
 
 - **Guard force-push and rebase slips (closes #3888)** — the Bash hook now

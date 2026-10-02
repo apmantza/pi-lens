@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A pull of a file whose only primary linter timed out or failed to spawn now
