@@ -244,6 +244,34 @@ export function parseConcurrencyArg(raw) {
 }
 
 /**
+ * The pool size for this run: an explicit valid `--concurrency` wins; without
+ * the flag, the host's parallelism and the config count bound the pool. Split
+ * out of `main` (#3927) so both the absent and the explicit branch are
+ * testable without a JVM or a network: `main` cannot reach this point in a
+ * test because `ensureJar` downloads or reads a real jar first.
+ */
+export function resolveConcurrency(
+	concurrencyRaw,
+	numConfigs,
+	availableParallelism,
+) {
+	return concurrencyRaw === undefined
+		? computeConcurrency(numConfigs, availableParallelism)
+		: parseConcurrencyArg(concurrencyRaw);
+}
+
+/**
+ * The run's final summary line. Split out of `main` (#3927) so the whole-run
+ * and sharded renderings are directly testable: it is the run's only
+ * observable account of how many configs ran, at what shard and concurrency,
+ * so a mutation here must red.
+ */
+export function formatSummary(configCount, shard, wallSeconds, concurrency) {
+	const shardSuffix = shard === undefined ? "" : ` (shard ${shard})`;
+	return `${configCount} configs${shardSuffix}, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`;
+}
+
+/**
  * The `java` argv TLC runs with, as a pure function so tests need no JVM.
  * Always runs with a single TLC worker (`-workers 1`, #3517): TLC's
  * `-workers auto` explores the state graph across several threads, so a
@@ -352,10 +380,11 @@ async function main() {
 		typeof os.availableParallelism === "function"
 			? os.availableParallelism()
 			: os.cpus().length;
-	const concurrency =
-		concurrencyRaw === undefined
-			? computeConcurrency(configs.length, availableParallelism)
-			: parseConcurrencyArg(concurrencyRaw);
+	const concurrency = resolveConcurrency(
+		concurrencyRaw,
+		configs.length,
+		availableParallelism,
+	);
 	const jar = await ensureJar(jarArg, root);
 
 	const wallStarted = Date.now();
@@ -392,9 +421,7 @@ async function main() {
 				`  ${dir}: ${totals.seconds.toFixed(1)}s summed over ${totals.count} configs`,
 		);
 	console.log("");
-	console.log(
-		`${configs.length} configs${shard === undefined ? "" : ` (shard ${shard})`}, ${wallSeconds.toFixed(1)}s wall (concurrency=${concurrency}, 1 TLC worker/config).`,
-	);
+	console.log(formatSummary(configs.length, shard, wallSeconds, concurrency));
 	console.log("Per-directory TLC time (summed, not wall time):");
 	for (const line of dirLines) console.log(line);
 

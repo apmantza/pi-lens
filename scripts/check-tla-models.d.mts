@@ -29,6 +29,17 @@ export declare function computeConcurrency(
 	availableParallelism: number,
 ): number;
 export declare function parseConcurrencyArg(raw: string | undefined): number;
+export declare function resolveConcurrency(
+	concurrencyRaw: string | undefined,
+	numConfigs: number,
+	availableParallelism: number,
+): number;
+export declare function formatSummary(
+	configCount: number,
+	shard: string | undefined,
+	wallSeconds: number,
+	concurrency: number,
+): string;
 export declare function parseShardArg(raw: string | undefined): {
 	index: number;
 	total: number;
