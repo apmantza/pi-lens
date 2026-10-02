@@ -8,11 +8,13 @@ import {
 	buildJavaArgs,
 	classifyTlcOutput,
 	computeConcurrency,
+	formatSummary,
 	listModelConfigs,
 	parseCliArgs,
 	parseConcurrencyArg,
 	parseModelHeader,
 	parseShardArg,
+	resolveConcurrency,
 	resolveJarPath,
 	runPool,
 	selectConfigs,
@@ -201,6 +203,44 @@ describe("computeConcurrency (#3572)", () => {
 	});
 });
 
+describe("resolveConcurrency (#3927)", () => {
+	it("sizes the pool from the host and config count when --concurrency is absent", () => {
+		expect(resolveConcurrency(undefined, 2, 8)).toBe(2);
+		expect(resolveConcurrency(undefined, 320, 4)).toBe(4);
+	});
+
+	it("honors an explicit --concurrency over the host's parallelism", () => {
+		expect(resolveConcurrency("3", 2, 8)).toBe(3);
+		expect(resolveConcurrency("1", 320, 4)).toBe(1);
+	});
+
+	// Recurrence: `main` used to fold the absent branch into `runPool`'s own
+	// `|| 1`, so a typo'd `--concurrency` silently became serial execution. The
+	// explicit branch must still validate, never fall back to the host default.
+	it("rejects an invalid explicit --concurrency instead of sizing from the host", () => {
+		expect(() => resolveConcurrency("0", 2, 8)).toThrow(
+			/--concurrency must be an integer/,
+		);
+		expect(() => resolveConcurrency("many", 2, 8)).toThrow(
+			/--concurrency must be an integer/,
+		);
+	});
+});
+
+describe("formatSummary (#3927)", () => {
+	it("omits the shard suffix for a whole-population run", () => {
+		expect(formatSummary(522, undefined, 12.3, 4)).toBe(
+			"522 configs, 12.3s wall (concurrency=4, 1 TLC worker/config).",
+		);
+	});
+
+	it("names the shard when one was selected", () => {
+		expect(formatSummary(131, "1/4", 5, 2)).toBe(
+			"131 configs (shard 1/4), 5.0s wall (concurrency=2, 1 TLC worker/config).",
+		);
+	});
+});
+
 describe("parseConcurrencyArg (#3572)", () => {
 	it("accepts a positive integer", () => {
 		expect(parseConcurrencyArg("4")).toBe(4);
@@ -273,6 +313,19 @@ describe("parseCliArgs (#3920)", () => {
 		expect(parseCliArgs([])).toEqual({});
 	});
 
+	// Recurrence: the pre-#3920 parser used `argv.indexOf("--shard")`, so a
+	// repeated flag took the FIRST value. `node:util` `parseArgs` takes the
+	// LAST. Pin last-wins so a future hand-rolled dedupe is a deliberate
+	// behaviour change, not a silent one (#3927, S2).
+	it("takes the last value when a flag repeats", () => {
+		expect(parseCliArgs(["--shard", "1/4", "--shard", "3/4"])).toEqual({
+			shard: "3/4",
+		});
+		expect(parseCliArgs(["--concurrency=2", "--concurrency=5"])).toEqual({
+			concurrency: "5",
+		});
+	});
+
 	// Recurrence: `indexOf` ignored a misspelled flag, so the run fell back to
 	// the whole population instead of failing. Unknown flags must throw here.
 	it.each(["--shrad", "--Shard", "--jar-file", "-s", "shards"])(
@@ -299,6 +352,15 @@ describe("parseCliArgs (#3920)", () => {
 describe("selectConfigs (#3918)", () => {
 	it("returns every config without --shard", () => {
 		expect(selectConfigs([], REPO_ROOT)).toEqual(listModelConfigs(REPO_ROOT));
+	});
+
+	// Recurrence: the empty-selection error used to name the shard even when
+	// none was given, so an empty formal/ tree read as a shard problem. Name
+	// the tree instead; a missing root yields no configs without touching disk.
+	it("names the empty formal tree, not a shard, when no --shard was given", () => {
+		expect(() =>
+			selectConfigs([], path.join(REPO_ROOT, "no-such-formal-root")),
+		).toThrow(/no formal\/\*\/\*\.cfg found/);
 	});
 
 	it("narrows to the shard's configs with --shard", () => {
