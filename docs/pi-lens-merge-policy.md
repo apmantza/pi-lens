@@ -120,8 +120,10 @@ unchanged. With the queue on:
   the PR`, with the failing job, step and test lines read from the
   `merge_group` run. Treat that exactly as a red PR run: fix, push, enqueue
   again. A failure from before the head's last push is an earlier head's and is
-  ignored. The queue read is one GraphQL call on a green head and is skipped
-  on a red or pending one; without a queue on master it is the only extra call.
+  ignored. The queue read is one GraphQL call each time a poll finds the head's
+  own checks green (a red or still-running head costs none); an in-queue PR
+  stays pending, so under `--wait` the queue is re-read once per poll until it
+  merges or ejects. Without a queue on master it is the only extra call.
 - **Retire update-branch and BEHIND.** The queue tests against the latest
   master itself, so `gh pr update-branch`, "not up to date" retries, and the
   `gh run rerun` replays-the-old-merge-commit workaround are moot. Worse, any
@@ -269,7 +271,7 @@ operator's private notes, so a different orchestrator can run the same train.
   | a new fixture under `tests/fixtures/` | the fixture-contract sweeps for that directory (style-preserving, population guards) — #2782 r2 |
   | a change that touches identifier uses of a glossary-retired synonym | run `tests/config/glossary-synonym-sweep.test.ts` on the head AND on the merge with `origin/master`, then re-pin in the PR from the sweep's own `UNPINNED`/`STALE` output — #3279, #3283, #3284, #3288 |
   | a new `vi.mock` in a test file | run `tests/config/vi-mock-export-sweep.test.ts`; whole-module mocks of a production module must spread `importOriginal` — PR #3268's CI red, fixed by trailing commit `621d61c5c` |
-  | a changelog fragment | front matter `section: <Section>` and exactly one top-level `- **Title (refs #N)** —` entry, never `CHANGELOG.md`, validated by `node scripts/check-changelog-fragments.mjs` — PR #3268 r1 shipped `category:` and a paragraph |
+  | a changelog fragment | front matter `section: <Section>` plus `audience: user` or `audience: internal` and exactly one top-level `- **Title (refs #N)** —` entry, never `CHANGELOG.md`, validated by `node scripts/check-changelog-fragments.mjs` — PR #3268 r1 shipped `category:` and a paragraph |
   | a PR body | the header gate: exactly one-sentence `## Why`, `## Notes for the reviewer`, `## Change outline`, plus Summary / Tests with `### Test assessment` / Blast radius / Class sweep / Observability; run `node scripts/check-pr-body.mjs --lint-local` before pushing — three PRs this week needed orchestrator body edits |
   | a whole-tree docs restructure of `AGENTS.md` | every governance test that reads `AGENTS.md`, with markers on their own lines — PR #3265 r1 |
   | a raw poll in a test | the flake-shape ratchet; the fix is the governed wait, never a header admission — #2781 r1 |

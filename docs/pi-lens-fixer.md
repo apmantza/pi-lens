@@ -159,9 +159,13 @@ rigor (#2599).
   `node scripts/check-changelog-fragments.mjs` before the hand-back; both
   must pass, and the hand-back quotes them. A red `PR body (advisory)` check is
   a fix-before-review item. A changelog fragment is `---` /
-  `section: <Added|Changed|Deprecated|Removed|Fixed|Security>` / `---` /
-  blank / one `- ` bullet. `npm run changelog:check` checks the rollup, not
-  fragments (#2456).
+  `section: <Added|Changed|Deprecated|Removed|Fixed|Security>` /
+  `audience: <user|internal>` / `---` / blank / one `- ` bullet. `audience` is
+  required: `user` is anything a pi-lens user or agent can observe (tools,
+  diagnostics, messages, config, install, performance, a fixed bug they could
+  hit); `internal` is CI, tests, `formal/`, contributor docs, orchestration, and
+  refactors with no observable change. `npm run changelog:check` checks the
+  rollup, not fragments (#2456).
 - Every code fact in the PR body is a `` `path:line` `` citation the check
   verifies: the file must be in the committed tree (never an untracked or
   git-ignored path, which CI cannot read), and a fenced quote after it must

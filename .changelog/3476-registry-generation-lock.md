@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - The instance registry lock no longer lets two sessions write the registry

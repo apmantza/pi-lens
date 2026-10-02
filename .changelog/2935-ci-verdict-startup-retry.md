@@ -1,5 +1,6 @@
 ---
 section: Changed
+audience: internal
 ---
 
 - `scripts/ci-verdict.mjs --wait` now also waits out a transient GitHub

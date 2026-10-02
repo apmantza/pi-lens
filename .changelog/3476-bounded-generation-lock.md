@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - The durable-store lock (dispositions and actionable warnings) no longer lets

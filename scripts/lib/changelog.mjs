@@ -6,6 +6,13 @@
 // `backfill-github-releases.mjs` (retroactive release-body sync) all build on
 // the pure functions here so the parsing rules stay identical everywhere.
 
+/**
+ * The per-release heading for `audience: internal` fragments (#3852). CHANGELOG.md
+ * keeps the entries (inside a collapsed `<details>`); the release-notes summary
+ * drops them and prints only a count.
+ */
+export const INTERNAL_HEADING = "Internal";
+
 /** A version heading looks like `## [3.8.60] - 2026-06-21` or `## [Unreleased]`. */
 const VERSION_HEADING = /^## \[([^\]]+)\]/;
 
@@ -53,7 +60,8 @@ function finalize(current) {
  * clause — dropping them entirely (the pre-3.8.67 behavior) made a
  * perf-heavy release body show none of its perf work. The full prose stays
  * in CHANGELOG.md; this is what the GitHub release body shows so a release
- * reads as a summary, not a wall of implementation detail.
+ * reads as a summary, not a wall of implementation detail. The `### Internal`
+ * block (#3852) is not shown: a one-line count replaces it.
  *
  * @param {string} body a section body from extractSection()
  * @param {{ maxGist?: number, gist?: boolean }} [opts]
@@ -66,6 +74,7 @@ export function summarizeSection(body, opts = {}) {
 	const order = [];
 	const buckets = new Map();
 	let heading = null;
+	let internalCount = 0;
 	for (const raw of body.split(/\r?\n/)) {
 		const line = raw.trimEnd();
 		const h = line.match(/^#{2,4}\s+(.*)$/);
@@ -79,6 +88,10 @@ export function summarizeSection(body, opts = {}) {
 		}
 		// Only top-level entries; nested/continuation lines are skipped.
 		if (heading === null) continue;
+		if (heading === INTERNAL_HEADING) {
+			if (/^[-*]\s+\S/.test(line)) internalCount++;
+			continue;
+		}
 		const bold = line.match(/^- (\*\*.+?\*\*)\s*(.*)$/);
 		if (bold) {
 			const gist = opts.gist ? cleanGist(bold[2], maxGist) : "";
@@ -96,6 +109,11 @@ export function summarizeSection(body, opts = {}) {
 		const items = buckets.get(h);
 		if (!items.length) continue;
 		out.push(`### ${h}`, "", ...items, "");
+	}
+	if (internalCount > 0) {
+		out.push(
+			`Plus ${internalCount} internal ${internalCount === 1 ? "change" : "changes"}: tests, CI, tooling, and refactors.`,
+		);
 	}
 	return out.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
 }

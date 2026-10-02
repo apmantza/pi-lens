@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **opengrep's rule-load republish no longer answers a running scan (closes #3490)** —

@@ -30,7 +30,7 @@ describe("changelog entry guard", () => {
 // counted the PR diff's additions.
 describe("one changelog fragment per PR (#3795)", () => {
 	const fragment = (bullet: string) =>
-		`---\nsection: Fixed\n---\n\n- ${bullet}\n`;
+		`---\nsection: Fixed\naudience: user\n---\n\n- ${bullet}\n`;
 	let dirs: string[] = [];
 	afterEach(() => {
 		for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });

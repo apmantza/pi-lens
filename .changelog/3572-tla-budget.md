@@ -1,5 +1,6 @@
 ---
 section: Changed
+audience: internal
 ---
 
 - `scripts/check-tla-models.mjs` runs `formal/*/*.cfg` through a

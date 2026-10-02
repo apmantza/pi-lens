@@ -1,5 +1,6 @@
 ---
 section: Changed
+audience: internal
 ---
 
 - The `formal/review-graph-signatures/` model splits the graph's atomic

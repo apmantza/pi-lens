@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: internal
 ---
 
 - The test-suite lock behind `npm test` and `npm run test:targeted` no longer

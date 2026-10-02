@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A web-tree-sitter runtime trap (`table index is out of bounds`, `memory access out of bounds`, `null function or function signature mismatch`) while one file's symbols were being extracted no longer fails the whole review-graph build. That file degrades to not-parsed, so the existing zero-symbol LSP fallback applies, and the build completes with every other file's symbols. A trap is charged to its input: the file's language and content, or a query. The first trap on an input recycles the tree-sitter parsers and tree cache and spends one unit of a per-process budget of three. A second trap on the same input spends nothing; that input is then skipped until its content changes, so one file that always traps cannot disable tree-sitter for the others. A trap on a fourth input in one process is treated as a wasm abort: tree-sitter is off until a restart, as for any abort. The next build re-extracts a file a one-off trap cost, and a restart retries every trapped file. While a trap has cost any file in the graph its symbols, the per-edit cascade reports a degraded graph instead of a clean result. If a trap still reaches the build's catch, `build_failed` carries `failureClass: "wasm-trap"`, and the cascade reports a degraded graph instead of a computation error (closes #3605).

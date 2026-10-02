@@ -3,7 +3,7 @@ export function isEntryBullet(line: string): boolean;
 export function parseEntry(
 	text: string,
 	file?: string,
-): { section: string; entry: string };
+): { section: string; audience: "user" | "internal"; entry: string };
 export function rollupChangelog(
 	version: string,
 	options?: { rootDir?: string; date?: string },
@@ -12,4 +12,9 @@ export function rollupChangelog(
 /** Reads and validates every entry file under `<rootDir>/.changelog` (the `changelog:check` script entry). */
 export function validateChangelogEntries(options?: {
 	rootDir?: string;
-}): Array<{ file: string; section: string; entry: string }>;
+}): Array<{
+	file: string;
+	section: string;
+	audience: "user" | "internal";
+	entry: string;
+}>;

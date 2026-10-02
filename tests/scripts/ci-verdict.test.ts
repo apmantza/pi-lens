@@ -3195,18 +3195,22 @@ const QUEUE_RUNS = MERGE_GROUP.workflow_runs.map(
 
 interface QueueFake {
 	enabled?: boolean;
-	entry?: { state: string; position: number } | null;
+	/** The authoritative `isInMergeQueue` flag; defaults to `entry !== null`. */
+	inQueue?: boolean;
+	entry?: unknown;
 	runs?: unknown[];
 	pushedAt?: string;
 	checkRuns?: unknown;
 }
 function ghQueue({
 	enabled = true,
+	inQueue,
 	entry = null,
 	runs = [],
 	pushedAt = "2026-02-26T20:00:00Z",
 	checkRuns = BOTH_SUCCESS,
 }: QueueFake = {}) {
+	const isInMergeQueue = inQueue ?? entry !== null;
 	const calls: string[] = [];
 	const ghExec = (args: string[]) => {
 		calls.push(args.join(" "));
@@ -3227,7 +3231,7 @@ function ghQueue({
 					repository: {
 						mergeQueue: enabled ? { id: "MQ_kwDOC01lZ80xjw" } : null,
 						pullRequest: {
-							isInMergeQueue: entry !== null,
+							isInMergeQueue,
 							mergeQueueEntry: entry,
 						},
 					},
@@ -3259,13 +3263,19 @@ function ghQueue({
 async function runQueue(options: QueueFake = {}) {
 	const { ghExec, calls } = ghQueue(options);
 	const lines: string[] = [];
-	const { code: exitCode } = await run({
+	const { code: exitCode, kind } = await run({
 		argv: [QUEUE_PR],
 		ghExec,
 		stdout: (line: string) => lines.push(line),
 		stderr: () => {},
 	});
-	return { exitCode, out: lines.join("\n"), reason: lines.at(-1) ?? "", calls };
+	return {
+		exitCode,
+		kind,
+		out: lines.join("\n"),
+		reason: lines.at(-1) ?? "",
+		calls,
+	};
 }
 const graphqlCalls = (calls: string[]) =>
 	calls.filter((call) => call.startsWith("api graphql")).length;
@@ -3275,14 +3285,75 @@ describe("run — merge queue states (#3754)", () => {
 	// shows a green head, so a reader concluded "done" (exit 0) while the
 	// merge_group run, the thing that actually merges it, was still running.
 	it("reports a PR in the queue as pending with its queue state, not as success", async () => {
-		const { exitCode, reason } = await runQueue({
+		const { exitCode, kind, reason } = await runQueue({
 			entry: { state: "AWAITING_CHECKS", position: 2 },
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
+		// F2: the plain `ci-verdict <pr>` line must carry this kind, not `pending`.
+		expect(kind).toBe("in-queue");
 		expect(reason).toContain(
 			"in the merge queue (awaiting_checks, position 2)",
 		);
 		expect(reason).toContain("neither absent nor done");
+	});
+
+	// #3765 F1: `isInMergeQueue` is the authoritative state; a null
+	// `mergeQueueEntry` (or absent/garbage metadata) must not read green again.
+	it("reports a queued PR as in-queue when the entry object is absent", async () => {
+		const { exitCode, kind, reason } = await runQueue({
+			inQueue: true,
+			entry: null,
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(kind).toBe("in-queue");
+		expect(reason).toContain("in the merge queue (queued)");
+	});
+
+	it("reads broken entry metadata defensively without leaving the queue", async () => {
+		const { exitCode, kind, reason } = await runQueue({
+			inQueue: true,
+			entry: { state: 42, position: "behind" },
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(kind).toBe("in-queue");
+		expect(reason).toContain("in the merge queue (queued)");
+		expect(reason).not.toContain("position");
+	});
+
+	it("ignores a stray entry object when the flag is false", async () => {
+		const { exitCode, kind } = await runQueue({
+			inQueue: false,
+			entry: { state: "AWAITING_CHECKS", position: 2 },
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(kind).toBe("green");
+	});
+
+	// #3765 F2: the named `in-queue` kind is the one exception to the coarse
+	// exit-code table; `cancelled` and `infra-rerun` still read `pending`.
+	it("keeps the coarse exit-line kind for non-queue verdicts", async () => {
+		const pending = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({
+						name: "Unit tests",
+						status: "in_progress",
+						conclusion: null,
+					}),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(pending.kind).toBe("pending");
+		const red = await runQueue({
+			checkRuns: {
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			},
+		});
+		expect(red.kind).toBe("red");
 	});
 
 	// Recurrence: a failed queue run ejects the PR, leaving a green head and no
@@ -3554,6 +3625,28 @@ describe("readMergeQueueState — the queue read's exact shape (#3754)", () => {
 			enabled: true,
 			entry: { state: "AWAITING_CHECKS", position: 2 },
 		});
+	});
+
+	// #3765 F1: the entry is derived from the authoritative `isInMergeQueue`
+	// flag, never gated on the nullable `mergeQueueEntry` object.
+	it("derives the entry from isInMergeQueue, not from mergeQueueEntry", () => {
+		const answer = (pullRequest: unknown) =>
+			JSON.stringify({
+				data: { repository: { mergeQueue: { id: "MQ_x" }, pullRequest } },
+			});
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				answer({ isInMergeQueue: true, mergeQueueEntry: null }),
+			),
+		).toEqual({ enabled: true, entry: { state: null, position: null } });
+		expect(
+			readMergeQueueState(QUEUE_PR, "acme/repo", () =>
+				answer({
+					isInMergeQueue: false,
+					mergeQueueEntry: { state: "AWAITING_CHECKS", position: 1 },
+				}),
+			),
+		).toEqual({ enabled: true, entry: null });
 	});
 });
 

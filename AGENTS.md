@@ -847,8 +847,9 @@ resolves `pi.skills` entries relative to the package root, so manifests use
 
 Runtime imports must be production dependencies. The pi SDK is an optional
 peer/dev dependency and must be imported type-only. Lockfiles use the pinned
-npm version. Release notes use one `.changelog/<slug>.md` fragment per PR;
-never edit `CHANGELOG.md` for ordinary PR notes.
+npm version. Release notes use one `.changelog/<slug>.md` fragment per PR
+(`audience: user` or `internal`; the release body lists only `user`); never
+edit `CHANGELOG.md` for ordinary PR notes.
 
 </important>
 ## Test requirements

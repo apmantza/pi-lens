@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **The shared tools install lock no longer ages out under a legitimate ERESOLVE npm install (refs #3515)** —

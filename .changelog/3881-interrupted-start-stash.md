@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - **A reload that interrupts a session start no longer drops the session's activations (closes #3881)** — pi does not stop a concurrent reload while it waits for a `session_start` to finish. When another extension reloaded the session during pi-lens's start, before the start had taken its hand-off, the reload's shutdown saved the new, still-empty session state over the hand-off. The reloaded session then started with that empty state and lost its lazy-tool activations and the rest of the state the hand-off carries. This affected in-memory and file-backed sessions alike. Now that shutdown passes on the hand-off the interrupted start would have taken, so the reloaded session picks it up. It passes on only what that start would have adopted, so an interrupted `/fork` still leaves the parent's authored files and queued advisories behind, as a clean `/fork` does. In addition, the interrupted start no longer adopts anything if it resumes after its own shutdown. Each occurrence is recorded once per start reason as `session-scope-handoff-interrupted`.

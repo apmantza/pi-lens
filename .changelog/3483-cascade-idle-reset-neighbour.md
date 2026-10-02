@@ -1,5 +1,6 @@
 ---
 section: Fixed
+audience: user
 ---
 
 - A cascade run no longer loses a dependent file when the LSP idle reset

@@ -235,8 +235,15 @@ const VERDICT_KIND_BY_EXIT = new Map([
 	[EXIT_TRANSPORT, "transport"],
 ]);
 
-/** The kind a plain verdict exit code prints; modes override with their own. */
-function verdictExitKind(exitCode) {
+/** The kind a plain verdict exit code prints; modes override with their own.
+ * The exit-code table is deliberately coarse: `cancelled`, `infra-rerun`,
+ * `absent-rearm` and `fork-approval` all print `(pending)`, which existing
+ * shell and warden readers match on. The one verdict kind the CLI documents
+ * as readable on this surface is `in-queue` (#3754): a queued PR is exit 3,
+ * and the plain line must not read as an ordinary `pending` (#3883 F4). */
+function verdictExitKind(exitCode, verdictKind) {
+	if (exitCode === EXIT_PENDING && verdictKind === "in-queue")
+		return "in-queue";
 	return VERDICT_KIND_BY_EXIT.get(exitCode) ?? "unknown";
 }
 
@@ -1339,7 +1346,12 @@ function formatInQueueReason(entry) {
 	const position = Number.isFinite(entry?.position)
 		? `, position ${entry.position}`
 		: "";
-	return `in the merge queue (${String(entry?.state ?? "QUEUED").toLowerCase()}${position}): every gating check on the head passed and the merge_group run decides the merge -- waiting is correct; it is neither absent nor done`;
+	// F1: the entry is read defensively now that `isInMergeQueue` (not the
+	// `mergeQueueEntry` object) decides queue membership, so a non-string state
+	// renders as the default rather than as its own stringified junk.
+	const state =
+		typeof entry?.state === "string" ? entry.state.toLowerCase() : "queued";
+	return `in the merge queue (${state}${position}): every gating check on the head passed and the merge_group run decides the merge -- waiting is correct; it is neither absent nor done`;
 }
 
 function formatQueueFailedReason(queue) {
@@ -1392,15 +1404,18 @@ export function readMergeQueueState(
 		)?.data?.repository;
 		if (!found) return null;
 		const pullRequest = found.pullRequest;
+		// #3754 F1: `isInMergeQueue` is the authoritative state; the entry is a
+		// detail read defensively. Gating the entry on `mergeQueueEntry` (a
+		// nullable object the schema may omit) turned a queued PR into a green
+		// success when the flag was true and the object absent.
 		return {
 			enabled: Boolean(found.mergeQueue),
-			entry:
-				pullRequest?.isInMergeQueue && pullRequest.mergeQueueEntry
-					? {
-							state: pullRequest.mergeQueueEntry.state ?? null,
-							position: pullRequest.mergeQueueEntry.position ?? null,
-						}
-					: null,
+			entry: pullRequest?.isInMergeQueue
+				? {
+						state: pullRequest.mergeQueueEntry?.state ?? null,
+						position: pullRequest.mergeQueueEntry?.position ?? null,
+					}
+				: null,
 		};
 	} catch {
 		return null;
@@ -3146,7 +3161,10 @@ export async function run({
 				}),
 			);
 		stdout(verdict.reason);
-		return { code: verdict.exitCode, kind: verdictExitKind(verdict.exitCode) };
+		return {
+			code: verdict.exitCode,
+			kind: verdictExitKind(verdict.exitCode, verdict.kind),
+		};
 	} catch (error) {
 		// Transport/unexpected (F3): `gh` missing from PATH, a call that hit its
 		// own timeout, malformed JSON, or anything else that means this script

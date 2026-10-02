@@ -15,7 +15,7 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
 - `ci.yml` and `lint.yml` run on `merge_group` (`types: [checks_requested]`).
   Together they produce every required check: `Lint & type-check`,
   `Unit tests`, `Install test (ubuntu-latest)`, `Install test (windows-latest)`,
-  `Install test (macos-latest)`, `knip`, `oxfmt format check`.
+  `Install test (macos-latest)`, `knip`, `oxfmt format check`, `TLA+ models`.
 - PR-only jobs (PR title, PR body, changelog fast-fail, targeted advisory) are
   guarded by `github.event_name == 'pull_request'` and are skipped on
   `merge_group`; none of them is required.
@@ -33,7 +33,7 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
 | Ruleset name | `master merge queue` | |
 | Enforcement status | Active | |
 | Target branches | Include default branch (`master`) | |
-| Require status checks to pass | the seven names above, source GitHub Actions | unchanged from branch protection today |
+| Require status checks to pass | the eight names above, source GitHub Actions | unchanged from branch protection today |
 | Require branches to be up to date | off | the queue replaces it |
 | Require merge queue | on | |
 | Merge method | Merge commit | repo convention (`gh pr merge --merge`) |
