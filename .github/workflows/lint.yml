@@ -14,6 +14,9 @@ on:
     # No "edited" (#3838): a retitle or body edit re-runs only the PR metadata
     # checks in pr-metadata.yml, not this workflow's whole job graph.
     types: [opened, synchronize, reopened]
+  # #3754: the merge queue needs knip and oxfmt on its own merge commit.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: lint-${{ github.ref }}

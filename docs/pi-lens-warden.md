@@ -22,6 +22,7 @@ next action. Use one state from this closed set:
 - `CI_REAL_FAILURE`
 - `CI_INFRA_FAILURE`
 - `READY_AUTOMERGE`
+- `IN_QUEUE`
 - `MERGED`
 
 A worker result becomes durable workflow evidence only when the orchestrator
@@ -44,6 +45,15 @@ Classify required CI from its log and exact head. Treat assertion failures and
 `[mem-watch] done. exitCode=1` as real. Apply the repository's exit-137 rules
 before calling a failure infrastructure. Do not treat SonarCloud or another
 advisory lane as a merge gate. A skipped required job is not green.
+
+Mark `IN_QUEUE` when the GitHub merge queue holds the pull request
+(`node scripts/ci-verdict.mjs <pr>` reports kind `in-queue`, exit 3): the
+head's checks are green and the `merge_group` run decides the merge. It is
+neither absent nor done. Never update-branch, push to, or re-arm a queued
+pull request: any push ejects it. A failed queue run is `CI_REAL_FAILURE` or
+`CI_INFRA_FAILURE` by the same log read as any red run (ci-verdict reports it
+as a FAIL event naming the failing job and test). See
+`docs/merge-queue-rollout.md`.
 
 Mark `READY_AUTOMERGE` only when the actual final head has passed required CI
 and adversarial review, every material finding has a disposition, and every

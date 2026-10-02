@@ -235,8 +235,15 @@ const VERDICT_KIND_BY_EXIT = new Map([
 	[EXIT_TRANSPORT, "transport"],
 ]);
 
-/** The kind a plain verdict exit code prints; modes override with their own. */
-function verdictExitKind(exitCode) {
+/** The kind a plain verdict exit code prints; modes override with their own.
+ * The exit-code table is deliberately coarse: `cancelled`, `infra-rerun`,
+ * `absent-rearm` and `fork-approval` all print `(pending)`, which existing
+ * shell and warden readers match on. The one verdict kind the CLI documents
+ * as readable on this surface is `in-queue` (#3754): a queued PR is exit 3,
+ * and the plain line must not read as an ordinary `pending` (#3883 F4). */
+function verdictExitKind(exitCode, verdictKind) {
+	if (exitCode === EXIT_PENDING && verdictKind === "in-queue")
+		return "in-queue";
 	return VERDICT_KIND_BY_EXIT.get(exitCode) ?? "unknown";
 }
 
@@ -482,6 +489,7 @@ export function computeVerdict(
 	rerunState = null,
 	absentContext = null,
 	noiseRowIds = null,
+	queueContext = null,
 ) {
 	const checkRuns = Array.isArray(checkRunsPayload?.check_runs)
 		? checkRunsPayload.check_runs
@@ -578,6 +586,7 @@ export function computeVerdict(
 
 	let exitCode;
 	let reason;
+	let queueFailedRows = null;
 	// #3700: the machine-readable state `--watch-open` and `--all` key on, so
 	// neither has to text-match `reason`.
 	let kind;
@@ -652,12 +661,29 @@ export function computeVerdict(
 			reason = `gating check(s) ${parts.join("; ")}`;
 		}
 	} else {
-		exitCode = EXIT_SUCCESS;
-		kind = "success";
-		reason =
-			noiseRows.length > 0
-				? `post-merge noise, not a failure: ${noiseRows.map((row) => row.name).join(", ")} could not fetch refs/pull/N/merge after the PR merged; every other gating check concluded success`
-				: "every gating check concluded success";
+		// #3754: the head's own gating checks are green, which only makes the PR
+		// ELIGIBLE for the merge queue. Read lazily (only here, so a red or
+		// pending head costs no extra call): a PR in the queue is waiting on the
+		// `merge_group` run, and a PR whose queue run failed was ejected.
+		const queue =
+			typeof queueContext === "function" ? queueContext() : queueContext;
+		if (queue?.entry) {
+			exitCode = EXIT_PENDING;
+			kind = "in-queue";
+			reason = formatInQueueReason(queue.entry);
+		} else if (queue?.failedRows?.length > 0) {
+			exitCode = EXIT_FAILURE;
+			kind = "failed";
+			queueFailedRows = queue.failedRows;
+			reason = formatQueueFailedReason(queue);
+		} else {
+			exitCode = EXIT_SUCCESS;
+			kind = "success";
+			reason =
+				noiseRows.length > 0
+					? `post-merge noise, not a failure: ${noiseRows.map((row) => row.name).join(", ")} could not fetch refs/pull/N/merge after the PR merged; every other gating check concluded success`
+					: "every gating check concluded success";
+		}
 	}
 	// #3801: the heavy advisory jobs do not exist as check-runs until the
 	// required checks passed (ci.yml's `heavy-gate`). Each absent one is listed
@@ -683,7 +709,7 @@ export function computeVerdict(
 		reason,
 		mergeState,
 		kind,
-		failingRows: failingGatingRows,
+		failingRows: queueFailedRows ?? failingGatingRows,
 		cancelledRows: cancelledLatestRows,
 	};
 }
@@ -836,6 +862,7 @@ export async function pollVerdict({
 	classification = null,
 	rerunState = null,
 	absentContext = null,
+	queueContext = null,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
 	onRetry = () => {},
@@ -860,6 +887,8 @@ export async function pollVerdict({
 			classification,
 			currentRerunState,
 			absentContext,
+			null,
+			queueContext,
 		);
 		polls += 1;
 		if (verdict.exitCode !== EXIT_PENDING) break;
@@ -1142,6 +1171,169 @@ export function fetchRerunState(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// #3754: the GitHub merge queue. Once enabled, a PR whose head checks are green
+// is ENQUEUED (`gh pr merge --auto`), and the queue tests it merged onto the
+// latest master in a `gh-readonly-queue/<base>/pr-<N>-<sha>` ref via a
+// `merge_group` workflow run. Three states the head's check-runs cannot show:
+// in the queue (waiting, not absent and not done), ejected after a failed
+// queue run (a FAIL event), and neither (plain eligible/success).
+// ---------------------------------------------------------------------------
+
+const MERGE_QUEUE_STATE_QUERY =
+	"query($owner:String!,$name:String!,$branch:String!,$number:Int!){repository(owner:$owner,name:$name){mergeQueue(branch:$branch){id} pullRequest(number:$number){isInMergeQueue mergeQueueEntry{state position}}}}";
+
+function formatInQueueReason(entry) {
+	const position = Number.isFinite(entry?.position)
+		? `, position ${entry.position}`
+		: "";
+	// F1: the entry is read defensively now that `isInMergeQueue` (not the
+	// `mergeQueueEntry` object) decides queue membership, so a non-string state
+	// renders as the default rather than as its own stringified junk.
+	const state =
+		typeof entry?.state === "string" ? entry.state.toLowerCase() : "queued";
+	return `in the merge queue (${state}${position}): every gating check on the head passed and the merge_group run decides the merge -- waiting is correct; it is neither absent nor done`;
+}
+
+function formatQueueFailedReason(queue) {
+	return `merge queue run failed and ejected the PR: ${queue.failedRuns
+		.map((failed) => failed.url)
+		.join(
+			", ",
+		)} -- failing: ${queue.failedRows.map((row) => row.name).join(", ")}`;
+}
+
+function graphqlFieldArgs(query, fields) {
+	return [
+		"api",
+		"graphql",
+		"-f",
+		`query=${query}`,
+		...Object.entries(fields).flatMap(([name, value]) => [
+			typeof value === "number" ? "-F" : "-f",
+			`${name}=${value}`,
+		]),
+	];
+}
+
+/**
+ * One GraphQL read answering both questions: does `PROTECTED_BRANCH` have a
+ * merge queue, and is this PR in it. `null` when unreadable or not a PR
+ * target: every caller then behaves as before the queue existed, and a
+ * repository without a queue costs exactly this one read (#3694's "a healthy
+ * head costs nothing extra" guard, which the queue must not break).
+ */
+export function readMergeQueueState(
+	target,
+	repository,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	if (!isPrNumber(target)) return null;
+	const [owner, name] = String(repository).split("/");
+	try {
+		const found = JSON.parse(
+			ghExec(
+				graphqlFieldArgs(MERGE_QUEUE_STATE_QUERY, {
+					owner,
+					name,
+					branch: PROTECTED_BRANCH,
+					number: Number(target),
+				}),
+				{ timeoutMs },
+			),
+		)?.data?.repository;
+		if (!found) return null;
+		const pullRequest = found.pullRequest;
+		// #3754 F1: `isInMergeQueue` is the authoritative state; the entry is a
+		// detail read defensively. Gating the entry on `mergeQueueEntry` (a
+		// nullable object the schema may omit) turned a queued PR into a green
+		// success when the flag was true and the object absent.
+		return {
+			enabled: Boolean(found.mergeQueue),
+			entry: pullRequest?.isInMergeQueue
+				? {
+						state: pullRequest.mergeQueueEntry?.state ?? null,
+						position: pullRequest.mergeQueueEntry?.position ?? null,
+					}
+				: null,
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The failed `merge_group` runs of this PR's LATEST queue attempt that began
+ * after the head was pushed, as gating rows (one per failed job, with its job
+ * URL, so `readFailureDetails` names the failing tests exactly as for a PR
+ * run). A queue attempt's branch is `gh-readonly-queue/<base>/pr-<N>-<sha>`;
+ * a run that began before the push is an earlier head's ejection. Fails open
+ * to "none".
+ */
+export function fetchFailedQueueRuns(
+	target,
+	repository,
+	pushedMs,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	const none = { failedRuns: [], failedRows: [] };
+	if (!isPrNumber(target) || !Number.isFinite(pushedMs)) return none;
+	const prefix = `gh-readonly-queue/${PROTECTED_BRANCH}/pr-${Number(target)}-`;
+	try {
+		const runs = (
+			JSON.parse(
+				ghExec(
+					[
+						"api",
+						`repos/${repository}/actions/runs?event=merge_group&status=completed&per_page=50`,
+					],
+					{ timeoutMs },
+				),
+			).workflow_runs ?? []
+		)
+			.filter(
+				(candidate) =>
+					String(candidate?.head_branch ?? "").startsWith(prefix) &&
+					candidate.conclusion === "failure" &&
+					Date.parse(candidate.created_at) >= pushedMs,
+			)
+			.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+		const latestBranch = runs[0]?.head_branch;
+		const failedRuns = runs
+			.filter((candidate) => candidate.head_branch === latestBranch)
+			.map((candidate) => ({ id: candidate.id, url: candidate.html_url }));
+		const failedRows = failedRuns.flatMap((failed) =>
+			(
+				JSON.parse(
+					ghExec(
+						[
+							"api",
+							`repos/${repository}/actions/runs/${failed.id}/jobs?per_page=100`,
+						],
+						{ timeoutMs },
+					),
+				).jobs ?? []
+			)
+				.filter((job) => job?.conclusion === "failure")
+				.map((job) => ({
+					name: job.name,
+					present: true,
+					id: job.id,
+					status: "completed",
+					conclusion: "failure",
+					url: job.html_url,
+					detailsUrl: job.html_url,
+					gating: true,
+				})),
+		);
+		return failedRows.length > 0 ? { failedRuns, failedRows } : none;
+	} catch {
+		return none;
+	}
+}
+
 // The only branch this repository protects (ci.yml/lint.yml/etc. all trigger
 // on `branches: [master]`); every PR this script is ever pointed at targets
 // it. Not derived per-target because a bare-SHA target carries no base-branch
@@ -1402,8 +1594,14 @@ export function readFailureDetails({
 			? readMasterSha(repository, ghExec, timeoutMs)
 			: null;
 		if (mergeBase && masterSha && masterSha !== mergeBase) {
+			const moved = `master moved since this failure's merge base (${mergeBase.slice(0, 9)} -> ${masterSha.slice(0, 9)})`;
+			// #3754: with a merge queue on master the queue tests the PR against the
+			// latest master itself, and an update-branch push re-runs every check
+			// (and ejects a queued PR): the update-branch remedy is moot.
 			hints.push(
-				`master moved since this failure's merge base (${mergeBase.slice(0, 9)} -> ${masterSha.slice(0, 9)}): gh run rerun replays the old merge commit and cannot pick up what master gained -- use gh pr update-branch ${target}`,
+				readMergeQueueState(target, repository, ghExec, timeoutMs)?.enabled
+					? `${moved}: the merge queue tests the PR on the latest master, so do not update-branch ${target} (it re-runs every check and ejects a queued PR); fix the failure and let the queue run`
+					: `${moved}: gh run rerun replays the old merge commit and cannot pick up what master gained -- use gh pr update-branch ${target}`,
 			);
 		}
 	}
@@ -2632,6 +2830,40 @@ export async function run({
 						};
 					}
 				: null;
+		// #3754: read lazily, only when computeVerdict reaches its green branch
+		// (a red or pending head costs no extra call): whether the PR sits in the
+		// merge queue, else whether a queue run of this head failed and ejected
+		// it. PR targets on the gh transport only (the queue state is GraphQL).
+		const queueContext =
+			transport === TRANSPORT_GH && isPrNumber(target)
+				? () => {
+						const state = readMergeQueueState(
+							target,
+							repository,
+							ghExec,
+							initialTimeoutMs,
+						);
+						if (state?.entry) return { entry: state.entry };
+						// No queue on the repository (or an unreadable answer): the green
+						// head is plain success, at the cost of the one read above.
+						if (!state?.enabled) return null;
+						headInfo = fetchAutoMergeAge(
+							target,
+							repository,
+							sha,
+							ghExec,
+							initialTimeoutMs,
+							headInfo.pushedMs,
+						);
+						return fetchFailedQueueRuns(
+							target,
+							repository,
+							headInfo.pushedMs,
+							ghExec,
+							initialTimeoutMs,
+						);
+					}
+				: null;
 		// #2609: read once, before polling starts (branch protection does not
 		// change between polls of the same head). `null` means unreadable --
 		// `requiredChecks` then falls back to the constant default, and every
@@ -2674,6 +2906,7 @@ export async function run({
 			classification: ciClassification,
 			rerunState,
 			absentContext,
+			queueContext,
 			onRetry: stderr,
 			...(sleepImpl ? { sleepImpl } : {}),
 			...(now ? { now } : {}),
@@ -2700,6 +2933,7 @@ export async function run({
 					typeof rerunState === "function" ? rerunState() : rerunState,
 					absentContext,
 					found.noiseRowIds,
+					queueContext,
 				);
 			}
 			verdict = { ...verdict, details: found.details, hints: found.hints };
@@ -2738,7 +2972,10 @@ export async function run({
 				}),
 			);
 		stdout(verdict.reason);
-		return { code: verdict.exitCode, kind: verdictExitKind(verdict.exitCode) };
+		return {
+			code: verdict.exitCode,
+			kind: verdictExitKind(verdict.exitCode, verdict.kind),
+		};
 	} catch (error) {
 		// Transport/unexpected (F3): `gh` missing from PATH, a call that hit its
 		// own timeout, malformed JSON, or anything else that means this script

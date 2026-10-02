@@ -73,6 +73,17 @@ export interface AbsentContext {
 	absentMinutes: number | null;
 }
 
+export interface MergeQueueEntry {
+	state: string | null;
+	position: number | null;
+}
+
+export interface QueueContext {
+	entry?: MergeQueueEntry;
+	failedRuns?: { id: number; url: string }[];
+	failedRows?: VerdictRow[];
+}
+
 export interface Verdict {
 	exitCode: number;
 	rows: VerdictRow[];
@@ -103,6 +114,7 @@ export declare function computeVerdict(
 	} | null,
 	absentContext?: AbsentContext | (() => AbsentContext | null) | null,
 	noiseRowIds?: Set<number | null> | null,
+	queueContext?: QueueContext | (() => QueueContext | null) | null,
 ): Verdict;
 
 export declare function formatVerdictTable(rows: VerdictRow[]): string;
@@ -154,6 +166,7 @@ export declare function pollVerdict(args: {
 		  })
 		| null;
 	absentContext?: AbsentContext | (() => AbsentContext | null) | null;
+	queueContext?: QueueContext | (() => QueueContext | null) | null;
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
 	onRetry?: (line: string) => void;
@@ -204,6 +217,21 @@ export declare function fetchAutoMergeAge(
 	timeoutMs?: number,
 	knownPushedMs?: number | null,
 ): { autoMerge: boolean; pushedMs: number | null };
+
+export declare function readMergeQueueState(
+	target: string | number,
+	repository: string,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): { enabled: boolean; entry: MergeQueueEntry | null } | null;
+
+export declare function fetchFailedQueueRuns(
+	target: string | number,
+	repository: string,
+	pushedMs: number | null,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): { failedRuns: { id: number; url: string }[]; failedRows: VerdictRow[] };
 
 export declare function fetchRerunState(
 	repository: string,

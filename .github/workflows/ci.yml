@@ -5,6 +5,14 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # #3754: the merge queue tests each queued PR merged onto the latest master
+  # in a `gh-readonly-queue/master/pr-N-<sha>` ref and waits for the required
+  # checks to report on THAT commit. Every workflow that produces a required
+  # check must therefore also run on `merge_group`, or the queue waits forever
+  # (tests/config/merge-queue-workflows.test.ts pins the list). PR-only jobs
+  # carry `if: github.event_name == 'pull_request'` and are skipped there.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -1260,7 +1268,13 @@ jobs:
     # then there is no run to report on or mark stale. The previous head's
     # comment keeps its own `Head:` line, and ci-verdict's MUTATION line reads
     # that as STALE against the current head.
-    if: always() && needs.mutation.result != 'skipped' && github.event.pull_request.head.repo.full_name == github.repository
+    #
+    # #3754: this job posts on a pull request, so it is guarded to
+    # `pull_request` explicitly rather than leaning on the fork-name check
+    # reading empty on `merge_group`. Explicit guards are what
+    # tests/config/merge-queue-workflows.test.ts pins for every
+    # pull_request-context job in this workflow.
+    if: always() && github.event_name == 'pull_request' && needs.mutation.result != 'skipped' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
