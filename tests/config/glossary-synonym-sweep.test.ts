@@ -909,7 +909,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/metrics-client.ts": 6,
 		"clients/metrics-history.ts": 12,
 		"clients/module-report.ts": 30,
-		"clients/mutating-tool.ts": 6,
+		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
+		// preference, and the readToolResultPathField return.
+		"clients/mutating-tool.ts": 9,
 		"clients/mutation-attribution.ts": 3,
 		"clients/ndjson-logger.ts": 5,
 		"clients/observed-mutation.ts": 6,
@@ -962,7 +964,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-coordinator.ts": 28,
 		"clients/runtime-session.ts": 15,
 		"clients/runtime-tool-call.ts": 22,
-		"clients/runtime-tool-result.ts": 22,
+		// 22 -> 20 (#3650): the tool_result path read is routed through
+		// readToolResultPathField; the open-coded input.path cast is gone.
+		"clients/runtime-tool-result.ts": 20,
 		// 25 -> 27 (#3218): the resolved-blocker filter keys both the current
 		// blocker set and each resolved entry with `path.resolve`.
 		"clients/runtime-turn.ts": 27,
