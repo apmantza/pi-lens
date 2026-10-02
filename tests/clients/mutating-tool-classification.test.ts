@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { pathsEqual } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
 import { getTouchedLinesForGuard } from "../../clients/read-guard-tool-lines.js";
@@ -866,5 +867,200 @@ describe("#2423 grep guard — the seam is the only mutation decision point", ()
 		for (const sample of allowed) {
 			expect(findMutationLiteralOffenders(sample), sample).toEqual([]);
 		}
+	});
+});
+
+describe("#3650 adapter-declared mutation path", () => {
+	/**
+	 * T1: an adapter that names its own path wins. The injected list goes
+	 * through the production `classifyMutatingTool` entry point (R6) — no
+	 * re-implemented copy of the adapter loop. Part 3's runtime registration
+	 * API is explicitly out of scope, so injection is a parameter, not a seam.
+	 */
+	it("uses the adapter-declared path when the adapter names one", async () => {
+		const { classifyMutatingTool } =
+			await import("../../clients/mutating-tool.js");
+		const classification = classifyMutatingTool(
+			{ toolName: "custom-edit", input: { customOp: true } },
+			{},
+			[
+				{
+					name: "test-custom-path",
+					kind: "edit",
+					resolve: (input) =>
+						input["customOp"] === true
+							? {
+									touchedLines: [2, 3] as [number, number],
+									path: "custom/path.ts",
+								}
+							: undefined,
+				},
+			],
+		);
+		expect(classification?.path).toBe("custom/path.ts");
+	});
+
+	/**
+	 * T2 (R3 back-compat): an adapter that omits `path` behaves exactly as
+	 * today — the static `path`/`filePath`/`file_path` field list decides.
+	 */
+	it("falls back to the static field list when the adapter omits path", async () => {
+		const { classifyMutatingTool } =
+			await import("../../clients/mutating-tool.js");
+		const classification = classifyMutatingTool(
+			{
+				toolName: "custom-edit",
+				input: { customOp: true, filePath: "/a.ts" },
+			},
+			{},
+			[
+				{
+					name: "test-no-path",
+					kind: "edit",
+					resolve: (input) =>
+						input["customOp"] === true
+							? { touchedLines: [1, 1] as [number, number] }
+							: undefined,
+				},
+			],
+		);
+		expect(classification?.path).toBe("/a.ts");
+	});
+
+	/**
+	 * T3/T4 lifecycle: one `hashline-edit-pro` `replace` driven through the
+	 * production `handleToolResult`, differing only in how the input spells its
+	 * path. Each case asserts the file lands in turn state AND reaches the
+	 * deferred-format queue — the two signals the hardcoded `.path` read
+	 * silently dropped for every non-`path` spelling.
+	 */
+	async function lifecycleSignals(
+		spelling: "path" | "filePath" | "file_path",
+		slug: string,
+	): Promise<{
+		files: string[];
+		filePath: string;
+		queued: number;
+		root: string;
+	}> {
+		await stubPipeline();
+		const env = setupTestEnvironment(`pi-lens-3650-${slug}-`);
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "spelled.ts");
+			fs.writeFileSync(filePath, SOURCE);
+
+			const cacheManager = new CacheManager(false);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: `s-3650-${slug}` });
+			runtime.beginTurn();
+
+			const event = {
+				toolName: "replace",
+				toolCallId: `call-3650-${slug}`,
+				input: {
+					[spelling]: filePath,
+					remove_from: ANCHOR(2),
+					remove_to: ANCHOR(3),
+					replacement_lines: ["const b = 20;", "const c = 30;"],
+				},
+				content: [{ type: "text", text: "replaced" }],
+			};
+			runPreflight(event, filePath);
+			await handleToolResult(toolResultDeps({ event, runtime, cacheManager }));
+
+			const files = Object.keys(
+				cacheManager.readTurnState(env.tmpDir).files ?? {},
+			);
+			return {
+				files,
+				filePath,
+				queued: runtime.pendingDeferredFormatCount,
+				root: env.tmpDir,
+			};
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	}
+
+	it("names a `filePath`-spelled replace in turn state and the deferred queue", async () => {
+		const { files, filePath, queued, root } = await lifecycleSignals(
+			"filePath",
+			"filepath",
+		);
+		// Turn-state keys are project-relative; resolve them against the
+		// project root before the canonical comparison.
+		expect(files.some((f) => pathsEqual(path.resolve(root, f), filePath))).toBe(
+			true,
+		);
+		expect(queued).toBe(1);
+	});
+
+	it("names a `file_path`-spelled replace in turn state and the deferred queue", async () => {
+		const { files, filePath, queued, root } = await lifecycleSignals(
+			"file_path",
+			"file-path",
+		);
+		expect(files.some((f) => pathsEqual(path.resolve(root, f), filePath))).toBe(
+			true,
+		);
+		expect(queued).toBe(1);
+	});
+
+	it("keeps the `path`-spelled replace lifecycle green (regression)", async () => {
+		const { files, filePath, queued, root } = await lifecycleSignals(
+			"path",
+			"path-control",
+		);
+		expect(files.some((f) => pathsEqual(path.resolve(root, f), filePath))).toBe(
+			true,
+		);
+		expect(queued).toBe(1);
+	});
+
+	/**
+	 * F1 guard killers: drive the exported production helper, not a copy.
+	 * A numeric `input.path` must not flow downstream (the old open-coded
+	 * read would hand `42` to `path.isAbsolute`, a host-fatal
+	 * `ERR_INVALID_ARG_TYPE`); the non-empty array is the case that kills
+	 * deleting the `typeof` half of the guard (`[].length > 0` would pass
+	 * the length check and leak the array out of a `string | undefined`
+	 * function).
+	 */
+	it("rejects a non-string `path` spelling", async () => {
+		const { readToolResultPathField } =
+			await import("../../clients/mutating-tool.js");
+		expect(
+			readToolResultPathField({ toolName: "read", input: { path: 42 } }),
+		).toBe(undefined);
+		expect(
+			readToolResultPathField({ toolName: "read", input: { path: ["/a.ts"] } }),
+		).toBe(undefined);
+	});
+
+	/**
+	 * An empty `path` is rejected and the `filePath` fallback wins. This
+	 * kills dropping the `ownPath.length > 0` half of the guard (an empty
+	 * string would be returned before classification ever ran).
+	 */
+	it("prefers the `filePath` fallback over an empty `path`", async () => {
+		const { readToolResultPathField } =
+			await import("../../clients/mutating-tool.js");
+		expect(
+			readToolResultPathField({
+				toolName: "replace",
+				input: {
+					path: "",
+					filePath: "/abs/a.ts",
+					remove_from: ANCHOR(2),
+					remove_to: ANCHOR(3),
+					replacement_lines: ["const b = 20;", "const c = 30;"],
+				},
+			}),
+		).toBe("/abs/a.ts");
 	});
 });
