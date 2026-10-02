@@ -25,9 +25,13 @@ import {
 	EXIT_SUCCESS,
 	EXIT_TRANSPORT,
 	EXIT_USAGE,
+	fetchActionRequiredRuns,
 	fetchCheckRunsPayload,
 	fetchFailedQueueRuns,
+	fetchHeadRuns,
+	fetchRerunState,
 	formatAbsentRequiredReason,
+	formatAbsentRunReason,
 	formatExitLine,
 	formatVerdictTable,
 	HARD_CAP_SECONDS,
@@ -3835,5 +3839,328 @@ describe("computeVerdict — queue context shapes (#3754)", () => {
 		);
 		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
 		expect(verdict.reason).toContain("flake watch, nightly smoke");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// #3861 added-line mutation coverage (direct unit seams)
+//
+// The `run`-level #3861 suites above drive the whole path with one run at a
+// time; they leave the formatter ternaries, the multi-run head selection, the
+// status mapping, the malformed-response direction, and the argv contract
+// unnamed. Each block below drives the REAL exported seam and pins the literal
+// result, so the mutation it names cannot survive.
+// ---------------------------------------------------------------------------
+
+const HEAD_SHA = "a".repeat(40);
+
+const workflowRun = (
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+	id: 1,
+	name: "CI",
+	event: "pull_request",
+	head_sha: HEAD_SHA,
+	status: "completed",
+	conclusion: "success",
+	run_attempt: 1,
+	created_at: "2026-01-01T00:00:00Z",
+	run_started_at: "2026-01-01T00:00:00Z",
+	...overrides,
+});
+
+const headRunsBody = (runs: Array<Record<string, unknown> | null>) =>
+	JSON.stringify({ total_count: runs.length, workflow_runs: runs });
+
+describe("formatAbsentRunReason — unnamed run, omitted age, terminal rerun text (#3861)", () => {
+	it("names an unnamed terminal run and appends no rerun command", () => {
+		const text = formatAbsentRunReason({
+			state: "completed",
+			id: null,
+			ageMinutes: null,
+			sha: "abc123",
+		});
+		expect(text).toBe(
+			"ci.yml an unnamed run is completed for abc123: the run is terminal and cannot produce the missing check-runs -- inspect it; the verdict never re-arms automatically",
+		);
+		expect(text).not.toContain("Stryker");
+		expect(text).not.toContain("gh run rerun");
+	});
+
+	it("names an unnamed registered run with no age text", () => {
+		const text = formatAbsentRunReason({
+			state: "queued",
+			id: null,
+			ageMinutes: null,
+			sha: "abc123",
+		});
+		expect(text).toBe(
+			"ci.yml an unnamed run is queued for abc123: the run is registered, so no re-arm is needed",
+		);
+		expect(text).not.toContain("Stryker");
+	});
+});
+
+describe("computeVerdict — the absent-required re-arm threshold is inclusive (#3861 C2)", () => {
+	it("at exactly the threshold a registered unknown run names the unreadable lookup", () => {
+		const verdict = computeVerdict(
+			{ check_runs: [] },
+			undefined,
+			"MERGEABLE",
+			null,
+			null,
+			{
+				repository: "acme/repo",
+				sha: HEAD_SHA,
+				actionRequiredRuns: [],
+				autoMerge: true,
+				absentMinutes: ABSENT_REQUIRED_REARM_MINUTES,
+				headRun: { state: "unknown", id: null, ageMinutes: null },
+			},
+		);
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toBe(
+			`required checks absent for ${ABSENT_REQUIRED_REARM_MINUTES} min on ${HEAD_SHA} and the ci.yml run lookup was unreadable: no re-arm advice without a run answer`,
+		);
+	});
+});
+
+describe("resolveHeadSha — malformed PR view JSON (#3861 D)", () => {
+	it("throws a named error rather than returning a fallback object", () => {
+		expect(() => resolveHeadSha("2539", () => "not json")).toThrow(
+			/could not parse the PR view JSON for 2539/,
+		);
+	});
+});
+
+describe("fetchCheckRunsPayload — malformed check-runs JSON (#3861 E)", () => {
+	it("throws a named error rather than returning an empty payload", () => {
+		expect(() =>
+			fetchCheckRunsPayload("acme/repo", "deadbeef", () => "not json"),
+		).toThrow(/could not parse the check-runs JSON for deadbeef \(page 1\)/);
+	});
+});
+
+describe("fetchHeadRuns — the head's latest ci.yml run (#3861 F)", () => {
+	const attemptRun = (
+		id: number,
+		run_attempt: number,
+		created_at: string,
+		run_started_at: string,
+	) =>
+		workflowRun({
+			id,
+			run_attempt,
+			created_at,
+			run_started_at,
+			status: "completed",
+			conclusion: "success",
+		});
+	const orderedRuns = [
+		attemptRun(1, 1, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+		attemptRun(2, 2, "2026-01-02T00:00:00Z", "2026-01-02T00:00:00Z"),
+		// The latest run's run_started_at deliberately differs from its
+		// created_at: `startedAtMs` must prefer run_started_at.
+		attemptRun(3, 3, "2026-01-03T00:00:00Z", "2026-01-04T00:00:00Z"),
+	];
+
+	it("picks the latest attempt from every input order", () => {
+		for (const order of [
+			[0, 1, 2],
+			[0, 2, 1],
+			[1, 0, 2],
+			[1, 2, 0],
+			[2, 0, 1],
+			[2, 1, 0],
+		]) {
+			const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+				headRunsBody(order.map((index) => orderedRuns[index]!)),
+			);
+			expect(result.headRun.id, `input order ${order}`).toBe(3);
+			expect(result.headRun.startedAtMs, `input order ${order}`).toBe(
+				Date.parse("2026-01-04T00:00:00Z"),
+			);
+		}
+	});
+
+	// The tie-break: two runs for the SAME attempt (GitHub can report a rerun
+	// this way) resolve by ascending created_at, never by input order.
+	const sameAttempt = [
+		workflowRun({
+			id: 11,
+			run_attempt: 1,
+			created_at: "2026-01-01T00:00:00Z",
+			run_started_at: "2026-01-01T00:00:00Z",
+		}),
+		workflowRun({
+			id: 12,
+			run_attempt: 1,
+			created_at: "2026-01-02T00:00:00Z",
+			run_started_at: "2026-01-02T00:00:00Z",
+		}),
+	];
+
+	it("breaks a same-attempt tie by created_at from either input order", () => {
+		for (const order of [
+			[0, 1],
+			[1, 0],
+		]) {
+			const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+				headRunsBody(order.map((index) => sameAttempt[index]!)),
+			);
+			expect(result.headRun.id, `input order ${order}`).toBe(12);
+		}
+	});
+
+	it("orders by run_attempt first, never by created_at when attempts differ", () => {
+		// A rerun (attempt 2) created EARLIER than its original (attempt 1): the
+		// attempt ladder, not the clock, chooses the latest.
+		const original = workflowRun({
+			id: 21,
+			run_attempt: 1,
+			created_at: "2026-01-02T00:00:00Z",
+			run_started_at: "2026-01-02T00:00:00Z",
+		});
+		const rerun = workflowRun({
+			id: 22,
+			run_attempt: 2,
+			created_at: "2026-01-01T00:00:00Z",
+			run_started_at: "2026-01-01T00:00:00Z",
+		});
+		const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+			headRunsBody([original, rerun]),
+		);
+		expect(result.headRun.id).toBe(22);
+	});
+});
+
+describe("fetchHeadRuns — status mapping (#3861 G)", () => {
+	it.each([
+		["queued", "queued"],
+		["waiting", "queued"],
+		["requested", "queued"],
+		["in_progress", "in_progress"],
+		["completed", "completed"],
+		["pending", "unknown"],
+	])("maps a %j status to %s", (status, expected) => {
+		const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+			headRunsBody([workflowRun({ status, conclusion: null })]),
+		);
+		expect(result.headRun.state).toBe(expected);
+	});
+
+	it("maps a completed cancelled run to cancelled", () => {
+		const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+			headRunsBody([
+				workflowRun({ status: "completed", conclusion: "cancelled" }),
+			]),
+		);
+		expect(result.headRun.state).toBe("cancelled");
+	});
+});
+
+describe("fetchHeadRuns — off-schema responses and null elements (#3861 H)", () => {
+	it.each([
+		["an empty object", "{}"],
+		["a JSON null", "null"],
+		["an object where the array belongs", '{"workflow_runs":{}}'],
+	])("rethrows the named malformed error for %s", (_label, body) => {
+		expect(() =>
+			fetchActionRequiredRuns(
+				"acme/repo",
+				HEAD_SHA,
+				() => body,
+				undefined,
+				false,
+			),
+		).toThrow(
+			/malformed actions\/runs response: workflow_runs is not an array/,
+		);
+	});
+
+	it("keeps the real run when the head's list carries a null element", () => {
+		const real = workflowRun({
+			id: 77,
+			status: "in_progress",
+			conclusion: null,
+		});
+		const result = fetchHeadRuns("acme/repo", HEAD_SHA, () =>
+			headRunsBody([null, real]),
+		);
+		expect(result.headRun.id).toBe(77);
+		expect(result.headRun.state).toBe("in_progress");
+	});
+});
+
+describe("fetchRerunState — the exact ci.yml head runs form the ladder (#3861 I)", () => {
+	it("keeps only the CI workflow's exact-head runs and reports the latest attempt", () => {
+		const result = fetchRerunState("acme/repo", HEAD_SHA, () =>
+			JSON.stringify({
+				total_count: 5,
+				workflow_runs: [
+					workflowRun({
+						id: 10,
+						run_attempt: 1,
+						status: "completed",
+						conclusion: "failure",
+					}),
+					workflowRun({
+						id: 11,
+						run_attempt: 2,
+						status: "in_progress",
+						conclusion: null,
+					}),
+					workflowRun({
+						id: 20,
+						name: "CodeQL",
+						run_attempt: 5,
+						status: "completed",
+						conclusion: "failure",
+					}),
+					workflowRun({
+						id: 30,
+						head_sha: "b".repeat(40),
+						run_attempt: 6,
+						status: "completed",
+						conclusion: "failure",
+					}),
+					null,
+				],
+			}),
+		);
+		expect(result).toEqual({
+			originalFailed: true,
+			latestAttempt: {
+				status: "in_progress",
+				conclusion: null,
+				run_attempt: 2,
+			},
+		});
+	});
+});
+
+describe("readOpenPrs — the exact pr list argv and caller timeout (#3861 K)", () => {
+	it("passes the exact argv and the caller's timeoutMs", () => {
+		const calls: Array<{ args: string[]; options: unknown }> = [];
+		const ghExec = (args: string[], options: unknown) => {
+			calls.push({ args, options });
+			return "[]";
+		};
+		expect(readOpenPrs(ghExec, 12_345)).toEqual([]);
+		expect(calls).toEqual([
+			{
+				args: [
+					"pr",
+					"list",
+					"--state",
+					"open",
+					"--limit",
+					"100",
+					"--json",
+					"number,author,headRefOid,autoMergeRequest",
+				],
+				options: { timeoutMs: 12_345 },
+			},
+		]);
 	});
 });

@@ -128,6 +128,32 @@ describe("ghPrFiles: one JSON object per gh --jq line (#3861 N2)", () => {
 			/malformed gh api --jq line/,
 		);
 	});
+
+	// #3861 A1: only a whitespace-only line is a blank `--jq` separator; the
+	// trim must catch tabs and a bare carriage return too, so none of them
+	// reaches `JSON.parse`.
+	it("skips whitespace-only and carriage-return-only lines", () => {
+		const exec = () =>
+			'{"filename":"clients/a.ts"}\n   \n\t\n\r\n{"filename":"docs/b.md"}\n';
+		expect(ghPrFiles("acme/repo", "1", exec)).toEqual([
+			"clients/a.ts",
+			"docs/b.md",
+		]);
+	});
+
+	// #3861 A2: the error excerpt is bounded to 200 characters; a longer
+	// malformed line must not carry its tail into the message.
+	it("caps the malformed-line excerpt at 200 characters", () => {
+		const exec = () => `${"Z".repeat(250)}TRAILING\n`;
+		let message = "";
+		try {
+			ghPrFiles("acme/repo", "1", exec);
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+		expect(message).toContain("malformed gh api --jq line");
+		expect(message.endsWith("Z".repeat(200))).toBe(true);
+	});
 });
 
 describe("run (the CLI the changes job calls)", () => {

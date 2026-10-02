@@ -982,6 +982,20 @@ describe("run() — REST transport end to end (#3497)", () => {
 	});
 });
 
+// #3861 J: a REST 200 with an EMPTY body is the documented empty answer (`{}`),
+// not a JSON contract violation; the `text.length === 0` early return keeps an
+// empty body from reaching `JSON.parse("")`.
+describe("restFetchCheckRunsPayload — an empty 200 body is an empty answer (#3861 J)", () => {
+	it("returns the empty payload for a 200 with no body", async () => {
+		const fetchImpl = async () => new Response("", { status: 200 });
+		const payload = await restFetchCheckRunsPayload("acme/repo", "sha-empty", {
+			token: "tok",
+			fetchImpl,
+		});
+		expect(payload).toEqual({ total_count: 0, check_runs: [] });
+	});
+});
+
 // Sanity: MIN_GH_TIMEOUT_MS is re-imported here (used nowhere else in this
 // file) purely so a future accidental removal of the export from
 // ci-verdict.mjs breaks this file's import too, not just the owned suite.
