@@ -50,6 +50,7 @@ import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	classifyMutatingTool,
+	readToolResultPathField,
 	PI_LENS_SYNTHETIC_MUTATION_FIELD,
 	type MutatingToolClassification,
 	type MutationKind,
@@ -1274,7 +1275,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// the turn and write counters; a capture taken there would name session 2.
 	const writeSession =
 		deps._sessionGeneration ?? runtime.captureSessionGeneration();
-	const rawFilePath = (event.input as { path?: string }).path;
+	// #3650: the tool_result path question has one owner
+	// (`readToolResultPathField`); no fallback cascade is open-coded here.
+	const rawFilePath = readToolResultPathField(event);
 	const workspaceRoot = runtime.projectRoot || process.cwd();
 	let bashAuthorshipConfirmed =
 		deps._allowAutonomousWriters ??
