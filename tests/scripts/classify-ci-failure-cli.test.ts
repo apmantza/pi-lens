@@ -38,7 +38,7 @@ const cliPath = join(repoRoot, "scripts", "classify-ci-failure.mjs");
 const stubPath = join(here, "fixtures", "classify-ci-failure-fetch-stub.mjs");
 
 // The exact argv .github/workflows/ci-infra-kill-rerun.yml builds when a
-// push or repository_dispatch run resolves no PR number (#2668).
+// push run resolves no PR number (#2668).
 // The PR-run argv the same workflow builds when a PR number IS resolved:
 // `--pr <n>` in place of `--allow-missing-pr` (ci-infra-kill-rerun.yml's
 // classify step, the `if [[ -n "$PR_NUMBER" ]]` arm).

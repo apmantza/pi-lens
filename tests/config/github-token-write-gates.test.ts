@@ -32,10 +32,7 @@ function jobSource(source: string, jobName: string): string {
 }
 
 function isActiveOnPullRequest(job: Job): boolean {
-	return (
-		!job.if?.includes("github.event_name == 'repository_dispatch'") &&
-		!job.if?.includes("github.event.workflow_run.")
-	);
+	return !job.if?.includes("github.event.workflow_run.");
 }
 
 function writesWithToken(jobText: string): boolean {

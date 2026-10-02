@@ -610,10 +610,6 @@ describe("the reachability model itself", () => {
 			"github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'",
 			false,
 		],
-		[
-			"always() && github.event_name == 'repository_dispatch' && needs.validate.result == 'success'",
-			false,
-		],
 		// Two rows in PR_CONTEXTS, because neither action value alone
 		// classifies both of these correctly.
 		[

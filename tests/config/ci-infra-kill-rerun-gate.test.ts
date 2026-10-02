@@ -52,10 +52,10 @@ function readClassifyIf(): string {
 // Review round 2, MUT J: the eligible-event set is duplicated in TWO places
 // -- the job's `if:` (which arms this job at all) and this step's own
 // `elif` (which decides whether to pass --allow-missing-pr) -- and only the
-// `if:` was under test. Dropping the `repository_dispatch` arm from the
-// `elif` leaves every other test green while a real dispatch run passes
-// neither --pr nor --allow-missing-pr, so the classifier throws and the
-// rerun never fires: #2668 again, with only a red classify job as signal.
+// `if:` was under test. Dropping the `push` arm from the `elif` leaves every
+// other test green while a real push run passes neither --pr nor
+// --allow-missing-pr, so the classifier throws and the rerun never fires:
+// #2668 again, with only a red classify job as signal.
 function readClassifyStepRun(): string {
 	const steps = loadWorkflow().jobs?.classify?.steps;
 	const classifyStep = Array.isArray(steps)
@@ -165,11 +165,6 @@ const ROWS: Array<[string, WorkflowRunContext, boolean]> = [
 		false,
 	],
 	[
-		"repository_dispatch (merge-train-post-merge) targeting master",
-		ctx({ event: "repository_dispatch", headBranch: "master" }),
-		true,
-	],
-	[
 		"workflow_dispatch (manual run)",
 		ctx({ event: "workflow_dispatch" }),
 		false,
@@ -186,11 +181,6 @@ const ROWS: Array<[string, WorkflowRunContext, boolean]> = [
 	[
 		"push-to-master run on its SECOND attempt (a second infra kill on one head)",
 		ctx({ event: "push", headBranch: "master", runAttempt: 2 }),
-		true,
-	],
-	[
-		"repository_dispatch run on its SECOND attempt (a second infra kill on one head)",
-		ctx({ event: "repository_dispatch", headBranch: "master", runAttempt: 2 }),
 		true,
 	],
 	// The bound: a rerun can only be issued FROM attempt 1 or 2, so at most
@@ -289,13 +279,14 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 
 	// Review round 2, MUT J: the `if:` truth table above cannot see this --
 	// it only pins whether the JOB runs, not what the STEP's own `elif` does
-	// once it has. Both `push` and `repository_dispatch` must appear in the
-	// --allow-missing-pr branch, or a dispatch run silently gets neither
-	// --pr nor --allow-missing-pr and the classifier throws (#2668 again).
-	it("the step's --allow-missing-pr branch names both push and repository_dispatch (review round 2, MUT J)", () => {
+	// once it has. The `push` arm must appear in the --allow-missing-pr
+	// branch (and no retired event arm may return), or a push run silently
+	// gets neither --pr nor --allow-missing-pr and the classifier throws
+	// (#2668 again).
+	it("the step's --allow-missing-pr branch names push and no retired event (review round 2, MUT J)", () => {
 		const stepRun = readClassifyStepRun();
 		expect(stepRun).toContain('"$RUN_EVENT" == "push"');
-		expect(stepRun).toContain('"$RUN_EVENT" == "repository_dispatch"');
+		expect(stepRun).not.toContain("repository_dispatch");
 	});
 });
 
@@ -458,46 +449,6 @@ describe("ci-infra-kill-rerun.yml terminal rerun path (#2806 F3)", () => {
 			"push failure attempt 3 (terminal)",
 			ctx({
 				event: "push",
-				headBranch: "master",
-				conclusion: "failure",
-				runAttempt: 3,
-			}),
-			true,
-		],
-		[
-			"repository_dispatch success attempt 2",
-			ctx({
-				event: "repository_dispatch",
-				headBranch: "master",
-				conclusion: "success",
-				runAttempt: 2,
-			}),
-			true,
-		],
-		[
-			"repository_dispatch failure attempt 2 (intermediate)",
-			ctx({
-				event: "repository_dispatch",
-				headBranch: "master",
-				conclusion: "failure",
-				runAttempt: 2,
-			}),
-			false,
-		],
-		[
-			"repository_dispatch success attempt 3 (terminal)",
-			ctx({
-				event: "repository_dispatch",
-				headBranch: "master",
-				conclusion: "success",
-				runAttempt: 3,
-			}),
-			true,
-		],
-		[
-			"repository_dispatch failure attempt 3 (terminal)",
-			ctx({
-				event: "repository_dispatch",
 				headBranch: "master",
 				conclusion: "failure",
 				runAttempt: 3,

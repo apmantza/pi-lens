@@ -33,9 +33,9 @@ jobs:
   #
   # `TLA+ models` is a REQUIRED check and never skips at job level: a job `if:`
   # that evaluates false reports `skipped`, which GitHub counts as passing, but
-  # ci-verdict and the merge train demand a literal `success` on a required row
-  # (#2618). It always starts and skips its STEPS. The name ends in
-  # `(advisory)`: this job reports, never gates.
+  # ci-verdict and the merge-train warden demand a literal `success` on a
+  # required row (#2618). It always starts and skips its STEPS. The name ends
+  # in `(advisory)`: this job reports, never gates.
   changes:
     name: Changed files (advisory)
     runs-on: ubuntu-latest
@@ -162,7 +162,7 @@ jobs:
       # proven-unchanged formal/ skips; an unreadable classification runs it.
       - name: Skip the model check (formal/ unchanged)
         if: needs.changes.outputs.formal == 'false'
-        run: echo "formal/ and scripts/check-tla-models.mjs are unchanged in this diff; model checking skipped (runs on every formal change, on master pushes and on merge-train replays)"
+        run: echo "formal/ and scripts/check-tla-models.mjs are unchanged in this diff; model checking skipped (runs on every formal change and on master pushes)"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: needs.changes.outputs.formal != 'false'
@@ -312,7 +312,7 @@ jobs:
 
   # #3753: the suite runs as parallel `vitest --shard=k/N` jobs, N being the
   # matrix length (`strategy.job-total`, so the count has ONE source). This job
-  # id stays `test` (record-post-merge-validation `needs:` it, and a matrix
+  # id stays `test` (the matrix-shard aggregate `needs:` it, and a matrix
   # job's `needs.test.result` is success only when EVERY shard
   # succeeded). The check-run the ruleset requires is the `unit-tests`
   # aggregate below, named exactly `Unit tests`.
@@ -590,8 +590,8 @@ jobs:
           exit 0
 
   # #3753: the ONE check-run named exactly `Unit tests`, the name the ruleset
-  # requires and every tool (ci-verdict, merge-train-warden, the lane gate)
-  # keys on. A job whose `needs` failed is SKIPPED by default, and GitHub
+  # requires and every tool (ci-verdict, merge-train-warden) keys on. A job
+  # whose `needs` failed is SKIPPED by default, and GitHub
   # counts a skipped required check as passing, so `if: always()` is what
   # makes a red or cancelled shard red here instead of green-by-skip.
   # `needs.test.result` must be exactly `success`: skipped, cancelled and
@@ -632,7 +632,7 @@ jobs:
   # check, the gate step reports `ready=false` and FAILS, so the row is red and a
   # run that was deferred for that reason is visible and distinguishable from a
   # dropped one (ci-verdict reads it). The job name ends in `(advisory)` so
-  # ci-verdict and the merge train never gate on it, red or not.
+  # ci-verdict and the merge-train warden never gate on it, red or not.
   heavy-gate:
     name: Heavy advisory gate (advisory)
     needs:
@@ -940,7 +940,7 @@ jobs:
     # That `needs:` was a cost gate, not a data dependency (the legs pack and
     # install the repo's own tarball), and it made Install the LAST required
     # check in 35 of 37 green runs, landing a median 3.5 minutes after Unit
-    # tests. `record-post-merge-validation` still waits for every job.
+    # tests. Every required check on this workflow still runs to completion.
     permissions:
       contents: read
     strategy:

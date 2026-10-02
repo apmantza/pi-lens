@@ -97,7 +97,6 @@ const EVENTS = [
 	"push",
 	"schedule",
 	"workflow_dispatch",
-	"repository_dispatch",
 ] as const;
 
 // [jobName, expected-eligible-events]
@@ -455,7 +454,7 @@ describe.each(MATRIX_GATED_JOBS)(
 			expect(cellsFor("pull_request")).toEqual([...prCells]);
 		});
 
-		it.each(["push", "schedule", "workflow_dispatch", "repository_dispatch"])(
+		it.each(["push", "schedule", "workflow_dispatch"])(
 			"keeps the full matrix on %s",
 			(event) => {
 				expect(cellsFor(event).sort()).toEqual([...fullCells].sort());

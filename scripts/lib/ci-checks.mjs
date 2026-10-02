@@ -146,7 +146,7 @@ export function isBlockingConclusion(conclusion) {
 // concurrency group when a cancelling event targets the SAME ref, and
 // that cancelled check-run can be the ONLY row present for its name for
 // several minutes before its replacement posts (live-probed 2026-09-06 on
-// PR #2607's head: three "Record post-merge validation" check-suites on ONE
+// PR #2607's head: three check-suites for one discovered job on ONE
 // commit -- 17:21:06 cancelled, 17:25:29 skipped, 17:32:15 skipped --
 // `resolveLatestByName` correctly drops the cancelled one once a newer row
 // exists, but at 17:21-17:25 it was the newest, and only, row). Reading that

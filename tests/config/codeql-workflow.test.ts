@@ -124,9 +124,8 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 		);
 	});
 
-	// Recurrence: a PR-time codeql job that also runs on master pushes and the
-	// merge-train repository_dispatch replay uploads the same SARIF category
-	// codeql.yml already uploaded for that commit.
+	// Recurrence: a PR-time codeql job that also runs on master pushes uploads
+	// the same SARIF category codeql.yml already uploaded for that commit.
 	it("keeps codeql.yml off pull_request and the ci.yml job on pull_request only", () => {
 		const triggers = Object.keys(load("codeql.yml").on ?? {}).sort();
 		expect(triggers).toEqual(["push", "schedule", "workflow_dispatch"]);

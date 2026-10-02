@@ -16,6 +16,16 @@ export declare function formatAbsentRequiredReason(
 	sha: string,
 	minutes?: number,
 ): string;
+export declare function formatAbsentRunReason(args: {
+	state: string;
+	id: number | null;
+	ageMinutes: number | null;
+	sha: string;
+}): string;
+export declare function formatAbsentRunUnknownReason(
+	sha: string,
+	minutes?: number,
+): string;
 export declare function formatForkApprovalReason(
 	repository: string,
 	runs: { id: number }[],
@@ -71,6 +81,11 @@ export interface AbsentContext {
 	actionRequiredRuns: { id: number }[];
 	autoMerge: boolean;
 	absentMinutes: number | null;
+	headRun?: {
+		state: string;
+		id: number | null;
+		ageMinutes: number | null;
+	} | null;
 }
 
 export interface MergeQueueEntry {
@@ -208,6 +223,21 @@ export declare function fetchActionRequiredRuns(
 	timeoutMs?: number,
 	failOpen?: boolean,
 ): { id: number }[];
+
+export declare function fetchHeadRuns(
+	repository: string,
+	sha: string,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+	failOpen?: boolean,
+): {
+	actionRequiredRuns: { id: number }[];
+	headRun: {
+		state: string;
+		id: number | null;
+		startedAtMs: number | null;
+	};
+};
 
 export declare function fetchAutoMergeAge(
 	target: string | number,

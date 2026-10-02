@@ -162,10 +162,10 @@ describe("run (the CLI the changes job calls)", () => {
 		});
 	});
 
-	// Recurrence: master and merge-train replays losing the full suite. Only a
-	// pull_request is ever classified; every other event runs everything and
-	// never reads the API.
-	it.each(["push", "repository_dispatch", "merge_group", "workflow_dispatch"])(
+	// Recurrence: master losing the full suite when a non-PR event was read as
+	// docs-only. Only a pull_request is ever classified; every other event runs
+	// everything and never reads the API.
+	it.each(["push", "merge_group", "workflow_dispatch"])(
 		"runs everything for a %s event without reading the API",
 		(event) => {
 			withOutput((files) => {

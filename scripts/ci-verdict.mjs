@@ -17,7 +17,7 @@
  * containing spaces, word-split by `read -ra`) sat red. Every check-run
  * GitHub reports on the head is now a row, and every row GATES unless it is
  * on the advisory allowlist (`scripts/lib/ci-checks.mjs`'s
- * `isAdvisoryCheck` -- the SAME list #2185's real merge-train gate already
+ * `isAdvisoryCheck` -- the SAME list the merge-train warden (#2185) already
  * uses). `run()` also attempts a LIVE read of `master`'s branch-protection
  * required-status-check names via `gh api`, and treats those names as
  * gating unconditionally (never excusable by the static advisory allowlist)
@@ -283,8 +283,37 @@ export function crashExit() {
  * a minute or two; ten is well past that without hiding a stuck retarget. */
 export const ABSENT_REQUIRED_REARM_MINUTES = 10;
 
+// The ci.yml workflow's own name, the one `fetchRerunState` and the absent-run
+// lookup both key on (#3861).
+const CI_WORKFLOW_NAME = "CI";
+
 export function formatAbsentRequiredReason(sha, minutes = 0) {
 	return `required checks absent for ${Math.max(0, Math.floor(Number(minutes) || 0))} min on ${sha} (auto-merge on) — push or merge master to re-arm`;
+}
+
+/**
+ * #3861: the head's `ci.yml` run is already registered, so "push or merge
+ * master to re-arm" is wrong advice -- the run exists and the queue is just
+ * slow. Report the run identity and its age instead; only a POSITIVE no-run
+ * answer authorizes re-arm (`formatAbsentRequiredReason`).
+ */
+export function formatAbsentRunReason({ state, id, ageMinutes, sha }) {
+	const label =
+		state === "in_progress" ? "in progress" : String(state ?? "registered");
+	const idText = id == null ? "an unnamed run" : `run ${id}`;
+	const ageText = Number.isFinite(ageMinutes)
+		? ` (${Math.max(0, Math.floor(ageMinutes))} min old)`
+		: "";
+	return `ci.yml ${idText} is ${label}${ageText} for ${sha}: the run is registered, so no re-arm is needed`;
+}
+
+/**
+ * #3861: the run lookup itself failed. An unreadable lookup is not evidence
+ * of a missing run, so it must never authorize the re-arm advice; the
+ * bounded line names the gap and stops there.
+ */
+export function formatAbsentRunUnknownReason(sha, minutes = 0) {
+	return `required checks absent for ${Math.max(0, Math.floor(Number(minutes) || 0))} min on ${sha} and the ci.yml run lookup was unreadable: no re-arm advice without a run answer`;
 }
 
 /** Never approves: GitHub shows a fork PR's first runs as `action_required`
@@ -631,8 +660,30 @@ export function computeVerdict(
 				context?.autoMerge === true &&
 				context.absentMinutes >= ABSENT_REQUIRED_REARM_MINUTES
 			) {
-				kind = "absent-rearm";
-				reason = formatAbsentRequiredReason(context.sha, context.absentMinutes);
+				// #3861: only a POSITIVE no-run answer authorizes re-arm. A
+				// registered run (or an unreadable lookup, which is not evidence
+				// of a missing run) reports its own bounded line and never
+				// advises a re-arm.
+				const headRun = context.headRun ?? null;
+				if (headRun?.state === "none" || headRun === null) {
+					kind = "absent-rearm";
+					reason = formatAbsentRequiredReason(
+						context.sha,
+						context.absentMinutes,
+					);
+				} else if (headRun.state === "unknown") {
+					reason = formatAbsentRunUnknownReason(
+						context.sha,
+						context.absentMinutes,
+					);
+				} else {
+					reason = formatAbsentRunReason({
+						state: headRun.state,
+						id: headRun.id,
+						ageMinutes: headRun.ageMinutes,
+						sha: context.sha,
+					});
+				}
 			} else {
 				reason =
 					mergeable == null
@@ -1029,10 +1080,49 @@ export function fetchCheckRunsPayload(
 	return { total_count: totalCount ?? checkRuns.length, check_runs: checkRuns };
 }
 
-/** Fork-approval runs for `sha`. GitHub reports one as `status: "completed"`
- * with `conclusion: "action_required"` -- never `status: "action_required"` --
- * and its head has no CI check-run rows at all (#3694). */
-export function fetchActionRequiredRuns(
+/** A run state the absent-required message can name (#3861). `unknown` is a
+ * failed or unrecognized lookup: it never authorizes the re-arm advice. */
+function summarizeHeadRun(runs) {
+	const ciRuns = runs.filter(
+		(run) => run?.name === CI_WORKFLOW_NAME && run?.event !== "merge_group",
+	);
+	if (ciRuns.length === 0)
+		return { state: "none", id: null, startedAtMs: null };
+	const sorted = [...ciRuns].sort(
+		(a, b) =>
+			Number(a.run_attempt ?? 1) - Number(b.run_attempt ?? 1) ||
+			Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? ""),
+	);
+	const latest = sorted.at(-1);
+	const startedAtMs = Date.parse(
+		latest?.run_started_at ?? latest?.created_at ?? "",
+	);
+	return {
+		state: runStateFromStatus(String(latest?.status ?? ""), latest?.conclusion),
+		id: latest?.id ?? null,
+		startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null,
+	};
+}
+
+function runStateFromStatus(status, conclusion) {
+	if (status === "in_progress") return "in_progress";
+	if (status === "queued" || status === "waiting" || status === "requested")
+		return "queued";
+	if (status === "completed")
+		return conclusion === "cancelled" ? "cancelled" : "completed";
+	return "unknown";
+}
+
+/**
+ * The head's workflow runs, read once (#3861): the fork-approval runs AND the
+ * `ci.yml` run state the absent-required message needs to decide whether a
+ * re-arm is even meaningful. The single `actions/runs?head_sha=` read is
+ * already the fork-approval seam (#3694); this reuses it rather than adding a
+ * second call. A failed read fails open to an empty approval list and an
+ * `unknown` run state, so an unreadable lookup never authorizes the re-arm
+ * advice; `failOpen: false` rethrows for `--approve-fork`.
+ */
+export function fetchHeadRuns(
 	repository,
 	sha,
 	ghExec = gh,
@@ -1049,16 +1139,37 @@ export function fetchActionRequiredRuns(
 				{ timeoutMs },
 			),
 		);
-		return (Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : [])
-			.filter(
-				(run) => run?.head_sha === sha && run?.conclusion === "action_required",
-			)
-			.map((run) => ({ id: run.id }));
+		const runs = (
+			Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : []
+		).filter((run) => run?.head_sha === sha);
+		return {
+			actionRequiredRuns: runs
+				.filter((run) => run?.conclusion === "action_required")
+				.map((run) => ({ id: run.id })),
+			headRun: summarizeHeadRun(runs),
+		};
 	} catch (error) {
-		// The verdict text fails open to "none"; an approval must not.
+		// The verdict text fails open to "unknown"; an approval must not.
 		if (!failOpen) throw error;
-		return [];
+		return {
+			actionRequiredRuns: [],
+			headRun: { state: "unknown", id: null, startedAtMs: null },
+		};
 	}
+}
+
+/** Fork-approval runs for `sha`. GitHub reports one as `status: "completed"`
+ * with `conclusion: "action_required"` -- never `status: "action_required"` --
+ * and its head has no CI check-run rows at all (#3694). */
+export function fetchActionRequiredRuns(
+	repository,
+	sha,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+	failOpen = true,
+) {
+	return fetchHeadRuns(repository, sha, ghExec, timeoutMs, failOpen)
+		.actionRequiredRuns;
 }
 
 /**
@@ -1144,7 +1255,7 @@ export function fetchRerunState(
 		const attempts = (
 			Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : []
 		)
-			.filter((run) => run?.name === "CI" && run?.head_sha === sha)
+			.filter((run) => run?.name === CI_WORKFLOW_NAME && run?.head_sha === sha)
 			.filter((run) => Number(run?.run_attempt) > 0)
 			.sort((a, b) => Number(a.run_attempt) - Number(b.run_attempt));
 		const original = attempts.find((run) => Number(run.run_attempt) === 1);
@@ -1861,7 +1972,20 @@ async function restGet(
 			{ stderr: `HTTP ${response.status}: ${excerpt} (${path})` },
 		);
 	}
-	return text.length > 0 ? JSON.parse(text) : {};
+	if (text.length === 0) return {};
+	try {
+		return JSON.parse(text);
+	} catch (error) {
+		// A non-JSON body from an `application/vnd.github+json` request is a
+		// contract violation, not an empty answer; name the path so `run()`'s
+		// catch prints which call broke (AGENTS.md shape 13).
+		throw Object.assign(
+			new Error(
+				`GitHub REST API returned invalid JSON for ${path}: ${error instanceof Error ? error.message : error}`,
+			),
+			{ stderr: `invalid JSON from ${path} (HTTP ${response.status})` },
+		);
+	}
 }
 
 /**
@@ -2117,21 +2241,26 @@ function formatEventLine(stream, number, kind, sha, reason) {
 }
 
 export function readOpenPrs(ghExec = gh, timeoutMs = DEFAULT_GH_TIMEOUT_MS) {
-	return JSON.parse(
-		ghExec(
-			[
-				"pr",
-				"list",
-				"--state",
-				"open",
-				"--limit",
-				"100",
-				"--json",
-				"number,author,headRefOid,autoMergeRequest",
-			],
-			{ timeoutMs },
-		),
+	const raw = ghExec(
+		[
+			"pr",
+			"list",
+			"--state",
+			"open",
+			"--limit",
+			"100",
+			"--json",
+			"number,author,headRefOid,autoMergeRequest",
+		],
+		{ timeoutMs },
 	);
+	try {
+		return JSON.parse(raw);
+	} catch (error) {
+		throw new Error(
+			`could not parse the open PR list JSON: ${error instanceof Error ? error.message : error}`,
+		);
+	}
 }
 
 function readViewerLogin(ghExec, timeoutMs) {
@@ -2792,26 +2921,38 @@ export async function run({
 							initialTimeoutMs,
 							headInfo.pushedMs,
 						);
+						const { actionRequiredRuns, headRun } = fetchHeadRuns(
+							repository,
+							sha,
+							ghExec,
+							initialTimeoutMs,
+						);
+						const nowMs = clock();
 						return {
 							repository,
 							sha,
-							actionRequiredRuns: fetchActionRequiredRuns(
-								repository,
-								sha,
-								ghExec,
-								initialTimeoutMs,
-							),
+							actionRequiredRuns,
 							autoMerge: headInfo.autoMerge,
 							absentMinutes: Math.max(
 								0,
 								Math.floor(
-									(clock() -
+									(nowMs -
 										(Number.isFinite(headInfo.pushedMs)
 											? headInfo.pushedMs
-											: (absentSinceMs ?? (firstAbsentMs ??= clock())))) /
+											: (absentSinceMs ?? (firstAbsentMs ??= nowMs)))) /
 										60_000,
 								),
 							),
+							headRun: {
+								state: headRun.state,
+								id: headRun.id,
+								ageMinutes: Number.isFinite(headRun.startedAtMs)
+									? Math.max(
+											0,
+											Math.floor((nowMs - headRun.startedAtMs) / 60_000),
+										)
+									: null,
+							},
 						};
 					}
 				: null;

@@ -28,6 +28,8 @@ import {
 	fetchCheckRunsPayload,
 	fetchFailedQueueRuns,
 	formatAbsentRequiredReason,
+	formatAbsentRunUnknownReason,
+	formatAbsentRunReason,
 	formatExitLine,
 	formatVerdictTable,
 	HARD_CAP_SECONDS,
@@ -792,20 +794,18 @@ describe("computeVerdict — every check-run gates unless advisory (#2609)", () 
 		expect(verdict.reason).toContain(REAL_PROD_INSTALL_BUILD_NAME);
 	});
 
-	// Not hypothetical: this repository's `record-post-merge-validation` job
-	// (ci.yml AND lint.yml) has a job-level `if: ... event_name ==
-	// 'repository_dispatch'` and reports "skipped" on every ordinary
-	// pull_request run (confirmed live on PR #2588, 2026-09-06 -- two "Record
-	// post-merge validation" rows, both "skipping" in `gh pr checks`). A bare
-	// `conclusion !== "success"` check (the pre-#2609 comparison, applied to a
-	// newly-discovered row) would red every PR forever.
+	// Not hypothetical: a discovered job can report "skipped" on an ordinary
+	// pull_request run (a job-level `if:` that evaluated false, or a skipped
+	// `needs:`). A bare `conclusion !== "success"` check (the pre-#2609
+	// comparison, applied to a newly-discovered row) would red every PR
+	// forever.
 	it("a discovered gating check that concluded 'skipped' does not fail the verdict", () => {
 		const payload = {
 			check_runs: [
 				checkRun({ name: "Unit tests", id: 1 }),
 				checkRun({ name: "Lint & type-check", id: 2 }),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "skipped",
 					id: 3,
 				}),
@@ -902,11 +902,11 @@ describe("computeVerdict — every check-run gates unless advisory (#2609)", () 
 //  discovered  | absent     | --                   | impossible by construction -- a discovered row's name, by definition, appeared in the payload
 //  advisory    | any incl. failure | --            | 0 (existing)      | 2 (existing)
 describe("computeVerdict — required rows reject skip/neutral/failure while latest cancellation reruns (#3373)", () => {
-	// The exact reported shape: ci.yml:253's `test` job (`Unit tests`) has
-	// `needs: validate-merge-train-dispatch` with no `if:` -- a failed/skipped
-	// dependency skips it outright, and the pre-fix-round-2 code (which
-	// exempted EVERY gating row's skipped/neutral conclusion, not just
-	// discovered ones) read that as a clean pass.
+	// The exact reported shape: ci.yml's `Unit tests` aggregate requires the
+	// `test` matrix job, and a failed/skipped dependency skips the aggregate
+	// outright, so the pre-fix-round-2 code (which exempted EVERY gating row's
+	// skipped/neutral conclusion, not just discovered ones) read that as a
+	// clean pass.
 	it("RED PROOF: a required 'Unit tests' that concluded skipped no longer passes", () => {
 		const payload = {
 			check_runs: [
@@ -955,11 +955,10 @@ describe("computeVerdict — required rows reject skip/neutral/failure while lat
 });
 
 describe("computeVerdict — a discovered row's cancelled conclusion is uncertain, not failing (#2618 fix-round-2, F2)", () => {
-	// RED PROOF against the pre-fix-round-2 code, reproduced with the REAL
-	// check_suite id and started_at GitHub returned for PR #2607's
-	// "Record post-merge validation" oldest (cancelled) run, live-probed
-	// 2026-09-06: `gh api repos/apmantza/pi-lens/commits/<sha>/check-runs`
-	// returned THREE check-suites for that name on ONE commit -- 17:21:06
+	// RED PROOF against the pre-fix-round-2 code, reproduced with a REAL
+	// check_suite id and started_at GitHub returned for PR #2607's oldest
+	// (cancelled) run, live-probed 2026-09-06: `gh api repos/apmantza/pi-lens/commits/<sha>/check-runs`
+	// returned THREE check-suites for that named job on ONE commit -- 17:21:06
 	// cancelled, 17:25:29 skipped, 17:32:15 skipped. This fixture carries
 	// ONLY the cancelled one, reproducing the transient window before either
 	// replacement had posted (`cancel-in-progress: true`, ci.yml:15-16).
@@ -969,7 +968,7 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 				checkRun({ name: "Unit tests", id: 1 }),
 				checkRun({ name: "Lint & type-check", id: 2 }),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "cancelled",
 					started_at: "2026-09-06T17:21:06Z",
 					id: 101527303167,
@@ -993,15 +992,9 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 				checkRun({ name: "Unit tests", id: 1 }),
 				checkRun({ name: "Lint & type-check", id: 2 }),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "cancelled",
 					id: 3,
-				}),
-				checkRun({
-					name: "Production install build (--omit=dev, from source)",
-					status: "in_progress",
-					conclusion: null,
-					id: 4,
 				}),
 			],
 		};
@@ -1025,19 +1018,19 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 				checkRun({ name: "Unit tests", id: 1 }),
 				checkRun({ name: "Lint & type-check", id: 2 }),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "cancelled",
 					started_at: "2026-09-06T17:21:06Z",
 					id: 101527303167,
 				}),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "skipped",
 					started_at: "2026-09-06T17:25:29Z",
 					id: 101527918964,
 				}),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "skipped",
 					started_at: "2026-09-06T17:32:15Z",
 					id: 101528845721,
@@ -1047,7 +1040,7 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
 		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
 		const row = verdict.rows.find(
-			(r) => r.name === "Record post-merge validation",
+			(r) => r.name === "Production install build (--omit=dev, from source)",
 		);
 		expect(row?.conclusion).toBe("skipped");
 	});
@@ -1058,7 +1051,7 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 				checkRun({ name: "Unit tests", id: 1 }),
 				checkRun({ name: "Lint & type-check", id: 2 }),
 				checkRun({
-					name: "Record post-merge validation",
+					name: "Production install build (--omit=dev, from source)",
 					conclusion: "cancelled",
 					id: 3,
 				}),
@@ -1491,7 +1484,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"Dependency boundaries",
 			"Close-keyword syntax",
 			"Changelog fragment (fast-fail)",
-			"Validate merge-train dispatch",
+			"Production install build (--omit=dev, from source)",
 			"Install test (ubuntu-latest)",
 			"Install test (windows-latest)",
 			"Install test (macos-latest)",
@@ -2912,6 +2905,117 @@ describe("run — absent-required re-arm message (#3694)", () => {
 		expect(calls.some((call) => call.includes("/actions/runs"))).toBe(false);
 		expect(calls.some((call) => call.includes("autoMergeRequest"))).toBe(false);
 		expect(calls.some((call) => call.includes("/check-suites"))).toBe(false);
+	});
+});
+
+// #3861: the absent-required re-arm advice is WRONG when a `ci.yml` run for
+// the exact head is already registered -- the usual cause is runner
+// starvation or the concurrency group holding a cancelled run's `if:
+// always()` job, and an empty re-arm commit only adds a run to a saturated
+// queue (observed on PR #3842, 2026-09-30). The run lookup is one read of
+// the same `actions/runs?head_sha=` endpoint the fork-approval read already
+// uses; only a POSITIVE no-run answer authorizes re-arm, and an unreadable
+// lookup never does.
+const headRun = (overrides: Record<string, unknown> = {}) => ({
+	id: 4242,
+	name: "CI",
+	event: "pull_request",
+	head_sha: FORK_APPROVAL.sha,
+	status: "queued",
+	conclusion: null,
+	run_attempt: 1,
+	created_at: minutesBefore(45),
+	run_started_at: minutesBefore(45),
+	...overrides,
+});
+
+const armedAbsent = {
+	checkRuns: { check_runs: [] },
+	autoMergeRequest: {},
+	checkSuites: suitesAt(minutesBefore(45)),
+};
+
+describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)", () => {
+	it.each([
+		["queued", "queued"],
+		["in_progress", "in progress"],
+		["completed", "completed"],
+	] as const)(
+		"a %s run for the head prints run id and age, never re-arm",
+		async (status, label) => {
+			const run_ = headRun({ status, run_started_at: minutesBefore(45) });
+			const { exitCode, reason } = await runVerdict(["3679"], {
+				...armedAbsent,
+				workflowRuns: [run_],
+			});
+			expect(exitCode).toBe(EXIT_PENDING);
+			expect(reason).toBe(
+				formatAbsentRunReason({
+					state: status,
+					id: 4242,
+					ageMinutes: 45,
+					sha: FORK_APPROVAL.sha,
+				}),
+			);
+			expect(reason).toContain(`run 4242 is ${label}`);
+			expect(reason).not.toContain("push or merge master to re-arm");
+		},
+	);
+
+	it("a cancelled attempt for the head still suppresses the re-arm advice", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ status: "completed", conclusion: "cancelled" })],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toContain("run 4242 is cancelled");
+		expect(reason).not.toContain("push or merge master to re-arm");
+	});
+
+	it("no run for the head still advises the re-arm", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+	});
+
+	it("an unreadable run lookup never advises the re-arm", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			runsThrow: true,
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(formatAbsentRunUnknownReason(FORK_APPROVAL.sha, 45));
+		expect(reason).not.toContain("push or merge master to re-arm");
+	});
+
+	it("a run for another head does not suppress the re-arm", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ head_sha: "0".repeat(40) })],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+	});
+
+	it("a merge_group run never counts as the head's ci.yml run", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ event: "merge_group", id: 7 })],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+	});
+
+	it("another workflow's run does not count as the head's ci.yml run", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ name: "CodeQL", id: 9 })],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
 	});
 });
 
