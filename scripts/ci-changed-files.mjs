@@ -124,8 +124,20 @@ export function pathsFromPrFiles(files) {
 	return paths;
 }
 
-function ghPrFiles(repo, pr) {
-	const raw = execFileSync(
+/**
+ * One `pulls/{n}/files` read: `gh api --jq '.[]'` prints one JSON object per
+ * line. A malformed line is an unreadable file list, not an empty one, so it
+ * throws and `run()` falls back to the full suite (AGENTS.md shape 48). `exec`
+ * is injectable so a test can prove the malformed-line direction without a
+ * real `gh`.
+ *
+ * @param {string} repo
+ * @param {string} pr
+ * @param {(file: string, args: string[], options: { encoding: string; timeout: number; maxBuffer: number }) => string} [exec]
+ * @returns {string[]}
+ */
+export function ghPrFiles(repo, pr, exec = execFileSync) {
+	const raw = exec(
 		"gh",
 		[
 			"api",

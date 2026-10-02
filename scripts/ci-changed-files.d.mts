@@ -7,6 +7,15 @@ export declare function classifyChangedFiles(paths: string[]): {
 export declare function pathsFromPrFiles(
 	files: Array<{ filename: string; previous_filename?: string }>,
 ): string[];
+export declare function ghPrFiles(
+	repo: string,
+	pr: string,
+	exec?: (
+		file: string,
+		args: string[],
+		options: { encoding: string; timeout: number; maxBuffer: number },
+	) => string,
+): string[];
 export declare function parseArgs(argv: string[]): {
 	event: string;
 	repo: string | null;

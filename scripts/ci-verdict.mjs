@@ -296,6 +296,11 @@ export function formatAbsentRequiredReason(sha, minutes = 0) {
  * master to re-arm" is wrong advice -- the run exists and the queue is just
  * slow. Report the run identity and its age instead; only a POSITIVE no-run
  * answer authorizes re-arm (`formatAbsentRequiredReason`).
+ *
+ * #3861 F3: a TERMINAL run (`completed` / `cancelled`) cannot produce the
+ * missing check-runs, so "no re-arm is needed" is false comfort. Name the
+ * terminal state and the manual inspect/rerun, and say plainly that nothing
+ * re-arms automatically (#3795 item 3 stays held).
  */
 export function formatAbsentRunReason({ state, id, ageMinutes, sha }) {
 	const label =
@@ -304,6 +309,11 @@ export function formatAbsentRunReason({ state, id, ageMinutes, sha }) {
 	const ageText = Number.isFinite(ageMinutes)
 		? ` (${Math.max(0, Math.floor(ageMinutes))} min old)`
 		: "";
+	if (state === "completed" || state === "cancelled") {
+		const rerunText =
+			id == null ? "" : ` or re-run it manually (gh run rerun ${id})`;
+		return `ci.yml ${idText} is ${label}${ageText} for ${sha}: the run is terminal and cannot produce the missing check-runs -- inspect it${rerunText}; the verdict never re-arms automatically`;
+	}
 	return `ci.yml ${idText} is ${label}${ageText} for ${sha}: the run is registered, so no re-arm is needed`;
 }
 
@@ -653,42 +663,59 @@ export function computeVerdict(
 			const approvalRuns = Array.isArray(context?.actionRequiredRuns)
 				? context.actionRequiredRuns
 				: [];
+			// #3861: a re-arm is authorized ONLY by a POSITIVE "no ci.yml run
+			// for the head" answer. A registered run, an unreadable lookup, and a
+			// missing head-run answer (the REST transport has no run context)
+			// are all NOT evidence of a missing run, so none of them prints the
+			// re-arm advice: neither the absent-rearm line nor the fallback's
+			// conditional retarget clause.
+			const headRun = context?.headRun ?? null;
+			const rearmAuthorized = headRun?.state === "none";
 			if (approvalRuns.length > 0) {
 				kind = "fork-approval";
 				reason = formatForkApprovalReason(context.repository, approvalRuns);
 			} else if (
+				rearmAuthorized &&
 				context?.autoMerge === true &&
 				context.absentMinutes >= ABSENT_REQUIRED_REARM_MINUTES
 			) {
-				// #3861: only a POSITIVE no-run answer authorizes re-arm. A
-				// registered run (or an unreadable lookup, which is not evidence
-				// of a missing run) reports its own bounded line and never
-				// advises a re-arm.
-				const headRun = context.headRun ?? null;
-				if (headRun?.state === "none" || headRun === null) {
-					kind = "absent-rearm";
-					reason = formatAbsentRequiredReason(
-						context.sha,
-						context.absentMinutes,
-					);
-				} else if (headRun.state === "unknown") {
-					reason = formatAbsentRunUnknownReason(
-						context.sha,
-						context.absentMinutes,
-					);
-				} else {
-					reason = formatAbsentRunReason({
-						state: headRun.state,
-						id: headRun.id,
-						ageMinutes: headRun.ageMinutes,
-						sha: context.sha,
-					});
-				}
-			} else {
+				kind = "absent-rearm";
+				reason = formatAbsentRequiredReason(context.sha, context.absentMinutes);
+			} else if (
+				headRun &&
+				context?.autoMerge === true &&
+				context.absentMinutes >= ABSENT_REQUIRED_REARM_MINUTES
+			) {
+				// A run is registered, or the lookup failed: name that fact
+				// instead of the re-arm advice #3861 removed.
 				reason =
-					mergeable == null
-						? "one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register"
-						: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY -- if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml`;
+					headRun.state === "unknown"
+						? formatAbsentRunUnknownReason(context.sha, context.absentMinutes)
+						: formatAbsentRunReason({
+								state: headRun.state,
+								id: headRun.id,
+								ageMinutes: headRun.ageMinutes,
+								sha: context.sha,
+							});
+			} else if (mergeable == null) {
+				reason =
+					"one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register";
+			} else if (rearmAuthorized) {
+				reason = `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY -- if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml`;
+			} else if (headRun && headRun.state !== "unknown") {
+				// A registered run below the re-arm threshold, or with auto-merge
+				// off: name it instead of the retarget clause (the same fact the
+				// over-threshold branch prints).
+				reason = formatAbsentRunReason({
+					state: headRun.state,
+					id: headRun.id,
+					ageMinutes: headRun.ageMinutes,
+					sha: context.sha,
+				});
+			} else {
+				// An unreadable lookup, a missing head-run answer, or no context:
+				// the quiet pending text, with no re-arm advice.
+				reason = `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY`;
 			}
 		} else {
 			// Only non-completed rows reach this branch; latest cancellations have
@@ -1003,8 +1030,14 @@ export function resolveHeadSha(
 			["pr", "view", String(target), "--json", "headRefOid,mergeable"],
 			{ timeoutMs },
 		);
-		const parsed = JSON.parse(raw);
-		return { sha: parsed.headRefOid, mergeable: parsed.mergeable ?? null };
+		try {
+			const parsed = JSON.parse(raw);
+			return { sha: parsed.headRefOid, mergeable: parsed.mergeable ?? null };
+		} catch (error) {
+			throw new Error(
+				`could not parse the PR view JSON for ${target}: ${error instanceof Error ? error.message : error}`,
+			);
+		}
 	}
 	return { sha: String(target).trim(), mergeable: null };
 }
@@ -1056,15 +1089,21 @@ export function fetchCheckRunsPayload(
 	let totalCount;
 	let page = 1;
 	for (;;) {
-		const payload = JSON.parse(
-			ghExec(
-				[
-					"api",
-					`repos/${repository}/commits/${sha}/check-runs?per_page=100&page=${page}`,
-				],
-				{ timeoutMs },
-			),
+		const raw = ghExec(
+			[
+				"api",
+				`repos/${repository}/commits/${sha}/check-runs?per_page=100&page=${page}`,
+			],
+			{ timeoutMs },
 		);
+		let payload;
+		try {
+			payload = JSON.parse(raw);
+		} catch (error) {
+			throw new Error(
+				`could not parse the check-runs JSON for ${sha} (page ${page}): ${error instanceof Error ? error.message : error}`,
+			);
+		}
 		if (typeof payload?.total_count === "number")
 			totalCount = payload.total_count;
 		if (Array.isArray(payload?.check_runs))
@@ -1139,9 +1178,18 @@ export function fetchHeadRuns(
 				{ timeoutMs },
 			),
 		);
-		const runs = (
-			Array.isArray(payload?.workflow_runs) ? payload.workflow_runs : []
-		).filter((run) => run?.head_sha === sha);
+		if (!Array.isArray(payload?.workflow_runs)) {
+			// #3861 F1: a 200 that violates the documented shape (no
+			// `workflow_runs` array) is a contract violation, not the empty
+			// success answer; the catch below fails open to `unknown`, which
+			// never authorizes a re-arm. A genuine "no run for the head" answer
+			// carries `workflow_runs: []` (verified live), which the array path
+			// below still resolves to `none`.
+			throw new Error(
+				"malformed actions/runs response: workflow_runs is not an array",
+			);
+		}
+		const runs = payload.workflow_runs.filter((run) => run?.head_sha === sha);
 		return {
 			actionRequiredRuns: runs
 				.filter((run) => run?.conclusion === "action_required")

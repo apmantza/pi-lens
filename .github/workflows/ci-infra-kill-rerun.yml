@@ -78,7 +78,7 @@ jobs:
     #   - This job fires for a first or second attempt (run_attempt <= 2) of
     #     a FAILED "CI" run, so it runs on every master red, infra or not.
     #   - Open this job's own log (Actions -> "CI infra-kill rerun" ->
-    #     the run for that push/dispatch). Its one console line names the
+    #     the run for that push). Its one console line names the
     #     classification: "no PR (push/dispatch) sha=<sha> job=Unit tests ->
     #     infra-kill (rerun triggered)" means it judged the kill infra and
     #     already reran the CI workflow once -- check the CI run's Actions

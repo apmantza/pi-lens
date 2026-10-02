@@ -327,6 +327,30 @@ describe("restFetchCheckRunsPayload (#3497)", () => {
 		expect(payload.check_runs).toHaveLength(REAL_CHECK_RUNS.source.total_count);
 	});
 
+	// N2 (#3861): a 200 body that is not JSON is a contract violation, not an
+	// empty answer; the thrown error names the path and keeps the raw stderr.
+	it("a non-JSON 200 body throws a named error with the path and raw stderr", async () => {
+		const fetchImpl = async () =>
+			new Response("<<html>not json</html>", { status: 200 });
+		let message = "";
+		let stderr = "";
+		try {
+			await restFetchCheckRunsPayload("acme/repo", "sha", {
+				token: "tok",
+				fetchImpl,
+			});
+		} catch (error) {
+			message = (error as Error).message;
+			stderr = (error as { stderr?: string }).stderr ?? "";
+		}
+		expect(message).toContain(
+			"GitHub REST API returned invalid JSON for repos/acme/repo/commits/sha/check-runs?per_page=100&page=1",
+		);
+		expect(stderr).toContain(
+			"invalid JSON from repos/acme/repo/commits/sha/check-runs?per_page=100&page=1",
+		);
+	});
+
 	// The four acceptance-criterion fixtures: computeVerdict must reach the
 	// SAME exit code from a REST-shaped payload as it does from the
 	// equivalent gh-shaped one (already proven correct by the 132

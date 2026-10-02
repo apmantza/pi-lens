@@ -28,8 +28,6 @@ import {
 	fetchCheckRunsPayload,
 	fetchFailedQueueRuns,
 	formatAbsentRequiredReason,
-	formatAbsentRunUnknownReason,
-	formatAbsentRunReason,
 	formatExitLine,
 	formatVerdictTable,
 	HARD_CAP_SECONDS,
@@ -40,6 +38,7 @@ import {
 	parseArgs,
 	pollVerdict,
 	readMergeQueueState,
+	readOpenPrs,
 	resolveClassification,
 	resolveGhTimeoutMs,
 	resolveHeadSha,
@@ -415,9 +414,24 @@ describe("computeVerdict — absent-check verdict is mergeable-aware (#2539 roun
 	// ever registers) with a MERGEABLE head. The issue claimed this exited 0;
 	// it already exits 3 (see the doc comment above computeVerdict), so this
 	// pins that exit code AND the issue's optional hint text, which is the
-	// one piece #2664 actually adds.
+	// one piece #2664 actually adds. #3861 F2: the hint requires the POSITIVE
+	// "no run for the head" answer; a missing run answer is not evidence.
 	it("A5 (#2664): both required rows absent + MERGEABLE exits 3 with the retarget hint", () => {
-		const verdict = computeVerdict({ check_runs: [] }, undefined, "MERGEABLE");
+		const verdict = computeVerdict(
+			{ check_runs: [] },
+			undefined,
+			"MERGEABLE",
+			null,
+			null,
+			{
+				repository: "acme/repo",
+				sha: "a".repeat(40),
+				actionRequiredRuns: [],
+				autoMerge: false,
+				absentMinutes: 5,
+				headRun: { state: "none", id: null, ageMinutes: null },
+			},
+		);
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
 		expect(verdict.rows.every((row) => !row.present)).toBe(true);
 		expect(verdict.reason).toContain("mergeable=MERGEABLE");
@@ -1484,7 +1498,6 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"Dependency boundaries",
 			"Close-keyword syntax",
 			"Changelog fragment (fast-fail)",
-			"Production install build (--omit=dev, from source)",
 			"Install test (ubuntu-latest)",
 			"Install test (windows-latest)",
 			"Install test (macos-latest)",
@@ -2609,6 +2622,8 @@ interface Gh3694Options {
 	committedAt?: string | null;
 	checkSuites?: unknown[] | null;
 	runsThrow?: boolean;
+	/** A raw `actions/runs` body, for the malformed-shape contract (#3861 F1). */
+	runsApiBody?: string | null;
 }
 
 function gh3694({
@@ -2620,6 +2635,7 @@ function gh3694({
 	committedAt = null,
 	checkSuites = null,
 	runsThrow = false,
+	runsApiBody = null,
 }: Gh3694Options = {}) {
 	const calls: string[] = [];
 	const ghExec = (args: string[]) => {
@@ -2634,7 +2650,7 @@ function gh3694({
 		if (endpoint.includes("/check-runs")) return JSON.stringify(checkRuns);
 		if (endpoint.includes("/actions/runs")) {
 			if (runsThrow) throw new Error("HTTP 502");
-			return JSON.stringify({ workflow_runs: workflowRuns });
+			return runsApiBody ?? JSON.stringify({ workflow_runs: workflowRuns });
 		}
 		if (endpoint.includes(`/commits/${sha}/check-suites`)) {
 			if (checkSuites === null) throw new Error("HTTP 502");
@@ -2936,13 +2952,24 @@ const armedAbsent = {
 };
 
 describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)", () => {
+	// N1: pin the exact rendered lines, never the formatter under test, so a
+	// formatter regression reds here.
+	const REARM_LINE = `required checks absent for 45 min on ${FORK_APPROVAL.sha} (auto-merge on) — push or merge master to re-arm`;
+	const REGISTERED_TAIL = "the run is registered, so no re-arm is needed";
+	const TERMINAL_TAIL =
+		"the run is terminal and cannot produce the missing check-runs -- inspect it or re-run it manually (gh run rerun 4242); the verdict never re-arms automatically";
+	const UNKNOWN_LINE = `required checks absent for 45 min on ${FORK_APPROVAL.sha} and the ci.yml run lookup was unreadable: no re-arm advice without a run answer`;
+	// The same literal through the fallback branch (auto-merge off or under the
+	// threshold) and the over-threshold branch: one rendered run line.
+	const QUEUED_LINE = `ci.yml run 4242 is queued (45 min old) for ${FORK_APPROVAL.sha}: ${REGISTERED_TAIL}`;
+
 	it.each([
-		["queued", "queued"],
-		["in_progress", "in progress"],
-		["completed", "completed"],
+		["queued", "queued", REGISTERED_TAIL],
+		["in_progress", "in progress", REGISTERED_TAIL],
+		["completed", "completed", TERMINAL_TAIL],
 	] as const)(
 		"a %s run for the head prints run id and age, never re-arm",
-		async (status, label) => {
+		async (status, label, tail) => {
 			const run_ = headRun({ status, run_started_at: minutesBefore(45) });
 			const { exitCode, reason } = await runVerdict(["3679"], {
 				...armedAbsent,
@@ -2950,17 +2977,26 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			});
 			expect(exitCode).toBe(EXIT_PENDING);
 			expect(reason).toBe(
-				formatAbsentRunReason({
-					state: status,
-					id: 4242,
-					ageMinutes: 45,
-					sha: FORK_APPROVAL.sha,
-				}),
+				`ci.yml run 4242 is ${label} (45 min old) for ${FORK_APPROVAL.sha}: ${tail}`,
 			);
 			expect(reason).toContain(`run 4242 is ${label}`);
 			expect(reason).not.toContain("push or merge master to re-arm");
 		},
 	);
+
+	// F3: a terminal run cannot produce the missing check-runs, so it names the
+	// manual rerun instead of the false-comfort "no re-arm is needed", and it
+	// never fires an automatic re-arm (#3795 item 3 stays held).
+	it("a terminal run names the manual rerun and never says no re-arm is needed", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ status: "completed", conclusion: "success" })],
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toContain("gh run rerun 4242");
+		expect(reason).toContain("never re-arms automatically");
+		expect(reason).not.toContain("no re-arm is needed");
+	});
 
 	it("a cancelled attempt for the head still suppresses the re-arm advice", async () => {
 		const { exitCode, reason } = await runVerdict(["3679"], {
@@ -2968,9 +3004,100 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			workflowRuns: [headRun({ status: "completed", conclusion: "cancelled" })],
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toContain("run 4242 is cancelled");
+		expect(reason).toBe(
+			`ci.yml run 4242 is cancelled (45 min old) for ${FORK_APPROVAL.sha}: ${TERMINAL_TAIL}`,
+		);
+		expect(reason).not.toContain("no re-arm is needed");
 		expect(reason).not.toContain("push or merge master to re-arm");
 	});
+
+	// F1: a 200 body that violates the documented `workflow_runs` shape is a
+	// contract violation, not the positive "none" that authorizes a re-arm.
+	it.each([
+		["an empty object", "{}"],
+		["a JSON null", "null"],
+		["a JSON array", "[]"],
+		["a bare total_count without workflow_runs", '{"total_count":0}'],
+		["a Not Found message", '{"message":"Not Found","documentation_url":"x"}'],
+		["an object where the array belongs", '{"workflow_runs":{}}'],
+		["a truncated body", '{"workflow_runs":['],
+	])(
+		"a %s actions/runs body is unreadable, never a positive none",
+		async (_label, body) => {
+			const { exitCode, reason } = await runVerdict(["3679"], {
+				...armedAbsent,
+				runsApiBody: body,
+			});
+			expect(exitCode).toBe(EXIT_PENDING);
+			expect(reason).toBe(UNKNOWN_LINE);
+			expect(reason).not.toContain("push or merge master to re-arm");
+		},
+	);
+
+	it("a valid empty workflow_runs array stays the positive none that re-arms", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			runsApiBody: JSON.stringify({ total_count: 0, workflow_runs: [] }),
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(REARM_LINE);
+	});
+
+	// F2: the fallback branch (auto-merge off, or under the threshold) used to
+	// append the same retarget clause while a run for the head was registered.
+	it("auto-merge off with a registered run prints the run line, not the retarget clause", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			workflowRuns: [headRun({ status: "queued" })],
+			checkRuns: { check_runs: [] },
+			autoMergeRequest: null,
+			checkSuites: suitesAt(minutesBefore(45)),
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(QUEUED_LINE);
+		expect(reason).not.toContain("push a commit or close/reopen to re-arm");
+	});
+
+	it("under the re-arm threshold with a registered run prints the run line, not the retarget clause", async () => {
+		const { exitCode, reason } = await runVerdict(["3679"], {
+			...armedAbsent,
+			workflowRuns: [headRun({ status: "queued" })],
+			checkSuites: suitesAt(minutesBefore(2)),
+		});
+		expect(exitCode).toBe(EXIT_PENDING);
+		expect(reason).toBe(QUEUED_LINE);
+		expect(reason).not.toContain("push a commit or close/reopen to re-arm");
+	});
+
+	// F2: a context with no head-run answer (the REST transport, or a legacy
+	// caller) is NOT evidence of a missing run: it must not re-arm.
+	it.each([
+		["null", null],
+		["absent", undefined],
+	] as const)(
+		"a %s head-run answer never authorizes a re-arm",
+		(_label, value) => {
+			const verdict = computeVerdict(
+				{ check_runs: [] },
+				undefined,
+				"MERGEABLE",
+				null,
+				null,
+				{
+					repository: "acme/repo",
+					sha: FORK_APPROVAL.sha,
+					actionRequiredRuns: [],
+					autoMerge: true,
+					absentMinutes: 45,
+					headRun: value,
+				},
+			);
+			expect(verdict.kind).toBe("pending");
+			expect(verdict.reason).not.toContain("push or merge master to re-arm");
+			expect(verdict.reason).not.toContain(
+				"push a commit or close/reopen to re-arm",
+			);
+		},
+	);
 
 	it("no run for the head still advises the re-arm", async () => {
 		const { exitCode, reason } = await runVerdict(["3679"], {
@@ -2978,7 +3105,7 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			workflowRuns: [],
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+		expect(reason).toBe(REARM_LINE);
 	});
 
 	it("an unreadable run lookup never advises the re-arm", async () => {
@@ -2987,7 +3114,7 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			runsThrow: true,
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toBe(formatAbsentRunUnknownReason(FORK_APPROVAL.sha, 45));
+		expect(reason).toBe(UNKNOWN_LINE);
 		expect(reason).not.toContain("push or merge master to re-arm");
 	});
 
@@ -2997,7 +3124,7 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			workflowRuns: [headRun({ head_sha: "0".repeat(40) })],
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+		expect(reason).toBe(REARM_LINE);
 	});
 
 	it("a merge_group run never counts as the head's ci.yml run", async () => {
@@ -3006,7 +3133,7 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			workflowRuns: [headRun({ event: "merge_group", id: 7 })],
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+		expect(reason).toBe(REARM_LINE);
 	});
 
 	it("another workflow's run does not count as the head's ci.yml run", async () => {
@@ -3015,7 +3142,23 @@ describe("run — a registered ci.yml run suppresses the re-arm advice (#3861)",
 			workflowRuns: [headRun({ name: "CodeQL", id: 9 })],
 		});
 		expect(exitCode).toBe(EXIT_PENDING);
-		expect(reason).toBe(formatAbsentRequiredReason(FORK_APPROVAL.sha, 45));
+		expect(reason).toBe(REARM_LINE);
+	});
+});
+
+// N2 (#3861): `readOpenPrs` names a malformed open-PR list instead of leaking a
+// bare SyntaxError; `run()`'s message-only catch then prints the named form.
+describe("readOpenPrs guards its JSON parse (#3861 N2)", () => {
+	it("throws a named error on a malformed open-PR list", () => {
+		expect(() => readOpenPrs(() => "not json")).toThrow(
+			/could not parse the open PR list JSON/,
+		);
+	});
+
+	it("returns the parsed list for a valid payload", () => {
+		expect(
+			readOpenPrs(() => JSON.stringify([{ number: 1, headRefOid: "abc" }])),
+		).toEqual([{ number: 1, headRefOid: "abc" }]);
 	});
 });
 

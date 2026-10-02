@@ -10,6 +10,7 @@ import {
 	parseArgs,
 	pathsFromPrFiles,
 	PR_FILES_API_CAP,
+	ghPrFiles,
 	run,
 } from "../../scripts/ci-changed-files.mjs";
 
@@ -103,6 +104,29 @@ describe("classifyChangedFiles: the strict docs allowlist", () => {
 		[["README.md"], false],
 	])("formal for %j is %s", (paths, formal) => {
 		expect(classifyChangedFiles(paths as string[]).formal).toBe(formal);
+	});
+});
+
+// N2 (#3861): the per-line parse `ghPrFiles` wraps is the ONE place a
+// `pulls/{n}/files` body is read; a malformed `--jq` line must throw (the
+// full-suite direction) rather than read as an empty list. `exec` is the
+// process boundary, so the fake stands in for `gh`, not for the parse.
+describe("ghPrFiles: one JSON object per gh --jq line (#3861 N2)", () => {
+	it("parses every non-empty line and carries a rename's previous path", () => {
+		const exec = () =>
+			'{"filename":"clients/a.ts"}\n\n{"filename":"docs/b.md","previous_filename":"clients/c.ts"}\n';
+		expect(ghPrFiles("acme/repo", "1", exec)).toEqual([
+			"clients/a.ts",
+			"docs/b.md",
+			"clients/c.ts",
+		]);
+	});
+
+	it("throws on a malformed line, never reads it as an empty file list", () => {
+		const exec = () => '{"filename":"clients/a.ts"}\nnot json\n';
+		expect(() => ghPrFiles("acme/repo", "1", exec)).toThrow(
+			/malformed gh api --jq line/,
+		);
 	});
 });
 
