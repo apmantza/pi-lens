@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -22,6 +23,42 @@ import {
 	verdictMatches,
 } from "../../scripts/check-tla-models.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+
+// The two doubles below stand in for the only two things `main` cannot run in
+// a unit test: the external `java` process and the external jar's pinned
+// checksum (#3927). Everything else — the CLI parser, the real `formal/`
+// corpus, the real filesystem, and the run's own summary — is the production
+// code path. `cryptoState` is the seam the caller-wiring case sets to the
+// pinned digest; the default empty string leaves every other `createHash`
+// caller untouched.
+const cryptoState = vi.hoisted(() => ({ digest: "" }));
+
+vi.mock("node:child_process", async () => {
+	const { makeFakeChild } = await import("../support/fake-child.js");
+	return {
+		spawn: () => {
+			const child = makeFakeChild();
+			queueMicrotask(() => {
+				child.stdout.emit(
+					"data",
+					"Model checking completed. No error has been found.\n",
+				);
+				child.emit("close", 0);
+			});
+			return child;
+		},
+	};
+});
+
+vi.mock("node:crypto", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:crypto")>();
+	return {
+		...actual,
+		createHash: () => ({
+			update: () => ({ digest: () => cryptoState.digest }),
+		}),
+	};
+});
 
 /** A promise plus its own resolve, for driving `runPool` step by step. */
 function deferred<T>() {
@@ -435,6 +472,85 @@ describe("entry guard order (#3920)", () => {
 		const output = messages.join("\n");
 		expect(output).toContain("Unknown option '--shadr'");
 		expect(output).not.toContain("does not exist");
+	});
+});
+
+describe("main() caller wiring (#3927)", () => {
+	// The extracted helpers are pinned by the cases above, but a passing helper
+	// does not prove `main` calls it: the pre-#3927 inline expressions sat
+	// behind `ensureJar`, so a caller-side change to the pool size or the
+	// summary line had no witness. Run the real entry module over the real
+	// `formal/` corpus with only the external `java`/jar boundary doubled, and
+	// read the run's own summary back. `--shard 1/<count>` selects exactly one
+	// real config, and `--concurrency 99` is a value `computeConcurrency` can
+	// never return for one config, so a `main` that inlines either expression
+	// instead of calling the helper cannot produce the observed summary.
+	it("runs the real entry and reports the pool size and summary through the extracted helpers", async () => {
+		const stubDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-tla-entry-"),
+		);
+		const stubJar = path.join(stubDir, "tla2tools.jar");
+		fs.writeFileSync(stubJar, "stub jar; the checksum is doubled below");
+		cryptoState.digest = TLA_TOOLS.sha256;
+		const total = listModelConfigs(REPO_ROOT).length;
+		const scriptPath = path.join(REPO_ROOT, "scripts", "check-tla-models.mjs");
+		const savedArgv = process.argv;
+		const savedExitCode = process.exitCode;
+		const logged: string[] = [];
+		const errors: string[] = [];
+		const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+			logged.push(args.map(String).join(" "));
+		});
+		const errorSpy = vi
+			.spyOn(console, "error")
+			.mockImplementation((...args) => {
+				errors.push(args.map(String).join(" "));
+			});
+		process.argv = [
+			process.execPath,
+			scriptPath,
+			"--jar",
+			stubJar,
+			"--concurrency",
+			"99",
+			"--shard",
+			`1/${total}`,
+		];
+		process.exitCode = undefined;
+		const isSummary = (line: string) => line.includes("wall (concurrency=");
+		try {
+			// A unique query re-evaluates the module body, so the production
+			// entry guard runs its private `main` over the real corpus.
+			await import(
+				`${pathToFileURL(scriptPath).href}?caller-wiring=${Date.now()}`
+			);
+			for (let i = 0; i < 1000 && !logged.some(isSummary); i++) {
+				await flushMicrotasks();
+			}
+			await flushMicrotasks();
+		} finally {
+			logSpy.mockRestore();
+			errorSpy.mockRestore();
+			process.argv = savedArgv;
+			process.exitCode = savedExitCode;
+			cryptoState.digest = "";
+			fs.rmSync(stubDir, { recursive: true, force: true });
+		}
+		// The run's own per-config result lines are the independent oracle:
+		// the summary must account for exactly the configs that ran, name the
+		// shard `main` passed, and carry the pool size `main` resolved. The
+		// expected string is built from that observation and literals, not by
+		// calling `formatSummary` (which would let a caller mutation and a
+		// helper mutation cancel out).
+		const resultLines = logged.filter((line) => /^(?:ok  |FAIL) /.test(line));
+		const summary = logged.find(isSummary);
+		expect(errors, errors.join("\n")).toEqual([]);
+		expect(resultLines).toHaveLength(1);
+		expect(summary, errors.join("\n")).toMatch(
+			new RegExp(
+				`^1 configs \\(shard 1/${total}\\), \\d+\\.\\ds wall \\(concurrency=99, 1 TLC worker/config\\)\\.$`,
+			),
+		);
 	});
 });
 
