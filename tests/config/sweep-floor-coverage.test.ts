@@ -204,6 +204,10 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"tests/scripts/red-on-base.test.ts":
 		"lists one TMPDIR-scoped scratch directory of a CLI fixture run and " +
 		"asserts it is empty after cleanup; not a production population sweep",
+	"tests/scripts/stryker-diff.test.ts":
+		"fake-Stryker fixture; linkRealNodeModules enumerates the local " +
+		"node_modules install and the emptiness assertions are on mapRelatedTests " +
+		"result sets (behavior cases), not a production source-population sweep",
 	"tests/scripts/no-hardcoded-machine-paths.test.ts":
 		"carries its own declared floor at the 'scans a nonzero number of " +
 		"script files' check (files.length > 10)",
