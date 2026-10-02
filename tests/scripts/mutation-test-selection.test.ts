@@ -781,62 +781,94 @@ describe("probeConcurrency", () => {
 });
 
 describe("runProbeProcess", () => {
+	// F2 (#3810 r1): the pre-fix lifecycle took a raw `spawn`, installed its own
+	// SIGTERM timer, and ignored the caller's abort signal, so a probe that
+	// ignored SIGTERM parked the promise forever. The fix delegates to the
+	// shared bounded seam (`spawnAsync`). Every case below hands the production
+	// entry point BOTH seams -- a stubborn child behind `spawn` and the bounded
+	// double behind `spawnAsync` -- so a pre-fix run reaches the raw lifecycle
+	// and reds on the missing timeout/abort verdict, never on "spawn is not a
+	// function". The stubborn child has no pid and a mock `kill`, so nothing
+	// signals a real process.
+	function stubbornChild() {
+		const child = {
+			pid: undefined,
+			kill: vi.fn(),
+			on: vi.fn(),
+			once: vi.fn(),
+		};
+		child.on.mockReturnValue(child);
+		child.once.mockReturnValue(child);
+		return child;
+	}
+
+	async function settleProbe(
+		spawnAsync: () => Promise<{ status: number | null; failure?: string }>,
+		signal?: AbortSignal,
+	) {
+		vi.useFakeTimers();
+		try {
+			const spawn = vi.fn(() => stubbornChild());
+			const settled: Array<{
+				status: number | null;
+				timedOut: boolean;
+				aborted: boolean;
+			}> = [];
+			// The pre-fix seam reads `spawn`; the fixed one reads `spawnAsync`. Both
+			// are handed the production entry point.
+			const options = {
+				spawn,
+				spawnAsync,
+				command: "vitest",
+				args: ["run", "x"],
+				timeoutMs: 1000,
+				signal,
+			} as Parameters<typeof runProbeProcess>[0];
+			void runProbeProcess(options).then((result) => settled.push(result));
+			// Drive the old lifecycle's own SIGTERM timer past its deadline; a
+			// parked pre-fix probe still leaves `settled` empty.
+			await vi.advanceTimersByTimeAsync(60_000);
+			return { settled, spawn };
+		} finally {
+			vi.useRealTimers();
+		}
+	}
+
 	it("passes the declared timeout and abort signal to the bounded subprocess seam (F2)", async () => {
-		// F2 (#3810): the old private lifecycle installed its own SIGTERM timer and
-		// ignored the caller's abort signal, so a probe that ignored SIGTERM never
-		// settled. It now delegates to the shared bounded seam with the timeout and
-		// signal it was handed.
-		const spawnAsync = vi.fn(async () => ({ status: 0 }));
-		const controller = new AbortController();
-		const done = await runProbeProcess({
-			spawnAsync,
-			command: "vitest",
-			args: ["run", "x"],
-			timeoutMs: 1000,
-			signal: controller.signal,
-		});
-		expect(done).toEqual({ status: 0, timedOut: false, aborted: false });
-		expect(spawnAsync).toHaveBeenCalledWith("vitest", ["run", "x"], {
-			timeout: 1000,
-			signal: controller.signal,
-		});
+		const { settled, spawn } = await settleProbe(async () => ({ status: 0 }));
+		expect(settled).toEqual([{ status: 0, timedOut: false, aborted: false }]);
+		expect(spawn).not.toHaveBeenCalled();
 	});
 
 	it("reports a failing exit and no status for a spawn error", async () => {
-		const exit = await runProbeProcess({
-			spawnAsync: async () => ({ status: 3 }),
-			command: "c",
-			args: [],
-			timeoutMs: 1000,
-		});
-		expect(exit).toEqual({ status: 3, timedOut: false, aborted: false });
-		const broken = await runProbeProcess({
-			spawnAsync: async () => ({ status: null, failure: "spawn" }),
-			command: "c",
-			args: [],
-			timeoutMs: 1000,
-		});
-		expect(broken).toEqual({ status: null, timedOut: false, aborted: false });
+		const failed = await settleProbe(async () => ({ status: 3 }));
+		expect(failed.settled).toEqual([
+			{ status: 3, timedOut: false, aborted: false },
+		]);
+		const broken = await settleProbe(async () => ({
+			status: null,
+			failure: "spawn",
+		}));
+		expect(broken.settled).toEqual([
+			{ status: null, timedOut: false, aborted: false },
+		]);
 	});
 
 	it("says the seam's time limit ended a probe, not the test", async () => {
-		const done = await runProbeProcess({
-			spawnAsync: async () => ({ status: null, failure: "timeout" }),
-			command: "c",
-			args: [],
-			timeoutMs: 5000,
-		});
-		expect(done).toEqual({ status: null, timedOut: true, aborted: false });
+		const { settled } = await settleProbe(async () => ({
+			status: null,
+			failure: "timeout",
+		}));
+		expect(settled).toEqual([{ status: null, timedOut: true, aborted: false }]);
 	});
 
 	it("says the caller's abort ended a probe", async () => {
-		const done = await runProbeProcess({
-			spawnAsync: async () => ({ status: null, failure: "aborted" }),
-			command: "c",
-			args: [],
-			timeoutMs: 5000,
-		});
-		expect(done).toEqual({ status: null, timedOut: false, aborted: true });
+		const controller = new AbortController();
+		const { settled } = await settleProbe(
+			async () => ({ status: null, failure: "aborted" }),
+			controller.signal,
+		);
+		expect(settled).toEqual([{ status: null, timedOut: false, aborted: true }]);
 	});
 });
 

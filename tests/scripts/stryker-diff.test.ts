@@ -8,12 +8,15 @@
 // a real, throwaway git fixture reproduces the actual TDZ ordering bug.
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -129,6 +132,421 @@ function runDriver(cwd: string, args: string[], timeout: number) {
 		timeout,
 	});
 }
+
+/** A real driver run that is allowed to exit non-zero (the partial path). */
+function runDriverResult(cwd: string, args: string[], timeout: number) {
+	return spawnSync(process.execPath, [driverPath, ...args], {
+		cwd,
+		encoding: "utf8",
+		timeout,
+	});
+}
+
+/** A real driver run with an explicit environment (the lock/#3853 arms). */
+function runDriverWithEnv(
+	cwd: string,
+	args: string[],
+	timeout: number,
+	env: NodeJS.ProcessEnv,
+) {
+	return execFileSync(process.execPath, [driverPath, ...args], {
+		cwd,
+		encoding: "utf8",
+		timeout,
+		env,
+	});
+}
+
+/**
+ * A fake external Stryker installed at the true process boundary
+ * (`node_modules/.bin/stryker`): the driver's own spawn target. It records every
+ * invocation (argv, parsed config, whether the incremental file was present on
+ * entry) and emits the artifacts the driver reads, so the real driver reaches
+ * its fingerprint, incremental, config and run-loop stages. Real filesystem,
+ * git, tsc and vitest stay real; only the Stryker binary is doubled.
+ */
+const FAKE_STRYKER = String.raw`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const dryRun = args.includes("--dryRunOnly");
+const mutateAt = args.indexOf("--mutate");
+const patterns = ((mutateAt === -1 ? "" : args[mutateAt + 1]) || "")
+	.split(",")
+	.filter(Boolean);
+const configFile = args[args.length - 1];
+let config = {};
+try {
+	const raw = fs.readFileSync(configFile, "utf8");
+	config = JSON.parse(raw.replace(/^export default /, "").replace(/;\s*$/, ""));
+} catch (error) {
+	console.error("fake stryker: unreadable config " + error.message);
+	process.exit(97);
+}
+const command = config.commandRunner ? config.commandRunner.command : null;
+fs.mkdirSync(".fake-stryker", { recursive: true });
+const incrementalPresent = fs.existsSync(".stryker/incremental.json");
+fs.appendFileSync(
+	".fake-stryker/invocations.jsonl",
+	JSON.stringify({
+		dryRun,
+		patterns,
+		configFile,
+		force: config.force === undefined ? null : config.force,
+		incremental: config.incremental === undefined ? null : config.incremental,
+		command,
+		incrementalPresent,
+		noLock: process.env.PI_LENS_TEST_NO_LOCK ?? null,
+	}) + "\n",
+);
+if (dryRun) {
+	console.log("Instrumented 3 source file(s) with " + patterns.length * 3 + " mutant(s)");
+	console.log("Initial test run succeeded. Ran 1 tests in 1 seconds (net 12 ms, overhead 0 ms).");
+	process.exit(0);
+}
+let control = {};
+try {
+	control = JSON.parse(fs.readFileSync(".fake-stryker/control.json", "utf8"));
+} catch {}
+const files = {};
+for (const pattern of patterns) {
+	const match = /^(.*):(\d+)-(\d+)$/.exec(pattern);
+	if (!match) continue;
+	const file = match[1];
+	const start = Number(match[2]);
+	if (!files[file]) files[file] = { mutants: [] };
+	const statuses = ["Killed", "Survived", "Timeout"];
+	for (let offset = 0; offset < statuses.length; offset += 1) {
+		files[file].mutants.push({
+			id: pattern + "-" + offset,
+			mutatorName: "FakeMutator",
+			replacement: "0",
+			status: statuses[offset],
+			location: {
+				start: { line: start, column: 1 },
+				end: { line: start, column: 2 },
+			},
+		});
+	}
+}
+if (control.writeIncremental !== false) {
+	fs.mkdirSync(".stryker", { recursive: true });
+	fs.writeFileSync(
+		".stryker/incremental.json",
+		JSON.stringify({ schemaVersion: "1.0", files, thresholds: {} }),
+	);
+}
+if (config.force === false) {
+	fs.writeFileSync(
+		"stryker.log",
+		"Result: 1 of " + patterns.length * 3 + " mutant result(s) are reused.\n",
+	);
+}
+if (control.writeReport !== false) {
+	fs.mkdirSync("reports/mutation", { recursive: true });
+	fs.writeFileSync(
+		"reports/mutation/mutation.json",
+		JSON.stringify({ schemaVersion: "1.0", files, thresholds: { high: 60, low: 20 } }),
+	);
+}
+process.exit(control.exitCode === undefined ? 0 : control.exitCode);
+`;
+
+/**
+ * A fake external vitest at the driver's coverage-probe spawn target. It records
+ * every argv the driver builds (so the option bag and include list are the
+ * driver's own, not the test's reassumption) and, by default, exits 0 without
+ * writing a coverage report -- exactly the successful probe with no report that
+ * distinguishes `rmSync(..., { force: true })` from `force: false`.
+ */
+const FAKE_VITEST = String.raw`#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.mkdirSync(".fake-vitest", { recursive: true });
+const reportsDirectory = (args.find((a) => a.startsWith("--coverage.reportsDirectory=")) || "").slice("--coverage.reportsDirectory=".length);
+const testPath = args.find((a) => a.startsWith("tests/")) || "";
+fs.appendFileSync(
+	".fake-vitest/invocations.jsonl",
+	JSON.stringify({
+		args,
+		reportsDirectory,
+		includes: args
+			.filter((a) => a.startsWith("--coverage.include="))
+			.map((a) => a.slice("--coverage.include=".length)),
+	}) + "\n",
+);
+let control = {};
+try {
+	control = JSON.parse(fs.readFileSync(".fake-vitest/control.json", "utf8"));
+} catch {}
+const exit = () => {
+	const forThis = (control.writeCoverageFor || []).some((needle) => testPath.includes(needle));
+	if ((control.writeCoverage || forThis) && reportsDirectory) {
+		fs.mkdirSync(reportsDirectory, { recursive: true });
+		fs.writeFileSync(reportsDirectory + "/coverage-final.json", "{}");
+	}
+	process.exit(control.exitCode === undefined ? 0 : control.exitCode);
+};
+if (control.sleepMs > 0) setTimeout(exit, control.sleepMs);
+else exit();
+`;
+
+/** Every fake-vitest invocation this fixture recorded, oldest first. */
+function fakeVitestInvocations(root: string) {
+	const file = join(root, ".fake-vitest", "invocations.jsonl");
+	if (!existsSync(file)) return [];
+	return readFileSync(file, "utf8")
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line));
+}
+
+/** Link the repo's real packages into a fixture, with a fake Stryker in `.bin`. */
+function linkRealNodeModules(
+	nm: string,
+	{ fakeVitest = false }: { fakeVitest?: boolean } = {},
+) {
+	const realNM = join(repositoryRoot, "node_modules");
+	mkdirSync(nm);
+	const linkTarget = (target: string) =>
+		process.platform === "win32"
+			? statSync(target).isDirectory()
+				? "junction"
+				: "file"
+			: undefined;
+	for (const entry of readdirSync(realNM)) {
+		if (entry === ".bin") continue;
+		const target = join(realNM, entry);
+		symlinkSync(target, join(nm, entry), linkTarget(target));
+	}
+	mkdirSync(join(nm, ".bin"));
+	for (const bin of readdirSync(join(realNM, ".bin"))) {
+		if (bin.startsWith("stryker")) continue;
+		if (fakeVitest && /^vitest(\.cmd)?$/i.test(bin)) continue;
+		const target = join(realNM, ".bin", bin);
+		symlinkSync(target, join(nm, ".bin", bin), linkTarget(target));
+	}
+	writeFileSync(join(nm, ".bin", "stryker"), FAKE_STRYKER, { mode: 0o755 });
+	if (fakeVitest) {
+		writeFileSync(join(nm, ".bin", "vitest"), FAKE_VITEST, { mode: 0o755 });
+		if (process.platform === "win32") {
+			writeFileSync(
+				join(nm, ".bin", "vitest.cmd"),
+				'@echo off\r\nnode "%~dp0vitest" %*\r\n',
+			);
+		}
+	}
+	if (process.platform === "win32") {
+		writeFileSync(
+			join(nm, ".bin", "stryker.cmd"),
+			'@echo off\r\nnode "%~dp0stryker" %*\r\n',
+		);
+	}
+}
+
+type DriverFixtureOptions = {
+	/** true: the PR's test calls the changed function, so coverage keeps it. */
+	covering: boolean;
+	/** true: add a compiled `clients/thing.ts` mutation source and its test. */
+	includeCompiled: boolean;
+	/** true: replace the probe binary with {@link FAKE_VITEST}. */
+	fakeVitest?: boolean;
+	/** true: a changed `clients/skipped.ts` with no compiled output/map. */
+	skippedCompiled?: boolean;
+	/** true: a changed `clients/corrupt.ts` whose `.js.map` is unparseable. */
+	corruptCompiled?: boolean;
+	/** true: a changed `scripts/ws.mjs` whose only change is whitespace. */
+	whitespaceCovered?: boolean;
+};
+
+/**
+ * A throwaway git repo shaped like the real mutation lane: a changed script and
+ * (optionally) a compiled `clients/` source, the repo's real `node_modules`
+ * linked in, and {@link FAKE_STRYKER} at the driver's spawn target. Two arms:
+ * `covering` makes the change behavior-preserving with a test that executes the
+ * changed line; the other arm changes a return value the test never calls.
+ */
+function buildDriverFixture({
+	covering,
+	includeCompiled,
+	fakeVitest = false,
+	skippedCompiled = false,
+	corruptCompiled = false,
+	whitespaceCovered = false,
+}: DriverFixtureOptions) {
+	const root = mkdtempSync(join(repositoryRoot, ".tmp-stryker-diff-fixture-"));
+	mkdirSync(join(root, "scripts"));
+	mkdirSync(join(root, "src"));
+	mkdirSync(join(root, "tests", "scripts"), { recursive: true });
+	mkdirSync(join(root, "tests", "config"));
+	if (includeCompiled || skippedCompiled || corruptCompiled) {
+		mkdirSync(join(root, "clients"), { recursive: true });
+		mkdirSync(join(root, "tests", "clients"), { recursive: true });
+	}
+	writeFileSync(join(root, "package.json"), '{"type":"module"}\n');
+	// Its own vitest config: without one vitest walks up to the repo's, whose
+	// globalSetup belongs to the repo's suite, not this fixture.
+	writeFileSync(join(root, "vitest.config.mjs"), "export default {};\n");
+	writeFileSync(
+		join(root, "tsconfig.mutation.json"),
+		JSON.stringify({
+			compilerOptions: { sourceMap: true, module: "nodenext" },
+			files: includeCompiled
+				? ["src/empty.ts", "clients/thing.ts"]
+				: ["src/empty.ts"],
+		}),
+	);
+	writeFileSync(join(root, "src", "empty.ts"), "export {};\n");
+	writeFileSync(
+		join(root, "scripts", "thing.mjs"),
+		"export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 2;\n}\n",
+	);
+	// A second changed script whose only change is indentation: five changed
+	// lines to a plain diff, none to `git diff -w`. The cap of one file must
+	// keep the script whose single line really changed (the #3797 review).
+	writeFileSync(
+		join(root, "scripts", "a-reflowed.mjs"),
+		"export const a = 1;\nexport const b = 2;\nexport const c = 3;\nexport const d = 4;\nexport const e = 5;\n",
+	);
+	// A changed script whose change is whitespace-only, with a test that really
+	// executes it: the cap's weighting ignores whitespace, but the mutated
+	// ranges must not.
+	if (whitespaceCovered) {
+		writeFileSync(join(root, "scripts", "ws.mjs"), "export const ws = 1;\n");
+		writeFileSync(
+			join(root, "tests", "scripts", "ws.test.ts"),
+			'import { expect, it } from "vitest";\nimport { ws } from "../../scripts/ws.mjs";\nit("reads ws", () => {\n\texpect(ws).toBe(1);\n});\n',
+		);
+	}
+	writeFileSync(
+		join(root, "tests", "scripts", "thing.test.ts"),
+		covering
+			? 'import { expect, it } from "vitest";\nimport { changed } from "../../scripts/thing.mjs";\nit("executes the changed line", () => {\n\texpect(changed()).toBe(2);\n});\n'
+			: 'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("uses the unchanged function", () => {\n\texpect(used()).toBe(1);\n});\n',
+	);
+	// A second related test: the probes run side by side, and a pool of one
+	// cannot tell a bounded pool from a broken one.
+	writeFileSync(
+		join(root, "tests", "scripts", "thing-other.test.ts"),
+		'import { expect, it } from "vitest";\nimport { used } from "../../scripts/thing.mjs";\nit("also uses the unchanged function", () => {\n\texpect(used() + 1).toBe(2);\n});\n',
+	);
+	if (includeCompiled) {
+		writeFileSync(
+			join(root, "clients", "thing.ts"),
+			"export function changed(): number {\n\treturn 2;\n}\n",
+		);
+		writeFileSync(
+			join(root, "tests", "clients", "thing.test.ts"),
+			'import { expect, it } from "vitest";\nimport { changed } from "../../clients/thing.js";\nit("executes the compiled changed line", () => {\n\texpect(changed()).toBe(2);\n});\n',
+		);
+	}
+	// A PR-own test the exclusion registry excludes for a reason.
+	writeFileSync(
+		join(root, "tests", "scripts", "own.test.ts"),
+		'// mutation-lane: exclude\nimport { it } from "vitest";\nit("is scheduling-sensitive", () => {});\n',
+	);
+	writeFileSync(
+		join(root, "tests", "config", "stryker-diff-exclusions.json"),
+		JSON.stringify({
+			"tests/scripts/own.test.ts": { reason: "fixture: scheduling-sensitive" },
+		}),
+	);
+	// A probe directory a killed earlier run left behind.
+	mkdirSync(join(root, ".stryker", "coverage", "stale"), { recursive: true });
+	writeFileSync(
+		join(root, ".stryker", "coverage", "stale", "coverage-final.json"),
+		"{}",
+	);
+	// A changed compiled source tsc never emits (not in the tsconfig `files`),
+	// and one whose emitted `.js.map` exists but is unparseable. Each exercises
+	// the driver's skipped-compiled branch without a fake build.
+	if (skippedCompiled) {
+		writeFileSync(
+			join(root, "clients", "skipped.ts"),
+			"export const skipped = 1;\n",
+		);
+		writeFileSync(
+			join(root, "tests", "clients", "skipped.test.ts"),
+			'import { it } from "vitest";\nit("sibling", () => {});\n',
+		);
+	}
+	if (corruptCompiled) {
+		writeFileSync(
+			join(root, "clients", "corrupt.ts"),
+			"export const corrupt = 1;\n",
+		);
+		writeFileSync(
+			join(root, "tests", "clients", "corrupt.test.ts"),
+			'import { it } from "vitest";\nit("sibling", () => {});\n',
+		);
+	}
+	linkRealNodeModules(join(root, "node_modules"), { fakeVitest });
+	const git = (args: string[]) => fixtureGit(root, args);
+	git(["init", "-q", "-b", "main"]);
+	git(["add", "."]);
+	git(["commit", "-qm", "base"]);
+	git(["checkout", "-qb", "feature"]);
+	writeFileSync(
+		join(root, "scripts", "thing.mjs"),
+		covering
+			? "export function used() {\n\treturn 1;\n}\nexport function changed() {\n\tconst two = 2;\n\treturn two;\n}\n"
+			: "export function used() {\n\treturn 1;\n}\nexport function changed() {\n\treturn 3;\n}\n",
+	);
+	if (includeCompiled) {
+		writeFileSync(
+			join(root, "clients", "thing.ts"),
+			"export function changed(): number {\n\tconst two = 2;\n\treturn two;\n}\n",
+		);
+	}
+	writeFileSync(
+		join(root, "scripts", "a-reflowed.mjs"),
+		"  export const a = 1;\n  export const b = 2;\n  export const c = 3;\n  export const d = 4;\n  export const e = 5;\n",
+	);
+	writeFileSync(
+		join(root, "tests", "scripts", "own.test.ts"),
+		'// mutation-lane: exclude\nimport { it } from "vitest";\nit("is scheduling-sensitive", () => {});\n// touched by the PR\n',
+	);
+	if (skippedCompiled) {
+		writeFileSync(
+			join(root, "clients", "skipped.ts"),
+			"export const skipped = 2;\n",
+		);
+	}
+	if (corruptCompiled) {
+		writeFileSync(
+			join(root, "clients", "corrupt.ts"),
+			"export const corrupt = 2;\n",
+		);
+		// Present on disk, unparseable: the `existsSync` guard passes and the
+		// JSON read is what fails.
+		writeFileSync(
+			join(root, "clients", "corrupt.js"),
+			"exports.corrupt = 2;\n",
+		);
+		writeFileSync(join(root, "clients", "corrupt.js.map"), "{ not json");
+	}
+	if (whitespaceCovered) {
+		writeFileSync(join(root, "scripts", "ws.mjs"), "  export const ws = 1;\n");
+	}
+	git(["commit", "-qam", "change the function"]);
+	return {
+		root,
+		git,
+		cleanup: () => rmSync(root, { recursive: true, force: true }),
+	};
+}
+
+/** Every fake-Stryker invocation this fixture recorded, oldest first. */
+function fakeStrykerInvocations(root: string) {
+	const file = join(root, ".fake-stryker", "invocations.jsonl");
+	if (!existsSync(file)) return [];
+	return readFileSync(file, "utf8")
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line));
+}
+
+const sha256 = (value: string) =>
+	createHash("sha256").update(value).digest("hex");
 
 describe("driver early-exit paths, spawned for real (#3592 round 2 F1)", () => {
 	// Recurrence this guards: `baseMeta` (called from four early-exit paths --
@@ -364,6 +782,533 @@ describe("driver selection stage, spawned for real (#3810)", () => {
 			rmSync(fixtureRepo, { recursive: true, force: true });
 		}
 	}, 150_000);
+});
+
+describe("driver Stryker stage, spawned for real (#3856 F3)", () => {
+	// Recurrence this guards (#3810 F3): the driver's fingerprint, incremental
+	// decision, generated Stryker config and run loop sat past the zero-mutant
+	// exits, so mutants on those added lines survived. This fixture installs a
+	// fake external Stryker at the driver's real spawn target and runs the real
+	// driver cold, then warm, then with a changed fingerprinted input -- real
+	// git, real tsc build, real vitest coverage probes, real cache files.
+	it("runs the real Stryker stage cold, warm, and on a changed fingerprint input", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		try {
+			const mergeBase = String(
+				fixture.git(["merge-base", "main", "HEAD"]),
+			).trim();
+			const testSelection = {
+				mode: "coverage",
+				pool: 3,
+				covering: 2,
+				kept: 2,
+				dropped: 0,
+				own: 0,
+				unknown: 0,
+			};
+
+			const cold = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(cold).toContain(
+				"mutation diff: related 3 → covering 2 → kept 2\n",
+			);
+			expect(cold).toContain(
+				"mutation diff: measuring which of 3 candidate test file(s) execute a changed line",
+			);
+			expect(cold).toContain(
+				"mutation diff: running 2 test file(s), related 3",
+			);
+			expect(cold).toContain("incremental cache cold-no-cache\n");
+			expect(cold).not.toContain("incremental cache cold-no-cache (");
+			expect(cold).toContain("mutation diff: mutating scripts/thing.mjs:");
+			expect(cold).toContain("clients/thing.js:");
+			expect(cold).toContain("mutation diff: completed");
+			const coldReport = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(coldReport.piLensMutationDiff.zeroMutants).toBeNull();
+			expect(coldReport.piLensMutationDiff.testSelection).toEqual(
+				testSelection,
+			);
+			expect(coldReport.piLensMutationDiff.rangesTotal).toBe(2);
+			expect(coldReport.piLensMutationDiff.counts).toEqual({
+				Killed: 2,
+				Survived: 2,
+				Timeout: 2,
+			});
+			expect(coldReport.piLensMutationDiff.incremental).toEqual({
+				state: "cold-no-cache",
+			});
+
+			// The fingerprint's inputs are recomputed independently, not mirrored.
+			const coldFingerprint = JSON.parse(
+				readFileSync(
+					join(fixture.root, ".stryker", "incremental.fingerprint"),
+					"utf8",
+				),
+			);
+			expect(coldFingerprint.inputs["fork-point"]).toBe(sha256(mergeBase));
+			expect(coldFingerprint.inputs.node).toBe(
+				sha256(process.versions.node.split(".")[0]),
+			);
+			expect(coldFingerprint.inputs["stryker.config.mjs"]).toBe(
+				sha256("<absent>"),
+			);
+			expect(coldFingerprint.inputs["tests/scripts/thing.test.ts"]).toBe(
+				sha256(
+					readFileSync(
+						join(fixture.root, "tests", "scripts", "thing.test.ts"),
+						"utf8",
+					),
+				),
+			);
+
+			// The fake Stryker saw the real config, commands and cache state.
+			const coldInvocations = fakeStrykerInvocations(fixture.root);
+			expect(coldInvocations).toHaveLength(2);
+			expect(coldInvocations[0]).toMatchObject({
+				dryRun: true,
+				force: true,
+				configFile: ".stryker/diff.config.mjs",
+			});
+			expect(coldInvocations[0].command).toContain("--testTimeout 30000");
+			expect(coldInvocations[1]).toMatchObject({
+				dryRun: false,
+				force: true,
+				incremental: true,
+				configFile: ".stryker/diff.config.mjs",
+				incrementalPresent: false,
+			});
+			expect(coldInvocations[1].command).toContain(
+				"tests/scripts/thing.test.ts",
+			);
+			expect(coldInvocations[1].command).toContain(
+				"tests/clients/thing.test.ts",
+			);
+
+			// The artifacts the cold run wrote make the second run reusable.
+			const warm = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(warm).toContain("incremental cache warm\n");
+			const warmReport = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(warmReport.piLensMutationDiff.incremental).toEqual({
+				state: "warm",
+				reused: 1,
+				total: 6,
+			});
+			const warmInvocations = fakeStrykerInvocations(fixture.root);
+			expect(warmInvocations).toHaveLength(4);
+			expect(warmInvocations[2]).toMatchObject({ dryRun: true, force: true });
+			expect(warmInvocations[3]).toMatchObject({
+				dryRun: false,
+				force: false,
+				incrementalPresent: true,
+			});
+
+			// Same changed-file SET, different content: a cold-inputs-changed run.
+			// TWO fingerprinted inputs change, so the change-list separator is
+			// observable (a one-element join hides it).
+			const ownTest = join(fixture.root, "tests", "scripts", "own.test.ts");
+			writeFileSync(
+				ownTest,
+				`${readFileSync(ownTest, "utf8")}// changed after the warm run\n`,
+			);
+			const compiledTest = join(
+				fixture.root,
+				"tests",
+				"clients",
+				"thing.test.ts",
+			);
+			writeFileSync(
+				compiledTest,
+				`${readFileSync(compiledTest, "utf8")}// changed after the warm run\n`,
+			);
+			const changed = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(changed).toContain(
+				"incremental cache cold-inputs-changed (tests/clients/thing.test.ts, tests/scripts/own.test.ts)\n",
+			);
+			const changedReport = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(changedReport.piLensMutationDiff.incremental).toEqual({
+				state: "cold-inputs-changed",
+				changed: ["tests/clients/thing.test.ts", "tests/scripts/own.test.ts"],
+			});
+			const changedInvocations = fakeStrykerInvocations(fixture.root);
+			expect(changedInvocations).toHaveLength(6);
+			expect(changedInvocations[5]).toMatchObject({
+				dryRun: false,
+				force: true,
+				incrementalPresent: false,
+			});
+		} finally {
+			fixture.cleanup();
+		}
+	}, 300_000);
+
+	it("treats a restored incremental file with no fingerprint as cold and clears it before the run", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		try {
+			writeFileSync(
+				join(fixture.root, ".stryker", "incremental.json"),
+				JSON.stringify({ schemaVersion: "1.0", files: {}, thresholds: {} }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("incremental cache cold-no-cache\n");
+			const invocations = fakeStrykerInvocations(fixture.root);
+			expect(invocations).toHaveLength(2);
+			expect(invocations[1]).toMatchObject({
+				dryRun: false,
+				force: true,
+				incrementalPresent: false,
+			});
+		} finally {
+			fixture.cleanup();
+		}
+	}, 150_000);
+
+	it("prints the selection note for a probe with no coverage answer", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		try {
+			// A related test whose probe exits non-zero is `unknown`, never 0: the
+			// driver must print the note that says so, and it must clear a probe
+			// directory a killed earlier run left behind even when absent.
+			writeFileSync(
+				join(fixture.root, "tests", "scripts", "broken.test.ts"),
+				'import { it } from "vitest";\nimport { changed } from "../../scripts/thing.mjs";\nit("fails its probe", () => {\n\tthrow new Error("probe fails");\n});\n',
+			);
+			rmSync(join(fixture.root, ".stryker", "coverage"), {
+				recursive: true,
+				force: true,
+			});
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain(
+				"mutation diff: no coverage answer for: tests/scripts/broken.test.ts\n",
+			);
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(report.piLensMutationDiff.testSelection).toMatchObject({
+				unknown: 1,
+				covering: 2,
+			});
+		} finally {
+			fixture.cleanup();
+		}
+	}, 150_000);
+
+	it("reports a partial run when the Stryker child fails after writing an incremental report", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		try {
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({
+					exitCode: 1,
+					writeReport: false,
+					writeIncremental: true,
+				}),
+			);
+			const result = runDriverResult(fixture.root, ["--base", "main"], 120_000);
+			expect(result.status).toBe(1);
+			const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+			expect(output).toContain("partial report");
+			expect(output).toContain("survived:");
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(report.piLensMutationDiff.partial).not.toBeNull();
+			expect(report.piLensMutationDiff.zeroMutants).toBeNull();
+		} finally {
+			fixture.cleanup();
+		}
+	}, 150_000);
+});
+
+describe("driver stage dispositions, spawned for real (#3856 F3 arm)", () => {
+	it("names the wait with its own log sink, then refuses behind an exclusive holder (F3 arm)", async () => {
+		// #3853's block is only live while an exclusive holder waits: the heartbeat
+		// goes through the driver's OWN `log` option (its own `mutation diff:`
+		// prefix) and the timeout throw goes through its catch. A run that takes the
+		// lock silently cannot tell either from a skipped lock.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+		});
+		const home = join(fixture.root, "home");
+		mkdirSync(home, { recursive: true });
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = home;
+		const exclusive = await acquireTestLock({
+			lockPath: getLockPath(),
+			slots: 2,
+			pollIntervalMs: 10,
+			heartbeatIntervalMs: 3_600_000,
+		});
+		try {
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				PI_LENS_HOME: home,
+				PI_LENS_TEST_LOCK_TIMEOUT_MS: "800",
+				PI_LENS_TEST_LOCK_HEARTBEAT_MS: "100",
+				PI_LENS_TEST_LOCK_POLL_MS: "20",
+			};
+			delete env.PI_LENS_TEST_NO_LOCK;
+			const result = spawnSync(
+				process.execPath,
+				[driverPath, "--base", "HEAD"],
+				{ cwd: fixture.root, encoding: "utf8", timeout: 30_000, env },
+			);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain(
+				"mutation diff: waiting for a shared test-suite slot: exclusive test-suite lock held by",
+			);
+			expect(result.stderr).toContain(
+				"mutation diff: timed out after 800ms waiting for test-suite lock",
+			);
+			expect(result.stderr).toContain("exclusive test-suite lock held by PID");
+		} finally {
+			await exclusive.release();
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			fixture.cleanup();
+		}
+	}, 120_000);
+
+	it("skips the lock when the bypass is set, even behind an exclusive holder (F3 arm)", async () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+		});
+		const home = join(fixture.root, "home");
+		mkdirSync(home, { recursive: true });
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = home;
+		const exclusive = await acquireTestLock({
+			lockPath: getLockPath(),
+			slots: 2,
+			pollIntervalMs: 10,
+			heartbeatIntervalMs: 3_600_000,
+		});
+		try {
+			const result = spawnSync(
+				process.execPath,
+				[driverPath, "--base", "HEAD"],
+				{
+					cwd: fixture.root,
+					encoding: "utf8",
+					timeout: 30_000,
+					env: {
+						...process.env,
+						PI_LENS_HOME: home,
+						PI_LENS_TEST_NO_LOCK: "1",
+						PI_LENS_TEST_LOCK_TIMEOUT_MS: "300",
+					},
+				},
+			);
+			expect(result.status).toBe(0);
+			expect(result.stderr).not.toContain(
+				"exclusive test-suite lock held by PID",
+			);
+		} finally {
+			await exclusive.release();
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			fixture.cleanup();
+		}
+	}, 120_000);
+
+	it("hands the nested-driver bypass to the Stryker child (F3 arm)", () => {
+		// The slot above already covers the vitest pools the Stryker child forks,
+		// and the driver's own test file spawns the driver again; without this the
+		// nested driver would wait on its parent. The Stryker child records the
+		// environment it inherited.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		const home = join(fixture.root, "home");
+		mkdirSync(home, { recursive: true });
+		const previousHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = home;
+		try {
+			const env: NodeJS.ProcessEnv = { ...process.env, PI_LENS_HOME: home };
+			delete env.PI_LENS_TEST_NO_LOCK;
+			runDriverWithEnv(fixture.root, ["--base", "main"], 120_000, env);
+			const invocations = fakeStrykerInvocations(fixture.root);
+			expect(invocations[0].noLock).toBe("1");
+		} finally {
+			if (previousHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previousHome;
+			fixture.cleanup();
+		}
+	}, 150_000);
+
+	it("keeps an aborted probe out of coverage mode when the budget signal fires (F3 arm)", () => {
+		// The probe deadline is a share of the remaining budget. A probe that runs
+		// longer than the share aborts, so every candidate becomes `unknown` and
+		// the driver falls back to the import graph. A deadline four times larger
+		// lets the same probe finish and switches to coverage mode.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+		});
+		try {
+			writeFileSync(
+				join(fixture.root, "tests", "scripts", "thing.test.ts"),
+				'import { expect, it } from "vitest";\nimport { changed } from "../../scripts/thing.mjs";\nit("sleeps past the probe share", async () => {\n\tawait new Promise((resolve) => setTimeout(resolve, 4000));\n\texpect(changed()).toBe(2);\n});\n',
+			);
+			runDriver(
+				fixture.root,
+				["--base", "main", "--budget-minutes", "0.2"],
+				120_000,
+			);
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			// The fast sibling finishes, the sleeper aborts: one unknown, coverage
+			// mode. With a four-times-larger deadline the sleeper finishes too and no
+			// probe is unknown.
+			expect(report.piLensMutationDiff.testSelection.mode).toBe("coverage");
+			expect(report.piLensMutationDiff.testSelection.unknown).toBe(1);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 150_000);
+
+	it("treats a successful probe with no coverage report as zero, not a crash (F3 arm)", () => {
+		// A probe that exits 0 without writing a report is `0` covered lines, and
+		// its scratch directory is removed even though vitest never made it. A
+		// `force: false` removal throws on that absent directory, and a
+		// `recursive: false` removal throws on the non-empty one a written report
+		// makes -- both turn a clean probe into `unknown`.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			fakeVitest: true,
+		});
+		try {
+			const absent = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(absent).toContain("mutation diff: measuring which of");
+			expect(absent).not.toContain("no coverage answer for");
+			mkdirSync(join(fixture.root, ".fake-vitest"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-vitest", "control.json"),
+				JSON.stringify({ writeCoverage: true }),
+			);
+			const present = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(present).not.toContain("no coverage answer for");
+		} finally {
+			fixture.cleanup();
+		}
+	}, 120_000);
+
+	it("skips a compiled source with no emitted output instead of probing a missing js (F3 arm)", () => {
+		// A changed `clients/` source tsc never emits (it is not in the
+		// tsconfig `files`) has no index entry. Its `probeInclude`/`probeRanges`
+		// entry must be skipped, never handed to the probe as a missing `.js`.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+			skippedCompiled: true,
+			fakeVitest: true,
+		});
+		try {
+			// One probe writes a report and the rest do not: `lines` is then a real
+			// answer, so a probe whose scratch directory cannot be removed is a
+			// named `unknown`, never a silent clean zero.
+			mkdirSync(join(fixture.root, ".fake-vitest"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-vitest", "control.json"),
+				JSON.stringify({ writeCoverageFor: ["tests/scripts/thing.test.ts"] }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			const invocations = fakeVitestInvocations(fixture.root);
+			expect(invocations.length).toBeGreaterThan(0);
+			for (const invocation of invocations) {
+				expect(invocation.includes).toContain("clients/thing.js");
+				expect(invocation.includes).not.toContain("clients/skipped.js");
+			}
+			expect(output).not.toContain("no coverage answer for");
+		} finally {
+			fixture.cleanup();
+		}
+	}, 120_000);
+
+	it("reports an unparseable source map and skips the compiled source (F3 arm)", () => {
+		// The `.js` and `.js.map` exist, so the `existsSync` guard passes and the
+		// JSON read is what fails: the error is logged, the source is recorded as
+		// skipped, and the run continues.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: true,
+			corruptCompiled: true,
+		});
+		try {
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("unreadable source map for clients/corrupt.ts");
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			// Only the corrupt source is skipped; the readable compiled one is not.
+			expect(report.piLensMutationDiff.filesNoSourceMap).toEqual([
+				"clients/corrupt.ts",
+			]);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 120_000);
+
+	it("mutates a covered file whose only change is whitespace (F3 arm)", () => {
+		// The changed-line ranges the lane mutates are read WITHOUT `-w`; only the
+		// cap's weighting ignores whitespace. A covered whitespace-only file must
+		// still contribute its ranges.
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			whitespaceCovered: true,
+		});
+		try {
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("mutation diff: mutating ");
+			expect(output).toContain("scripts/ws.mjs:");
+		} finally {
+			fixture.cleanup();
+		}
+	}, 120_000);
 });
 
 describe("stryker diff selection", () => {
