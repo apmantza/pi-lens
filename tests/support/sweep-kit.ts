@@ -765,11 +765,39 @@ export function readWalkedFiles(
  *
  * Declarations are matched by shape at the start of the line: `function`/
  * `class` (with `export`/`default`/`abstract`/`async` modifiers), or a
- * `const`/`let` bound to a name. The walk goes upward and returns the FIRST
- * match — the nearest enclosing declaration, on the assumption true of every
- * #2442 site: a flagged statement sits directly inside the body of the
- * declaration immediately above it. `maxLookback` bounds the walk so one
- * pathological file can't turn this into an O(fileSize) scan per occurrence.
+ * `const`/`let` bound to a name. The result is the nearest such declaration
+ * strictly above the flagged line, on the assumption true of every #2442
+ * site: a flagged statement sits directly inside the body of the declaration
+ * immediately above it.
+ *
+ * ## Why this is a per-file index, not a per-occurrence window (#3938)
+ *
+ * This used to walk UP from `lineIndex` for at most `maxLookback = 400`
+ * physical lines. Crossing that window silently dropped the function-name
+ * identity component: the SAME statement in the SAME function produced
+ * `path#handleToolResult:hash~ctx` at distance 400 and `path#hash~ctx` at
+ * distance 402 (master's #3650 inserted two harmless lines inside
+ * `handleToolResult` and re-keyed a live exemption; #3824 swapped the table
+ * entry by hand, which is the drift this shape keeps producing). A numeric
+ * window is not identity: identity is "the nearest declaration above", and
+ * that fact does not change when unrelated lines are inserted.
+ *
+ * The lookup is now a REQUEST-LOCAL pass: {@link enclosingOwnerIndex} scans
+ * the file ONCE, forward, recording for every line the nearest declaration
+ * strictly above it. One O(lines) pass per distinct `lines` array, memoised
+ * in a `WeakMap` keyed on that array, so a scan that flags k occurrences in
+ * one file pays O(lines) total, not O(k × lines) — the per-occurrence bound
+ * the old cap existed to solve, solved without a magic distance. Work is
+ * bounded on both axes: one pass per distinct array, and each pass visits
+ * each line once.
+ *
+ * Ownership is LEXICAL (#3938 r2): the lines are passed through the shared
+ * {@link stripSource} seam (`strings: "blank"`) before the declaration match,
+ * so a column-0 `function`/`const`-shaped line inside a multi-line block
+ * comment or template literal is blanked to spaces and is NOT an owner. This
+ * is the same comment/string stripper every sweep already runs for detection;
+ * it preserves length, line count and column layout, so the blanked line index
+ * is still the raw line index, and the flagged line's own hash stays RAW.
  *
  * Matched at column 0 ONLY — no leading whitespace. This repo's shipped
  * source declares every top-level function/class/const at column 0, so
@@ -781,25 +809,75 @@ export function readWalkedFiles(
  * variable, instead of `recordTrackedInit`. The trade is real: a declaration
  * nested inside a class or namespace is invisible to this pattern and falls
  * back to the content hash in {@link stableOccurrenceKey}, same as a
- * module-scope site with no enclosing declaration at all.
+ * module-scope site with no enclosing declaration at all. Partial coverage is
+ * therefore explicit: an unmatched line has an UNKNOWN owner and the hash
+ * alone is the key, never a guessed name.
  */
 const DECLARATION_PATTERN =
 	/^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\s*\*?\s+|class\s+)([A-Za-z_$][\w$]*)|^(?:export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*[:=]/;
 
+/**
+ * Per-file memo for {@link findEnclosingSymbol}. The key is the `lines` array
+ * the caller already holds for one file, so the entry lives exactly as long
+ * as that scan: this is request-local derived state, not a cross-request
+ * cache, and the `WeakMap` lets a finished scan's arrays be collected.
+ */
+const ENCLOSING_OWNER_INDEX = new WeakMap<
+	readonly string[],
+	readonly (string | undefined)[]
+>();
+
+/**
+ * One forward pass over the comment/string-BLANKED lines, recording for every
+ * index the nearest column-0 declaration STRICTLY ABOVE it (`undefined` when
+ * there is none). The array is memoised per `lines` identity; see
+ * {@link ENCLOSING_OWNER_INDEX}.
+ *
+ * Ownership is lexical: the text goes through the shared {@link stripSource}
+ * seam (`strings: "blank"`) before matching. A declaration-shaped line inside
+ * a multi-line block comment or template literal is blanked to spaces and is
+ * never an owner, while a real column-0 declaration is untouched. The strip
+ * preserves length, line count and column layout, so a blanked index is the
+ * same raw index the flagged line's own hash uses.
+ */
+function enclosingOwnerIndex(
+	lines: readonly string[],
+): readonly (string | undefined)[] {
+	const cached = ENCLOSING_OWNER_INDEX.get(lines);
+	if (cached !== undefined) return cached;
+	const blanked = stripSource(lines.join("\n")).split("\n");
+	const owners: (string | undefined)[] = new Array(lines.length);
+	let owner: string | undefined;
+	for (let i = 0; i < lines.length; i++) {
+		// Assigned BEFORE matching line i, so a flagged occurrence that itself
+		// reads as `const x = ...` (the eviction idiom's own shape) never
+		// resolves to ITSELF as its own "enclosing" declaration.
+		owners[i] = owner;
+		const match = DECLARATION_PATTERN.exec(blanked[i] ?? "");
+		if (match) owner = match[1] ?? match[2];
+	}
+	ENCLOSING_OWNER_INDEX.set(lines, owners);
+	return owners;
+}
+
+/**
+ * Nearest named function/class/const-or-let declaration STRICTLY ABOVE
+ * `lineIndex` (0-based) that is real CODE. The text is matched after
+ * {@link stripSource} blanks comments and string/template contents, so a
+ * declaration-shaped interior line is never an owner. `lineIndex` must be a
+ * valid index into `lines` (`0 <= lineIndex < lines.length`); an out-of-range
+ * index returns `undefined`.
+ *
+ * Contract: the caller must not mutate `lines` after the first call. The owner
+ * index is memoised on the array's identity, so an in-place edit makes a later
+ * call return the pre-edit owner. Every production caller builds the array
+ * once and only reads it.
+ */
 export function findEnclosingSymbol(
 	lines: readonly string[],
 	lineIndex: number,
-	maxLookback = 400,
 ): string | undefined {
-	// Starts ABOVE lineIndex, never on it: a flagged occurrence that itself
-	// happens to read as `const x = ...` (the eviction idiom's own shape) must
-	// never resolve to ITSELF as its own "enclosing" declaration.
-	const floor = Math.max(0, lineIndex - maxLookback);
-	for (let i = lineIndex - 1; i >= floor; i--) {
-		const match = DECLARATION_PATTERN.exec(lines[i] ?? "");
-		if (match) return match[1] ?? match[2];
-	}
-	return undefined;
+	return enclosingOwnerIndex(lines)[lineIndex];
 }
 
 /**
@@ -827,6 +905,12 @@ export function findEnclosingSymbol(
  * built to close, one layer down. `auditRegistry`'s `requireUniqueFlagged`
  * (default on) is the backstop: it fails loud on any duplicate flagged key
  * rather than let a caller of this function rely on the hash alone.
+ *
+ * The enclosing-symbol lookup is distance-independent (#3938): see
+ * {@link findEnclosingSymbol}. An insert ABOVE the declaration, an insert
+ * between the declaration and the flagged line, and an insert directly at the
+ * flagged line are three different keys: the first two leave the key
+ * unchanged, the third changes the content hash.
  */
 export function stableOccurrenceKey(
 	relPath: string,

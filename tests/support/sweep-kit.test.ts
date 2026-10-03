@@ -630,6 +630,178 @@ describe("sweep-kit: findEnclosingSymbol / stableOccurrenceKey (#2475)", () => {
 			/^fixture\.ts#[0-9a-f]{8}$/,
 		);
 	});
+
+	// #3938: the old lookup walked up at most 400 physical lines. A harmless
+	// insertion could push the SAME statement in the SAME function past that
+	// window, which silently dropped the symbol component and re-keyed a live
+	// exemption. Identity is the nearest column-0 declaration above, and that
+	// fact does not move when unrelated lines land.
+	describe("request-local enclosing-owner index (#3938)", () => {
+		const FILLER = 397;
+		/**
+		 * Compile-valid handler. `filler` sets the flagged line's distance from the
+		 * declaration; `prepend` inserts harmless lines directly after the
+		 * declaration — far from the flagged line, so its neighbours (the
+		 * `~context` suffix) do not move.
+		 */
+		function longHandlerLines(
+			filler = FILLER,
+			prepend: string[] = [],
+			flagged = "\tawait sweepInlineBlockerFreshness(deps);",
+		): string[] {
+			const lines = [
+				"export async function longHandler(deps: ProbeDeps): Promise<void> {",
+				...prepend,
+			];
+			for (let i = 0; i < filler; i++) lines.push(`\tconst filler${i} = ${i};`);
+			lines.push(flagged);
+			lines.push("}");
+			return lines;
+		}
+
+		it("finds the enclosing declaration beyond the old 400-line window", () => {
+			const lines = longHandlerLines(401);
+			const flagged = lines.length - 2;
+			// The fixture's whole point: the flagged line sits >400 lines below
+			// its declaration, where the old bounded walk returned undefined.
+			expect(flagged).toBeGreaterThan(400);
+			expect(findEnclosingSymbol(lines, flagged)).toBe("longHandler");
+		});
+
+		it("a harmless insertion above the flagged line leaves the key unchanged across the old boundary", () => {
+			// Start just INSIDE the old window (distance 397) so the insertion is
+			// what carries the flagged line past 400 — the exact drift #3824 hit
+			// when master inserted two lines inside `handleToolResult`.
+			const lines = longHandlerLines(FILLER - 1);
+			const before = stableOccurrenceKey("fixture.ts", lines, lines.length - 2);
+			expect(before).toMatch(/^fixture\.ts#longHandler:[0-9a-f]{8}$/);
+
+			const inserted = longHandlerLines(FILLER - 1, [
+				"\t// unrelated padding another PR landed",
+				"\t// four more harmless lines",
+				"\t// to push the await past 400",
+				"\tconst unrelated = 1;",
+				"\tconst unrelated2 = 2;",
+				"\tconst unrelated3 = 3;",
+			]);
+			// Pre-#3938 the flagged line is now >400 below the declaration and
+			// the symbol component was dropped, so the key changed.
+			const after = stableOccurrenceKey(
+				"fixture.ts",
+				inserted,
+				inserted.length - 2,
+			);
+			expect(after).toBe(before);
+		});
+
+		it("a key CHANGES on a genuine replacement statement beyond 400 lines", () => {
+			const lines = longHandlerLines();
+			const flagged = lines.length - 2;
+			const before = stableOccurrenceKey("fixture.ts", lines, flagged);
+			const replaced = [...lines];
+			replaced[flagged] = "\tawait aGenuinelyDifferentCall(deps);";
+			expect(stableOccurrenceKey("fixture.ts", replaced, flagged)).not.toBe(
+				before,
+			);
+		});
+
+		it("fixture pin: the drifted handleToolResult await derives its symbol after padding", () => {
+			// Independent of the live scan: the same shape as
+			// `clients/runtime-tool-result.ts`'s recursive await, whose harmless
+			// two-line insertion (#3650) re-keyed it from
+			// `#handleToolResult:a1bef279~57385903` to `#a1bef279~57385903`.
+			const lines = [
+				"async function handleToolResult(args: ToolResultArgs): Promise<Result> {",
+			];
+			for (let i = 0; i < 397; i++) lines.push(`\tconst filler${i} = ${i};`);
+			lines.push("\t// unrelated whitespace landed by another PR");
+			lines.push("\tconst syntheticResult = await handleToolResult({");
+			lines.push("\t\t...args,");
+			lines.push("\t});");
+			lines.push("\treturn syntheticResult;");
+			lines.push("}");
+			const flagged = lines.length - 4; // the `const syntheticResult` line
+			expect(
+				stableOccurrenceKey("clients/runtime-tool-result.ts", lines, flagged),
+			).toMatch(
+				/^clients\/runtime-tool-result\.ts#handleToolResult:[0-9a-f]{8}$/,
+			);
+		});
+
+		it("a comment or string shaped like a declaration is never an owner", () => {
+			const lines = [
+				"// function commentFake() {",
+				'"function stringFake() {";',
+				"  function indentedFake() {",
+				"export function realOwner() {",
+				"\tawait work();",
+				"}",
+			];
+			expect(findEnclosingSymbol(lines, 4)).toBe("realOwner");
+
+			// A MULTI-LINE interior whose column-0 line IS declaration-shaped is
+			// the case the single-line shapes cannot reach: the old raw-text match
+			// treated it as an owner. The owner now comes from the shared
+			// `stripSource` seam, so both interiors blank to spaces (#3938 AC5).
+			const multiLine = [
+				"export function realOwner() {",
+				"/*",
+				"function fakeFromComment() {",
+				"*/",
+				"\tconst template = `",
+				"function fakeFromString() {",
+				"`;",
+				"\tawait work();",
+				"}",
+			];
+			expect(findEnclosingSymbol(multiLine, 7)).toBe("realOwner");
+		});
+
+		it("hashes the flagged line RAW while deriving the owner from blanked text", () => {
+			// Two raw lines that blank to the SAME text (`\tconst s = "";`)
+			// but differ as written. If the hash were taken from the blanked line
+			// they would collide; hashing the RAW line keeps them distinct, so an
+			// edit to the flagged statement still re-triggers review.
+			const lines = [
+				["function owner() {", '\tconst s = "one";', "}"],
+				["function owner() {", '\tconst s = "two";', "}"],
+			];
+			const [one, two] = lines.map((l) =>
+				stableOccurrenceKey("fixture.ts", l, 1),
+			);
+			expect(one).toMatch(/^fixture\.ts#owner:[0-9a-f]{8}$/);
+			expect(two).toMatch(/^fixture\.ts#owner:[0-9a-f]{8}$/);
+			expect(one).not.toBe(two);
+		});
+
+		it("an out-of-range lineIndex returns no owner (0 <= lineIndex < lines.length)", () => {
+			const lines = ["function owner() {", "\ta();", "}"];
+			expect(findEnclosingSymbol(lines, 2)).toBe("owner");
+			expect(findEnclosingSymbol(lines, 3)).toBeUndefined();
+			expect(findEnclosingSymbol(lines, -1)).toBeUndefined();
+		});
+
+		it("a malformed, unbalanced fragment still resolves the nearest declaration without throwing", () => {
+			const lines = [
+				"export function brokenOwner() {",
+				"\tif (true) {",
+				"\tawait work();",
+				// no closing braces: a truncated/ambiguous fragment
+			];
+			expect(findEnclosingSymbol(lines, 2)).toBe("brokenOwner");
+			expect(stableOccurrenceKey("fixture.ts", lines, 2)).toMatch(
+				/^fixture\.ts#brokenOwner:[0-9a-f]{8}$/,
+			);
+		});
+
+		it("a line with no declaration above has an honest unknown owner (bare hash)", () => {
+			const lines = ["await topLevelWork();"];
+			expect(findEnclosingSymbol(lines, 0)).toBeUndefined();
+			expect(stableOccurrenceKey("fixture.ts", lines, 0)).toMatch(
+				/^fixture\.ts#[0-9a-f]{8}$/,
+			);
+		});
+	});
 });
 
 // ── 2. Registry semantics ───────────────────────────────────────────────────

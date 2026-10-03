@@ -137,6 +137,31 @@ describe("buildRekeyPlan", () => {
 		expect(refused).toBe(true);
 	});
 
+	// (b2) #3938's migration case: the SAME statement's head gains an
+	// enclosing-symbol component because the owner lookup became
+	// distance-independent. The own-line hash and the neighbourhood context
+	// are byte-identical, but the head string differs, so the tool must
+	// REFUSE. That is why the table's 105-key migration was proven and applied
+	// by hand (same file + same own-line hash + same context) instead of by
+	// loosening this matcher into a count- or suffix-based rename.
+	it("REFUSES a bare head that only gains its enclosing symbol (#3938)", () => {
+		const oldKeys = ["clients/foo.ts#70abab7e~0e2c385e"];
+		const newOccurrences = [
+			occurrence(
+				"clients/foo.ts#bar:70abab7e~0e2c385e",
+				"clients/foo.ts:12  await something();",
+			),
+		];
+
+		const plan = buildRekeyPlan(oldKeys, newOccurrences);
+
+		expect(plan.changed).toEqual([]);
+		expect(plan.mapping.size).toBe(0);
+		expect(plan.unresolved).toHaveLength(1);
+		expect(plan.unresolved[0].oldKey).toBe("clients/foo.ts#70abab7e~0e2c385e");
+		expect(plan.unresolved[0].reason).toMatch(/no current occurrence/);
+	});
+
 	it("pairs duplicate-content occurrences positionally within one head bucket, not across heads", () => {
 		// Two occurrences of the byte-identical line under the same symbol,
 		// distinguished only by neighbourhood context -- exactly the shape
