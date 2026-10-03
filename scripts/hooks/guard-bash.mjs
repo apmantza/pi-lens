@@ -108,12 +108,16 @@
  * `<<<` here-strings (content inert, substitutions live); `#` comments,
  * recognized only at a word start the way bash does (`a#b` is not a
  * comment); backslash-newline line continuation; a leading `{`
- * command-group brace and `command`/`exec`/`env`/`sudo`/`time` runner
+ * command-group brace, the shell keywords and operators that run the next
+ * word (`do`, `then`, `else`, `elif`, `if`, `while`, `until`, `!`,
+ * `coproc`; #3787) and `command`/`exec`/`env`/`sudo`/`time` runner
  * prefixes; `export VAR=val` persisted forward to later segments of the
  * same scan; a command word resolved by its final path segment
  * (`/usr/bin/git` == `./git` == `git`); leading `FOO=bar` env assignments
- * and `-c <k>=<v>` / `-C <dir>` git global options; a backslash-escaped
- * command word (`\g\i\t stash`, which bash runs).
+ * and the git global options that take a separate value (`-c <k>=<v>`,
+ * `-C <dir>`, `--git-dir`, `--work-tree`, `--namespace`, `--config-env`,
+ * `--attr-source`; #3787); a backslash-escaped command word
+ * (`\g\i\t stash`, which bash runs).
  *
  * ## NOT handled (accepted; no test claims otherwise)
  *
@@ -129,9 +133,8 @@
  *     a runtime-computed word.
  *   - `require(mod)` with a variable specifier, for the probe rule.
  *   - A hook bypass spelled some other way (#3778):
- *     `GIT_CONFIG_KEY_0=core.hooksPath`, the separate-token
- *     `--config-env core.hooksPath=X`, a hand edit of `.git/config`, or `git
- *     commit` through an alias. (`--no-veri`/`--no-verif` ARE matched; `--no-ver`
+ *     `GIT_CONFIG_KEY_0=core.hooksPath`, a hand edit of `.git/config`, or
+ *     `git commit` through an alias. (`--no-veri`/`--no-verif` ARE matched; `--no-ver`
  *     is ambiguous, so git itself rejects it.)
  *   - `kill $(pgrep -f tlc2.TLC)` and `pgrep -f tlc2 | xargs kill` (#3556
  *     review F6): the same machine-wide kill harm `sharedKill` denies, but
@@ -749,8 +752,18 @@ export function stripEnvAssignments(words) {
 	return { env, rest: words.slice(i) };
 }
 
-/** Global git flags that consume a SEPARATE following token as their value. */
-const GIT_TWO_TOKEN_FLAGS = new Set(["-C", "-c"]);
+/** Global git flags that consume a SEPARATE following token as their value
+ *  (#3787, each probed against git 2.53: `--exec-path` takes its value only
+ *  as `=`, and `--super-prefix` is rejected as an unknown option). */
+const GIT_TWO_TOKEN_FLAGS = new Set([
+	"-C",
+	"-c",
+	"--git-dir",
+	"--work-tree",
+	"--namespace",
+	"--config-env",
+	"--attr-source",
+]);
 
 /**
  * Does `dir` look like a git WORKTREE checkout -- checked the same way git
@@ -820,10 +833,10 @@ function hasNodeModulesSymlinkOutside(worktreeDir) {
 }
 
 /**
- * Walk past a `git` invocation's global options (`-C <dir>` and
- * `-c <key>=<value>` take a separate value; every other `-x`/`--x` global
- * option is assumed to take none, which is all #2699's deny/allow strings
- * need) and return the index of the subcommand word. Shared by
+ * Walk past a `git` invocation's global options (the {@link
+ * GIT_TWO_TOKEN_FLAGS} take a separate value; every other `-x`/`--x` global
+ * option is assumed to take none) and return the index of the subcommand
+ * word. Shared by
  * {@link classifyGit} (deciding stash/reset/worktree/clone) and
  * {@link classifyCheckOrWrite} (deciding commit/push for #3471), so the
  * global-option skip lives in exactly one place.
@@ -1753,19 +1766,41 @@ function classifyTempDirVars(env) {
 const RUNNER_PREFIX_WORDS = new Set(["command", "exec", "env", "sudo", "time"]);
 
 /**
- * Strip a leading `{` command-group brace and any leading runner-prefix
- * words (repeated, so `command env git stash` and `{ sudo git stash` both
- * resolve to `git stash`). `env`'s own `FOO=bar` assignments (if any) still
- * parse correctly afterward via {@link stripEnvAssignments} once `env`
- * itself is dropped.
+ * Reserved words and operators after which bash runs the NEXT word as a
+ * command (#3787, each probed in bash 5.3: the side effect happened). Not
+ * `case`/`esac`/`fi`/`done`/`in`/`select`: they run nothing at that word, and
+ * a `case` arm is split off by its `)`.
+ */
+const COMMAND_KEYWORDS = new Set([
+	"{",
+	"!",
+	"do",
+	"then",
+	"else",
+	"elif",
+	"if",
+	"while",
+	"until",
+	"coproc",
+]);
+
+/**
+ * Strip any leading `{` brace, shell keyword ({@link COMMAND_KEYWORDS}) and
+ * runner-prefix words, in any order and repeated, so `command env git stash`,
+ * `{ sudo git stash` and `do git stash` all resolve to `git stash`. `env`'s
+ * own `FOO=bar` assignments (if any) still parse correctly afterward via
+ * {@link stripEnvAssignments} once `env` itself is dropped.
  *
  * @param {string[]} words
  * @returns {string[]}
  */
 function stripCommandGroupAndRunnerPrefixes(words) {
 	let i = 0;
-	if (words[i] === "{") i++;
-	while (i < words.length && RUNNER_PREFIX_WORDS.has(words[i])) i++;
+	while (
+		i < words.length &&
+		(COMMAND_KEYWORDS.has(words[i]) || RUNNER_PREFIX_WORDS.has(words[i]))
+	)
+		i++;
 	return words.slice(i);
 }
 
@@ -1960,6 +1995,11 @@ function isCheckScriptPath(fileArg) {
 function classifyCheckOrWrite(rawSegment) {
 	const rawWords = splitWords(rawSegment);
 	if (rawWords.length === 0) return null;
+	// A keyword-led segment is neither (#3787): stripping `if`/`while`/`until`
+	// would turn a loop's own condition into a "check" that its `;`-joined
+	// `done`/`fi` never gates, and deny `until npm test; do …; done && git
+	// push`. Control flow is writeIsInsideControlFlow's job here.
+	if (rawWords[0] !== "{" && COMMAND_KEYWORDS.has(rawWords[0])) return null;
 	const words = stripCommandGroupAndRunnerPrefixes(rawWords);
 	if (words.length === 0) return null;
 	const { rest: afterEnv } = stripEnvAssignments(words);
