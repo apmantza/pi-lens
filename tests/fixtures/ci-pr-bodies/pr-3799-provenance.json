@@ -1,0 +1,24 @@
+{
+  "source": "Published pull request #3799 (#3791 coverage notice per pull)",
+  "baseRefOid": "02ba3719cc28b984614f8df05c193bcd1ca8f28e",
+  "headRefOid": "adde1de13ca3df719ca318652ec0590dfe010914",
+  "mergeCommitOid": "5c790295ec75d44e4b4942f844d8a6bb4cbfce13",
+  "bodyPath": "pr-3799-body.md",
+  "bodySha256": "63dbca3c1835a9c9f8fe17b35dc964b965a4fdba304db955c85e0a9a3645e49c",
+  "diffPath": "pr-3799.diff",
+  "diffSha256": "d4263914c6a9f34b94e78b98d76b7df7f798f4e8f0d43cad6485d5f34dcaffe8",
+  "postImages": {
+    "clients/dispatch/dispatcher.ts": {
+      "path": "pr-3799-dispatcher.ts.txt",
+      "oid": "d4ca357bdef0cbdc4311c0a390758fc4fdff1f18"
+    },
+    "clients/dispatch/integration.ts": {
+      "path": "pr-3799-integration.ts.txt",
+      "oid": "97e7d35d69712375308742cc17e86b01d9be8314"
+    },
+    "clients/mcp/analyze.ts": {
+      "path": "pr-3799-analyze.ts.txt",
+      "oid": "543e9473c69367b8b0838be9e4289d31b00274ad"
+    }
+  }
+}

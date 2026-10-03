@@ -1,0 +1,25 @@
+{
+  "source": "Archived `--unified=0` post-image blobs named by the #3770, #3774, and #3785 runtime fixtures. CI checks out at depth 1, so the historical objects are unreachable; the bytes are vendored beside the fixtures and pinned by the git blob oid each diff's `index` line names (#3945).",
+  "postImages": {
+    "clients/installer/index.ts": {
+      "path": "pr-3770-installer-index.ts.txt",
+      "oid": "1d0ea5a6dde091e196d412f8c7bf537133bc0c27"
+    },
+    "clients/lsp/server.ts": {
+      "path": "pr-3770-lsp-server.ts.txt",
+      "oid": "37421a9b2dfef420df29c68d513c2e3a88211ddf"
+    },
+    "clients/fix-run-restore.ts": {
+      "path": "pr-3774-fix-run-restore.ts.txt",
+      "oid": "6ae97db92ad25c06b0c2d676f4293cea1eecb7f5"
+    },
+    "clients/read-guard.ts": {
+      "path": "pr-3785-read-guard.ts.txt",
+      "oid": "b4a6590ef59f2584aaa0f994b2c644a38fcb3ee3"
+    },
+    "clients/runtime-tool-call.ts": {
+      "path": "pr-3785-runtime-tool-call.ts.txt",
+      "oid": "5912311c5abdc1ac02ea710f78dde9c0f1b3fb31"
+    }
+  }
+}

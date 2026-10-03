@@ -48,7 +48,7 @@ export declare function lintLocalPrBody(
 	body: string,
 	cwd?: string,
 	git?: (args: string[], options?: Record<string, unknown>) => string,
-	options?: { title?: string; ref?: string },
+	options?: { title?: string; ref?: string; headFiles?: Map<string, string> },
 ): { valid: boolean; errors: string[] };
 export declare function lintTlaCoverage(
 	body?: string,

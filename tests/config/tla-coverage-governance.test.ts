@@ -78,6 +78,12 @@ const READ_GUARD_DIFF = [
 	"+// touched",
 ].join("\n");
 
+// The runtime post-image must match the diff's added lines (#3906 r3), so a
+// synthetic diff supplies its own post-image instead of the real file.
+const READ_GUARD_HEAD_FILES = new Map([
+	["clients/read-guard.ts", "// touched"],
+]);
+
 function compareStrings(a: string, b: string) {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -383,7 +389,9 @@ describe("TLA+ coverage in the PR-body lint (#3802)", () => {
 			args.includes("--name-only")
 				? "clients/read-guard.ts\n"
 				: READ_GUARD_DIFF;
-		const result = lintLocalPrBody(BASE_BODY, REPO_ROOT, git as never);
+		const result = lintLocalPrBody(BASE_BODY, REPO_ROOT, git as never, {
+			headFiles: READ_GUARD_HEAD_FILES,
+		});
 		expect(result.valid).toBe(false);
 		expect(result.errors.join(" ")).toContain("formal/read-guard/");
 	});
@@ -394,7 +402,9 @@ describe("TLA+ coverage in the PR-body lint (#3802)", () => {
 				? "clients/read-guard.ts\n"
 				: READ_GUARD_DIFF;
 		const body = `${BASE_BODY}\n\nTLA+ unaffected: read-guard — only a local helper moved.\nTLA+ unaffected: session-lifecycle — the change does not touch session state.`;
-		const result = lintLocalPrBody(body, REPO_ROOT, git as never);
+		const result = lintLocalPrBody(body, REPO_ROOT, git as never, {
+			headFiles: READ_GUARD_HEAD_FILES,
+		});
 		expect(result.valid).toBe(true);
 	});
 });
@@ -444,5 +454,40 @@ describe("lintTlaCoverage seam (#3802)", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+// #3906 AC2: the #3799 delivery decision in clients/dispatch/dispatcher.ts is a
+// lifecycle/delivery seam with no formal family, so the row is `unmodelled`
+// with a real reason. The row gates the seam record rule; the TLA axis stays an
+// advisory. The #3799 corpus that exercises the refusal is in
+// tests/scripts/check-pr-body.test.ts.
+describe("dispatcher seam row (#3906 AC2)", () => {
+	it("maps clients/dispatch/dispatcher.ts as unmodelled with a real reason", () => {
+		expect(map.map?.["clients/dispatch/dispatcher.ts"]).toBe("unmodelled");
+		const reason = map.notes?.["clients/dispatch/dispatcher.ts"];
+		expect(typeof reason).toBe("string");
+		expect(reason?.length ?? 0).toBeGreaterThan(40);
+		expect(reason).toContain("buildCoverageNotice");
+		expect(reason).toMatch(/no formal family|unmodelled/i);
+	});
+
+	it("removes dispatch/dispatcher from the unlisted note but keeps its siblings", () => {
+		const unlisted = String(map.notes?.unlisted ?? "");
+		expect(unlisted).not.toContain("dispatch/dispatcher");
+		expect(unlisted).toContain("dispatch/types");
+		expect(unlisted).toContain("dispatch/utils/format-utils");
+	});
+
+	it("keeps the dispatcher advisory on the TLA axis", () => {
+		const result = evaluateTlaCoverage({
+			map,
+			changedFiles: ["clients/dispatch/dispatcher.ts"],
+			body: "",
+		});
+		expect(result.errors).toEqual([]);
+		expect(result.advisories.join(" ")).toContain(
+			"clients/dispatch/dispatcher.ts",
+		);
 	});
 });

@@ -3,6 +3,7 @@ type GitOptions = {
 	env?: NodeJS.ProcessEnv;
 	encoding?: BufferEncoding;
 	stdio?: "ignore" | "pipe" | "inherit";
+	maxBuffer?: number;
 };
 
 export function envFor(

@@ -1,0 +1,734 @@
+diff --git a/.changelog/3791-analyze-coverage-per-pull.md b/.changelog/3791-analyze-coverage-per-pull.md
+new file mode 100644
+index 000000000..bc94ac98b
+--- /dev/null
++++ b/.changelog/3791-analyze-coverage-per-pull.md
+@@ -0,0 +1,5 @@
++---
++section: Fixed
++---
++
++- **Every `pilens_analyze` pull reports an unanalysable file (#3791)** — The dispatcher latched its synthetic coverage notice once per session, so a second warm `pilens_analyze` call for a file with no toolchain returned zero counts and an empty diagnostics list — a silent false clean. The pi push surface keeps its once-per-session notice; the MCP pull surface, including the warm PostToolUse hook route, now repeats it on every call, matching the cold hook route.
+diff --git a/AGENTS.md b/AGENTS.md
+index e24a3aab3..d2810c453 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -686,6 +686,12 @@ ADR: docs/adr/0009-reported-path-attribution.md
+   Every model-facing diagnostic, blocker, advisory, widget, nudge, and snapshot
+   either passes the shared freshness/disposition gate or carries an explicit
+   bounded age label.
++- The dispatcher coverage notice (`buildCoverageNotice`) latches once per
++  session (`coverageNoticeSeen`) for the pi push surface; pull surfaces
++  (`pilens_analyze`, including its warm PostToolUse hook route) pass
++  `dedupeCoverageNotice: false` so every call carries the notice and the push
++  latch stays untouched (#3791). The warm hook deliberately repeats the notice
++  on every edit, matching its cold hook route.
+ - `pilens:files:touched` publishers are `clients/pipeline.ts` and
+   `clients/runtime-agent-end.ts`; `clients/agent-nudge.ts` is the subscriber.
+   `clients/lsp-mutation.ts` has an optional callback but is not a publisher until
+diff --git a/clients/dispatch/dispatcher.ts b/clients/dispatch/dispatcher.ts
+index 3ff563167..d4ca357bd 100644
+--- a/clients/dispatch/dispatcher.ts
++++ b/clients/dispatch/dispatcher.ts
+@@ -607,9 +607,22 @@ export interface DispatchLatencyReport {
+ 	warnings: number;
+ }
+ 
++/**
++ * Build the synthetic coverage notice for this dispatch, or `undefined` when
++ * the runners covered the file.
++ *
++ * `dedupe` is the push/pull axis, always supplied by the sole caller
++ * (`dispatchForFile`). `true` is the pi push surface, where the session-scoped
++ * `coverageNoticeSeen` latch keeps a per-edit notice from repeating on every
++ * keystroke. A pull surface (`pilens_analyze`) passes `false`: each call is an
++ * independent question, so the notice must come back every time, and the latch
++ * is left untouched so a later push still gets its once-per-session notice
++ * (refs #3791).
++ */
+ function buildCoverageNotice(
+ 	ctx: DispatchContext,
+ 	runnerLatencies: RunnerLatency[],
++	dedupe: boolean,
+ ): Diagnostic | undefined {
+ 	if (!ctx.kind) return undefined;
+ 	const lspEnabled = !ctx.pi.getFlag("no-lsp");
+@@ -665,8 +678,10 @@ function buildCoverageNotice(
+ 		// scanner that recovered a delivery path (or lost one) kept the stale
+ 		// wording for the rest of the session.
+ 		const onceKey = `${ctx.kind}:${ctx.filePath}:${dedupeSet(silentServerIds)}|${dedupeSet(deferredServerIds)}`;
+-		if (coverageNoticeSeen.has(onceKey)) return undefined;
+-		coverageNoticeSeen.add(onceKey);
++		if (dedupe) {
++			if (coverageNoticeSeen.has(onceKey)) return undefined;
++			coverageNoticeSeen.add(onceKey);
++		}
+ 		const coverageParts: string[] = [];
+ 		if (deferredServerIds.length > 0) {
+ 			coverageParts.push(
+@@ -733,8 +748,10 @@ function buildCoverageNotice(
+ 	if (anyLinterHasCoverage) return undefined;
+ 
+ 	const onceKey = `${ctx.kind}:${ctx.filePath}`;
+-	if (coverageNoticeSeen.has(onceKey)) return undefined;
+-	coverageNoticeSeen.add(onceKey);
++	if (dedupe) {
++		if (coverageNoticeSeen.has(onceKey)) return undefined;
++		coverageNoticeSeen.add(onceKey);
++	}
+ 
+ 	return {
+ 		id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
+@@ -1180,6 +1197,12 @@ export async function dispatchForFile(
+ 	groups: RunnerGroup[],
+ 	registry: RunnerRegistryContract,
+ 	onRunnerResult?: RunnerResultSink,
++	/**
++	 * Push/pull coverage-notice dedupe (refs #3791). Defaults to `true` (the pi
++	 * push surface's once-per-session latch). A pull surface passes `false` so
++	 * every call carries the notice — see {@link buildCoverageNotice}.
++	 */
++	options?: { dedupeCoverageNotice?: boolean },
+ ): Promise<DispatchResult> {
+ 	const _overallStart = Date.now();
+ 	if (ctx.fileRole === "generated") {
+@@ -1416,7 +1439,11 @@ export async function dispatchForFile(
+ 
+ 	const inlineBlockers = blockers;
+ 	const inlineFixed = fixedItems;
+-	const coverageNotice = buildCoverageNotice(ctx, runnerLatencies);
++	const coverageNotice = buildCoverageNotice(
++		ctx,
++		runnerLatencies,
++		options?.dedupeCoverageNotice ?? true,
++	);
+ 
+ 	// Format output — only blocking issues shown inline
+ 	// Warnings tracked but not shown (noise) — surfaced via lens_diagnostics
+diff --git a/clients/dispatch/integration.ts b/clients/dispatch/integration.ts
+index c071e26ee..97e7d35d6 100644
+--- a/clients/dispatch/integration.ts
++++ b/clients/dispatch/integration.ts
+@@ -2874,6 +2874,12 @@ export async function dispatchLintWithResult(
+ 		 * DispatchContext.telemetryModel's doc. */
+ 		telemetryModel?: string;
+ 		telemetryProvider?: string;
++		/**
++		 * Pull surface (`pilens_analyze`): emit the coverage notice on every call
++		 * instead of latching it once per session (refs #3791). Leave unset for
++		 * the pi push surface, which keeps the once-per-session latch.
++		 */
++		dedupeCoverageNotice?: boolean;
+ 	},
+ ): Promise<DispatchResult> {
+ 	// Default true preserves the per-edit fast path (errors only). Callers that
+@@ -2930,7 +2936,19 @@ export async function dispatchLintWithResult(
+ 		}
+ 
+ 		await runProviders(ctx);
+-		const result = await dispatchForFile(ctx, groups, sessionRunnerRegistry);
++		const result = await dispatchForFile(
++			ctx,
++			groups,
++			sessionRunnerRegistry,
++			undefined,
++			// exactOptionalPropertyTypes: omit the key rather than pass
++			// `undefined`, which the target option type rejects (#3791).
++			{
++				...(options?.dedupeCoverageNotice !== undefined && {
++					dedupeCoverageNotice: options.dedupeCoverageNotice,
++				}),
++			},
++		);
+ 		trackSessionSlopStats(ctx, result.diagnostics);
+ 
+ 		// Schedule debounced ast-grep warning scan for jsts files.
+diff --git a/clients/mcp/analyze.ts b/clients/mcp/analyze.ts
+index b7cafc83d..543e9473c 100644
+--- a/clients/mcp/analyze.ts
++++ b/clients/mcp/analyze.ts
+@@ -485,6 +485,12 @@ export async function analyzeFile(
+ 		undefined,
+ 		{
+ 			blockingOnly: options.blockingOnly ?? false,
++			// #3791: this is a pull surface. Each call is an independent question,
++			// so the synthetic coverage notice must come back on every call rather
++			// than being latched once per session by the dispatcher — otherwise a
++			// second pull of an unanalysable file reads as a false clean. The pi
++			// push surface keeps its once-per-session latch (the default).
++			dedupeCoverageNotice: false,
+ 		},
+ 	);
+ 	const durationMs = Date.now() - start;
+diff --git a/tests/clients/dispatch/dispatcher-flow.test.ts b/tests/clients/dispatch/dispatcher-flow.test.ts
+index f077dde33..319fd6e61 100644
+--- a/tests/clients/dispatch/dispatcher-flow.test.ts
++++ b/tests/clients/dispatch/dispatcher-flow.test.ts
+@@ -269,6 +269,134 @@ describe("Dispatch Flow", () => {
+ 			);
+ 		}, 30000);
+ 
++		it("repeats the coverage notice for a pull dispatch and leaves the push latch untouched (#3791)", async () => {
++			// #3791: the pi push surface latches the notice once per session (the
++			// sibling test above). A pull surface (`pilens_analyze`, connected by
++			// `dedupeCoverageNotice: false`) must say so on every call, and must
++			// not consume the latch a later push still needs.
++			registerRunner({
++				id: "lsp",
++				appliesTo: ["go"],
++				priority: 4,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "go-vet",
++				appliesTo: ["go"],
++				priority: 12,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "golangci-lint",
++				appliesTo: ["go"],
++				priority: 14,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "tree-sitter",
++				appliesTo: ["go"],
++				priority: 20,
++				async run() {
++					return { status: "succeeded", diagnostics: [], semantic: "none" };
++				},
++			});
++
++			const ctx = createMockContext("main.go");
++			const groups: RunnerGroup[] = [
++				{
++					mode: "all",
++					runnerIds: ["lsp", "go-vet", "golangci-lint", "tree-sitter"],
++				},
++			];
++			const notice = "Pi-lens go analysis unavailable";
++			const pull = () =>
++				runDispatchForFile(ctx, groups, registry, undefined, {
++					dedupeCoverageNotice: false,
++				});
++
++			// Pay the push latch first so the pull call has to ignore it, not just
++			// start from a clean session.
++			const pushFirst = await runDispatchForFile(ctx, groups, registry);
++			expect(pushFirst.output).toContain(notice);
++			const pushSecond = await runDispatchForFile(ctx, groups, registry);
++			expect(pushSecond.output).not.toContain(notice);
++
++			const pullFirst = await pull();
++			expect(pullFirst.output).toContain(notice);
++			expect(pullFirst.warnings.map((w) => w.message)).toContainEqual(
++				expect.stringContaining(notice),
++			);
++			const pullSecond = await pull();
++			expect(pullSecond.output).toContain(notice);
++			expect(pullSecond.warnings.map((w) => w.message)).toContainEqual(
++				expect.stringContaining(notice),
++			);
++
++			// The pull runs did not write the latch: the next push is still
++			// suppressed, exactly as it would have been without the pulls.
++			const pushThird = await runDispatchForFile(ctx, groups, registry);
++			expect(pushThird.output).not.toContain(notice);
++		}, 30000);
++
++		it("does not let pull dispatches consume a fresh push notice (#3791 F2)", async () => {
++			registerRunner({
++				id: "lsp",
++				appliesTo: ["go"],
++				priority: 4,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "go-vet",
++				appliesTo: ["go"],
++				priority: 12,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "golangci-lint",
++				appliesTo: ["go"],
++				priority: 14,
++				async run() {
++					return { status: "skipped", diagnostics: [], semantic: "none" };
++				},
++			});
++			registerRunner({
++				id: "tree-sitter",
++				appliesTo: ["go"],
++				priority: 20,
++				async run() {
++					return { status: "succeeded", diagnostics: [], semantic: "none" };
++				},
++			});
++
++			const ctx = createMockContext("main.go");
++			const groups: RunnerGroup[] = [
++				{
++					mode: "all",
++					runnerIds: ["lsp", "go-vet", "golangci-lint", "tree-sitter"],
++				},
++			];
++			const notice = "Pi-lens go analysis unavailable";
++			const pull = () =>
++				runDispatchForFile(ctx, groups, registry, undefined, {
++					dedupeCoverageNotice: false,
++				});
++
++			expect((await pull()).output).toContain(notice);
++			expect((await pull()).output).toContain(notice);
++			const firstPush = await runDispatchForFile(ctx, groups, registry);
++			expect(firstPush.output).toContain(notice);
++		});
++
+ 		it("does not let unrelated runner coverage suppress missing-tool notices", async () => {
+ 			registerRunner({
+ 				id: "lsp",
+diff --git a/tests/clients/dispatch/integration.test.ts b/tests/clients/dispatch/integration.test.ts
+index 0ce8ebceb..6fc42f022 100644
+--- a/tests/clients/dispatch/integration.test.ts
++++ b/tests/clients/dispatch/integration.test.ts
+@@ -53,6 +53,7 @@ import {
+ } from "../../../clients/dispatch/dispatcher.js";
+ import { runProviders } from "../../../clients/dispatch/fact-runner.js";
+ import { getFactStoreEvictionReporter } from "../../../clients/dispatch/fact-store.js";
++import { analyzeFile } from "../../../clients/mcp/analyze.js";
+ 
+ const emptyDispatchResult = {
+ 	diagnostics: [],
+@@ -191,6 +192,70 @@ describe("Dispatch Integration", () => {
+ 			expect(result.diagnostics).toHaveLength(1);
+ 		});
+ 
++		// #3791: the coverage notice's push/pull axis is threaded from the MCP
++		// pull facade through this seam to `dispatchForFile`. These assert the
++		// pass-through the same way this file already observes the
++		// telemetryModel/telemetryProvider positional hop: `dispatchForFile` is a
++		// true process boundary here (real runners would spawn), so the argument
++		// it receives IS the observable contract.
++		it("forwards the pull coverage-dedupe opt-out to dispatchForFile (#3791)", async () => {
++			vi.mocked(dispatchForFile).mockClear();
++
++			await dispatchLintWithResult(
++				"app.ts",
++				"/project",
++				{ getFlag: () => false },
++				undefined,
++				undefined,
++				{ dedupeCoverageNotice: false },
++			);
++
++			expect(dispatchForFile).toHaveBeenCalledWith(
++				expect.anything(),
++				expect.anything(),
++				expect.anything(),
++				undefined,
++				{ dedupeCoverageNotice: false },
++			);
++		});
++
++		it("omits the coverage-dedupe key on the push path (#3791)", async () => {
++			vi.mocked(dispatchForFile).mockClear();
++
++			await dispatchLintWithResult("app.ts", "/project", {
++				getFlag: () => false,
++			});
++
++			const options = vi.mocked(dispatchForFile).mock.calls.at(-1)?.[4];
++			// An explicit `{ dedupeCoverageNotice: undefined }` is not the same
++			// contract as an absent key: the dispatcher's `?? true` would still
++			// default it, but the object identity a consumer sees must not carry
++			// the key on the push path.
++			expect(Object.keys(options ?? {})).toEqual([]);
++		});
++
++		it("routes the MCP analyze facade through the pull opt-out (#3791)", async () => {
++			const dir = fs.mkdtempSync(
++				path.join(os.tmpdir(), "pi-lens-analyze-pull-opt-out-"),
++			);
++			try {
++				const file = path.join(dir, "main.go");
++				fs.writeFileSync(file, "package main\n\nfunc main() {}\n");
++				vi.mocked(dispatchForFile).mockClear();
++
++				await analyzeFile(file, dir, {
++					flags: { "no-lsp": true },
++					warmLsp: false,
++					record: false,
++				});
++
++				const options = vi.mocked(dispatchForFile).mock.calls.at(-1)?.[4];
++				expect(options).toEqual({ dedupeCoverageNotice: false });
++			} finally {
++				fs.rmSync(dir, { recursive: true, force: true });
++			}
++		});
++
+ 		it("returns result with warnings but no blockers", async () => {
+ 			vi.mocked(dispatchForFile).mockResolvedValue({
+ 				diagnostics: [
+diff --git a/tests/clients/dispatch/runners/runner-status-semantics.test.ts b/tests/clients/dispatch/runners/runner-status-semantics.test.ts
+index 907993fbe..094576d56 100644
+--- a/tests/clients/dispatch/runners/runner-status-semantics.test.ts
++++ b/tests/clients/dispatch/runners/runner-status-semantics.test.ts
+@@ -608,6 +608,111 @@ describe("runner status/semantic edge cases", () => {
+ 		}
+ 	});
+ 
++	it("repeats a scanner coverage notice on every pull without consuming the push latch (#3791)", async () => {
++		// #3791: the same session latch dedupes the scanner-partial notice class
++		// too, so a warm `pilens_analyze` pull of a file with a silent scanner
++		// also read as a clean result on the second call. A pull dispatch
++		// (`dedupeCoverageNotice: false`) must emit it every time and must leave
++		// the push latch intact.
++		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
++			.default;
++		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
++			await import("../../../../clients/dispatch/dispatcher.js");
++		const env = setupTestEnvironment("pi-lens-lsp-pull-coverage-");
++		try {
++			const filePath = path.join(env.tmpDir, "main.ts");
++			fs.writeFileSync(filePath, "const x = 1;\n");
++			clearCoverageNoticeState();
++			touchFile.mockResolvedValue(
++				diagsResult([], {
++					confirmation: "partial",
++					unconfirmedServerIds: ["opengrep"],
++				}),
++			);
++			const registry = new RunnerRegistry();
++			registry.register(runner);
++			const groups = [{ mode: "all" as const, runnerIds: ["lsp"] }];
++			const notice = "coverage: opengrep silent";
++			const pull = () =>
++				dispatchForFile(
++					ctx(filePath, env.tmpDir) as never,
++					groups,
++					registry,
++					undefined,
++					{ dedupeCoverageNotice: false },
++				);
++
++			// Pay the push latch first, so the pull has to ignore a set key.
++			const pushFirst = await dispatchForFile(
++				ctx(filePath, env.tmpDir) as never,
++				groups,
++				registry,
++			);
++			expect(pushFirst.output).toContain(notice);
++			const pushSecond = await dispatchForFile(
++				ctx(filePath, env.tmpDir) as never,
++				groups,
++				registry,
++			);
++			expect(pushSecond.output).not.toContain(notice);
++
++			expect((await pull()).output).toContain(notice);
++			expect((await pull()).output).toContain(notice);
++
++			// The pulls did not write the latch either: the next push stays silent.
++			const pushThird = await dispatchForFile(
++				ctx(filePath, env.tmpDir) as never,
++				groups,
++				registry,
++			);
++			expect(pushThird.output).not.toContain(notice);
++		} finally {
++			env.cleanup();
++		}
++	});
++
++	it("keeps a fresh scanner push notice after two pulls (#3791 F2)", async () => {
++		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
++			.default;
++		const { clearCoverageNoticeState, dispatchForFile, RunnerRegistry } =
++			await import("../../../../clients/dispatch/dispatcher.js");
++		const env = setupTestEnvironment("pi-lens-lsp-fresh-push-coverage-");
++		try {
++			const filePath = path.join(env.tmpDir, "main.ts");
++			fs.writeFileSync(filePath, "const x = 1;\n");
++			clearCoverageNoticeState();
++			touchFile.mockResolvedValue(
++				diagsResult([], {
++					confirmation: "partial",
++					unconfirmedServerIds: ["opengrep"],
++				}),
++			);
++			const registry = new RunnerRegistry();
++			registry.register(runner);
++			const groups = [{ mode: "all" as const, runnerIds: ["lsp"] }];
++			const notice = "coverage: opengrep silent";
++			const pull = () =>
++				dispatchForFile(
++					ctx(filePath, env.tmpDir) as never,
++					groups,
++					registry,
++					undefined,
++					{ dedupeCoverageNotice: false },
++				);
++
++			expect((await pull()).output).toContain(notice);
++			expect((await pull()).output).toContain(notice);
++			const firstPush = await dispatchForFile(
++				ctx(filePath, env.tmpDir) as never,
++				groups,
++				registry,
++			);
++			expect(firstPush.output).toContain(notice);
++		} finally {
++			env.cleanup();
++		}
++	});
++
+ 	it("renders a primary diagnostic and its scanner coverage marker together (#1867 F2)", async () => {
+ 		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+ 			.default;
+diff --git a/tests/config/stryker-diff-exclusions.json b/tests/config/stryker-diff-exclusions.json
+index bca1806ed..6638d3019 100644
+--- a/tests/config/stryker-diff-exclusions.json
++++ b/tests/config/stryker-diff-exclusions.json
+@@ -1,4 +1,7 @@
+ {
++  "tests/mcp/analyze-coverage-repeat.smoke.test.ts": {
++    "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
++  },
+   "tests/mcp/analyze-graph.smoke.test.ts": {
+     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
+   },
+diff --git a/tests/mcp/analyze-cli.test.ts b/tests/mcp/analyze-cli.test.ts
+index 9c64b0e82..d09708eb4 100644
+--- a/tests/mcp/analyze-cli.test.ts
++++ b/tests/mcp/analyze-cli.test.ts
+@@ -297,6 +297,48 @@ function startTurnEndStub(
+ 	);
+ }
+ 
++function startWarmAnalyzeStub(
++	cwd: string,
++	response: Record<string, unknown>,
++): Promise<TurnEndStub> {
++	const endpoint = ipcPathForCwd(cwd);
++	if (process.platform !== "win32") {
++		try {
++			fs.unlinkSync(endpoint);
++		} catch {
++			/* none */
++		}
++	}
++	const sockets: net.Socket[] = [];
++	const requests: unknown[] = [];
++	const server = net.createServer((socket) => {
++		sockets.push(socket);
++		socket.setEncoding("utf8");
++		let replied = false;
++		socket.on("data", (chunk: string) => {
++			if (replied) return;
++			replied = true;
++			requests.push(JSON.parse(chunk.trim()));
++			socket.end(`${JSON.stringify({ result: response })}\n`);
++		});
++	});
++	return new Promise((resolve) =>
++		server.listen(endpoint, () =>
++			resolve({
++				sockets,
++				requests,
++				close: () =>
++					new Promise<void>((done) => {
++						(
++							server as net.Server & { closeAllConnections?: () => void }
++						).closeAllConnections?.();
++						server.close(() => done());
++					}),
++			}),
++		),
++	);
++}
++
+ // Built from the producer's real constant so a wording change in
+ // runtime-context.ts cannot silently diverge from what the bin strips.
+ const FRAMED_ADVISORY = `${AUTOMATION_FRAMING}Address 🔴 blockers before continuing; ℹ️ advisories are informational only.
+@@ -600,3 +642,49 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
+ 		expect(stub.requests).toHaveLength(1);
+ 	}, 20_000);
+ });
++
++describe("pi-lens-analyze warm hook route", { retry: 2 }, () => {
++	it("repeats the warm coverage notice on every PostToolUse hook (#3791 F1)", async () => {
++		const cwd = fs.mkdtempSync(
++			path.join(os.tmpdir(), "pi-lens-cli-warm-hook-"),
++		);
++		const file = path.join(cwd, "main.go");
++		fs.writeFileSync(file, "package main\n");
++		const stub = await startWarmAnalyzeStub(cwd, {
++			filePath: file,
++			cwd,
++			counts: {
++				diagnostics: 1,
++				blockers: 0,
++				warnings: 1,
++				advisories: 0,
++				fixed: 0,
++			},
++			diagnostics: [
++				{
++					line: 1,
++					semantic: "warning",
++					tool: "coverage",
++					message: "coverage: go scanner silent",
++				},
++			],
++		});
++		try {
++			const first = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
++			const second = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
++			for (const run of [first, second]) {
++				expect(run.code).toBe(0);
++				const parsed = JSON.parse(run.stdout) as {
++					hookSpecificOutput?: { additionalContext?: string };
++				};
++				expect(parsed.hookSpecificOutput?.additionalContext).toContain(
++					"coverage: go scanner silent",
++				);
++			}
++			expect(stub.requests).toHaveLength(2);
++		} finally {
++			await stub.close();
++			removeTempDirSync(cwd);
++		}
++	}, 45_000);
++});
+diff --git a/tests/mcp/analyze-coverage-repeat.smoke.test.ts b/tests/mcp/analyze-coverage-repeat.smoke.test.ts
+new file mode 100644
+index 000000000..0616ca20b
+--- /dev/null
++++ b/tests/mcp/analyze-coverage-repeat.smoke.test.ts
+@@ -0,0 +1,113 @@
++// mutation-lane: exclude
++/**
++ * #3791: a warm MCP `pilens_analyze` pull must report the coverage notice on
++ * EVERY call, not only the first.
++ *
++ * The dispatcher dedupes the synthetic coverage notice once per session
++ * (`coverageNoticeSeen`, clients/dispatch/dispatcher.ts). That latch suits the
++ * pi push surface — a per-edit notice should not repeat on every keystroke —
++ * but `pilens_analyze` is a pull surface: each call is a deliberate question,
++ * and a later pull of a file pi-lens never analysed must not read as a clean
++ * result (the #3750/#3749 false-clean class).
++ *
++ * The unanalysable input is deterministic: a Go file analysed with `no-lsp` by
++ * a server whose PATH holds no `go`/`gopls`/`golangci-lint`, so every primary
++ * and fallback linter skips and only structural runners run. PATH is handed to
++ * the server subprocess (the harness merges it over `process.env`), so the
++ * case does not depend on what the host happens to have installed.
++ *
++ * Requires `npm run build` first (resolves mcp/server.js next to its source).
++ */
++
++import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import * as path from "node:path";
++import { afterAll, beforeAll, describe, expect, it } from "vitest";
++import { McpHarness } from "./harness.js";
++
++interface AnalyzeShape {
++	counts: {
++		diagnostics: number;
++		warnings: number;
++		advisories: number;
++		blockers: number;
++		fixed: number;
++	};
++	diagnostics: Array<{ message: string }>;
++}
++
++function parseAnalyze(res: Record<string, unknown>): AnalyzeShape {
++	const text = (res.result as { content: { text: string }[] }).content[0].text;
++	return JSON.parse(
++		text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
++	) as AnalyzeShape;
++}
++
++describe("pilens_analyze coverage notice across repeat warm pulls (#3791)", () => {
++	let projectDir: string;
++	let harness: McpHarness;
++
++	beforeAll(async () => {
++		projectDir = mkdtempSync(path.join(tmpdir(), "pi-lens-analyze-coverage-"));
++		writeFileSync(
++			path.join(projectDir, "main.go"),
++			"package main\n\nfunc main() {}\n",
++		);
++		harness = new McpHarness({ cwd: projectDir, env: { PATH: "" } });
++		const init = await harness.request(1, "initialize", {
++			protocolVersion: "2025-06-18",
++			capabilities: {},
++			clientInfo: { name: "analyze-coverage-smoke", version: "0" },
++		});
++		expect((init.result as { protocolVersion: string }).protocolVersion).toBe(
++			"2025-06-18",
++		);
++		harness.notify("notifications/initialized");
++		// Pay the one-time server startup cost before the asserted request window.
++		await harness.request(2, "tools/call", {
++			name: "pilens_health",
++			arguments: {},
++		});
++	});
++
++	afterAll(() => {
++		harness.dispose();
++		try {
++			rmSync(projectDir, {
++				recursive: true,
++				force: true,
++				maxRetries: 5,
++				retryDelay: 200,
++			});
++		} catch {
++			// OS reclaims the temp dir eventually.
++		}
++	});
++
++	it("carries a coverage warning on the first, second, and third pull", async () => {
++		const analyze = (id: number) =>
++			harness.request(id, "tools/call", {
++				name: "pilens_analyze",
++				arguments: {
++					file: path.join(projectDir, "main.go"),
++					cwd: projectDir,
++					flags: { "no-lsp": true },
++				},
++			});
++
++		const first = parseAnalyze(await analyze(10));
++		const second = parseAnalyze(await analyze(11));
++		const third = parseAnalyze(await analyze(12));
++
++		for (const [label, result] of [
++			["first", first],
++			["second", second],
++			["third", third],
++		] as const) {
++			expect(
++				result.counts.warnings,
++				`${label} pull must carry the coverage warning`,
++			).toBeGreaterThanOrEqual(1);
++		}
++	}, 60_000);
++});
