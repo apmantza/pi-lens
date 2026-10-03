@@ -21,15 +21,36 @@ const jobs = (
 	) as { jobs: Record<string, Job> }
 ).jobs;
 
-// The check-running step of each required shard job. The aggregate jobs'
-// enforcement steps stay covered by the blanket loop below; these are the
-// shard-level verdict producers. Named rather than looped so a future
-// best-effort upload, metadata, or hygiene helper step does not have to fail
-// the check to stay allowed (#3923 F1).
-const CRITICAL_SHARD_STEPS: [jobId: string, stepName: string][] = [
+// The check-running step of each required shard job, plus the verdict steps of
+// the required `install-test` job. The shard jobs feed a required aggregate;
+// `install-test` has no aggregate, so each matrix leg is its own required
+// context (`Install test (ubuntu-latest)`, ...) and a tolerated step greens
+// that leg. Named rather than looped so the intentionally best-effort steps
+// stay allowed: `install-test` tolerates only `POSIX case-insensitive anchors
+// (APFS)` and `Rule catalog report (non-blocking)`, both declared advisory in
+// ci.yml. The aggregate jobs' enforcement steps stay covered by the blanket
+// loop below (#3923 F1, #3925).
+const CRITICAL_STEPS: [jobId: string, stepName: string][] = [
 	["test", "Run tests"],
 	["test", "Tmp-fixture hygiene owner"],
 	["tla-shards", "Model-check formal/ against each config's expected verdict"],
+	["install-test", "Install from tarball (simulates pi install npm:pi-lens)"],
+	["install-test", "Verify required files in tarball"],
+	["install-test", "Verify package.json entry points exist in tarball"],
+	["install-test", "Verify bundled core grammars shipped in the tarball"],
+	["install-test", "Load each extension entry point (catches missing files)"],
+	[
+		"install-test",
+		"Verify no host-provided package shipped in the tarball (#1926)",
+	],
+	[
+		"install-test",
+		"Verify extension entry loads (catches missing node_modules deps)",
+	],
+	[
+		"install-test",
+		"Startup not weakened — entry loads from precompiled dist (#182)",
+	],
 ];
 
 describe("#3920 sharded required-check failure policy", () => {
@@ -62,13 +83,15 @@ describe("#3920 sharded required-check failure policy", () => {
 		}
 	});
 
-	// Recurrence (#3923 F1): the aggregate loop only pins the aggregate jobs.
-	// A tolerated `continue-on-error` on a shard job's own check-running step
-	// greens `Unit tests (shard k/N)` / `TLA+ models (shard k/N)` while every
-	// ci.yml reader stays green, so the required aggregate sees success. Each
-	// critical step is asserted by name so a deletion or rename cannot drop it
-	// from the population silently.
-	it.each(CRITICAL_SHARD_STEPS)(
+	// Recurrence (#3923 F1, #3925): the aggregate loop only pins the aggregate
+	// jobs. A tolerated `continue-on-error` on a shard job's own check-running
+	// step greens `Unit tests (shard k/N)` / `TLA+ models (shard k/N)` while
+	// every ci.yml reader stays green, so the required aggregate sees success.
+	// The same tolerance on an `install-test` verdict step greens that leg's
+	// required context, since no aggregate re-reads its result. Each critical
+	// step is asserted by name so a deletion or rename cannot drop it from the
+	// population silently.
+	it.each(CRITICAL_STEPS)(
 		"keeps the %s job's `%s` step from tolerating failure",
 		(jobId, stepName) => {
 			const steps = jobs[jobId]?.steps ?? [];
