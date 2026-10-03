@@ -1810,7 +1810,8 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 			if (result.rootFallback) {
 				rootFallbackReasons.add(describeRootFallback(result.rootFallback));
 			}
-		} else {
+		} else if (classifyBatchFileOutcome(result) === "clean") {
+			// Unsupported, unavailable and failed files were never checked.
 			clean += 1;
 		}
 	}
