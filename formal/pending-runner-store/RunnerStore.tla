@@ -1,11 +1,7 @@
 --------------------------- MODULE RunnerStore ---------------------------
 (***************************************************************************)
 (* The deferred collect-later runner store (clients/dispatch/              *)
-(* pending-runner-findings.ts) across a same-process scope retirement, for *)
-(* #3758 (the drain's captured-scope fence) and #3813/#3824 (the           *)
-(* turn-end cap's requeue). This family models the store alone; the peek   *)
-(* reader the commit gate adds in #3814 is a separate lane and is NOT      *)
-(* modelled here.                                                          *)
+(* pending-runner-findings.ts) across a same-process session replacement. *)
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - deferRunnerFindings: the producer's admission. It fences with the    *)
@@ -13,10 +9,12 @@
 (*    scope or from a released writer with no captured handle (shape 57);  *)
 (*  - drainPendingRunnerFindings: the turn-end reader. It removes the      *)
 (*    settled answers it admits and keeps in-flight work for the store;    *)
+(*  - peekSettledRunnerFindings: the commit gate's non-draining reader. It *)
+(*    returns settled answers without removing them (#3814);               *)
 (*  - requeueRunnerFindings: re-enters a drained, settled answer for the   *)
 (*    next turn end when the delivery cap cut it (#3813). It tracks        *)
-(*    unconditionally and carries entry.session, so the next drain can     *)
-(*    still fence it (#3824);                                             *)
+(*    unconditionally and carries entry.session, so the next reader can    *)
+(*    still fence it;                                                     *)
 (*  - a raw generation bump (a scope's retirement) with no store clear.    *)
 (*    resetPendingRunnerFindings clears the store at session_start, so the *)
 (*    window this model explores is the one before that clear, as #3824's  *)
@@ -25,26 +23,25 @@
 (* An entry carries two identities: `producer`, the generation that        *)
 (* actually computed the answer (0 = a released writer with no captured    *)
 (* handle), and `owner`, the generation the fence reads off the entry. The *)
-(* shipped code keeps them equal (the drained shape carries                *)
-(* entry.session, and the requeue copies it); a requeue that dropped it    *)
-(* would leave owner 0 while producer stays 1.                             *)
+(* shipped code keeps them equal (settledSnapshot carries entry.session);  *)
+(* a requeue that dropped it would leave owner 0 while producer stays 1.   *)
 (*                                                                         *)
 (* Invariants:                                                             *)
-(*  - NoStaleAdmission (shape 54, safety): the reader admits no answer     *)
-(*    whose producer scope has retired;                                   *)
-(*  - NoDropFreshAnswer (shape 54, no-drop): the reader drops no answer    *)
-(*    whose producer scope is live or has no captured handle.             *)
+(*  - NoStaleAdmission (shape 54, safety): no reader admits an answer      *)
+(*    whose producer scope has retired;                                    *)
+(*  - NoDropFreshAnswer (shape 54, no-drop): no reader drops an answer     *)
+(*    whose producer scope is live or has no captured handle.              *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     Slots,     \* the writers whose answers the store may hold
-    Drain,     \* "owned"    the shipped turn-end read (guardedWrite)
-               \* "unfenced" the pre-#3758 drain (no admission check)
+    Peek,      \* "owned"    the shipped commit-gate read (ownedByLiveSession)
+               \* "unfenced" the pre-fix #3814 peek (no admission check)
                \* "none"     over-drop mutant: the read admits nothing
-    Requeue,   \* "carry" (shipped) | "drop" (the drained shape loses session)
-    NoHandle   \* "admit" (shipped) | "drop" (mutant: a released writer is
-               \* fenced out)
+    Drain,     \* "owned" | "unfenced" | "none" (the turn-end reader)
+    Requeue,   \* "carry" (shipped) | "drop" (the snapshot loses entry.session)
+    NoHandle   \* "admit" (shipped) | "drop" (mutant: a released writer is fenced out)
 
 VARIABLES
     phase,      \* "s1" | "s2"
@@ -54,8 +51,8 @@ VARIABLES
     pending,    \* entries the store holds
     settled,    \* pending entries whose answer has arrived
     delivered,  \* entries a drain removed and admitted
-    leaked,     \* the reader admitted an answer whose producer has retired
-    droppedLive \* the reader dropped an answer whose producer is live/unfenced
+    leaked,     \* a reader admitted an answer whose producer has retired
+    droppedLive \* a reader dropped an answer whose producer is live/unfenced
 
 vars == <<phase, gen, producer, owner, pending, settled, delivered, leaked,
           droppedLive>>
@@ -116,6 +113,16 @@ RequeueTrack(s) ==
     /\ owner' = [owner EXCEPT ![s] = IF Requeue = "carry" THEN owner[s] ELSE 0]
     /\ UNCHANGED <<phase, gen, producer, delivered, leaked, droppedLive>>
 
+\* The commit gate's non-draining read. A fresh answer it filters out is a
+\* no-drop failure; a retired answer it returns is a stale admission.
+PeekRead ==
+    /\ LET candidates == pending \cap settled
+           admitted == {s \in candidates : ReaderAdmits(Peek, s)}
+           rejected == candidates \ admitted
+       IN /\ leaked' = (leaked \/ (\E s \in admitted : TrueRetired(s)))
+          /\ droppedLive' = (droppedLive \/ (\E s \in rejected : Fresh(s)))
+          /\ UNCHANGED <<phase, gen, producer, owner, pending, settled, delivered>>
+
 \* The turn-end drain: it removes the settled answers it admits, drops the
 \* settled ones whose fence rejects, and keeps in-flight work.
 DrainRead ==
@@ -140,14 +147,15 @@ Retire ==
 Next ==
     \/ (\E s \in Slots, o \in {0, gen} : Defer(s, o))
     \/ (\E s \in Slots : RequeueTrack(s))
+    \/ PeekRead
     \/ DrainRead
     \/ Retire
 
 Spec == Init /\ [][Next]_vars
 
-(* Shape 54, safety: the reader never admits an answer whose producer retired. *)
+(* Shape 54, safety: a reader never admits an answer whose producer retired. *)
 NoStaleAdmission == ~leaked
 
-(* Shape 54, no-drop: the reader never drops a live or unfenced answer. *)
+(* Shape 54, no-drop: a reader never drops a live or unfenced answer. *)
 NoDropFreshAnswer == ~droppedLive
 =============================================================================

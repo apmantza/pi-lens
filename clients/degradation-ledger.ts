@@ -222,6 +222,14 @@ export type DegradationKind =
 	 * Recorded ONCE per migrated directory via the session-start drain.
 	 */
 	| "data_dir_migrated"
+	/**
+	 * #3814: the commit gate's pre-check of settled collect-later runner answers
+	 * (`absorbSettledRunnerBlockers`) threw. The gate falls back to the blocker
+	 * map as it stood, and the turn-end drain still records those answers. Subject
+	 * is `commit_gate`; counted, so a recurring fault is one row, not one per
+	 * commit.
+	 */
+	| "deferred-blocker-gate-error"
 	| "demoted-finding-retired"
 	| "diagnostic-retained-unreconciled"
 	| "dispatch-non-absolute-baseline-path"

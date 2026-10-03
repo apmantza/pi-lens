@@ -697,6 +697,14 @@ export function gateFindingsByPathFreshness<
 	sources: S;
 	maxUniquePaths?: number;
 	probePath?: (resolvedPath: string) => FindingPathFacts;
+	/**
+	 * Judge without writing the delivery records (`finding_dead_path_drop`,
+	 * `finding_stale_line_demote`, the stat-budget row). For a caller that only
+	 * PEEKS at an answer another surface will deliver and record: the commit gate
+	 * reading a settled collect-later answer before the turn end that owns it
+	 * (#3814 r1 L1: both sites wrote the row for one decision).
+	 */
+	quiet?: boolean;
 }): { [K in keyof S]: FindingFreshnessGate<SourceFinding<S[K]>> } {
 	const memo = createPathFactsMemo(args);
 	// Sorted, not literal order: which source pays for a shared path, and the
@@ -744,9 +752,11 @@ export function gateFindingsByPathFreshness<
 	}
 	merged.statCount = memo.facts.size;
 	merged.truncated = memo.starved.size > 0;
-	emitDeadPathDropRecord(args.cwd, merged, dropped);
-	emitStaleLineDemoteRecord(args.cwd, scannedAtByStore, merged, demoted);
-	emitStatBudgetRecord(args.cwd, memo);
+	if (args.quiet !== true) {
+		emitDeadPathDropRecord(args.cwd, merged, dropped);
+		emitStaleLineDemoteRecord(args.cwd, scannedAtByStore, merged, demoted);
+		emitStatBudgetRecord(args.cwd, memo);
+	}
 	return gates as { [K in keyof S]: FindingFreshnessGate<SourceFinding<S[K]>> };
 }
 

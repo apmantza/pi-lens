@@ -4,6 +4,8 @@ import type { CacheManager } from "./cache-manager.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { tokenizeShellCommand } from "./bash-file-access.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
+import { absorbSettledRunnerBlockers } from "./deferred-runner-blockers.js";
 import { logLatency } from "./latency-logger.js";
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import {
@@ -1315,6 +1317,24 @@ export function evaluateGitGuard(
 	const inspectLine = diagnosticsTool
 		? `Run ${diagnosticsTool} mode=all for full details, then commit again.`
 		: "Inspect the full diagnostics, then commit again.";
+	// #3814: a collect-later runner's answer that settled since the last turn
+	// end has not been drained yet, so the latch below cannot know it. Feeding it
+	// into the blocker map first makes the latch the one verdict. A failure here
+	// leaves the pre-#3814 answer (the turn-end drain still records it), counted
+	// once rather than refusing every commit on a bug the agent cannot fix.
+	try {
+		const absorbed = absorbSettledRunnerBlockers(runtime, cwd);
+		// The inline path refreshes the persisted record beside the latch at
+		// `tool_result`; a recording at the gate has no turn end to do it, and a
+		// session boundary reads the record, not the latch (r1 M3).
+		if (absorbed.recorded > 0) syncGitGuardRecord(runtime, cacheManager, cwd);
+	} catch (failure) {
+		incrementDegradationCount({
+			kind: "deferred-blocker-gate-error",
+			subject: "commit_gate",
+			reason: failure instanceof Error ? failure.message : String(failure),
+		});
+	}
 	if (runtime.gitGuardHasBlockers) {
 		logDecision(cwd, "blocked", "runtime_blockers", {
 			projectSeq: runtime.projectSeq,

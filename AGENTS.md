@@ -685,6 +685,19 @@ the surface they bite; each block loads only when its trigger applies.
 - Git command classification has one lexer and one guarded-verb matcher seam.
   Unknown wrappers and indirect guarded verbs fail closed. Text-consumer
   allowances recurse through command substitutions and execution contexts.
+- The commit gate reads two states: the inline-blocker map's latch
+  (`RuntimeCoordinator`), then the persisted `turn-end-findings` record. A
+  collect-later runner's blocking findings join the map through
+  `clients/deferred-runner-blockers.ts`, never a second store: the turn-end
+  late-runner lane records them before the blocker replay (so the replay is
+  their one delivery and the composer persists them), and the gate judges
+  answers that settled but no turn end has drained, then refreshes the
+  persisted record (`syncGitGuardRecord`) as the inline path does at
+  `tool_result`. Both sites call one verdict, `judgeDeferredRunnerFindings`
+  (freshness, then policy), and the record's `sources` and `lines` come from
+  `clients/inline-blocker-fields.ts`, shared with the pipeline's writer. A run
+  still in flight does not gate, and an edit to the file while its re-check is in
+  flight clears the record until that answer settles (#3814).
 - The shared-checkout guard refuses unsafe worktree mutation when another live
   session and uncommitted work are both proven. It never auto-stashes.
 - `mcp/server.ts` talks to pi-lens through `clients/lens-engine.ts`. A mirrored

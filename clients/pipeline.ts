@@ -17,10 +17,11 @@ import * as nodeFs from "node:fs";
 import * as nodeCrypto from "node:crypto";
 import * as path from "node:path";
 import type { PiLensFlagSource } from "./lens-config.js";
+import { findNearestContaining } from "./path-utils.js";
 import {
-	findNearestContaining,
-	normalizeEphemeralMapKey,
-} from "./path-utils.js";
+	inlineBlockerLines,
+	inlineBlockerSources,
+} from "./inline-blocker-fields.js";
 import {
 	recordFromDispatchDiagnostic,
 	type ActionableWarningRecord,
@@ -2372,47 +2373,10 @@ async function analysePipeline(
 		// claims coverage for — it pins the entry rather than silently widening
 		// what an LSP check is allowed to clear.
 		inlineBlockerSources: hasDeliverableBlockers
-			? [
-					...new Set(
-						deliverableBlockers.map((d) => d.tool?.trim() || "unknown"),
-					),
-				]
+			? inlineBlockerSources(deliverableBlockers)
 			: undefined,
 		inlineBlockerLines: hasDeliverableBlockers
-			? deliverableBlockers
-					// #1641 review F2: the blocker array (#3190: the deliverable subset
-					// of `dispatchResult.blockers`) is NOT guaranteed to be
-					// scoped to THIS file — a chart-wide runner (helm-lint, helm-render)
-					// reports blocking diagnostics against other files in the chart
-					// (e.g. `values.yaml`) alongside `ctx.filePath`. The precedent every
-					// per-file runner already follows (dotnet-build.ts, javac.ts) is to
-					// drop cross-file rows before they reach a per-file record; this is
-					// that same filter applied at the aggregation point instead, since
-					// `blockers` is pooled across every runner dispatched for this file.
-					// Without it, a cross-file line count gets attributed to THIS
-					// file's past-EOF check and can demote an in-bounds, fully valid
-					// blocker for content the diagnostic never described.
-					//
-					// #1641 review round 2 (LOW): `path.resolve` equality doesn't fold
-					// case, and an LSP-sourced diagnostic's `filePath` is stamped with
-					// realpath canonical casing (dispatch/runners/lsp.ts ->
-					// normalizeMapKey) while `ctx.filePath` can arrive lowercase-drive
-					// on Windows — the drive-letter class from #1139/#1150. A bare
-					// `path.resolve` equality then drops EVERY LSP blocker line and
-					// this record silently skips the past-EOF gate (fail-open, but
-					// exactly the pre-fix behavior on the surface #1641 targets).
-					// `normalizeEphemeralMapKey` slash-folds and (on win32)
-					// lowercase-folds both sides with no filesystem I/O — cheap enough
-					// for this per-blocker hot-path filter. `pathsEqual` was
-					// deliberately NOT used here: it calls `realpathSync` per
-					// comparison, which this filter cannot afford per blocker.
-					.filter(
-						(d) =>
-							normalizeEphemeralMapKey(d.filePath) ===
-							normalizeEphemeralMapKey(filePath),
-					)
-					.map((d) => d.line)
-					.filter((line): line is number => typeof line === "number")
+			? inlineBlockerLines(deliverableBlockers, filePath)
 			: undefined,
 		actionableWarnings,
 		codeQualityWarnings,

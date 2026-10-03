@@ -484,10 +484,15 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 		RUNTIME_TURN_FILE,
 		"Turn-end CLI runner findings collected after the post-write path.",
 		// #3248: this lane was the last push surface with no disposition stage;
-		// it now routes through the same shared policy call as its
-		// late-auxiliary twin, which is what this gate pins.
-		["gateFindingsByPathFreshness", "applyPushedFindingPolicy"],
-		['"late-runner-findings"'],
+		// it routes through the same shared policy call as its late-auxiliary
+		// twin. #3814: the freshness gate and that policy call now live in ONE
+		// verdict, `judgeDeferredRunnerFindings` (clients/deferred-runner-blockers.ts),
+		// which the commit gate calls too; this lane's proof is that it asks that
+		// verdict. That the verdict itself runs both seams is pinned by behaviour
+		// (`tests/index-3814-deferred-blocker-gate.test.ts`: a stale answer and a
+		// marked finding each stop blocking, one mutation each).
+		["judgeDeferredRunnerFindings"],
+		["judgeDeferredRunnerFindings("],
 		{ evidenceMin: 2 },
 	),
 	"runtime-turn:cascade-blocker": labeled(
@@ -687,8 +692,10 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 		"clients/git-guard.ts",
 		"Git-guard commit/push 🔴 COMMIT BLOCKED verdict (--lens-guard).",
 		"Synchronous preflight rejection returned inline with the failed git " +
-			"command — no stored state is delivered, so nothing can go stale between " +
-			"detection and delivery.",
+			"command. The blocker map it reads is refreshed at decision time: the " +
+			"gate first judges settled collect-later runner answers through the " +
+			"freshness gate and the finding policy (#3814), so a stale answer " +
+			"cannot block.",
 		"live",
 	),
 	"shared-checkout-guard:worktree-mutation-blocked": labeled(

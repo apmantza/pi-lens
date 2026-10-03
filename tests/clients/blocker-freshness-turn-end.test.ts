@@ -506,10 +506,10 @@ describe("turn-end blocker freshness (#1631)", () => {
 			expect(content).not.toContain("Deferred runner");
 			// A blocking finding must not be framed as "no action required".
 			expect(content).not.toContain("no action required");
-			expect(content).toContain("blocking: fix before continuing");
-			// The late part rides the advisory channel: it must not flip the
-			// git guard (pre-existing channel for deferred findings).
-			expect(hasBlockers).toBe(false);
+			// #3814: a blocking survivor is delivered in the blocker channel, the
+			// one section an in-band blocker gets, and it flips the git guard.
+			expect(content).toContain("Unresolved from this turn");
+			expect(hasBlockers).toBe(true);
 			expect(metadata).toMatchObject({
 				pending: 1,
 				delivered: 1,

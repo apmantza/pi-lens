@@ -138,6 +138,10 @@ import {
 } from "./dispatch/finding-policy.js";
 import { detectFileRole } from "./file-role.js";
 import {
+	judgeDeferredRunnerFindings,
+	recordDeferredRunnerBlockers,
+} from "./deferred-runner-blockers.js";
+import {
 	applyInlineBlockerPolicy,
 	type InlineBlockerPolicyTallyEntry,
 	summarizeInlineBlockerPolicy,
@@ -1011,8 +1015,177 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	 */
 	const staleSecretParts: string[] = [];
 	const advisoryParts: string[] = [];
+	/**
+	 * #3813: one-shot state a producer consumes for a part of this message,
+	 * held until the cap has said what the message kept (see
+	 * `clients/turn-end/delivery-holds.ts`). It folds in #1950 fix-round F1's
+	 * deferred dependency-drift commits: that dedupe silences a turn whose
+	 * rendered content is byte-identical to the last one delivered, so a
+	 * counter must not advance for it (`skipOnSuppressed`).
+	 */
+	const deliveryHolds: DeliveryHold[] = [];
+	/** A session replaced mid-turn owns none of the held state any more. */
+	const holdGeneration = runtime.sessionGeneration;
 	const projectDiagnosticsDelta: ProjectDiagnostic[] = [];
 	const projectDiagnosticsSources = new Set<string>();
+
+	// Collect-later CLI runners continue off the write path. Their completed
+	// answers go through ONE freshness-then-policy verdict
+	// (`judgeDeferredRunnerFindings`, shared with the commit gate), like late
+	// auxiliary findings.
+	//
+	// #3814: this lane runs BEFORE the blocker replay below. A blocking survivor
+	// is recorded into the inline-blocker map, so the replay delivers it as the
+	// one blocker section a finding gets and the composer persists it with the
+	// turn's other blockers; the late advisory carries the non-blocking
+	// survivors only. Delivered after the replay, a finding the commit gate had
+	// recorded first reached the agent twice in one message, and the persisted
+	// record said no blockers.
+	const runnerFindingsStart = Date.now();
+	// Turn-end delivery is deliberately non-blocking. Collect already-settled
+	// results and requeue the rest; the edit path already paid the deferral
+	// decision, so another 2s wait would charge every turn while a runner is
+	// still in flight (#2122 F5).
+	const pendingRunnerFindings = await drainPendingRunnerFindings(0);
+	let runnerFindingsDelivered = 0;
+	let runnerFindingsStale = 0;
+	let runnerFindingsFailed = 0;
+	let runnerFindingsDropped = 0;
+	/** #3814: blocking survivors newly entered into the blocker map this turn end. */
+	let runnerBlockersRecorded = 0;
+	/** #3248: bounded per-turn on this lane's own row, never per finding. */
+	let runnerFindingsDispositionSuppressed = 0;
+	const runnerFindingsDeliveredIds: string[] = [];
+	for (const pending of pendingRunnerFindings) {
+		const result = pending.result;
+		if (!result) continue;
+		recordRunner(
+			pending.filePath,
+			pending.runnerId,
+			result.status,
+			result.diagnostics.length,
+			Date.now() - pending.markedAtMs,
+			pending.writeIndex,
+		);
+		// #3796: a runner whose findings fail its check reports `failed` WITH
+		// diagnostics and no fault kind (or `blocking_diagnostics`); that goes
+		// through the freshness gate and delivery like a success. A failed result
+		// with no diagnostics, or with a fault kind (timeout, server_error), is a
+		// broken runner: the note is kept and any partial findings still deliver.
+		if (
+			result.status === "failed" &&
+			(result.diagnostics.length === 0 ||
+				(result.failureKind !== undefined &&
+					result.failureKind !== "blocking_diagnostics"))
+		) {
+			runnerFindingsFailed += 1;
+			const detail = result.failureMessage ? `: ${result.failureMessage}` : "";
+			const failedNote = `❌ Deferred runner ${pending.runnerId} failed (${result.failureKind ?? "unknown"})${detail}`;
+			// #3813: the drain above removed this settled entry for good. If the
+			// cap cuts the note, hand back the failure alone (the findings, if
+			// any, are judged on their own part below).
+			deliveryHolds.push({
+				part: failedNote,
+				onHeld: () =>
+					requeueRunnerFindings({
+						...pending,
+						result: { ...result, diagnostics: [] },
+					}),
+			});
+			// @delivery-surface: runtime-turn:late-runner-findings
+			advisoryParts.push(failedNote);
+		}
+		// The survivors are what the agent READS, so they take the same policy
+		// stack the late-AUXILIARY drain below applies (#3248). The verdict runs
+		// the freshness gate first, then the policy against the file's CURRENT
+		// bytes; an unreadable file fails open inside it.
+		const verdict = judgeDeferredRunnerFindings(pending, cwd);
+		runnerFindingsStale += verdict.stale;
+		if (verdict.stale > 0) {
+			// The runner answered for bytes older than the latest edit. Do not
+			// re-arm this completed answer: only a new runner query can restore
+			// coverage for the refreshed bytes.
+			dropStaleRunnerFindings(pending);
+			runnerFindingsDropped += 1;
+		}
+		if (verdict.live === 0) continue;
+		const displayPath = toRunnerDisplayPath(cwd, pending.filePath);
+		const runnerKept = verdict.kept;
+		runnerFindingsDispositionSuppressed += verdict.suppressed;
+		if (runnerKept.length === 0) {
+			// Every late finding was marked. A PUSH surface stays silent rather
+			// than re-announcing that the mark is working; the count rides this
+			// lane's bounded per-turn row below.
+			continue;
+		}
+		runnerFindingsDelivered += runnerKept.length;
+		// #3814: the blocking survivors enter the blocker map (the commit gate's
+		// latch, the replay below, a later write to the file clears them). The
+		// commit gate may have recorded them already (a replay records 0).
+		runnerBlockersRecorded += recordDeferredRunnerBlockers(
+			runtime,
+			pending,
+			runnerKept,
+			verdict.bytes,
+		);
+		for (const finding of runnerKept) {
+			if (runnerFindingsDeliveredIds.length < 50) {
+				runnerFindingsDeliveredIds.push(finding.id);
+			}
+		}
+		// The replay delivers the blocking survivors; the advisory carries the rest.
+		const advisoryKept = runnerKept.flatMap((finding) =>
+			finding.semantic === "blocking" ? [] : [finding],
+		);
+		if (advisoryKept.length === 0) continue;
+		const lines = advisoryKept.map(
+			(finding) =>
+				`  ${displayPath}:${finding.line ?? 1}:${finding.column ?? 1} [${finding.rule ?? finding.id}] ${finding.message}`,
+		);
+		// #1616 suppressed-bucket rule: a delivery that still has something to
+		// say states what it dropped, once per delivery.
+		const runnerSuppressedNote =
+			verdict.suppressed > 0
+				? `; suppressed by disposition: ${verdict.suppressed} finding(s)`
+				: "";
+		const lateRunnerPart = `⏱️ Late runner diagnostics (${pending.runnerId} completed after the edit${runnerSuppressedNote}):\n${lines.join("\n")}`;
+		// #3813: the drain above removed this settled entry for good. If the cap
+		// cuts this part, hand back only the NON-blocking half this advisory
+		// carried; the blocking survivors live in the blocker map (#3814), which
+		// the replay persists for the next turn.
+		const {
+			failureKind: _kind,
+			failureMessage: _message,
+			...findingsOnly
+		} = result;
+		deliveryHolds.push({
+			part: lateRunnerPart,
+			onHeld: () =>
+				requeueRunnerFindings({
+					...pending,
+					result: { ...findingsOnly, diagnostics: advisoryKept },
+				}),
+		});
+		// @delivery-surface: runtime-turn:late-runner-findings
+		advisoryParts.push(lateRunnerPart);
+	}
+	logLatency({
+		type: "phase",
+		toolName: "turn_end",
+		filePath: cwd,
+		phase: "late_runner_findings",
+		durationMs: Date.now() - runnerFindingsStart,
+		metadata: {
+			pending: pendingRunnerFindings.length,
+			delivered: runnerFindingsDelivered,
+			stale: runnerFindingsStale,
+			failed: runnerFindingsFailed,
+			dropped: runnerFindingsDropped,
+			blockersRecorded: runnerBlockersRecorded,
+			dispositionSuppressed: runnerFindingsDispositionSuppressed,
+			deliveredIds: runnerFindingsDeliveredIds,
+		},
+	});
 
 	// #1641: past-EOF gate. Runs BEFORE the dependency-drift sweep below — a
 	// cheap statSync per cited file is worth paying first so the pricier
@@ -1039,17 +1212,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	/** #1944/#1950: demotions retired after their delivery limit. */
 	let demotedFindingsRetired = 0;
-	/**
-	 * #3813: one-shot state a producer consumes for a part of this message,
-	 * held until the cap has said what the message kept (see
-	 * `clients/turn-end/delivery-holds.ts`). It folds in #1950 fix-round F1's
-	 * deferred dependency-drift commits: that dedupe silences a turn whose
-	 * rendered content is byte-identical to the last one delivered, so a
-	 * counter must not advance for it (`skipOnSuppressed`).
-	 */
-	const deliveryHolds: DeliveryHold[] = [];
-	/** A session replaced mid-turn owns none of the held state any more. */
-	const holdGeneration = runtime.sessionGeneration;
 	/**
 	 * The two inline-blocker commits a hold runs once its advisory reached the
 	 * message. The past-EOF retire is #1944's "after this ONE delivery"; the
@@ -4042,168 +4204,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	cacheManager.incrementTurnCycle(cwd, currentOwner);
 
-	// Collect-later CLI runners continue off the write path. Their completed
-	// diagnostics use the same freshness gate as late auxiliary findings and
-	// enter the ordinary turn-end advisory delivery channel.
-	const runnerFindingsStart = Date.now();
-	// Turn-end delivery is deliberately non-blocking. Collect already-settled
-	// results and requeue the rest; the edit path already paid the deferral
-	// decision, so another 2s wait would charge every turn while a runner is
-	// still in flight (#2122 F5).
-	const pendingRunnerFindings = await drainPendingRunnerFindings(0);
-	let runnerFindingsDelivered = 0;
-	let runnerFindingsStale = 0;
-	let runnerFindingsFailed = 0;
-	let runnerFindingsDropped = 0;
-	/** #3248: bounded per-turn on this lane's own row, never per finding. */
-	let runnerFindingsDispositionSuppressed = 0;
-	const runnerFindingsDeliveredIds: string[] = [];
-	/** #3796: late parts carrying a blocking finding — never "no action required". */
-	const unlabeledAdvisoryParts = new Set<string>();
-	for (const pending of pendingRunnerFindings) {
-		const result = pending.result;
-		if (!result) continue;
-		recordRunner(
-			pending.filePath,
-			pending.runnerId,
-			result.status,
-			result.diagnostics.length,
-			Date.now() - pending.markedAtMs,
-			pending.writeIndex,
-		);
-		// #3796: a runner whose findings fail its check reports `failed` WITH
-		// diagnostics and no fault kind (or `blocking_diagnostics`); that goes
-		// through the freshness gate and delivery like a success. A failed result
-		// with no diagnostics, or with a fault kind (timeout, server_error), is a
-		// broken runner: the note is kept and any partial findings still deliver.
-		if (
-			result.status === "failed" &&
-			(result.diagnostics.length === 0 ||
-				(result.failureKind !== undefined &&
-					result.failureKind !== "blocking_diagnostics"))
-		) {
-			runnerFindingsFailed += 1;
-			const detail = result.failureMessage ? `: ${result.failureMessage}` : "";
-			const failedNote = `❌ Deferred runner ${pending.runnerId} failed (${result.failureKind ?? "unknown"})${detail}`;
-			// #3813: the drain above removed this settled entry for good. If the
-			// cap cuts the note, hand back the failure alone (the findings, if
-			// any, are judged on their own part below).
-			deliveryHolds.push({
-				part: failedNote,
-				onHeld: () =>
-					requeueRunnerFindings({
-						...pending,
-						result: { ...result, diagnostics: [] },
-					}),
-			});
-			// @delivery-surface: runtime-turn:late-runner-findings
-			advisoryParts.push(failedNote);
-		}
-		const findings = result.diagnostics;
-		if (findings.length === 0) continue;
-		const { "late-runner-findings": gate } = gateFindingsByPathFreshness({
-			cwd,
-			sources: {
-				"late-runner-findings": {
-					findings,
-					scannedAt: pending.markedAtMs,
-					citedPath: (finding: (typeof findings)[number]) => finding.filePath,
-				},
-			},
-		});
-		runnerFindingsStale += gate.stale.length;
-		if (gate.stale.length > 0) {
-			// The runner answered for bytes older than the latest edit. Do not
-			// re-arm this completed answer: only a new runner query can restore
-			// coverage for the refreshed bytes.
-			dropStaleRunnerFindings(pending);
-			runnerFindingsDropped += 1;
-		}
-		if (gate.live.length === 0) continue;
-		const displayPath = toRunnerDisplayPath(cwd, pending.filePath);
-		// #3248: the survivors are what the agent READS, so they take the same
-		// policy stack the late-AUXILIARY drain below applies — this lane is its
-		// twin (same post-gate `Diagnostic[]`, same rendering) and was the one
-		// push surface still re-reporting a finding the agent had marked. AFTER
-		// the freshness gate, like every other lane: the anchor is derived from
-		// the post-gate identity, never the raw pre-gate set. The file's CURRENT
-		// bytes; an unreadable file fails open inside the helper.
-		let runnerContent: string | undefined;
-		try {
-			runnerContent = fs.readFileSync(pending.filePath, "utf-8");
-		} catch {
-			runnerContent = undefined;
-		}
-		const { kept: runnerKept, suppressed: runnerSuppressedHere } =
-			applyPushedFindingPolicy(gate.live, {
-				cwd,
-				filePath: pending.filePath,
-				content: runnerContent,
-			});
-		runnerFindingsDispositionSuppressed += runnerSuppressedHere;
-		if (runnerKept.length === 0) {
-			// Every late finding was marked. A PUSH surface stays silent rather
-			// than re-announcing that the mark is working; the count rides this
-			// lane's bounded per-turn row below.
-			continue;
-		}
-		const lines = runnerKept.map(
-			(finding) =>
-				`  ${displayPath}:${finding.line ?? 1}:${finding.column ?? 1} [${finding.rule ?? finding.id}] ${finding.message}`,
-		);
-		runnerFindingsDelivered += runnerKept.length;
-		for (const finding of runnerKept) {
-			if (runnerFindingsDeliveredIds.length < 50) {
-				runnerFindingsDeliveredIds.push(finding.id);
-			}
-		}
-		// #1616 suppressed-bucket rule: a delivery that still has something to
-		// say states what it dropped, once per delivery.
-		const runnerSuppressedNote =
-			runnerSuppressedHere > 0
-				? `; suppressed by disposition: ${runnerSuppressedHere} finding(s)`
-				: "";
-		const lateBlocking = runnerKept.some(
-			(finding) => finding.semantic === "blocking",
-		);
-		const lateRunnerPart = `⏱️ Late runner diagnostics (${pending.runnerId} completed after the edit${runnerSuppressedNote}${lateBlocking ? "; blocking: fix before continuing" : ""}):\n${lines.join("\n")}`;
-		if (lateBlocking) unlabeledAdvisoryParts.add(lateRunnerPart);
-		// @delivery-surface: runtime-turn:late-runner-findings
-		advisoryParts.push(lateRunnerPart);
-		// #3813: handed back as the findings alone, still pre-policy so a mark
-		// made in the meantime applies, and the stale half already counted
-		// above is not carried (it would be dropped and recorded twice).
-		const {
-			failureKind: _kind,
-			failureMessage: _message,
-			...findingsOnly
-		} = result;
-		deliveryHolds.push({
-			part: lateRunnerPart,
-			onHeld: () =>
-				requeueRunnerFindings({
-					...pending,
-					result: { ...findingsOnly, diagnostics: gate.live },
-				}),
-		});
-	}
-	logLatency({
-		type: "phase",
-		toolName: "turn_end",
-		filePath: cwd,
-		phase: "late_runner_findings",
-		durationMs: Date.now() - runnerFindingsStart,
-		metadata: {
-			pending: pendingRunnerFindings.length,
-			delivered: runnerFindingsDelivered,
-			stale: runnerFindingsStale,
-			failed: runnerFindingsFailed,
-			dropped: runnerFindingsDropped,
-			dispositionSuppressed: runnerFindingsDispositionSuppressed,
-			deliveredIds: runnerFindingsDeliveredIds,
-		},
-	});
-
 	// #2001/#2002: collect-later delivery for auxiliary LSP servers whose
 	// aux-grace window expired without a publication (opengrep on Windows:
 	// ~8s per scan against a 2s grace — the scanner's eventual findings sat
@@ -4749,11 +4749,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		...resolvedParts.map(asIs),
 		...blockerParts.map(asIs),
 		...staleSecretParts.map(asIs),
+		// #3814: a blocking late-runner finding never reaches `advisoryParts`; it
+		// rides the blocker replay, so every advisory part gets the label.
 		...advisoryParts.map((raw) => ({
 			raw,
-			text: unlabeledAdvisoryParts.has(raw)
-				? raw
-				: `ℹ️ Advisory — no action required this turn:\n${raw}`,
+			text: `ℹ️ Advisory — no action required this turn:\n${raw}`,
 		})),
 	];
 	const findingParts = composedParts.map((part) => part.text);

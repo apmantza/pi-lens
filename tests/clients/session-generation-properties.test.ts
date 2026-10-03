@@ -57,6 +57,7 @@ import type { CascadeRun } from "../../clients/cascade-types.js";
 import {
 	deferRunnerFindings,
 	drainPendingRunnerFindings,
+	peekSettledRunnerFindings,
 	requeueRunnerFindings,
 	resetPendingRunnerFindings,
 } from "../../clients/dispatch/pending-runner-findings.js";
@@ -88,6 +89,8 @@ type WriterKind = "cascade" | "runner" | "runnerBare" | "bookkeep" | "widget";
 type Command =
 	| { t: "write"; kind: WriterKind }
 	| { t: "turn" }
+	/** The #3813 delivery hold: drain, then requeue the cut settled answer. */
+	| { t: "collect" }
 	/** `keepWidget`: a `/reload` (the widget and its guard survive) or `/new`. */
 	| { t: "start"; keepWidget: boolean }
 	| { t: "shutdown" }
@@ -120,6 +123,7 @@ const commandArb: fc.Arbitrary<Command> = fc.oneof(
 		}),
 	},
 	{ weight: 2, arbitrary: fc.constant({ t: "turn" as const }) },
+	{ weight: 2, arbitrary: fc.constant({ t: "collect" as const }) },
 	{
 		weight: 2,
 		arbitrary: fc.record({
@@ -157,6 +161,8 @@ interface Run {
 	/** Writer files each store holds at quiescence. */
 	cascade: string[];
 	runner: string[];
+	/** The commit gate's non-draining view, read before the final drain. */
+	peek: string[];
 	bookkeep: string[];
 	/** The widget file's message at quiescence (the writer's name). */
 	widget: string | undefined;
@@ -177,6 +183,7 @@ async function execute(
 		finalSession: 1,
 		cascade: [],
 		runner: [],
+		peek: [],
 		bookkeep: [],
 		widget: undefined,
 		widgetSinceClear: [],
@@ -342,6 +349,23 @@ async function execute(
 							requeueRunnerFindings({ ...entry, result: entry.result });
 					}
 					note(`turn-end cap: drained ${drained.length}, requeued`);
+				} else if (command.t === "collect") {
+					// The #3813 delivery hold: a settled answer the turn-end cap cut
+					// re-enters the store. The requeue is scheduled, so it may land on
+					// either side of a session start: a raw store clear leaves the
+					// snapshot to be re-added, and the next reader must fence the
+					// retired producer it carried (the stale-peek direction, #3758).
+					const collected = await drainPendingRunnerFindings(0);
+					for (const entry of collected) {
+						if (!entry.result) continue;
+						void s
+							.schedule(Promise.resolve(), `requeue:${entry.runnerId}`)
+							.then(() => {
+								requeueRunnerFindings({ ...entry, result: entry.result! });
+								note(`requeue ${entry.runnerId}`);
+							});
+					}
+					note("collect");
 				} else if (command.t === "retire") {
 					// A raw generation bump with NO store clear: the retirement window
 					// #3758's drain fence defends, before the next session_start clears.
@@ -388,6 +412,8 @@ async function execute(
 	// The final session's turn end reads each store.
 	await runtime.settleCascadeRuns(0);
 	run.cascade = runtime.consumeCascadeRuns().map((r) => r.filePath);
+	// The commit gate's non-draining read runs before the drain consumes it.
+	run.peek = peekSettledRunnerFindings().map((e) => e.filePath);
 	run.runner = (await drainPendingRunnerFindings(0)).map((e) => e.filePath);
 	const bookkept = new Set(
 		turnStateWrites
@@ -471,6 +497,43 @@ function noOwnDrop(run: Run): string[] {
 }
 
 /**
+ * Safety (shape 54): the fence never lets a superseded session's own runner
+ * answer into the commit gate's peek. The drain side is `noStaleWrite`; this
+ * pins the non-draining reader across the #3813 requeue round-trip. A
+ * `runnerBare` writer carries no handle, so it is unfenced by design (shape 57)
+ * and is not this fence's to reject.
+ */
+function peekNoStale(run: Run): string[] {
+	const out: string[] = [];
+	for (const w of run.writers) {
+		if (w.kind !== "runner" || w.session === run.finalSession) continue;
+		if (run.peek.includes(w.file))
+			out.push(
+				`runner w${w.id} from session ${w.session} is in session ${run.finalSession}'s peek`,
+			);
+	}
+	return out;
+}
+
+/**
+ * No-drop (shape 54): the fence never drops the final session's own answer, nor
+ * a released writer's no-handle deferral (a `runnerBare`, shape 57), from the
+ * gate's peek, across the #3813 requeue round-trip.
+ */
+function peekNoOwnDrop(run: Run): string[] {
+	const out: string[] = [];
+	for (const w of run.writers) {
+		if (w.kind !== "runner" && w.kind !== "runnerBare") continue;
+		if (w.session !== run.finalSession) continue;
+		if (!run.peek.includes(w.file))
+			out.push(
+				`${w.kind} w${w.id} of the final session was dropped by the peek`,
+			);
+	}
+	return out;
+}
+
+/**
  * #3540 r2: order tokens rise with issue order across session resets, so the
  * widget holds the latest-issued writer among those that wrote since the last
  * `/new`, whatever order the writes landed in. A turn half that restarts at
@@ -490,7 +553,9 @@ function widgetLatest(run: Run): string[] {
 const PROPERTIES = {
 	liveness,
 	noStaleWrite,
+	peekNoStale,
 	noOwnDrop,
+	peekNoOwnDrop,
 	noHandleDelivered,
 	widgetLatest,
 } satisfies Record<string, (run: Run) => string[]>;

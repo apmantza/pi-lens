@@ -1436,15 +1436,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(runtime-turn.ts:2882).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#82bbe401~723cb9f3": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`drainPendingRunnerFindings(0)` — a zero-WAIT drain, which " +
-			"bounds how long it waits for new findings but not how long the " +
-			"drain itself takes.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-turn.ts#9167ea7d~7f6889da": {
 		family: "hook-await",
 		site: "turn_end",
@@ -1517,13 +1508,22 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"seam (#2523 slice 2).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~c3e1d7c1": {
+	"clients/runtime-turn.ts#fde4167d~c3e1d7c1": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
 			"`sweepInlineBlockerFreshness` — #2523's turn_end list " +
 			"(runtime-turn.ts:789): unconditional, no `signal` parameter, " +
 			"uncapped population.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-turn.ts#handleTurnEnd:82bbe401~723cb9f3": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"`drainPendingRunnerFindings(0)` — a zero-WAIT drain, which " +
+			"bounds how long it waits for new findings but not how long the " +
+			"drain itself takes.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-turn.ts#runTestTargetsBounded:7307dda7~99843961": {

@@ -130,6 +130,15 @@ let session: string;
 let dbgLines: string[];
 let dbgWaiters: Array<{ pattern: RegExp; resolve: () => void }>;
 let runCalls: { mock: { results: Array<{ value: unknown }> } };
+/**
+ * Resolves when the production test batch fired by the most recent `turnEnd()`
+ * has fully settled. `handleTurnEnd` fires the batch without awaiting it, so
+ * the turn's own promise says nothing about it; this rides the production
+ * completion seam (`onTestRunnerComplete`) rather than inferring completion
+ * from a spy's length (#3896).
+ */
+let batchComplete: Promise<void> = Promise.resolve();
+let completeBatch: () => void = () => {};
 
 function git(cwd: string, ...args: string[]): void {
 	gitExecFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
@@ -207,6 +216,9 @@ function edit(file: string): void {
 }
 
 async function turnEnd(): Promise<void> {
+	batchComplete = new Promise<void>((resolve) => {
+		completeBatch = resolve;
+	});
 	await handleTurnEnd({
 		ctxCwd: session,
 		getFlag: () => false,
@@ -217,27 +229,25 @@ async function turnEnd(): Promise<void> {
 		deadCodeClients: [],
 		depChecker: { ensureAvailable: async () => false },
 		testRunnerClient: client,
+		onTestRunnerComplete: () => completeBatch(),
 		resetLSPService: () => {},
 		resetFormatService: () => {},
 	} as unknown as Parameters<typeof handleTurnEnd>[0]);
 }
 
 /**
- * The turn's test batch is fired without being awaited. Its runner promises are
- * the production `runTestFileAsync` calls (spied, not replaced), so awaiting
- * them is awaiting the real runs: the process boundary is already settled, and
- * the failed-target record is written inside each call before it resolves.
+ * The turn's test batch is fired without being awaited, so its completion is
+ * not observable through the `turnEnd()` promise. Await the production
+ * completion seam (`onTestRunnerComplete`, wired in `turnEnd()`), which fires
+ * only after the batch's own `runTestTargetsBounded` has settled every
+ * dispatched target. Awaiting a snapshot of the spy's `runTestFileAsync`
+ * promises instead raced the concurrency-4 pool: the 5th call of a 5-target
+ * batch is registered in a worker continuation that lands after a snapshot of
+ * the first four promises resolves, so the drain exited at 4 and the assertion
+ * read 4 (#3896, CI run 37099886100 job 111137192587).
  */
 async function batchSettled(spawnCount: number): Promise<void> {
-	// The pool dispatches the next target when one settles, so keep awaiting
-	// until no call is left that this snapshot has not seen.
-	let seen = 0;
-	while (seen < runCalls.mock.results.length) {
-		seen = runCalls.mock.results.length;
-		await Promise.allSettled(
-			runCalls.mock.results.map((call) => call.value as Promise<unknown>),
-		);
-	}
+	await batchComplete;
 	expect(runner.spawns).toHaveLength(spawnCount);
 }
 
@@ -508,6 +518,14 @@ describe("#3871 test root: the checkout that owns the edit", () => {
 			await turnEnd();
 			await batchSettled(worktrees.length);
 
+			// Independent 5-call witness: the production selection line, the
+			// production `runTestFileAsync` call count, and the spawn count. A drain
+			// that exits early on the concurrency-4 pool is caught by more than the
+			// single spy the old drain itself polled (#3896).
+			expect(dbgLines.join("\n")).toContain(
+				"turn_end: firing 5 test target(s)",
+			);
+			expect(runCalls.mock.results).toHaveLength(worktrees.length);
 			expect(
 				spawned()
 					.map((spawn) => spawn.cwd)
@@ -541,6 +559,38 @@ describe("#3871 test root: the checkout that owns the edit", () => {
 					.map((spawn) => spawn.cwd)
 					.sort(),
 			).toEqual([...carried, fresh].map((dir) => real(dir)).sort());
+		});
+	});
+
+	describe("#3896 the batch drain sees every target of a concurrency-4 batch", () => {
+		// Recurrence prevented: `batchSettled` inferred completion from a snapshot
+		// of the spy's `runTestFileAsync` promises. With 5 targets through a
+		// concurrency-4 pool the 5th call is registered in a worker continuation
+		// that can land after that snapshot resolves, so the drain exited at 4 and
+		// the assertion read 4 (CI run 37099886100 job 111137192587: "expected 5,
+		// got 4"). This case drives the same ordering in the session checkout, so
+		// it runs without a linked worktree — the 5-worktree fixture above needs
+		// `git worktree add`, which a worktree-bound worker's git guard refuses.
+		it("observes the 5th target the pool dispatches after the first four settle", async () => {
+			const files = [1, 2, 3, 4, 5].map((n) =>
+				write(main, `tests/unit/probe${n}.test.ts`, "export {};\n"),
+			);
+			git(main, "add", "-A");
+			git(main, "commit", "-qm", "probe targets");
+			for (const file of files) edit(file);
+
+			await turnEnd();
+			await batchSettled(files.length);
+
+			// Independent 5-call witness: the production selection line, the
+			// production `runTestFileAsync` call count, and the spawn count.
+			expect(dbgLines.join("\n")).toContain(
+				`turn_end: firing ${files.length} test target(s)`,
+			);
+			expect(runCalls.mock.results).toHaveLength(files.length);
+			expect(spawned().map((spawn) => spawn.cwd)).toEqual(
+				files.map(() => real(main)),
+			);
 		});
 	});
 
