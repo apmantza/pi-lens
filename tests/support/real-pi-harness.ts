@@ -131,6 +131,28 @@ export function createRealPiProject(
 	return dir;
 }
 
+/**
+ * The PATH head `npm run` hands a test, whatever started it: the repo's
+ * `node_modules/.bin`, then the running node's directory. The pre-push hook
+ * and a bare `vitest` start without the first, and the child then finds
+ * neither `pi` nor the `knip` the fixture's project-diagnostics scan resolves
+ * through PATH (#3742). Both bins are `#!/usr/bin/env node` shims, hence the
+ * second entry. The key is matched case-insensitively because Windows spreads
+ * `Path`.
+ */
+export function withRepoBinOnPath(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const key =
+		Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "PATH";
+	const entries = [
+		path.join(repoRoot, "node_modules", ".bin"),
+		path.dirname(process.execPath),
+		env[key],
+	];
+	return { ...env, [key]: entries.filter(Boolean).join(path.delimiter) };
+}
+
 function startRealPi(
 	scenario: string,
 	scriptFile: string,
@@ -163,7 +185,7 @@ function startRealPi(
 		{
 			cwd: project,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: {
+			env: withRepoBinOnPath({
 				...process.env,
 				// Keep the real host outside Vitest's runner-only rethrow mode.
 				VITEST: undefined,
@@ -173,7 +195,7 @@ function startRealPi(
 				REAL_PI_HARNESS_PROVIDER_LOG: providerLog,
 				ANTHROPIC_API_KEY: "sk-ant-real-harness-dummy",
 				...env,
-			},
+			}),
 		},
 	);
 	const events: RpcMessage[] = [];

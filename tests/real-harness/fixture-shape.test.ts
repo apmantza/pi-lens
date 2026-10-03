@@ -4,6 +4,7 @@ import * as path from "node:path";
 import {
 	realHarnessFixtureRoot,
 	validateScript,
+	withRepoBinOnPath,
 } from "../support/real-pi-harness.js";
 
 describe("real harness fixture shape", () => {
@@ -35,5 +36,20 @@ describe("real harness fixture shape", () => {
 		expect(() =>
 			validateScript([[{ type: "text" }]], "broken/script.json"),
 		).toThrow(/text must be a string/);
+	});
+	it("puts the repo bin dir first on the child PATH under any key casing (#3742)", () => {
+		const head = [
+			path.resolve("node_modules", ".bin"),
+			path.dirname(process.execPath),
+		];
+		const joined = (...parts: string[]) => parts.join(path.delimiter);
+		expect(withRepoBinOnPath({ PATH: "/usr/bin" })).toEqual({
+			PATH: joined(...head, "/usr/bin"),
+		});
+		expect(withRepoBinOnPath({ Path: "C:\\Windows" })).toEqual({
+			Path: joined(...head, "C:\\Windows"),
+		});
+		expect(withRepoBinOnPath({ PATH: "" })).toEqual({ PATH: joined(...head) });
+		expect(withRepoBinOnPath({})).toEqual({ PATH: joined(...head) });
 	});
 });
