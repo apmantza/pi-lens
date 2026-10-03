@@ -22,33 +22,16 @@
 // pull request must declare "(advisory)" in its check-run name, so neither
 // the check list nor `ci-verdict` reads its unconditional success as a gate.
 //
-// EVALUATION: the same technique as tests/config/ci-infra-kill-rerun-gate.ts
-// and install-smoke-gates.ts -- yaml.load the REAL workflow, substitute every
-// context path in the LOADED `if:` string with a JSON literal, and evaluate
-// with `new Function`. GitHub Actions expression syntax and JS agree exactly
-// on this subset (dotted paths, `==`, `!=`, `&&`, `||`, parentheses, quoted
-// strings and numbers). An unrecognised context path THROWS rather than
-// being guessed at, so a workflow that grows a new one fails loudly here
-// instead of being silently read as reachable.
-//
-// THE MODEL, and what it cannot see. Reachability is decided against a small
-// declared set of pull_request contexts (PR_CONTEXTS below) -- a job is
-// reachable if ANY of them makes its `if:` true. `needs.*.result` reads
-// `success` and `needs.*.outputs.*` reads `'true'`, the permissive reading:
-// a job that is reachable only when an upstream job FAILS will read as
-// unreachable and needs a registry entry naming that. A job's
-// `strategy.matrix` is evaluated under the same contexts (#3085 gap 2): an
-// exclusion moved OUT of `if:` and INTO a matrix that narrows to no cell on
-// pull_request is the same unreachability, and is flagged the same way. One
-// known blind spot, stated rather than papered over: a workflow with no
-// `pull_request`/`pull_request_target` trigger at all is out of scope -- the
-// nightly-only lanes (tool-smoke, compat-smoke, parser-smoke, release,
-// labels, ...) are deliberate, and flagging every job in them would bury this
-// sweep's real signal in a registry nobody reads (#3085 gap 1).
+// EVALUATION and THE MODEL live in the shared owner,
+// tests/support/workflow-pull-request-reachability.ts (#3941): the contexts,
+// the `${{ }}`/`==` substitution, the `new Function` evaluation, and
+// `triggersOnPullRequest`. This file keeps only the sweep: the matrix
+// narrowing helpers below (`pullRequestMatrixCells` and friends), the
+// registry audit, and the fixtures. `isPullRequestReachable` is imported so
+// the reachability cases here drive the same function the sweep does.
 import { readFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import yaml from "../../clients/deps/js-yaml.js";
 import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
 import {
 	assertSortedRegistry,
@@ -56,116 +39,25 @@ import {
 	listSourceFiles,
 	relativePosix,
 } from "../support/sweep-kit.js";
+import {
+	PR_CONTEXTS,
+	type PullRequestContext,
+	type ScalarLiteralValue,
+	evaluateForPullRequest,
+	githubEquals,
+	isPullRequestReachable,
+	isTrueForPullRequest,
+	loadWorkflow,
+	substituteForPullRequest,
+	triggersOnPullRequest,
+	type WorkflowFile,
+} from "../support/workflow-pull-request-reachability.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOWS_DIR = resolve(REPO_ROOT, ".github/workflows");
 
-interface PullRequestContext {
-	label: string;
-	eventName: string;
-	action: string;
-	merged: boolean;
-}
-
-// A job is PR-reachable if ANY of these makes its `if:` true. Two rows,
-// because one cannot serve both: `clear-stale-verdict-labels` requires
-// action `synchronize`, and a job restricted to other actions (as
-// `pr-body-lint` was before #3864 F2) needs a non-synchronize row; both kinds
-// are genuinely PR-reachable.
-const PR_CONTEXTS: readonly PullRequestContext[] = [
-	{
-		label: "pull_request / opened",
-		eventName: "pull_request",
-		action: "opened",
-		merged: false,
-	},
-	{
-		label: "pull_request / synchronize",
-		eventName: "pull_request",
-		action: "synchronize",
-		merged: false,
-	},
-];
-
-const CONTEXT_PATHS: Array<[string, (ctx: PullRequestContext) => unknown]> = [
-	["github.event_name", (ctx) => ctx.eventName],
-	["github.event.action", (ctx) => ctx.action],
-	["github.event.pull_request.merged", (ctx) => ctx.merged],
-	// Same-repo PR by a human: the common case, and the permissive one for
-	// every fork / bot guard in the tree.
-	["github.event.pull_request.head.repo.full_name", () => "acme/repo"],
-	["github.event.pull_request.user.login", () => "a-human"],
-	["github.repository", () => "acme/repo"],
-	// A `pull_request` event carries no workflow_run payload at all, so every
-	// path under it reads null -- which is what makes a workflow_run-only job
-	// correctly unreachable from a PR.
-	["github.event.workflow_run.head_repository.full_name", () => null],
-	["github.event.workflow_run.head_branch", () => null],
-	["github.event.workflow_run.conclusion", () => null],
-	["github.event.workflow_run.run_attempt", () => null],
-	["github.event.workflow_run.event", () => null],
-];
-
-// Zero-argument status functions and the permissive `needs.*` reading. Order
-// matters only in that these run before the leftover-reference check.
-const FUNCTION_SUBSTITUTIONS: Array<[RegExp, string]> = [
-	[/always\(\)/g, "true"],
-	[/success\(\)/g, "true"],
-	[/failure\(\)/g, "false"],
-	[/cancelled\(\)/g, "false"],
-	[/needs\.[A-Za-z0-9_-]+\.result/g, '"success"'],
-	[/needs\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+/g, '"true"'],
-];
-
-export function substituteForPullRequest(
-	expr: string,
-	ctx: PullRequestContext,
-): string {
-	// `${{ ... }}` is optional around a job-level `if:`; release.yml writes it
-	// that way. Strip it before evaluating either spelling.
-	let out = expr.trim().replace(/^\$\{\{([\s\S]*)\}\}$/, "$1");
-	for (const [path, read] of CONTEXT_PATHS) {
-		out = out.split(path).join(JSON.stringify(read(ctx)) ?? "null");
-	}
-	for (const [pattern, replacement] of FUNCTION_SUBSTITUTIONS) {
-		out = out.replace(pattern, replacement);
-	}
-	if (/(?:github|needs|env|inputs|steps|vars|secrets)\./.test(out)) {
-		throw new Error(
-			`workflow-pull-request-reachability: unrecognised context path in an if: expression -- ` +
-				`add it to CONTEXT_PATHS with the value a pull_request run would see, rather than ` +
-				`letting it be guessed at. Residue: ${out}`,
-		);
-	}
-	// `!=`/`==` before `===`, so the `!==` produced here is not re-rewritten.
-	return out.replace(/!=/g, "!==").replace(/(?<![!<>=])==(?!=)/g, "===");
-}
-
-/**
- * Evaluate a workflow expression under one PR context. `fromJSON` is the one
- * function a matrix narrowing uses, and it is JSON.parse.
- */
-function evaluateForPullRequest(
-	expr: string,
-	ctx: PullRequestContext,
-): unknown {
-	const substituted = substituteForPullRequest(expr, ctx);
-	// `new Function` over this repo's own workflow text plus JSON-literal
-	// fixtures, never external or untrusted input -- the same argument
-	// tests/config/ci-infra-kill-rerun-gate.test.ts makes for the same
-	// technique.
-	return new Function("fromJSON", `"use strict"; return (${substituted});`)(
-		(text: string) => JSON.parse(text),
-	);
-}
-
-function isTrueForPullRequest(expr: string, ctx: PullRequestContext): boolean {
-	return Boolean(evaluateForPullRequest(expr, ctx));
-}
-
-export function isPullRequestReachable(expr: string): boolean {
-	return PR_CONTEXTS.some((ctx) => isTrueForPullRequest(expr, ctx));
-}
+// The expression model itself is imported from
+// tests/support/workflow-pull-request-reachability.ts (see the header).
 
 /** A matrix value as a pull request sees it: `${{ }}` evaluated, else as written. */
 function resolveMatrixValue(value: unknown, ctx: PullRequestContext): unknown {
@@ -231,49 +123,6 @@ export function pullRequestMatrixCells(
 		}
 	}
 	return count;
-}
-
-interface WorkflowFile {
-	/** `.github/workflows/<name>.yml`, the registry key prefix. */
-	path: string;
-	text: string;
-}
-
-type Job = {
-	if?: unknown;
-	name?: unknown;
-	"continue-on-error"?: unknown;
-	strategy?: { matrix?: unknown };
-};
-type Workflow = { on?: unknown; jobs?: Record<string, Job> };
-
-function loadWorkflow(text: string): Workflow {
-	// `on:` is YAML 1.1 truthy, so js-yaml can key it as boolean `true`.
-	const parsed = yaml.load(text) as Record<string, unknown>;
-	const triggers = parsed?.on ?? parsed?.[true as unknown as string];
-	return { on: triggers, jobs: parsed?.jobs as Record<string, Job> };
-}
-
-export function triggersOnPullRequest(workflow: Workflow): boolean {
-	const triggers = workflow.on;
-	// GitHub accepts three spellings of `on:` and this must read all three.
-	// The ARRAY case is checked first and explicitly (round 2, F1): an array
-	// is `typeof "object"`, so the mapping branch below would key it with
-	// Object.keys and get ["0","1"] -- no match, and every job in that file
-	// silently skipped with jobsExamined 0, the sweep reading clean over a
-	// file it never looked inside. Every workflow in the tree happens to use
-	// the mapping form today, which is exactly why this read clean; the
-	// sweep exists for the next member, which may use any spelling.
-	const names = Array.isArray(triggers)
-		? triggers.map(String)
-		: typeof triggers === "string"
-			? [triggers]
-			: triggers && typeof triggers === "object"
-				? Object.keys(triggers as Record<string, unknown>)
-				: [];
-	return names.some(
-		(name) => name === "pull_request" || name === "pull_request_target",
-	);
 }
 
 /**
@@ -506,6 +355,50 @@ describe("the #3043 shape is what this sweep flags", () => {
 		expect(flagged).not.toContain(".github/workflows/install-smoke.yml::smoke");
 	});
 
+	// #3941 r3: the old JS-strict evaluation read a mixed-case pull-request
+	// gate as unreachable and demanded a registry exemption for a real PR job.
+	// The fold reads GitHub's case-insensitive equality, so no flag.
+	it("does not flag a mixed-case pull-request gate as unreachable", () => {
+		const file = [
+			"on:",
+			"  pull_request:",
+			"jobs:",
+			"  mixed:",
+			"    if: github.event_name == 'PULL_REQUEST'",
+			"    runs-on: ubuntu-latest",
+			"    steps:",
+			"      - run: echo mixed",
+			"",
+		].join("\n");
+		const { flagged } = findPullRequestUnreachableJobs([
+			{ path: ".github/workflows/fixture.yml", text: file },
+		]);
+		expect(flagged).toEqual([]);
+	});
+
+	// #3941 r4 (F6): the quoted-prose pair is TRUE on a pull request (two
+	// constant strings differ), so a real PR job must not be flagged
+	// unreachable. The pre-fix raw substitution corrupted the DATA and read it as
+	// false.
+	it("does not flag a true constant quoted-prose pair", () => {
+		const quotedPair = `'github.event_name' != '"pull_request"' && 'github.event_name' != '"pull_request_target"'`;
+		const file = [
+			"on:",
+			"  pull_request:",
+			"jobs:",
+			"  quoted:",
+			`    if: ${JSON.stringify(quotedPair)}`,
+			"    runs-on: ubuntu-latest",
+			"    steps:",
+			"      - run: echo quoted",
+			"",
+		].join("\n");
+		const { flagged } = findPullRequestUnreachableJobs([
+			{ path: ".github/workflows/fixture.yml", text: file },
+		]);
+		expect(flagged).toEqual([]);
+	});
+
 	// Round 2, F1: GitHub Actions accepts THREE spellings of `on:` -- a
 	// mapping (`on:\n  pull_request:`), a bare string (`on: pull_request`)
 	// and a LIST (`on: [push, pull_request]`). js-yaml parses the list as a
@@ -629,6 +522,290 @@ describe("the reachability model itself", () => {
 		expect(isPullRequestReachable(expr)).toBe(expected);
 	});
 
+	// #3941 r3: GitHub compares strings case-insensitively and coerces a
+	// mismatched scalar type to a number. The shared fold routes both callers
+	// through `githubEquals`, so a mixed-case pull-request literal is reachable
+	// rather than silently read as unreachable -- which used to make
+	// `findUndeclaredAdvisoryJobs` SKIP a real PR advisory job.
+	it.each([
+		["github.event_name == 'PULL_REQUEST'", true],
+		["github.event_name == 'Pull_Request'", true],
+		["github.event_name == 'PUSH'", false],
+		["'0' == 0", true],
+	])("folds GitHub equality: %s -> reachable=%s", (expr, expected) => {
+		expect(isPullRequestReachable(expr)).toBe(expected);
+	});
+
+	// #3941 r4 (F6): the shared full model used to rewrite string-literal DATA
+	// before folding, because every pass ran on raw text. A quoted literal is
+	// DATA: a context path, a status function, or an operator inside it is
+	// GitHub's own string bytes, never CODE. These cases drive the real consumer
+	// entry point, not a helper.
+	const openedContext = PR_CONTEXTS[0] as PullRequestContext;
+
+	it.each([
+		["'github.event_name'", "github.event_name"],
+		["'always()'", "always()"],
+		["'x==y'", "x==y"],
+	])("keeps quoted literal DATA intact: %s", (expr, expected) => {
+		expect(evaluateForPullRequest(expr, openedContext)).toBe(expected);
+	});
+
+	it("folds a constant quoted-prose pair the way GitHub compares it", () => {
+		expect(
+			isPullRequestReachable(
+				`'github.event_name' != '"pull_request"' && 'github.event_name' != '"pull_request_target"'`,
+			),
+		).toBe(true);
+	});
+
+	it("does not read a context path inside a quoted literal as a context read", () => {
+		expect(
+			evaluateForPullRequest(
+				"'github.event.issue.number' == 'github.event.issue.number'",
+				openedContext,
+			),
+		).toBe(true);
+	});
+
+	it("reads GitHub's doubled-quote escape instead of producing invalid JS", () => {
+		expect(
+			evaluateForPullRequest("github.event_name == 'don''t'", openedContext),
+		).toBe(false);
+		expect(evaluateForPullRequest("'don''t' == 'don''t'", openedContext)).toBe(
+			true,
+		);
+	});
+
+	it("treats a backslash in a GitHub string as data, not a JS escape", () => {
+		// `\u0041` is six literal characters in GitHub's grammar; JS would read
+		// it as `A`, so a true result here would be the old silent decode.
+		expect(evaluateForPullRequest("'a\\u0041b' == 'aAb'", openedContext)).toBe(
+			false,
+		);
+	});
+
+	it("reports a doubled-away or unclosed literal as unsupported", () => {
+		expect(() =>
+			evaluateForPullRequest(
+				"github.event_name == 'pull_requ\\'est'",
+				openedContext,
+			),
+		).toThrow(/unsupported expression/);
+	});
+
+	// #3941 r5 (F7): the fold used to trust token adjacency as operand
+	// identity, but GitHub binds `!` and the relationals tighter than `==`/`!=`
+	// and compares left-associatively. A literal comparison that is not a
+	// complete operand is REFUSED with the bounded unsupported-expression
+	// error, never folded into a guessed boolean. Each case drives the real
+	// consumer entry point.
+	it.each([
+		// relational to the left of the equality's left operand
+		"1 < 2 == true",
+		"0 > 1 == false",
+		"2 < 3 == true",
+		// the same unsupported topology even when the guess happens to match
+		"1 > 0 == true",
+		// a relational takes the equality's right operand
+		"0 == 1 < 2",
+		"1 == 2 < 3",
+		"true == 1 < 2",
+		// prefix `!` directly on the operand
+		"! 'x' != 'y'",
+		"!1 == 0",
+		"! 1 < 2 == true",
+		// a comparison run that starts or ends at a non-literal operand
+		"fromJSON('0') == 1 == 2",
+		"1 == 1 == fromJSON('1')",
+		// mixed with a supported boolean operator
+		"1 < 2 == true && 'a' == 'A'",
+	])("refuses unsupported comparison topology: %s", (expr) => {
+		expect(() => isPullRequestReachable(expr)).toThrow(
+			/unsupported expression/,
+		);
+	});
+
+	it.each([
+		// parentheses make the comparison a complete operand again
+		["(1 > 0) == true", true],
+		["(1 < 2) == true", true],
+		["!(1 == 2)", true],
+		["((1 == 1)) == true", true],
+		// equality chains evaluate left-associatively, as GitHub does
+		["1 == 1 == true", true],
+		["1 != 1 == false", true],
+		["1 == 2 == 3", false],
+		["1 == 2 == 3 == 4", false],
+		["1 == 1 == 1 == 1", true],
+		// boolean operators bind looser than equality
+		["1 < 2 && 3 == 3", true],
+		["1 == 1 || 2 == 3", true],
+	])(
+		"keeps supported comparison topology: %s -> reachable=%s",
+		(expr, expected) => {
+			expect(isPullRequestReachable(expr)).toBe(expected);
+		},
+	);
+
+	// #3941 r6 (F9): `COMPARISON_BOUNDARY_OPERATORS` already lists `<=`,
+	// `>=`, and `!=`, and the entry guard keeps a non-literal right operand
+	// out of the fold, but no case pinned any of the four. Removing `<=`,
+	// `>=`, or `!=` from the boundary set, or forcing the entry guard false,
+	// survived the r5 suite and silently restored the wrong-boolean F7 harm at
+	// that neighbour. Each case drives the real model entry point AND the real
+	// caller, so the refusal propagates instead of a clean `[]` flag.
+	it.each(["1 <= 2 == true", "1 >= 2 == true", "fromJSON('0') != 1 == 2"])(
+		"refuses an unsupported comparison neighbour: %s",
+		(expr) => {
+			expect(() => isPullRequestReachable(expr)).toThrow(
+				/unsupported expression/,
+			);
+			const file: WorkflowFile = {
+				path: ".github/workflows/fixture.yml",
+				text: [
+					"on:",
+					"  pull_request:",
+					"jobs:",
+					"  probe:",
+					`    if: ${expr}`,
+				].join("\n"),
+			};
+			expect(() => findPullRequestUnreachableJobs([file])).toThrow(
+				/unsupported expression/,
+			);
+		},
+	);
+
+	// #3941 r6 (F9): `1 == fromJSON('1')` is supported, not refused: the right
+	// operand is a call, so the entry guard leaves the comparison to the
+	// evaluator and GitHub loose equality makes `1 == 1` true. The guard is
+	// load-bearing -- forcing it false folds the call as a literal and throws a
+	// raw `SyntaxError` from `new Function`. A job gated on the expression is
+	// reachable, and its advisory declaration is still named.
+	it("keeps a comparison whose right operand is a call, not a literal", () => {
+		expect(isPullRequestReachable("1 == fromJSON('1')")).toBe(true);
+		const file: WorkflowFile = {
+			path: ".github/workflows/fixture.yml",
+			text: [
+				"on:",
+				"  pull_request:",
+				"jobs:",
+				"  probe:",
+				"    name: probe (advisory)",
+				"    continue-on-error: true",
+				"    if: 1 == fromJSON('1')",
+			].join("\n"),
+		};
+		expect(findPullRequestUnreachableJobs([file]).flagged).toEqual([]);
+		expect(findUndeclaredAdvisoryJobs([file])).toEqual({
+			flagged: [],
+			advisoryJobs: [".github/workflows/fixture.yml::probe"],
+		});
+	});
+
+	// #3941 r5 (F8.1): GitHub's expression grammar has single-quoted strings
+	// only. A double-quoted literal is invalid, and the model names the
+	// grammar rule at the real caller instead of falling through to a generic
+	// character error.
+	it("reports a GitHub-invalid double-quoted string as unsupported", () => {
+		expect(() =>
+			evaluateForPullRequest(
+				'github.event_name == "pull_request"',
+				openedContext,
+			),
+		).toThrow(/double-quoted string/);
+	});
+
+	// #3941 r5 (F8.3): the number token keeps GitHub's hex spelling (and the
+	// exponent, leading-dot, and signed spellings), so `0xff == 255` is true.
+	it.each([
+		["0xff == 255", true],
+		["0x10 == 16", true],
+		["1e2 == 100", true],
+		[".5 == 0.5", true],
+		["-1 == -1", true],
+		["1.5 == 1.5", true],
+	])("keeps the number spelling GitHub accepts: %s", (expr, expected) => {
+		expect(isPullRequestReachable(expr)).toBe(expected);
+	});
+
+	// #3941 r5 (F8.4): the `^...$` anchors on the needs forms are load-bearing.
+	// A path that only begins or ends like a supported one must reach the
+	// code-residue refusal, not be silently substituted as `success`/`'true'`.
+	it("refuses a needs path that only begins or ends like a supported one", () => {
+		for (const expr of [
+			"needs.foo.result.bar == 'success'",
+			"needs.foo.outputs.name.extra == 'true'",
+			"xneeds.foo.result == 'success'",
+			"xneeds.foo.outputs.name == 'true'",
+		]) {
+			expect(() => isPullRequestReachable(expr)).toThrow(
+				/unrecognised context path/,
+			);
+		}
+	});
+
+	it("keeps a quoted literal that spells a needs path as DATA", () => {
+		expect(
+			evaluateForPullRequest(
+				"'needs.foo.result.bar' == 'needs.foo.result.bar'",
+				openedContext,
+			),
+		).toBe(true);
+	});
+
+	it("substitutes the supported needs result and output forms", () => {
+		expect(isPullRequestReachable("needs.foo.result == 'success'")).toBe(true);
+		expect(isPullRequestReachable("needs.foo.outputs.name == 'true'")).toBe(
+			true,
+		);
+	});
+
+	// #3941 r5 (F8.2): the context-value domain is closed to scalars at the
+	// type level, so the old runtime non-scalar branch is deleted rather than
+	// kept as an unreachable guard. The assertion below does not type-check if
+	// `ScalarLiteralValue` is widened to admit an object.
+	it("closes the context-value domain to scalars at the type level", () => {
+		const scalarRow: [string, (ctx: PullRequestContext) => ScalarLiteralValue] =
+			["github.example.scalar", () => 1];
+		expect(scalarRow[0]).toBe("github.example.scalar");
+		// A CONTEXT_PATHS row's value function may only return a scalar literal.
+		// @ts-expect-error a context path may only inject a scalar literal
+		const objectRowValue = (): ScalarLiteralValue => ({ nested: true });
+		expect(objectRowValue).toBeTypeOf("function");
+	});
+
+	it("never rescans an injected context value as code", () => {
+		// The value reads like a context path; a second raw pass would rewrite
+		// it, and the two operands would no longer be equal.
+		expect(
+			evaluateForPullRequest("github.event_name == 'github.repository'", {
+				...openedContext,
+				eventName: "github.repository",
+			}),
+		).toBe(true);
+	});
+
+	it("preserves fromJSON JSON bytes, keys, and case", () => {
+		expect(
+			evaluateForPullRequest(
+				`fromJSON('[{"KEY":"github.event_name"},{"always()":"x==y"}]')`,
+				openedContext,
+			),
+		).toEqual([{ KEY: "github.event_name" }, { "always()": "x==y" }]);
+	});
+
+	it("exposes one GitHub equality owner for the fold and the projection", () => {
+		expect(githubEquals("Pull_Request", "pull_request")).toBe(true);
+		expect(githubEquals("push", "pull_request")).toBe(false);
+		expect(githubEquals("0", 0)).toBe(true);
+		expect(githubEquals(null, 0)).toBe(true);
+		expect(githubEquals(false, 0)).toBe(true);
+		expect(githubEquals(true, 1)).toBe(true);
+		expect(githubEquals("nope", 0)).toBe(false);
+	});
+
 	// A context path nobody declared must throw, not be guessed at: silently
 	// reading an unknown path as reachable is how a sweep stops sweeping
 	// (AGENTS.md defect shape 10).
@@ -739,6 +916,48 @@ describe("reachable and gating are two columns (#3087)", () => {
 			].join("\n"),
 		);
 		expect(findUndeclaredAdvisoryJobs([file]).advisoryJobs).toEqual([]);
+	});
+
+	// #3941 r3 caller witness: a mixed-case pull-request gate is a REAL
+	// pull-request job. The old JS-strict evaluation read it as unreachable and
+	// this sweep skipped its missing advisory marker; the fold keeps it in the
+	// population.
+	it("names a mixed-case advisory job instead of skipping it", () => {
+		const file = workflow(
+			[
+				"  probe:",
+				"    name: probe",
+				"    if: github.event_name == 'PULL_REQUEST'",
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo probe",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).flagged).toEqual([
+			".github/workflows/fixture.yml::probe",
+		]);
+	});
+
+	// #3941 r4 (F6) caller witness: the quoted-prose pair is TRUE on a pull
+	// request, so this job is PR-reachable. Skipping it would drop a real
+	// advisory job from the sweep.
+	it("names an advisory job whose quoted-prose gate is true on a pull request", () => {
+		const quotedPair = `'github.event_name' != '"pull_request"' && 'github.event_name' != '"pull_request_target"'`;
+		const file = workflow(
+			[
+				"  probe:",
+				"    name: probe",
+				`    if: ${JSON.stringify(quotedPair)}`,
+				"    continue-on-error: true",
+				"    runs-on: ubuntu-latest",
+				"    steps:",
+				"      - run: echo probe",
+			].join("\n"),
+		);
+		expect(findUndeclaredAdvisoryJobs([file]).flagged).toEqual([
+			".github/workflows/fixture.yml::probe",
+		]);
 	});
 });
 
