@@ -613,11 +613,12 @@ describe("pi-lens MCP result bounds", { retry: 2 }, () => {
 // The dispatcher now checks every tool's arguments against the schema it
 // advertises. Own harness, so the degradation ledger these tests read starts
 // empty.
-// The reviewed sweep output (round 3): all 256 refusals of 4580 probes over the
-// live tools/list schemas, every one a declared parameter the call did not send,
-// written with another case, a plural `s`, or a leading word (`filePath`,
-// `dir_path`, `Paths`, `kind` for `kinds`). A new tool or key that adds a pair
-// must be read and added here on purpose.
+// The reviewed sweep output (#3809 re-pin): all 273 refusals of 4813 probes over
+// the live tools/list schemas, every one a declared parameter the call did not
+// send, written with another case, a plural `s`, or a leading word that does not
+// retarget it (`filePath`, `dir_path`, `Paths`, `kind` for `kinds`; not
+// `cwdPath`, `maxFiles`). A new tool or key that adds a pair must be read and
+// added here on purpose.
 const PINNED_REFUSALS: string[] = [
 	"pilens_analyze {Cwd} -> cwd",
 	"pilens_analyze {Flags} -> flags",
@@ -635,7 +636,9 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_ast_grep_replace {Path} -> paths",
 	"pilens_ast_grep_replace {Precedes} -> precedes",
 	"pilens_ast_grep_replace {Strictness} -> strictness",
+	"pilens_ast_grep_replace {absPath} -> paths",
 	"pilens_ast_grep_replace {applys} -> apply", // spellchecker:disable-line
+	"pilens_ast_grep_replace {configPath} -> paths",
 	"pilens_ast_grep_replace {cwds} -> cwd",
 	"pilens_ast_grep_replace {dirPath} -> paths",
 	"pilens_ast_grep_replace {dir_path} -> paths",
@@ -646,15 +649,16 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_ast_grep_replace {insideKinds} -> insideKind",
 	"pilens_ast_grep_replace {namePath} -> paths",
 	"pilens_ast_grep_replace {name_path} -> paths",
-	"pilens_ast_grep_replace {pathPath} -> paths",
-	"pilens_ast_grep_replace {path_path} -> paths",
 	"pilens_ast_grep_replace {path} -> paths",
+	"pilens_ast_grep_replace {projectPath} -> paths",
+	"pilens_ast_grep_replace {rootPath} -> paths",
 	"pilens_ast_grep_replace {sourcePath} -> paths",
 	"pilens_ast_grep_replace {source_path} -> paths",
 	"pilens_ast_grep_replace {symbolPath} -> paths",
 	"pilens_ast_grep_replace {symbol_path} -> paths",
 	"pilens_ast_grep_replace {targetPath} -> paths",
 	"pilens_ast_grep_replace {target_path} -> paths",
+	"pilens_ast_grep_replace {workspacePath} -> paths",
 	"pilens_ast_grep_search {Context} -> context",
 	"pilens_ast_grep_search {Cwd} -> cwd",
 	"pilens_ast_grep_search {Dump} -> dump",
@@ -675,6 +679,8 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_ast_grep_search {Skip} -> skip",
 	"pilens_ast_grep_search {Strictness} -> strictness",
 	"pilens_ast_grep_search {ValidateOnly} -> validateOnly",
+	"pilens_ast_grep_search {absPath} -> paths",
+	"pilens_ast_grep_search {configPath} -> paths",
 	"pilens_ast_grep_search {contexts} -> context",
 	"pilens_ast_grep_search {cwds} -> cwd",
 	"pilens_ast_grep_search {dirPath} -> paths",
@@ -689,10 +695,10 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_ast_grep_search {namePath} -> paths",
 	"pilens_ast_grep_search {name_path} -> paths",
 	"pilens_ast_grep_search {nodeKinds} -> nodeKind",
-	"pilens_ast_grep_search {pathPath} -> paths",
-	"pilens_ast_grep_search {path_path} -> paths",
 	"pilens_ast_grep_search {path} -> paths",
 	"pilens_ast_grep_search {patterns} -> pattern",
+	"pilens_ast_grep_search {projectPath} -> paths",
+	"pilens_ast_grep_search {rootPath} -> paths",
 	"pilens_ast_grep_search {rules} -> rule",
 	"pilens_ast_grep_search {selectors} -> selector",
 	"pilens_ast_grep_search {skips} -> skip",
@@ -703,6 +709,7 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_ast_grep_search {targetPath} -> paths",
 	"pilens_ast_grep_search {target_path} -> paths",
 	"pilens_ast_grep_search {validateOnlys} -> validateOnly",
+	"pilens_ast_grep_search {workspacePath} -> paths",
 	"pilens_diagnostics {AnalysisRoot} -> analysisRoot",
 	"pilens_diagnostics {Concurrency} -> concurrency",
 	"pilens_diagnostics {Cwd} -> cwd",
@@ -720,8 +727,10 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_diagnostics {Severity} -> severity",
 	"pilens_diagnostics {Source} -> source",
 	"pilens_diagnostics {WaitMs} -> waitMs",
+	"pilens_diagnostics {absPath} -> path",
 	"pilens_diagnostics {analysisRoots} -> analysisRoot",
 	"pilens_diagnostics {concurrencys} -> concurrency",
+	"pilens_diagnostics {configPath} -> path",
 	"pilens_diagnostics {cwds} -> cwd",
 	"pilens_diagnostics {dirPath} -> path",
 	"pilens_diagnostics {dir_path} -> path",
@@ -731,28 +740,31 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_diagnostics {modes} -> mode",
 	"pilens_diagnostics {namePath} -> path",
 	"pilens_diagnostics {name_path} -> path",
-	"pilens_diagnostics {pathPath} -> path",
-	"pilens_diagnostics {path_path} -> path",
+	"pilens_diagnostics {projectPath} -> path",
+	"pilens_diagnostics {rootPath} -> path",
 	"pilens_diagnostics {scopes} -> scope",
 	"pilens_diagnostics {serverScopes} -> serverScope",
 	"pilens_diagnostics {severitys} -> severity",
-	"pilens_diagnostics {sourcePath} -> path",
-	"pilens_diagnostics {source_path} -> path",
 	"pilens_diagnostics {sources} -> source",
 	"pilens_diagnostics {symbolPath} -> path",
 	"pilens_diagnostics {symbol_path} -> path",
 	"pilens_diagnostics {targetPath} -> path",
 	"pilens_diagnostics {target_path} -> path",
+	"pilens_diagnostics {workspacePath} -> path",
 	"pilens_effective_config {Cwd} -> cwd",
 	"pilens_effective_config {FILE} -> file",
 	"pilens_effective_config {File} -> file",
 	"pilens_effective_config {cwds} -> cwd",
 	"pilens_effective_config {files} -> file",
+	"pilens_effective_config {hasFiles} -> file",
+	"pilens_effective_config {newFile} -> file",
 	"pilens_latency {FILE} -> file",
 	"pilens_latency {File} -> file",
 	"pilens_latency {Limit} -> limit",
 	"pilens_latency {files} -> file",
+	"pilens_latency {hasFiles} -> file",
 	"pilens_latency {limits} -> limit",
+	"pilens_latency {newFile} -> file",
 	"pilens_lsp_navigation {Apply} -> apply",
 	"pilens_lsp_navigation {CallHierarchyItem} -> callHierarchyItem",
 	"pilens_lsp_navigation {Character} -> character",
@@ -774,10 +786,12 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_lsp_navigation {SYMBOL} -> symbol",
 	"pilens_lsp_navigation {Symbol} -> symbol",
 	"pilens_lsp_navigation {TopLevelOnly} -> topLevelOnly",
+	"pilens_lsp_navigation {absPath} -> path",
 	"pilens_lsp_navigation {applys} -> apply", // spellchecker:disable-line
 	"pilens_lsp_navigation {callHierarchyItems} -> callHierarchyItem",
 	"pilens_lsp_navigation {characters} -> character",
 	"pilens_lsp_navigation {commands} -> command",
+	"pilens_lsp_navigation {configPath} -> path",
 	"pilens_lsp_navigation {cwds} -> cwd",
 	"pilens_lsp_navigation {dirPath} -> path",
 	"pilens_lsp_navigation {dir_path} -> path",
@@ -792,18 +806,17 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_lsp_navigation {name_path} -> path",
 	"pilens_lsp_navigation {newFilePaths} -> newFilePath",
 	"pilens_lsp_navigation {newNames} -> newName",
-	"pilens_lsp_navigation {pathPath} -> path",
-	"pilens_lsp_navigation {path_path} -> path",
 	"pilens_lsp_navigation {paths} -> path",
+	"pilens_lsp_navigation {projectPath} -> path",
 	"pilens_lsp_navigation {querys} -> query", // spellchecker:disable-line
+	"pilens_lsp_navigation {rootPath} -> path",
 	"pilens_lsp_navigation {sourcePath} -> path",
 	"pilens_lsp_navigation {source_path} -> path",
-	"pilens_lsp_navigation {symbolPath} -> path",
-	"pilens_lsp_navigation {symbol_path} -> path",
 	"pilens_lsp_navigation {symbols} -> symbol",
 	"pilens_lsp_navigation {targetPath} -> path",
 	"pilens_lsp_navigation {target_path} -> path",
 	"pilens_lsp_navigation {topLevelOnlys} -> topLevelOnly",
+	"pilens_lsp_navigation {workspacePath} -> path",
 	"pilens_module_report {BlastRadiusDepth} -> blastRadiusDepth",
 	"pilens_module_report {BlastRadius} -> blastRadius",
 	"pilens_module_report {CallGraph} -> callGraph",
@@ -851,6 +864,8 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_symbol_search {PATH} -> paths",
 	"pilens_symbol_search {Paths} -> paths",
 	"pilens_symbol_search {Path} -> paths",
+	"pilens_symbol_search {absPath} -> paths",
+	"pilens_symbol_search {configPath} -> paths",
 	"pilens_symbol_search {cwds} -> cwd",
 	"pilens_symbol_search {dirPath} -> paths",
 	"pilens_symbol_search {dir_path} -> paths",
@@ -860,21 +875,24 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_symbol_search {limits} -> limit",
 	"pilens_symbol_search {namePath} -> paths",
 	"pilens_symbol_search {name_path} -> paths",
-	"pilens_symbol_search {pathPath} -> paths",
-	"pilens_symbol_search {path_path} -> paths",
 	"pilens_symbol_search {path} -> paths",
+	"pilens_symbol_search {projectPath} -> paths",
+	"pilens_symbol_search {rootPath} -> paths",
 	"pilens_symbol_search {sourcePath} -> paths",
 	"pilens_symbol_search {source_path} -> paths",
 	"pilens_symbol_search {symbolPath} -> paths",
 	"pilens_symbol_search {symbol_path} -> paths",
 	"pilens_symbol_search {targetPath} -> paths",
 	"pilens_symbol_search {target_path} -> paths",
+	"pilens_symbol_search {workspacePath} -> paths",
 	"pilens_turn_end {Cwd} -> cwd",
 	"pilens_turn_end {FILE} -> files",
 	"pilens_turn_end {Files} -> files",
 	"pilens_turn_end {File} -> files",
 	"pilens_turn_end {cwds} -> cwd",
 	"pilens_turn_end {file} -> files",
+	"pilens_turn_end {hasFiles} -> files",
+	"pilens_turn_end {newFile} -> files",
 ];
 
 describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
@@ -1139,6 +1157,15 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 			["pilens_module_report", { file: "missing.ts" }, "symbol", null],
 			["pilens_lsp_navigation", { operation: "hover" }, "name", null],
 			["pilens_ast_grep_search", { lang: "typescript" }, "text", null],
+			// #3809: the qualifier makes these a different parameter, not `path` /
+			// `file` / `files`; each was refused on that head noun before.
+			["pilens_diagnostics", {}, "cwdPath", null],
+			["pilens_lsp_navigation", { operation: "hover" }, "cwdPath", null],
+			["pilens_turn_end", {}, "maxFiles", null],
+			["pilens_latency", {}, "outFile", null],
+			["pilens_latency", {}, "includeFiles", null],
+			// An undeclared qualifier keeps the head-noun refusal.
+			["pilens_diagnostics", {}, "workspacePath", "path"],
 		];
 		for (const [tool, required, key, named] of rows) {
 			const result = await call(tool, { ...required, [key]: "x" });
@@ -1154,6 +1181,20 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 			}
 		}
 	}, 120_000);
+
+	// #3809: a retargeted key runs with a warning that names no wrong parameter.
+	it("hints the declared qualifier for cwdPath and no head noun for maxFiles", async () => {
+		const cwdPath = await call("pilens_diagnostics", { cwdPath: "/x" });
+		expect(cwdPath.isError).not.toBe(true);
+		expect(firstLine(cwdPath)).toBe(
+			"Ignored unknown argument(s) for pilens_diagnostics: `cwdPath` (did you mean `cwd`?). They had no effect on this call.",
+		);
+		const maxFiles = await call("pilens_turn_end", { maxFiles: 3 });
+		expect(maxFiles.isError).not.toBe(true);
+		expect(firstLine(maxFiles)).toBe(
+			"Ignored unknown argument(s) for pilens_turn_end: `maxFiles`. They had no effect on this call.",
+		);
+	}, 60_000);
 
 	// Round 3 sweep: every (tool, key) pair over the LIVE tools/list schemas, the
 	// tool's required keys sent, so a refusal can only come from the predicate.
@@ -1248,7 +1289,25 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 			"skip",
 		];
 		const cap = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+		// #3809: a qualifier plus a head noun. Retargeted ones (`cwdPath`,
+		// `maxFiles`) must not be pinned as refusals; the rest are.
+		const qualified = [
+			"cwdPath",
+			"cwd_path",
+			"maxFiles",
+			"countFiles",
+			"outFile",
+			"includeFiles",
+			"workspacePath",
+			"projectPath",
+			"rootPath",
+			"configPath",
+			"absPath",
+			"newFile",
+			"hasFiles",
+		];
 		const common = new Set<string>([
+			...qualified,
 			...bases,
 			...bases.map(cap),
 			...bases.map((word) => `${word}s`),
@@ -1341,5 +1400,13 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 		);
 		expect(row?.reason).toContain("ignored argument(s): onlyKeyA");
 		expect(row?.reason).not.toContain("onlyKeyB");
+		// #3809: a retargeted key runs instead of being refused, and is counted.
+		await call("pilens_turn_end", { maxFiles: 3 });
+		const last = await health();
+		expect(last?.count).toBe((after?.count ?? 0) + 1);
+		expect(
+			last?.latestReasons.find((entry) => entry.subject === "pilens_turn_end")
+				?.reason,
+		).toContain("ignored argument(s): maxFiles");
 	}, 25_000);
 });

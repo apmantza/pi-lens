@@ -321,6 +321,150 @@ describe("refusalMatches", () => {
 	});
 });
 
+// Recurrence (#3809): the head-noun rule ignored what the leading tokens mean,
+// so `cwdPath` (a cwd), `maxFiles` (a count) and `outFile` (a sink) refused
+// naming `path` / `file`, the wrong parameter. A qualifier that is itself a
+// declared key, or a quantity / flag / sink word, makes the key a different
+// parameter: it warns and the tool runs.
+describe("qualifier-aware head-noun matching (#3809)", () => {
+	it("does not match when the leading tokens are themselves a declared key", () => {
+		const rows: [string, string[]][] = [
+			["cwdPath", ["cwd", "path"]],
+			["cwd_path", ["cwd", "paths"]],
+			["CWD-Path", ["cwd", "path"]],
+			["symbolPath", ["symbol", "path"]],
+		];
+		for (const [key, declared] of rows)
+			expect(refusalMatches(key, declared), key).toEqual([]);
+	});
+
+	it("matches when the leading tokens are not a declared key of this tool", () => {
+		const rows: [string, string[], string[]][] = [
+			["cwdPath", ["path"], ["path"]],
+			["workspacePath", ["cwd", "path"], ["path"]],
+			["configPath", ["path"], ["path"]],
+			["symbolPath", ["path"], ["path"]],
+		];
+		for (const [key, declared, expected] of rows)
+			expect(refusalMatches(key, declared), key).toEqual(expected);
+	});
+
+	it("does not match when a leading token is a quantity, flag or sink word", () => {
+		const words = [
+			"max",
+			"min",
+			"num",
+			"count",
+			"total",
+			"include",
+			"exclude",
+			"out",
+			"output",
+		];
+		for (const word of words) {
+			expect(refusalMatches(`${word}Files`, ["file"]), word).toEqual([]);
+			expect(refusalMatches(`${word}_file`, ["files"]), word).toEqual([]);
+		}
+		// Any leading token counts, not only the first.
+		expect(refusalMatches("lspMaxFiles", ["file"])).toEqual([]);
+	});
+
+	it("still matches a head noun behind a qualifier that is neither", () => {
+		// Spelling enumerator: the word list is finite, so an unlisted word keeps
+		// the old verdict (a refusal naming the head noun).
+		const rows: [string, string[], string[]][] = [
+			["newFile", ["file"], ["file"]],
+			["hasFile", ["file"], ["file"]],
+			["withFiles", ["file"], ["file"]],
+			["dirPath", ["file", "path"], ["path"]],
+			["absPath", ["path"], ["path"]],
+		];
+		for (const [key, declared, expected] of rows)
+			expect(refusalMatches(key, declared), key).toEqual(expected);
+	});
+
+	it("keeps a folded-equal match over a qualifier-dropped head noun", () => {
+		expect(refusalMatches("MaxFiles", ["maxFiles", "file"])).toEqual([
+			"maxFiles",
+		]);
+	});
+
+	it("warns and runs with the declared qualifier as the hint for cwdPath", () => {
+		const report = findIgnoredArguments(DIAGNOSTICS, { cwdPath: "/x" });
+		expect(report?.ignored).toEqual([{ key: "cwdPath", suggestion: "cwd" }]);
+		expect(report?.unsentSuggestions).toEqual([]);
+		expect(report && refusalResult("pilens_diagnostics", report)).toBe(
+			undefined,
+		);
+	});
+
+	// Mutation survivors in #3950: one-token qualifiers did not distinguish
+	// folding a compound declared key from joining its tokens with punctuation.
+	it("warns and runs when a compound qualifier names a declared parameter", () => {
+		const report = findIgnoredArguments(
+			{ properties: { file: {}, blastRadius: {} }, required: ["file"] },
+			{ file: "a.ts", blast_radius_file: true },
+		);
+		expect(report).toEqual({
+			ignored: [{ key: "blast_radius_file", suggestion: "blastRadius" }],
+			missingRequired: [],
+			unsentSuggestions: [],
+		});
+		expect(refusalResult("pilens_module_report", report!)).toBeUndefined();
+	});
+
+	// A positive slice offset happened to select the suffix of two-token
+	// keys. A longer locator must still refuse, rather than run on defaults.
+	it("refuses a locator with multiple undeclared qualifier tokens", () => {
+		const report = findIgnoredArguments(DIAGNOSTICS, { localFilePath: "/x" });
+		expect(report?.unsentSuggestions).toEqual([
+			{ key: "localFilePath", suggestion: "path" },
+		]);
+		expect(refusalResult("pilens_diagnostics", report!)?.isError).toBe(true);
+	});
+
+	// Joining either side without spaces loses multi-token suffix matches;
+	// the spelling must still refuse when the whole declared suffix matches.
+	it("refuses a compound declared suffix with its token boundaries intact", () => {
+		const report = findIgnoredArguments(
+			{ properties: { file: {}, blastRadius: {} }, required: ["file"] },
+			{ file: "a.ts", requested_blast_radius: true },
+		);
+		expect(report?.ignored).toEqual([
+			{ key: "requested_blast_radius", suggestion: "blastRadius" },
+		]);
+		expect(report?.unsentSuggestions).toEqual([
+			{ key: "requested_blast_radius", suggestion: "blastRadius" },
+		]);
+		expect(refusalResult("pilens_module_report", report!)?.isError).toBe(true);
+	});
+
+	it("warns and runs with no hint at the head noun it is not", () => {
+		for (const key of ["maxFiles", "outFile", "includeFiles"]) {
+			const report = findIgnoredArguments(ANALYZE, { file: "a.ts", [key]: 1 });
+			expect(report?.ignored, key).toEqual([{ key }]);
+			expect(report?.unsentSuggestions, key).toEqual([]);
+			expect(report && refusalResult("pilens_analyze", report), key).toBe(
+				undefined,
+			);
+		}
+	});
+
+	it("refuses on the required key alone, never as a mistyped head noun", () => {
+		const report = findIgnoredArguments(ANALYZE, { countFiles: 1 });
+		const text =
+			report && refusalResult("pilens_analyze", report)?.content[0].text;
+		expect(text).toContain("\nNot run: required argument(s) `file` missing.");
+		expect(text).not.toContain("mistyped");
+	});
+
+	it("still hints the head noun for a key whose qualifier does not retarget it", () => {
+		expect(
+			findIgnoredArguments(ANALYZE, { file: "a.ts", fileName: 1 })?.ignored,
+		).toEqual([{ key: "fileName", suggestion: "file" }]);
+	});
+});
+
 describe("refusal versus hint", () => {
 	it("keeps the hint and runs when the loose scorer finds a key the predicate does not", () => {
 		const report = findIgnoredArguments(

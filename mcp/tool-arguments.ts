@@ -103,28 +103,75 @@ function tokensOf(key: string): string[] {
  * punctuation folded: `Path`, `PATH`, `Server_Scope` for `serverScope`), or (b)
  * are the TRAILING tokens of the ignored key, its head noun (`filePath` and
  * `file_path` end in the token `path`; `pathName` and `sourcePath` do not end
- * in `path` / `source`). A plural `s` is ignored on either side (`paths` for
- * `path`). Reverse containment, abbreviations, typos, leading or middle tokens
- * and substrings (`files` for `maxLspFiles`, `file` for `path`) never match:
- * those stay a warning, because refusing on them sent callers to the wrong
- * parameter. A folded-equal match decides alone; suffix matches count only when none exists.
+ * in `path` / `source`), unless the leading tokens change what the key names
+ * (#3809): they are themselves a declared key (`cwdPath` is `cwd`, not `path`,
+ * when `cwd` is declared), or one is a quantity, flag or sink word (`maxFiles`,
+ * `includeFiles`, `outFile` are not `file`). A plural `s` is ignored on either
+ * side (`paths` for `path`). Reverse containment, abbreviations, typos, leading
+ * or middle tokens and substrings (`files` for `maxLspFiles`, `file` for
+ * `path`) never match: those stay a warning, because refusing on them sent
+ * callers to the wrong parameter. A folded-equal match decides alone; suffix
+ * matches count only when none exists.
  */
 export function refusalMatches(
 	key: string,
 	declared: readonly string[],
 ): string[] {
+	return classifyKey(key, declared).matches;
+}
+
+/**
+ * Qualifier words that turn a head noun into a different parameter: a quantity
+ * (`maxFiles` counts files) or a flag or sink (`includeFiles`, `outFile`),
+ * never the file parameter itself (#3809). A finite list on purpose: a
+ * spelling not on it (`newFile`, `hasFile`) still refuses on its head noun.
+ * Compared after the plural `s` is dropped, so no entry ends in `s`.
+ */
+const NON_LOCATOR_QUALIFIERS: ReadonlySet<string> = new Set([
+	"max",
+	"min",
+	"num",
+	"count",
+	"total",
+	"include",
+	"exclude",
+	"out",
+	"output",
+]);
+
+interface KeyMatches {
+	/** The declared keys the refusal predicate returns for the key. */
+	matches: string[];
+	/** Head-noun matches dropped because the qualifier names something else. */
+	retargeted: string[];
+}
+
+function classifyKey(key: string, declared: readonly string[]): KeyMatches {
 	const tokens = tokensOf(key);
 	const folded = tokens.join("");
+	const declaredFolds = new Set(
+		declared.map((name) => tokensOf(name).join("")),
+	);
 	const equal: string[] = [];
 	const suffix: string[] = [];
+	const retargeted: string[] = [];
 	for (const candidate of declared) {
 		const wanted = tokensOf(candidate);
 		if (wanted.length === 0) continue;
-		if (folded === wanted.join("")) equal.push(candidate);
-		else if (tokens.slice(-wanted.length).join(" ") === wanted.join(" "))
-			suffix.push(candidate);
+		if (folded === wanted.join("")) {
+			equal.push(candidate);
+			continue;
+		}
+		if (tokens.slice(-wanted.length).join(" ") !== wanted.join(" ")) continue;
+		const qualifier = tokens.slice(0, -wanted.length);
+		const retargets =
+			declaredFolds.has(qualifier.join("")) ||
+			qualifier.some((token) => NON_LOCATOR_QUALIFIERS.has(token));
+		(retargets ? retargeted : suffix).push(candidate);
 	}
-	return equal.length > 0 ? equal : suffix;
+	return equal.length > 0
+		? { matches: equal, retargeted: [] }
+		: { matches: suffix, retargeted };
 }
 
 /**
@@ -142,7 +189,7 @@ export function findIgnoredArguments(
 	const ignored = Object.keys(args)
 		.filter((key) => !Object.hasOwn(properties, key))
 		.map((key): IgnoredArgument => {
-			const matches = refusalMatches(key, declared);
+			const { matches, retargeted } = classifyKey(key, declared);
 			// Sending any one spelling of the parameter (`path` or `paths`) settles it.
 			const unsent = matches.some((match) => Object.hasOwn(args, match))
 				? undefined
@@ -152,8 +199,14 @@ export function findIgnoredArguments(
 				!unsentSuggestions.some((entry) => entry.suggestion === unsent)
 			)
 				unsentSuggestions.push({ key, suggestion: unsent });
-			// The hint prefers the refusal match, so the line and the refusal agree.
-			const suggestion = matches[0] ?? nearestDeclaredKey(key, declared);
+			// The hint prefers the refusal match, so the line and the refusal agree,
+			// and never points a retargeted key back at the head noun it is not.
+			const suggestion =
+				matches[0] ??
+				nearestDeclaredKey(
+					key,
+					declared.filter((name) => !retargeted.includes(name)),
+				);
 			return suggestion === undefined ? { key } : { key, suggestion };
 		});
 	if (ignored.length === 0) return undefined;

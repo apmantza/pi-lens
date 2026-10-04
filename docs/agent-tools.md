@@ -61,7 +61,9 @@ object argument such as `callHierarchyItem`, `rule` or `flags` are not checked):
   optional `path` of `pilens_diagnostics`: ``Not run: `filePath` looks like a
   mistyped `path`, which was not sent.``). The exact predicate is named in
   [public-api-stability.md](public-api-stability.md). Anything looser (a typo,
-  an abbreviation, `files` for `maxLspFiles`) stays a warning with the hint;
+  an abbreviation, `files` for `maxLspFiles`, or a count, flag or output key
+  such as `maxFiles`, `includeFiles`, `outFile` or `cwdPath` where `cwd` is
+  declared) stays a warning;
 - each such call adds one count to the `mcp-ignored-arguments` degradation
   group (subject: the tool name), visible in `pilens_health`.
 

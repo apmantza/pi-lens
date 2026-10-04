@@ -364,16 +364,23 @@ are part of the contract, so the predicate is named here** (`refusalMatches` in
    each token. The declared key matches when its tokens equal the ignored key's
    tokens joined (`Path`, `PATH` for `path`; `Server_Scope` for `serverScope`),
    or are the **trailing** tokens of the ignored key, its head noun (`filePath`
-   and `file_path` for `path`; `paths` and `path` for each other). A folded-equal
-   match decides alone. If the call sent any matching key (`path` or `paths`),
-   nothing is refused.
+   and `file_path` for `path`; `paths` and `path` for each other). A head-noun
+   match is dropped when the leading tokens change what the key names: they are
+   themselves a declared key of the tool (`cwdPath` is `cwd`, not `path`, where
+   `cwd` is declared), or one of them is `max`, `min`, `num`, `count`, `total`,
+   `include`, `exclude`, `out` or `output` (`maxFiles`, `includeFiles` and
+   `outFile` are not `file`). The word list is finite: `newFile` and `hasFile`
+   still refuse as `file`. A folded-equal match decides alone. If the call sent
+   any matching key (`path` or `paths`), nothing is refused.
 
 Everything else stays a warning and the tool runs, exactly as it did before: a
 misspelled mode name, an abbreviation (`max`), a substring or reverse containment
 (`files` for `maxLspFiles`, `file` for `path`), a leading or middle word
-(`sourcePath` is not `source`). Such keys still get the `did you mean` hint, which
-is a separate, looser scorer and is advice only; retuning it cannot change
-which calls run. Changing the predicate above flips calls between running and
+(`sourcePath` is not `source`), a key whose qualifier retargets the head noun
+(`maxFiles`). Such keys still get the `did you mean` hint, except that a
+retargeted head noun is never the hint (`maxFiles` gets none, `cwdPath` gets
+`cwd`). The hint is a separate, looser scorer and is advice only; retuning it
+cannot change which calls run. Changing the predicate above flips calls between running and
 refusing and is a change to this contract.
 
 Only top-level keys are checked: keys inside a nested object argument
