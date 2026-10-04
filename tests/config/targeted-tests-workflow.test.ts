@@ -1,17 +1,21 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import {
 	CI_ONLY_PRE_PUSH_TESTS,
+	TEST_TREE_GOVERNANCE_TESTS,
 	TREE_SCANNING_GOVERNANCE_TESTS,
 } from "../../scripts/pre-push-targeted-tests.mjs";
 import {
 	assertNonEmptyScan,
 	codeMatches,
+	escapeRegExp,
 	listSourceFiles,
+	readWalkedFile,
 	readWalkedFiles,
 	relativePosix,
+	stripSource,
 } from "../support/sweep-kit.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -80,6 +84,143 @@ function walkHelperAliases(source: string): string[] {
 	return [...aliases];
 }
 
+// ── Walks delegated to a tests/support module (#3472) ──────────────────────
+//
+// `countsByDetector` (tests/support/flake-shape-scan.ts) walks the tests tree
+// on behalf of the flake-shape ratchet, so the ratchet's own calls name no
+// walk helper. The census resolves each relative import that lands in
+// tests/support/, finds the exports whose body reaches a walk helper (through
+// module-local functions and through further support imports), and treats a
+// test that calls one of them as a walker. The chunks are column-0
+// declarations of the comment/string-blanked module, not a name list.
+
+const SUPPORT_ROOT = resolve(TESTS_ROOT, "support");
+const DECLARATION =
+	/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*[:=])/gm;
+const RELATIVE_IMPORT =
+	/\bimport\s+(?:type\s+)?([^;"']*?)\s*from\s*["'](\.[^"']*)["']/g;
+const DIRECT_HELPER = new RegExp(`^(?:${WALK_HELPERS})$`);
+const CALLEE = /\b([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?\s*\(/g;
+
+/** Reads a source file by absolute path; `undefined` when it is gone. */
+type SourceReader = (absolute: string) => string | undefined;
+
+interface ImportBinding {
+	file: string;
+	/** The exported name, or `*` for a namespace binding. */
+	imported: string;
+}
+
+interface SupportModule {
+	chunks: Map<string, string>;
+	imports: Map<string, ImportBinding>;
+	helpers: RegExp;
+}
+
+function supportImports(
+	from: string,
+	source: string,
+): Map<string, ImportBinding> {
+	const bindings = new Map<string, ImportBinding>();
+	for (const match of codeMatches(source, RELATIVE_IMPORT)) {
+		const resolved = resolve(dirname(from), match[2]).replace(/\.js$/, ".ts");
+		if (!resolved.startsWith(`${SUPPORT_ROOT}${sep}`)) continue;
+		const clause = match[1];
+		const namespace = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(clause);
+		if (namespace)
+			bindings.set(namespace[1], { file: resolved, imported: "*" });
+		const named = /\{([^}]*)\}/.exec(clause);
+		for (const specifier of named?.[1].split(",") ?? []) {
+			const [imported, local = imported] = specifier
+				.trim()
+				.replace(/^type\s+/, "")
+				.split(/\s+as\s+/);
+			if (imported) bindings.set(local, { file: resolved, imported });
+		}
+	}
+	return bindings;
+}
+
+function supportModule(file: string, source: string): SupportModule {
+	const blanked = stripSource(source, { strings: "blank" });
+	const starts = [...blanked.matchAll(DECLARATION)];
+	const chunks = new Map<string, string>();
+	starts.forEach((start, index) => {
+		const end = starts[index + 1]?.index ?? blanked.length;
+		chunks.set(start[1] ?? start[2], blanked.slice(start.index, end));
+	});
+	const helpers = [WALK_HELPERS, ...walkHelperAliases(source)].join("|");
+	return {
+		chunks,
+		imports: supportImports(file, source),
+		helpers: new RegExp(`\\b(?:${helpers})\\s*\\(`),
+	};
+}
+
+/**
+ * Answers "does this support export reach a walk helper", caching proven walks
+ * per census. A cycle answers `false` only while that name is being visited.
+ */
+function createSupportWalkIndex(read: SourceReader) {
+	const modules = new Map<string, SupportModule | undefined>();
+	const verdicts = new Map<string, boolean>();
+	const load = (file: string): SupportModule | undefined => {
+		if (!modules.has(file)) {
+			const source = read(file);
+			modules.set(
+				file,
+				source === undefined ? undefined : supportModule(file, source),
+			);
+		}
+		return modules.get(file);
+	};
+	const walks = (file: string, name: string): boolean => {
+		const key = `${file}#${name}`;
+		const known = verdicts.get(key);
+		if (known !== undefined) return known;
+		verdicts.set(key, false);
+		const module = load(file);
+		const chunk = module?.chunks.get(name);
+		let verdict = false;
+		if (module && chunk !== undefined) {
+			verdict = module.helpers.test(chunk);
+			for (const [, callee, member] of chunk.matchAll(CALLEE)) {
+				if (verdict) break;
+				const binding = module.imports.get(callee);
+				if (binding?.imported === "*" && member)
+					verdict = walks(binding.file, member);
+				else if (binding) verdict = walks(binding.file, binding.imported);
+				else if (callee !== name && module.chunks.has(callee))
+					verdict = walks(file, callee);
+			}
+		}
+		// A false reached through a cycle is provisional, not proof of no walk.
+		if (verdict) verdicts.set(key, true);
+		else verdicts.delete(key);
+		return verdict;
+	};
+	return {
+		/** True when `source` calls a support export that walks a tree. */
+		callsSupportWalker(from: string, source: string): boolean {
+			return [...supportImports(from, source)].some(([local, binding]) => {
+				const name = escapeRegExp(local);
+				if (binding.imported === "*") {
+					const members = new RegExp(`\\b${name}\\.([\\w$]+)\\s*\\(`, "g");
+					return codeMatches(source, members).some((call) =>
+						walks(binding.file, call[1]),
+					);
+				}
+				// A direct helper name is judged by the production-root shapes.
+				return (
+					!DIRECT_HELPER.test(binding.imported) &&
+					codeHas(source, new RegExp(`\\b${name}\\s*\\(`, "g")) &&
+					walks(binding.file, binding.imported)
+				);
+			});
+		},
+	};
+}
+
 function shapesFor(walkHelpers: string): Record<string, RegExp> {
 	return {
 		// A walk helper called with a production-root path literal.
@@ -127,11 +268,21 @@ function codeHas(source: string, pattern: RegExp): boolean {
 	return codeMatches(source, pattern).length > 0;
 }
 
-export function isTreeScannerCandidate(source: string): boolean {
+/** Resolves the tests/support walks a file delegates to (#3472). */
+interface SupportWalks {
+	file: string;
+	index: ReturnType<typeof createSupportWalkIndex>;
+}
+
+export function isTreeScannerCandidate(
+	source: string,
+	support?: SupportWalks,
+): boolean {
 	const walkHelpers = [WALK_HELPERS, ...walkHelperAliases(source)].join("|");
 	const SHAPES = shapesFor(walkHelpers);
 	const ANY_WALK = anyWalkFor(walkHelpers);
 	return (
+		support?.index.callsSupportWalker(support.file, source) === true ||
 		codeHas(source, SHAPES.productionWalk) ||
 		codeHas(source, SHAPES.namedProductionWalk) ||
 		(codeHas(source, SHAPES.productionRead) && codeHas(source, FLOOR)) ||
@@ -150,6 +301,8 @@ export function isTreeScannerCandidate(source: string): boolean {
 // A reason is required; `auditRegistry`'s stale-entry check (below) deletes an
 // entry whose file stops matching the scanner shapes.
 const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
+	"tests/build-freshness-guard.test.ts":
+		"runs the freshness helpers over temp roots it builds; its one real-root case checks compiled-twin mtimes, which the pre-push build step satisfies, not a source population",
 	"tests/clients/analyzed-files-producer-coverage.test.ts":
 		"governance sweep over a specific production module or target that import resolution already selects; not a broad production-population scanner",
 	"tests/clients/bus-producer-coverage.test.ts":
@@ -198,6 +351,8 @@ const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"enumerates a production path for behavior/fixture assertions, not a production population scan",
 	"tests/config/sync-child-process-timeout.test.ts":
 		"governance sweep over a specific production module or target that import resolution already selects; not a broad production-population scanner",
+	"tests/config/test-shard-assignment.test.ts":
+		"reads the live test file set for shard placement and duration-snapshot drift, not a production or test-code defect population; unknown files receive the median cost and accumulated missing/stale snapshot entries can cross the 15% drift threshold (regenerated by scripts/gen-test-shard-weights.mjs)",
 	"tests/config/win32-gate-lane.test.ts":
 		"walks the tests/ tree, not the production source population; out of the production tree-scanner registry",
 	"tests/host-sdk-type-only.test.ts":
@@ -208,6 +363,10 @@ const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"enumerates a production path for behavior/fixture assertions, not a production population scan",
 	"tests/scripts/pre-push-targeted-tests.test.ts":
 		"enumerates a production path for behavior/fixture assertions, not a production population scan",
+	"tests/support/tests-tree-write-guard-race.test.ts":
+		"exercises the tests-tree write guard against a temp root the test creates; the live tests/ tree is not the population",
+	"tests/support/tests-tree-write-guard.test.ts":
+		"exercises the tests-tree write guard against a temp root the test creates; the live tests/ tree is not the population",
 };
 
 /** The scanner population discovered on this tree, repo-relative and sorted. */
@@ -217,8 +376,11 @@ export function discoveredTreeScanners(): string[] {
 		.filter((file) => relativePosix(ROOT, file) !== SELF);
 	// readWalkedFiles, not readFileSync: a path that vanished between the walk
 	// and the read is out of the population, not a finding (#3082).
+	const index = createSupportWalkIndex(readWalkedFile);
 	return readWalkedFiles(walked)
-		.filter(({ source }) => isTreeScannerCandidate(source))
+		.filter(({ file, source }) =>
+			isTreeScannerCandidate(source, { file, index }),
+		)
 		.map(({ file }) => relativePosix(ROOT, file))
 		.sort();
 }
@@ -261,14 +423,19 @@ describe("targeted advisory workflow contract (#3215)", () => {
 			// Mechanical equality in both directions: an unregistered scanner reds,
 			// including one that calls a walk helper through an import alias
 			// (`fg("clients/**")`, #3448), and a registry entry that is no longer a
-			// scanner reds. Not seen: a helper renamed through a dynamic `import()`
-			// or `require`, which no test in this tree uses.
-			expect(expectedRegistry).toEqual(
-				[...TREE_SCANNING_GOVERNANCE_TESTS].sort(),
-			);
-			expect(new Set(TREE_SCANNING_GOVERNANCE_TESTS).size).toBe(
-				TREE_SCANNING_GOVERNANCE_TESTS.length,
-			);
+			// scanner reds, as does one whose walk lives in an imported
+			// tests/support module (#3472). Not seen: a helper renamed through a
+			// dynamic `import()` or `require`, or a support export that only a
+			// `export … from` re-export reaches (hook-await-scan.ts re-exports an
+			// .mjs; its tree walkers are already the named production shapes).
+			// A scanner may sit in either list (#3472): the production list is
+			// armed by a production change, the tests-tree list by a tests/ change.
+			const registered = [
+				...TREE_SCANNING_GOVERNANCE_TESTS,
+				...TEST_TREE_GOVERNANCE_TESTS,
+			];
+			expect(expectedRegistry).toEqual([...registered].sort());
+			expect(new Set(registered).size).toBe(registered.length);
 
 			// Dead-sweep floors (AGENTS.md shape 10, #1718): the census cannot pass
 			// by discovering nothing. Registered through the sweep-kit seam so the
@@ -408,6 +575,197 @@ describe("tree-scanner census — import aliases are resolved (#3448)", () => {
 			),
 		).toBe(false);
 	});
+});
+
+// #3472: a walk delegated to a tests/support module. `scan.ts` below stands in
+// for tests/support/flake-shape-scan.ts: the test names no walk helper, and the
+// export it calls reaches one through module-local functions or other support
+// modules. The reader is in-memory, so no file on disk decides these cases.
+describe("tree-scanner census — walks delegated to tests/support (#3472)", () => {
+	const TEST_FILE = resolve(TESTS_ROOT, "clients/subject.test.ts");
+	const WALKING_SCAN = [
+		"export function counts(detector: string) {",
+		"	return files().length + detector.length;",
+		"}",
+		"function files() {",
+		"	return listSourceFiles(ROOT);",
+		"}",
+	].join("\n");
+
+	function candidate(source: string, modules: Record<string, string>): boolean {
+		const read = (absolute: string) =>
+			modules[relativePosix(SUPPORT_ROOT, absolute)];
+		return isTreeScannerCandidate(source, {
+			file: TEST_FILE,
+			index: createSupportWalkIndex(read),
+		});
+	}
+
+	it.each([
+		[
+			"a module-local helper reached from the export",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{ "scan.ts": WALKING_SCAN },
+		],
+		[
+			"an arrow-function export",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{
+				"scan.ts": "export const counts = (d: string) =>\n	readdirSync(d);",
+			},
+		],
+		[
+			"an aliased import",
+			'import { counts as c } from "../support/scan.js";\nc("x");',
+			{ "scan.ts": WALKING_SCAN },
+		],
+		[
+			"a namespace import",
+			'import * as scan from "../support/scan.js";\nscan.counts("x");',
+			{ "scan.ts": WALKING_SCAN },
+		],
+		[
+			"a second support module",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{
+				"scan.ts":
+					'import { allFiles } from "./inner.js";\nexport function counts(d: string) {\n	return allFiles(d);\n}',
+				"inner.ts":
+					"export function allFiles(d: string) {\n	return glob(d);\n}",
+			},
+		],
+		[
+			"a walk helper the support module renames",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{
+				"scan.ts":
+					'import { readdirSync as ls } from "node:fs";\nexport function counts(d: string) {\n	return ls(d);\n}',
+			},
+		],
+	])("detects %s", (_label, source, modules) => {
+		expect(candidate(source, modules)).toBe(true);
+	});
+
+	it.each([
+		[
+			"an export whose body does not walk",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{
+				"scan.ts": "export function counts(d: string) {\n	return d.length;\n}",
+			},
+		],
+		[
+			"a walk named only in a support comment or string",
+			'import { counts } from "../support/scan.js";\ncounts("x");',
+			{
+				"scan.ts":
+					'// readdirSync(ROOT) is not a walk\nexport function counts(d: string) {\n	return "listSourceFiles(ROOT)" + d;\n}',
+			},
+		],
+		[
+			"a walking export that is imported but never called",
+			'import { counts } from "../support/scan.js";\n// counts("x");',
+			{ "scan.ts": WALKING_SCAN },
+		],
+		[
+			"a module outside tests/support",
+			'import { counts } from "../../clients/scan.js";\ncounts("x");',
+			{ "../../clients/scan.ts": WALKING_SCAN },
+		],
+		[
+			"a direct helper name, which the production-root shapes judge",
+			'import { listSourceFiles } from "../support/kit.js";\nlistSourceFiles(dir);',
+			{
+				"kit.ts":
+					"export function listSourceFiles(d: string) {\n	return readdirSync(d);\n}",
+			},
+		],
+		[
+			"a call cycle with no walk in it",
+			'import { a } from "../support/scan.js";\na();',
+			{
+				"scan.ts":
+					"export function a() {\n	return b();\n}\nfunction b() {\n	return a();\n}",
+			},
+		],
+	])("does NOT detect %s", (_label, source, modules) => {
+		expect(candidate(source, modules)).toBe(false);
+	});
+
+	// #3472: one census shares the index across files; resolving a cycle from
+	// one export must not hide another export's reachable walk later.
+	it("does not cache a cycle cut as a non-walking export", () => {
+		const source = [
+			"export function a(depth = 1) { if (depth > 0) return b(depth - 1); return files(); }",
+			"export function b(depth = 1) { return a(depth); }",
+			"function files() { return listSourceFiles(ROOT); }",
+		].join("\n");
+		const index = createSupportWalkIndex(() => source);
+		for (const name of ["a", "b", "a", "b"]) {
+			expect(
+				index.callsSupportWalker(
+					TEST_FILE,
+					`import { ${name} } from "../support/scan.js";\n${name}();`,
+				),
+				name,
+			).toBe(true);
+		}
+	});
+
+	it("follows namespace calls inside support modules", () => {
+		expect(
+			candidate('import { counts } from "../support/scan.js";\ncounts();', {
+				"scan.ts":
+					'import * as inner from "./inner.js";\nexport function counts() { return inner.files(); }',
+				"inner.ts": "export function files() { return readdirSync(ROOT); }",
+			}),
+		).toBe(true);
+	});
+
+	it("does not attribute a sibling export's walk to a non-walking export", () => {
+		expect(
+			candidate('import { counts } from "../support/scan.js";\ncounts();', {
+				"scan.ts":
+					"export function counts() { return 0; }\nexport function files() { return readdirSync(ROOT); }",
+			}),
+		).toBe(false);
+	});
+
+	it("ignores missing support modules and quoted namespace calls", () => {
+		expect(
+			candidate(
+				'import { counts } from "../support/missing.js";\ncounts();',
+				{},
+			),
+		).toBe(false);
+		expect(
+			candidate(
+				'import * as scan from "../support/scan.js";\n"scan.counts()"; // scan.counts()',
+				{
+					"scan.ts": WALKING_SCAN,
+				},
+			),
+		).toBe(false);
+	});
+
+	it("resolves countsByDetector to the real tests-tree walk behind it", () => {
+		const ratchet = resolve(TESTS_ROOT, "clients/flake-shape-ratchet.test.ts");
+		const index = createSupportWalkIndex(readWalkedFile);
+		const call =
+			'import { countsByDetector } from "../support/flake-shape-scan.js";\ncountsByDetector("raw-timer-wait");';
+		expect(index.callsSupportWalker(ratchet, call)).toBe(true);
+	});
+
+	it(
+		"registers the flake-shape ratchet as a tests-tree scanner",
+		() => {
+			const ratchet = "tests/clients/flake-shape-ratchet.test.ts";
+			expect(census()).toContain(ratchet);
+			expect(TEST_TREE_GOVERNANCE_TESTS).toContain(ratchet);
+			expect(TREE_SCANNING_GOVERNANCE_TESTS).not.toContain(ratchet);
+		},
+		CENSUS_TIMEOUT_MS,
+	);
 });
 
 describe("CI-only pre-push tier (#3426 H3432-1)", () => {

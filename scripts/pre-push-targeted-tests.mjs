@@ -45,6 +45,8 @@ export const MAX_SELECTED_TESTS = 25;
 // a production-file push stays a bounded local convenience; CI is still
 // authoritative. With the flake-shape ratchet, all twelve registry suites ran
 // in 64.91s through this hook on 2026-09-26 (#3492's range, capped selection).
+// After #3472 widened the census, all 24 registry suites across both lists ran
+// in 23.65s as one `vitest run` at 6 workers (2026-10-03).
 // Suites over the budget on their own
 // move to CI_ONLY_PRE_PUSH_TESTS below.
 
@@ -81,6 +83,14 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// Reads scripts/measure-lsp-idle-eviction.mjs as source (the script runs on
 	// load and cannot be imported), so no import path selects this test (#3645).
 	"tests/config/lsp-idle-eviction-measurement.test.ts",
+	// #3472: these walk clients/ through a tests/support scanner module, so the
+	// census only sees them once it resolves a delegated walk.
+	"tests/clients/atomic-write-sweep.test.ts",
+	"tests/clients/availability-classifiedby-ok-sweep.test.ts",
+	"tests/clients/availability-policy-coverage.test.ts",
+	"tests/clients/bounded-telemetry-sweep.test.ts",
+	"tests/clients/single-flight-ratchet.test.ts",
+	"tests/config/bounded-container-guard.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
@@ -91,6 +101,11 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 // tests. Measured locally at ~17-23 s alone, inside the 120 s budget.
 export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/clients/flake-shape-ratchet.test.ts",
+	// #3472: the tests-tree scanners the census finds through tests/support.
+	"tests/config/module-instance-coverage.test.ts",
+	"tests/config/tmp-fixture-hygiene.test.ts",
+	"tests/config/vacuous-skip-coverage.test.ts",
+	"tests/support/host-event-shape-scan.test.ts",
 ];
 
 export function changesTestTreeFile(file) {
