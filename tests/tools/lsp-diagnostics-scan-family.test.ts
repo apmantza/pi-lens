@@ -53,6 +53,13 @@ function goldenWinningExtensions(
 }
 
 describe("resolveDirectoryScanExtensions (#2434 exhaustive family coverage, #2458 fix-round F1)", () => {
+	it("includes Lean files in the added Lean scan family", async () => {
+		const result = await resolveDirectoryScanExtensions((extensions) =>
+			extensions.includes(".lean"),
+		);
+		expect(result).toContain(".lean");
+	});
+
 	const universe = [
 		...new Set(Object.values(golden.extensions).flat() as string[]),
 	].sort();

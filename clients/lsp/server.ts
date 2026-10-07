@@ -29,6 +29,7 @@ import {
 	DOTNET_CSHARP_ROOT_MARKERS,
 	DOTNET_FSHARP_ROOT_MARKERS,
 	KIND_EXTENSIONS,
+	LEAN_ROOT_MARKERS,
 } from "../file-kinds.js";
 import { extensionsForLanguage } from "../language-registry.js";
 import {
@@ -3358,6 +3359,16 @@ export const KotlinServer: LSPServerInfo = {
 	},
 };
 
+export const LeanServer = createInteractiveServer({
+	id: "lean",
+	name: "Lean 4 Language Server",
+	extensions: KIND_EXTENSIONS.lean,
+	root: RootWithFallback(createRootDetector([...LEAN_ROOT_MARKERS])),
+	language: "lean",
+	command: "lake",
+	args: ["serve"],
+});
+
 export const SwiftServer = createInteractiveServer({
 	id: "swift",
 	name: "SourceKit-LSP",
@@ -4468,6 +4479,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	FSharpServer,
 	JavaServer,
 	KotlinServer,
+	LeanServer,
 	SwiftServer,
 	DartServer,
 	LuaServer,

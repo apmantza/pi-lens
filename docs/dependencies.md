@@ -28,6 +28,7 @@ Auto-install behavior depends on gate type:
 | `shellcheck`                        | Shell script linting             | Yes            | GitHub release                     |
 | `shfmt`                             | Shell script formatting          | Yes            | GitHub release                     |
 | `rust-analyzer`                     | Rust LSP                         | Yes            | GitHub release                     |
+| `lake serve`                        | Lean 4 LSP                       | No             | `lake` must be on PATH; uses the project's Lean toolchain |
 | `golangci-lint`                     | Go linting                       | Yes            | GitHub release                     |
 | `hadolint`                          | Dockerfile linting               | Yes            | GitHub release                     |
 | `ktlint`                            | Kotlin linting                   | Yes            | GitHub release                     |
@@ -50,6 +51,8 @@ Auto-install behavior depends on gate type:
 | `govulncheck`                       | Go reachable-CVE session scan    | `go install`   | Auto (`go.mod` present)            |
 | `trivy`                             | Dependency-CVE session scan      | Auto-install   | Explicit opt-in (`trivy.enabled`)  |
 | `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
+
+Lean LSP is launched as `lake serve` from the detected Lake project root, so elan selects the toolchain from that project's `lean-toolchain` file and Lake supplies its project environment. pi-lens does not install or manage Lean/elan; install Lean and Lake separately and ensure `lake` is on `PATH`.
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.
 

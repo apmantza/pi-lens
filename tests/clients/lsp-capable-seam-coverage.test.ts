@@ -79,6 +79,7 @@ const PINNED_LSP_LANGUAGE_IDS = [
 	"json",
 	"jsonc",
 	"kotlin",
+	"lean",
 	"less",
 	"lua",
 	"markdown",

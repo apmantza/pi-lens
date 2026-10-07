@@ -14,6 +14,12 @@ afterEach(() => {
 	fixtureRoot = undefined;
 });
 
+describe("detectFileKind — Lean", () => {
+	it("classifies .lean source files", () => {
+		expect(detectFileKind("/repo/Math/Main.lean")).toBe("lean");
+	});
+});
+
 describe("detectFileKind — terragrunt", () => {
 	it("detects terragrunt.hcl and root.hcl by filename", () => {
 		expect(detectFileKind("/repo/infra/terragrunt.hcl")).toBe("terragrunt");

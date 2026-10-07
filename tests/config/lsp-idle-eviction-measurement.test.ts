@@ -43,6 +43,7 @@ const DOC = "docs/lsp-idle-eviction.md";
 // fixture. The row reads `unavailable (no-fixture)` until then. Shrink-only: a
 // fixture that starts routing to a server makes its admission stale and red.
 const NO_FIXTURE_ADMISSIONS: Record<string, string> = {
+	lean: "Lean requires a user-managed elan/Lake toolchain that fixtures do not provision; its real-process smoke runs only when a developer already has one installed",
 	omnisharp:
 		"csharp fallback with no smoke fixture yet; lane C (#3311) adds it and removes this row",
 	"docker-official":

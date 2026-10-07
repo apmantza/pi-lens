@@ -320,6 +320,9 @@ const lspSpawnHeavyInclude = [
 	"tests/clients/lsp/did-save-notification.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	"tests/clients/lsp/integration.test.ts",
+	// #4119: real `lake serve` process, initialization handshake, and first
+	// type-error diagnostics from a Lean document; needs the quiet real-spawn lane.
+	"tests/clients/lsp/lean-real-smoke.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a

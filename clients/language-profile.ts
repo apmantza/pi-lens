@@ -6,6 +6,7 @@ import {
 	DOTNET_CSHARP_ROOT_MARKERS,
 	DOTNET_FSHARP_ROOT_MARKERS,
 	KIND_EXTENSIONS,
+	LEAN_ROOT_MARKERS,
 	TERRAGRUNT_FILENAMES,
 	type FileKind,
 } from "./file-kinds.js";
@@ -56,6 +57,7 @@ const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	// spellings; java listed only the Groovy one.
 	java: ["pom.xml", "build.gradle", "build.gradle.kts", ".classpath"],
 	kotlin: ["build.gradle.kts", "build.gradle", "pom.xml"],
+	lean: LEAN_ROOT_MARKERS,
 	swift: ["Package.swift"],
 	dart: ["pubspec.yaml"],
 	elixir: ["mix.exs"],
@@ -109,6 +111,7 @@ const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	// workspace root.
 	java: ["pom.xml", "build.gradle", "build.gradle.kts", ".classpath"],
 	kotlin: ["build.gradle.kts", "build.gradle", "pom.xml"],
+	lean: LEAN_ROOT_MARKERS,
 	swift: ["Package.swift"],
 	dart: ["pubspec.yaml"],
 	elixir: ["mix.exs"],
