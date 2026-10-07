@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — real Lean elaboration and its diagnostic publication are the behavior under test; mocks cannot reproduce the Lake/elan process boundary.
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";

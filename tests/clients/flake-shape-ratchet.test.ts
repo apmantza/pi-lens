@@ -277,6 +277,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real, live direct child is the only pid whose /proc PPid is this process, so the Linux ownership arm of the kill-by-pid predicate cannot be observed through any double",
 	},
+	"real-process-spawn:clients/lsp/lean-real-smoke.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real Lean elaboration and diagnostic publication require Lake and elan across the child-process boundary; the serialized wall-clock lane isolates the handshake and diagnostic wait",
+	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
 		reason:
