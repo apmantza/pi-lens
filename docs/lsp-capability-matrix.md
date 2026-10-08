@@ -260,5 +260,5 @@ two-run `clean-behavior` hysteresis and the consecutive-night `idle-eviction`
 counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"docker":{"nights":[{"day":"2026-10-07","rssMb":64,"coldMs":566}]},"json":{"nights":[{"day":"2026-10-07","rssMb":67,"coldMs":1116}]},"powershell":{"nights":[{"day":"2026-10-07","rssMb":155,"coldMs":2601}]},"python-jedi":{"nights":[{"day":"2026-10-07","rssMb":51,"coldMs":1796}]},"zizmor":{"nights":[{"day":"2026-10-07","rssMb":58,"coldMs":608}]}}}
+{"idle-eviction":{"docker":{"nights":[{"day":"2026-10-07","rssMb":64,"coldMs":566},{"day":"2026-10-08","rssMb":64,"coldMs":555}]},"json":{"nights":[{"day":"2026-10-07","rssMb":67,"coldMs":1116},{"day":"2026-10-08","rssMb":67,"coldMs":1097}]},"python-jedi":{"nights":[{"day":"2026-10-07","rssMb":51,"coldMs":1796},{"day":"2026-10-08","rssMb":51,"coldMs":1764}]},"svelte":{"nights":[{"day":"2026-10-08","rssMb":223,"coldMs":2987}]}}}
 ```
