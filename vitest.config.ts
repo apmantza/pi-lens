@@ -872,3 +872,6 @@ export default defineConfig({
 		],
 	},
 });
+
+// sonar probe (temporary)
+export const probeNoop = () => {};
