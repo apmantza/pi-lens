@@ -23,8 +23,8 @@ process.env.PI_LENS_TMP_HYGIENE_RUN_ID ??= `${Date.now()}-${process.pid}`;
 if (process.platform === "win32") {
 	try {
 		const longTmp = fs.realpathSync.native(os.tmpdir());
-		process.env.TEMP = longTmp;
-		process.env.TMP = longTmp;
+		process.env.TEMP = longTmp; // probe
+		process.env.TMP = longTmp; // probe
 	} catch {
 		// Unresolvable tmpdir: keep the runner's own spelling.
 	}
