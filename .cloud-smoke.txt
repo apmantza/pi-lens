@@ -1,1 +1,2 @@
 cloud smoke 1
+cloud smoke 2
