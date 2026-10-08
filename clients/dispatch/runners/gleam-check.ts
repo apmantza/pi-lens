@@ -164,14 +164,15 @@ const gleamCheckRunner: RunnerDefinition = {
 		);
 		if (diagnostics.length === 0) {
 			if (result.status && result.status !== 0) {
+				const message =
+					firstOutputLine(result) ||
+					"gleam check exited non-zero without structured diagnostics";
 				return {
 					status: "failed",
 					diagnostics: [
 						{
 							id: "gleam-check-nonzero-no-diagnostics",
-							message:
-								firstOutputLine(result) ||
-								"gleam check exited non-zero without structured diagnostics",
+							message,
 							filePath: ctx.filePath,
 							severity: "error",
 							semantic: "blocking",
@@ -181,6 +182,8 @@ const gleamCheckRunner: RunnerDefinition = {
 						},
 					],
 					semantic: "blocking",
+					failureKind: "unconfirmed_output",
+					failureMessage: message.slice(0, 200),
 				};
 			}
 			return { status: "succeeded", diagnostics: [], semantic: "none" };

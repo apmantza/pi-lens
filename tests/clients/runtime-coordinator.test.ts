@@ -1,8 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 
 describe("RuntimeCoordinator", () => {
 	it("resetForSession clears recorded tool-call path attributions (#1642 F5)", () => {
@@ -36,6 +41,57 @@ describe("RuntimeCoordinator", () => {
 		expect(
 			runtime.partialApplyRecords.find(filePath, "old text", "new text"),
 		).toBeUndefined();
+	});
+
+	/** #3613: one code-quality record, named by the session that recorded it. */
+	const quality = (rule: string) => ({
+		id: `cq:${rule}`,
+		filePath: path.resolve("src/quality.ts"),
+		displayPath: "src/quality.ts",
+		line: 1,
+		severity: "warning" as const,
+		tool: "ast-grep",
+		rule,
+		message: rule,
+		category: "maintainability" as const,
+		origin: "dispatch" as const,
+	});
+	const rules = (records: { rule?: string }[]) => records.map((r) => r.rule);
+
+	it("resetForSession drops the outgoing session's turn warnings and keeps a concurrent session's (#3613)", () => {
+		// The recurrences: a reset that clears every partition drops a live
+		// subagent's warnings at the primary's /new, and one that clears none
+		// carries a /reload's (same session id) old warnings into its turn.
+		const runtime = new RuntimeCoordinator();
+		runtime.setSessionLifecycle({ sessionId: "primary-session" });
+		runtime.recordCodeQualityWarnings([quality("own")]);
+		runtime.recordCodeQualityWarnings([quality("sub")], "subagent-session");
+
+		runtime.resetForSession();
+		runtime.setSessionLifecycle({ sessionId: "primary-session" });
+
+		expect({
+			own: rules(runtime.peekCodeQualityWarnings()),
+			sub: rules(runtime.peekCodeQualityWarnings("subagent-session")),
+		}).toEqual({ own: [], sub: ["sub"] });
+	});
+
+	it("forgetTurnSession never drops this coordinator's own turn warnings (#3613)", () => {
+		// The recurrence: a secondary shutdown with no session id of its own,
+		// or the coordinator's id, cleared the primary's partition.
+		const runtime = new RuntimeCoordinator();
+		runtime.recordCodeQualityWarnings([quality("own")]);
+		runtime.recordCodeQualityWarnings([quality("sub")], "subagent-session");
+
+		runtime.forgetTurnSession(undefined);
+		runtime.forgetTurnSession(runtime.telemetrySessionId);
+		const kept = rules(runtime.peekCodeQualityWarnings());
+		runtime.forgetTurnSession("subagent-session");
+
+		expect({
+			kept,
+			sub: rules(runtime.peekCodeQualityWarnings("subagent-session")),
+		}).toEqual({ kept: ["own"], sub: [] });
 	});
 
 	it("makes edit autofix deferral sticky after a write until beginTurn", () => {
@@ -294,6 +350,130 @@ describe("RuntimeCoordinator", () => {
 			runtime.seedProjectSequence(5, new Map([["/proj/a.ts", 3]]));
 			// Seeded per-file counters carry no seq provenance ⇒ empty changed map.
 			expect(runtime.getFilesChangedSince(0)).toHaveLength(0);
+		});
+	});
+
+	// #4137 round 3: an analysis without authorship withholds the blocker
+	// channel (#3226), so its clean result says nothing about bytes an authored
+	// analysis found blocking. Before this, an opaque recovery of the very bytes
+	// an agent authored cleared the record whenever the already-analysed latch
+	// was gone (a concurrent session's turn start, the session's own next turn).
+	describe("an unauthored clean result on the recorded bytes (#4137 round 3)", () => {
+		const recorded = { size: 12, sha256: "a".repeat(64) };
+		let dir = "";
+		let file = "";
+		beforeEach(() => {
+			// A live file: the snapshot drops records of deleted files (#1245).
+			dir = mkdtempSync(path.join(tmpdir(), "pi-lens-same-bytes-"));
+			file = path.join(dir, "same-bytes.ts");
+			writeFileSync(file, "debugger;\n");
+			resetDegradationLedger();
+		});
+		afterEach(() => {
+			rmSync(dir, { recursive: true, force: true });
+		});
+
+		it("keeps the record, notes nothing resolved, and consumes no write order", () => {
+			const runtime = new RuntimeCoordinator();
+			runtime.recordInlineBlockers(
+				file,
+				"🔴 STOP L2",
+				1,
+				["biome"],
+				[2],
+				recorded,
+			);
+			expect(
+				runtime.clearInlineBlockers(file, 2, undefined, {
+					authored: false,
+					sha256: recorded.sha256,
+				}),
+			).toBe(false);
+			expect(runtime.getInlineBlockersSnapshot()).toHaveLength(1);
+			expect(runtime.hasResolvedBlockerFiles()).toBe(false);
+			// Other bytes are not the record's: a later clean write still clears.
+			expect(
+				runtime.clearInlineBlockers(file, 3, undefined, {
+					authored: false,
+					sha256: "b".repeat(64),
+				}),
+			).toBe(true);
+			expect(runtime.getInlineBlockersSnapshot()).toHaveLength(0);
+			expect(runtime.hasResolvedBlockerFiles()).toBe(true);
+		});
+
+		// The refusal's observability: one ledger entry per file key, counted, so
+		// a script that keeps touching a blocked file does not write a row per run.
+		it("counts repeated refusals on one ledger entry per file, not one per occurrence", () => {
+			const runtime = new RuntimeCoordinator();
+			runtime.recordInlineBlockers(
+				file,
+				"🔴 STOP L2",
+				1,
+				["biome"],
+				[2],
+				recorded,
+			);
+			for (const writeIndex of [2, 3, 4]) {
+				expect(
+					runtime.clearInlineBlockers(file, writeIndex, undefined, {
+						authored: false,
+						sha256: recorded.sha256,
+					}),
+				).toBe(false);
+			}
+			const group = getDegradationSummary().find(
+				(candidate) => candidate.kind === "blocker-clear-refused",
+			);
+			expect(group?.count).toBe(3);
+			expect(group?.latestReasons).toEqual([
+				{
+					subject: normalizeMapKey(file),
+					reason: expect.stringContaining("(count: 3)"),
+				},
+			]);
+			// Nothing is counted when the clear is not refused.
+			runtime.clearInlineBlockers(file, 5, undefined, {
+				authored: false,
+				sha256: "b".repeat(64),
+			});
+			expect(
+				getDegradationSummary().find((c) => c.kind === "blocker-clear-refused")
+					?.count,
+			).toBe(3);
+		});
+
+		it("clears a record that carries no content baseline, as before", () => {
+			// #2982: a dispatch that could not fingerprint the file (unreadable, or
+			// over the baseline cap) records no hash, so nothing can match it.
+			const runtime = new RuntimeCoordinator();
+			runtime.recordInlineBlockers(file, "🔴 STOP L2", 1, ["biome"], [2]);
+			expect(
+				runtime.clearInlineBlockers(file, 2, undefined, {
+					authored: false,
+					sha256: undefined,
+				}),
+			).toBe(true);
+			expect(runtime.getInlineBlockersSnapshot()).toHaveLength(0);
+		});
+
+		it("lets an authored clean of the same bytes clear the record", () => {
+			const runtime = new RuntimeCoordinator();
+			runtime.recordInlineBlockers(
+				file,
+				"🔴 STOP L2",
+				1,
+				["biome"],
+				[2],
+				recorded,
+			);
+			expect(
+				runtime.clearInlineBlockers(file, 2, undefined, {
+					authored: true,
+					sha256: recorded.sha256,
+				}),
+			).toBe(true);
+			expect(runtime.getInlineBlockersSnapshot()).toHaveLength(0);
 		});
 	});
 

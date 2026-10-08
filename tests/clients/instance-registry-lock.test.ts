@@ -543,6 +543,64 @@ describe("instance registry lock", () => {
 		).toBe("blocked");
 		expect(fs.readFileSync(marker, "utf8")).toBe("sync body reached\n");
 	});
+
+	// Recurrence: #2146. pi evaluates this module more than once per process, so
+	// the in-flight own-hold counter must live in the process singleton. At
+	// module scope the sync call in the second evaluation sees no hold, spins
+	// the 500 ms wait against the async holder, and records a lock timeout.
+	it("skips the sync wait for an async hold taken in another module evaluation", async () => {
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-registry-lock-"),
+		);
+		dirs.push(dir);
+		const target = path.join(dir, "instances.json");
+		vi.resetModules();
+		const other = await import("../../clients/instance-registry-lock.js");
+		const otherLedger = await import("../../clients/degradation-ledger.js");
+		expect(other.withInstanceRegistryLockSync).not.toBe(
+			withInstanceRegistryLockSync,
+		);
+
+		let during: string | undefined = "not run";
+		await expect(
+			withInstanceRegistryLock(target, async () => {
+				during = other.withInstanceRegistryLockSync(target, () => "entered");
+				return "held";
+			}),
+		).resolves.toBe("held");
+
+		expect(during).toBeUndefined();
+		const counts = new Map(
+			otherLedger.getDegradationSummary().map((g) => [g.kind, g.count]),
+		);
+		expect(counts.get("instance-registry-lock-own-hold")).toBe(1);
+		expect(counts.has("instance-registry-lock-timeout")).toBe(false);
+		// The hold is gone with its lock: the sync path enters again.
+		expect(other.withInstanceRegistryLockSync(target, () => "entered")).toBe(
+			"entered",
+		);
+	});
+
+	// Recurrence: a counter that is not decremented on a throwing op would turn
+	// every later sync removal into a skipped removal for the process lifetime.
+	it("enters the sync path again after an async hold whose op threw", async () => {
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-registry-lock-"),
+		);
+		dirs.push(dir);
+		const target = path.join(dir, "instances.json");
+
+		await expect(
+			withInstanceRegistryLock(target, async () => {
+				throw new Error("op failed");
+			}),
+		).rejects.toThrow("op failed");
+
+		expect(withInstanceRegistryLockSync(target, () => "entered")).toBe(
+			"entered",
+		);
+		expect(degradationKinds()).not.toContain("instance-registry-lock-own-hold");
+	});
 });
 
 describe("withGenerationLockSync (#3509)", () => {

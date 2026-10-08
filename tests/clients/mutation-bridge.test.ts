@@ -415,11 +415,6 @@ describe("#3677: a foreign readGuardBranchEpoch cannot poison a deferred record"
 		try {
 			const filePath = path.join(env.tmpDir, "reset.ts");
 			fs.writeFileSync(filePath, SOURCE);
-			// Age the file past the guard's session start, so the
-			// `wasWrittenThisSession` mtime fallback cannot mask a credited
-			// write: only an explicit `recordWritten` credit can make it true.
-			const anHourAgo = new Date(Date.now() - 3_600_000);
-			fs.utimesSync(filePath, anHourAgo, anHourAgo);
 
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
@@ -454,9 +449,7 @@ describe("#3677: a foreign readGuardBranchEpoch cannot poison a deferred record"
 			expect(accepted).toBe(true);
 
 			// Fail closed: the pre-reset capture is NOT credited to the new session.
-			expect((runtime.readGuard as any).wasWrittenThisSession(filePath)).toBe(
-				false,
-			);
+			expect(runtime.readGuard.exportAuthorship().written).toEqual([]);
 			// ... and the refusal is observable through the lineage's own record.
 			expect(
 				getDegradationSummary()

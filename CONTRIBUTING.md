@@ -87,6 +87,7 @@ mechanically enforced rather than relied on.
 - **Test workers.** `PI_LENS_TEST_MAX_WORKERS` caps the vitest worker-fork
   count (`vitest.config.ts`); set it (`=6` is what CI and agent worktrees use)
   on a memory-constrained host to avoid an OOM under a full or targeted run.
+  Without it a local run uses half the logical CPUs, up to 8 forks.
 - **Mutation testing.** The PR proof is hand mutation of each new guard (see
   "Mutation output is quoted, not ticked" in `AGENTS.md`). Stryker is not a PR
   check: `.github/workflows/stryker-nightly.yml` runs it nightly on master over
@@ -203,7 +204,7 @@ A runner is a tool that runs on a file write/edit and produces `Diagnostic`s. Ex
    - Pick a unique `id`.
    - Set `appliesTo` to the relevant `FileKind`(s) from `clients/file-kinds.ts`. An empty array means "all kinds".
    - Set `priority` using values from `clients/dispatch/priorities.ts`.
-   - `status` is not a severity channel: severity lives in each diagnostic's `semantic`. A run that completed with findings returns `status: "succeeded"`, or `status: "failed"` when the runner's own threshold says the findings fail the check (in a multi-member `fallback` group, `failed` is what lets the next runner run). Build every findings verdict with `findingsResult` (`clients/dispatch/types.ts`) or `finishParsedRun`, which stamps a findings `failed` with `failureKind: "blocking_diagnostics"`. A `failed` without that kind means the runner itself broke; give it its own kind (`timeout`, `server_error`, …) where the cause is known. `tests/clients/dispatch/runners/runner-findings-failure-kind.test.ts` drives every registered runner, so a new one needs a row there.
+   - `status` is not a severity channel: severity lives in each diagnostic's `semantic`. A run that completed with findings returns `status: "succeeded"`, or `status: "failed"` when the runner's own threshold says the findings fail the check (in a multi-member `fallback` group, `failed` is what lets the next runner run). Build every findings verdict with `findingsResult` (`clients/dispatch/types.ts`) or `finishParsedRun`, which stamps a findings `failed` with `failureKind: "blocking_diagnostics"`. A `failed` without that kind means the runner itself broke; give it its own kind (`timeout`, `server_error`, `parser_error`, `unconfirmed_output`, …) where the cause is known, even when the arm also returns a synthetic diagnostic: turn end and the log analyzer read the kind, not the diagnostic count (#3796). `tests/clients/dispatch/runners/runner-findings-failure-kind.test.ts` drives every registered runner, so a new one needs a row there.
    - Prefer `safeSpawnAsync` and `createAvailabilityChecker`/`resolveAvailableOrInstall` from `clients/dispatch/runners/utils/runner-helpers.ts`.
    - If the tool has auto-fix, set `fixable`/`autoFixAvailable` correctly so the diagnostic lands in actionable warnings rather than code-quality history only (see [Actionable warnings routing](#actionable-warnings-routing)).
 

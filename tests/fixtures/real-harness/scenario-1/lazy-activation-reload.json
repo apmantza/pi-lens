@@ -1,0 +1,12 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "pi_lens_activate_tools",
+			"id": "activate-lazy-search",
+			"arguments": { "tools": ["ast_grep_search"] }
+		}
+	],
+	[{ "type": "text", "text": "activated" }],
+	[{ "type": "text", "text": "restored" }]
+]

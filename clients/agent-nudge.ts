@@ -47,6 +47,7 @@
  */
 import type { FilesTouchedPayload } from "./bus-publish.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
+import { hashText } from "./finding-identity.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { ReadGuard } from "./read-guard.js";
@@ -81,8 +82,12 @@ const MAX_NAMES_SHOWN = 5;
 type AccumulatedFileOrigin = "local" | "cross-process";
 
 interface AccumulatedFile {
+	/** The accumulator key (`normalizeMapKey` form), for the `agent_nudge` row's hash (#3873). */
+	key: string;
 	/** Original (non-normalized) path, for display. First-seen form wins. */
 	displayPath: string;
+	/** The pi session that wrote a cross-process touch, when its record named one (#3873). */
+	originSessionId?: string;
 	reasons: Set<FilesTouchedPayload["reason"]>;
 	origin: AccumulatedFileOrigin;
 	/**
@@ -112,6 +117,12 @@ const _touched = new Map<string, AccumulatedFile>();
 // actually suppresses, which is the metric that validates (or indicts) the
 // "only nudge for files the session saw" rule.
 let _relevanceFilteredCount = 0;
+
+// #3873 O7: how many non-empty queue drains this process has made. An
+// `agent_nudge` row carries the drain it came from, so the same file in three
+// rows of three drains reads as three deliveries of one touch (a replay), and
+// in one drain as one.
+let _queueEpoch = 0;
 
 // #3598: model-facing advisories a producer cannot put in a tool result because
 // its tool result was already delivered (the deferred agent_end drain). Same
@@ -192,8 +203,16 @@ export const agentAdvisoryStore = defineSessionStore<string[]>({
 	restore: (scope, payload, ctx) => {
 		// Only the slot is the queue as the predecessor's shutdown left it; a
 		// sidecar is a past turn's, whose advisories may have been delivered.
-		if (ctx.source !== "slot" || !Array.isArray(payload)) return;
+		if (ctx.source !== "slot" || !Array.isArray(payload))
+			return { itemsIn: 0, itemsKept: 0 };
 		const handle = scope.capture();
+		const ownCount = () => {
+			let count = 0;
+			for (const entry of _advisories)
+				if (entry.scope.scopeId === scope.scopeId) count += 1;
+			return count;
+		};
+		const before = ownCount();
 		for (const text of payload) {
 			if (typeof text !== "string") continue;
 			// Re-tag the predecessor's entry, so the prune does not count a
@@ -204,6 +223,7 @@ export const agentAdvisoryStore = defineSessionStore<string[]>({
 			if (at === -1) queueAgentAdvisory(text, handle);
 			else _advisories[at] = { scope: handle, text };
 		}
+		return { itemsIn: payload.length, itemsKept: ownCount() - before };
 	},
 	reason:
 		"the advisories a session queued and has not seen; a reload keeps the conversation, so they reach its next context call",
@@ -214,6 +234,7 @@ export function _resetAgentNudgeForTests(): void {
 	_advisories.length = 0;
 	_touched.clear();
 	_relevanceFilteredCount = 0;
+	_queueEpoch = 0;
 	_enabledCache = undefined;
 }
 
@@ -278,6 +299,7 @@ function recordTouchedEvent(
 			existing.contentDelivered = false;
 		} else {
 			_touched.set(mapKey, {
+				key: mapKey,
 				displayPath: rawPath,
 				reasons: new Set([payload.reason]),
 				origin: "local",
@@ -312,7 +334,11 @@ function recordTouchedEvent(
  * so entries reaching this function are already the "new, foreign" set.
  */
 export function recordCrossProcessTouches(
-	entries: Array<{ path: string; reason: FilesTouchedPayload["reason"] }>,
+	entries: Array<{
+		path: string;
+		reason: FilesTouchedPayload["reason"];
+		sessionId?: string;
+	}>,
 ): void {
 	if (!isAgentNudgeEnabled()) return;
 	for (const entry of entries) {
@@ -327,7 +353,11 @@ export function recordCrossProcessTouches(
 			existing.contentDelivered = false;
 		} else {
 			_touched.set(mapKey, {
+				key: mapKey,
 				displayPath: entry.path,
+				...(entry.sessionId !== undefined && {
+					originSessionId: entry.sessionId,
+				}),
 				reasons: new Set([entry.reason]),
 				origin: "cross-process",
 				contentDelivered: false,
@@ -456,7 +486,7 @@ export function consumeAgentNudge(
 	/** The session scope of this `context` call; none drains no advisory. */
 	scope?: SessionScope,
 ): { messages: Array<{ role: "user"; content: string }> } | undefined {
-	const touched = consumeTouchedNudge(dbg);
+	const touched = consumeTouchedNudge(dbg, scope?.scopeId);
 	pruneRetiredAdvisories();
 	const own: QueuedAdvisory[] = [];
 	const others: QueuedAdvisory[] = [];
@@ -474,6 +504,7 @@ export function consumeAgentNudge(
 
 function consumeTouchedNudge(
 	dbg?: (msg: string) => void,
+	scopeId?: number,
 ): { messages: Array<{ role: "user"; content: string }> } | undefined {
 	const drained = Array.from(_touched.values());
 	_touched.clear();
@@ -482,6 +513,7 @@ function consumeTouchedNudge(
 
 	if (!isAgentNudgeEnabled()) return undefined;
 	if (drained.length === 0) return undefined;
+	_queueEpoch += 1;
 
 	try {
 		// #1464: a write whose post-fix bytes were attached to its own tool
@@ -541,6 +573,19 @@ function consumeTouchedNudge(
 				// alongside the existing relevance-filter metric.
 				originLocal: localCount,
 				originCrossProcess: crossProcessCount,
+				// #3873 O7: which files, written by which sessions, drained for
+				// which scope in which drain. Bounded: 8 hashes of 8 characters
+				// and 4 session ids per row.
+				fileKeys: entries.slice(0, 8).map((e) => hashText(e.key, 8)),
+				originSessionIds: [
+					...new Set(
+						entries.flatMap((e) =>
+							e.originSessionId === undefined ? [] : [e.originSessionId],
+						),
+					),
+				].slice(0, 4),
+				scopeId,
+				queueEpoch: _queueEpoch,
 			},
 		});
 

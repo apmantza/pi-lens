@@ -69,6 +69,9 @@ type PrivateCompile = {
 };
 
 describe("tree-sitter rule compile guard (#884)", () => {
+	// #4141: CI shard load puts this full cross-grammar sweep above Vitest's
+	// 5-second default. The last ten shard-1 runs measured 2.652–4.345s;
+	// 18s is approximately 4x the observed p95 without weakening the sweep.
 	it("compiles every shipped, non-disabled rule against its grammar (or is a documented, shrinking known-broken exception)", async () => {
 		const loader = new TreeSitterQueryLoader();
 		const queries = await loader.loadQueries(process.cwd());
@@ -149,7 +152,7 @@ describe("tree-sitter rule compile guard (#884)", () => {
 		// silently skipped, so a language gaining a real (enabled) rule set
 		// without a grammar mapping doesn't slip past this guard unnoticed.
 		expect([...uncheckedLanguages].sort()).toEqual([]);
-	});
+	}, 18_000);
 
 	it("documents languages with rule directories but no grammar mapping (#884 open decision)", async () => {
 		const loader = new TreeSitterQueryLoader();

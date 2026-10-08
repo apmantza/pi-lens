@@ -153,8 +153,27 @@ newest-in-range lane reads it, bounded above so `"*"` can never mean
 `@latest`), and `tests/packaging.test.ts` pins it against the hosts this
 matrix has passed on. A newer host enters the window in ONE change: run this
 matrix on it, add it to that test's verified list, and move the workflow's
-ceiling together. The window is contiguous, so a ceiling past an unrun minor
-claims that minor too.
+ceiling together. P1 is one verified host per minor line from 0.86 onward;
+0.81–0.83 are in-window without a dedicated host, while 0.80, 0.84, and
+0.85 are represented by the existing host list and ratchet. A ceiling past an
+unrun minor still claims that minor, so the verified-minor ratchet names the
+admitted lines explicitly.
+
+### Verified hosts
+
+The certified policy is `>=0.80.10 <1.2.0`. Each listed minor line has a
+release-QA witness; the workflow ceiling and `tests/packaging.test.ts` list are
+updated together.
+
+| host | date | pi-lens commit | result |
+| --- | --- | --- | --- |
+| 0.86.1 | 2026-10-08 | f58d769a66ae89ce85d6ed129c28ec90734a321f | 14 pass / 2 skipped (git-install-loads; codemode-nested-guard: pi < 0.99) |
+| 0.87.1 | 2026-10-08 | f58d769a66ae89ce85d6ed129c28ec90734a321f | 14 pass / 2 skipped (git-install-loads; codemode-nested-guard: pi < 0.99) |
+| 0.99.2 | 2026-10-08 | 08abd60e193e5a17ea28dd4fbf3603cc9a0cdbe0 | 15 pass / 1 skipped (git-install-loads) |
+| 1.0.4 | 2026-10-08 | 08abd60e193e5a17ea28dd4fbf3603cc9a0cdbe0 | 15 pass / 1 skipped (git-install-loads) |
+| 1.1.0 | 2026-10-08 | 2fda17a53d62267cd9035fa04380bbf0e2de4318 | 15 pass / 1 skipped (git-install-loads) |
+
+Re-run any row with `node scripts/release-qa.mjs --pi <host>` at the listed commit.
 
 ## Why `skills-registered` pins the registrar
 

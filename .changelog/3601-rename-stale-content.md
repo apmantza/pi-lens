@@ -1,6 +1,0 @@
----
-section: Fixed
-audience: user
----
-
-- **`lsp_navigation`'s `rename` no longer rewrites a file that changed after the language server computed the rename, for the rename's own file and for every file the language client has open (refs #3601)** — the tool applied the server's workspace edit with no expected-content check, so a concurrent `edit` or `write` to a file the rename touched was overwritten at the server's stale offsets. The rename's own file is now held to the bytes the tool sent the server. Every other file the edit writes text to that the client has open is held to the client's last send, and is refused when those bytes were re-sent with a change after the rename was requested (an agent write whose hook synced it while the server computed). A refusal happens before any write, names the file in the tool result, and counts one `lsp-edit-stale-content` degradation. A file the client has not opened is checked best effort only: it is refused when written after the request, or within 2 s before it ("modified within 2 s of the rename request; retry"), but that cannot prove the server read its current bytes, so an external write the server's own file watching missed, or one that keeps the old mtime, is still applied at stale offsets (#3747). A file the edit creates is not checked.

@@ -1315,7 +1315,9 @@
       "contributions": [
         "code",
         "bug",
-        "ideas"
+        "ideas",
+        "doc",
+        "test"
       ]
     },
     {
@@ -1786,6 +1788,96 @@
       "profile": "https://github.com/vanyastaff",
       "contributions": [
         "bug"
+      ]
+    },
+    {
+      "login": "EightDoor",
+      "name": "周凯",
+      "avatar_url": "https://avatars.githubusercontent.com/u/35022264?v=4",
+      "profile": "https://github.com/EightDoor",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "pikachu01",
+      "name": "pikachu01",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1090194?v=4",
+      "profile": "https://github.com/pikachu01",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "igorggor",
+      "name": "Igor G. Gor",
+      "avatar_url": "https://avatars.githubusercontent.com/u/236343180?v=4",
+      "profile": "https://github.com/igorggor",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "dampent",
+      "name": "dampent",
+      "avatar_url": "https://avatars.githubusercontent.com/u/32382169?v=4",
+      "profile": "https://github.com/dampent",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "arbelafor",
+      "name": "arbelafor",
+      "avatar_url": "https://avatars.githubusercontent.com/u/288174596?v=4",
+      "profile": "https://github.com/arbelafor",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "qiyangfan",
+      "name": "yangfan qi",
+      "avatar_url": "https://avatars.githubusercontent.com/u/102476247?v=4",
+      "profile": "https://github.com/qiyangfan",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "IGabrielRC",
+      "name": "IGabrielRC",
+      "avatar_url": "https://avatars.githubusercontent.com/u/99936003?v=4",
+      "profile": "https://github.com/IGabrielRC",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "Antrakos",
+      "name": "Taras Zubrei",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13787714?v=4",
+      "profile": "https://github.com/Antrakos",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "pandas9",
+      "name": "pandas9",
+      "avatar_url": "https://avatars.githubusercontent.com/u/81386636?v=4",
+      "profile": "https://github.com/pandas9",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "renzooliveira",
+      "name": "Renzo Oliveira",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10881850?v=4",
+      "profile": "https://github.com/renzooliveira",
+      "contributions": [
+        "ideas"
       ]
     }
   ]

@@ -228,6 +228,25 @@ function pidAlive(pid: number): boolean {
 	}
 }
 
+/**
+ * #4019: `taskkill /F /T` is issued before `safeSpawnAsync` resolves, but Windows
+ * reaps a tree asynchronously and a loaded runner can lag. Poll to a deadline
+ * rather than sleeping a fixed interval, so the assertion stays "the tree is
+ * gone" instead of "it was gone within one arbitrary sleep". Returns true once
+ * the pid is no longer alive.
+ */
+async function waitForPidDeath(
+	pid: number,
+	deadlineMs: number,
+): Promise<boolean> {
+	const deadline = Date.now() + deadlineMs;
+	while (Date.now() < deadline) {
+		if (!pidAlive(pid)) return true;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return !pidAlive(pid);
+}
+
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) removeTempDirSync(dir);
 });
@@ -242,6 +261,13 @@ describe("installer process lifecycle (#945)", () => {
 	// 30s installTool budget). 15s still catches a true hang.
 	const REAL_PROCESS_TIMEOUT_MS = 15_000;
 
+	// #4019: see the call site. Windows' cold `cmd.exe /c node` startup for the
+	// fake npm shares this budget with the behaviour under test, so it must sit far
+	// outside startup while still being a timeout the fake npm cannot beat (it
+	// never exits on its own).
+	const WINDOWS_TREE_KILL_TIMEOUT_MS = 3_000;
+	const CHILD_DEATH_DEADLINE_MS = 5_000;
+
 	// lane: windows-vitest
 	it.skipIf(process.platform !== "win32")(
 		"kills a fake npm's complete Windows process tree on timeout",
@@ -254,13 +280,22 @@ describe("installer process lifecycle (#945)", () => {
 				...testEnv(home, counter, script),
 				FAKE_NPM_SLOW: "1",
 				FAKE_NPM_CHILD_PID: childPidFile,
-				PI_LENS_INSTALL_TIMEOUT_MS: "500",
+				// #4019: this budget is the INSTALLER's wait before its `taskkill /F /T`
+				// (clients/safe-spawn.ts), and it starts when npm is spawned — so on
+				// Windows it also has to cover the fake npm's cold `cmd.exe /c node`
+				// startup before that npm writes its grandchild's pid. At 500 ms a
+				// loaded runner could time out first, leaving the test to observe an
+				// EMPTY tree instead of a killed one (it failed on exactly that race,
+				// with "Process timed out after 500ms" in the assertion payload).
+				PI_LENS_INSTALL_TIMEOUT_MS: String(WINDOWS_TREE_KILL_TIMEOUT_MS),
 			});
 			expect(result.code).toBe(0);
 			expect(fs.existsSync(childPidFile), JSON.stringify(result)).toBe(true);
 			const childPid = Number(fs.readFileSync(childPidFile, "utf8"));
-			await new Promise((resolve) => setTimeout(resolve, 250));
-			expect(pidAlive(childPid)).toBe(false);
+			expect(
+				await waitForPidDeath(childPid, CHILD_DEATH_DEADLINE_MS),
+				`pid ${childPid} still alive after ${CHILD_DEATH_DEADLINE_MS}ms; ${JSON.stringify(result)}`,
+			).toBe(true);
 		},
 		REAL_PROCESS_TIMEOUT_MS,
 	);

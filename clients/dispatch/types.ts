@@ -201,9 +201,14 @@ export interface RunnerResult {
 	 * When status==="failed", a short machine-readable reason that separates a
 	 * genuine runner breakage from "the check ran and found blocking issues".
 	 * Conventional values: "timeout", "exception" (thrown/aborted), "server_error"
-	 * (LSP/tool process failed), "blocking_diagnostics" (the check completed and
+	 * (LSP/tool process failed), "parser_error" (the tool exited nonzero and its
+	 * output could not be parsed), "unconfirmed_output" (the tool printed output
+	 * the runner could not confirm as findings for this file), "unavailable",
+	 * "blocking_diagnostics" (the check completed and
 	 * its findings, by the runner's own threshold, failed it — not a runner
-	 * fault). Every `failed` built from findings carries "blocking_diagnostics"
+	 * fault). A fault arm may carry a synthetic diagnostic so the inline path is
+	 * never silent; its kind, not the diagnostic, says it is a fault (#3796).
+	 * Every `failed` built from findings carries "blocking_diagnostics"
 	 * through `findingsResult` (#3781), so a `failed` without it means the runner
 	 * produced no usable result. A runner may also report findings, blocking ones
 	 * included, as `succeeded`; `status` is not a severity channel, and severity
@@ -277,8 +282,9 @@ export function findingsResult(
  * caller must not read it as "the file was analysed".
  *
  * The parameter accepts the wider latency-row status set (`when_skipped`,
- * `pending`, and `deferred`) so the dispatcher asks this one owner instead of
- * comparing `status`/`failureKind` itself.
+ * `pending`, and `deferred`) so the dispatcher's coverage notice and turn end's
+ * deferred delivery (#3796) ask this one owner instead of comparing
+ * `status`/`failureKind` themselves.
  */
 export function hasUsableResult(result: {
 	status: string;

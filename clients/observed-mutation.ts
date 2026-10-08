@@ -329,12 +329,20 @@ interface ObservedNetState {
 	handled: BoundedSet<string>;
 	turnIndex: number;
 	turnSpentMs: number;
+	/**
+	 * #3613 F2: the spend of recent turns other than `turnIndex`. Two sessions'
+	 * turns interleave on this one net (a subagent's beside the primary's), so
+	 * a switch parks the spend instead of resetting it. Bounded at
+	 * `OBSERVED_PARKED_TURNS_MAX`, oldest key first.
+	 */
+	parkedSpendMs: Map<number, number>;
 	/** Where the next settled sweep resumes its rotation over the tracked set. */
 	sweepCursor: number;
 }
 
 const OBSERVED_FAMILY = "observed-mutation-net";
-const OBSERVED_VERSION = 3;
+const OBSERVED_VERSION = 4;
+const OBSERVED_PARKED_TURNS_MAX = 8;
 
 function state(): ObservedNetState {
 	return getProcessSingleton<ObservedNetState>(
@@ -346,6 +354,7 @@ function state(): ObservedNetState {
 			handled: new BoundedSet(OBSERVED_HANDLED_MAX),
 			turnIndex: -1,
 			turnSpentMs: 0,
+			parkedSpendMs: new Map(),
 			sweepCursor: 0,
 		}),
 	);
@@ -364,6 +373,7 @@ export function resetObservedMutationNet(): void {
 	current.handled.clear();
 	current.turnIndex = -1;
 	current.turnSpentMs = 0;
+	current.parkedSpendMs.clear();
 	current.sweepCursor = 0;
 }
 
@@ -381,6 +391,7 @@ export function _observedMutationStateForTests(): {
 	pending: string[];
 	ledger: string[];
 	handled: string[];
+	turnIndex: number;
 	turnSpentMs: number;
 	sweepCursor: number;
 } {
@@ -389,6 +400,7 @@ export function _observedMutationStateForTests(): {
 		pending: [...current.pending.keys()],
 		ledger: [...current.ledger.keys()],
 		handled: [...current.handled],
+		turnIndex: current.turnIndex,
 		turnSpentMs: current.turnSpentMs,
 		sweepCursor: current.sweepCursor,
 	};
@@ -455,22 +467,47 @@ export function hasPendingObservation(toolCallId: string | undefined): boolean {
 	return toolCallId !== undefined && state().pending.has(toolCallId);
 }
 
-function remainingTurnBudgetMs(turnIndex: number): number {
+/** The net's state with `turnIndex`'s spend in the budget slot. */
+function budgetFor(
+	turnIndex: number,
+	isLiveTurn: (turnIndex: number) => boolean = () => false,
+): ObservedNetState {
 	const current = state();
 	if (current.turnIndex !== turnIndex) {
+		const parked = current.parkedSpendMs;
+		if (current.turnIndex !== -1)
+			parked.set(current.turnIndex, current.turnSpentMs);
+		current.turnSpentMs = parked.get(turnIndex) ?? 0;
+		parked.delete(turnIndex);
 		current.turnIndex = turnIndex;
-		current.turnSpentMs = 0;
+		while (parked.size > OBSERVED_PARKED_TURNS_MAX) {
+			// Oldest dead turn first; the oldest live one only when all are live.
+			let victim: number | undefined;
+			for (const key of parked.keys())
+				if (!isLiveTurn(key) && (victim === undefined || key < victim))
+					victim = key;
+			parked.delete(victim ?? Math.min(...parked.keys()));
+		}
 	}
-	return Math.max(0, OBSERVED_TURN_BUDGET_MS - current.turnSpentMs);
+	return current;
 }
 
-function chargeTurnBudget(turnIndex: number, spentMs: number): void {
-	const current = state();
-	if (current.turnIndex !== turnIndex) {
-		current.turnIndex = turnIndex;
-		current.turnSpentMs = 0;
-	}
-	current.turnSpentMs += Math.max(0, spentMs);
+function remainingTurnBudgetMs(
+	turnIndex: number,
+	isLiveTurn?: (turnIndex: number) => boolean,
+): number {
+	return Math.max(
+		0,
+		OBSERVED_TURN_BUDGET_MS - budgetFor(turnIndex, isLiveTurn).turnSpentMs,
+	);
+}
+
+function chargeTurnBudget(
+	turnIndex: number,
+	spentMs: number,
+	isLiveTurn?: (turnIndex: number) => boolean,
+): void {
+	budgetFor(turnIndex, isLiveTurn).turnSpentMs += Math.max(0, spentMs);
 }
 
 /** Test seam: force the per-turn budget to a known state. */
@@ -478,9 +515,7 @@ export function _setObservedTurnBudgetForTests(
 	turnIndex: number,
 	spentMs: number,
 ): void {
-	const current = state();
-	current.turnIndex = turnIndex;
-	current.turnSpentMs = spentMs;
+	budgetFor(turnIndex).turnSpentMs = spentMs;
 }
 
 type BoundedOutcome<T> =
@@ -733,6 +768,13 @@ export interface ArmObservationArgs {
 	cwd: string | undefined;
 	sessionGeneration: number;
 	turnIndex: number;
+	/**
+	 * #3613 G2: whether a turn key is a live session turn (the primary's, or
+	 * a live subagent's current one). Parking evicts dead turns first, so a
+	 * subagent's run cannot push out the primary's spent turn. Omitted, every
+	 * parked turn counts as dead.
+	 */
+	isLiveTurn?: (turnIndex: number) => boolean;
 	signal?: AbortSignal;
 	dbg?: (msg: string) => void;
 }
@@ -764,7 +806,7 @@ export async function armObservedMutation(
 		return { armed: false, reason: "not-eligible" };
 	if (!args.toolCallId) return { armed: false, reason: "no-tool-call-id" };
 
-	const remaining = remainingTurnBudgetMs(args.turnIndex);
+	const remaining = remainingTurnBudgetMs(args.turnIndex, args.isLiveTurn);
 	if (remaining <= 0) {
 		emitBounded(
 			"observed_mutation_budget_exhausted",
@@ -818,7 +860,7 @@ export async function armObservedMutation(
 		// blown capture budget is attributable.
 		{ hook: "tool_call", label: "armObservedMutation" },
 	);
-	chargeTurnBudget(args.turnIndex, Date.now() - started);
+	chargeTurnBudget(args.turnIndex, Date.now() - started, args.isLiveTurn);
 
 	if (!outcome.ok) {
 		emitBounded(
@@ -1050,6 +1092,9 @@ export async function settleObservedMutation(
 		args.signal,
 		{ hook: "tool_result_edit", label: "settleObservedMutation" },
 	);
+	// No liveness here: a settle switches only to its own arm's turn, which
+	// it takes back out of the parked set, so it grows that set (and evicts)
+	// only when that turn was already evicted.
 	chargeTurnBudget(args.turnIndex, Date.now() - started);
 	if (!capture.ok) {
 		// A wedged filesystem call. There is no diff to report and, critically,

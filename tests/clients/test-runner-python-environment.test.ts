@@ -186,6 +186,250 @@ afterAll(() => {
 });
 
 describe("pytest project environment", () => {
+	it("does not borrow an ambient environment for a linked-worktree root (#3871 V4)", async () => {
+		const project = createProject(false);
+		const ambient = createEnvironment(createTempDir("pi-lens-ambient-"));
+		process.env.VIRTUAL_ENV = ambient.root;
+
+		const result = await new TestRunnerClient(false).runTestFileAsync(
+			project.testFile,
+			project.root,
+			{
+				runner: "pytest",
+				config: RUNNERS.pytest,
+				requireOwnInstall: true,
+			},
+		);
+
+		expect(result.notRun).toBe("no-runner-install");
+		expect(safeSpawnAsync).not.toHaveBeenCalled();
+	});
+
+	it("accepts an ambient environment inside a linked-worktree root (#3871 V4)", async () => {
+		const project = createProject(false);
+		const ambient = createEnvironment(path.join(project.root, ".ambient"));
+		process.env.CONDA_PREFIX = ambient.root;
+
+		const result = await new TestRunnerClient(false).runTestFileAsync(
+			project.testFile,
+			project.root,
+			{
+				runner: "pytest",
+				config: RUNNERS.pytest,
+				requireOwnInstall: true,
+			},
+		);
+
+		expect(result.notRun).toBeUndefined();
+		expect(safeSpawnAsync).toHaveBeenCalledOnce();
+		expect(safeSpawnAsync.mock.calls[0][0]).toBe(ambient.pythonPath);
+	});
+
+	it("rejects an outside UV_PROJECT_ENVIRONMENT for own-install runs (#3871 F4)", async () => {
+		const project = createProject(false);
+		fs.writeFileSync(
+			path.join(project.root, "pyproject.toml"),
+			"[project]\nname='app'\n",
+		);
+		const ambient = createEnvironment(createTempDir("pi-lens-uv-ambient-"));
+		process.env.UV_PROJECT_ENVIRONMENT = ambient.root;
+
+		const result = await new TestRunnerClient(false).runTestFileAsync(
+			project.testFile,
+			project.root,
+			{
+				runner: "pytest",
+				config: RUNNERS.pytest,
+				requireOwnInstall: true,
+			},
+		);
+
+		expect(result.notRun).toBe("no-runner-install");
+		expect(safeSpawnAsync).not.toHaveBeenCalled();
+	});
+
+	it("rejects an ambient environment on another Windows drive for a linked-worktree root (#3871 V1)", async () => {
+		// Recurrence (#3871 V1): round 2 dropped the `path.isAbsolute(relative)`
+		// leg, so `path.win32.relative("C:\\proj\\.worktrees\\x", "D:\\envs\\main")`
+		// ("D:\\envs\\main", no `..`) counted as inside and a linked-worktree
+		// run borrowed the other drive's environment again. The real resolver is
+		// loaded under win32 path semantics so the ubuntu lane runs the branch;
+		// only the interpreter probe (`access`, a host filesystem call) answers
+		// for the win32-shaped interpreter paths, which cannot exist on posix.
+		const worktree = "C:\\proj\\.worktrees\\x";
+		const home = "C:\\Users\\dev";
+		const interpreter = (root: string): string =>
+			path.win32.join(
+				root,
+				process.platform === "win32" ? "Scripts" : "bin",
+				process.platform === "win32" ? "python.exe" : "python",
+			);
+		const otherDrive = "D:\\envs\\main";
+		const inside = `${worktree}\\.ambient`;
+		const present = new Set([interpreter(otherDrive), interpreter(inside)]);
+		vi.resetModules();
+		vi.doMock("node:path", () => ({ ...path.win32, default: path.win32 }));
+		vi.doMock("node:fs/promises", async (importOriginal) => {
+			const actual = await importOriginal<typeof import("node:fs/promises")>();
+			return {
+				...actual,
+				access: async (file: fs.PathLike, mode?: number) => {
+					if (present.has(String(file))) return;
+					return actual.access(file, mode);
+				},
+			};
+		});
+		try {
+			const win = await import("../../clients/python-environment.js");
+			for (const name of ["VIRTUAL_ENV", "CONDA_PREFIX"] as const) {
+				delete process.env.VIRTUAL_ENV;
+				delete process.env.CONDA_PREFIX;
+				process.env[name] = otherDrive;
+				// Control: the session root itself still borrows it, so the
+				// double does present the interpreter and the gate is what rejects.
+				expect((await win.detectPythonEnvironment(worktree, home))?.root).toBe(
+					otherDrive,
+				);
+				expect(
+					await win.detectPythonEnvironment(worktree, home, {
+						allowAmbient: false,
+					}),
+				).toBeUndefined();
+				process.env[name] = inside;
+				expect(
+					(
+						await win.detectPythonEnvironment(worktree, home, {
+							allowAmbient: false,
+						})
+					)?.root,
+				).toBe(inside);
+			}
+		} finally {
+			vi.doUnmock("node:path");
+			vi.doUnmock("node:fs/promises");
+			vi.resetModules();
+		}
+	});
+
+	it("passes the display root through nested text-runner spawns (#3871 F3)", async () => {
+		const dispatchRoot = createTempDir("pi-lens-3871-f3-");
+		const spawnCwd = path.join(dispatchRoot, "pkg");
+		fs.mkdirSync(path.join(spawnCwd, "tests"), { recursive: true });
+		// `alsoUnderCwd` rows are the V2 both-bases rows, one per call site: the
+		// same relative name exists under the dispatch root and under the
+		// runner's own cwd, and only the `[spawnCwd, cwd]` order names the file
+		// the runner actually ran. The pytest stdout is real pytest 9.1.1 output
+		// for a nested `pytest.ini`.
+		const cases = [
+			{
+				runner: "pytest",
+				config: RUNNERS.pytest,
+				marker: "pytest.ini",
+				file: "tests/test_widget.py",
+				line: "test_value",
+				alsoUnderCwd: false,
+				stdout:
+					"FAILED tests/test_widget.py::test_value - assert 1 == 2\n1 failed in 0.01s",
+			},
+			{
+				runner: "pytest",
+				config: RUNNERS.pytest,
+				marker: "pytest.ini",
+				file: "tests/test_a.py",
+				line: "test_a",
+				alsoUnderCwd: true,
+				stdout:
+					"FAILED tests/test_a.py::test_a - assert 1 == 2\n1 failed in 0.01s",
+			},
+			{
+				runner: "phpunit",
+				config: RUNNERS.phpunit,
+				marker: "phpunit.xml",
+				file: "tests/Foo.php",
+				line: "12",
+				alsoUnderCwd: false,
+				stdout:
+					"1) Foo\\\\BarTest::testValue\n\ntests/Foo.php:12\nTests: 1, Assertions: 1, Errors: 1, Failures: 0, Skipped: 0.",
+			},
+			{
+				runner: "mix",
+				config: RUNNERS.mix,
+				marker: "mix.exs",
+				file: "test/foo_test.exs",
+				line: "12",
+				alsoUnderCwd: false,
+				stdout:
+					"  1) test value (FooTest)\n\n  test/foo_test.exs:12\n3 tests, 1 failure",
+			},
+			{
+				runner: "generic",
+				config: RUNNERS.mix,
+				marker: "mix.exs",
+				file: "tests/widget.py",
+				line: "12",
+				alsoUnderCwd: false,
+				stdout: "FAILED tests/widget.py:12\n1 tests completed, 1 failed",
+			},
+			{
+				runner: "phpunit",
+				config: RUNNERS.phpunit,
+				marker: "phpunit.xml",
+				file: "tests/Both.php",
+				line: "7",
+				alsoUnderCwd: true,
+				stdout:
+					"1) Foo\\\\BothTest::testValue\n\ntests/Both.php:7\nTests: 1, Assertions: 1, Errors: 1, Failures: 0, Skipped: 0.",
+			},
+			{
+				runner: "mix",
+				config: RUNNERS.mix,
+				marker: "mix.exs",
+				file: "test/both_test.exs",
+				line: "7",
+				alsoUnderCwd: true,
+				stdout:
+					"  1) test both (BothTest)\n\n  test/both_test.exs:7\n3 tests, 1 failure",
+			},
+			{
+				runner: "generic",
+				config: RUNNERS.mix,
+				marker: "mix.exs",
+				file: "tests/both.py",
+				line: "7",
+				alsoUnderCwd: true,
+				stdout: "FAILED tests/both.py:7\n1 tests completed, 1 failed",
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			fs.writeFileSync(path.join(spawnCwd, testCase.marker), "");
+			const target = path.join(spawnCwd, testCase.file);
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.writeFileSync(target, "");
+			if (testCase.alsoUnderCwd) {
+				const decoy = path.join(dispatchRoot, testCase.file);
+				fs.mkdirSync(path.dirname(decoy), { recursive: true });
+				fs.writeFileSync(decoy, "");
+			}
+			safeSpawnAsync.mockImplementationOnce(async () => ({
+				stdout: testCase.stdout,
+				stderr: "",
+				status: 1,
+			}));
+			const result = await new TestRunnerClient(false).runTestFileAsync(
+				target,
+				dispatchRoot,
+				{
+					runner: testCase.runner,
+					config: testCase.config,
+					displayRoot: path.dirname(dispatchRoot),
+				},
+			);
+			expect(result.failures[0]?.location).toBe(
+				`${path.relative(path.dirname(dispatchRoot), target).replaceAll(path.sep, "/")}:${testCase.line}`,
+			);
+		}
+	});
 	it("runs pytest with an unactivated project .venv", async () => {
 		const { root, testFile, pythonPath, binDir } = createProject(true);
 		const inheritedPath = process.env.PATH;

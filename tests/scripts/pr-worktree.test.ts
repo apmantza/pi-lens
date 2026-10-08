@@ -27,6 +27,7 @@ import {
 	classifyNodeModules,
 	deriveClosePlan,
 	deriveOpenPlan,
+	nestedDestinationError,
 	worktreeBranchName,
 } from "../../scripts/lib/pr-worktree.mjs";
 import { run } from "../../scripts/pr-worktree.mjs";
@@ -106,9 +107,10 @@ function runCli(
 	fixture: Fixture,
 	args: string[],
 	extraEnv: Record<string, string> = {},
+	cwd: string = fixture.repo,
 ): string {
 	return execFileSync(process.execPath, [CLI, ...args], {
-		cwd: fixture.repo,
+		cwd,
 		env: {
 			...gitFixtureEnv(fixture.root),
 			PI_LENS_WORKTREES_ROOT: fixture.worktreesRoot,
@@ -124,9 +126,14 @@ function runCliResult(
 	fixture: Fixture,
 	args: string[],
 	extraEnv: Record<string, string> = {},
+	cwd: string = fixture.repo,
 ): { status: number; stdout: string; stderr: string } {
 	try {
-		return { status: 0, stdout: runCli(fixture, args, extraEnv), stderr: "" };
+		return {
+			status: 0,
+			stdout: runCli(fixture, args, extraEnv, cwd),
+			stderr: "",
+		};
 	} catch (error) {
 		const failure = error as {
 			status?: number;
@@ -399,6 +406,290 @@ describe("pr-worktree CLI open", () => {
 		expect(
 			fixture.git(["show-ref", "--verify", "refs/heads/pr-worktree/merge-1"]),
 		).toContain("refs/heads/pr-worktree/merge-1");
+	});
+});
+
+// Recurrence: #3978 / #3981 -- HOME pinned under the source checkout (the
+// sanctioned probe-home isolation) made the default review root a directory
+// INSIDE that checkout, so a second registered tree doubled test discovery.
+describe("pr-worktree nested-destination rail (pure)", () => {
+	const refuse = (
+		destination: string,
+		checkouts: string[],
+		pathApi: typeof path = path,
+	) =>
+		nestedDestinationError({
+			destination,
+			checkouts,
+			mainCheckout: checkouts[0],
+			pathApi,
+		});
+
+	it("refuses a destination at or inside a checkout and names both plus the override", () => {
+		const nested = refuse("/a/main/.probe-home/home/Desktop/wt/r1", [
+			"/a/main",
+		]);
+		expect(nested).toBe(
+			"refusing /a/main/.probe-home/home/Desktop/wt/r1: it is at or inside the registered checkout /a/main, " +
+				"where test and governance discovery would walk it as part of that checkout; " +
+				"set PI_LENS_WORKTREES_ROOT to a directory outside every checkout",
+		);
+		expect(refuse("/a/main", ["/a/main"])).toContain("PI_LENS_WORKTREES_ROOT");
+		expect(refuse("/a/main/..x/r1", ["/a/main"])).not.toBeNull();
+	});
+
+	it("refuses when any registered checkout holds the destination", () => {
+		expect(refuse("/a/linked/wt/r1", ["/a/main", "/a/linked"])).toContain(
+			"/a/linked",
+		);
+	});
+
+	// Recurrence: PR #3998 review F1 -- equality with a NON-main registered row
+	// (a name already open, or registered with its directory gone) read as
+	// nested and hid git's own "already exists" / "prune" answer.
+	it("refuses equality only against the main checkout, containment against every row", () => {
+		expect(refuse("/a/linked", ["/a/main", "/a/linked"])).toBeNull();
+		expect(refuse("/a/linked/r1", ["/a/main", "/a/linked"])).toContain(
+			"/a/linked",
+		);
+		expect(refuse("/a/main", ["/a/main", "/a/linked"])).toContain("/a/main");
+	});
+
+	it("allows a destination outside every checkout, including a sibling that shares a name prefix", () => {
+		expect(refuse("/a/main-worktrees/r1", ["/a/main"])).toBeNull();
+		expect(refuse("/a/..x/r1", ["/a/main"])).toBeNull();
+		expect(refuse("/a/trees/r2", ["/a/main", "/a/trees/r1"])).toBeNull();
+		expect(refuse("/a", ["/a/main"])).toBeNull();
+	});
+
+	it("decides win32 paths with win32 semantics", () => {
+		const win = path.win32;
+		expect(
+			refuse("C:\\repo\\.probe-home\\home\\wt\\r1", ["C:\\repo"], win),
+		).not.toBeNull();
+		expect(refuse("c:\\REPO\\wt\\r1", ["C:\\repo"], win)).not.toBeNull();
+		expect(refuse("C:\\repo-wt\\r1", ["C:\\repo"], win)).toBeNull();
+		expect(refuse("D:\\wt\\r1", ["C:\\repo"], win)).toBeNull();
+	});
+});
+
+describe("pr-worktree CLI open nested-destination rail", () => {
+	function pinnedHome(home: string): Record<string, string> {
+		fs.mkdirSync(home, { recursive: true });
+		return { HOME: home, USERPROFILE: home, PI_LENS_WORKTREES_ROOT: "" };
+	}
+
+	function openNamed(
+		fixture: Fixture,
+		env: Record<string, string>,
+		name = "review-1",
+		cwd = fixture.repo,
+	) {
+		return runCliResult(fixture, ["open", "9001", "--name", name], env, cwd);
+	}
+
+	/** No worktree was registered, no review branch made, and nothing fetched. */
+	function expectNothingCreated(fixture: Fixture, registered = 1): void {
+		const rows = fixture
+			.git(["worktree", "list", "--porcelain"])
+			.split("\n")
+			.filter((line) => line.startsWith("worktree "));
+		expect(rows).toHaveLength(registered);
+		expect(fixture.git(["branch", "--list", "pr-worktree/*"]).trim()).toBe("");
+		const gitDir = path.join(fixture.repo, ".git");
+		expect(fs.existsSync(path.join(gitDir, "FETCH_HEAD"))).toBe(false);
+		expect(
+			fs.existsSync(path.join(gitDir, "worktrees", "linked", "FETCH_HEAD")),
+		).toBe(false);
+	}
+
+	it("refuses the default root when HOME is pinned under the source checkout", () => {
+		const fixture = makeFixture();
+		const home = path.join(fixture.repo, ".probe-home", "home");
+		const result = openNamed(fixture, pinnedHome(home));
+		const nested = path.join(
+			fs.realpathSync(home),
+			"Desktop",
+			"pi-lens-worktrees",
+			"review-1",
+		);
+
+		expect(result.status).toBe(2);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toContain(`refusing ${nested}: `);
+		expect(result.stderr).toContain(fs.realpathSync(fixture.repo));
+		expect(result.stderr).toContain("PI_LENS_WORKTREES_ROOT");
+		expect(fs.existsSync(path.join(home, "Desktop"))).toBe(false);
+		expectNothingCreated(fixture);
+	});
+
+	it("refuses an explicit root inside the source checkout", () => {
+		const fixture = makeFixture();
+		const result = openNamed(fixture, {
+			PI_LENS_WORKTREES_ROOT: path.join(fixture.repo, "inner", "trees"),
+		});
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("PI_LENS_WORKTREES_ROOT");
+		expect(fs.existsSync(path.join(fixture.repo, "inner"))).toBe(false);
+		expectNothingCreated(fixture);
+	});
+
+	it("refuses a destination that is the source checkout itself", () => {
+		const fixture = makeFixture();
+		const result = openNamed(
+			fixture,
+			{ PI_LENS_WORKTREES_ROOT: fixture.root },
+			"main",
+		);
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain(fs.realpathSync(fixture.repo));
+		expectNothingCreated(fixture);
+	});
+
+	it("refuses a HOME that is a symlink into the source checkout", () => {
+		const fixture = makeFixture();
+		const real = path.join(fixture.repo, ".probe-home", "home");
+		fs.mkdirSync(real, { recursive: true });
+		const alias = path.join(fixture.root, "home-alias");
+		fs.symlinkSync(real, alias, "junction");
+		const result = openNamed(fixture, pinnedHome(alias));
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain(
+			path.join(fs.realpathSync(real), "Desktop", "pi-lens-worktrees"),
+		);
+		expect(fs.existsSync(path.join(real, "Desktop"))).toBe(false);
+		expectNothingCreated(fixture);
+	});
+
+	it("refuses when run from a linked worktree whose HOME sits under the main checkout", () => {
+		const fixture = makeFixture();
+		const linked = path.join(fixture.root, "linked");
+		fixture.git(["worktree", "add", "-b", "linked-branch", linked]);
+		const home = path.join(fixture.repo, ".probe-home", "home");
+		const result = openNamed(fixture, pinnedHome(home), "review-1", linked);
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain(fs.realpathSync(fixture.repo));
+		expect(fs.existsSync(path.join(home, "Desktop"))).toBe(false);
+		expectNothingCreated(fixture, 2);
+	});
+
+	// Recurrence: PR #3998 review F1 -- re-opening a registered name exited 2
+	// with the "nested" text and steered the worker to the env override instead
+	// of git's "already exists" / "prune" answer.
+	it("leaves a reopened registered name to git instead of calling it nested", () => {
+		const fixture = makeFixture();
+		const env = { PI_LENS_WORKTREES_ROOT: fixture.worktreesRoot };
+		expect(openNamed(fixture, env, "r1").status).toBe(0);
+
+		const again = openNamed(fixture, env, "r1");
+		expect(again.status).toBe(1);
+		expect(again.stderr).toContain("failed to create worktree");
+		expect(again.stderr).toContain("already exists");
+		expect(again.stderr).not.toContain("refusing");
+	});
+
+	it("leaves a registered name whose directory is gone to git's prune answer", () => {
+		const fixture = makeFixture();
+		const env = { PI_LENS_WORKTREES_ROOT: fixture.worktreesRoot };
+		expect(openNamed(fixture, env, "r1").status).toBe(0);
+		fs.rmSync(path.join(fixture.worktreesRoot, "r1"), {
+			recursive: true,
+			force: true,
+		});
+
+		const again = openNamed(fixture, env, "r1");
+		expect(again.status).toBe(1);
+		expect(again.stderr).toContain("failed to create worktree");
+		expect(again.stderr).not.toContain("refusing");
+	});
+
+	// Recurrence: PR #3998 review F2 -- a `bare` row from the registry was judged
+	// as a checkout, so the "worktrees inside a bare repository" layout was refused.
+	it("opens a destination under a bare repository's directory", () => {
+		const fixture = makeFixture();
+		const bare = path.join(fixture.root, "bare.git");
+		fixture.git(["clone", "-q", "--bare", fixture.origin, bare], fixture.root);
+		const linked = path.join(fixture.root, "lw");
+		fixture.git(["worktree", "add", linked, "master"], bare);
+		const root = path.join(bare, "wts");
+		const result = openNamed(
+			fixture,
+			{ PI_LENS_WORKTREES_ROOT: root },
+			"r1",
+			linked,
+		);
+
+		expect(result.stderr).not.toContain("refusing");
+		expect(result.status).toBe(0);
+		expect(fs.existsSync(path.join(root, "r1"))).toBe(true);
+	});
+
+	it("opens under a default root whose HOME is outside every checkout", () => {
+		const fixture = makeFixture();
+		const home = path.join(fixture.root, "home");
+		const result = openNamed(fixture, pinnedHome(home));
+		const worktree = path.join(
+			home,
+			"Desktop",
+			"pi-lens-worktrees",
+			"review-1",
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout.trim()).toBe(worktree);
+		expect(fs.existsSync(worktree)).toBe(true);
+	});
+
+	it("opens beside the source when the root only shares its name prefix, and opens a second tree beside the first", () => {
+		const fixture = makeFixture();
+		const root = path.join(fixture.root, "main-worktrees");
+		const env = { PI_LENS_WORKTREES_ROOT: root };
+
+		expect(openNamed(fixture, env, "review-1").status).toBe(0);
+		expect(openNamed(fixture, env, "review-2").status).toBe(0);
+		expect(fs.existsSync(path.join(root, "review-1"))).toBe(true);
+		expect(fs.existsSync(path.join(root, "review-2"))).toBe(true);
+	});
+
+	it("judges a relative root against the directory git creates it from, not the caller's cwd", () => {
+		const fixture = makeFixture();
+		const sub = path.join(fixture.repo, "sub");
+		fs.mkdirSync(sub);
+		// git runs from the repo root, so ".." is the fixture root (outside the
+		// source); resolved from `sub` it would wrongly read as the repo itself.
+		const result = openNamed(
+			fixture,
+			{ PI_LENS_WORKTREES_ROOT: ".." },
+			"rel-1",
+			sub,
+		);
+
+		expect(result.status).toBe(0);
+		expect(fs.existsSync(path.join(fixture.root, "rel-1"))).toBe(true);
+	});
+
+	// Recurrence: PR #3998 review F3 -- `mkdirSync` resolved a relative root
+	// against the process cwd while git and the guard resolve it from the repo
+	// root, leaving an empty directory inside the source for a run from a
+	// subdirectory.
+	it("creates a relative root where git resolves it, not inside the source", () => {
+		const fixture = makeFixture();
+		const sub = path.join(fixture.repo, "sub");
+		fs.mkdirSync(sub);
+		const result = openNamed(
+			fixture,
+			{ PI_LENS_WORKTREES_ROOT: "../root" },
+			"rel-2",
+			sub,
+		);
+
+		expect(result.status).toBe(0);
+		expect(fs.existsSync(path.join(fixture.root, "root", "rel-2"))).toBe(true);
+		expect(fs.existsSync(path.join(fixture.repo, "root"))).toBe(false);
 	});
 });
 
@@ -751,6 +1042,29 @@ describe("pr-worktree CLI arguments and lookup", () => {
 		const result = fixtureRun(fixture, ["open", "9001", "--head"], { ghExec });
 		expect(result.status).toBe(0);
 		expect(ghCalls).toEqual([["pr", "view", "9001", "--json", "headRefName"]]);
+	});
+
+	// Fail closed: with no registry to judge against, open must not guess the
+	// destination is clear and go on to fetch and add.
+	it("stops before the fetch when the worktree registry cannot be read", () => {
+		const fixture = makeFixture();
+		const calls: string[][] = [];
+		const gitExec = (args: string[], options: { cwd?: string } = {}) => {
+			calls.push(args);
+			if (args[0] === "worktree" && args[1] === "list") {
+				throw new Error("registry unreadable");
+			}
+			return fixtureGitExec(fixture)(args, options);
+		};
+		const result = fixtureRun(fixture, ["open", "9001", "--name", "r1"], {
+			gitExec,
+		});
+		expect(result.status).toBe(1);
+		expect(result.stderr.join("\n")).toContain(
+			"failed to list worktrees: registry unreadable",
+		);
+		expect(calls.map((args) => args[0])).not.toContain("fetch");
+		expect(fs.existsSync(path.join(fixture.worktreesRoot, "r1"))).toBe(false);
 	});
 });
 

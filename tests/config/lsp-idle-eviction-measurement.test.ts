@@ -263,6 +263,7 @@ describe("nightly wiring of the idle-eviction document (#3645)", () => {
 			"clients/lsp/server.ts",
 			"tests/config/lsp-idle-eviction-reasons.json",
 			"tests/config/lsp-idle-eviction-registry.test.ts",
+			".changelog/3989-lsp-idle-eviction-promote.md",
 			"$RUNNER_TEMP/lsp-idle-eviction-promote.md",
 		])
 			expect(stage).toContain(path);
@@ -388,6 +389,7 @@ describe("nightly wiring of the idle-eviction document (#3645)", () => {
 				.filter(Boolean)
 				.sort(),
 		).toEqual([
+			".changelog/3989-lsp-idle-eviction-promote.md",
 			"clients/lsp/server.ts",
 			"tests/config/lsp-idle-eviction-reasons.json",
 			"tests/config/lsp-idle-eviction-registry.test.ts",

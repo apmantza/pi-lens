@@ -9,11 +9,12 @@ import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
 import { dropHashlineAnchorMemo } from "./hashline-anchor.js";
 import { evaluateSharedCheckoutGuard } from "./shared-checkout-guard.js";
 import { logLatency } from "./latency-logger.js";
-import { normalizeMapKey, toPosix } from "./path-utils.js";
+import { toPosix } from "./path-utils.js";
 import {
 	captureFileStats,
 	getOpaqueBaselineStore,
 	isGitWorktree,
+	opaqueBaselineSlot,
 	type PendingOpaqueBaseline,
 } from "./opaque-mutation-scan.js";
 import { normalizeForGuardMatch } from "./host-edit-normalize.js";
@@ -369,6 +370,12 @@ interface ToolCallDeps {
 	) => void;
 	resetLSPService: (options?: LSPShutdownOptions) => void;
 	getTreeSitterClient?: typeof getSharedTreeSitterClient;
+	/**
+	 * #3613: the stable session id of the session whose tool call this is, so
+	 * the post-edit pipeline a partial apply runs here records its per-turn
+	 * warnings in that session's partition.
+	 */
+	sessionId?: string;
 }
 
 export type ToolCallResult = { block: true; reason?: string } | void;
@@ -570,7 +577,10 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			const scanRoot = ctx.cwd ?? runtime.projectRoot;
 			if (scanRoot) {
 				const started = Date.now();
-				const rootKey = `${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`;
+				const baselineSlot = opaqueBaselineSlot(
+					scanRoot,
+					runtime.sessionGeneration,
+				);
 				let baseline: PendingOpaqueBaseline;
 				let resultNote: string;
 				if (await isGitWorktree(scanRoot)) {
@@ -596,10 +606,21 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					resultNote =
 						outcome.unknownReason ?? `scanned:${outcome.scannedCount}`;
 				}
-				// Session-stamped key: a concurrent-secondary session (#473)
-				// replacing this slot must yield a no-pending-snapshot UNKNOWN
-				// for us - never a diff against another session's baseline.
-				getOpaqueBaselineStore().record(rootKey, baseline);
+				// Session-stamped slot: a concurrent-secondary session (#473)
+				// replacing it must yield a no-pending-snapshot UNKNOWN for us -
+				// never a diff against another session's baseline. One entry per
+				// call (#4137): parallel bash calls all record before the first
+				// result. The turn lets the store retire the entry of a call that
+				// never gets a result (#3613 F2: this session's own turn).
+				getOpaqueBaselineStore().record(
+					baselineSlot,
+					resolveToolCallCorrelationId(event),
+					baseline,
+					{
+						key: runtime.turnKey(deps.sessionId),
+						isLive: (key) => runtime.isLiveTurnKey(key),
+					},
+				);
 				logLatency({
 					type: "phase",
 					phase: "opaque_mutation_prescan",
@@ -646,7 +667,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				targetPath: observedPath,
 				cwd: ctx.cwd ?? runtime.projectRoot,
 				sessionGeneration: runtime.sessionGeneration,
-				turnIndex: runtime.turnIndex,
+				// #3613 F2: the budget of this session's own turn.
+				turnIndex: runtime.turnKey(deps.sessionId),
+				isLiveTurn: (key) => runtime.isLiveTurnKey(key),
 				signal: ctx.signal,
 				dbg,
 			});
@@ -1495,6 +1518,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 									metricsClient,
 									resetLSPService,
 									readGuard: runtime.readGuard,
+									sessionId: deps.sessionId,
 									_ownWriteStamp: partialStamp,
 									agentBehaviorRecord: (toolName, analyzedPath) =>
 										agentBehaviorClient.recordToolCall(toolName, analyzedPath),

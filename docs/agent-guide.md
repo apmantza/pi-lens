@@ -151,7 +151,9 @@ Don't try to route around it — clear the blockers, then commit. The guard is s
 pi-lens monitors that you **read a file before editing it** (`clients/read-guard.ts`).
 Edits fail or warn when:
 
-1. **Zero-read** — you never read the file this conversation.
+1. **Zero-read** — you never read the file this conversation, or your write
+   record of it expired after 30 idle minutes (the block says "the earlier
+   write record ... expired"). Read it again.
 2. **Stale** — the file changed on disk since you read it (content-hash checked).
 3. **Out-of-range** — your edit target wasn't covered by any read.
 

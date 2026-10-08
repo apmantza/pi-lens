@@ -9,7 +9,7 @@
 (*  - the agent: Read (with #3576 R1, its read-warm touch: a stamped LSP  *)
 (*    sync of the bytes it read, runtime-tool-call.ts ~833, outside pi's    *)
 (*    queue), and Edit = guard check (read-guard.ts checkEdit:              *)
-(*    a read this session, or wasWrittenThisSession), then a                *)
+(*    a read this session, or writtenThisSession), then a                   *)
 (*    read-modify-write under pi's per-file withFileMutationQueue           *)
 (*    (core/tools/edit.js), then tool_result: recordWritten of its own      *)
 (*    write, the deferred-format queue record, and the pipeline's LSP sync  *)
@@ -80,7 +80,7 @@ CONSTANTS
     ExtWrites,        \* formats of F by another pi-lens process
     Overlap,          \* TRUE: next run may start while the drain runs (RPC / waitForIdle hosts)
     Orphan,           \* TRUE: the 10 s bound may abandon the formatter child
-    MtimeAuthored,    \* TRUE: wasWrittenThisSession's mtime >= sessionStart fallback (#3520)
+    MtimeAuthored,    \* TRUE: the zero-read check's mtime >= sessionStart fallback (the code before #3520)
     ResetClearsGuard, \* FALSE: mutant, /new keeps the read guard
     FixQueue,         \* fix: contentBefore..fileContent (incl. the child) under withFileMutationQueue(F)
     FixQueueHold,     \* fix: an abandoned child keeps the queue until it exits

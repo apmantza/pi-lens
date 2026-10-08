@@ -23,6 +23,16 @@
  * - Full read-then-edit authorization path: bridge-registered read unblocks
  *   a subsequent edit that would otherwise be blocked
  *
+ * ## The real delegated path (#3654)
+ *
+ * The shim is a translator over the unified bridge body. This file mounts it
+ * exactly as `index.ts` does: `forward` is the real `recordIOEntry` bound to a
+ * deps object whose read guard is the per-test capture below. There is no v1
+ * fallback body to test instead (that body is how #3654 F1, a dropped
+ * zero-line read, shipped green). v2 reads `disk` evidence, so every
+ * forwarded path is a real fixture file; a read of an absent file records
+ * nothing.
+ *
  * ## Test structure
  *
  * The bridge is registered with `configurable: false` — once set the global
@@ -35,10 +45,20 @@
  * - `beforeEach` resets that mutable state — it never touches the global.
  */
 
+import * as fs from "node:fs";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import { type IOBridgeDeps, recordIOEntry } from "../../clients/io-bridge.js";
 import {
 	READ_BRIDGE_KEY,
 	type ReadBridge,
@@ -79,16 +99,64 @@ type RecordReadArgs = {
 //
 // Registered once in beforeAll; each test resets these in beforeEach.
 
+type RecordReadOpts = { captureLineHashes?: boolean };
+
 let _calls: RecordReadArgs[];
-let _guardFn: (r: RecordReadArgs) => void;
+let _guardFn: (r: RecordReadArgs, opts?: RecordReadOpts) => void;
 let _turnIndex: number;
 let _writeIndex: number;
 let _isRecordable: (fp: string) => boolean;
+let _fixtureDir: string | undefined;
+
+/** A real 200-line fixture file (created on first use), so v2's disk read admits it. */
+function fx(name: string): string {
+	_fixtureDir ??= mkdtempSync(join(tmpdir(), "pi-lens-read-bridge-fixtures-"));
+	const filePath = join(_fixtureDir, name);
+	if (!fs.existsSync(filePath)) {
+		const lines = Array.from({ length: 200 }, (_, i) => `const l${i + 1} = 0;`);
+		writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
+	}
+	return filePath;
+}
+
+/** The unused mutation half of the bridge deps: a read must never reach it. */
+function unusedDep(name: string): never {
+	throw new Error(`read-bridge test: unexpected ${name} call`);
+}
+
+/**
+ * The v2 deps a read reaches, wired as `index.ts` wires them; the read guard
+ * is the per-test capture. `guard` lets a test mount a separate capture.
+ */
+function readDeps(guard: {
+	recordRead(r: RecordReadArgs, opts?: RecordReadOpts): void;
+}): IOBridgeDeps {
+	return {
+		getRuntime: () => unusedDep("getRuntime"),
+		getCacheManager: () => unusedDep("getCacheManager"),
+		getProjectRoot: () => unusedDep("getProjectRoot"),
+		getDispatchCwd: () => unusedDep("getDispatchCwd"),
+		countFileLines: () => unusedDep("countFileLines"),
+		isRecordable: () => true,
+		getReadGuard: () => ({
+			recordRead: (record, opts) => guard.recordRead(record, opts),
+			forgetPath: () => unusedDep("forgetPath"),
+			hasKnownPath: () => unusedDep("hasKnownPath"),
+		}),
+		getTurnIndex: () => _turnIndex,
+		peekWriteIndex: () => _writeIndex,
+		getFlag: () => undefined,
+		isExternalOrVendorFile: () => unusedDep("isExternalOrVendorFile"),
+		isPathIgnoredByProject: () => unusedDep("isPathIgnoredByProject"),
+		notifyExternalFileChange: () => unusedDep("notifyExternalFileChange"),
+		nodeFs: { existsSync: fs.existsSync, statSync: fs.statSync },
+	};
+}
 
 /** A well-formed entry that always passes validation. */
 function validEntry(overrides: Partial<ReadBridgeEntry> = {}): ReadBridgeEntry {
 	return {
-		filePath: "/project/src/main.go",
+		filePath: fx("main.go"),
 		requestedOffset: 10,
 		requestedLimit: 50,
 		...overrides,
@@ -105,17 +173,22 @@ it("bridge is absent before registerReadBridge is called", () => {
 
 describe("read-bridge", () => {
 	beforeAll(() => {
-		registerReadBridge({
-			getReadGuard: () => ({
-				recordRead: (r: RecordReadArgs) => {
-					_guardFn(r);
-					_calls.push(r);
-				},
-			}),
-			getTurnIndex: () => _turnIndex,
-			peekWriteIndex: () => _writeIndex,
-			isRecordable: (fp) => _isRecordable(fp),
+		const deps = readDeps({
+			recordRead: (r, opts) => {
+				_guardFn(r, opts);
+				_calls.push(r);
+			},
 		});
+		registerReadBridge({
+			isRecordable: (fp) => _isRecordable(fp),
+			forward: (entry) => recordIOEntry(entry, deps),
+		});
+	});
+
+	afterAll(() => {
+		if (_fixtureDir !== undefined) {
+			rmSync(_fixtureDir, { recursive: true, force: true });
+		}
 	});
 
 	beforeEach(() => {
@@ -171,15 +244,14 @@ describe("read-bridge", () => {
 
 	it("second call to registerReadBridge is a no-op — first registration wins", () => {
 		const separateGuard = { recordRead: vi.fn() };
+		const separateDeps = readDeps(separateGuard);
 		registerReadBridge({
-			getReadGuard: () => separateGuard,
-			getTurnIndex: () => 99,
-			peekWriteIndex: () => 99,
 			isRecordable: () => true,
+			forward: (entry) => recordIOEntry(entry, separateDeps),
 		});
 
 		(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-			validEntry({ filePath: "/a.ts" }),
+			validEntry({ filePath: fx("a.ts") }),
 		);
 
 		// Original bridge captured the call
@@ -201,7 +273,7 @@ describe("read-bridge", () => {
 
 		expect(_guardFn).toHaveBeenCalledOnce();
 		const call = _calls[0];
-		expect(call.filePath).toBe("/project/src/main.go");
+		expect(call.filePath).toBe(fx("main.go"));
 		expect(call.requestedOffset).toBe(10);
 		expect(call.requestedLimit).toBe(50);
 		expect(call.effectiveOffset).toBe(10);
@@ -234,16 +306,16 @@ describe("read-bridge", () => {
 			return true;
 		};
 		(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-			validEntry({ filePath: "/project/checked.ts" }),
+			validEntry({ filePath: fx("checked.ts") }),
 		);
-		expect(seen).toEqual(["/project/checked.ts"]);
+		expect(seen).toEqual([fx("checked.ts")]);
 	});
 
 	it("turnIndex and writeIndex are sampled at call-time, not registration-time", () => {
 		_turnIndex = 5;
 		_writeIndex = 2;
 		(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-			validEntry({ filePath: "/a.ts" }),
+			validEntry({ filePath: fx("a.ts") }),
 		);
 		expect(_calls[0].turnIndex).toBe(5);
 		expect(_calls[0].writeIndex).toBe(2);
@@ -251,7 +323,7 @@ describe("read-bridge", () => {
 		_turnIndex = 9;
 		_writeIndex = 4;
 		(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-			validEntry({ filePath: "/b.ts" }),
+			validEntry({ filePath: fx("b.ts") }),
 		);
 		expect(_calls[1].turnIndex).toBe(9);
 		expect(_calls[1].writeIndex).toBe(4);
@@ -360,7 +432,15 @@ describe("read-bridge", () => {
 
 	// ── Zero-line reads of empty files ───────────────────────────────────────
 
+	// #3654 F1: these run the v2 zero-line read the shim delegates to. The
+	// shim used to spell `requestedLimit: 0` as the range `[1, 0]`, which v2
+	// rejects as malformed: the first case is the red for that shape.
 	describe("zero-line reads of empty files", () => {
+		const zeroLineDrops = () =>
+			getDegradationSummary().filter(
+				(group) => group.kind === "io-bridge-read-dropped",
+			);
+
 		it("accepts a zero-line read of a real empty file with whole-file coverage and no content binding", () => {
 			const dir = mkdtempSync(join(tmpdir(), "pi-lens-read-bridge-empty-"));
 			try {
@@ -376,11 +456,7 @@ describe("read-bridge", () => {
 				expect(_calls[0].effectiveOffset).toBe(1);
 				expect(_calls[0].effectiveLimit).toBe(Number.MAX_SAFE_INTEGER);
 				expect(_calls[0].contentBinding).toBeUndefined();
-				expect(
-					getDegradationSummary().filter(
-						(group) => group.kind === "read-bridge-zero-line-dropped",
-					),
-				).toHaveLength(0);
+				expect(zeroLineDrops()).toHaveLength(0);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
@@ -397,29 +473,31 @@ describe("read-bridge", () => {
 					requestedLimit: 0,
 				});
 				expect(_guardFn).not.toHaveBeenCalled();
-				const groups = getDegradationSummary().filter(
-					(group) => group.kind === "read-bridge-zero-line-dropped",
-				);
+				const groups = zeroLineDrops();
 				expect(groups).toHaveLength(1);
-				expect(groups[0].latestReasons[0].subject).toBe(filePath);
-				expect(groups[0].latestReasons[0].reason).toContain("not empty");
+				expect(groups[0].latestReasons[0].subject).toBe(
+					"unknown:bookkeeping-error",
+				);
+				expect(groups[0].latestReasons[0].reason).toContain(
+					"zero-line read of a non-empty file",
+				);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
 		});
 
 		it("requestedLimit = 0 on a non-existent file is dropped", () => {
+			fx("main.go");
 			(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-				validEntry({ requestedLimit: 0 }),
+				validEntry({
+					filePath: join(_fixtureDir!, "absent.ts"),
+					requestedLimit: 0,
+				}),
 			);
 			expect(_guardFn).not.toHaveBeenCalled();
-			const groups = getDegradationSummary().filter(
-				(group) => group.kind === "read-bridge-zero-line-dropped",
-			);
+			const groups = zeroLineDrops();
 			expect(groups).toHaveLength(1);
-			expect(groups[0].latestReasons[0].reason).toContain(
-				"size could not be read",
-			);
+			expect(groups[0].latestReasons[0].reason).toContain("ENOENT");
 		});
 	});
 
@@ -528,7 +606,7 @@ describe("read-bridge", () => {
 				const filePath = join(dir, "green.ts");
 				writeFileSync(filePath, "const value = 1;\n", "utf-8");
 				const guard = new ReadGuard("bridge-green", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead(
 					validEntry({
 						filePath,
@@ -548,7 +626,7 @@ describe("read-bridge", () => {
 				const filePath = join(dir, "mutated.ts");
 				writeFileSync(filePath, "const value = 1;\n", "utf-8");
 				const guard = new ReadGuard("bridge-mismatch", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead(
 					validEntry({
 						filePath,
@@ -574,7 +652,7 @@ describe("read-bridge", () => {
 		it("bridge-registered read forwards all fields the guard needs to authorize a subsequent edit", () => {
 			_turnIndex = 1;
 			_writeIndex = 0;
-			const filePath = "/project/src/handler.ts";
+			const filePath = fx("handler.ts");
 			const beforeCall = Date.now();
 
 			(globalThis as any)[READ_BRIDGE_KEY].recordRead(
@@ -601,19 +679,52 @@ describe("read-bridge", () => {
 			expect(read.source).toBe("bridge:test-ext");
 		});
 
+		it("a ranged read stores disk line hashes for exactly the lines it covered", () => {
+			const guard = new ReadGuard("bridge-disk-hashes", { mode: "block" });
+			_guardFn = (record, opts) => guard.recordRead(record, opts);
+			const filePath = fx("hashed.ts");
+			(globalThis as any)[READ_BRIDGE_KEY].recordRead(
+				validEntry({ filePath, requestedOffset: 10, requestedLimit: 5 }),
+			);
+			const stored = guard.getReadHistory(filePath);
+			expect(stored).toHaveLength(1);
+			expect(Object.keys(stored[0]?.lineHashes ?? {})).toEqual([
+				"10",
+				"11",
+				"12",
+				"13",
+				"14",
+			]);
+		});
+
+		// #3654: v2's disk-evidence read refuses a file that is gone, where the
+		// v1 body recorded coverage for it. The drop is visible in the ledger.
+		it("a read of an absent file records nothing and leaves one drop row", () => {
+			fx("main.go");
+			(globalThis as any)[READ_BRIDGE_KEY].recordRead(
+				validEntry({ filePath: join(_fixtureDir!, "gone.ts"), consumer: "x" }),
+			);
+			expect(_guardFn).not.toHaveBeenCalled();
+			const groups = getDegradationSummary().filter(
+				(group) => group.kind === "io-bridge-read-dropped",
+			);
+			expect(groups).toHaveLength(1);
+			expect(groups[0].latestReasons[0].subject).toBe("x:bookkeeping-error");
+		});
+
 		it("a read for file A does not authorize edits on file B", () => {
 			(globalThis as any)[READ_BRIDGE_KEY].recordRead(
-				validEntry({ filePath: "/project/a.ts" }),
+				validEntry({ filePath: fx("a.ts") }),
 			);
 			expect(_guardFn).toHaveBeenCalledOnce();
-			expect(_calls[0].filePath).toBe("/project/a.ts");
-			const readsForB = _calls.filter((c) => c.filePath === "/project/b.ts");
+			expect(_calls[0].filePath).toBe(fx("a.ts"));
+			const readsForB = _calls.filter((c) => c.filePath === fx("b.ts"));
 			expect(readsForB).toHaveLength(0);
 		});
 
 		it("multiple reads on the same file are all forwarded", () => {
 			const bridge = (globalThis as any)[READ_BRIDGE_KEY];
-			const filePath = "/project/big.ts";
+			const filePath = fx("big.ts");
 			bridge.recordRead(
 				validEntry({ filePath, requestedOffset: 1, requestedLimit: 50 }),
 			);
@@ -644,7 +755,7 @@ describe("read-bridge", () => {
 				// only the bridged read may authorize the later edit.
 				utimesSync(filePath, new Date(0), new Date(0));
 				const guard = new ReadGuard("bridge-empty", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 1,
@@ -666,7 +777,7 @@ describe("read-bridge", () => {
 				// only the bridged read may authorize the later edit.
 				utimesSync(filePath, new Date(0), new Date(0));
 				const guard = new ReadGuard("bridge-empty-reread", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 1,
@@ -699,7 +810,7 @@ describe("read-bridge", () => {
 				const guard = new ReadGuard("bridge-binding-supersede", {
 					mode: "block",
 				});
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 1,
@@ -746,7 +857,7 @@ describe("read-bridge", () => {
 				const guard = new ReadGuard("bridge-binding-noncover", {
 					mode: "block",
 				});
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 1,
@@ -788,7 +899,7 @@ describe("read-bridge", () => {
 				// only the bridged read may authorize the later edit.
 				utimesSync(filePath, new Date(0), new Date(0));
 				const guard = new ReadGuard("bridge-empty-stale", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 1,
@@ -827,7 +938,7 @@ describe("read-bridge", () => {
 				// only the bridged read may authorize the later edit.
 				utimesSync(filePath, new Date(0), new Date(0));
 				const guard = new ReadGuard("bridge-empty-offset", { mode: "block" });
-				_guardFn = (record) => guard.recordRead(record);
+				_guardFn = (record, opts) => guard.recordRead(record, opts);
 				(globalThis as any)[READ_BRIDGE_KEY].recordRead({
 					filePath,
 					requestedOffset: 5,

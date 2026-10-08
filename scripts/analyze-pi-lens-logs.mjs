@@ -417,6 +417,18 @@ function createState(files) {
 	};
 }
 
+/**
+ * The failure kind of a `failed` or `crashed` runner row. `metadata.failureKind`
+ * is exact: inline rows carry it (#3781) and collect-later rows too (#3796).
+ * Rows written by released versions never carry it, so the count heuristic
+ * (a failure with diagnostics is found-errors) stays only as that fallback.
+ */
+function runnerFailureKind(entry) {
+	if (entry.metadata?.failureKind) return entry.metadata.failureKind;
+	if (entry.status === "crashed") return "crashed";
+	return (entry.diagnosticCount ?? 0) > 0 ? "blocking_diagnostics" : "unknown";
+}
+
 async function analyzeLatency(files, state) {
 	for (const file of files) {
 		await forEachJsonLine(file, "latency", state, (entry) => {
@@ -433,15 +445,8 @@ async function analyzeLatency(files, state) {
 				if (status === "failed" || status === "crashed") {
 					// Separate a genuine runner breakage from "the check ran and found
 					// blocking issues" (e.g. the LSP runner reports status:failed when a
-					// file has type errors). Prefer the logged failureKind; fall back to
-					// the heuristic that a failure carrying diagnostics is found-errors.
-					const kind =
-						entry.metadata?.failureKind ??
-						(status === "crashed"
-							? "crashed"
-							: (entry.diagnosticCount ?? 0) > 0
-								? "blocking_diagnostics"
-								: "unknown");
+					// file has type errors).
+					const kind = runnerFailureKind(entry);
 					state.latency.runnerFailureKinds.inc(`${runner}:${kind}`);
 					if (kind === "blocking_diagnostics") {
 						state.latency.runnerBlockingFindings.inc(runner);
@@ -1641,7 +1646,8 @@ function trackLatencySignals(state, entry, ts) {
 		if (
 			entry.status === "failed" &&
 			md.tier === "collect-later" &&
-			Number(entry.diagnosticCount ?? 0) > 0
+			Number(entry.diagnosticCount ?? 0) > 0 &&
+			runnerFailureKind(entry) === "blocking_diagnostics"
 		) {
 			state.latency.deferredRunnerFailed.push({
 				ts: entry.ts,

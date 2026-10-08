@@ -545,6 +545,32 @@ describe("ReadGuard", () => {
 			}
 		});
 
+		it("blocks zero-read edit on a file another writer touched after the guard started (#3520)", () => {
+			const env = setupTestEnvironment("read-guard-foreign-write-");
+			try {
+				const guard = createReadGuard("test-session");
+				// An external editor, a second pi-lens or git wrote it: no recordWritten.
+				const filePath = path.join(env.tmpDir, "foreign.ts");
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				const later = new Date(Date.now() + 60_000);
+				fs.utimesSync(filePath, later, later);
+
+				const verdict = guard.checkEdit(filePath, [1, 1]);
+
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("Edit without read");
+				expect(guard.getReadHistory(filePath)).toEqual([]);
+				expect(logReadGuardEvent).toHaveBeenCalledWith(
+					expect.objectContaining({
+						event: "edit_blocked",
+						metadata: expect.objectContaining({ reasonKind: "zero_read" }),
+					}),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("ignores mtime staleness when read line hashes still match", () => {
 			const env = setupTestEnvironment("read-guard-hash-");
 			try {
@@ -2145,6 +2171,32 @@ describe("ReadGuard Tier-2 idle decay and bounds (#1389)", () => {
 		}
 	});
 
+	it("forgets the authorship of an idle-evicted file, so it needs a read again (#3520)", () => {
+		const env = setupTestEnvironment("read-guard-idle-authorship-");
+		vi.useFakeTimers();
+		try {
+			const filePath = path.join(env.tmpDir, "idle.ts");
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			// The kernel's coarse clock can stamp the file before the fake clock's
+			// start; pin a newer mtime so the mtime fallback of the code before
+			// #3520 fires on every run.
+			const later = new Date(Date.now() + 60_000);
+			fs.utimesSync(filePath, later, later);
+			const guard = createReadGuard("tier2-idle-authorship");
+			guard.recordRead(createReadRecord(filePath));
+			guard.recordWritten(filePath); // consumes the read; arms the idle timer
+			expect(guard.exportAuthorship().written).toHaveLength(1);
+
+			vi.advanceTimersByTime(31 * 60_000);
+
+			expect(guard.exportAuthorship().written).toEqual([]);
+			expect(guard.checkEdit(filePath).action).toBe("block");
+		} finally {
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
 	it("retains an old read until an edit consumes it", () => {
 		vi.useFakeTimers();
 		try {
@@ -2169,24 +2221,130 @@ describe("ReadGuard eviction-path telemetry (#1918)", () => {
 			.mock.calls.filter(([entry]) => entry.event === event);
 	}
 
-	// #1918 review F2: idle-timeout is routine housekeeping, not a fault — a
-	// read-only session idling out N files is healthy behavior, and N is
-	// unbounded, so it takes an in-code justification (evictFile's doc
-	// comment) instead of an always-on record. The eviction itself still
-	// happens; only the telemetry is intentionally silent.
-	it("evicts on idle timeout without any read_file_evicted record", () => {
+	// #1918 review F2: idle-timeout is routine housekeeping, not a fault, so it
+	// stays out of the ledger and logs nothing for a file that carried no
+	// authorship. Recurrence: a record per idle eviction would flood the log in
+	// every healthy session (an edit-history-only file idles out too).
+	it("evicts an idle file that carried no write record without any read_file_evicted record", () => {
 		vi.useFakeTimers();
 		try {
 			const guard = createReadGuard("1918-idle-evict-session");
 			const filePath = "/tmp/1918-idle-evict.ts";
-			guard.recordRead(createReadRecord(filePath));
-			guard.recordWritten(filePath); // marks consumed; arms the idle timer
+			// A blocked zero-read edit leaves an edit history and arms the idle timer.
+			expect(guard.checkEdit(filePath, [1, 1]).action).toBe("block");
+			expect(guard.getEditHistory(filePath)).toHaveLength(1);
 			vi.mocked(logReadGuardEvent).mockClear();
 
 			vi.advanceTimersByTime(31 * 60_000);
 
-			expect(guard.getReadHistory(filePath)).toHaveLength(0);
+			expect(guard.getEditHistory(filePath)).toHaveLength(0);
 			expect(evictionEvents("read_file_evicted")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// #3520: an idle-evicted write record is one read_file_evicted line per file
+	// per session. Recurrence: the eviction was silent, so a later zero_read
+	// block of an edited file had nothing in read-guard.log to explain it.
+	it("records an idle-evicted write record once per file per session (#3520)", () => {
+		vi.useFakeTimers();
+		try {
+			const guard = createReadGuard("3520-idle-record-session");
+			const filePath = "/tmp/3520-idle-record.ts";
+			const otherPath = "/tmp/3520-idle-record-other.ts";
+			guard.recordRead(createReadRecord(filePath));
+			guard.recordWritten(filePath);
+			vi.mocked(logReadGuardEvent).mockClear();
+
+			vi.advanceTimersByTime(31 * 60_000);
+
+			const first = evictionEvents("read_file_evicted");
+			expect(first).toHaveLength(1);
+			expect(first[0][0]).toMatchObject({
+				event: "read_file_evicted",
+				filePath: normalizeFilePath(filePath),
+				metadata: { reason: "idle-timeout", authorshipDropped: true },
+			});
+
+			// The same file written and evicted again: no second line.
+			guard.recordRead(createReadRecord(filePath));
+			guard.recordWritten(filePath);
+			vi.advanceTimersByTime(31 * 60_000);
+			expect(evictionEvents("read_file_evicted")).toHaveLength(1);
+
+			// Another file gets its own line.
+			guard.recordRead(createReadRecord(otherPath));
+			guard.recordWritten(otherPath);
+			vi.advanceTimersByTime(31 * 60_000);
+			expect(
+				evictionEvents("read_file_evicted").map(([entry]) => entry.filePath),
+			).toEqual([normalizeFilePath(filePath), normalizeFilePath(otherPath)]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// #3520: the zero_read text claims "you have not read X in this
+	// conversation". For a file the agent wrote, that is false. Recurrence: the
+	// agent argued with the guard about a file it had just edited.
+	it("tells an edit of a file whose write record idle-expired that the record expired (#3520)", () => {
+		vi.useFakeTimers();
+		try {
+			const guard = createReadGuard("3520-idle-text-session");
+			const filePath = "/tmp/3520-idle-text.ts";
+			const neverPath = "/tmp/3520-never-written.ts";
+			guard.recordRead(createReadRecord(filePath));
+			guard.recordWritten(filePath);
+			vi.advanceTimersByTime(31 * 60_000);
+			vi.mocked(logReadGuardEvent).mockClear();
+
+			const expired = guard.checkEdit(filePath, [1, 1]);
+			const never = guard.checkEdit(neverPath, [1, 1]);
+
+			const canonical = normalizeFilePath(filePath);
+			expect(expired.action).toBe("block");
+			expect(expired.reason).toBe(
+				`🔄 RETRYABLE — Edit without read: the earlier write record for \`${canonical}\` expired, so it needs a read again. Read it first, then retry: \`read path="${canonical}"\`.`,
+			);
+			expect(expired.reason).not.toContain("have not read");
+			// A file that was never written keeps the zero_read text.
+			expect(never.reason).toContain("you have not read");
+			const blocked = vi
+				.mocked(logReadGuardEvent)
+				.mock.calls.filter(([entry]) => entry.event === "edit_blocked");
+			expect(blocked.map(([entry]) => entry.metadata)).toEqual([
+				expect.objectContaining({
+					reasonKind: "zero_read",
+					writeRecordExpired: true,
+				}),
+				expect.not.objectContaining({ writeRecordExpired: true }),
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// #3520: the marker set is bounded like the file store. Recurrence guarded:
+	// a long session that edits many files grows the set without bound.
+	it("keeps the expired write records of at most 256 files (#3520)", () => {
+		vi.useFakeTimers();
+		try {
+			const guard = createReadGuard("3520-idle-cap-session");
+			const paths = Array.from(
+				{ length: 257 },
+				(_, i) => `/tmp/3520-idle-cap-${i}.ts`,
+			);
+			for (const filePath of paths) guard.recordWritten(filePath);
+
+			vi.advanceTimersByTime(31 * 60_000);
+
+			expect(guard.checkEdit(paths[0], [1, 1]).reason).toContain(
+				"you have not read",
+			);
+			expect(guard.checkEdit(paths[256], [1, 1]).reason).toContain(
+				"write record",
+			);
 		} finally {
 			vi.useRealTimers();
 		}

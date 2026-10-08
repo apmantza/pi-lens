@@ -421,10 +421,29 @@ describe("host-provided peers are open; the supported window lives in install-sm
 	const floor = workflow.env?.PI_HOST_FLOOR_VERSION ?? "";
 
 	// Hosts release-qa has actually passed. NOT derived from the lockfile: the
-	// lockfile carries the unit suite's dev baseline (0.99.2 after #3805), which
-	// is a test host, not a promise. When release-qa passes on a newer host, add
-	// it here and widen PI_HOST_SUPPORTED_RANGE in the same change, never before.
-	const RELEASE_QA_VERIFIED_HOSTS = ["0.80.10", "0.84.1", "0.85.1"];
+	// lockfile's pi version is only a test host, not a promise. P1 requires one
+	// release-qa witness per minor line from 0.86 onward; represented 0.80,
+	// 0.84, and 0.85 lines are also kept in this ratchet.
+	const RELEASE_QA_VERIFIED_HOSTS = [
+		"0.80.10",
+		"0.84.1",
+		"0.85.1",
+		"0.86.1",
+		"0.87.1",
+		"0.99.2",
+		"1.0.4",
+		"1.1.0",
+	];
+	const VERIFIED_MINOR_LINES = [
+		"0.80",
+		"0.84",
+		"0.85",
+		"0.86",
+		"0.87",
+		"0.99",
+		"1.0",
+		"1.1",
+	];
 
 	it("declares a window at all", () => {
 		expect(
@@ -458,11 +477,19 @@ describe("host-provided peers are open; the supported window lives in install-sm
 		).toBe(false);
 	});
 
-	it("does not admit a host release-qa has not passed (0.86.0 stays out)", () => {
-		// Widening past the verified set re-opens the gap #2586 and #2682 name:
-		// the newest-in-range lane would then certify a minor nothing witnessed.
-		expect(semver.satisfies("0.86.0", window)).toBe(false);
-		expect(semver.satisfies("0.99.2", window)).toBe(false);
+	it("keeps the next unverified host out (1.2.0 stays out)", () => {
+		expect(semver.satisfies("1.2.0", window)).toBe(false);
+	});
+
+	it("has a release-qa verified host on every certified minor line", () => {
+		for (const minorLine of VERIFIED_MINOR_LINES) {
+			expect(
+				RELEASE_QA_VERIFIED_HOSTS.some((version) =>
+					version.startsWith(`${minorLine}.`),
+				),
+				`${minorLine} has no release-qa verified host`,
+			).toBe(true);
+		}
 	});
 });
 

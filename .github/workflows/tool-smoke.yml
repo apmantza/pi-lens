@@ -506,7 +506,7 @@ jobs:
             cp --parents docs/lsp-capability-matrix.md docs/servercapabilities.md docs/lsp-idle-eviction.md "$stage/files/"
           fi
           if [ "$PROMOTED" = true ]; then
-            cp --parents clients/lsp/server.ts tests/config/lsp-idle-eviction-reasons.json tests/config/lsp-idle-eviction-registry.test.ts "$stage/files/"
+            cp --parents clients/lsp/server.ts tests/config/lsp-idle-eviction-reasons.json tests/config/lsp-idle-eviction-registry.test.ts .changelog/3989-lsp-idle-eviction-promote.md "$stage/files/"
             cp "$RUNNER_TEMP/lsp-idle-eviction-promote.md" "$stage/idle-eviction-promote.md"
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -682,6 +682,7 @@ jobs:
             clients/lsp/server.ts
             tests/config/lsp-idle-eviction-reasons.json
             tests/config/lsp-idle-eviction-registry.test.ts
+            .changelog/3989-lsp-idle-eviction-promote.md
           commit-message: 'perf(lsp): promote measured idle-eviction servers (refs #3989)'
           title: 'perf(lsp): promote measured idle-eviction servers (refs #3989)'
           body-path: ${{ runner.temp }}/pr-inputs/idle-eviction-promote.md

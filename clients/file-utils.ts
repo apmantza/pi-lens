@@ -3,7 +3,7 @@
  */
 
 import * as fs from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Minimatch, type MinimatchOptions } from "./deps/minimatch.js";
@@ -36,6 +36,8 @@ import {
 	loadPiLensProjectConfig,
 } from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { isEphemeralCheckoutRoot } from "./ephemeral-root.js";
+import { getProcessSingleton } from "./process-singletons.js";
 
 /**
  * Return the directory where pi-lens stores project-specific data
@@ -49,6 +51,14 @@ import { safeSpawnAsync } from "./safe-spawn.js";
  *   PILENS_DATA_DIR=~/.pi-lens/projects
  *   → ~/.pi-lens/projects/home-user-myapp-<8-hex-hash>/
  *
+ * Temporary checkouts (#1129 decision B, `isEphemeralCheckoutRoot`: a real
+ * git checkout below the host tmpdir, or a directory inside one) keep the
+ * same slug under `<base>/.ephemeral/<pid>-<8 hex>/`, a base this process
+ * alone owns: normal within the process, never read by another one. The
+ * exit hook removes it and the session-start sweep reaps a dead process's.
+ * A leading dot keeps the name out of the slug namespace. Either answer is
+ * settled once per process per (base, cwd).
+ *
  * This keeps project folders clean and avoids creating .pi-lens folders
  * inside user projects.
  */
@@ -58,8 +68,7 @@ export function getProjectDataDir(cwd: string): string {
 	if (!configuredBase && fs.existsSync(legacyProjectDir)) {
 		return legacyProjectDir;
 	}
-	const base = configuredBase || path.join(getGlobalPiLensDir(), "projects");
-	const resolvedBase = base.trim();
+	const resolvedBase = projectDataBase();
 	const memoKey = `${resolvedBase}\0${path.resolve(cwd)}`;
 	const cached = settledDataDirs.get(memoKey);
 	if (cached !== undefined) return cached;
@@ -67,15 +76,113 @@ export function getProjectDataDir(cwd: string): string {
 	const readable = projectDataDirReadableSlug(canonical.root);
 	const hash = projectDataDirRootHash(canonical.root);
 	const slug = `${readable || "default"}-${hash}`;
-	const dir = path.join(resolvedBase, slug);
+	const base = isEphemeralCheckoutRoot(cwd)
+		? ephemeralDataBase(resolvedBase)
+		: resolvedBase;
+	const dir = path.join(base, slug);
+	if (base !== resolvedBase && pendingDataDirMigrations.length < 32) {
+		pendingDataDirMigrations.push({ to: dir, outcome: "ephemeral" });
+	}
 	const settled = settleProjectDataDir(
-		resolvedBase,
+		base,
 		readable || "default",
 		dir,
 		memoKey,
 		canonical.fallback,
 	);
 	return settled;
+}
+
+function projectDataBase(): string {
+	const configuredBase = process.env.PILENS_DATA_DIR?.trim();
+	return configuredBase || path.join(getGlobalPiLensDir(), "projects");
+}
+
+const EPHEMERAL_DATA_DIR_NAME = ".ephemeral";
+const EPHEMERAL_TOKEN_PATTERN = /^(\d+)-[0-9a-f]{8}$/;
+
+/**
+ * The one token per process (a process singleton, so every module copy hands
+ * out the same dir). The random half keeps a reused pid from inheriting a
+ * dead process's leftovers before the sweep reaps them.
+ */
+function ephemeralDataToken(): { token: string; exitHook: boolean } {
+	return getProcessSingleton("project-data-ephemeral-token", 1, () => ({
+		token: `${process.pid}-${randomBytes(4).toString("hex")}`,
+		exitHook: false,
+	}));
+}
+
+function ephemeralDataBase(resolvedBase: string): string {
+	const state = ephemeralDataToken();
+	if (!state.exitHook) {
+		state.exitHook = true;
+		process.once("exit", removeEphemeralDataDirs);
+	}
+	return path.join(resolvedBase, EPHEMERAL_DATA_DIR_NAME, state.token);
+}
+
+/**
+ * The exit hook: remove this process's ephemeral base. Best-effort and total.
+ * An exit-time writer registered later can still recreate an entry; the
+ * session-start sweep removes it once this pid is dead.
+ */
+export function removeEphemeralDataDirs(): void {
+	const dir = path.join(
+		projectDataBase(),
+		EPHEMERAL_DATA_DIR_NAME,
+		ephemeralDataToken().token,
+	);
+	try {
+		fs.rmSync(dir, { recursive: true, force: true });
+	} catch {
+		// Left for the next session-start sweep.
+	}
+}
+
+/**
+ * Reap the ephemeral bases of dead processes under the configured data base.
+ * Reads at most `maxEntries` entries; touches only directories named
+ * `<pid>-<8 hex>` whose pid `isPidAlive` reports dead. A reused live pid keeps
+ * its dead predecessor's dir until that pid dies too: the safe direction.
+ * Returns the number of directories removed.
+ */
+export async function sweepDeadEphemeralDataDirs(options: {
+	isPidAlive: (pid: number) => boolean;
+	maxEntries?: number;
+}): Promise<number> {
+	const parent = path.join(projectDataBase(), EPHEMERAL_DATA_DIR_NAME);
+	let handle: fs.Dir;
+	try {
+		handle = await fs.promises.opendir(parent);
+	} catch {
+		return 0;
+	}
+	let removed = 0;
+	try {
+		for (let i = 0; i < (options.maxEntries ?? 512); i++) {
+			const entry = await handle.read();
+			if (entry === null) break;
+			const pid = entry.isDirectory()
+				? EPHEMERAL_TOKEN_PATTERN.exec(entry.name)?.[1]
+				: undefined;
+			if (pid === undefined || options.isPidAlive(Number(pid))) continue;
+			try {
+				await fs.promises.rm(path.join(parent, entry.name), {
+					recursive: true,
+					force: true,
+				});
+				removed++;
+			} catch {
+				// Left for the next sweep.
+			}
+		}
+	} catch {
+		// Best-effort directory scan.
+	} finally {
+		await handle.close().catch(() => {});
+	}
+	return removed;
 }
 
 /**
@@ -129,8 +236,16 @@ function projectDataDirRootHash(canonicalRoot: string): string {
 export interface ProjectDataDirMigration {
 	/** The hashed-slug directory derived for the root. */
 	to: string;
-	/** The bounded outcome that the session-start drain renders. */
-	outcome: "renamed" | "coexisting" | "rename-failed" | "identity-fallback";
+	/**
+	 * The bounded outcome that the session-start drain renders. `ephemeral`
+	 * (#1129) is not a migration: the root got a process-owned dir instead.
+	 */
+	outcome:
+		| "renamed"
+		| "coexisting"
+		| "rename-failed"
+		| "identity-fallback"
+		| "ephemeral";
 }
 
 const pendingDataDirMigrations: ProjectDataDirMigration[] = [];

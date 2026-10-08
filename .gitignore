@@ -126,6 +126,11 @@ migrate-*.js
 !docs/api-ports-inventory.md
 !docs/astplayground.md
 !docs/public-api-stability.md
+# #3654: the io-bridge migration guide is a referenced deliverable, and the
+# RFC ships as this lane's design record. Negations (not `git add -f`) so the
+# diff stays reviewable and the files are ordinary tracked docs.
+!docs/io-bridge-v2-migration.md
+!docs/rfcs/*.md
 !docs/configuration.md
 !docs/release-qa-baseline.md
 

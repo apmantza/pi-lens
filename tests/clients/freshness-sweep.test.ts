@@ -42,8 +42,6 @@ const EXEMPT: Record<string, string> = {
 		"age-based maxAge expiry of a cached install probe, same TTL-not-freshness shape",
 	"lsp/lombok.ts":
 		"max-selection among candidates (find newest), no reference timestamp",
-	"read-guard.ts":
-		"session-start membership gate (mtime >= sessionStartMs) - different semantic than post-record drift",
 };
 
 describe("freshness kernel coverage (#1739)", () => {

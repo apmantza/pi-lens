@@ -1789,6 +1789,7 @@ export class TestRunnerClient {
 				absoluteTestFile,
 				cwd,
 				spawnCwd,
+				requireOwnInstall,
 			);
 			if (requireOwnInstall && !ownInstall) {
 				return {
@@ -1850,6 +1851,8 @@ export class TestRunnerClient {
 						absoluteTestFile,
 						cwd,
 						runner,
+						displayRoot ?? cwd,
+						spawnCwd,
 					);
 					break;
 				case "phpunit":
@@ -1859,6 +1862,9 @@ export class TestRunnerClient {
 						result.status ?? 0,
 						absoluteTestFile,
 						runner,
+						displayRoot ?? cwd,
+						cwd,
+						spawnCwd,
 					);
 					break;
 				case "mix":
@@ -1868,6 +1874,9 @@ export class TestRunnerClient {
 						result.status ?? 0,
 						absoluteTestFile,
 						runner,
+						displayRoot ?? cwd,
+						cwd,
+						spawnCwd,
 					);
 					break;
 				default:
@@ -1877,6 +1886,9 @@ export class TestRunnerClient {
 						result.status ?? 0,
 						absoluteTestFile,
 						runner,
+						displayRoot ?? cwd,
+						cwd,
+						spawnCwd,
 					);
 					break;
 			}
@@ -2322,13 +2334,37 @@ export class TestRunnerClient {
 
 	// --- Pytest Parser (text-based, no JSON dependency) ---
 
+	/**
+	 * #3871: a text runner prints a path relative to the directory it ran in
+	 * (`spawnCwd`, first in `bases`) or to the dispatch root. The first base
+	 * that holds the file wins; a path that resolves nowhere stays as printed,
+	 * and an absent capture is no location.
+	 */
+	private renderTextLocation(
+		displayRoot: string,
+		bases: readonly string[],
+		file: string | undefined,
+		line: string | undefined,
+	): string | undefined {
+		if (file === undefined || line === undefined) return undefined;
+		for (const base of bases) {
+			const resolved = path.resolve(base, file);
+			if (fs.existsSync(resolved)) {
+				return `${toPosix(path.relative(displayRoot, resolved))}:${line}`;
+			}
+		}
+		return `${file}:${line}`;
+	}
+
 	private parsePytestOutput(
 		stdout: string,
 		stderr: string,
 		exitCode: number,
 		testFile: string,
-		_cwd: string,
+		cwd: string,
 		runner: string,
+		displayRoot: string = cwd,
+		spawnCwd: string = cwd,
 	): TestResult {
 		const failures: TestFailure[] = [];
 		const output = `${stdout}\n${stderr}`;
@@ -2341,10 +2377,17 @@ export class TestRunnerClient {
 		const failureRegex = /FAILED\s+(\S+::\S+)\s*-\s*(.+?)(?:\n|$)/g;
 		let match;
 		while ((match = failureRegex.exec(output)) !== null) {
+			const [file, ...testParts] = match[1].split("::");
+			const location = this.renderTextLocation(
+				displayRoot,
+				[spawnCwd, cwd],
+				file,
+				testParts.join("::"),
+			);
 			failures.push({
 				name: match[1],
 				message: match[2].trim().slice(0, 500),
-				location: match[1].replace("::", ":"),
+				...(location === undefined ? {} : { location }),
 			});
 		}
 
@@ -2383,6 +2426,9 @@ export class TestRunnerClient {
 		exitCode: number,
 		testFile: string,
 		runner: string,
+		displayRoot: string = path.dirname(testFile),
+		cwd: string = path.dirname(testFile),
+		spawnCwd: string = cwd,
 	): TestResult {
 		const output = `${stdout}\n${stderr}`;
 		let passed = 0;
@@ -2417,7 +2463,26 @@ export class TestRunnerClient {
 		const failureRegex = /^\d+\)\s+(\S+)/gm;
 		let match;
 		while ((match = failureRegex.exec(output)) !== null) {
-			failures.push({ name: match[1], message: match[1] });
+			// #3871 r3: `[^\S\n]*`, not `\s*`, after a line anchor. `\s*` crossed
+			// newlines, so every line of a blank run rescanned the whole run.
+			const afterFailure = output.slice(match.index + match[0].length);
+			const nextFailure = afterFailure.search(/(?:^|\n)[^\S\n]*\d+\)\s/);
+			const failureBlock =
+				nextFailure === -1 ? afterFailure : afterFailure.slice(0, nextFailure);
+			const locationMatch = /(?:^|\n)[^\S\n]*([^\s:]+\.php):(\d+)/.exec(
+				failureBlock,
+			);
+			const location = this.renderTextLocation(
+				displayRoot,
+				[spawnCwd, cwd],
+				locationMatch?.[1],
+				locationMatch?.[2],
+			);
+			failures.push({
+				name: match[1],
+				message: match[1],
+				...(location === undefined ? {} : { location }),
+			});
 		}
 
 		// #1452: PHPUnit prints its own elapsed time and this parser dropped it,
@@ -2489,6 +2554,9 @@ export class TestRunnerClient {
 		exitCode: number,
 		testFile: string,
 		runner: string,
+		displayRoot: string = path.dirname(testFile),
+		cwd: string = path.dirname(testFile),
+		spawnCwd: string = cwd,
 	): TestResult {
 		const output = `${stdout}\n${stderr}`;
 		let passed = 0;
@@ -2524,13 +2592,28 @@ export class TestRunnerClient {
 
 		// Individual failures: "  1) test some behavior (MyModuleTest)"
 		const failures: TestFailure[] = [];
-		const failureRegex = /^\s*\d+\)\s+(.+?)\s*\(([^)]+)\)\s*$/gm;
+		// #3871 r3: `^[^\S\n]*`, not `^\s*`: the multiline anchor restarted at
+		// every line of a blank run and `\s*` rescanned the rest of it.
+		const failureRegex = /^[^\S\n]*\d+\)\s+(.+?)\s*\(([^)]+)\)\s*$/gm;
 		let match;
 		while ((match = failureRegex.exec(output)) !== null) {
+			const afterFailure = output.slice(match.index + match[0].length);
+			const nextFailure = afterFailure.search(/(?:^|\n)[^\S\n]*\d+\)\s/);
+			const failureBlock =
+				nextFailure === -1 ? afterFailure : afterFailure.slice(0, nextFailure);
+			const locationMatch = /(?:^|\n)[^\S\n]*([^\s:]+\.exs):(\d+)/.exec(
+				failureBlock,
+			);
 			failures.push({
 				name: match[1].trim(),
 				message: match[1].trim(),
-				location: match[2].trim(),
+				location:
+					this.renderTextLocation(
+						displayRoot,
+						[spawnCwd, cwd],
+						locationMatch?.[1],
+						locationMatch?.[2],
+					) ?? match[2].trim(),
 			});
 		}
 
@@ -2792,6 +2875,9 @@ export class TestRunnerClient {
 		exitCode: number,
 		testFile: string,
 		runner: string,
+		displayRoot: string = path.dirname(testFile),
+		cwd: string = path.dirname(testFile),
+		spawnCwd: string = cwd,
 	): TestResult {
 		const output = `${stdout}\n${stderr}`;
 		const lower = output.toLowerCase();
@@ -3017,7 +3103,25 @@ export class TestRunnerClient {
 		];
 		for (const m of otherNames) {
 			if (failures.length >= 5) break;
-			failures.push({ name: m[1].trim(), message: m[1].trim() });
+			const name = m[1].trim();
+			// #3871 r3: `(?<!\S)` starts a location only at a token start. The
+			// unanchored match restarted at every offset of a long token, and
+			// took `//host/a.py:80` out of a prose URL.
+			const locationMatch =
+				/(?<!\S)([^\s:]+\.(?:go|rs|rb|java|kt|cs|fs|py|php|exs)):(\d+)/.exec(
+					name,
+				);
+			const location = this.renderTextLocation(
+				displayRoot,
+				[spawnCwd, cwd],
+				locationMatch?.[1],
+				locationMatch?.[2],
+			);
+			failures.push({
+				name,
+				message: name,
+				...(location === undefined ? {} : { location }),
+			});
 		}
 
 		// #1487: gated on `!matched`, not on `failed === 0`. A non-zero exit
@@ -3302,6 +3406,7 @@ export class TestRunnerClient {
 		 * Defaults to `cwd`, which is every call where the two are the same.
 		 */
 		spawnCwd: string = cwd,
+		requireOwnInstall = false,
 	): Promise<{
 		command: string;
 		args: string[];
@@ -3320,7 +3425,9 @@ export class TestRunnerClient {
 		// resolved from the host PATH. The child-only environment also keeps tools
 		// spawned by tests inside the same project environment.
 		if (runner === "pytest") {
-			const pythonEnvironment = await detectPythonEnvironment(cwd);
+			const pythonEnvironment = await detectPythonEnvironment(cwd, undefined, {
+				allowAmbient: !requireOwnInstall,
+			});
 			if (pythonEnvironment) {
 				return {
 					command: pythonEnvironment.pythonPath,

@@ -260,7 +260,7 @@ export const SESSION_STORE_REGISTRY: Readonly<
 	},
 	"read-guard-authorship": {
 		module: "read-guard-branch.ts",
-		state: "the ReadGuard's writtenThisSession and its mtime anchor",
+		state: "the ReadGuard's writtenThisSession",
 	},
 	widget: {
 		module: "widget-state.ts",
@@ -963,11 +963,11 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 	{
 		id: "opaque-mutation-scan:baselineStore+gitMemo",
 		module: "opaque-mutation-scan.ts",
-		state: "OpaqueBaselineStore byCwd map, gitRepoMemo, gitToplevelMemo",
+		state: "OpaqueBaselineStore pending map, gitRepoMemo, gitToplevelMemo",
 		policy: "session_start",
 		resetName: "resetOpaqueMutationState",
 		reason:
-			"#2000 phase 2: pending pre-command baselines are keyed cwd:generation and become unreachable when the session generation advances; and the git-worktree and toplevel memos must re-probe after a session that may have seen a directory become a worktree, or become a LINKED worktree of another (#2007). Without the reset the baselines leak per session and the memos mis-answer forever.",
+			"#2000 phase 2: pending pre-command baselines are keyed cwd:generation (plus the tool-call id, #4137) and become unreachable when the session generation advances; and the git-worktree and toplevel memos must re-probe after a session that may have seen a directory become a worktree, or become a LINKED worktree of another (#2007). Without the reset the baselines leak per session and the memos mis-answer forever.",
 	},
 
 	// ── The rest of the session_start reset chain ────────────────────────────
@@ -1783,7 +1783,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"widget-state.ts": 5,
 	// #2068 added the per-index dirty-file set; it is process-local wire-cache
 	// state and is cleared by serialization, so it needs no session reset.
-	"word-index.ts": 4,
+	// #4129 added the serialized-source WeakMap used to publish persist-owned
+	// wire bytes; it follows the WordIndex object's lifetime and needs no reset.
+	"word-index.ts": 5,
 	"workspace-topology.ts": 2,
 	"zizmor-config.ts": 0,
 };

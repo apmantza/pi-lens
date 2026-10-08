@@ -19,11 +19,13 @@ import {
 	getReviewGraphWorkerFallbackReasonForTests,
 	GRAPH_PERSIST_MAX_ELEMENTS_DEFAULT,
 	type GraphSeqHint,
+	refreshReviewGraphPersistWorkerHeapStatistics,
 	resetReviewGraphPersistWorkerForTests,
 	terminateReviewGraphPersistWorkerForTests,
 	waitForReviewGraphPersistsForTests,
 } from "../../clients/review-graph/builder.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { collectMemorySampleSubsystems } from "../../clients/memory-sampler.js";
 import {
 	flushReviewGraphLogSync,
 	logReviewGraph,
@@ -142,6 +144,71 @@ describe("review-graph persist circuit-breaker (#260)", () => {
 	});
 	it("defaults to the measured 500,000-element ceiling (#936)", () => {
 		expect(GRAPH_PERSIST_MAX_ELEMENTS_DEFAULT).toBe(500_000);
+	});
+	it("memory samples observe and clear the real persist-worker heap slot (#4129)", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
+		try {
+			expect(
+				collectMemorySampleSubsystems(null).persistWorkers.reviewGraph,
+			).toBeNull();
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			await waitForReviewGraphPersistsForTests();
+			// The worker answers asynchronously. Await that answer, never a
+			// count of ticks: CI shard 3 (job 113054297476) went red when 20
+			// setImmediate turns ran out before the worker's reply landed.
+			await refreshReviewGraphPersistWorkerHeapStatistics();
+			const sampled =
+				collectMemorySampleSubsystems(null).persistWorkers.reviewGraph;
+			expect(sampled?.heapUsedBytes).toBeGreaterThan(0);
+			await terminateReviewGraphPersistWorkerForTests();
+			expect(
+				collectMemorySampleSubsystems(null).persistWorkers.reviewGraph,
+			).toBeNull();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("drops a persist-worker heap reading that lands after the worker exited (#4129)", async () => {
+		// Recurrence: under 24 busy loops this file's slot case read a non-null
+		// reading after terminate() in 5 of 20 runs: the sampler's
+		// fire-and-forget refresh landed after the exit clear. The answer is
+		// held here so it lands after the clear every time.
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
+		let captured: Worker | undefined;
+		const realPost = Worker.prototype.postMessage;
+		const postSpy = vi
+			.spyOn(Worker.prototype, "postMessage")
+			.mockImplementation(function (
+				this: Worker,
+				...args: Parameters<Worker["postMessage"]>
+			) {
+				captured = this;
+				return realPost.apply(this, args);
+			});
+		try {
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			await waitForReviewGraphPersistsForTests();
+			const worker = captured!;
+			const reading = await worker.getHeapStatistics();
+			let release!: () => void;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			worker.getHeapStatistics = () => held.then(() => reading);
+			const refresh = refreshReviewGraphPersistWorkerHeapStatistics();
+			await terminateReviewGraphPersistWorkerForTests();
+			release();
+			await refresh;
+			expect(
+				collectMemorySampleSubsystems(null).persistWorkers.reviewGraph,
+			).toBeNull();
+		} finally {
+			postSpy.mockRestore();
+			env.cleanup();
+		}
 	});
 
 	it("entry-budget truncation remains visibly partial through persistence", async () => {

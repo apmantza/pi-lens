@@ -1,6 +1,0 @@
----
-section: Fixed
-audience: user
----
-
-- **Name blockers resolved since the agent was last told, and stop claiming a demoted one still blocks (#3218, #3748)** — the turn-end block now says `Resolved this turn: <file> (<n> blocker(s) cleared by the <n>th write)` when a clean dispatch retires an inline blocker, `… confirmed clean)` when `lens_diagnostics` confirmed it on a read-only turn, and `Resolved since the last report:` for a retirement a turn_end could not deliver (a foreign-owner or max-cycles turn, or a retire that landed while the turn_end was running), capped at 10 files with `… and N more`; the resolved lines lead the block but take only the room the live blockers leave (at most four files and 40% of the turn-end length cap per message, a very long path shortened in the middle), so the cap cuts neither a retirement nor a blocker, and the rest wait for the next turn_end; when blockers are within roughly 920–1000 chars of the 1000-char cap, the always-taken Resolved floor line may cut about one line of the last blocker’s tail; a file the same message lists as unresolved is held for the next turn_end instead of being dropped; and a stale or demoted advisory no longer ends with the delta-promotion note `new in this edit → blocks in delta mode`.

@@ -448,7 +448,9 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/python-provenance.ts#b39949e4",
 		"clients/review-graph/builder.ts#CHANGED_SYMBOLS_PREFIX:860385f2",
 		"clients/review-graph/builder.ts#_persistGenerations:fe391d04",
-		"clients/review-graph/builder.ts#_lastWorkerFallbackReasonForTests:ae62be11",
+		// Checkpoint worker requests are keyed by id and drained on completion or
+		// worker death; this admission covers the active-request map.
+		"clients/review-graph/builder.ts#getReviewGraphPersistWorkerHeapStatistics:ae62be11",
 		"clients/review-graph/builder.ts#_checkpointGenerations:7a0f0107",
 		// #3605: `_wasmTrappedFiles`. An entry exists only for a file whose
 		// extraction a web-tree-sitter trap cost, i.e. a path whose content is
@@ -535,6 +537,9 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/word-index.ts#updateWordIndexDocument:8b5e4c9e",
 		"clients/word-index.ts#isCanonicalWordIndexToken:99249de8",
 		"clients/word-index.ts#deserializeWordIndex:d6d64306",
+		// WeakMap entries are content-keyed by live WordIndex objects and are
+		// reclaimed with those objects; this is not an unbounded path-key cache.
+		"clients/word-index.ts#serializedWordIndexCaches:baa74c91",
 		"clients/workspace-topology.ts#PI_LENS_CONFIG_BASENAMES:8403ed7a",
 		"clients/workspace-topology.ts#registerWorkspaceTopologyReset:17d6ff8a",
 		"mcp/server.ts#DEFAULT_CWD:a08d6c7d",

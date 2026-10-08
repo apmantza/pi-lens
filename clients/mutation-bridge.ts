@@ -62,6 +62,7 @@ import { noteMutationHandled } from "./observed-mutation.js";
 import type { ProjectChangeSource } from "./project-changes.js";
 import { getProcessBridge, registerProcessBridge } from "./process-bridge.js";
 import { recordDroppedRead } from "./session-scope.js";
+import { publishFormatQueued } from "./format-events-publish.js";
 
 /** Stable Symbol key — identical across module reloads in the same process. */
 export const MUTATION_BRIDGE_KEY: unique symbol = Symbol.for(
@@ -157,9 +158,16 @@ export interface MutationBridgeDeps {
 	 */
 	shouldStampReadGuard?(): boolean;
 	dbg?: (msg: string) => void;
+	/** Test seam for the deferred-format event; defaults to the real publisher. */
+	publishFormatQueued?: typeof publishFormatQueued;
 }
 
-function isValidRange(value: unknown): value is [number, number] {
+/**
+ * A 1-indexed closed `[start, end]` line range. The one range check both
+ * bridges use: this module's v1 entries and `clients/io-bridge.ts`'s v2
+ * facets (#3654).
+ */
+export function isValidRange(value: unknown): value is [number, number] {
 	if (!Array.isArray(value) || value.length !== 2) return false;
 	const [start, end] = value;
 	return (
@@ -176,39 +184,44 @@ function isValidRange(value: unknown): value is [number, number] {
  * Validate a raw entry from an untrusted caller. Deliberately lightweight, for
  * the same reason `read-bridge.ts` gives: this is an advisory protocol between
  * same-process extensions, so the goal is catching typos and bad numbers rather
- * than enforcing a boundary.
+ * than enforcing a boundary. Returns the first problem, or `undefined` when the
+ * entry is valid. This is the one mutation-entry validator: the v2 bridge
+ * translates its facet into this shape and reports the same detail (#3654).
  */
-export function isValidMutationEntry(
-	entry: unknown,
-): entry is MutationBridgeEntry {
-	if (typeof entry !== "object" || entry === null) return false;
+function mutationEntryProblem(entry: unknown): string | undefined {
+	if (typeof entry !== "object" || entry === null)
+		return "entry must be an object";
 	const e = entry as Record<string, unknown>;
 
-	if (typeof e["filePath"] !== "string" || e["filePath"] === "") return false;
+	if (typeof e["filePath"] !== "string" || e["filePath"] === "")
+		return "filePath must be a non-empty string";
 
 	const kind = e["kind"];
-	if (kind !== "write" && kind !== "edit") return false;
+	if (kind !== "write" && kind !== "edit")
+		return 'kind must be "edit" or "write"';
 
 	if (e["touchedLines"] !== undefined && !isValidRange(e["touchedLines"]))
-		return false;
+		return "touchedLines must be 1-indexed [start, end]";
 
 	const editRanges = e["editRanges"];
 	if (editRanges !== undefined) {
-		if (!Array.isArray(editRanges) || editRanges.length === 0) return false;
-		if (!editRanges.every(isValidRange)) return false;
+		if (!Array.isArray(editRanges) || editRanges.length === 0)
+			return "edit ranges must be a non-empty array";
+		if (!editRanges.every(isValidRange))
+			return "edit ranges must be 1-indexed [start, end] with start <= end";
 	}
 
 	if (e["consumer"] !== undefined && typeof e["consumer"] !== "string")
-		return false;
+		return "consumer must be a string";
 
 	if (
 		e["importsChanged"] !== undefined &&
 		typeof e["importsChanged"] !== "boolean"
 	)
-		return false;
+		return "importsChanged must be a boolean";
 
 	if (e["deferAutofix"] !== undefined && typeof e["deferAutofix"] !== "boolean")
-		return false;
+		return "deferAutofix must be a boolean";
 
 	// #2430: only the observational net's two values are accepted. An unknown
 	// string is rejected rather than silently downgraded, so a producer that
@@ -219,9 +232,15 @@ export function isValidMutationEntry(
 		provenance !== "observed" &&
 		provenance !== "settled-sweep"
 	)
-		return false;
+		return 'provenance must be "observed" or "settled-sweep"';
 
-	return true;
+	return undefined;
+}
+
+export function isValidMutationEntry(
+	entry: unknown,
+): entry is MutationBridgeEntry {
+	return mutationEntryProblem(entry) === undefined;
 }
 
 /**
@@ -294,157 +313,284 @@ function resolveChangedRange(
 	return { start: 1, end: Math.max(1, deps.countFileLines(filePath)) };
 }
 
+/** Why a mutation record was not credited to live session state (#3654). */
+export type MutationRecordReason =
+	| "malformed"
+	| "out-of-scope"
+	| "stale-lineage"
+	| "bookkeeping-error";
+
+/** The full answer {@link recordMutationOutcome} gives (#3654). */
+export interface MutationRecordOutcome {
+	/** v1 `recordMutation()`'s boolean: the receipt/bookkeeping was taken. */
+	recorded: boolean;
+	/**
+	 * v2 live-state acceptance. False only for a drop, or for a retired lineage
+	 * when the caller asked to reject one (`rejectStaleLineage`).
+	 */
+	accepted: boolean;
+	/** Present when `accepted` is false. */
+	reason?: MutationRecordReason;
+	/** The validator's problem (or the out-of-scope path) for a drop. */
+	detail?: string;
+	/**
+	 * Deferred kinds this call newly enqueued (a same-kind re-touch is silent),
+	 * the exact population published as `pilens:format:queued` on `pi.events`.
+	 */
+	queued: ReadonlyArray<"autofix" | "format">;
+}
+
+/** The two drop answers that carry no bookkeeping. */
+function rejectedOutcome(
+	reason: "malformed" | "out-of-scope",
+	detail: string,
+): MutationRecordOutcome {
+	return { recorded: false, accepted: false, reason, detail, queued: [] };
+}
+
+/** Everything the bookkeeping stages share once an entry is admitted. */
+interface MutationBookkeepingContext {
+	entry: MutationBridgeEntry;
+	classification: ReturnType<typeof classifyBridgeMutation>;
+	deps: MutationBridgeDeps;
+	runtime: ReturnType<MutationBridgeDeps["getRuntime"]>;
+	filePath: string;
+	projectRoot: string;
+	dispatchCwd: string;
+}
+
+/**
+ * The live-state decision plus the read-guard staleness stamp (#3620/#3709,
+ * #2465, #3525). Returns whether the producer's session is still live and the
+ * resolved branch epoch the deferred queue should carry (#3677).
+ */
+function stampLiveMutation(
+	ctx: MutationBookkeepingContext,
+	stampReadGuard: boolean,
+): { sessionLive: boolean; stamp: number | undefined } {
+	const { entry, classification, runtime, filePath } = ctx;
+	const lineage = entry.lineage;
+	let sessionLive = true;
+	if (
+		lineage !== undefined &&
+		lineage.guardedWrite(filePath, () => true) !== true
+	) {
+		sessionLive = false;
+		// The write's own queue-time epoch is the entry's, when it has one.
+		if (stampReadGuard) {
+			recordDroppedRead(
+				lineage,
+				entry.provenance ?? classification.toolName,
+				entry.readGuardBranchEpoch ?? lineage.branchEpoch,
+			);
+		}
+	}
+	// #3677: resolve the foreign epoch BEFORE either consumer sees it, so the
+	// `Math.max` merge of the deferred queue never gets a value this scope
+	// cannot hold. A dead session's replay was dropped above, unresolved.
+	const stamp = sessionLive
+		? resolveReadGuardBranchEpoch(
+				entry.readGuardBranchEpoch,
+				runtime.readGuard.currentBranchEpoch,
+			)
+		: undefined;
+	// 1. Staleness stamp: the file changed under pi-lens, so a later edit is
+	//    judged by read coverage rather than by this write.
+	if (sessionLive && stampReadGuard) {
+		runtime.readGuard.recordWritten?.(filePath, {
+			...(stamp !== undefined && { branchEpoch: stamp }),
+			// #3525: settled-sweep drift is unattributed, and the agent never
+			// saw it: authorship, not FileTime.
+			...(entry.provenance === "settled-sweep" && { stampFileTime: false }),
+		});
+	}
+	return { sessionLive, stamp };
+}
+
+/** Turn state (2) and the attributed change-log receipt (3), then the handled mark. */
+function applyTurnAndChangeLog(
+	ctx: MutationBookkeepingContext,
+	sessionLive: boolean,
+): void {
+	const { entry, classification, deps, runtime, filePath, projectRoot } = ctx;
+	const changedRange = resolveChangedRange(classification, deps, filePath);
+	if (sessionLive) {
+		deps
+			.getCacheManager()
+			.addModifiedRange?.(
+				filePath,
+				changedRange,
+				entry.importsChanged ?? false,
+				projectRoot,
+				runtime.telemetrySessionId,
+			);
+	}
+	runtime.recordProjectMutation?.({
+		filePath,
+		source: `agent-tool:${classification.toolName}`,
+		cwd: projectRoot,
+		changedRange,
+		onAppendError: (err) =>
+			deps.dbg?.(`mutation_bridge: change log append failed: ${err}`),
+	});
+	// #2430: this file is now accounted for this run, so the `agent_settled`
+	// sweep re-baselines it instead of reporting the same bytes as drift no tool
+	// call explains. It sits OUTSIDE the `deferAutofix` guard below and must stay
+	// there (#2465): "pi-lens accounted for this write" and "pi-lens will also
+	// format this file later" are different questions.
+	noteMutationHandled(filePath);
+}
+
+/**
+ * 4. Deferred autofix and format at `agent_settled` — never immediate. Pushes
+ * into the caller's array so a throw mid-loop keeps the kinds already queued.
+ */
+function queueDeferredMutation(
+	ctx: MutationBookkeepingContext,
+	sessionLive: boolean,
+	stamp: number | undefined,
+	queued: Array<"autofix" | "format">,
+): void {
+	const { entry, classification, runtime, filePath, projectRoot, dispatchCwd } =
+		ctx;
+	if (!sessionLive || entry.deferAutofix === false) return;
+	for (const kind of ["autofix", "format"] as const) {
+		const landed = runtime.deferMutation?.(
+			filePath,
+			dispatchCwd,
+			classification.toolName,
+			projectRoot,
+			kind,
+			runtime.telemetrySessionId,
+			projectRoot,
+			// #3521: the settled sweep's epoch, so a record it queues after
+			// a /tree is not credited to the new branch. #3677: a value this
+			// scope cannot hold is dropped (undefined), so the merge uses the
+			// current epoch.
+			stamp,
+		);
+		if (landed) queued.push(kind);
+	}
+}
+
+/** The stages inside the producer's try: stamp, turn state, change log, deferral. */
+function runMutationBookkeeping(
+	ctx: MutationBookkeepingContext,
+	queued: Array<"autofix" | "format">,
+): boolean {
+	const stampReadGuard = ctx.deps.shouldStampReadGuard?.() ?? true;
+	const { sessionLive, stamp } = stampLiveMutation(ctx, stampReadGuard);
+	applyTurnAndChangeLog(ctx, sessionLive);
+	queueDeferredMutation(ctx, sessionLive, stamp, queued);
+	return sessionLive;
+}
+
 /**
  * The mutation-recording body, exported so tests drive it against a real
  * `RuntimeCoordinator` and `CacheManager` without mounting the global
  * singleton.
+ *
+ * Returns the richer outcome (#3654) the unified bridge needs: the v1 boolean
+ * the frozen shim still returns, the v2 live-state acceptance, and the kinds
+ * this call newly enqueued for the deferred pass.
+ *
+ * `rejectStaleLineage` is the one behavioral knob. A retired lineage still
+ * runs the same bookkeeping (receipt, handled mark, deferral skip) either way;
+ * v2 reports it as `accepted:false, reason:"stale-lineage"` while the frozen
+ * v1 shim keeps the historical `recorded:true` it has always returned.
  */
-export function recordMutationThroughSeam(
+export function recordMutationOutcome(
 	entry: unknown,
 	deps: MutationBridgeDeps,
-): boolean {
-	if (!isValidMutationEntry(entry)) {
-		deps.dbg?.("mutation_bridge: dropped malformed entry");
-		return false;
+	opts?: { rejectStaleLineage?: boolean },
+): MutationRecordOutcome {
+	const problem = mutationEntryProblem(entry);
+	if (problem !== undefined) {
+		deps.dbg?.(`mutation_bridge: dropped malformed entry: ${problem}`);
+		return rejectedOutcome("malformed", problem);
 	}
-	if (!deps.isRecordable(entry.filePath)) {
-		deps.dbg?.(`mutation_bridge: out of scope ${entry.filePath}`);
-		return false;
+	const valid = entry as MutationBridgeEntry;
+	if (!deps.isRecordable(valid.filePath)) {
+		deps.dbg?.(`mutation_bridge: out of scope ${valid.filePath}`);
+		return rejectedOutcome("out-of-scope", valid.filePath);
 	}
+	const outcome = runAdmittedMutation(valid, deps, opts);
+	if (outcome.queued.length > 0) publishQueued(valid, deps, outcome.queued);
+	return outcome;
+}
 
+/**
+ * #3654: announce the files this call newly queued for the deferred pass
+ * (`pilens:format:queued`, the v1 event drop #3650), for every producer:
+ * the v1 shim and the v2 bridge both reach this one body. Fire-and-forget.
+ */
+function publishQueued(
+	entry: MutationBridgeEntry,
+	deps: MutationBridgeDeps,
+	queued: ReadonlyArray<"autofix" | "format">,
+): void {
+	const publish = deps.publishFormatQueued ?? publishFormatQueued;
+	try {
+		publish({
+			filePath: entry.filePath,
+			cwd: deps.getDispatchCwd(entry.filePath),
+			tool: entry.kind,
+			kinds: [...queued],
+			...(deps.dbg !== undefined && { dbg: deps.dbg }),
+		});
+	} catch (err) {
+		deps.dbg?.(
+			`mutation_bridge: format-queued publish failed for ${entry.filePath}: ${err}`,
+		);
+	}
+}
+
+/** The bookkeeping for a valid, in-scope entry. */
+function runAdmittedMutation(
+	entry: MutationBridgeEntry,
+	deps: MutationBridgeDeps,
+	opts: { rejectStaleLineage?: boolean } | undefined,
+): MutationRecordOutcome {
 	// #3598: an observed or bridged producer's write is an agent mutation a
 	// running whole-package fixer must not erase. Read it before the bookkeeping.
 	noteAgentMutation(entry.filePath);
 
-	const classification = classifyBridgeMutation(entry);
-	const filePath = entry.filePath;
-	const runtime = deps.getRuntime();
-	const projectRoot = deps.getProjectRoot();
-	const dispatchCwd = deps.getDispatchCwd(filePath);
-
+	const ctx: MutationBookkeepingContext = {
+		entry,
+		classification: classifyBridgeMutation(entry),
+		deps,
+		runtime: deps.getRuntime(),
+		filePath: entry.filePath,
+		projectRoot: deps.getProjectRoot(),
+		dispatchCwd: deps.getDispatchCwd(entry.filePath),
+	};
+	const queued: Array<"autofix" | "format"> = [];
+	let sessionLive = true;
 	try {
-		const stampReadGuard = deps.shouldStampReadGuard?.() ?? true;
-		// #3620/#3709: once the producer's scope has retired, the replay writes
-		// none of the live session's state (the stamp, turn state and deferral
-		// below); the receipt and the handled mark are disk facts and stay. The
-		// epoch alone cannot refuse it: it restarts at 0 in every scope. No
-		// lineage (every external producer): fail-open, as before.
-		const lineage = entry.lineage;
-		let sessionLive = true;
-		if (
-			lineage !== undefined &&
-			lineage.guardedWrite(filePath, () => true) !== true
-		) {
-			sessionLive = false;
-			// The write's own queue-time epoch is the entry's, when it has one.
-			if (stampReadGuard)
-				recordDroppedRead(
-					lineage,
-					entry.provenance ?? classification.toolName,
-					entry.readGuardBranchEpoch ?? lineage.branchEpoch,
-				);
-		}
-		// #3677: resolve the foreign epoch BEFORE either consumer sees it, so the
-		// `Math.max` merge of the deferred queue never gets a value this scope
-		// cannot hold. A dead session's replay was dropped above, unresolved.
-		const stamp = sessionLive
-			? resolveReadGuardBranchEpoch(
-					entry.readGuardBranchEpoch,
-					runtime.readGuard.currentBranchEpoch,
-				)
-			: undefined;
-		// 1. Staleness stamp: the file changed under pi-lens, so a later edit is
-		//    judged by read coverage rather than by this write. #2465: gated on
-		//    `shouldStampReadGuard` (the `no-read-guard` flag) ALONE — the
-		//    `isRecordable` check above already passed, so the write itself is
-		//    still bookkept below whether or not the stamp fires.
-		if (sessionLive && stampReadGuard) {
-			runtime.readGuard.recordWritten?.(filePath, {
-				...(stamp !== undefined && {
-					branchEpoch: stamp,
-				}),
-				// #3525: settled-sweep drift is unattributed, and the agent never
-				// saw it: authorship, not FileTime.
-				...(entry.provenance === "settled-sweep" && { stampFileTime: false }),
-			});
-		}
-
-		// 2. Turn state: this is the insert that leaves `turn-state.json` `files`
-		//    non-empty for a mutation no `tool_result` described. `importsChanged`
-		//    defaults to `false` (the historical, pre-#2450 behavior every
-		//    existing producer that doesn't compute it still gets); a producer
-		//    that DOES know the real value threads it through the entry instead
-		//    of this seam silently understating it (#2450 review round 2, F1).
-		const changedRange = resolveChangedRange(classification, deps, filePath);
-		if (sessionLive)
-			deps
-				.getCacheManager()
-				.addModifiedRange?.(
-					filePath,
-					changedRange,
-					entry.importsChanged ?? false,
-					projectRoot,
-					runtime.telemetrySessionId,
-				);
-
-		// 3. Attributed change-log receipt. The source carries the producer's
-		//    identity instead of collapsing onto `agent-edit`, so a report can
-		//    tell an extension's rewrite apart from the model's own edit.
-		runtime.recordProjectMutation?.({
-			filePath,
-			source: `agent-tool:${classification.toolName}`,
-			cwd: projectRoot,
-			changedRange,
-			onAppendError: (err) =>
-				deps.dbg?.(`mutation_bridge: change log append failed: ${err}`),
-		});
-
-		// #2430: this file is now accounted for this run, so the `agent_settled`
-		// sweep re-baselines it instead of reporting the same bytes as drift no
-		// tool call explains. Every in-process producer passes through here, so
-		// this is the one place that has to say so.
-		//
-		// It sits OUTSIDE the `deferAutofix` guard below and must stay there
-		// (#2465). "pi-lens accounted for this write" and "pi-lens will also
-		// format this file later" are different questions: the LSP
-		// mutation-bridge fallback passes `deferAutofix: false` precisely
-		// because an LSP-applied edit is not this seam's to format, and it is
-		// still a write pi-lens recorded. Move this inside the guard and every
-		// such write is re-read by the settled sweep as unattributed drift.
-		noteMutationHandled(filePath);
-
-		// 4. Deferred autofix and format at `agent_settled` — never immediate.
-		//    Skippable per entry (`deferAutofix: false`, #2450 review round 2 F3):
-		//    the LSP mutation-bridge fallback (`clients/lsp-mutation.ts`) sets
-		//    this because `bookkeepLspMutation`'s direct path never enqueues a
-		//    deferred pass for an LSP-applied edit — the two branches must stay
-		//    behaviorally equivalent for the same write. Every other producer
-		//    (ast_grep_replace, a third-party extension) omits the field and
-		//    keeps deferring, unchanged.
-		if (sessionLive && entry.deferAutofix !== false) {
-			for (const kind of ["autofix", "format"] as const) {
-				runtime.deferMutation?.(
-					filePath,
-					dispatchCwd,
-					classification.toolName,
-					projectRoot,
-					kind,
-					runtime.telemetrySessionId,
-					projectRoot,
-					// #3521: the settled sweep's epoch, so a record it queues after
-					// a /tree is not credited to the new branch. #3677: a value this
-					// scope cannot hold is dropped (undefined), so the merge uses the
-					// current epoch.
-					stamp,
-				);
-			}
-		}
+		sessionLive = runMutationBookkeeping(ctx, queued);
 	} catch (err) {
 		// Bookkeeping must never break a producer's own write path.
-		deps.dbg?.(`mutation_bridge: recording failed for ${filePath}: ${err}`);
-		return false;
+		deps.dbg?.(`mutation_bridge: recording failed for ${ctx.filePath}: ${err}`);
+		return {
+			recorded: false,
+			accepted: false,
+			reason: "bookkeeping-error",
+			detail: `${err}`,
+			queued,
+		};
 	}
-	return true;
+	const accepted = sessionLive || opts?.rejectStaleLineage !== true;
+	return accepted
+		? { recorded: true, accepted: true, queued }
+		: { recorded: true, accepted: false, reason: "stale-lineage", queued };
+}
+
+/** The v1 `recordMutation()` boolean answer, over the same one body. */
+export function recordMutationThroughSeam(
+	entry: unknown,
+	deps: MutationBridgeDeps,
+): boolean {
+	return recordMutationOutcome(entry, deps).recorded;
 }
 
 /**
@@ -457,6 +603,10 @@ export function registerMutationBridge(deps: MutationBridgeDeps): void {
 	registerProcessBridge(MUTATION_BRIDGE_KEY, (): MutationBridge => ({
 		version: 1 as const,
 		recordMutation(entry: MutationBridgeEntry): boolean {
+			// #3654: the v1 shim calls the one bookkeeping body the v2 bridge
+			// also calls, so it gains the `pilens:format:queued` publish with no
+			// translation through v2. A retired lineage keeps the v1 answer
+			// (`true`: the receipt was taken).
 			return recordMutationThroughSeam(entry, deps);
 		},
 	}));

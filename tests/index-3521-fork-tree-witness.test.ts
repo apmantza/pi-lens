@@ -57,12 +57,20 @@ import { takeHandoff } from "../clients/session-scope.js";
 import { exportWidgetState } from "../clients/widget-state.js";
 import { queueAgentAdvisory } from "../clients/agent-nudge.js";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
+import { CacheManager } from "../clients/cache-manager.js";
 import {
 	deferRunnerFindings,
 	pendingRunnerFindingsSize,
 	resetPendingRunnerFindings,
 } from "../clients/dispatch/pending-runner-findings.js";
 import { RuntimeCoordinator } from "../clients/runtime-coordinator.js";
+import { recordMemorySampleOutcome } from "../clients/memory-sampler.js";
+import {
+	_observedMutationStateForTests,
+	_setObservedTurnBudgetForTests,
+	hasPendingObservation,
+	OBSERVED_TURN_BUDGET_MS,
+} from "../clients/observed-mutation.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import {
 	cleanupTestEnvironmentsDrained,
@@ -90,6 +98,30 @@ vi.mock("../clients/lsp/index.js", async (importOriginal) => {
 		getLSPService: () =>
 			(lspDouble.service as ReturnType<typeof original.getLSPService>) ??
 			original.getLSPService(),
+	};
+});
+
+/**
+ * #3613: the dispatch pipeline is doubled at its boundary for the S4 turn
+ * describe only, so a tool result carries a known code-quality warning
+ * through the real tool_result, turn_start and turn_end handlers. Every other
+ * test sees the real pipeline.
+ */
+const pipelineDouble = vi.hoisted(() => ({
+	result: undefined as undefined | ((filePath: string) => unknown),
+	/** The files the doubled pipeline analysed, in order. */
+	analysed: [] as string[],
+}));
+vi.mock("../clients/pipeline.js", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("../clients/pipeline.js")>();
+	return {
+		...original,
+		runPipeline: (async (ctx, deps) =>
+			pipelineDouble.result
+				? (pipelineDouble.analysed.push(ctx.filePath),
+					pipelineDouble.result(ctx.filePath))
+				: original.runPipeline(ctx, deps)) as typeof original.runPipeline,
 	};
 });
 
@@ -1403,7 +1435,7 @@ describe("#3612 /reload hands the read guard to the reloaded activation", () => 
 		expect(await c.editLine("post_new", file, 2, "Y", false)).toBe("ALLOW");
 	});
 
-	it("keeps the session's mtime anchor across /reload, so a file changed after the session began stays authored (D5)", async () => {
+	it("does not call a file changed after the session began authored, before or after /reload (#3520)", async () => {
 		const runtime = await startRuntime(SessionManager.create(cwd, sessionsDir));
 		const c = conversation(runtime);
 		c.user("prompt 1");
@@ -1411,11 +1443,15 @@ describe("#3612 /reload hands the read guard to the reloaded activation", () => 
 		// Written after the session began, by nothing the guard records.
 		const file = path.join(cwd, "late.conf");
 		fs.writeFileSync(file, "l1\nl2\nl3");
-		expect(await c.editLine("pre_late", file, 2, "Y", false)).toBe("ALLOW");
+		expect(await c.editLine("pre_late", file, 2, "Y", false)).toEqual(
+			ZERO_READ,
+		);
 
 		await reload(runtime);
 
-		expect(await c.editLine("post_late", file, 2, "Y", false)).toBe("ALLOW");
+		expect(await c.editLine("post_late", file, 2, "Y", false)).toEqual(
+			ZERO_READ,
+		);
 	});
 
 	it("does not carry the parent's authorship into a /fork", async () => {
@@ -2827,6 +2863,151 @@ describe("#3881 an interrupted session_start hands on the slot left for it", () 
 	}
 
 	/**
+	 * #4113 (#3898's T-1): a reload scheduled with zero microtask hops lands
+	 * before pi-lens's `session_start` handler is entered, so the activation
+	 * has no role, no in-flight mark and no scope. The recurrence: that
+	 * shutdown forwarded nothing; the interrupted fork's late start was
+	 * declined and discarded the `(fork, key)` slot, and the inner reload's
+	 * start missed it, losing the conversation's activations. The gap's name
+	 * says which start was interrupted, so the shutdown forwards as the mark
+	 * does. A reload or resume start kept its state here before the fix; it
+	 * pins the same forward (and its bounded record) for every slot kind.
+	 */
+	for (const kind of ["fork", "reload", "resume"] as const) {
+		for (const store of ["in-memory", "file-backed"] as const) {
+			if (kind === "resume" && store === "in-memory") continue;
+			it(`keeps a ${store} session's activations when a reload interrupts its ${kind} start before pi-lens's handler runs (micro:0)`, async () => {
+				let runtime: AgentSessionRuntime | undefined;
+				let armed = false;
+				let inner: Promise<void> | undefined;
+				const reloadAtOnce = (pi: ExtensionAPI) => {
+					pi.on("session_start", (event) => {
+						if (
+							!armed ||
+							(event as { reason?: string }).reason !== kind ||
+							inner
+						)
+							return;
+						inner = new Promise<void>((resolve, reject) =>
+							queueMicrotask(() =>
+								runtime!.session.reload().then(resolve, reject),
+							),
+						);
+					});
+				};
+				runtime = await startRuntime(
+					store === "file-backed"
+						? SessionManager.create(cwd, sessionsDir)
+						: SessionManager.inMemory(cwd),
+					[],
+					[reloadAtOnce],
+				);
+				const c = conversation(runtime);
+				c.user("prompt 1");
+				c.done();
+				await activateTools(runtime, "act", ["ast_grep_search"]);
+				const u2 = c.user("prompt 2");
+				c.done();
+				if (kind === "resume") await turnEnd(runtime);
+				resetDegradationLedger();
+
+				armed = true;
+				if (kind === "reload") await reload(runtime);
+				else if (kind === "fork") await runtime.fork(u2);
+				else
+					await runtime.switchSession(c.S().sessionManager.getSessionFile()!);
+				expect(inner).toBeDefined();
+				await inner;
+
+				expect(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+				expect(
+					(await scopeTransitionRows())
+						.filter((row) => row.transition === "start")
+						.at(-1),
+				).toMatchObject({
+					reason: "reload",
+					role: "primary",
+					handoffSource: kind === "resume" ? "own-sidecar" : "slot",
+				});
+				const handoffRows = (await latencyRows("degradation_ledger"))
+					.filter((row) =>
+						String(row.kind).startsWith("session-scope-handoff-"),
+					)
+					.map((row) => [row.kind, row.subject, row.outcome]);
+				expect(handoffRows).toContainEqual([
+					"session-scope-handoff-interrupted",
+					kind,
+					kind === "resume" ? "no-slot" : "forwarded",
+				]);
+				// The late declined fork start finds no slot left to discard.
+				expect(
+					handoffRows.filter(
+						([rowKind]) => rowKind === "session-scope-handoff-discarded",
+					),
+				).toEqual([]);
+			});
+		}
+	}
+
+	/**
+	 * #4113 verify X1 (R2, the reviewer's PR20): a gap subagent resumes the
+	 * user's file inside the user's resume gap, so two started primaries run
+	 * on one file. In the user's later reload gap the second runtime reloads
+	 * itself: it is primary with no in-flight mark, and the gap names
+	 * `(reload, its file)`. The recurrence: without the "no scope" half of
+	 * the unstarted rule, that started shutdown forwarded the user's slot
+	 * instead of stashing its own scope, and its reload successor ran with the
+	 * user's activations, not its own.
+	 */
+	it("keeps a same-file second primary's own activations when it reloads in the user's reload gap (R2)", async () => {
+		let second: AgentSessionRuntime | undefined;
+		let target = "";
+		let phase: "resume" | "reload" | "done" = "resume";
+		const gapActor = (pi: ExtensionAPI) => {
+			pi.on("session_shutdown", async (event) => {
+				const reason = (event as { reason?: string }).reason;
+				if (phase === "resume" && reason === "resume" && !second) {
+					second = await startRuntime(SessionManager.inMemory(cwd));
+					await second.switchSession(target);
+				} else if (phase === "reload" && reason === "reload" && second) {
+					phase = "done";
+					await activateTools(second, "act-second", ["lsp_navigation"]);
+					await reload(second);
+				}
+			});
+		};
+		const other = SessionManager.create(cwd, sessionsDir);
+		other.appendMessage({
+			role: "user",
+			content: "other",
+			timestamp: Date.now(),
+		} as never);
+		target = other.getSessionFile()!;
+		const primary = await startRuntime(
+			SessionManager.create(cwd, sessionsDir),
+			[gapActor],
+		);
+		const c = conversation(primary);
+		c.user("prompt 1");
+		c.done();
+		await primary.switchSession(target);
+		expect(second).toBeDefined();
+		await activateTools(primary, "act-user", ["ast_grep_search"]);
+		resetDegradationLedger();
+
+		phase = "reload";
+		await reload(primary);
+
+		expect(phase).toBe("done");
+		expect(activeSituational(second!)).toEqual(["lsp_navigation"]);
+		expect(
+			(await latencyRows("degradation_ledger")).filter(
+				(row) => row.kind === "session-scope-handoff-interrupted",
+			),
+		).toEqual([]);
+	});
+
+	/**
 	 * #3881 r2 F2: a reload scheduled one microtask hop after the fork's
 	 * `session_start` emit lands in t0, after pi-lens's handler was entered
 	 * and before it set its scope. The recurrence: a mark set after the
@@ -2841,7 +3022,7 @@ describe("#3881 an interrupted session_start hands on the slot left for it", () 
 			pi.on("session_start", (event) => {
 				if ((event as { reason?: string }).reason !== "fork" || inner) return;
 				// One hop: zero hops lands before pi-lens's handler is entered
-				// (t-1, a pre-existing loss named in #3898's Remainder).
+				// (T-1, #4113: the micro:0 tests above).
 				inner = Promise.resolve()
 					.then(() => undefined)
 					.then(() => runtime!.session.reload());
@@ -2943,5 +3124,650 @@ describe("#3881 an interrupted session_start hands on the slot left for it", () 
 				.filter((row) => row.transition === "start")
 				.at(-1),
 		).toMatchObject({ reason: "reload", handoffSource: "slot" });
+	});
+});
+
+/**
+ * #3613 (session-scope S4, N2): the coordinator's turn state is the
+ * primary's, and a concurrent secondary (an in-process subagent) runs its own
+ * turn_start, tool results and turn_end on the same module-level runtime. The
+ * recurrence: the subagent's turn_start advanced the primary's turn and
+ * cleared the warnings the primary's tool results had recorded for this turn,
+ * so the primary's turn_end delivered none of them; and the per-turn records
+ * were one map, so either session's turn end delivered and cleared the
+ * other's.
+ */
+describe("#3613 a concurrent secondary's turn leaves the primary's turn state alone", () => {
+	const PRIMARY_RULE = "probe-3613-primary";
+	const SUBAGENT_RULE = "probe-3613-subagent";
+
+	beforeEach(() => {
+		FLAGS.set("lens-actionable-warnings", true);
+		// An actionable and a code-quality warning on line 1 of every analysed
+		// file, named by the session that edits it: the subagent edits `sub.ts`.
+		pipelineDouble.result = (filePath) => {
+			const rule =
+				path.basename(filePath) === "sub.ts" ? SUBAGENT_RULE : PRIMARY_RULE;
+			// `key.ts` holds a hardcoded secret the ast-grep rule flags.
+			const awRule =
+				path.basename(filePath) === "key.ts"
+					? "ts-hardcoded-secret-assignment"
+					: "no-var";
+			return {
+				output: "",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				actionableWarnings: [
+					{
+						id: `aw:${rule}`,
+						filePath,
+						displayPath: path.basename(filePath),
+						line: 1,
+						severity: "warning",
+						tool: "ast-grep",
+						rule: awRule,
+						message: `AW-${rule}`,
+						actions: [],
+						suppressed: false,
+						origin: "dispatch",
+					},
+				],
+				codeQualityWarnings: [
+					{
+						id: `cq:${rule}`,
+						filePath,
+						displayPath: path.basename(filePath),
+						line: 1,
+						severity: "warning",
+						tool: "ast-grep",
+						rule,
+						message: `${rule} fired`,
+						category: "maintainability",
+						origin: "dispatch",
+					},
+				],
+			};
+		};
+	});
+
+	afterEach(() => {
+		FLAGS.delete("lens-actionable-warnings");
+		pipelineDouble.result = undefined;
+		pipelineDouble.analysed = [];
+		vi.restoreAllMocks();
+	});
+
+	/**
+	 * A concurrent secondary in the primary's project: pi-lens analyses only
+	 * files under the primary's root.
+	 */
+	function startSubagent(): Promise<AgentSessionRuntime> {
+		return startRuntime(SessionManager.inMemory(cwd));
+	}
+
+	async function startTurn(runtime: AgentSessionRuntime): Promise<void> {
+		await runtime.session.extensionRunner.emit({
+			type: "turn_start",
+			turnIndex: 0,
+			timestamp: Date.now(),
+		} as never);
+	}
+
+	async function endTurn(runtime: AgentSessionRuntime): Promise<void> {
+		await runtime.session.extensionRunner.emit({
+			type: "turn_end",
+			turnIndex: 0,
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				api: "x",
+				provider: "x",
+				model: "x",
+				usage,
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+			toolResults: [],
+		} as never);
+	}
+
+	/** One edit through the session's real tool_call and tool_result hooks. */
+	let edits = 0;
+	async function edit(runtime: AgentSessionRuntime, file: string) {
+		const c = conversation(runtime);
+		c.user(`edit ${path.basename(file)}`);
+		await c.write(`call_edit_${++edits}`, file, "const a = 1;\n");
+	}
+
+	const sessionIdOf = (runtime: AgentSessionRuntime) =>
+		runtime.session.sessionManager.getSessionId();
+
+	/**
+	 * An edit batch with one stale `oldText`: pi-lens applies the edit that
+	 * still matches and runs the post-edit pipeline itself, from tool_call.
+	 */
+	async function partialEdit(runtime: AgentSessionRuntime, file: string) {
+		const c = conversation(runtime);
+		c.user(`edit ${path.basename(file)}`);
+		await c.read(`call_read_${++edits}`, file);
+		const id = `call_partial_${++edits}`;
+		const args = {
+			path: file,
+			edits: [
+				{ oldText: "const a = 1;", newText: "const a = 2;" },
+				{ oldText: "const gone = 0;", newText: "const gone = 1;" },
+			],
+		};
+		await runtime.session.agent.beforeToolCall?.({
+			toolCall: { type: "toolCall", id, name: "edit", arguments: args },
+			args,
+		} as never);
+	}
+
+	/**
+	 * Which session's warnings a context shows: `cq:<rule>` from the
+	 * code-quality advisory, `aw:<file>` from the actionable one.
+	 */
+	function shown(text: string): string[] {
+		const actionable =
+			/Fixable warnings introduced this turn[\s\S]*?If continuing/.exec(
+				text,
+			)?.[0] ?? "";
+		return [
+			...[PRIMARY_RULE, SUBAGENT_RULE]
+				.filter((rule) => text.includes(`${rule}×`))
+				.map((rule) => `cq:${rule}`),
+			...["a.ts", "sub.ts"]
+				.filter((file) => actionable.includes(`  ${file}: `))
+				.map((file) => `aw:${file}`),
+		];
+	}
+
+	/** The per-turn records a coordinator holds for one session's turn. */
+	const held = (coordinator: RuntimeCoordinator, sessionId?: string) => [
+		...coordinator
+			.peekCodeQualityWarnings(sessionId)
+			.map((w) => `cq:${w.rule}`),
+		...coordinator
+			.peekActionableWarnings(sessionId)
+			.map((w) => `aw:${path.basename(w.filePath)}`),
+	];
+	const PRIMARY = [`cq:${PRIMARY_RULE}`, "aw:a.ts"];
+	const SUBAGENT = [`cq:${SUBAGENT_RULE}`, "aw:sub.ts"];
+
+	it("keeps the primary's warnings, turn and write order when a subagent's turn starts", async () => {
+		const seen = coordinators();
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const coordinator = seen[0]!;
+		await startTurn(primary);
+		await edit(primary, path.join(cwd, "a.ts"));
+		const turnState = () => ({
+			turnIndex: coordinator.turnIndex,
+			orderTurn: coordinator.writeOrderTurn,
+			writeIndex: coordinator.peekWriteIndex(),
+			turnStartProjectSeq: coordinator.turnStartProjectSeq,
+			warnings: held(coordinator),
+		});
+		const before = turnState();
+		expect(before.warnings).toEqual(PRIMARY);
+		const subagent = await startSubagent();
+
+		await startTurn(subagent);
+
+		expect(turnState()).toEqual(before);
+		await endTurn(primary);
+		expect(shown(await contextText(primary))).toEqual(PRIMARY);
+	});
+
+	it("keeps the primary's turns its own when its session start throws after the reset", async () => {
+		// #3613 F1 (review r1 P1). The recurrence: the stable id was pinned only
+		// after the start's await, so a swallowed throw there left the
+		// coordinator on reset's random id, and every turn of the primary took
+		// the other-session path: its turn index and order turn never moved.
+		const seen: RuntimeCoordinator[] = [];
+		const reset = RuntimeCoordinator.prototype.resetForSession;
+		vi.spyOn(
+			RuntimeCoordinator.prototype,
+			"resetForSession",
+		).mockImplementation(function (this: RuntimeCoordinator, ...args) {
+			seen.push(this);
+			reset.apply(this, args);
+			throw new Error("probe-3613-F1: a session_start step after reset");
+		});
+		// Production swallows a session_start crash (`surfaceHandlerCrash`
+		// rethrows only under Vitest), and the session goes on.
+		const vitest = process.env.VITEST;
+		delete process.env.VITEST;
+		let primary: AgentSessionRuntime;
+		try {
+			primary = await startRuntime(SessionManager.inMemory(cwd));
+		} finally {
+			process.env.VITEST = vitest;
+		}
+		extensionErrors.splice(0);
+		const coordinator = seen[0]!;
+		const before = {
+			turnIndex: coordinator.turnIndex,
+			orderTurn: coordinator.writeOrderTurn,
+		};
+
+		await startTurn(primary);
+		await edit(primary, path.join(cwd, "a.ts"));
+		await endTurn(primary);
+		await startTurn(primary);
+
+		expect({
+			id: coordinator.telemetrySessionId,
+			turns: coordinator.turnIndex - before.turnIndex,
+			orderMoved: coordinator.writeOrderTurn > before.orderTurn,
+		}).toEqual({ id: sessionIdOf(primary), turns: 2, orderMoved: true });
+	});
+
+	/**
+	 * A call of a tool pi-lens does not know as a writer, with a path: the
+	 * observed-mutation net arms a baseline for it from tool_call, inside the
+	 * per-turn observation budget.
+	 */
+	let opaqueCalls = 0;
+	const opaqueTool = (id: string, file: string) => ({
+		toolCall: {
+			type: "toolCall",
+			id,
+			name: "probe_mcp_write",
+			arguments: { path: file },
+		},
+		args: { path: file },
+	});
+	async function opaqueCallId(runtime: AgentSessionRuntime, file: string) {
+		const id = `call_opaque_${++opaqueCalls}`;
+		await runtime.session.agent.beforeToolCall?.(opaqueTool(id, file) as never);
+		return { id, armed: hasPendingObservation(id) };
+	}
+	const opaqueCall = async (runtime: AgentSessionRuntime, file: string) =>
+		(await opaqueCallId(runtime, file)).armed;
+	/** The host's tool_result for an opaque call: the net settles it. */
+	async function opaqueResult(
+		runtime: AgentSessionRuntime,
+		id: string,
+		file: string,
+	): Promise<void> {
+		await runtime.session.agent.afterToolCall?.({
+			...opaqueTool(id, file),
+			result: { content: [{ type: "text", text: "ok" }], details: undefined },
+			isError: false,
+		} as never);
+	}
+	/** Spend the whole observation budget of the turn the net last charged. */
+	const exhaustBudget = () =>
+		_setObservedTurnBudgetForTests(
+			_observedMutationStateForTests().turnIndex,
+			OBSERVED_TURN_BUDGET_MS,
+		);
+
+	it("gives each of a subagent's turns its own observation budget", async () => {
+		// #3613 F2 (review r1 P4). The recurrence: the budget keyed on the
+		// primary's turn index, which a subagent's turns no longer move, so a
+		// subagent that spent it in its first turn observed nothing for the
+		// rest of its run.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const target = path.join(cwd, "opaque.txt");
+		fs.writeFileSync(target, "x\n");
+		await startTurn(primary);
+		await startTurn(subagent);
+		const firstArms = await opaqueCall(subagent, target);
+		exhaustBudget();
+		const spentTurnArms = await opaqueCall(subagent, target);
+
+		await startTurn(subagent);
+
+		expect({
+			firstArms,
+			spentTurnArms,
+			nextTurnArms: await opaqueCall(subagent, target),
+		}).toEqual({ firstArms: true, spentTurnArms: false, nextTurnArms: true });
+	});
+
+	it("charges a subagent's settled observation to its own turn", async () => {
+		// #3613 F2: the settle in tool_result charges the turn the arm used.
+		// The recurrence: the settle charged the primary's turn index, so a
+		// subagent's observation time spent the primary's budget.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const target = path.join(cwd, "opaque.txt");
+		fs.writeFileSync(target, "x\n");
+		await startTurn(primary);
+		await startTurn(subagent);
+		const { id } = await opaqueCallId(subagent, target);
+		const subagentTurn = _observedMutationStateForTests().turnIndex;
+		await opaqueCall(primary, target);
+		const primaryTurn = _observedMutationStateForTests().turnIndex;
+
+		await opaqueResult(subagent, id, target);
+
+		expect({
+			distinct: subagentTurn !== primaryTurn,
+			charged: _observedMutationStateForTests().turnIndex,
+		}).toEqual({ distinct: true, charged: subagentTurn });
+	});
+
+	it("does not fire the memory sample at every subagent turn end while the primary sits on a sampling turn", async () => {
+		// #3613 F2 (round 2). The recurrence: the cadence keyed on the
+		// primary's turn index, which a subagent's turns no longer move, so
+		// while the primary sat on a sampling turn every subagent turn end
+		// wrote a sample.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		for (let turn = 1; turn <= 10; turn += 1) await startTurn(primary);
+		const before = (await latencyRows("memory_sample")).length;
+
+		for (let turn = 1; turn <= 2; turn += 1) {
+			await startTurn(subagent);
+			await endTurn(subagent);
+		}
+
+		expect((await latencyRows("memory_sample")).length - before).toBe(0);
+	});
+
+	it("keeps the memory sample's cadence through a long subagent run inside one primary turn", async () => {
+		// #3613 G1 (verify r2, probe MEM). The recurrence: round 2 paced the
+		// cadence on a subagent's fractional turn key, which never meets the
+		// `% 10` gate, so a long subagent run wrote no memory sample at all
+		// (the process-level OOM signal, #1999).
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		const before = (await latencyRows("memory_sample")).length;
+
+		for (let turn = 1; turn <= 20; turn += 1) {
+			await startTurn(subagent);
+			await endTurn(subagent);
+		}
+
+		expect(
+			(await latencyRows("memory_sample")).length - before,
+		).toBeGreaterThan(0);
+	});
+
+	it("tightens the memory sample on the same turn count it paces on", async () => {
+		// #3613 G1. The recurrence: the gate read the count of all turn starts
+		// while the tightened window was recorded on the primary's turn index,
+		// so a heap jump during a subagent run opened a window that had
+		// already closed.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		// A one-byte last sample: the next real one reads as rapid growth.
+		recordMemorySampleOutcome(1, 0);
+		const before = (await latencyRows("memory_sample")).length;
+
+		// Turn starts 2..11: the sample at 10 tightens, so 11 samples too.
+		for (let turn = 1; turn <= 10; turn += 1) {
+			await startTurn(subagent);
+			await endTurn(subagent);
+		}
+
+		expect((await latencyRows("memory_sample")).length - before).toBe(2);
+	});
+
+	it("keeps the primary's spent budget spent through nine subagent turns inside its turn", async () => {
+		// #3613 G2 (verify r2, probe E9). The recurrence: parking evicted the
+		// smallest key, which is the primary's live turn (a subagent's keys sit
+		// above it), so the ninth subagent turn handed the primary a fresh
+		// budget.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const target = path.join(cwd, "opaque.txt");
+		fs.writeFileSync(target, "x\n");
+		await startTurn(primary);
+		await opaqueCall(primary, target);
+		exhaustBudget();
+		const subagentArms: boolean[] = [];
+		for (let turn = 1; turn <= 9; turn += 1) {
+			await startTurn(subagent);
+			subagentArms.push(await opaqueCall(subagent, target));
+		}
+
+		expect({
+			subagentArms: subagentArms.every(Boolean),
+			primaryArmsAgain: await opaqueCall(primary, target),
+		}).toEqual({ subagentArms: true, primaryArmsAgain: false });
+	});
+
+	it("keeps a live subagent's spent budget spent through another subagent's nine turns", async () => {
+		// #3613 G2 (verify r3 H1, probe LIVEA): a live concurrent session's
+		// current turn is live too. The recurrence: liveness that counted only
+		// the coordinator's own turn, so a second subagent's run evicted the
+		// first subagent's spent turn and handed it a fresh budget.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagentA = await startSubagent();
+		const subagentB = await startSubagent();
+		const target = path.join(cwd, "opaque.txt");
+		fs.writeFileSync(target, "x\n");
+		await startTurn(primary);
+		await startTurn(subagentA);
+		await opaqueCall(subagentA, target);
+		exhaustBudget();
+		const bArms: boolean[] = [];
+		for (let turn = 1; turn <= 9; turn += 1) {
+			await startTurn(subagentB);
+			bArms.push(await opaqueCall(subagentB, target));
+		}
+
+		expect({
+			bArms: bArms.every(Boolean),
+			aArmsAgain: await opaqueCall(subagentA, target),
+		}).toEqual({ bArms: true, aArmsAgain: false });
+	});
+
+	it("keeps the primary's spent observation budget spent while a subagent's turn interleaves", async () => {
+		// #3613 F2. The recurrence it guards: per-session budget keys over the
+		// net's one budget slot, so every switch between the two sessions'
+		// calls reset the spend and neither turn was bounded.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const target = path.join(cwd, "opaque.txt");
+		fs.writeFileSync(target, "x\n");
+		await startTurn(primary);
+		await opaqueCall(primary, target);
+		exhaustBudget();
+		await startTurn(subagent);
+
+		const subagentArms = await opaqueCall(subagent, target);
+
+		expect({
+			subagentArms,
+			primaryArmsAgain: await opaqueCall(primary, target),
+		}).toEqual({ subagentArms: true, primaryArmsAgain: false });
+	});
+
+	it("delivers a subagent's own warnings at its turn end, after the primary's next turn starts", async () => {
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(subagent);
+		await edit(subagent, path.join(cwd, "sub.ts"));
+		await startTurn(primary);
+
+		await endTurn(subagent);
+		const subagentSees = await contextText(subagent);
+		await edit(primary, path.join(cwd, "a.ts"));
+		await endTurn(primary);
+		const primarySees = await contextText(primary);
+
+		expect({
+			subagent: shown(subagentSees),
+			primary: shown(primarySees),
+		}).toEqual({ subagent: SUBAGENT, primary: PRIMARY });
+	});
+
+	it("delivers a subagent's warnings from an edit pi-lens applied in part at its own turn end", async () => {
+		const seen = coordinators();
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const coordinator = seen[0]!;
+		const subagent = await startSubagent();
+		const sub = path.join(cwd, "sub.ts");
+		fs.writeFileSync(sub, "const a = 1;\n");
+		await startTurn(primary);
+		await startTurn(subagent);
+
+		await partialEdit(subagent, sub);
+		const analysed = [...pipelineDouble.analysed];
+		const primaryHolds = held(coordinator);
+		await endTurn(subagent);
+
+		expect({
+			analysed,
+			primaryHolds,
+			subagentSees: shown(await contextText(subagent)),
+		}).toEqual({ analysed: [sub], primaryHolds: [], subagentSees: SUBAGENT });
+	});
+
+	it("keeps the primary's warnings out of a subagent's turn end", async () => {
+		const seen = coordinators();
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const coordinator = seen[0]!;
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(primary, path.join(cwd, "a.ts"));
+
+		await endTurn(subagent);
+
+		expect({
+			subagentSees: shown(await contextText(subagent)),
+			primaryKeeps: held(coordinator),
+		}).toEqual({ subagentSees: [], primaryKeeps: PRIMARY });
+	});
+
+	it("enriches only the primary's secret report with the primary's ast-grep match", async () => {
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const key = path.join(cwd, "key.ts");
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(primary, key);
+		// A gitleaks scan after the edit: its finding is live for both
+		// sessions, which share the project's scan cache.
+		new CacheManager(false).writeCache(
+			"gitleaks",
+			{
+				success: true,
+				scannedAt: new Date().toISOString(),
+				findings: [{ ruleId: "aws-access-token", file: key, startLine: 1 }],
+			},
+			cwd,
+		);
+
+		await endTurn(subagent);
+		const subagentSees = await contextText(subagent);
+		await endTurn(primary);
+		const primarySees = await contextText(primary);
+
+		const provenance = (text: string) =>
+			/key\.ts:1 — aws-access-token \[([^\]]*)\]/.exec(text)?.[1];
+		expect({
+			subagent: provenance(subagentSees),
+			primary: provenance(primarySees),
+		}).toEqual({ subagent: "gitleaks", primary: "gitleaks + ast-grep" });
+	});
+
+	it("starts a subagent's turn without the warnings its previous turn left undelivered", async () => {
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(subagent, path.join(cwd, "sub.ts"));
+
+		// The turn ended with no turn_end (an aborted turn); the next one starts.
+		await startTurn(subagent);
+		await endTurn(subagent);
+
+		expect(shown(await contextText(subagent))).toEqual([]);
+	});
+
+	it("keeps a subagent's warnings across the primary's /new", async () => {
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(subagent, path.join(cwd, "sub.ts"));
+
+		await primary.newSession();
+		await endTurn(subagent);
+
+		expect(shown(await contextText(subagent))).toEqual(SUBAGENT);
+	});
+
+	it("re-analyses a subagent's unchanged file on its next turn", async () => {
+		// The recurrence it guards: gating the turn_start's dedupe clear to
+		// the primary with the rest of the turn state. The dedupe keys on the
+		// primary's turn index, which a subagent's turn no longer moves.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const sub = path.join(cwd, "sub.ts");
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(subagent, sub);
+		await endTurn(subagent);
+
+		await startTurn(subagent);
+		await edit(subagent, sub);
+
+		expect(pipelineDouble.analysed).toEqual([sub, sub]);
+	});
+
+	it("advances a subagent's own turn id and leaves the primary's", async () => {
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		await startTurn(primary);
+		await startTurn(subagent);
+		await startTurn(subagent);
+
+		await edit(subagent, path.join(cwd, "sub.ts"));
+		await edit(primary, path.join(cwd, "a.ts"));
+
+		await flushLatencyLog();
+		const turnIds = new Set(
+			fs
+				.readFileSync(getLatencyLogPath(), "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => (JSON.parse(line) as { turnId?: string }).turnId),
+		);
+		expect({
+			subagent: turnIds.has(`${sessionIdOf(subagent)}:2`),
+			primary: turnIds.has(`${sessionIdOf(primary)}:1`),
+			primaryMoved: turnIds.has(`${sessionIdOf(primary)}:3`),
+		}).toEqual({ subagent: true, primary: true, primaryMoved: false });
+	});
+
+	it("drops a subagent's per-turn records when it shuts down before its turn end", async () => {
+		const seen = coordinators();
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const coordinator = seen[0]!;
+		const subagent = await startSubagent();
+		const subagentId = sessionIdOf(subagent);
+		await startTurn(primary);
+		await startTurn(subagent);
+		await edit(subagent, path.join(cwd, "sub.ts"));
+		await edit(primary, path.join(cwd, "a.ts"));
+		const recorded = held(coordinator, subagentId);
+
+		await subagent.dispose();
+		runtimes.splice(runtimes.indexOf(subagent), 1);
+
+		expect({
+			recorded,
+			left: held(coordinator, subagentId),
+			primary: held(coordinator),
+			// Its turn key goes too: the session's id now keys the primary's turn.
+			turnKey: coordinator.turnKey(subagentId) === coordinator.turnIndex,
+		}).toEqual({
+			recorded: SUBAGENT,
+			left: [],
+			primary: PRIMARY,
+			turnKey: true,
+		});
 	});
 });

@@ -24,6 +24,7 @@ import type { FileKind } from "./file-kinds.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import {
 	drainProjectDataDirMigrations,
+	sweepDeadEphemeralDataDirs,
 	getGlobalPiLensDir,
 	getKnipIgnorePatterns,
 	getProjectDataDir,
@@ -35,7 +36,7 @@ import {
 	GovulncheckClient,
 	type GovulncheckResult,
 } from "./govulncheck-client.js";
-import { sweepAtomicWriteStages } from "./instance-reaper.js";
+import { realIsPidAlive, sweepAtomicWriteStages } from "./instance-reaper.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipResult } from "./knip-client.js";
 import { canRunStartupHeavyScans } from "./language-policy.js";
@@ -130,7 +131,11 @@ import { resetZizmorTokenAvailability } from "./zizmor-config.js";
 import { resetSpawnTimeoutCooldowns } from "./spawn-timeout-cooldown.js";
 import { resetTestRunnerDelivery } from "./test-runner-delivery.js";
 import { resetLspMutationNoBridgeDbgLatch } from "./lsp-mutation.js";
-import type { SessionStartClassification } from "./session-lifecycle.js";
+import type {
+	ClassificationBasis,
+	SessionStartClassification,
+	SessionStartGuardDecision,
+} from "./session-lifecycle.js";
 import type { PiLensGlobalConfig } from "./lens-config.js";
 import type { PiLensProjectConfig } from "./project-lens-config.js";
 
@@ -179,6 +184,11 @@ interface SessionStartDeps {
 	/** The root-identity input that classification consulted (mirrors
 	 *  `ClassifySessionStartInput.sameRoot`). */
 	sessionStartSameRoot?: boolean;
+	/** #3873 O6: which classifier branch decided, the age of a replacement
+	 *  gap's marker and the start's match against the successor it named. */
+	sessionStartBasis?: ClassificationBasis;
+	sessionStartGapMs?: number;
+	sessionStartLineageMatch?: SessionStartGuardDecision["lineageMatch"];
 	runtime: RuntimeCoordinator;
 	cacheManager: CacheManager;
 	astGrepClient: AstGrepClient;
@@ -2529,6 +2539,16 @@ export async function handleSessionStart(
 	for (const migration of drainProjectDataDirMigrations()) {
 		const targetName = path.basename(migration.to);
 		const hash = targetName.match(/([0-9a-f]{8})$/)?.[1] ?? "unknown";
+		if (migration.outcome === "ephemeral") {
+			// #1129 decision B: say once that this root's state dies with the process.
+			recordDegradationOnce({
+				kind: "data-dir-ephemeral",
+				subject: hash,
+				reason:
+					"temporary checkout: project data lives in a process-owned directory and is not kept after exit",
+			});
+			continue;
+		}
 		recordDegradationOnce({
 			kind: "data_dir_migrated",
 			subject: hash,
@@ -2558,6 +2578,11 @@ export async function handleSessionStart(
 		path.join(globalDir, "bin"),
 		path.join(globalDir, "tools"),
 	]).catch(() => {
+		// best-effort lifecycle cleanup — never fail session_start
+	});
+	// #1129: reap the ephemeral data dirs of processes that died before their
+	// exit hook ran. Fire-and-forget and bounded like the stage sweep above.
+	void sweepDeadEphemeralDataDirs({ isPidAlive: realIsPidAlive }).catch(() => {
 		// best-effort lifecycle cleanup — never fail session_start
 	});
 	if (quickMode) {
@@ -2730,10 +2755,7 @@ export async function handleSessionStart(
 				// alongside `mode` — every start reaching this line already
 				// classified `primary`/`sequential-replacement` (a `secondary-root`
 				// start returns before `handleSessionStart` is ever called).
-				classification: deps.sessionStartClassification,
-				// `undefined` is omitted by JSON.stringify. Keep unknown explicit so
-				// strict log readers can distinguish it from legacy omission.
-				sameRoot: deps.sessionStartSameRoot ?? "unknown",
+				...sessionStartDecisionMetadata(deps),
 			},
 		});
 		logHostReadyDelay(deps, cwd);
@@ -3199,13 +3221,33 @@ export async function handleSessionStart(
 			mode: startupMode,
 			reason: deps.sessionReason,
 			// #2129: see the quick-mode session_start_total record above.
-			classification: deps.sessionStartClassification,
 			// Keep the full path's durable shape identical to quick mode.
-			sameRoot: deps.sessionStartSameRoot ?? "unknown",
+			...sessionStartDecisionMetadata(deps),
 		},
 	});
 	logHostReadyDelay(deps, cwd);
 	emitSmellsSessionStartLine(dbg, sessionStartMs);
+}
+
+/**
+ * What `decideSessionStart` consulted, for both `session_start_total` rows
+ * (#2129, #3873 O6). `sameRoot` is explicit when unknown, because
+ * `JSON.stringify` omits `undefined` and strict log readers must tell unknown
+ * from a legacy row. `basis` names the classifier branch, `gapMs` the age of
+ * a replacement gap's marker and `lineageMatch` the start against the
+ * successor that marker named, so a `primary` with `sameRoot: unknown` says
+ * why it was primary.
+ */
+function sessionStartDecisionMetadata(
+	deps: SessionStartDeps,
+): Record<string, unknown> {
+	return {
+		classification: deps.sessionStartClassification,
+		sameRoot: deps.sessionStartSameRoot ?? "unknown",
+		basis: deps.sessionStartBasis,
+		gapMs: deps.sessionStartGapMs,
+		lineageMatch: deps.sessionStartLineageMatch,
+	};
 }
 
 /**

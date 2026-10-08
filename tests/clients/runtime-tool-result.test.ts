@@ -30,6 +30,7 @@ import {
 	getFormattersForFile,
 } from "../../clients/formatters.js";
 import { getProjectIgnoreMatcher } from "../../clients/file-utils.js";
+import { normalizeFilePath } from "../../clients/path-utils.js";
 import {
 	getVerifiedPathAttributionGuessCount,
 	resetVerifiedPathAttributionGuessCount,
@@ -615,15 +616,6 @@ describe("bash grep searchReads registration", () => {
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",
 			} as any);
-			// The set holds the guard's canonical KEY (lower-cased forward slashes on
-			// win32), not the raw spelling the test wrote (#4019).
-			const guardKey = (runtime.readGuard as any).key(filePath);
-			expect((runtime.readGuard as any).wasWrittenThisSession(guardKey)).toBe(
-				false,
-			);
-			expect(
-				(runtime.readGuard as any).unchangedThisSession.has(guardKey),
-			).toBe(true);
 			expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
 				"block",
 			);
@@ -691,9 +683,6 @@ describe("bash grep searchReads registration", () => {
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",
 			} as any);
-			expect((runtime.readGuard as any).wasWrittenThisSession(filePath)).toBe(
-				false,
-			);
 			expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
 				"block",
 			);
@@ -2736,6 +2725,22 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					}),
 				]),
 			);
+			// #3520: authorship is recordWritten's alone. The opaque-recovered files
+			// get no recordWritten above, so they need a read although their mtime is
+			// newer than the session; the observed bash write stays editable with
+			// its mtime long past.
+			expect(runtime.readGuard.exportAuthorship().written).toEqual([
+				normalizeFilePath(directPath),
+			]);
+			for (const filePath of [existingPath, createdPath])
+				expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
+					"block",
+				);
+			const longAgo = new Date("2000-01-01T00:00:00Z");
+			fs.utimesSync(directPath, longAgo, longAgo);
+			expect(runtime.readGuard.checkEdit(directPath, [1, 1]).action).toBe(
+				"allow",
+			);
 		} finally {
 			env.cleanup();
 		}
@@ -3532,6 +3537,57 @@ describe("runtime-tool-result inline behavior warnings", () => {
 			expect(modifiedRanges.map((entry) => entry.filePath)).toContain(
 				sideEffectPath,
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a native edit and the sibling its pipeline rewrote editable with their mtimes long past (#3520 no-drop)", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		const env = setupTestEnvironment("pi-lens-3520-native-sibling-");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/main.rs", "mod h;\n");
+			const siblingPath = createTempFile(
+				env.tmpDir,
+				"src/helper.rs",
+				"pub fn h() {}\n",
+			);
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "",
+				hasBlockers: false,
+				isError: false,
+				fileModified: true,
+				changedFiles: [filePath, siblingPath],
+			});
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 mod h;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			const longAgo = new Date("2000-01-01T00:00:00Z");
+			for (const written of [filePath, siblingPath])
+				fs.utimesSync(written, longAgo, longAgo);
+			expect(runtime.readGuard.exportAuthorship().written.sort()).toEqual(
+				[filePath, siblingPath].map(normalizeFilePath).sort(),
+			);
+			for (const written of [filePath, siblingPath])
+				expect(runtime.readGuard.checkEdit(written, [1, 1]).action).toBe(
+					"allow",
+				);
 		} finally {
 			env.cleanup();
 		}

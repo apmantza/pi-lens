@@ -408,6 +408,32 @@ describe("analyze-pi-lens-logs.mjs D1-D16 detectors (#3870)", () => {
 		expect(smell(report, "deferred-runner-failed-undelivered")?.count).toBe(1);
 	});
 
+	it("D13 deferred-runner-failed-undelivered: reads the collect-later row's failureKind (#3796)", () => {
+		// All rows are synthetic (labelled in the fixture): the real logs hold no
+		// collect-later row with a kind. Recurrence prevented: a fault arm with a
+		// synthetic diagnostic (finishParsedRun's parse-error) was filed as an
+		// undelivered finding by the diagnostic-count heuristic. The kindless row
+		// from a released version still takes that fallback (shape 57); a
+		// kind-carrying findings row still flags.
+		const report = run("deferred-runner-fault-kind");
+		const flags = report.detectors.deferredRunnerFailedUndelivered;
+		expect(flags.map((f: any) => [f.runnerId, f.pid])).toEqual([
+			["lsp", "9801"],
+			["pyright", "9803"],
+		]);
+		const kinds = Object.fromEntries(
+			report.latency.runnerFailureKinds.map((r: any) => [r.key, r.count]),
+		);
+		expect(kinds).toEqual({
+			"lsp:blocking_diagnostics": 1,
+			"eslint:parser_error": 1,
+			"pyright:blocking_diagnostics": 1,
+		});
+		const failures = smell(report, "runner-failures");
+		expect(failures?.count).toBe(1);
+		expect(failures?.examples[0]?.metadata?.failureKind).toBe("parser_error");
+	});
+
 	it("D14 aux-stuck-pair: flags an auxiliary pair stuck in two turn ends", () => {
 		// {"phase":"late_auxiliary_findings","metadata":{"stuckPairs":[{"filePath":".../src/workspace.ts","serverId":"opengrep"}]}}
 		// Real: the 13 late_auxiliary_findings rows of pid 3205171. tools.ts is

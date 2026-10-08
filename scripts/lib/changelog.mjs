@@ -56,8 +56,8 @@ function finalize(current) {
  * Condense a section body into scannable release notes: keep the `### Added/
  * Changed/Fixed` subheadings and every top-level entry, trimmed to a short
  * one-liner. Bold-titled entries (`- **Title** …`) keep the title (plus a
- * short gist when one exists); plain entries (`- perf: …`) keep their first
- * clause — dropping them entirely (the pre-3.8.67 behavior) made a
+ * short gist when one exists); plain entries (`- perf: …`) keep their whole
+ * first sentence — dropping them entirely (the pre-3.8.67 behavior) made a
  * perf-heavy release body show none of its perf work. The full prose stays
  * in CHANGELOG.md; this is what the GitHub release body shows so a release
  * reads as a summary, not a wall of implementation detail. The `### Internal`
@@ -68,15 +68,16 @@ function finalize(current) {
  * @returns {string}
  */
 export function summarizeSection(body, opts = {}) {
-	const maxGist = opts.maxGist ?? 130;
+	const maxGist = opts.maxGist ?? 220;
 	// Bucket entries under canonical subheadings, merging same-named headings
 	// (a section may carry two `### Added` blocks) and preserving first-seen order.
 	const order = [];
 	const buckets = new Map();
 	let heading = null;
 	let internalCount = 0;
-	for (const raw of body.split(/\r?\n/)) {
-		const line = raw.trimEnd();
+	const lines = body.split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		let line = lines[i].trimEnd();
 		const h = line.match(/^#{2,4}\s+(.*)$/);
 		if (h) {
 			heading = h[1].trim();
@@ -92,6 +93,25 @@ export function summarizeSection(body, opts = {}) {
 			if (/^[-*]\s+\S/.test(line)) internalCount++;
 			continue;
 		}
+		const entry = line.match(/^- (\S.*)$/);
+		if (entry) {
+			let text = entry[1];
+			let next = i + 1;
+			while (next < lines.length) {
+				const continuation = lines[next].trimEnd();
+				if (
+					continuation.trim() === "" ||
+					/^#{2,4}\s+/.test(continuation) ||
+					/^-\s+/.test(continuation) ||
+					/^\s+-\s+/.test(continuation)
+				)
+					break;
+				text += ` ${continuation.trim()}`;
+				next++;
+			}
+			i = next - 1;
+			line = `- ${text}`;
+		}
 		const bold = line.match(/^- (\*\*.+?\*\*)\s*(.*)$/);
 		if (bold) {
 			const gist = opts.gist ? cleanGist(bold[2], maxGist) : "";
@@ -102,7 +122,7 @@ export function summarizeSection(body, opts = {}) {
 		}
 		const plain = line.match(/^- (\S.*)$/);
 		if (!plain) continue;
-		buckets.get(heading).push(`- ${plainGist(plain[1], maxGist)}`);
+		buckets.get(heading).push(`- ${plainGist(plain[1])}`);
 	}
 	const out = [];
 	for (const h of order) {
@@ -118,30 +138,50 @@ export function summarizeSection(body, opts = {}) {
 	return out.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
 }
 
-// Condense a plain (non-bold-titled) entry to its first clause: cut at the
-// earliest sentence/clause boundary past a minimum (so `perf: X — details`
-// keeps the self-describing `perf: X`), hard-truncating at a word boundary
-// only as a last resort. Trailing `(#NNN)` refs from the original are
-// re-appended so the release still links its issues.
-function plainGist(text, maxGist) {
+// Condense a plain (non-bold-titled) entry to its whole first sentence.
+// Trailing `(#NNN)` refs from the original are re-appended so the release
+// still links its issues. Do not cut at clauses or impose a character cap:
+// those cuts turned wrapped changelog prose into misleading fragments.
+function plainGist(text) {
 	const refs = [...text.matchAll(/\((?:refs?|closes?|fixes?)?\s*#\d+\)/gi)].map(
 		(m) => m[0],
 	);
-	const MIN_CLAUSE = 30;
-	let cut = text.length;
-	for (const boundary of [/\.\s/g, /;\s/g, /\s—\s/g]) {
-		for (const m of text.matchAll(boundary)) {
-			if (m.index >= MIN_CLAUSE && m.index < cut) cut = m.index;
-			break; // only the first occurrence of each boundary matters
-		}
-	}
-	let gist = text.slice(0, cut).trim();
-	if (gist.length > maxGist) {
-		const sliced = gist.slice(0, maxGist);
-		gist = sliced.slice(0, sliced.lastIndexOf(" ")).trim() + " …";
-	}
+	const gist = firstSentence(text);
 	const missing = refs.filter((r) => !gist.includes(r));
 	return missing.length ? `${gist} ${missing.join(" ")}` : gist;
+}
+
+function firstSentence(text) {
+	let code = false;
+	let parentheses = 0;
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i];
+		if (char === "`") {
+			code = !code;
+			continue;
+		}
+		if (code) continue;
+		if (char === "(") {
+			parentheses++;
+			continue;
+		}
+		if (char === ")") {
+			parentheses = Math.max(0, parentheses - 1);
+			continue;
+		}
+		if (parentheses > 0 || !/[.!?]/.test(char)) continue;
+		if (char === "." && ignoredPeriod(text, i)) continue;
+		if (i + 1 === text.length || /\s/.test(text[i + 1])) {
+			return text.slice(0, i + 1).trim();
+		}
+	}
+	return text.trim();
+}
+
+function ignoredPeriod(text, index) {
+	const before = text.slice(0, index + 1);
+	if (/(?:^|\s)(?:e\.g|i\.e)\.$/i.test(before)) return true;
+	return /(?:^|\s)v?\d+(?:\.\d+)+\.$/i.test(before);
 }
 
 // Return a short, clean one-clause gist, or "" if no clean short form exists
@@ -204,7 +244,9 @@ export function hasSection(text, version) {
  *      on the same physical line as the opening. `summarizeSection` reads only
  *      the entry's first line and emits only the text inside `**…**`, so a
  *      wrapped title renders truncated AND drops any `(refs #NNN)` that trails
- *      onto the continuation line.
+ *      onto the continuation line. The summarizer now joins continuation lines;
+ *      this lint remains because wrapped titles are still poor release-note
+ *      input.
  *
  * Line numbers are 1-based within the passed body.
  *

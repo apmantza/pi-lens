@@ -1231,6 +1231,27 @@ function createSubagentStopFixture(agentId: string) {
 	}
 
 	/**
+	 * Make the process-listing seam return its real failure shape without
+	 * relying on how quickly a Windows PowerShell spawn fails. The old
+	 * `SystemRoot` setup could let a fast runner complete the listing inside
+	 * the 400ms ceiling, so the `listing-failed` record was never produced
+	 * (#4019).
+	 */
+	function patchProcessScanFailure() {
+		fs.renameSync(processScanPath, realProcessScanPath);
+		fs.writeFileSync(
+			processScanPath,
+			[
+				'export * from "./process-scan-real.mjs";',
+				"export function snapshotProcesses() {",
+				"\treturn Promise.resolve({ rows: [], ok: false });",
+				"}",
+				"",
+			].join("\n"),
+		);
+	}
+
+	/**
 	 * #2519: the same module-substitution hook as `patchProcessScan`, but
 	 * DETERMINISTIC rather than wall-clock-timed. `snapshotProcesses` is
 	 * only ever called from `readProcessTable`, itself only reached AFTER
@@ -1411,6 +1432,7 @@ function createSubagentStopFixture(agentId: string) {
 		cli,
 		git,
 		patchProcessScan,
+		patchProcessScanFailure,
 		patchRecheck,
 		patchProcessScanAppendRows,
 		addNodeModulesJunction,
@@ -1428,6 +1450,7 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 	let ledgerDir = "";
 	let worktree = "";
 	let cli = "";
+	let patchProcessScanFailure: () => void;
 	// #2519 round 2, S4: exposed by the builder rather than redeclared here
 	// -- the exact describe-private duplicate of the builder's own `git`
 	// this finding flagged.
@@ -1435,7 +1458,8 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 
 	beforeEach(() => {
 		fixture = createSubagentStopFixture(AGENT_ID);
-		({ root, repo, ledgerDir, worktree, cli, git } = fixture);
+		({ root, repo, ledgerDir, worktree, cli, git, patchProcessScanFailure } =
+			fixture);
 	});
 
 	afterEach(() => {
@@ -1889,22 +1913,19 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 		{ timeout: 90_000 },
 		() => {
 			// The exact reason string from the reported hygiene.log. The listing
-			// is made to fail by pointing the child's `SystemRoot` at a directory
-			// with no `System32`, so `windowsExe("...powershell.exe")` (the
-			// listing's absolute interpreter path) does not exist and the spawn
-			// errors. The first version drove it with a 400ms ceiling ("the real
-			// listing costs ~524ms at its floor", measured on one dev box), but
-			// the GitHub runner's listing sometimes finishes inside 400ms, so the
-			// `listing-failed` record was absent on a fast run: a wall-clock race
-			// on an unmeasured host claim (#4019). `--scan-timeout-ms 400` stays
-			// because it is the ceiling the record reports. Windows-only because
-			// POSIX `ps` answers in ~15ms — the portable case above drives the
+			// failure is forced through the fixture's copy of the real process-scan
+			// seam, rather than by relying on how quickly a missing PowerShell
+			// executable reports its spawn error. The old setup raced a fast listing
+			// and never produced the record (#4019). `--scan-timeout-ms 400` stays
+			// because it is the ceiling the record reports. The forced seam makes the
+			// case platform-neutral; it stays Windows-gated only for its win32 lane
+			// membership (tests/config/win32-gate-lane.test.ts). The portable case above drives the
 			// same degraded state through the `skipped` branch instead (both yield
 			// listingOk=false and an empty table; only the reason string differs).
+			patchProcessScanFailure();
 			runCli(
 				[...registeredArgv(), "--scan-timeout-ms", "400"],
 				subagentStopPayload(AGENT_ID),
-				{ SystemRoot: path.join(root, "no-system-root") },
 			);
 
 			expect(fs.existsSync(worktree)).toBe(false);

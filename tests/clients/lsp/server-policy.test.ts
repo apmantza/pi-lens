@@ -774,6 +774,72 @@ describe("lsp server policy", () => {
 		await expect(NearestRoot(["package.json"])(file)).resolves.toBe(tmp);
 	});
 
+	it("declines pi-agent staging roots and records the declined root (#1129)", async () => {
+		const { resolveLspServerCwd } =
+			await import("../../../clients/lsp/server.js");
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../../clients/degradation-ledger.js");
+		const fixtureRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-1129-agent-"),
+		);
+		const tmp = path.join(fixtureRoot, "pi-agent-1129");
+		fs.mkdirSync(tmp);
+		dirs.push(fixtureRoot);
+		const file = path.join(tmp, "src", "index.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "export const value = 1;\n");
+		resetDegradationLedger();
+
+		const server = {
+			id: "test",
+			root: async () => tmp,
+			rootMarkers: ["package.json"],
+		};
+		expect(await resolveLspServerCwd(server, file, tmp)).toBeUndefined();
+		expect(await resolveLspServerCwd(server, file, tmp)).toBeUndefined();
+		const declined = getDegradationSummary().find(
+			(group) => group.kind === "lsp-root-declined",
+		);
+		expect(declined?.count).toBe(1);
+		expect(declined?.latestReasons[0]?.subject).toBe(fs.realpathSync(tmp));
+	});
+
+	// Recurrence (#1129 F5, review probe p4): a real checkout named
+	// pi-agent-sdk under the tmpdir got no LSP cwd at all.
+	it("keeps the LSP root of a real checkout named like a pi-agent staging dir (#1129)", async () => {
+		const { resolveLspServerCwd } =
+			await import("../../../clients/lsp/server.js");
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../../clients/degradation-ledger.js");
+		const fixtureRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-1129-agent-sdk-"),
+		);
+		dirs.push(fixtureRoot);
+		const checkout = path.join(fixtureRoot, "pi-agent-sdk");
+		fs.mkdirSync(path.join(checkout, ".git", "objects"), { recursive: true });
+		fs.writeFileSync(
+			path.join(checkout, ".git", "HEAD"),
+			"ref: refs/heads/main\n",
+		);
+		fs.writeFileSync(path.join(checkout, "package.json"), "{}\n");
+		const file = path.join(checkout, "src", "index.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "export const value = 1;\n");
+		resetDegradationLedger();
+
+		const server = {
+			id: "test",
+			root: async () => checkout,
+			rootMarkers: ["package.json"],
+		};
+		expect(await resolveLspServerCwd(server, file, checkout)).toBe(checkout);
+		expect(
+			getDegradationSummary().some(
+				(group) => group.kind === "lsp-root-declined",
+			),
+		).toBe(false);
+	});
+
 	it("does not classify a testdata substring as a fixture segment (#1328)", async () => {
 		const { NearestRoot } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(

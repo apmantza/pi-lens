@@ -30,6 +30,8 @@ export interface PersistedSessionState {
 	savedAt: number;
 	/** Each declared session store's snapshot, by store name (`session-scope.ts`). */
 	stores: Record<string, unknown>;
+	/** Set by {@link fromDisk} on a migrated file only; never written (#3873). */
+	migratedFrom?: 1;
 }
 
 /**
@@ -59,6 +61,7 @@ function fromDisk(parsed: unknown): PersistedSessionState | undefined {
 		sessionId: String(v1.sessionId),
 		savedAt: Number(v1.savedAt),
 		stores: { widget: v1.widget, "read-guard": v1.readGuard },
+		migratedFrom: 1,
 	};
 }
 

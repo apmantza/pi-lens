@@ -156,8 +156,8 @@ function describeOwner(owner) {
  * exists to prevent (#2435 evidence: 27-69 such failures per local full run,
  * none reproducible in isolation). Two is deliberately small: the point is a
  * ceiling on concurrent vitest fork pools, not a queue. #3839 kept it at two
- * when the pre-push hook joined the slots: a local run may fork up to 16
- * (50% of cores, scripts/lib/worker-budget.mjs) and the box already sits at
+ * when the pre-push hook joined the slots: a local run may fork up to 8
+ * (50% of cores, capped, scripts/lib/worker-budget.mjs) and the box already sits at
  * load 100+, so the hook takes one of the same two slots instead of the
  * machine, and the ceiling on lock-managed fork pools does not rise. The
  * exclusive holder drains every slot up to MAX_SHARED_SLOTS, whatever count its

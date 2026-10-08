@@ -113,6 +113,20 @@ const UNPROVEN_IDS = [
 ] as const;
 `;
 const FIXTURE_HOLD = holdList(FIXTURE_REGISTRY_TS) as Map<string, string>;
+const FIXTURE_PREFIX_SERVER_TS = `export const DockerServer: LSPServerInfo = {
+\tid: "docker",
+\tidleEviction: "unmeasured",
+};
+
+export const DockerOfficialServer: LSPServerInfo = {
+\tid: "docker-official",
+\tidleEviction: "unmeasured",
+};
+`;
+const FIXTURE_PREFIX_REGISTRY_TS = FIXTURE_REGISTRY_TS.replace(
+	'\t"json",',
+	'\t"docker",\n\t"docker-official",',
+);
 
 describe("consecutive-night hysteresis (#3989)", () => {
 	it("counts one qualifying night as pending, two as promotable", () => {
@@ -579,6 +593,7 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 			reasonsPath: file("reasons.json", `{\n\t"typescript": "x"\n}\n`),
 			registryPath: file("registry.test.ts", FIXTURE_REGISTRY_TS),
 			bodyPath: path.join(dir, "body.md"),
+			changelogPath: path.join(dir, "3989-lsp-idle-eviction-promote.md"),
 			summary: (rows: object[]) =>
 				file("summary.json", JSON.stringify({ rows })),
 		};
@@ -595,6 +610,7 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 				serverPath: ws.serverPath,
 				reasonsPath: ws.reasonsPath,
 				registryPath: ws.registryPath,
+				changelogPath: ws.changelogPath,
 				today,
 				log: () => {},
 			});
@@ -614,6 +630,36 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 			JSON.parse(fs.readFileSync(ws.reasonsPath, "utf8")).json,
 		).toBeTruthy();
 		expect(fs.readFileSync(ws.bodyPath, "utf8")).toContain("| json |");
+		const changelog = fs.readFileSync(ws.changelogPath, "utf8");
+		expect(changelog).toContain("section: Changed");
+		expect(changelog).toContain("audience: user");
+		expect(changelog).toContain("`json`");
+		expect(changelog).toContain("refs #3989");
+	});
+
+	it("retains earlier promoted servers until the release consumes the fragment", () => {
+		const ws = workspace();
+		const next = workspace();
+		const run = (target: typeof ws, serverId: string, today: string) =>
+			promoteFromSummary({
+				summaryPath: target.summary([row(serverId)]),
+				bodyPath: target.bodyPath,
+				matrixPath: target.matrixPath,
+				serverPath: target.serverPath,
+				reasonsPath: target.reasonsPath,
+				registryPath: target.registryPath,
+				changelogPath: ws.changelogPath,
+				today,
+				log: () => {},
+			});
+
+		expect(run(ws, "json", D1)).toEqual([]);
+		expect(run(ws, "json", D2)).toEqual(["json"]);
+		expect(run(next, "zizmor", D1)).toEqual([]);
+		expect(run(next, "zizmor", D2)).toEqual(["zizmor"]);
+		const changelog = fs.readFileSync(ws.changelogPath, "utf8");
+		expect(changelog).toContain("`json`");
+		expect(changelog).toContain("`zizmor`");
 	});
 
 	it("clears the night memory when the measurement left no summary", () => {
@@ -851,13 +897,12 @@ describe("the registry test's class pin (#3989 F1)", () => {
 	});
 
 	// #3994 r4: `id: "docker"` is a prefix of `id: "docker-official"`. A prefix
-	// matcher sees two definitions and refuses the real docker promotion; an exact
-	// one edits docker's own line and leaves docker-official's byte-identical.
-	it("promotes docker alone on the real source and leaves docker-official's line untouched", () => {
-		const realServer = fs.readFileSync(
-			path.join(repoRoot, "clients/lsp/server.ts"),
-			"utf8",
-		);
+	// matcher sees two definitions and refuses the docker promotion; an exact one
+	// edits docker's own line and leaves docker-official's byte-identical. Keep
+	// this pair in a fixture because the real registry is now allowed to promote
+	// docker; a self-modifying bot test must not name a mutable real-state value.
+	it("promotes docker alone on a prefix-pair fixture and leaves docker-official's line untouched", () => {
+		const realServer = FIXTURE_PREFIX_SERVER_TS;
 		const plan = planPromotions({
 			rows: [row("docker")],
 			prior: nights([D1], () => [row("docker")]),
@@ -867,7 +912,7 @@ describe("the registry test's class pin (#3989 F1)", () => {
 				path.join(repoRoot, "tests/config/lsp-idle-eviction-reasons.json"),
 				"utf8",
 			),
-			registrySource: REAL_REGISTRY_TS,
+			registrySource: FIXTURE_PREFIX_REGISTRY_TS,
 		});
 		expect(plan.promoted.map((p) => p.serverId)).toEqual(["docker"]);
 		const lineAfter = (text: string, id: string) => {

@@ -16,19 +16,24 @@ import * as fs from "node:fs";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { relative } from "node:path";
 import {
 	getExcludedDirGlobs,
 	getProjectIgnoreGlobs,
 	getProjectIgnoreMatcher,
 } from "./file-utils.js";
 import { findNodeToolBinary } from "./package-manager.js";
-import { isAtOrAboveHomeDir, isFullyQualified } from "./path-utils.js";
+import { isAtOrAboveHomeDir, isFullyQualified, toPosix } from "./path-utils.js";
 import { getJscpdMaxEntriesDerived } from "./project-scale.js";
 import {
 	createAvailabilityChecker,
 	findManagedNodeToolBinary,
 	resolveAvailableOrInstall,
 } from "./dispatch/runners/utils/runner-helpers.js";
+import {
+	canonicalDirectory,
+	listNestedLinkedWorktreeRoots,
+} from "./review-graph/git-identity.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
@@ -75,25 +80,77 @@ const SCAN_TIMEOUT_MS = 30_000;
 const JSCPD_CONFIG_FILENAMES = [".jscpd.json", "jscpd.json"];
 
 /**
- * True when the project ships its own jscpd config: a `.jscpd.json`/
- * `jscpd.json` file, or a `package.json` `jscpd` field. jscpd discovers either
- * unaided, but `--min-lines`/`--min-tokens`/`--ignore` on the CLI override
- * whatever the config sets — passing them unconditionally silently discarded a
- * project's own thresholds and ignore list (#1731, discipline A).
+ * The project's own jscpd config, or `null` when it ships none: a
+ * `.jscpd.json`/`jscpd.json` file, or a `package.json` `jscpd` field. jscpd
+ * discovers either unaided, but `--min-lines`/`--min-tokens`/`--ignore` on the
+ * CLI override whatever the config sets -- passing them unconditionally
+ * silently discarded a project's own thresholds and ignore list (#1731,
+ * discipline A). `--ignore` REPLACES the config's `ignore`, so the list is read
+ * here to be merged with the linked-worktree exclusion (#4117). A config file
+ * wins outright over the package.json field, as in jscpd (measured, 5.4.0: with
+ * both present only the file's `ignore` applies; it does not read `jscpd.json`
+ * at all, a name this list keeps from before #4117). `ignoreList: null` means the
+ * config is there but its list cannot be read.
  */
-function hasProjectJscpdConfig(cwd: string): boolean {
+function readProjectJscpdConfig(
+	cwd: string,
+): { ignoreList: string[] | null } | null {
+	const fromObject = (config: unknown): { ignoreList: string[] | null } => {
+		const list = (config as { ignore?: unknown } | null)?.ignore;
+		if (list === undefined) return { ignoreList: [] };
+		return Array.isArray(list) && list.every((e) => typeof e === "string")
+			? { ignoreList: list as string[] }
+			: { ignoreList: null };
+	};
 	for (const name of JSCPD_CONFIG_FILENAMES) {
-		if (fs.existsSync(path.join(cwd, name))) return true;
+		const file = path.join(cwd, name);
+		if (!fs.existsSync(file)) continue;
+		try {
+			return fromObject(JSON.parse(fs.readFileSync(file, "utf-8")));
+		} catch {
+			return { ignoreList: null };
+		}
 	}
 	try {
 		const pkg = JSON.parse(
 			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
 		);
-		if (pkg && typeof pkg === "object" && pkg.jscpd !== undefined) return true;
+		if (pkg && typeof pkg === "object" && pkg.jscpd !== undefined) {
+			return fromObject(pkg.jscpd);
+		}
 	} catch {
 		// No/malformed package.json — "no project config" is the honest answer.
 	}
-	return false;
+	return null;
+}
+
+/**
+ * `--ignore` globs for the linked worktrees under `cwd` (#4117): the path
+ * relative to `cwd` plus `/**`. jscpd matches `--ignore` against cwd-relative
+ * paths (measured, 5.4.0: an absolute pattern ignores nothing). A path a comma
+ * would split or a glob character would misread is counted, not passed.
+ */
+function worktreeIgnoreGlobs(cwd: string): string[] {
+	const base = canonicalDirectory(cwd);
+	const globs: string[] = [];
+	for (const worktree of listNestedLinkedWorktreeRoots(cwd)) {
+		const inside = toPosix(relative(base, worktree));
+		const unsafe = inside.includes(",")
+			? "comma-in-path"
+			: /[*?[\]{}()!\\]/.test(inside)
+				? "glob-char-in-path"
+				: null;
+		if (unsafe) {
+			incrementDegradationCount({
+				kind: "scan-worktree-exclusion-skipped",
+				subject: "jscpd",
+				reason: `${unsafe}: ${inside} not ignored under ${cwd}`,
+			});
+			continue;
+		}
+		globs.push(`${inside}/**`);
+	}
+	return globs;
 }
 
 const jscpdAvailability = createAvailabilityChecker(
@@ -324,7 +381,6 @@ export class JscpdClient {
 		if (isTsProject) {
 			baseIgnores.push("**/*.js", "**/*.jsx");
 		}
-		const ignorePattern = baseIgnores.join(",");
 
 		try {
 			// Prefer a local/global-installed jscpd (any manager) over npx (#375).
@@ -335,27 +391,45 @@ export class JscpdClient {
 					? { cmd: this.jscpdManagedPath, prefix: [] as string[] }
 					: { cmd: "npx", prefix: ["jscpd"] };
 			// A project's own jscpd config wins outright (#1731, discipline A):
-			// these three flags all override whatever it sets, so none are passed
-			// when the project ships one — jscpd discovers it unaided.
-			const hasConfig = hasProjectJscpdConfig(cwd);
+			// these flags all override whatever it sets, so the thresholds are not
+			// passed when the project ships one and jscpd discovers it unaided.
+			// `--ignore` replaces the config's list, so under a config it is passed
+			// only to leave out linked worktrees (#4117), carrying the config's own
+			// entries; a list that cannot be read is left alone.
+			const config = readProjectJscpdConfig(cwd);
+			const worktreeGlobs = worktreeIgnoreGlobs(cwd);
+			let patterns: string[] | undefined;
+			if (config === null) {
+				patterns = [...baseIgnores, ...worktreeGlobs];
+			} else if (worktreeGlobs.length > 0) {
+				if (config.ignoreList === null) {
+					incrementDegradationCount({
+						kind: "scan-worktree-exclusion-skipped",
+						subject: "jscpd",
+						reason: `config-ignore-unreadable: ${worktreeGlobs.length} linked worktree(s) under ${cwd} not ignored`,
+					});
+				} else {
+					patterns = [...config.ignoreList, ...worktreeGlobs];
+				}
+			}
 			const result = await safeSpawnAsync(
 				cmd,
 				[
 					...prefix,
 					".",
-					...(hasConfig
-						? []
-						: [
+					...(config === null
+						? [
 								"--min-lines",
 								String(minLines),
 								"--min-tokens",
 								String(minTokens),
-							]),
+							]
+						: []),
 					"--reporters",
 					"json",
 					"--output",
 					outDir,
-					...(hasConfig ? [] : ["--ignore", ignorePattern]),
+					...(patterns === undefined ? [] : ["--ignore", patterns.join(",")]),
 				],
 				{
 					timeout: SCAN_TIMEOUT_MS,

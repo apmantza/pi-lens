@@ -142,7 +142,9 @@ export const importFactProvider: FactProvider = {
 						hasEsm = true;
 						importNodes.push(child);
 					} else if (child.type === "export_statement") {
-						const isReExport = Boolean(firstChildOfType(child, "string"));
+						// The `from` keyword separates a re-export's source string from
+						// `export default "x"` / `export = "x"`, whose string is a value.
+						const isReExport = Boolean(firstChildOfType(child, "from"));
 						// `export { x }` / `export * from` / `export { x } from` are ESM
 						// declarations (like TS's isExportDeclaration); `export const x` /
 						// `export default` (a wrapped declaration) is NOT counted here.

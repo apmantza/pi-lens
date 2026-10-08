@@ -91,6 +91,13 @@ const CONVERSATION_MODULE_STATE: Readonly<Record<string, readonly string[]>> = {
 	],
 	"index.ts": [
 		"_bridgeGetFlag",
+		// #3654: the unified IO bridge's mount latch. Process-lifetime by design —
+		// the singleton lives on `globalThis` under `Symbol.for(...)` and the mount
+		// is first-wins — exactly like `_readBridgeRegistered` and
+		// `_mutationBridgeRegistered` beside it. Boundary fixture:
+		// `tests/clients/io-bridge.test.ts` mounts twice and pins first-wins +
+		// version. Not session state, so no reset.
+		"_ioBridgeRegistered",
 		"_lspConfigInitializedCwds",
 		"_mutationBridgeRegistered",
 		"_nextTestRunnerDeliveryOwnerId",
@@ -159,6 +166,10 @@ const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 	_fileLastProjectSeq: "reset",
 	_fileSeq: "reset",
 	_fixedThisTurn: "reset",
+	_foreignTurnKeys:
+		"kept: a live concurrent session's turn key outlives the primary's replacement; its own shutdown removes it (forgetTurnSession, #3613)",
+	_foreignTurns:
+		"kept: a count that only orders concurrent sessions' turn keys, which stay distinct across a reset (#3613)",
 	_gitGuardCacheUnknownReason: "reset",
 	_gitGuardHasBlockers: "reset",
 	_gitGuardSummary: "reset",
@@ -195,6 +206,7 @@ const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 	_turnEndCascadeSettleStarts: "reset",
 	_turnIndex: "reset",
 	_turnStartProjectSeq: "reset",
+	_turnStarts: "reset",
 	_turnSummary: "reset",
 	_viewLogEntries: "reset",
 	_viewMissingThrough: "reset",

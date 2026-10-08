@@ -94,6 +94,7 @@ import {
 	isOutsideAllSessionRoots,
 } from "./session-roots.js";
 import { getProcessSingleton } from "../process-singletons.js";
+import { isEphemeralCheckoutRoot } from "../ephemeral-root.js";
 import { getLanguageId } from "./language.js";
 import {
 	getReverseDepsFromIndex,
@@ -412,6 +413,7 @@ async function runRenameNotify(
 }
 const DEFAULT_LSP_CLIENT_CEILING = 24;
 const DEFAULT_IDLE_EVICT_MS = 20 * 60_000;
+const DEFAULT_EPHEMERAL_IDLE_EVICT_MS = 60_000;
 
 /**
  * #3645: the idle window shared by every server whose registry policy is
@@ -428,6 +430,22 @@ export function getLspIdleEvictMs(): number {
 		if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
 	}
 	return DEFAULT_IDLE_EVICT_MS;
+}
+
+function getEphemeralLspIdleEvictMs(): number {
+	const parsed = Number.parseInt(
+		process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS ?? "",
+		10,
+	);
+	return Number.isSafeInteger(parsed) && parsed > 0
+		? parsed
+		: DEFAULT_EPHEMERAL_IDLE_EVICT_MS;
+}
+
+export function getLspIdleEvictMsForRoot(root: string): number {
+	return isEphemeralCheckoutRoot(root)
+		? getEphemeralLspIdleEvictMs()
+		: getLspIdleEvictMs();
 }
 
 export function getLspClientCeiling(): number {
@@ -555,6 +573,8 @@ function readEnvAuxGraceMs(): number | undefined {
 }
 const DEFAULT_AUX_GRACE_CEILING_MS = 2000;
 const MAX_ADAPTIVE_AUX_GRACE_CEILING_MS = 8000;
+/** Servers named in one no-client `lsp_touch_file` row (#3873 O9). */
+const MAX_TOUCH_CANDIDATES = 8;
 const ADAPTIVE_AUX_GRACE_MARGIN_MS = 500;
 
 export function auxWaitBudgetMs(
@@ -1940,6 +1960,8 @@ export class LSPService {
 		// warm-LSP-friendly 20-minute default instead.
 		this.clearIdleEvictionTimer(key);
 		const lastUsedAt = this.clientLastUsedAt.get(key) ?? Date.now();
+		const root = key.slice(key.indexOf(":") + 1);
+		const idleMs = getLspIdleEvictMsForRoot(root);
 		const timer = setTimeout(() => {
 			this.idleEvictionTimers.delete(key);
 			void this.withClientSpawnGate(async () => {
@@ -1972,7 +1994,7 @@ export class LSPService {
 					reason: "idle LSP client released to bound memory",
 				});
 			}).catch(() => {});
-		}, getLspIdleEvictMs());
+		}, idleMs);
 		timer.unref?.();
 		this.idleEvictionTimers.set(key, timer);
 	}
@@ -3452,6 +3474,13 @@ export class LSPService {
 		filePath: string,
 		excludeServerIds?: ReadonlySet<string>,
 		resolvedRoots?: Map<string, string>,
+		/**
+		 * The roots of the auxiliary servers this call attempted (#3873 G1). Kept
+		 * apart from `resolvedRoots`, which `isSpawnInFlight` reads as the
+		 * PRIMARY servers' roots: an auxiliary spawn in flight must not read as
+		 * the primary's.
+		 */
+		auxiliaryRoots?: Map<string, string>,
 	): Promise<{ clients: SpawnedServer[]; serverCountAttempted: number }> {
 		const allServers = getServersForFileWithConfig(filePath);
 		const servers =
@@ -3472,6 +3501,10 @@ export class LSPService {
 			(entry): entry is { server: LSPServerInfo; root: string } =>
 				entry.root !== undefined,
 		);
+
+		for (const { server, root } of rootedServers)
+			if (server.role === "auxiliary")
+				auxiliaryRoots?.set(server.id, normalizeMapKey(root));
 
 		let serverCountAttempted = 0;
 		const acquisitions = new Map<string, Promise<SpawnedServer | undefined>>();
@@ -4840,6 +4873,7 @@ export class LSPService {
 			options.clientScope ?? (diagnosticsMode === "full" ? "all" : "primary");
 		const useAllClients = clientScope === "all";
 		const resolvedPrimaryRoots = new Map<string, string>();
+		const attemptedAuxiliaryRoots = new Map<string, string>();
 		const waitSkipReasons = new Set<string>();
 		const coldAuxiliaryServerIds = new Set<string>();
 		const noteColdAuxiliary = (
@@ -4857,6 +4891,7 @@ export class LSPService {
 				filePath,
 				options.excludeServerIds,
 				resolvedPrimaryRoots,
+				attemptedAuxiliaryRoots,
 			);
 			spawned = result.clients;
 			serverCountAttempted = result.serverCountAttempted;
@@ -4940,6 +4975,12 @@ export class LSPService {
 					...(waitSkipReasons.size > 0
 						? { reason: [...waitSkipReasons][0] }
 						: {}),
+					// #3873 O9: part of the touch's one row, so no extra record per touch.
+					candidates: this.describeTouchCandidates(
+						filePath,
+						resolvedPrimaryRoots,
+						attemptedAuxiliaryRoots,
+					),
 				},
 			});
 			return;
@@ -10341,6 +10382,62 @@ export class LSPService {
 			if (this.state.inFlight.has(`${serverId}:${root}`)) return true;
 		}
 		return false;
+	}
+
+	/**
+	 * #3873 O9: what a touch that found no client had to choose from. One entry
+	 * per PRIMARY language server configured for the file: whether a root
+	 * resolved for it (`rooted`), what this service held for that server and
+	 * root (`clientFound`: `alive`, `dead` or `none`), and that client's spawn
+	 * time (`generation`, epoch ms; a replaced client has a new one). Pure
+	 * lookup over the roots the touch already resolved, so `rooted: false` means
+	 * this touch resolved no root for it (none found, its wait timed out first,
+	 * or it was an alternate never tried), and an `alive` client next to a
+	 * no-client verdict is the contradiction worth reading.
+	 *
+	 * An auxiliary server (opengrep, ast-grep, typos, ...) is listed only when
+	 * this touch attempted it and so has a root in `auxiliaryRoots`, which only
+	 * `clientScope: "all"` fills (`getClientsForFile`). In the primary and
+	 * with-auxiliary scopes it is skipped: no root is resolved for it here, so
+	 * its entry would read `rooted: false` beside a live client. The
+	 * with-auxiliary outcome is the `auxiliary_readiness` row's (written only in
+	 * that branch). Bounded at {@link MAX_TOUCH_CANDIDATES}.
+	 */
+	describeTouchCandidates(
+		filePath: string,
+		resolvedRoots: ReadonlyMap<string, string>,
+		auxiliaryRoots: ReadonlyMap<string, string> = new Map(),
+	): Array<{
+		serverId: string;
+		rooted: boolean;
+		clientFound: "alive" | "dead" | "none";
+		generation: number | undefined;
+	}> {
+		const candidates: Array<{
+			serverId: string;
+			rooted: boolean;
+			clientFound: "alive" | "dead" | "none";
+			generation: number | undefined;
+		}> = [];
+		for (const server of getServersForFileWithConfig(filePath)) {
+			// Only `clientScope: "all"` attempts auxiliary servers in this touch; an
+			// auxiliary it did not attempt was never considered.
+			const auxiliary = server.role === "auxiliary";
+			if (auxiliary && !auxiliaryRoots.has(server.id)) continue;
+			if (candidates.length >= MAX_TOUCH_CANDIDATES) break;
+			const root = (auxiliary ? auxiliaryRoots : resolvedRoots).get(server.id);
+			const key = root === undefined ? undefined : `${server.id}:${root}`;
+			const client =
+				key === undefined ? undefined : this.state.clients.get(key);
+			candidates.push({
+				serverId: server.id,
+				rooted: root !== undefined,
+				clientFound: client ? (client.isAlive() ? "alive" : "dead") : "none",
+				generation:
+					key === undefined ? undefined : this.state.clientSpawnedAt.get(key),
+			});
+		}
+		return candidates;
 	}
 
 	/**

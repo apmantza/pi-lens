@@ -48,9 +48,11 @@ export const lazyToolMemoryStore = defineSessionStore<string[]>({
 	},
 	snapshot: (scope) => [...memory(scope)],
 	restore: (scope, payload) => {
-		if (!Array.isArray(payload)) return;
+		if (!Array.isArray(payload)) return { itemsIn: 0, itemsKept: 0 };
+		const before = memory(scope).size;
 		for (const name of payload)
 			if (typeof name === "string") memory(scope).add(name);
+		return { itemsIn: payload.length, itemsKept: memory(scope).size - before };
 	},
 	reason:
 		"the lazy tools a conversation activated, restored on every rebuild so the advertised tool list keeps its prompt-cache prefix",

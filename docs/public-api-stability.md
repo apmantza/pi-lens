@@ -391,6 +391,13 @@ JSON-RPC `-32602` error; `arguments` absent, `null` or `[]` means no arguments.
 pass extra keys today would break, so it needs a major, through the removal
 checklist in section 4.
 
+## 6. File I/O Lifecycle Bridge (v2)
+
+`PiLensIOBridge` is public API from day one ([RFC 3654](rfcs/3654-unified-io-bridge-v2.md)).
+Producers access the bridge via `Symbol.for("pi-lens:io-bridge")` carrying `readonly version: 2`.
+The compatibility policy and migration path from legacy v1 symbols are documented in
+[Migration Guide: File I/O Lifecycle Bridge v1 → v2](io-bridge-v2-migration.md).
+
 ## Where each policy point is enforced
 
 | Policy point | Data | Test |

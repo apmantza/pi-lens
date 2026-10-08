@@ -219,6 +219,44 @@ Several in-memory caches release their contents after a period of inactivity so 
 long-running session does not retain hydrated state indefinitely. Each has an
 env-tunable window; all default to 20 minutes (`1200000` ms).
 
+### V8 heap ceiling for long pi sessions
+
+If a long pi session with pi-lens approaches the memory available on its host,
+set a V8 old-space ceiling before launching pi:
+
+```sh
+NODE_OPTIONS=--max-old-space-size=700 pi
+```
+
+`700` MB is a diagnosis-based starting point, not a universal project limit. In
+the #1999 investigation, the capped and uncapped runs had the same settled live
+heap (about 240 MB), while the cap reduced peak RSS from about 1,870 MB to
+961 MB at the same point and did not add wall time in that run. GC CPU cost was not measured separately, so treat the value as a starting point to tune on your own workload. The measured
+long-session parent heaps were otherwise about 1.3–1.8 GiB, so increase the
+ceiling for a workload that needs more headroom. A ceiling that is too low can
+make Node abort with an out-of-memory crash; it does not reduce the live state
+that the workload requires.
+
+This setting applies to that pi launch only. To make it persistent for a shell,
+export it first, then launch pi:
+
+```sh
+export NODE_OPTIONS=--max-old-space-size=700
+pi
+```
+
+To observe what the session is using, inspect `memory_sample` records in
+`~/.pi-lens/latency.log`. Compare `process.heapUsedBytes` with the settled
+`process.heapSettledBytes`, and check `process.externalNonBufferBytes` for
+external memory that is not ArrayBuffer memory. The latest asynchronous
+persist-worker readings are under
+`subsystems.persistWorkers.reviewGraph` and
+`subsystems.persistWorkers.projectSnapshot`. If `/lens-health` exposes the
+same memory fields in a future pi-lens version, use those current readings
+there as well; the current `/lens-health` output does not render them. The
+complete field definitions are in
+[`pi-lens-monitor.md`](pi-lens-monitor.md#memory-samples).
+
 ### `PI_LENS_LSP_IDLE_EVICT_MS`
 
 Shared idle window (ms) after which every language-service client whose registry
@@ -229,6 +267,14 @@ nightly measurement behind each declaration, is in
 [`lsp-idle-eviction.md`](lsp-idle-eviction.md).
 When unset or invalid, `PI_LENS_TS_IDLE_EVICT_MS` (below) is read.
 **Default:** 20 minutes (`1200000`).
+
+### `PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS`
+
+Idle window (ms) for language-service clients whose workspace is inside a
+temporary or ephemeral Git checkout. This overrides the shared window above
+for those roots; when unset or invalid, the default is 60 seconds (`60000`).
+The nightly idle-eviction measurement temporarily sets this variable alongside
+`PI_LENS_LSP_IDLE_EVICT_MS` so both root policies are measured.
 
 ### `PI_LENS_TS_IDLE_EVICT_MS`
 

@@ -1,6 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	classifyObservedRunner,
 	COLLECT_LATER_THRESHOLD_MS,
@@ -29,6 +29,10 @@ import {
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
+import {
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../../clients/latency-logger.js";
 import {
 	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
@@ -171,6 +175,101 @@ describe("observed runner collect-later tier (#2116)", () => {
 			status: "failed",
 			failureKind: "timeout",
 		});
+	});
+
+	// #3796 item 2. Recurrence prevented: the collect-later runner row logged
+	// only `{tier, delivered}`, so the log analyzer fell back to counting
+	// diagnostics and filed a fault arm that carries a synthetic diagnostic as
+	// a finding. Read back from the real latency.log sink.
+	it("writes failureKind and failureMessage on the collect-later latency row", async () => {
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		try {
+			const outcomes: Record<string, RunnerResult> = {
+				"kind-runner": {
+					status: "failed",
+					diagnostics: [],
+					semantic: "warning",
+					failureKind: "parser_error",
+					failureMessage: "kind-runner output could not be parsed",
+				},
+				"kindless-runner": {
+					status: "failed",
+					diagnostics: [],
+					semantic: "warning",
+				},
+				"clean-runner": {
+					status: "succeeded",
+					diagnostics: [],
+					semantic: "none",
+				},
+			};
+			const registry = new RunnerRegistry();
+			for (const runnerId of Object.keys(outcomes)) {
+				observeRunnerLatency({
+					projectRoot,
+					runnerId,
+					durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+				});
+				registry.register({
+					id: runnerId,
+					appliesTo: ["jsts"],
+					priority: 1,
+					run: async () => outcomes[runnerId],
+				});
+			}
+			const ctx = createDispatchContext(
+				filePath,
+				projectRoot,
+				{ getFlag: () => false },
+				new FactStore(),
+			);
+			Object.defineProperty(ctx, "writeIndex", { value: 1 });
+			await dispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: Object.keys(outcomes) }],
+				registry,
+			);
+			await drainPendingRunnerFindings(100);
+			await flushLatencyLog();
+			const rows = readFileSync(getLatencyLogPath(), "utf-8")
+				.trim()
+				.split("\n")
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							type?: string;
+							runnerId?: string;
+							status?: string;
+							filePath?: string;
+							metadata?: { tier?: string };
+						},
+				)
+				.filter(
+					(row) =>
+						row.type === "runner" &&
+						row.metadata?.tier === "collect-later" &&
+						row.status !== "pending" &&
+						row.filePath === filePath,
+				);
+			const metadataOf = (runnerId: string) =>
+				rows.find((row) => row.runnerId === runnerId)?.metadata;
+			expect(metadataOf("kind-runner")).toEqual({
+				tier: "collect-later",
+				delivered: "turn_end",
+				failureKind: "parser_error",
+				failureMessage: "kind-runner output could not be parsed",
+			});
+			expect(metadataOf("kindless-runner")).toEqual({
+				tier: "collect-later",
+				delivered: "turn_end",
+			});
+			expect(metadataOf("clean-runner")).toEqual({
+				tier: "collect-later",
+				delivered: "turn_end",
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("does not defer a slow observation outside a write dispatch", async () => {

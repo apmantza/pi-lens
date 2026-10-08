@@ -13,6 +13,23 @@ import {
 	releaseGeneration,
 	tryAcquireGeneration,
 } from "./generation-lock.js";
+import { getProcessSingleton } from "./process-singletons.js";
+
+const OWN_HOLDS_FAMILY = "instance-registry.lock-own-holds";
+/** Bump when the cell's shape changes. */
+const OWN_HOLDS_VERSION = 1;
+
+/**
+ * How many async holds of the registry lock are in flight in this process.
+ * A process singleton, not module scope: pi evaluates this module more than
+ * once per process (#2146), and the holder and a sync waiter can sit in
+ * different evaluations.
+ */
+function ownAsyncHolds(): { count: number } {
+	return getProcessSingleton(OWN_HOLDS_FAMILY, OWN_HOLDS_VERSION, () => ({
+		count: 0,
+	}));
+}
 
 const LOCK_STALE_MS = 5_000;
 const LOCK_WAIT_MS = 500;
@@ -119,6 +136,14 @@ function recordLegacyHeld(target: string): void {
 	});
 }
 
+function recordOwnHold(target: string): void {
+	incrementDegradationCount({
+		kind: "instance-registry-lock-own-hold",
+		subject: path.resolve(target),
+		reason: "did not wait: an async registry op of this process holds the lock",
+	});
+}
+
 function recordLockTimeout(target: string): void {
 	incrementDegradationCount({
 		kind: "instance-registry-lock-timeout",
@@ -156,9 +181,12 @@ export async function withInstanceRegistryLock<T>(
 				await new Promise((resolve) => setTimeout(resolve, backoffMs()));
 			continue;
 		}
+		const holds = ownAsyncHolds();
+		holds.count += 1;
 		try {
 			return await op();
 		} finally {
+			holds.count -= 1;
 			release(target, hold);
 		}
 	}
@@ -166,10 +194,19 @@ export async function withInstanceRegistryLock<T>(
 	return undefined;
 }
 
+/**
+ * The sync wait blocks the event loop, so it can never get a lock an async op
+ * of this process holds: that op needs the loop to release it. It returns
+ * `undefined` at once then, and the caller queues behind the holder.
+ */
 export function withInstanceRegistryLockSync<T>(
 	target: string,
 	op: () => T,
 ): T | undefined {
+	if (ownAsyncHolds().count > 0) {
+		recordOwnHold(target);
+		return undefined;
+	}
 	const deadline = Date.now() + LOCK_WAIT_MS;
 	while (Date.now() <= deadline) {
 		const hold = tryAcquire(target);

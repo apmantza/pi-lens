@@ -435,6 +435,10 @@ export function planPromotions({
 export function renderPromotionBody(promoted, skipped, runUrl) {
 	const lines = [
 		"Automated promotion from the nightly `tool-smoke` idle-eviction measurement (#3989). This PR is a draft and is never auto-merged.",
+		"No new failure path; no record added.",
+		"TLA+ unaffected: session-lifecycle — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"TLA+ unaffected: format-drain — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"TLA+ unaffected: lsp-idle-reset — the flip changes idleEviction policy data in the registry table, not lifecycle.",
 		"",
 		`Each server below was measured \`eligible\` (eviction and respawn preserved every finding) on ${PROMOTE_NIGHTS} consecutive nightly runs, held idle RSS of at least ${IDLE_EVICTION_MIN_RSS_BYTES / MB} MB, and cold-started in at most ${COLD_START_MAX_MS} ms on both nights (the worse night is judged). It flips that server's \`idleEviction: "unmeasured"\` to \`"transparent"\` in \`clients/lsp/server.ts\`, adds its reason row to \`tests/config/lsp-idle-eviction-reasons.json\`, and moves its id from NEXT_PHASE_ELIGIBLE_IDS to TRANSPARENT_IDS in \`tests/config/lsp-idle-eviction-registry.test.ts\` (#3952's class pin). Nothing is ever demoted here: a declared-transparent server the measurement vetoes is the drift issue's job (#3645).`,
 		"",

@@ -174,7 +174,10 @@ describe("instance registry across a session replacement (#3498)", () => {
 		await shutdownDuringHeartbeat();
 
 		expect(ownEntry()).toBeUndefined();
-		expect(degradationCount("instance-registry-lock-timeout")).toBe(1);
+		// The sync removal does not wait out a lock this process holds: the
+		// holder needs the event loop that wait would block.
+		expect(degradationCount("instance-registry-lock-own-hold")).toBe(1);
+		expect(degradationCount("instance-registry-lock-timeout")).toBe(0);
 		expect(
 			ledger
 				.getDegradationSummary()

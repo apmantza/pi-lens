@@ -770,9 +770,11 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 	restore: async (_scope, payload, ctx) => {
 		clearWidgetState();
 		const state = payload as PersistedWidgetState | undefined;
-		if (!state?.files) return;
+		if (!state?.files) return { itemsIn: 0, itemsKept: 0 };
 		// Only a sidecar reaches here (startup, resume), and it carries savedAt.
-		importWidgetState(await dropStaleFiles(state, ctx.savedAt as number));
+		const fresh = await dropStaleFiles(state, ctx.savedAt as number);
+		importWidgetState(fresh);
+		return { itemsIn: state.files.length, itemsKept: fresh.files.length };
 	},
 	reset: () => clearWidgetState(),
 	reason:

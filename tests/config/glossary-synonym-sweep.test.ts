@@ -326,7 +326,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/session.ts": 4,
 		"clients/metrics-client.ts": 7,
 		"clients/observed-mutation.ts": 7,
-		"clients/opaque-mutation-scan.ts": 4,
 		"clients/runtime-tool-call.ts": 13,
 		"clients/sgconfig.ts": 6,
 		"clients/widget-state.ts": 2,
@@ -345,7 +344,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/review-graph/tsconfig-paths.ts": 6,
 		"clients/source-filter.ts": 4,
 		"clients/tree-sitter-cache.ts": 16,
-		"clients/word-index.ts": 11,
+		// #4129 adds cache terminology for the persist-owned serialized view.
+		"clients/word-index.ts": 15,
 	},
 	channel: {
 		"clients/agent-nudge.ts": 1,
@@ -355,11 +355,17 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"index.ts": 2,
 	},
 	consumer: {
+		// #3654: the unified bridge's frozen `BridgeEntry.consumer` field (RFC §3)
+		// and the v1 shim reads that forward it (D14). Caller-identity sense; the
+		// lexical census cannot tell it apart from the retired delivery-surface
+		// sense. New internal code in `clients/io-bridge.ts` says `caller`; only
+		// the frozen public/RFC field reads remain.
 		"clients/ast-grep-client.ts": 1,
+		"clients/io-bridge-contract.ts": 1,
 		"clients/lsp-mutation.ts": 1,
 		"clients/mutating-tool.ts": 2,
 		"clients/observed-mutation.ts": 3,
-		"clients/read-bridge.ts": 2,
+		"clients/read-bridge.ts": 5,
 		"clients/zizmor-config.ts": 13,
 	},
 	epoch: {
@@ -654,7 +660,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (one `Array.prototype.filter`), and the call-graph lane drops a parked
 		// file it already walks as fresh (one). The knip and dead-code re-offers
 		// share one helper in turn-end/delivery-holds.ts instead of two copies.
-		"clients/runtime-turn.ts": 33,
+		"clients/runtime-turn.ts": 32,
 		"clients/safe-spawn.ts": 4,
 		"clients/sanitize.ts": 9,
 		"clients/scratch-tree-policy.ts": 2,
@@ -696,6 +702,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	},
 	ignore: {
 		"clients/file-utils.ts": 2,
+		// 0 -> 2 (#4117): jscpd's own config key, read (`config.ignore`) and typed
+		// (`{ ignore?: unknown }`) to merge the project's list with the worktree
+		// exclusion; the name is jscpd's, not one this tree coined.
+		"clients/jscpd-client.ts": 2,
 		"clients/lens-config.ts": 9,
 		"clients/project-lens-config.ts": 6,
 	},
@@ -870,7 +880,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/extension-log.ts": 2,
 		"clients/file-kinds.ts": 2,
 		"clients/file-time.ts": 7,
-		"clients/file-utils.ts": 53,
+		"clients/ephemeral-root.ts": 15,
+		"clients/file-utils.ts": 57,
 		"clients/finding-identity.ts": 2,
 		"clients/fix-worklog.ts": 3,
 		"clients/format-service.ts": 3,
@@ -890,7 +901,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/installer/index.ts": 107,
 		"clients/installer/managed-tool-refresh.ts": 4,
 		"clients/instance-reaper.ts": 4,
-		"clients/instance-registry-lock.ts": 8,
+		// 8 -> 9 (#3498): the own-hold skip's degradation `subject`,
+		// `path.resolve(target)`, as its sibling records in this file spell it.
+		"clients/instance-registry-lock.ts": 9,
 		"clients/instance-registry.ts": 2,
 		"clients/jscpd-client.ts": 8,
 		"clients/json-cache-read.ts": 4,
@@ -928,7 +941,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mutation-attribution.ts": 3,
 		"clients/ndjson-logger.ts": 5,
 		"clients/observed-mutation.ts": 6,
-		"clients/opaque-mutation-scan.ts": 5,
+		"clients/opaque-mutation-scan.ts": 6,
 		"clients/opengrep-client.ts": 8,
 		"clients/opengrep-config.ts": 3,
 		"clients/package-manager.ts": 20,
@@ -958,7 +971,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-lens-config.ts": 21,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
-		"clients/python-environment.ts": 18,
+		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
+		// path operations at the shared Python resolver seam; r3 restored the
+		// `path.isAbsolute` leg that rejects another Windows drive (V1).
+		"clients/python-environment.ts": 22,
 		"clients/read-guard-logger.ts": 3,
 		"clients/recent-touches.ts": 5,
 		"clients/reverse-deps.ts": 8,
@@ -978,10 +994,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(filePath)`, the expression every sibling method uses.
 		"clients/runtime-coordinator.ts": 29,
 		"clients/runtime-session.ts": 15,
-		"clients/runtime-tool-call.ts": 22,
+		// 22 -> 21 (#4137): the baseline slot's `path.resolve` moved into
+		// `opaqueBaselineSlot` (clients/opaque-mutation-scan.ts).
+		"clients/runtime-tool-call.ts": 21,
 		// 22 -> 20 (#3650): the tool_result path read is routed through
 		// readToolResultPathField; the open-coded input.path cast is gone.
-		"clients/runtime-tool-result.ts": 20,
+		"clients/runtime-tool-result.ts": 19,
 		// 25 -> 27 (#3218): the resolved-blocker filter keys both the current
 		// blocker set and each resolved entry with `path.resolve`.
 		"clients/runtime-turn.ts": 27,
@@ -1004,7 +1022,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 61 -> 66: filesystem ownership/discovery operations plus the alias
 		// exception's physical policy-relative path (R4). These remain filesystem
 		// operations, not delivery lanes; the census measures every use.
-		"clients/test-runner-client.ts": 66,
+		// 66 -> 74 (#3871 r2): text-runner display rebasing uses path operations
+		// for pytest, PHPUnit, Mix, and generic runner locations.
+		"clients/test-runner-client.ts": 74,
 		"clients/todo-scanner.ts": 3,
 		// 4 -> 10 (#3655): the Node lockfile walk-up and supplier selection
 		// resolve pnpm/yarn evidence through `path.join`, `path.relative`,
@@ -1055,6 +1075,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/git-guard.ts": 44,
 		"clients/govulncheck-client.ts": 4,
 		"clients/inline-blocker-dispositions.ts": 4,
+		// #3654: the unified bridge's own `record()` API (RFC §3) — a method
+		// name, not the retired finding-record noun; the lexical census cannot
+		// tell the two senses apart.
+		"clients/io-bridge-contract.ts": 2,
+		"clients/io-bridge.ts": 2,
 		"clients/lsp/document-drift.ts": 19,
 		"clients/lsp/index.ts": 36,
 		"clients/lsp/workspace-diagnostics-cache.ts": 2,
@@ -1066,7 +1091,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/fresh-fetch.ts": 12,
 		"clients/project-lens-config.ts": 6,
 		"clients/project-snapshot.ts": 10,
-		"clients/read-bridge.ts": 1,
 		"clients/read-guard-tool-lines.ts": 4,
 		"clients/read-guard.ts": 20,
 		"clients/runtime-agent-end.ts": 56,
@@ -1107,7 +1131,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/cache.ts": 16,
 		"clients/project-diagnostics/scanner.ts": 10,
 		"clients/project-report.ts": 3,
-		"clients/project-snapshot.ts": 128,
+		// #4129 adds the word-index splice and worker heap slot's snapshot uses.
+		"clients/project-snapshot.ts": 130,
 		"clients/read-guard-branch.ts": 2,
 		"clients/read-guard-tool-lines.ts": 3,
 		"clients/read-guard.ts": 2,
@@ -1279,6 +1304,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/install-diagnostics.ts": 3,
 		"clients/installer/index.ts": 60,
 		"clients/installer/managed-tool-refresh.ts": 24,
+		// #3654: the unified bridge protocol's own `version` field (RFC §3) — a
+		// protocol name that cannot be renamed.
+		"clients/io-bridge-contract.ts": 1,
+		"clients/io-bridge.ts": 1,
 		"clients/knip-client.ts": 8,
 		"clients/lens-events.ts": 4,
 		// #3505 (b): the workspace pull binds an item by the LSP report's own
@@ -1304,11 +1333,18 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/types.ts": 2,
 		"clients/project-snapshot.ts": 17,
 		"clients/read-bridge.ts": 2,
+		// #3873: the persisted read-set's own schema `version` on the
+		// `read_guard_branch_retained` row (`payloadVersion`), not a generation.
+		"clients/read-guard-branch.ts": 5,
 		"clients/read-guard.ts": 3,
 		"clients/review-graph/builder.ts": 27,
 		"clients/review-graph/types.ts": 1,
 		"clients/runtime-session.ts": 8,
 		"clients/runtime-turn.ts": 1,
+		// #3873: the sidecar envelope's schema `version` (and the version a
+		// migrated file was written at) on `session_handoff_adopt`, not a
+		// generation.
+		"clients/session-scope.ts": 5,
 		"clients/session-state-store.ts": 6,
 		// 19 -> 52 (#3655): the pnpm/yarn lockfile readers thread each
 		// supplier's resolved `version` (params, `.version` fields, and the
@@ -1346,7 +1382,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/pipeline.ts": 6,
 		"clients/project-diagnostics/runner-adapters/call-graph-impact.ts": 1,
 		"clients/runtime-agent-end.ts": 6,
-		"clients/runtime-coordinator.ts": 6,
 		"clients/runtime-turn.ts": 21,
 		"clients/secret-findings.ts": 3,
 		"clients/widget-state.ts": 1,

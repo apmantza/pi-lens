@@ -575,7 +575,13 @@ describe("oxlint runner", () => {
 
 				expect(outcome.status).toBe(expectedStatus);
 				expect(outcome.skipReason).toBe(expectedSkipReason);
-				expect(outcome.failureKind).toBe(expectedFailureKind);
+				// A parsed-nothing row is finishParsedRun's parse-error arm (#3796).
+				expect(outcome.failureKind).toBe(
+					expectedFailureKind ??
+						(expectedDegradation === "runner-parsed-nothing"
+							? "parser_error"
+							: undefined),
+				);
 				const degradationKinds = logLatency.mock.calls
 					.map(
 						([entry]) =>

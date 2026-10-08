@@ -10,8 +10,10 @@
  * scripts/lib/lsp-idle-eviction-promote.mjs, flips its `idleEviction:
  * "unmeasured"` line to `"transparent"` in clients/lsp/server.ts and adds its
  * reason row to tests/config/lsp-idle-eviction-reasons.json, in the working
- * tree. The workflow's second create-pull-request step commits only those two
- * paths to `bot/lsp-idle-evict-promote` as a DRAFT PR; it is never merged here.
+ * tree. The workflow's second create-pull-request step commits those edits and
+ * the generated changelog to `bot/lsp-idle-evict-promote` as a DRAFT PR; it is
+ * never merged here.
+ * It also emits one user-facing changelog fragment naming the promoted servers.
  *
  *   node scripts/promote-lsp-idle-eviction.mjs --summary <path> [--body <path>]
  *       [--matrix <path>] [--server-src <path>] [--reasons <path>] [--today <YYYY-MM-DD>]
@@ -51,7 +53,7 @@ function readRejected(file) {
 /**
  * One nightly run. Returns the promoted server ids; never throws.
  *
- * @param {{ summaryPath?: string, bodyPath?: string, matrixPath: string, serverPath: string, reasonsPath: string, registryPath: string, rejectedPath?: string, today: string, runUrl?: string | null, log?: (line: string) => void }} opts
+ * @param {{ summaryPath?: string, bodyPath?: string, changelogPath?: string, matrixPath: string, serverPath: string, reasonsPath: string, registryPath: string, rejectedPath?: string, today: string, runUrl?: string | null, log?: (line: string) => void }} opts
  * @returns {string[]}
  */
 export function promoteFromSummary(opts) {
@@ -99,6 +101,21 @@ export function promoteFromSummary(opts) {
 		fs.writeFileSync(opts.reasonsPath, plan.reasonsText);
 		fs.writeFileSync(opts.registryPath, plan.registrySource);
 		if (opts.bodyPath && plan.body) fs.writeFileSync(opts.bodyPath, plan.body);
+		if (opts.changelogPath) {
+			const previous = fs.existsSync(opts.changelogPath)
+				? fs.readFileSync(opts.changelogPath, "utf8")
+				: "";
+			const previousIds = [...previous.matchAll(/`([^`]+)`/g)].map(
+				([, serverId]) => serverId,
+			);
+			const serverIds = [
+				...new Set([...previousIds, ...plan.promoted.map((p) => p.serverId)]),
+			];
+			fs.writeFileSync(
+				opts.changelogPath,
+				`---\nsection: Changed\naudience: user\n---\n\n- Idle eviction is now enabled for ${serverIds.map((serverId) => `\`${serverId}\``).join(", ")} after consecutive safe measurements (refs #3989).\n`,
+			);
+		}
 		return plan.promoted.map((p) => p.serverId);
 	} catch (error) {
 		log(`idle-eviction promotion: ${error?.message ?? error}`);
@@ -143,6 +160,11 @@ if (
 				"config",
 				"lsp-idle-eviction-registry.test.ts",
 			),
+		),
+		changelogPath: path.join(
+			repoRoot,
+			".changelog",
+			"3989-lsp-idle-eviction-promote.md",
 		),
 		rejectedPath: flag("--rejected", undefined),
 		today: flag("--today", new Date().toISOString().slice(0, 10)),

@@ -174,13 +174,34 @@ export function parseTomlStringArray(
 ): string[] {
 	if (content === undefined) return [];
 	const normalized = normalizeToml(content);
-	const match = normalized.match(
-		new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*\\[([\\s\\S]*?)\\]`, "m"),
+	const open = normalized.match(
+		new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*\\[`, "m"),
 	);
-	if (!match) return [];
-	return [...match[1].matchAll(/"([^"]*)"|'([^']*)'/g)].map((m) =>
-		(m[1] ?? m[2] ?? "").trim(),
+	if (open?.index === undefined) return [];
+	const from = open.index + open[0].length;
+	const to = indexOfArrayEnd(normalized, from);
+	if (to < 0) return [];
+	return [...normalized.slice(from, to).matchAll(/"([^"]*)"|'([^']*)'/g)].map(
+		(m) => (m[1] ?? m[2] ?? "").trim(),
 	);
+}
+
+/**
+ * Index of the `]` that closes an array whose body starts at `from`, skipping
+ * every `]` inside a quoted string (a glob class such as `"legacy_[ab]*"` is
+ * an entry, not the end); -1 when it never closes (#4117).
+ */
+function indexOfArrayEnd(text: string, from: number): number {
+	let quote: '"' | "'" | null = null;
+	for (let i = from; i < text.length; i++) {
+		const ch = text[i];
+		if (quote) {
+			if (ch === "\\" && quote === '"') i++;
+			else if (ch === quote) quote = null;
+		} else if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === "]") return i;
+	}
+	return -1;
 }
 
 /**

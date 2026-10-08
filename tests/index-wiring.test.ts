@@ -296,8 +296,9 @@ const EXPECTED_HOOKS = [
 
 /**
  * turn_end and a `/fork` or `/reload` shutdown persist the session stores
- * (#3612) fire-and-forget (#2523): yield (no timer) until the sidecar's
- * atomic rename is visible, so it is read, and never lands after cleanup.
+ * (#3612) fire-and-forget (#2523): yield until a wall-clock deadline so the
+ * sidecar's atomic rename is visible, and never lands after cleanup. The
+ * deadline covers thread-pool latency; a yield-count cap does not (#4134).
  */
 async function sidecarWritten(cwd: string, sessionId: string): Promise<void> {
 	const sidecar = path.join(
@@ -305,7 +306,8 @@ async function sidecarWritten(cwd: string, sessionId: string): Promise<void> {
 		"sessions",
 		`${sessionId}.json`,
 	);
-	for (let i = 0; i < 5000 && !fs.existsSync(sidecar); i++)
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline && !fs.existsSync(sidecar))
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	expect(fs.existsSync(sidecar), sidecar).toBe(true);
 }

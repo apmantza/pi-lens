@@ -20,7 +20,9 @@ the `TLA+ models` CI job checks them all.
   lock is not re-entrant (`generation-lock.ts` `tryAcquireGeneration`), and the
   sync wait uses `Atomics.wait`, which blocks the event loop. So if this
   process's own async op holds the lock, the holder cannot release it, and
-  after 500 ms the sync removal gives up.
+  the sync removal gives up at once (`instance-registry-lock-own-hold`).
+  Before the own-hold skip it gave up only after the 500 ms wait; the model
+  does not separate the two, since both skip the removal.
 - **The heartbeat** (`updateHeartbeat`), fire-and-forget from turn_end and
   from the quiet window. Under the lock it notes whether the entry is missing.
   After the lock it re-registers from the intent with a queued

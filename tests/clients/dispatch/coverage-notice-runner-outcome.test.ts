@@ -290,7 +290,7 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 
 	it("carries the notice when a failed primary has a diagnostic but no failureKind", async () => {
 		// A `failed` with no `failureKind` is indistinguishable from a runner
-		// break until #3796 item 3 gives the parse-error arms a kind (#3781).
+		// break (#3781); the parse-error arms carry a kind since #3796 item 3.
 		registry.register({
 			id: "lsp",
 			appliesTo: ["jsts"],

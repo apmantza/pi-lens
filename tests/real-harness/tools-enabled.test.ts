@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
 import { withRealPi } from "../support/real-pi-harness.js";
@@ -34,6 +35,72 @@ function latestTools(pi: {
 // every NDJSON logger is a no-op under isTestMode(). Other scenarios keep the
 // harness default.
 describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
+	// #2889 recurrence: pi rebuilds the extension factory on reload, so a
+	// closure-local activation set loses the model's lazy-tool posture.
+	it("restores lazy activation after the real extension factory reloads", async () => {
+		await withRealPi(
+			{
+				fixture: "scenario-1",
+				script: "lazy-activation-reload.json",
+				extensions: [
+					fileURLToPath(
+						new URL(
+							"../fixtures/real-harness/reload-extension.mjs",
+							import.meta.url,
+						),
+					),
+				],
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
+			async (pi) => {
+				await pi.prompt("activate a lazy tool");
+				await pi.awaitAssistantTurn();
+				const before = pi.providerObservations().at(0)?.tools;
+				expect(
+					(Array.isArray(before) ? before : []).some(
+						(tool) => (tool as { name?: string }).name === "ast_grep_search",
+					),
+				).toBe(false);
+				await pi.awaitToolResult("pi_lens_activate_tools");
+				await pi.awaitAssistantTurn();
+				const activated = pi.providerObservations().at(-1)?.tools;
+				expect(
+					(Array.isArray(activated) ? activated : []).some(
+						(tool) => (tool as { name?: string }).name === "ast_grep_search",
+					),
+				).toBe(true);
+
+				await pi.prompt("/real-harness-reload");
+				await pi.prompt("observe the restored tool set");
+				await pi.awaitAssistantTurn();
+				const restored = pi.providerObservations().at(-1)?.tools;
+				expect(
+					(Array.isArray(restored) ? restored : []).some(
+						(tool) => (tool as { name?: string }).name === "ast_grep_search",
+					),
+				).toBe(true);
+
+				const restores = () =>
+					pi.lens
+						.latencyRows()
+						.filter(
+							(row) =>
+								row.phase === "tool_set_mutation" &&
+								(row.metadata as { reason?: string })?.reason ===
+									"session_rebuild_restore",
+						);
+				await expect.poll(() => restores().length, { timeout: 5_000 }).toBe(1);
+				const restoreRows = restores();
+				expect(restoreRows).toHaveLength(1);
+				expect(restoreRows[0]?.metadata).toMatchObject({
+					reason: "session_rebuild_restore",
+					addedCount: expect.any(Number),
+					removedCount: expect.any(Number),
+				});
+			},
+		);
+	}, 60_000);
+
 	it("omits a project-disabled tool from pi's wire roster and records it once", async () => {
 		await withRealPi(
 			{

@@ -928,9 +928,9 @@ export function deregisterInstance(): void {
 		return true;
 	});
 	if (removed) return;
-	// #3498: the lock was not free for the whole sync wait. The holder may be
-	// this process's own heartbeat or registration, which cannot release while
-	// the sync wait blocks the event loop. The process may live on through a
+	// #3498: the sync removal did not get the lock. A peer held it for the whole
+	// sync wait, or this process's own heartbeat or registration holds it, which
+	// the sync path does not wait on. The process may live on through a
 	// session replacement, so queue the removal behind the holder instead of
 	// dropping it and leaving the ended session's root in the registry.
 	incrementDegradationCount({

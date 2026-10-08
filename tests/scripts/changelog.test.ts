@@ -131,18 +131,19 @@ describe("changelog lib — summarizeSection", () => {
 	const PLAIN = [
 		"### Changed",
 		"",
-		"- perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait (#450)",
+		"- perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait. (#450)",
 		"- perf: short one (#453)",
 		"  - nested continuation stays dropped",
 		"",
 	].join("\n");
 
-	it("keeps plain bullets, condensed to their first clause", () => {
+	it("keeps plain bullets through their whole first sentence", () => {
 		const s = summarizeSection(PLAIN);
 		expect(s).toContain("### Changed");
-		// First clause survives; the post-boundary tail does not.
-		expect(s).toContain("- perf: cascade diagnostics now run concurrently");
-		expect(s).not.toContain("settled at turn_end");
+		// The complete first sentence survives; clause tails are not cut away.
+		expect(s).toContain(
+			"- perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait. (#450)",
+		);
 		expect(s).toContain("- perf: short one (#453)");
 		expect(s).not.toContain("nested continuation");
 	});
@@ -153,14 +154,126 @@ describe("changelog lib — summarizeSection", () => {
 		expect(line).toContain("(#450)");
 	});
 
-	it("hard-truncates an unbroken over-long plain bullet at a word boundary", () => {
+	it("joins wrapped plain entries before choosing a complete gist", () => {
+		const body = [
+			"### Fixed",
+			"",
+			"- A file with no project marker (no `package.json`, `Cargo.toml` and the like",
+			"  above it) no longer re-walks every ancestor directory on each lookup.",
+			"",
+		].join("\n");
+		const line = summarizeSection(body)
+			.split("\n")
+			.find((candidate) => candidate.startsWith("- A file"));
+		expect(line).toBe(
+			"- A file with no project marker (no `package.json`, `Cargo.toml` and the like above it) no longer re-walks every ancestor directory on each lookup.",
+		);
+	});
+
+	it("joins wrapped bold gist text and preserves refs on continuation lines", () => {
+		const body = [
+			"### Fixed",
+			"",
+			"- **Wrapped fix (#77)** — The first sentence continues onto",
+			"  the next line and remains a complete gist (refs #88). More detail.",
+			"",
+		].join("\n");
+		expect(summarizeSection(body, { gist: true })).toContain(
+			"- **Wrapped fix (#77)** — The first sentence continues onto the next line and remains a complete gist (refs #88)",
+		);
+	});
+
+	it("stops joining at adjacent top-level bullets and headings", () => {
+		const body = [
+			"### Fixed",
+			"",
+			"- First entry remains separate.",
+			"- Second entry remains separate.",
+			"### Added",
+			"- A following heading remains reachable.",
+		].join("\n");
+		const summary = summarizeSection(body);
+		expect(summary).toContain("- First entry remains separate.");
+		expect(summary).toContain("- Second entry remains separate.");
+		expect(summary).toContain("### Added");
+		expect(summary).toContain("- A following heading remains reachable.");
+	});
+
+	it("summarizes the released 4.4.0 section without physical-line fragments", () => {
+		const body = extractSection(CHANGELOG, "4.4.0");
+		expect(body).not.toBeNull();
+		const summary = summarizeSection(body!);
+		// A literal command ellipsis is valid; hard-truncation ellipses are not.
+		expect(summary).not.toMatch(/ …|…$/m);
+		expect(summary).toContain("re-registers on its next heartbeat");
+		for (const fragment of [
+			"pi 1.0.x and 1.1.x are now verified release-QA hosts, and the published",
+			"A file with no project marker (no `package.json`, `Cargo.toml` and the like",
+			"A pi-lens session whose instance-registry entry went missing",
+			"The durable-store lock (dispositions and actionable warnings) no longer lets",
+			"The shared tools install lock no longer lets two sessions install at once",
+			"The quarantine lock (the probe cache, the tool-refresh state and the orphan",
+		]) {
+			expect(summary.split("\n")).not.toContain(`- ${fragment}`);
+		}
+		for (const line of summary
+			.split("\n")
+			.filter((value) => value.startsWith("- "))) {
+			expect(line).not.toMatch(
+				/(?:and the published|and the like|went missing|no longer lets|at once|the orphan)$/,
+			);
+		}
+	});
+
+	it("keeps an unbroken over-long plain bullet instead of hard-truncating", () => {
 		const long = `### Fixed\n\n- ${"word ".repeat(60).trim()} (#99)\n`;
 		const s = summarizeSection(long);
 		const line = s.split("\n").find((l) => l.startsWith("- word"));
 		expect(line).toBeDefined();
-		expect(line!.length).toBeLessThan(180);
-		expect(line).toContain("…");
+		expect(line).toContain("word ".repeat(59));
+		expect(line).not.toContain("…");
 		expect(line).toContain("(#99)");
+	});
+
+	it("keeps a plain entry through an em-dash parenthetical", () => {
+		const body = [
+			"### Fixed",
+			"",
+			"- The session registry keeps its identity stable while restarting — including its lock — and now re-registers on its next heartbeat, using its original root.",
+			"",
+		].join("\n");
+		expect(summarizeSection(body)).toContain(
+			"- The session registry keeps its identity stable while restarting — including its lock — and now re-registers on its next heartbeat, using its original root.",
+		);
+	});
+
+	it("ignores periods in code spans, abbreviations, and version numbers", () => {
+		const body = [
+			"### Fixed",
+			"",
+			"- The parser keeps the code token `a. b` intact before returning a result. Later details are omitted.",
+			"- The parser keeps parenthetical notes (the old path. still works) before returning a result. Later details are omitted.",
+			"- The release bumps to 1.2. before continuing with the migration. Later details are omitted.",
+			"",
+		].join("\n");
+		const summary = summarizeSection(body);
+		expect(summary).toContain(
+			"- The parser keeps the code token `a. b` intact before returning a result.",
+		);
+		expect(summary).toContain(
+			"- The parser keeps parenthetical notes (the old path. still works) before returning a result.",
+		);
+		expect(summary).toContain(
+			"- The release bumps to 1.2. before continuing with the migration.",
+		);
+	});
+
+	it("keeps the bold gist default below its documented cap", () => {
+		const gist = "word ".repeat(35).trim();
+		const body = `### Fixed\n\n- **Long title** — ${gist}. More detail.`;
+		const summary = summarizeSection(body, { gist: true });
+		expect(summary).toContain(`- **Long title** — ${gist}`);
+		expect(summary).not.toContain("…");
 	});
 });
 

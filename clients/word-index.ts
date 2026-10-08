@@ -1900,11 +1900,16 @@ interface SerializedWordIndexCache {
 	serialized: SerializedWordIndex;
 	slotByFileId: Map<number, number>;
 	tokensByFile: Map<string, Set<string>>;
+	wireBytes: number | null;
 }
 
 const serializedWordIndexCaches = new WeakMap<
 	WordIndex,
 	SerializedWordIndexCache
+>();
+const serializedWordIndexSources = new WeakMap<
+	SerializedWordIndex,
+	WordIndex
 >();
 
 /**
@@ -1919,6 +1924,22 @@ const serializedWordIndexCaches = new WeakMap<
 export interface WordIndexSerializeWork {
 	affectedTokenCount: number;
 	tookFullPath: boolean;
+}
+
+/** Bytes in the JSON wire representation most recently persisted for an index. */
+export function getWordIndexWireBytes(index: WordIndex): number | null {
+	return serializedWordIndexCaches.get(index)?.wireBytes ?? null;
+}
+
+/** Record the UTF-8 length the snapshot persist took while encoding this serialized index. */
+export function recordPersistedWordIndexWireBytes(
+	serialized: SerializedWordIndex | undefined,
+	wireBytes: number | undefined,
+): void {
+	if (!serialized || wireBytes === undefined) return;
+	const index = serializedWordIndexSources.get(serialized);
+	const cache = index && serializedWordIndexCaches.get(index);
+	if (cache?.serialized === serialized) cache.wireBytes = wireBytes;
 }
 
 let _lastSerializeWork: WordIndexSerializeWork | undefined;
@@ -1986,7 +2007,12 @@ function serializeWordIndexFull(index: WordIndex): SerializedWordIndexCache {
 		affectedTokenCount: postings.length,
 		tookFullPath: true,
 	};
-	return { serialized, slotByFileId, tokensByFile };
+	return {
+		serialized,
+		slotByFileId,
+		tokensByFile,
+		wireBytes: null,
+	};
 }
 
 /**
@@ -2108,7 +2134,12 @@ function serializeWordIndexIncrementally(
 		affectedTokenCount: affectedTokens.size,
 		tookFullPath: false,
 	};
-	return { serialized, slotByFileId, tokensByFile };
+	return {
+		serialized,
+		slotByFileId,
+		tokensByFile,
+		wireBytes: null,
+	};
 }
 
 export function serializeWordIndex(index: WordIndex): SerializedWordIndex {
@@ -2117,6 +2148,7 @@ export function serializeWordIndex(index: WordIndex): SerializedWordIndex {
 		? serializeWordIndexIncrementally(index, prior)
 		: serializeWordIndexFull(index);
 	serializedWordIndexCaches.set(index, cache);
+	serializedWordIndexSources.set(cache.serialized, index);
 	index.dirtyFiles?.clear();
 	return cache.serialized;
 }
@@ -2431,6 +2463,7 @@ export function deserializeWordIndex(
 			serialized: data,
 			slotByFileId,
 			tokensByFile,
+			wireBytes: null,
 		});
 	}
 

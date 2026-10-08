@@ -47,14 +47,6 @@ function setup() {
 			"// end", // 12
 		].join("\n") + "\n",
 	);
-	// Backdate the fixture so the guard treats it as pre-existing code, not
-	// session-authored. The zero-read branch calls wasWrittenThisSession, which
-	// compares the file's mtime to the guard's session-start time; a fixture
-	// written in the same instant the guard is constructed reads as
-	// authored-this-session on fast / fine-grained-mtime runners (Linux CI) and
-	// wrongly skips the zero-read block. Real source files predate the session.
-	const past = new Date(Date.now() - 3_600_000);
-	fs.utimesSync(file, past, past);
 	const symbol = {
 		name: "target",
 		kind: "function",
@@ -119,8 +111,6 @@ describe("ReadGuard.recordSymbolRead (#245 tie-in)", () => {
 				"}", // 6
 			].join("\n") + "\n",
 		);
-		const past = new Date(Date.now() - 3_600_000);
-		fs.utimesSync(file, past, past);
 		try {
 			const guard = createReadGuard("s-doc-comment");
 			guard.recordSymbolRead(

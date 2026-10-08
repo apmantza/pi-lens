@@ -53,6 +53,8 @@
 
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
+import { logLatency } from "./latency-logger.js";
+import { getProcessSingleton } from "./process-singletons.js";
 
 /**
  * Names of every generation-carrying store created through this module.
@@ -172,6 +174,80 @@ export interface GenerationMap {
 	size(): number;
 }
 
+/**
+ * #3873 O5: per-source denominator for the stale-write ledger. The ledger
+ * writes a row at the first drop and at power-of-two counts, so zero rows
+ * cannot tell zero drops from a guard nothing exercised. These counters give
+ * `guarded` (every write a fence admitted or dropped) and `dropped` per
+ * source, rolled up once per session by {@link emitFenceRollupAtSessionEnd}.
+ *
+ * Bounded by declared source names (`MAX_DECLARED_SOURCES`), with every
+ * undeclared name folded into one `(other)` entry; one cell per process, so a
+ * second module evaluation counts into the same tallies.
+ */
+interface FenceTally {
+	guarded: number;
+	dropped: number;
+}
+
+const FENCE_TALLY_FAMILY = "generation-guard.fence-tally";
+const FENCE_TALLY_VERSION = 1;
+const OTHER_SOURCES = "(other)";
+/** Sources named in one rollup row; the rest are counted in `sourcesOmitted`. */
+const MAX_ROLLUP_SOURCES = 16;
+
+function fenceTallies(): Map<string, FenceTally> {
+	return getProcessSingleton(
+		FENCE_TALLY_FAMILY,
+		FENCE_TALLY_VERSION,
+		() => new Map<string, FenceTally>(),
+	);
+}
+
+function tallyFence(sourceName: string, dropped: boolean): void {
+	const tallies = fenceTallies();
+	const key = declaredSources.has(sourceName) ? sourceName : OTHER_SOURCES;
+	let tally = tallies.get(key);
+	if (!tally) {
+		tally = { guarded: 0, dropped: 0 };
+		tallies.set(key, tally);
+	}
+	tally.guarded += 1;
+	if (dropped) tally.dropped += 1;
+}
+
+/**
+ * One `session_end_fence_rollup` row at a primary `session_shutdown`, next to
+ * `session_end_bus_rollup`: per generation source, the writes its fence
+ * admitted or dropped this session. Written even when empty, so a session
+ * that exercised no fence is distinguishable from a flush gap. About 350 B
+ * plus 60 B per source, 16 sources at most; clears the tallies.
+ */
+export function emitFenceRollupAtSessionEnd(cwd: string): void {
+	const tallies = fenceTallies();
+	const rows = [...tallies.entries()]
+		.map(([source, tally]) => ({ source, ...tally }))
+		.sort(
+			(a, b) =>
+				b.dropped - a.dropped ||
+				b.guarded - a.guarded ||
+				a.source.localeCompare(b.source),
+		);
+	tallies.clear();
+	logLatency({
+		type: "phase",
+		phase: "session_end_fence_rollup",
+		filePath: cwd,
+		durationMs: 0,
+		metadata: {
+			guardedTotal: rows.reduce((sum, row) => sum + row.guarded, 0),
+			droppedTotal: rows.reduce((sum, row) => sum + row.dropped, 0),
+			sources: rows.slice(0, MAX_ROLLUP_SOURCES),
+			sourcesOmitted: Math.max(0, rows.length - MAX_ROLLUP_SOURCES),
+		},
+	});
+}
+
 function recordStaleWrite(
 	sourceName: string,
 	subject: string,
@@ -189,6 +265,8 @@ function makeHandle(
 	sourceName: string,
 	generation: number,
 	read: () => number,
+	/** The declared source, without a map's `[key]` suffix: the tally's key. */
+	tallyName: string,
 ): GenerationHandle {
 	return {
 		generation,
@@ -198,9 +276,11 @@ function makeHandle(
 		guardedWrite<T>(subject: string, write: () => T): T | undefined {
 			const observed = read();
 			if (observed !== generation) {
+				tallyFence(tallyName, true);
 				recordStaleWrite(sourceName, subject, generation, observed);
 				return undefined;
 			}
+			tallyFence(tallyName, false);
 			return write();
 		},
 	};
@@ -233,7 +313,7 @@ export function createGenerationSource(
 			return held.generation;
 		},
 		capture(): GenerationHandle {
-			return makeHandle(name, read(), read);
+			return makeHandle(name, read(), read, name);
 		},
 	};
 }
@@ -319,16 +399,21 @@ export function createGenerationMap(
 			// forgotten or evicted, which is the fail-open hole this closes.
 			const stamp = read(normalized) || issue(normalized);
 			const capturedInvalidations = invalidations;
-			return makeHandle(`${name}[${normalized}]`, stamp, () => {
-				// Fast path: nothing has been invalidated since capture, so no key
-				// can have changed stamps and the normalizer need not run again.
-				if (invalidations === capturedInvalidations) return stamp;
-				// Something moved. Re-derive the key from the ORIGINAL string: a
-				// normalizer that consults the filesystem can resolve the same
-				// input to a different key once the path exists, and a stamp read
-				// under the stale spelling would falsely read current.
-				return read(normalize(key));
-			});
+			return makeHandle(
+				`${name}[${normalized}]`,
+				stamp,
+				() => {
+					// Fast path: nothing has been invalidated since capture, so no key
+					// can have changed stamps and the normalizer need not run again.
+					if (invalidations === capturedInvalidations) return stamp;
+					// Something moved. Re-derive the key from the ORIGINAL string: a
+					// normalizer that consults the filesystem can resolve the same
+					// input to a different key once the path exists, and a stamp read
+					// under the stale spelling would falsely read current.
+					return read(normalize(key));
+				},
+				name,
+			);
 		},
 		forget(key: string): void {
 			invalidations += 1;

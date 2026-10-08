@@ -1,6 +1,0 @@
----
-section: Added
-audience: internal
----
-
-- **guard-bash refuses a `git commit`/`git push` chained after an ungated check (refs #3471)** — a check (`npm run lint`/`build`/`test`/`fmt:check`/`preflight`, `npx vitest`, a bare or `timeout`-wrapped `vitest`, `npm test`, `tsc`, `node scripts/check-*.mjs`) piped or `;`-separated from a following `git commit`/`git push`, rather than gated with `&&`, is denied — the check's exit code gates nothing that way, and a real failure can still get committed or pushed. Two of the three 2026-09-25 incidents this issue reports fit that shape directly; the third (a push with no check anywhere, verified only by reading a later `grep`'s exit status) is a documented remainder — see the linked issue comment. Auditing the real 2026-09-07..08 transcript corpus for this shape found 28 historical instances of the exact same defect, now pinned as expected denies. A write gated through shell control flow (`if [ $vexit -eq 0 ]; then …; fi`, this repo's own convention for deciding from a saved exit code) is exempted per WRITE, not per region — an earlier, already-closed `for…do…done` loop elsewhere in the same command no longer hides a later, genuinely ungated check — and a write with no preceding check at all (the sanctioned `git commit -m x; git status` pattern) is never judged.

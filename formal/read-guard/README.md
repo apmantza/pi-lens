@@ -7,9 +7,9 @@ session boundaries. The `TLA+ models` CI job
 (`node scripts/check-tla-models.mjs`) checks every config here against its
 `\* expect:` line.
 
-Issues: #3519, #3521, #3522, #3523, #3524 and #3525 are fixed in the code and
-modelled as such. The configs for #3520 still document its bug against the
-current code (`violated`).
+Issues: #3519, #3520, #3521, #3522, #3523, #3524 and #3525 are fixed in the
+code and modelled as such. The one config that still turns the #3520 mtime
+fallback on (`TreeDrainFencedMtime`) is a mutant of the fix (`violated`).
 
 ## Scope
 
@@ -49,6 +49,15 @@ change.
     (`clients/runtime-tool-result.ts` `handleToolResult`), and attaches the post-fix bytes as
     "authoritative". Since #3519 the attachment, when delivered, is
     recorded as a whole-file read hashed from the attached bytes.
+  - **bash** (a recognized bash write, `BashWrite`): `recordWritten` with
+    `stampFileTime: false` (#3525) and no creation read
+    (`clients/runtime-tool-result.ts` `handleToolResult`). The command is in the
+    conversation, so the agent knows what it wrote; the file gets authorship and
+    no read record. The format drain also sets `written` with no read, but the
+    agent never saw its bytes; `BashWrite` is the one action that authors with
+    no read and with the agent knowing the bytes, so it is the witness that the
+    zero-read arm of `checkEdit` lets an own write through (`BashAuthored`,
+    #3520).
 - **Another writer** (an external editor, a second pi-lens instance, git):
   changes the file between any two steps. With `ExtPhases` it can land inside
   a tool call.
@@ -81,8 +90,8 @@ change.
 
   Since #3521 (`BranchFilter`), both keep exactly the records whose tool
   result is on the new branch, each whole, and clear the FileTime stamp,
-  `writtenThisSession`, pending creations and the edit history, and
-  re-anchor the mtime fallback (`read-guard.ts` `retainBranch` /
+  `writtenThisSession`, pending creations and the edit history
+  (`read-guard.ts` `retainBranch` /
   `importBranch`, `index.ts` `session_tree` and `session_start`). Before it,
   `/fork` imported nothing (pi re-runs the extension factory, so the
   closure-local stash died) and `/tree` had no handler.
@@ -94,7 +103,8 @@ edits and writes, and the authoritative attachment.
 
 The current code is `HandlerEvidence = FALSE`, `CreationHandlerEvidence =
 FALSE`, `RecordAuthoritative = TRUE`, `RecordOwnEdit = TRUE`,
-`OwnEditSkipsReloc = TRUE`, `MtimeAuthored = TRUE`, `OwnEditRescue = FALSE`,
+`OwnEditSkipsReloc = TRUE`, `MtimeAuthored = FALSE` (since #3520; `TRUE`
+before it), `OwnEditRescue = FALSE`,
 `BranchFilter = TRUE`, `FormatStamp = FALSE`, `SpanSnapshot = TRUE`,
 `RelocFromLatest = TRUE`, `WholeVouchesPastEnd = FALSE`, `ForkAtBoundary = FALSE`,
 `DrainMode = "fenced"` (every config before #3521 round 2 keeps `"atomic"`,
@@ -106,16 +116,18 @@ is inert. `WholeVouchesPastEnd` (#3522 part 3, a whole-file view also vouching
 that lines past its end do not exist) is not in the code, and no invariant
 needs it.
 A config that turns one of these off either names the bug it isolates (for
-example `MtimeAuthored = FALSE` in `Guarded`, so bug 2 does not mask the rest)
+example `MtimeAuthored = FALSE` in `Guarded`, so bug 2 does not mask the rest,
+before #3520 fixed it)
 or is a mutant of a fix (`*NoRecord`, `EvidenceAtResultHandler`,
-`OwnEditRelocInsertRecorded`, `SpanSnapshotFixAnyReloc`, `SpanSnapshotFixNoOwnRecord`).
+`OwnEditRelocInsertRecorded`, `SpanSnapshotFixAnyReloc`, `SpanSnapshotFixNoOwnRecord`,
+`TreeDrainFencedMtime`, which sets `MtimeAuthored = TRUE`).
 
 ## Guard (as coded)
 
 The model follows `checkEdit` step by step:
 
-- **Zero-read.** `wasWrittenThisSession`: `writtenThisSession`, or
-  `mtime >= sessionStartMs`.
+- **Zero-read.** The authorship check: `writtenThisSession` only, since
+  #3520. Before it, also `mtime >= sessionStartMs` (`MtimeAuthored = TRUE`).
 - **FileTime.** Whole-file mtime/ctime/size. The rescue is
   `canIgnoreStalenessByHashes` (`canTreatStalenessAsOwnPriorEdit` is gone
   since #3525).
@@ -186,9 +198,9 @@ head that added this model. It is not checked in CI.
 | `NewSession` | current code across `/new` | pass | 316,790 |
 | `Unhashed` / `UnhashedNoFileTime` | current code without line hashes / without FileTime | pass / violated `NoStaleAllow` | 13,370 / 243 |
 | `ContextSlack` | the admitted `contextLines` slack | violated `NoBlindAllow` | 79 |
-| `MtimeAuthored`, `MtimeAuthoredNew` | #3520 | violated `NoBlindAllow` | 9 / 36 |
+| `MtimeAuthored`, `MtimeAuthoredNew` | #3520 fixed: another writer's mtime authors nothing, alone and across `/new` (`MtimeAuthored = TRUE`, the code before it, violated `NoBlindAllow` at 9 / 36 distinct states) | pass | 8 / 378 |
+| `BashAuthored` | #3520 no-drop witness: a recognized bash write authors a never-read file, no other writer, then an edit; three agent ops. With the zero-read check ignoring `written` it violates `NoFalseBlock` (6 distinct states). A fourth op (bash, edit, bash, edit) blocks with `file_modified`, since a bash write leaves FileTime stale by design (#3525), so the bound stays at three | pass | 57 |
 | `TreeFilter` | #3521 fixed: `/tree` with reads, ranged reads, edits and writes | pass | 50,413 |
-| `TreeFilterMtime` | the same with the #3520 mtime fallback on: the re-anchored `born` | pass | 50,413 |
 | `TreeFilterExt` | #3521 fixed, another writer anywhere | pass | 344,765 |
 | `TreeFilterUnhashed` | #3521 fixed without hashes | pass | 1,174 |
 | `TreeCarriesReads` | the same as `TreeFilter`'s base with `BranchFilter = FALSE` (the code before #3521: no handler) | violated `NoBlindAllow` | 337 |
@@ -198,7 +210,7 @@ head that added this model. It is not checked in CI.
 | `TreeDrainFenced` | #3521 review F1 and R2-F1 fixed: the settle drain lands after a `/tree`, possibly requeued first, and its stamp is refused | pass | 179,312 |
 | `TreeDrainRequeue` | the same with the epoch taken at the settle that dequeues it (round 2): requeued work is credited to the new branch | violated `NoBlindAllow` | 15,534 |
 | `TreeDrainUnfenced` | the same, stamp credited (the code before round 2) | violated `NoBlindAllow` | 2,529 |
-| `TreeDrainFencedMtime` | the fenced drain with the #3520 mtime fallback: the formatter write postdates the re-anchor (residual until #3520) | violated `NoBlindAllow` | 2,528 |
+| `TreeDrainFencedMtime` | mutant of #3520: the fenced drain with the mtime fallback back on (the code before #3520); the formatter write postdates the re-anchor | violated `NoBlindAllow` | 2,528 |
 | `ContextSuppress`, `SpanAcrossReads` | #3522 fixed: a newer context-only read, and an edit spanning two reads | pass | 232,543 / 146,000 |
 | `SpanSnapshotFix` | #3522 fixed, one- and two-line edits, contextLines 1, another writer (replace/delete/insert), three agent ops | pass | 98,195 |
 | `SpanSnapshotFixAnyReloc` | the same relocating from any read that hashes the range | violated `NoStaleAllow` | 24,987 |
@@ -211,9 +223,10 @@ FALSE`, so the creation-read race `CreationAtResult` documents cannot mask the
 relocation check.
 
 The investigation's configs for the candidate fixes of #3520
-(`AllFixes`, `AllFixesCtx`, `NoMtimeAuthored`, `ForkAtBoundary`,
+(`AllFixes`, `AllFixesCtx`, `ForkAtBoundary`,
 `ForkImportWholeRecord`, `OwnEditRecorded*`) are not here; each arrives with
-its fix. #3525's `UnhashedFix` is the flipped `UnhashedOwnEditRescue` and
+its fix. #3520's `NoMtimeAuthored` is the flipped `MtimeAuthored` and
+`MtimeAuthoredNew`. #3525's `UnhashedFix` is the flipped `UnhashedOwnEditRescue` and
 `UnhashedFormatStamp`; its `OwnEditRescueContext` (the hashed case, a hybrid
 with the #3522 fix on) is not added, since `SpanSnapshotFix` now checks
 contextLines 1 with another writer and the rescue off. The four-op

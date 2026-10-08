@@ -340,6 +340,48 @@ describe("handleToolCall", () => {
 		}
 	});
 
+	it("blocks a zero-read edit after another writer rewrote the file mid-session, and injects no read (#3520)", async () => {
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-foreign-");
+		try {
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/foreign.ts",
+				"function foo() {\n\treturn 1;\n}\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const guard = runtime.readGuard;
+			// An external editor or git writes it after the guard exists; pi-lens
+			// observed nothing, so there is no recordWritten.
+			fs.writeFileSync(filePath, "function foo() {\n\treturn 7;\n}\n");
+			const later = new Date(Date.now() + 60_000);
+			fs.utimesSync(filePath, later, later);
+
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					event: {
+						toolName: "edit",
+						input: {
+							path: filePath,
+							oldText: "return 7;",
+							newText: "return 8;",
+						},
+					},
+				}),
+			);
+
+			expect(result).toMatchObject({ block: true });
+			expect((result as { reason: string }).reason).toContain(
+				"Edit without read",
+			);
+			expect(guard.getReadHistory(filePath)).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("does not block a write, and lets a subsequent edit through once read-guard sees the write", async () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-call-write-");
 		try {

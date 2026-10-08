@@ -106,6 +106,22 @@ describe("ReadGuard.retainBranch (#3521)", () => {
 		expect(verdict(guard, b, 2)).toMatch(/^block: .*Edit without read/);
 	});
 
+	// #3520: the idle-expiry marker describes the branch that wrote the file.
+	// Recurrence: a /tree cleared the write record, and the old marker then
+	// blamed an expiry that never happened on this branch.
+	it("forgets an idle-expired write record, so the block names no expiry (#3520)", () => {
+		vi.useFakeTimers();
+		const a = oldFile("a.ts", 6);
+		const guard = createReadGuard("retain-expired-write");
+		guard.recordWritten(a);
+		vi.advanceTimersByTime(31 * 60_000);
+		expect(verdict(guard, a, 2)).toMatch(/^block: .*write record/);
+
+		guard.retainBranch(new Set());
+
+		expect(verdict(guard, a, 2)).toMatch(/^block: .*you have not read/);
+	});
+
 	it("deletes a record with no tool-call id (a bridge read)", () => {
 		const a = oldFile("a.ts", 6);
 		const guard = createReadGuard("retain-no-id");
@@ -190,26 +206,6 @@ describe("ReadGuard.retainBranch (#3521)", () => {
 
 		expect(guard.getReadHistory(c)).toEqual([]);
 	});
-
-	it("re-anchors the mtime fallback, so an abandoned branch's write is not authored here", () => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		const t0 = new Date("2030-01-01T00:00:00Z").getTime();
-		vi.setSystemTime(t0);
-		const guard = createReadGuard("retain-mtime");
-		// Written after the guard started, with no recordWritten: only the
-		// `mtime >= sessionStartMs` fallback (#3520's) calls it authored.
-		const c = oldFile("c.ts", 3);
-		const written = new Date(t0 + 1_000);
-		fs.utimesSync(c, written, written);
-		expect(verdict(guard, c, 2)).toBe("allow");
-
-		const fresh = createReadGuard("retain-mtime-2");
-		fs.utimesSync(c, written, written);
-		vi.setSystemTime(t0 + 2_000);
-		fresh.retainBranch(new Set());
-
-		expect(verdict(fresh, c, 2)).toMatch(/^block: .*Edit without read/);
-	});
 });
 
 /**
@@ -243,13 +239,28 @@ describe("ReadGuard authorship export/import (#3612)", () => {
 			null,
 			{},
 			{ written: [42, null] },
-			// Last, so nothing after it can overwrite the anchor it carries.
-			{ written: "c.ts", sessionStartMs: "0" },
+			{ written: "c.ts" },
 		])
 			expect(() => guard.importAuthorship(payload)).not.toThrow();
 		expect(guard.exportAuthorship().written).toEqual([]);
-		// A non-numeric anchor is ignored: an old file is still not authored.
 		expect(verdict(guard, c, 2)).toMatch(/^block: .*Edit without read/);
+	});
+
+	// A released writer (#3612) also exported `sessionStartMs`; its row still
+	// restores the written files, and the retired anchor decides nothing.
+	it("imports a released writer's row and ignores its retired sessionStartMs (#3520)", () => {
+		const c = oldFile("c.ts", 3);
+		const guard = createReadGuard("authorship-released");
+
+		guard.importAuthorship({
+			written: [normalizeFilePath(c)],
+			sessionStartMs: 0,
+		});
+
+		expect(verdict(guard, c, 2)).toBe("allow");
+		expect(guard.exportAuthorship()).toEqual({
+			written: [normalizeFilePath(c)],
+		});
 	});
 });
 

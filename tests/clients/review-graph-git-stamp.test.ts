@@ -96,7 +96,13 @@ describe("review-graph snapshot git stamp (#300)", () => {
 		const cwd = tmpDir();
 		process.env.PILENS_DATA_DIR = path.join(cwd, "data");
 		makeFakeRepo(cwd, "a".repeat(40));
+		// #1129: the data-dir owner probes a root's `.git` once per process to
+		// classify it (pinned in ephemeral-root.test.ts). Settle it before
+		// counting, so this case counts only the build's own walks. `statSync`
+		// is already the module mock, so the spy inherits its history: clear it.
+		getProjectDataDir(cwd);
 		const stat = vi.spyOn(fs, "statSync");
+		stat.mockClear();
 
 		// #3417 recurrence: persistence/checkpoint/revision checks must not turn
 		// one build into repeated upward `.git` walks.

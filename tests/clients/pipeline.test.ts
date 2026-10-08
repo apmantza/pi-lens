@@ -357,6 +357,39 @@ describe("Pipeline", () => {
 		});
 	});
 
+	// #4137 round 3: `clearInlineBlockers` compares the bytes a run without
+	// authorship read against the record it would clear, so the baseline is
+	// returned for a clean result too, not only beside a blocker.
+	it("carries the content baseline of the bytes it analysed on a clean result", async () => {
+		const filePath = createTempFile(
+			tmpDir,
+			"clean-baseline.ts",
+			"const x = 1;\n",
+		);
+		vi.mocked(dispatchLintWithResult).mockImplementationOnce(async () => ({
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "clean",
+			blockerOutput: "",
+			hasBlockers: false,
+		}));
+
+		const result = await runPipeline(
+			createMockContext(filePath, { allowAutonomousWriters: false }),
+			createMockDeps(),
+		);
+
+		expect(result.hasBlockers).toBe(false);
+		expect(result.inlineBlockerFileContent).toEqual({
+			size: Buffer.byteLength("const x = 1;\n"),
+			sha256: createHash("sha256").update("const x = 1;\n").digest("hex"),
+		});
+	});
+
 	it("states why a delta-promoted unused finding blocks in the enriched STOP block (#3218)", async () => {
 		// The turn-end replay renders through `formatDiagnostics`, but the inline
 		// tool result renders the enriched variant. Both must carry the seam's

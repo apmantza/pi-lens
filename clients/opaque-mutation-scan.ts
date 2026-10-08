@@ -40,6 +40,8 @@ import * as path from "node:path";
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
 import { createHash } from "node:crypto";
 
+import { BoundedFifoMap } from "./bounded-cache.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { freshnessFromMtime } from "./freshness.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -99,6 +101,16 @@ export interface PendingOpaqueBaseline {
 	strategy: "git" | "stat-diff";
 	stats?: FileStatsSnapshot;
 	statsUnknownReason?: OpaqueUnknownReason;
+}
+
+/**
+ * The turn a baseline was recorded in: the session's turn key and the
+ * coordinator's liveness test for it (`RuntimeCoordinator.turnKey` and
+ * `isLiveTurnKey`, #3613), so a concurrent session's turn stays live.
+ */
+export interface OpaqueBaselineTurn {
+	key: number;
+	isLive: (key: number) => boolean;
 }
 
 export interface CaptureOptions {
@@ -278,29 +290,109 @@ export function diffFileContent(
 	return changed;
 }
 
+/**
+ * The session-stamped slot (`<cwd>:<generation>`) a baseline lives in, derived
+ * once for the `tool_call` record and the `tool_result` take (shape 19). The
+ * generation keeps a concurrent-secondary session (#473) from consuming another
+ * session's baseline.
+ */
+export function opaqueBaselineSlot(
+	scanRoot: string,
+	sessionGeneration: number,
+): string {
+	return `${normalizeMapKey(path.resolve(scanRoot))}:${sessionGeneration}`;
+}
+
+/**
+ * Upper bound on baselines awaiting their `tool_result`, so per-call keying
+ * keeps the bound a one-entry slot had by construction. Real batches are a
+ * handful of calls; a codemode fan-out of dozens still fits.
+ */
+export const OPAQUE_BASELINE_PENDING_CAP = 64;
+
+/**
+ * Baselines awaiting their `tool_result`, one entry per bash call (#4137).
+ *
+ * pi runs the bash calls of one assistant message in parallel (top level and
+ * codemode's nested `Promise.all` alike), so all N `tool_call`s precede the
+ * first `tool_result`. A slot per cwd kept the last baseline and N-1 calls lost
+ * the evidence that proves they authored their own writes. The tool-call id
+ * gives each call its own entry; a host that supplies no id keeps the shared
+ * slot, the only identity it offers.
+ *
+ * A call's recovery window also holds its siblings' writes, which it dispatches
+ * as opaque; the pipeline dedupe ranks authority, so the sibling's own authored
+ * dispatch of the same bytes still runs (`claimPipelineDispatch`).
+ */
 export class OpaqueBaselineStore {
-	private readonly byCwd = new Map<string, PendingOpaqueBaseline>();
-	private evictions = 0;
+	private readonly pending = new BoundedFifoMap<
+		string,
+		{ state: PendingOpaqueBaseline; turn: OpaqueBaselineTurn | undefined }
+	>(OPAQUE_BASELINE_PENDING_CAP);
 
-	record(cwdKey: string, baseline: PendingOpaqueBaseline): void {
-		if (this.byCwd.has(cwdKey)) this.evictions += 1;
-		this.byCwd.set(cwdKey, baseline);
+	private static keyOf(slot: string, callId: string | undefined): string {
+		return callId === undefined ? slot : `${slot}#${callId}`;
 	}
 
-	take(cwdKey: string): PendingOpaqueBaseline | undefined {
-		const baseline = this.byCwd.get(cwdKey);
-		this.byCwd.delete(cwdKey);
-		return baseline;
+	/**
+	 * Store `state` for a call. A baseline this displaces is lost: its
+	 * `tool_result` will find nothing and report `partial-recognition-no-baseline`,
+	 * withholding the blocker section of a write the agent authored. That loss is
+	 * counted in the degradation ledger, one entry per cause with a running count,
+	 * never one row per occurrence (#4137).
+	 *
+	 * First, an entry whose turn is over is retired: pi sends no `tool_result`
+	 * for a call a `tool_call` handler blocked or Escape aborted before it ran,
+	 * and on a non-git project the entry holds a whole-tree stat snapshot.
+	 */
+	record(
+		slot: string,
+		callId: string | undefined,
+		state: PendingOpaqueBaseline,
+		turn?: OpaqueBaselineTurn,
+	): void {
+		for (const [staleKey, entry] of this.pending.entriesArray())
+			if (entry.turn && !entry.turn.isLive(entry.turn.key)) {
+				this.pending.delete(staleKey);
+				recordBaselineLoss("unsettled");
+			}
+		const key = OpaqueBaselineStore.keyOf(slot, callId);
+		const overwrote = this.pending.delete(key);
+		const evicted = this.pending.set(key, { state, turn });
+		if (overwrote) recordBaselineLoss("overwrite");
+		if (evicted.length > 0) recordBaselineLoss("cap");
 	}
 
-	get evictionCount(): number {
-		return this.evictions;
+	take(
+		slot: string,
+		callId: string | undefined,
+	): PendingOpaqueBaseline | undefined {
+		const key = OpaqueBaselineStore.keyOf(slot, callId);
+		const entry = this.pending.get(key);
+		this.pending.delete(key);
+		return entry?.state;
 	}
 
 	/** Session-boundary clear - unconsumed baselines are unreachable after reset. */
 	takeAllForTest(): void {
-		this.byCwd.clear();
+		this.pending.clear();
 	}
+}
+
+const BASELINE_LOSS_REASONS = {
+	overwrite:
+		"a pending bash baseline was replaced before its tool_result took it; that call reports partial-recognition-no-baseline and withholds blockers (host without distinct tool-call ids, or a reused id)",
+	cap: `more than ${OPAQUE_BASELINE_PENDING_CAP} bash baselines awaited a tool_result; the oldest was dropped`,
+	unsettled:
+		"a bash baseline outlived its turn with no tool_result (the call was blocked or aborted before it ran) and was retired; a result that still arrives reports partial-recognition-no-baseline",
+} as const;
+
+function recordBaselineLoss(cause: keyof typeof BASELINE_LOSS_REASONS): void {
+	incrementDegradationCount({
+		kind: "opaque-baseline-lost",
+		subject: cause,
+		reason: BASELINE_LOSS_REASONS[cause],
+	});
 }
 
 const globalStoreSymbol = Symbol.for("pi-lens:opaque-snapshot-store");

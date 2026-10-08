@@ -20,6 +20,8 @@ process.env.PI_LENS_TMP_HYGIENE_RUN_ID ??= `${Date.now()}-${process.pid}`;
 // directory before any worker forks (they inherit `process.env`), so the 454
 // raw `mkdtemp(os.tmpdir())` callers and the product agree. Same directory,
 // never a relocation (AGENTS.md: do not move the harness home via TEMP).
+// SonarCloud typescript:S5443 flags the two assignments below; this file is
+// classified as a test file in .sonarcloud.properties for that reason.
 if (process.platform === "win32") {
 	try {
 		const longTmp = fs.realpathSync.native(os.tmpdir());
@@ -98,7 +100,9 @@ const sharedSetupFiles = ["./tests/support/vitest-setup.ts"];
 // bounded by nothing. That is how the Unit-tests job got SIGKILLed (exit 137)
 // with no failing assertion. Local runs keep the measured 2026-07-29 posture
 // (8 forks ≈ 40s / 9-11 GB peak RSS; 6 forks ≈ 44s / 8 GB); memory-constrained
-// local runs still use PI_LENS_TEST_MAX_WORKERS=6.
+// local runs still use PI_LENS_TEST_MAX_WORKERS=6. A host with more than 16
+// logical CPUs is capped at those 8 forks (LOCAL_WORKER_CAP) rather than half
+// its cores.
 const testHost = {
 	totalMemMb: Math.round(os.totalmem() / (1024 * 1024)),
 	cpus: os.availableParallelism?.() ?? os.cpus().length,
@@ -381,6 +385,7 @@ export const realHarnessInclude = [
 	"tests/real-harness/negative.test.ts",
 	"tests/real-harness/child-exit.test.ts",
 	"tests/real-harness/tools-enabled.test.ts",
+	"tests/real-harness/bridge-reload.test.ts",
 	"tests/real-harness/diagnostic-provenance.test.ts",
 	"tests/real-harness/provider-compatibility.test.ts",
 ];
@@ -481,6 +486,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/sgconfig-scratch-bound.test.ts",
 	"tests/clients/shared-checkout-guard.test.ts",
 	"tests/clients/startup-overhead.test.ts",
+	// #3871: runner-location regex budget (depth-30 paths, 100K blank runs
+	// and tokens); a real event-loop occupancy witness, so it runs serialized.
+	"tests/clients/test-runner-location-regex-budget.test.ts",
 	// #3511 review round 3: the quick-mode warmup witness joins session_start's
 	// background save with vi.waitFor (flake-shape admission).
 	"tests/clients/word-index-lifecycle.test.ts",
@@ -506,6 +514,9 @@ export const wallClockBudgetInclude = [
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
+	// #4133: the real pi child environment is the subject of this boundary test;
+	// keep it in the serialized real-harness lane.
+	"tests/real-harness/fixture-shape.test.ts",
 	// #3870: every detector test drives the analyzer's real CLI entry point
 	// (a real node subprocess) over redacted fixture logs (flake-shape admission).
 	"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",

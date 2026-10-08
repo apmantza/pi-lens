@@ -135,10 +135,21 @@ export async function writeGzipStageFile(
 		await fs.promises.mkdir(path.dirname(stagePath), { recursive: true });
 		const chunks = function* () {
 			const chunkSize = 256 * 1024;
-			for (let offset = 0; offset < body.length; offset += chunkSize) {
+			let offset = 0;
+			while (offset < body.length) {
+				let end = Math.min(offset + chunkSize, body.length);
+				// A string chunk is encoded on its own, so a surrogate pair split
+				// across two chunks would become two U+FFFD (#3913). JSON.stringify
+				// escapes lone surrogates, so a high surrogate ending a chunk always
+				// pairs with the next unit: end the chunk one unit early instead.
+				if (typeof body === "string" && end < body.length) {
+					const last = body.charCodeAt(end - 1);
+					if (last >= 0xd800 && last <= 0xdbff) end--;
+				}
 				yield typeof body === "string"
-					? body.slice(offset, offset + chunkSize)
-					: body.subarray(offset, offset + chunkSize);
+					? body.slice(offset, end)
+					: body.subarray(offset, end);
+				offset = end;
 			}
 		};
 		await pipeline(

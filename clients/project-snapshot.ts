@@ -26,7 +26,12 @@ import type { RuleScanResult } from "./rules-scanner.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { StartupScanContext } from "./startup-scan.js";
 import {
+	readWorkerHeapStatistics,
+	type PersistWorkerHeapStatistics,
+} from "./persist-worker-stats.js";
+import {
 	deserializeWordIndex,
+	recordPersistedWordIndexWireBytes,
 	serializeWordIndex,
 	type SerializedWordIndex,
 } from "./word-index.js";
@@ -1008,6 +1013,8 @@ interface PendingSnapshotBody {
 	dedupeFingerprints: string[];
 	/** Main-thread serialize time of the worker dispatch (#3789); the worker's own is 0. */
 	serializeMs?: number;
+	/** UTF-8 length of the word index's JSON, taken while encoding the body. */
+	wordIndexWireBytes?: number | undefined;
 }
 
 interface SnapshotPersistRecord {
@@ -1049,6 +1056,33 @@ let _snapshotPromotionSeamForTests: (() => Promise<void>) | undefined;
 let _lastSnapshotPersistErrorForTests: string | undefined;
 let _snapshotExiting = false;
 let _snapshotWorkerBodyWritesForTests = 0;
+
+let _snapshotPersistWorkerHeapStatistics: PersistWorkerHeapStatistics | null =
+	null;
+
+/**
+ * Refreshes a bounded, last-known view; Worker#getHeapStatistics is async.
+ * The sampler does not await the result (the reading lags one sample); tests
+ * await it instead of polling ticks.
+ */
+export function refreshProjectSnapshotPersistWorkerHeapStatistics(): Promise<void> {
+	const worker = _snapshotPersistWorker;
+	if (!worker || typeof worker.getHeapStatistics !== "function") {
+		return Promise.resolve();
+	}
+	return readWorkerHeapStatistics(worker)
+		.then((stats) => {
+			// An answer that lands after the worker's exit or death clear belongs
+			// to a dead isolate; every clear also drops the worker reference.
+			if (_snapshotPersistWorker === worker)
+				_snapshotPersistWorkerHeapStatistics = stats;
+		})
+		.catch(() => {});
+}
+
+export function getProjectSnapshotPersistWorkerHeapStatistics(): PersistWorkerHeapStatistics | null {
+	return _snapshotPersistWorkerHeapStatistics;
+}
 
 function snapshotWorkerEnabled(): boolean {
 	// The synchronous fallback writer is a legitimate degraded mode (hosts that
@@ -1552,12 +1586,63 @@ function promoteSnapshotBody(
 function serializeSnapshotBody(snapshot: ProjectSnapshot): {
 	bytes: Uint8Array<ArrayBuffer>;
 	serializeMs: number;
+	wordIndexWireBytes?: number | undefined;
 } {
 	const started = performance.now();
-	const bytes = new TextEncoder().encode(
-		JSON.stringify(storedSnapshot(snapshot)),
+	const stored = storedSnapshot(snapshot) as { wordIndex?: unknown };
+	const spliced =
+		stored.wordIndex === undefined ? undefined : spliceWordIndexBody(stored);
+	const bytes =
+		spliced?.bytes ?? new TextEncoder().encode(JSON.stringify(stored));
+	return {
+		bytes,
+		serializeMs: performance.now() - started,
+		wordIndexWireBytes: spliced?.wordIndexWireBytes,
+	};
+}
+
+/** Stands in for the word index while the rest of the body is stringified. */
+const WORD_INDEX_PLACEHOLDER = `\u0000pi-lens-word-index-${process.pid}-${Date.now()}\u0000`;
+const WORD_INDEX_KEY_JSON = '"wordIndex":';
+const WORD_INDEX_PLACEHOLDER_JSON = `${WORD_INDEX_KEY_JSON}${JSON.stringify(
+	WORD_INDEX_PLACEHOLDER,
+)}`;
+
+/**
+ * Encode the stored body with the word index stringified on its own, so its
+ * UTF-8 length is known without reading the body in JavaScript (#4129). The
+ * index is stringified once, the rest of the body once with a placeholder in
+ * its slot; native `indexOf` finds the placeholder and `encodeInto` writes the
+ * three pieces into one buffer, byte-identical to encoding
+ * `JSON.stringify(stored)`. Returns undefined when the placeholder is absent
+ * (a `toJSON` that rewrites the body), and the caller encodes the plain
+ * stringify. The placeholder carries a NUL, the pid and the module load time,
+ * and its quoted `"wordIndex":` form cannot occur inside a JSON string (quotes
+ * are escaped there), so the first match is the top-level slot.
+ */
+function spliceWordIndexBody(stored: {
+	wordIndex?: unknown;
+}): { bytes: Uint8Array<ArrayBuffer>; wordIndexWireBytes: number } | undefined {
+	const marker = WORD_INDEX_PLACEHOLDER_JSON;
+	const head = JSON.stringify({ ...stored, wordIndex: WORD_INDEX_PLACEHOLDER });
+	const at = head.indexOf(marker);
+	if (at < 0) return undefined;
+	const prefix = head.slice(0, at + WORD_INDEX_KEY_JSON.length);
+	const suffix = head.slice(at + marker.length);
+	const wordIndex = JSON.stringify(stored.wordIndex);
+	const prefixBytes = Buffer.byteLength(prefix);
+	const wordIndexWireBytes = Buffer.byteLength(wordIndex);
+	const bytes = new Uint8Array(
+		prefixBytes + wordIndexWireBytes + Buffer.byteLength(suffix),
 	);
-	return { bytes, serializeMs: performance.now() - started };
+	const encoder = new TextEncoder();
+	encoder.encodeInto(prefix, bytes.subarray(0, prefixBytes));
+	encoder.encodeInto(
+		wordIndex,
+		bytes.subarray(prefixBytes, prefixBytes + wordIndexWireBytes),
+	);
+	encoder.encodeInto(suffix, bytes.subarray(prefixBytes + wordIndexWireBytes));
+	return { bytes, wordIndexWireBytes };
 }
 
 function writeSnapshotBodyOnMainThread(
@@ -1588,7 +1673,10 @@ function writeSnapshotBodyOnMainThread(
 		});
 	}
 	try {
-		const { bytes, serializeMs } = serializeSnapshotBody(pending.snapshot);
+		const { bytes, serializeMs, wordIndexWireBytes } = serializeSnapshotBody(
+			pending.snapshot,
+		);
+		pending.wordIndexWireBytes = wordIndexWireBytes;
 		const rawBytes = bytes.byteLength;
 		const fingerprint = fingerprintProjectSnapshotJson(
 			bytes,
@@ -1640,6 +1728,10 @@ function writeSnapshotBodyOnMainThread(
 			},
 		);
 		if (!promoted) return;
+		recordPersistedWordIndexWireBytes(
+			pending.snapshot.wordIndex,
+			pending.wordIndexWireBytes,
+		);
 		reconcileAuthoritativeAfterWrite(pending, rawBytes);
 		logSnapshotPersistSuccess(pending, fingerprint, {
 			rawBytes,
@@ -1772,6 +1864,10 @@ function handleSnapshotWorkerResult(
 			completeSnapshotPersist(pending);
 			return;
 		}
+		recordPersistedWordIndexWireBytes(
+			pending.snapshot.wordIndex,
+			pending.wordIndexWireBytes,
+		);
 		reconcileAuthoritativeAfterWrite(pending, result.rawBytes);
 		logSnapshotPersistSuccess(pending, result.semanticFingerprint, {
 			rawBytes: result.rawBytes,
@@ -1826,6 +1922,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 		return;
 	}
 	pending.serializeMs = serialized.serializeMs;
+	pending.wordIndexWireBytes = serialized.wordIndexWireBytes;
 	const id = ++_snapshotWorkerRequestId;
 	_snapshotWorkerRequests.set(id, pending);
 	const request: ProjectSnapshotPersistWorkerRequest = {
@@ -1854,6 +1951,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 
 function handleSnapshotWorkerDeath(reason: string): void {
 	_snapshotPersistWorker = undefined;
+	_snapshotPersistWorkerHeapStatistics = null;
 	_snapshotWorkerDisabled = true;
 	const requests = [..._snapshotWorkerRequests.values()];
 	_snapshotWorkerRequests.clear();
@@ -1913,7 +2011,10 @@ function getSnapshotPersistWorker(): Worker | undefined {
 		});
 		worker.on("error", (err: Error) => handleSnapshotWorkerDeath(err.message));
 		worker.on("exit", (code) => {
-			if (_snapshotPersistWorker === worker) _snapshotPersistWorker = undefined;
+			if (_snapshotPersistWorker === worker) {
+				_snapshotPersistWorker = undefined;
+				_snapshotPersistWorkerHeapStatistics = null;
+			}
 			// Any body still queued when the worker exits was abandoned mid-flight
 			// (a crash, a `terminate()`, or host recycling) — it will never be
 			// promoted by this worker, so fall it back to the sync writer rather
@@ -2167,6 +2268,7 @@ export function resetProjectSnapshotPersistWorkerForTests(): void {
 	_snapshotGenerationGateEnabledForTests = true;
 	_snapshotPromotionSeamForTests = undefined;
 	_snapshotPersistWorker = undefined;
+	_snapshotPersistWorkerHeapStatistics = null;
 	_snapshotWorkerRequests.clear();
 	_snapshotGenerationStates.clear();
 	_successfulSnapshotPersists.clear();

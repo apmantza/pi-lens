@@ -75,6 +75,7 @@ import {
 import { evaluateGitGuard } from "../../clients/git-guard.js";
 import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
 	handleTurnEnd,
@@ -791,6 +792,34 @@ describe("M3c: late runner findings vs the cap (#3813)", () => {
 			rig.cleanup();
 		}
 	});
+	// #3796 item 3. Recurrence prevented: the requeued findings kept `failed`
+	// but lost the kind, so once a kindless `failed` read as broken the next
+	// turn end announced a runner failure that never happened.
+	it("re-offers a cut findings-failed entry's findings without a broken-runner note", async () => {
+		const rig = makeRig("pi-lens-3813-m3c-findings-failed-");
+		try {
+			const fillerFile = fillerBlocker(rig, 1000);
+			const file = path.join(rig.cwd, "run-a.ts");
+			deferSettled(rig, "run-a.ts", {
+				status: "failed",
+				semantic: "warning",
+				failureKind: "blocking_diagnostics",
+				diagnostics: [runnerDiagnostic(file, `${PAD}${RUNNER_END}`)],
+			});
+			const first = await endTurn(rig);
+			expect(first).not.toContain(RUNNER_END);
+			expect(pendingRunnerFindingsSize()).toBe(1);
+
+			clearFiller(rig, fillerFile);
+			nextTurn(rig, 2);
+			const second = await endTurn(rig);
+			expect(second).toContain(RUNNER_END);
+			expect(second).not.toContain("Deferred runner slow-runner failed");
+		} finally {
+			rig.cleanup();
+		}
+	});
+
 	it("re-offers a failed entry's note and findings once each when both were cut", async () => {
 		const rig = makeRig("pi-lens-3813-m3c-both-");
 		try {
@@ -1058,6 +1087,366 @@ describe("M3d: late auxiliary coverage vs the cap (#3813)", () => {
 				.map((call) => call[0])
 				.find((entry: any) => entry?.phase === "late_auxiliary_holds");
 			expect(row?.metadata).toMatchObject({ rearmed: 1, pendingAfter: 1 });
+		} finally {
+			rig.cleanup();
+		}
+	});
+});
+
+/**
+ * #4161: `handleTurnEnd` captured its session at entry and drained the hold
+ * stores after several awaits. A session replaced inside that window (`/new`,
+ * a resume) left the old turn draining the NEW session's state; settle then
+ * skipped the restore for the stale session, so a cut item was gone. Every
+ * case replaces the session between the turn's entry and a drain, then asks
+ * the successor's own stores and its next turn.
+ */
+describe("#4161: a turn whose session was replaced drains nothing of its successor's", () => {
+	const SUCCESSOR = "session-4161-successor";
+	const runEnd = (name: string) => `${PAD}END-${name}`;
+
+	function cascadeRun(rig: Rig, name: string) {
+		const primary = touch(rig, `${name}.ts`);
+		const neighbor = touch(rig, `${name}-dep.ts`);
+		return {
+			filePath: primary,
+			result: cascadeResult(primary, neighbor, runEnd(name)),
+			neighborCount: 1,
+			diagnosticCount: 1,
+		};
+	}
+
+	/** The successor's `session_start` reset plus its own identity. */
+	function replace(rig: Rig): void {
+		rig.runtime.resetForSession();
+		rig.runtime.setTelemetryIdentity({ sessionId: SUCCESSOR });
+	}
+
+	function staleWriteSubjects(): string[] {
+		return getDegradationSummary()
+			.filter((entry) => entry.kind === "generation-guard-stale-write")
+			.flatMap((entry) => entry.latestReasons.map((r) => r.subject));
+	}
+
+	/** The drain's one `late_auxiliary_findings` row for the turn. */
+	function lateAuxRow(): any {
+		return logLatency.mock.calls
+			.map((call) => call[0])
+			.find((entry: any) => entry?.phase === "late_auxiliary_findings");
+	}
+
+	// Recurrence: REVIEW_4155 F1. The replacement lands at the turn's first
+	// await; the successor records a blocker that cuts every later part, a
+	// built cascade run, and a compute still parked for the settle.
+	it("leaves the successor's cascade run and parked compute for the successor's own turn", async () => {
+		const rig = makeRig("pi-lens-4161-cascade-");
+		try {
+			touch(rig, "old-edit.ts");
+			let successorFiller = "";
+			queueMicrotask(() => {
+				replace(rig);
+				successorFiller = fillerBlocker(rig, 1000);
+				rig.runtime.appendCascadeRun(cascadeRun(rig, "succ-built"));
+				rig.runtime.appendCascadePromise(
+					Promise.resolve(cascadeRun(rig, "succ-pending")),
+					rig.runtime.captureSessionGeneration(),
+					path.join(rig.cwd, "succ-pending.ts"),
+				);
+			});
+			await endTurn(rig);
+
+			clearFiller(rig, successorFiller);
+			nextTurn(rig, 2);
+			const successorTurn = await endTurn(rig);
+			expect(successorTurn).toContain("END-succ-built");
+			expect(successorTurn).toContain("END-succ-pending");
+			expect(staleWriteSubjects()).toEqual(
+				expect.arrayContaining([
+					"runtime-session:cascade-settle",
+					"runtime-session:turn-end:cascade-runs",
+				]),
+			);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence: REVIEW_4155 F1, the reviewer's window. The replacement lands
+	// inside the cascade settle's await: the old session's compute settles
+	// there, and the successor appends its own run.
+	it("keeps the successor's run and drops the replaced session's compute that settles inside the settle wait", async () => {
+		const rig = makeRig("pi-lens-4161-settle-");
+		try {
+			fillerBlocker(rig, 1000);
+			const oldRun = cascadeRun(rig, "old-pending");
+			const settled = Promise.resolve(oldRun);
+			// `settleCascadeRuns` attaches the first `.then` when it takes the
+			// compute; the hook replaces the session in the next microtask, while
+			// the settle awaits.
+			const then = settled.then.bind(settled);
+			let taken = false;
+			(settled as any).then = (onFulfilled: any, onRejected: any) => {
+				if (!taken) {
+					taken = true;
+					queueMicrotask(() => {
+						replace(rig);
+						rig.runtime.appendCascadeRun(cascadeRun(rig, "succ-built"));
+					});
+				}
+				return then(onFulfilled, onRejected);
+			};
+			rig.runtime.appendCascadePromise(
+				settled,
+				rig.runtime.captureSessionGeneration(),
+				oldRun.filePath,
+			);
+			await endTurn(rig);
+			expect(taken).toBe(true);
+
+			const pendingAfter = rig.runtime
+				.consumeCascadeRuns()
+				.map((run) => path.basename(run.filePath));
+			expect(pendingAfter).toEqual(["succ-built.ts"]);
+			expect(staleWriteSubjects()).toEqual(
+				expect.arrayContaining([
+					"runtime-session:turn-end:cascade-runs",
+					`runtime-session:${oldRun.filePath}`,
+				]),
+			);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence: the late-auxiliary drain sits after every scan await. The
+	// replacement lands in the knip scan, after the old turn read its blocker
+	// (which cuts the part), and the successor marks its own pair.
+	it("leaves the successor's late-auxiliary pair pending", async () => {
+		const rig = makeRig("pi-lens-4161-aux-drain-");
+		try {
+			fillerBlocker(rig, 1000);
+			touch(rig, "old-edit.ts");
+			await endTurn(rig, () => {
+				replace(rig);
+				markAux(rig, "succ-aux.ts");
+			});
+			expect(pendingAuxiliaryCoverageSize()).toBe(1);
+			expect(staleWriteSubjects()).toContain(
+				"runtime-session:turn-end:late-aux",
+			);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence: the probe-failure re-arm runs after the probe's await. A
+	// replacement inside it must not hand the old session's pair to the
+	// successor, whose session_start emptied this store.
+	it("does not re-arm the replaced session's pair into its successor", async () => {
+		const rig = makeRig("pi-lens-4161-aux-rearm-");
+		try {
+			const file = markAux(rig, "old-aux.ts");
+			readCachedDiagnosticsForServers.mockImplementation(async () => {
+				replace(rig);
+				throw new Error("probe failed");
+			});
+			await endTurn(rig);
+			expect(pendingAuxiliaryCoverageSize()).toBe(0);
+			expect(staleWriteSubjects()).toContain(
+				"runtime-session:turn-end:late-aux-rearm",
+			);
+			// Recurrence (#4168 review F2): the dropped re-arm was still counted,
+			// so the row read `rearmed: 1` beside `pendingAfter: 0`.
+			expect(lateAuxRow()?.metadata).toMatchObject({
+				rearmed: 0,
+				pendingAfter: 0,
+			});
+			expect(file).toContain("old-aux.ts");
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence (#4168 review F3): one stale-write subject per pair let a
+	// replaced turn's pairs push every other subject out of the kind's
+	// 20-entry window. The store is one subject; its count carries N.
+	it("records the replaced turn's dropped re-arms under one subject for the store", async () => {
+		const rig = makeRig("pi-lens-4161-aux-rearm-subject-");
+		try {
+			markAux(rig, "old-aux-a.ts");
+			markAux(rig, "old-aux-b.ts");
+			readCachedDiagnosticsForServers.mockImplementation(async () => {
+				replace(rig);
+				throw new Error("probe failed");
+			});
+			await endTurn(rig);
+			expect(pendingAuxiliaryCoverageSize()).toBe(0);
+			expect(
+				staleWriteSubjects().filter((subject) =>
+					subject.includes("late-aux-rearm"),
+				),
+			).toEqual(["runtime-session:turn-end:late-aux-rearm"]);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence (#4168 verify R2-F1, probe S1): round 2 judged a concurrent
+	// secondary's drains AND settle by the secondary's own scope. A secondary
+	// that drained the primary's run and then ended before settle skipped the
+	// restore, so the primary's cut run was lost (head `[]`, master
+	// `["primary-built.ts"]`). The store is the coordinator's, so its fence is
+	// the coordinator's scope, which is live: settle restores it for the primary.
+	it("a secondary that drained the primary's cut run and then ended before settle restores it for the primary", async () => {
+		const rig = makeRig("pi-lens-4161-secondary-s1-");
+		try {
+			fillerBlocker(rig, 1000);
+			rig.runtime.appendCascadeRun(cascadeRun(rig, "primary-built"));
+			const secondary = beginScope({ role: "secondary" });
+			await handleTurnEnd({
+				// The knip await sits after `consumeCascadeRuns`, so the retirement
+				// lands between the drain and settle.
+				...makeDeps(rig.runtime, rig.cacheManager, rig.cwd, () =>
+					retireScope(secondary, "shutdown"),
+				),
+				sessionId: "secondary-4161",
+				sessionScope: secondary,
+			});
+			expect(
+				rig.runtime
+					.consumeCascadeRuns()
+					.map((run) => path.basename(run.filePath)),
+			).toEqual(["primary-built.ts"]);
+			expect(staleWriteSubjects()).toEqual([]);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence (#4168 verify R2-F1, probe S4): the same window on the
+	// late-auxiliary store. The secondary drained the primary's pair, its scope
+	// ended inside the probe's await, and the still-scanning re-arm was fenced
+	// off (head 0, master 1). The store is the module's, shared through the
+	// coordinator, so the coordinator's live scope lets the re-arm land.
+	it("a secondary that drained the primary's aux pair and then ended before settle re-arms it for the primary", async () => {
+		const rig = makeRig("pi-lens-4161-secondary-s4-");
+		try {
+			markAux(rig, "primary-aux.ts");
+			const secondary = beginScope({ role: "secondary" });
+			// Alive but not yet published: the drain's own still-scanning branch
+			// re-arms the pair after this await.
+			readCachedDiagnosticsForServers.mockImplementation(async () => {
+				retireScope(secondary, "shutdown");
+				return new Map([["opengrep", { diags: [] }]]);
+			});
+			await handleTurnEnd({
+				...makeDeps(rig.runtime, rig.cacheManager, rig.cwd),
+				sessionId: "secondary-4161",
+				sessionScope: secondary,
+			});
+			expect(pendingAuxiliaryCoverageSize()).toBe(1);
+			expect(lateAuxRow()?.metadata).toMatchObject({
+				rearmed: 1,
+				pendingAfter: 1,
+			});
+			expect(staleWriteSubjects()).toEqual([]);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	// Recurrence (#4168 verify R2-F2): the "re-arm counted only when it landed"
+	// guard was pinned at the probe-failure site alone; making the count
+	// unconditional at the other three sites stayed green. One row per site:
+	// the replacement lands inside the probe's await, the probe's answer steers
+	// the drain into that site's branch, and the row must not claim a re-arm
+	// (or a stuck pair) the fence dropped.
+	const REARM_SITES = [
+		{
+			site: "notify-stall",
+			markedAgoMs: 2000,
+			// The LSP service's teardown status for a pair marked before it.
+			probe: () =>
+				new Map([
+					[
+						"opengrep",
+						{ diags: [], notifyStallDemoted: true, demotedAt: Date.now() },
+					],
+				]),
+		},
+		{
+			site: "still-scanning",
+			markedAgoMs: 2000,
+			// Alive, nothing published yet.
+			probe: () => new Map([["opengrep", { diags: [] }]]),
+		},
+		{
+			site: "stale-gate",
+			// The file's mtime (now) is past a mark this old, so every finding
+			// the probe answers is stale and the drain re-arms with the baseline.
+			markedAgoMs: 60_000,
+			probe: () =>
+				new Map([
+					[
+						"opengrep",
+						{ diags: [auxDiag(0, "stale body")], publishedAt: Date.now() },
+					],
+				]),
+		},
+	] as const;
+
+	it.each(REARM_SITES)(
+		"does not count a re-arm the fence dropped at the $site site",
+		async ({ site, markedAgoMs, probe }) => {
+			const rig = makeRig(`pi-lens-4161-aux-rearm-${site}-`);
+			try {
+				const file = touch(rig, "old-aux.ts");
+				markPendingAuxiliaryCoverage(
+					file,
+					["opengrep"],
+					Date.now() - markedAgoMs,
+				);
+				readCachedDiagnosticsForServers.mockImplementation(async () => {
+					replace(rig);
+					return probe();
+				});
+				await endTurn(rig);
+				expect(pendingAuxiliaryCoverageSize()).toBe(0);
+				expect(staleWriteSubjects()).toContain(
+					"runtime-session:turn-end:late-aux-rearm",
+				);
+				expect(lateAuxRow()?.metadata).toMatchObject({
+					rearmed: 0,
+					pendingAfter: 0,
+					stuckPairs: [],
+				});
+			} finally {
+				rig.cleanup();
+			}
+		},
+	);
+
+	// No-drop direction (shape 54): without a replacement the same turn still
+	// drains, settles and restores (the reviewer's control, `[Y, X]`).
+	it("restores both cut runs when no replacement lands", async () => {
+		const rig = makeRig("pi-lens-4161-control-");
+		try {
+			fillerBlocker(rig, 1000);
+			const oldRun = cascadeRun(rig, "old-pending");
+			rig.runtime.appendCascadePromise(
+				Promise.resolve(oldRun),
+				rig.runtime.captureSessionGeneration(),
+				oldRun.filePath,
+			);
+			rig.runtime.appendCascadeRun(cascadeRun(rig, "old-built"));
+			await endTurn(rig);
+			expect(
+				rig.runtime
+					.consumeCascadeRuns()
+					.map((run) => path.basename(run.filePath))
+					.sort(),
+			).toEqual(["old-built.ts", "old-pending.ts"]);
+			expect(staleWriteSubjects()).toEqual([]);
 		} finally {
 			rig.cleanup();
 		}

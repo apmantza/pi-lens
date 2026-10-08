@@ -38,7 +38,11 @@ function fakeClient(label: string, busy = false) {
 	};
 }
 
-function configureServer(id = "typescript", policy = "transparent") {
+function configureServer(
+	id = "typescript",
+	policy = "transparent",
+	root = "/repo",
+) {
 	const spawn = vi.fn(async () => ({
 		process: {
 			process: { killed: false },
@@ -54,7 +58,7 @@ function configureServer(id = "typescript", policy = "transparent") {
 			name: id,
 			extensions: [".ts"],
 			idleEviction: policy,
-			root: async () => "/repo",
+			root: async () => root,
 			spawn,
 		},
 	]);
@@ -130,6 +134,45 @@ describe("LSP idle eviction (#1332 b2)", () => {
 			expect(client.shutdown).toHaveBeenCalledWith({ reason: "idle_eviction" });
 			expect(service.getAliveClientCount()).toBe(0);
 		});
+	});
+
+	// Recurrence (#1129 F8, review mutation M6): the service timer read the
+	// generic window, so a tmp checkout's client sat idle for 20 minutes while
+	// only the pure window selector was tested.
+	it("evicts a tmp checkout's client on the ephemeral window through the service timer (#1129)", async () => {
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const checkout = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-1129-idle-timer-"),
+		);
+		try {
+			fs.mkdirSync(path.join(checkout, ".git", "objects"), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(checkout, ".git", "HEAD"),
+				"ref: refs/heads/main\n",
+			);
+			vi.useFakeTimers();
+			delete process.env.PI_LENS_TS_IDLE_EVICT_MS;
+			process.env.PI_LENS_LSP_IDLE_EVICT_MS = "100000";
+			process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS = "20";
+			const client = fakeClient("ephemeral-window");
+			createLSPClient.mockResolvedValue(client);
+			configureServer("typescript", "transparent", checkout);
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+			await service.getClientForFile(path.join(checkout, "main.ts"));
+			await vi.advanceTimersByTimeAsync(20);
+			expect(client.shutdown).toHaveBeenCalledWith({
+				reason: "idle_eviction",
+			});
+			expect(service.getAliveClientCount()).toBe(0);
+		} finally {
+			delete process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS;
+			fs.rmSync(checkout, { recursive: true, force: true });
+		}
 	});
 
 	it("releases the idle client and transparently rebuilds on the next request", async () => {

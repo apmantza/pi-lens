@@ -106,6 +106,11 @@
 (*   "rolelessKey"       #4106: a shutdown whose start never ran, in a     *)
 (*                       named gap, is the primary's only when its own     *)
 (*                       manager's key is the named one (SecRoleless)      *)
+(*   "forwardUnstarted"  #4113: a shutdown that lands before pi-lens's     *)
+(*                       start handler ran (W0: no mark, no scope) forwards *)
+(*                       the slot left for the start its gap names, as     *)
+(*                       forwardUnadopted does; without it nothing is      *)
+(*                       written and the slot keeps the start's reason     *)
 (*   "nameAtShutdown"    #3855 r5 (merged): the naming site binds a fresh  *)
 (*                       ticket to a file-less reload/fork session's       *)
 (*                       manager that carries none, in every window        *)
@@ -124,7 +129,7 @@ CONSTANTS
                     \*   {"New","Resume","Fork","Clone","CancelFork","Reload",
                     \*    "Quit","PiFork","Tree","IdleReset","SecStart",
                     \*    "SecEnd","SecTurn","SecReload","SecFork","Dup",
-                    \*    "Interrupt"}
+                    \*    "Interrupt","InterruptPreScope","InterruptUnstarted"}
     Writers,        \* the writers in play, a subset of
                     \*   {"read","secRead","heartbeat","lsp","widget",
                     \*    "advisory","activate"}
@@ -206,10 +211,16 @@ LegacyFence(s) == IF s = "RG" THEN "session" ELSE TargetFence(s)
 TargetSec(s) ==
     CASE s \in {"RG", "TC", "LZ"} -> "own" [] OTHER -> "shared"
 
-\* Merged master: S2 gave the lazy-tool memory a cell per scope (#3653); a
-\* subagent's handlers still reach the module-level runtime, so its read
-\* guard and turn counter are the primary's (#3607, N2, #3613 open).
-MergedSec(s) == IF s = "LZ" THEN "own" ELSE "shared"
+\* Merged master: S2 gave the lazy-tool memory a cell per scope (#3653), and
+\* #3613 the turn state: `beginTurn` takes the turn's session id and the
+\* per-turn records are partitioned by it (`clients/runtime-coordinator.ts`).
+\* A subagent's handlers still reach the module-level runtime's read guard
+\* (#3607, F4, the rest of #3613).
+MergedSec(s) == IF s \in {"LZ", "TC"} THEN "own" ELSE "shared"
+
+\* Merged master before #3613: the turn counter and per-turn maps were the
+\* module-level runtime's too (N2).
+PreS4TurnSec(s) == IF s = "LZ" THEN "own" ELSE "shared"
 
 \* Before S2, the subagent shared everything.
 LegacySec(s) == "shared"
@@ -368,6 +379,21 @@ CellOf(t) == IF role[t] = "secondary" /\ SecPolicy("RG") = "shared"
              THEN last ELSE t
 ActCell(t) == IF role[t] = "secondary" /\ SecPolicy("LZ") = "shared"
               THEN last ELSE t
+\* The scope whose turn counter and per-turn maps a turn of scope t should
+\* move: its own, or, when the turn state is shared, the module-level
+\* runtime's.
+TurnCellOf(t) == IF role[t] = "secondary" /\ SecPolicy("TC") = "shared"
+                 THEN last ELSE t
+\* #3613 F1: the coordinator holds the stable id of the session it serves.
+\* The start pins it; `startThrows` is a start whose handler throws after its
+\* reset, which skips a pin placed after the start's await, so the
+\* coordinator keeps the reset's random id. `pinAtReset` pins it before the
+\* await (merged).
+Pinned == ~Has("startThrows") \/ Has("pinAtReset")
+\* The code's rule (`turnSession`, `beginTurn`): a turn is the coordinator's
+\* own when its session's id equals the id the coordinator holds. Selected by
+\* id, not by role, like the code.
+OwnTurn(t) == Pinned /\ sess[t] = sess[last]
 
 Ents(S) == {x.e : x \in S}
 
@@ -731,13 +757,17 @@ BeginDeclined ==
 \* every action but reset and none).
 Keeps(s, k) == ~Has("forwardPolicy") \/ Policy(s, k) \notin {"reset", "none"}
 
-\* pre: the reload lands before the start held its scope (verify r4 V6):
-\* before pi-lens's start handler ran (W0), or inside its awaits before
-\* `scope = runtime.sessionScope` (W1, W2). Nothing was reset yet, and only
-\* the naming-site rule can bind a ticket to the start's manager.
-InterruptAt(pre) ==
-    /\ \/ ~pre /\ "Interrupt" \in Transitions
-       \/ pre /\ "InterruptPreScope" \in Transitions
+\* w = "pre": the reload lands before the start held its scope (verify r4
+\* V6), inside its awaits before `scope = runtime.sessionScope` (W1, W2).
+\* w = "unstarted" (#4113): before pi-lens's start handler ran (W0), so there
+\* is no in-flight mark either; the shutdown is primary by the gap's named
+\* key (#4106), and the name is the start reason pi-lens never saw. Nothing
+\* was reset yet in either, and only the naming-site rule can bind a ticket
+\* to the start's manager.
+InterruptAt(w) ==
+    /\ \/ w = "post" /\ "Interrupt" \in Transitions
+       \/ w = "pre" /\ "InterruptPreScope" \in Transitions
+       \/ w = "unstarted" /\ "InterruptUnstarted" \in Transitions
     /\ "interrupt" \notin used
     /\ ~RegOn /\ ~LspOn
     /\ pend.k \in {"new", "resume", "fork", "clone", "reload"}
@@ -745,6 +775,11 @@ InterruptAt(pre) ==
     /\ LET k == pend.k
            t == nxt
            f == NewFile(k)
+           pre == w # "post"
+           \* The code's forward: the in-flight mark's reason, or at W0 the
+           \* gap's name (pend.k either way).
+           fwdOn == Has("forwardUnadopted")
+                    /\ (w # "unstarted" \/ Has("forwardUnstarted"))
            left == SR(k) \in SlotReasons /\ SlotMatch(SR(k), f, Via(k, pend.from))
            \* SameMgr for t: its start kept pend.from's manager.
            keeps == k \in {"reload", "fork", "clone"} /\ (k = "reload" \/ f \in FileLess)
@@ -765,7 +800,7 @@ InterruptAt(pre) ==
        /\ lin' = NewLin(k, t)
        /\ predOf' = [predOf EXCEPT ![t] = pend.from]
        /\ resets' = IF pre THEN resets ELSE [resets EXCEPT ![t] = 1]
-       /\ slot' = IF Has("forwardUnadopted")
+       /\ slot' = IF fwdOn
                   THEN IF left
                        THEN [slot EXCEPT !.from = t, !.reason = "reload",
                                          !.file = Key(f),
@@ -773,6 +808,8 @@ InterruptAt(pre) ==
                                          !.act = IF Keeps("LZ", k) THEN @ ELSE {},
                                          !.adv = IF Keeps("AD", k) THEN @ ELSE {}]
                        ELSE slot
+                  \* W0 without the fix: no mark and no scope, nothing written.
+                  ELSE IF w = "unstarted" THEN slot
                   ELSE [has |-> TRUE, from |-> t, tk |-> t, reason |-> "reload",
                         file |-> Key(f), facts |-> {}, act |-> {}, adv |-> {}]
        \* #3855 r4 (verify r3 V4): the gap is named by the key the code's
@@ -1140,7 +1177,9 @@ Dup ==
 
 TurnStart ==
     /\ turns < MaxTurns /\ primary # 0 /\ pend.k = "none"
-    /\ turn' = [turn EXCEPT ![primary] = @ + 1]
+    \* Not the coordinator's own (F1): only the turn's own id moves.
+    /\ turn' = IF OwnTurn(primary) THEN [turn EXCEPT ![primary] = @ + 1]
+               ELSE turn
     /\ begun' = [begun EXCEPT ![primary] = @ + 1]
     /\ turns' = turns + 1
     /\ Draw
@@ -1150,14 +1189,16 @@ TurnStart ==
                    resets, dupDone, landed, reads, predOf, lzV, adV, steps,
                    used>>
 
-\* A subagent's turn_start. onTurnStart calls runtime.beginTurn() with no
-\* role gate (onTurnStart in index.ts), which advances the primary's turn (N2).
+\* A subagent's turn_start. onTurnStart passes the turn's session id to
+\* runtime.beginTurn (#3613), which advances only that session's turn state;
+\* before it (TC shared) the call advanced the primary's turn (N2).
 SecTurn ==
     /\ "SecTurn" \in Transitions /\ turns < MaxTurns
     /\ \E s \in Tickets :
           /\ st[s] = "live" /\ role[s] = "secondary"
-          /\ LET tgt == IF SecPolicy("TC") = "own" THEN s ELSE last IN
-             turn' = [turn EXCEPT ![tgt] = @ + 1]
+          /\ LET tgt == IF SecPolicy("TC") = "shared" \/ OwnTurn(s)
+                        THEN last ELSE s
+             IN turn' = [turn EXCEPT ![tgt] = @ + 1]
           /\ begun' = [begun EXCEPT ![s] = @ + 1]
     /\ turns' = turns + 1
     /\ Draw
@@ -1364,7 +1405,7 @@ Next ==
     \/ Begin
     \/ BeginDemoted
     \/ BeginDeclined
-    \/ \E pre \in BOOLEAN : InterruptAt(pre)
+    \/ \E w \in {"post", "pre", "unstarted"} : InterruptAt(w)
     \/ PiFork
     \/ Tree /\ UNCHANGED r2V
     \/ IdleReset /\ UNCHANGED r2V
@@ -1451,14 +1492,17 @@ NoUnrecordedFalseBlock ==
 \* No guard drops a write whose own lineage is still current (shape 54).
 NoOwnDrop == ~ownDrop
 
-\* #3607 and N2: a primary transition never removes a live secondary's own
-\* facts, and a secondary's turn never moves a primary's turn.
+\* #3607, N2 and #3613: a primary transition never removes a live
+\* secondary's own facts, and every live scope's turn state is moved by its
+\* own turns only: a secondary's turn never moves the primary's, and the
+\* primary's turns and replacements never move or reset a secondary's (its
+\* per-turn records are not dropped).
 SecondaryIsolation ==
     /\ \A s \in Tickets :
           (st[s] = "live" /\ role[s] = "secondary")
               => {x \in landed : x.o = s} \subseteq cell[CellOf(s)]
-    /\ \A p \in Tickets :
-          (st[p] = "live" /\ role[p] = "primary") => turn[p] = begun[p]
+    /\ \A t \in Tickets :
+          (st[t] = "live" /\ role[t] # "-") => turn[TurnCellOf(t)] = begun[t]
 
 \* F2: the slot is taken only by a primary start that replaced the scope
 \* that wrote it.

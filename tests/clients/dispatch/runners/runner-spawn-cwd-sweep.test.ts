@@ -272,7 +272,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"Windows LSP tree cleanup targets a pid and does not resolve project configuration",
 	],
 	[
-		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:488c639e~e7e502d1",
+		"clients/dead-code-client.ts#PythonDeadCodeClient.analyze:a1223aae~edc51d69",
 		"the analysis root reaches runAnalyze as `key` (path.resolve(root)); the name carries no `cwd`, so the wrapper rule cannot see it — the spawn it reaches passes it as cwd. #2894 left it: `analyze(root)`'s input is already a DIRECTORY, and `resolveToolCwd` takes a FILE and starts from `path.dirname` of it, so handing it a root would walk from that root's PARENT",
 	],
 	[
@@ -618,8 +618,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
 	],
 	[
-		"clients/jscpd-client.ts#JscpdClient.runScan:441c892b~dbf27697",
-		"cwd is runScan's own `cwd` parameter, and `hasProjectJscpdConfig(cwd)` decides the flags from the same directory",
+		"clients/jscpd-client.ts#JscpdClient.runScan:9700ad53~dbf27697",
+		"cwd is runScan's own `cwd` parameter, and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
 	],
 	[
 		"clients/knip-client.ts#KnipClient.runAnalyze:b959739e~f5c0e305",

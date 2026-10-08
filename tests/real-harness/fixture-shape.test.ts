@@ -5,8 +5,10 @@ import {
 	realHarnessFixtureRoot,
 	validateScript,
 	withRepoBinOnPath,
+	withRealPi,
 } from "../support/real-pi-harness.js";
 
+// flake-shape: real-process-spawn — the child environment is the subject of this boundary test
 describe("real harness fixture shape", () => {
 	it("requires every scenario to provide a project directory and valid script fields", () => {
 		for (const scenario of readdirSync(realHarnessFixtureRoot)) {
@@ -51,5 +53,18 @@ describe("real harness fixture shape", () => {
 		});
 		expect(withRepoBinOnPath({ PATH: "" })).toEqual({ PATH: joined(...head) });
 		expect(withRepoBinOnPath({})).toEqual({ PATH: joined(...head) });
+	});
+	it("gives real pi children a TMPDIR under their removable home (#4133)", async () => {
+		await withRealPi(
+			{ fixture: "scenario-1", script: "script.json" },
+			async (pi) => {
+				expect(pi.childEnvironment().TMPDIR).toBe(
+					path.join(pi.homePath(), "tmp"),
+				);
+				expect(pi.childEnvironment().TMP).toBe(pi.childEnvironment().TMPDIR);
+				expect(pi.childEnvironment().TEMP).toBe(pi.childEnvironment().TMPDIR);
+				expect(statSync(pi.childTempDir()).isDirectory()).toBe(true);
+			},
+		);
 	});
 });

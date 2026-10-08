@@ -146,7 +146,7 @@ change that drops it turns the check red.
 | `FixEnterEarly` | without `EnterAfterResolve` (the code before #3610): an install holds pi's queue | violated `NoInstallHold` | 164 |
 | `FixNoOrphanSync` | without `FixOrphanSync` (the code before #3529) | violated `LspMatchesDisk` | 594 |
 | `MutNoReset` | non-vacuity: `/new` keeps the read guard | violated `NoBlindAllow` | 601 |
-| `FixMtime` | residual #3520: the mtime fallback on | violated `NoBlindAllow` | 660 |
+| `FixMtime` | mutant of #3520: the mtime fallback back on (the code before it) | violated `NoBlindAllow` | 660 |
 | `FixExtProcess` | residual: another pi-lens process formats F | violated `NoLostEdit` | 160 |
 
 Distinct states at the violation for the violated configs. #3576 made every
@@ -188,8 +188,13 @@ Two fix parts now overlap in the model, and the code keeps both:
 - **Another pi-lens process** (`FixExtProcess`) is outside this process's
   queue. An in-place `--write` child cannot do the compare-and-swap write
   that would close it.
-- **#3520** (`FixMtime`): the read guard's mtime fallback admits a
-  session-2 edit from the drain's write alone. It needs its own fix.
+- **#3520** (`FixMtime`): the read guard's mtime fallback admitted a
+  session-2 edit from the drain's write alone. The code no longer has the
+  fallback; `FixMtime` keeps it on as a mutant. This model has no no-drop
+  witness for the zero-read arm: `EditCheck` counts every zero-read admit as
+  blind (`blind' = blind \/ ~reads`), so any admit that an own-write action
+  earned without a read would count against `NoBlindAllow`. That direction is `formal/read-guard`
+  `BashAuthored`.
 - **The actionable-warnings phase** at the end of the drain writes through
   its own mutation context and is not modelled. Since #3576 it starts only
   while the drain's session and LSP service are current, starts no edit after

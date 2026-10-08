@@ -29,6 +29,7 @@ import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
+import { hashText } from "./finding-identity.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -233,7 +234,14 @@ export function retireScope(
 	scope: SessionScope,
 	reason: string | undefined,
 ): void {
+	const wasLive = scope.isLive();
 	(scope as Scope).retire(reason);
+	// #3873 O4: pi's shutdown retires a scope and `logScopeTransition` writes
+	// that row at its call site. A scope retired by its coordinator beginning
+	// the next one (`superseded`) had no shutdown before it, so this is the
+	// only record that a start replaced a scope that never ended: an orphan.
+	if (wasLive && reason === "superseded")
+		logScopeTransition(scope, { transition: "end", reason });
 }
 
 /** `/tree`: the scope's branch epoch moves once; its handles go branch-stale. */
@@ -252,7 +260,12 @@ export function nextOrderTurn(): number {
 	return state.orderTurn;
 }
 
-export type ScopeTransition = "start" | "shutdown" | "tree";
+/**
+ * `end` (#3873): a scope its coordinator superseded without a shutdown.
+ * `demote`: a start declined as a gap non-successor (#3855); its `start` row
+ * is role `secondary`, this row says why.
+ */
+export type ScopeTransition = "start" | "shutdown" | "tree" | "end" | "demote";
 
 /**
  * One `session_scope_transition` row per scope start, retire and branch
@@ -266,15 +279,18 @@ export function logScopeTransition(
 		transition: ScopeTransition;
 		reason: string | undefined;
 		sessionId?: string;
-		cwd: string;
+		/** Absent for a retire that has no session cwd (`end`). */
+		cwd?: string;
 		/** A primary start's hand-off source (#3612); see {@link adoptHandoff}. */
 		handoffSource?: StartSource;
+		/** Why the decision went this way (`demote`: basis, gap and lineage). */
+		detail?: Record<string, unknown>;
 	},
 ): void {
 	logLatency({
 		type: "phase",
 		phase: "session_scope_transition",
-		filePath: args.cwd,
+		filePath: args.cwd ?? "<pi-lens>",
 		durationMs: 0,
 		metadata: {
 			transition: args.transition,
@@ -287,6 +303,7 @@ export function logScopeTransition(
 			evaluationOrdinal: PI_LENS_EVALUATION_ORDINAL,
 			coordinatorId: scope.coordinatorId,
 			handoffSource: args.handoffSource,
+			...args.detail,
 		},
 	});
 }
@@ -375,6 +392,15 @@ export interface AdoptContext {
 	cwd: string;
 }
 
+/**
+ * What a store's `restore` reports for its `session_store_action` row
+ * (#3873): the items its payload held and how many it kept.
+ */
+export interface StoreCarry {
+	itemsIn: number;
+	itemsKept: number;
+}
+
 export interface SessionStoreSpec<P> {
 	/** Unique; the sidecar key and the governance registry's row name. */
 	name: string;
@@ -392,7 +418,7 @@ export interface SessionStoreSpec<P> {
 		scope: SessionScope,
 		payload: unknown,
 		ctx: AdoptContext,
-	): void | Promise<void>;
+	): void | StoreCarry | Promise<void | StoreCarry>;
 	reset?(scope: SessionScope): void;
 	/** One sentence: why this state is a store. */
 	reason: string;
@@ -456,10 +482,22 @@ interface Handoff {
 	/** The successor's session file; file-less, the stashing scope's ticket. */
 	key: string | number;
 	stores: Record<string, unknown>;
+	/**
+	 * When the snapshot was taken (#3873): the slot's age in its records.
+	 * Optional so a slot a build from before this field stashed (same cell
+	 * version) still reads: its rows carry no age.
+	 */
+	at?: number;
+	/** A `key-mismatch-left` row was written for this slot (#3873): once per slot. */
+	mismatchLogged?: boolean;
 }
 
 const HANDOFF_FAMILY = "session-scope.handoff";
-/** Bump when {@link Handoff}'s or the cell's shape changes. */
+/**
+ * Bump when {@link Handoff}'s or the cell's shape changes incompatibly. The
+ * #3873 fields are optional additions, so the version stays 2 and a slot an
+ * earlier build left is still taken.
+ */
 const HANDOFF_VERSION = 2;
 
 interface HandoffCell {
@@ -482,6 +520,55 @@ function handoffSlot(): HandoffCell {
 	}));
 }
 
+/** What became of the slot: one `session_handoff_slot` row per op (#3873). */
+type SlotOp =
+	| "stashed"
+	| "replaced"
+	| "taken"
+	| "key-mismatch-left"
+	| "forwarded"
+	| "unconsumed-at-exit";
+
+/** A slot or start key for a row: a file as a short hash, a ticket as itself. */
+function describeKey(key: string | number | undefined): string | undefined {
+	if (key === undefined) return undefined;
+	return typeof key === "number" ? `ticket:${key}` : `file:${hashText(key, 8)}`;
+}
+
+/** A slot's age in ms, `undefined` for one stashed before `at` existed. */
+function ageOf(handoff: Handoff | undefined): number | undefined {
+	return handoff?.at === undefined ? undefined : Date.now() - handoff.at;
+}
+
+/**
+ * #3873 O1: one `session_handoff_slot` row per slot transition, so a slot
+ * that was left, replaced, taken, left for another start, or never consumed
+ * is provable from `latency.log`. Bound: at most one row per primary
+ * shutdown (`stashed`, `replaced`, `forwarded`, `unconsumed-at-exit`) and per
+ * primary or demoted start (`taken`, `key-mismatch-left`); each is a distinct
+ * lifecycle event with no loop behind it, about 350 B.
+ */
+function logSlotOp(
+	op: SlotOp,
+	handoff: Handoff | undefined,
+	extra: Record<string, unknown> = {},
+): void {
+	logLatency({
+		type: "phase",
+		phase: "session_handoff_slot",
+		filePath: "<pi-lens>",
+		durationMs: 0,
+		metadata: {
+			op,
+			reason: handoff?.reason,
+			keyHash: describeKey(handoff?.key),
+			storeNames: handoff && Object.keys(handoff.stores),
+			ageMs: ageOf(handoff),
+			...extra,
+		},
+	});
+}
+
 /**
  * At a primary `session_shutdown` (sync): leave the scope's snapshot for a
  * successor that continues its conversation. pi sends `targetSessionFile`
@@ -500,32 +587,72 @@ export function stashHandoff(
 ): boolean {
 	// `quit` and a missing reason have no successor: they read as `startup`.
 	const reason = toStartReason(args.reason);
-	if (!SOURCES[reason].includes("slot")) return false;
 	const cell = handoffSlot();
+	if (!SOURCES[reason].includes("slot")) {
+		// #3873 O1: the process ends with a slot nobody took.
+		if (cell.handoff && (args.reason === undefined || args.reason === "quit"))
+			logSlotOp("unconsumed-at-exit", cell.handoff);
+		return false;
+	}
 	const manager = asManager(args.sessionManager);
 	if (manager !== undefined) cell.left.set(manager, scope.scopeId);
+	const replaced = cell.handoff;
 	cell.handoff = {
 		reason,
 		key: args.targetSessionFile ?? args.sessionFile ?? scope.scopeId,
 		stores: snapshotSessionStores(scope),
+		at: Date.now(),
 	};
+	logSlotOp(replaced ? "replaced" : "stashed", cell.handoff, {
+		...(replaced && {
+			replacedReason: replaced.reason,
+			replacedKeyHash: describeKey(replaced.key),
+			replacedAgeMs: ageOf(replaced),
+		}),
+	});
 	return true;
 }
+
+/** Who asked for the slot (#3873): the adopting start, a forward or a discard. */
+type SlotTaker = "adopt" | "forward" | "discard";
 
 /**
  * Consume the slot only when its key equals this start's (F2): its session
  * file, or, file-less, its predecessor's ticket. A slot left for another
  * start stays in place.
  */
+function takeSlot(
+	reason: StartReason,
+	key: string | number | undefined,
+	by: SlotTaker,
+): Handoff | undefined {
+	const slot = handoffSlot();
+	const handoff = slot.handoff;
+	if (!handoff) return undefined;
+	if (handoff.reason !== reason || handoff.key !== key) {
+		// Once per slot: a stale slot outlives its successor and every later
+		// declined start asks for it, so a row per ask would be a row per start.
+		if (!handoff.mismatchLogged) {
+			handoff.mismatchLogged = true;
+			logSlotOp("key-mismatch-left", handoff, {
+				by,
+				askedReason: reason,
+				askedKeyHash: describeKey(key),
+			});
+		}
+		return undefined;
+	}
+	slot.handoff = undefined;
+	logSlotOp("taken", handoff, { by });
+	return handoff;
+}
+
 export function takeHandoff(
 	reason: StartReason,
 	key: string | number | undefined,
+	by: SlotTaker = "adopt",
 ): Record<string, unknown> | undefined {
-	const slot = handoffSlot();
-	const handoff = slot.handoff;
-	if (handoff?.reason !== reason || handoff.key !== key) return undefined;
-	slot.handoff = undefined;
-	return handoff.stores;
+	return takeSlot(reason, key, by)?.stores;
 }
 
 /**
@@ -587,7 +714,13 @@ export function discardHandoff(args: {
 	sessionManager: unknown;
 }): boolean {
 	const reason = toStartReason(args.reason);
-	if (!takeHandoff(reason, startKey(args.sessionFile, args.sessionManager)))
+	if (
+		!takeHandoff(
+			reason,
+			startKey(args.sessionFile, args.sessionManager),
+			"discard",
+		)
+	)
 		return false;
 	recordDegradationOnce({
 		kind: "session-scope-handoff-discarded",
@@ -618,20 +751,25 @@ export function forwardHandoff(args: {
 	const reason = toStartReason(args.reason);
 	const startReason = toStartReason(args.startReason);
 	const key = startKey(args.sessionFile, args.sessionManager);
-	const stores = SOURCES[reason].includes("slot")
-		? takeHandoff(startReason, key)
+	const taken = SOURCES[reason].includes("slot")
+		? takeSlot(startReason, key, "forward")
 		: undefined;
-	if (stores) {
+	const stores = taken?.stores;
+	if (taken) {
 		const adopted: Record<string, unknown> = {};
-		for (const [name, payload] of Object.entries(stores))
+		for (const [name, payload] of Object.entries(taken.stores))
 			if (sessionStores.get(name)?.policy[startReason] === "adopt")
 				adopted[name] = payload;
-		// A taken slot's key equalled `key`, so `key` is defined here.
-		handoffSlot().handoff = {
+		// A taken slot's key equalled `key`, so `key` is defined here. The
+		// snapshot keeps its age: forwarding re-keys it, it is not a new one.
+		const forwarded: Handoff = {
 			reason,
 			key: args.targetSessionFile ?? (key as string | number),
 			stores: adopted,
+			...(taken.at !== undefined && { at: taken.at }),
 		};
+		handoffSlot().handoff = forwarded;
+		logSlotOp("forwarded", forwarded);
 	}
 	// The successor's start resets the in-memory ledger; the record's durable
 	// `degradation_ledger` row in latency.log is what outlives it.
@@ -648,12 +786,28 @@ export function forwardHandoff(args: {
 export interface PersistedStores {
 	savedAt: number;
 	stores: Record<string, unknown>;
+	/** The envelope version this build read (#3873). */
+	version?: number;
+	/** The on-disk version a migrated file was written at. */
+	migratedFrom?: number;
+}
+
+/** The store names a payload actually holds (`undefined` values are absent). */
+function heldStoreNames(stores: Record<string, unknown>): string[] {
+	return Object.entries(stores).flatMap(([name, payload]) =>
+		payload === undefined ? [] : [name],
+	);
 }
 
 /**
  * A primary `session_start`, after its scope began: resolve the hand-off
  * source once, then run every store's action for the reason. A secondary
  * never adopts: its scope's cells start empty (#473).
+ *
+ * #3873 O2, O3: one `session_handoff_adopt` row (every candidate tried and
+ * why it fell through) and one `session_store_action` row per declared store
+ * per primary start; bounded by primary starts, about 400 B each, and
+ * `dbg` gets the one-line per-store carry summary.
  */
 export async function adoptHandoff(
 	scope: SessionScope,
@@ -664,46 +818,110 @@ export async function adoptHandoff(
 		cwd: string;
 		loadOwnSidecar(): Promise<PersistedStores | undefined>;
 		loadParentSidecar(): Promise<PersistedStores | undefined>;
+		dbg?: (message: string) => void;
 	},
 ): Promise<StartSource> {
 	const reason = toStartReason(args.reason);
 	// Only a fork or reload slot is ever left, so no other reason matches.
-	const slotted = takeHandoff(
+	const slotted = takeSlot(
 		reason,
 		startKey(args.sessionFile, args.sessionManager),
+		"adopt",
 	);
 	let source: StartSource = "none";
 	let found: { savedAt?: number; stores: Record<string, unknown> } | undefined;
+	const tried: Array<Record<string, unknown>> = [];
 	for (const candidate of SOURCES[reason]) {
+		let version: number | undefined;
+		let ageMs: number | undefined;
 		if (candidate === "slot") {
-			found = slotted && { stores: slotted };
-		} else if (candidate === "own-sidecar") {
-			found = await args.loadOwnSidecar();
+			found = slotted && { stores: slotted.stores };
+			if (slotted) ageMs = ageOf(slotted);
 		} else {
-			found = await args.loadParentSidecar();
+			const sidecar =
+				candidate === "own-sidecar"
+					? await args.loadOwnSidecar()
+					: await args.loadParentSidecar();
+			found = sidecar;
+			version = sidecar?.migratedFrom ?? sidecar?.version;
+			if (sidecar) ageMs = Date.now() - sidecar.savedAt;
 		}
+		tried.push({
+			source: candidate,
+			found: found !== undefined,
+			...(found && {
+				version,
+				ageMs,
+				storeNames: heldStoreNames(found.stores),
+			}),
+		});
 		if (found) {
 			source = candidate;
 			break;
 		}
 	}
+	logLatency({
+		type: "phase",
+		phase: "session_handoff_adopt",
+		filePath: args.cwd,
+		durationMs: 0,
+		metadata: {
+			reason,
+			startKeyHash: describeKey(
+				startKey(args.sessionFile, args.sessionManager),
+			),
+			scopeId: scope.scopeId,
+			tried,
+			chosen: source,
+		},
+	});
 	if (SOURCES[reason][0] === "slot" && source !== "slot")
 		recordDegradationOnce({
 			kind: "session-scope-handoff-missed",
 			subject: reason,
 			reason: `a ${reason} start found no hand-off slot keyed by its session file or its predecessor's ticket; it started from ${source}`,
 		});
+	const summary: string[] = [];
 	for (const spec of sessionStores.values()) {
 		const action = spec.policy[reason];
 		if (action === "reset") spec.reset?.(scope);
-		if (action !== "adopt") continue;
-		await spec.restore(scope, found?.stores[spec.name], {
-			reason,
-			source,
-			savedAt: found?.savedAt,
-			sessionManager: args.sessionManager,
-			cwd: args.cwd,
+		const payload = found?.stores[spec.name];
+		let carry: StoreCarry | undefined;
+		if (action === "adopt") {
+			const restored = await spec.restore(scope, payload, {
+				reason,
+				source,
+				savedAt: found?.savedAt,
+				sessionManager: args.sessionManager,
+				cwd: args.cwd,
+			});
+			if (restored) carry = restored;
+		}
+		const label = action === "none" ? "skip" : action;
+		logLatency({
+			type: "phase",
+			phase: "session_store_action",
+			filePath: args.cwd,
+			durationMs: 0,
+			metadata: {
+				store: spec.name,
+				action: label,
+				reason,
+				source,
+				payloadPresent: payload !== undefined,
+				...(carry && {
+					itemsIn: carry.itemsIn,
+					itemsKept: carry.itemsKept,
+					itemsDropped: carry.itemsIn - carry.itemsKept,
+				}),
+			},
 		});
+		summary.push(
+			carry
+				? `${spec.name} ${label} ${carry.itemsKept}/${carry.itemsIn}`
+				: `${spec.name} ${label}`,
+		);
 	}
+	args.dbg?.(`session_start: stores from ${source} — ${summary.join(", ")}`);
 	return source;
 }

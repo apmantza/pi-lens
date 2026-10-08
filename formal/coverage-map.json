@@ -13,6 +13,7 @@
     "lsp-idle-reset",
     "lsp-rename-edit",
     "lsp-server-content",
+    "opaque-baseline-slot",
     "pending-runner-store",
     "read-guard",
     "review-graph-promotion",
@@ -23,7 +24,9 @@
     "snapshot-freshness",
     "snapshot-promotion",
     "store-freshness",
-    "tree-sitter-trap-budget"
+    "tree-sitter-trap-budget",
+    "turn-end-delivery-holds",
+    "turn-end-late-scan"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -36,14 +39,16 @@
     ],
     "clients/runtime-tool-call.ts": [
       "read-guard",
-      "dispatch-pipeline"
+      "dispatch-pipeline",
+      "opaque-baseline-slot"
     ],
     "clients/runtime-tool-result.ts": [
       "read-guard",
       "session-straddle",
       "session-lifecycle",
       "dispatch-pipeline",
-      "store-freshness"
+      "store-freshness",
+      "opaque-baseline-slot"
     ],
     "clients/runtime-agent-end.ts": [
       "format-drain",
@@ -83,6 +88,13 @@
     ],
     "clients/mutation-bridge.ts": [
       "session-lifecycle",
+      "read-guard"
+    ],
+    "clients/io-bridge.ts": [
+      "session-lifecycle",
+      "read-guard"
+    ],
+    "clients/confirmed-delete.ts": [
       "read-guard"
     ],
     "clients/observed-mutation.ts": [
@@ -158,7 +170,8 @@
       "session-registry"
     ],
     "clients/instance-registry-lock.ts": [
-      "file-locks"
+      "file-locks",
+      "session-registry"
     ],
     "clients/generation-lock.ts": [
       "file-locks",
@@ -231,6 +244,9 @@
       "late-aux-drain",
       "session-straddle"
     ],
+    "clients/turn-end/delivery-holds.ts": [
+      "turn-end-delivery-holds"
+    ],
     "clients/freshness.ts": [
       "store-freshness"
     ],
@@ -253,13 +269,18 @@
       "store-freshness"
     ],
     "clients/knip-client.ts": [
-      "store-freshness"
+      "store-freshness",
+      "turn-end-late-scan"
     ],
     "clients/jscpd-client.ts": [
       "store-freshness"
     ],
     "clients/dead-code-client.ts": [
-      "store-freshness"
+      "store-freshness",
+      "turn-end-late-scan"
+    ],
+    "clients/hard-failure-summary.ts": [
+      "turn-end-late-scan"
     ],
     "clients/dependency-checker.ts": [
       "store-freshness"
@@ -302,6 +323,9 @@
       "read-guard",
       "late-aux-drain",
       "dispatch-pipeline"
+    ],
+    "clients/opaque-mutation-scan.ts": [
+      "opaque-baseline-slot"
     ]
   },
   "notes": {
@@ -321,8 +345,12 @@
     "clients/dispatch/dispatcher.ts": "`buildCoverageNotice` decides per dispatch whether the synthetic model-facing coverage notice is emitted; the decision is the session-scoped `coverageNoticeSeen` latch (kind + file + sorted server sets) with the `dedupe` push/pull axis. No formal family models a model-facing coverage-notice dedupe: `dispatch-pipeline`'s `latch` is the `(file, hash)` analysed/in-flight dedupe in `clients/pipeline.ts`, and `session-lifecycle`'s `dedupe` is the #2890 duplicate-start gate. Unmodelled at the TLA axis (advisory), so the row only gates the seam record rule for the file's decision branches.",
     "clients/dispatch/pending-runner-findings.ts": "The deferred collect-later runner store (#3758/#3813): both readers (drain, commit gate's non-draining peek) apply the owned-admission fence (ownedByLiveSession), and requeueRunnerFindings carries entry.session, so a requeued answer stays fenced to its producer scope. Modelled by pending-runner-store (#3814, #3824).",
     "clients/workspace-topology.ts": "Marker-walk miss cache keyed by start-dir mtime plus the 2 s cadence (#3456). Low value; store-freshness could host it as a gate kind.",
-    "clients/knip-client.ts": "The four heavyweight analyzers stamp scannedAt at the top of their run body, before the first read (#3690); a joined run inherits the initiator's read stamp. That is store-freshness' Stamp = \"start\" rule.",
+    "clients/knip-client.ts": "The four heavyweight analyzers stamp scannedAt at the top of their run body, before the first read (#3690); a joined run inherits the initiator's read stamp. That is store-freshness' Stamp = \"start\" rule. The knip lane drops a late result by design and its two-sample floor and memo are not modelled (turn-end-late-scan README, \"What the model cannot see\"); only the shared `HardFailureStamps` is.",
+    "clients/dead-code-client.ts": "The turn_end dead-code lane's late scan (#4117 round 2, #4120): the client's single flight `inFlight` is process-wide, so a scan parked by one session is joined by the next session's analyze (J1, `JoinedScanStale`); `HardFailureStamps` is set where a scan settles and never cleared at a session boundary. The lane itself is in clients/runtime-turn.ts, which stays at its three families: a fourth would make the row a hub (4 or more) and silence the gate for the whole file. Modelled by turn-end-late-scan; store-freshness keeps the Stamp rule.",
+    "clients/hard-failure-summary.ts": "`HardFailureStamps` (stamp where a scan settles, 30 minute expiry, success lifts), shared by the knip and dead-code clients. Modelled by turn-end-late-scan (`NoRespawnWhileStamped`, `StampAtTurn`, `BackoffUnread`).",
     "unlisted": "Runtime files touched by the 151 audited PRs and deliberately not mapped (no lifecycle, timing, identity or concurrency behaviour): bounded-telemetry, cache-observability, complexity-client, dispatch/types, dispatch/utils/format-utils, install-diagnostics, lens-config, lsp/config, lsp/session-roots, lsp/wait-policy/capability-snapshot, module-report, path-utils, persistent-reverify, probe-home-state, project-diagnostics/types, project-lens-config, python-environment, read-expansion, review-graph-logger, tool-agreement, tools/module-report. Also deliberately unmapped because nearly every PR touches them for non-lifecycle reasons: clients/degradation-ledger.ts (the DegradationKind registry; touched by most runtime PRs for a record kind, never lifecycle behaviour); clients/latency-logger.ts (telemetry sink); clients/hook-budgets.ts (budget table (data); #2523 governs it); clients/dispatch/runners/** (runner outcome parsing; the fix-run restore seam is mapped at clients/fix-run-restore.ts); clients/dispatch/facts/** (pure extractors; their tree-sitter trap accounting lives in clients/tree-sitter-client.ts).",
-    "clients/test-runner-client.ts": "Per-checkout isolation of automatic test selection (#3649). Identity keying without interleaving; unit tests suffice, listed only so the gap is visible."
+    "clients/turn-end/delivery-holds.ts": "The turn-end delivery holds (#3813): peek-then-commit, drain-then-restore and park-then-recheck, settled once after the cap against the kept prefix (the reach rule), fenced by isCurrentSession, with the cut-advisory park keyed by session (#4112). Modelled by turn-end-delivery-holds. The producers register their holds in clients/runtime-turn.ts (handleTurnEnd), which is deliberately not given this family: that row would reach four families and its gate would turn advisory (#3878).",
+    "clients/test-runner-client.ts": "Per-checkout isolation of automatic test selection (#3649). Identity keying without interleaving; unit tests suffice, listed only so the gap is visible.",
+    "clients/opaque-mutation-scan.ts": "The pending opaque baseline of bash calls (OpaqueBaselineStore: one entry per tool-call id, retirement of an entry whose turn is over, the pending cap and its counted loss; #4137). Modelled by opaque-baseline-slot, together with the authority-ranked dispatch dedupe its recoveries feed (claimPipelineDispatch). The record site is clients/runtime-tool-call.ts and the take site and the dedupe are in clients/runtime-tool-result.ts, so those rows list the family too; the recovery itself (recoverOpaqueChangesViaGit, captureFileStats) is a stat or git read, not lifecycle."
   }
 }

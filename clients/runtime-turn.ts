@@ -76,6 +76,7 @@ import {
 	stableFindingKey,
 } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
+import { type SessionScope, scopeCell } from "./session-scope.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	writeProjectDiagnosticsDeltaReport,
@@ -84,6 +85,7 @@ import { deadCodeIssueToProjectDiagnostic } from "./project-diagnostics/runner-a
 import { trivyFindingToProjectDiagnostic } from "./project-diagnostics/runner-adapters/trivy.js";
 import { knipIssuesToProjectDiagnostics } from "./project-diagnostics/runner-adapters/knip.js";
 import type { ProjectDiagnostic } from "./project-diagnostics/types.js";
+import { hasAmbientPythonEnvironment } from "./python-environment.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	getLspBudgetIdleTimeoutMs,
@@ -133,6 +135,7 @@ import {
 import type { LSPDiagnostic } from "./lsp/client.js";
 import { convertLspDiagnostics } from "./dispatch/utils/lsp-diagnostics.js";
 import { retagAuxiliaryDiagnostics } from "./dispatch/auxiliary-lsp.js";
+import { findingsResult, hasUsableResult } from "./dispatch/types.js";
 import {
 	type PersistentReverifyResult,
 	runPersistentReverify,
@@ -488,6 +491,13 @@ interface TurnEndDeps {
 	}) => void;
 	/** Stable session identity from the event ctx that fired this turn_end. */
 	sessionId?: string;
+	/**
+	 * #4154: the session scope of the activation whose turn this is: the
+	 * coordinator's for the primary, its own for a concurrent secondary (which
+	 * shares the coordinator). A late dead-code scan belongs to it. Absent on
+	 * the MCP route and in harnesses: the coordinator's scope.
+	 */
+	sessionScope?: SessionScope;
 	/** Abort signal from the event ctx that fired this turn_end. */
 	signal?: AbortSignal;
 	/** Delivery adapter whose tool names appear in agent-facing advisories. */
@@ -507,6 +517,204 @@ function wouldPoisonCache(
 	next: { success: boolean },
 ): boolean {
 	return !next.success && prev?.data.success === true;
+}
+
+/**
+ * A dead-code scan that missed the turn_end budget and is still running, or
+ * has finished since (#4117). `bounded()` abandons the await, not the process,
+ * and vulture keeps no disk cache, so what the abandoned scan computes is
+ * written and delivered by the entry below instead of being thrown away: the
+ * scan lands its baseline row where it settles, and the next turn_end that
+ * reaches the lane delivers its delta. One entry per (client, root) on the
+ * cell of the session scope whose turn parked it (#4154): the primary's, a
+ * concurrent secondary's own, or a replaced session's new one. Park, take,
+ * carry and the settle's liveness check all ask that one scope, so a session
+ * never sees another's entry, and a scan that settles after its session ended
+ * is dropped. While an entry exists no second scan starts, so the settle
+ * handler is the session's only writer of the baseline row.
+ */
+interface LateDeadCodeScan {
+	/** Resolved paths of the files edited in the turn the scan was started for. */
+	files: ReadonlySet<string>;
+	/** The baseline row the scan was started against; absent when there was none. */
+	previousScan: DeadCodeResult | undefined;
+	/** Resolved paths edited while the scan ran: the next scan covers them. */
+	carry: Set<string>;
+	/** The scan's result once it succeeded; null while it runs. */
+	settled: DeadCodeResult | null;
+	/** When the lane asked for the scan (`joinedEarlierScan`). */
+	askedAt: number;
+}
+
+const LATE_DEAD_CODE_SCANS = "dead-code-late-scans";
+
+function lateDeadCodeScansOf(
+	scope: SessionScope,
+): Map<string, LateDeadCodeScan> {
+	return scopeCell(
+		scope,
+		LATE_DEAD_CODE_SCANS,
+		() => new Map<string, LateDeadCodeScan>(),
+	) as Map<string, LateDeadCodeScan>;
+}
+
+/**
+ * #4154 J1: did `analyze()` hand back a scan that was already running when the
+ * lane asked at `askedAt`? The client's single flight is process-wide, so the
+ * scan may be another session's, a subagent's, or a fresh fetch's, started
+ * before this turn's edits: it read the tree before them and cannot cover
+ * them. `scannedAt` is the initiator's read stamp, which a joiner inherits
+ * (#3600); a result without one never reached a scan.
+ */
+function joinedEarlierScan(result: DeadCodeResult, askedAt: number): boolean {
+	return (
+		result.scannedAt !== undefined && Date.parse(result.scannedAt) < askedAt
+	);
+}
+
+/**
+ * #4154 V1: a scan's result, with the row a FAILED result is judged against
+ * before it is written: the row on disk once the scan settled, not the one
+ * read before it started. Another writer (another pi-lens process on the same
+ * project) may have stored a good row meanwhile, and the failure must not
+ * replace it. A success needs no row, and a good `startRow` is kept either way,
+ * so only the cold path reads; it reads through `readCacheAsync`, so an inline
+ * caller's `bounded()` still covers the read.
+ */
+function withRowForFailureWrite<R extends { success: boolean }>(
+	scan: Promise<R>,
+	cacheManager: CacheManager,
+	cacheKey: string,
+	cwd: string,
+	startRow: { data: { success: boolean } } | null,
+): Promise<{ result: R; row: { data: { success: boolean } } | null }> {
+	return scan.then((result) =>
+		result.success || startRow?.data.success === true
+			? { result, row: startRow }
+			: cacheManager
+					.readCacheAsync<{ success: boolean }>(cacheKey, cwd)
+					.then((row) => ({ result, row })),
+	);
+}
+
+/** One finished scan and what it is compared with, for the dead-code delta. */
+interface DeadCodeDeltaSource {
+	result: DeadCodeResult;
+	previousScan: DeadCodeResult | undefined;
+	/** Resolved paths of the files whose new findings are attributable to the agent. */
+	modified: ReadonlySet<string>;
+}
+
+function lateDeadCodeScanKey(client: DeadCodeClient, cwd: string): string {
+	return `${client.id}\0${cwd}`;
+}
+
+/** The one `dead-code.log` event a cross-file scan produces, inline or late. */
+function deadCodeScanEvent(
+	client: DeadCodeClient,
+	cwd: string,
+	result: DeadCodeResult,
+	durationMs: number,
+): Parameters<typeof logDeadCodeScan>[0] {
+	return {
+		language: client.language,
+		root: cwd,
+		success: result.success,
+		cached: false,
+		unusedExports: result.unusedExports.length,
+		unusedFiles: result.unusedFiles.length,
+		unusedDeps: result.unusedDeps.length,
+		unlistedDeps: result.unlistedDeps.length,
+		durationMs: result.durationMs ?? durationMs,
+		...(result.excludedWorktrees !== undefined && {
+			excludedWorktrees: result.excludedWorktrees,
+		}),
+		...(!result.success && { reason: result.summary }),
+	};
+}
+
+/** Remove a late scan that will not be used, and count why. */
+function dropLateDeadCodeScan(
+	scans: Map<string, LateDeadCodeScan>,
+	key: string,
+	client: DeadCodeClient,
+	reason: string,
+): void {
+	scans.delete(key);
+	incrementDegradationCount({
+		kind: "dead-code-late-scan-dropped",
+		subject: client.id,
+		reason,
+	});
+}
+
+/**
+ * Keep a dead-code scan that missed the turn_end budget (#4117 F1), or one
+ * that joined a scan older than this turn's edits (#4154 J1). Where it settles
+ * it writes the baseline row (a failure never replaces the good row on disk
+ * then, #925, #4154 V1) and its `dead-code.log` event, and a successful result
+ * waits in the entry for the next turn_end of the same session that reaches
+ * the lane. A result for a session that has ended is dropped and counted.
+ */
+function parkLateDeadCodeScan(args: {
+	scope: SessionScope;
+	cacheManager: CacheManager;
+	client: DeadCodeClient;
+	cwd: string;
+	cacheKey: string;
+	scan: Promise<DeadCodeResult>;
+	startedAt: number;
+	files: ReadonlySet<string>;
+	previousScan: DeadCodeResult | undefined;
+}): void {
+	const { scope, cacheManager, client, cwd, cacheKey, startedAt } = args;
+	const scans = lateDeadCodeScansOf(scope);
+	const key = lateDeadCodeScanKey(client, cwd);
+	const entry: LateDeadCodeScan = {
+		files: args.files,
+		previousScan: args.previousScan,
+		carry: new Set(),
+		settled: null,
+		askedAt: startedAt,
+	};
+	scans.set(key, entry);
+	void withRowForFailureWrite(
+		args.scan,
+		cacheManager,
+		cacheKey,
+		cwd,
+		entry.previousScan ? { data: entry.previousScan } : null,
+	).then(
+		({ result, row }) => {
+			if (!scope.isLive()) {
+				dropLateDeadCodeScan(scans, key, client, "session-ended");
+				return;
+			}
+			const durationMs = Date.now() - startedAt;
+			const cacheKept = wouldPoisonCache(row, result);
+			if (!cacheKept) {
+				cacheManager.writeCache(cacheKey, result, cwd, {
+					scanDurationMs: durationMs,
+				});
+			}
+			logDeadCodeScan({
+				...deadCodeScanEvent(client, cwd, result, durationMs),
+				...(cacheKept && { cacheKept }),
+			});
+			if (!result.success) {
+				dropLateDeadCodeScan(
+					scans,
+					key,
+					client,
+					`scan-failed: ${result.summary}`,
+				);
+				return;
+			}
+			entry.settled = result;
+		},
+		(err: unknown) =>
+			dropLateDeadCodeScan(scans, key, client, `scan-threw: ${err}`),
+	);
 }
 
 // LSP idle reset scheduling — prevents thrashing by delaying shutdown
@@ -1032,19 +1240,41 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	 * counter must not advance for it (`skipOnSuppressed`).
 	 */
 	const deliveryHolds: DeliveryHold[] = [];
-	/** A session replaced mid-turn owns none of the held state any more. */
-	const holdGeneration = runtime.sessionGeneration;
 	/**
-	 * #3813/#3901: a parked lane belongs to the session that cut it. The runtime
-	 * is a process singleton and a concurrent secondary (subagent) activation
-	 * runs this function on it, so `holdGeneration` (the runtime's scope id) is
-	 * the same for both; the turn's own session id, the one the deferred-test
-	 * list is keyed by, is not. A secondary neither takes nor shows the
-	 * primary's parked items.
+	 * #4161/#4168: identity follows the store's owner, each taken here, at
+	 * entry. `turnScope` is the activation's scope (the coordinator's for the
+	 * primary and on the MCP route, its own for a concurrent secondary): it
+	 * owns the late dead-code scan cell (#4154). `holdScope` is the
+	 * coordinator's scope: it owns the hold stores (the cascade runs and
+	 * parked computes, the park map, and the module-level late-auxiliary and
+	 * runner stores), which a concurrent secondary shares with the primary
+	 * (#3613). A session replaced mid-turn owns none of the held state any
+	 * more, and that is judged at every access, not here: the hold stores are
+	 * drained after awaits that a replacement can land in, so a drain or a
+	 * write-back runs through `holdScope.guardedWrite` and nothing is drained
+	 * once the coordinator's scope has ended (one counted
+	 * `generation-guard-stale-write` row per store or lane). A secondary's own
+	 * end therefore fences only its cell: what it drained from the shared
+	 * stores is restored at settle for the primary, as on master (#4168 R2-F1).
+	 */
+	const turnScope = deps.sessionScope ?? runtime.sessionScope;
+	const holdScope = runtime.captureSessionGeneration();
+	/**
+	 * #3813/#3901: a parked lane belongs to the session that cut it. The park
+	 * map is the coordinator's, shared by a concurrent secondary (subagent)
+	 * activation that runs this function on the process-singleton runtime, so
+	 * its key carries the turn's own session id, the one the deferred-test list
+	 * is keyed by. A secondary neither takes nor shows the primary's parked
+	 * items; `holdScope` fences only the session's end.
 	 */
 	const carryScope = sessionId ?? runtime.telemetrySessionId;
 	const carryLane = (...parts: string[]): string =>
 		[carryScope, ...parts].join(":");
+	/** #3901/#4161: a lane's parked items, taken once, by its own session. */
+	const takeParked = <T>(lane: string): T[] =>
+		holdScope.guardedWrite(`turn-end:${lane}`, () =>
+			runtime.takeCutAdvisoryItems<T>(lane),
+		) ?? [];
 	/**
 	 * #3813/#3901: the hold for an item-bearing advisory whose producer has no
 	 * queue to restore (knip, dead-code, call-graph impact). `shown` are the
@@ -1131,17 +1361,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			Date.now() - pending.markedAtMs,
 			pending.writeIndex,
 		);
-		// #3796: a runner whose findings fail its check reports `failed` WITH
-		// diagnostics and no fault kind (or `blocking_diagnostics`); that goes
-		// through the freshness gate and delivery like a success. A failed result
-		// with no diagnostics, or with a fault kind (timeout, server_error), is a
-		// broken runner: the note is kept and any partial findings still deliver.
-		if (
-			result.status === "failed" &&
-			(result.diagnostics.length === 0 ||
-				(result.failureKind !== undefined &&
-					result.failureKind !== "blocking_diagnostics"))
-		) {
+		// #3796: a runner whose findings fail its check reports `failed` with
+		// `blocking_diagnostics`; that goes through the freshness gate and
+		// delivery like a success. Any other failed result (a fault kind, or
+		// none) is a broken runner, whatever it carries: the note is kept and
+		// any partial findings still deliver. `hasUsableResult` owns the rule.
+		if (result.status === "failed" && !hasUsableResult(result)) {
 			runnerFindingsFailed += 1;
 			const detail = result.failureMessage ? `: ${result.failureMessage}` : "";
 			const failedNote = `❌ Deferred runner ${pending.runnerId} failed (${result.failureKind ?? "unknown"})${detail}`;
@@ -1227,7 +1452,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			onHeld: () =>
 				requeueRunnerFindings({
 					...pending,
-					result: { ...findingsOnly, diagnostics: advisoryKept },
+					result: findingsResult(advisoryKept, findingsOnly),
 				}),
 		});
 		// @delivery-surface: runtime-turn:late-runner-findings
@@ -1490,10 +1715,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// concurrently off the write hot path; wait a bounded time for them here so
 	// their runs are available to the merge below. A compute still in flight at
 	// the cap is carried over to the next turn_end (never dropped).
+	// #4161: the settle takes the parked computes at the call and writes them
+	// back after its own await; `generation` fences both ends to this turn's
+	// session.
 	const cascadeSettleStart = Date.now();
 	const { settled, timedOut } = await runtime.settleCascadeRuns(
 		cascadeSettleWaitMs(),
-		{ trackTurnEndClock: true },
+		{ trackTurnEndClock: true, generation: holdScope },
 	);
 	logLatency({
 		type: "phase",
@@ -1510,7 +1738,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	//   2. Neighbor-level: each neighbor is claimed by the latest cascade result
 	//      that covers it — suppresses stale neighbor state from earlier writes.
 	const t0 = Date.now();
-	const cascadeRuns = runtime.consumeCascadeRuns().filter((run) => {
+	const cascadeRuns = (
+		holdScope.guardedWrite("turn-end:cascade-runs", () =>
+			runtime.consumeCascadeRuns(),
+		) ?? []
+	).filter((run) => {
 		const originSeq = run.origin?.projectSeq;
 		const originTurn = run.origin?.turnSeq;
 		// A deferred result from AFTER a later write is not current state. Old test
@@ -2036,6 +2268,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		cacheKept?: boolean;
 		/** The hook's own signal fired while the scan was awaited (Escape). */
 		aborted?: boolean;
+		/** #3872: this root's last two scans both outlasted the budget left (this is the shorter), so it was not awaited. */
+		scanFloorMs?: number;
+		/** #3872: linked worktrees nested under the root, which knip walks as project files. */
+		nestedWorktrees?: number;
+		/** #3872: files with issues dropped from the result for living in one. */
+		nestedFilesDropped?: number;
 	};
 	// #3872: knip runs in the checkout that owns each edit. A linked worktree is
 	// its own project; the session root would walk it as a nested copy of the
@@ -2048,6 +2286,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			reason: `${toRunnerDisplayPath(cwd, root)} not scanned: more than ${MAX_KNIP_ROOTS_PER_TURN} checkouts edited this turn`,
 		});
 	}
+	/**
+	 * What a root whose last scan outlasted the budget is still given to answer:
+	 * one timer tick, which a memo hit (microtasks) beats and a real scan loses to.
+	 */
+	const KNOWN_SLOW_KNIP_GRACE_MS = 1;
 	/** Issues each knip section names; a cut section parks exactly these (#3901). */
 	const KNIP_MAX_SHOWN = 5;
 	/** One checkout's finished scan: cache write, delta, delivery. `scanRoot === cwd` is the session checkout. */
@@ -2055,10 +2298,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		scanRoot: string,
 		prevKnip: CacheEntry<KnipResult> | null,
 		knipResult: KnipResult,
+		rowNow: { data: { success: boolean } } | null,
 	): KnipTurnMeta => {
 		// Never overwrite a good scan with a failure (#925, #1467): the last
-		// good result stays until a new successful scan replaces it.
-		const knipWouldPoison = wouldPoisonCache(prevKnip, knipResult);
+		// good result stays until a new successful scan replaces it. `rowNow` is
+		// the row on disk once the scan settled, not `prevKnip` (#4154 V1).
+		const knipWouldPoison = wouldPoisonCache(rowNow, knipResult);
 		if (knipWouldPoison) {
 			dbg(
 				`turn_end: keeping last good knip cache; this run failed: ${knipResult.summary}`,
@@ -2077,6 +2322,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			dispositionSuppressed: 0,
 			...(!knipResult.success && { reason: knipResult.summary }),
 			...(knipResult.failureKind && { failureKind: knipResult.failureKind }),
+			...(knipResult.nestedWorktrees !== undefined && {
+				nestedWorktrees: knipResult.nestedWorktrees,
+				nestedFilesDropped: knipResult.nestedFilesDropped,
+			}),
 			...(knipWouldPoison && { cacheKept: true }),
 		};
 
@@ -2090,8 +2339,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const knipAdvisoryLane = carryLane("knip", scanRoot, "advisory");
 		const parkedKnip = knipResult.success
 			? [
-					...runtime.takeCutAdvisoryItems<KnipIssue>(knipBlockerLane),
-					...runtime.takeCutAdvisoryItems<KnipIssue>(knipAdvisoryLane),
+					...takeParked<KnipIssue>(knipBlockerLane),
+					...takeParked<KnipIssue>(knipAdvisoryLane),
 				]
 			: [];
 		if (knipResult.success && knipResult.issues.length > 0) {
@@ -2286,15 +2535,33 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				// the scan finishes off-hook and warms knip's own cache for the next
 				// turn. Its late result is never written or delivered here -- the turn
 				// it was computed for has already ended.
+				//
+				// A root whose last TWO scans both took longer than the budget left
+				// is not awaited again (one cold scan is not a measurement): the wait would end in the same deferral, three
+				// seconds later on every turn (live clone with six unignored
+				// worktrees: the handler sat at 3000 ms on each of three turns). The
+				// scan is still started, so a root that became fast is noticed on the
+				// next turn, and the grace below still answers a memo hit, which
+				// resolves in microtasks.
+				const remainingMs = Math.max(
+					0,
+					HOOK_WALL_BUDGET_MS.turn_end - (Date.now() - turnEndStart),
+				);
+				const scanFloorMs = knipClient.scanFloorMs?.(scanRoot);
+				const knownSlow =
+					scanFloorMs !== undefined && scanFloorMs > remainingMs;
 				const scanned = await bounded(
-					knipClient.analyze(scanRoot, getKnipIgnorePatterns(), {
-						projectSeq: runtime.projectSeq,
-					}),
+					withRowForFailureWrite(
+						knipClient.analyze(scanRoot, getKnipIgnorePatterns(), {
+							projectSeq: runtime.projectSeq,
+						}),
+						cacheManager,
+						"knip",
+						scanRoot,
+						prevKnip,
+					),
 					{
-						ms: Math.max(
-							0,
-							HOOK_WALL_BUDGET_MS.turn_end - (Date.now() - turnEndStart),
-						),
+						ms: knownSlow ? KNOWN_SLOW_KNIP_GRACE_MS : remainingMs,
 						signal: deps.signal,
 						hook: "turn_end",
 						label: "knip",
@@ -2302,15 +2569,42 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				);
 				if (scanned === undefined) {
 					dbg(`turn_end: knip for ${scanRoot} outlived the turn_end budget`);
+					const aborted = deps.signal?.aborted === true;
+					const nestedWorktrees = knipClient.nestedWorktrees?.(scanRoot) ?? 0;
 					metadata = {
 						execution: "deferred",
-						aborted: deps.signal?.aborted === true,
+						aborted,
+						...(knownSlow && {
+							reason: "scan-exceeds-budget",
+							scanFloorMs,
+						}),
+						...(nestedWorktrees > 0 && { nestedWorktrees }),
 					};
+					// The cause, once per root and counted (the root's rows carry the
+					// per-turn number): knip walks these worktrees because the project
+					// never ignored them, and only the project can stop that. A turn the
+					// user cancelled is not a degradation.
+					if (nestedWorktrees > 0 && !aborted) {
+						incrementDegradationCount({
+							kind: "turn-end-knip-nested-worktrees",
+							subject: toRunnerDisplayPath(cwd, scanRoot),
+							reason: `${nestedWorktrees} linked worktree(s) nested under the scan root: knip walks them as project files and the scan did not fit the turn_end budget; add their directory (for example /.worktrees/) to .gitignore to drop the cost`,
+						});
+					}
 				} else {
-					metadata = applyKnipResult(scanRoot, prevKnip, scanned);
+					metadata = applyKnipResult(
+						scanRoot,
+						prevKnip,
+						scanned.result,
+						scanned.row,
+					);
 				}
 			}
-			budgetSpent = metadata.execution === "deferred";
+			// A root that was not awaited spent none of the budget: the next
+			// checkout still gets its scan (an Escape ends the loop either way).
+			budgetSpent =
+				metadata.execution === "deferred" &&
+				(metadata.scanFloorMs === undefined || metadata.aborted === true);
 			logKnipRow(scanRoot, startedAt, metadata);
 		}
 	}
@@ -2334,6 +2628,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		reason?: string;
 		/** True when a failed run left the previous good cache in place (#1467). */
 		cacheKept?: boolean;
+		/** #4117: `deferred` when a scan outlived the turn_end budget and was abandoned. */
+		execution?: "deferred";
+		/** #4117: the abandonment was the hook's own signal (Escape), not the clock. */
+		aborted?: boolean;
+		/** #4117: linked worktrees the scan was told to leave out. */
+		excludedWorktrees?: number;
 	} = {};
 	if (runtime.isStartupScanInFlight("dead-code")) {
 		dbg("turn_end: skipping dead-code (startup scan still in flight)");
@@ -2353,44 +2653,229 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		/** #3248: bounded per-turn on this lane's own row, never per finding. */
 		let deadCodeDispositionSuppressed = 0;
 		const reasons: string[] = [];
+		/**
+		 * The attributable delta of finished scans: what became unused in the files
+		 * each source's `modified` names, against that source's `baseline` (the row
+		 * its scan was compared with). A source is a scan that finished inside this
+		 * turn, or one that missed an earlier turn's budget and settled since
+		 * (#4117 F1); the last source is the newest and gives the totals and the
+		 * re-offered cut items.
+		 */
+		const deliverDeadCodeDelta = (
+			client: DeadCodeClient,
+			sources: readonly DeadCodeDeltaSource[],
+		): void => {
+			const latest = sources.at(-1);
+			if (latest === undefined) return;
+			const result = latest.result;
+			// #3901: items the cap cut on the previous turn. A failed scan
+			// leaves them parked; a successful one takes them (offered once).
+			const deadCodeLane = carryLane("dead-code", client.id);
+			const parkedDeadCode = takeParked<DeadCodeIssue>(deadCodeLane);
+			deadCodeMeta.totalIssues =
+				(deadCodeMeta.totalIssues ?? 0) + deadCodeIssues(result).length;
+			// No baseline means every finding looks new. Report nothing rather
+			// than blame the edit for the whole project's pre-existing debt.
+			if (!sources.some((source) => source.previousScan?.success)) {
+				reasons.push(`${client.id}:no_previous_scan`);
+				return;
+			}
+			const newIssues: DeadCodeIssue[] = [];
+			for (const source of sources) {
+				if (!source.previousScan?.success) continue;
+				const prevKeys = new Set(
+					deadCodeIssues(source.previousScan).map(deadCodeIssueKey),
+				);
+				for (const issue of deadCodeIssues(source.result)) {
+					if (prevKeys.has(deadCodeIssueKey(issue)) || !issue.file) continue;
+					if (source.modified.has(resolveRunnerPath(cwd, issue.file))) {
+						newIssues.push(issue);
+					}
+				}
+			}
+			// #3901: a parked item is offered again only while this scan still
+			// reports it, as this scan's own record of it; it bypasses the
+			// baseline and the edited-file gate the cut turn overwrote.
+			const reOffered = stillReportedParked(
+				parkedDeadCode,
+				deadCodeIssues(result),
+				deadCodeIssueKey,
+				new Set(newIssues.map(deadCodeIssueKey)),
+			);
+			if (newIssues.length === 0 && reOffered.length === 0) {
+				reasons.push(`${client.id}:clean`);
+				return;
+			}
+			newIssueTotal += newIssues.length;
+			if (newIssues.length > 0) {
+				projectDiagnosticsDelta.push(
+					...newIssues.map((issue) =>
+						deadCodeIssueToProjectDiagnostic(cwd, issue, result.language),
+					),
+				);
+				projectDiagnosticsSources.add("dead-code");
+			}
+			// #3248: the rendered advisory takes the stored-disposition
+			// filter, keyed off this lane's OWN adapter. The delta record
+			// above keeps the unfiltered set — its reader applies the policy
+			// on read, so filtering both would double-apply on one lane.
+			const deadCodeDeliverable = filterFindingsByDisposition(
+				[...newIssues, ...reOffered],
+				cwd,
+				(issue) =>
+					deadCodeIssueToProjectDiagnostic(cwd, issue, result.language),
+			);
+			deadCodeDispositionSuppressed += deadCodeDeliverable.suppressed;
+			// Every finding on this scan was marked: a PUSH surface stays
+			// silent rather than re-announcing that the mark is working; the
+			// count rides this lane's bounded per-turn row.
+			if (deadCodeDeliverable.kept.length === 0) {
+				reasons.push(`${client.id}:all_disposed`);
+				return;
+			}
+			const deadCodePart = formatDeadCodeDelta(
+				deadCodeDeliverable.kept,
+				result.language,
+			);
+			// @delivery-surface: runtime-turn:dead-code-advisory
+			advisoryParts.push(deadCodePart);
+			const reOfferedKeys = new Set(reOffered.map(deadCodeIssueKey));
+			deliveryHolds.push(
+				cutAdvisoryHold(
+					"dead-code",
+					deadCodeLane,
+					deadCodePart,
+					deadCodeDeliverable.kept.slice(0, DEAD_CODE_DELTA_MAX_SHOWN),
+					(issue) => reOfferedKeys.has(deadCodeIssueKey(issue)),
+				),
+			);
+		};
 		// A malformed client or deps object must never abort turn_end. Before the
 		// per-turn delta this block only read a cache; now it iterates and awaits,
 		// so the whole thing needs the guard, not just `client.analyze`.
 		try {
+			// #4168 F1: the entry scope, never one read after the knip await.
+			const lateScans = lateDeadCodeScansOf(turnScope);
 			for (const client of deadCodeClients) {
 				if (!client.detect(cwd)) {
 					reasons.push(`${client.id}:not_detected`);
 					continue;
 				}
-				if (![...modifiedFiles()].some((f) => client.owns(f))) {
-					reasons.push(`${client.id}:no_owned_files`);
-					continue;
-				}
 				const cacheKey = `dead-code-${client.id}`;
-				const prev = cacheManager.readCache<DeadCodeResult>(cacheKey, cwd);
-				// Back off after a timeout/kill so an unresponsive scanner cannot cost
-				// every later turn its full analysis budget (mirrors knip).
-				if (
-					prev &&
-					!prev.data.success &&
-					isHardFailureSummary(prev.data.summary)
-				) {
-					dbg(
-						`turn_end: skipping dead-code after failure: ${prev.data.summary}`,
-					);
-					deadCodeMeta.skipped = true;
-					reasons.push(`${client.id}:backoff:${prev.data.summary}`);
-					continue;
+				const lateKey = lateDeadCodeScanKey(client, cwd);
+				const sources: DeadCodeDeltaSource[] = [];
+				// A scan an earlier turn abandoned at its budget (#4117 F1): its
+				// session may be over; if it finished, its delta is delivered now
+				// and the files edited meanwhile join this turn's scan; if it still
+				// runs, nothing else starts and this turn's files wait for it.
+				const late = lateScans.get(lateKey);
+				let carried: ReadonlySet<string> = new Set();
+				if (late?.settled) {
+					lateScans.delete(lateKey);
+					sources.push({
+						result: late.settled,
+						previousScan: late.previousScan,
+						modified: late.files,
+					});
+					carried = late.carry;
+					reasons.push(`${client.id}:late_scan`);
+					// #4154 J1: a scan that was already running when the lane asked read
+					// the tree before the files it was parked for were edited. Its delta
+					// still shows what it saw; the next scan covers those files too.
+					if (joinedEarlierScan(late.settled, late.askedAt)) {
+						carried = new Set([...late.carry, ...late.files]);
+						reasons.push(`${client.id}:joined`);
+					}
 				}
-				const startMs = Date.now();
 				try {
-					const result = await client.analyze(cwd);
+					if (late && !late.settled) {
+						for (const file of modifiedFiles()) late.carry.add(file);
+						reasons.push(`${client.id}:in_flight`);
+						continue;
+					}
+					const scanFiles = new Set([...modifiedFiles(), ...carried]);
+					if (![...scanFiles].some((f) => client.owns(f))) {
+						reasons.push(`${client.id}:no_owned_files`);
+						continue;
+					}
+					const prev = cacheManager.readCache<DeadCodeResult>(cacheKey, cwd);
+					// Back off after a timeout/kill so an unresponsive scanner cannot cost
+					// every later turn its full analysis budget (mirrors knip). #4117: a
+					// scan abandoned at the budget that later timed out wrote no row, so
+					// the client that saw it settle is asked as well (optional: doubles).
+					const previousFailedHard =
+						prev &&
+						!prev.data.success &&
+						isHardFailureSummary(prev.data.summary);
+					const abandonedFailure = previousFailedHard
+						? null
+						: (client.recentHardFailure?.(cwd) ?? null);
+					if (previousFailedHard || abandonedFailure !== null) {
+						const failure = previousFailedHard
+							? prev.data.summary
+							: (abandonedFailure ?? "");
+						dbg(`turn_end: skipping dead-code after failure: ${failure}`);
+						deadCodeMeta.skipped = true;
+						reasons.push(`${client.id}:backoff:${failure}`);
+						continue;
+					}
+					const startMs = Date.now();
+					// #4117: awaited under the turn_end budget that is LEFT and the
+					// hook's signal, as knip is (#3872). `bounded()` abandons the await,
+					// never the process: vulture keeps its own 30 s timeout and
+					// single-flight slot, and a scan that misses the budget is parked
+					// (`parkLateDeadCodeScan`) so its row is written where it settles and
+					// its delta delivered by a later turn. No further client starts once
+					// the budget is spent. A failure's row is re-read inside the same
+					// bound (#4154 V1).
+					const scan = client.analyze(cwd);
+					const settled = await bounded(
+						withRowForFailureWrite(scan, cacheManager, cacheKey, cwd, prev),
+						{
+							signal: deps.signal,
+							hook: "turn_end",
+							label: "dead-code",
+							ms: Math.max(
+								0,
+								HOOK_WALL_BUDGET_MS.turn_end - (Date.now() - turnEndStart),
+							),
+						},
+					);
+					// #4154 J1: a joined scan that predates this turn's edits is not
+					// their answer even when it finishes in time: parked like a late
+					// one, its delta lands next turn and its files join the next scan.
+					const joined =
+						settled !== undefined && joinedEarlierScan(settled.result, startMs);
+					if (settled === undefined || joined) {
+						if (joined) {
+							reasons.push(`${client.id}:joined`);
+						} else {
+							dbg(`turn_end: dead-code(${client.id}) outlived the budget`);
+							deadCodeMeta.execution = "deferred";
+							deadCodeMeta.aborted = deps.signal?.aborted === true;
+							reasons.push(`${client.id}:deferred`);
+						}
+						parkLateDeadCodeScan({
+							scope: turnScope,
+							cacheManager,
+							client,
+							cwd,
+							cacheKey,
+							scan,
+							startedAt: startMs,
+							files: scanFiles,
+							previousScan: prev?.data,
+						});
+						if (joined) continue;
+						break;
+					}
+					const { result } = settled;
 					const durationMs = Date.now() - startMs;
 					// Never overwrite a good scan with a failure (#925, #1467): a
 					// vulture timeout on one .py turn would otherwise evict the
 					// session_start scan, and the backoff above would then latch
-					// off the poisoned record.
-					if (wouldPoisonCache(prev, result)) {
+					// off the poisoned record. The good row is the one on disk now.
+					if (wouldPoisonCache(settled.row, result)) {
 						dbg(
 							`turn_end: keeping last good dead-code(${client.id}) cache; this run failed: ${result.summary}`,
 						);
@@ -2402,103 +2887,31 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					}
 					// One event per cross-file scan (AGENTS.md) — the per-turn scan is
 					// now the primary path, so dead-code.log must see it too.
-					logDeadCodeScan({
-						language: client.language,
-						success: result.success,
-						cached: false,
-						unusedExports: result.unusedExports.length,
-						unusedFiles: result.unusedFiles.length,
-						unusedDeps: result.unusedDeps.length,
-						unlistedDeps: result.unlistedDeps.length,
-						durationMs: result.durationMs ?? durationMs,
-						...(!result.success && { reason: result.summary }),
-					});
+					logDeadCodeScan(deadCodeScanEvent(client, cwd, result, durationMs));
 					deadCodeMeta.success = result.success;
+					if (result.excludedWorktrees !== undefined) {
+						deadCodeMeta.excludedWorktrees =
+							(deadCodeMeta.excludedWorktrees ?? 0) + result.excludedWorktrees;
+					}
 					if (!result.success) {
 						reasons.push(`${client.id}:scan_failed:${result.summary}`);
 						continue;
 					}
-					// #3901: items the cap cut on the previous turn. A failed scan
-					// leaves them parked; a successful one takes them (offered once).
-					const deadCodeLane = carryLane("dead-code", client.id);
-					const parkedDeadCode =
-						runtime.takeCutAdvisoryItems<DeadCodeIssue>(deadCodeLane);
-					deadCodeMeta.totalIssues =
-						(deadCodeMeta.totalIssues ?? 0) + deadCodeIssues(result).length;
-					// No baseline means every finding looks new. Report nothing rather
-					// than blame the edit for the whole project's pre-existing debt.
-					if (!prev?.data.success) {
-						reasons.push(`${client.id}:no_previous_scan`);
-						continue;
-					}
-					const prevKeys = new Set(
-						deadCodeIssues(prev.data).map(deadCodeIssueKey),
-					);
-					const modified = modifiedFiles();
-					const newIssues = deadCodeIssues(result).filter((issue) => {
-						if (prevKeys.has(deadCodeIssueKey(issue))) return false;
-						if (!issue.file) return false;
-						return modified.has(resolveRunnerPath(cwd, issue.file));
+					sources.push({
+						result,
+						previousScan: prev?.data,
+						modified: scanFiles,
 					});
-					// #3901: a parked item is offered again only while this scan still
-					// reports it, as this scan's own record of it; it bypasses the
-					// baseline and the edited-file gate the cut turn overwrote.
-					const reOffered = stillReportedParked(
-						parkedDeadCode,
-						deadCodeIssues(result),
-						deadCodeIssueKey,
-						new Set(newIssues.map(deadCodeIssueKey)),
-					);
-					if (newIssues.length === 0 && reOffered.length === 0) {
-						reasons.push(`${client.id}:clean`);
-						continue;
-					}
-					newIssueTotal += newIssues.length;
-					if (newIssues.length > 0) {
-						projectDiagnosticsDelta.push(
-							...newIssues.map((issue) =>
-								deadCodeIssueToProjectDiagnostic(cwd, issue, result.language),
-							),
-						);
-						projectDiagnosticsSources.add("dead-code");
-					}
-					// #3248: the rendered advisory takes the stored-disposition
-					// filter, keyed off this lane's OWN adapter. The delta record
-					// above keeps the unfiltered set — its reader applies the policy
-					// on read, so filtering both would double-apply on one lane.
-					const deadCodeDeliverable = filterFindingsByDisposition(
-						[...newIssues, ...reOffered],
-						cwd,
-						(issue) =>
-							deadCodeIssueToProjectDiagnostic(cwd, issue, result.language),
-					);
-					deadCodeDispositionSuppressed += deadCodeDeliverable.suppressed;
-					// Every finding on this scan was marked: a PUSH surface stays
-					// silent rather than re-announcing that the mark is working; the
-					// count rides this lane's bounded per-turn row.
-					if (deadCodeDeliverable.kept.length === 0) {
-						reasons.push(`${client.id}:all_disposed`);
-						continue;
-					}
-					const deadCodePart = formatDeadCodeDelta(
-						deadCodeDeliverable.kept,
-						result.language,
-					);
-					// @delivery-surface: runtime-turn:dead-code-advisory
-					advisoryParts.push(deadCodePart);
-					const reOfferedKeys = new Set(reOffered.map(deadCodeIssueKey));
-					deliveryHolds.push(
-						cutAdvisoryHold(
-							"dead-code",
-							deadCodeLane,
-							deadCodePart,
-							deadCodeDeliverable.kept.slice(0, DEAD_CODE_DELTA_MAX_SHOWN),
-							(issue) => reOfferedKeys.has(deadCodeIssueKey(issue)),
-						),
-					);
 				} catch (err) {
 					dbg(`turn_end: dead-code(${client.id}) failed: ${err}`);
 					reasons.push(`${client.id}:threw`);
+				} finally {
+					try {
+						deliverDeadCodeDelta(client, sources);
+					} catch (err) {
+						dbg(`turn_end: dead-code(${client.id}) delivery failed: ${err}`);
+						reasons.push(`${client.id}:threw`);
+					}
 				}
 			}
 		} catch (err) {
@@ -2603,7 +3016,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		cwd,
 		signal: deps.signal,
 		readScannerCache,
-		peekActionableWarnings: () => runtime.peekActionableWarnings(),
+		peekActionableWarnings: () => runtime.peekActionableWarnings(sessionId),
 	};
 
 	// govulncheck — the session_start-cached Go CVE store, delivered as ONE
@@ -3387,10 +3800,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							targets.find(
 								(candidate) => candidate.testFile === result.value.file,
 							)?.testRoot ?? cwd;
+						// #3871: name the refused borrow only when the shell actually
+						// set an ambient Python environment.
+						const ambientNote =
+							result.value.runner === "pytest" && hasAmbientPythonEnvironment()
+								? "; ambient Python environments outside this checkout were not borrowed"
+								: "";
 						incrementDegradationCount({
 							kind: "turn-end-test-root-skipped",
 							subject: result.value.notRun,
-							reason: `${toRunnerDisplayPath(cwd, skippedRoot)} has no ${result.value.runner} install of its own; its tests were skipped rather than fetched through npx or run in another environment`,
+							reason: `${toRunnerDisplayPath(cwd, skippedRoot)} has no ${result.value.runner} install of its own${ambientNote}; its tests were skipped rather than fetched through npx or run in another environment`,
 						});
 						dbg(
 							`turn_end: skipped ${toRunnerDisplayPath(cwd, result.value.file)}: ${result.value.notRun} in ${toRunnerDisplayPath(cwd, skippedRoot)}`,
@@ -3917,14 +4336,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						normalizeMapKey(resolveRunnerPath(cwd, file)),
 					),
 				);
-				const reOfferedImpactFiles = runtime
-					.takeCutAdvisoryItems<string>(carryLane("call-graph"))
-					.filter(
-						(file) =>
-							!impactFileKeys.has(
-								normalizeMapKey(resolveRunnerPath(cwd, file)),
-							),
-					);
+				const reOfferedImpactFiles = takeParked<string>(
+					carryLane("call-graph"),
+				).filter(
+					(file) =>
+						!impactFileKeys.has(normalizeMapKey(resolveRunnerPath(cwd, file))),
+				);
 				/** Files that contributed a line to the part. */
 				const shownImpactFiles: string[] = [];
 				for (const filePath of [...impactFiles, ...reOfferedImpactFiles]) {
@@ -4131,7 +4548,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				turnIndex: runtime.turnIndex,
 				files,
 				modifiedRangesByFile,
-				dispatchWarnings: runtime.peekActionableWarnings(),
+				dispatchWarnings: runtime.peekActionableWarnings(sessionId),
 				includeLspCodeActions: !!getFlag("lens-actionable-warning-actions"),
 				projectSeqStart: runtime.turnStartProjectSeq,
 				projectSeqEnd: runtime.projectSeq,
@@ -4350,7 +4767,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// view all agree; the delta view's own filter then re-applies to the same
 		// set and is idempotent. Per file, because the anchor is content-bound.
 		const qualityWarningsByFile = new Map<string, CodeQualityWarningRecord[]>();
-		for (const warning of runtime.peekCodeQualityWarnings()) {
+		for (const warning of runtime.peekCodeQualityWarnings(sessionId)) {
 			const group = qualityWarningsByFile.get(warning.filePath);
 			if (group) group.push(warning);
 			else qualityWarningsByFile.set(warning.filePath, [warning]);
@@ -4430,11 +4847,31 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// (baseline preserved, TTL anchor advanced) until the re-arm TTL; a dead
 	// client drops silently.
 	const lateAuxStart = Date.now();
-	const drainedPairs = drainPendingAuxiliaryCoverage();
 	// #2168: cap evictions retire a pair before any drain can observe it — read
 	// and reset that count here so it folds into this turn's reconciliation
 	// sum instead of the pair vanishing uncounted.
-	const lateAuxCapEvicted = drainPendingAuxCapEvictedCount();
+	// #4161: both belong to the session current now; a replaced one takes none.
+	const { drainedPairs, lateAuxCapEvicted } = holdScope.guardedWrite(
+		"turn-end:late-aux",
+		() => ({
+			drainedPairs: drainPendingAuxiliaryCoverage(),
+			lateAuxCapEvicted: drainPendingAuxCapEvictedCount(),
+		}),
+	) ?? { drainedPairs: [], lateAuxCapEvicted: 0 };
+	/**
+	 * #4161: a re-arm after the probe's await lands only in this session.
+	 * True when it landed: a dropped one is the stale-write row's, never a
+	 * `rearmed` count (#4168 F2).
+	 */
+	const rearmLateAux = (pair: (typeof drainedPairs)[number]): boolean =>
+		holdScope.guardedWrite(
+			// One subject for the store (#4168 F3): the row's count carries how many.
+			"turn-end:late-aux-rearm",
+			() => {
+				rearmPendingAuxiliaryCoverage(pair);
+				return true;
+			},
+		) === true;
 	let lateAuxDelivered = 0;
 	let lateAuxStale = 0;
 	let lateAuxMissing = 0;
@@ -4505,8 +4942,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					lateAuxProbeFailed += pairs.length;
 					for (const pair of pairs) {
 						if (canRearmPendingAuxiliary(pair)) {
-							rearmPendingAuxiliaryCoverage(pair);
-							lateAuxRearmed += 1;
+							if (rearmLateAux(pair)) lateAuxRearmed += 1;
 						} else if (isPendingAuxiliaryPastRearmTtl(pair)) {
 							lateAuxExpired += 1;
 						} else {
@@ -4565,13 +5001,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						const pastTtl = isPendingAuxiliaryPastRearmTtl(pair);
 						const atCeiling = (pair.rearmCount ?? 0) >= MAX_LATE_AUX_REARMS;
 						if (!pastTtl && !atCeiling) {
-							rearmPendingAuxiliaryCoverage(pair);
-							lateAuxRearmed += 1;
-							if (lateAuxStuckPairs.length < 20)
-								lateAuxStuckPairs.push({
-									filePath: pair.filePath,
-									serverId: pair.serverId,
-								});
+							if (rearmLateAux(pair)) {
+								lateAuxRearmed += 1;
+								if (lateAuxStuckPairs.length < 20)
+									lateAuxStuckPairs.push({
+										filePath: pair.filePath,
+										serverId: pair.serverId,
+									});
+							}
 						} else {
 							if (pastTtl) lateAuxExpired += 1;
 							else lateAuxCeilingExhausted += 1;
@@ -4602,13 +5039,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						// anchored on `lastRearmedAtMs`, advanced by every successful
 						// empty probe: the scanner is demonstrably alive, just slow.
 						if (canRearmPendingAuxiliary(pair)) {
-							rearmPendingAuxiliaryCoverage(pair);
-							lateAuxRearmed += 1;
-							if (lateAuxStuckPairs.length < 20)
-								lateAuxStuckPairs.push({
-									filePath: pair.filePath,
-									serverId: pair.serverId,
-								});
+							if (rearmLateAux(pair)) {
+								lateAuxRearmed += 1;
+								if (lateAuxStuckPairs.length < 20)
+									lateAuxStuckPairs.push({
+										filePath: pair.filePath,
+										serverId: pair.serverId,
+									});
+							}
 						} else {
 							if (isPendingAuxiliaryPastRearmTtl(pair)) lateAuxExpired += 1;
 							else lateAuxCeilingExhausted += 1;
@@ -4699,8 +5137,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							// a refreshed baseline absorbed the edit, so an older queued
 							// scan that published later passed both gates).
 							if (canRearmPendingAuxiliary(pair)) {
-								rearmPendingAuxiliaryCoverage(pair);
-								lateAuxRearmed += 1;
+								if (rearmLateAux(pair)) lateAuxRearmed += 1;
 							} else if (isPendingAuxiliaryPastRearmTtl(pair)) {
 								lateAuxExpired += 1;
 							} else {
@@ -4990,7 +5427,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const settleHolds = (suppressed: boolean): void => {
 			const outcome = holdPlan.settle({
 				suppressed,
-				isCurrentSession: () => runtime.isCurrentSession(holdGeneration),
+				isCurrentSession: () => holdScope.isCurrent(),
 				onFault: (cause) => dbg(`turn_end: delivery hold failed: ${cause}`),
 			});
 			heldSections = outcome.held;
@@ -5206,8 +5643,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	}
 
 	runtime.fixedThisTurn.clear();
-	runtime.clearActionableWarnings();
-	runtime.clearCodeQualityWarnings();
+	// #3613: only this turn's session's records; a concurrent session drains
+	// its own at its own turn end.
+	runtime.clearActionableWarnings(sessionId);
+	runtime.clearCodeQualityWarnings(sessionId);
 	if (demotedFindingsRetired > 0) {
 		// #1944: the retired payload must not survive as a SUPPRESSION key.
 		// `turn-end-findings-last` holds a content signature used to silence a

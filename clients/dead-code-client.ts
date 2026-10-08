@@ -17,8 +17,15 @@ import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolve } from "node:path";
+import {
+	extractTomlTableSection,
+	parseTomlStringArray,
+} from "./cargo-manifest.js";
+import { HardFailureStamps } from "./hard-failure-summary.js";
 import { findLocalBinsAt, VENV_BIN_DIRS } from "./package-manager.js";
 import { findNearestMarkerRoot } from "./path-utils.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { getScratchTreeFnmatchPatterns } from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
@@ -70,6 +77,11 @@ export interface DeadCodeResult extends AnalysedRootSignal {
 	 * neither shape produces a widget row.
 	 */
 	scannedAt?: string;
+	/**
+	 * #4117: how many linked worktrees under the root the scan was told to
+	 * leave out. Absent on a result that never reached the spawn.
+	 */
+	excludedWorktrees?: number;
 }
 
 export interface DeadCodeClient {
@@ -85,6 +97,12 @@ export interface DeadCodeClient {
 	ensureAvailable(root?: string): Promise<boolean>;
 	/** Project-wide scan. Never throws; failures come back as success:false. */
 	analyze(cwd: string): Promise<DeadCodeResult>;
+	/**
+	 * The summary of this root's last timeout or kill while it is recent
+	 * enough to keep turn_end from launching another heavyweight scan (#4117);
+	 * `null` when there is none. Optional: test doubles omit it.
+	 */
+	recentHardFailure?(cwd: string): string | null;
 }
 
 function emptyResult(language: string): Omit<DeadCodeResult, "summary"> {
@@ -170,6 +188,17 @@ export function parseVultureOutput(
 	return issues;
 }
 
+/** fnmatch metacharacters made literal: `[*]`, `[?]`, `[[]`. */
+function escapeFnmatchLiteral(text: string): string {
+	return text.replace(/[*?[]/g, (ch) => `[${ch}]`);
+}
+
+/** A project's own `[tool.vulture]` table, as far as the exclusion merge reads it. */
+interface ProjectVultureConfig {
+	/** Its `exclude` entries; `null` when the key is there but its value cannot be read. */
+	exclude: string[] | null;
+}
+
 /**
  * Python dead-code via vulture (https://github.com/jendrikseipp/vulture).
  *
@@ -192,10 +221,24 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 	private resolved: { cmd: string; prefix: string[] } | null = null;
 	private ensureInFlight: Promise<boolean> | null = null;
 	private inFlight = new Map<string, Promise<DeadCodeResult>>();
+	/**
+	 * Per project root, the last run that died to a timeout or kill (#4117).
+	 * Set where the scan SETTLES, so a scan turn_end abandoned at its budget and
+	 * that later timed out still leaves the failure the next turn must see: the
+	 * turn's own cache row only exists for a scan that settled inside it, and a
+	 * failure never replaces a good baseline row.
+	 */
+	private readonly hardFailures = new HardFailureStamps();
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
 		this.log = verbose ? createSubsystemLogger("dead-code:python") : () => {};
+	}
+
+	recentHardFailure(cwd: string): string | null {
+		const root = this.resolveProjectRoot(cwd || process.cwd());
+		if (!root) return null;
+		return this.hardFailures.recent(resolve(root));
 	}
 
 	private get minConfidence(): number {
@@ -414,7 +457,10 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		const key = path.resolve(root);
 		const existing = this.inFlight.get(key);
 		if (existing) return existing;
-		const promise = this.runAnalyze(key);
+		const promise = this.runAnalyze(key).then((result) => {
+			this.hardFailures.settle(key, result);
+			return result;
+		});
 		const wrapped = promise.finally(() => {
 			// Identity-guarded release (#1968, #1967's pattern): delete only if
 			// THIS build is still the registered one. A bare delete-by-key lets
@@ -427,23 +473,59 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 	}
 
 	/**
-	 * True when `<root>/pyproject.toml` carries a `[tool.vulture]` table.
-	 * vulture's own config discovery reads that table, but CLI flags override
-	 * it — passing `--min-confidence`/`--exclude` unconditionally silently
-	 * overrode a project's own thresholds and ignore list (#1731, discipline A).
-	 * Same shape as `hasSqlfluffConfig`/`hasMypyConfig` in `tool-policy.ts`: a
-	 * plain string search, no TOML parser, matching the section header only.
+	 * The project's own `[tool.vulture]` table, or `null` when
+	 * `<root>/pyproject.toml` carries none. vulture's own config discovery reads
+	 * that table, but CLI flags override it -- passing `--min-confidence` or
+	 * `--exclude` unconditionally silently overrode a project's own thresholds
+	 * and ignore list (#1731, discipline A). The table is read with the shared
+	 * TOML table/array readers (`cargo-manifest.ts`) so the one list vulture's
+	 * `--exclude` would replace can be merged instead (#4117).
 	 */
-	private hasProjectVultureConfig(root: string): boolean {
+	private readProjectVultureConfig(root: string): ProjectVultureConfig | null {
+		let content: string;
 		try {
-			const content = fs.readFileSync(
-				path.join(root, "pyproject.toml"),
-				"utf-8",
-			);
-			return content.includes("[tool.vulture]");
+			content = fs.readFileSync(path.join(root, "pyproject.toml"), "utf-8");
 		} catch {
-			return false;
+			return null;
 		}
+		if (!content.includes("[tool.vulture]")) return null;
+		const table = extractTomlTableSection(content, "tool.vulture") ?? "";
+		const exclude = parseTomlStringArray(table, "exclude");
+		const keyed = /^[ \t]*exclude[ \t]*=/m.test(table);
+		const emptyList = /^[ \t]*exclude[ \t]*=[ \t]*\[\s*\]/m.test(table);
+		// vulture's `--exclude` is a comma list: an entry holding a comma would be
+		// split into two patterns and widen the user's exclusion, so such a list
+		// is left to vulture's own config reader like an unreadable one.
+		const unreadable =
+			(keyed && exclude.length === 0 && !emptyList) ||
+			exclude.some((entry) => entry.includes(","));
+		return { exclude: unreadable ? null : exclude };
+	}
+
+	/**
+	 * `--exclude` patterns for the linked worktrees under `root` (#4117), and how
+	 * many of them could not be spelled. vulture matches each pattern against the
+	 * module's RESOLVED path (`Path.resolve()` in `get_modules`), and a pattern
+	 * without a glob character is wrapped as `*pattern*`, so a bare name would
+	 * also drop `pkg/<name>-utils/`: the pattern is the absolute real path plus
+	 * `/*`, with glob characters in the path made literal. A comma cannot be
+	 * escaped (the list is comma-split), so that worktree is counted, not passed.
+	 */
+	private worktreeExcludes(root: string): { patterns: string[] } {
+		const nested = listNestedLinkedWorktreeRoots(root);
+		const patterns: string[] = [];
+		for (const worktree of nested) {
+			if (worktree.includes(",")) {
+				incrementDegradationCount({
+					kind: "scan-worktree-exclusion-skipped",
+					subject: "vulture",
+					reason: `comma-in-path: ${worktree} not excluded under ${root}`,
+				});
+				continue;
+			}
+			patterns.push(`${escapeFnmatchLiteral(worktree)}/*`);
+		}
+		return { patterns };
 	}
 
 	private async runAnalyze(root: string): Promise<DeadCodeResult> {
@@ -454,13 +536,33 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		const invocation = this.resolved ?? { cmd: "vulture", prefix: [] };
 		// Let the project's own [tool.vulture] config win (#1731, discipline A):
 		// vulture discovers it unaided, but these two flags override it when
-		// passed, so they are omitted whenever the project ships that table.
-		const hasConfig = this.hasProjectVultureConfig(root);
+		// passed, so `--min-confidence` is omitted whenever the project ships that
+		// table. `--exclude` REPLACES the table's `exclude`, so under a config it is
+		// passed only to leave out linked worktrees (#4117), and then carries the
+		// config's own entries too; a list that cannot be read is left alone.
+		const config = this.readProjectVultureConfig(root);
+		const worktrees = this.worktreeExcludes(root);
+		let exclude: string[] | undefined;
+		if (config === null) {
+			exclude = [...VULTURE_EXCLUDES, ...worktrees.patterns];
+		} else if (worktrees.patterns.length > 0) {
+			if (config.exclude === null) {
+				incrementDegradationCount({
+					kind: "scan-worktree-exclusion-skipped",
+					subject: "vulture",
+					reason: `config-exclude-unreadable: ${worktrees.patterns.length} linked worktree(s) under ${root} not excluded`,
+				});
+			} else {
+				exclude = [...config.exclude, ...worktrees.patterns];
+			}
+		}
+		const excludedWorktrees =
+			exclude === undefined ? 0 : worktrees.patterns.length;
 		const args = [
 			...invocation.prefix,
 			".",
-			...(hasConfig ? [] : [`--min-confidence=${this.minConfidence}`]),
-			...(hasConfig ? [] : [`--exclude=${VULTURE_EXCLUDES.join(",")}`]),
+			...(config === null ? [`--min-confidence=${this.minConfidence}`] : []),
+			...(exclude === undefined ? [] : [`--exclude=${exclude.join(",")}`]),
 			`--ignore-decorators=${VULTURE_IGNORE_DECORATORS.join(",")}`,
 		];
 		const result = await safeSpawnAsync(invocation.cmd, args, {
@@ -527,9 +629,15 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 				summary: "No dead code found",
 				durationMs,
 				scannedAt,
+				excludedWorktrees,
 			};
 		}
-		return { ...this.parseOutput(output, root), durationMs, scannedAt };
+		return {
+			...this.parseOutput(output, root),
+			durationMs,
+			scannedAt,
+			excludedWorktrees,
+		};
 	}
 
 	private parseOutput(output: string, root: string): DeadCodeResult {

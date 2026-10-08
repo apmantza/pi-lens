@@ -40,6 +40,8 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import type { RunnerResult } from "../../clients/dispatch/types.js";
+import { finishParsedRun } from "../../clients/dispatch/runners/utils/tool-failure.js";
 import { _resetInstanceRegistryEnabledForTests } from "../../clients/instance-registry.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -431,8 +433,10 @@ describe("turn-end blocker freshness (#1631)", () => {
 			driftAfterMark?: boolean;
 			failureMessage?: string;
 			runnerId?: string;
-			/** `null` leaves the result without a failureKind (the item-3 arms). */
+			/** `null` leaves the result without a failureKind. */
 			failureKind?: string | null;
+			/** Builds the deferred result itself, from the real producer. */
+			build?: (filePath: string) => RunnerResult;
 		}) {
 			const env = setupTestEnvironment("pi-lens-runner-failed-turnend-");
 			try {
@@ -448,20 +452,25 @@ describe("turn-end blocker freshness (#1631)", () => {
 					projectRoot: env.tmpDir,
 					runnerId: opts.runnerId ?? "pyright",
 					markedAtMs: opts.markedAtMs ?? Date.now() + 60_000,
-					promise: Promise.resolve({
-						status: "failed",
-						...(opts.failureKind === null
-							? {}
-							: { failureKind: opts.failureKind ?? "blocking_diagnostics" }),
-						failureMessage: opts.failureMessage,
-						diagnostics: opts.diagnostics.map((d) => ({
-							...d,
-							filePath,
-							tool: opts.runnerId ?? "pyright",
-							severity: d.semantic === "blocking" ? "error" : "warning",
-						})),
-						semantic: "blocking",
-					} as any),
+					promise: Promise.resolve(
+						opts.build?.(filePath) ??
+							({
+								status: "failed",
+								...(opts.failureKind === null
+									? {}
+									: {
+											failureKind: opts.failureKind ?? "blocking_diagnostics",
+										}),
+								failureMessage: opts.failureMessage,
+								diagnostics: opts.diagnostics.map((d) => ({
+									...d,
+									filePath,
+									tool: opts.runnerId ?? "pyright",
+									severity: d.semantic === "blocking" ? "error" : "warning",
+								})),
+								semantic: "blocking",
+							} as any),
+					),
 				});
 				if (opts.driftAfterMark) {
 					await new Promise<void>((resolve) => setImmediate(resolve));
@@ -521,6 +530,7 @@ describe("turn-end blocker freshness (#1631)", () => {
 
 		it("still reports a failed deferred runner with no diagnostics as broken", async () => {
 			const { content, metadata } = await runDeferredFailed({
+				failureKind: null,
 				diagnostics: [],
 				failureMessage: "spawn ENOENT",
 			});
@@ -565,18 +575,49 @@ describe("turn-end blocker freshness (#1631)", () => {
 			});
 		});
 
-		// The four item-3 arms set no failureKind; until #3796 item 3 gives them
-		// one they are indistinguishable from findings and are delivered.
-		it("delivers a failed deferred result with diagnostics and no failureKind as findings", async () => {
+		// #3796 item 3. `hasUsableResult` owns the rule: a failed result with no
+		// kind is a runner that produced no usable result, whatever it carries.
+		it("reports a failed deferred result with diagnostics and no failureKind as broken and still delivers its finding", async () => {
 			const { content, metadata } = await runDeferredFailed({
 				failureKind: null,
 				diagnostics: [
 					{ id: "no-kind", message: "NO-KIND-PROBE", semantic: "warning" },
 				],
 			});
+			expect(content).toContain("Deferred runner pyright failed (unknown)");
 			expect(content).toContain("NO-KIND-PROBE");
-			expect(content).not.toContain("Deferred runner");
-			expect(metadata).toMatchObject({ delivered: 1, failed: 0 });
+			expect(metadata).toMatchObject({
+				delivered: 1,
+				failed: 1,
+				deliveredIds: ["no-kind"],
+			});
+		});
+
+		// The result is built by the real shared tail, not shaped by hand: a
+		// nonzero exit with unparsable stdout, the arm eslint, prisma-validate
+		// and others share. Recurrence prevented: it carried no kind, so it was
+		// delivered as a finding and the log analyzer filed it as one.
+		it("reports finishParsedRun's parse-error arm as a parser_error runner failure", async () => {
+			const { content, metadata } = await runDeferredFailed({
+				runnerId: "eslint",
+				diagnostics: [],
+				build: (filePath) =>
+					finishParsedRun({
+						tool: "eslint",
+						ctx: { filePath },
+						result: { status: 2, stdout: "Oops! Something went wrong" },
+						diagnostics: [],
+					}),
+			});
+			expect(content).toContain(
+				"Deferred runner eslint failed (parser_error): eslint exited 2 but its output could not be parsed",
+			);
+			expect(metadata).toMatchObject({
+				pending: 1,
+				delivered: 1,
+				failed: 1,
+				deliveredIds: ["eslint:parse-error:1"],
+			});
 		});
 
 		it("still drops a failed deferred runner's stale blocking finding", async () => {

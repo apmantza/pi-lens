@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+	LOCAL_WORKER_CAP,
 	MAX_WORKER_HEAP_MB,
 	MIN_WORKER_HEAP_MB,
 	NON_WORKER_RESERVE_MB,
@@ -213,6 +214,71 @@ describe("test worker budget (#2042)", () => {
 		expect(budget.maxWorkers).toBe("50%");
 		expect(budget.heapMb).toBe(4096);
 		expect(budget.heavyMaxWorkers).toBe(2);
+	});
+
+	it("caps a local host whose half is above the measured fork count", () => {
+		// "50%" was 8 forks on the 16-thread host above. On a wider host it
+		// counts hyperthreads and efficiency cores as if they were fast cores.
+		for (const cpus of [17, 24, 32, 64]) {
+			expect(
+				resolveTestWorkerBudget({ totalMemMb: 65_536, cpus, ci: false })
+					.maxWorkers,
+				`${cpus}cpu`,
+			).toBe(LOCAL_WORKER_CAP);
+		}
+	});
+
+	it("never raises a smaller local host to the cap", () => {
+		for (const cpus of [1, 2, 4, 8, 16]) {
+			expect(
+				resolveTestWorkerBudget({ totalMemMb: 65_536, cpus, ci: false })
+					.maxWorkers,
+				`${cpus}cpu`,
+			).toBe("50%");
+		}
+	});
+
+	it("lets the explicit override exceed the local cap", () => {
+		expect(
+			resolveTestWorkerBudget({
+				totalMemMb: 65_536,
+				cpus: 24,
+				ci: false,
+				workerOverride: 12,
+			}).maxWorkers,
+		).toBe(12);
+	});
+
+	it("pins the local cap to its measurement", () => {
+		const measurement = JSON.parse(
+			fs.readFileSync(
+				path.join(repoRoot, "tests/fixtures/local-worker-cap-measurement.json"),
+				"utf8",
+			),
+		) as {
+			recommendedLocalWorkerCap: number;
+			runs: Array<{
+				workers: number;
+				wallSeconds: number;
+				cpuSeconds: number;
+				peakBusyCores: number;
+			}>;
+		};
+		expect(LOCAL_WORKER_CAP).toBe(measurement.recommendedLocalWorkerCap);
+		const at = (pick: (workers: number) => boolean) => {
+			const row = measurement.runs.find((run) => pick(run.workers));
+			if (!row) throw new Error("the measurement lost a row the cap rests on");
+			return row;
+		};
+		const cap = at((workers) => workers === LOCAL_WORKER_CAP);
+		const more = at((workers) => workers > LOCAL_WORKER_CAP);
+		const fewer = at((workers) => workers < LOCAL_WORKER_CAP);
+		// More forks: a higher peak and more CPU for the wall time they save.
+		expect(more.peakBusyCores).toBeGreaterThan(cap.peakBusyCores);
+		expect(more.cpuSeconds).toBeGreaterThan(cap.cpuSeconds);
+		// Fewer forks: no lower peak, and a longer run.
+		expect(fewer.peakBusyCores).toBeGreaterThanOrEqual(cap.peakBusyCores);
+		expect(fewer.wallSeconds).toBeGreaterThan(cap.wallSeconds);
 	});
 
 	it("honours the explicit local overrides", () => {

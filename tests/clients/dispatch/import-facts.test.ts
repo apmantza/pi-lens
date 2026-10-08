@@ -261,6 +261,51 @@ import { bar } from "./bar.js";
 		expect(reexports).toHaveLength(0);
 	});
 
+	// Recurrence (#3822): `isReExport` was "has a direct string child", so a
+	// string-literal default or `export =` value became a phantom re-export.
+	it.each([
+		["a string default export", `export default "hello";`],
+		["a single-quoted default export", `export default 'hello';`],
+		["a string export-equals", `export = "hello";`],
+	])("does not read %s as a re-export", async (_label, source) => {
+		const { reexports, coverage } = await runProvider("f.ts", source);
+		expect(coverage).toBe("complete");
+		expect(reexports).toEqual([]);
+	});
+
+	it("does not read a string default export in a .js file as a re-export", async () => {
+		const { reexports, coverage } = await runProvider(
+			"f.js",
+			`export default "hello";`,
+		);
+		expect(coverage).toBe("complete");
+		expect(reexports).toEqual([]);
+	});
+
+	it("keeps the real re-export next to a phantom one", async () => {
+		const { reexports } = await runProvider(
+			"f.ts",
+			`export default "hello";\nexport { a } from "./a.js";\n`,
+		);
+		expect(reexports).toStrictEqual([{ source: "./a.js", names: ["a"] }]);
+	});
+
+	it("captures a namespace re-export", async () => {
+		const { reexports } = await runProvider(
+			"f.ts",
+			`export * as ns from "./a.js";\n`,
+		);
+		expect(reexports).toStrictEqual([{ source: "./a.js", names: [] }]);
+	});
+
+	it("captures a type-only named re-export", async () => {
+		const { reexports } = await runProvider(
+			"f.ts",
+			`export type { T } from "./a.js";\n`,
+		);
+		expect(reexports).toStrictEqual([{ source: "./a.js", names: ["T"] }]);
+	});
+
 	it("empty reexports for files with no re-exports", async () => {
 		const { reexports } = await runProvider(
 			"f.ts",
@@ -402,6 +447,17 @@ describe("importFactProvider — moduleType of a dynamic import (#3780)", () => 
 			"cjs",
 		],
 		["an exported declaration is not ESM", `export const a = 1;`, "unknown"],
+		[
+			"a string default export is not ESM (#3822)",
+			`export default "x";`,
+			"unknown",
+		],
+		["a string export-equals is not ESM (#3822)", `export = "x";`, "unknown"],
+		[
+			"a namespace re-export marks the file ESM",
+			`export * as ns from "./a.js";`,
+			"esm",
+		],
 		["a star re-export marks the file ESM", `export * from "./a.js";`, "esm"],
 		[
 			"a named re-export marks the file ESM",

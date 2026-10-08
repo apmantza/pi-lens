@@ -3,6 +3,7 @@
 export function promoteFromSummary(opts: {
 	summaryPath?: string;
 	bodyPath?: string;
+	changelogPath?: string;
 	matrixPath: string;
 	serverPath: string;
 	reasonsPath: string;

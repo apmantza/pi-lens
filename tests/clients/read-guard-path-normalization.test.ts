@@ -128,14 +128,6 @@ describe("ReadGuard path-key normalization (zero_read false-block regression)", 
 			fs.mkdirSync(path.join(tmpDir, "pkgs", "foo"), { recursive: true });
 			const target = path.join(tmpDir, "pkgs", "foo", "i.ts");
 			fs.writeFileSync(target, "export const i = 1;\n");
-			// Age the file past the guard's session start. `wasWrittenThisSession`
-			// (read-guard.ts:1515) falls back to `mtimeMs >= sessionStartMs`,
-			// and a fixture written in the same millisecond the guard is
-			// constructed reads as "the agent authored this" and is ALLOWED — a
-			// wall-clock race that failed 1 run in 4 before this line. The subject
-			// here is which path the block names, not mtime semantics.
-			const anHourAgo = new Date(Date.now() - 3_600_000);
-			fs.utimesSync(target, anHourAgo, anHourAgo);
 			fs.symlinkSync(
 				path.join("..", "pkgs", "foo"),
 				path.join(tmpDir, "node_modules", "Foo"),
@@ -264,11 +256,10 @@ describe("ReadGuard pendingCreations key (#3163 existence-straddle)", () => {
 		// OUTSTANDING enforcement state, so `touchFile` deliberately arms no idle
 		// timer for it (read-guard.ts:685-687) and the file's write record survives
 		// idle session. With the entry orphaned there is no read, the idle timer
-		// runs, `evictFile` drops `writtenThisSession`, and the mtime backstop in
-		// `wasWrittenThisSession` is the only thing left — which is exactly what
-		// that set exists to cover for (FAT32 granularity, NFS clock skew, a
-		// formatter that rewinds mtime). Then the follow-up edit of the file the
-		// agent itself just created is blocked with `zero_read`.
+		// runs and `evictFile` drops `writtenThisSession`, which is exactly what
+		// covers FAT32 granularity, NFS clock skew and a formatter that rewinds
+		// mtime. Then the follow-up edit of the file the agent itself just
+		// created is blocked with `zero_read`.
 		it("keeps a just-created file editable across an idle window when mtime is unreliable", () => {
 			const tmpDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-rg-3163b-"),

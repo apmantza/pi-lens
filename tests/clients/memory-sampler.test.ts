@@ -12,6 +12,8 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	buildMemorySample,
@@ -39,6 +41,7 @@ import {
 	WordIndexFileTable,
 	WordPostingList,
 } from "../../clients/word-index-store.js";
+import { serializeWordIndex } from "../../clients/word-index.js";
 import { PathKeyedMap } from "../../clients/path-keyed-map.js";
 import { normalizeEphemeralMapKey } from "../../clients/path-utils.js";
 import { createLSPClient } from "../../clients/lsp/client.js";
@@ -153,14 +156,21 @@ describe("toMemoryProcessUsage (pure reshape)", () => {
 			external: 20,
 			arrayBuffers: 10,
 		};
-		expect(toMemoryProcessUsage(mem)).toEqual({
+		const { heapSettledBytes, heapSettledMajorGcCount, ...reshaped } =
+			toMemoryProcessUsage(mem);
+		expect(reshaped).toEqual({
 			rssBytes: 100,
 			heapTotalBytes: 80,
 			heapUsedBytes: 60,
 			externalBytes: 20,
 			arrayBuffersBytes: 10,
+			externalNonBufferBytes: 10,
 			peakWorkingSetBytes: null,
 		});
+		// The settled pair is process-wide GC state, not part of the reshape: a
+		// major GC earlier in this fork makes it non-null. The fresh-isolate test
+		// below pins its null-until-first-major-GC transition.
+		expect(heapSettledBytes === null).toBe(heapSettledMajorGcCount === 0);
 
 		// #1999: OS high-water mark rides along so an idle-moment rss sample can be
 		// distinguished from true growth (libuv maps PeakWorkingSetSize → maxRSS in KB).
@@ -168,6 +178,60 @@ describe("toMemoryProcessUsage (pure reshape)", () => {
 			toMemoryProcessUsage(mem, { maxRSS: 500_000 }).peakWorkingSetBytes,
 		).toBe(500_000 * 1024);
 		expect(toMemoryProcessUsage(mem, {}).peakWorkingSetBytes).toBeNull();
+	});
+});
+
+describe("settled heap through the production GC observer (#4129)", () => {
+	it("moves from null to a reading after one real major GC in a fresh isolate", async () => {
+		// Recurrence (VERIFY_4129 M3): the observer's `observe()`, its callback
+		// and the major-kind filter were each mutable without a red, because the
+		// only test drove a test seam instead of a GC. A fresh worker isolate
+		// loads the built sampler (the production module-load state), forces a
+		// real mark-compact through the `--expose-gc` + vm trick, and waits on
+		// event-loop ticks, never wall-clock, for the observer's entry.
+		const samplerUrl = pathToFileURL(
+			path.join(import.meta.dirname, "../../clients/memory-sampler.js"),
+		).href;
+		const source = `
+			const { parentPort } = require("node:worker_threads");
+			const v8 = require("node:v8");
+			const vm = require("node:vm");
+			(async () => {
+				const sampler = await import(${JSON.stringify(samplerUrl)});
+				const read = () => {
+					const usage = sampler.toMemoryProcessUsage(process.memoryUsage());
+					return [usage.heapSettledBytes, usage.heapSettledMajorGcCount];
+				};
+				const before = read();
+				v8.setFlagsFromString("--expose-gc");
+				vm.runInNewContext("gc")();
+				let after = read();
+				let ticks = 0;
+				while (after[1] === before[1] && ticks < 50) {
+					await new Promise((resolve) => setImmediate(resolve));
+					ticks += 1;
+					after = read();
+				}
+				parentPort.postMessage({ before, after });
+			})().catch((error) => parentPort.postMessage({ error: String(error) }));
+		`;
+		const worker = new Worker(source, { eval: true });
+		try {
+			const result = await new Promise<{
+				before?: [number | null, number];
+				after?: [number | null, number];
+				error?: string;
+			}>((resolve, reject) => {
+				worker.once("message", resolve);
+				worker.once("error", reject);
+			});
+			expect(result.error).toBeUndefined();
+			expect(result.before).toEqual([null, 0]);
+			expect(result.after?.[1]).toBe(1);
+			expect(result.after?.[0]).toBeGreaterThan(0);
+		} finally {
+			await worker.terminate();
+		}
 	});
 });
 
@@ -250,7 +314,35 @@ describe("collectMemorySampleSubsystems (O(1)/O(bounded-cache-size) live reads)"
 			// bytes), each carrying the fixed per-list header charge.
 			residentBytes: 2 * (8 + WORD_POSTING_LIST_OVERHEAD_BYTES),
 			forwardEntries: 1,
+			wireBytes: null,
 		});
+	});
+
+	it("reports the S1 attribution fields through the real sampler", () => {
+		const wordIndex: WordIndex = {
+			postings: new Map([["foo", WordPostingList.fromLanes("foo", [0, 1, 2])]]),
+			fileTable: new WordIndexFileTable(),
+			docLengths: new PathKeyedMap<number>(normalizeEphemeralMapKey),
+			forward: new PathKeyedMap<WordForwardEntry>(normalizeEphemeralMapKey),
+			totalTokens: 3,
+			docCount: 0,
+			fileMtimes: new PathKeyedMap<number>(normalizeEphemeralMapKey),
+			fileSizes: new PathKeyedMap<number>(normalizeEphemeralMapKey),
+		};
+		serializeWordIndex(wordIndex);
+		const sample = buildMemorySample(null, fakeMem());
+		expect(sample.process.externalNonBufferBytes).toBe(
+			sample.process.externalBytes - sample.process.arrayBuffersBytes,
+		);
+		expect(sample.samplerDurationMs).toBeGreaterThanOrEqual(0);
+		expect(sample.subsystems.wordIndex).toBeNull();
+		// Serializing alone never measures the wire form; the persist does
+		// (tests/clients/project-snapshot-persist-transfer.test.ts).
+		expect(collectMemorySampleSubsystems(wordIndex).wordIndex?.wireBytes).toBe(
+			null,
+		);
+		expect(sample.subsystems.persistWorkers).toHaveProperty("reviewGraph");
+		expect(sample.subsystems.persistWorkers).toHaveProperty("projectSnapshot");
 	});
 
 	it("reviewGraph/dispatchCaches mirror the live accessors exactly (no extra reads)", () => {
@@ -282,6 +374,19 @@ describe("collectMemorySampleSubsystems (O(1)/O(bounded-cache-size) live reads)"
 		// criterion 3).
 		for (const [name, subsystem] of Object.entries(subsystems)) {
 			if (subsystem === null) continue;
+			if (name === "persistWorkers") {
+				for (const worker of [
+					subsystem.reviewGraph,
+					subsystem.projectSnapshot,
+				]) {
+					if (worker === null) continue;
+					expect(
+						Object.keys(worker).some((key) => /Bytes$/.test(key)),
+						"persist worker must expose byte-denominated fields",
+					).toBe(true);
+				}
+				continue;
+			}
 			expect(
 				Object.keys(subsystem).some((key) => /Bytes$/.test(key)),
 				`${name} must expose a byte-denominated field`,

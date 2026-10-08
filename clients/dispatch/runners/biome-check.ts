@@ -351,15 +351,16 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 		if (parsed.parseError) {
 			const raw = checkResult.stdout || checkResult.stderr || "";
 			const preview = raw.replace(/\s+/g, " ").slice(0, 160);
+			const message =
+				"Biome JSON parse failed: " +
+				parsed.parseError +
+				(preview ? " (output preview: " + preview + ")" : "");
 			return {
 				status: "failed",
 				diagnostics: [
 					{
 						id: "biome:parse-error:1",
-						message:
-							"Biome JSON parse failed: " +
-							parsed.parseError +
-							(preview ? " (output preview: " + preview + ")" : ""),
+						message,
 						filePath: ctx.filePath,
 						line: 1,
 						column: 1,
@@ -369,6 +370,8 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 					},
 				],
 				semantic: "warning",
+				failureKind: "parser_error",
+				failureMessage: message.slice(0, 200),
 			};
 		}
 

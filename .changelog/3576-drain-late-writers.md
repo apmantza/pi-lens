@@ -1,6 +1,0 @@
----
-section: Fixed
-audience: user
----
-
-- **pi-lens' end-of-run work stays in the session it started in, and starts no language server after quitting (closes #3576)** — The formatting and fixing pi-lens runs when the agent's run settles can still be running when `/new`, a fork or a resume starts the next session, or when pi quits or the idle timer shuts the language servers down. Its conservative quickfix pass for actionable warnings could then open files in a new language server, apply edits, and record them in the next session; an autofix could mark a file as already fixed for the next session; and the bookkeeping pass after it re-read the next session's files. After quitting or the idle shutdown, its sync of a formatted file could start a language server nobody needed. The quickfix pass now starts, and starts each edit, only while its session and its language server are current, and an edit it was already writing no longer records into the next session; the fixed-file mark and the bookkeeping pass stay in their session; and its syncs stop once the language server it started with was shut down. When the next session already has the file open, pi-lens still brings that open copy up to date with the formatted file on disk, without starting a server. Each dropped write is counted once in the degradation report.

@@ -60,6 +60,14 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 			const testFile = args.find((arg) => /\.(test\.ts|py)$/.test(arg));
 			if (testFile === undefined) return { stdout: "", stderr: "", status: 0 };
 			runner.spawns.push({ command, args, cwd: options?.cwd ?? "" });
+			if (args.includes("pytest")) {
+				return {
+					stdout:
+						"FAILED tests/test_widget.py::test_value - AssertionError\n1 failed in 0.01s\n",
+					stderr: "",
+					status: 1,
+				};
+			}
 			const failed = runner.failing.has(path.resolve(testFile)) ? 1 : 0;
 			return {
 				stdout: JSON.stringify({
@@ -790,6 +798,27 @@ describe("#3871 test root: the checkout that owns the edit", () => {
 				JSON.stringify(peekTestFindings(cacheManager, main, runtime, true)),
 			).toContain("at tests/unit/self.test.ts:12");
 		});
+
+		it("rebases a pytest failure through the real turn-end path", async () => {
+			const x = addWorktree("pytest");
+			write(x, "pyproject.toml", "[tool.pytest.ini_options]\n");
+			const python = write(x, ".venv/bin/python", "#!/bin/sh\nexit 0\n");
+			fs.chmodSync(python, 0o755);
+			const xTest = write(
+				x,
+				"tests/test_widget.py",
+				"def test_value(): pass\n",
+			);
+			runner.failing.add(xTest);
+			edit(xTest);
+
+			await turnEnd();
+			await dbgSeen(/failure\(s\) cached for pull diagnostics/);
+
+			expect(
+				JSON.stringify(peekTestFindings(cacheManager, main, runtime, true)),
+			).toContain("at .worktrees/pytest/tests/test_widget.py:test_value");
+		});
 	});
 
 	describe("a worktree without its own runner install", () => {
@@ -816,6 +845,45 @@ describe("#3871 test root: the checkout that owns the edit", () => {
 			expect(
 				cacheManager.readCache("test-runner-findings", main)?.data,
 			).not.toEqual(expect.objectContaining({ results: expect.anything() }));
+		});
+
+		const skipBarePytest = async (): Promise<string> => {
+			const bare = addWorktree("bare-pytest", { install: false });
+			write(bare, "pyproject.toml", "[tool.pytest.ini_options]\n");
+			const testFile = write(
+				bare,
+				"tests/test_widget.py",
+				"def test_value(): pass\n",
+			);
+			edit(testFile);
+
+			await turnEnd();
+			await dbgSeen(/no-runner-install/);
+
+			expect(runner.spawns).toEqual([]);
+			return JSON.stringify(skipRows());
+		};
+
+		it("explains when a linked-worktree pytest run ignores ambient Python", async () => {
+			// The session checkout's activated venv: a real interpreter outside
+			// the worktree, which the containment gate refuses to borrow.
+			const python = write(main, ".venv/bin/python", "#!/bin/sh\nexit 0\n");
+			fs.chmodSync(python, 0o755);
+			vi.stubEnv("VIRTUAL_ENV", path.join(main, ".venv"));
+
+			expect(await skipBarePytest()).toContain(
+				"ambient Python environments outside this checkout were not borrowed",
+			);
+		});
+
+		it("names no ambient Python in a pytest skip when none is set (#3871 r3)", async () => {
+			// Recurrence (#3871 r2 verify LOW-3): the ambient clause was appended
+			// to every pytest skip, so a worktree with no environment anywhere
+			// read as if an activated one had been refused.
+			const reason = await skipBarePytest();
+
+			expect(reason).toContain("has no pytest install of its own");
+			expect(reason).not.toContain("ambient Python");
 		});
 
 		it("still runs the installed worktree beside the bare one", async () => {

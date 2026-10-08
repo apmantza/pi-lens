@@ -108,10 +108,11 @@ env:
   # (pi's rule for host-provided peers, #2682), so this is the ONLY place the
   # supported window is stated; tests/packaging.test.ts pins it against the
   # release-qa verified hosts. BUMP BY HAND, together with that list, only
-  # after release-qa has run on the newer host. The window is contiguous, so
-  # 0.99.2 (the unit suite's dev baseline) does not lift the ceiling past 0.86
-  # on its own: the minors between need a run each, or the window changes shape.
-  PI_HOST_SUPPORTED_RANGE: ">=0.80.10 <0.86.0"
+  # after release-qa has run on the newer host. P1 is one verified host per
+  # minor line from 0.86 onward; 0.81-0.83 are in-window without a dedicated
+  # host. The ratchet also records 0.80, 0.84, and 0.85, so an unrun minor
+  # cannot be silently admitted by a higher ceiling.
+  PI_HOST_SUPPORTED_RANGE: ">=0.80.10 <1.2.0"
 
 jobs:
   smoke:

@@ -73,6 +73,13 @@ interface Scan {
 	knipFails?: boolean;
 	/** Host flags turned on for the turn. */
 	flags?: Set<string>;
+	/** Runs inside the knip scan's await, where a test can change the world. */
+	duringKnipScan?: () => void | Promise<void>;
+	/**
+	 * The dead-code scan reports this start stamp: a scan that was already
+	 * running when the lane asked, which the lane parks (#4154 J1).
+	 */
+	deadCodeScannedAt?: string;
 	deadCode: Array<Record<string, unknown>>;
 }
 
@@ -117,14 +124,16 @@ function makeDeps(rig: Rig, sessionId?: string) {
 		cacheManager: rig.cacheManager,
 		knipClient: {
 			ensureAvailable: async () => false,
-			analyze: async () =>
-				rig.scan.knipFails
+			analyze: async () => {
+				await rig.scan.duringKnipScan?.();
+				return rig.scan.knipFails
 					? { ...EMPTY_KNIP, success: false, summary: "knip failed" }
 					: {
 							...EMPTY_KNIP,
 							issues: rig.scan.knip,
 							unusedExports: rig.scan.knip,
-						},
+						};
+			},
 		},
 		deadCodeClients: [
 			{
@@ -137,6 +146,9 @@ function makeDeps(rig: Rig, sessionId?: string) {
 					...EMPTY_KNIP,
 					language: "python",
 					unusedExports: rig.scan.deadCode,
+					...(rig.scan.deadCodeScannedAt === undefined
+						? {}
+						: { scannedAt: rig.scan.deadCodeScannedAt }),
 				}),
 			},
 		],
@@ -670,25 +682,25 @@ describe("a concurrent secondary does not spend the primary's parked items (revi
 	});
 });
 
-describe("call-graph impact advisory vs the cap (#3813)", () => {
-	function graphWith(callee: string, callers: string[]): FunctionCallGraph {
-		return {
-			callees: new Map(),
-			callers: new Map([[callee, new Set(callers)]]),
-			edges: callers.map((callerKey) => ({
-				callerKey,
-				calleeKey: callee,
-				weight: 1,
-				evidenceCount: 1,
-			})) as any,
-			inDegree: new Map(),
-			unresolvedRefs: 0,
-			totalRefs: callers.length,
-			coverage: { complete: true } as any,
-			builtAt: new Date().toISOString(),
-		};
-	}
+function graphWith(callee: string, callers: string[]): FunctionCallGraph {
+	return {
+		callees: new Map(),
+		callers: new Map([[callee, new Set(callers)]]),
+		edges: callers.map((callerKey) => ({
+			callerKey,
+			calleeKey: callee,
+			weight: 1,
+			evidenceCount: 1,
+		})) as any,
+		inDegree: new Map(),
+		unresolvedRefs: 0,
+		totalRefs: callers.length,
+		coverage: { complete: true } as any,
+		builtAt: new Date().toISOString(),
+	};
+}
 
+describe("call-graph impact advisory vs the cap (#3813)", () => {
 	it.each(CELLS)(
 		"$cell: cut impact lines are re-offered next turn, once",
 		async ({ filler, reached }) => {
@@ -813,4 +825,136 @@ describe("pointer-only advisories keep their pull record when the cap cuts them 
 			}
 		},
 	);
+});
+
+/**
+ * #4161: a turn end whose session was replaced while it awaited takes
+ * nothing its successor parked. A sequential replacement with the same stable
+ * id (resume, `session-lifecycle.ts` same-session branch) parks under the same
+ * lane key, so before the fence the old turn took the successor's item after
+ * its scan await, the cap cut it, and the skipped settle never re-parked it.
+ * One row per take site (#4168 review F4: un-fencing one site alone must red).
+ */
+describe("#4161: a replaced turn takes nothing its successor parked", () => {
+	const LANES = [
+		{
+			lane: "knip",
+			marker: "left-pad",
+			setup: (rig: Rig) => {
+				touch(rig, "edited.ts");
+				rig.scan.knip = [
+					{ type: "unlisted", name: "left-pad", file: "edited.ts", line: 1 },
+				];
+			},
+		},
+		{
+			lane: "dead-code",
+			marker: "orphanPy",
+			setup: (rig: Rig) => {
+				const edited = touch(rig, "edited.py", "def orphanPy():\n    pass\n");
+				rig.scan.deadCode = [
+					{
+						category: "export",
+						kind: "function",
+						name: "orphanPy",
+						file: edited,
+						line: 1,
+					},
+				];
+			},
+		},
+		{
+			lane: "call-graph",
+			marker: "liveCaller",
+			setup: (rig: Rig) => {
+				const edited = touch(rig, "src/core.ts");
+				const caller = touch(rig, "src/caller.ts");
+				rig.runtime.callGraph = graphWith(`${edited}:doThing`, [
+					`${caller}:liveCaller`,
+				]);
+			},
+		},
+	] as const;
+
+	it.each(LANES)(
+		"$lane: the successor's parked item reaches the successor",
+		async ({ lane, marker, setup }) => {
+			const rig = makeRig(`pi-lens-4161-${lane}-park-`);
+			try {
+				const parks = vi.spyOn(rig.runtime, "parkCutAdvisoryItems");
+				const fillerFile = fillerBlocker(rig, 1000);
+				setup(rig);
+				expect(await endTurn(rig)).not.toContain(marker);
+				// What the cut turn parked, as its own call wrote it.
+				const parked = parks.mock.calls.filter(([, items]) => items.length > 0);
+				expect(parked).toHaveLength(1);
+
+				retireWorklist(rig);
+				nextTurn(rig, 2);
+				rig.scan.duringKnipScan = () => {
+					rig.scan.duringKnipScan = undefined;
+					rig.runtime.resetForSession();
+					rig.runtime.setTelemetryIdentity({ sessionId: SESSION });
+					// The successor's own cut turn parked the same item under its key.
+					for (const [key, items] of parked)
+						rig.runtime.parkCutAdvisoryItems(key, items);
+				};
+				await endTurn(rig);
+
+				clearFiller(rig, fillerFile);
+				retireWorklist(rig);
+				nextTurn(rig, 3);
+				expect(await endTurn(rig)).toContain(marker);
+				expect(
+					getDegradationSummary()
+						.filter((entry) => entry.kind === "generation-guard-stale-write")
+						.flatMap((entry) => entry.latestReasons.map((r) => r.subject)),
+				).toContain(`runtime-session:turn-end:${parked[0]?.[0]}`);
+			} finally {
+				rig.cleanup();
+			}
+		},
+	);
+
+	// Recurrence (#4168 review F1): the late dead-code scan cell was read
+	// through the LIVE `runtime.sessionScope` after the knip await, on the
+	// MCP and harness route (no `deps.sessionScope`). The replaced turn took
+	// the successor's settled scan, the cap cut its part, and the finding was
+	// gone. The successor parks its scan the real way: its own turn joins a
+	// scan older than its edit (#4154 J1).
+	it("the successor's late dead-code scan reaches the successor", async () => {
+		const rig = makeRig("pi-lens-4161-late-scan-");
+		try {
+			fillerBlocker(rig, 1000);
+			touch(rig, "old-edit.ts");
+			rig.scan.duringKnipScan = async () => {
+				rig.scan.duringKnipScan = undefined;
+				rig.runtime.resetForSession();
+				rig.runtime.setTelemetryIdentity({ sessionId: SESSION });
+				const edited = touch(rig, "edited.py", "def orphanPy():\n    pass\n");
+				rig.scan.deadCode = [
+					{
+						category: "export",
+						kind: "function",
+						name: "orphanPy",
+						file: edited,
+						line: 1,
+					},
+				];
+				rig.scan.deadCodeScannedAt = new Date(
+					Date.now() - 60_000,
+				).toISOString();
+				// The successor's turn: its scan is parked, and settles.
+				await endTurn(rig);
+				rig.scan.deadCodeScannedAt = undefined;
+			};
+			await endTurn(rig);
+
+			retireWorklist(rig);
+			nextTurn(rig, 3);
+			expect(await endTurn(rig)).toContain("orphanPy");
+		} finally {
+			rig.cleanup();
+		}
+	});
 });

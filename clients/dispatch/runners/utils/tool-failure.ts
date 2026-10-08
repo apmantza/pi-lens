@@ -318,8 +318,9 @@ export function parseToolRun<D>(
  *                             (`findingsResult` in types.ts, #3781).
  * - no findings, exit 0     → clean: `succeeded`/`none`.
  * - no findings, nonzero exit,
- *   bytes emitted           → `failed` + one parse-error warning diagnostic.
- *                             Never clean (#1781 shape). A runner whose tool
+ *   bytes emitted           → `failed` + one parse-error warning diagnostic,
+ *                             `failureKind: "parser_error"` (not findings,
+ *                             #3796). Never clean (#1781 shape). A runner whose tool
  *                             legitimately exits nonzero on a clean file must
  *                             normalize the status BEFORE calling this.
  */
@@ -351,12 +352,13 @@ export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
 
 	if (input.diagnostics.length === 0) {
 		if (status !== 0 && raw.trim().length > 0) {
+			const message = `${input.tool} exited ${status} but its output could not be parsed`;
 			return {
 				status: "failed",
 				diagnostics: [
 					{
 						id: `${input.tool}:parse-error:1`,
-						message: `${input.tool} exited ${status} but its output could not be parsed`,
+						message,
 						filePath: input.ctx.filePath,
 						line: 1,
 						column: 1,
@@ -366,6 +368,8 @@ export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
 					},
 				],
 				semantic: "warning",
+				failureKind: "parser_error",
+				failureMessage: message,
 			};
 		}
 		return { status: "succeeded", diagnostics: [], semantic: "none" };

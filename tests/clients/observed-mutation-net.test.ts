@@ -297,6 +297,39 @@ describe("#2430 item 4 — bounds are visible, never silent", () => {
 		}
 	});
 
+	it("parks a spent turn's budget across other turns, at most eight of them (#3613 F2)", async () => {
+		// The recurrences: a switch to another session's turn reset the spend
+		// (no bound when two sessions interleave), or the parked spends grew
+		// with every turn the process ever saw.
+		const env = setupTestEnvironment("pi-lens-3613-parked-");
+		try {
+			const filePath = path.join(env.tmpDir, "parked.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const armsAt = async (turnIndex: number, toolCallId: string) =>
+				(
+					await armObservedMutation(
+						armArgs(filePath, env.tmpDir, { turnIndex, toolCallId }),
+					)
+				).armed;
+			_setObservedTurnBudgetForTests(1, OBSERVED_TURN_BUDGET_MS + 1);
+			for (let turn = 2; turn <= 9; turn += 1)
+				_setObservedTurnBudgetForTests(turn, 0);
+			// Turns 1..8 are parked (eight) and turn 9 holds the slot.
+			const keptSpent = await armsAt(1, "call-parked-kept");
+			_setObservedTurnBudgetForTests(1, OBSERVED_TURN_BUDGET_MS + 1);
+			for (let turn = 2; turn <= 10; turn += 1)
+				_setObservedTurnBudgetForTests(turn, 0);
+			// Turn 1 is the oldest of nine parked: it is dropped.
+
+			expect({
+				keptSpent,
+				afterEviction: await armsAt(1, "call-parked-evicted"),
+			}).toEqual({ keptSpent: false, afterEviction: true });
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("cancels cleanly on an aborted turn instead of finishing the walk", async () => {
 		const env = setupTestEnvironment("pi-lens-2430-abort-");
 		try {

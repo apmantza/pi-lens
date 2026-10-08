@@ -1046,7 +1046,11 @@ async function runGroup(
 					status: result.status,
 					diagnosticCount: result.diagnostics.length,
 					semantic: result.semantic ?? semantic,
-					metadata: { tier: "collect-later", delivered: "turn_end" },
+					metadata: {
+						tier: "collect-later",
+						delivered: "turn_end",
+						...failureRowMetadata(result),
+					},
 				});
 				return result;
 			});
@@ -1178,14 +1182,10 @@ async function runGroup(
 						}))
 					: undefined,
 			metadata:
-				result.status === "failed" && result.failureKind
-					? {
-							failureKind: result.failureKind,
-							failureMessage: result.failureMessage,
-						}
-					: skipReason
-						? { skipReason, ...(claimSource !== undefined && { claimSource }) }
-						: undefined,
+				failureRowMetadata(result) ??
+				(skipReason
+					? { skipReason, ...(claimSource !== undefined && { claimSource }) }
+					: undefined),
 		});
 		recordRunner(
 			ctx.filePath,
@@ -1594,6 +1594,21 @@ function normalizeDiagnosticFilePath(
 	}
 
 	return resolveRunnerPath(ctx.cwd, rawPath || ctx.filePath);
+}
+
+/**
+ * The `failureKind` of a failed run, for the latency.log runner row (#3796).
+ * Inline and collect-later rows share it, so the log analyzer reads one place.
+ */
+function failureRowMetadata(
+	result: RunnerResult,
+): { failureKind: string; failureMessage: string | undefined } | undefined {
+	return result.status === "failed" && result.failureKind
+		? {
+				failureKind: result.failureKind,
+				failureMessage: result.failureMessage,
+			}
+		: undefined;
 }
 
 async function runRunner(

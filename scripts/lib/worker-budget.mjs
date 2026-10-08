@@ -52,6 +52,17 @@ export const NON_WORKER_RESERVE_MB = 3072;
 /** Local default, unchanged from the pre-#2042 measured posture. */
 const LOCAL_MAX_WORKERS = "50%";
 
+/**
+ * Local ceiling on forks. "50%" was 8 forks on the 16-thread host it was
+ * measured on, and grows with every logical CPU, efficiency cores and
+ * hyperthreads included. Measured on a 24-thread host with 8 performance
+ * cores (`tests/fixtures/local-worker-cap-measurement.json`): 12 forks finish
+ * the default project 16 s sooner than 8, for 23% more CPU-seconds and a peak
+ * of 22 busy cores against 13. 6 forks hold the same peak as 8 and take 21 s
+ * longer.
+ */
+export const LOCAL_WORKER_CAP = 8;
+
 /** Per-fork V8 heap ceiling on a host with room for it (pre-#2042 value). */
 export const MAX_WORKER_HEAP_MB = 4096;
 
@@ -81,7 +92,10 @@ export function resolveTestWorkerBudget(host) {
 	);
 
 	const ciWorkers = Math.min(cpuCap, memCap);
-	const maxWorkers = ci ? ciWorkers : workerOverride || LOCAL_MAX_WORKERS;
+	// Only where "50%" would exceed the cap: a smaller host keeps its posture.
+	const localWorkers =
+		cpus > 2 * LOCAL_WORKER_CAP ? LOCAL_WORKER_CAP : LOCAL_MAX_WORKERS;
+	const maxWorkers = ci ? ciWorkers : workerOverride || localWorkers;
 
 	// The heavy phase's files each peaked at 1.4-3.9 GB, above the general
 	// budget, so on CI it runs at half the general concurrency (floor 1). Locally

@@ -635,6 +635,15 @@ the surface they bite; each block loads only when its trigger applies.
 - LSP roots never exceed the session-cwd ceiling. Root/config discovery uses
   shared marker seams. Child cwd resolution uses `resolveToolCwd` and its
   caller-specific markers.
+- Temporary roots (#1129) are classified once per process by
+  `clients/ephemeral-root.ts`, on real paths on both sides. A directory inside
+  a real git checkout below `os.tmpdir()` (root or subdirectory) is a normal
+  LSP root with the ephemeral idle window, and `getProjectDataDir` gives it
+  its usual slug under `<base>/.ephemeral/<pid>-<8 hex>/`: normal within the
+  process, never read by another one, removed by the exit hook and, for a
+  dead pid, by the session-start sweep. A `pi-agent-*` path below the tmpdir
+  that no checkout owns is declined at `resolveLspServerCwd` with one
+  `lsp-root-declined` record per staging root per session.
 - Per-path LSP notifications serialize read/build/send/record work. Pull
   cancellation blocks a same-path replacement until settlement. Waits are
   deadline- and abort-bounded, and silence is never clean.
@@ -674,7 +683,7 @@ the surface they bite; each block loads only when its trigger applies.
   `test-target-foreign-checkout`. Proven by
   `tests/clients/test-runner-worktree-isolation.test.ts`.
 - By design, a session whose cwd is a plain folder with no `.git` that holds several repositories, a submodule, or a nested linked worktree gets no automatic tests for the files inside them: any nested `.git` is a foreign checkout, and there is no per-project opt-in (maintainer decision, #3649/#3691). Run them explicitly.
-- The one exception to that boundary is a linked worktree of the session's own repository (same git commondir, different top level, `resolveLinkedWorktreeOwner` in `clients/review-graph/git-identity.ts`, #3871): turn_end selects and runs its tests with that worktree's root as the project root (`clients/test-target-roots.ts`), so config, `node_modules` and the failed-first state are the worktree's own. A worktree root without its own runner install (no `node_modules/.bin`, venv or `vendor/bin`) is skipped with a counted `turn-end-test-root-skipped` row rather than run through `npx` or a bare interpreter; a failure there is located relative to the session checkout; a sibling worktree's file is still foreign to every other root. The edit worklist is the session's project worklist (#2504), so a session whose cwd is itself a linked worktree never sees an edit in the main checkout or a sibling and runs only its own tests. Each turn that edited files writes one `turn_end_test_selection` record to `latency.log` (candidates, selected, why not, and selected/candidates per owning root; first 8 roots, the rest in `rootsOmitted`; `selected` includes carried deferred targets, which no candidate bucket counts, so per-root `selected` can sum below it; one row of about 570 B per edit turn with candidates, bounded by log rotation only), so a turn with 0 tests is explained without the dbg lines the MCP route drops.
+- The one exception to that boundary is a linked worktree of the session's own repository (same git commondir, different top level, `resolveLinkedWorktreeOwner` in `clients/review-graph/git-identity.ts`, #3871): turn_end selects and runs its tests with that worktree's root as the project root (`clients/test-target-roots.ts`), so config, `node_modules` and the failed-first state are the worktree's own. A worktree root without its own runner install (no `node_modules/.bin`, venv or `vendor/bin`) is skipped with a counted `turn-end-test-root-skipped` row rather than run through `npx` or a bare interpreter; a reported location is rebased through `displayRoot` using the runner cwd first, then the dispatch root, only when that file exists, and otherwise remains as printed. A sibling worktree's file is still foreign to every other root. Python's ambient `VIRTUAL_ENV`, `CONDA_PREFIX`, or absolute `UV_PROJECT_ENVIRONMENT` is accepted for the session checkout, and for a linked worktree only when the environment root is inside that checkout; a skipped pytest row says that ambient environments were not borrowed when one is set. The edit worklist is the session's project worklist (#2504), so a session whose cwd is itself a linked worktree never sees an edit in the main checkout or a sibling and runs only its own tests. Each turn that edited files writes one `turn_end_test_selection` record to `latency.log` (candidates, selected, why not, and selected/candidates per owning root; first 8 roots, the rest in `rootsOmitted`; `selected` includes carried deferred targets, which no candidate bucket counts, so per-root `selected` can sum below it; one row of about 570 B per edit turn with candidates, bounded by log rotation only), so a turn with 0 tests is explained without the dbg lines the MCP route drops.
 - Managed tools resolve through the registry and sanctioned availability seams.
   Do not hand-roll install, PATH, or package-manager discovery. Use typed
   `SpawnFailure.kind`; repair only `tool-not-found`.
@@ -758,9 +767,34 @@ the surface they bite; each block loads only when its trigger applies.
   `concurrent-secondary` skips the reset, since a subagent reset tears down the
   primary's warm state. `secondary` belongs to the shutdown classification. A process-lifetime latch cannot store a
   session fact without an explicit reset.
+- Turn state is the turn's session's (#3613): `RuntimeCoordinator.beginTurn`
+  takes the ctx's stable session id and moves the coordinator's counters,
+  write-order turn and change window only for its own session, and per-turn
+  warnings are partitioned by the session that recorded them. Every
+  producer and reader passes that id (`tool_result`, a partial apply's
+  pipeline, `turn_end`). A concurrent secondary still shares the read guard
+  and the turn-end worklist (the open half of #3613). State `turn_end` parks
+  in a scope cell for a later turn lives on the activation's own scope
+  (`TurnEndDeps.sessionScope`, passed by `index.ts`), never on
+  `runtime.sessionScope`, which is the primary's during a secondary's turn
+  (#4154: the late dead-code scan). A turn-end drain or write-back is fenced
+  by the scope that owns the store, taken at entry (#4161, #4168 round 3):
+  the coordinator's for the coordinator and module stores a secondary
+  shares, the activation's for its own scope cell. One store never answers
+  to two scopes, and a secondary's end fences only its cell.
+- Every session-scope hand-off decision leaves one `latency.log` row per
+  lifecycle event, never one per occurrence in a loop (#3873):
+  `session_handoff_slot`, `session_handoff_adopt`, `session_store_action`
+  (a store's `restore` returns its `StoreCarry`, items in and kept),
+  `session_scope_transition` (`end`, `demote`) and `session_end_fence_rollup`.
+  `docs/pi-lens-monitor.md` lists the fields; a new session store or hand-off
+  branch adds its row there in the same change.
 - Logger writes use `createNdjsonLogger`; flush before reading a log. Redact at
   the sink. New failure records preserve the discriminating file/tool/record
   identity and retain dropped counts.
+- `memory_sample` remains one bounded latency record. Its heap, external,
+  worker-isolate, tree-sitter, and word-index fields are latest-value or O(1)
+  reads; sampler assembly time is recorded in `samplerDurationMs`.
 - Delivery surfaces are registered in `clients/finding-delivery-gate.ts`.
   Every model-facing diagnostic, blocker, advisory, widget, nudge, and snapshot
   either passes the shared freshness/disposition gate or carries an explicit
@@ -956,6 +990,11 @@ Never hand-edit generated `.js` or `dist/`. Open and close PR worktrees with
 `node scripts/pr-worktree.mjs open <PR|branch> [--merge|--head]` and
 `close <path>`; close unlinks a symlinked `node_modules` before removal
 (#2704) and refuses the main checkout, a dirty tree, or a real `node_modules`.
+Open refuses (exit 2, before any fetch or mkdir) a destination that is the main
+checkout or inside a registered non-bare checkout, symlinks resolved: a probe
+HOME pinned under the source makes the default root a child of it (#3981). An
+exact hit on another registered tree is left to git. Set `PI_LENS_WORKTREES_ROOT` to a
+directory outside every checkout.
 
 <important if="relocating project data, machine state, or telemetry">
 

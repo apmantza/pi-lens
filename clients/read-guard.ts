@@ -11,6 +11,7 @@
  */
 
 import * as fs from "node:fs";
+import { BoundedSet } from "./bounded-cache.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import { createFileTime, type FileTime } from "./file-time.js";
 import { hashDiagnosticContent } from "./lsp/diagnostic-binding.js";
@@ -178,7 +179,6 @@ export interface PersistedReadGuardState {
 /** A session's authorship ({@link ReadGuard.exportAuthorship}), keys in `normalizeFilePath` form. */
 export interface PersistedReadGuardAuthorship {
 	written: string[];
-	sessionStartMs: number;
 }
 
 /**
@@ -598,12 +598,17 @@ export class ReadGuard {
 		string,
 		{ turnIndex: number; writeIndex: number; toolCallId?: string }
 	>();
-	// Files that recordWritten() has fired on this session. Lets
-	// wasWrittenThisSession() return a deterministic answer for files the
-	// pi Write tool authored, independent of filesystem mtime granularity
-	// or clock skew (NFS, FAT32, etc.).
+	// Files that recordWritten() has fired on this session: the only evidence
+	// of session authorship, independent of filesystem mtime granularity or
+	// clock skew (NFS, FAT32, etc.) and of other writers' mtimes (#3520).
 	private readonly writtenThisSession = new Set<string>();
-	private readonly unchangedThisSession = new Set<string>();
+	// Files whose write record idle-expired (#3520): `evictFile` drops the
+	// authorship with the rest of the file's state, and a later zero-read edit
+	// must say so instead of "you have not read" (false for a file the agent
+	// wrote). Insertion order is eviction order; a branch move clears it with
+	// the authorship it describes. Session-scoped like the guard: `/new` and
+	// `/fork` build a fresh one, and a `/reload` does not carry it.
+	private readonly expiredWrites = new BoundedSet<string>(READ_GUARD_MAX_FILES);
 	// Existence-independent index for hasKnownPath/forgetPath (#1668 review
 	// F1). `this.key()` (normalizeFilePath) branches on whether `filePath`
 	// currently exists on disk, on EVERY platform since #3098 — an existing
@@ -638,8 +643,6 @@ export class ReadGuard {
 	/** Running per-file record-cap trim totals for this session (#1913 F1). */
 	private readonly trimAccumulators = new Map<string, FileTrimStats>();
 	private readonly sessionId: string;
-	/** Re-anchored at every conversation move (#3521); see `retainBranch`. */
-	private sessionStartMs: number;
 	/**
 	 * The scope whose branch epoch this guard reads (#3611). Every
 	 * `retainBranch` moves it (#3521). A deferred writer captures the epoch
@@ -656,7 +659,6 @@ export class ReadGuard {
 	) {
 		this.scope = scope;
 		this.sessionId = sessionId;
-		this.sessionStartMs = Date.now();
 		this.config = { ...DEFAULT_CONFIG, ...config };
 		this.fileTime = createFileTime(sessionId);
 	}
@@ -708,14 +710,16 @@ export class ReadGuard {
 	 * on the rising edge, so a file evicted repeatedly across a session can't
 	 * flood the log.
 	 *
-	 * `idle-timeout` is deliberately excluded from both the ledger tally and
-	 * the log line (#1918 review F2): idle eviction is designed housekeeping,
-	 * not a fault signal — a read-only session that idles out N files is
-	 * healthy, ordinary behavior, and N is unbounded (every distinct file path
-	 * touched that session is its own ledger subject). Recording it here would
-	 * grow the ledger's tally map without bound and spam `pilens_health` in
-	 * every healthy session, unlike the other three reasons, which are rare by
-	 * construction (only real pressure or an explicit delete reaches them).
+	 * `idle-timeout` is deliberately excluded from the ledger tally and, for a
+	 * file that carried no write record, from the log line (#1918 review F2):
+	 * idle eviction is designed housekeeping, not a fault signal — N is
+	 * unbounded (every distinct file path touched that session is its own
+	 * ledger subject). Recording it here would grow the ledger's tally map
+	 * without bound and spam `pilens_health` in every healthy session, unlike
+	 * the other three reasons, which are rare by construction (only real
+	 * pressure or an explicit delete reaches them). The one exception is a
+	 * dropped write record (#3520): it changes the next edit's verdict, so
+	 * {@link noteExpiredWrite} logs it once per file, outside the ledger.
 	 */
 	private evictFile(filePath: string, reason: FileEvictionReason): void {
 		this.clearFileTimer(filePath);
@@ -723,13 +727,16 @@ export class ReadGuard {
 		this.edits.delete(filePath);
 		this.fileLastUsed.delete(filePath);
 		this.consumedReadFiles.delete(filePath);
-		this.writtenThisSession.delete(filePath);
+		const droppedAuthorship = this.writtenThisSession.delete(filePath);
 		// #1668 review F1: prune the reverse-pointing knownPathIndex entries
 		// too, so it never outlives the record it points at.
 		for (const [syntacticKey, stored] of this.knownPathIndex) {
 			if (stored === filePath) this.knownPathIndex.delete(syntacticKey);
 		}
-		if (reason === "idle-timeout") return;
+		if (reason === "idle-timeout") {
+			if (droppedAuthorship) this.noteExpiredWrite(filePath);
+			return;
+		}
 		const isRisingEdge = incrementDegradationCount({
 			kind: "read-guard-file-evicted",
 			subject: filePath,
@@ -743,6 +750,22 @@ export class ReadGuard {
 				metadata: { reason },
 			});
 		}
+	}
+
+	/**
+	 * #3520: remember that an idle eviction dropped this file's write record,
+	 * and log it once per file (the set is the once-only gate). The set holds
+	 * at most `READ_GUARD_MAX_FILES` files, oldest dropped first.
+	 */
+	private noteExpiredWrite(filePath: string): void {
+		if (this.expiredWrites.has(filePath)) return;
+		this.expiredWrites.add(filePath);
+		logReadGuardEvent({
+			event: "read_file_evicted",
+			sessionId: this.sessionId,
+			filePath,
+			metadata: { reason: "idle-timeout", authorshipDropped: true },
+		});
 	}
 
 	private touchFile(filePath: string): void {
@@ -812,6 +835,14 @@ export class ReadGuard {
 			 * to whatever last observed the disk (#3519, #3523, #3524).
 			 */
 			stampFileTime?: boolean;
+			/**
+			 * False when the caller deliberately supplies or omits line evidence,
+			 * so the guard must not fall back to a disk hash capture. #3654 D5: a
+			 * coverage-only bridge read credits its range with no hashes and
+			 * performs zero disk reads. Default true preserves every existing
+			 * caller (native reads, search reads, the v1 read shim).
+			 */
+			captureLineHashes?: boolean;
 		},
 	): void {
 		const filePath = this.key(record.filePath);
@@ -837,11 +868,13 @@ export class ReadGuard {
 			filePath,
 			lineHashes:
 				record.lineHashes ??
-				captureLineHashes(
-					filePath,
-					record.effectiveOffset,
-					record.effectiveLimit,
-				),
+				(opts?.captureLineHashes === false
+					? undefined
+					: captureLineHashes(
+							filePath,
+							record.effectiveOffset,
+							record.effectiveLimit,
+						)),
 		};
 		const arr = this.reads.get(storedRecord.filePath) ?? [];
 		this.consumedReadFiles.delete(storedRecord.filePath);
@@ -1064,12 +1097,10 @@ export class ReadGuard {
 		// 1. Zero-read check
 		const fileReads = this.reads.get(filePath);
 		if (!fileReads || fileReads.length === 0) {
-			// If the file was written after this session started, the agent authored
-			// it in this session (via Write or any other mechanism). Allow the edit —
-			// a synthetic read would have been injected for Write tool calls, but
-			// this catches cases where the write bypassed the hook or the session
-			// restarted between write and edit.
-			if (this.wasWrittenThisSession(filePath)) {
+			// Only a write pi-lens observed (recordWritten, from any producer) is
+			// the agent's own; a newer mtime is any writer's (#3520). A synthetic
+			// read is injected for it.
+			if (this.writtenThisSession.has(filePath)) {
 				this.injectCreationRead(filePath, 0, 0);
 				const verdict = this.allow();
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
@@ -1077,14 +1108,20 @@ export class ReadGuard {
 				});
 				return verdict;
 			}
+			// #3520: an idle eviction dropped the agent's own write record, so
+			// "you have not read" would be false.
+			const writeRecordExpired = this.expiredWrites.has(filePath);
 			const verdict = this.blockOrWarn(
 				"zero-read",
-				`🔄 RETRYABLE — Edit without read: you have not read \`${filePath}\` in this conversation. Read it first, then retry: \`read path="${filePath}"\`.`,
+				writeRecordExpired
+					? `🔄 RETRYABLE — Edit without read: the earlier write record for \`${filePath}\` expired, so it needs a read again. Read it first, then retry: \`read path="${filePath}"\`.`
+					: `🔄 RETRYABLE — Edit without read: you have not read \`${filePath}\` in this conversation. Read it first, then retry: \`read path="${filePath}"\`.`,
 				undefined,
 				effectiveMode,
 			);
 			this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 				reasonKind: "zero_read",
+				...(writeRecordExpired ? { writeRecordExpired } : {}),
 			});
 			return verdict;
 		}
@@ -1425,7 +1462,6 @@ export class ReadGuard {
 			return;
 		}
 		const filePath = this.key(rawFilePath);
-		this.unchangedThisSession.delete(filePath);
 		// #1668 review F1: index by the existence-independent syntactic key
 		// (see `knownPathIndex`) so a later hasKnownPath/forgetPath lookup
 		// after an external delete can still find this entry's real key.
@@ -1451,15 +1487,6 @@ export class ReadGuard {
 				opts?.writtenContent,
 			);
 		}
-	}
-
-	/** Record that a recognized mutation had complete evidence but changed no bytes. */
-	recordUnchanged(rawFilePath: string): void {
-		const filePath = this.key(rawFilePath);
-		// A no-op command is scoped to this command. It must not erase a
-		// confirmed Write from earlier in the session.
-		if (!this.writtenThisSession.has(filePath))
-			this.unchangedThisSession.add(filePath);
 	}
 
 	/**
@@ -1569,25 +1596,24 @@ export class ReadGuard {
 	}
 
 	/**
-	 * The files this session authored (#3612, D5): what `wasWrittenThisSession`
-	 * reads. A `/reload` keeps the conversation and its branch, so the
+	 * The files this session authored (#3612, D5): `writtenThisSession`, which
+	 * the zero-read check reads. A `/reload` keeps the conversation and its branch, so the
 	 * reloaded guard keeps them; every other start resets them.
 	 */
 	exportAuthorship(): PersistedReadGuardAuthorship {
-		return {
-			written: [...this.writtenThisSession],
-			sessionStartMs: this.sessionStartMs,
-		};
+		return { written: [...this.writtenThisSession] };
 	}
 
-	/** Restore {@link exportAuthorship}'s output. Null-safe on a malformed payload. */
+	/**
+	 * Restore {@link exportAuthorship}'s output. Null-safe on a malformed
+	 * payload; a row from a released writer may carry a `sessionStartMs`, which
+	 * is ignored.
+	 */
 	importAuthorship(state: unknown): void {
 		const authorship = state as Partial<PersistedReadGuardAuthorship> | null;
 		if (Array.isArray(authorship?.written))
 			for (const filePath of authorship.written)
 				if (typeof filePath === "string") this.writtenThisSession.add(filePath);
-		if (typeof authorship?.sessionStartMs === "number")
-			this.sessionStartMs = authorship.sessionStartMs;
 	}
 
 	/**
@@ -1600,8 +1626,7 @@ export class ReadGuard {
 	 * each kept record must pass the per-line hash check against disk at the
 	 * next edit. A stamp taken on the abandoned branch would otherwise vouch
 	 * for bytes this branch never showed. Edits, authored-write and
-	 * pending-creation state came from the old branch too, so they go, and the
-	 * mtime fallback of `wasWrittenThisSession` is re-anchored to now.
+	 * pending-creation state came from the old branch too, so they go.
 	 */
 	retainBranch(onBranch: ReadonlySet<string>): {
 		kept: number;
@@ -1623,11 +1648,9 @@ export class ReadGuard {
 		}
 		this.edits.clear();
 		this.writtenThisSession.clear();
+		this.expiredWrites.clear();
 		this.pendingCreations.clear();
 		this.fileTime.clear();
-		// #3520 owns deleting this fallback; until then a write made on the
-		// abandoned branch must not read as authored on this one.
-		this.sessionStartMs = Date.now();
 		moveBranch(this.scope);
 		return result;
 	}
@@ -1745,19 +1768,6 @@ export class ReadGuard {
 			timestamp: Date.now(),
 			...(toolCallId !== undefined && { toolCallId }),
 		});
-	}
-
-	private wasWrittenThisSession(filePath: string): boolean {
-		if (this.unchangedThisSession.has(filePath)) return false;
-		// Authoritative path: we observed a write of this file via recordWritten.
-		// Survives mtime granularity (FAT32 ~2s), clock skew (NFS), and external
-		// tools that touch mtime backward.
-		if (this.writtenThisSession.has(filePath)) return true;
-		try {
-			return fs.statSync(filePath).mtimeMs >= this.sessionStartMs;
-		} catch {
-			return false;
-		}
 	}
 
 	private canIgnoreStalenessByHashes(

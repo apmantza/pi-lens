@@ -30,6 +30,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { computeHashlineAnchors } from "../../clients/hashline-anchor.js";
 import { lineContentHash } from "../../clients/read-guard.js";
+import { recordIOEntry } from "../../clients/io-bridge.js";
 import {
 	READ_BRIDGE_KEY,
 	registerReadBridge,
@@ -2418,11 +2419,30 @@ let _bridgeRuntime: RuntimeCoordinator | undefined;
 
 describe("#3962: a native re-read supersedes a stale bridge binding", () => {
 	beforeAll(() => {
-		registerReadBridge({
+		// #3654: the v1 shim runs the unified bridge body, wired as index.ts
+		// wires it; only the read half of the deps is reachable from a read.
+		const unused = (): never => {
+			throw new Error("read-only bridge deps: unexpected mutation call");
+		};
+		const deps = {
+			getRuntime: unused,
+			getCacheManager: unused,
+			getProjectRoot: unused,
+			getDispatchCwd: unused,
+			countFileLines: unused,
+			isRecordable: () => true,
 			getReadGuard: () => _bridgeRuntime!.readGuard,
 			getTurnIndex: () => 0,
 			peekWriteIndex: () => 0,
+			getFlag: () => undefined,
+			isExternalOrVendorFile: unused,
+			isPathIgnoredByProject: unused,
+			notifyExternalFileChange: unused,
+			nodeFs: { existsSync: fs.existsSync, statSync: fs.statSync },
+		};
+		registerReadBridge({
 			isRecordable: () => true,
+			forward: (entry) => recordIOEntry(entry, deps),
 		});
 	});
 

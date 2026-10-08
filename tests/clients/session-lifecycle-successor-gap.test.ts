@@ -30,6 +30,7 @@ import {
 	decideSessionStart,
 	getActiveSessionId,
 	getSecondarySessionCount,
+	namedSuccessorReason,
 	noteSessionShutdown,
 	releasePrimarySession,
 	SUCCESSOR_PENDING_TTL_MS,
@@ -421,5 +422,69 @@ describe("a role-less shutdown in a named gap (#4106)", () => {
 		// Another id beside a live primary: secondary, as before #4106.
 		expect(noteSessionShutdown(liveCtx(), "other", REPO, 7)).toBe("secondary");
 		expect(successorPendingReasons()).toEqual([]);
+	});
+});
+
+/**
+ * #4113: a start interrupted before pi-lens's handler ran never saw its own
+ * reason, so its shutdown reads the reason the gap names. The recurrence it
+ * pins: a name read past its marker (expired, or from a build without the
+ * name) would forward a stale slot to the next start.
+ */
+describe("the start a pending gap names (#4113)", () => {
+	beforeEach(() => {
+		_resetSessionLifecycleForTests();
+		resetDegradationLedger();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		_resetSessionLifecycleForTests();
+		resetDegradationLedger();
+	});
+
+	it("is the named reason while the marker is pending", () => {
+		decideSessionStart(liveCtx(), "host-session", REPO, "startup");
+		releasePrimarySession("fork", "/s/fork.jsonl");
+		expect(namedSuccessorReason()).toBe("fork");
+	});
+
+	it("is none once the named successor registered", () => {
+		decideSessionStart(liveCtx(), "host-session", REPO, "startup");
+		releasePrimarySession("reload", 7);
+		decideSessionStart(liveCtx(), "host-session", REPO, "reload", 7);
+		expect(namedSuccessorReason()).toBeUndefined();
+	});
+
+	it("is none where nothing is named, or once the marker expired", () => {
+		expect(namedSuccessorReason()).toBeUndefined();
+		decideSessionStart(liveCtx(), "host-session", REPO, "startup");
+		releasePrimarySession("quit");
+		expect(namedSuccessorReason()).toBeUndefined();
+		_resetSessionLifecycleForTests();
+		vi.useFakeTimers();
+		decideSessionStart(liveCtx(), "host-session", REPO, "startup");
+		releasePrimarySession("reload", 7);
+		vi.advanceTimersByTime(SUCCESSOR_PENDING_TTL_MS);
+		expect(namedSuccessorReason()).toBeUndefined();
+	});
+
+	it("is none for a marker a build without the name rewrote", () => {
+		const now = Date.now();
+		_seedProcessSingletonCellForTests(
+			"session-lifecycle.primary-registration",
+			{
+				schema: "pi-lens.process-singletons",
+				version: 1,
+				value: {
+					activeCtx: undefined,
+					activeSessionId: undefined,
+					activeRoot: undefined,
+					secondarySessionCount: 0,
+					successorPendingSince: now,
+					successorNamed: { since: now - 1, reason: "fork", key: 7 },
+				},
+			},
+		);
+		expect(namedSuccessorReason()).toBeUndefined();
 	});
 });

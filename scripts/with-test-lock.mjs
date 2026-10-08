@@ -5,7 +5,7 @@
  * Serializes full-suite test runs across a machine: multiple concurrent
  * `npm test` invocations (several agents on parallel worktrees, plus an
  * interactive run) spawn independently-sized fork pools
- * (`maxWorkers: "50%"`, 4GB/fork — vitest.config.ts) that assume a
+ * (half the cores up to 8, 4GB/fork — vitest.config.ts) that assume a
  * dedicated machine. Run more than one at once and they fight over CPU/RAM,
  * producing vitest worker-crash cascades and timing-budget flakes that look
  * like real bugs but aren't (see AGENTS.md's testing-discipline section).

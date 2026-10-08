@@ -1412,7 +1412,10 @@ describe("#3926 the Windows summary stays honest when the tree is unavailable", 
 // transport proves the form difference (by-name fails after the ref is
 // deleted; by-captured-SHA resolves the object); GitHub's own server-side
 // policy is established by the same-run, same-second sibling successes in
-// INVESTIGATION.md.
+// INVESTIGATION.md. #4167: this is intentionally a real-spawn wall-clock
+// budget; Windows Git process startup makes the measured p95 much slower than
+// Linux, so the per-test budget is 4x the worst of 10 measured Windows runs (15.2 s) rather than a fake Git
+// seam or a weakened assertion.
 describe("#3926 the merge ref disappears but the captured commit resolves", () => {
 	const fixture = setupTestEnvironment("pi-lens-3926-git-");
 	afterAll(() => fixture.cleanup());
@@ -1505,5 +1508,5 @@ describe("#3926 the merge ref disappears but the captured commit resolves", () =
 		expect(git(consumer, ["rev-parse", "refs/remotes/pull/7/b1"]).trim()).toBe(
 			merge,
 		);
-	});
+	}, 61_000);
 });

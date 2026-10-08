@@ -1385,15 +1385,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"rather than a change.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:118c149d~fbb822b8": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"A project-diagnostics analyzer run on turn_end with a " +
-			"spawn-level timeout only; the same leaf-bound shape as knip " +
-			"above it.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-turn.ts#handleTurnEnd:156451e5~bf99fb9e": {
 		family: "hook-await",
 		site: "turn_end",
@@ -2246,7 +2237,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `applyConservativeActionableWarningFixes`); no hook signal reaches it.
 	"clients/file-mutation-queue.ts": 1,
 	"clients/file-time.ts": 1,
-	"clients/file-utils.ts": 1,
+	// #1129: +4 — `sweepDeadEphemeralDataDirs` awaits the bounded directory
+	// read (opendir, read, close) and each dead-pid removal. session_start
+	// fires it with `void` and never awaits it, so no hook waits on these.
+	"clients/file-utils.ts": 5,
 	// #3598: the pre-run hash of a whole-package fixer's files (stat and read per
 	// file, batched), the settle's compare-and-restore, and the wrapper's
 	// awaits. Each is a local file operation on a file of at most 1 MiB, inside a
@@ -2444,6 +2438,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/pipeline.ts": 64,
 	"clients/project-changes.ts": 2,
 	"clients/project-snapshot.ts": 2,
+	// #3871 r3: runtime-turn imports only the synchronous
+	// `hasAmbientPythonEnvironment`, which this one-hop walk cannot tell apart.
+	// The four awaits are `detectPythonEnvironment`'s filesystem probes, which
+	// turn_end already reached two hops away through test-runner-client.ts.
+	"clients/python-environment.ts": 4,
 	"clients/quiet-window.ts": 6,
 	"clients/read-expansion.ts": 2,
 	// 5 -> 3 (#3612): `resolveReadGuardStartState`'s two sidecar awaits moved
@@ -2658,13 +2657,27 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"promise per store, so the three turn-end stores spend one budget each " +
 		"per delivery however many lanes await them, and an abandoned read " +
 		"yields null — a cold cache to every lane — never a stale envelope.",
-	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~df074468":
+	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~9c52f63e":
+		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
+		"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
+		"wall budget is still live. #4117: this is the dead-code client's " +
+		"`analyze` (vulture), awaited under the budget LEFT after the phases " +
+		"before it, as knip's is above. It replaces the #2523 exemption for the " +
+		"same await; the scan is abandoned, not cancelled: it finishes off-hook " +
+		"under vulture's own 30 s spawn timeout and single-flight slot, writes " +
+		"its row where it settles and is delivered by a later turn (round 2). " +
+		"#4154: a failed scan's re-read of the row on disk " +
+		"(`withRowForFailureWrite`, `readCacheAsync`) runs inside this same bound.",
+	"call:clients/runtime-turn.ts#handleTurnEnd:2b57f8b9~b310ae4e":
 		"`deps.signal` — the live `turn_end` ctx.signal in the pi host, optional " +
 		"only in the standalone MCP adapter and unit harnesses, where the turn_end " +
 		"wall budget is still live. #3872: this is `knipClient.analyze`, awaited " +
 		"under the budget LEFT after the phases before it (not a fresh 3000 ms), " +
 		"so a slow scan releases the handler instead of holding it past " +
-		"`hook-await-exceeded`. It replaces the #2523 exemption for the same " +
+		"`hook-await-exceeded`; a root whose last scan outlasted that budget is " +
+		"awaited for one timer tick only (a memo hit still answers), so the " +
+		"handler does not sit out the full budget on every turn. It replaces the " +
+		"#2523 exemption for the same " +
 		"await; the scan itself is abandoned, not cancelled, and finishes off-hook " +
 		"under knip's own 30 s spawn timeout and single-flight slot.",
 	"call:clients/runtime-turn.ts#handleTurnEnd:4da1e4ca~7e52ce49":

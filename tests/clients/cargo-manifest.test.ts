@@ -65,6 +65,38 @@ describe("parseTomlStringArray comment stripping (review round 2, F1)", () => {
 		expect(parseTomlStringArray(content, "members")).toEqual(["crates/real"]);
 	});
 
+	// Recurrence prevented (review of #4120, F2): the array ended at the first
+	// `]`, even inside a string, so a glob class cut the list and every later
+	// entry was dropped from the user's own [tool.vulture] exclude.
+	it("ends the array at the closing bracket, not at a `]` inside a string", () => {
+		const content = 'exclude = ["*/gen/*", "*/legacy_[ab]*", "*/skip/*"]';
+		expect(parseTomlStringArray(content, "exclude")).toEqual([
+			"*/gen/*",
+			"*/legacy_[ab]*",
+			"*/skip/*",
+		]);
+		expect(
+			parseTomlStringArray(
+				"exclude = ['a/*', 'tests/[!_]*']\nx = 1",
+				"exclude",
+			),
+		).toEqual(["a/*", "tests/[!_]*"]);
+	});
+
+	it("reads a multi-line array whose entries hold brackets", () => {
+		const content = 'exclude = [\n  "a/[xy]*",\n  "b/*", # keep ]\n]\nmore = 1';
+		expect(parseTomlStringArray(content, "exclude")).toEqual([
+			"a/[xy]*",
+			"b/*",
+		]);
+	});
+
+	it("reads nothing from an array that never closes", () => {
+		expect(
+			parseTomlStringArray('exclude = ["a/*", "b/[x*"', "exclude"),
+		).toEqual([]);
+	});
+
 	it("leaves a `#` inside a quoted string alone (not a comment leader)", () => {
 		const content = 'members = ["crates/foo#bar"]';
 		expect(parseTomlStringArray(content, "members")).toEqual([

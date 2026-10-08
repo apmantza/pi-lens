@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-07",
+  "measuredOn": "44e3e505b (upstream/master 396e73aa7 plus the registry own-hold fix)",
+  "host": "12th Gen Intel(R) Core(TM) i9-12900K, 24 logical CPUs (8 performance cores with 2 threads each, 8 efficiency cores), 64032 MB, Linux 7.0.0-34-generic, node v24.19.0",
+  "command": "time env PI_LENS_TEST_MAX_WORKERS=<workers> npm test -- --project default --reporter=dot",
+  "busyCores": "`vmstat -t 1` beside each run: (us + sy) / 100 * 24 over the run's window, so it includes the host's other load, named per run as backgroundBusyCores (the same reading after the run ended).",
+  "exitCode": "1 in every run: the same 11 files (16 tests) are red on this host on upstream/master 396e73aa7 with no change applied, run alone.",
+  "runs": [
+    {
+      "workers": 12,
+      "vitestDuration": "Duration  91.57s (tests 63%, import 26%, transform 7%, setup 4%)",
+      "time": "887.15s user 234.36s system 1216% cpu 1:32.18 total",
+      "wallSeconds": 91.57,
+      "cpuSeconds": 1121.51,
+      "meanBusyCores": 15.1,
+      "peakBusyCores": 21.6,
+      "backgroundBusyCores": 4.6
+    },
+    {
+      "workers": 8,
+      "vitestDuration": "Duration  107.92s (tests 64%, import 27%, transform 5%, setup 4%, worker 1%)",
+      "time": "711.82s user 196.54s system 837% cpu 1:48.46 total",
+      "wallSeconds": 107.92,
+      "cpuSeconds": 908.36,
+      "meanBusyCores": 10.3,
+      "peakBusyCores": 13.0,
+      "backgroundBusyCores": 1.6
+    },
+    {
+      "workers": 6,
+      "vitestDuration": "Duration  128.91s (tests 64%, import 27%, transform 5%, setup 4%, worker 1%)",
+      "time": "644.43s user 180.68s system 637% cpu 2:09.44 total",
+      "wallSeconds": 128.91,
+      "cpuSeconds": 825.11,
+      "meanBusyCores": 8.2,
+      "peakBusyCores": 13.0,
+      "backgroundBusyCores": 1.9
+    }
+  ],
+  "recommendedLocalWorkerCap": 8
+}

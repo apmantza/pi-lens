@@ -289,8 +289,9 @@ export function shouldLogEvent(event: string): boolean {
 		// the per-file edits-cap trim. Idle-timeout eviction is deliberately
 		// EXCLUDED from this event (see read-guard.ts's evictFile doc
 		// comment) — it's routine housekeeping, not a fault, and its
-		// per-file cardinality is unbounded in a healthy session. Same
-		// rarity argument as #1913 for the reasons that DO fire: each is
+		// per-file cardinality is unbounded in a healthy session — except
+		// when it drops a write record (#3520), once per file per session.
+		// Same rarity argument as #1913 for the reasons that DO fire: each is
 		// rising-edge gated once per file per session, so always-on
 		// visibility costs nothing.
 		event === "read_file_evicted" ||

@@ -5,8 +5,8 @@ import { handleSessionStart } from "../../clients/runtime-session.js";
 import {
 	_resetSessionLifecycleForTests,
 	classifyCurrentSessionEmission,
-	classifySessionStart,
-	classifySessionStartGuarded,
+	explainSessionStart,
+	explainSessionStartGuarded,
 	decideSessionStart,
 	getSecondarySessionCount,
 	noteSessionShutdown,
@@ -38,63 +38,144 @@ function weirdThrowCtx(): unknown {
 	};
 }
 
-describe("classifySessionStart (pure truth table)", () => {
+describe("explainSessionStart (pure truth table)", () => {
 	afterEach(() => {
 		_resetSessionLifecycleForTests();
 	});
 
 	it("no prior -> primary", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: false,
 				priorCtxActive: undefined,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("primary");
 	});
 
 	it("prior exists, same session id -> sequential-replacement", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: true,
 				priorCtxActive: true,
 				sameSessionId: true,
-			}),
+			}).classification,
 		).toBe("sequential-replacement");
 	});
 
 	it("prior exists, confirmed invalidated (priorCtxActive=false) -> sequential-replacement", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: true,
 				priorCtxActive: false,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("sequential-replacement");
 	});
 
 	it("prior exists, still active, different session id -> concurrent-secondary", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: true,
 				priorCtxActive: true,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("concurrent-secondary");
 	});
 
 	it("prior exists, inconclusive probe -> sequential-replacement (fail-safe)", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: true,
 				priorCtxActive: undefined,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("sequential-replacement");
 	});
 });
 
-describe("classifySessionStartGuarded (kill switch)", () => {
+// #3873 O6: the basis names the branch that decided, so a `primary` row says
+// why. Recurrence: the B3 window logged `classification: primary` four times
+// with no word on whether a prior primary, a dead ctx or an inconclusive
+// probe led to it.
+describe("explainSessionStart basis (#3873)", () => {
+	const cases: Array<
+		[string, Parameters<typeof explainSessionStart>[0], [string, string]]
+	> = [
+		[
+			"no prior primary",
+			{ hasPrior: false, priorCtxActive: undefined, sameSessionId: false },
+			["primary", "no-prior-primary"],
+		],
+		[
+			"no prior primary, successor pending",
+			{
+				hasPrior: false,
+				priorCtxActive: undefined,
+				sameSessionId: false,
+				successorPending: true,
+			},
+			["concurrent-secondary", "successor-pending"],
+		],
+		[
+			"same session id",
+			{ hasPrior: true, priorCtxActive: true, sameSessionId: true },
+			["sequential-replacement", "same-session"],
+		],
+		[
+			"prior ctx live",
+			{ hasPrior: true, priorCtxActive: true, sameSessionId: false },
+			["concurrent-secondary", "prior-ctx-live"],
+		],
+		[
+			"root differs",
+			{
+				hasPrior: true,
+				priorCtxActive: false,
+				sameSessionId: false,
+				sameRoot: false,
+			},
+			["secondary-root", "root-differs"],
+		],
+		[
+			"prior ctx dead",
+			{ hasPrior: true, priorCtxActive: false, sameSessionId: false },
+			["sequential-replacement", "prior-ctx-dead"],
+		],
+		[
+			"prior ctx unknown",
+			{ hasPrior: true, priorCtxActive: undefined, sameSessionId: false },
+			["sequential-replacement", "prior-ctx-unknown"],
+		],
+	];
+	for (const [name, input, [classification, basis]] of cases)
+		it(`${name} -> ${classification} / ${basis}`, () => {
+			expect(explainSessionStart(input)).toEqual({ classification, basis });
+		});
+
+	it("the kill switch reports guard-disabled", () => {
+		const prev = process.env.PI_LENS_CONCURRENT_SESSION_GUARD;
+		process.env.PI_LENS_CONCURRENT_SESSION_GUARD = "0";
+		try {
+			expect(
+				explainSessionStartGuarded({
+					hasPrior: true,
+					priorCtxActive: true,
+					sameSessionId: false,
+				}),
+			).toEqual({
+				classification: "sequential-replacement",
+				basis: "guard-disabled",
+			});
+		} finally {
+			if (prev === undefined)
+				delete process.env.PI_LENS_CONCURRENT_SESSION_GUARD;
+			else process.env.PI_LENS_CONCURRENT_SESSION_GUARD = prev;
+		}
+	});
+});
+
+describe("explainSessionStartGuarded (kill switch)", () => {
 	const prevEnv = process.env.PI_LENS_CONCURRENT_SESSION_GUARD;
 
 	afterEach(() => {
@@ -109,33 +190,33 @@ describe("classifySessionStartGuarded (kill switch)", () => {
 	it("PI_LENS_CONCURRENT_SESSION_GUARD=0 forces sequential-replacement even for a live concurrent sibling", () => {
 		process.env.PI_LENS_CONCURRENT_SESSION_GUARD = "0";
 		expect(
-			classifySessionStartGuarded({
+			explainSessionStartGuarded({
 				hasPrior: true,
 				priorCtxActive: true,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("sequential-replacement");
 	});
 
 	it("PI_LENS_CONCURRENT_SESSION_GUARD=0 with no prior still reports primary", () => {
 		process.env.PI_LENS_CONCURRENT_SESSION_GUARD = "0";
 		expect(
-			classifySessionStartGuarded({
+			explainSessionStartGuarded({
 				hasPrior: false,
 				priorCtxActive: undefined,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("primary");
 	});
 
 	it("guard enabled (default / any non-'0' value) behaves like the pure classifier", () => {
 		delete process.env.PI_LENS_CONCURRENT_SESSION_GUARD;
 		expect(
-			classifySessionStartGuarded({
+			explainSessionStartGuarded({
 				hasPrior: true,
 				priorCtxActive: true,
 				sameSessionId: false,
-			}),
+			}).classification,
 		).toBe("concurrent-secondary");
 	});
 });

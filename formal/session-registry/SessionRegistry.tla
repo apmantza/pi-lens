@@ -31,8 +31,11 @@
 (*                                                                         *)
 (* The lock is not re-entrant (generation-lock.ts): the sync deregister    *)
 (* meets this process's own async hold as "busy", and Atomics.wait blocks  *)
-(* the event loop, so the holder cannot release; after LOCK_WAIT_MS the    *)
-(* sync removal gives up.                                                  *)
+(* the event loop, so the holder cannot release. A sync removal that sees  *)
+(* an own async hold in flight skips the LOCK_WAIT_MS spin and gives up at *)
+(* once (instance-registry-lock-own-hold); one that meets a peer's hold    *)
+(* gives up after LOCK_WAIT_MS. Both end in the same state, so the model   *)
+(* does not tell them apart (time is over-approximated).                   *)
 (*                                                                         *)
 (* FixParts is the fix in clients/instance-registry.ts. deregisterInstance *)
 (* advances a process-wide registration generation whenever any gate is   *)
@@ -199,7 +202,8 @@ Shutdown ==
        \/ /\ lock = "other" /\ ~stuck            \* the other process released
           /\ entry' = {}                         \* inside the 500 ms spin
           /\ UNCHANGED tail
-       \/ /\ lock # "none"                       \* timeout: removal skipped
+       \/ /\ lock # "none"                       \* removal skipped: own hold
+                                                 \* (no wait) or timeout
           /\ UNCHANGED entry
           /\ tail' = IF Retry THEN Append(tail, DeregOp) ELSE tail
     /\ UNCHANGED <<sess, tpc, lock, hbPc, hbMissing, spawned, secDone, aux>>
@@ -282,7 +286,8 @@ RootLanded ==
     IF SecOn THEN [rmLanded EXCEPT ![Op1.s] = @ + 1] ELSE rmLanded
 
 \* The sync attempt `deregisterInstanceRootNow` made before #3657 (and
-\* `withInstanceRegistryLockSync`'s 500 ms spin): the lock is taken
+\* `withInstanceRegistryLockSync`'s 500 ms spin, which now returns at once
+\* when an own async hold is in flight): the lock is taken
 \* atomically when it is free, or when the other process releases inside the
 \* spin; it is busy for the whole spin when this process's own heartbeat
 \* holds it (the holder cannot release while Atomics.wait blocks the loop).

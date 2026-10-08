@@ -85,7 +85,10 @@ import {
 	successorStartKey,
 } from "./clients/session-scope.js";
 import { sanitizeCorrelationId } from "./clients/read-guard-logger.js";
-import { registerMutationBridge } from "./clients/mutation-bridge.js";
+import {
+	type MutationBridgeDeps,
+	registerMutationBridge,
+} from "./clients/mutation-bridge.js";
 import {
 	OBSERVED_TRACKED_MAX_FILES,
 	refreshObservedMutationLedger,
@@ -101,8 +104,19 @@ import { isEditClassToolResult } from "./clients/bash-file-access.js";
 import { resolveLanguageRootForFile } from "./clients/language-profile.js";
 import { countFileLines } from "./clients/read-guard-tool-lines.js";
 import { registerReadBridge } from "./clients/read-bridge.js";
-import { normalizeFilePath } from "./clients/path-utils.js";
-import { isRecordableProjectPath } from "./clients/file-utils.js";
+import {
+	type IOBridgeDeps,
+	recordIOEntry,
+	registerIOBridge,
+} from "./clients/io-bridge.js";
+import {
+	isExternalOrVendorFile,
+	normalizeFilePath,
+} from "./clients/path-utils.js";
+import {
+	isPathIgnoredByProject,
+	isRecordableProjectPath,
+} from "./clients/file-utils.js";
 import {
 	loadSessionState,
 	persistScope,
@@ -140,6 +154,7 @@ import { wireDiagnosticsBusEmitterGetter } from "./clients/diagnostics-publish.j
 import { wireDispositionBusEmitterGetter } from "./clients/disposition-publish.js";
 import { wireFormatEventsBusEmitterGetter } from "./clients/format-events-publish.js";
 import { emitBusEventRollupAtSessionEnd } from "./clients/bus-events-logger.js";
+import { emitFenceRollupAtSessionEnd } from "./clients/generation-guard.js";
 import {
 	emitVerifiedPathAttributionRollup,
 	resetVerifiedPathAttributionGuessCount,
@@ -219,6 +234,7 @@ import {
 	decideSessionStart,
 	decrementSecondarySessionCount,
 	getActivePrimaryRoot,
+	namedSuccessorReason,
 	noteSessionShutdown,
 	releasePrimarySession,
 	probeCtxActive,
@@ -604,6 +620,10 @@ let _bridgeGetFlag:
 // follows its registration discipline exactly — mount once per process, refresh
 // the flag getter on every activation.
 let _mutationBridgeRegistered = false;
+// #3654: the unified I/O bridge composes the read-guard and the mutation
+// seam; it follows the same once-per-process discipline and is mounted in the
+// same first-wins pass as the two v1 shims it supersedes.
+let _ioBridgeRegistered = false;
 
 /**
  * Read a bridge flag without letting a session replacement obstruct the
@@ -615,10 +635,11 @@ let _mutationBridgeRegistered = false;
  */
 function getBridgeFlag(
 	getter: ((name: string) => boolean | string | undefined) | undefined,
-	bridge: "read" | "mutation",
+	bridge: "read" | "mutation" | "io",
+	name = "no-read-guard",
 ): boolean | string | undefined {
 	try {
-		return getter?.("no-read-guard");
+		return getter?.(name);
 	} catch (err) {
 		if (!isStaleExtensionCtxError(err)) throw err;
 		recordDegradationOnce({
@@ -1040,16 +1061,72 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 	let lensEnabled = !getLensFlag("no-lens");
 
-	// Read-bridge: refresh the flag getter on every factory activation so the
+	// Bridges: refresh the flag getter on every factory activation so the
 	// live getLensFlag closure is always used (same pattern as _turnSummaryEmitCtx).
-	// Register the singleton once — subsequent activations only refresh the getter.
+	// Each singleton is registered once; later activations only refresh the getter.
 	_bridgeGetFlag = getLensFlag;
+
+	// Mutation bridge (#2423): same live-getter discipline as the read bridge.
+	// An in-process producer that writes a file outside pi-lens's tool-event
+	// path records it here, and the same bookkeeping runs.
+	const mutationBridgeDeps: MutationBridgeDeps = {
+		getRuntime: () => runtime,
+		getCacheManager: () => cacheManager,
+		getProjectRoot: () => runtime.projectRoot || process.cwd(),
+		getDispatchCwd: (filePath: string) =>
+			resolveLanguageRootForFile(
+				filePath,
+				runtime.projectRoot || process.cwd(),
+			),
+		countFileLines,
+		// #2465: unlike the read bridge below (whose whole purpose IS the
+		// read-guard stamp, so `no-read-guard` correctly disables it
+		// entirely), this bridge also drives turn-state and the change-log
+		// receipt. `no-read-guard` gates ONLY the read-guard stamp — the same
+		// canonical split `clients/runtime-tool-result.ts` applies at
+		// `recordWritten` (:1859) — so it must not appear in the recordability
+		// gate `recordMutationThroughSeam` early-returns on. That gate stays
+		// path-scope only (ignored/vendor); the flag is threaded separately
+		// below via `shouldStampReadGuard`.
+		isRecordable(filePath: string): boolean {
+			return isRecordableProjectPath(filePath, runtime.projectRoot);
+		},
+		shouldStampReadGuard(): boolean {
+			return !getBridgeFlag(_bridgeGetFlag, "mutation");
+		},
+		dbg,
+	};
+	// Unified File I/O bridge (#3654): the v2 surface. It composes the mutation
+	// seam with the read guard and the confirmed-delete lifecycle. The v1 read
+	// shim below runs this same body with these same deps, and the v1 mutation
+	// shim calls the bookkeeping owner the v2 mutate facet also calls, so a v1
+	// producer gets the unified behavior (disk-evidence reads, the
+	// `pilens:format:queued` publish) without changing its own call.
+	const ioBridgeDeps: IOBridgeDeps = {
+		...mutationBridgeDeps,
+		getReadGuard: () => runtime.readGuard,
+		getTurnIndex: () => runtime.turnIndex,
+		peekWriteIndex: () => runtime.peekWriteIndex(),
+		getFlag: (name: string, bridge?: "read" | "mutation" | "io") =>
+			getBridgeFlag(_bridgeGetFlag, bridge ?? "io", name),
+		isExternalOrVendorFile: (filePath: string) =>
+			isExternalOrVendorFile(filePath, runtime.projectRoot),
+		isPathIgnoredByProject: (filePath: string) =>
+			isPathIgnoredByProject(filePath, runtime.projectRoot, false),
+		// #3654: resolved lazily through the live LSP client seam, so a test mock
+		// of `clients/lsp/index.js` that predates this bridge (and so omits the
+		// named export) cannot break the delete path. This is exactly what the
+		// module-level `notifyExternalFileChange` does
+		// (`getLSPService().notifyExternalFileChange(...)`), so the real path is
+		// unchanged.
+		notifyExternalFileChange: (filePath: string, type: number) =>
+			getLSPService().notifyExternalFileChange(filePath, type),
+		nodeFs: { existsSync: nodeFs.existsSync, statSync: nodeFs.statSync },
+	};
+
 	if (!_readBridgeRegistered) {
 		_readBridgeRegistered = true;
 		registerReadBridge({
-			getReadGuard: () => runtime.readGuard,
-			getTurnIndex: () => runtime.turnIndex,
-			peekWriteIndex: () => runtime.peekWriteIndex(),
 			isRecordable(filePath: string): boolean {
 				// Unknown during a replacement/reload records the read. The guard is
 				// the obstruction here, so failure must fall toward not blocking the
@@ -1057,41 +1134,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 				if (getBridgeFlag(_bridgeGetFlag, "read")) return false;
 				return isRecordableProjectPath(filePath, runtime.projectRoot);
 			},
+			forward: (entry) => recordIOEntry(entry, ioBridgeDeps),
 		});
 	}
-
-	// Mutation bridge (#2423): same live-getter discipline as the read bridge.
-	// An in-process producer that writes a file outside pi-lens's tool-event
-	// path records it here, and the same bookkeeping runs.
 	if (!_mutationBridgeRegistered) {
 		_mutationBridgeRegistered = true;
-		registerMutationBridge({
-			getRuntime: () => runtime,
-			getCacheManager: () => cacheManager,
-			getProjectRoot: () => runtime.projectRoot || process.cwd(),
-			getDispatchCwd: (filePath: string) =>
-				resolveLanguageRootForFile(
-					filePath,
-					runtime.projectRoot || process.cwd(),
-				),
-			countFileLines,
-			// #2465: unlike the read bridge above (whose whole purpose IS the
-			// read-guard stamp, so `no-read-guard` correctly disables it
-			// entirely), this bridge also drives turn-state and the change-log
-			// receipt. `no-read-guard` gates ONLY the read-guard stamp — the same
-			// canonical split `clients/runtime-tool-result.ts` applies at
-			// `recordWritten` (:1859) — so it must not appear in the recordability
-			// gate `recordMutationThroughSeam` early-returns on. That gate stays
-			// path-scope only (ignored/vendor); the flag is threaded separately
-			// below via `shouldStampReadGuard`.
-			isRecordable(filePath: string): boolean {
-				return isRecordableProjectPath(filePath, runtime.projectRoot);
-			},
-			shouldStampReadGuard(): boolean {
-				return !getBridgeFlag(_bridgeGetFlag, "mutation");
-			},
-			dbg,
-		});
+		registerMutationBridge(mutationBridgeDeps);
+	}
+	if (!_ioBridgeRegistered) {
+		_ioBridgeRegistered = true;
+		registerIOBridge(ioBridgeDeps);
 	}
 	// Automatic context injection (the `context` hook). Independent of lensEnabled
 	// so tools/LSP/read-guard/formatting keep running when it is off. Precedence:
@@ -2339,7 +2391,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						// #3819 r2: a demoted real successor (a row-17 start holds the
 						// primary registration) discards the slot left for it, so the
 						// session cannot take it stale once it classifies primary again.
-						discardHandoff({
+						const discardedSlot = discardHandoff({
 							reason: sessionReason,
 							sessionFile: getSessionFile(ctx),
 							sessionManager: getSessionManager(ctx),
@@ -2353,6 +2405,23 @@ function activateExtension(hostPi: ExtensionAPI) {
 							sessionId: stableSessionId,
 							cwd: sessionStartCwd ?? runtime.projectRoot,
 						});
+						// #3873 O4: a start the replacement gap declined because it is
+						// not the successor the shutdown named (#3855) is a demotion; a
+						// plain concurrent subagent is not, and writes only its `start`.
+						if (sessionStartDecision.basis === "successor-pending")
+							logScopeTransition(scope, {
+								transition: "demote",
+								reason: sessionReason,
+								sessionId: stableSessionId,
+								cwd: sessionStartCwd ?? runtime.projectRoot,
+								detail: {
+									classification: sessionStartDecision.classification,
+									basis: sessionStartDecision.basis,
+									gapMs: sessionStartDecision.gapMs,
+									lineageMatch: sessionStartDecision.lineageMatch,
+									discardedSlot,
+								},
+							});
 						return;
 					}
 
@@ -2474,7 +2543,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 						.then((entries) => {
 							if (entries.length === 0) return;
 							recordCrossProcessTouches(
-								entries.map((e) => ({ path: e.path, reason: e.reason })),
+								entries.map((e) => ({
+									path: e.path,
+									reason: e.reason,
+									sessionId: e.sessionId,
+								})),
 							);
 							dbg(
 								`session_start: cross-process nudge — ${entries.length} file(s) from other instance(s)`,
@@ -2523,6 +2596,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 						// "sequential-replacement" — a declined start returned above.
 						sessionStartClassification: sessionStartDecision.classification,
 						sessionStartSameRoot: sessionStartDecision.sameRoot,
+						sessionStartBasis: sessionStartDecision.basis,
+						sessionStartGapMs: sessionStartDecision.gapMs,
+						sessionStartLineageMatch: sessionStartDecision.lineageMatch,
 						getFlag: (name: string) => getLensFlag(name),
 						notify: (msg, level) => notifyUi(ctx, msg, level),
 						dbg,
@@ -2541,6 +2617,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// scope before its first await. Take it now (#3612): a throw later
 					// in the handler must not leave this activation without its scope.
 					scope = runtime.sessionScope;
+					// Pin the stable identity + reason over the fresh random id that
+					// reset drew (#190). #3613 F1: before the await, for the same
+					// reason as the scope: a throw later in the handler must not leave
+					// the coordinator on the random id, or every turn of this primary
+					// would take `beginTurn`'s other-session path.
+					runtime.setSessionLifecycle({
+						sessionId: stableSessionId,
+						reason: sessionReason,
+					});
 					await bounded(sessionStartWork, {
 						ms: HOOK_WALL_BUDGET_MS.session_start,
 						signal: ctx.signal,
@@ -2548,13 +2633,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						label: "handleSessionStart",
 					});
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
-
-					// Pin the stable identity + reason AFTER handleSessionStart (which ran
-					// resetForSession → a fresh random id); the stable id now wins (#190).
-					runtime.setSessionLifecycle({
-						sessionId: stableSessionId,
-						reason: sessionReason,
-					});
 					// #3612: the coordinator's fresh guard is this scope's read-guard
 					// cell, which the read-guard stores snapshot and restore.
 					scopeCell(scope, READ_GUARD_CELL, () => runtime.readGuard);
@@ -2575,6 +2653,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						sessionFile: getSessionFile(ctx),
 						sessionManager: ctx.sessionManager,
 						cwd: stateCwd,
+						dbg,
 						loadOwnSidecar: () => loadSessionState(stateCwd, stableSessionId),
 						loadParentSidecar: async () => {
 							const parentFile = (() => {
@@ -2704,6 +2783,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			ensureLSPConfigInitialized,
 			updateLspStatus,
 			resetLSPService,
+			sessionId: getStableSessionId(ctx),
 		});
 	});
 
@@ -2856,7 +2936,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 		) {
 			mountLensWidget(ctx.ui, readExtensionMode(ctx));
 		}
-		runtime.beginTurn();
+		// #3613 (S4, N2): the turn's own session. A concurrent secondary's turn
+		// advances only its own turn identity and per-turn records; the
+		// coordinator's turn state is the primary's.
+		runtime.beginTurn(getStableSessionId(ctx));
+		// Every turn, a secondary's too: clearing only re-runs a duplicate
+		// same-state analysis, while keeping it would skip a secondary's next
+		// turn (the dedupe keys on the primary's turn index).
 		clearLastAnalyzedStateCache();
 
 		// #492: parent-at-turn_start cross-process nudge consumer — the "parent
@@ -2886,7 +2972,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// drop path — every entry that reaches this point is relevant by
 				// construction.
 				recordCrossProcessTouches(
-					entries.map((e) => ({ path: e.path, reason: e.reason })),
+					entries.map((e) => ({
+						path: e.path,
+						reason: e.reason,
+						sessionId: e.sessionId,
+					})),
 				);
 				dbg(
 					`turn_start: cross-process nudge — ${entries.length} file(s) from other instance(s)`,
@@ -3271,7 +3361,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// (see clients/memory-sampler.ts). Session age + turn count ride along so
 			// growth-vs-age curves are plottable from logs alone. Still cheap:
 			// O(1)/O(bounded-cache-size) reads only, no extra throttling needed.
-			if (shouldEmitMemorySampleAdaptive(runtime.turnIndex)) {
+			// #3613 G1: process-level cadences pace on every session's turn
+			// starts. The primary's index stands still through a subagent's run
+			// (it would fire at every subagent turn end while on a sampling
+			// turn), and a subagent's fractional turn key never meets `% N`.
+			const cadenceTurn = runtime.turnStartCount;
+			if (shouldEmitMemorySampleAdaptive(cadenceTurn)) {
 				try {
 					const sample = buildMemorySample(
 						runtime.wordIndex,
@@ -3293,10 +3388,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						durationMs: 0,
 						metadata: { turnIndex: runtime.turnIndex, ...sample },
 					});
-					recordMemorySampleOutcome(
-						sample.process.heapUsedBytes,
-						runtime.turnIndex,
-					);
+					recordMemorySampleOutcome(sample.process.heapUsedBytes, cadenceTurn);
 				} catch {
 					// best-effort observability — never fail turn_end over this
 				}
@@ -3306,7 +3398,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// sample above — at most once per SMELLS_TURN_CHECK_INTERVAL turns, and
 			// each smell notifies at most once per session (checkSmellsAndNoteOnce's
 			// gate). See clients/smells-rollup.ts for the tail-scan cost bound.
-			if (shouldCheckSmellsThisTurn(runtime.turnIndex)) {
+			if (shouldCheckSmellsThisTurn(cadenceTurn)) {
 				try {
 					// S3c (#1432 review): use the in-process session start instead of
 					// letting countRecentSmells() fall back to its 24h rolling
@@ -3339,6 +3431,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 				depChecker,
 				testRunnerClient,
 				sessionId: getStableSessionId(ctx),
+				// #4154: this activation's own scope, so a concurrent secondary's
+				// late dead-code scan never lands in the primary's cell.
+				...(scope === undefined ? {} : { sessionScope: scope }),
 				signal: ctx.signal,
 				onTestRunnerComplete: (delivery) =>
 					stageTestRunnerDelivery({
@@ -3730,6 +3825,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 				"concurrent-secondary",
 			);
 			clearCachePrefixSession(stableSessionId, "concurrent-secondary");
+			// #3613: its per-turn records end with it.
+			runtime.forgetTurnSession(stableSessionId);
 			decrementSecondarySessionCount();
 			// #2130: scoped deregistration. A secondary's shutdown must never run
 			// `deregisterInstance()` — the process lives on and the primary still
@@ -3785,10 +3882,19 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// slot's sidecar save is its fallback (a fork's parent sidecar).
 			// #3881: a start still in flight never adopted; the slot left for it
 			// is the conversation's state, so hand that on instead.
-			if (startInFlight) {
-				startInFlight.shutDown = true;
+			// #4113: a start interrupted before pi-lens's handler ran has no mark
+			// and no scope. Its shutdown is primary only with the gap's named key
+			// (#4106), so the gap's name is the start reason it never saw. A
+			// started activation holds its scope and stashes it, even in a gap
+			// it does not own (a same-file second primary, R2: verify X1).
+			const unstartedReason =
+				startInFlight || scope !== undefined
+					? undefined
+					: namedSuccessorReason();
+			if (startInFlight || unstartedReason !== undefined) {
+				if (startInFlight) startInFlight.shutDown = true;
 				forwardHandoff({
-					startReason: startInFlight.reason,
+					startReason: startInFlight ? startInFlight.reason : unstartedReason,
 					reason: shutdownReason,
 					sessionFile: getSessionFile(ctx),
 					targetSessionFile: shutdownEvent?.targetSessionFile,
@@ -3882,6 +3988,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// returned before reaching here), since the rollup counters are
 			// process-wide module state a live secondary would still need.
 			emitBusEventRollupAtSessionEnd(runtime.projectRoot);
+			// #3873 O5: the fence side of the same rollup. The bus row proves
+			// `skipped_stale_session`; this one gives each generation fence its
+			// guarded and dropped counts, so zero drops is distinguishable from
+			// a fence nothing exercised.
+			emitFenceRollupAtSessionEnd(runtime.projectRoot);
 			emitVerifiedPathAttributionRollup(runtime.projectRoot);
 			// #2249: same primary-only placement — one concurrent_session_bind_rollup
 			// row summarizing this session's declined binds by classification, a

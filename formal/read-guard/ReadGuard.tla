@@ -30,6 +30,9 @@
 (*      write  : noteCreatedFile at tool_call, host write,                 *)
 (*               recordWritten (injects the creation read,                 *)
 (*               read-guard.ts).                                           *)
+(*      bash   : a recognized bash write (runtime-tool-result.ts           *)
+(*               handleToolResult): recordWritten, no creation read, no    *)
+(*               FileTime stamp (#3525).                                   *)
 (*               The turn's first write runs the immediate                 *)
 (*               autofix (pipeline.ts runAutofix), recordWritten again     *)
 (*               (runtime-tool-result.ts handleToolResult), and the        *)
@@ -58,7 +61,7 @@ CONSTANTS
     N0,             \* initial line count
     MaxLen,         \* longest file
     AgentOps,       \* bound on agent tool calls
-    Ops,            \* agent tool kinds: subset of {"read","rread","edit","write"}
+    Ops,            \* agent tool kinds: subset of {"read","rread","edit","write","bash"}
     Spans,          \* edit spans: subset of {1,2}
     ExtWrites,      \* bound on other-writer writes
     ExtKinds,       \* subset of {"replace","delete","insert"}
@@ -72,7 +75,7 @@ CONSTANTS
     \* ---- current-code switches ----
     HandlerEvidence,\* TRUE (pre-#3524 code): a native read's hashes, range and FileTime come from disk at tool_result
     CreationHandlerEvidence, \* TRUE (code before #3524's remainder): the injected creation read is hashed from disk at tool_result
-    MtimeAuthored,  \* TRUE (code): zero-read allow when mtime >= guard construction
+    MtimeAuthored,  \* TRUE (code before #3520): zero-read allow when mtime >= guard construction; FALSE: only `written` authors
     OwnEditRescue,  \* TRUE (code before #3525): canTreatStalenessAsOwnPriorEdit
     ForkImport,     \* FALSE (code before #3521): pi re-runs the factory for a fork, so the closure stash died and the fork imported nothing
     SuppressByNewerContext, \* TRUE (code before #3522): a newer context-only candidate cancels a snapshot mismatch; read only when SpanSnapshot = FALSE
@@ -86,7 +89,7 @@ CONSTANTS
     RelocFromLatest,     \* TRUE (code since #3522): relocate only from a read that is the agent's latest view of every line
     WholeVouchesPastEnd, \* FALSE (code): a whole-file view also vouches that lines past its end do not exist (#3522 part 3; no invariant needs it)
     ForkAtBoundary,      \* fork/tree: forget reads made after the fork point
-    BranchFilter,        \* TRUE (code since #3521): fork/tree keep the branch's records whole, clear FileTime, written, pendCreate and the own-edit rescue, and re-anchor born
+    BranchFilter,        \* TRUE (code since #3521): fork/tree keep the branch's records whole, clear FileTime, written, pendCreate and the own-edit rescue, and re-anchor born (read only when MtimeAuthored)
     DrainMode,           \* "atomic": the format drain runs inside Turn (no /tree can interleave);
                          \* "unfenced": it is queued at settle and may land after a /tree (code before #3521 round 2);
                          \* "settle": the same, and its recordWritten is refused once a /tree moved the branch
@@ -229,7 +232,7 @@ Reloc(lo, hi) ==
 \* Returns [act |-> "allow"|"block"|"reloc", to |-> start, inject |-> BOOLEAN].
 Verdict(lo, hi) ==
     IF Len(reads) = 0
-    THEN IF written \/ (MtimeAuthored /\ rev > born)            \* wasWrittenThisSession
+    THEN IF written \/ (MtimeAuthored /\ rev > born)            \* the zero-read authorship check (writtenThisSession)
            THEN [act |-> "allow", to |-> lo, inject |-> TRUE, why |-> "session_authored"]
            ELSE [act |-> "block", to |-> lo, inject |-> FALSE, why |-> "zero_read"]
     ELSE IF FileTimeCheck /\ ft # rev
@@ -407,6 +410,22 @@ WriteRW2 ==
     /\ UNCHANGED <<disk, rev, tok, kTurn, pendCreate, lastEditOk, born, turnNo, ops,
                    ext, nb, fixedTurn, mutatedTurn, dr, staleAllow, blindAllow, falseBlock>>
 
+\* ---- recognized bash write (whole file, no creation read) ----
+\* handleToolResult's recognized-bash arm: recordWritten(stampFileTime: false)
+\* (#3525). The command text is in the conversation, so the agent knows what it
+\* wrote (know), but no creation read is injected and FileTime stays where it
+\* was. With no read record this is the authorship the zero-read arm of Verdict
+\* alone vouches for: the no-drop witness of #3520 (BashAuthored.cfg).
+BashWrite ==
+    /\ CanOp("bash")
+    /\ LET c == [l \in 1..N0 |-> tok + l - 1]
+       IN /\ disk' = c /\ know' = KnowAll(c)
+    /\ rev' = rev + 1 /\ tok' = tok + N0
+    /\ written' = TRUE
+    /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend, ext, nb,
+                   fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
 ----------------------------------------------------------------------------
 \* Another writer (external editor, second pi-lens instance, git checkout).
 External ==
@@ -521,8 +540,9 @@ Fork ==
 \* /tree: the conversation moves to an earlier point in the same activation.
 \* BranchFilter (#3521, retainBranch): keep the branch's records whole, clear
 \* the FileTime stamp (so each kept record passes the per-line hash rescue),
-\* writtenThisSession, pending creations and the edit history, and re-anchor
-\* the mtime fallback. Without it (the code before #3521), no handler.
+\* writtenThisSession, pending creations and the edit history, and (only under
+\* MtimeAuthored, the code before #3520) re-anchor the mtime fallback. Without
+\* it (the code before #3521), no handler.
 Tree ==
     /\ Idle /\ "tree" \in Bounds /\ nb < MaxBounds /\ ~SettleDue
     /\ know' = kTurn
@@ -546,7 +566,7 @@ Next ==
     \/ ReadExec \/ ReadResult
     \/ \E lo \in 1..MaxLen, s \in Spans : Edit(lo, s)
     \/ EditRW
-    \/ Write \/ WriteRW1 \/ Fix \/ WriteRW2
+    \/ Write \/ WriteRW1 \/ Fix \/ WriteRW2 \/ BashWrite
     \/ External \/ Turn \/ Settle \/ Requeue \/ Drain \/ New \/ Fork \/ Tree
 
 Spec == Init /\ [][Next]_vars

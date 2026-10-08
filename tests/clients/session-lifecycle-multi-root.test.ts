@@ -17,8 +17,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	_resetSessionLifecycleForTests,
-	classifySessionStart,
-	classifySessionStartGuarded,
+	explainSessionStart,
+	explainSessionStartGuarded,
 	decideSessionStart,
 	getActivePrimaryRoot,
 	getSecondarySessionCount,
@@ -51,7 +51,7 @@ function unprobeableCtx(): unknown {
 	return {};
 }
 
-describe("classifySessionStart state space (#2129)", () => {
+describe("explainSessionStart state space (#2129)", () => {
 	afterEach(() => {
 		_resetSessionLifecycleForTests();
 	});
@@ -65,12 +65,12 @@ describe("classifySessionStart state space (#2129)", () => {
 	describe("different root (sameRoot: false)", () => {
 		for (const [label, priorCtxActive] of priorCtxActiveCases) {
 			it(`${label}, different session id -> never steals the full start`, () => {
-				const verdict = classifySessionStart({
+				const verdict = explainSessionStart({
 					hasPrior: true,
 					priorCtxActive,
 					sameSessionId: false,
 					sameRoot: false,
-				});
+				}).classification;
 				expect(verdict).not.toBe("sequential-replacement");
 				expect(verdict).not.toBe("primary");
 			});
@@ -78,45 +78,45 @@ describe("classifySessionStart state space (#2129)", () => {
 
 		it("prior inactive + different id -> secondary-root (the defect case)", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: false,
 					sameSessionId: false,
 					sameRoot: false,
-				}),
+				}).classification,
 			).toBe("secondary-root");
 		});
 
 		it("probe inconclusive + different id -> secondary-root", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: undefined,
 					sameSessionId: false,
 					sameRoot: false,
-				}),
+				}).classification,
 			).toBe("secondary-root");
 		});
 
 		it("a LIVE sibling still reports the more specific concurrent-secondary", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: true,
 					sameSessionId: false,
 					sameRoot: false,
-				}),
+				}).classification,
 			).toBe("concurrent-secondary");
 		});
 
 		it("same session id still wins — a resume re-announcing itself is sequential", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: false,
 					sameSessionId: true,
 					sameRoot: false,
-				}),
+				}).classification,
 			).toBe("sequential-replacement");
 		});
 	});
@@ -124,34 +124,34 @@ describe("classifySessionStart state space (#2129)", () => {
 	describe("same root (sameRoot: true) — behavior is unchanged from pre-#2129", () => {
 		it("prior inactive -> sequential-replacement (full start still runs)", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: false,
 					sameSessionId: false,
 					sameRoot: true,
-				}),
+				}).classification,
 			).toBe("sequential-replacement");
 		});
 
 		it("probe inconclusive -> sequential-replacement (fail-safe preserved)", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: undefined,
 					sameSessionId: false,
 					sameRoot: true,
-				}),
+				}).classification,
 			).toBe("sequential-replacement");
 		});
 
 		it("prior active -> concurrent-secondary", () => {
 			expect(
-				classifySessionStart({
+				explainSessionStart({
 					hasPrior: true,
 					priorCtxActive: true,
 					sameSessionId: false,
 					sameRoot: true,
-				}),
+				}).classification,
 			).toBe("concurrent-secondary");
 		});
 	});
@@ -159,17 +159,17 @@ describe("classifySessionStart state space (#2129)", () => {
 	describe("root unknown (sameRoot: undefined) — never changes a verdict", () => {
 		for (const [label, priorCtxActive] of priorCtxActiveCases) {
 			it(`${label}: matches the verdict with no root input at all`, () => {
-				const withUnknownRoot = classifySessionStart({
+				const withUnknownRoot = explainSessionStart({
 					hasPrior: true,
 					priorCtxActive,
 					sameSessionId: false,
 					sameRoot: undefined,
-				});
-				const withoutRootField = classifySessionStart({
+				}).classification;
+				const withoutRootField = explainSessionStart({
 					hasPrior: true,
 					priorCtxActive,
 					sameSessionId: false,
-				});
+				}).classification;
 				expect(withUnknownRoot).toBe(withoutRootField);
 				expect(withUnknownRoot).not.toBe("secondary-root");
 			});
@@ -178,12 +178,12 @@ describe("classifySessionStart state space (#2129)", () => {
 
 	it("no prior -> primary regardless of root", () => {
 		expect(
-			classifySessionStart({
+			explainSessionStart({
 				hasPrior: false,
 				priorCtxActive: undefined,
 				sameSessionId: false,
 				sameRoot: false,
-			}),
+			}).classification,
 		).toBe("primary");
 	});
 });
@@ -283,12 +283,12 @@ describe("decideSessionStart root identity (#2129)", () => {
 	it("the kill switch disables the root decline with the rest of the guard", () => {
 		vi.stubEnv("PI_LENS_CONCURRENT_SESSION_GUARD", "0");
 		expect(
-			classifySessionStartGuarded({
+			explainSessionStartGuarded({
 				hasPrior: true,
 				priorCtxActive: false,
 				sameSessionId: false,
 				sameRoot: false,
-			}),
+			}).classification,
 		).toBe("sequential-replacement");
 	});
 

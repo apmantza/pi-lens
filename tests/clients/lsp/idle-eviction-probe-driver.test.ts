@@ -14,6 +14,9 @@
  * `touchFile` wrapper is the one seam the unit lane cannot run for real: a
  * real diagnostics touch needs a real server, which only the nightly spawns.
  */
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createServiceDriver,
@@ -64,14 +67,14 @@ const finding = (line: number): ProbeFinding => ({
 	range: { start: { line, character: 0 }, end: { line, character: 1 } },
 });
 
-function registryServer(role?: "auxiliary") {
+function registryServer(role?: "auxiliary", root = "/repo") {
 	return {
 		id: "goish",
 		name: "goish",
 		extensions: [".go"],
 		idleEviction: "unmeasured" as string,
 		...(role ? { role } : {}),
-		root: async () => "/repo",
+		root: async () => root,
 		spawn: vi.fn(async () => ({
 			process: {
 				process: { killed: false },
@@ -82,6 +85,13 @@ function registryServer(role?: "auxiliary") {
 			},
 		})),
 	};
+}
+
+function ephemeralCheckout(): string {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-idle-probe-"));
+	fs.mkdirSync(path.join(root, ".git"));
+	fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+	return root;
 }
 
 async function harness(
@@ -155,6 +165,7 @@ describe("idle-eviction probe driver over the real LSPService (#3645)", () => {
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
 		delete process.env.PI_LENS_LSP_IDLE_EVICT_MS;
+		delete process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS;
 		delete process.env.PI_LENS_TS_IDLE_EVICT_MS;
 		let pid = 100;
 		spawnedClients.length = 0;
@@ -167,6 +178,7 @@ describe("idle-eviction probe driver over the real LSPService (#3645)", () => {
 
 	afterEach(() => {
 		delete process.env.PI_LENS_LSP_IDLE_EVICT_MS;
+		delete process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS;
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
@@ -194,6 +206,7 @@ describe("idle-eviction probe driver over the real LSPService (#3645)", () => {
 		restore();
 		expect(server.idleEviction).toBe("unmeasured");
 		expect(process.env.PI_LENS_LSP_IDLE_EVICT_MS).toBeUndefined();
+		expect(process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS).toBeUndefined();
 
 		await driver.touch();
 		expect(driver.isTargetAlive()).toBe(true);
@@ -213,6 +226,36 @@ describe("idle-eviction probe driver over the real LSPService (#3645)", () => {
 		restore();
 		expect(process.env.PI_LENS_LSP_IDLE_EVICT_MS).toBe("777");
 		await service.shutdown();
+	});
+
+	it("arms the ephemeral window for a temporary git checkout", async () => {
+		const root = ephemeralCheckout();
+		try {
+			process.env.PI_LENS_LSP_IDLE_EVICT_MS = "100000";
+			process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS = "777";
+			const server = registryServer(undefined, root);
+			const { service, driver } = await harness(server, () => [finding(1)]);
+			await driver.touch();
+
+			const restore = await driver.armEviction();
+			const { getLspIdleEvictMsForRoot } =
+				await import("../../../clients/lsp/index.js");
+			expect(process.env.PI_LENS_LSP_IDLE_EVICT_MS).toBe("20");
+			expect(process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS).toBe("20");
+			// Recurrence: c61fc49ba added a timer the probe did not arm (#3989).
+			// Ask the real selector for both root classes so either arm cannot drift.
+			expect(getLspIdleEvictMsForRoot(root)).toBe(20);
+			expect(getLspIdleEvictMsForRoot("/repo")).toBe(20);
+			await vi.advanceTimersByTimeAsync(20);
+			expect(driver.isTargetAlive()).toBe(false);
+
+			restore();
+			expect(process.env.PI_LENS_LSP_IDLE_EVICT_MS).toBe("100000");
+			expect(process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS).toBe("777");
+			await service.shutdown();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("reads the server's resident bytes from the pid of its live client", async () => {

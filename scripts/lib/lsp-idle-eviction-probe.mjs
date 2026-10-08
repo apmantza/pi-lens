@@ -405,18 +405,28 @@ export function createServiceDriver(args) {
 		},
 		async armEviction() {
 			const policy = server.idleEviction;
-			const hadWindow = Object.hasOwn(env, "PI_LENS_LSP_IDLE_EVICT_MS");
-			const priorWindow = env.PI_LENS_LSP_IDLE_EVICT_MS;
+			const hadGenericWindow = Object.hasOwn(env, "PI_LENS_LSP_IDLE_EVICT_MS");
+			const priorGenericWindow = env.PI_LENS_LSP_IDLE_EVICT_MS;
+			const hadEphemeralWindow = Object.hasOwn(
+				env,
+				"PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS",
+			);
+			const priorEphemeralWindow = env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS;
 			let restored = false;
 			const restore = () => {
 				if (restored) return;
 				restored = true;
 				server.idleEviction = policy;
-				if (hadWindow) env.PI_LENS_LSP_IDLE_EVICT_MS = priorWindow;
+				if (hadGenericWindow)
+					env.PI_LENS_LSP_IDLE_EVICT_MS = priorGenericWindow;
 				else delete env.PI_LENS_LSP_IDLE_EVICT_MS;
+				if (hadEphemeralWindow)
+					env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS = priorEphemeralWindow;
+				else delete env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS;
 			};
 			server.idleEviction = "transparent";
 			env.PI_LENS_LSP_IDLE_EVICT_MS = String(args.windowMs);
+			env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS = String(args.windowMs);
 			try {
 				const client = (await acquire())?.client;
 				if (client && typeof client.shutdown === "function") {

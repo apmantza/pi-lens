@@ -18,15 +18,17 @@ Four kinds of config:
   and so must #3819's fix (`H3FileLess`, `H3FileLessStores`,
   `H3FileLessCarry`, `H3StaleSlot`, `H3StaleSlotFileLess`, with `ticketKey`
   and `demotedDiscard`), and so must #3881's (`H3Interrupted`,
-  `H3InterruptedFileLess`, with `forwardUnadopted` and `forwardPolicy`), and
+  `H3InterruptedFileLess`, with `forwardUnadopted` and `forwardPolicy`;
+  #4113's `H3InterruptedUnstarted*` add `forwardUnstarted`), and
   so must #3855's (`H3DemoteCarry`, `H3DemoteAdvisory`, `H3DemoteActivation`,
   `H3DemoteFileLess`, `H3SecNew`, `H3SecNewFileLess`, `H3DemotedReplaces`,
   `H3StaleNoteResume`, `H3NoteEvicted`, `H3InMemoryNewGapReload`,
   `H3SdkBind`, `H3SdkBindFileBacked`, with `namedSuccessor`; `Merged`,
   `MergedStores`, `H3Interrupted*` and `H3FileLessCarry` carry it too, with
-  `HasPrimary`). The rest register a known
-  violation of merged master until its fix flips the config to `pass`:
-  `Current` violates `SecondaryIsolation` through N2 (#3613), and
+  `HasPrimary`), and so must #3613's turn half (`MergedTurns`). The rest
+  register a known violation of merged master until its fix flips the
+  config to `pass`: `Current` violates `NoCrossSessionState` through F4
+  (the read-guard half of #3613), and
   `AcceptedSecondaryForkActivation` pins the answer #3855 gives for a
   subagent's own `/fork` (finding F6), and `AcceptedR3InMemoryNew` pins
   #3855's residual R3 (finding F7).
@@ -147,13 +149,14 @@ its handler outlived a later entry. Every config uses `TRUE` except
 **Policies are constants.** A config picks `TargetPolicy` (the merged table)
 or `LegacyPolicy` (master at df5fb8abb, before #3669 and S1-S3), `TargetFence`
 or `LegacyFence`, and `TargetSec` (the design, S4 included), `MergedSec`
-(merged master) or `LegacySec`.
+(merged master), `PreS4TurnSec` (merged master before #3613's turn half) or
+`LegacySec`.
 
 | Store | startup | /new | resume | /fork, /clone, pi --fork | /tree | /reload | shutdown | idle | Secondary: target / merged | Fence |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `RG` target | rehydrate | reset | rehydrate | import-parent | filter-by-branch (D8) | filter-by-branch (D5) | none | none | own / shared (#3613) | branch |
 | `RG` legacy | rehydrate | reset | rehydrate | reset | none | reset (N1) | none | none | shared | session |
-| `TC` | reset | reset | reset | reset | none | reset | none | none | own / shared (N2, #3613) | session |
+| `TC` | reset | reset | reset | reset | none | reset | none | none | own / own (#3613; before it shared, N2) | session |
 | `WG` guards | reset | reset | reset | carry (legacy: reset, #3589) | carry | carry | none | none | shared | none |
 | `LS` | none | none | none | none | none | none | reset | reset | shared | service |
 | `LT` lens toggles | reset | reset | reset | reset | none | reset | none | none | shared | none |
@@ -199,6 +202,15 @@ or `LegacyFence`, and `TargetSec` (the design, S4 included), `MergedSec`
   written by the interrupted scope (`forwardHandoff`), and stashes nothing
   of the scope. Without it, it stashes the scope's empty snapshot, as
   `stashHandoff` did.
+- `forwardUnstarted` (#4113, #3898's T-1): `InterruptAt("unstarted")` is a
+  reload that lands before pi-lens's start handler ran (W0), so the
+  activation has no in-flight mark and no scope; its shutdown is primary by
+  the gap's named key (#4106). With this part it forwards the slot left for
+  the start the gap names, as `forwardUnadopted` does (`namedSuccessorReason`,
+  `clients/session-lifecycle.ts`); without it nothing is written, the slot
+  keeps the `/fork` reason, and the inner reload's start misses it
+  (`Mut4113Unstarted`). With the part, the W0 step reaches the same states as
+  the W1/W2 step, so `H3InterruptedUnstarted` has `H3Interrupted`'s count.
 - `forwardPolicy` (#3881 r2): the forwarded slot keeps only the stores the
   interrupted start's own reason adopts (`Keeps`), so the successor's
   policy applies on top of the original one. Without it, every store is
@@ -229,9 +241,10 @@ or `LegacyFence`, and `TargetSec` (the design, S4 included), `MergedSec`
 - `nameAtShutdown` (#3855 round 5, merged; verify r4 V6): the naming site
   (`successorStartKey`) binds a fresh process-unique ticket to a file-less
   `reload`/`fork` session's manager that carries none, in every window of an
-  interrupted start. `InterruptAt(pre)` models the windows: `pre` is a reload
-  that lands before the start held its scope (before pi-lens's start handler,
-  or inside its awaits before `scope = runtime.sessionScope`; `preScope`),
+  interrupted start. `InterruptAt(w)` models the windows: `"pre"` is a reload
+  that lands before the start held its scope (inside pi-lens's start
+  handler's awaits before `scope = runtime.sessionScope`), and `"unstarted"`
+  one before that handler ran (#4113); both are in `preScope`,
   where only this rule binds. `Mut3855r4PreScope` keeps round 4's rule, which
   needs the scope and names such a gap `(reload, none)`.
 - `bindInterrupted` (#3855 round 4, superseded by `nameAtShutdown`): a primary shutdown that
@@ -256,6 +269,16 @@ or `LegacyFence`, and `TargetSec` (the design, S4 included), `MergedSec`
   comes stays; a primary successor whose key a note holds is declined
   (`BeginDeclined`). `Mut3855r1*` keep its violations.
 
+`startThrows` and `pinAtReset` (#3613 F1, review r1 on #4118) are a fault
+and its fix, not a merged mechanism pair. `startThrows` makes every primary
+start's handler throw after its reset. The code then never pins the stable
+session id if the pin sits after the start's await, and the coordinator
+keeps the reset's random id. `pinAtReset` is the merged pin, placed before
+the await (`index.ts`). `OwnTurn` selects a turn's target by id equality,
+as `beginTurn` does (`turnSession`, `clients/runtime-coordinator.ts`): a
+turn is the coordinator's own only when its session's id is the pinned
+one.
+
 ## Invariants
 
 | Invariant | Meaning |
@@ -266,7 +289,7 @@ or `LegacyFence`, and `TargetSec` (the design, S4 included), `MergedSec`
 | `NoFalseBlock` | The same, over every read-guard write that completed, whether it landed or a guard dropped it. The design violates it (F1, accepted), so only `AcceptedLateRead*` and `NewestReadTreeFork` check it. |
 | `NoUnrecordedFalseBlock` | `NoFalseBlock` over the writes that left no drop record: every false block is recorded. |
 | `NoOwnDrop` | No guard drops a write whose own lineage is still current (catalog shape 54). |
-| `SecondaryIsolation` | A primary transition never removes a live subagent's own facts, and a subagent's turn never moves the primary's turn. |
+| `SecondaryIsolation` | A primary transition never removes a live subagent's own facts, and every live scope's turn state is moved by its own turns only: a subagent's turn never moves the primary's, and the primary's turns and replacements never move or reset a live subagent's (#3613). |
 | `HandoffOnce` | Every slot take is by a primary start that replaced the scope that wrote the slot. |
 | `NoCrossSessionAdoption` | Every slot take is by a start whose conversation continues the writer's (the same file on `/reload`, a copy on `/fork`), so no start adopts another session's state through the slot (#3803 hypothesis 3). |
 | `OrderMonotone` | A write-order token drawn later outranks every earlier one, across `/reload` and entry-module evaluations. |
@@ -299,7 +322,7 @@ A pass holds only inside these bounds:
 - **`/tree` only on a two-entry branch**, and it drops the last entry.
 - **One writer of each kind** begins per behaviour, one advisory per producer,
   and one activation per scope. `MaxTurns` is 0 in `Merged`, 1 in `Fix` and
-  `Current`, and 3 in `FixOrder`.
+  `Current`, 2 in `MergedTurns`, and 3 in `FixOrder`.
 - **One subagent** (file `S`, its fork `T`), no time, and tool-call ids unique
   across conversations (D4 is not modelled).
 
@@ -313,6 +336,8 @@ counterexample.
 |---|---|---|---|
 | `Merged` | merged master: every transition but a subagent's turn and its own replacement, the primary's read-guard writer | pass | 11116 |
 | `MergedStores` | merged master: activations and advisories across every transition that moves them, with a subagent | pass | 65248 |
+| `MergedTurns` | merged master with turns (#3613): a subagent's turns and the primary's turns, `/new`, resume, `/fork`, `/reload` and `/tree`, the primary's read-guard writer | pass | 23024 |
+| `H3StartThrows` | #3613 F1 fix: `MergedTurns` with every start throwing after its reset, and the pin before the await | pass | 23024 |
 | `H3FileBacked` | merged slot: a subagent's own `/reload` or `/fork` in the primary's gap, file-backed sessions | pass | 597 |
 | `H3FileLess` | the same, file-less sessions, with #3819's fix | pass | 597 |
 | `H3FileLessStores` | `H3FileLess` with activations and advisories: none crosses | pass | 20834 |
@@ -321,6 +346,8 @@ counterexample.
 | `H3StaleSlotFileLess` | the same, file-less sessions | pass | 3016 |
 | `H3Interrupted` | file-backed: a `/reload`, `/fork` or resume start is interrupted by its own `/reload` before it adopts, with #3881's fix: the inner reload's start keeps the reads, activations and advisory, and an interrupted `/fork` carries no advisory | pass | 226398 |
 | `H3InterruptedFileLess` | the same, file-less sessions | pass | 226398 |
+| `H3InterruptedUnstarted` | #4113: the same, and the reload may also land before pi-lens's start handler ran (W0): that shutdown forwards the slot left for the start its gap names | pass | 226398 |
+| `H3InterruptedUnstartedFileLess` | the same, file-less sessions | pass | 226398 |
 | `H3DemoteCarry` | file-backed, #3855's fix: a subagent's own `/reload` or `/fork` in the gap stays secondary, so the real successor keeps the reads | pass | 235 |
 | `H3DemoteAdvisory` | the same: the real successor keeps the advisory | pass | 224 |
 | `H3DemoteActivation` | the same: the real successor keeps the conversation's activations | pass | 256 |
@@ -347,7 +374,7 @@ counterexample.
 | `Mut3855r1DemotedReplaces` | #3855 r1 (F2): the demoted user conversation's own `/reload` finds its note and is declined | violated `UserNotDeclined` | 212 |
 | `Mut3855r1StaleNote` | #3855 r1 (F3): a stale note declines the primary's resume successor; no primary | violated `HasPrimary` | 6 |
 | `Mut3855r1Evicted` | #3855 r1: an evicted note lets a gap subagent's start demote the real successor | violated `NoLostCarry` | 225 |
-| `Current` | merged master, every transition: N2, #3613 | violated `SecondaryIsolation` | 54 |
+| `Current` | merged master, every transition: F4, #3613 | violated `NoCrossSessionState` | 257 |
 | `Fix` | adopted design: every transition, a primary and a subagent reader, one turn | pass | 71419 |
 | `FixProcess` | adopted design: heartbeat and LSP work across `/new`, resume, `/reload`, idle reset, quit, `pi --fork` | pass | 24771 |
 | `FixOrder` | adopted design: widget tokens over three turns across `/new`, `/reload`, quit, `pi --fork` | pass | 319 |
@@ -368,6 +395,7 @@ counterexample.
 | `Pre3819FileLess` | pre-#3819: a subagent's own replacement takes a file-less primary's slot | violated `NoCrossSessionAdoption` | 63 |
 | `Pre3819StaleSlot` | pre-#3819: a demoted session takes a stale slot | violated `HandoffOnce` | 1177 |
 | `Pre3881Interrupted` | pre-#3881: the interrupted start's shutdown stashes its empty scope | violated `NoLostActivation` | 209 |
+| `Mut4113Unstarted` | pre-#4113: a W0 shutdown writes nothing, so the `/fork` slot is missed | violated `NoLostActivation` | 478 |
 | `Pre3855DemoteCarry` | pre-#3855, #3668 row 17: the demoted real successor loses the reads | violated `NoLostCarry` | 239 |
 | `Pre3855DemoteAdvisory` | pre-#3855: the demoted real successor loses the advisory | violated `NoLostAdvisory` | 236 |
 | `Pre3855DemoteActivation` | pre-#3855: the demoted real successor loses the conversation's activations | violated `NoLostActivation` | 145 |
@@ -379,7 +407,9 @@ counterexample.
 | `MutSettleDuringTree` | the drain writer races `/tree`, fenced at session level only | violated `NoStaleBranchWrite` | 12 |
 | `MutLspAfterIdleReset` | LSP work spawns after the idle reset | violated `NoCrossSessionState` | 8 |
 | `MutHeartbeatBeforeRegistration` | a heartbeat lands before the new registration | violated `NoCrossSessionState` | 10 |
-| `MutSecondaryTurnStart` | a subagent's `turn_start` advances the primary's turn | violated `SecondaryIsolation` | 5 |
+| `MutSecondaryTurnStart` | pre-#3613: a subagent's `turn_start` advances the primary's turn | violated `SecondaryIsolation` | 4 |
+| `MutSecondaryTurnReset` | pre-#3613: the primary's turn start or `/new` moves a live subagent's per-turn records | violated `SecondaryIsolation` | 8 |
+| `MutStartThrowsLatePin` | #3613 r1 (F1): the throwing start with the pin after the await; the primary's turns never move its turn state | violated `SecondaryIsolation` | 7 |
 | `MutTreeWipesSecondary` | the primary's `/tree` filters the subagent's reads | violated `SecondaryIsolation` | 9 |
 | `MutSecondaryReadShared` | a subagent's read lands in the primary's read guard | violated `NoCrossSessionState` | 4 |
 | `MutSecondaryTakesHandoff` | a subagent's start takes the slot and discards it | violated `HandoffOnce` | 7 |
@@ -403,13 +433,13 @@ alternative" is a shape the adopted design rejects, never shipped.
 | `Mut3855r1StaleNote` | #3855 review F3 | #3855 r1 (6ae7e2716): notes had no time bound | A subagent reloads and its start never comes; the primary resumes the subagent's file; its successor matches the stale note and is declined. |
 | `Mut3855r1Evicted` | #3855 r1 | #3855 r1 (6ae7e2716): `SECONDARY_SUCCESSOR_NOTE_CAP` | A read lands; `/reload`; the gap subagent's note is evicted; its own `/reload` start classifies primary and the real successor is demoted. |
 | `Mut4106RolelessShutdown` | #4106 | pre-#4106 (8d030fa27): `noteSessionShutdown` returned primary whenever no primary was registered | The primary's `/reload`; a subagent binds and runs a `/new`; its start is interrupted by its own `/reload` before pi-lens's handler (`SecRoleless`); the role-less shutdown is primary and its reload successor takes the slot. |
-| `Mut3855r4PreScope` | #3855 verify r4 V6 | #3855 r4 (0b8ee3ca4): `forwardHandoff` bound the interrupted scope's ticket, which a start interrupted before `scope = runtime.sessionScope` does not hold | The primary's in-memory `/new`; a `/reload` lands before its start held its scope (`InterruptAt(TRUE)`); an SDK reload bind (no key) takes the slot. |
+| `Mut3855r4PreScope` | #3855 verify r4 V6 | #3855 r4 (0b8ee3ca4): `forwardHandoff` bound the interrupted scope's ticket, which a start interrupted before `scope = runtime.sessionScope` does not hold | The primary's in-memory `/new`; a `/reload` lands before its start held its scope (`InterruptAt("pre")`); an SDK reload bind (no key) takes the slot. |
 | `Mut3855r3InterruptedNewGap` | #3855 verify r3 V3 | #3855 r3 (53ef06147): `forwardHandoff` bound no ticket | The primary's in-memory `/new`; its start is interrupted by its own `/reload`; an SDK subagent binds with reason `reload` and no key; the gap was named `(reload, none)`, so it is primary. |
 | `Mut3855r2KeylessFailSafe` | #3855 verify r2 V1 | #3855 r2 (317ffae8a): J6's `key === undefined && typeof namedKey === "number"` | An in-memory primary's `/reload` or `/fork`; an SDK subagent binds with that reason and no key; J6 admits it and the real successor is demoted. |
 | `Pre3855SdkBind` | #3855 verify r2 PR8 | pre-#3855 (b9eda404c): #3668 row 17 | As above, with any non-`startup` gap start admitted. |
 | `AcceptedR3InMemoryNew` | #3855 residual R3 | master, accepted | The primary's in-memory `/new`; a subagent's own in-memory `/new` starts first in the gap with the same pair. |
 | `AcceptedSecondaryForkActivation` | #3855 (the #3835 r2 question) | master, accepted: a secondary's scope never stashes, saves a sidecar or adopts, and `adoptHandoff` runs only for a primary start | The subagent activates a tool, and its own `/fork` starts without it. |
-| `Current` | N2, #3613 | master: `onTurnStart` calls `runtime.beginTurn()` with no role gate (`index.ts`) | The subagent starts, and its `turn_start` moves the primary's turn. |
+| `Current` | F4, #3613 | master: a subagent's handlers reach the module-level `runtime.readGuard` | The subagent's read lands in the primary's cell. |
 | `PreS1OrderTurn` | N3; #3540 case A | pre-S1 (b456ff89c): `_writeOrderTurn += 1`, a coordinator field | A turn draws token 1, `/reload` re-evaluates the entry, and the next turn draws token 1 again. |
 | `MutWidgetDropAfterReEval` | N3's harm; #3540 | pre-S1 (b456ff89c), as above | Two turns and a widget write at token 2; after `/reload` with re-evaluation, a turn draws token 1, and the widget guard drops the live session's own write as older. |
 | `PreS2ReloadReset` | N1, under D5 | pre-S2 (ae5396e46): `resetForSession` on every primary start, no reload hand-off | A read lands, and `/reload` starts clean. |
@@ -419,6 +449,7 @@ alternative" is a shape the adopted design rejects, never shipped.
 | `PreS2AdvisoryReload` | #3612 (the advisory scope addition) | pre-S2 (ae5396e46, which has #3757): no advisory store | An advisory is queued, `/reload`, and the prune drops it as its retired scope's. |
 | `PreS3StalePipelineAfterNew` | #3596; the #3528 drain shape | pre-S3 (f8453c664): `runtime.readGuard.recordWritten` resolved when the write lands | A write begins, `/new` completes, and the write lands in session 2. |
 | `Pre3757AdvisoryShared` | #3748 | pre-#3757 (61c6ee644): an untagged queue | The drain queues an advisory, and the subagent's context call takes it. |
+| `Mut4113Unstarted` | #4113 | pre-#4113 (17b10c027): the shutdown forwarded only under the in-flight mark, which a start interrupted before pi-lens's handler ran never set | An activation lands; `/fork` leaves the `(fork, key)` slot; the fork's start is interrupted by its own `/reload` before pi-lens's handler (`InterruptAt("unstarted")`); nothing is forwarded, and the inner reload's start misses the slot. |
 | `Pre3881Interrupted` | #3881 | pre-#3881 (5d55e4821): `stashHandoff` at every primary `/reload` shutdown, whether or not the activation's start adopted | An activation lands; `/reload` (or `/fork`) leaves the slot; the successor's start is interrupted by its own `/reload`, whose shutdown stashes the empty scope over that slot; the inner reload's start takes the empty slot. |
 | `MutInterruptedForkPolicy` | #3881 (review r1 F1 on #3898) | #3881 r1 (cbcd95b94): `forwardHandoff` re-keyed the whole slot | An advisory is queued; `/fork` leaves the slot; the fork's start is interrupted by its own `/reload`, which forwards every store; the inner reload's start re-tags the parent's advisory, and a context call on the fork's file delivers it. |
 | `MutFileLessNoTicketKey` | #3819 | design alternative: the discard alone | As `Pre3819FileLess`: the subagent's own start classifies primary before the real successor starts, so it matches `(reason, undefined)`. |
@@ -427,15 +458,21 @@ alternative" is a shape the adopted design rejects, never shipped.
 | `MutTreeCarries` | #3521 tree half | pre-#3669 (df5fb8abb): no `session_tree` handler | A read of entry 2 lands, then `/tree` drops entry 2 and the read stays. |
 | `MutLspAfterIdleReset` | #3576 | pre-#3602 (7101a6766): before G5's `captureLspServiceGeneration` | LSP work begins, the idle reset runs, and the work spawns a server. |
 | `MutHeartbeatBeforeRegistration` | #3498 | pre-#3593 (f2c880012): the heartbeat before #3498's fix; the lock-level detail is `formal/session-registry` | A heartbeat begins, session 1 shuts down, and the heartbeat re-registers session 1's root before session 2's registration lands. |
-| `MutSecondaryTurnStart` | N2 | master (#3613), as `Current` | As `Current`. |
+| `MutSecondaryTurnStart` | N2, #3613 | pre-#3613 (17b10c027): `onTurnStart` called `runtime.beginTurn()` with no session id (`index.ts`) | The subagent starts, and its `turn_start` moves the primary's turn. |
+| `MutSecondaryTurnReset` | #3613 | pre-#3613 (17b10c027): one per-turn warning map on the coordinator, cleared by every `beginTurn` and by `resetForSession` | The primary's turn starts while a subagent is live, so the subagent's per-turn records move (the same for the primary's `/new`). |
+| `MutStartThrowsLatePin` | #3613 F1 (review r1 on #4118) | #4118 r1 (c4c4564b6): `setSessionLifecycle` after `await bounded(handleSessionStart …)` | The startup's handler throws after its reset, the pin is skipped, and the primary's first turn takes the other-session path. |
 | `MutSecondaryReadShared` | F4, #3613 | master: a subagent's handlers reach the module-level `runtime.readGuard` | The subagent's read lands in the primary's cell. |
 | `MutTreeWipesSecondary` | #3607 | master, the accepted residual #3521 F2 (the comment on the `session_tree` handler, `index.ts`) | The subagent's read lands, and the primary's `/tree` filters it away. |
 | `MutSettleDuringTree` | #3521 (the G10 F1 review race) | design alternative: fenced at session level with no branch epoch | A read of entry 2 begins, `/tree` drops entry 2, and the read lands. |
 | `MutSecondaryTakesHandoff` | design finding F2 | design alternative: section 3.4 as written | `/reload`'s shutdown fills the slot, and a subagent's `session_start` takes it. |
 | `MutDuplicateStart` | #2890 | pre-#2895 (745020083): no duplicate-start gate | A duplicate start re-runs the reset. |
 
-`Current` with `SecondaryIsolation` removed from its invariant list violates
-`NoCrossSessionState` (257 states): F4, the other half of #3613.
+Since #3613's turn half, `Current` holds `SecondaryIsolation` and violates
+`NoCrossSessionState` (257 states): F4, the read-guard half of #3613, still
+open. `MergedTurns` checked under `PreS4TurnSec` violates
+`SecondaryIsolation` (26 states), and `MutSecondaryTurnReset` passes under
+the invariant before #3613 (19 states): the turn clause for live subagents
+is what sees the primary's turn and reset moving their records.
 
 ## Findings
 
@@ -506,7 +543,7 @@ a file-less successor find its slot at all (`H3FileLessCarry`).
 
 **F4. Today, a subagent's read authorises the primary's edit** (#3613). The
 shared read guard puts a subagent's read in the primary's cell
-(`MutSecondaryReadShared`, and `Current` without `SecondaryIsolation`).
+(`MutSecondaryReadShared` and `Current`).
 
 **F5. An interrupted start's shutdown re-keys the slot; skipping the stash
 is not enough (#3881).** The interrupted start never adopted, so the slot

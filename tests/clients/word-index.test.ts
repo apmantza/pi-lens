@@ -7,6 +7,7 @@ import {
 	centralityFromReverseDeps,
 	deserializeWordIndex,
 	getWordIndexBuildStatus,
+	getWordIndexWireBytes,
 	parseWordIndexQuery,
 	flushWordIndexRecompactionsForTests,
 	searchWordIndex,
@@ -585,6 +586,14 @@ describe("serializeWordIndex / deserializeWordIndex", () => {
 		{ path: "src/a.ts", content: "function alphaHandler() {}" },
 		{ path: "src/b.ts", content: "function betaHandler(alpha) {}" },
 	];
+
+	it("leaves wire bytes unset until the snapshot persist measures them (#4129)", () => {
+		const index = buildWordIndex(files);
+		serializeWordIndex(index);
+		// Recurrence: measuring JSON in serializeWordIndex puts whole-index work
+		// back on every incremental persist and defeats the occupancy guard (#2068).
+		expect(getWordIndexWireBytes(index)).toBeNull();
+	});
 
 	it("round-trips to identical search behavior", () => {
 		const index = buildWordIndex(files);

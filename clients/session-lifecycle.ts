@@ -156,6 +156,22 @@ export interface ClassifySessionStartInput {
 }
 
 /**
+ * Which input decided a classification (#3873 O6): the branch of
+ * {@link explainSessionStart} that returned, so a `primary` /
+ * `sequential-replacement` row says whether a prior primary, a dead ctx or an
+ * inconclusive probe led to it.
+ */
+export type ClassificationBasis =
+	| "no-prior-primary"
+	| "successor-pending"
+	| "same-session"
+	| "prior-ctx-live"
+	| "root-differs"
+	| "prior-ctx-dead"
+	| "prior-ctx-unknown"
+	| "guard-disabled";
+
+/**
  * PURE classifier — no I/O, no throws, fully unit-testable in isolation.
  *
  * Branches (fail-safe order matters):
@@ -212,9 +228,11 @@ export interface ClassifySessionStartInput {
  * `PI_LENS_CONCURRENT_SESSION_GUARD=0` disables this branch with the rest of
  * the guard.
  */
-export function classifySessionStart(
-	input: ClassifySessionStartInput,
-): SessionStartClassification {
+/** The one implementation of the branch order above; it names the branch taken (#3873). */
+export function explainSessionStart(input: ClassifySessionStartInput): {
+	classification: SessionStartClassification;
+	basis: ClassificationBasis;
+} {
 	const {
 		hasPrior,
 		priorCtxActive,
@@ -223,13 +241,26 @@ export function classifySessionStart(
 		successorPending,
 	} = input;
 
-	if (!hasPrior) return successorPending ? "concurrent-secondary" : "primary";
-	if (sameSessionId) return "sequential-replacement";
-	if (priorCtxActive === true) return "concurrent-secondary";
-	if (sameRoot === false) return "secondary-root";
-	if (priorCtxActive === false) return "sequential-replacement";
+	if (!hasPrior)
+		return successorPending
+			? { classification: "concurrent-secondary", basis: "successor-pending" }
+			: { classification: "primary", basis: "no-prior-primary" };
+	if (sameSessionId)
+		return { classification: "sequential-replacement", basis: "same-session" };
+	if (priorCtxActive === true)
+		return { classification: "concurrent-secondary", basis: "prior-ctx-live" };
+	if (sameRoot === false)
+		return { classification: "secondary-root", basis: "root-differs" };
+	if (priorCtxActive === false)
+		return {
+			classification: "sequential-replacement",
+			basis: "prior-ctx-dead",
+		};
 	// priorCtxActive === undefined: inconclusive probe — fail-safe.
-	return "sequential-replacement";
+	return {
+		classification: "sequential-replacement",
+		basis: "prior-ctx-unknown",
+	};
 }
 
 /** Lazy env read (house style) — never memoized, so tests can flip it
@@ -403,7 +434,7 @@ export type SessionShutdownClassification = "primary" | "secondary";
 
 /**
  * Classifies a `session_shutdown` firing the same fail-safe way as
- * `classifySessionStart`: it is `secondary` ONLY when a DIFFERENT primary is
+ * `explainSessionStart`: it is `secondary` ONLY when a DIFFERENT primary is
  * registered (positively identified — ctx identity differs AND session ids
  * are both known and differ) and that primary's ctx still probes active
  * (positive evidence the shutting-down session is a live sibling, not the
@@ -511,7 +542,7 @@ export function noteSessionShutdown(
 }
 
 /**
- * Read-only counterpart to {@link classifySessionStart}, usable from ANY
+ * Read-only counterpart to {@link explainSessionStart}, usable from ANY
  * event handler (agent_end, turn_end, ...) rather than only session_start.
  * Unlike `decideSessionStart` this never mutates the module-scope
  * registration — repeated calls across a session's many agent_end/turn_end
@@ -562,12 +593,16 @@ export function decrementSecondarySessionCount(): void {
  * one place: when disabled, always report `sequential-replacement` (i.e.
  * behave exactly as if this module didn't exist).
  */
-export function classifySessionStartGuarded(
-	input: ClassifySessionStartInput,
-): SessionStartClassification {
+export function explainSessionStartGuarded(input: ClassifySessionStartInput): {
+	classification: SessionStartClassification;
+	basis: ClassificationBasis;
+} {
 	if (!guardEnabled())
-		return input.hasPrior ? "sequential-replacement" : "primary";
-	return classifySessionStart(input);
+		return {
+			classification: input.hasPrior ? "sequential-replacement" : "primary",
+			basis: "guard-disabled",
+		};
+	return explainSessionStart(input);
 }
 
 /** Test-only: clears all module-scope state (house style — see
@@ -602,6 +637,19 @@ export interface SessionStartGuardDecision {
 	sameRoot: boolean | undefined;
 	/** The registered primary's normalized root at decision time, if any. */
 	primaryRoot: string | undefined;
+	/** #3873 O6: the branch of the classifier that decided. */
+	basis: ClassificationBasis;
+	/**
+	 * #3873 O6: ms since a primary replacement's shutdown left its successor
+	 * marker (`undefined`: no marker), whether or not it has expired.
+	 */
+	gapMs: number | undefined;
+	/**
+	 * #3873 O6: this start against the successor the marker named: `none` (no
+	 * marker), `unnamed` (a marker without a name), `named` (this start's reason
+	 * and key are the named ones) or `not-named`.
+	 */
+	lineageMatch: "none" | "unnamed" | "named" | "not-named";
 }
 
 /**
@@ -650,7 +698,7 @@ export function decideSessionStart(
 
 	// #2129: compare THIS start's cwd against the registered primary's root.
 	// `undefined` on either side means "unknown", never "different" — see
-	// `classifySessionStart`'s fail-safe note.
+	// `explainSessionStart`'s fail-safe note.
 	const incomingRoot = normalizeRootForCompare(root);
 	const sameRoot =
 		hasPrior && s.activeRoot !== undefined && incomingRoot !== undefined
@@ -662,13 +710,25 @@ export function decideSessionStart(
 	// classifier consulted rather than the value this call just wrote.
 	const primaryRootAtDecision = s.activeRoot;
 
-	const classification = classifySessionStartGuarded({
+	const { classification, basis } = explainSessionStartGuarded({
 		hasPrior,
 		priorCtxActive,
 		sameSessionId,
 		sameRoot,
 		successorPending,
 	});
+	const gapMs =
+		s.successorPendingSince === undefined
+			? undefined
+			: Date.now() - s.successorPendingSince;
+	const lineageMatch =
+		s.successorPendingSince === undefined
+			? "none"
+			: named === undefined
+				? "unnamed"
+				: reason === named.reason && key === named.key
+					? "named"
+					: "not-named";
 
 	if (
 		classification === "concurrent-secondary" ||
@@ -691,6 +751,9 @@ export function decideSessionStart(
 			secondaryCount: s.secondarySessionCount,
 			sameRoot,
 			primaryRoot: primaryRootAtDecision,
+			basis,
+			gapMs,
+			lineageMatch,
 		};
 	}
 
@@ -703,7 +766,26 @@ export function decideSessionStart(
 		secondaryCount: s.secondarySessionCount,
 		sameRoot,
 		primaryRoot: primaryRootAtDecision,
+		basis,
+		gapMs,
+		lineageMatch,
 	};
+}
+
+/**
+ * #4113: in a primary replacement gap (no primary registered, the marker
+ * pending), the start reason its shutdown named. A start interrupted before
+ * pi-lens's handler ran never saw its own reason; when #4106 classifies its
+ * shutdown primary it carries the named key, so it is that start.
+ */
+export function namedSuccessorReason(): string | undefined {
+	const s = state();
+	if (s.activeCtx !== undefined || s.activeSessionId !== undefined)
+		return undefined;
+	const named = namedSuccessorOf(s);
+	return named !== undefined && successorStillPending(s)
+		? named.reason
+		: undefined;
 }
 
 /** #3855: the successor the pending replacement named, when this build's

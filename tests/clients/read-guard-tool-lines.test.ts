@@ -2264,14 +2264,6 @@ describe("#2423 the read-before-edit guard covers a third-party edit tool", () =
 				"guarded.ts",
 				"manyBlanks",
 			);
-			// The guard treats a file whose mtime is at or after its own
-			// sessionStartMs as authored this session and lets the edit through.
-			// A same-millisecond write would therefore make this test allow for a
-			// reason that has nothing to do with the tool name — age the file so
-			// the assertion is about read coverage only.
-			const beforeSession = new Date(Date.now() - 60_000);
-			fs.utimesSync(filePath, beforeSession, beforeSession);
-
 			const unread = new ReadGuard("guard-2423-unread", { mode: "block" });
 			const { touchedLines } = getTouchedLinesForGuard(
 				{

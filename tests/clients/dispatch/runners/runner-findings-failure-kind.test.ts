@@ -32,7 +32,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
-import type { RunnerResult } from "../../../../clients/dispatch/types.js";
+import {
+	hasUsableResult,
+	type RunnerResult,
+} from "../../../../clients/dispatch/types.js";
 import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
@@ -1202,6 +1205,8 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 			runnerId: string,
 			reply: Driver["reply"],
 			ids: string[],
+			// #3796: an arm that returns a synthetic diagnostic names its fault.
+			kind: string | undefined,
 		]
 	> = [
 		[
@@ -1209,24 +1214,28 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 			"eslint",
 			() => ({ status: 2, stdout: "Oops! Something went wrong" }),
 			["eslint:parse-error:1"],
+			"parser_error",
 		],
 		[
 			"biome JSON parse error",
 			"biome-check-json",
 			() => ({ status: 1, stdout: `not json ${MARKER}` }),
 			["biome:parse-error:1"],
+			"parser_error",
 		],
 		[
 			"pyright JSON catch",
 			"pyright",
 			() => ({ status: 1, stdout: `Traceback ${MARKER}` }),
 			[],
+			undefined,
 		],
 		[
 			"cue-vet unattributable output",
 			"cue-vet",
 			() => ({ status: 1, stderr: `cue: internal failure ${MARKER}\n` }),
 			["cue-vet-unparsed"],
+			"unconfirmed_output",
 		],
 		[
 			"gleam nonzero exit with no diagnostics",
@@ -1236,18 +1245,21 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 				stderr: `gleam: could not load project ${MARKER}\n`,
 			}),
 			["gleam-check-nonzero-no-diagnostics"],
+			"unconfirmed_output",
 		],
 		[
 			"spotbugs with no report file",
 			"spotbugs",
 			() => ({ status: 2, stderr: `spotbugs crashed ${MARKER}` }),
 			[],
+			undefined,
 		],
 		[
 			"rust-clippy unparsable output",
 			"rust-clippy",
 			() => ({ status: 101, stdout: `garbage ${MARKER}\n` }),
 			[],
+			undefined,
 		],
 		[
 			// Real npm 9.2.0 bytes for `npx --no prisma` with nothing to run
@@ -1265,12 +1277,13 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 				].join("\n"),
 			}),
 			["prisma-validate:parse-error:1"],
+			"parser_error",
 		],
 	];
 
 	it.each(FAULT_ARMS)(
 		"%s stays failed without blocking_diagnostics",
-		async (_name, runnerId, reply, ids) => {
+		async (_name, runnerId, reply, ids, kind) => {
 			const driver = DRIVERS[runnerId];
 			if (!driver) throw new Error(`no driver for ${runnerId}`);
 			const observed = await drive(runnerId, { ...driver, reply });
@@ -1278,6 +1291,14 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 			expect(observed.result?.diagnostics.map((d) => d.id)).toEqual(ids);
 			expect(observed.result?.failureKind).not.toBe("blocking_diagnostics");
 			expect(observed.row?.failureKind).not.toBe("blocking_diagnostics");
+			// The coverage rule's owner reads it as no usable result.
+			expect(hasUsableResult(observed.result as RunnerResult)).toBe(false);
+			if (kind !== undefined) {
+				expect(observed.result?.failureKind).toBe(kind);
+				expect(observed.row?.failureKind).toBe(kind);
+				expect(observed.logged?.failureKind).toBe(kind);
+				expect(observed.result?.failureMessage).toBeTruthy();
+			}
 		},
 	);
 });
