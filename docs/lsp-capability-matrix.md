@@ -148,7 +148,7 @@ carries the named admission until then.
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci |
 | csharp | csharp-ls | pull | — | n/a (pull) | 1 | ci |
-| typescript | typescript-language-server | push-only | silent | direct | 3 | dev+ci |
+| typescript | typescript-language-server | push-only | silent | empty-first | 3 | dev+ci |
 | markdown | marksman | push-only | silent | direct | 3 | ci |
 | lua | lua-language-server | push-only | silent | direct | 3 | dev+ci |
 | python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci |
@@ -156,7 +156,7 @@ carries the named admission until then.
 | yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci |
 | dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci |
-| dockerfile-official | docker-language-server (official) | push-only | unknown | empty-only | ? | dev+ci |
+| dockerfile-official | docker-language-server (official) | push-only | publishes-versioned | direct | 2 | dev+ci |
 | toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | terraform | terraform-ls | push-only | publishes-unversioned | empty-first | 2* | dev+ci |
 | prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
@@ -252,7 +252,7 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-_None observed as of the last probe run._
+- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "typescript7" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
 
 ## Capability matrix refresh state (nightly-generated)
 
@@ -261,5 +261,5 @@ two-run `clean-behavior` hysteresis and the consecutive-night `idle-eviction`
 counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"dockerfile-official":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1}},"idle-eviction":{"docker":{"nights":[{"day":"2026-10-07","rssMb":64,"coldMs":566}]},"json":{"nights":[{"day":"2026-10-07","rssMb":67,"coldMs":1116}]},"powershell":{"nights":[{"day":"2026-10-07","rssMb":155,"coldMs":2601}]},"python-jedi":{"nights":[{"day":"2026-10-07","rssMb":51,"coldMs":1796}]},"zizmor":{"nights":[{"day":"2026-10-07","rssMb":58,"coldMs":608}]}}}
+{"idle-eviction":{"docker-official":{"nights":[{"day":"2026-10-09","rssMb":62,"coldMs":652}]},"kotlin":{"nights":[{"day":"2026-10-09","rssMb":278,"coldMs":2010}]},"powershell":{"nights":[{"day":"2026-10-09","rssMb":161,"coldMs":1883}]},"rust":{"nights":[{"day":"2026-10-09","rssMb":661,"coldMs":2269}]},"svelte":{"nights":[{"day":"2026-10-09","rssMb":221,"coldMs":2311}]},"zizmor":{"nights":[{"day":"2026-10-09","rssMb":56,"coldMs":581}]}}}
 ```

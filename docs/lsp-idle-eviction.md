@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-10-07 on linux; 48 registry servers: 32 eligible, 0 vetoed, 2 inconclusive, 14 unavailable (0 not reached: budget)._
+_Last generated: 2026-10-09 on linux; 48 registry servers: 33 eligible, 0 vetoed, 2 inconclusive, 13 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -45,7 +45,7 @@ step log only, because it flaps.
 | cue | primary | unmeasured | eligible | · | ok | preserved |
 | dart | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | deno | primary | transparent | eligible | · | ok | preserved |
-| docker | primary | unmeasured | eligible | · | ok | preserved |
+| docker | primary | transparent | eligible | · | ok | preserved |
 | docker-official | primary | unmeasured | eligible | · | ok | preserved |
 | elixir | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | expert | primary | unmeasured | eligible | · | ok | preserved |
@@ -56,7 +56,7 @@ step log only, because it flaps.
 | haskell | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | html | primary | transparent | eligible | · | ok | preserved |
 | java | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| json | primary | unmeasured | eligible | · | ok | preserved |
+| json | primary | transparent | eligible | · | ok | preserved |
 | kotlin | primary | unmeasured | eligible | · | ok | preserved |
 | lua | primary | unmeasured | eligible | · | ok | preserved |
 | marksman | primary | transparent | eligible | · | ok | preserved |
@@ -68,7 +68,7 @@ step log only, because it flaps.
 | powershell | primary | unmeasured | eligible | · | ok | preserved |
 | prisma | primary | transparent | eligible | · | ok | preserved |
 | python | primary | transparent | eligible | · | ok | preserved |
-| python-jedi | primary | unmeasured | eligible | · | ok | preserved |
+| python-jedi | primary | transparent | eligible | · | ok | preserved |
 | ruby | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | rust | primary | unmeasured | eligible | · | ok | preserved |
 | shuck | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
@@ -92,14 +92,12 @@ nothing.
 
 - **ast-grep** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **cue** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **docker** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **docker-official** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **expert** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **gleam** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **json** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **kotlin** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **lua** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **powershell** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **python-jedi** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **rust** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **svelte** [proposal] declared unmeasured but eviction and respawn preserved its findings
 - **terraform** [proposal] declared unmeasured but eviction and respawn preserved its findings
