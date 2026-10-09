@@ -64,10 +64,6 @@ const UNMEASURED_PUSH_ADMISSIONS = new Map<string, string>([
 		"vue",
 		"@vue/language-server: the `publishes-unversioned` cell was an artifact of #3390 (58/45 publishes attributed to vue were tinymist's); nightly 36046209160 re-measured 0/0 with the sink scoped, so the cell is `unknown` until a run observes vue itself publish",
 	],
-	[
-		"dockerfile-official",
-		"official Docker Language Server publishes an empty versioned result on the known dirty fixture; one night is retained as pending until the two-run clean-signal hysteresis confirms the row",
-	],
 ]);
 
 interface MatrixRow {
