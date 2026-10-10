@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-10-09 on linux; 48 registry servers: 33 eligible, 0 vetoed, 2 inconclusive, 13 unavailable (0 not reached: budget)._
+_Last generated: 2026-10-10 on linux; 48 registry servers: 8 eligible, 0 vetoed, 16 inconclusive, 24 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -35,54 +35,54 @@ step log only, because it flaps.
 
 | server | role | declared | result | reason | respawn | coverage |
 |---|---|---|---|---|---|---|
-| ast-grep | auxiliary | unmeasured | eligible | · | ok | preserved |
-| bash | primary | transparent | eligible | · | ok | preserved |
+| ast-grep | auxiliary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| bash | primary | transparent | unavailable | server-not-started | n/a | n/a |
 | clojure | primary | transparent | eligible | · | ok | preserved |
 | cmake | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
 | cpp | primary | transparent | eligible | · | ok | preserved |
 | csharp | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| css | primary | transparent | eligible | · | ok | preserved |
-| cue | primary | unmeasured | eligible | · | ok | preserved |
+| css | primary | transparent | unavailable | server-not-started | n/a | n/a |
+| cue | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | dart | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | deno | primary | transparent | eligible | · | ok | preserved |
-| docker | primary | transparent | eligible | · | ok | preserved |
-| docker-official | primary | unmeasured | eligible | · | ok | preserved |
+| docker | primary | transparent | unavailable | server-not-started | n/a | n/a |
+| docker-official | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | elixir | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| expert | primary | unmeasured | eligible | · | ok | preserved |
-| fish | primary | transparent | eligible | · | ok | preserved |
+| expert | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| fish | primary | transparent | unavailable | server-not-started | n/a | n/a |
 | fsharp | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| gleam | primary | unmeasured | eligible | · | ok | preserved |
+| gleam | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | go | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | haskell | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| html | primary | transparent | eligible | · | ok | preserved |
+| html | primary | transparent | unavailable | server-not-started | n/a | n/a |
 | java | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | json | primary | transparent | eligible | · | ok | preserved |
-| kotlin | primary | unmeasured | eligible | · | ok | preserved |
-| lua | primary | unmeasured | eligible | · | ok | preserved |
+| kotlin | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| lua | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | marksman | primary | transparent | eligible | · | ok | preserved |
 | nix | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | ocaml | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | omnisharp | primary | unmeasured | unavailable | no-fixture | n/a | n/a |
 | opengrep | auxiliary | transparent | eligible | · | ok | preserved |
-| php | primary | transparent | eligible | · | ok | preserved |
-| powershell | primary | unmeasured | eligible | · | ok | preserved |
-| prisma | primary | transparent | eligible | · | ok | preserved |
-| python | primary | transparent | eligible | · | ok | preserved |
+| php | primary | transparent | unavailable | server-not-started | n/a | n/a |
+| powershell | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| prisma | primary | transparent | unavailable | server-not-started | n/a | n/a |
+| python | primary | transparent | unavailable | server-not-started | n/a | n/a |
 | python-jedi | primary | transparent | eligible | · | ok | preserved |
 | ruby | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| rust | primary | unmeasured | eligible | · | ok | preserved |
+| rust | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | shuck | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
-| svelte | primary | unmeasured | eligible | · | ok | preserved |
+| svelte | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | swift | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
-| terraform | primary | unmeasured | eligible | · | ok | preserved |
-| tinymist | primary | unmeasured | eligible | · | ok | preserved |
-| toml | primary | unmeasured | eligible | · | ok | preserved |
+| terraform | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| tinymist | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| toml | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 | typescript | primary | transparent | eligible | · | ok | preserved |
-| typos | auxiliary | unmeasured | eligible | · | ok | preserved |
-| vue | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
-| yaml | primary | transparent | eligible | · | ok | preserved |
-| zig | primary | unmeasured | eligible | · | ok | preserved |
-| zizmor | auxiliary | unmeasured | eligible | · | ok | preserved |
+| typos | auxiliary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| vue | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
+| yaml | primary | transparent | unavailable | server-not-started | n/a | n/a |
+| zig | primary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
+| zizmor | auxiliary | unmeasured | inconclusive | not-evicted | not-evicted | n/a |
 
 ## Declared versus measured
 
@@ -90,22 +90,15 @@ step log only, because it flaps.
 or `info` line is for a maintainer to act on in a follow-up; this run changed
 nothing.
 
-- **ast-grep** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **cue** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **docker-official** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **expert** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **gleam** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **kotlin** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **lua** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **powershell** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **rust** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **svelte** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **terraform** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **tinymist** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **toml** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **typos** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **zig** [proposal] declared unmeasured but eviction and respawn preserved its findings
-- **zizmor** [proposal] declared unmeasured but eviction and respawn preserved its findings
+- **bash** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **css** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **docker** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **fish** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **html** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **php** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **prisma** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **python** [info] declared transparent with no evidence this run: unavailable (server-not-started)
+- **yaml** [info] declared transparent with no evidence this run: unavailable (server-not-started)
 
 ## Reasons
 
