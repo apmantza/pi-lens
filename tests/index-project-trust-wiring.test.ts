@@ -3,9 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import extension from "../index.js";
+import { resolveToolCommand } from "../clients/dispatch/runners/utils/runner-helpers.js";
 import {
 	getProjectTrustState,
 	resetProjectTrust,
+	setProjectTrustState,
 } from "../clients/project-trust.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
@@ -107,9 +109,17 @@ describe("session_start project-trust adoption (#1334 S5)", () => {
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
 
-		await pi.emit("session_start", {}, makeCtx({ cwd: tmpProject() }));
+		// #4300: a non-pi startup grant must not widen a subsequent pi session.
+		const cwd = tmpProject();
+		const bin = path.join(cwd, "node_modules", ".bin");
+		fs.mkdirSync(bin, { recursive: true });
+		fs.writeFileSync(path.join(bin, "oxlint"), "");
+		fs.writeFileSync(path.join(bin, "oxlint.cmd"), "");
+		setProjectTrustState("trusted");
+		await pi.emit("session_start", {}, makeCtx({ cwd }));
 
 		expect(getProjectTrustState()).toBe("unknown");
+		expect(resolveToolCommand(cwd, "oxlint")).toBe("oxlint");
 	});
 
 	it("re-reads on every session_start so a denial is not sticky", async () => {

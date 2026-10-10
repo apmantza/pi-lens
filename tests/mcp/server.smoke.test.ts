@@ -1464,3 +1464,95 @@ describe("McpHarness.dispose tears down the server's process tree", () => {
 		60_000,
 	);
 });
+
+// #4300: the real MCP child must not inherit pi's absent-host trust policy.
+// Real transport and process are required: in-process setters cannot witness startup.
+describe("non-pi workspace trust (#4300)", () => {
+	it("uses the project-local oxlint in warm and fresh MCP analysis", async () => {
+		const env = setupTestEnvironment("pi-lens-mcp-trust-bin-");
+		const bin = path.join(env.tmpDir, "node_modules", ".bin");
+		fs.mkdirSync(bin, { recursive: true });
+		const marker = path.join(env.tmpDir, "used-oxlint");
+		const script = path.join(env.tmpDir, "oxlint.cjs");
+		fs.writeFileSync(
+			script,
+			`require("node:fs").appendFileSync(${JSON.stringify(marker)}, "used\\n"); console.log(JSON.stringify({diagnostics: []}));`,
+		);
+		fs.writeFileSync(
+			path.join(bin, "oxlint"),
+			`#!/usr/bin/env node\nrequire(${JSON.stringify(script)});\n`,
+			{ mode: 0o755 },
+		);
+		fs.writeFileSync(
+			path.join(bin, "oxlint.cmd"),
+			`@"${process.execPath}" "${script}" %*\r\n`,
+		);
+		fs.writeFileSync(path.join(env.tmpDir, ".oxlintrc.json"), "{}");
+		const file = path.join(env.tmpDir, "sample.js");
+		fs.writeFileSync(file, "export const answer = 42;\n");
+		const child = new McpHarness({ cwd: env.tmpDir });
+		try {
+			for (const [index, mode] of ["warm", "fresh"].entries()) {
+				fs.rmSync(marker, { force: true });
+				await child.request(4300 + index, "tools/call", {
+					name: "pilens_analyze",
+					arguments: { file, mode, flags: { "no-lsp": true } },
+				});
+				expect(fs.existsSync(marker), `${mode} uses local oxlint`).toBe(true);
+			}
+		} finally {
+			child.dispose();
+			env.cleanup();
+		}
+	}, 60_000);
+
+	it("admits Lean's code-running server through the real MCP spawn gate", async () => {
+		const env = setupTestEnvironment("pi-lens-mcp-trust-lean-");
+		const home = path.join(env.tmpDir, "home");
+		fs.mkdirSync(home);
+		const marker = path.join(env.tmpDir, "spawned-lean");
+		const script = path.join(env.tmpDir, "lean.mjs");
+		fs.writeFileSync(
+			script,
+			`import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(marker)}, "spawned"); await import(${JSON.stringify(new URL("../fixtures/fake-lsp-server.mjs", import.meta.url).href)});`,
+		);
+		fs.writeFileSync(
+			path.join(home, "lsp.json"),
+			JSON.stringify({
+				serverOverrides: { lean: { command: [process.execPath, script] } },
+			}),
+		);
+		fs.writeFileSync(path.join(env.tmpDir, "lakefile.lean"), "import Lake\n");
+		const file = path.join(env.tmpDir, "Main.lean");
+		fs.writeFileSync(file, "def main := 1\n");
+		const child = new McpHarness({
+			cwd: env.tmpDir,
+			env: { PI_LENS_HOME: home, PI_LENS_TEST_MODE: "0" },
+		});
+		try {
+			await child.request(4302, "tools/call", {
+				name: "pilens_lsp_navigation",
+				arguments: { operation: "documentSymbol", path: file },
+			});
+			expect(fs.existsSync(marker), "Lean crossed the project-code gate").toBe(
+				true,
+			);
+			await child.closeInput();
+			const records = fs
+				.readFileSync(path.join(home, "extension.log"), "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { message: string });
+			expect(
+				records.filter(
+					(row) =>
+						row.message ===
+						"mcp: workspace trust belongs to the MCP client; pi trust not consulted",
+				),
+			).toHaveLength(1);
+		} finally {
+			child.dispose();
+			env.cleanup();
+		}
+	}, 60_000);
+});

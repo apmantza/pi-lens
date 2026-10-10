@@ -53,9 +53,10 @@ function runBin(
 	nodeArgs: string[] = [],
 	home = path.join(testIsolationDir, "home"),
 	cwd?: string,
+	entry = binJs,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [...nodeArgs, binJs, ...args], {
+		const child = spawn(process.execPath, [...nodeArgs, entry, ...args], {
 			stdio: ["pipe", "pipe", "pipe"],
 			cwd,
 			env: {
@@ -1285,4 +1286,68 @@ describe("pi-lens-analyze warm hook route", { retry: 2 }, () => {
 			removeTempDirSync(cwd);
 		}
 	}, 45_000);
+});
+
+// #4300: invalid input still crosses the real standalone host startup policy.
+// Reuse the bounded bin harness; the preload observes real trust consumers.
+describe("standalone host trust startup (#4300)", () => {
+	it.each([
+		["analyze-cli", ["--file=missing.js"]],
+		["cli", ["invalid-command"]],
+		["worker", []],
+	])(
+		"%s admits project execution and records its host policy",
+		async (entry, args) => {
+			const project = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-cli-isolation-"),
+			);
+			const home = path.join(project, "home");
+			const bin = path.join(project, "node_modules", ".bin");
+			fs.mkdirSync(bin, { recursive: true });
+			fs.writeFileSync(path.join(bin, "oxlint"), "");
+			fs.writeFileSync(path.join(bin, "oxlint.cmd"), "");
+			try {
+				await runBin(
+					args,
+					undefined,
+					[
+						"--import",
+						path.join(
+							repoRoot,
+							"tests/fixtures/witness/non-pi-trust/startup-probe.mjs",
+						),
+					],
+					home,
+					project,
+					path.join(repoRoot, "mcp", `${entry}.js`),
+				);
+				const result = JSON.parse(
+					fs.readFileSync(path.join(project, "trust-startup.json"), "utf8"),
+				) as { command: string; codeServerAllowed: boolean };
+				expect(result.command).toMatch(/node_modules[\\/]\.bin[\\/]oxlint/);
+				expect(result.codeServerAllowed).toBe(true);
+				const host =
+					entry === "cli"
+						? "build-graph"
+						: entry === "worker"
+							? "mcp-worker"
+							: entry;
+				const records = fs
+					.readFileSync(path.join(home, "extension.log"), "utf8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line) as { message: string });
+				expect(
+					records.filter(
+						(row) =>
+							row.message.startsWith(`${host}: workspace trust belongs to`) &&
+							row.message.endsWith("pi trust not consulted"),
+					),
+				).toHaveLength(1);
+			} finally {
+				removeTempDirSync(project);
+			}
+		},
+		60_000,
+	);
 });

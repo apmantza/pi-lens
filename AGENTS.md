@@ -688,14 +688,19 @@ file-scoped worklist and receives no project-wide scanner output.
 - `safeSpawnAsync` is the subprocess seam. It carries ambient abort behavior,
   process-tree cleanup, output caps, typed failure kinds, and bounded timeouts.
   Installs pass `ignoreAmbientSignal: true` and remain trust-gated.
-- Project trust is consumed through `isProjectTrusted`; pi-lens never registers
-  the host's trust-answer handler. `compileLspRegistry` is the one admission
+- Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never
+  registers the host's trust-answer handler. `compileLspRegistry` is the one admission
   seam for LSP executable fields: global config and built-ins remain allowed,
   while project `command`, command overrides, `env`, and
   `initializationOptions` require pi's `trusted` answer. Missing trust APIs are
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.
+  Non-pi process entry points (`mcp/server.ts`, `mcp/worker.ts`,
+  `mcp/analyze-cli.ts`, and `mcp/cli.ts`) declare trusted execution once at
+  startup through `setProjectTrustState`: workspace trust belongs to their
+  calling client, and pi trust is not consulted.
+  `tests/mcp/server.smoke.test.ts` and `tests/mcp/analyze-cli.test.ts` pin it.
 - LSP service generations, workspace-sweep holds, and repair latches use
   versioned process singletons. Reset tears down the old generation before a
   replacement can spawn. Idle eviction is lease-guarded and clears ownership
