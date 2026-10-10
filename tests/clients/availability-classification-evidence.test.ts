@@ -97,8 +97,10 @@ class FakeScanClient extends SecurityScanClient<string[]> {
 }
 
 beforeEach(async () => {
+	// The removed module double reported `getProjectTrustState() === "unknown"`,
+	// so keep that state rather than widening every case to "trusted".
 	(await import("../../clients/project-trust.js")).setProjectTrustState(
-		"trusted",
+		"unknown",
 	);
 	safeSpawnAsync.mockReset();
 	logLatencySpy.mockReset();

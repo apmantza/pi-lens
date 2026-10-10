@@ -5,13 +5,14 @@
  */
 
 import * as path from "node:path";
+import { Lang, parse } from "@ast-grep/napi";
 import { describe, expect, it } from "vitest";
 import {
 	assertNonEmptyScan,
 	listSourceFiles,
 	readWalkedFiles,
-	stripSource,
 } from "../support/sweep-kit.js";
+import { isViMockCall, unquote } from "../support/vi-mock-export-gate.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
@@ -27,20 +28,43 @@ const BASELINE: Record<string, number> = {
 	"clients/project-trust.js": 1,
 };
 
+/**
+ * Both the hoisted `vi.mock` and the non-hoisted `vi.doMock` replace a whole
+ * module, so the ratchet owns both. The structural {@link isViMockCall}
+ * (shared with the export gate) answers dot, bracket and spaced forms; this is
+ * the one caller that widens its property set.
+ */
+const MOCK_METHODS = ["mock", "doMock"] as const;
+
+/**
+ * Resolve a module specifier to its module identity: posix separators, any
+ * relative depth, and a `.js`/`.ts`/extensionless spelling all name the same
+ * module. Comparing the trailing `clients/<name>` path (never a raw
+ * `endsWith("…js")`) keeps a nested same-named file from counting.
+ */
+function resolvesToModule(specifier: string, moduleName: string): boolean {
+	const strip = (value: string) =>
+		value.replace(/\\/g, "/").replace(/\.(?:[cm]?[jt]s)$/, "");
+	const candidate = strip(specifier);
+	const modulePath = strip(moduleName);
+	return candidate === modulePath || candidate.endsWith(`/${modulePath}`);
+}
+
 function countViMockSites(source: string, moduleName: string): number {
-	const structure = stripSource(source);
+	const calls = parse(Lang.TypeScript, source)
+		.root()
+		.findAll({ rule: { kind: "call_expression" } });
 	let count = 0;
-	for (const match of structure.matchAll(/\bvi\s*\.\s*mock\s*\(\s*/g)) {
-		const start = match.index ?? 0;
-		const argument = source
-			.slice(start)
-			.match(/^vi\s*\.\s*mock\s*\(\s*["']([^"']+)["']/);
-		if (argument?.[1].endsWith(moduleName)) count++;
+	for (const call of calls) {
+		if (!isViMockCall(call.field("function"), MOCK_METHODS)) continue;
+		const argument = call.field("arguments")?.namedChildren()[0];
+		const specifier = argument ? unquote(argument.text()) : undefined;
+		if (specifier && resolvesToModule(specifier, moduleName)) count++;
 	}
 	return count;
 }
 
-function counts(): Record<string, number> {
+async function counts(): Promise<Record<string, number>> {
 	const files = listSourceFiles(TESTS_ROOT, {
 		extensions: [".ts"],
 		exclude: (relative) => relative.startsWith("fixtures/"),
@@ -52,25 +76,37 @@ function counts(): Record<string, number> {
 	for (const { source } of readWalkedFiles(files)) {
 		for (const { module } of SEAM_MODULES)
 			result[module] += countViMockSites(source, module);
+		// Turn the loop between files so `@ast-grep/napi` can free each parsed
+		// tree from its finalizer before the next one is built (the
+		// `vi-mock-export-sweep` memory bound, #3565).
+		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
 	return result;
 }
 
 describe("project-trust real seam ratchet (#4281)", () => {
-	it("keeps every seam module's whole-module mock population at or below baseline", () => {
-		const live = counts();
+	it("keeps every seam module's whole-module mock population at or below baseline", async () => {
+		const live = await counts();
 		for (const { module } of SEAM_MODULES) {
-			expect(live[module]).toBeGreaterThan(0);
 			expect(live[module]).toBeLessThanOrEqual(BASELINE[module]);
 		}
 	});
 
-	it("counts executable vi.mock calls while ignoring comments and strings", () => {
+	// Liveness: a detector that silently counts zero would pass the shrink-only
+	// assertion above, so the known sites are pinned here. The comment and the
+	// string literal must not count; each executable spelling must (shape 34:
+	// the unlisted `doMock`/`.ts`/backtick/bracket forms are the point).
+	it("detects executable mocks and ignores comments and strings", () => {
 		const source = [
-			'// vi.mock("./clients/project-trust.js")',
-			"const text = 'vi.mock(\"./clients/project-trust.js\")';",
-			'vi.mock("../../clients/project-trust.js", () => ({}));',
+			'// vi.mock("../clients/project-trust.js")',
+			"const text = 'vi.mock(\"../clients/project-trust.js\")';",
+			'vi.mock("../clients/project-trust.js", () => ({}));',
+			'vi.doMock("../clients/project-trust.js", () => ({}));',
+			'vi.mock("../clients/project-trust.ts", () => ({}));',
+			"vi.mock(`../clients/project-trust.js`, () => ({}));",
+			'vi["mock"]("../clients/project-trust.js", () => ({}));',
+			'vi.doMock("../clients/other.js", () => ({}));',
 		].join("\n");
-		expect(countViMockSites(source, "clients/project-trust.js")).toBe(1);
+		expect(countViMockSites(source, "clients/project-trust.js")).toBe(5);
 	});
 });

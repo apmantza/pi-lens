@@ -92,7 +92,10 @@ beforeEach(() => {
 	});
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// The trust state is process-wide; reset it in teardown so a failed
+	// assertion cannot leak "untrusted" into the next file's case.
+	(await import("../../clients/project-trust.js")).resetProjectTrust();
 	restoreEnv();
 	fs.rmSync(piLensHome, { recursive: true, force: true });
 });
@@ -280,7 +283,6 @@ describe("the installer records what its attempt did (#1500)", () => {
 			install: "not-attempted",
 			installReason: expect.stringContaining("project trust"),
 		});
-		trust.resetProjectTrust();
 	});
 
 	it("no attempt at all reads as not-attempted", async () => {
