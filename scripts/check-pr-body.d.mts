@@ -108,6 +108,7 @@ export declare function resolveTouchesTests(
 export declare function lintPullRequestEvent(
 	fetchImpl?: typeof fetch,
 	event?: { pull_request?: { number: number; body?: string | null } },
+	diffImpl?: () => string,
 ): Promise<{ valid: boolean; repaired: boolean }>;
 export declare function localDiff(
 	cwd?: string,

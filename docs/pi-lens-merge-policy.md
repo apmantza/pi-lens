@@ -497,10 +497,11 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Detection retrospective on every merged bug fix (2026-09-06).** The
   catalog records the CODE lesson of a bug (a shape, a screen, a guard). Before
   a bug-labelled lane's ledger row closes, the orchestrator also records the
-  DETECTION lesson in one line: which verification layer caught it (external
-  user, reviewer probe, CI job, governance sweep, install/compat/tool smoke,
-  dogfood, release gate) and which layer SHOULD have caught it earlier and at
-  what cost. If that layer does not exist, file it as an issue with the bug as
+  DETECTION lesson in one line: which verification layer caught it and which
+  layer SHOULD have caught it earlier and at what cost. The accepted layer
+  words are the `DETECTION_LAYERS` list exported by `scripts/check-pr-body.mjs`,
+  which the `## Detection` body check reads; the prose does not restate them.
+  If that layer does not exist, file it as an issue with the bug as
   its named recurrence — the same standard shapes are held to. The ledger
   carries a `caught by / should have been caught by` column. Record: #2587's
   manifest entry escaped the package for four releases; a second registration

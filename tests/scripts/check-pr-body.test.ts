@@ -5192,6 +5192,19 @@ describe("detection retrospective for bug-closing PRs (#4288)", () => {
 		]);
 	});
 
+	it("keeps the merge policy pointing at the exported vocabulary", () => {
+		// R4: the policy prose named a divergent list (`CI job`,
+		// `install/compat/tool smoke`). It now points at DETECTION_LAYERS; this
+		// pin fails if a copied list drifts back in.
+		const doc = readFileSync(
+			resolve(repositoryRoot, "docs/pi-lens-merge-policy.md"),
+			"utf8",
+		);
+		expect(doc).toContain("DETECTION_LAYERS");
+		for (const stale of ["CI job", "install/compat/tool smoke"])
+			expect(doc).not.toContain(stale);
+	});
+
 	it("fails a bug-closing body without the section", () => {
 		const result = lintPrBody(body, { bugClosing: true });
 		expect(result.valid).toBe(false);
@@ -5260,6 +5273,55 @@ describe("detection retrospective for bug-closing PRs (#4288)", () => {
 		);
 		expect(result.valid).toBe(false);
 		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("does not count a tilde-fenced example", () => {
+		const result = lintPrBody(
+			withDetection(
+				"~~~md\n" +
+					"- Caught by: smoke\n" +
+					"- Should have been caught by: CI unit\n" +
+					"- Gap: #1\n" +
+					"~~~",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("does not count a four-space indented code block", () => {
+		const result = lintPrBody(
+			withDetection(
+				"    - Caught by: smoke\n" +
+					"    - Should have been caught by: CI unit\n" +
+					"    - Gap: #1",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("accepts a one-word none: reason", () => {
+		expect(
+			lintPrBody(
+				withDetection(
+					"- Caught by: smoke\n" +
+						"- Should have been caught by: CI unit\n" +
+						"- Gap: none: n/a",
+				),
+				{ bugClosing: true },
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts the Detection retrospective heading", () => {
+		expect(
+			lintPrBody(`${body}\n\n## Detection retrospective\n${validDetection}`, {
+				bugClosing: true,
+			}),
+		).toEqual({ valid: true, errors: [] });
 	});
 
 	it("refuses a non-test exists: path", () => {
@@ -5379,9 +5441,16 @@ describe("detection reaches the CI event entry (#4288)", () => {
 	it("requires Detection when the closed issue is bug-labelled", async () => {
 		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 		try {
-			const result = await lintPullRequestEvent(eventFetch(true), {
-				pull_request: { number: 4288, body: bugBody },
-			});
+			// #4288 R1: the CI checkout is shallow, so `git diff origin/master...HEAD`
+			// has no merge base and GITHUB_ACTIONS makes that fatal. The detection
+			// wires are independent of git, so inject an empty diff and pin the CI
+			// environment the unit-test job actually runs in.
+			vi.stubEnv("GITHUB_ACTIONS", "true");
+			const result = await lintPullRequestEvent(
+				eventFetch(true),
+				{ pull_request: { number: 4288, body: bugBody } },
+				() => "",
+			);
 			expect(result.valid).toBe(false);
 			expect(errors.mock.calls.flat().join("\n")).toContain('"## Detection"');
 		} finally {
@@ -5390,21 +5459,29 @@ describe("detection reaches the CI event entry (#4288)", () => {
 	});
 
 	it("does not require Detection when the closed issue is not a bug", async () => {
-		const result = await lintPullRequestEvent(eventFetch(false), {
-			pull_request: { number: 4288, body: bugBody },
-		});
+		vi.stubEnv("GITHUB_ACTIONS", "true");
+		const result = await lintPullRequestEvent(
+			eventFetch(false),
+			{ pull_request: { number: 4288, body: bugBody } },
+			() => "",
+		);
 		expect(result).toEqual({ valid: true, repaired: false });
 	});
 
 	it("warns and skips Detection when the label read fails", async () => {
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			const result = await lintPullRequestEvent(eventFetch("fail"), {
-				pull_request: { number: 4288, body: bugBody },
-			});
+			vi.stubEnv("GITHUB_ACTIONS", "true");
+			const result = await lintPullRequestEvent(
+				eventFetch("fail"),
+				{ pull_request: { number: 4288, body: bugBody } },
+				() => "",
+			);
 			expect(result.valid).toBe(true);
+			// R2: the skip must be a visible GitHub Actions annotation on the job
+			// log, naming the reason and the issue, not a silent pass.
 			expect(warning).toHaveBeenCalledWith(
-				expect.stringContaining('"## Detection"'),
+				expect.stringMatching(/^::warning::.*## Detection.*#4288/s),
 			);
 		} finally {
 			warning.mockRestore();

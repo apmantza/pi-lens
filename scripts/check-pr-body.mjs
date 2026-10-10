@@ -95,6 +95,9 @@ const SECTION_SYNONYMS = new Map([
 	// #4288: required only when the PR closes a bug-labelled issue, so it stays
 	// out of REQUIRED_SECTIONS and is added per-request in `lintPrBody`.
 	["detection", "detection"],
+	// The merge policy calls it a "detection retrospective"; accept that heading
+	// so an author following the prose is not answered with the generic message.
+	["detection retrospective", "detection"],
 ]);
 const REVIEW_HEADER_REPAIR_PREFIX =
 	"## Why\nLegacy body normalized for the required review contract.\n\n" +
@@ -111,18 +114,60 @@ function hasSection(heading, section) {
 		: heading?.section === section;
 }
 
+// Fenced (``` / ~~~) and 4-space indented code blocks are stripped, so a quoted
+// example cannot satisfy a body section (#4288 R3). An indented block cannot
+// interrupt a paragraph (CommonMark), so a 4-space line that follows body text
+// stays: list continuations and nested bullets are content, not code. The
+// closing fence must repeat the opener's character (>=3 of them).
 function sourceWithoutFencedBlocks(source) {
-	let fenced = false;
-	return String(source ?? "")
-		.split(/\r?\n/)
-		.map((line) => {
-			if (/^\s*```/.test(line)) {
-				fenced = !fenced;
-				return "";
+	const lines = String(source ?? "").split(/\r?\n/);
+	const output = [];
+	let fenceChar = null;
+	let fenceLength = 0;
+	let inIndented = false;
+	// "start" | "blank" | "heading" | "text": whether the previous emitted
+	// line can precede an indented code block.
+	let previous = "start";
+	for (const line of lines) {
+		if (fenceChar) {
+			const close = new RegExp(`^\\s*\\${fenceChar}{${fenceLength},}\\s*$`);
+			if (close.test(line)) {
+				fenceChar = null;
+				fenceLength = 0;
 			}
-			return fenced ? "" : line;
-		})
-		.join("\n");
+			output.push("");
+			continue;
+		}
+		const open = /^\s*(`{3,}|~{3,})/.exec(line);
+		if (open) {
+			fenceChar = open[1][0];
+			fenceLength = open[1].length;
+			inIndented = false;
+			output.push("");
+			previous = "blank";
+			continue;
+		}
+		if (/^(?: {4,}|\t)/.test(line)) {
+			if (
+				inIndented ||
+				previous === "start" ||
+				previous === "blank" ||
+				previous === "heading"
+			) {
+				inIndented = true;
+				output.push("");
+				continue;
+			}
+		} else {
+			inIndented = false;
+		}
+		output.push(line);
+		const trimmed = line.trim();
+		if (trimmed === "") previous = "blank";
+		else if (HEADING.test(line)) previous = "heading";
+		else previous = "text";
+	}
+	return output.join("\n");
 }
 
 function templatePlaceholderLines() {
@@ -1749,7 +1794,9 @@ function validDetectionGap(value) {
 		);
 	}
 	const none = /^none\s*:\s*(.+)$/i.exec(text);
-	if (none) return wordCount(none[1]) >= 2;
+	// A one-word reason ("none: oversight") is legitimate; the shape only
+	// requires a reason to be present (#4288 R5).
+	if (none) return wordCount(none[1]) >= 1;
 	return false;
 }
 
@@ -2265,6 +2312,7 @@ function eventPayload() {
 export async function lintPullRequestEvent(
 	fetchImpl = globalThis.fetch,
 	event = eventPayload(),
+	diffImpl = localDiff,
 ) {
 	const pullRequest = event.pull_request;
 	if (!pullRequest || !process.env.GITHUB_REPOSITORY)
@@ -2286,7 +2334,7 @@ export async function lintPullRequestEvent(
 		);
 	let diff = "";
 	try {
-		diff = localDiff();
+		diff = diffImpl();
 	} catch (error) {
 		if (process.env.GITHUB_ACTIONS) {
 			const reason = error instanceof Error ? error.message : String(error);
