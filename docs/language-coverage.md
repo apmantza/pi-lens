@@ -1,6 +1,6 @@
 # Language Coverage
 
-pi-lens supports **36+ languages** through dispatch runners and LSP integration.
+pi-lens supports **37+ languages** through dispatch runners and LSP integration.
 
 Formatting uses a single selected formatter per file: explicit project config wins, otherwise pi-lens uses a smart default where supported, and config-first ecosystems do not autoformat without config.
 
@@ -33,6 +33,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Java                  | ✓   | lsp, javac                                                                                                     | google-java-format      |
 | Java + Lombok         | ✓   | JDT LS launched with `-javaagent:<lombok.jar>` when Lombok is detected and a jar is found (`PI_LENS_LOMBOK_JAR` / `LOMBOK_JAR`, project `.lombok/lombok.jar`, or Maven/Gradle cache) | google-java-format      |
 | Kotlin                | ✓   | lsp, ktlint, detekt                                                                                            | ktlint                  |
+| Lean 4                | ✓ (Lake `serve`) | lsp; uses each project's Lake toolchain and environment                                               | —                       |
 | Swift                 | ✓   | lsp, swiftlint                                                                                                 | swiftformat             |
 | Dart                  | ✓   | lsp, dart-analyze                                                                                              | dart format             |
 | Lua                   | ✓   | lsp                                                                                                            | stylua                  |

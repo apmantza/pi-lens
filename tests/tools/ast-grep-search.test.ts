@@ -1,10 +1,12 @@
 import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	_telemetryClassificationErrorForTest,
 	_telemetryErrorForTest,
 	createAstGrepSearchTool,
 } from "../../tools/ast-grep-search.js";
+import { setupTestEnvironment } from "../clients/test-utils.js";
 
 function makeClient(
 	overrides: Partial<Parameters<typeof createAstGrepSearchTool>[0]> = {},
@@ -36,6 +38,60 @@ function asSearchDetails(details: unknown): SearchDetails {
 }
 
 describe("ast_grep_search tool", () => {
+	describe("relative paths resolve against ctx.cwd (#4233 V3-HIGH-01)", () => {
+		it("passes an absolute target when the model gives a relative path", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-search-rel-");
+			try {
+				const search = vi
+					.fn()
+					.mockResolvedValue({ matches: [], totalMatches: 0 });
+				const tool = createAstGrepSearchTool(makeClient({ search }));
+				await tool.execute(
+					"rel-1",
+					{ pattern: "foo($X)", lang: "typescript", paths: ["src/a.ts"] },
+					new AbortController().signal,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				// The ast-grep child runs from a pi-lens-owned neutral cwd when its npx
+				// fallback wins (#4193), so every target must be absolute before dispatch.
+				expect(search).toHaveBeenCalledWith(
+					"foo($X)",
+					"typescript",
+					[path.join(env.tmpDir, "src", "a.ts")],
+					expect.anything(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("defaults to the absolute ctx.cwd when no paths are given", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-search-default-");
+			try {
+				const search = vi
+					.fn()
+					.mockResolvedValue({ matches: [], totalMatches: 0 });
+				const tool = createAstGrepSearchTool(makeClient({ search }));
+				await tool.execute(
+					"rel-2",
+					{ pattern: "foo($X)", lang: "typescript" },
+					new AbortController().signal,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(search).toHaveBeenCalledWith(
+					"foo($X)",
+					"typescript",
+					[env.tmpDir],
+					expect.anything(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
 	describe("telemetry sanitization", () => {
 		it("escapes NUL bytes and truncates long subprocess errors", () => {
 			expect(_telemetryErrorForTest(undefined)).toBeUndefined();
@@ -622,28 +678,33 @@ describe("ast_grep_search tool", () => {
 			expect(text).toContain("Hint:");
 		});
 
-		it("passes paths to searchWithRule", async () => {
-			const searchWithRule = vi
-				.fn()
-				.mockResolvedValue({ matches: [], totalMatches: 0 });
-			const tool = createAstGrepSearchTool(makeClient({ searchWithRule }));
-			await tool.execute(
-				"r4",
-				{
-					pattern: "foo($X)",
-					lang: "typescript",
-					rule: "id: r\nlanguage: TypeScript\nrule:\n  kind: call_expression",
-					paths: ["src/"],
-				},
-				new AbortController().signal,
-				null,
-				{ cwd: "." },
-			);
-			expect(searchWithRule).toHaveBeenCalledWith(
-				expect.any(String),
-				["src/"],
-				expect.objectContaining({ deadlineAt: expect.any(Number) }),
-			);
+		it("resolves relative paths before searchWithRule dispatch (#4233 V3-HIGH-01)", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-search-rule-");
+			try {
+				const searchWithRule = vi
+					.fn()
+					.mockResolvedValue({ matches: [], totalMatches: 0 });
+				const tool = createAstGrepSearchTool(makeClient({ searchWithRule }));
+				await tool.execute(
+					"r4",
+					{
+						pattern: "foo($X)",
+						lang: "typescript",
+						rule: "id: r\nlanguage: TypeScript\nrule:\n  kind: call_expression",
+						paths: ["src/"],
+					},
+					new AbortController().signal,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(searchWithRule).toHaveBeenCalledWith(
+					expect.any(String),
+					[path.join(env.tmpDir, "src")],
+					expect.objectContaining({ deadlineAt: expect.any(Number) }),
+				);
+			} finally {
+				env.cleanup();
+			}
 		});
 
 		it("returns read handles and no dump suggestion for YAML-rule matches", async () => {

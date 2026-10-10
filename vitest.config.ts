@@ -457,6 +457,9 @@ export const wallClockBudgetInclude = [
 	// is this process, so the Linux ownership arm of the kill-by-pid predicate
 	// cannot be observed through any double (flake-shape admission).
 	"tests/clients/lsp/kill-process-tree-real-child.test.ts",
+	// #4119: real Lake/elan process plus a pushed Lean diagnostic; phase after
+	// lsp-spawn-heavy to satisfy the flake-shape serialized-wall-clock admission.
+	"tests/clients/lsp/lean-real-smoke.test.ts",
 	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
 	// #2765 round 3: fake timers exercise the live hook remainder after delayed

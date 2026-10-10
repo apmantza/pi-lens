@@ -21,7 +21,7 @@ import type { SearchReadLocation } from "../clients/search-read-registration.js"
 import { isAtOrAboveHomeDir } from "../clients/path-utils.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
-import { LANGUAGES } from "./shared.js";
+import { LANGUAGES, resolveAstGrepPaths } from "./shared.js";
 
 /**
  * Build the agent-facing error text, appending a remediation hint derived from
@@ -723,7 +723,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						details: {},
 					};
 				}
-				const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
+				const searchPaths = resolveAstGrepPaths(paths, ctx.cwd);
 				const PAGE_SIZE = Math.max(
 					1,
 					Math.min(

@@ -171,6 +171,13 @@
 		// tests/clients/instance-reaper-pid-reuse.test.ts (#3538 R4-F1) runs
 		// the reaper confined under util-linux `unshare --pid --time` -- a
 		// system binary, never npm-installable; the case skips when absent.
-		"unshare"
+		"unshare",
+		// tests/clients/lsp/lean-real-smoke.test.ts launches the Lean language
+		// server as `lake serve` and probes `elan show`; both come from a
+		// user-managed elan/Lake toolchain (docs/dependencies.md's PATH-only Lean
+		// row) -- system tools, never npm packages, so no dependency could
+		// provide them. The case skips when the toolchain is absent.
+		"elan",
+		"lake"
 	]
 }

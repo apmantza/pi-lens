@@ -205,6 +205,11 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 			{ mode: "fallback", runnerIds: ["detekt"], filterKinds: ["kotlin"] },
 		],
 	},
+	lean: {
+		name: "Lean 4 Diagnostics",
+		capabilities: ["types", "lint"],
+		writeGroups: [primary("lean")],
+	},
 	swift: {
 		name: "Swift Linting",
 		capabilities: ["types", "lint"],

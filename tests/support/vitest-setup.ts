@@ -872,6 +872,15 @@ const TMP_LEAK_ADMISSIONS: TmpLeakAdmission[] = [
 		issue: "#2912",
 	})),
 	{
+		// Temporary (maintainer decision, 2026-10-10). Remove this row in the PR
+		// that names and fixes the CI producer; #4292 owns that removal.
+		file: "*",
+		prefix: "pi-lens-jscpd-",
+		reason:
+			"A jscpd report dir (clients/jscpd-client.ts runScan) still leaks in CI shard 5 from a producer no local run reproduces, so it reds every PR's hygiene owner; admitted while the producer is traced. The prefix also covers jscpd-client.test.ts fixture roots, which are still removed at cleanup.",
+		issue: "#4133",
+	},
+	{
 		file: "*",
 		prefix: "pi-lens-ast-grep",
 		reason:
