@@ -347,6 +347,8 @@ export function createDispatchContext(
 	sessionGeneration?: GenerationHandle,
 	/** Stable session identity for deferred runner delivery. */
 	sessionId?: string,
+	/** Root ownership selected by the shared analysis-root seam. */
+	analysisRootMode?: import("../analysis-root.js").AnalysisRootMode,
 ): DispatchContext {
 	const absoluteFilePath = resolveRunnerPath(cwd, filePath);
 	const normalizedProjectRoot = normalizeMapKey(
@@ -387,6 +389,7 @@ export function createDispatchContext(
 		cwd: normalizedCwd,
 		kind,
 		fileRole,
+		analysisRootMode,
 		generatedEvidence: generatedDetail?.evidence,
 		generatedLineShapeMean: generatedDetail?.lineShapeMean,
 		pi,
@@ -1246,6 +1249,19 @@ export async function dispatchForFile(
 	options?: { dedupeCoverageNotice?: boolean },
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
+	if (ctx.analysisRootMode === "adopted") {
+		return {
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "",
+			blockerOutput: "",
+			hasBlockers: false,
+		};
+	}
 	if (ctx.fileRole === "generated") {
 		// The generated short-circuit (refs #2346): never ran before this fix
 		// for name-less machine-emitted files (a scraped/minified page has no

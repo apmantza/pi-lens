@@ -13,8 +13,11 @@ import {
 } from "../../../clients/lsp/wait-policy/strategies.js";
 
 describe("TypeScript diagnostic strategies (#1412)", () => {
-	it("keeps classic first-push seeding but stabilizes native TS7 pushes", () => {
-		expect(getStrategy("typescript", "classic").seedFirstPush).toBe(true);
+	it("holds classic's measured empty first push and stabilizes native TS7 pushes", () => {
+		expect(getStrategy("typescript", "classic").seedFirstPush).toBe(false);
+		expect(getStrategy("typescript", "classic").emptyFirstPublish).toBe(
+			"indexing",
+		);
 		expect(getStrategy("typescript", "native-ts7").seedFirstPush).toBe(false);
 		expect(getStrategy("typescript", "native-ts7").debounceMs).toBeGreaterThan(
 			0,

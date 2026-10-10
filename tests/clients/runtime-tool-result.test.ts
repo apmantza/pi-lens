@@ -41,12 +41,17 @@ import {
 	getProjectIgnoreMatcher,
 } from "../../clients/file-utils.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
+import { resolveAnalysisRoot } from "../../clients/analysis-root.js";
 import {
 	getVerifiedPathAttributionGuessCount,
 	resetVerifiedPathAttributionGuessCount,
 } from "../../clients/path-attribution-telemetry.js";
 import { toPosix } from "../../clients/path-utils.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createTempFile,
+	removeTempDirSync,
+	setupTestEnvironment,
+} from "./test-utils.js";
 import {
 	createBashToolDefinition,
 	createReadToolDefinition,
@@ -190,11 +195,30 @@ it("keeps intended vendor skips silent (#4218)", async () => {
 it("classifies outside-root path families through the real tool-result seam (#4230)", async () => {
 	resetDegradationLedger();
 	const env = setupTestEnvironment("pi-lens-4230-path-families-");
+	const previousHome = process.env.HOME;
+	const previousTmpDir = process.env.TMPDIR;
 	const previousDataDir = process.env.PILENS_DATA_DIR;
-	process.env.PILENS_DATA_DIR = path.join(
+	const isolatedTmpDir = path.join(env.tmpDir, "runtime-tmp");
+	fs.mkdirSync(isolatedTmpDir, { recursive: true });
+	process.env.TMPDIR = isolatedTmpDir;
+	const syntheticHome = path.join(env.tmpDir, "home");
+	const ordinaryHomeProject = path.join(syntheticHome, "other-project");
+	const dataDir = path.join(
 		path.dirname(env.tmpDir),
 		`pi-lens-4230-data-${process.pid}`,
 	);
+	fs.mkdirSync(ordinaryHomeProject, { recursive: true });
+	fs.writeFileSync(path.join(ordinaryHomeProject, "package.json"), "{}\n");
+	process.env.HOME = syntheticHome;
+	vi.mocked(
+		(await import("../../clients/pipeline.js")).runPipeline,
+	).mockResolvedValue({
+		output: "",
+		hasBlockers: false,
+		isError: false,
+		fileModified: false,
+	});
+	process.env.PILENS_DATA_DIR = dataDir;
 	try {
 		const projectDataPath = path.join(
 			getProjectDataDir(env.tmpDir),
@@ -264,13 +288,15 @@ it("classifies outside-root path families through the real tool-result seam (#42
 			],
 			[
 				"ordinary tmp project file",
-				path.join(os.tmpdir(), "capture", "lib", "x.ts"),
+				path.join(path.dirname(env.tmpDir), "capture", "lib", "x.ts"),
 				true,
 			],
+			// D1 maintainer decision: sibling projects below $HOME are adopted;
+			// only $HOME itself and its ancestors remain refused.
 			[
 				"ordinary home project file",
-				path.join(os.homedir(), "other-project", "src", "a.ts"),
-				true,
+				path.join(ordinaryHomeProject, "src", "a.ts"),
+				false,
 			],
 		] as const;
 
@@ -302,8 +328,69 @@ it("classifies outside-root path families through the real tool-result seam (#42
 			else expect(advisory).toBeUndefined();
 		}
 	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousTmpDir === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previousTmpDir;
 		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = previousDataDir;
+		removeTempDirSync(dataDir);
+		env.cleanup();
+	}
+});
+
+it("adopts a home sibling but refuses home, ancestors, and a home symlink (#4230 D1)", () => {
+	const env = setupTestEnvironment("pi-lens-4230-home-boundary-");
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
+	const previousTmpDir = process.env.TMPDIR;
+	// Windows' os.tmpdir() is normally below USERPROFILE, and Windows
+	// os.homedir() reads USERPROFILE rather than HOME. Keep this fake home
+	// outside the OS temp tree and pin both environment spellings so the D1
+	// boundary is testing home ownership, not the temp-root refusal (#4230).
+	const home = fs.mkdtempSync(path.join(process.cwd(), ".analysis-root-home-"));
+	const sessionRoot = path.join(home, "code", "a");
+	const siblingRoot = path.join(home, "code", "b");
+	const homeLink = path.join(env.tmpDir, "home-link");
+	fs.mkdirSync(sessionRoot, { recursive: true });
+	fs.mkdirSync(siblingRoot, { recursive: true });
+	fs.writeFileSync(path.join(siblingRoot, "package.json"), "{}\n");
+	fs.writeFileSync(path.join(home, "package.json"), "{}\n");
+	fs.writeFileSync(path.join(env.tmpDir, "package.json"), "{}\n");
+	const isolatedTmpDir = path.join(env.tmpDir, "runtime-tmp");
+	fs.mkdirSync(isolatedTmpDir, { recursive: true });
+	process.env.TMPDIR = isolatedTmpDir;
+	try {
+		fs.symlinkSync(home, homeLink, "dir");
+	} catch {
+		expect(true).toBe(true);
+		if (previousTmpDir === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previousTmpDir;
+		fs.rmSync(home, { recursive: true, force: true });
+		env.cleanup();
+		return;
+	}
+	process.env.HOME = home;
+	process.env.USERPROFILE = home;
+	try {
+		expect(
+			resolveAnalysisRoot(path.join(siblingRoot, "src", "b.ts"), sessionRoot),
+		).toBe("adopted");
+		expect(resolveAnalysisRoot(path.join(home, "home.ts"), sessionRoot)).toBe(
+			"none",
+		);
+		expect(resolveAnalysisRoot(env.tmpDir, sessionRoot)).toBe("none");
+		expect(
+			resolveAnalysisRoot(path.join(homeLink, "src", "b.ts"), sessionRoot),
+		).toBe("none");
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+		if (previousTmpDir === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previousTmpDir;
+		fs.rmSync(home, { recursive: true, force: true });
 		env.cleanup();
 	}
 });

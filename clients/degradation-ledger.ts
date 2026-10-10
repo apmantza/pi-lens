@@ -599,6 +599,7 @@ export type DegradationKind =
 	 */
 	| "log-sink-truncate-refused"
 	| "log-sink-write-failure"
+	| "lsp-adopted-root-evicted"
 	| "lsp-breaker"
 	| "lsp-capability-skip"
 	/**
@@ -1535,6 +1536,7 @@ export type DegradationKind =
 	| "tool-cwd-resolution"
 	/** A loader request named a configured-disabled tool. */
 	| "tool-disabled"
+	| "tool-result-adopted-project"
 	/** A project edit was outside the session root and skipped analysis (#4218). */
 	| "tool-result-outside-project-root"
 	/** #3612: a lazy-tool activation arrived before its activation's session scope began. */

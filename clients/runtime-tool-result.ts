@@ -123,6 +123,7 @@ import {
 import {
 	canWriteAnalysisRoot,
 	resolveAnalysisRoot,
+	resolveAnalysisRootPath,
 	type AnalysisRootMode,
 } from "./analysis-root.js";
 
@@ -2555,7 +2556,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		);
 		return;
 	}
-	if (analysisRootMode === "none" || analysisRootMode === "adopted") {
+	if (analysisRootMode === "none") {
 		if (
 			isOutsideProjectRoot(filePath, workspaceRoot) &&
 			!isVendorPath(filePath) &&
@@ -2577,6 +2578,22 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			`tool_result: skipped pipeline - file outside project root or in node_modules: ${filePath}`,
 		);
 		return;
+	}
+	if (analysisRootMode === "adopted") {
+		const adoptedRoot = resolveAnalysisRootPath(filePath, workspaceRoot);
+		if (adoptedRoot) {
+			const firstAdoptedRoot = recordDegradationOnce({
+				kind: "tool-result-adopted-project",
+				subject: adoptedRoot,
+				reason: `analysing ${adoptedRoot} as a separate project`,
+			});
+			if (firstAdoptedRoot) {
+				queueAgentAdvisory(
+					`pi-lens is analysing ${adoptedRoot} as a separate project (LSP diagnostics from global servers only; no project tools run).`,
+					writeSession,
+				);
+			}
+		}
 	}
 	// #2430: a classified mutation is accounted for by the chain below, so the
 	// `agent_settled` sweep must re-baseline this file rather than report the

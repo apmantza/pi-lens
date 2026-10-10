@@ -2085,6 +2085,7 @@ async function analysePipeline(
 		},
 		{
 			projectRoot: ctx.projectRoot,
+			analysisRootMode: ctx.analysisRootMode,
 			// The runners' widget order (#3540).
 			writeIndex: widgetOrder(),
 			// #3568: a collect-later runner defers its result to a turn end.

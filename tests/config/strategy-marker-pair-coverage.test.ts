@@ -72,6 +72,11 @@ const PAIR_TESTS: Record<string, PairTest> = {
 		title:
 			"REPLAY-SAVE-RESCAN: opengrep's didSave rescan of v1 cannot answer v2's send, so v1 is withheld after a re-touch (#3482 surplus)",
 	},
+	"typescript:emptyFirstPublish+silentOnClean": {
+		file: "tests/clients/lsp/cascade-tier.test.ts",
+		title:
+			"keeps TypeScript's empty-first hold and silent-clean cascade markers together",
+	},
 };
 
 /** `server:markerA+markerB` → why the two markers never meet. */

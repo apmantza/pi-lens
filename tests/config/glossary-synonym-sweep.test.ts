@@ -942,7 +942,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp-mutation.ts": 3,
 		"clients/lsp/config.ts": 9,
 		"clients/lsp/edits.ts": 23,
-		"clients/lsp/index.ts": 17,
+		"clients/lsp/index.ts": 18,
 		"clients/lsp/inferred-project.ts": 3,
 		"clients/lsp/jvm-runtime.ts": 19,
 		"clients/lsp/language.ts": 3,

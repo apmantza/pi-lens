@@ -212,6 +212,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real recursive fs.watch delivery is the subject; no fake clock delivers an inotify event and a stubbed watcher proves nothing",
 	},
+	"real-process-spawn:clients/analysis-root-writers.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"real git worktree metadata is written and registered by Git; an in-process double cannot prove linked-worktree ownership",
+	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
 		reason:

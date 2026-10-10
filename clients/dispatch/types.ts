@@ -12,6 +12,7 @@
  */
 
 import type { GenerationHandle } from "../generation-guard.js";
+import type { AnalysisRootMode } from "../analysis-root.js";
 import type { ExtensionLogLevel } from "../extension-log.js";
 import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
@@ -317,6 +318,8 @@ export function hasUsableResult(result: {
  * re-normalizes.
  */
 export interface DispatchContext {
+	/** Root ownership selected by the shared analysis-root seam. */
+	readonly analysisRootMode?: AnalysisRootMode;
 	/** Normalized. See the #2016 invariant above. */
 	readonly filePath: string;
 	/**

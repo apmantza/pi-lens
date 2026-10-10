@@ -9,13 +9,12 @@ import { withRealPi } from "../support/real-pi-harness.js";
 // flake-shape: real-process-spawn — only a real pi host can prove that its
 // tool_result delivery and the provider-visible advisory cross the extension
 // process boundary.
-// Recurrence prevented: #4218/#4230, where the shipped out-of-root notice was
+// Recurrence prevented: #4218/#4230, where the shipped root classification was
 // pinned only through an in-process handler and could drift at the host seam.
 describe("real pi: out-of-root write notice and exemptions", () => {
-	it("records one outside-project notice and stays silent for owned paths", async () => {
-		const probeRoot = path.resolve(".probe-home");
-		mkdirSync(probeRoot, { recursive: true });
-		const outside = claimScratchDir(probeRoot, "outside-root-project");
+	it("records one adopted-project notice and stays silent for owned paths", async () => {
+		const outside = claimScratchDir(os.tmpdir(), "outside-root-project");
+		writeFileSync(path.join(outside, "package.json"), "{}\n");
 		const piTemp = mkdtempSync(path.join(os.tmpdir(), "pi-lens-real-harness-"));
 		const directTmpFile = path.join(
 			os.tmpdir(),
@@ -53,27 +52,23 @@ describe("real pi: out-of-root write notice and exemptions", () => {
 							() =>
 								pi.lens
 									.degradations()
-									.filter(
-										(row) => row.kind === "tool-result-outside-project-root",
-									),
+									.filter((row) => row.kind === "tool-result-adopted-project"),
 							{ timeout: 5_000 },
 						)
 						.toHaveLength(1);
 					const rows = pi.lens
 						.degradations()
-						.filter((row) => row.kind === "tool-result-outside-project-root");
+						.filter((row) => row.kind === "tool-result-adopted-project");
 					expect(rows).toHaveLength(1);
 					expect(JSON.stringify(rows)).not.toContain(directTmpFile);
-					expect(rows[0]?.subject).toBe(pi.projectPath());
+					expect(rows[0]?.subject).toBe(outside);
 					const advisories = pi
 						.providerObservations()
 						.filter((observation) =>
-							JSON.stringify(observation).includes("outside the session root"),
+							JSON.stringify(observation).includes("separate project"),
 						);
 					expect(advisories).toHaveLength(1);
-					expect(JSON.stringify(advisories[0])).toContain(
-						`${outside}/target.ts`,
-					);
+					expect(JSON.stringify(advisories[0])).toContain("separate project");
 					expect(JSON.stringify(advisories)).not.toContain(directTmpFile);
 				},
 			);

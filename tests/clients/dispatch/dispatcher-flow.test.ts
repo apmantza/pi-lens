@@ -9,7 +9,7 @@
  * - Conditional runners (when)
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clearCoverageNoticeState,
 	clearLatencyReports,
@@ -56,6 +56,44 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Runner Registration", () => {
+		it("refuses all dispatch runners for an adopted root at the dispatch entry", async () => {
+			// Recurrence: #4257 F1 allowed project-configured runners to execute
+			// after the adopted-root notice, despite the caller's root classification.
+			const run = vi.fn(async () => ({
+				status: "succeeded" as const,
+				diagnostics: [],
+				semantic: "none" as const,
+			}));
+			registerRunner({
+				id: "adopted-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run,
+			});
+			const ctx = createDispatchContext(
+				"test.ts",
+				"/project",
+				{ getFlag: () => false },
+				new FactStore(),
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				"adopted",
+			);
+			const result = await runDispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: ["adopted-runner"] }],
+				registry,
+			);
+			expect(run).not.toHaveBeenCalled();
+			expect(result.diagnostics).toEqual([]);
+		});
+
 		it("registers and retrieves a runner by id", () => {
 			const runner = createCleanRunner("test-runner");
 			registerRunner(runner);

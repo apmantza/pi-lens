@@ -1,5 +1,6 @@
 {
 	"real-process-spawn": {
+		"clients/analysis-root-writers.test.ts": 7,
 		"clients/biome-config-decorator-metadata.test.ts": 3,
 		"clients/bounded-pid-file-lock-dead-owner.test.ts": 1,
 		"clients/bounded-pid-file-lock.test.ts": 1,

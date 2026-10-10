@@ -94,6 +94,15 @@ import {
 	isOutsideAllSessionRoots,
 } from "./session-roots.js";
 import {
+	findLocalBinUpwards,
+	isProjectLocalBinPath,
+} from "../package-manager.js";
+import {
+	resolveAnalysisRoot,
+	resolveAnalysisRootPath,
+} from "../analysis-root.js";
+
+import {
 	configureLspServiceLifecycle,
 	getOwnedLspService,
 	peekOwnedLspService,
@@ -107,7 +116,7 @@ import {
 	getReverseDepsFromIndex,
 	loadReverseDependencyIndexFromSnapshot,
 } from "../reverse-deps.js";
-import type { LSPServerInfo } from "./server.js";
+import { isSameOrWithin, type LSPServerInfo } from "./server.js";
 import {
 	enforceLspRootCeiling,
 	getServerById,
@@ -150,6 +159,9 @@ const AUX_WAIT_DEMOTION_THRESHOLD = 5;
 const AUX_WAIT_DEMOTION_RATIO = 0.9;
 const AUX_WAIT_REPROMOTION_THRESHOLD = 5;
 const AUX_WAIT_REPROMOTION_RATIO = 0.5;
+/** Phase A bound: adopted roots are foreign workspaces, not session roots. */
+const ADOPTED_ROOT_CAP = 2;
+const ADOPTED_ROOT_IDLE_EVICT_MS = 60_000;
 
 /**
  * Request-local attribution for no-filePath workspace queries. The fixed site
@@ -1491,6 +1503,9 @@ export class LSPService {
 	);
 	/** LRU clock for capacity eviction, keyed by the canonical server/root key. */
 	private readonly clientLastUsedAt = new Map<string, number>();
+	/** LRU of foreign project roots; kept apart from the session-root registry. */
+	private readonly adoptedRootLastUsedAt = new Map<string, number>();
+	private readonly adoptedClientKeys = new Set<string>();
 	/**
 	 * Manager-owned use leases close the acquisition/use gap that `isBusy()`
 	 * cannot see: a caller may hold a selected client before its first request has
@@ -1597,6 +1612,68 @@ export class LSPService {
 		});
 	}
 
+	private analysisRootModeForFile(filePath: string): string {
+		const roots = getSessionRootsForTelemetry(128);
+		if (this.sessionCwd) roots.push(this.sessionCwd);
+		let adopted = false;
+		for (const root of new Set(roots)) {
+			const mode = resolveAnalysisRoot(filePath, root);
+			if (mode === "session" || mode === "linked-worktree") return mode;
+			adopted ||= mode === "adopted";
+		}
+		return adopted ? "adopted" : "none";
+	}
+
+	private fileIsOutsideRegisteredRoots(filePath: string): boolean {
+		const roots = getSessionRootsForTelemetry(128);
+		if (roots.length === 0) return isOutsideAllSessionRoots(filePath);
+		return !roots.some((root) => isSameOrWithin(root, filePath));
+	}
+
+	private admitAdoptedRoot(root: string, filePath: string): boolean {
+		if (this.analysisRootModeForFile(filePath) !== "adopted") return false;
+		const normalized = normalizeMapKey(root);
+		const liveRoots = new Set<string>();
+		for (const key of this.state.clients.keys()) {
+			if (this.adoptedClientKeys.has(key))
+				liveRoots.add(key.slice(key.indexOf(":") + 1));
+		}
+		for (const root of this.adoptedRootLastUsedAt.keys()) {
+			if (!liveRoots.has(root)) this.adoptedRootLastUsedAt.delete(root);
+		}
+		if (liveRoots.has(normalized)) {
+			this.adoptedRootLastUsedAt.set(normalized, Date.now());
+			return true;
+		}
+		if (this.adoptedRootLastUsedAt.size < ADOPTED_ROOT_CAP) {
+			this.adoptedRootLastUsedAt.set(normalized, Date.now());
+			return true;
+		}
+		this.adoptedRootLastUsedAt.set(normalized, Date.now());
+		const victim = [...this.adoptedRootLastUsedAt.keys()]
+			.sort(
+				(a, b) =>
+					(this.adoptedRootLastUsedAt.get(a) ?? 0) -
+					(this.adoptedRootLastUsedAt.get(b) ?? 0),
+			)
+			.find((candidate) => candidate !== normalized);
+		if (!victim) return true;
+		this.adoptedRootLastUsedAt.delete(victim);
+		for (const [key, client] of this.state.clients) {
+			if (!this.adoptedClientKeys.has(key) || !key.endsWith(`:${victim}`))
+				continue;
+			if ((this.clientLeases.get(key) ?? 0) > 0) continue;
+			this.retireClient(key);
+			void client.shutdown({ reason: "adopted-root-lru" }).catch(() => {});
+		}
+		incrementDegradationCount({
+			kind: "lsp-adopted-root-evicted",
+			subject: victim,
+			reason: `adopted root cap ${ADOPTED_ROOT_CAP} evicted ${victim}`,
+		});
+		return true;
+	}
+
 	/**
 	 * Resolve one server's client identity root. Root selection is hard-bounded
 	 * by the session cwd, then config-only nested roots reuse an already-hosted
@@ -1614,13 +1691,29 @@ export class LSPService {
 			onRootFailure,
 		);
 		if (!candidate) return undefined;
+		const mode = this.analysisRootModeForFile(filePath);
+		if (mode === "adopted") {
+			const classifierRoot = resolveAnalysisRootPath(
+				filePath,
+				this.sessionCwd ?? process.cwd(),
+			);
+			if (
+				!classifierRoot ||
+				normalizeMapKey(classifierRoot) !== normalizeMapKey(candidate)
+			)
+				return undefined;
+		}
 		// #2052: a file outside EVERY initialized session cwd gets no client at
 		// all. The ceiling below is unchanged (`process.cwd()`, as before this
 		// issue) and still only clamps files that are actually inside it —
 		// `enforceLspRootCeiling` returns the root untouched for an out-of-ceiling
 		// file. So this gate is the ONLY new refusal, and it consults the
 		// registry, not a single cwd.
-		if (isOutsideAllSessionRoots(filePath)) return undefined;
+		if (
+			this.fileIsOutsideRegisteredRoots(filePath) &&
+			this.analysisRootModeForFile(filePath) !== "adopted"
+		)
+			return undefined;
 		const root = enforceLspRootCeiling(candidate, process.cwd(), filePath);
 		if (normalizeMapKey(root) === normalizeMapKey(process.cwd())) return root;
 
@@ -1893,6 +1986,15 @@ export class LSPService {
 		this.state.clientSpawnedAt.delete(key);
 		this.forgetReadiness(key);
 		this.clientLastUsedAt.delete(key);
+		if (this.adoptedClientKeys.delete(key)) {
+			const root = key.slice(key.indexOf(":") + 1);
+			if (
+				![...this.adoptedClientKeys].some((candidate) =>
+					candidate.endsWith(`:${root}`),
+				)
+			)
+				this.adoptedRootLastUsedAt.delete(root);
+		}
 		this.clearIdleEvictionTimer(key);
 		// #1714: the backlog count describes a process that no longer exists.
 		this.auxNotifyInflight.delete(key);
@@ -1915,14 +2017,20 @@ export class LSPService {
 
 	private scheduleIdleEviction(key: string, server: LSPServerInfo): void {
 		// The registry owns this policy. Unmeasured and resident servers stay resident.
-		if (server.idleEviction !== "transparent") return;
+		if (
+			server.idleEviction !== "transparent" &&
+			!this.adoptedClientKeys.has(key)
+		)
+			return;
 		// Pressure-gating these timers would require a separate reconciliation pass
 		// when the manager crosses the threshold; keep ownership simple and use the
 		// warm-LSP-friendly 20-minute default instead.
 		this.clearIdleEvictionTimer(key);
 		const lastUsedAt = this.clientLastUsedAt.get(key) ?? Date.now();
 		const root = key.slice(key.indexOf(":") + 1);
-		const idleMs = getLspIdleEvictMsForRoot(root);
+		const idleMs = this.adoptedClientKeys.has(key)
+			? ADOPTED_ROOT_IDLE_EVICT_MS
+			: getLspIdleEvictMsForRoot(root);
 		const timer = setTimeout(() => {
 			this.idleEvictionTimers.delete(key);
 			void this.withClientSpawnGate(async () => {
@@ -4084,6 +4192,28 @@ export class LSPService {
 
 		const normalizedRoot = normalizeMapKey(root);
 		const key = `${server.id}:${normalizedRoot}`;
+		const adopted = this.analysisRootModeForFile(filePath) === "adopted";
+		if (adopted) {
+			const localCommand =
+				server.command ?? server.projectLocalCommand ?? server.availabilityKey;
+			const localBinary = localCommand
+				? path.isAbsolute(localCommand)
+					? isProjectLocalBinPath(localCommand, root)
+						? localCommand
+						: undefined
+					: findLocalBinUpwards(localCommand, root)
+				: undefined;
+			if (localBinary) {
+				recordDegradationOnce({
+					kind: "lsp-registry-decision",
+					subject: `${server.id}:${normalizeMapKey(root)}`,
+					reason: "project-local LSP binary refused for adopted root",
+				});
+				return undefined;
+			}
+			this.adoptedClientKeys.add(key);
+			if (!this.admitAdoptedRoot(root, filePath)) return undefined;
+		}
 		const isOptionalServer = OPTIONAL_LSP_SERVER_IDS.has(server.id); // NOSONAR: set intentionally empty — no optional servers configured yet
 
 		if (
@@ -7445,7 +7575,12 @@ export class LSPService {
 	private async findOutsideProjectRoot(
 		filePath: string,
 	): Promise<string | undefined> {
-		if (!isOutsideAllSessionRoots(filePath)) return undefined;
+		if (!this.fileIsOutsideRegisteredRoots(filePath)) return undefined;
+		// Phase A adopted projects are deliberately not registered as session
+		// roots: they may receive per-file LSP diagnostics, but must never widen
+		// the session-wide bookkeeping population. The shared resolver is the
+		// admission seam, so this gate cannot drift from tool_result's decision.
+		if (this.analysisRootModeForFile(filePath) === "adopted") return undefined;
 		const candidates = await Promise.all(
 			getServersForFileWithConfig(filePath).map((server) =>
 				server.root(filePath),

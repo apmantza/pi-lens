@@ -2876,6 +2876,7 @@ export async function dispatchLintWithResult(
 		 * DispatchContext.telemetryModel's doc. */
 		telemetryModel?: string;
 		telemetryProvider?: string;
+		analysisRootMode?: import("../analysis-root.js").AnalysisRootMode;
 		/**
 		 * Pull surface (`pilens_analyze`): emit the coverage notice on every call
 		 * instead of latching it once per session (refs #3791). Leave unset for
@@ -2900,6 +2901,7 @@ export async function dispatchLintWithResult(
 		options?.telemetryProvider,
 		options?.sessionGeneration,
 		options?.sessionId,
+		options?.analysisRootMode,
 	);
 	sessionFacts.clearFileFactsFor(ctx.filePath);
 	// #2243 item 2: release the pin when the dispatch settles.

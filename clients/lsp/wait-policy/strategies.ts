@@ -255,11 +255,15 @@ export interface DiagnosticStrategy {
 export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 	{
 		typescript: {
-			seedFirstPush: true,
+			seedFirstPush: false,
 			pullRetryBudgetMs: 0,
 			debounceMs: 50,
 			aggregateWaitMs: 1000,
 			expectSemanticSecondPush: false,
+			// #3310 / nightly run 37930006227: the clean TypeScript fixture
+			// published an empty pre-index result before its settled result.
+			// Hold that first publish so it cannot resolve a push wait as clean.
+			emptyFirstPublish: "indexing",
 			// Tier 3 (#458): typescript-language-server publishes nothing on a
 			// clean→clean edit (docs/lsp-capability-matrix.md, re-confirmed
 			// 2026-07-12). It's the lone core-set tier-3 server, which is exactly

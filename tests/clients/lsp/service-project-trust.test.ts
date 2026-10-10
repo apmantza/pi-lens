@@ -105,6 +105,84 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		expect(client?.client).toBeTruthy();
 	});
 
+	it("refuses a project-local LSP binary for an adopted root", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const sessionRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-session-"),
+		);
+		const project = fs.mkdtempSync(
+			path.join(process.cwd(), ".probe-adopted-lsp-"),
+		);
+		const binDir = path.join(project, "node_modules", ".bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(path.join(project, "package.json"), "{}\n");
+		fs.writeFileSync(
+			path.join(binDir, "typescript-language-server"),
+			"#!/bin/sh\n",
+		);
+		fs.chmodSync(path.join(binDir, "typescript-language-server"), 0o755);
+		const { trust, spawn } = await setup();
+		getServersForFileWithConfig.mockReturnValue([
+			{
+				id: "typescript",
+				name: "TypeScript",
+				extensions: [".ts"],
+				root: async () => project,
+				command: path.join(binDir, "typescript-language-server"),
+				spawn,
+			},
+		]);
+		const adoptedService = new LSPService(undefined, sessionRoot);
+		const file = path.join(project, "main.ts");
+		expect((adoptedService as any).analysisRootModeForFile(file)).toBe(
+			"adopted",
+		);
+		const client = await adoptedService.getClientForFile(file);
+		expect(client).toBeUndefined();
+		expect(spawn).not.toHaveBeenCalled();
+		trust.resetProjectTrust();
+		fs.rmSync(sessionRoot, { recursive: true, force: true });
+		fs.rmSync(project, { recursive: true, force: true });
+	});
+
+	it("bounds adopted roots and evicts an idle adopted client", async () => {
+		// Recurrence: #4257 F4 allowed the adopted LSP population and idle timers
+		// to lose their cap without a test observing either guard.
+		vi.useFakeTimers();
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const raw = service as any;
+		raw.analysisRootModeForFile = () => "adopted";
+		for (const root of ["/repo/a", "/repo/b", "/repo/c"]) {
+			const rootKey = `server:${root}`;
+			expect(raw.admitAdoptedRoot(root, "/repo/file.ts")).toBe(true);
+			raw.adoptedClientKeys.add(rootKey);
+			raw.state.clients.set(rootKey, {
+				isAlive: () => true,
+				isBusy: () => false,
+				shutdown: vi.fn(async () => undefined),
+			});
+		}
+		expect(raw.adoptedRootLastUsedAt.size).toBe(2);
+
+		const client = {
+			isAlive: () => true,
+			isBusy: () => false,
+			shutdown: vi.fn(async () => undefined),
+		};
+		const key = "server:/repo/a";
+		raw.adoptedClientKeys.add(key);
+		raw.state.clients.set(key, client);
+		raw.clientLastUsedAt.set(key, Date.now());
+		raw.scheduleIdleEviction(key, {
+			id: "server",
+			idleEviction: "unmeasured",
+		});
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(client.shutdown).toHaveBeenCalledWith({ reason: "idle_eviction" });
+		vi.useRealTimers();
+	});
+
 	it("refuses an unknown-trust project-local built-in binary through launchLSP", async () => {
 		const project = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-project-local-lsp-"),

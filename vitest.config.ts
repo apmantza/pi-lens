@@ -416,6 +416,9 @@ export const realHarnessInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 export const wallClockBudgetInclude = [
+	// #4257: the HOME ceiling witness uses a real child process to isolate the
+	// os.homedir boundary (flake-shape admission).
+	"tests/clients/analysis-root-writers.test.ts",
 	// #4148: a 199K-blank-line rule is a real event-loop occupancy witness for
 	// validateRule's synchronous language extraction, so it runs serialized.
 	"tests/clients/ast-grep-rule-regex-budget.test.ts",

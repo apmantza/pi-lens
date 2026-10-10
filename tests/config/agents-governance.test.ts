@@ -63,4 +63,18 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(shapeNumbers(counterfeit)).toHaveLength(64);
 		expect(shapeNumbers(counterfeit)).not.toContain(1);
 	});
+
+	it("keeps issue and PR references in AGENTS.md from growing", () => {
+		// Recurrence: PR #4270's first draft put three incident numbers into an
+		// AGENTS.md rule. Maintainer, 2026-10-10: AGENTS.md stays lean and
+		// HISTORY.md carries issues, PRs and examples. Lower the baseline when a
+		// reference moves to HISTORY.md; never raise it.
+		expect(issueRefs(agentsText())).toBeLessThanOrEqual(113);
+	});
 });
+
+function issueRefs(text: string): number {
+	// `#N` of any length, and issue/PR URLs, which carry no `#` (review F-4272-1).
+	return [...blankMarkdown(text).matchAll(/#\d+\b|\/(?:issues|pull)\/\d+\b/g)]
+		.length;
+}

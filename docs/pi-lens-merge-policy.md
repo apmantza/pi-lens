@@ -611,6 +611,10 @@ Each row cost a lane at least once; the prose above carries the record.
 
 | Mistake | Fix |
 |---------|-----|
+| Writing incident numbers and examples into an `AGENTS.md` rule | AGENTS.md stays lean; issues, PRs and examples go to `HISTORY.md` (maintainer, 2026-10-10). `tests/config/agents-governance.test.ts` ratchets the reference count down only |
+| Routing a review finding as one PR's bug when it is a member of a class | Name the shape, grep for members, and record the verdict before the fix round; `plegma-delegate-guard` refuses a fix brief with a HIGH/MEDIUM finding and no `Shape:` line |
+| Trusting a wrapper script's exit status when it echoes a check's result | `pr-body.sh lint` printed `lint-exit=1` and exited 0, so a failing body went live; the wrapper now exits with the check's status. Read the check's own result line |
+| Hand-rolling the governance suite in a fresh worktree | `npm run build` alone left `dist/` missing and three census suites red; use the orchestrator's `gov-check.sh <tree>`, which builds both outputs and keeps the `node_modules` link for the commit hook |
 | Reading a CI verdict without checking the SHA it judged | `ci-verdict --wait` returned exit 0 for the PREVIOUS head seconds after a push (#2878 trailing, 2026-09-10); compare the verdict's SHA with `gh pr view --json headRefOid` before merging |
 | Reporting "pushed" before `git log -1` shows the commit | Two trailing commits failed the pre-commit hook (changelog one-entry rule, unused vars) and the ledger/body already said pushed; verify the head, then write the row |
 | Folding a worker's extra changelog fragment into an existing one | One fragment = one top-level entry (`rollup-changelog --check`); keep a second fragment separate or drop it |

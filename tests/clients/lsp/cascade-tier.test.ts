@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { normalizeMapKey } from "../../../clients/path-utils.js";
+import { getStrategy } from "../../../clients/lsp/wait-policy/strategies.js";
 
 const getServersForFileWithConfig = vi.fn();
 const registerQuietWindowTask = vi.fn();
@@ -85,6 +86,23 @@ describe("classifyCascadeWaitTier", () => {
 		];
 		const tier = mod.classifyCascadeWaitTier({} as any, FILE, snapshots as any);
 		expect(tier).toBe("tier3-silent");
+	});
+
+	it("keeps TypeScript's empty-first hold and silent-clean cascade markers together", () => {
+		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
+		const strategy = getStrategy("typescript", "classic");
+		expect(strategy.emptyFirstPublish).toBe("indexing");
+		expect(
+			mod.classifyServerWaitTier("typescript", {
+				serverId: "typescript",
+				root: "C:/repo",
+				operationSupport: {} as any,
+				workspaceDiagnosticsSupport: { mode: "push-only" as const },
+				advertisedCommands: [],
+				rawCapabilityKeys: [],
+				launchVariant: "classic" as const,
+			} as any),
+		).toBe("tier3-silent");
 	});
 
 	// #524/#529/#541/#558: "typescript" can be either the classic

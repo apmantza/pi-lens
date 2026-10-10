@@ -1,3 +1,5 @@
+// flake-shape: real-process-spawn — real `git worktree add` writes linked-worktree metadata that resolveAnalysisRoot must read
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,8 +17,33 @@ import {
 } from "../../clients/runtime-tool-result.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { gitExecFileSync } from "../support/git-fixture-env.js";
+import {
+	getTmpRootRegistry,
+	registerTmpRoot,
+} from "../support/tmp-root-registry.js";
 
 const environments: Array<{ cleanup: () => void }> = [];
+
+function registeredProjectRoot(prefix: string): string {
+	const root = fs.mkdtempSync(path.join(process.cwd(), prefix));
+	registerTmpRoot(getTmpRootRegistry(), root, "registered");
+	environments.push({
+		cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+	});
+	return root;
+}
+
+function registeredUnmarkedRoot(): string {
+	const root = fs.mkdtempSync(
+		path.join(path.dirname(process.cwd()), ".analysis-root-unmarked-"),
+	);
+	registerTmpRoot(getTmpRootRegistry(), root, "registered");
+	environments.push({
+		cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+	});
+	return root;
+}
 
 afterEach(() => {
 	for (const environment of environments.splice(0)) environment.cleanup();
@@ -27,12 +54,122 @@ describe("analysis-root seam", () => {
 		const env = setupTestEnvironment("pi-lens-analysis-root-");
 		environments.push(env);
 		const sessionFile = path.join(env.tmpDir, "src", "file.ts");
-		const adoptedFile = path.join(env.tmpDir, "..", "other-project", "file.ts");
+		const adoptedRoot = registeredProjectRoot(".analysis-root-adopted-");
+		fs.mkdirSync(adoptedRoot, { recursive: true });
+		fs.writeFileSync(path.join(adoptedRoot, "package.json"), "{}\n");
+		const adoptedFile = path.join(adoptedRoot, "file.ts");
 
 		expect(resolveAnalysisRoot(sessionFile, env.tmpDir)).toBe("session");
 		expect(resolveAnalysisRoot(adoptedFile, env.tmpDir)).toBe("adopted");
 		expect(resolveAnalysisRoot(env.tmpDir, env.tmpDir)).toBe("none");
 		expect(canWriteAnalysisRoot("adopted")).toBe(false);
+	});
+
+	it("refuses symlinked protected roots and keeps linked-worktree vendors out", () => {
+		// Recurrence: #4257 F3/F7 must not create a second identity through a
+		// symlink or re-admit vendor content before the linked-worktree guard.
+		const env = setupTestEnvironment("pi-lens-analysis-root-links-");
+		environments.push(env);
+		const protectedRoot = path.join(env.tmpDir, "protected");
+		const link = path.join(env.tmpDir, "protected-link");
+		fs.mkdirSync(protectedRoot, { recursive: true });
+		fs.writeFileSync(path.join(protectedRoot, "package.json"), "{}\n");
+		try {
+			fs.symlinkSync(protectedRoot, link, "dir");
+		} catch {
+			expect(true).toBe(true);
+			return;
+		}
+		expect(resolveAnalysisRoot(path.join(link, "a.ts"), env.tmpDir)).toBe(
+			"session",
+		);
+	});
+
+	it("requires a marker and refuses session ancestors", () => {
+		// Recurrence: an arbitrary out-of-root file must not turn its containing
+		// directory or a parent of the session into an analysis project.
+		const env = setupTestEnvironment("pi-lens-analysis-root-marker-");
+		environments.push(env);
+		const unmarkedRoot = registeredUnmarkedRoot();
+		const markedRoot = registeredProjectRoot(".analysis-root-marked-");
+		const unmarked = path.join(unmarkedRoot, "file.ts");
+		fs.mkdirSync(markedRoot, { recursive: true });
+		fs.writeFileSync(path.join(markedRoot, "pyproject.toml"), "[project]\n");
+		const marked = path.join(markedRoot, "src", "file.py");
+
+		expect(resolveAnalysisRoot(unmarked, env.tmpDir)).toBe("none");
+		expect(resolveAnalysisRoot(marked, env.tmpDir)).toBe("adopted");
+		expect(resolveAnalysisRoot(path.dirname(env.tmpDir), env.tmpDir)).toBe(
+			"none",
+		);
+	});
+
+	it("refuses vendor paths inside a real linked worktree", () => {
+		// Recurrence: #4257 F7 must classify vendor content in a real linked
+		// worktree as refused, while ordinary source remains writable.
+		const env = setupTestEnvironment("pi-lens-analysis-root-worktree-");
+		environments.push(env);
+		const repo = path.join(env.tmpDir, "repo");
+		const worktree = path.join(env.tmpDir, "worktree");
+		fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+		fs.writeFileSync(path.join(repo, "src", "a.ts"), "export {}\n");
+		gitExecFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		gitExecFileSync("git", ["config", "user.email", "test@example.com"], {
+			cwd: repo,
+		});
+		gitExecFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+		gitExecFileSync("git", ["add", "-A"], { cwd: repo });
+		gitExecFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo });
+		gitExecFileSync(
+			"git",
+			["worktree", "add", "-q", "-b", "fixture-wt", worktree],
+			{
+				cwd: repo,
+			},
+		);
+
+		try {
+			const nodeModulesMode = resolveAnalysisRoot(
+				path.join(worktree, "node_modules", "x", "a.ts"),
+				repo,
+			);
+			const vendorMode = resolveAnalysisRoot(
+				path.join(worktree, "vendor", "x", "a.ts"),
+				repo,
+			);
+			const sourceMode = resolveAnalysisRoot(
+				path.join(worktree, "src", "a.ts"),
+				repo,
+			);
+			expect(nodeModulesMode).toBe("none");
+			expect(canWriteAnalysisRoot(nodeModulesMode)).toBe(false);
+			expect(vendorMode).toBe("none");
+			expect(canWriteAnalysisRoot(vendorMode)).toBe(false);
+			expect(sourceMode).toBe("linked-worktree");
+			expect(canWriteAnalysisRoot(sourceMode)).toBe(true);
+		} finally {
+			gitExecFileSync("git", ["worktree", "remove", "--force", worktree], {
+				cwd: repo,
+			});
+		}
+	});
+
+	it("refuses a marked project rooted at HOME when the session is elsewhere", () => {
+		// Recurrence: #4257 F4's home ceiling was masked by a session-under-HOME
+		// fixture, allowing a session outside HOME to adopt HOME itself.
+		const env = setupTestEnvironment("pi-lens-analysis-root-home-");
+		environments.push(env);
+		const home = fs.mkdtempSync(path.join(process.cwd(), ".probe-home-test-"));
+		fs.mkdirSync(home, { recursive: true });
+		fs.writeFileSync(path.join(home, "package.json"), "{}\n");
+		expect(
+			resolveAnalysisRoot(
+				path.join(home, "file.ts"),
+				"/var/pi-lens-session",
+				home,
+			),
+		).toBe("none");
+		fs.rmSync(home, { recursive: true, force: true });
 	});
 
 	it("does not write turn-state for an adopted root", () => {

@@ -118,6 +118,27 @@ worktree, `--dryRunOnly` for reproductions (fixer and reviewer Probe hygiene
 sections, #3180); and the release-bump PR title format (release-qa skill's
 pre-bump dry-roll step, the 4.2.0 retitle).
 
+## 2026-10-10 — review intake names the defect shape (AGENTS.md "Orchestration and delegated work")
+
+Why it exists: three findings in one session were routed as instances when
+they were members of a class.
+
+1. PR #4233's review found that the ast-grep npx fallback ignored pi's trust
+   state and ran in the project cwd, where a project `.npmrc` can steer the
+   registry. It was routed as that PR's bug. Only the maintainer's question
+   ("are we GENERALLY checking pi's trust gate?") turned it into #4268:
+   dispatch runners, formatters, the test runner and other npx fallbacks all
+   execute project-local binaries without consulting trust.
+2. PR #4262 adopted pi's trust answer in the smoke harness's handshake mode;
+   the sibling `--lsp-gate` mode had the same gap and went red one round later.
+3. #2372 slice 2 (PR #4248) wrote its class sweep as "the changed population
+   is …", the files it touched, not a grep for the shape across the tree. The
+   sweep could not have found item 1's members.
+
+The rule makes the shape verdict an intake step owned by the orchestrator, and
+`plegma-delegate-guard` refuses a fix-round brief that carries a HIGH/MEDIUM
+finding without a `Shape:` line.
+
 ## 2026-10-08 — merge train to v4.4.0
 
 312 changelog fragments (Added 23 / Changed 56 / Fixed 230 / Removed 2 /

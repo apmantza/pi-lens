@@ -150,7 +150,7 @@ carries the named admission until then.
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci |
 | csharp | csharp-ls | pull | — | n/a (pull) | 1 | ci |
-| typescript | typescript-language-server | push-only | silent | direct | 3 | dev+ci |
+| typescript | typescript-language-server | push-only | silent | empty-first | 3 | dev+ci |
 | markdown | marksman | push-only | silent | direct | 3 | ci |
 | lua | lua-language-server | push-only | silent | direct | 3 | dev+ci |
 | python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci |
@@ -257,7 +257,7 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "typescript7" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
+_None observed as of the last probe run._
 
 ## Capability matrix refresh state (nightly-generated)
 
@@ -266,5 +266,5 @@ date-based `direct` expiry (#3401) and consecutive-night `idle-eviction`
 counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"first-publish":{"typescript":{"pendingFirstPublish":"empty-first","runs":1}},"idle-eviction":{"docker-official":{"nights":[{"day":"2026-10-09","rssMb":62,"coldMs":652}]},"kotlin":{"nights":[{"day":"2026-10-09","rssMb":278,"coldMs":2010}]},"powershell":{"nights":[{"day":"2026-10-09","rssMb":161,"coldMs":1883}]},"rust":{"nights":[{"day":"2026-10-09","rssMb":661,"coldMs":2269}]},"svelte":{"nights":[{"day":"2026-10-09","rssMb":221,"coldMs":2311}]},"zizmor":{"nights":[{"day":"2026-10-09","rssMb":56,"coldMs":581}]}}}
+{"first-publish":{"dockerfile":{"firstMissed":"2026-10-10"},"prisma":{"firstMissed":"2026-10-10"},"python":{"firstMissed":"2026-10-10"},"shell":{"firstMissed":"2026-10-10"},"terraform":{"pendingFirstPublish":"direct","runs":1},"yaml":{"firstMissed":"2026-10-10"}}}
 ```

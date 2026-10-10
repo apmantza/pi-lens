@@ -44,7 +44,11 @@ const PHP_DEBOUNCE_MS = 150;
 // Keep one explicit row per marker server: a new marker must add its consumer
 // cases here, and removing a marker leaves the stale row red. This prevents a
 // parameterized suite from silently shrinking when the strategy table drifts.
-const EMPTY_FIRST_PUBLISH_CONSUMER_SERVERS = ["php", "terraform"] as const;
+const EMPTY_FIRST_PUBLISH_CONSUMER_SERVERS = [
+	"php",
+	"terraform",
+	"typescript",
+] as const;
 
 const FINDING: LSPDiagnostic = {
 	severity: 1,
