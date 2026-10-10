@@ -14,7 +14,6 @@ import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
 import { mkdtempSync } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	getExcludedDirGlobs,
@@ -31,6 +30,7 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
 // --- Types ---
@@ -74,21 +74,6 @@ const SCAN_TIMEOUT_MS = 30_000;
 /** jscpd's own config-file names, in its discovery order, checked at `cwd` only
  * (jscpd does not walk up). */
 const JSCPD_CONFIG_FILENAMES = [".jscpd.json", "jscpd.json"];
-
-/**
- * Parent directory for the scan's `pi-lens-jscpd-*` report directory.
- *
- * `os.tmpdir()` normally. A harness that spawns a child which can be SIGKILLed
- * before `runScan`'s `finally` runs sets `PI_LENS_TEST_JSCPD_TMPDIR` to a directory
- * it owns: the orphaned report directory then lands inside that owned root and
- * the harness's own teardown removes it, instead of stranding a
- * `pi-lens-jscpd-*` entry in the shared tmpdir (#4133). Read at call time like
- * the other lazy env seams; an empty value falls back to the tmpdir.
- */
-function jscpdReportParentDir(): string {
-	const override = process.env.PI_LENS_TEST_JSCPD_TMPDIR?.trim();
-	return override && override.length > 0 ? override : os.tmpdir();
-}
 
 /**
  * The project's own jscpd config, or `null` when it ships none: a
@@ -370,7 +355,7 @@ export class JscpdClient {
 		// reads any file a widget row's freshness is judged against.
 		const scannedAt = new Date().toISOString();
 		const outDir = mkdtempSync(
-			path.join(jscpdReportParentDir(), "pi-lens-jscpd-"),
+			path.join(scannerReportParentDir(), "pi-lens-jscpd-"),
 		);
 
 		try {

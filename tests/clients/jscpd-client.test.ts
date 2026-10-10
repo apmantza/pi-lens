@@ -759,18 +759,17 @@ describe("jscpd-client scan setup cleanup (#4133)", () => {
 		}
 	});
 
-	it("creates the report directory under PI_LENS_TEST_JSCPD_TMPDIR when set", async () => {
-		// #4133: a harness that owns a jscpd-only root points the report
-		// directory there, so a process killed before the scan's `finally` leaves
-		// its orphan inside a root the harness sweeps instead of the shared
-		// tmpdir.
+	it("creates the report directory under PI_LENS_TEST_SCANNER_TMPDIR when set", async () => {
+		// #4133: a harness that owns a scanner root points the report directory
+		// there, so a process killed before the scan's `finally` leaves its orphan
+		// inside a root the harness sweeps instead of the shared tmpdir.
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
 		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-report-scan-");
 		const { tmpDir: reportRoot } = setupTestEnvironment(
 			"pi-lens-jscpd-report-root-",
 		);
-		const previous = process.env.PI_LENS_TEST_JSCPD_TMPDIR;
-		process.env.PI_LENS_TEST_JSCPD_TMPDIR = reportRoot;
+		const previous = process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+		process.env.PI_LENS_TEST_SCANNER_TMPDIR = reportRoot;
 		trackedRmSync.mockClear();
 		try {
 			const client = new JscpdClient(false) as unknown as {
@@ -793,8 +792,9 @@ describe("jscpd-client scan setup cleanup (#4133)", () => {
 				{ recursive: true, force: true },
 			);
 		} finally {
-			if (previous === undefined) delete process.env.PI_LENS_TEST_JSCPD_TMPDIR;
-			else process.env.PI_LENS_TEST_JSCPD_TMPDIR = previous;
+			if (previous === undefined)
+				delete process.env.PI_LENS_TEST_SCANNER_TMPDIR;
+			else process.env.PI_LENS_TEST_SCANNER_TMPDIR = previous;
 			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});

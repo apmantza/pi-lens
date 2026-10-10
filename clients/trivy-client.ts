@@ -43,12 +43,12 @@
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { loadPiLensProjectConfig } from "./project-lens-config.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import { toPosix } from "./path-utils.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import {
 	getScratchTreeGlobPatterns,
 	nestedWorktreeOffsets,
@@ -329,7 +329,9 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 		const scannedAt = new Date().toISOString();
 		const bin = this.binaryPath ?? "trivy";
 		const severities = resolveSeverityFloor(cwd);
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "pi-lens-trivy-"));
+		const outDir = mkdtempSync(
+			path.join(scannerReportParentDir(), "pi-lens-trivy-"),
+		);
 		const reportPath = path.join(outDir, "trivy-report.json");
 		try {
 			// One filesystem walk covers all three scanners. `--severity` filters
