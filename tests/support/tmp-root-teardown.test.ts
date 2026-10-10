@@ -20,7 +20,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
-import { tmpHygieneUnadmittedEntries } from "./vitest-setup.js";
+import {
+	formatTmpHygieneLeakEntry,
+	tmpHygieneCreators,
+	tmpHygieneUnadmittedEntries,
+} from "./vitest-setup.js";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url));
 const FIXTURE_DIR = "tests/fixtures/tmp-teardown";
@@ -194,5 +198,39 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 			).length,
 		).toBe(2);
 		expect(sweepLine("genuine-leak.fixture.ts", "afterAll")).toBe("");
+	});
+
+	it("persists the creating test file for an observed leak and omits an unobserved one (cross-process)", () => {
+		// #2912 (2026-10-10): the interposer runs in the FIXTURE's fork, so the
+		// creators record only crosses to the serialized owner through this
+		// run-id-scoped file. The raw mkdtemp leak is observed and named; the
+		// mkdir sibling no interposer sees is absent, so the owner labels it as
+		// created outside the test process rather than naming a prefix owner.
+		const creators = tmpHygieneCreators(
+			path.join(REPO, ".probe-home", `tmp-hygiene-creators-${RUN_ID}.log`),
+		);
+		const rawLeak = leftovers("pi-lens-2912-genuine-raw-")[0];
+		expect(rawLeak).toBeDefined();
+		expect(creators.get(rawLeak)).toBe(
+			"fixtures/tmp-teardown/genuine-leak.fixture.ts",
+		);
+		expect(creators.has("pi-lens-2912-genuine-mkdir-sibling")).toBe(false);
+	});
+
+	it("labels an entry a grandchild process made as created outside the test process", () => {
+		// #2912 (2026-10-10): the real-pi jscpd shape — a process the fixture
+		// spawned makes the root, so no interposer in the run observes it. The
+		// creators record is silent and the owner must not fall back to a prefix
+		// owner; it names the outside-process origin instead.
+		const entries = leftovers("pi-lens-2912child-");
+		expect(entries).toHaveLength(1);
+		const entry = entries[0];
+		const creators = tmpHygieneCreators(
+			path.join(REPO, ".probe-home", `tmp-hygiene-creators-${RUN_ID}.log`),
+		);
+		expect(creators.has(entry)).toBe(false);
+		expect(formatTmpHygieneLeakEntry(entry, undefined, undefined)).toBe(
+			`${entry} (created outside the test process (child))`,
+		);
 	});
 });

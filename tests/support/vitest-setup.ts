@@ -11,6 +11,7 @@ import { installKillGuard, killGuardReport } from "./kill-guard.js";
 import { reportPeakRss } from "./worker-peak-rss.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import {
+	formatTmpRootCreators,
 	formatTmpRootSweep,
 	getTmpRootRegistry,
 	installTmpRootInterposer,
@@ -199,6 +200,91 @@ export function tmpHygieneRunFiles(
 	}
 }
 
+/**
+ * #2912 (2026-10-10 follow-up): the test file each worker was running when it
+ * observed a tmp entry appear, one `<entry>\t<file>` line per entry.
+ *
+ * The prefix index answers "which file brackets a NAME"; that misattributed the
+ * jscpd leak on #4122/#4285, where a real-pi CHILD of
+ * `tests/real-harness/outside-root.test.ts` made `pi-lens-jscpd-*` but the
+ * report named `tests/clients/jscpd-client.test.ts`, the file that declares the
+ * prefix. The interposer sees creations only inside a test process, so this
+ * record names the real creator where one exists and is silent where a child
+ * process made the entry.
+ *
+ * Run-id scoped by name beside the manifest, appended at each worker's teardown
+ * from the registry (one record per entry, never one per mkdtemp call), and
+ * removed with the other per-run records in `cleanupTmpHygiene`.
+ */
+const tmpHygieneCreatorsPath = path.join(
+	path.dirname(tmpHygieneBaselinePath),
+	`tmp-hygiene-creators-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}.log`,
+);
+const flushedTmpRootCreators = new Set<string>();
+/** Set by `cleanupTmpHygiene` (the serialized owner removed the record) so the
+ *  setup's own afterAll, which runs AFTER the owner's, cannot recreate the file
+ *  it just removed. */
+let tmpHygieneCreatorsClosed = false;
+
+function flushTmpRootCreators(): void {
+	if (tmpHygieneCreatorsClosed) return;
+	const formatted = formatTmpRootCreators(tmpRootRegistry);
+	if (formatted === undefined) return;
+	const fresh = formatted
+		.split("\n")
+		.filter((line) => line.length > 0 && !flushedTmpRootCreators.has(line));
+	if (fresh.length === 0) return;
+	try {
+		fs.appendFileSync(tmpHygieneCreatorsPath, `${fresh.join("\n")}\n`);
+		for (const line of fresh) flushedTmpRootCreators.add(line);
+	} catch {
+		// An unwritable shared home costs creator attribution only: the owner
+		// then labels the entry as created outside the test process, which is the
+		// fail-safe direction (an innocent prefix owner is never named).
+	}
+}
+
+/** The observed creator of each leaked entry, keyed by entry name. An EMPTY map
+ *  means nothing was recorded (a dead run, an unwritable home, or every entry
+ *  made outside a test process), and the owner then uses the child label rather
+ *  than a prefix guess. */
+export function tmpHygieneCreators(
+	creatorsPath: string = tmpHygieneCreatorsPath,
+): Map<string, string> {
+	const creators = new Map<string, string>();
+	let raw: string;
+	try {
+		raw = fs.readFileSync(creatorsPath, "utf8");
+	} catch {
+		return creators;
+	}
+	for (const line of raw.split("\n")) {
+		const tab = line.indexOf("\t");
+		if (tab <= 0) continue;
+		const entry = line.slice(0, tab);
+		// One record per entry; a torn or duplicated append keeps the first.
+		if (!creators.has(entry)) creators.set(entry, line.slice(tab + 1));
+	}
+	return creators;
+}
+
+/**
+ * How one leaked entry is described in the hygiene owner's failure message:
+ * the prefix owner beside the test file that ACTUALLY created it. An entry no
+ * test-process interposer saw (a child process the run spawned) is labelled
+ * `created outside the test process` instead of being given the prefix owner,
+ * whose guess is exactly what sent #4122/#4285 to the wrong file.
+ */
+export function formatTmpHygieneLeakEntry(
+	entry: string,
+	prefixOwner: string | undefined,
+	creator: string | undefined,
+): string {
+	if (creator === undefined)
+		return `${entry} (created outside the test process (child))`;
+	return `${entry} (owner: tests/${prefixOwner ?? "unknown"}; created by tests/${creator})`;
+}
+
 function removeTmpHygieneOwnerMarker(): void {
 	try {
 		fs.rmSync(tmpHygieneOwnerMarker, { force: true });
@@ -266,6 +352,7 @@ installTmpRootInterposer(
 	tmpRootRegistry,
 	nodeFs as unknown as MkdtempTarget,
 	tmpHygieneRealTmp,
+	() => tmpHygieneOwnFile,
 );
 syncBuiltinESMExports();
 const tmpRootIo = {
@@ -277,6 +364,10 @@ const tmpRootExists = tmpRootIo.exists;
 afterEach(() => sampleTmpRoots(tmpRootRegistry, tmpRootExists));
 
 function sweepOwnTmpRoots(via: "afterAll" | "SIGTERM"): void {
+	// #2912 (2026-10-10): publish the creators record at every teardown, before
+	// the registry is gone with the fork, so the serialized owner can name the
+	// test file behind a leak. One line per entry; a second teardown is a no-op.
+	flushTmpRootCreators();
 	const line = formatTmpRootSweep(
 		tmpHygieneOwnFile,
 		sweepTmpRoots(tmpRootRegistry, tmpRootIo),
@@ -1221,7 +1312,9 @@ export function reapStaleTmpHygieneRecords(
 ): number {
 	const runId = process.env.PI_LENS_TMP_HYGIENE_RUN_ID;
 	const ownerPrefix = `${runId}-`;
-	const manifestPrefix = "tmp-hygiene-files-";
+	// Both per-run records written beside each other: #3314's file manifest and
+	// #2912's creators record. Same owner, same lifetime, same reaping window.
+	const recordPrefixes = ["tmp-hygiene-files-", "tmp-hygiene-creators-"];
 	let reaped = 0;
 	const reap = (entryPath: string): void => {
 		const mtimeMs = fs.statSync(entryPath, { throwIfNoEntry: false })?.mtimeMs;
@@ -1235,9 +1328,11 @@ export function reapStaleTmpHygieneRecords(
 		reap(path.join(ownerDir, name));
 	}
 	for (const name of readTmpDirEntries(recordDir)) {
-		if (!name.startsWith(manifestPrefix) || !name.endsWith(".log")) continue;
-		if (runId !== undefined && name === `${manifestPrefix}${runId}.log`)
-			continue;
+		const prefix = recordPrefixes.find((candidate) =>
+			name.startsWith(candidate),
+		);
+		if (prefix === undefined || !name.endsWith(".log")) continue;
+		if (runId !== undefined && name === `${prefix}${runId}.log`) continue;
 		reap(path.join(recordDir, name));
 	}
 	return reaped;
@@ -1462,6 +1557,8 @@ export function cleanupTmpHygiene(
 	try {
 		fs.rmSync(tmpHygieneBaselinePath, { force: true });
 		fs.rmSync(tmpHygieneRunFilesPath, { force: true });
+		fs.rmSync(tmpHygieneCreatorsPath, { force: true });
+		tmpHygieneCreatorsClosed = true;
 	} catch {
 		// A stale ignored baseline is harmless; the next run uses a new id.
 	}

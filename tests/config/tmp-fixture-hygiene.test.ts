@@ -20,6 +20,8 @@ import {
 	tmpHygieneExcludeLiveOwnerEntries,
 	tmpHygieneForeignRunEntries,
 	tmpHygieneRunFiles,
+	tmpHygieneCreators,
+	formatTmpHygieneLeakEntry,
 	tmpHygieneSweepableEntries,
 	tmpHygieneWaitForOwnerDrain,
 	tmpHygieneUnadmittedEntries,
@@ -39,6 +41,10 @@ import {
 	type TmpHygieneProcessProbe,
 } from "../support/vitest-setup.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
+import {
+	getTmpRootRegistry,
+	recordedTmpRootCreators,
+} from "../support/tmp-root-registry.js";
 import { getLatencyLogPath } from "../../clients/latency-logger.js";
 import {
 	buildProjectSnapshotFromRuntime,
@@ -414,10 +420,14 @@ describe("tmp-fixture-hygiene", () => {
 			ownerForTmpEntry,
 			liveOwners,
 		);
-		const described = attributable.map((entry) => {
-			const owner = ownerForTmpEntry(entry);
-			return `${entry} (owner: tests/${owner ?? "unknown"})`;
-		});
+		const creators = tmpHygieneCreators();
+		const described = attributable.map((entry) =>
+			formatTmpHygieneLeakEntry(
+				entry,
+				ownerForTmpEntry(entry),
+				creators.get(entry),
+			),
+		);
 		// #3715: the repo root is a second namespace the tmp census does not see.
 		const rootCensus = unadmittedRepoRootEntries(repoRootBaseline());
 		if (rootCensus.unknown)
@@ -1725,6 +1735,53 @@ describe("tmp-fixture-hygiene", () => {
 				).toEqual([]);
 			} finally {
 				fs.rmSync(fixture, { recursive: true, force: true });
+			}
+		});
+	});
+
+	// #2912 (2026-10-10): the owner must name the test file that CREATED a
+	// leaked entry, not the file whose declared prefix matches its name. The
+	// jscpd leak on #4122/#4285 was misattributed to
+	// tests/clients/jscpd-client.test.ts by prefix; the real producer was a
+	// real-pi child of tests/real-harness/outside-root.test.ts.
+	describe("owner attribution by creator (#2912)", () => {
+		const OWN = "config/tmp-fixture-hygiene.test.ts";
+		const FOREIGN_PREFIX_OWNER = "clients/jscpd-client.test.ts";
+		const FOREIGN_PREFIX = "pi-lens-jscpd-managed-";
+
+		it("names the creating test file beside the prefix owner", () => {
+			const entry = `${FOREIGN_PREFIX}AbCdEf`;
+			expect(formatTmpHygieneLeakEntry(entry, FOREIGN_PREFIX_OWNER, OWN)).toBe(
+				`${entry} (owner: tests/${FOREIGN_PREFIX_OWNER}; created by tests/${OWN})`,
+			);
+		});
+
+		it("labels an unobserved entry as created outside the test process, never with a prefix owner", () => {
+			const entry = `${FOREIGN_PREFIX}AbCdEf`;
+			expect(
+				formatTmpHygieneLeakEntry(entry, FOREIGN_PREFIX_OWNER, undefined),
+			).toBe(`${entry} (created outside the test process (child))`);
+		});
+
+		it("records this file as the creator of an entry another file's prefix names", () => {
+			// A real creation through the real interposer, not a synthetic map: one
+			// file's prefix on a name another file made is the acceptance shape.
+			// The prefix is spelled as a template with only an interpolation, so
+			// this file does NOT enter the owner index as a candidate: the prefix
+			// owner stays the other file, which is what makes the attribution test
+			// meaningful.
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${FOREIGN_PREFIX}`));
+			try {
+				const entry = path.basename(dir);
+				const creator =
+					recordedTmpRootCreators(getTmpRootRegistry()).get(entry);
+				expect(creator).toBe(OWN);
+				expect(ownerForTmpEntry(entry)).toBe(FOREIGN_PREFIX_OWNER);
+				expect(
+					formatTmpHygieneLeakEntry(entry, ownerForTmpEntry(entry), creator),
+				).toContain(`created by tests/${OWN}`);
+			} finally {
+				fs.rmSync(dir, { recursive: true, force: true });
 			}
 		});
 	});

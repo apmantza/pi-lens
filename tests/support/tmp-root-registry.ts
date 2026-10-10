@@ -43,6 +43,10 @@ interface TmpRootEntry {
 	kind: TmpRootKind;
 	/** This worker saw the directory absent after it was recorded. */
 	sawAbsent: boolean;
+	/** The test file this worker was running when the entry first appeared, when
+	 *  the interposer could see the creation (a test process). `undefined` for an
+	 *  entry another process made, which no interposer observes. */
+	createdBy?: string;
 }
 
 export interface TmpRootRegistry {
@@ -70,19 +74,53 @@ export function registerTmpRoot(
 	registry: TmpRootRegistry,
 	dir: string,
 	kind: TmpRootKind,
+	createdBy?: string,
 ): void {
 	const existing = registry.roots.get(dir);
 	if (existing) {
 		// `setupTestEnvironment` creates through `mkdtempSync`, which the
 		// interposer already recorded as observed; the harness claim wins.
 		if (kind === "registered") existing.kind = "registered";
+		// One record per entry: the FIRST observation names the creator, and a
+		// later registration (the harness claim) never rewrites it.
+		if (existing.createdBy === undefined && createdBy !== undefined)
+			existing.createdBy = createdBy;
 		return;
 	}
 	if (registry.roots.size >= MAX_TMP_ROOTS) {
 		registry.dropped += 1;
 		return;
 	}
-	registry.roots.set(dir, { kind, sawAbsent: false });
+	registry.roots.set(dir, { kind, sawAbsent: false, createdBy });
+}
+
+/** One `entry<TAB>file` line per recorded entry whose creation this worker
+ *  observed, sorted so the record is deterministic. `undefined` when there is
+ *  nothing to say. Deliberately NOT one line per mkdtemp call: the registry
+ *  already holds one entry per directory, so a recreation cannot grow the
+ *  record (AGENTS.md shape 9). */
+export function formatTmpRootCreators(
+	registry: TmpRootRegistry,
+): string | undefined {
+	const lines: string[] = [];
+	for (const [dir, entry] of registry.roots)
+		if (entry.createdBy !== undefined)
+			lines.push(`${path.basename(dir)}\t${entry.createdBy}`);
+	if (lines.length === 0) return undefined;
+	lines.sort();
+	return `${lines.join("\n")}\n`;
+}
+
+/** The observed creator of each recorded entry, keyed by entry name. The
+ *  in-process counterpart of the persisted creators record. */
+export function recordedTmpRootCreators(
+	registry: TmpRootRegistry,
+): Map<string, string> {
+	const creators = new Map<string, string>();
+	for (const [dir, entry] of registry.roots)
+		if (entry.createdBy !== undefined)
+			creators.set(path.basename(dir), entry.createdBy);
+	return creators;
 }
 
 /** Note which recorded roots are absent NOW. Called after each test's own
@@ -161,6 +199,10 @@ export function installTmpRootInterposer(
 	registry: TmpRootRegistry,
 	target: MkdtempTarget,
 	realTmp: string,
+	/** The test file running when a directory appears. The shared setup passes
+	 *  the process's own file, so an entry a test created is attributed to it
+	 *  rather than to whatever file declares the name's prefix. */
+	createdBy?: () => string,
 ): void {
 	const tmpRoot = path.resolve(realTmp);
 	const note = (dir: unknown): void => {
@@ -170,7 +212,7 @@ export function installTmpRootInterposer(
 			path.dirname(resolved) === tmpRoot &&
 			path.basename(resolved).startsWith("pi-lens-")
 		)
-			registerTmpRoot(registry, dir, "observed");
+			registerTmpRoot(registry, dir, "observed", createdBy?.());
 	};
 	const sync = target.mkdtempSync as (...args: unknown[]) => unknown;
 	target.mkdtempSync = function (this: unknown, ...args: unknown[]) {

@@ -21,9 +21,11 @@ import { setupTestEnvironment } from "../clients/test-utils.js";
 import {
 	MAX_TMP_ROOTS,
 	createTmpRootRegistry,
+	formatTmpRootCreators,
 	formatTmpRootSweep,
 	getTmpRootRegistry,
 	installTmpRootInterposer,
+	recordedTmpRootCreators,
 	registerTmpRoot,
 	sampleTmpRoots,
 	sweepTmpRoots,
@@ -215,6 +217,42 @@ describe("tmp-root interposer (#2912)", () => {
 		expect(
 			(target.mkdtempSync as (p: string) => string)("/var/tmp/pi-lens-r-"),
 		).toBe("/var/tmp/pi-lens-r-AAAAAA");
+	});
+
+	it("records the test file running when each entry appeared, one record per entry", () => {
+		const registry = createTmpRootRegistry();
+		const { target } = fakeTarget();
+		installTmpRootInterposer(
+			registry,
+			target,
+			"/var/tmp",
+			() => "leaking.test.ts",
+		);
+		const sync = target.mkdtempSync as (p: string) => string;
+		sync("/var/tmp/pi-lens-sync-");
+		sync("/var/tmp/pi-lens-other-");
+		expect(recordedTmpRootCreators(registry)).toEqual(
+			new Map([
+				["pi-lens-sync-AAAAAA", "leaking.test.ts"],
+				["pi-lens-other-AAAAAA", "leaking.test.ts"],
+			]),
+		);
+		// One line per entry, sorted: the record a worker appends for the
+		// serialized owner is deterministic and never per mkdtemp call.
+		expect(formatTmpRootCreators(registry)).toBe(
+			"pi-lens-other-AAAAAA\tleaking.test.ts\npi-lens-sync-AAAAAA\tleaking.test.ts\n",
+		);
+		// The harness claim upgrades the kind but never rewrites the creator.
+		registerTmpRoot(registry, "/var/tmp/pi-lens-sync-AAAAAA", "registered");
+		expect(registry.roots.get("/var/tmp/pi-lens-sync-AAAAAA")?.createdBy).toBe(
+			"leaking.test.ts",
+		);
+	});
+
+	it("says nothing about creators when no interposer observed the creation", () => {
+		const registry = createTmpRootRegistry();
+		expect(formatTmpRootCreators(registry)).toBeUndefined();
+		expect(recordedTmpRootCreators(registry).size).toBe(0);
 	});
 });
 
