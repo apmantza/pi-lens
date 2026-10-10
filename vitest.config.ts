@@ -348,6 +348,8 @@ const lspSpawnHeavyInclude = [
 	// here by hand rather than pretended to be derived. The file runs once: the
 	// default project excludes this list.
 	"tests/mcp/analyze-cli.test.ts",
+	// #4300: the MCP witness crosses Lean's real initialize handshake.
+	"tests/mcp/server.smoke.test.ts",
 	"tests/support/fake-lsp-server.test.ts",
 	// #873/#448: the dispatch LSP runner against a real stdio JSON-RPC server
 	// — a real child spawn through the production LSPService plus a

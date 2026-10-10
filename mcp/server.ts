@@ -19,6 +19,7 @@
  * corrupt the message stream.
  */
 
+import { setProjectTrustState } from "../clients/project-trust.js";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -99,7 +100,7 @@ import {
 	observeSituationalToolCall,
 	startSituationalToolTelemetrySession,
 } from "../clients/situational-tool-telemetry.js";
-import { flushExtensionLog } from "../clients/extension-log.js";
+import { logExtension, flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -566,6 +567,15 @@ function graphStalenessNote(
 }
 
 // --- Tools -------------------------------------------------------------------
+
+// #4300: this process runs outside pi; its caller owns workspace trust.
+setProjectTrustState("trusted");
+logExtension({
+	subsystem: "project-trust",
+	level: "debug",
+	message:
+		"mcp: workspace trust belongs to the MCP client; pi trust not consulted",
+});
 
 const cacheManager = new CacheManager();
 // #536: investigated wiring the same `flushPending` 4th arg pi's index.ts passes

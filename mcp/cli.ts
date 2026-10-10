@@ -8,6 +8,8 @@
 // place for flushReviewGraphPersist to claim.
 process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS = "3600000";
 
+import { setProjectTrustState } from "../clients/project-trust.js";
+import { logExtension } from "../clients/extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FactStore } from "../clients/dispatch/fact-store.js";
@@ -149,6 +151,15 @@ async function buildGraph(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	// #4300: this process runs outside pi; its caller owns workspace trust.
+	setProjectTrustState("trusted");
+	logExtension({
+		subsystem: "project-trust",
+		level: "debug",
+		message:
+			"build-graph: workspace trust belongs to the calling client; pi trust not consulted",
+	});
+
 	const command = process.argv[2];
 	if (command !== "build-graph") {
 		fail("usage: pi-lens build-graph [--cwd <dir>]");

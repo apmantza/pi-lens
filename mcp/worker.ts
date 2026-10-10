@@ -11,6 +11,8 @@
  * stderr.
  */
 
+import { setProjectTrustState } from "../clients/project-trust.js";
+import { logExtension } from "../clients/extension-log.js";
 import { analyzeFile } from "../clients/mcp/analyze.js";
 
 function arg(name: string): string | undefined {
@@ -20,6 +22,15 @@ function arg(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
+	// #4300: this process runs outside pi; its caller owns workspace trust.
+	setProjectTrustState("trusted");
+	logExtension({
+		subsystem: "project-trust",
+		level: "debug",
+		message:
+			"mcp-worker: workspace trust belongs to the MCP client; pi trust not consulted",
+	});
+
 	const file = arg("file");
 	const cwd = arg("cwd") ?? process.cwd();
 	if (!file) {
