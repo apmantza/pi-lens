@@ -117,7 +117,10 @@ import {
 	loadReverseDependencyIndexFromSnapshot,
 } from "../reverse-deps.js";
 import { isSameOrWithin, type LSPServerInfo } from "./server.js";
-import { refuseUntrustedLspExecution } from "./launch.js";
+import {
+	refuseUntrustedLspExecution,
+	withLspProjectCodePermission,
+} from "./launch.js";
 import {
 	enforceLspRootCeiling,
 	getServerById,
@@ -4647,12 +4650,17 @@ export class LSPService {
 		);
 		recordLsp(server.id, root, "spawn_start");
 		try {
-			const spawned = await server.spawn(root, {
-				allowInstall,
-				projectCodeAllowed:
-					this.analysisRootModeForFile(filePath) !== "adopted",
-				sessionRoot: this.sessionCwd ?? process.cwd(),
-			});
+			const projectCodeAllowed =
+				this.analysisRootModeForFile(filePath) !== "adopted";
+			const spawned = await withLspProjectCodePermission(
+				projectCodeAllowed,
+				() =>
+					server.spawn(root, {
+						allowInstall,
+						projectCodeAllowed,
+						sessionRoot: this.sessionCwd ?? process.cwd(),
+					}),
+			);
 
 			// Guard 1: service was shut down while we were waiting for the spawn.
 			// Kill the raw process — no LSPClient exists yet — and bail out without

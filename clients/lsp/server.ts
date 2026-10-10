@@ -2615,7 +2615,15 @@ export const TypeScriptServer: LSPServerInfo = {
 	rootMarkers: TypeScriptRoot.rootMarkers,
 	async spawn(root, options) {
 		const nativeLsp = await findNativeTypeScriptLsp(root);
-		if (nativeLsp) {
+		if (
+			nativeLsp &&
+			admitProjectSuppliedTsserver(
+				nativeLsp.command,
+				root,
+				true,
+				options?.projectCodeAllowed,
+			)
+		) {
 			const env = await getToolEnvironment();
 			logSessionStart(
 				`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command}`,

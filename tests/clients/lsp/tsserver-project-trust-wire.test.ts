@@ -87,6 +87,47 @@ process.on("message", req => { if (req.type === "request") process.send({seq:0,t
 	fs.writeFileSync(tsc, "");
 	return { marker, tsc };
 }
+function nativeCompilerTree(root: string, label: string) {
+	const fixture = compilerTree(root, label, "7.0.0");
+	const script = path.join(root, "node_modules", "typescript", "native.cjs");
+	// #4299 R2-F1: the real launch must execute this marker in the owned
+	// positive control, and never in the adopted root. LSP framing is the
+	// external process boundary; no production launcher/client is doubled.
+	fs.writeFileSync(
+		script,
+		`const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(fixture.marker)}, "native executed");
+let input = Buffer.alloc(0);
+process.stdin.on("data", chunk => {
+ input = Buffer.concat([input, chunk]);
+ while (true) {
+  const end = input.indexOf("\\r\\n\\r\\n");
+  if (end < 0) return;
+  const length = Number(/Content-Length: (\\d+)/i.exec(input.subarray(0, end).toString())[1]);
+  if (input.length < end + 4 + length) return;
+  const req = JSON.parse(input.subarray(end + 4, end + 4 + length));
+  input = input.subarray(end + 4 + length);
+  if (req.id !== undefined) {
+   const result = req.method === "initialize" ? {capabilities:{definitionProvider:true,textDocumentSync:1}} : null;
+   const body = JSON.stringify({jsonrpc:"2.0",id:req.id,result});
+   process.stdout.write("Content-Length: " + Buffer.byteLength(body) + "\\r\\n\\r\\n" + body);
+  }
+  if (req.method === "exit") process.exit(0);
+ }
+});
+`,
+	);
+	const command =
+		process.platform === "win32" ? `${fixture.tsc}.cmd` : fixture.tsc;
+	fs.writeFileSync(
+		command,
+		process.platform === "win32"
+			? `@echo off\n"${process.execPath}" "${script}" %*\n`
+			: `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`,
+	);
+	fs.chmodSync(command, 0o755);
+	return fixture;
+}
 function project(root: string) {
 	fs.mkdirSync(root, { recursive: true });
 	fs.writeFileSync(path.join(root, "package.json"), "{}");
@@ -206,6 +247,95 @@ describe("real wrapper effective compiler trust (#4299)", () => {
 		expect(await attach(session, root, file)).toBeUndefined();
 		expect(fs.existsSync(hostile.marker)).toBe(false);
 	});
+	it.each([false, true])(
+		"native TS7 preserves trusted root permission (adopted=%s) (#4299 R2-F1)",
+		async (adopted) => {
+			const session = path.join(tmp, "session");
+			project(session);
+			const root = adopted ? path.join(tmp, "adopted") : session;
+			const file = project(root);
+			const hostile = nativeCompilerTree(root, "native");
+			const managed = compilerTree(
+				path.join(tmp, "managed"),
+				"native-fallback-managed",
+			);
+			compiler.value = managed.tsc;
+			expect(resolveAnalysisRoot(file, session)).toBe(
+				adopted ? "adopted" : "session",
+			);
+			process.chdir(session);
+			setProjectTrustState("trusted");
+			expect(await attach(session, root, file)).toBeDefined();
+			expect(fs.existsSync(hostile.marker)).toBe(!adopted);
+			expect(fs.existsSync(managed.marker)).toBe(adopted);
+		},
+	);
+	it.each([false, true])(
+		"classic project-local wrapper inherits root permission (adopted=%s) (#4299 R2-F1)",
+		async (adopted) => {
+			const session = path.join(tmp, "session");
+			project(session);
+			const root = adopted ? path.join(tmp, "adopted") : session;
+			const file = project(root);
+			const hostile = nativeCompilerTree(root, "local-wrapper");
+			fs.writeFileSync(
+				path.join(root, "node_modules", "typescript", "package.json"),
+				JSON.stringify({ name: "typescript", version: "5.9.3" }),
+			);
+			const suffix = process.platform === "win32" ? ".cmd" : "";
+			fs.copyFileSync(
+				`${hostile.tsc}${suffix}`,
+				path.join(
+					root,
+					"node_modules",
+					".bin",
+					`typescript-language-server${suffix}`,
+				),
+			);
+			fs.chmodSync(
+				path.join(
+					root,
+					"node_modules",
+					".bin",
+					`typescript-language-server${suffix}`,
+				),
+				0o755,
+			);
+			const managed = compilerTree(
+				path.join(tmp, "managed"),
+				"wrapper-managed",
+			);
+			compiler.value = managed.tsc;
+			expect(resolveAnalysisRoot(file, session)).toBe(
+				adopted ? "adopted" : "session",
+			);
+			process.chdir(session);
+			setProjectTrustState("trusted");
+			expect(Boolean(await attach(session, root, file))).toBe(!adopted);
+			expect(fs.existsSync(hostile.marker)).toBe(!adopted);
+			if (adopted) {
+				await flushLatencyLog();
+				const rows = fs
+					.readFileSync(getLatencyLogPath(), "utf8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line));
+				expect(rows).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							phase: "degradation_ledger",
+							metadata: expect.objectContaining({
+								kind: "lsp-registry-decision",
+								field: "project-local-binary",
+								trust: "trusted",
+								count: 1,
+							}),
+						}),
+					]),
+				);
+			}
+		},
+	);
 	it("forces an absolute managed compiler through the real wrapper under unknown trust", async () => {
 		const root = path.join(tmp, "project");
 		const file = project(root);

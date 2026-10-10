@@ -102,7 +102,7 @@ const DOES_NOT_EXECUTE_PROJECT_CODE = new Map<string, string>([
 	["toml", "TOML language service reads data files only"],
 	[
 		"typescript",
-		"tsserver type-checks and completes; unless the session is trusted it runs pi-lens's managed tsserver, never the project's (#4296)",
+		"TypeScript type-checks and completes; project classic/native compilers require trusted session ownership, and adopted roots use admitted managed classic TypeScript (#4296/#4299)",
 	],
 	["typos", "spell-checker over source text; it executes nothing"],
 	["yaml", "YAML language service reads data files only"],

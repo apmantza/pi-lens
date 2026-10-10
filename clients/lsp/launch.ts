@@ -7,6 +7,7 @@
  * - Package manager execution
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type ChildProcess,
 	execFileSync,
@@ -394,6 +395,17 @@ function findBinaryOnPath(
 	return undefined;
 }
 
+// #4299 R2-F1: every launcher in one service spawn inherits its file's
+// analysis-root permission, including async discovery and repair continuations.
+const lspProjectCodePermission = new AsyncLocalStorage<boolean>();
+
+export function withLspProjectCodePermission<T>(
+	allowed: boolean,
+	spawn: () => Promise<T>,
+): Promise<T> {
+	return lspProjectCodePermission.run(allowed, spawn);
+}
+
 let unknownProjectLocalNoticeGeneration = -1;
 
 type LspExecutionTrustRequest =
@@ -464,10 +476,15 @@ export function refuseUntrustedLspExecution(
 	const needsTrust =
 		request.kind === "project-code-server"
 			? trust !== "trusted"
-			: trust === "unknown";
+			: !admitProjectSuppliedTsserver(
+					request.resolvedCommand,
+					request.cwd,
+					true,
+				);
 	if (!needsTrust) return;
 
-	recordUntrustedLspExecution(request, trust);
+	if (request.kind === "project-code-server")
+		recordUntrustedLspExecution(request, trust);
 	throw new SpawnFailureError(
 		"spawn-failed",
 		`LSP ${request.kind === "project-code-server" ? "project-code server" : "project-local binary"} refused: project trust is ${trust}`,
@@ -476,7 +493,8 @@ export function refuseUntrustedLspExecution(
 }
 
 /**
- * #4296/#4299: admit the effective compiler, never an unset hint that lets the
+ * #4296/#4299: admit the effective classic/native compiler or local launcher,
+ * never an unset hint that lets the
  * wrapper resolve workspace code. Project code also requires session ownership;
  * pi's trusted answer does not authorize an adopted project's compiler.
  */
@@ -484,7 +502,7 @@ export function admitProjectSuppliedTsserver(
 	tsserverPath: string | undefined,
 	cwd: string,
 	projectSupplied: boolean,
-	projectCodeAllowed = true,
+	projectCodeAllowed = lspProjectCodePermission.getStore() ?? true,
 ): string | undefined {
 	const trust = getProjectTrustState();
 	if (
@@ -772,12 +790,9 @@ export async function launchLSP(
 
 	// Built-in server commands have no config provenance to carry into the
 	// registry. Once PATH resolution selects a project-local installed binary,
-	// unknown host trust must still fail closed (#4248 R2-1). Global and managed
+	// trusted session ownership is required (#4248 R2-1, #4299 R2-F1). Global and managed
 	// fallbacks remain compatible because they resolve outside the project root.
-	if (
-		getProjectTrustState() === "unknown" &&
-		isProjectLocalLspBinary(spawnCommand, cwd)
-	) {
+	if (isProjectLocalLspBinary(spawnCommand, cwd)) {
 		refuseUntrustedLspExecution({
 			kind: "project-local-binary",
 			command,
