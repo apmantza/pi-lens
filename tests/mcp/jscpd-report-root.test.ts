@@ -32,6 +32,7 @@ const FAKE_SCANNER = path.join(
 /** Place a fake scanner shim named after `name` in `binDir`, pointing at the
  *  shared parking fixture. */
 function writeFakeScanner(binDir: string, name: string): void {
+	fs.mkdirSync(binDir, { recursive: true });
 	fs.writeFileSync(
 		path.join(binDir, name),
 		`#!/bin/sh\nexec node "${FAKE_SCANNER}" "$@"\n`,
@@ -44,17 +45,37 @@ function writeFakeScanner(binDir: string, name: string): void {
 }
 
 /**
- * Resolve once `file` exists. `fs.watchFile` polls the real stat; the
- * synchronous first call covers a file created between the caller's check and
- * the watcher's registration, and later callbacks cover creation after it.
+ * Resolve once `file` exists, or reject after `timeoutMs`. `fs.watchFile`
+ * polls the real stat; the synchronous first call covers a file created
+ * between the caller's check and the watcher's registration, and later
+ * callbacks cover creation after it.
+ *
+ * The watcher is released on EVERY settle path — success, timeout, and a
+ * callback that finds the file absent — through one `finish`. The round-3
+ * helper unwatched only in the success branch, so a marker that never appears
+ * (the jscpd case after #4268) left a `persistent` StatWatcher holding the
+ * worker until the whole 90 s test budget elapsed. The deadline is an
+ * `AbortSignal.timeout` (unref'd), so the wait cannot keep the process alive
+ * by itself.
  */
-function waitForFile(file: string): Promise<void> {
-	return new Promise<void>((resolve) => {
-		const listener = (): void => {
-			if (!fs.existsSync(file)) return;
+function waitForFile(file: string, timeoutMs: number): Promise<void> {
+	const deadline = AbortSignal.timeout(timeoutMs);
+	return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		const finish = (err?: Error): void => {
+			if (settled) return;
+			settled = true;
 			fs.unwatchFile(file, listener);
-			resolve();
+			deadline.removeEventListener("abort", onTimeout);
+			if (err) reject(err);
+			else resolve();
 		};
+		const onTimeout = (): void =>
+			finish(new Error(`waitForFile timed out after ${timeoutMs}ms: ${file}`));
+		const listener = (): void => {
+			if (fs.existsSync(file)) finish();
+		};
+		deadline.addEventListener("abort", onTimeout);
 		fs.watchFile(file, { interval: 50, persistent: true }, listener);
 		listener();
 	});
@@ -78,6 +99,8 @@ interface ScannerCase {
 	prefix: string;
 	/** Make the scanner a live member of the `mode=full` path. */
 	prepareProject(fixture: string): void;
+	/** Plant the fake where this scanner's real resolver selects it. */
+	placeFake(paths: { fixture: string; home: string }): void;
 }
 
 const CASES: readonly ScannerCase[] = [
@@ -85,6 +108,20 @@ const CASES: readonly ScannerCase[] = [
 		name: "jscpd",
 		prefix: "pi-lens-jscpd-",
 		prepareProject() {},
+		// #4268 refuses a project-local `node_modules/.bin` binary under the MCP
+		// child's unknown project trust, so a fake planted there is never the
+		// process that runs. `JscpdClient` resolves its scanner through
+		// `findNodeToolBinary` (trust-gated) and then falls back to
+		// `jscpdManagedPath`, which `ensureAvailable` fills from the
+		// TRUST-INDEPENDENT `findManagedNodeToolBinary` shim. Planting the fake
+		// at that managed shim exercises the real resolver without relaxing the
+		// trust gate or adding a trust knob.
+		placeFake({ home }) {
+			writeFakeScanner(
+				path.join(home, "tools", "node_modules", ".bin"),
+				"jscpd",
+			);
+		},
 	},
 	{
 		// mode=full runs gitleaks only on a tracked git repo (#130/#608).
@@ -92,6 +129,11 @@ const CASES: readonly ScannerCase[] = [
 		prefix: "pi-lens-gitleaks-",
 		prepareProject(fixture) {
 			fs.mkdirSync(path.join(fixture, ".git"), { recursive: true });
+		},
+		// gitleaks's `probeVersion` falls through to the bare command name on
+		// PATH, so its project-local PATH entry still selects the fake.
+		placeFake({ fixture }) {
+			writeFakeScanner(path.join(fixture, "node_modules", ".bin"), "gitleaks");
 		},
 	},
 ];
@@ -101,17 +143,19 @@ describe("mcp harness scanner report root (#4133)", () => {
 		it(`sweeps a killed ${spec.name} scan's report directory from the harness-owned root`, async () => {
 			const { tmpDir } = setupTestEnvironment(`pi-lens-${spec.name}-mcp-`);
 			const fixture = path.join(tmpDir, "project");
+			const home = path.join(tmpDir, "home");
 			const binDir = path.join(fixture, "node_modules", ".bin");
-			fs.mkdirSync(binDir, { recursive: true });
+			fs.mkdirSync(fixture, { recursive: true });
 			fs.writeFileSync(path.join(fixture, "src.ts"), "export const a = 1;\n");
 			spec.prepareProject(fixture);
-			writeFakeScanner(binDir, spec.name);
+			spec.placeFake({ fixture, home });
 			const marker = path.join(tmpDir, `${spec.name}-output.txt`);
 
 			const harness = new McpHarness({
 				cwd: fixture,
 				env: {
 					SCANNER_FAKE_MARKER: marker,
+					PI_LENS_HOME: home,
 					PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
 				},
 			});
@@ -123,7 +167,10 @@ describe("mcp harness scanner report root (#4133)", () => {
 				});
 				// Fire-and-forget: the parked scan cannot resolve before dispose().
 				fireFullDiagnostics(harness);
-				await waitForFile(marker);
+				// A short deadline keeps a wiring break from hanging the whole 90 s
+				// budget: the parked fake writes the marker in well under a second,
+				// and the helper releases its watcher either way.
+				await waitForFile(marker, 30_000);
 				const reportDir = fs.readFileSync(marker, "utf8").trim();
 				// The child really did create the report directory this test kills.
 				expect(fs.existsSync(reportDir)).toBe(true);
@@ -141,4 +188,19 @@ describe("mcp harness scanner report root (#4133)", () => {
 			}
 		}, 90_000);
 	}
+
+	it("releases its fs.watchFile watcher when the awaited file never appears", async () => {
+		const { tmpDir } = setupTestEnvironment("pi-lens-wait-for-file-");
+		const missing = path.join(tmpDir, "never-created.txt");
+		const statWatchers = (): number =>
+			process.getActiveResourcesInfo().filter((r) => r === "StatWatcher")
+				.length;
+		const before = statWatchers();
+		const pending = waitForFile(missing, 150);
+		// The watcher registers synchronously inside the promise executor, before
+		// the promise can settle.
+		expect(statWatchers()).toBe(before + 1);
+		await expect(pending).rejects.toThrow(/timed out after 150ms/);
+		expect(statWatchers()).toBe(before);
+	});
 });

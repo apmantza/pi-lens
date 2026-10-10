@@ -15,11 +15,18 @@
  * copy is the drift this seam exists to prevent (#4133 round 3). Read at call
  * time like the other lazy env seams; an empty value falls back to the
  * tmpdir.
+ *
+ * The override is honoured only in test mode (`isTestMode()`). Production
+ * always uses `os.tmpdir()`, so a leaked `PI_LENS_TEST_SCANNER_TMPDIR` cannot
+ * relocate a real scan's report directory; the harness child inherits vitest's
+ * `VITEST` marker, so its override still resolves (#4292 round 4).
  */
 
 import * as os from "node:os";
+import { isTestMode } from "./env-utils.js";
 
 export function scannerReportParentDir(): string {
+	if (!isTestMode()) return os.tmpdir();
 	const override = process.env.PI_LENS_TEST_SCANNER_TMPDIR?.trim();
 	return override && override.length > 0 ? override : os.tmpdir();
 }
