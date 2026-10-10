@@ -9,18 +9,23 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	oxfmtFormatter,
 	phpCsFixerFormatter,
 	sqlfluffFormatter,
 } from "../../clients/formatters.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { createVenvFinder } from "../../clients/dispatch/runners/utils/runner-helpers.js";
 import {
 	evaluateResolutionCase,
 	plantResolutionFixture,
 	RESOLUTION_CASES,
 } from "../../scripts/smoke-tools.mjs";
+
+// These cases plant project-local rungs on purpose; the trust gate is exercised
+// by the dedicated witnesses, so this resolution sweep runs trusted.
+beforeEach(() => setProjectTrustState("trusted"));
 
 const deps = {
 	formatters: {

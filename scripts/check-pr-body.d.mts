@@ -30,11 +30,16 @@ export declare function lintPrBody(
 		ref?: string;
 		headFiles?: Map<string, string>;
 		testCorpus?: { paths: Set<string>; titles: Set<string> };
+		proseMode?: "block" | "warn";
 	},
 ): {
 	valid: boolean;
 	errors: string[];
 };
+export declare function lintClassSweep(
+	body?: string,
+	options?: { diff?: string },
+): string[];
 export declare function testCorpus(options?: {
 	cwd?: string;
 	workingTree?: boolean;
@@ -48,7 +53,12 @@ export declare function lintLocalPrBody(
 	body: string,
 	cwd?: string,
 	git?: (args: string[], options?: Record<string, unknown>) => string,
-	options?: { title?: string; ref?: string; headFiles?: Map<string, string> },
+	options?: {
+		title?: string;
+		ref?: string;
+		headFiles?: Map<string, string>;
+		proseMode?: "block" | "warn";
+	},
 ): { valid: boolean; errors: string[] };
 export declare function parseRuntimeHunks(diff: string): Array<{
 	pre: string;

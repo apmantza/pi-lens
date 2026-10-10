@@ -432,7 +432,7 @@ const WRITER_STEPS: Record<string, number> = {
 	".github/workflows/stale-open-issues.yml": 1,
 	".github/workflows/stale.yml": 1,
 	".github/workflows/stryker-nightly.yml": 1,
-	".github/workflows/tool-smoke.yml": 8,
+	".github/workflows/tool-smoke.yml": 9,
 };
 
 // Every dispatchable job that holds a write scope, with the scopes it holds.

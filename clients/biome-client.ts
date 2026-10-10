@@ -13,9 +13,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isFileKind } from "./file-kinds.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
-import { findGlobalBinary } from "./package-manager.js";
+import {
+	findGlobalBinary,
+	findLocalBinAt,
+	localBinPath,
+} from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
-import { probeToolAsync } from "./tool-probe.js";
+import { getIsolatedNpxSpawnOptions, probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
 import { resolveToolCwd } from "./tool-cwd.js";
@@ -134,17 +138,18 @@ export class BiomeClient {
 			"node_modules",
 			".bin",
 		);
-		const candidates = isWin
-			? [
-					path.join(resolveCwd, "node_modules", ".bin", "biome.cmd"),
-					path.join(resolveCwd, "node_modules", ".bin", "biome"),
-				]
-			: [path.join(resolveCwd, "node_modules", ".bin", "biome")];
-		for (const p of candidates) {
-			if (fs.existsSync(p)) {
-				this.localBinaryByCwd.set(resolveCwd, p);
-				return { cmd: p, args: [] };
-			}
+		// THE shared construction seam (#4268 HIGH-1): the project's own shim is
+		// resolved through the trust-gated lookup, never a private join, so it is
+		// refused under unknown/untrusted trust while the managed copy below runs.
+		const localBiome = localBinPath(
+			findLocalBinAt("biome", resolveCwd, {
+				windowsExt: ".cmd",
+				isWindows: isWin,
+			}),
+		);
+		if (localBiome) {
+			this.localBinaryByCwd.set(resolveCwd, localBiome);
+			return { cmd: localBiome, args: [] };
 		}
 		if (this.autoInstalledBinaryPath) {
 			return { cmd: this.autoInstalledBinaryPath, args: [] };
@@ -174,7 +179,14 @@ export class BiomeClient {
 
 	private async spawnBiomeAsync(args: string[], timeout = 15000, cwd?: string) {
 		const { cmd, args: prefix } = await this.getBiomeBinary(cwd);
-		return safeSpawnAsync(cmd, [...prefix, ...args], { timeout, cwd });
+		return safeSpawnAsync(cmd, [...prefix, ...args], {
+			timeout,
+			cwd,
+			// ONE neutral-cwd seam for npx/bunx fallbacks (#4193, #4268 acceptance 3),
+			// so a project `.npmrc` is never read; a resolved binary keeps the
+			// project cwd it was given (biome.json discovery).
+			...(cmd === "npx" || cmd === "bunx" ? getIsolatedNpxSpawnOptions() : {}),
+		});
 	}
 
 	/**

@@ -22,6 +22,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 import { getDegradationSummary } from "../../clients/degradation-ledger.js";
 import {
 	cleanupTestEnvironmentsDrained,
@@ -114,6 +118,9 @@ describe("#3750 an empty result under a server-root fallback", () => {
 	let service: { shutdown: () => Promise<void> } | undefined;
 
 	beforeAll(async () => {
+		// Host-boundary stub: this fixture exercises the real LSP service and
+		// admits its project-code servers as a trusted project.
+		setProjectTrustState("trusted");
 		for (const name of [
 			"rust-analyzer",
 			"csharp-ls",
@@ -128,6 +135,7 @@ describe("#3750 an empty result under a server-root fallback", () => {
 	});
 
 	afterAll(async () => {
+		resetProjectTrust();
 		process.env.PATH = originalPath;
 		delete process.env.FAKE_LSP_RESPOND_PULL_WITH;
 		await cleanupTestEnvironmentsDrained("pi-lens-3750-", {

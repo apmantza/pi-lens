@@ -50,8 +50,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { detectPythonEnvironment } from "../../clients/python-environment.js";
 
 /** Deep enough that a per-`**` blowup is astronomical, shallow enough to build fast. */
@@ -106,6 +107,9 @@ function createDeepWorkspace(manifest: string): {
 }
 
 describe("non-backtracking workspace-member matcher (#2603)", () => {
+	// The workspace `.venv` is a project-sourced environment; the trust gate is
+	// witnessed in `project-local-bin-trust.test.ts`.
+	beforeEach(() => setProjectTrustState("trusted"));
 	it(`answers a ${INTERLEAVED_LINKS}-link interleaved members glob within ${BUDGET_MS}ms through detectPythonEnvironment`, async () => {
 		// The glob cannot match (no component is `zzz`), so the matcher must
 		// consider every split before answering — the worst case, and the one a

@@ -8,6 +8,8 @@ holds the pi-lens rules every role shares, for every runner and model. The
 principles apply throughout and are not restated; project files win on
 conflict.
 
+User-facing prose follows the live standard in `docs/pi-lens-reviewer.md`.
+
 ## Worktree and Git
 
 Work only in the assigned worktree. Before editing, verify its absolute path,

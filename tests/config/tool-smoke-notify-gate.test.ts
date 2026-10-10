@@ -120,14 +120,19 @@ describe("tool-smoke.yml's issue writers are scoped to nightly/default runs (#33
 		});
 	});
 
-	it("runs the three notifiers in order, the job-verdict writer last (must observe every gating layer)", () => {
+	it("runs the four notifiers in order, the job-verdict writers last (must observe every gating layer)", () => {
 		const names = (notifyJob.steps as Step[]).map((s) => String(s.name ?? ""));
 		const at = (needle: string) => names.findIndex((n) => n.includes(needle));
 		expect(at(CLEAN_SIGNAL_NOTIFY_STEP_NAME)).toBeGreaterThan(-1);
 		expect(at("Notify on idle-eviction drift")).toBeGreaterThan(
 			at(CLEAN_SIGNAL_NOTIFY_STEP_NAME),
 		);
-		expect(names[names.length - 1]).toContain(NOTIFY_STEP_NAME);
+		expect(at("Notify on LSP capability census")).toBeGreaterThan(
+			at(NOTIFY_STEP_NAME),
+		);
+		expect(names[names.length - 1]).toContain(
+			"Notify on LSP capability census",
+		);
 	});
 
 	// Recurrence: #4077 split, a notifier that stops being best-effort turns a
@@ -144,7 +149,7 @@ describe("tool-smoke.yml's issue writers are scoped to nightly/default runs (#33
 	it("runs the docs refresh writer only for scheduled/default-branch runs with a changed doc (#3380)", () => {
 		expect(workflow.jobs?.[PRS_JOB]?.if).toBe(PRS_IF);
 		expect(docsRefreshStep.if).toBe(
-			"needs.tool-smoke.outputs.docs_changed == 'true'",
+			"needs.tool-smoke.outputs.docs_changed == 'true' && needs.tool-smoke.outputs.census == 'success'",
 		);
 	});
 
@@ -253,7 +258,7 @@ describe("tool-smoke.yml's issue writers are scoped to nightly/default runs (#33
 				(s) => typeof s.name === "string" && s.name.includes(name),
 			);
 		const stage = index("Stage the refresh-PR inputs");
-		expect(stage).toBe(index("Check LSP docs refresh diff") + 1);
+		expect(stage).toBe(index("LSP capability census") + 1);
 		expect(stage).toBeLessThan(index("Format layer"));
 		const condition =
 			"always() && (steps.docs_diff.outputs.changed == 'true' || steps.idle_promote.outputs.promoted == 'true')";

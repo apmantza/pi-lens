@@ -12,6 +12,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { FormatService } from "../../clients/format-service.js";
 import { clearFormatterRuntimeState } from "../../clients/formatters.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
@@ -133,6 +134,9 @@ function reindentAsBiome(content: string, width: number, unit: number): string {
 
 describe("formatter indentation inference through FormatService (#3038)", () => {
 	beforeEach(() => {
+		// This suite witnesses indentation inference, not the trust gate; local
+		// rungs are planted on purpose and the gate is covered elsewhere.
+		setProjectTrustState("trusted");
 		safeSpawnAsync.mockReset();
 		clearFormatterRuntimeState();
 		resetDegradationLedger();

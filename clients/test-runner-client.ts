@@ -25,7 +25,12 @@ import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
 import { detectFileRole } from "./file-role.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
-import { findGlobalBinary } from "./package-manager.js";
+import {
+	findGlobalBinary,
+	findLocalBinAt,
+	localBinPath,
+} from "./package-manager.js";
+import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import {
 	augmentPythonEnvironment,
@@ -1805,6 +1810,11 @@ export class TestRunnerClient {
 				cwd: spawnCwd,
 				timeout: 60000,
 				env,
+				// ONE neutral-cwd seam for npx/bunx fallbacks (#4193, #4268
+				// acceptance 3); a resolved runner binary keeps the project cwd.
+				...(command === "npx" || command === "bunx"
+					? getIsolatedNpxSpawnOptions()
+					: {}),
 				// #2522 R2 F1. `safeSpawnAsync` resolves `options.signal ?? ambient`,
 				// so an absent batch signal keeps the pre-#2522 ambient behaviour.
 				signal,
@@ -3446,8 +3456,13 @@ export class TestRunnerClient {
 		// explicitly before falling back to a global `phpunit` on PATH.
 		if (runner === "phpunit") {
 			const suffix = process.platform === "win32" ? ".bat" : "";
-			const vendorBin = path.join(cwd, "vendor", "bin", `phpunit${suffix}`);
-			if (fs.existsSync(vendorBin)) {
+			const vendorBin = localBinPath(
+				findLocalBinAt("phpunit", cwd, {
+					windowsExt: suffix,
+					binDirs: [path.join("vendor", "bin")],
+				}),
+			);
+			if (vendorBin) {
 				return {
 					command: vendorBin,
 					args: config.args(testFile, spawnCwd),
@@ -3463,12 +3478,17 @@ export class TestRunnerClient {
 
 		const binName = config.binName ?? runner;
 		const suffix = process.platform === "win32" ? ".cmd" : "";
-		const localBin = path.join(cwd, "node_modules", ".bin", binName + suffix);
+		const localBin = localBinPath(
+			findLocalBinAt(binName, cwd, {
+				windowsExt: suffix,
+				binDirs: [path.join("node_modules", ".bin")],
+			}),
+		);
 
 		// A resolved binary (local, or any manager's global bin) becomes the command
 		// itself, so the leading wrapper-name arg(s) that named it (e.g. "vitest",
 		// or "-m pytest") are stripped from args() — see stripWrapperArgs.
-		if (fs.existsSync(localBin)) {
+		if (localBin) {
 			return {
 				command: localBin,
 				args: stripWrapperArgs(binName, config.args(testFile, spawnCwd)),

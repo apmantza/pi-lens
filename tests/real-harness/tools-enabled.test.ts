@@ -125,7 +125,9 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 				const disabledLines = pi.lens
 					.sessionStartLog()
 					.filter((line) =>
-						line.includes("session_start: disabled tools = ast_grep_replace"),
+						line.includes(
+							"session_start: disabled tools = ast_grep_replace, health (2 total)",
+						),
 					);
 				expect(disabledLines).toHaveLength(1);
 				for (const tool of tools) {
@@ -133,6 +135,48 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 						tool.descriptionBytes + tool.schemaBytes,
 					);
 				}
+			},
+		);
+	});
+
+	it("does not emit a disabled-tools note for the default config", async () => {
+		await withRealPi(
+			{
+				fixture: "scenario-1",
+				script: "script.json",
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
+			async (pi) => {
+				await pi.prompt("check the default startup note");
+				await pi.awaitAssistantTurn();
+				expect(
+					pi.lens
+						.sessionStartLog()
+						.some((line) => line.includes("session_start: disabled tools =")),
+				).toBe(false);
+			},
+		);
+	});
+
+	it("bounds a long disabled-tools session note", async () => {
+		await withRealPi(
+			{
+				fixture: "tools-disabled-many",
+				script: "script.json",
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
+			async (pi) => {
+				await pi.prompt("report the disabled tools");
+				await pi.awaitAssistantTurn();
+				expect(
+					pi.lens
+						.sessionStartLog()
+						.some((line) =>
+							line.includes(
+								"session_start: disabled tools = ast_grep_search, ast_grep_replace, ast_grep_outline, lsp_navigation, lens_diagnostics, lens_diagnostic_mark, symbol_search, module_report and 9 more (17 total)",
+							),
+						),
+				).toBe(true);
 			},
 		);
 	});

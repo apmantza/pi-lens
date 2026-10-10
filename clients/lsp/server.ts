@@ -500,6 +500,8 @@ export interface LSPServerInfo {
 	idleEviction: "transparent" | "resident" | "unmeasured";
 	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
 	custom?: boolean;
+	/** True when startup/indexing can execute project-owned build or plugin code. */
+	executesProjectCode?: boolean;
 	/** Set by compileLspRegistry after the source trust decision is admitted. */
 	trustAllowed?: boolean;
 	/**
@@ -1542,6 +1544,7 @@ interface InteractiveServerSpec {
 	language: string;
 	fallbackFor?: string;
 	requiresProjectRoot?: boolean;
+	executesProjectCode?: boolean;
 	command: string | ((root: string) => string);
 	args?: string[] | ((root: string) => string[]);
 	initialization?:
@@ -1571,6 +1574,7 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 		rootMarkers: spec.root.rootMarkers,
 		fallbackFor: spec.fallbackFor,
 		requiresProjectRoot: spec.requiresProjectRoot,
+		executesProjectCode: spec.executesProjectCode,
 		availabilityKey:
 			typeof spec.command === "string" && isSimpleCommand(spec.command)
 				? spec.command
@@ -3096,6 +3100,7 @@ export const RustServer: LSPServerInfo = {
 	// Measured (#3750): rust-analyzer answers an empty result for a detached file.
 	requiresProjectRoot: true,
 	name: "rust-analyzer",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["rust"],
 	// No FileDirRoot fallback (#201): rust-analyzer is a heavy workspace server
 	// that is useless without a Cargo manifest. With the fallback, every .rs file
@@ -3136,6 +3141,7 @@ export const RubyServer: LSPServerInfo = {
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Ruby LSP",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["ruby"],
 	root: RootWithFallback(
 		PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
@@ -3282,6 +3288,7 @@ export const PowerShellServer: LSPServerInfo = {
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "PowerShell Editor Services",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["powershell"],
 	// Index at the workspace (script modules reference siblings); fall back to the
 	// file dir.
@@ -3310,6 +3317,7 @@ export const CSharpServer: LSPServerInfo = {
 	// Documented (#3750): csharp-ls needs a solution or project.
 	requiresProjectRoot: true,
 	name: "csharp-ls",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["csharp"],
 	// No FileDirRoot fallback (#201): csharp-ls is a workspace server and should
 	// not spawn once per source directory before a .sln/.csproj exists. Glob root
@@ -3338,6 +3346,7 @@ export const CSharpServer: LSPServerInfo = {
 export const OmniSharpServer = createInteractiveServer({
 	id: "omnisharp",
 	name: "OmniSharp",
+	executesProjectCode: true,
 	// Documented (#3750): OmniSharp needs a solution or project.
 	requiresProjectRoot: true,
 	fallbackFor: "csharp",
@@ -3355,6 +3364,7 @@ export const FSharpServer: LSPServerInfo = {
 	// Documented (#3750): FSAutocomplete needs a project.
 	requiresProjectRoot: true,
 	name: "FSAutocomplete",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["fsharp"],
 	root: createRootDetector([...DOTNET_FSHARP_ROOT_MARKERS]),
 	async spawn(root, options) {
@@ -3382,6 +3392,7 @@ export const FSharpServer: LSPServerInfo = {
 export const JavaServer = createInteractiveServer({
 	id: "java",
 	name: "JDT Language Server",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["java"],
 	root: RootWithFallback(JavaWorkspaceRoot()),
 	language: "java",
@@ -3395,6 +3406,7 @@ export const KotlinServer: LSPServerInfo = {
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Kotlin Language Server",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["kotlin"],
 	root: RootWithFallback(
 		createRootDetector(["build.gradle.kts", "build.gradle", "pom.xml"]),
@@ -3421,6 +3433,7 @@ export const KotlinServer: LSPServerInfo = {
 export const SwiftServer = createInteractiveServer({
 	id: "swift",
 	name: "SourceKit-LSP",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["swift"],
 	root: createRootDetector(["Package.swift"]),
 	language: "swift",
@@ -3429,6 +3442,7 @@ export const SwiftServer = createInteractiveServer({
 
 export const DartServer = createInteractiveServer({
 	id: "dart",
+	executesProjectCode: true,
 	name: "Dart Analysis Server",
 	extensions: KIND_EXTENSIONS["dart"],
 	root: RootWithFallback(createRootDetector(["pubspec.yaml"])),
@@ -3525,6 +3539,7 @@ export const CppServer: LSPServerInfo = createTreeBinaryServer({
 
 export const ZigServer: LSPServerInfo = {
 	id: "zig",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "ZLS",
@@ -3546,6 +3561,7 @@ export const ZigServer: LSPServerInfo = {
 export const HaskellServer = createInteractiveServer({
 	id: "haskell",
 	name: "Haskell Language Server",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["haskell"],
 	root: createRootDetector(["stack.yaml", "cabal.project", "*.cabal"]),
 	language: "haskell",
@@ -3556,6 +3572,7 @@ export const HaskellServer = createInteractiveServer({
 export const ElixirServer = createInteractiveServer({
 	id: "elixir",
 	name: "ElixirLS",
+	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["elixir"],
 	root: RootWithFallback(createRootDetector(["mix.exs"])),
 	language: "elixir",
@@ -3567,6 +3584,7 @@ export const ElixirExpertServer: LSPServerInfo = {
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Expert",
+	executesProjectCode: true,
 	fallbackFor: "elixir",
 	extensions: KIND_EXTENSIONS["elixir"],
 	root: RootWithFallback(createRootDetector(["mix.exs"])),
@@ -3655,6 +3673,7 @@ export const MarksmanServer: LSPServerInfo = {
 
 export const OCamlServer = createInteractiveServer({
 	id: "ocaml",
+	executesProjectCode: true,
 	name: "ocamllsp",
 	extensions: KIND_EXTENSIONS["ocaml"],
 	root: createRootDetector(["dune-project", "opam"]),
@@ -3664,6 +3683,7 @@ export const OCamlServer = createInteractiveServer({
 
 export const ClojureServer: LSPServerInfo = {
 	id: "clojure",
+	executesProjectCode: true,
 	idleEviction: "transparent",
 	role: "language",
 	name: "Clojure LSP",
@@ -3706,6 +3726,7 @@ export const CueServer: LSPServerInfo = {
 
 export const TerraformServer: LSPServerInfo = {
 	id: "terraform",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Terraform LSP",
@@ -3728,6 +3749,7 @@ export const TerraformServer: LSPServerInfo = {
 
 export const NixServer = createInteractiveServer({
 	id: "nix",
+	executesProjectCode: true,
 	name: "nixd",
 	extensions: KIND_EXTENSIONS["nix"],
 	root: createRootDetector(["flake.nix"]),
@@ -3841,6 +3863,7 @@ export const FishServer: LSPServerInfo = {
 
 export const CMakeServer: LSPServerInfo = {
 	id: "cmake",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "CMake Language Server",
@@ -4079,6 +4102,7 @@ export const PrismaServer: LSPServerInfo = {
 
 export const VueServer: LSPServerInfo = {
 	id: "vue",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Vue Language Server",
@@ -4140,6 +4164,7 @@ export const VueServer: LSPServerInfo = {
 
 export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Svelte Language Server",

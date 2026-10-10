@@ -31,6 +31,7 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
 // --- Types ---
@@ -428,7 +429,10 @@ export class JscpdClient {
 				],
 				{
 					timeout: SCAN_TIMEOUT_MS,
+					// A cache-only npx fallback must not read the project's `.npmrc`
+					// (#4268 acceptance 3); local/managed jscpd keeps the project cwd.
 					cwd,
+					...(cmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
 				},
 			);
 

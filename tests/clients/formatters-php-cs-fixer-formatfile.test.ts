@@ -35,8 +35,12 @@ function vendorBinPath(root: string): string {
 }
 
 describe("formatFile — php-cs-fixer ancestor config carriage (#2472)", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.resetModules();
+		// The suite plants a project-local vendor binary on purpose; the trust gate
+		// itself is witnessed in `project-local-bin-trust.test.ts`.
+		const trust = await import("../../clients/project-trust.js");
+		trust.setProjectTrustState("trusted");
 		safeSpawnAsync.mockReset();
 	});
 

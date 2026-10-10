@@ -447,7 +447,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/live-bus-emitter.ts": 2,
 		"clients/lsp/cascade-tier.ts": 1,
 		"clients/lsp/client.ts": 13,
-		"clients/lsp/index.ts": 24,
+		"clients/lsp/index.ts": 28,
 		"clients/lsp/jvm-runtime.ts": 1,
 		"clients/lsp/server.ts": 13,
 		"clients/mcp/ipc.ts": 8,
@@ -715,7 +715,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/analyze-cli.ts": 1,
 		"mcp/server.ts": 9,
 		"mcp/tool-arguments.ts": 4,
-		"index.ts": 21,
+		// #1416: /lens-health's effective tool projection adds two semantic
+		// filters; keep the existing census entry pinned to the live population.
+		"index.ts": 23,
 	},
 	ignore: {
 		"clients/file-utils.ts": 2,
@@ -800,7 +802,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-tool-logger.ts": 3,
 		"clients/atomic-write-staging.ts": 2,
 		"clients/bash-file-access.ts": 9,
-		"clients/biome-client.ts": 10,
+		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
+		// shared `findLocalBinAt` trust seam, one construction site for the shim.
+		"clients/biome-client.ts": 7,
 		"clients/blocker-freshness.ts": 4,
 		// 5 -> 6 (#3594): the remembered-holder skip's degradation `subject`,
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
@@ -892,7 +896,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 23 -> 30 (#2660): the resolver now carries its selected `path` and
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
+		// stop building `.bin` paths by hand and route through the shared lookup.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 28,
 		"clients/dispatch/runners/vale.ts": 7,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 7,
 		"clients/dispatch/runners/yamllint.ts": 3,
@@ -1085,7 +1091,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/word-index.ts": 51,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
-		"tools/ast-grep-outline.ts": 8,
+		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution
+		// onto the shared `resolveHostToolPath` seam, so ast-grep-outline.ts drops
+		// its own `path` import and two `path.*` calls.
+		"tools/ast-grep-outline.ts": 5,
 		"tools/ast-grep-search.ts": 2,
 		"tools/effective-config.ts": 2,
 		"tools/lens-diagnostic-mark.ts": 6,

@@ -250,6 +250,14 @@ jobs:
       resolution_layer: ${{ steps.resolution_layer.outcome }}
       docs_changed: ${{ steps.docs_diff.outputs.changed }}
       promoted: ${{ steps.idle_promote.outputs.promoted }}
+      census: ${{ steps.lsp_census.outcome }}
+      seed_matrix: ${{ steps.seed_matrix.outcome }}
+      lsp_matrix: ${{ steps.lsp_matrix.outcome }}
+      clean_signal: ${{ steps.clean_signal.outcome }}
+      server_capabilities: ${{ steps.server_capabilities.outcome }}
+      idle_measurement: ${{ steps.idle_measurement.outcome }}
+      idle_promote: ${{ steps.idle_promote.outcome }}
+      docs_diff: ${{ steps.docs_diff.outcome }}
     # The installer hits the GitHub REST API to resolve release assets.
     # Unauthenticated = 60 req/hr per IP, exhausted on shared-IP runners.
     # The auto-provided token raises this to 5000 req/hr; the installer sends it
@@ -419,6 +427,7 @@ jobs:
       # `bot/lsp-docs-refresh` does. `timeout-minutes` bounds a hung fetch,
       # which `continue-on-error` does not.
       - name: Seed the capability matrix from the last unmerged refresh
+        id: seed_matrix
         if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'
         continue-on-error: true
         timeout-minutes: 2
@@ -431,6 +440,7 @@ jobs:
       # "unavailable", so this never reds the nightly. MERGES into the doc — a
       # server this ubuntu host couldn't spawn keeps its prior (dev-box) row (#390).
       - name: LSP capability matrix (characterize diagnostic mode per server)
+        id: lsp_matrix
         continue-on-error: true
         run: node scripts/characterize-lsp.mjs --install
 
@@ -445,6 +455,7 @@ jobs:
       # only, NEVER a build/CI gate (this step's own continue-on-error covers the
       # probe already; the drift check can't fail the job either way).
       - name: LSP clean-signal probe (Tier 2 vs 3 among push servers) + silentOnClean drift check
+        id: clean_signal
         continue-on-error: true
         env:
           PILENS_PUB_DEBUG: "1"
@@ -455,6 +466,7 @@ jobs:
       # previously never run anywhere, so its ws-pull column (#389) stayed stale.
       # Merges over the prior doc (keeps servers absent on this host).
       - name: LSP server capability inventory (regenerate docs/servercapabilities.md)
+        id: server_capabilities
         continue-on-error: true
         run: node scripts/server-capabilities.mjs --install
 
@@ -472,6 +484,7 @@ jobs:
       # server this run vetoes, which shows as a failed step and an
       # `::error::` annotation without failing the job.
       - name: LSP idle-eviction measurement (regenerate docs/lsp-idle-eviction.md)
+        id: idle_measurement
         continue-on-error: true
         timeout-minutes: 15
         run: node scripts/measure-lsp-idle-eviction.mjs --install --budget-seconds 600 --summary "$RUNNER_TEMP/lsp-idle-eviction-summary.json" --drift-body "$RUNNER_TEMP/lsp-idle-eviction-drift.md" --drift-state "$RUNNER_TEMP/lsp-idle-eviction-drift-state"
@@ -509,6 +522,23 @@ jobs:
       - name: Check LSP docs refresh diff
         id: docs_diff
         run: node scripts/check-generated-docs-diff.mjs
+
+      # #4277: the refresh PR must not become the only place a marker mismatch
+      # is visible. Run every census that reads the capability matrix against
+      # the freshly regenerated files before handing them to the PR writer.
+      # The log is staged for the tracking issue, including the server and
+      # missing/stale marker text emitted by the failing assertion.
+      - name: LSP capability census (gate refresh PR)
+        id: lsp_census
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npx vitest run \
+            tests/config/lsp-first-publish-census.test.ts \
+            tests/config/lsp-clean-behavior-census.test.ts \
+            tests/config/lsp-idle-eviction-measurement.test.ts \
+            tests/scripts/lsp-matrix-refresh-expiry.test.ts \
+            2>&1 | tee "$RUNNER_TEMP/lsp-capability-census.log"
 
       # The hand-off to `tool-smoke-prs` (#4077), staged where the old PR steps
       # ran, before any later layer can touch the tree: the files the docs-refresh
@@ -610,6 +640,7 @@ jobs:
           stage="$RUNNER_TEMP/notify-inputs"
           mkdir -p "$stage"
           cp -f "$RUNNER_TEMP"/tool-smoke-*.log "$RUNNER_TEMP"/lsp-idle-eviction-drift* "$stage/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/lsp-capability-census.log" "$stage/" 2>/dev/null || true
           summary="$(node --input-type=module -e "import { DRIFT_SUMMARY_PATH } from './scripts/lib/clean-signal.mjs'; process.stdout.write(DRIFT_SUMMARY_PATH)")"
           cp -f "$summary" "$stage/pilens-clean-signal-drift-summary.json" 2>/dev/null || true
           echo "staged by ${GITHUB_JOB}" > "$stage/staged.txt"
@@ -654,7 +685,7 @@ jobs:
       # run) instead of pushing to master. Docs change rarely (only when a server's
       # caps/tier change), so this is low-noise. No-ops when nothing changed.
       - name: Open/update LSP-docs refresh PR
-        if: needs.tool-smoke.outputs.docs_changed == 'true'
+        if: needs.tool-smoke.outputs.docs_changed == 'true' && needs.tool-smoke.outputs.census == 'success'
         continue-on-error: true
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
@@ -819,6 +850,56 @@ jobs:
           # when a non-continue-on-error step actually failed somewhere in it.
           JOB_STATUS: ${{ needs.tool-smoke.result }}
         run: node scripts/notify-tool-smoke-red.mjs
+
+      # #4277: a census mismatch belongs in its own persistent issue, not in a
+      # refresh PR that can be closed while its red logs go unread. This is an
+      # explicit always-path and inspects every best-effort LSP step as well as
+      # the job result, so failures before the census are reported too.
+      - name: Notify on LSP capability census (file/update/close tracking issue)
+        if: always()
+        continue-on-error: true
+        env:
+          JOB_STATUS: ${{ needs.tool-smoke.result }}
+          CENSUS_OUTCOME: ${{ needs.tool-smoke.outputs.census }}
+          SEED_OUTCOME: ${{ needs.tool-smoke.outputs.seed_matrix }}
+          MATRIX_OUTCOME: ${{ needs.tool-smoke.outputs.lsp_matrix }}
+          CLEAN_OUTCOME: ${{ needs.tool-smoke.outputs.clean_signal }}
+          CAPABILITIES_OUTCOME: ${{ needs.tool-smoke.outputs.server_capabilities }}
+          IDLE_OUTCOME: ${{ needs.tool-smoke.outputs.idle_measurement }}
+          PROMOTE_OUTCOME: ${{ needs.tool-smoke.outputs.idle_promote }}
+          DIFF_OUTCOME: ${{ needs.tool-smoke.outputs.docs_diff }}
+          CENSUS_LOG: ${{ runner.temp }}/lsp-capability-census.log
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TITLE='nightly: LSP capability census drift'
+          clean=true
+          for outcome in "$JOB_STATUS" "$CENSUS_OUTCOME" "$SEED_OUTCOME" "$MATRIX_OUTCOME" "$CLEAN_OUTCOME" "$CAPABILITIES_OUTCOME" "$IDLE_OUTCOME" "$PROMOTE_OUTCOME" "$DIFF_OUTCOME"; do
+            [ "$outcome" = success ] || clean=false
+          done
+          if [ "$clean" = true ]; then
+            node scripts/upsert-tracking-issue.mjs --title "$TITLE" --label nightly-drift --clean --close-when-clean
+            exit 0
+          fi
+          body="$RUNNER_TEMP/lsp-capability-census-drift.md"
+          {
+            echo "The nightly LSP capability refresh did not produce a clean census."
+            echo
+            echo "Run: $RUN_URL"
+            echo "Measurement commit: $COMMIT_URL"
+            echo
+            echo "Outcomes: job=$JOB_STATUS seed=$SEED_OUTCOME matrix=$MATRIX_OUTCOME clean-signal=$CLEAN_OUTCOME capabilities=$CAPABILITIES_OUTCOME idle=$IDLE_OUTCOME promotion=$PROMOTE_OUTCOME docs-diff=$DIFF_OUTCOME census=$CENSUS_OUTCOME"
+            echo
+            echo "Failing census output (including server and missing/stale marker details):"
+            if [ -s "$CENSUS_LOG" ]; then
+              node scripts/extract-vitest-failures.mjs "$CENSUS_LOG"
+            else
+              echo "The census did not start; an earlier refresh or measurement step failed or was cancelled."
+            fi
+          } > "$body"
+          gh label create nightly-drift --color B60205 --description 'Nightly automated drift finding' || true
+          node scripts/upsert-tracking-issue.mjs --title "$TITLE" --label nightly-drift --body-file "$body"
 
   # #3916 (recurrence of #3789): the project-snapshot persist bench, run nightly
   # so a change that puts a clone back on the worker persist path reds master

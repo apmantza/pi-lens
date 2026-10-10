@@ -178,7 +178,8 @@ describe("sweep warm-up treats a fallbackFor pair as one family (#3939 F1)", () 
 	let root: string;
 
 	beforeEach(async () => {
-		vi.resetModules();
+		const lspServer = await import("../../../clients/lsp/server.js");
+		lspServer.resetDirectLspCommandAvailability();
 		launchMock.mockReset();
 		createLSPClientMock.mockReset();
 		findManagedToolBinaryMock.mockReset();
@@ -210,6 +211,8 @@ describe("sweep warm-up treats a fallbackFor pair as one family (#3939 F1)", () 
 		delete process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS;
 		const roots = await import("../../../clients/lsp/session-roots.js");
 		roots.resetSessionRootsForTests();
+		const trust = await import("../../../clients/project-trust.js");
+		trust.resetProjectTrust();
 		removeTempDirSync(root);
 	});
 
@@ -226,7 +229,13 @@ describe("sweep warm-up treats a fallbackFor pair as one family (#3939 F1)", () 
 	async function sweep(family: Family, arm: Arm) {
 		const file = project(family);
 		launchMock.mockImplementation(armLauncher(family, arm));
+		// Keep the real LSP module graph intact: the direct-command availability
+		// latch is process/session state, and resetModules() split the registry's
+		// Elixir server objects from the service's server module. This fixture uses
+		// the real trust seam after importing the service that consumes it.
 		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const trust = await import("../../../clients/project-trust.js");
+		trust.setProjectTrustState("trusted");
 		const service = new LSPService();
 		try {
 			const results = await service.runWorkspaceDiagnostics(root, {
@@ -286,6 +295,8 @@ describe("sweep warm-up treats a fallbackFor pair as one family (#3939 F1)", () 
 				launchMock.mockImplementation(armLauncher(family, "fallback-only"));
 				silentServerIds = new Set([family.fallbackId]);
 				const { LSPService } = await import("../../../clients/lsp/index.js");
+				const trust = await import("../../../clients/project-trust.js");
+				trust.setProjectTrustState("trusted");
 				const service = new LSPService();
 				const warmup = await service.ensureWarmForSweep(file);
 				expect(warmup.performedWarmup).toBe(true);

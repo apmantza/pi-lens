@@ -396,6 +396,77 @@ function findBinaryOnPath(
 
 let unknownProjectLocalNoticeGeneration = -1;
 
+type LspExecutionTrustRequest =
+	| {
+			kind: "project-code-server";
+			serverId: string;
+			root: string;
+	  }
+	| {
+			kind: "project-local-binary";
+			command: string;
+			resolvedCommand: string;
+			cwd: string;
+	  };
+
+/** Refuse project-code servers and project-local binaries through one trust seam. */
+export function refuseUntrustedLspExecution(
+	request: LspExecutionTrustRequest,
+): void {
+	const trust = getProjectTrustState();
+	const needsTrust =
+		request.kind === "project-code-server"
+			? trust !== "trusted"
+			: trust === "unknown";
+	if (!needsTrust) return;
+
+	const generation = getDegradationLedgerGeneration();
+	const subject =
+		request.kind === "project-code-server"
+			? `project-code-server:g${generation}:${request.serverId}:${request.root}`
+			: `project-local-binary:g${generation}:${path.basename(request.command)}`;
+	const metadata =
+		request.kind === "project-code-server"
+			? {
+					field: request.kind,
+					serverId: request.serverId,
+					root: request.root,
+					trust,
+				}
+			: {
+					field: request.kind,
+					resolved: isProjectLocalLspBinary(
+						request.resolvedCommand,
+						request.cwd,
+					),
+					trust,
+				};
+	recordDegradationOnce({
+		kind: "lsp-registry-decision",
+		subject,
+		reason: `LSP execution refused: ${request.kind} and project trust is ${trust}`,
+		metadata,
+	});
+	if (unknownProjectLocalNoticeGeneration !== generation) {
+		unknownProjectLocalNoticeGeneration = generation;
+		const label =
+			request.kind === "project-code-server"
+				? "project-code LSP server"
+				: "project-local LSP binary";
+		logExtension({
+			subsystem: "lsp-registry",
+			level: "warn",
+			message: `${label} refused: mark the project trusted in pi or upgrade pi`,
+			metadata: { field: request.kind },
+		});
+	}
+	throw new SpawnFailureError(
+		"spawn-failed",
+		`LSP ${request.kind === "project-code-server" ? "project-code server" : "project-local binary"} refused: project trust is ${trust}`,
+		new Error(`project trust is ${trust}`),
+	);
+}
+
 /**
  * Whether the resolved executable is a project-local installed binary.
  * `launchLSP` is the one seam that has both the final resolved command and its
@@ -407,34 +478,6 @@ export function isProjectLocalLspBinary(
 	cwd: string,
 ): boolean {
 	return isProjectLocalBinPath(resolvedCommand, cwd);
-}
-
-function refuseUnknownProjectLocalBinary(
-	command: string,
-	resolvedCommand: string,
-	cwd: string,
-): void {
-	const generation = getDegradationLedgerGeneration();
-	const subject = `project-local-binary:g${generation}:${path.basename(command)}`;
-	recordDegradationOnce({
-		kind: "lsp-registry-decision",
-		subject,
-		reason: "project-local LSP binary refused: pi project trust is unknown",
-		metadata: {
-			field: "project-local-binary",
-			resolved: isProjectLocalLspBinary(resolvedCommand, cwd),
-			trust: "unknown",
-		},
-	});
-	if (unknownProjectLocalNoticeGeneration === generation) return;
-	unknownProjectLocalNoticeGeneration = generation;
-	logExtension({
-		subsystem: "lsp-registry",
-		level: "warn",
-		message:
-			"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
-		metadata: { field: "project-local-binary" },
-	});
 }
 
 /**
@@ -695,10 +738,12 @@ export async function launchLSP(
 		getProjectTrustState() === "unknown" &&
 		isProjectLocalLspBinary(spawnCommand, cwd)
 	) {
-		refuseUnknownProjectLocalBinary(command, spawnCommand, cwd);
-		const message =
-			"LSP project-local binary refused: project trust is unknown";
-		throw new SpawnFailureError("spawn-failed", message, new Error(message));
+		refuseUntrustedLspExecution({
+			kind: "project-local-binary",
+			command,
+			resolvedCommand: spawnCommand,
+			cwd,
+		});
 	}
 
 	// Pre-validate .cmd shims only after trust has admitted the candidate: if the

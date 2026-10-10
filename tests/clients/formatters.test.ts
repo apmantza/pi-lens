@@ -48,6 +48,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { FORMATTER_MARKERS } from "../../clients/tool-cwd.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { _getSpotlessGradleReadCountForTests } from "../../clients/tool-policy.js";
 
@@ -130,6 +131,9 @@ let tmpDir: string;
 let cleanup: () => void;
 
 beforeEach(() => {
+	// This suite plants project-local rungs on purpose; the trust gate itself
+	// is witnessed in `project-local-bin-trust.test.ts`.
+	setProjectTrustState("trusted");
 	({ tmpDir, cleanup } = setupTestEnvironment("pi-lens-fmt-test-"));
 });
 

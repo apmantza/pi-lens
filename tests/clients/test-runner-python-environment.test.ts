@@ -59,6 +59,7 @@ import {
 	detectPythonEnvironment,
 	type PythonEnvironmentSource,
 } from "../../clients/python-environment.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
 import {
 	getDegradationSummary,
@@ -156,6 +157,10 @@ async function runPytest(
 // sets these same variables, and hooks scoped to one describe left the other
 // reading a leaked VIRTUAL_ENV (AGENTS.md test screen: env leakage).
 beforeEach(() => {
+	// This suite maps interpreter discovery, not the trust gate; the project
+	// `.venv` rungs are planted on purpose and the gate is witnessed in
+	// `project-local-bin-trust.test.ts`.
+	setProjectTrustState("trusted");
 	originalVirtualEnv = process.env.VIRTUAL_ENV;
 	originalCondaPrefix = process.env.CONDA_PREFIX;
 	originalUvProjectEnvironment = process.env.UV_PROJECT_ENVIRONMENT;

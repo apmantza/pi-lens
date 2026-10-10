@@ -64,6 +64,10 @@ names include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,
 lifecycle tools `session_start`, `turn_end`, and `session_end` remain enabled
 because their host protocols require them.
 
+To see the resolved tool surface, use `/lens-health`; the `effective_config`
+tool provides the full configuration provenance. Bundled skills are managed by
+pi's package-manifest filters.
+
 ### `lsp.servers.<id>.covers` — declaring which runners a custom server subsumes
 
 A custom server entry accepts an optional `covers` array naming dispatch

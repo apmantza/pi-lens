@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const safeSpawnAsync = vi.fn(
@@ -32,6 +33,9 @@ describe("PythonDeadCodeClient (vulture) — project-first resolution (#1731)", 
 	const tmpDirs: string[] = [];
 
 	beforeEach(() => {
+		// This suite witnesses project-first resolution, not the trust gate; the
+		// gate is covered by the dedicated trust witnesses.
+		setProjectTrustState("trusted");
 		safeSpawnAsync.mockReset();
 		safeSpawnAsync.mockImplementation(async () => ({
 			error: null,

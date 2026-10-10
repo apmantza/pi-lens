@@ -1691,6 +1691,13 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"through the settle's session guard.",
 		owner: "#2523 slice 2",
 	},
+	"index.ts#activateExtension:7cf4ec4b~c1d0dbef": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"/lens-health lazily loads lens-engine and reads the existing effective-config view inside one signal-less deadline; the command is not a lifecycle hook and has no host hook signal to thread",
+		owner: "#1416",
+	},
 	"index.ts#activateExtension:889073a2~ebe0e096": {
 		family: "hook-await",
 		site: "session_start",
@@ -2198,11 +2205,14 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 37 → 35 (#2660): evidence now reuses the resolver's rung instead of
 	// awaiting a second managed-binary lookup, removing the resolver's two
 	// unbounded awaits (the lookup and its caller-side reconstruction).
+	// 36 -> 37 (#4193): the isolated npx fallback now awaits the probe with
+	// its owned spawn options; this is still bounded by the probe's 5s timeout,
+	// but no hook signal reaches this helper until #2523 AC4 threads it through.
 	// #3968: +1 — `coveringLaneAvailable` awaits each covering gate command
 	// (`ctx.hasTool`), whose probe carries the dispatcher's own 5s budget; the
 	// loop is bounded by the fact's fixed gate list, but like every sibling
 	// here it stays unbounded from the hook's signal until #2523 AC4.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 36,
+	"clients/dispatch/runners/utils/runner-helpers.ts": 37,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2258,7 +2268,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `runFormatPhase` used to await it before the resolution (pipeline.ts
 	// below loses that await). The wait is the fix: an agent edit of the same
 	// file finishes first. The run is inside the format service's `bounded()`.
-	"clients/formatters.ts": 116,
+	// 116 → 118 (#4268): `resolveNpxFallback` resolves a cache-only npx fallback
+	// to a pi-lens-managed binary before the run, so it awaits the lazy installer
+	// import and `ensureTool`. Neither can take a hook signal: the resolver runs
+	// inside the format service's own `bounded()` call, and the formatter seam
+	// carries no `AbortSignal` until #2523 AC4 threads it through.
+	"clients/formatters.ts": 118,
 	"clients/gitleaks-client.ts": 4,
 	// #1892: the turn-end secrets LANE, extracted out of `runtime-turn.ts` with
 	// no behaviour change. Its one unbounded await is `collect`'s

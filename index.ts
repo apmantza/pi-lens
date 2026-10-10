@@ -1,6 +1,6 @@
 import "./clients/console-guard-install.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
-import { bounded } from "./clients/deadline-utils.js";
+import { bounded, withDeadline } from "./clients/deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./clients/hook-budgets.js";
 import {
 	closeModuleLoadConsoleWindow,
@@ -1074,6 +1074,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const disabledToolNames = LENS_TOOL_NAMES.filter(
 		(name) => !isToolEnabled(name),
 	);
+	const formatDisabledToolNames = (names: readonly string[]): string => {
+		const shown = names.slice(0, 8);
+		const omitted = names.length - shown.length;
+		const suffix = omitted > 0 ? ` and ${omitted} more` : "";
+		return `${shown.join(", ")}${suffix} (${names.length} total)`;
+	};
 
 	let lensEnabled = !getLensFlag("no-lens");
 
@@ -1499,6 +1505,31 @@ function activateExtension(hostPi: ExtensionAPI) {
 					count: crashEntries.length,
 				}),
 			];
+
+			// Lazy and bounded: lens-engine is not on the session-start eager
+			// allowlist, and only the health command needs the effective config.
+			const effectiveTools = (
+				await withDeadline(
+					import("./clients/lens-engine.js").then(({ effectiveConfig }) =>
+						effectiveConfig({
+							cwd: runtime.projectRoot,
+							noTools: noToolFlag(),
+						}),
+					),
+					{ ms: 5_000 },
+				)
+			).tools;
+			const enabledTools = effectiveTools
+				.filter((tool) => tool.enabled)
+				.map((tool) => tool.name);
+			const disabledTools = effectiveTools
+				.filter((tool) => !tool.enabled)
+				.map((tool) => tool.name);
+			lines.push("", `Tools enabled: ${enabledTools.join(", ") || "none"}`);
+			if (disabledTools.length > 0) {
+				lines.push(`Tools disabled: ${formatDisabledToolNames(disabledTools)}`);
+			}
+			lines.push("Skills: managed by pi package filters");
 			const slopScoreLine = dispatchIntegration.getDispatchSlopScoreLine();
 
 			if (crashEntries.length > 0) {
@@ -2162,7 +2193,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				typeof piWithActiveTools.setActiveTools !== "function"
 			)
 				return;
-			const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
+			const lazyNames = new Set(enabledLazyTools);
 			const plan = planToolSet(
 				piWithActiveTools.getActiveTools(),
 				lazyNames,
@@ -2291,9 +2322,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 					const buildIdentity = getBuildIdentity(import.meta.url);
 					if (buildIdentity) dbg(formatBuildIdentity(buildIdentity));
 					const sessionReason = sessionStartReason;
-					dbg(
-						`session_start: disabled tools = ${disabledToolNames.join(",") || "none"}`,
-					);
+					if (disabledToolNames.length > 0) {
+						dbg(
+							`session_start: disabled tools = ${formatDisabledToolNames(disabledToolNames)}`,
+						);
+					}
 
 					// #1334 S5: adopt the HOST's project-trust decision before anything
 					// below can auto-install a tool or spawn an LSP server. pi-lens is a
