@@ -9,7 +9,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	createAvailabilityChecker,
+	resolveAdoptedRootCommand,
+} from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 
 // PHP's `-l` exit contract, declared HERE rather than in the shared classifier
@@ -71,14 +74,13 @@ const phpLintRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "php-lint");
-		if (!(await php.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
-
-		const cmd = php.getCommand(cwd);
-		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
+		const cmd =
+			ctx.analysisRootMode === "adopted"
+				? resolveAdoptedRootCommand("php", ctx, cwd)
+				: (await php.isAvailableAsync(cwd))
+					? php.getCommand(cwd)
+					: null;
+		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(cmd, ["-l", absPath], {

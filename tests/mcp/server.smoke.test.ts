@@ -34,13 +34,16 @@ import { stripSource } from "../support/sweep-kit.js";
 // absorbs the transient spike (the established pattern for load-sensitive tests).
 describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 	let harness: McpHarness;
+	let workspace: ReturnType<typeof setupTestEnvironment>;
 
 	beforeAll(() => {
-		harness = new McpHarness();
+		workspace = setupTestEnvironment("mcp-smoke-session-");
+		harness = new McpHarness({ cwd: workspace.tmpDir });
 	});
 
 	afterAll(() => {
 		harness.dispose();
+		workspace.cleanup();
 	});
 
 	// #2860 round 4 N6: this scans the production construction itself. The
@@ -460,7 +463,13 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 	it("answers tools/call pilens_analyze (warm) with a real dispatch result", async () => {
 		// no-lsp keeps it fast (skips the cold LSP spawn) while still running the
 		// real tree-sitter/ast-grep/oxlint pipeline on a clean repo file.
-		const target = path.join(repoRoot, "clients", "mcp", "host-shim.ts");
+		// #4309 F1: this smoke checks ordinary session dispatch. A repository
+		// file outside the isolated server's session is now correctly adopted.
+		const target = path.join(workspace.tmpDir, "host-shim.ts");
+		fs.copyFileSync(
+			path.join(repoRoot, "clients", "mcp", "host-shim.ts"),
+			target,
+		);
 		const res = await harness.request(7, "tools/call", {
 			name: "pilens_analyze",
 			arguments: { file: target, mode: "warm", flags: { "no-lsp": true } },

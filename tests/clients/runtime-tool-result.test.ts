@@ -379,7 +379,9 @@ it("adopts a home sibling but refuses home, ancestors, and a home symlink (#4230
 		expect(resolveAnalysisRoot(path.join(home, "home.ts"), sessionRoot)).toBe(
 			"none",
 		);
-		expect(resolveAnalysisRoot(env.tmpDir, sessionRoot)).toBe("none");
+		// #4309 r2: assert an actual ancestor of the fake home. env.tmpDir is
+		// a separate project under Plegma's marked scratch root, not an ancestor.
+		expect(resolveAnalysisRoot(path.dirname(home), sessionRoot)).toBe("none");
 		expect(
 			resolveAnalysisRoot(path.join(homeLink, "src", "b.ts"), sessionRoot),
 		).toBe("none");

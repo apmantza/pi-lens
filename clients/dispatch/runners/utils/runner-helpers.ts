@@ -7,8 +7,11 @@
  * - Config file finders
  */
 
+import { emitBounded } from "../../../bounded-telemetry.js";
+import { resolveAnalysisRootPath } from "../../../analysis-root.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { delimiter, resolve as resolveCommandPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
@@ -20,6 +23,7 @@ import {
 } from "../../../generation-guard.js";
 import { PathKeyedMap } from "../../../path-keyed-map.js";
 import {
+	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
 } from "../../../path-utils.js";
@@ -51,7 +55,10 @@ import {
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
-import { safeSpawnAsync } from "../../../safe-spawn.js";
+import {
+	safeSpawnAsync,
+	resolveWindowsCommandForEnvironment,
+} from "../../../safe-spawn.js";
 import {
 	getIsolatedNpxSpawnOptions,
 	probeToolAsync,
@@ -464,6 +471,83 @@ async function findManagedReleaseBinary(
 	return verdict === "ok" || verdict === "unverified" ? candidate : null;
 }
 
+/**
+ * #4309: resolve every adopted-runner binary before any probe or spawn.
+ * PATH entries are interpreted at the runner cwd and the chosen absolute path
+ * is retained, so a relative PATH cannot select a different executable later.
+ * Managed shims and symlinks obey the same adopted/session containment rule.
+ */
+export function resolveAdoptedRootCommand(
+	command: string,
+	ctx: DispatchContext,
+	cwd: string,
+): string | null {
+	// Neither admitted command has a release installer; use the managed shim
+	// candidates and PATH without probing either before containment.
+	const candidates = managedNodeToolCandidates(command);
+	let selected = candidates.find(
+		(candidate) => candidate && fs.existsSync(candidate),
+	);
+	if (!selected) {
+		if (process.platform === "win32") {
+			selected = resolveWindowsCommandForEnvironment(
+				command,
+				cwd,
+				process.env,
+			)?.resolvedPath;
+		} else {
+			selected = (process.env.PATH ?? "")
+				.split(delimiter)
+				.map((dir) => resolveCommandPath(cwd, dir, command))
+				.find((candidate) => {
+					try {
+						fs.accessSync(candidate, fs.constants.X_OK);
+						return fs.statSync(candidate).isFile();
+					} catch {
+						return false;
+					}
+				});
+		}
+	}
+	if (!selected) return null;
+	try {
+		const binary = fs.realpathSync.native(selected);
+		const session = ctx.projectRoot ?? ctx.cwd;
+		const adopted = resolveAnalysisRootPath(ctx.filePath, session);
+		if (!adopted) return null;
+		const roots = [adopted, session].map((root) =>
+			fs.realpathSync.native(root),
+		);
+		if (
+			roots.some(
+				(root) =>
+					binary === root ||
+					isUnderDir(binary, root) ||
+					isUnderDir(selected, root),
+			)
+		) {
+			emitBounded(
+				"adopted_root_binary_refused",
+				`${ctx.filePath}:${command}:${binary}`,
+				{
+					filePath: ctx.filePath,
+					durationMs: 0,
+					metadata: { command, binary },
+				},
+				{
+					ledgerKind: "adopted-root-binary-refused",
+					risingEdgePer: "identity",
+				},
+			);
+			return null;
+		}
+		return binary;
+	} catch {
+		// An unreadable identity cannot prove that executing it is safe.
+		return null;
+	}
+}
+
 // =============================================================================
 // VENV-AWARE COMMAND FINDER
 // =============================================================================
@@ -495,15 +579,23 @@ export function createVenvFinder(
 	command: string,
 	windowsExt = "",
 	verificationArgs: string[] = ["--version"],
+	/**
+	 * Adopted-root policy (#4242): when `false`, the project-local `.venv` rung is
+	 * skipped entirely, so a project-local interpreter is neither probed nor run.
+	 * The default (`true`) preserves every session-root caller unchanged.
+	 */
+	allowProjectLocal = true,
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
-		const venvBin = localBinPath(
-			findLocalBinAt(command, cwd, {
-				windowsExt,
-				binDirs: VENV_BIN_DIRS,
-			}),
-		);
-		if (venvBin) return { path: venvBin, rung: "venv" };
+		if (allowProjectLocal) {
+			const venvBin = localBinPath(
+				findLocalBinAt(command, cwd, {
+					windowsExt,
+					binDirs: VENV_BIN_DIRS,
+				}),
+			);
+			if (venvBin) return { path: venvBin, rung: "venv" };
+		}
 
 		// Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
 		// same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
@@ -583,6 +675,11 @@ export interface AvailabilityCheckerOptions {
 	environment?: (cwd: string) => Promise<NodeJS.ProcessEnv>;
 	/** Compatibility for legacy probes whose test doubles carry no failure kind. */
 	unclassifiedFailureOutcome?: AvailabilityOutcome;
+	/**
+	 * Adopted-root policy (#4242): `false` resolves only managed or PATH binaries,
+	 * never a project-local `.venv` one. Omitted keeps the session default.
+	 */
+	allowProjectLocal?: boolean;
 }
 
 /**
@@ -1057,7 +1154,12 @@ export function createAvailabilityChecker(
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
-	const findCommand = createVenvFinder(command, windowsExt, versionArgs);
+	const findCommand = createVenvFinder(
+		command,
+		windowsExt,
+		versionArgs,
+		options.allowProjectLocal !== false,
+	);
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;

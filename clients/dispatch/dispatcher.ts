@@ -67,6 +67,10 @@ import {
 	observeRunnerLatency,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
+import {
+	ADOPTED_ROOT_RUNNER_ALLOWLIST,
+	filterGroupsForAdoptedRoot,
+} from "./adopted-root-runners.js";
 
 import {
 	applyRulePolicy,
@@ -1250,17 +1254,43 @@ export async function dispatchForFile(
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
 	if (ctx.analysisRootMode === "adopted") {
-		return {
-			diagnostics: [],
-			blockers: [],
-			warnings: [],
-			baselineWarningCount: 0,
-			fixed: [],
-			resolvedCount: 0,
-			output: "",
-			blockerOutput: "",
-			hasBlockers: false,
-		};
+		// #4242 phase A (per-file linters): an adopted root runs ONLY the explicit
+		// admission list of config-free, code-free runners, and only from global or
+		// pi-lens-managed binaries. The default is refused, so a newly registered
+		// runner stays off an adopted root until `ADOPTED_ROOT_RUNNER_ALLOWLIST`
+		// admits it. Whole-project scanners and test runners are not in the plan
+		// for a per-file dispatch, and turn-end tests stay off via the foreign
+		// checkout gate.
+		const planned = groups.flatMap((g) => g.runnerIds);
+		groups = filterGroupsForAdoptedRoot(groups);
+		const admitted = new Set(groups.flatMap((g) => g.runnerIds));
+		logLatency({
+			type: "phase",
+			filePath: ctx.filePath,
+			phase: "dispatch_adopted_root_allowlist",
+			durationMs: 0,
+			metadata: {
+				admissionList: ADOPTED_ROOT_RUNNER_ALLOWLIST.join(","),
+				admitted: groups.flatMap((g) => g.runnerIds).join(","),
+				refused: planned
+					.flatMap((id) => (admitted.has(id) ? [] : [id]))
+					.join(","),
+				noAdmittedRunner: groups.length === 0,
+			},
+		});
+		if (groups.length === 0) {
+			return {
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			};
+		}
 	}
 	if (ctx.fileRole === "generated") {
 		// The generated short-circuit (refs #2346): never ran before this fix

@@ -674,8 +674,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"runAutofix forwards its own `cwd` parameter into tryEslintFix",
 	],
 	[
-		"clients/pipeline.ts#analysePipeline:9c1e49f0~dbf27697",
-		"analysePipeline (runPipeline's body since #3506) forwards its own `cwd` parameter into runAutofix",
+		"clients/pipeline.ts#analysePipeline:128f8f18~dbf27697",
+		"analysePipeline forwards its language `cwd` into runAutofix and separately passes the authoritative session root for adopted-writer admission (#4309)",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~b4dc9aa5",

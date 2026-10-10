@@ -64,6 +64,10 @@ export type DegradationKind =
 	 * the project root; once per session.
 	 */
 	| "actionable-warnings-quickfix-uncredited"
+	/** #4309: a resolved executable belongs to the adopted or session project. */
+	| "adopted-root-binary-refused"
+	/** #4309: an autonomous formatter or fixer is disabled for an adopted file. */
+	| "adopted-root-writer-skipped"
 	/**
 	 * #3748: a model-facing advisory (`clients/agent-nudge.ts`'s queue) never
 	 * reached a `context` call. Subject `cap:<scope id>`: the queue already held
