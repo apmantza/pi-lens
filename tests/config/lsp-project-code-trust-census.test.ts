@@ -41,6 +41,7 @@ const PROJECT_CODE_SERVERS = new Set([
 	"cmake",
 	"vue",
 	"svelte",
+	"tinymist",
 ]);
 
 /**
@@ -98,14 +99,10 @@ const DOES_NOT_EXECUTE_PROJECT_CODE = new Map<string, string>([
 		"jedi analyzes and completes; it does not run the project's Python",
 	],
 	["shuck", "parses shell source; it never runs the project's scripts"],
-	[
-		"tinymist",
-		"Typst language server analyses markup; it runs no project build script",
-	],
 	["toml", "TOML language service reads data files only"],
 	[
 		"typescript",
-		"tsserver type-checks and completes; it does not run the project's build",
+		"TypeScript type-checks and completes; project classic/native compilers require trusted session ownership, and adopted roots use admitted managed classic TypeScript (#4296/#4299)",
 	],
 	["typos", "spell-checker over source text; it executes nothing"],
 	["yaml", "YAML language service reads data files only"],

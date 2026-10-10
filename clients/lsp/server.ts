@@ -37,6 +37,7 @@ import {
 	direntsHaveMarkerGlobMatch,
 	isAtOrAboveHomeDir,
 	isFullyQualified,
+	isUnderDir,
 	isWindowsPath,
 	matchesWorkspaceMemberPattern,
 	normalizeEphemeralMapKey,
@@ -93,7 +94,11 @@ import {
 	isCommandAvailableAsync,
 	safeSpawnAsync,
 } from "../safe-spawn.js";
-import { type LSPProcess, launchLSP } from "./launch.js";
+import {
+	type LSPProcess,
+	admitProjectSuppliedTsserver,
+	launchLSP,
+} from "./launch.js";
 import { ephemeralStagingRoot } from "../ephemeral-root.js";
 import { createLombokJdtlsArgs } from "./lombok.js";
 import { resolveJavaRuntimeEnv } from "./jvm-runtime.js";
@@ -485,6 +490,9 @@ async function nearestNonExcludedFallbackRoot(
 
 export interface LSPSpawnOptions {
 	allowInstall?: boolean;
+	/** Session trust does not authorize adopted project code. */
+	projectCodeAllowed?: boolean;
+	sessionRoot?: string;
 }
 
 export interface LSPServerInfo {
@@ -2131,8 +2139,49 @@ async function typescriptVersionForTsc(
 async function findTsserverPath(
 	root: string,
 	allowInstall: boolean | undefined,
+	options?: LSPSpawnOptions,
 ): Promise<string | undefined> {
 	const fs = await import("node:fs/promises");
+	// All sources fold here. Real paths prevent a managed spelling that links
+	// back into project bytes from escaping the provenance decision.
+	const projectRoots = await Promise.all(
+		[root, options?.sessionRoot ?? process.cwd(), process.cwd()].map((dir) =>
+			fs.realpath(dir).catch(() => path.resolve(dir)),
+		),
+	);
+	const admitCandidate = async (
+		candidate: string,
+		projectSupplied: boolean,
+	) => {
+		try {
+			const real = await fs.realpath(candidate);
+			// Only this filename makes the wrapper use the exact file; other
+			// names are reinterpreted as a package directory (5.3.0 resolver).
+			if (
+				path.basename(real) !== "tsserver.js" ||
+				!(await fs.stat(real)).isFile()
+			)
+				return undefined;
+			const manifest = JSON.parse(
+				await fs.readFile(
+					path.join(path.dirname(real), "..", "package.json"),
+					"utf8",
+				),
+			);
+			// The wrapper ignores an explicit path without a package version, then
+			// searches the workspace (#4299 F1). Never hand it such a path.
+			if (typeof manifest?.version !== "string" || !manifest.version)
+				return undefined;
+			return admitProjectSuppliedTsserver(
+				real,
+				options?.sessionRoot ?? process.cwd(),
+				projectSupplied || projectRoots.some((dir) => isUnderDir(real, dir)),
+				options?.projectCodeAllowed,
+			);
+		} catch {
+			return undefined;
+		}
+	};
 	const ancestorHit = await findAncestorFile(
 		root,
 		"node_modules",
@@ -2140,7 +2189,10 @@ async function findTsserverPath(
 		"lib",
 		"tsserver.js",
 	);
-	if (ancestorHit) return ancestorHit;
+	if (ancestorHit) {
+		const admittedAncestor = await admitCandidate(ancestorHit, true);
+		if (admittedAncestor) return admittedAncestor;
+	}
 	const cwdCandidate = path.join(
 		process.cwd(),
 		"node_modules",
@@ -2150,19 +2202,21 @@ async function findTsserverPath(
 	);
 	try {
 		await fs.access(cwdCandidate);
-		return cwdCandidate;
+		// cwd is a session project source, even outside a nested LSP root.
+		const admittedCwd = await admitCandidate(cwdCandidate, false);
+		if (admittedCwd) return admittedCwd;
 	} catch {
 		/* not found */
 	}
 	const tsserverForTsc = async (
 		tscPath: string | undefined,
 	): Promise<string | undefined> => {
-		if (!tscPath) return undefined;
+		if (!tscPath || !path.isAbsolute(tscPath)) return undefined;
 		for (const dir of typescriptDirsForTsc(tscPath)) {
 			const candidate = path.join(dir, "lib", "tsserver.js");
 			try {
-				await fs.access(candidate);
-				return candidate;
+				const admitted = await admitCandidate(candidate, false);
+				if (admitted) return admitted;
 			} catch {
 				/* not found */
 			}
@@ -2560,9 +2614,16 @@ export const TypeScriptServer: LSPServerInfo = {
 	root: TypeScriptRoot,
 	rootMarkers: TypeScriptRoot.rootMarkers,
 	async spawn(root, options) {
-		const fs = await import("node:fs/promises");
 		const nativeLsp = await findNativeTypeScriptLsp(root);
-		if (nativeLsp) {
+		if (
+			nativeLsp &&
+			admitProjectSuppliedTsserver(
+				nativeLsp.command,
+				root,
+				true,
+				options?.projectCodeAllowed,
+			)
+		) {
 			const env = await getToolEnvironment();
 			logSessionStart(
 				`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command}`,
@@ -2600,26 +2661,29 @@ export const TypeScriptServer: LSPServerInfo = {
 			}
 		}
 
-		// Find tsserver.js — also try relative to the LSP binary for local installs
-		let tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		// An unset/invalid hint lets the wrapper select project bytes itself.
+		// Require an admitted compiler before launching the classic wrapper.
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 		if (!tsserverPath) {
-			const localCandidate = path.join(
-				path.dirname(lspPath),
-				"..",
-				"typescript",
-				"lib",
-				"tsserver.js",
+			admitProjectSuppliedTsserver(
+				undefined,
+				root,
+				true,
+				options?.projectCodeAllowed,
 			);
-			try {
-				await fs.access(localCandidate);
-				tsserverPath = localCandidate;
-			} catch {
-				/* not found */
-			}
+			return undefined;
 		}
 		if (tsserverPath) source = "managed";
 
-		// Use absolute path and proper environment
+		// The installed wrapper selects its child from the
+		// `initialization.tsserver.path` returned below; the legacy
+		// `TSSERVER_PATH` variable is set too, but this wrapper version does not
+		// read it. Both name the same admitted path, so neither an older wrapper
+		// that reads the variable nor this one can fork a different compiler.
 		const env = await getToolEnvironment();
 		const proc = await launchLSP(lspPath, ["--stdio"], {
 			cwd: root,
@@ -3645,6 +3709,7 @@ export const GleamServer: LSPServerInfo = {
 
 export const TinymistServer: LSPServerInfo = {
 	id: "tinymist",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Tinymist",
@@ -4147,7 +4212,11 @@ export const VueServer: LSPServerInfo = {
 	clientWaitTimeoutMs: 30_000,
 	initializeTimeoutMs: 30_000,
 	async spawn(root, options) {
-		const tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 
 		// Vue Language Server needs Vue dependencies installed to resolve types.
 		// Without node_modules, navigation requests will timeout or return empty.
@@ -4207,7 +4276,11 @@ export const SvelteServer: LSPServerInfo = {
 	clientWaitTimeoutMs: 20_000,
 	initializeTimeoutMs: 20_000,
 	async spawn(root, options) {
-		const tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 		const proc = await resolveAndLaunch(
 			{
 				candidates: [

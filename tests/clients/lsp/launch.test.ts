@@ -69,6 +69,44 @@ describe("lsp launch", () => {
 		},
 	);
 
+	it("isolates concurrent adopted and owned launch permission (#4299 R2-F1)", async () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-launch-scope-"),
+		);
+		const command = path.join(root, "node_modules", ".bin", "language-server");
+		fs.mkdirSync(path.dirname(command), { recursive: true });
+		fs.writeFileSync(command, "");
+		const spawnMock = vi.fn(() => new MockChildProcess(2468));
+		vi.doMock("node:child_process", () => ({
+			execFileSync: vi.fn(() => ""),
+			spawn: spawnMock,
+		}));
+		const { launchLSP, withLspProjectCodePermission } =
+			await import("../../../clients/lsp/launch.js");
+		const { setProjectTrustState, resetProjectTrust } =
+			await import("../../../clients/project-trust.js");
+		setProjectTrustState("trusted");
+		try {
+			// Both continuations resume after the other scope has been installed;
+			// a process-global flag borrows the owned permission and executes twice.
+			const launch = () =>
+				Promise.resolve().then(() => launchLSP(command, [], { cwd: root }));
+			const results = await Promise.allSettled([
+				withLspProjectCodePermission(false, launch),
+				withLspProjectCodePermission(true, launch),
+			]);
+			expect(results[0].status).toBe("rejected");
+			expect(results[1].status).toBe("fulfilled");
+			expect(spawnMock).toHaveBeenCalledTimes(1);
+			// Outside any scope there is no root permission, so a project-local
+			// launcher is refused even under trusted trust (#4296 R3-F1).
+			await expect(launch()).rejects.toThrow();
+			expect(spawnMock).toHaveBeenCalledTimes(1);
+		} finally {
+			resetProjectTrust();
+			removeTempDirSync(root);
+		}
+	});
 	it("redacts secrets in crash-adjacent session-start writes", async () => {
 		const tempDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-launch-log-"),

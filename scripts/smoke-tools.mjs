@@ -3462,6 +3462,19 @@ export async function runResolutionSmoke({ verbose, deps } = {}) {
 	}
 	let resolved = deps;
 	if (!resolved) {
+		// #4300/#4301: like the handshake and diagnostics layers, this harness is a
+		// standalone host, not pi, and its fixtures represent a trusted project.
+		// Without this the #4268 gate refuses every project-local resolver rung.
+		const trustEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"project-trust.js",
+		);
+		const { adoptProjectTrustFromContext } = await import(
+			pathToFileURL(trustEntry).href
+		);
+		adoptProjectTrustFromContext({ isProjectTrusted: () => true });
 		const formattersEntry = path.join(
 			repoRoot,
 			"dist",

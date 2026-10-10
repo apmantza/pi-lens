@@ -11,7 +11,10 @@ import { removeTempDirSync } from "../test-utils.js";
 // runtime-install WIRING via the candidate list and server shape (#241).
 const { launchLSP } = vi.hoisted(() => ({ launchLSP: vi.fn() }));
 const { logLatency } = vi.hoisted(() => ({ logLatency: vi.fn() }));
-vi.mock("../../../clients/lsp/launch.js", () => ({ launchLSP }));
+vi.mock("../../../clients/lsp/launch.js", () => ({
+	launchLSP,
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+}));
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
 		typeof import("../../../clients/latency-logger.js")
@@ -132,7 +135,7 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		expect(tried).toContain("fsautocomplete");
 	});
 
-	it("TypeScriptServer discovers a global typescript-language-server when install is disabled (discovery decoupled from install)", async () => {
+	it("TypeScriptServer discovers a global wrapper with installs disabled but refuses it without a compiler (#4299)", async () => {
 		// Regression: with PI_LENS_DISABLE_LSP_INSTALL=1 (allowInstall:false) the old
 		// code skipped the ensureTool call entirely, so a globally-installed
 		// typescript-language-server (no per-project node_modules) was never found and
@@ -160,8 +163,10 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 			expect(vi.mocked(ensureTool)).toHaveBeenCalledWith("typescript", {
 				allowInstall: false,
 			});
-			expect(triedCommands()).toContain(GLOBAL_TLS);
-			expect(res).toBeDefined();
+			// #4299: discovery still runs, but an unset compiler hint would let
+			// the wrapper execute workspace code. No compiler means no launch.
+			expect(launchLSP).not.toHaveBeenCalled();
+			expect(res).toBeUndefined();
 		} finally {
 			process.chdir(oldCwd);
 			removeTempDirSync(tmp);

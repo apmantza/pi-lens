@@ -30,6 +30,7 @@
  * CLI failures exit 2. Clean scans and findings still exit 0.
  */
 
+import { setProjectTrustState } from "../clients/project-trust.js";
 import * as path from "node:path";
 import { flushExtensionLog, logExtension } from "../clients/extension-log.js";
 import { redactSecrets } from "../clients/redact/secrets.js";
@@ -272,6 +273,15 @@ function writeReport(report: string, hookMode: boolean): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	// #4300: this process runs outside pi; its caller owns workspace trust.
+	setProjectTrustState("trusted");
+	logExtension({
+		subsystem: "project-trust",
+		level: "debug",
+		message:
+			"analyze-cli: workspace trust belongs to the calling client; pi trust not consulted",
+	});
+
 	const hookMode = process.argv.includes("--hook");
 	const withLsp = process.argv.includes("--lsp");
 	const fileArg = argVal("file");

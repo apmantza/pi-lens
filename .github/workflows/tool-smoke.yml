@@ -523,6 +523,20 @@ jobs:
         id: docs_diff
         run: node scripts/check-generated-docs-diff.mjs
 
+      # #4302: vitest resolves a test's `.js` import specifier to the compiled
+      # twin beside each source `.ts`, and its globalSetup aborts the whole run
+      # when any twin is missing or older than its source
+      # (tests/support/check-build-freshness.ts). This job installs with
+      # `npm install` and builds `build:dist`, which emit only `dist/`, so the
+      # tree reaches the census with no in-place twins at all; and the
+      # idle-eviction promotion step above edits clients/lsp/server.ts, so an
+      # earlier build would be stale for the census anyway. Build in place
+      # here, after every source-mutating step and immediately before the
+      # census, so the census tests read the fresh twins (including a night's
+      # promotion edit) instead of aborting on the guard.
+      - name: Build in-place compiled twins for the census (#4302)
+        run: npm run build
+
       # #4277: the refresh PR must not become the only place a marker mismatch
       # is visible. Run every census that reads the capability matrix against
       # the freshly regenerated files before handing them to the PR writer.

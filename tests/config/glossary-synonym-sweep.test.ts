@@ -956,7 +956,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// resolved command basename through the existing path vocabulary.
 		"clients/lsp/launch.ts": 31,
 		"clients/lsp/lombok.ts": 14,
-		"clients/lsp/server.ts": 121,
+		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
+		// validation replace the wrapper-relative guess. No path-key owner changes.
+		"clients/lsp/server.ts": 124,
 		"clients/lsp/session-roots.ts": 6,
 		"clients/lsp/workspace-diagnostics-cache.ts": 13,
 		// 6 -> 5 (#3643): removed the obsolete ring path-comparison branch;
@@ -1375,7 +1377,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/edits.ts": 24,
 		"clients/lsp/index.ts": 6,
 		"clients/lsp/lombok.ts": 6,
-		"clients/lsp/server.ts": 16,
+		// #4299: 16 -> 18; two reads of the external TypeScript package
+		// manifest's literal version field, not a pi-lens generation identity.
+		"clients/lsp/server.ts": 18,
 		"clients/lsp/workspace-diagnostics-cache.ts": 7,
 		"clients/mcp/ipc.ts": 15,
 		"clients/metrics-history.ts": 3,
