@@ -40,11 +40,6 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	isCommandAvailableAsync: vi.fn(async () => false),
 }));
 
-vi.mock("../../clients/project-trust.js", () => ({
-	assertInstallAllowed: vi.fn(() => true),
-	projectTrustDenialReason: vi.fn(() => "untrusted project"),
-}));
-
 let piLensHome: string;
 let restoreEnv: () => void;
 
@@ -97,7 +92,10 @@ beforeEach(() => {
 	});
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// The trust state is process-wide; reset it in teardown so a failed
+	// assertion cannot leak "untrusted" into the next file's case.
+	(await import("../../clients/project-trust.js")).resetProjectTrust();
 	restoreEnv();
 	fs.rmSync(piLensHome, { recursive: true, force: true });
 });
@@ -273,10 +271,10 @@ describe("the installer records what its attempt did (#1500)", () => {
 	});
 
 	it("project-trust denial records a decline, not a failure", async () => {
-		const trust = await import("../../clients/project-trust.js");
-		vi.mocked(trust.assertInstallAllowed).mockReturnValue(false);
 		safeSpawnAsync.mockResolvedValue(npmFailed);
 		const { ensureTool, getInstallAttempt } = await installer();
+		const trust = await import("../../clients/project-trust.js");
+		trust.setProjectTrustState("untrusted");
 
 		expect(await ensureTool("fish-lsp")).toBeUndefined();
 		const attempt = getInstallAttempt("fish-lsp");
@@ -285,7 +283,6 @@ describe("the installer records what its attempt did (#1500)", () => {
 			install: "not-attempted",
 			installReason: expect.stringContaining("project trust"),
 		});
-		vi.mocked(trust.assertInstallAllowed).mockReturnValue(true);
 	});
 
 	it("no attempt at all reads as not-attempted", async () => {

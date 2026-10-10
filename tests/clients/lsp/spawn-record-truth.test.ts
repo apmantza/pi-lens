@@ -50,9 +50,11 @@ vi.mock("../../../clients/lsp/config.js", () => ({
 vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
 
 /**
- * Drives the one route into `ensureClientForServer`'s catch: a throw from
- * `spawnClient` BEFORE its own `try`. Defaults to off, so every other test in
- * this file runs against the real trust module's behavior.
+ * Fault injection: a synthetic throw from the trust probe reaches
+ * `ensureClientForServer`'s catch before `spawnClient` enters its own `try`.
+ * This is a test-double throw, not a host call: `isLspSpawnAllowedByTrust()`
+ * cannot throw on its own. Defaults to off, so every other test in this file
+ * runs against the real trust module's behavior.
  */
 const trustProbeThrows = { value: false };
 vi.mock("../../../clients/project-trust.js", async (importOriginal) => {

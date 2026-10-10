@@ -46,11 +46,6 @@ vi.mock("../../clients/installer/index.js", () => ({
 	resetPathWalkMemo: () => {},
 	getToolEnvironment: async () => ({ ...process.env }),
 }));
-vi.mock("../../clients/project-trust.js", () => ({
-	assertInstallAllowed: () => true,
-	getProjectTrustState: () => "unknown",
-	projectTrustDenialReason: () => "",
-}));
 vi.mock("../../clients/sessionstart-logger.js", () => ({
 	logSessionStart: vi.fn(),
 }));
@@ -87,8 +82,9 @@ const decisions = () =>
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
 	while (tempDirs.length > 0) removeTempDirSync(tempDirs.pop() as string);
+	(await import("../../clients/project-trust.js")).resetProjectTrust();
 });
 
 class FakeScanClient extends SecurityScanClient<string[]> {
@@ -100,7 +96,12 @@ class FakeScanClient extends SecurityScanClient<string[]> {
 	}
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+	// The removed module double reported `getProjectTrustState() === "unknown"`,
+	// so keep that state rather than widening every case to "trusted".
+	(await import("../../clients/project-trust.js")).setProjectTrustState(
+		"unknown",
+	);
 	safeSpawnAsync.mockReset();
 	logLatencySpy.mockReset();
 	ensureTool.mockReset();

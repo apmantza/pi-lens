@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const safeSpawnAsync = vi.fn();
@@ -8,14 +8,6 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => "/usr/bin/terragrunt"),
-}));
-
-// This suite pins formatter resolution and cwd behavior; the trust gate itself
-// is witnessed in `package-manager.test.ts`. `vi.resetModules()` in `beforeEach`
-// re-evaluates the graph, so the trust answer is mocked rather than latched.
-vi.mock("../../clients/project-trust.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/project-trust.js")>()),
-	getProjectTrustState: () => "trusted",
 }));
 
 // `resolveNpxFallback` installs the package through `ensureTool`; the spy lets
@@ -66,10 +58,21 @@ describe("formatFile", () => {
 	let resetDegradationLedger: () => void;
 	beforeEach(async () => {
 		vi.resetModules();
+		// This suite pins formatter resolution and cwd behavior; it runs trusted
+		// so project rungs resolve. The latch is set AFTER `vi.resetModules()`,
+		// because a reset re-evaluates the module graph and discards a latch set
+		// on the previous instance.
+		(await import("../../clients/project-trust.js")).setProjectTrustState(
+			"trusted",
+		);
 		safeSpawnAsync.mockReset();
 		({ getDegradationSummary, resetDegradationLedger } =
 			await import("../../clients/degradation-ledger.js"));
 		resetDegradationLedger();
+	});
+
+	afterEach(async () => {
+		(await import("../../clients/project-trust.js")).resetProjectTrust();
 	});
 
 	it.each(["prettier", "biome", "oxfmt"] as const)(
