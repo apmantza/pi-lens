@@ -21,8 +21,11 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import {
+	closeTmpHygieneCreators,
+	flushTmpRootCreatorsForTests,
 	formatTmpHygieneLeakEntry,
 	tmpHygieneCreators,
+	tmpHygieneCreatorsPath,
 	tmpHygieneUnadmittedEntries,
 } from "./vitest-setup.js";
 
@@ -215,6 +218,21 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 			"fixtures/tmp-teardown/genuine-leak.fixture.ts",
 		);
 		expect(creators.has("pi-lens-2912-genuine-mkdir-sibling")).toBe(false);
+		// #4307-1: the record is appended at BOTH teardowns -- the file's afterAll
+		// and the pool's SIGTERM -- so `flushTmpRootCreators` dedupes per line. A
+		// regression there doubles the raw record; `tmpHygieneCreators` first-wins
+		// would hide it, so assert on the RAW persisted lines.
+		const recordPath = path.join(
+			REPO,
+			".probe-home",
+			`tmp-hygiene-creators-${RUN_ID}.log`,
+		);
+		const lines = fs
+			.readFileSync(recordPath, "utf8")
+			.split("\n")
+			.filter((line) => line.length > 0);
+		expect(lines.length).toBeGreaterThan(0);
+		expect(new Set(lines).size).toBe(lines.length);
 	});
 
 	it("labels an entry a grandchild process made as created outside the test process", () => {
@@ -230,7 +248,18 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 		);
 		expect(creators.has(entry)).toBe(false);
 		expect(formatTmpHygieneLeakEntry(entry, undefined, undefined)).toBe(
-			`${entry} (created outside the test process (child))`,
+			`${entry} (created outside the test process, or the creators record was unreadable)`,
 		);
+	});
+
+	it("does not recreate the creators record after cleanup has closed the flush", () => {
+		// #4307 sweep: the owner's cleanup runs BEFORE the setup's own afterAll
+		// flush under the stack hook order, so the closed latch is what keeps the
+		// flush from recreating the record it removed. This worker's registry
+		// already holds a created entry (`setupTestEnvironment` at module load),
+		// so a missing latch would make the flush write the file back.
+		closeTmpHygieneCreators();
+		flushTmpRootCreatorsForTests();
+		expect(fs.existsSync(tmpHygieneCreatorsPath)).toBe(false);
 	});
 });

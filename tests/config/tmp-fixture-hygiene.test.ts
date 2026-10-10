@@ -1333,7 +1333,8 @@ describe("tmp-fixture-hygiene", () => {
 			// #3332: a skipped file or killed worker never reaches teardown, so its
 			// marker and run manifest used to accumulate under the persistent home.
 			// The current run stays protected by name, while a fresh sibling stays
-			// protected by age (#3314).
+			// protected by age (#3314). #4307-2: the #2912 creators record is reaped
+			// on the same window, so a targeted run leaves neither record behind.
 			const ownerDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-tmp-reap-owners-"),
 			);
@@ -1346,18 +1347,22 @@ describe("tmp-fixture-hygiene", () => {
 			try {
 				for (const run of ["one", "two", "three"]) {
 					process.env.PI_LENS_TMP_HYGIENE_RUN_ID = `reap-3332-${run}`;
-					const marker = path.join(
-						ownerDir,
-						`${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}-1.json`,
-					);
+					const runId = process.env.PI_LENS_TMP_HYGIENE_RUN_ID;
+					const marker = path.join(ownerDir, `${runId}-1.json`);
 					const manifest = path.join(
 						recordDir,
-						`tmp-hygiene-files-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}.log`,
+						`tmp-hygiene-files-${runId}.log`,
+					);
+					const creators = path.join(
+						recordDir,
+						`tmp-hygiene-creators-${runId}.log`,
 					);
 					fs.writeFileSync(marker, JSON.stringify({ pid: 1, file: OWNER }));
 					fs.writeFileSync(manifest, `${OWNER}\n`);
+					fs.writeFileSync(creators, `pi-lens-reap-${run}\t${OWNER}\n`);
 					fs.utimesSync(marker, old, old);
 					fs.utimesSync(manifest, old, old);
+					fs.utimesSync(creators, old, old);
 					reapStaleTmpHygieneRecords(ownerDir, recordDir, now);
 				}
 				const freshMarker = path.join(ownerDir, "reap-3332-fresh-1.json");
@@ -1365,14 +1370,21 @@ describe("tmp-fixture-hygiene", () => {
 					recordDir,
 					"tmp-hygiene-files-reap-3332-fresh.log",
 				);
+				const freshCreators = path.join(
+					recordDir,
+					"tmp-hygiene-creators-reap-3332-fresh.log",
+				);
 				fs.writeFileSync(freshMarker, JSON.stringify({ pid: 1, file: OWNER }));
 				fs.writeFileSync(freshManifest, `${OWNER}\n`);
+				fs.writeFileSync(freshCreators, `pi-lens-fresh\t${OWNER}\n`);
 				reapStaleTmpHygieneRecords(ownerDir, recordDir, now);
 				expect(fs.readdirSync(ownerDir).sort()).toEqual([
 					"reap-3332-fresh-1.json",
 					"reap-3332-three-1.json",
 				]);
 				expect(fs.readdirSync(recordDir).sort()).toEqual([
+					"tmp-hygiene-creators-reap-3332-fresh.log",
+					"tmp-hygiene-creators-reap-3332-three.log",
 					"tmp-hygiene-files-reap-3332-fresh.log",
 					"tmp-hygiene-files-reap-3332-three.log",
 				]);
@@ -1756,11 +1768,16 @@ describe("tmp-fixture-hygiene", () => {
 			);
 		});
 
-		it("labels an unobserved entry as created outside the test process, never with a prefix owner", () => {
+		it("labels an entry with no creator by both causes, never with a prefix owner", () => {
 			const entry = `${FOREIGN_PREFIX}AbCdEf`;
+			// #4307-4: `creator === undefined` is one state for a child-made entry
+			// and an unreadable record, so the label names both rather than
+			// asserting a child the record cannot prove.
 			expect(
 				formatTmpHygieneLeakEntry(entry, FOREIGN_PREFIX_OWNER, undefined),
-			).toBe(`${entry} (created outside the test process (child))`);
+			).toBe(
+				`${entry} (created outside the test process, or the creators record was unreadable)`,
+			);
 		});
 
 		it("records this file as the creator of an entry another file's prefix names", () => {
@@ -1785,14 +1802,14 @@ describe("tmp-fixture-hygiene", () => {
 			}
 		});
 
-		it("reads one creator per entry, keeps the first on a duplicate line, and is empty when absent", () => {
+		it("reads one creator per entry, keeps the first on a duplicate line, skips a malformed line, and is empty when absent", () => {
 			const file = path.join(
 				TMP_HYGIENE_HOME,
 				`tmp-hygiene-creators-probe-${process.pid}.log`,
 			);
 			fs.writeFileSync(
 				file,
-				"pi-lens-a\tfirst.test.ts\npi-lens-a\tsecond.test.ts\npi-lens-b\tthird.test.ts\n",
+				"pi-lens-a\tfirst.test.ts\npi-lens-a\tsecond.test.ts\nmalformed-no-tab\npi-lens-b\tthird.test.ts\n",
 			);
 			try {
 				expect([...tmpHygieneCreators(file).entries()].sort()).toEqual([
