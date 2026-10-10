@@ -8,18 +8,13 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { findingsResult } from "../types.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	createAvailabilityChecker,
+	resolveAdoptedRootCommand,
+} from "./utils/runner-helpers.js";
 
 // fish_indent ships with fish — not separately installable, no managed fallback
 const fishIndent = createAvailabilityChecker("fish_indent");
-// #4242: an adopted root never runs a project-local interpreter, whatever the
-// session trust. This checker skips the project-local `.venv` rung.
-const fishIndentAdoptedRoot = createAvailabilityChecker(
-	"fish_indent",
-	"",
-	["--version"],
-	{ allowProjectLocal: false },
-);
 
 const fishIndentRunner: RunnerDefinition = {
 	id: "fish-indent",
@@ -29,14 +24,12 @@ const fishIndentRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "fish-indent");
-		const checker =
-			ctx.analysisRootMode === "adopted" ? fishIndentAdoptedRoot : fishIndent;
-
-		const available = await checker.isAvailableAsync(cwd);
-		if (!available)
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-
-		const cmd = checker.getCommand(cwd);
+		const cmd =
+			ctx.analysisRootMode === "adopted"
+				? resolveAdoptedRootCommand("fish_indent", ctx, cwd)
+				: (await fishIndent.isAvailableAsync(cwd))
+					? fishIndent.getCommand(cwd)
+					: null;
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
 		// --check: exits 0 if already formatted, 1 if reformatting would change the file

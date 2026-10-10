@@ -1261,7 +1261,9 @@ export async function dispatchForFile(
 		// admits it. Whole-project scanners and test runners are not in the plan
 		// for a per-file dispatch, and turn-end tests stay off via the foreign
 		// checkout gate.
+		const planned = groups.flatMap((g) => g.runnerIds);
 		groups = filterGroupsForAdoptedRoot(groups);
+		const admitted = new Set(groups.flatMap((g) => g.runnerIds));
 		logLatency({
 			type: "phase",
 			filePath: ctx.filePath,
@@ -1270,7 +1272,10 @@ export async function dispatchForFile(
 			metadata: {
 				admissionList: ADOPTED_ROOT_RUNNER_ALLOWLIST.join(","),
 				admitted: groups.flatMap((g) => g.runnerIds).join(","),
-				refused: groups.length === 0,
+				refused: planned
+					.flatMap((id) => (admitted.has(id) ? [] : [id]))
+					.join(","),
+				noAdmittedRunner: groups.length === 0,
 			},
 		});
 		if (groups.length === 0) {

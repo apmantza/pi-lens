@@ -67,7 +67,7 @@ import {
 } from "./file-utils.js";
 import type { FormatService } from "./format-service.js";
 import type { GenerationHandle } from "./generation-guard.js";
-import type { AnalysisRootMode } from "./analysis-root.js";
+import { resolveAnalysisRoot, type AnalysisRootMode } from "./analysis-root.js";
 import { logLatency } from "./latency-logger.js";
 import type { PostAutofixNotice } from "./post-autofix-notice.js";
 import { emitLensAnalysisComplete } from "./lens-events.js";
@@ -924,6 +924,7 @@ export async function runAutofix(
 	deps: Pick<PipelineDeps, "biomeClient" | "ruffClient" | "fixedThisTurn">,
 	getFlagSource?: PipelineContext["getFlagSource"],
 	writeHold?: FileMutationHold,
+	sessionRoot = cwd,
 ): Promise<{
 	fixedCount: number;
 	autofixTools: string[];
@@ -939,6 +940,23 @@ export async function runAutofix(
 	restoring?: Promise<FixRunLoss> | undefined;
 	skipReason?: string;
 }> {
+	if (resolveAnalysisRoot(filePath, sessionRoot) === "adopted") {
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "adopted_root_writer_skipped",
+			durationMs: 0,
+			metadata: { writer: "autofix" },
+		});
+		return {
+			fixedCount: 0,
+			autofixTools: [],
+			attemptedTools: [],
+			changedFiles: [],
+			needsContentRefresh: false,
+			skipReason: "adopted_root",
+		};
+	}
 	const { biomeClient, ruffClient, fixedThisTurn } = deps;
 	const noAutofix = getFlag("no-autofix", filePath);
 	let fixedCount = 0;
@@ -1620,6 +1638,7 @@ export async function runFormatPhase(
 	budgetMs = HOOK_WALL_BUDGET_MS.tool_result_edit,
 	hook: LedgerHookKey = "tool_result_edit",
 	writeHold?: FileMutationHold,
+	sessionRoot?: string,
 ): Promise<FormatPhaseResult> {
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1628,78 +1647,93 @@ export async function runFormatPhase(
 	let fileContent: string | undefined;
 	let abandoned: Promise<void> | undefined;
 
-	const formatService = getFormatService();
-	try {
-		formatService.recordRead(filePath);
-		// #3506: the formatter rewrites the file in place (see runAutofix). It
-		// enters the hold once its command is resolved (#3558), and one the
-		// budget gave up on keeps its entry until its child settles.
-		const result = await formatService.formatFile(filePath, {
-			signal,
-			budgetMs,
-			hook,
-			...(writeHold ? { writeHold } : {}),
+	const adopted =
+		sessionRoot !== undefined &&
+		resolveAnalysisRoot(filePath, sessionRoot) === "adopted";
+	if (adopted)
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "adopted_root_writer_skipped",
+			durationMs: 0,
+			metadata: { writer: "format" },
 		});
-		abandoned = result.abandoned;
-		// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
-		// `formattersUsed` (which drives change bookkeeping / turn summaries) and
-		// out of `formatFailures` (which requeues). Record it once, distinctly.
-		for (const f of result.formatters) {
-			if (f.outcome !== "unavailable") continue;
-			if (f.error?.includes("project tool agreement could not be established"))
-				continue;
-			const reason = f.error ?? "formatter executable not found";
-			formatUnavailable.push({ formatter: f.name, reason });
-			recordDegradationOnce({
-				kind: "formatter-unavailable",
-				subject: `${f.name}:${path.basename(filePath)}`,
-				reason,
+	if (!adopted) {
+		const formatService = getFormatService();
+		try {
+			formatService.recordRead(filePath);
+			// #3506: the formatter rewrites the file in place (see runAutofix). It
+			// enters the hold once its command is resolved (#3558), and one the
+			// budget gave up on keeps its entry until its child settles.
+			const result = await formatService.formatFile(filePath, {
+				signal,
+				budgetMs,
+				hook,
+				...(writeHold ? { writeHold } : {}),
 			});
-		}
-		formattersUsed = result.formatters
-			.filter((f) => f.outcome !== "unavailable")
-			.map((f) => f.name);
-		if (result.anyChanged) {
-			formatChanged = true;
-			dbg(
-				"autoformat: " +
-					result.formatters
-						.map(
-							(f) => f.name + "(" + (f.changed ? "changed" : "unchanged") + ")",
-						)
-						.join(", "),
-			);
-		}
-		if (!result.allSucceeded) {
-			const failures = result.formatters.filter((f) => !f.success);
-			for (const failure of failures) {
+			abandoned = result.abandoned;
+			// An unavailable tool is NOT a formatter that ran (#2413): keep it out of
+			// `formattersUsed` (which drives change bookkeeping / turn summaries) and
+			// out of `formatFailures` (which requeues). Record it once, distinctly.
+			for (const f of result.formatters) {
+				if (f.outcome !== "unavailable") continue;
+				if (
+					f.error?.includes("project tool agreement could not be established")
+				)
+					continue;
+				const reason = f.error ?? "formatter executable not found";
+				formatUnavailable.push({ formatter: f.name, reason });
 				recordDegradationOnce({
-					kind: "formatter-failure",
-					subject: `${failure.name}:${path.basename(filePath)}`,
-					reason: failure.error ?? "unknown error",
+					kind: "formatter-unavailable",
+					subject: `${f.name}:${path.basename(filePath)}`,
+					reason,
 				});
 			}
-			formatFailures.push(
-				...failures.map((f) => `${f.name}: ${f.error ?? "unknown error"}`),
-			);
-			dbg(
-				"autoformat: " +
-					failures
-						.map((f) => f.name + " failed: " + (f.error ?? "unknown error"))
-						.join("; "),
-			);
+			formattersUsed = result.formatters
+				.filter((f) => f.outcome !== "unavailable")
+				.map((f) => f.name);
+			if (result.anyChanged) {
+				formatChanged = true;
+				dbg(
+					"autoformat: " +
+						result.formatters
+							.map(
+								(f) =>
+									f.name + "(" + (f.changed ? "changed" : "unchanged") + ")",
+							)
+							.join(", "),
+				);
+			}
+			if (!result.allSucceeded) {
+				const failures = result.formatters.filter((f) => !f.success);
+				for (const failure of failures) {
+					recordDegradationOnce({
+						kind: "formatter-failure",
+						subject: `${failure.name}:${path.basename(filePath)}`,
+						reason: failure.error ?? "unknown error",
+					});
+				}
+				formatFailures.push(
+					...failures.map((f) => `${f.name}: ${f.error ?? "unknown error"}`),
+				);
+				dbg(
+					"autoformat: " +
+						failures
+							.map((f) => f.name + " failed: " + (f.error ?? "unknown error"))
+							.join("; "),
+				);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			recordDegradationOnce({
+				kind: "formatter-failure",
+				subject: `format-service:${path.basename(filePath)}`,
+				reason: message,
+			});
+			formatFailures.push(message);
+			dbg(`autoformat error: ${err}`);
 		}
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		recordDegradationOnce({
-			kind: "formatter-failure",
-			subject: `format-service:${path.basename(filePath)}`,
-			reason: message,
-		});
-		formatFailures.push(message);
-		dbg(`autoformat error: ${err}`);
 	}
-
 	const fileReadStamp = performance.now();
 	const fileReadAtMs = Date.now();
 	let fileBytes: Buffer | undefined;
@@ -1847,7 +1881,9 @@ async function analysePipeline(
 	let formattersUsed: string[] = [];
 	let formatFailures: string[] = [];
 	const piChangedFiles = new Set<string>();
-	const autoformatDisabled = !!getFlag("no-autoformat", filePath);
+	const autoformatDisabled =
+		resolveAnalysisRoot(filePath, ctx.projectRoot ?? cwd) === "adopted" ||
+		!!getFlag("no-autoformat", filePath);
 	const immediateFormat = !!getFlag("immediate-format");
 	const formatDeferred =
 		allowAutonomousWriters &&
@@ -1868,6 +1904,7 @@ async function analysePipeline(
 			undefined,
 			undefined,
 			writeHold,
+			ctx.projectRoot ?? cwd,
 		);
 		// #3858: a formatter the budget (or Escape) gave up on writes F later,
 		// after the sync below pushed the bytes from before. Sync that write too.
@@ -1949,6 +1986,7 @@ async function analysePipeline(
 			deps,
 			getFlagSource,
 			writeHold,
+			ctx.projectRoot ?? cwd,
 		));
 	// The restore waits for pi's queue entries (#3830), so this result never
 	// waits for it: F's diagnostics and blockers must not wait on whoever holds a

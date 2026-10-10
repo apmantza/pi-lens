@@ -19,15 +19,15 @@
  * config or plugin:
  *   - `php-lint` — `php -l <file>` is syntax-check only; `php.ini` is
  *     machine/global config, never the project's. The runner resolves `php`
- *     through the adopted-root availability checker (`allowProjectLocal:
- *     false`), so a project `.venv/bin/php` is neither probed nor run.
+ *     through `resolveAdoptedRootCommand`, which refuses executable paths
+ *     inside the adopted or session root, including PATH and symlink targets.
  *   - `fish-indent` — `fish_indent --check <file>` compares one file against
  *     fish's built-in formatter; it reads no config and executes no project
- *     code, and uses the same adopted-root (global/managed-only) checker.
+ *     code, and uses the same adopted-root executable containment seam.
  *
  * Everything else stays refused: config-as-code linters (eslint, oxlint,
- * biome), config-file linters (yamllint, markdownlint, hadolint, shellcheck,
- * shfmt, taplo, sqlfluff, htmlhint, vale, spellcheck, stylelint, ruff, mypy,
+ * biome-check-json), config-file linters (yamllint, markdownlint, hadolint, shellcheck,
+ * shfmt, taplo, sqlfluff, htmlhint, vale, spellcheck, stylelint, ruff-lint, mypy,
  * pyright, rubocop, phpstan, detekt, ktlint, swiftlint, psscriptanalyzer,
  * tflint, terragrunt, trivy/config, actionlint), compilers and build drivers
  * that execute project code (go-vet, golangci-lint, rust-clippy, dotnet-build,

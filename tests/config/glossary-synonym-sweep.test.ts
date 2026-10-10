@@ -1236,7 +1236,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/elixir-check.ts": 2,
 		"clients/dispatch/runners/eslint.ts": 3,
 		"clients/dispatch/runners/fact-rules.ts": 2,
-		"clients/dispatch/runners/fish-indent.ts": 6,
+		// #4309: folded unavailable/absent-command exits remove one status use.
+		"clients/dispatch/runners/fish-indent.ts": 5,
 		"clients/dispatch/runners/gleam-check.ts": 7,
 		"clients/dispatch/runners/go-vet.ts": 5,
 		"clients/dispatch/runners/golangci-lint.ts": 4,
@@ -1250,7 +1251,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/markdownlint.ts": 4,
 		"clients/dispatch/runners/mypy.ts": 2,
 		"clients/dispatch/runners/oxlint.ts": 12,
-		"clients/dispatch/runners/php-lint.ts": 3,
+		"clients/dispatch/runners/php-lint.ts": 2,
 		"clients/dispatch/runners/phpstan.ts": 4,
 		"clients/dispatch/runners/prisma-validate.ts": 5,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 14,

@@ -2589,7 +2589,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			});
 			if (firstAdoptedRoot) {
 				queueAgentAdvisory(
-					`pi-lens is analysing ${adoptedRoot} as a separate project (LSP + global, config-free per-file linters; project-local tools, project config, and test runners are off).`,
+					`pi-lens is analysing ${adoptedRoot} as a separate project (LSP + global or managed php-lint/fish-indent; formatting, autofix, other dispatch runners, and automatic tests are off).`,
 					writeSession,
 				);
 			}

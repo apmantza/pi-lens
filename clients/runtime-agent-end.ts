@@ -553,6 +553,7 @@ export async function handleAgentEnd({
 				{ biomeClient, ruffClient, fixedThisTurn },
 				getFlagSource,
 				fixHold,
+				ctxCwd ?? runtime.projectRoot,
 			);
 			restoring = result.restoring;
 			const tools = result.autofixTools.map((label) => label.split(":")[0]);
@@ -778,6 +779,7 @@ export async function handleAgentEnd({
 						DEFERRED_FORMAT_BUDGET_MS,
 						"agent_settled",
 						formatHold,
+						ctxCwd ?? runtime.projectRoot,
 					).finally(() => formatHold?.release());
 					work[index] = {
 						record,

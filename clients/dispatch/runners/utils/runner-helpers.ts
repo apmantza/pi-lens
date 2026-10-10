@@ -7,8 +7,10 @@
  * - Config file finders
  */
 
+import { resolveAnalysisRootPath } from "../../../analysis-root.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { delimiter, resolve as resolveCommandPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
@@ -20,6 +22,7 @@ import {
 } from "../../../generation-guard.js";
 import { PathKeyedMap } from "../../../path-keyed-map.js";
 import {
+	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
 } from "../../../path-utils.js";
@@ -51,7 +54,10 @@ import {
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
-import { safeSpawnAsync } from "../../../safe-spawn.js";
+import {
+	safeSpawnAsync,
+	resolveWindowsCommandForEnvironment,
+} from "../../../safe-spawn.js";
 import {
 	getIsolatedNpxSpawnOptions,
 	probeToolAsync,
@@ -462,6 +468,77 @@ async function findManagedReleaseBinary(
 	if (!candidate) return null;
 	const verdict = await verifyManagedCandidate(candidate, verificationArgs);
 	return verdict === "ok" || verdict === "unverified" ? candidate : null;
+}
+
+/**
+ * #4309: resolve every adopted-runner binary before any probe or spawn.
+ * PATH entries are interpreted at the runner cwd and the chosen absolute path
+ * is retained, so a relative PATH cannot select a different executable later.
+ * Managed shims and symlinks obey the same adopted/session containment rule.
+ */
+export function resolveAdoptedRootCommand(
+	command: string,
+	ctx: DispatchContext,
+	cwd: string,
+): string | null {
+	// Neither admitted command has a release installer; use the managed shim
+	// candidates and PATH without probing either before containment.
+	const candidates = managedNodeToolCandidates(command);
+	let selected = candidates.find(
+		(candidate) => candidate && fs.existsSync(candidate),
+	);
+	if (!selected) {
+		if (process.platform === "win32") {
+			selected = resolveWindowsCommandForEnvironment(
+				command,
+				cwd,
+				process.env,
+			)?.resolvedPath;
+		} else {
+			selected = (process.env.PATH ?? "")
+				.split(delimiter)
+				.map((dir) => resolveCommandPath(cwd, dir, command))
+				.find((candidate) => {
+					try {
+						fs.accessSync(candidate, fs.constants.X_OK);
+						return fs.statSync(candidate).isFile();
+					} catch {
+						return false;
+					}
+				});
+		}
+	}
+	if (!selected) return null;
+	try {
+		const binary = fs.realpathSync.native(selected);
+		const session = ctx.projectRoot ?? ctx.cwd;
+		const adopted = resolveAnalysisRootPath(ctx.filePath, session);
+		if (!adopted) return null;
+		const roots = [adopted, session].map((root) =>
+			fs.realpathSync.native(root),
+		);
+		if (
+			roots.some(
+				(root) =>
+					binary === root ||
+					isUnderDir(binary, root) ||
+					isUnderDir(selected, root),
+			)
+		) {
+			logLatency({
+				type: "phase",
+				filePath: ctx.filePath,
+				phase: "adopted_root_binary_refused",
+				durationMs: 0,
+				metadata: { command, binary },
+			});
+			return null;
+		}
+		return binary;
+	} catch {
+		// An unreadable identity cannot prove that executing it is safe.
+		return null;
+	}
 }
 
 // =============================================================================
