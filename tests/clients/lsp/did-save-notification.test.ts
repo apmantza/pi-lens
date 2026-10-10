@@ -510,4 +510,93 @@ describe("didSave through the real createLSPClient init path (#3405)", () => {
 			await stopLSP(proc).catch(() => {});
 		}
 	}, 15_000);
+
+	// The production consequence the issue is about, not the notification alone:
+	// a server whose WHOLE diagnose pass is save-triggered publishes ONLY from
+	// its didSave branch (`FAKE_LSP_PUBLISH_ON_SAVE`), so the diagnostics pi-lens
+	// reads are reachable exactly when the save is. Expert is that member; the
+	// fixture stands in for it because the local box has no Elixir (#3405).
+	it("reads the save-only server's diagnostics after a save touch", async () => {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FAKE_LSP_SAVE: "true",
+				FAKE_LSP_PUBLISH_ON_SAVE: "1",
+				FAKE_LSP_ECHO_DID_SAVE: "1",
+				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-save-publish",
+			process: proc,
+			root: process.cwd(),
+		});
+		try {
+			const recorder = notifyRecorder(client);
+			const filePath = path.join(os.tmpdir(), "pi-lens-did-save-publish.ts");
+			// 6th argument `saved: true` is the post-write sync's declaration.
+			await client.notify.open(
+				filePath,
+				"const x = 1;\n",
+				"typescript",
+				undefined,
+				true,
+				true,
+			);
+			// The fixture sends the publish BEFORE this echo, and a stdio stream is
+			// FIFO, so a settled echo proves the client has already stored it.
+			await recorder.untilSave();
+			await client.waitForDiagnostics(filePath, 5000);
+			expect(client.getDiagnostics(filePath).map((d) => d.code)).toEqual([
+				"P3405",
+			]);
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
+
+	it("reads no diagnostics from the same server when the touch is not a save", async () => {
+		const proc = await spawnFakeLspServer({
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				FAKE_LSP_SAVE: "true",
+				FAKE_LSP_PUBLISH_ON_SAVE: "1",
+				FAKE_LSP_ECHO_DID_SAVE: "1",
+				FAKE_LSP_ECHO_NOTIFY_METHODS: "1",
+				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-save-publish-none",
+			process: proc,
+			root: process.cwd(),
+		});
+		try {
+			const recorder = notifyRecorder(client);
+			const filePath = path.join(
+				os.tmpdir(),
+				"pi-lens-did-save-publish-none.ts",
+			);
+			await client.notify.open(
+				filePath,
+				"const x = 1;\n",
+				"typescript",
+				undefined,
+				true,
+				false,
+			);
+			await recorder.until("textDocument/didOpen");
+			// A reply issued after the notify proves the server drained it, so the
+			// absent publish below is evidence, not a race.
+			await client.pingLiveness?.(5000);
+			expect(recorder.methods).not.toContain("textDocument/didSave");
+			expect(client.getDiagnostics(filePath)).toEqual([]);
+		} finally {
+			await client.shutdown().catch(() => {});
+			await stopLSP(proc).catch(() => {});
+		}
+	}, 15_000);
 });
