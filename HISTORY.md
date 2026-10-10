@@ -1,5 +1,12 @@
 # HISTORY
 
+## 2026-10-10 — project-trust test doubles (#4281)
+
+Four recent regressions showed that whole-module in-process doubles and hand-built
+client doubles can hide new exports or gates: extension-log (#4264), ReadGuard
+(#4266), project-trust (#4233), and the rust trust fixture (#4279). The live
+catalog rule is in `AGENTS.md`; this incident record stays here.
+
 Completed arcs and dissolved sections moved out of `AGENTS.md` by the
 2026-08-25 reorganization. Nothing here changes a future decision; the live
 guidance those sections carried stayed in `AGENTS.md`.

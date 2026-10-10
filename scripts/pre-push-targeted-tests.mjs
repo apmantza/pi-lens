@@ -156,6 +156,7 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// #3613 R2: walks clients/ for direct turn-state `sessions[` access outside
 	// CacheManager, so a production change must arm it.
 	"tests/config/turn-state-partition-owner-sweep.test.ts",
+	"tests/config/project-trust-seam-ratchet.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer

@@ -84,10 +84,6 @@ vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	findNodeToolBinary: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../clients/project-trust.js", () => ({
-	assertInstallAllowed: vi.fn(() => true),
-}));
-
 /** A probe the host killed at its budget: says nothing about the tool. */
 const timeoutResult = {
 	stdout: "",
@@ -120,6 +116,9 @@ function advancePastCooldown(): void {
 }
 
 beforeEach(async () => {
+	(await import("../../clients/project-trust.js")).setProjectTrustState(
+		"trusted",
+	);
 	vi.resetAllMocks();
 	ensureTool.mockResolvedValue(null);
 	safeSpawn.mockReturnValue({ stdout: "", stderr: "", status: 1 });
@@ -130,6 +129,7 @@ beforeEach(async () => {
 afterEach(async () => {
 	vi.useRealTimers();
 	await resetDispatchAvailabilityState();
+	(await import("../../clients/project-trust.js")).resetProjectTrust();
 });
 
 describe("BiomeClient availability (#1476)", () => {
