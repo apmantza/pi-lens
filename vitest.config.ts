@@ -332,6 +332,8 @@ const lspSpawnHeavyInclude = [
 	// #4248: the unknown-trust project-local binary witness resolves a real
 	// PATH entry through launchLSP; keep that child-spawn boundary phased here.
 	"tests/clients/lsp/service-project-trust.test.ts",
+	// #4299: real wrapper compiler-resolution security witness.
+	"tests/clients/lsp/tsserver-project-trust-wire.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a

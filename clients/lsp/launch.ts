@@ -407,13 +407,8 @@ type LspExecutionTrustRequest =
 			command: string;
 			resolvedCommand: string;
 			cwd: string;
-			/**
-			 * Whether `resolvedCommand` is project-supplied. Defaults to the shared
-			 * installed-binary classifier (#4268). The tsserver argument (#4296) is
-			 * under `node_modules/typescript`, which that classifier does not cover,
-			 * so its caller states the provenance explicitly.
-			 */
-			projectLocal?: boolean;
+			/** Effective compiler refusal, including foreign-root ownership. */
+			reason?: string;
 	  };
 
 /** Record one bounded trust refusal through the shared lsp-registry seam. */
@@ -436,15 +431,14 @@ function recordUntrustedLspExecution(
 				}
 			: {
 					field: request.kind,
-					resolved:
-						request.projectLocal ??
-						isProjectLocalLspBinary(request.resolvedCommand, request.cwd),
 					trust,
 				};
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
-		reason: `LSP execution refused: ${request.kind} and project trust is ${trust}`,
+		reason:
+			(request.kind === "project-local-binary" ? request.reason : undefined) ??
+			`LSP execution refused: ${request.kind} and project trust is ${trust}`,
 		metadata,
 	});
 	if (unknownProjectLocalNoticeGeneration !== generation) {
@@ -482,32 +476,31 @@ export function refuseUntrustedLspExecution(
 }
 
 /**
- * #4296: the classic TypeScript wrapper forks the file named by
- * `TSSERVER_PATH` / `initialization.tsserver.path`, so a project-supplied
- * `tsserver.js` is code the wrapper executes. The launcher-only project-local
- * gate (#4268) classifies the wrapper, never this argument. Under any trust but
- * `trusted`, decline a project-supplied path through the same
- * project-local-binary notice (one bounded record and one extension warning per
- * session) so the caller falls back to pi-lens-managed TypeScript.
- *
- * `projectSupplied` is the caller's provenance verdict: the ancestor-walk hit
- * and an in-project `process.cwd()` candidate are project-supplied; a
- * pi-lens-managed or global path is not.
+ * #4296/#4299: admit the effective compiler, never an unset hint that lets the
+ * wrapper resolve workspace code. Project code also requires session ownership;
+ * pi's trusted answer does not authorize an adopted project's compiler.
  */
 export function admitProjectSuppliedTsserver(
-	tsserverPath: string,
+	tsserverPath: string | undefined,
 	cwd: string,
 	projectSupplied: boolean,
+	projectCodeAllowed = true,
 ): string | undefined {
 	const trust = getProjectTrustState();
-	if (!projectSupplied || trust === "trusted") return tsserverPath;
+	if (
+		tsserverPath &&
+		(!projectSupplied || (projectCodeAllowed && trust === "trusted"))
+	)
+		return tsserverPath;
 	recordUntrustedLspExecution(
 		{
 			kind: "project-local-binary",
-			command: tsserverPath,
-			resolvedCommand: tsserverPath,
+			command: tsserverPath ?? "tsserver.js",
+			resolvedCommand: tsserverPath ?? "tsserver.js",
 			cwd,
-			projectLocal: true,
+			reason: tsserverPath
+				? "LSP execution refused: project compiler requires trusted session ownership"
+				: "LSP execution refused: no admitted absolute TypeScript compiler",
 		},
 		trust,
 	);

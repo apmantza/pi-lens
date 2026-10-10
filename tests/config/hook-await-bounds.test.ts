@@ -2394,7 +2394,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `await server.root` inside resolveLspServerCwd. Neither number is the
 	// old bare probe being removed.
 	"clients/lsp/index.ts": 159,
-	"clients/lsp/server.ts": 112,
+	// #4299: 112 -> 116, net four local-filesystem awaits for canonical
+	// compiler/package validation and candidate admission, after deleting the
+	// wrapper-relative fallback. Each is a local stat/realpath/read before
+	// launch; hook-signal threading remains #2523 AC4, as for existing lookup
+	// awaits. This records the actual census rather than hiding a new lookup.
+	"clients/lsp/server.ts": 116,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	"clients/opaque-mutation-scan.ts": 10,

@@ -489,6 +489,9 @@ async function nearestNonExcludedFallbackRoot(
 
 export interface LSPSpawnOptions {
 	allowInstall?: boolean;
+	/** Session trust does not authorize adopted project code. */
+	projectCodeAllowed?: boolean;
+	sessionRoot?: string;
 }
 
 export interface LSPServerInfo {
@@ -2135,8 +2138,49 @@ async function typescriptVersionForTsc(
 async function findTsserverPath(
 	root: string,
 	allowInstall: boolean | undefined,
+	options?: LSPSpawnOptions,
 ): Promise<string | undefined> {
 	const fs = await import("node:fs/promises");
+	// All sources fold here. Real paths prevent a managed spelling that links
+	// back into project bytes from escaping the provenance decision.
+	const projectRoots = await Promise.all(
+		[root, options?.sessionRoot ?? process.cwd(), process.cwd()].map((dir) =>
+			fs.realpath(dir).catch(() => path.resolve(dir)),
+		),
+	);
+	const admitCandidate = async (
+		candidate: string,
+		projectSupplied: boolean,
+	) => {
+		try {
+			const real = await fs.realpath(candidate);
+			// Only this filename makes the wrapper use the exact file; other
+			// names are reinterpreted as a package directory (5.3.0 resolver).
+			if (
+				path.basename(real) !== "tsserver.js" ||
+				!(await fs.stat(real)).isFile()
+			)
+				return undefined;
+			const manifest = JSON.parse(
+				await fs.readFile(
+					path.join(path.dirname(real), "..", "package.json"),
+					"utf8",
+				),
+			);
+			// The wrapper ignores an explicit path without a package version, then
+			// searches the workspace (#4299 F1). Never hand it such a path.
+			if (typeof manifest?.version !== "string" || !manifest.version)
+				return undefined;
+			return admitProjectSuppliedTsserver(
+				real,
+				options?.sessionRoot ?? process.cwd(),
+				projectSupplied || projectRoots.some((dir) => isUnderDir(real, dir)),
+				options?.projectCodeAllowed,
+			);
+		} catch {
+			return undefined;
+		}
+	};
 	const ancestorHit = await findAncestorFile(
 		root,
 		"node_modules",
@@ -2145,14 +2189,7 @@ async function findTsserverPath(
 		"tsserver.js",
 	);
 	if (ancestorHit) {
-		// #4296: the ancestor walk is the project's own node_modules lineage, so
-		// the hit is project-supplied. Under any trust but `trusted` it is declined
-		// through the shared trust seam; fall through to managed TypeScript.
-		const admittedAncestor = admitProjectSuppliedTsserver(
-			ancestorHit,
-			root,
-			true,
-		);
+		const admittedAncestor = await admitCandidate(ancestorHit, true);
 		if (admittedAncestor) return admittedAncestor;
 	}
 	const cwdCandidate = path.join(
@@ -2164,13 +2201,8 @@ async function findTsserverPath(
 	);
 	try {
 		await fs.access(cwdCandidate);
-		// Only a candidate outside the project is pi-lens-adjacent; one inside it
-		// is project-supplied and follows the same gate.
-		const admittedCwd = admitProjectSuppliedTsserver(
-			cwdCandidate,
-			root,
-			isUnderDir(cwdCandidate, root),
-		);
+		// cwd is a session project source, even outside a nested LSP root.
+		const admittedCwd = await admitCandidate(cwdCandidate, false);
 		if (admittedCwd) return admittedCwd;
 	} catch {
 		/* not found */
@@ -2178,12 +2210,12 @@ async function findTsserverPath(
 	const tsserverForTsc = async (
 		tscPath: string | undefined,
 	): Promise<string | undefined> => {
-		if (!tscPath) return undefined;
+		if (!tscPath || !path.isAbsolute(tscPath)) return undefined;
 		for (const dir of typescriptDirsForTsc(tscPath)) {
 			const candidate = path.join(dir, "lib", "tsserver.js");
 			try {
-				await fs.access(candidate);
-				return candidate;
+				const admitted = await admitCandidate(candidate, false);
+				if (admitted) return admitted;
 			} catch {
 				/* not found */
 			}
@@ -2581,7 +2613,6 @@ export const TypeScriptServer: LSPServerInfo = {
 	root: TypeScriptRoot,
 	rootMarkers: TypeScriptRoot.rootMarkers,
 	async spawn(root, options) {
-		const fs = await import("node:fs/promises");
 		const nativeLsp = await findNativeTypeScriptLsp(root);
 		if (nativeLsp) {
 			const env = await getToolEnvironment();
@@ -2621,28 +2652,21 @@ export const TypeScriptServer: LSPServerInfo = {
 			}
 		}
 
-		// Find tsserver.js — also try relative to the LSP binary for local installs
-		let tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		// An unset/invalid hint lets the wrapper select project bytes itself.
+		// Require an admitted compiler before launching the classic wrapper.
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 		if (!tsserverPath) {
-			const localCandidate = path.join(
-				path.dirname(lspPath),
-				"..",
-				"typescript",
-				"lib",
-				"tsserver.js",
+			admitProjectSuppliedTsserver(
+				undefined,
+				root,
+				true,
+				options?.projectCodeAllowed,
 			);
-			try {
-				await fs.access(localCandidate);
-				// #4296: a wrapper-relative candidate is project-supplied when it sits
-				// inside the LSP root (a project-local wrapper); gate it like the walk.
-				tsserverPath = admitProjectSuppliedTsserver(
-					localCandidate,
-					root,
-					isUnderDir(localCandidate, root),
-				);
-			} catch {
-				/* not found */
-			}
+			return undefined;
 		}
 		if (tsserverPath) source = "managed";
 
@@ -4158,7 +4182,11 @@ export const VueServer: LSPServerInfo = {
 	clientWaitTimeoutMs: 30_000,
 	initializeTimeoutMs: 30_000,
 	async spawn(root, options) {
-		const tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 
 		// Vue Language Server needs Vue dependencies installed to resolve types.
 		// Without node_modules, navigation requests will timeout or return empty.
@@ -4218,7 +4246,11 @@ export const SvelteServer: LSPServerInfo = {
 	clientWaitTimeoutMs: 20_000,
 	initializeTimeoutMs: 20_000,
 	async spawn(root, options) {
-		const tsserverPath = await findTsserverPath(root, options?.allowInstall);
+		const tsserverPath = await findTsserverPath(
+			root,
+			options?.allowInstall,
+			options,
+		);
 		const proc = await resolveAndLaunch(
 			{
 				candidates: [

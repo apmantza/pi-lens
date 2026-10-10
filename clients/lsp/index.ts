@@ -4647,7 +4647,12 @@ export class LSPService {
 		);
 		recordLsp(server.id, root, "spawn_start");
 		try {
-			const spawned = await server.spawn(root, { allowInstall });
+			const spawned = await server.spawn(root, {
+				allowInstall,
+				projectCodeAllowed:
+					this.analysisRootModeForFile(filePath) !== "adopted",
+				sessionRoot: this.sessionCwd ?? process.cwd(),
+			});
 
 			// Guard 1: service was shut down while we were waiting for the spawn.
 			// Kill the raw process — no LSPClient exists yet — and bail out without
@@ -4719,10 +4724,18 @@ export class LSPService {
 			}
 
 			const override = getServerInitOverride(server.id, filePath);
-			const mergedInit = mergeInitializationOptions(
-				spawned.initialization,
-				override?.initializationOptions,
-			);
+			// #4299: the compiler owner's admitted path must survive config
+			// merging; otherwise the wrapper can fork a different compiler.
+			const mergedInit =
+				spawned.launchVariant === "classic"
+					? mergeInitializationOptions(
+							override?.initializationOptions,
+							spawned.initialization,
+						)
+					: mergeInitializationOptions(
+							spawned.initialization,
+							override?.initializationOptions,
+						);
 			// A replacement process is a new first-contact identity even when the
 			// configured server id is unchanged. Re-arm both capability latches before
 			// the replacement can publish a snapshot.

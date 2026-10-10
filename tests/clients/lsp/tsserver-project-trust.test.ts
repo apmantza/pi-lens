@@ -93,7 +93,7 @@ function buildTsTree(label: string, hostileInSubdir = false): TsTree {
 	const hostileTsserver = path.join(hostileDir, "tsserver.js");
 	fs.writeFileSync(hostileTsserver, markerScript(hostileMarker, "hostile"));
 	fs.writeFileSync(
-		path.join(path.dirname(path.dirname(hostileDir)), "package.json"),
+		path.join(path.dirname(hostileDir), "package.json"),
 		`${JSON.stringify({ name: "typescript", version: "5.9.3" })}\n`,
 	);
 
@@ -155,9 +155,20 @@ beforeEach(() => {
 	// CommonJS script, so the double loads it in-process; a real language-server
 	// child belongs in the lsp-spawn-heavy lane.
 	launchLSPMock.mockImplementation(async (_command, _args, options) => {
-		const tsserver = (
+		let tsserver = (
 			options as { env?: Record<string, string | undefined> } | undefined
 		)?.env?.TSSERVER_PATH;
+		// #4299 F3: match the real wrapper's workspace fallback when unset.
+		if (!tsserver) {
+			const workspace = path.join(
+				options.cwd,
+				"node_modules",
+				"typescript",
+				"lib",
+				"tsserver.js",
+			);
+			if (fs.existsSync(workspace)) tsserver = workspace;
+		}
 		if (tsserver) requireFixture(tsserver);
 		return {
 			process: { killed: false },
@@ -254,6 +265,99 @@ describe("project tsserver.js trust gate (#4296)", () => {
 		expect(fs.existsSync(tree.hostileMarker)).toBe(false);
 	});
 
+	it("skips malformed project metadata and keeps the managed compiler fallback (#4299)", async () => {
+		const tree = buildTsTree("malformed-project");
+		fs.writeFileSync(
+			path.join(path.dirname(tree.hostileTsserver), "..", "package.json"),
+			"{",
+		);
+		const { setProjectTrustState } =
+			await import("../../../clients/project-trust.js");
+		setProjectTrustState("trusted");
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		process.chdir(tree.root);
+		expect(
+			tsserverPathOf(
+				await TypeScriptServer.spawn(tree.root, { allowInstall: false }),
+			),
+		).toBe(tree.managedTsserver);
+		expect(fs.existsSync(tree.hostileMarker)).toBe(false);
+		expect(fs.existsSync(tree.managedMarker)).toBe(true);
+	});
+
+	it("still uses the managed compiler when the optional session root no longer exists", async () => {
+		const tree = buildTsTree("missing-session");
+		const { setProjectTrustState } =
+			await import("../../../clients/project-trust.js");
+		setProjectTrustState("unknown");
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		process.chdir(tree.root);
+		expect(
+			tsserverPathOf(
+				await TypeScriptServer.spawn(tree.root, {
+					allowInstall: false,
+					sessionRoot: path.join(tree.tmp, "retired-session"),
+				}),
+			),
+		).toBe(tree.managedTsserver);
+		expect(fs.existsSync(tree.hostileMarker)).toBe(false);
+		expect(fs.existsSync(tree.managedMarker)).toBe(true);
+	});
+
+	it.for([
+		"empty version",
+		"numeric version",
+		"malformed JSON",
+		"missing manifest",
+		"directory",
+		"renamed target",
+	])(
+		"refuses a managed compiler with %s before the wrapper can fall through (#4299)",
+		async (kind, context) => {
+			const tree = buildTsTree("invalid");
+			const manifest = path.join(
+				path.dirname(tree.managedTsserver),
+				"..",
+				"package.json",
+			);
+			if (kind === "missing manifest") fs.unlinkSync(manifest);
+			else if (kind === "renamed target") {
+				const renamed = path.join(
+					path.dirname(tree.managedTsserver),
+					"compiler.js",
+				);
+				fs.renameSync(tree.managedTsserver, renamed);
+				try {
+					fs.symlinkSync(renamed, tree.managedTsserver);
+				} catch (error) {
+					context.skip(
+						`filesystem cannot create a renamed compiler link: ${String(error)}`,
+					);
+				}
+			} else if (kind === "directory") {
+				fs.unlinkSync(tree.managedTsserver);
+				fs.mkdirSync(tree.managedTsserver);
+			} else
+				fs.writeFileSync(
+					manifest,
+					kind === "malformed JSON"
+						? "{"
+						: JSON.stringify({ version: kind === "numeric version" ? 5 : "" }),
+				);
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("unknown");
+			const { TypeScriptServer } =
+				await import("../../../clients/lsp/server.js");
+			process.chdir(tree.root);
+			expect(
+				await TypeScriptServer.spawn(tree.root, { allowInstall: false }),
+			).toBeUndefined();
+			expect(launchLSPMock).not.toHaveBeenCalled();
+			expect(fs.existsSync(tree.hostileMarker)).toBe(false);
+		},
+	);
+
 	it("skips a project-local wrapper's relative tsserver.js when no managed TypeScript is available", async () => {
 		const tree = buildTsTree("local-wrapper");
 		const binDir = path.join(tree.root, "node_modules", ".bin");
@@ -274,7 +378,8 @@ describe("project tsserver.js trust gate (#4296)", () => {
 			allowInstall: false,
 		});
 
-		expect(tsserverPathOf(spawned)).toBeUndefined();
+		expect(spawned).toBeUndefined();
+		expect(launchLSPMock).not.toHaveBeenCalled();
 		expect(fs.existsSync(tree.hostileMarker)).toBe(false);
 	});
 });

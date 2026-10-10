@@ -196,9 +196,9 @@ describe("TypeScript native LSP selection", () => {
 		});
 	});
 
-	it("falls back to the classic server when a TypeScript 7 package has no local tsc binary", async () => {
+	it("refuses the classic wrapper without a compiler when TypeScript 7 has no local tsc binary", async () => {
 		const root = makeProject("7.0.2");
-		const lspPath = addClassicWrapper(root);
+		addClassicWrapper(root);
 		const previousCwd = process.cwd();
 		process.chdir(root);
 		try {
@@ -206,17 +206,11 @@ describe("TypeScript native LSP selection", () => {
 				allowInstall: false,
 			});
 
-			expect(launchLSP).toHaveBeenCalledWith(lspPath, ["--stdio"], {
-				cwd: root,
-				env: {
-					PI_LENS_TEST_TOOLCHAIN: "1",
-					TSSERVER_PATH: undefined,
-				},
-			});
+			expect(launchLSP).not.toHaveBeenCalled();
 			expect(ensureTool).toHaveBeenCalledWith("typescript", {
 				allowInstall: false,
 			});
-			expect(result).toBeDefined();
+			expect(result).toBeUndefined();
 		} finally {
 			process.chdir(previousCwd);
 		}
@@ -229,20 +223,12 @@ describe("TypeScript native LSP selection", () => {
 			"{",
 		);
 		addNativeTsc(root);
-		const { lspPath, tsserverPath } = addClassicServer(root);
+		addClassicServer(root);
 
 		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
 
-		expect(launchLSP).toHaveBeenCalledWith(lspPath, ["--stdio"], {
-			cwd: root,
-			env: {
-				PI_LENS_TEST_TOOLCHAIN: "1",
-				TSSERVER_PATH: tsserverPath,
-			},
-		});
-		expect(result?.initialization).toEqual({
-			tsserver: { path: tsserverPath },
-		});
+		expect(launchLSP).not.toHaveBeenCalled();
+		expect(result).toBeUndefined();
 	});
 
 	// Copilot review (PR #526): a nearer `node_modules/typescript/` directory
@@ -261,21 +247,15 @@ describe("TypeScript native LSP selection", () => {
 		fs.mkdirSync(path.join(packageRoot, "node_modules", "typescript"), {
 			recursive: true,
 		});
-		const { lspPath, tsserverPath } = addClassicServer(packageRoot);
+		addClassicServer(packageRoot);
 
 		const result = await TypeScriptServer.spawn(packageRoot, {
 			allowInstall: false,
 		});
 
-		// Must fall back to the classic path AT packageRoot, not launch the
-		// ancestor's native tsc.
-		expect(launchLSP).toHaveBeenCalledWith(lspPath, ["--stdio"], {
-			cwd: packageRoot,
-			env: {
-				PI_LENS_TEST_TOOLCHAIN: "1",
-				TSSERVER_PATH: tsserverPath,
-			},
-		});
-		expect(result?.launchVariant).toBe("classic");
+		// #4299: broken metadata cannot authorize an implicit classic fallback,
+		// and the nearer install still shadows the ancestor native compiler.
+		expect(launchLSP).not.toHaveBeenCalled();
+		expect(result).toBeUndefined();
 	});
 });
