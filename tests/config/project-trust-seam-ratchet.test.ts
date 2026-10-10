@@ -64,6 +64,10 @@ function countViMockSites(source: string, moduleName: string): number {
 	return count;
 }
 
+function seamBaseName(module: string): string {
+	return module.replace(/^.*\//, "").replace(/\.(?:js|ts)$/, "");
+}
+
 async function counts(): Promise<Record<string, number>> {
 	const files = listSourceFiles(TESTS_ROOT, {
 		extensions: [".ts"],
@@ -74,7 +78,15 @@ async function counts(): Promise<Record<string, number>> {
 		SEAM_MODULES.map(({ module }) => [module, 0]),
 	);
 	for (const { source } of readWalkedFiles(files)) {
-		for (const { module } of SEAM_MODULES)
+		// Parse only files that name a seam module: every mock spelling the
+		// liveness case pins carries the module's base name as text, so the
+		// substring test keeps the population exact and skips ~900 AST parses
+		// (the unfiltered loop timed out in CI at 5000 ms, #4285 verify).
+		const named = SEAM_MODULES.filter(({ module }) =>
+			source.includes(seamBaseName(module)),
+		);
+		if (named.length === 0) continue;
+		for (const { module } of named)
 			result[module] += countViMockSites(source, module);
 		// Turn the loop between files so `@ast-grep/napi` can free each parsed
 		// tree from its finalizer before the next one is built (the
