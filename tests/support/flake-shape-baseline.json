@@ -26,6 +26,7 @@
 		"clients/lsp/headless-tool-call-keepalive.test.ts": 1,
 		"clients/lsp/kill-process-tree-real-child.test.ts": 2,
 		"clients/lsp/launch-stderr-guard.test.ts": 2,
+		"clients/lsp/lean-real-smoke.test.ts": 3,
 		"clients/lsp/typescript-classic-repair.integration.test.ts": 2,
 		"clients/lsp/typescript-native-vitest.integration.test.ts": 1,
 		"clients/metrics-history-stderr.test.ts": 14,

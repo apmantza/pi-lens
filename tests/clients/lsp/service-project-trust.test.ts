@@ -163,6 +163,40 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		trust.resetProjectTrust();
 	});
 
+	it("refuses the real LeanServer under unknown trust (lake interprets lakefile.lean)", async () => {
+		// #4269 witness: the Lean row's own `executesProjectCode: true` is what
+		// routes it through refuseUntrustedLspExecution. No trust mock: the real
+		// setProjectTrustState/resetProjectTrust seam is exercised, and the row is
+		// the real LeanServer (only its spawn is spied, so the exec seam stays
+		// unentered). Pre-fix the field is absent, the service backstop allows
+		// unknown trust, and spawn is reached — the red this guards.
+		const project = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lean-trust-"),
+		);
+		fs.writeFileSync(path.join(project, "lakefile.lean"), "import Lake\n");
+		fs.writeFileSync(path.join(project, "Main.lean"), "def main := 1\n");
+		const { trust, service, spawn } = await setup();
+		const { LeanServer } = await import("../../../clients/lsp/server.js");
+		getServersForFileWithConfig.mockReturnValue([{ ...LeanServer, spawn }]);
+		expect(trust.getProjectTrustState()).toBe("unknown");
+
+		const client = await service.getClientForFile(
+			path.join(project, "Main.lean"),
+		);
+
+		expect(spawn).not.toHaveBeenCalled();
+		expect(createLSPClient).not.toHaveBeenCalled();
+		expect(client).toBeUndefined();
+		expect(logExtension).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message:
+					"project-code LSP server refused: mark the project trusted in pi or upgrade pi",
+			}),
+		);
+		trust.resetProjectTrust();
+		fs.rmSync(project, { recursive: true, force: true });
+	});
+
 	it("refuses a project-local LSP binary for an adopted root", async () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const sessionRoot = fs.mkdtempSync(
