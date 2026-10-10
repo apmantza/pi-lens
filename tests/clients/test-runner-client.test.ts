@@ -18,6 +18,7 @@ import {
 	type TestResult,
 } from "../../clients/test-runner-client.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 
 // Only the resolveExec matrix below (#1098) needs this mocked; every other
 // test in this file never reaches a `findGlobalBinary` call.
@@ -35,6 +36,8 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
 	for (const c of cleanups.splice(0)) c();
 });
+
+beforeEach(() => setProjectTrustState("trusted"));
 
 describe("test-runner-client", () => {
 	it("does not infer vitest from vite config alone", () => {

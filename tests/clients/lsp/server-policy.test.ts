@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../test-utils.js";
 
 const toolNotFound = (message = "ENOENT: command not found") =>
@@ -122,6 +122,17 @@ afterEach(() => {
 	observedReadFileSync.mockClear();
 	logSessionStart.mockClear();
 	vi.resetModules();
+});
+
+// The suite plants project-local interpreters (`.venv`) and binaries on
+// purpose; the trust gate itself is witnessed by
+// `tests/clients/project-local-bin-trust.test.ts`.
+//
+// `afterEach` resets the module graph, so this re-imports the fresh trust
+// module before each case; every module under test then shares that instance.
+beforeEach(async () => {
+	const trust = await import("../../../clients/project-trust.js");
+	trust.setProjectTrustState("trusted");
 });
 
 describe("lsp server policy", () => {

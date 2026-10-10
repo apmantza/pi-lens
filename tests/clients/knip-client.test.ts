@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getProjectDataDir } from "../../clients/file-utils.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { getToolEnvironment } from "../../clients/installer/index.js";
 import {
 	KnipClient,
@@ -22,6 +23,11 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 }));
 
 describe("knip-client", () => {
+	// The suite asserts the project `.bin` is prepended to the child PATH and
+	// that a local knip resolves; the trust gate itself is witnessed in
+	// `project-local-bin-trust.test.ts`.
+	beforeEach(() => setProjectTrustState("trusted"));
+
 	it("runAnalyze() passes --cache and a --cache-location under getProjectDataDir", async () => {
 		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-knip-cache-");
 		try {

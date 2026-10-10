@@ -438,6 +438,22 @@ describe("Markdown claim units", () => {
 		]);
 	});
 
+	it("starts a sentence after a code span or numeric token", () => {
+		expect(
+			splitMarkdownUnits(
+				"The first sentence ends here. `tests/x.test.ts` already parses that source.\nA second sentence ends here. 4.4.2 is the pinned version.",
+			),
+		).toEqual([
+			{ kind: "sentence", text: "The first sentence ends here." },
+			{
+				kind: "sentence",
+				text: "`tests/x.test.ts` already parses that source.",
+			},
+			{ kind: "sentence", text: "A second sentence ends here." },
+			{ kind: "sentence", text: "4.4.2 is the pinned version." },
+		]);
+	});
+
 	it("requires a directly following origin/master fence for a master claim", () => {
 		const accepted = lintPrBody(
 			`${body}\n\nThis is pre-existing.\n\n\`\`\`text\nrun on origin/master: pass\n\`\`\``,

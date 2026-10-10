@@ -54,8 +54,12 @@ function createTomlCtx(filePath: string, cwd: string) {
 }
 
 describe("taplo runner", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.resetModules();
+		// The suite plants a project-local taplo on purpose; the trust gate itself
+		// is witnessed in `tests/clients/project-local-bin-trust.test.ts`.
+		const trust = await import("../../../../clients/project-trust.js");
+		trust.setProjectTrustState("trusted");
 		safeSpawn.mockReset();
 		safeSpawnAsync.mockReset();
 		lspPrimaryCoversFile.mockReset();

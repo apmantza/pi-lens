@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
-import { findLocalBinUpwards } from "../../package-manager.js";
+import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
 import { stripAnsi } from "../../sanitize.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -174,7 +174,8 @@ const taploRunner: RunnerDefinition = {
 		// correct for pi-lens's OWN managed install (a GitHub-release binary,
 		// `clients/installer/index.ts` taplo entry), a different artifact with a
 		// different extension, so it stays as the checker's fallback only.
-		let cmd: string | null = findLocalBinUpwards("taplo", cwd) ?? null;
+		let cmd: string | null =
+			localBinPath(findLocalBinUpwards("taplo", cwd)) ?? null;
 		if (!cmd) {
 			if (await taplo.isAvailableAsync(cwd)) {
 				cmd = taplo.getCommand(cwd);

@@ -79,6 +79,7 @@ vi.mock("../../clients/rust-client.js", async (importOriginal) => {
 
 import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { probeToolAsync } from "../../clients/tool-probe.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -87,6 +88,7 @@ const dirs: string[] = [];
 let previousHome: string | undefined;
 
 beforeEach(() => {
+	setProjectTrustState("trusted");
 	// The seam caps every marker walk at `$HOME` (`isAtOrAboveHomeDir`), so a
 	// fixture under the OS temp root is out of reach of its own markers unless
 	// the ceiling moves with it. `os.homedir()` reads `$HOME` on POSIX, and
@@ -293,6 +295,15 @@ describe("#2894 root seam: a hand-derived package root resolves through resolveT
 		});
 		const pkgRoot = path.join(root, "packages", "ui");
 		const filePath = path.join(pkgRoot, "src", "index.ts");
+		// A trusted project resolves its own biome at the dispatch cwd, so the
+		// lint child starts where the resolved binary lives rather than the
+		// neutral npx cwd (#4268 acceptance 3).
+		for (const dir of [root, pkgRoot]) {
+			const bin = path.join(dir, "node_modules", ".bin");
+			fs.mkdirSync(bin, { recursive: true });
+			fs.writeFileSync(path.join(bin, "biome"), "");
+			fs.writeFileSync(path.join(bin, "biome.cmd"), "");
+		}
 		const { BiomeClient } = await import("../../clients/biome-client.js");
 		const { resolveToolCwd } = await import("../../clients/tool-cwd.js");
 		const client = new BiomeClient();
