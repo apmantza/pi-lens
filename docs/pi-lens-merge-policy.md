@@ -614,6 +614,13 @@ Each row cost a lane at least once; the prose above carries the record.
 |---------|-----|
 | Writing incident numbers and examples into an `AGENTS.md` rule | AGENTS.md stays lean; issues, PRs and examples go to `HISTORY.md` (maintainer, 2026-10-10). `tests/config/agents-governance.test.ts` ratchets the reference count down only |
 | Routing a review finding as one PR's bug when it is a member of a class | Name the shape, grep for members, and record the verdict before the fix round; `plegma-delegate-guard` refuses a fix brief with a HIGH/MEDIUM finding and no `Shape:` line |
+| Dispatching a fixer on an issue's text without checking it against the code | Grep the claimed gap on master before the brief. A stale premise turns the lane into a no-op or a witness-only PR |
+| Writing off a worker's reds as "sandbox" without a same-env base run | Accept a sandbox attribution only with the same test names red on origin/master under the same env vars. Hundreds of guard reds can hide one real red |
+| Folding a reviewer's remedy after running only the file the reviewer named | Run every test that references the changed symbol (`rg -l <symbol> tests`) before pushing a fold |
+| Pushing with `-q` or a grep filter, then landing on whatever the PR head is | Read the push result unfiltered, check `git merge-base --is-ancestor <intended> origin/<branch>`, and land with `EXPECT_HEAD=<intended or its merge>` |
+| Gating a background step on `until ! pgrep -f '<pattern>'` | That command line matches itself and never exits. Chain the steps in one command, or wait on a PID |
+| Editing an orchestrator script while a chain or monitor runs it | Stop the chain first, or write a new file and `mv` it into place |
+| Patching a CI-only red for a fifth round without CI evidence | When a red does not reproduce locally, put temporary instrumentation in a do-not-merge PR and read the CI log before the next fix round |
 | Taking a causal premise ("a later merge dropped X") from a hand-back into a PR body or brief | Bisect before writing it: `git show <sha>:<file>` along the path from the fix commit to master. A lane round can revert its own earlier round, and that is not a merge drop |
 | Trusting a wrapper script's exit status when it echoes a check's result | `pr-body.sh lint` printed `lint-exit=1` and exited 0, so a failing body went live; the wrapper now exits with the check's status. Read the check's own result line |
 | Hand-rolling the governance suite in a fresh worktree | `npm run build` alone left `dist/` missing and three census suites red; use the orchestrator's `gov-check.sh <tree>`, which builds both outputs and keeps the `node_modules` link for the commit hook |
