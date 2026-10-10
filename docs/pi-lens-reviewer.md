@@ -52,6 +52,11 @@ a brief supplies only `lane=<name>`, scope, and the grant.
 
 ## Verification
 
+For each new or changed `vi.mock` or hand-built double of a `clients/` module,
+check whether a real test seam exists (`set*`, `adopt*`, or `reset*`). If it
+does, treat the double as a finding and require the behavior to run through the
+real seam. Check that every gate the diff adds is exercised through that path.
+
 - **Name the behaviour population.** When a change replaces, moves, or widens
   a lifecycle, dispatch, or ownership seam, run EVERY suite that exercises the
   behaviour the seam governs and name the list; a curated file set cannot

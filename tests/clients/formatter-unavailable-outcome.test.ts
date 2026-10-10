@@ -10,7 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "./test-utils.js";
 
 // formatters.ts owns a LOCAL `which` (availability-latched) that probes via
@@ -21,15 +21,6 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => null),
-}));
-
-// This suite pins the unavailable-vs-failed classification through the real
-// resolvers; it runs trusted so planted project rungs are reachable (the
-// fresh import each test takes means a latched state would not survive
-// `vi.resetModules`).
-vi.mock("../../clients/project-trust.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/project-trust.js")>()),
-	getProjectTrustState: () => "trusted",
 }));
 
 const WHICH_COMMANDS = new Set(["where", "which"]);
@@ -43,11 +34,22 @@ async function loadFormatters() {
 }
 
 describe("formatFile classifies an unavailable tool distinctly from a failure (#2413)", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.resetModules();
+		// This suite pins the unavailable-vs-failed classification through the
+		// real resolvers; it runs trusted so planted project rungs are reachable.
+		// The latch is set AFTER `vi.resetModules()`, because a reset re-evaluates
+		// the module graph and discards a latch set on the previous instance.
+		(await import("../../clients/project-trust.js")).setProjectTrustState(
+			"trusted",
+		);
 		safeSpawnAsync.mockReset();
 		// Default: every `where`/`which` probe reports the tool absent.
 		safeSpawnAsync.mockResolvedValue({ status: 1, stdout: "", stderr: "" });
+	});
+
+	afterEach(async () => {
+		(await import("../../clients/project-trust.js")).resetProjectTrust();
 	});
 
 	it("a resolver returning FORMATTER_UNAVAILABLE never spawns and is not a failure", async () => {

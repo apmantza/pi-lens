@@ -83,6 +83,7 @@ vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	findGlobalBinary: vi.fn(async () => undefined),
 	findNodeToolBinary: vi.fn(async () => undefined),
 }));
+
 /** A probe the host killed at its budget: says nothing about the tool. */
 const timeoutResult = {
 	stdout: "",
@@ -115,16 +116,13 @@ function advancePastCooldown(): void {
 }
 
 beforeEach(async () => {
+	(await import("../../clients/project-trust.js")).setProjectTrustState(
+		"trusted",
+	);
 	vi.resetAllMocks();
 	ensureTool.mockResolvedValue(null);
 	safeSpawn.mockReturnValue({ stdout: "", stderr: "", status: 1 });
 	await resetDispatchAvailabilityState();
-	// SgRunner reads project trust since #4233. These cases pin availability
-	// latching, so they run as a trusted project through the real trust seam,
-	// on the same compiled module instance the clients load.
-	(await import("../../clients/project-trust.js")).setProjectTrustState(
-		"trusted",
-	);
 	vi.useFakeTimers({ toFake: ["Date"] });
 });
 
