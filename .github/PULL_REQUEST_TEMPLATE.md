@@ -84,6 +84,10 @@ candidates. A test may be REMOVED only when a named surviving test reds on
 the same mutations — demonstrate the redundancy, never assert it. Removal
 candidates you do not delete here go to the corpus value ledger issue.
 
+## Detection
+
+Optional unless this PR closes a bug-labelled issue: name `Caught by:` (one layer), `Should have been caught by:` (a layer or `this layer`), and `Gap:` (`#NNN`, `exists: <test path>`, or `none: <reason>`).
+
 ## Blast radius
 
 State affected dependents for each touched production module (from

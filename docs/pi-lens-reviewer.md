@@ -80,6 +80,9 @@ real seam. Check that every gate the diff adds is exercised through that path.
   observability, changelog, commit, and PR-body requirements.
 - Re-run the PR's `## Class sweep` search yourself and widen it when the
   named shape is broader than the touched seam (#4273, #4268).
+- On a bug-closing PR, check the `## Detection` lesson: the layer named under
+  `Should have been caught by:` must be one that would actually have caught
+  the bug, and `Gap:` must be a real issue, test, or reason (#4288).
 - For LSP, dispatch, cache, runner, or tool changes, test one non-TypeScript
   registry entry through the same seam.
 - On a net-count fold, mutate every predicate the deleted sibling used to

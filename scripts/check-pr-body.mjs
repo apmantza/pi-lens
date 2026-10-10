@@ -15,6 +15,7 @@ import {
 	closeKeywordPlacementMessage,
 	lintCloseKeywordPlacement,
 	lintCloseKeywords,
+	parseCloseKeywords,
 } from "./lib/close-keywords.mjs";
 import { checkProse, proseSections } from "./check-prose.mjs";
 
@@ -91,6 +92,9 @@ const SECTION_SYNONYMS = new Map([
 	["class sweep", "class sweep"],
 	["observability", "observability"],
 	["test assessment", "test assessment"],
+	// #4288: required only when the PR closes a bug-labelled issue, so it stays
+	// out of REQUIRED_SECTIONS and is added per-request in `lintPrBody`.
+	["detection", "detection"],
 ]);
 const REVIEW_HEADER_REPAIR_PREFIX =
 	"## Why\nLegacy body normalized for the required review contract.\n\n" +
@@ -1674,6 +1678,128 @@ export function repairFlattenedBody(body = "") {
 		: `${REVIEW_HEADER_REPAIR_PREFIX}\n${repaired}`;
 }
 
+// #4288 (docs/pi-lens-merge-policy.md, "Detection retrospective on every
+// merged bug fix"): a PR that closes a bug-labelled issue states which layer
+// caught the bug, which layer should have caught it, and what gap remains.
+// The layer vocabulary is ONE exported list so the body lint, the template
+// hint, and the orchestrator's ledger copy cannot drift.
+export const DETECTION_LAYERS = Object.freeze([
+	"external user",
+	"reviewer probe",
+	"CI unit",
+	"governance sweep",
+	"smoke",
+	"nightly",
+	"dogfood",
+	"release gate",
+]);
+const DETECTION_LAYER_SET = new Set(
+	DETECTION_LAYERS.map((layer) => layer.toLowerCase()),
+);
+// "This layer caught it in time" is a valid detection lesson (issue #4288,
+// "Valid verdicts"): the gate must not demand new tests for every bug.
+const DETECTION_SHOULD_SET = new Set([...DETECTION_LAYER_SET, "this layer"]);
+
+export const DETECTION_MESSAGE =
+	'PR body "## Detection" must state the bug-detection lesson in three lines: ' +
+	'"Caught by: <layer>", "Should have been caught by: <layer|this layer>", ' +
+	'and "Gap: <issue ref> | exists: <test path> | none: <reason>". ' +
+	`Layers: ${DETECTION_LAYERS.join(", ")}. See ${TEMPLATE_PATH}.`;
+
+// A field value is found by its line prefix, never a sentence mention: a
+// prose line that merely contains "caught by" is not the field. Leading list
+// markers and bold/code emphasis are tolerated because the template sanctions
+// them; the value itself is returned raw for per-field validation.
+function detectionFieldValue(content, field) {
+	for (const raw of String(content ?? "").split(/\r?\n/)) {
+		const candidate = raw.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)?/, "").trim();
+		const match =
+			/^(?:\*\*|__)?([A-Za-z ]+?)(?:\*\*|__)?\s*:(?:\*\*|__)?\s*(.*)$/.exec(
+				candidate,
+			);
+		if (match && match[1].trim().toLowerCase() === field)
+			return match[2].trim();
+	}
+	return null;
+}
+
+function normalizeDetectionLayer(value) {
+	return String(value ?? "")
+		.replace(/[*_`]/g, "")
+		.replace(/[\s.,;:!]+$/, "")
+		.replace(/\s+/g, " ")
+		.trim()
+		.toLowerCase();
+}
+
+// `Gap:` names a follow-up issue, an existing test that now covers the bug, or
+// a reasoned `none:`. `exists:` must name a test path (under tests/ or a test
+// extension), so "exists: TBD" is refused.
+function validDetectionGap(value) {
+	const text = String(value ?? "").trim();
+	if (/(?:^|\s|[(])#\d+\b/.test(text)) return true;
+	const exists = /^exists\s*:\s*(.+)$/i.exec(text);
+	if (exists) {
+		const testPath = exists[1].replace(/[*_`]/g, "").trim();
+		return (
+			testPath.startsWith("tests/") ||
+			/(?:^|\/)test_[^/]+$/.test(testPath) ||
+			/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(testPath) ||
+			/_test\.(?:py|go|rs)$/.test(testPath)
+		);
+	}
+	const none = /^none\s*:\s*(.+)$/i.exec(text);
+	if (none) return wordCount(none[1]) >= 2;
+	return false;
+}
+
+/**
+ * #4288: the `## Detection` contract. Returns [] when the section is absent
+ * (the missing-section error stays owned by `lintPrBody`), otherwise one
+ * message when any of the three lines is missing or invalid. Parsing runs over
+ * the fenced-block-free body, so a quoted example inside a code fence never
+ * satisfies the requirement (issue #4288, "Red first").
+ */
+export function lintDetectionSection(body = "") {
+	const lines = sourceWithoutFencedBlocks(body).split(/\r?\n/);
+	const headings = [];
+	for (let index = 0; index < lines.length; index += 1) {
+		const match = HEADING.exec(lines[index]);
+		if (match)
+			headings.push({
+				index,
+				level: match[0].match(/^#+/)[0].length,
+				section: SECTION_SYNONYMS.get(match[1].trim().toLowerCase()),
+			});
+	}
+	const heading = headings.find((candidate) =>
+		hasSection(candidate, "detection"),
+	);
+	if (!heading) return [];
+	const nextHeading = headings.find(
+		(candidate) =>
+			candidate.index > heading.index && candidate.level <= heading.level,
+	);
+	const content = lines
+		.slice(heading.index + 1, nextHeading?.index ?? lines.length)
+		.join("\n");
+	const caughtBy = detectionFieldValue(content, "caught by");
+	const shouldBy = detectionFieldValue(content, "should have been caught by");
+	const gap = detectionFieldValue(content, "gap");
+	if (
+		caughtBy === null ||
+		!DETECTION_LAYER_SET.has(normalizeDetectionLayer(caughtBy))
+	)
+		return [DETECTION_MESSAGE];
+	if (
+		shouldBy === null ||
+		!DETECTION_SHOULD_SET.has(normalizeDetectionLayer(shouldBy))
+	)
+		return [DETECTION_MESSAGE];
+	if (gap === null || !validDetectionGap(gap)) return [DETECTION_MESSAGE];
+	return [];
+}
+
 const CLASS_SWEEP_MESSAGE =
 	'PR body "## Class sweep" must name the defect shape (Shape:, Defect shape:, ' +
 	"Defect class:, or Class:), quote the search command that defines its " +
@@ -1896,18 +2022,13 @@ export function lintPrBody(body = "", options = {}) {
 	// requires the new header trio; keeping that switch explicit avoids changing
 	// the meaning of lower-level parser tests.
 	const requiredSections = options.workingTree
-		? options.requireTestAssessment
-			? [...REQUIRED_SECTIONS, "Test assessment"]
-			: REQUIRED_SECTIONS
-		: options.requireTestAssessment
-			? [
-					"Tests",
-					"Blast radius",
-					"Class sweep",
-					"Observability",
-					"Test assessment",
-				]
-			: ["Tests", "Blast radius", "Class sweep", "Observability"];
+		? [...REQUIRED_SECTIONS]
+		: ["Tests", "Blast radius", "Class sweep", "Observability"];
+	if (options.requireTestAssessment) requiredSections.push("Test assessment");
+	// #4288: only a bug-closing PR owes the detection retrospective. The
+	// tri-state resolution lives at the callers; `true` is the only value that
+	// requires the section, so an unreadable label never blocks.
+	if (options.bugClosing) requiredSections.push("Detection");
 
 	for (const name of requiredSections) {
 		const heading = headings.find((candidate) =>
@@ -1941,6 +2062,7 @@ export function lintPrBody(body = "", options = {}) {
 					".",
 			);
 	}
+	if (options.bugClosing) errors.push(...lintDetectionSection(body));
 	if (options.diff)
 		errors.push(
 			...lintRuntimeObservability(lines, headings, options.diff, options),
@@ -2068,6 +2190,51 @@ export async function resolveTouchesTests(
 	}
 }
 
+/**
+ * #4288: does the PR close an issue carrying the `bug` label? Returns `true`
+ * (some closed issue is bug-labelled), `false` (no closed issue is), or `null`
+ * when the label cannot be read (no API credentials, a non-2xx, or a malformed
+ * body). A `null` never blocks the lint: the callers warn and skip the
+ * `## Detection` requirement rather than demanding a section they cannot
+ * justify (issue #4288, "Detecting the bug label").
+ */
+export async function resolveBugClosing(body, fetchImpl = globalThis.fetch) {
+	const issues = parseCloseKeywords(body).issues;
+	if (issues.length === 0) return false;
+	const token = process.env.GITHUB_TOKEN;
+	const apiUrl = process.env.GITHUB_API_URL;
+	const repository = process.env.GITHUB_REPOSITORY;
+	if (!token || !apiUrl || !repository) return null;
+	for (const number of issues) {
+		let data;
+		try {
+			const response = await fetchImpl(
+				`${apiUrl}/repos/${repository}/issues/${number}`,
+				{
+					signal: AbortSignal.timeout(10_000),
+					headers: {
+						Accept: "application/vnd.github+json",
+						Authorization: `Bearer ${token}`,
+						"X-GitHub-Api-Version": "2022-11-28",
+					},
+				},
+			);
+			if (!response.ok) return null;
+			data = await response.json();
+		} catch {
+			return null;
+		}
+		const labels = Array.isArray(data?.labels) ? data.labels : [];
+		if (
+			labels.some(
+				(label) => (typeof label === "string" ? label : label?.name) === "bug",
+			)
+		)
+			return true;
+	}
+	return false;
+}
+
 function eventPayload() {
 	const eventPath = process.env.GITHUB_EVENT_PATH;
 	if (!eventPath) throw new Error("GITHUB_EVENT_PATH is required");
@@ -2105,6 +2272,18 @@ export async function lintPullRequestEvent(
 	const { body, normalized } = await resolveLivePrBody(pullRequest, fetchImpl);
 	const requireTestAssessment =
 		(await resolveTouchesTests(pullRequest, fetchImpl)) === true;
+	// #4288: a bug-closing PR owes a detection retrospective. The label read is
+	// best-effort; an unreadable label warns and skips the requirement.
+	let bugClosing = null;
+	try {
+		bugClosing = await resolveBugClosing(body, fetchImpl);
+	} catch {
+		bugClosing = null;
+	}
+	if (bugClosing === null && parseCloseKeywords(body).issues.length > 0)
+		console.warn(
+			'::warning::PR body check could not read the closed issue label(s), so the "## Detection" section is not required (#4288).',
+		);
 	let diff = "";
 	try {
 		diff = localDiff();
@@ -2118,6 +2297,7 @@ export async function lintPullRequestEvent(
 	}
 	const result = lintPrBody(body, {
 		requireTestAssessment,
+		bugClosing: bugClosing === true,
 		diff,
 		workingTree: true,
 		// Existing open bodies were authored before #4280. Set PI_LENS_PROSE_GRACE=1
@@ -2323,8 +2503,23 @@ export function lintLocalPrBody(
 		// upstream ref, retain structural lint rather than inventing scope.
 		diff = "";
 	}
+	// #4288: the local preflight is offline. An injected resolver (tests) or an
+	// explicit tri-state wins; otherwise the label is unknown and a body that
+	// closes an issue warns instead of demanding a Detection section it cannot
+	// justify.
+	let bugClosing = options.bugClosing;
+	if (bugClosing === undefined)
+		bugClosing =
+			typeof options.resolveBugClosing === "function"
+				? options.resolveBugClosing(body)
+				: null;
+	if (bugClosing === null && parseCloseKeywords(body).issues.length > 0)
+		console.warn(
+			'::warning::PR body check could not read the closed issue label offline, so the "## Detection" section is not required (#4288).',
+		);
 	const result = lintPrBody(body, {
 		requireTestAssessment: localTouchesTests(cwd, git),
+		bugClosing: bugClosing === true,
 		diff,
 		cwd,
 		workingTree: true,
