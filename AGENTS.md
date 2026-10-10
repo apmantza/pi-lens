@@ -524,6 +524,10 @@ file-scoped worklist and receives no project-wide scanner output.
     and gate pins, advisory and deferred allowlists, contracts, PR template) and
     give each a disposition in the PR body (#4005).
 
+66. **In-process module double with a real seam:** when a `clients/` module has
+    a test setter, adopter, or reset, drive that seam; keep a double only at a
+    process or host boundary.
+
 </important>
 
 <important if="session, turn or generation lifecycle">

@@ -39,16 +39,6 @@ vi.mock("../../../../clients/file-utils.js", async (importOriginal) => ({
 	getGlobalPiLensDir: () => piLensDirHolder.dir,
 }));
 
-// This suite witnesses the managed-release rung against a project venv; it
-// runs trusted (the fresh import each test takes means a latched state would
-// not survive `vi.resetModules`).
-vi.mock("../../../../clients/project-trust.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../../../clients/project-trust.js")
-	>()),
-	getProjectTrustState: () => "trusted",
-}));
-
 vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/latency-logger.js")
@@ -162,16 +152,24 @@ async function spawnMock() {
 	return vi.mocked(mod.safeSpawnAsync);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	vi.resetModules();
+	// This suite witnesses the managed-release rung against a project venv; it
+	// runs trusted so the project venv outranks the managed rungs. The latch is
+	// set AFTER `vi.resetModules()`, because a reset re-evaluates the module
+	// graph and discards a latch set on the previous instance.
+	(await import("../../../../clients/project-trust.js")).setProjectTrustState(
+		"trusted",
+	);
 	logLatencySpy.mockReset();
 	tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2140-home-"));
 	cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2140-cwd-"));
 	piLensDirHolder.dir = tmpHome;
 });
 
-afterEach(() => {
+afterEach(async () => {
 	vi.useRealTimers();
+	(await import("../../../../clients/project-trust.js")).resetProjectTrust();
 	removeTempDirSync(tmpHome);
 	removeTempDirSync(cwd);
 });

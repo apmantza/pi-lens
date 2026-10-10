@@ -10,6 +10,10 @@ mechanics"; a brief supplies only `lane=<name>`, scope, and the grant.
 
 ## Before code
 
+Before mocking a `clients/` module, look for its test seam (`set*`, `adopt*`, or
+`reset*`). The pre-flight must list the mock dependents of any module whose
+exports change.
+
 - Trace the production entry point and reproduce the defect through it
   (principles §1, "Premise first"). Name no seam before the reproduction; the
   red reproduction is your feedback loop, built before any theory of the fix.
