@@ -39,7 +39,7 @@ export interface ViMockExportOptions {
 	importerDepth?: number;
 }
 
-function unquote(text: string): string | undefined {
+export function unquote(text: string): string | undefined {
 	if (!/^['"`]/.test(text)) return undefined;
 	try {
 		return JSON.parse(text.replace(/^`|`$/g, '"')) as string;
@@ -49,27 +49,35 @@ function unquote(text: string): string | undefined {
 }
 
 /**
- * Semantic `vi.mock` call check: the object must be `vi` and the property
- * must name `mock`, whether written dot (`vi.mock`), bracket
- * (`vi["mock"]` — a `subscript_expression`, not a `member_expression`), or
- * spaced (`vi . mock`). Checking `callee.text() === "vi.mock"` enumerates one
- * surface spelling and misses the others (shape 34); structural fields do
- * not.
+ * Semantic mock-call check: the object must be `vi` and the property must be
+ * one of `names`, whether written dot (`vi.mock`), bracket (`vi["mock"]` — a
+ * `subscript_expression`, not a `member_expression`), or spaced
+ * (`vi . mock`). Checking `callee.text() === "vi.mock"` enumerates one surface
+ * spelling and misses the others (shape 34); structural fields do not.
+ * `names` defaults to `["mock"]`, so the whole-module export gate keeps its
+ * existing population; a caller that also owns the non-hoisted `vi.doMock`
+ * passes both names instead of re-deriving the structural match.
  */
-function isViMockCall(callee: SgNode | undefined | null): boolean {
+export function isViMockCall(
+	callee: SgNode | undefined | null,
+	names: readonly string[] = ["mock"],
+): boolean {
 	if (!callee) return false;
 	if (callee.kind() === "member_expression") {
 		if (callee.field("object")?.text() !== "vi") return false;
 		const property = callee.field("property");
 		if (!property) return false;
-		if (property.kind() === "property_identifier")
-			return property.text() === "mock";
-		return unquote(property.text()) === "mock";
+		const name =
+			property.kind() === "property_identifier"
+				? property.text()
+				: unquote(property.text());
+		return name !== undefined && names.includes(name);
 	}
 	if (callee.kind() === "subscript_expression") {
 		const named = callee.children().filter((child) => child.isNamed());
 		if (named.length < 2 || named[0].text() !== "vi") return false;
-		return unquote(named[1].text()) === "mock";
+		const name = unquote(named[1].text());
+		return name !== undefined && names.includes(name);
 	}
 	return false;
 }

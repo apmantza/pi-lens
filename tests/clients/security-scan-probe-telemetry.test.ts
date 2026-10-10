@@ -55,10 +55,6 @@ vi.mock("../../clients/installer/index.js", () => ({
 	getToolEnvironment: vi.fn(async () => ({})),
 }));
 
-vi.mock("../../clients/project-trust.js", () => ({
-	assertInstallAllowed: vi.fn(() => true),
-}));
-
 /** A probe the host killed at its budget: says nothing about the tool. */
 const timeoutResult = {
 	stdout: "",
@@ -152,7 +148,10 @@ function advancePastCooldown(): void {
 	vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+	(await import("../../clients/project-trust.js")).setProjectTrustState(
+		"trusted",
+	);
 	vi.resetAllMocks();
 	ensureTool.mockResolvedValue(null);
 	findManagedToolBinary.mockResolvedValue(undefined);
@@ -232,8 +231,9 @@ it("package-manager reset does not tear down an airborne security flight", async
 	await expect(Promise.all(calls)).resolves.toEqual([true, true]);
 });
 
-afterEach(() => {
+afterEach(async () => {
 	vi.useRealTimers();
+	(await import("../../clients/project-trust.js")).resetProjectTrust();
 });
 
 const CONSUMERS = ["gitleaks", "trivy", "opengrep", "govulncheck"] as const;
