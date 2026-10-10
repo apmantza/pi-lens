@@ -125,6 +125,24 @@ worktree, `--dryRunOnly` for reproductions (fixer and reviewer Probe hygiene
 sections, #3180); and the release-bump PR title format (release-qa skill's
 pre-bump dry-roll step, the 4.2.0 retitle).
 
+## 2026-10-10 — v4.4.2 train retro (merge-policy rows of 2026-10-10)
+
+The day shipped v4.4.2 (#4305) and merged the trust work (#4299, #4300 via #4304, #4285) and both taken-over external PRs (#4233, #4122). It also fixed the shard-5 jscpd leak (#4292) and a master red on ratchet memory (#4310). Seven orchestration mistakes became merge-policy rows:
+- #3405 was dispatched on a stale premise.
+- Sandbox git-guard reds hid real reds (#4308 R1, the release dry roll).
+- A folded remedy missed a second test that encoded the old default (#4299).
+- A filtered push failed silently and the land chain pinned the wrong head (#4307).
+- `pgrep -f` wait loops matched themselves and stalled three pushes for an hour.
+- Scripts were edited while running.
+- The jscpd leak took four fix rounds before a CI trace (#4298) named the producer.
+
+Mechanisms built the same day:
+- The settlement hook runs the governance suite on unpublished worker trees.
+- pr-watch reports a conflicting head.
+- land.sh takes `EXPECT_HEAD` and approves held fork runs.
+- The daily sweep deletes merged branches and kills orphaned test processes.
+- gov-check builds `dist`.
+
 ## 2026-10-10 — jscpd temp-dir leak retro (merge-policy row "causal premise from a hand-back")
 
 `JscpdClient.runScan` removes its `pi-lens-jscpd-*` report directory in a
