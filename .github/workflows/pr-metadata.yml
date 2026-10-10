@@ -60,6 +60,12 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      # #4288: `resolveBugClosing` reads the closed issue's labels through
+      # `GET /repos/{owner}/{repo}/issues/{n}`, which needs issues:read. A fork
+      # pull_request gets a read-only token, but read permissions are still
+      # granted, so the base repository's labels stay readable; a 403 warns and
+      # skips the Detection requirement instead of blocking.
+      issues: read
     timeout-minutes: 5
     # Runs on synchronize too (#3802): the TLA+ coverage rule reads the diff, so
     # a push that adds a mapped-file change or the missing .cfg must re-evaluate

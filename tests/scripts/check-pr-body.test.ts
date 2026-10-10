@@ -30,6 +30,9 @@ import {
 	repairFlattenedBody,
 	resolveLivePrBody,
 	resolveTouchesTests,
+	DETECTION_LAYERS,
+	lintDetectionSection,
+	resolveBugClosing,
 } from "../../scripts/check-pr-body.mjs";
 import { blankCommentsAndStrings } from "../../scripts/check-pr-body.mjs";
 
@@ -5161,6 +5164,352 @@ describe("class sweep reaches the CI event entry (#4273 F6)", () => {
 			);
 		} finally {
 			errors.mockRestore();
+		}
+	});
+});
+
+// #4288 (docs/pi-lens-merge-policy.md, "Detection retrospective on every
+// merged bug fix"): a PR closing a bug-labelled issue names the layer that
+// caught the bug, the layer that should have caught it, and the gap. The
+// label read is best-effort, so an offline/unreadable label warns and skips.
+describe("detection retrospective for bug-closing PRs (#4288)", () => {
+	const withDetection = (lines: string) => `${body}\n\n## Detection\n${lines}`;
+	const validDetection =
+		"- **Caught by:** reviewer probe\n" +
+		"- **Should have been caught by:** CI unit\n" +
+		"- **Gap:** none: no existing test covered the shape";
+
+	it("exports one layer vocabulary", () => {
+		expect(DETECTION_LAYERS).toEqual([
+			"external user",
+			"reviewer probe",
+			"CI unit",
+			"governance sweep",
+			"smoke",
+			"nightly",
+			"dogfood",
+			"release gate",
+		]);
+	});
+
+	it("keeps the merge policy pointing at the exported vocabulary", () => {
+		// R4: the policy prose named a divergent list (`CI job`,
+		// `install/compat/tool smoke`). It now points at DETECTION_LAYERS; this
+		// pin fails if a copied list drifts back in.
+		const doc = readFileSync(
+			resolve(repositoryRoot, "docs/pi-lens-merge-policy.md"),
+			"utf8",
+		);
+		expect(doc).toContain("DETECTION_LAYERS");
+		for (const stale of ["CI job", "install/compat/tool smoke"])
+			expect(doc).not.toContain(stale);
+	});
+
+	it("fails a bug-closing body without the section", () => {
+		const result = lintPrBody(body, { bugClosing: true });
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("needs no section on a feature PR", () => {
+		expect(lintPrBody(body)).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts the valid three-line lesson with a reasoned none:", () => {
+		expect(
+			lintPrBody(withDetection(validDetection), { bugClosing: true }),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts this layer and an issue-reference gap", () => {
+		expect(
+			lintPrBody(
+				withDetection(
+					"- Caught by: smoke\n" +
+						"- Should have been caught by: this layer\n" +
+						"- Gap: #4288",
+				),
+				{ bugClosing: true },
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts an exists: test path", () => {
+		expect(
+			lintPrBody(
+				withDetection(
+					"- Caught by: nightly\n" +
+						"- Should have been caught by: governance sweep\n" +
+						"- Gap: exists: tests/scripts/check-pr-body.test.ts",
+				),
+				{ bugClosing: true },
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("fails an unknown layer word", () => {
+		const result = lintPrBody(
+			withDetection(
+				"- Caught by: maintainer\n" +
+					"- Should have been caught by: CI unit\n" +
+					"- Gap: #1",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("does not count a fenced example", () => {
+		const result = lintPrBody(
+			withDetection(
+				"```md\n" +
+					"- Caught by: smoke\n" +
+					"- Should have been caught by: CI unit\n" +
+					"- Gap: #1\n" +
+					"```",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("does not count a tilde-fenced example", () => {
+		const result = lintPrBody(
+			withDetection(
+				"~~~md\n" +
+					"- Caught by: smoke\n" +
+					"- Should have been caught by: CI unit\n" +
+					"- Gap: #1\n" +
+					"~~~",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("does not count a four-space indented code block", () => {
+		const result = lintPrBody(
+			withDetection(
+				"    - Caught by: smoke\n" +
+					"    - Should have been caught by: CI unit\n" +
+					"    - Gap: #1",
+			),
+			{ bugClosing: true },
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("accepts a one-word none: reason", () => {
+		expect(
+			lintPrBody(
+				withDetection(
+					"- Caught by: smoke\n" +
+						"- Should have been caught by: CI unit\n" +
+						"- Gap: none: n/a",
+				),
+				{ bugClosing: true },
+			),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("accepts the Detection retrospective heading", () => {
+		expect(
+			lintPrBody(`${body}\n\n## Detection retrospective\n${validDetection}`, {
+				bugClosing: true,
+			}),
+		).toEqual({ valid: true, errors: [] });
+	});
+
+	it("refuses a non-test exists: path", () => {
+		expect(
+			lintDetectionSection(
+				"## Detection\n" +
+					"- Caught by: smoke\n" +
+					"- Should have been caught by: CI unit\n" +
+					"- Gap: exists: TBD",
+			),
+		).toEqual([expect.stringContaining('"## Detection"')]);
+	});
+
+	it("refuses the template's optional hint as a bug-closing answer", () => {
+		const template = readFileSync(
+			resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
+			"utf8",
+		);
+		const hint = /## Detection\r?\n\r?\n([^#]*)/.exec(template)?.[1] ?? "";
+		expect(hint.trim().length).toBeGreaterThan(0);
+		const result = lintPrBody(`${body}\n\n## Detection\n${hint}`, {
+			bugClosing: true,
+		});
+		expect(result.valid).toBe(false);
+	});
+});
+
+describe("bug label resolution (#4288)", () => {
+	const closed = "## Summary\nFixes #12 in the detector.\n";
+	const labelFetch = (names: string[]) =>
+		vi
+			.fn()
+			.mockImplementation(
+				async () =>
+					new Response(
+						JSON.stringify({ labels: names.map((name) => ({ name })) }),
+						{ status: 200 },
+					),
+			);
+
+	afterEach(() => vi.unstubAllEnvs());
+
+	function stubApi() {
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+	}
+
+	it("returns true when a closed issue carries the bug label", async () => {
+		stubApi();
+		expect(await resolveBugClosing(closed, labelFetch(["bug"]))).toBe(true);
+	});
+
+	it("returns false when no closed issue carries the bug label", async () => {
+		stubApi();
+		expect(await resolveBugClosing(closed, labelFetch(["enhancement"]))).toBe(
+			false,
+		);
+	});
+
+	it("returns false with no close keyword and never fetches", async () => {
+		const fetchImpl = vi.fn();
+		expect(await resolveBugClosing("## Summary\nRefs #12.\n", fetchImpl)).toBe(
+			false,
+		);
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+
+	it("returns null when no API credentials are available", async () => {
+		vi.stubEnv("GITHUB_TOKEN", "");
+		expect(await resolveBugClosing(closed, labelFetch(["bug"]))).toBe(null);
+	});
+
+	it("returns null on a failed label read", async () => {
+		stubApi();
+		const fetchImpl = vi
+			.fn()
+			.mockResolvedValue(new Response("denied", { status: 500 }));
+		expect(await resolveBugClosing(closed, fetchImpl)).toBe(null);
+	});
+
+	it("returns null on a malformed label body", async () => {
+		stubApi();
+		const fetchImpl = vi
+			.fn()
+			.mockResolvedValue(new Response("not json", { status: 200 }));
+		expect(await resolveBugClosing(closed, fetchImpl)).toBe(null);
+	});
+});
+
+describe("detection reaches the CI event entry (#4288)", () => {
+	const bugBody = `${body}\n\nCloses #4288.`;
+
+	const eventFetch = (bug: boolean | "fail") =>
+		vi.fn().mockImplementation(async (url: string) => {
+			if (String(url).includes("/files"))
+				return new Response(JSON.stringify([]), { status: 200 });
+			if (String(url).includes("/issues/"))
+				return bug === "fail"
+					? new Response("denied", { status: 500 })
+					: new Response(
+							JSON.stringify({ labels: bug ? [{ name: "bug" }] : [] }),
+							{ status: 200 },
+						);
+			return new Response(JSON.stringify({ body: bugBody }), {
+				status: 200,
+			});
+		});
+
+	beforeEach(() => {
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+	});
+	afterEach(() => vi.unstubAllEnvs());
+
+	it("requires Detection when the closed issue is bug-labelled", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			// #4288 R1: the CI checkout is shallow, so `git diff origin/master...HEAD`
+			// has no merge base and GITHUB_ACTIONS makes that fatal. The detection
+			// wires are independent of git, so inject an empty diff and pin the CI
+			// environment the unit-test job actually runs in.
+			vi.stubEnv("GITHUB_ACTIONS", "true");
+			const result = await lintPullRequestEvent(
+				eventFetch(true),
+				{ pull_request: { number: 4288, body: bugBody } },
+				() => "",
+			);
+			expect(result.valid).toBe(false);
+			expect(errors.mock.calls.flat().join("\n")).toContain('"## Detection"');
+		} finally {
+			errors.mockRestore();
+		}
+	});
+
+	it("does not require Detection when the closed issue is not a bug", async () => {
+		vi.stubEnv("GITHUB_ACTIONS", "true");
+		const result = await lintPullRequestEvent(
+			eventFetch(false),
+			{ pull_request: { number: 4288, body: bugBody } },
+			() => "",
+		);
+		expect(result).toEqual({ valid: true, repaired: false });
+	});
+
+	it("warns and skips Detection when the label read fails", async () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			vi.stubEnv("GITHUB_ACTIONS", "true");
+			const result = await lintPullRequestEvent(
+				eventFetch("fail"),
+				{ pull_request: { number: 4288, body: bugBody } },
+				() => "",
+			);
+			expect(result.valid).toBe(true);
+			// R2: the skip must be a visible GitHub Actions annotation on the job
+			// log, naming the reason and the issue, not a silent pass.
+			expect(warning).toHaveBeenCalledWith(
+				expect.stringMatching(/^::warning::.*## Detection.*#4288/s),
+			);
+		} finally {
+			warning.mockRestore();
+		}
+	});
+});
+
+describe("detection on the local preflight (#4288)", () => {
+	it("requires the section for a resolved bug", () => {
+		const result = lintLocalPrBody(body, process.cwd(), () => "", {
+			bugClosing: true,
+		});
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain('"## Detection"');
+	});
+
+	it("warns rather than requiring when the label cannot be read", () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const result = lintLocalPrBody(
+				`${body}\n\nCloses #4288.`,
+				process.cwd(),
+				() => "",
+			);
+			expect(result.valid).toBe(true);
+			expect(warning).toHaveBeenCalledWith(expect.stringContaining("#4288"));
+		} finally {
+			warning.mockRestore();
 		}
 	});
 });

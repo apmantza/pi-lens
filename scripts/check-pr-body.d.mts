@@ -31,6 +31,7 @@ export declare function lintPrBody(
 		headFiles?: Map<string, string>;
 		testCorpus?: { paths: Set<string>; titles: Set<string> };
 		proseMode?: "block" | "warn";
+		bugClosing?: boolean;
 	},
 ): {
 	valid: boolean;
@@ -40,6 +41,13 @@ export declare function lintClassSweep(
 	body?: string,
 	options?: { diff?: string },
 ): string[];
+export declare const DETECTION_LAYERS: readonly string[];
+export declare const DETECTION_MESSAGE: string;
+export declare function lintDetectionSection(body?: string): string[];
+export declare function resolveBugClosing(
+	body: string,
+	fetchImpl?: typeof fetch,
+): Promise<boolean | null>;
 export declare function testCorpus(options?: {
 	cwd?: string;
 	workingTree?: boolean;
@@ -58,6 +66,8 @@ export declare function lintLocalPrBody(
 		ref?: string;
 		headFiles?: Map<string, string>;
 		proseMode?: "block" | "warn";
+		bugClosing?: boolean | null;
+		resolveBugClosing?: (body: string) => boolean | null;
 	},
 ): { valid: boolean; errors: string[] };
 export declare function parseRuntimeHunks(diff: string): Array<{
@@ -98,6 +108,7 @@ export declare function resolveTouchesTests(
 export declare function lintPullRequestEvent(
 	fetchImpl?: typeof fetch,
 	event?: { pull_request?: { number: number; body?: string | null } },
+	diffImpl?: () => string,
 ): Promise<{ valid: boolean; repaired: boolean }>;
 export declare function localDiff(
 	cwd?: string,

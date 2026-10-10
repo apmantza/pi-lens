@@ -65,6 +65,21 @@ const EXPECTED_PERMISSIONS: Record<
 			sync: { contents: "read", issues: "write" },
 		},
 	},
+	// #4288 R7: `pr-body-lint` reads the closed issue's labels, so it needs
+	// issues:read; the title job reads only the PR and the close-keyword job only
+	// the body. Pin every job so a later edit cannot silently drop the read.
+	".github/workflows/pr-metadata.yml": {
+		workflow: {},
+		jobs: {
+			"pr-title-lint": { contents: "read", "pull-requests": "read" },
+			"pr-body-lint": {
+				contents: "read",
+				"pull-requests": "read",
+				issues: "read",
+			},
+			"close-keyword-lint": { "pull-requests": "read" },
+		},
+	},
 };
 
 describe("GitHub Actions workflow permissions", () => {
