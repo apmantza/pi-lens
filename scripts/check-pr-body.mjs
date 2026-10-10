@@ -16,6 +16,7 @@ import {
 	lintCloseKeywordPlacement,
 	lintCloseKeywords,
 } from "./lib/close-keywords.mjs";
+import { checkProse, proseSections } from "./check-prose.mjs";
 
 const TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
 const TEMPLATE_FILE = resolve(
@@ -969,15 +970,19 @@ function codeSpanMasked(text) {
 	);
 }
 
-function endsSentence(text, index) {
+function endsSentence(text, index, original = text) {
 	const char = text[index];
 	if (!".!?".includes(char)) return false;
 	if (char === "." && (text[index - 1] === "." || text[index + 1] === "."))
 		return false;
 	const next = text[index + 1] ?? "";
 	if (next && !/\s/.test(next)) return false;
-	const following = text.slice(index + 1).match(/\S/)?.[0];
-	return following === undefined || /[A-Z]/.test(following);
+	const remainder = original.slice(index + 1);
+	const following = remainder.match(/\S/)?.[0];
+	if (following === undefined || /[A-Z]/.test(following)) return true;
+	const afterWhitespace = remainder.replace(/^\s+/, "");
+	if (afterWhitespace.startsWith("`")) return true;
+	return /^\d/.test(afterWhitespace);
 }
 
 function splitMarkdownSentences(text) {
@@ -985,7 +990,7 @@ function splitMarkdownSentences(text) {
 	let start = 0;
 	const masked = codeSpanMasked(text);
 	for (let index = 0; index < text.length; index += 1) {
-		if (endsSentence(masked, index)) {
+		if (endsSentence(masked, index, text)) {
 			sentences.push({ text: text.slice(start, index + 1), start });
 			start = index + 1;
 		}
@@ -999,7 +1004,7 @@ function countSentenceTerminators(lines) {
 	let count = 0;
 	const masked = codeSpanMasked(lines.join("\n").trim());
 	for (let index = 0; index < masked.length; index += 1) {
-		if (endsSentence(masked, index)) count += 1;
+		if (endsSentence(masked, index, lines.join("\n").trim())) count += 1;
 	}
 	return count;
 }
@@ -1944,6 +1949,14 @@ export function lintPrBody(body = "", options = {}) {
 	errors.push(...lintTestReferences(body, options));
 	errors.push(...lintMasterClaims(body));
 	errors.push(...lintShellExpansionGarble(body));
+	const prose = checkProse(proseSections(body), {
+		// Historical structural fixtures call lintPrBody without workingTree.
+		// Keep those calls advisory; local and event gates set workingTree and block.
+		mode: options.proseMode ?? (options.workingTree ? "block" : "warn"),
+	});
+	errors.push(...prose.errors.map((error) => `PR body prose ${error}`));
+	for (const warning of prose.warnings)
+		console.warn(`PR body prose warning: ${warning}`);
 	return { valid: errors.length === 0, errors };
 }
 
@@ -2107,6 +2120,9 @@ export async function lintPullRequestEvent(
 		requireTestAssessment,
 		diff,
 		workingTree: true,
+		// Existing open bodies were authored before #4280. Set PI_LENS_PROSE_GRACE=1
+		// for the transition job; local preflight remains blocking by default.
+		proseMode: process.env.PI_LENS_PROSE_GRACE === "1" ? "warn" : "block",
 	});
 	const classSweep = lintClassSweep(body, { diff });
 	if (classSweep.length) {
@@ -2314,6 +2330,7 @@ export function lintLocalPrBody(
 		workingTree: true,
 		ref: options.ref,
 		headFiles: options.headFiles,
+		proseMode: options.proseMode,
 	});
 	const classSweep = lintClassSweep(body, { diff });
 	if (classSweep.length) {
@@ -2358,6 +2375,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 	const refIndex = process.argv.indexOf("--ref");
 	const title = titleIndex === -1 ? "" : process.argv[titleIndex + 1];
 	const ref = refIndex === -1 ? undefined : process.argv[refIndex + 1];
+	const proseMode = process.argv.includes("--prose-grace") ? "warn" : "block";
 	if (titleIndex !== -1 && !title) throw new Error("--title requires text");
 	if (refIndex !== -1 && !ref) throw new Error("--ref requires a revision");
 	if (bodyIndex !== -1) {
@@ -2369,7 +2387,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 			readFileSync(bodyPath, "utf8"),
 			process.cwd(),
 			gitExecFileSync,
-			{ title, ref },
+			{ title, ref, proseMode },
 		);
 		for (const error of result.errors) console.error(error);
 		process.exitCode = result.valid ? 0 : 1;
@@ -2380,7 +2398,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 			readFileSync(bodyPath, "utf8"),
 			process.cwd(),
 			gitExecFileSync,
-			{ title, ref },
+			{ title, ref, proseMode },
 		);
 		for (const error of result.errors) console.error(error);
 		process.exitCode = result.valid ? 0 : 1;

@@ -13,7 +13,8 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	safeSpawnAsync,
 }));
-vi.mock("../../../../clients/tool-probe.js", () => ({
+vi.mock("../../../../clients/tool-probe.js", async (importOriginal) => ({
+	...(await importOriginal<Record<string, unknown>>()),
 	probeToolAsync: vi.fn(async () => ({
 		error: new Error("unavailable"),
 		status: null,

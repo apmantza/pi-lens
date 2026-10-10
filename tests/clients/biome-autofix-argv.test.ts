@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const safeSpawnAsync = vi.fn();
@@ -19,6 +20,9 @@ vi.mock("../../clients/installer/index.js", () => ({ ensureTool }));
 // monorepo doesn't get biome's "Found a nested root configuration" error.
 describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)", () => {
 	beforeEach(() => {
+		// The suite pins argv order and the forwarded dispatch cwd for a resolved
+		// project binary, so it runs trusted.
+		setProjectTrustState("trusted");
 		vi.resetAllMocks();
 		ensureTool.mockResolvedValue(null);
 		safeSpawnAsync.mockResolvedValue({
@@ -37,6 +41,13 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 			const filePath = path.join(tmpDir, "src", "app.ts");
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
 			fs.writeFileSync(filePath, "const x = 1;\n");
+			// A trusted project resolves its own biome, so the forwarded dispatch cwd
+			// is the one the child starts in. Without it the client falls back to npx
+			// and starts in the neutral pi-lens-owned cwd (#4268 acceptance 3).
+			const tmpBin = path.join(tmpDir, "node_modules", ".bin");
+			fs.mkdirSync(tmpBin, { recursive: true });
+			fs.writeFileSync(path.join(tmpBin, "biome"), "");
+			fs.writeFileSync(path.join(tmpBin, "biome.cmd"), "");
 
 			const { BiomeClient } = await import("../../clients/biome-client.js");
 			const client = new BiomeClient();
@@ -79,6 +90,10 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
 			fs.writeFileSync(path.join(packageDir, "biome.json"), "{}\n");
 			fs.writeFileSync(filePath, "const x = 1;\n");
+			const pkgBin = path.join(packageDir, "node_modules", ".bin");
+			fs.mkdirSync(pkgBin, { recursive: true });
+			fs.writeFileSync(path.join(pkgBin, "biome"), "");
+			fs.writeFileSync(path.join(pkgBin, "biome.cmd"), "");
 
 			const { BiomeClient } = await import("../../clients/biome-client.js");
 			await new BiomeClient().fixFileAsync(filePath, tmpDir);

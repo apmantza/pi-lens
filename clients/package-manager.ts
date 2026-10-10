@@ -17,6 +17,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { resolve as resolvePath } from "node:path";
 import {
 	type AvailabilityLatch,
 	classifyProbeFailure,
@@ -33,6 +34,9 @@ import {
 	type GenerationHandle,
 } from "./generation-guard.js";
 import { isAtOrAboveHomeDir, isUnderDir, walkUpDirs } from "./path-utils.js";
+import { getProjectTrustState } from "./project-trust.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
+import { logExtension } from "./extension-log.js";
 
 export type NodePackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
@@ -557,6 +561,54 @@ export const PROJECT_LOCAL_BIN_DIRS: readonly string[] = [
 	...VENV_BIN_DIRS,
 ];
 
+/** A local candidate was present, but pi's trust policy refused its use. */
+export interface LocalBinTrustRefusal {
+	readonly kind: "refused-by-trust";
+	readonly tool: string;
+	readonly root: string;
+	readonly trust: "untrusted" | "unknown";
+}
+
+export type LocalBinLookup = string | LocalBinTrustRefusal;
+
+export function isLocalBinTrustRefusal(
+	value: LocalBinLookup | undefined,
+): value is LocalBinTrustRefusal {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		value.kind === "refused-by-trust"
+	);
+}
+
+export function localBinPath(
+	value: LocalBinLookup | undefined,
+): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function refuseLocalBin(tool: string, root: string): LocalBinTrustRefusal {
+	const trust = getProjectTrustState() as "untrusted" | "unknown";
+	const resolvedRoot = resolvePath(root);
+	const subject = `project-local-binary:${resolvedRoot}:${tool}`;
+	if (
+		recordDegradationOnce({
+			kind: "trust-refusal",
+			subject,
+			reason: `project-local binary refused: pi project trust is ${trust}`,
+		})
+	) {
+		logExtension({
+			subsystem: "project-trust",
+			level: "warn",
+			message:
+				"project-local binary refused: mark the project trusted in pi or upgrade pi",
+			metadata: { tool, root: resolvedRoot, trust },
+		});
+	}
+	return { kind: "refused-by-trust", tool, root: resolvedRoot, trust };
+}
+
 /** Keep trust classification beside the resolver's canonical directory set. */
 export function isProjectLocalBinPath(
 	resolvedCommand: string,
@@ -726,13 +778,17 @@ export function findLocalBinUpwards(
 	tool: string,
 	startDir: string,
 	options: LocalBinWalkOptions = {},
-): string | undefined {
+): LocalBinLookup | undefined {
 	// `.next().value`, not a `for…of` that returns on its first iteration: the
 	// latter is a single-iteration loop (SonarCloud S1751, and it reads as one
 	// too). The generator is simply left suspended after the first match — it
 	// holds no resource that needs closing, which is exactly why the walk above
 	// never stats an ancestor beyond the hit.
-	return localBinMatches([tool], startDir, options).next().value;
+	const match = localBinMatches([tool], startDir, options).next().value;
+	if (match === undefined || options.ceiling === false) return match;
+	if (getProjectTrustState() !== "trusted")
+		return refuseLocalBin(tool, startDir);
+	return match;
 }
 
 /**
@@ -755,8 +811,16 @@ export function findLocalBinsUpwards(
 	tools: readonly string[],
 	startDir: string,
 	options: LocalBinWalkOptions = {},
-): string[] {
-	return [...localBinMatches(tools, startDir, options)];
+): LocalBinLookup[] {
+	const matches = [...localBinMatches(tools, startDir, options)];
+	if (
+		matches.length === 0 ||
+		options.ceiling === false ||
+		getProjectTrustState() === "trusted"
+	) {
+		return matches;
+	}
+	return [refuseLocalBin(tools.join(","), startDir)];
 }
 
 /**
@@ -780,14 +844,17 @@ export function findLocalBinsAt(
 		LocalBinWalkOptions,
 		"windowsExt" | "binDirs" | "isWindows"
 	> = {},
-): string[] {
+): LocalBinLookup[] {
 	const {
 		windowsExt = ".cmd",
 		binDirs = NODE_MODULES_BIN_DIRS,
 		isWindows = onWindows(),
 	} = options;
 	const names = expandCandidateNames(tools, windowsExt, isWindows);
-	return [...matchesInDir(path.resolve(dir), names, binDirs)];
+	const matches = [...matchesInDir(path.resolve(dir), names, binDirs)];
+	if (matches.length === 0 || getProjectTrustState() === "trusted")
+		return matches;
+	return [refuseLocalBin(tools.join(","), dir)];
 }
 
 /** The nearest — i.e. first-listed — `<dir>/<binDir>/<tool>` match, or `undefined`. */
@@ -798,8 +865,9 @@ export function findLocalBinAt(
 		LocalBinWalkOptions,
 		"windowsExt" | "binDirs" | "isWindows"
 	> = {},
-): string | undefined {
-	return findLocalBinsAt([tool], dir, options)[0];
+): LocalBinLookup | undefined {
+	const match = findLocalBinsAt([tool], dir, options)[0];
+	return match;
 }
 
 /**
@@ -819,7 +887,7 @@ export async function findNodeToolBinary(
 	windowsExt = ".cmd",
 ): Promise<string | undefined> {
 	return (
-		findLocalBinUpwards(tool, cwd, { windowsExt }) ??
+		localBinPath(findLocalBinUpwards(tool, cwd, { windowsExt })) ??
 		(await findGlobalBinary(tool, windowsExt))
 	);
 }

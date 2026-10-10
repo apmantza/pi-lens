@@ -38,7 +38,7 @@ import {
 } from "./dispatch/runners/utils/availability-policy.js";
 import { spawnFailedWithNoOutput } from "./dispatch/runners/utils/spawn-outcome.js";
 import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
-import { findLocalBinUpwards } from "./package-manager.js";
+import { findLocalBinUpwards, localBinPath } from "./package-manager.js";
 import { logSessionStart } from "./sessionstart-logger.js";
 
 // --- Types ---
@@ -229,7 +229,7 @@ export type KnipBinarySource = "project" | "global" | "managed-or-path";
  * add spawns a probe per package manager, and this runs on every analyze().
  */
 export function resolveProjectKnipBinary(targetDir: string): string | null {
-	return findLocalBinUpwards("knip", targetDir) ?? null;
+	return localBinPath(findLocalBinUpwards("knip", targetDir)) ?? null;
 }
 
 /**

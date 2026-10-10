@@ -212,3 +212,11 @@ merge-order interactions with other open PRs, plus:
 - Cleared categories (one compact list) and exact-head identity.
 
 Use short, active, plain prose.
+
+## Documentation and prose standard
+
+Apply this standard to PR and issue bodies, review comments, commit messages, documentation, and changelog entries. Lead with the outcome. Remove words that do no work. Use active voice and present tense. Use second person for instructions, and use the imperative for steps. Keep one idea per sentence, with about 20–25 words and no more than 30 words. Use consistent terminology and sentence-case headings. Define acronyms on first use. Prefer plain words over jargon. Avoid `please`, filler, noun piles, nested parentheticals, and em-dash chains. Use the Oxford comma.
+
+The mechanical rules are checked by `scripts/check-prose.mjs`. The checker ignores fenced code, inline code, URLs, quoted log lines, blockquotes, and tables. It blocks long sentences, filler, and title-case headings. It warns on passive voice. The CLI accepts a body file or standard input and supports `--json`.
+
+Reviewers judge clarity, terminology, active voice, sentence structure, and whether each list uses parallel grammar. Treat a mechanically clean result as necessary, not sufficient. Report prose that obscures the outcome or makes a user infer the action.

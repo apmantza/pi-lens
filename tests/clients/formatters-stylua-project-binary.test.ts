@@ -12,11 +12,16 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { styluaFormatter } from "../../clients/formatters.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const tmpDirs: string[] = [];
+
+// The suite plants a project-local shim on purpose; the trust gate itself is
+// witnessed in `project-local-bin-trust.test.ts`.
+beforeEach(() => setProjectTrustState("trusted"));
 
 afterEach(() => {
 	while (tmpDirs.length > 0) {

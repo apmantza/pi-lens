@@ -2265,7 +2265,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `runFormatPhase` used to await it before the resolution (pipeline.ts
 	// below loses that await). The wait is the fix: an agent edit of the same
 	// file finishes first. The run is inside the format service's `bounded()`.
-	"clients/formatters.ts": 116,
+	// 116 → 118 (#4268): `resolveNpxFallback` resolves a cache-only npx fallback
+	// to a pi-lens-managed binary before the run, so it awaits the lazy installer
+	// import and `ensureTool`. Neither can take a hook signal: the resolver runs
+	// inside the format service's own `bounded()` call, and the formatter seam
+	// carries no `AbortSignal` until #2523 AC4 threads it through.
+	"clients/formatters.ts": 118,
 	"clients/gitleaks-client.ts": 4,
 	// #1892: the turn-end secrets LANE, extracted out of `runtime-turn.ts` with
 	// no behaviour change. Its one unbounded await is `collect`'s

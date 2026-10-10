@@ -802,7 +802,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-tool-logger.ts": 3,
 		"clients/atomic-write-staging.ts": 2,
 		"clients/bash-file-access.ts": 9,
-		"clients/biome-client.ts": 10,
+		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
+		// shared `findLocalBinAt` trust seam, one construction site for the shim.
+		"clients/biome-client.ts": 7,
 		"clients/blocker-freshness.ts": 4,
 		// 5 -> 6 (#3594): the remembered-holder skip's degradation `subject`,
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
@@ -894,7 +896,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 23 -> 30 (#2660): the resolver now carries its selected `path` and
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
+		// stop building `.bin` paths by hand and route through the shared lookup.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 28,
 		"clients/dispatch/runners/vale.ts": 7,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 7,
 		"clients/dispatch/runners/yamllint.ts": 3,

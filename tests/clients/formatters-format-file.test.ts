@@ -10,6 +10,25 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	which: vi.fn(async () => "/usr/bin/terragrunt"),
 }));
 
+// This suite pins formatter resolution and cwd behavior; the trust gate itself
+// is witnessed in `package-manager.test.ts`. `vi.resetModules()` in `beforeEach`
+// re-evaluates the graph, so the trust answer is mocked rather than latched.
+vi.mock("../../clients/project-trust.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/project-trust.js")>()),
+	getProjectTrustState: () => "trusted",
+}));
+
+// `resolveNpxFallback` installs the package through `ensureTool`; the spy lets
+// each case choose whether the fallback RESOLVES (and runs the binary from the
+// project cwd) or stays npx (neutral cwd).
+const ensureTool = vi.hoisted(() => vi.fn());
+vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/installer/index.js")
+	>()),
+	ensureTool,
+}));
+
 async function loadFormatFile() {
 	const mod = await import("../../clients/formatters.js");
 	return {
@@ -345,6 +364,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
+		ensureTool.mockReset();
 	});
 
 	it("does not spawn any command when the resolver refuses to format", async () => {
@@ -441,13 +461,15 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 		}
 	});
 
-	it("uses the npx fallback when the primary is unavailable and the file is not gated", async () => {
+	it("resolves the npx fallback to the managed binary and runs it from the project root", async () => {
 		const env = setupTestEnvironment("pi-lens-format-npx-available-");
 		try {
 			writeNodeAgreementEvidence(env, "prettier");
 			const filePath = path.join(env.tmpDir, "formatted.js");
 			fs.writeFileSync(filePath, "const value = 1;\n");
 			fs.writeFileSync(path.join(env.tmpDir, ".gitignore"), "ignored.md\n");
+			const managed = path.join(env.tmpDir, "managed", "prettier");
+			ensureTool.mockResolvedValue(managed);
 			const mod = await import("../../clients/formatters.js");
 			const formatter = {
 				...mod.prettierFormatter,
@@ -462,11 +484,45 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 				changed: false,
 				outcome: "unchanged",
 			});
+			// The resolved binary runs with the PROJECT cwd so cwd-relative
+			// `.prettierignore` discovery still applies (#4268 HIGH-2).
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
-				"npx",
-				["prettier", "--write", filePath],
+				managed,
+				["--write", filePath],
 				expect.objectContaining({ cwd: env.tmpDir }),
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("runs an unresolved npx fallback from the neutral pi-lens-owned cwd", async () => {
+		const env = setupTestEnvironment("pi-lens-format-npx-neutral-");
+		try {
+			writeNodeAgreementEvidence(env, "prettier");
+			const filePath = path.join(env.tmpDir, "formatted.js");
+			fs.writeFileSync(filePath, "const value = 1;\n");
+			ensureTool.mockResolvedValue(undefined);
+			const mod = await import("../../clients/formatters.js");
+			const formatter = {
+				...mod.prettierFormatter,
+				resolveCommand: async () => null,
+			};
+			safeSpawnAsync.mockResolvedValue({ status: 0, stdout: "", stderr: "" });
+
+			const result = await mod.formatFile(filePath, formatter);
+
+			expect(result.outcome).toBe("unchanged");
+			const npxCall = safeSpawnAsync.mock.calls.find(
+				(call: unknown[]) => call[0] === "npx",
+			) as [string, string[], { cwd?: string }];
+			expect(npxCall).toBeDefined();
+			// The cache-only fallback never reads the project's `.npmrc`: it runs
+			// from the pi-lens-owned cwd. The child environment's `npm_config_*`
+			// removal is witnessed at the process boundary in
+			// `npx-child-env-isolation.test.ts`; an assertion on the options object
+			// here cannot see the spawn merge (`getSpawnEnvironment`).
+			expect(npxCall[2].cwd).not.toBe(env.tmpDir);
 		} finally {
 			env.cleanup();
 		}

@@ -17,7 +17,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Controllable `os.homedir()` override — `vi.spyOn(os, "homedir")` fails
 // under Vitest's ESM interop ("Cannot redefine property"), so the module is
@@ -36,11 +36,16 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 import { phpCsFixerFormatter } from "../../clients/formatters.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { resolvePhpCsFixerConfig } from "../../clients/php-cs-fixer-config.js";
 import { hasPhpCsFixerConfig } from "../../clients/tool-policy.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const isWin = process.platform === "win32";
+
+// The suite plants a project-local vendor binary on purpose; the trust gate
+// itself is witnessed in `project-local-bin-trust.test.ts`.
+beforeEach(() => setProjectTrustState("trusted"));
 
 const tmpDirs: string[] = [];
 

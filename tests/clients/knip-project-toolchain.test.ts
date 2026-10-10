@@ -20,6 +20,7 @@ import {
 	resolveProjectKnipConfig,
 } from "../../clients/knip-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 
 vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync: vi.fn(async () => ({
@@ -90,6 +91,7 @@ async function toolchainRows(): Promise<string[]> {
 
 describe("knip project-toolchain resolution (#1721)", () => {
 	beforeEach(async () => {
+		setProjectTrustState("trusted");
 		const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
 		const { logSessionStart } =
 			await import("../../clients/sessionstart-logger.js");

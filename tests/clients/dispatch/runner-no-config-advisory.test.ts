@@ -32,6 +32,7 @@ import {
 	flushExtensionLog,
 	getExtensionLogPath,
 } from "../../../clients/extension-log.js";
+import { setProjectTrustState } from "../../../clients/project-trust.js";
 import {
 	noteSpawnTimeout,
 	resetSpawnTimeoutCooldowns,
@@ -94,6 +95,7 @@ function register(
 }
 
 beforeEach(() => {
+	setProjectTrustState("trusted");
 	tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2811-"));
 	savedEnv.PI_LENS_TEST_MODE = process.env.PI_LENS_TEST_MODE;
 	process.env.PI_LENS_TEST_MODE = "0";
