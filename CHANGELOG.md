@@ -26,7 +26,7 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Path-scoped rule policy** — Add `rules.<id>.ignorePaths` to skip a rule on matching project-relative paths and reclaim scan work (#4226).
 
-- **Analyse marked out-of-root edits as adopted projects.** pi-lens can deliver LSP diagnostics and per-file linting for a separate project while keeping project-local tools and session bookkeeping isolated (closes #4242).
+- **Analyse marked out-of-root edits as adopted projects.** An edit in a separate project gets LSP diagnostics from global servers, while project-local tools, linters and session bookkeeping stay isolated (refs #4242).
 
 - **`/lens-health` now reports the effective pi-lens tool surface**, including disabled tools and the host-managed bundled-skill boundary.
 
