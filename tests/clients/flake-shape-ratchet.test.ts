@@ -941,8 +941,8 @@ function describeProblem(p: RatchetProblem): string {
 const WALK_TIMEOUT_MS = 180_000;
 
 describe("flake-shape ratchet (#2547)", () => {
-	beforeAll(() => {
-		for (const detector of DETECTOR_NAMES) countsByDetector(detector);
+	beforeAll(async () => {
+		for (const detector of DETECTOR_NAMES) await countsByDetector(detector);
 	}, WALK_TIMEOUT_MS);
 
 	it("keeps every admission map sorted", () => {
@@ -964,10 +964,10 @@ describe("flake-shape ratchet (#2547)", () => {
 	});
 	it.each(DETECTOR_NAMES)(
 		"detector %s: no new files, no risen counts vs. the baseline",
-		(detector) => {
+		async (detector) => {
 			const problems = auditAgainstBaseline(
 				detector,
-				countsByDetector(detector),
+				await countsByDetector(detector),
 			);
 			expect(problems.map(describeProblem)).toEqual([]);
 		},
@@ -976,14 +976,14 @@ describe("flake-shape ratchet (#2547)", () => {
 
 	// Whole-tree scan performs AST parsing and can exceed Vitest's default under
 	// CI contention (run 34195211598, head 5c0aa5a4).
-	it("the baseline names no file that has vanished from the live scan", () => {
+	it("the baseline names no file that has vanished from the live scan", async () => {
 		// Stated asymmetrically on purpose (see module doc): a count FALLING is
 		// not a failure above, but a baseline entry for a file the scan no
 		// longer touches AT ALL is dead weight worth flagging here, same as
 		// `auditRegistry`'s stale-exemption check one layer up.
 		const stale: string[] = [];
 		for (const detector of DETECTOR_NAMES) {
-			const live = countsByDetector(detector);
+			const live = await countsByDetector(detector);
 			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
 				if (!(file in live)) stale.push(`${detector}:${file}`);
 			}
@@ -1597,26 +1597,23 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		expect(scanRawTimerWait("interleaving-kit.ts", source)).toEqual([]);
 	});
 
-	it("(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population", () => {
+	it("(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population", async () => {
 		// Mutation-sensitive population proof: dropping the support walk from
 		// countsByDetector makes this red. fault-injection.ts is the one
 		// existing helper the extended scan flags (its sanctioned delayInside
 		// timer + teardown failsafe are baselined, not admitted).
-		expect(countsByDetector("raw-timer-wait")).toHaveProperty(
+		expect(await countsByDetector("raw-timer-wait")).toHaveProperty(
 			"support/fault-injection.ts",
 		);
 	});
 
-	it("(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary", () => {
+	it("(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary", async () => {
 		// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
 		// node:child_process by design — they are the fixture boundary the
 		// test-side detector routes callers toward, not a flake shape.
-		expect(
-			countsByDetector("real-process-spawn")["support/git-fixture-env.ts"],
-		).toBeUndefined();
-		expect(
-			countsByDetector("real-process-spawn")["support/fake-child.ts"],
-		).toBeUndefined();
+		const spawnCounts = await countsByDetector("real-process-spawn");
+		expect(spawnCounts["support/git-fixture-env.ts"]).toBeUndefined();
+		expect(spawnCounts["support/fake-child.ts"]).toBeUndefined();
 	});
 
 	it("ATTACK (#2563): a raw timer inside a tests/support helper is a NEW flagged file", () => {
