@@ -1,11 +1,25 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fileUtils from "../../clients/file-utils.js";
 import { gatedPromise } from "../support/fault-injection.js";
 import {
 	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
 } from "./test-utils.js";
+
+// #4133: record the report-directory cleanup the scan-setup guard must reach.
+// The `node:fs` namespace is not spy-writable, so the seam is a delegating
+// `rmSync` mock that still performs the real removal.
+const { trackedRmSync } = vi.hoisted(() => ({
+	trackedRmSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	trackedRmSync.mockImplementation(actual.rmSync);
+	return { ...actual, rmSync: trackedRmSync };
+});
 
 const ensureTool = vi.fn();
 const findNodeToolBinary = vi.fn();
@@ -695,6 +709,51 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-", {
 				beforeDrain: () => client.shutdown(),
 			});
+		}
+	});
+});
+
+/**
+ * #4133: `runScan` creates its report directory before any project-controlled
+ * file is read. The ignore-pattern setup reads the project's `.gitignore` and
+ * lens config, so it must sit inside the cleanup guard: a throw there must
+ * still remove the directory. #4192's merge reverted this guard and dropped
+ * its regression; this re-pins both.
+ */
+describe("jscpd-client scan setup cleanup (#4133)", () => {
+	it("removes the report directory when scan setup throws", async () => {
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-setup-");
+		trackedRmSync.mockClear();
+		const ignoreGlobs = vi
+			.spyOn(fileUtils, "getProjectIgnoreGlobs")
+			.mockImplementationOnce(() => {
+				throw new Error("ignore setup failed");
+			});
+		try {
+			const client = new JscpdClient(false) as unknown as {
+				scan: (
+					cwd: string,
+					minLines: number,
+					minTokens: number,
+					isTsProject: boolean,
+				) => Promise<{ success: boolean }>;
+				ensureAvailable: () => Promise<boolean>;
+				hasSourceFilesRecursive: (dir: string) => boolean;
+			};
+			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+			vi.spyOn(client, "hasSourceFilesRecursive").mockReturnValue(true);
+
+			const result = await client.scan(tmpDir, 5, 50, false);
+
+			expect(result.success).toBe(false);
+			expect(trackedRmSync).toHaveBeenCalledWith(
+				expect.stringContaining(`${path.sep}pi-lens-jscpd-`),
+				{ recursive: true, force: true },
+			);
+		} finally {
+			ignoreGlobs.mockRestore();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});
 });
