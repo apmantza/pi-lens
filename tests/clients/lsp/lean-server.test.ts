@@ -36,4 +36,13 @@ describe("Lean Lake LSP server", () => {
 		});
 		expect(launchLSP).toHaveBeenCalledWith("lake", ["serve"], { cwd: root });
 	});
+
+	// #3750/#4119: `lake serve` cannot analyse a file outside a Lake project, so
+	// an empty answer under `RootWithFallback`'s fallback root is unconfirmed,
+	// not clean. Pin the trait on the registered row, not only the export.
+	it("declares requiresProjectRoot on the registry row", () => {
+		expect(
+			LSP_SERVERS.find((server) => server.id === "lean")?.requiresProjectRoot,
+		).toBe(true);
+	});
 });

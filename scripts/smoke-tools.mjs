@@ -957,6 +957,25 @@ const LSP_FIXTURES = [
 		tools: ["kotlin-language-server"],
 	},
 	{
+		// #4119: the Lean 4 language server is `lake serve`, supplied by the
+		// project's elan/Lake toolchain. pi-lens does not install or manage Lean
+		// (see docs/dependencies.md), and the nightly runner carries no elan, so
+		// the gate cannot drive a primary finding; the committed Lake project
+		// keeps the row durable so a provisioned host completes the handshake.
+		// The launch executes the project's `lakefile.lean` (project code) under
+		// host trust — the shared field for that class is #4269, not a
+		// Lean-specific branch, so this row stays exempt with the same
+		// availability limit elixir/rust record (#3311).
+		lspGateExempt:
+			"availability limit: `lake serve` comes from a user-managed elan/Lake toolchain the nightly runner does not provision (no installer-registry entry; docs/dependencies.md PATH-only Lean row), so the gate cannot drive a primary finding; the fixture stays durable for a provisioned host; see #4119, #4269",
+		lspGateMarker: '"not a natural number"',
+		lang: "lean",
+		dir: "tests/fixtures/tool-smoke/lean",
+		file: "Main.lean",
+		serverHint: "lake serve (Lean 4)",
+		tools: [],
+	},
+	{
 		lang: "swift",
 		lspGate: true,
 		lspGateMarker: 'let gateSeed: Int = "not a number"',

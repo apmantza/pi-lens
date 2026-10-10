@@ -3422,6 +3422,9 @@ export const LeanServer = createInteractiveServer({
 	extensions: KIND_EXTENSIONS.lean,
 	root: RootWithFallback(createRootDetector([...LEAN_ROOT_MARKERS])),
 	language: "lean",
+	// Documented (#3750): `lake serve` analyses a file only when a Lake project
+	// roots it; a root-fallback empty answer is unconfirmed, not clean.
+	requiresProjectRoot: true,
 	command: "lake",
 	args: ["serve"],
 });
