@@ -20,6 +20,8 @@ import {
 	tmpHygieneExcludeLiveOwnerEntries,
 	tmpHygieneForeignRunEntries,
 	tmpHygieneRunFiles,
+	tmpHygieneCreators,
+	formatTmpHygieneLeakEntry,
 	tmpHygieneSweepableEntries,
 	tmpHygieneWaitForOwnerDrain,
 	tmpHygieneUnadmittedEntries,
@@ -39,6 +41,10 @@ import {
 	type TmpHygieneProcessProbe,
 } from "../support/vitest-setup.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
+import {
+	getTmpRootRegistry,
+	recordedTmpRootCreators,
+} from "../support/tmp-root-registry.js";
 import { getLatencyLogPath } from "../../clients/latency-logger.js";
 import {
 	buildProjectSnapshotFromRuntime,
@@ -414,10 +420,14 @@ describe("tmp-fixture-hygiene", () => {
 			ownerForTmpEntry,
 			liveOwners,
 		);
-		const described = attributable.map((entry) => {
-			const owner = ownerForTmpEntry(entry);
-			return `${entry} (owner: tests/${owner ?? "unknown"})`;
-		});
+		const creators = tmpHygieneCreators();
+		const described = attributable.map((entry) =>
+			formatTmpHygieneLeakEntry(
+				entry,
+				ownerForTmpEntry(entry),
+				creators.get(entry),
+			),
+		);
 		// #3715: the repo root is a second namespace the tmp census does not see.
 		const rootCensus = unadmittedRepoRootEntries(repoRootBaseline());
 		if (rootCensus.unknown)
@@ -1323,7 +1333,8 @@ describe("tmp-fixture-hygiene", () => {
 			// #3332: a skipped file or killed worker never reaches teardown, so its
 			// marker and run manifest used to accumulate under the persistent home.
 			// The current run stays protected by name, while a fresh sibling stays
-			// protected by age (#3314).
+			// protected by age (#3314). #4307-2: the #2912 creators record is reaped
+			// on the same window, so a targeted run leaves neither record behind.
 			const ownerDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-tmp-reap-owners-"),
 			);
@@ -1336,18 +1347,22 @@ describe("tmp-fixture-hygiene", () => {
 			try {
 				for (const run of ["one", "two", "three"]) {
 					process.env.PI_LENS_TMP_HYGIENE_RUN_ID = `reap-3332-${run}`;
-					const marker = path.join(
-						ownerDir,
-						`${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}-1.json`,
-					);
+					const runId = process.env.PI_LENS_TMP_HYGIENE_RUN_ID;
+					const marker = path.join(ownerDir, `${runId}-1.json`);
 					const manifest = path.join(
 						recordDir,
-						`tmp-hygiene-files-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}.log`,
+						`tmp-hygiene-files-${runId}.log`,
+					);
+					const creators = path.join(
+						recordDir,
+						`tmp-hygiene-creators-${runId}.log`,
 					);
 					fs.writeFileSync(marker, JSON.stringify({ pid: 1, file: OWNER }));
 					fs.writeFileSync(manifest, `${OWNER}\n`);
+					fs.writeFileSync(creators, `pi-lens-reap-${run}\t${OWNER}\n`);
 					fs.utimesSync(marker, old, old);
 					fs.utimesSync(manifest, old, old);
+					fs.utimesSync(creators, old, old);
 					reapStaleTmpHygieneRecords(ownerDir, recordDir, now);
 				}
 				const freshMarker = path.join(ownerDir, "reap-3332-fresh-1.json");
@@ -1355,14 +1370,21 @@ describe("tmp-fixture-hygiene", () => {
 					recordDir,
 					"tmp-hygiene-files-reap-3332-fresh.log",
 				);
+				const freshCreators = path.join(
+					recordDir,
+					"tmp-hygiene-creators-reap-3332-fresh.log",
+				);
 				fs.writeFileSync(freshMarker, JSON.stringify({ pid: 1, file: OWNER }));
 				fs.writeFileSync(freshManifest, `${OWNER}\n`);
+				fs.writeFileSync(freshCreators, `pi-lens-fresh\t${OWNER}\n`);
 				reapStaleTmpHygieneRecords(ownerDir, recordDir, now);
 				expect(fs.readdirSync(ownerDir).sort()).toEqual([
 					"reap-3332-fresh-1.json",
 					"reap-3332-three-1.json",
 				]);
 				expect(fs.readdirSync(recordDir).sort()).toEqual([
+					"tmp-hygiene-creators-reap-3332-fresh.log",
+					"tmp-hygiene-creators-reap-3332-three.log",
 					"tmp-hygiene-files-reap-3332-fresh.log",
 					"tmp-hygiene-files-reap-3332-three.log",
 				]);
@@ -1726,6 +1748,82 @@ describe("tmp-fixture-hygiene", () => {
 			} finally {
 				fs.rmSync(fixture, { recursive: true, force: true });
 			}
+		});
+	});
+
+	// #2912 (2026-10-10): the owner must name the test file that CREATED a
+	// leaked entry, not the file whose declared prefix matches its name. The
+	// jscpd leak on #4122/#4285 was misattributed to
+	// tests/clients/jscpd-client.test.ts by prefix; the real producer was a
+	// real-pi child of tests/real-harness/outside-root.test.ts.
+	describe("owner attribution by creator (#2912)", () => {
+		const OWN = "config/tmp-fixture-hygiene.test.ts";
+		const FOREIGN_PREFIX_OWNER = "clients/jscpd-client.test.ts";
+		const FOREIGN_PREFIX = "pi-lens-jscpd-managed-";
+
+		it("names the creating test file beside the prefix owner", () => {
+			const entry = `${FOREIGN_PREFIX}AbCdEf`;
+			expect(formatTmpHygieneLeakEntry(entry, FOREIGN_PREFIX_OWNER, OWN)).toBe(
+				`${entry} (owner: tests/${FOREIGN_PREFIX_OWNER}; created by tests/${OWN})`,
+			);
+		});
+
+		it("labels an entry with no creator by both causes, never with a prefix owner", () => {
+			const entry = `${FOREIGN_PREFIX}AbCdEf`;
+			// #4307-4: `creator === undefined` is one state for a child-made entry
+			// and an unreadable record, so the label names both rather than
+			// asserting a child the record cannot prove.
+			expect(
+				formatTmpHygieneLeakEntry(entry, FOREIGN_PREFIX_OWNER, undefined),
+			).toBe(
+				`${entry} (created outside the test process, or the creators record was unreadable)`,
+			);
+		});
+
+		it("records this file as the creator of an entry another file's prefix names", () => {
+			// A real creation through the real interposer, not a synthetic map: one
+			// file's prefix on a name another file made is the acceptance shape.
+			// The prefix is spelled as a template with only an interpolation, so
+			// this file does NOT enter the owner index as a candidate: the prefix
+			// owner stays the other file, which is what makes the attribution test
+			// meaningful.
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${FOREIGN_PREFIX}`));
+			try {
+				const entry = path.basename(dir);
+				const creator =
+					recordedTmpRootCreators(getTmpRootRegistry()).get(entry);
+				expect(creator).toBe(OWN);
+				expect(ownerForTmpEntry(entry)).toBe(FOREIGN_PREFIX_OWNER);
+				expect(
+					formatTmpHygieneLeakEntry(entry, ownerForTmpEntry(entry), creator),
+				).toContain(`created by tests/${OWN}`);
+			} finally {
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		});
+
+		it("reads one creator per entry, keeps the first on a duplicate line, skips a malformed line, and is empty when absent", () => {
+			const file = path.join(
+				TMP_HYGIENE_HOME,
+				`tmp-hygiene-creators-probe-${process.pid}.log`,
+			);
+			fs.writeFileSync(
+				file,
+				"pi-lens-a\tfirst.test.ts\npi-lens-a\tsecond.test.ts\nmalformed-no-tab\npi-lens-b\tthird.test.ts\n",
+			);
+			try {
+				expect([...tmpHygieneCreators(file).entries()].sort()).toEqual([
+					["pi-lens-a", "first.test.ts"],
+					["pi-lens-b", "third.test.ts"],
+				]);
+			} finally {
+				fs.rmSync(file, { force: true });
+			}
+			expect(
+				tmpHygieneCreators(
+					path.join(TMP_HYGIENE_HOME, "no-such-creators-record.log"),
+				).size,
+			).toBe(0);
 		});
 	});
 });
