@@ -68,6 +68,20 @@ To see the resolved tool surface, use `/lens-health`; the `effective_config`
 tool provides the full configuration provenance. Bundled skills are managed by
 pi's package-manifest filters.
 
+### Session-start orientation
+
+The session-start orientation names only the tools pi-lens actually registered.
+A tool disabled with `tools.<name>.enabled: false` is never advertised, so the
+orientation cannot direct the agent to a tool it cannot call. The tool roster is
+the same registry that drives registration; there is no second list.
+
+`contextInjection.requirePreExistingFixes` (default `true`) controls one
+sentence in that orientation: whether pre-existing blocking errors must be
+fixed. Set it to `false` when the task's scope excludes pre-existing debt. The
+orientation then requires fixes only for blocking errors the agent's own edits
+introduce; pre-existing ones are reported, not demanded. It is a global setting,
+like every `contextInjection` key.
+
 ### `lsp.servers.<id>.covers` — declaring which runners a custom server subsumes
 
 A custom server entry accepts an optional `covers` array naming dispatch

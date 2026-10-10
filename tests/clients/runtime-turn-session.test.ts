@@ -24,7 +24,10 @@ import {
 	getLatencyLogPath,
 } from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { SESSION_START_GUIDANCE } from "../../clients/runtime-session.js";
+import {
+	renderSessionStartGuidance,
+	SESSION_START_GUIDANCE,
+} from "../../clients/runtime-session.js";
 import {
 	registerPrimarySession,
 	releasePrimarySession,
@@ -1342,6 +1345,61 @@ describe("context injection framing", () => {
 
 		// Stay lean: the orientation is a nudge, not re-documentation of every arg.
 		expect(text.length).toBeLessThan(750);
+	});
+
+	it("renders no tool the loaded set disabled (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: ["symbol_search", "module_report", "read_enclosing"],
+		}).join("\n");
+		// Every disabled tool is never mentioned; the tool that stayed enabled
+		// is still advertised, so the fix does not silence a whole bullet.
+		expect(text).not.toMatch(/\bsymbol_search\b/);
+		expect(text).not.toMatch(/\bmodule_report\b/);
+		expect(text).not.toMatch(/\bread_enclosing\b/);
+		expect(text).toContain("read_symbol");
+		expect(text).toContain("lens_diagnostics");
+		expect(text).toContain("lsp_navigation");
+	});
+
+	it("drops only the situational clauses whose member is disabled (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: ["ast_grep_search", "lens_diagnostics"],
+		}).join("\n");
+		expect(text).not.toMatch(/\bast_grep_search\b/);
+		expect(text).not.toMatch(/\blens_diagnostics\b/);
+		// The surviving situational members keep their bullet, without the
+		// ast_grep_search-only dump hint.
+		expect(text).toContain("lsp_navigation");
+		expect(text).toContain("ast_grep_replace");
+		expect(text).not.toContain("dump=true");
+	});
+
+	it("pins the all-enabled default byte-for-byte (#2967)", () => {
+		expect(renderSessionStartGuidance()).toEqual(SESSION_START_GUIDANCE);
+		expect(SESSION_START_GUIDANCE.join("\n")).toContain(
+			"symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.",
+		);
+		expect(renderSessionStartGuidance()).toEqual(
+			renderSessionStartGuidance({ disabledToolNames: [] }),
+		);
+	});
+
+	it("scopes the pre-existing-fix demand through the config boolean (#2967)", () => {
+		const shipped = renderSessionStartGuidance({
+			requirePreExistingFixes: true,
+		}).join("\n");
+		expect(shipped).toContain(
+			"blocking errors (including pre-existing) show inline and must be fixed.",
+		);
+		const scoped = renderSessionStartGuidance({
+			requirePreExistingFixes: false,
+		}).join("\n");
+		expect(scoped).not.toContain("including pre-existing");
+		expect(scoped).toContain(
+			"pre-existing ones are reported but not required.",
+		);
+		// The default is the shipped wording.
+		expect(renderSessionStartGuidance().join("\n")).toBe(shipped);
 	});
 });
 
