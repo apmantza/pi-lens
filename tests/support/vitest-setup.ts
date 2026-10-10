@@ -216,7 +216,7 @@ export function tmpHygieneRunFiles(
  * from the registry (one record per entry, never one per mkdtemp call), and
  * removed with the other per-run records in `cleanupTmpHygiene`.
  */
-const tmpHygieneCreatorsPath = path.join(
+export const tmpHygieneCreatorsPath = path.join(
 	path.dirname(tmpHygieneBaselinePath),
 	`tmp-hygiene-creators-${process.env.PI_LENS_TMP_HYGIENE_RUN_ID}.log`,
 );
@@ -244,10 +244,31 @@ function flushTmpRootCreators(): void {
 	}
 }
 
+/** Remove the run's creators record and close the flush. `cleanupTmpHygiene`
+ *  runs in the owner's afterAll, which runs BEFORE the setup's own afterAll
+ *  under the stack hook order; without the closed latch the setup flush would
+ *  recreate the record it just removed. Exported so the teardown test drives
+ *  the latch directly (#4307 sweep). */
+export function closeTmpHygieneCreators(): void {
+	try {
+		fs.rmSync(tmpHygieneCreatorsPath, { force: true });
+	} catch {
+		// A stale ignored record is harmless; the next run uses a new id.
+	} finally {
+		tmpHygieneCreatorsClosed = true;
+	}
+}
+
+/** Test seam (#4307 sweep): run the setup's flush so a test can prove the
+ *  closed latch suppresses it. */
+export function flushTmpRootCreatorsForTests(): void {
+	flushTmpRootCreators();
+}
+
 /** The observed creator of each leaked entry, keyed by entry name. An EMPTY map
  *  means nothing was recorded (a dead run, an unwritable home, or every entry
- *  made outside a test process), and the owner then uses the child label rather
- *  than a prefix guess. */
+ *  made outside a test process), and the owner then labels the entry by both
+ *  causes rather than a prefix guess. */
 export function tmpHygieneCreators(
 	creatorsPath: string = tmpHygieneCreatorsPath,
 ): Map<string, string> {
@@ -271,9 +292,12 @@ export function tmpHygieneCreators(
 /**
  * How one leaked entry is described in the hygiene owner's failure message:
  * the prefix owner beside the test file that ACTUALLY created it. An entry no
- * test-process interposer saw (a child process the run spawned) is labelled
- * `created outside the test process` instead of being given the prefix owner,
- * whose guess is exactly what sent #4122/#4285 to the wrong file.
+ * test-process interposer saw is labelled by BOTH causes that leave no creator
+ * on record -- a child process the run spawned, or a creators record this run
+ * could not read -- instead of being given the prefix owner, whose guess is
+ * exactly what sent #4122/#4285 to the wrong file. The two causes are one
+ * `creator === undefined` state here, so the label names both rather than
+ * asserting a child the record cannot prove (#4307-4).
  */
 export function formatTmpHygieneLeakEntry(
 	entry: string,
@@ -281,7 +305,7 @@ export function formatTmpHygieneLeakEntry(
 	creator: string | undefined,
 ): string {
 	if (creator === undefined)
-		return `${entry} (created outside the test process (child))`;
+		return `${entry} (created outside the test process, or the creators record was unreadable)`;
 	return `${entry} (owner: tests/${prefixOwner ?? "unknown"}; created by tests/${creator})`;
 }
 
@@ -1557,11 +1581,10 @@ export function cleanupTmpHygiene(
 	try {
 		fs.rmSync(tmpHygieneBaselinePath, { force: true });
 		fs.rmSync(tmpHygieneRunFilesPath, { force: true });
-		fs.rmSync(tmpHygieneCreatorsPath, { force: true });
-		tmpHygieneCreatorsClosed = true;
 	} catch {
 		// A stale ignored baseline is harmless; the next run uses a new id.
 	}
+	closeTmpHygieneCreators();
 	return reaped;
 }
 
