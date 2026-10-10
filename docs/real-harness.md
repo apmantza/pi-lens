@@ -12,6 +12,23 @@ process boundary that an in-process test cannot observe.
 4. Call `awaitToolResult("<tool>")` for every expected tool result.
 5. Add the test to `realHarnessInclude` and the real-process-spawn ratchet.
 
+## Persisted-session restart
+
+Pass `persistedSession: true` when a scenario must cross a process boundary.
+The harness creates `--session-dir <home>/sessions` and exposes `pi.resume()`;
+that operation closes stdin on the first child and starts a second child with
+the installed pi CLI's `--continue` flag. The RPC documentation defines
+`new_session` and `clone`, but no resume RPC; `--continue` is therefore the
+authoritative resume operation for this lane. `pi.quit()` closes stdin without
+removing the probe home, so final shutdown records can be read before the
+`withRealPi` cleanup.
+
+Before either orderly stdin close, the harness waits for `latency.log` to keep
+the same size and mtime for 250 ms, bounded by 5 seconds. This protects the
+logger's intentional exit-flush replay trade (#935): closing while its last
+async append is in flight can duplicate that final lifecycle row. A timeout is
+an explicit harness failure, not a reason to proceed with an unstable log.
+
 Scripts contain turns. Each turn contains text or typed tool-call actions.
 Malformed scripts fail validation before the child starts.
 

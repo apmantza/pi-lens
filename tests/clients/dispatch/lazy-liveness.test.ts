@@ -58,7 +58,7 @@ describe("dispatch session warm/first-use liveness (#1394)", () => {
 				},
 			}));
 		});
-		vi.doMock("../../../clients/lsp/index.js", () => ({
+		vi.doMock("../../../clients/lsp/capabilities.js", () => ({
 			getLSPService: () =>
 				makeLspServiceDouble({
 					touchFile: async () => [],

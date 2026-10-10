@@ -641,4 +641,72 @@ describe("#1714 — sweep notify volume must not out-run an auxiliary", () => {
 		).shutdown({ reason: "session_start" });
 		expect(inflight.size).toBe(0);
 	});
+
+	/**
+	 * #1756 stage 1 — the `replyOrdering` trait, proven in BOTH directions
+	 * (AGENTS.md shape 54: a one-direction proof leaves the branch untested).
+	 *
+	 * The barrier's round-trip is evidence only for a server that drains one
+	 * ordered message stream. A server that declares `"threaded"` answers
+	 * requests off a separate task, so the reply proves nothing and the gate
+	 * steps over it — reaching by declaration the same inert state it used to
+	 * reach only by measurement. `"single-task-ordered"` and the `unmeasured`
+	 * default keep it armed, so the trait cannot grant a pacing change by
+	 * omission.
+	 */
+	async function sweepWithReplyOrdering(replyOrdering: string | undefined) {
+		process.env.PI_LENS_LSP_AUX_NOTIFY_INFLIGHT = "4";
+		const aux = makeScanner("ast-grep");
+		const primary = makePrimary("typescript");
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("typescript"),
+			makeServer(
+				"ast-grep",
+				"auxiliary",
+				replyOrdering === undefined ? {} : { replyOrdering },
+			),
+		]);
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "ast-grep" ? aux : primary,
+		);
+		const service = await makeService();
+		const results = await sweep(service, sweepFiles(40));
+		return { aux, results, barriers: rowsFor("lsp_notify_inflight_barrier") };
+	}
+
+	it("spends no barrier round-trip on a server that declares threaded replies", async () => {
+		const { aux, results, barriers } = await sweepWithReplyOrdering("threaded");
+
+		// The round-trip is not evidence for this server, so none is spent and no
+		// barrier is recorded.
+		expect(aux.stats.pings).toBe(0);
+		expect(barriers).toHaveLength(0);
+		// Inert means the pre-#1714 notify sequence: every file still reaches the
+		// scanner, and nothing is reported as uncovered because of the gate.
+		expect(aux.stats.opens).toBe(40);
+		expect(
+			results.filter((r) => r?.unconfirmedServerIds?.includes("ast-grep")),
+		).toHaveLength(0);
+	});
+
+	it("keeps the barrier armed for a declared single-task-ordered server", async () => {
+		const { aux, barriers } = await sweepWithReplyOrdering(
+			"single-task-ordered",
+		);
+
+		expect(aux.stats.pings).toBeGreaterThan(0);
+		expect(barriers.length).toBeGreaterThan(0);
+		expect(aux.stats.opens).toBe(40);
+	});
+
+	it("keeps the barrier armed for a server that declares no reply ordering", async () => {
+		const { aux, barriers } = await sweepWithReplyOrdering(undefined);
+
+		// The fail-safe default: an unmeasured server is never granted a pacing
+		// change by omission.
+		expect(aux.stats.pings).toBeGreaterThan(0);
+		expect(barriers.length).toBeGreaterThan(0);
+		expect(aux.stats.opens).toBe(40);
+	});
 });

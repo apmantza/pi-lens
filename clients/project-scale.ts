@@ -7,7 +7,7 @@
  *
  *   - project-diagnostics scanner: 500 files  (clients/project-diagnostics/scanner.ts)
  *   - review graph:               1,000 files (clients/runtime-config.ts)
- *   - startup scan:               2,000 source files (clients/startup-scan.ts)
+ *   - startup scan:               2,500 source files (clients/startup-scan.ts)
  *   - jscpd:                      6,000 dir entries (clients/jscpd-client.ts)
  *   - word index:                 6,000 files (clients/word-index.ts)
  *
@@ -18,15 +18,16 @@
  * chosen so every ratio below reproduces today's five defaults exactly) and
  * exposes one `deriveBudget(ratio, cwd)` helper subsystems call instead of
  * declaring their own local constant. Raising `maxProjectFiles` in one place
- * scales all five budgets coherently; this refactor changes no default value.
+ * scales all five budgets coherently; startup's calibrated ratio is the one
+ * intentional default adjustment recorded here.
  *
- * Ratio table (documents today's five defaults at the default base of 2,000):
+ * Ratio table (documents the defaults at the default base of 2,000):
  *
  *   | Subsystem                    | Ratio | Derived @ base 2,000 | Today  |
  *   |-------------------------------|-------|----------------------|--------|
  *   | project-diagnostics scanner   | 0.25× | 500                  | 500    |
  *   | review graph (#775 R1: tapered above 4,000, see below) | 0.5× | 1,000 | 1,000 |
- *   | startup scan (source files)   | 1×    | 2,000                | 2,000  |
+ *   | startup scan (source files)   | 1.25× | 2,500                | 2,000  |
  *   | jscpd (dir entries)           | 3×    | 6,000                | 6,000  |
  *   | word index (files)            | 3×    | 6,000                | 6,000  |
  *
@@ -106,7 +107,7 @@ export function getProjectScaleBase(cwd?: string): number {
 }
 
 /**
- * Ratios calibrated to reproduce today's five hardcoded defaults exactly at
+ * Ratios calibrated against the five hardcoded defaults at
  * {@link DEFAULT_PROJECT_SCALE_BASE}. The unit each budget is expressed in
  * stays subsystem-appropriate (files vs. directory entries); this table is
  * the single place that encodes the relationship between them.
@@ -116,8 +117,8 @@ export const PROJECT_SCALE_RATIOS = {
 	projectDiagnosticsScanner: 0.25,
 	/** review graph: files kept. 0.5 * 2,000 = 1,000. */
 	reviewGraph: 0.5,
-	/** startup scan: source files counted. 1 * 2,000 = 2,000. */
-	startupScan: 1,
+	/** startup scan: source files counted. 1.25 * 2,000 = 2,500. */
+	startupScan: 1.25,
 	/** jscpd: directory entries visited (its own gate, not source-filter's). 3 * 2,000 = 6,000. */
 	jscpd: 3,
 	/** word index: files indexed. 3 * 2,000 = 6,000. */

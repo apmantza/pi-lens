@@ -16,6 +16,7 @@ import { parseVitestSummary } from "./lib/vitest-summary.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import {
 	changedFiles as committedChangedFiles,
+	findStaleDistFiles,
 	worktreeChangedFiles,
 } from "./pre-push-targeted-tests.mjs";
 
@@ -156,6 +157,23 @@ export function main(argv = process.argv.slice(2)) {
 		// Nothing below is meaningful on a stale or missing build.
 		unproven(`build failed (exit ${build.status}); no test step ran`);
 		return report(root, record, findings, { governance: 0, changed: 0 });
+	}
+	const staleDist = findStaleDistFiles(root);
+	if (staleDist.length > 0) {
+		console.log(
+			`[lane-check] dist/ missing or stale (${staleDist.map(({ output }) => output).join(", ")}); running npm run build:dist...`,
+		);
+		const distBuild = run(root, "npm", ["run", "build:dist"]);
+		record.checks.distBuild = distBuild.status;
+		if (distBuild.status !== 0) {
+			console.error(
+				"[lane-check] dist build failed; run `npm run build:dist` to rebuild dist/.",
+			);
+			unproven(
+				`dist build failed (exit ${distBuild.status}); no test step ran`,
+			);
+			return report(root, record, findings, { governance: 0, changed: 0 });
+		}
 	}
 
 	const committed = committedChangedFiles(`${BASE}...HEAD`);

@@ -30,10 +30,10 @@ vi.mock("../../clients/warm-attach.js", () => ({
 // the "#631 per-server scheduling" describe block below actually exercise
 // the property under test (never >1 in-flight touch per server group),
 // rather than a mock that would trivially satisfy it either way.
-vi.mock("../../clients/lsp/index.js", async () => {
+vi.mock("../../clients/lsp/capabilities.js", async () => {
 	const actual = await vi.importActual<
-		typeof import("../../clients/lsp/index.js")
-	>("../../clients/lsp/index.js");
+		typeof import("../../clients/lsp/capabilities.js")
+	>("../../clients/lsp/capabilities.js");
 	return {
 		...actual,
 		getLSPService: () => mocked.service,

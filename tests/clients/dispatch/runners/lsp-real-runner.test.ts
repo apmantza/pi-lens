@@ -13,6 +13,7 @@ import lspRunner from "../../../../clients/dispatch/runners/lsp.js";
 import {
 	initLSPConfig,
 	resetLSPConfigStateForTests,
+	getServersForFileWithConfig,
 } from "../../../../clients/lsp/config.js";
 import {
 	getLSPService,
@@ -22,6 +23,10 @@ import {
 	makeRealRunnerEnv,
 	type RealRunnerEnv,
 } from "../../../support/real-runner-ctx.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../../../clients/project-trust.js";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 const fakeServerPath = path.resolve(
@@ -62,6 +67,9 @@ d("LSP dispatch runner — real server (#873)", () => {
 	let env: RealRunnerEnv;
 
 	beforeAll(async () => {
+		// Host-boundary stub: this fixture intentionally uses a project custom
+		// server in a project pi has trusted.
+		setProjectTrustState("trusted");
 		env = makeRealRunnerEnv({ kind: "jsts" });
 		const configDir = path.join(env.cwd, ".pi-lens");
 		fs.mkdirSync(configDir, { recursive: true });
@@ -82,6 +90,7 @@ d("LSP dispatch runner — real server (#873)", () => {
 	});
 
 	afterAll(async () => {
+		resetProjectTrust();
 		await getLSPService().shutdown();
 		resetLSPService({ fast: true });
 		resetLSPConfigStateForTests();
@@ -138,5 +147,63 @@ d("LSP dispatch runner — real server (#873)", () => {
 			semantic: "none",
 			rawOutput: "no-diagnostics",
 		});
+	}, 30_000);
+
+	it("drops stale primary diagnostics after a current-content timeout (#4231)", async () => {
+		await getLSPService().shutdown();
+		resetLSPService({ fast: true });
+		resetLSPConfigStateForTests();
+		fs.writeFileSync(
+			path.join(env.cwd, ".pi-lens", "lsp.json"),
+			JSON.stringify({
+				servers: {
+					"fake-real-runner": {
+						name: "Fake delayed primary LSP",
+						extensions: [".real-lsp"],
+						command: process.execPath,
+						args: [fakeServerPath],
+						env: {
+							FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS: "5000",
+							FAKE_LSP_DIAGNOSTIC_MESSAGE: "stale primary error",
+						},
+					},
+					typos: {
+						name: "Fake auxiliary typos LSP",
+						extensions: [".real-lsp"],
+						command: process.execPath,
+						args: [fakeServerPath],
+						env: {
+							FAKE_LSP_DIAGNOSTIC_MESSAGE: "fresh typos finding",
+							FAKE_LSP_DIAGNOSTIC_SOURCE: "typos",
+						},
+					},
+				},
+			}),
+		);
+		await initLSPConfig(env.cwd);
+		const { ctx, filePath } = env.addFile(
+			"stale.real-lsp",
+			"old content with a primary error\n",
+		);
+		const auxiliary = getServersForFileWithConfig(filePath).find(
+			(server) => server.id === "typos",
+		);
+		if (!auxiliary) throw new Error("test typos server is not registered");
+		auxiliary.role = "auxiliary";
+		const initial = await lspRunner.run(ctx);
+		expect(
+			initial.diagnostics.some((d) => d.message.includes("stale primary")),
+		).toBe(true);
+
+		fs.writeFileSync(filePath, "new content with a typo\n");
+		const result = await lspRunner.run(ctx);
+
+		expect(
+			result.diagnostics.some((d) => d.message.includes("stale primary")),
+		).toBe(false);
+		expect(
+			result.diagnostics.map((d) => ({ tool: d.tool, message: d.message })),
+		).toEqual([{ tool: "typos", message: "fresh typos finding" }]);
+		expect(result.unconfirmedServerIds).toContain("fake-real-runner");
 	}, 30_000);
 });

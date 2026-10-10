@@ -66,7 +66,7 @@ function warningDiagnostics(count: number): LSPDiagnostic[] {
 	}));
 }
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	// The five methods `buildActionableWarningsReport` actually reads, overridden
 	// on a factory-seeded surface (#2592): a sixth one added to the production
 	// path would otherwise TypeError into the report's swallow-all catch and

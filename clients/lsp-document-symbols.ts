@@ -1,5 +1,5 @@
 import type { LSPSymbol } from "./lsp/client.js";
-import { getLSPService } from "./lsp/index.js";
+import { getLSPService } from "./lsp/capabilities.js";
 
 // Grounded against this repo's workspace-native TypeScript 7.0.2 server
 // (`tsc --lsp --stdio`) on 2026-07-30: 20 already-open documentSymbol calls

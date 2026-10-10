@@ -48,6 +48,7 @@ vi.mock("../../clients/installer/index.js", () => ({
 }));
 vi.mock("../../clients/project-trust.js", () => ({
 	assertInstallAllowed: () => true,
+	getProjectTrustState: () => "unknown",
 	projectTrustDenialReason: () => "",
 }));
 vi.mock("../../clients/sessionstart-logger.js", () => ({

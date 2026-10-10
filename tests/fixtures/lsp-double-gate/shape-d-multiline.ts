@@ -3,7 +3,7 @@
 // `vi.fn`, so this produced zero matches.
 import { vi } from "vitest";
 
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => ({
 		supportsLSP: () => true,
 		touchFile: vi

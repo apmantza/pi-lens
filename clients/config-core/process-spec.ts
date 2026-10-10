@@ -27,7 +27,8 @@
  * fail-open, because an older host that never had `isProjectTrusted` never had
  * a decision to honor. Here it is fail-closed, and the asymmetry is deliberate:
  * `isToolInstallAllowedByTrust` gates pi-lens's OWN managed tools, while this
- * gates a command string a repository wrote.
+ * gates a command string a repository wrote. The downstream LSP backstop also
+ * requires an explicit trusted host signal for every raw server entry.
  */
 
 import { incrementDegradationCount } from "../degradation-ledger.js";

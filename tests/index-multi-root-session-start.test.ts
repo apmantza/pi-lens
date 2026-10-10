@@ -137,17 +137,18 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 	 * secondary needs its own `extension()` call; the module-scope lifecycle
 	 * state they share is exactly the seam the guard reads.
 	 *
-	 * Both roots are registered by hand so the entry's contents are exact and
-	 * independent of whichever writes the handler's fire-and-forget path
-	 * happens to queue.
+	 * The host's roots are registered by hand so the entry's contents are
+	 * exact and independent of whichever writes the handler's fire-and-forget
+	 * path happens to queue. A root in `hostRoots` is the host's own (#3849):
+	 * no secondary's shutdown may remove it.
 	 */
-	async function bindSecondaryIn(cwd: string) {
+	async function bindSecondaryIn(cwd: string, hostRoots: string[] = []) {
 		const host = createPiMock();
 		extension(host.asExtensionAPI());
 		const hostCtx = makeCtx({ cwd: hostRoot, sessionId: "host-session" });
 		await host.emit("session_start", makeSessionStartEvent(), hostCtx);
 		await registerInstance(hostRoot);
-		await registerInstance(tempWorktree);
+		for (const root of hostRoots) await registerInstance(root);
 		await settleRegistryWrites();
 
 		const secondary = createPiMock();
@@ -184,7 +185,7 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 		// The scoped deregistration is positively-different-root only. A
 		// secondary in the SAME directory that dropped it would delete the
 		// registry root the host is still working in.
-		const secondary = await bindSecondaryIn(hostRoot);
+		const secondary = await bindSecondaryIn(hostRoot, [tempWorktree]);
 
 		await secondary.emit(
 			"session_shutdown",
@@ -246,6 +247,109 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 		expect(roots[1]).toContain(path.basename(tempWorktree));
 		// Still pinned: a declined start must never become the advertised root.
 		expect(roots[0]).toContain(path.basename(hostRoot));
+	}, 30_000);
+
+	it("a reload-gap session cannot free two live secondary holders (#3849 F2)", async () => {
+		const first = createPiMock();
+		extension(first.asExtensionAPI());
+		const hostCtx = makeCtx({ cwd: hostRoot, sessionId: "host-session" });
+		await first.emit("session_start", makeSessionStartEvent(), hostCtx);
+		await first.emit("session_shutdown", { reason: "reload" }, hostCtx);
+		invalidate(hostCtx);
+
+		const gap = createPiMock();
+		extension(gap.asExtensionAPI());
+		const gapCtx = makeCtx({ cwd: tempWorktree, sessionId: "gap-session" });
+		await gap.emit("session_start", makeSessionStartEvent(), gapCtx);
+
+		const reloaded = createPiMock();
+		extension(reloaded.asExtensionAPI());
+		await reloaded.emit(
+			"session_start",
+			makeSessionStartEvent({ reason: "reload" }),
+			makeCtx({ cwd: hostRoot, sessionId: "host-session" }),
+		);
+
+		const holder1 = createPiMock();
+		extension(holder1.asExtensionAPI());
+		await holder1.emit(
+			"session_start",
+			makeSessionStartEvent(),
+			makeCtx({ cwd: tempWorktree, sessionId: "holder-1" }),
+		);
+		const holder2 = createPiMock();
+		extension(holder2.asExtensionAPI());
+		await holder2.emit(
+			"session_start",
+			makeSessionStartEvent(),
+			makeCtx({ cwd: tempWorktree, sessionId: "holder-2" }),
+		);
+		await settleRegistryWrites();
+
+		await gap.emit("session_shutdown", {}, gapCtx);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).toContain(path.resolve(tempWorktree));
+
+		await holder1.emit(
+			"session_shutdown",
+			{},
+			makeCtx({ cwd: tempWorktree, sessionId: "holder-1" }),
+		);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).toContain(path.resolve(tempWorktree));
+
+		await holder2.emit(
+			"session_shutdown",
+			{},
+			makeCtx({ cwd: tempWorktree, sessionId: "holder-2" }),
+		);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).not.toContain(path.resolve(tempWorktree));
+	}, 30_000);
+
+	it("a holder whose hold a primary reload dropped cannot free a later holder's root (#3849)", async () => {
+		// Round-2 verify R2-2: S1 holds T, the primary's reload removes the
+		// whole entry, the reloaded primary re-registers, S2 adds T, then S1
+		// shuts down. S1's hold ended with the entry, so its shutdown must not
+		// take S2's. Recurrence: an anonymous per-root count let S1 consume the
+		// count S2's add had just written.
+		const host = createPiMock();
+		extension(host.asExtensionAPI());
+		const hostCtx = makeCtx({ cwd: hostRoot, sessionId: "host-session" });
+		await host.emit("session_start", makeSessionStartEvent(), hostCtx);
+
+		const first = createPiMock();
+		extension(first.asExtensionAPI());
+		const firstCtx = makeCtx({ cwd: tempWorktree, sessionId: "holder-1" });
+		await first.emit("session_start", makeSessionStartEvent(), firstCtx);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).toContain(path.resolve(tempWorktree));
+
+		await host.emit("session_shutdown", { reason: "reload" }, hostCtx);
+		invalidate(hostCtx);
+		const reloaded = createPiMock();
+		extension(reloaded.asExtensionAPI());
+		await reloaded.emit(
+			"session_start",
+			makeSessionStartEvent({ reason: "reload" }),
+			makeCtx({ cwd: hostRoot, sessionId: "host-session" }),
+		);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).not.toContain(path.resolve(tempWorktree));
+
+		const second = createPiMock();
+		extension(second.asExtensionAPI());
+		const secondCtx = makeCtx({ cwd: tempWorktree, sessionId: "holder-2" });
+		await second.emit("session_start", makeSessionStartEvent(), secondCtx);
+		await settleRegistryWrites();
+
+		await first.emit("session_shutdown", {}, firstCtx);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).toContain(path.resolve(tempWorktree));
+
+		await second.emit("session_shutdown", {}, secondCtx);
+		await settleRegistryWrites();
+		expect(await rootsForThisPid()).not.toContain(path.resolve(tempWorktree));
 	}, 30_000);
 
 	it("a declined SAME-root start adds nothing to the set (#2130)", async () => {

@@ -5,6 +5,10 @@ import type { ActionableWarningsReport } from "../../clients/actionable-warnings
 import { CacheManager } from "../../clients/cache-manager.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { resolvePiLensFlag } from "../../clients/lens-config.js";
+import {
+	type LspMutationContext,
+	recordLspMutation,
+} from "../../clients/lsp-mutation.js";
 import { recordMutationThroughSeam } from "../../clients/mutation-bridge.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { loadPiLensProjectConfig } from "../../clients/project-lens-config.js";
@@ -72,16 +76,71 @@ vi.mock("../../clients/formatters.js", async (importOriginal) => {
 	};
 });
 import { getFormatService } from "../../clients/format-service.js";
+import { HOOK_WALL_BUDGET_MS } from "../../clients/hook-budgets.js";
 import {
 	type FormatterInfo,
 	formatFile as runFormatter,
 	getFormattersForFile,
 } from "../../clients/formatters.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 describe("runtime-agent-end deferred formatting", () => {
 	const cleanupAgentEndTemps = async () => {
 		await cleanupTestEnvironmentsDrained("pi-lens-agent-end-");
 	};
+
+	// Recurrence: a run that dies between a read's tool_call and its
+	// tool_execution_end (a throw in pi's agent loop takes handleRunFailure,
+	// which emits agent_end and no tool_execution_end) left the capture to
+	// license an edit in the next run (#4185 R2-3; the per-call release is
+	// handleToolExecutionEnd since round 4, this is its backstop).
+	it("releases a capture its run left open at the real agent-settled handler (#4185 R2-3)", async () => {
+		const env = setupTestEnvironment("pi-lens-blocked-read-turn-end-");
+		try {
+			const filePath = createTempFile(
+				env.tmpDir,
+				"blocked.ts",
+				"export const value = 1;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall({
+					event: {
+						toolName: "read",
+						toolCallId: "blocked-read",
+						input: { path: filePath },
+					},
+					ctx: { cwd: env.tmpDir },
+					lensEnabled: true,
+					getFlag: (name: string) =>
+						name === "no-lsp" || name === "no-complexity",
+					dbg: () => {},
+					runtime,
+					cacheManager: new CacheManager(false),
+					ensureLSPConfigInitialized: async () => {},
+					updateLspStatus: () => {},
+					resetLSPService: () => {},
+				} as never),
+			);
+			expect(runtime.readGuard.getReadHistory(filePath)).toEqual([
+				expect.objectContaining({ provisional: true }),
+			]);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: () => {},
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				getFormatService: () => ({ recordRead: () => {} }) as never,
+			});
+			expect(runtime.readGuard.getReadHistory(filePath)).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
 
 	afterEach(cleanupAgentEndTemps);
 	afterAll(cleanupAgentEndTemps);
@@ -1159,6 +1218,15 @@ describe("runtime-agent-end deferred formatting", () => {
 					paths: [filePath.replace(/\\/g, "/")],
 				}),
 			);
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:format:done",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					fileCount: 1,
+					paths: [filePath.replace(/\\/g, "/")],
+				}),
+			);
 		} finally {
 			resetFormatEventsPublish();
 			if (previousDataDir === undefined) {
@@ -1168,6 +1236,142 @@ describe("runtime-agent-end deferred formatting", () => {
 			}
 			env.cleanup();
 		}
+	});
+
+	it("keeps the format lifecycle matchable and waits for an abandoned formatter write (#4213)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-bus-format-identity-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setSessionLifecycle({ sessionId: "session-4213" });
+			runtime.deferFormat(
+				filePath,
+				env.tmpDir,
+				"edit",
+				env.tmpDir,
+				"session-4213",
+			);
+			let releaseLate!: () => void;
+			const abandoned = new Promise<void>((resolve) => {
+				releaseLate = resolve;
+			});
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+			const drain = handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				currentSessionId: "session-4213",
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () =>
+					({
+						recordRead: () => {},
+						formatFile: vi.fn(async () => ({
+							filePath,
+							formatters: [{ name: "biome", success: true, changed: true }],
+							anyChanged: true,
+							allSucceeded: true,
+							abandoned,
+						})) as any,
+					}) as any,
+			});
+			await drain;
+			expect(emit).not.toHaveBeenCalledWith(
+				"pilens:format:done",
+				expect.anything(),
+			);
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			releaseLate();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			const done = emit.mock.calls.find(
+				([name]) => name === "pilens:format:done",
+			);
+			expect(done?.[1]).toMatchObject({
+				ownerSessionId: "session-4213",
+				turnIndex: expect.any(Number),
+				batchId: expect.any(String),
+			});
+		} finally {
+			resetFormatEventsPublish();
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("publishes one bounded unsettled terminal for a formatter that never settles (#4213)", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const env = setupTestEnvironment("pi-lens-agent-end-format-unsettled-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		const { getDegradationSummary, resetDegradationLedger } =
+			await import("../../clients/degradation-ledger.js");
+		resetDegradationLedger();
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+			const never = new Promise<never>(() => {});
+			const drain = handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () =>
+					({ recordRead: () => {}, formatFile: () => never }) as any,
+			});
+			await vi.advanceTimersByTimeAsync(
+				HOOK_WALL_BUDGET_MS.agent_settled + 30_000 + 1,
+			);
+			await drain;
+			const done = emit.mock.calls.filter(
+				([name]) => name === "pilens:format:done",
+			);
+			expect(done).toHaveLength(1);
+			expect(done[0]?.[1]).toMatchObject({
+				settled: false,
+				paths: [filePath.replace(/\\/g, "/")],
+				fileCount: 1,
+			});
+			expect(
+				getDegradationSummary().filter(
+					(entry) => entry.kind === "deferred-format-unsettled",
+				),
+			).toEqual([
+				expect.objectContaining({
+					kind: "deferred-format-unsettled",
+				}),
+			]);
+		} finally {
+			resetDegradationLedger();
+			resetFormatEventsPublish();
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps fallback batch ids unique across same-clock coordinator reloads (#4213)", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1_700_000_000_000);
+		const a = new RuntimeCoordinator();
+		const b = new RuntimeCoordinator();
+		expect(a.telemetrySessionId).not.toBe(b.telemetrySessionId);
+		a.resetForSession(1_700_000_000_000);
+		expect(a.telemetrySessionId).not.toBe(b.telemetrySessionId);
+		vi.useRealTimers();
 	});
 
 	it("does not publish pilens:format:start when there is nothing queued (#673)", async () => {
@@ -1205,6 +1409,49 @@ describe("runtime-agent-end deferred formatting", () => {
 			} else {
 				process.env.PILENS_DATA_DIR = previousDataDir;
 			}
+			env.cleanup();
+		}
+	});
+
+	it("publishes pilens:format:done with no paths when formatting changes no bytes (#673)", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-agent-end-bus-format-done-empty-",
+		);
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () =>
+					({
+						recordRead: () => {},
+						formatFile: vi.fn(async () => ({
+							filePath,
+							formatters: [],
+							anyChanged: false,
+							allSucceeded: true,
+						})),
+					}) as any,
+			});
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:format:done",
+				expect.objectContaining({ fileCount: 0, paths: [] }),
+			);
+		} finally {
+			resetFormatEventsPublish();
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
 			env.cleanup();
 		}
 	});
@@ -1359,6 +1606,157 @@ describe("runtime-agent-end deferred formatting", () => {
 			resetBusPublish();
 			applyConservativeActionableWarningFixesMock.mockReset();
 			env.cleanup();
+		}
+	});
+
+	// #4187 R4-4 (probe L4): the quickfix drain is the third writer that credits
+	// authorship over bytes the agent never saw, and it was the one drain with no
+	// pre-write retire: the format and autofix drains both call
+	// `retireChangedAuthorshipBeforeDrain` before they rewrite. Recurrence: the
+	// drain's `recordWritten` re-baselined the authorship over another writer's
+	// line, so the next positional edit of that line was allowed.
+	it("ends an authorship another writer broke before the LSP quickfix drain rewrites it (#4187 R4-4)", async () => {
+		const fixture = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
+		for (const foreign of [true, false]) {
+			const env = setupTestEnvironment(
+				`pi-lens-agent-end-quickfix-retire-${foreign}-`,
+			);
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", fixture);
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.seedProjectSequence(1);
+				// The agent's own bash write authored the file, without a read.
+				runtime.readGuard.recordWritten(filePath, {
+					stampFileTime: false,
+					toolCallId: "call-4187-quickfix-bash",
+				});
+				if (foreign) {
+					const lines = fixture.split("\n");
+					lines[1] = "const external = 2;";
+					fs.writeFileSync(filePath, lines.join("\n"));
+				}
+				const report: ActionableWarningsReport = {
+					generatedAt: new Date().toISOString(),
+					scope: "turn_delta",
+					sessionId: "s1",
+					turnIndex: 1,
+					projectSeqEnd: 1,
+					deltaOnly: true,
+					includeLspCodeActions: true,
+					files: [
+						{
+							filePath,
+							displayPath: "src/app.ts",
+							// #3676: the entries the credit epoch is read from; without
+							// them the drain stamps no read guard at all.
+							branchEpoch: runtime.readGuard.currentBranchEpoch,
+							branchScope: runtime.readGuard.lineageKey,
+							warnings: [
+								{
+									id: "aw:4187",
+									filePath,
+									displayPath: "src/app.ts",
+									severity: "warning",
+									tool: "typescript",
+									message: "unused var",
+									suppressed: false,
+									origin: "dispatch",
+									actions: [
+										{
+											title: "Remove unused var",
+											hasEdit: true,
+											hasCommand: false,
+											autoFixEligible: true,
+										},
+									],
+								},
+							],
+						},
+					],
+					summary: {
+						warnings: 1,
+						unsuppressed: 1,
+						suppressed: 0,
+						files: 1,
+						actions: 1,
+						autoFixEligible: 1,
+					},
+				};
+				// The real fix pass applies a code action and bookkeeps it through
+				// the context the drain built, so drive that seam: rewrite line 1,
+				// then `recordLspMutation` with the drain's own `mutationContext`.
+				applyConservativeActionableWarningFixesMock.mockImplementationOnce(
+					async (args: { mutationContext: LspMutationContext }) => {
+						const lines = fs.readFileSync(filePath, "utf-8").split("\n");
+						lines[0] = "const fixed = 1;";
+						fs.writeFileSync(filePath, lines.join("\n"));
+						recordLspMutation(args.mutationContext, {
+							results: [
+								{
+									descriptions: [],
+									files: [filePath],
+									operationTotal: 1,
+									appliedOperationTotal: 1,
+									appliedOperationIndexes: [0],
+									operationCounts: {
+										textEdits: 1,
+										create: 0,
+										rename: 0,
+										delete: 0,
+									},
+									fileDetails: [
+										{
+											filePath,
+											range: { start: 1, end: 1 },
+											importsChanged: false,
+										},
+									],
+								},
+							],
+						});
+						return {
+							considered: 1,
+							applied: 1,
+							changedFiles: [filePath],
+							skipped: [],
+						};
+					},
+				);
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" ||
+						name === "lens-actionable-warnings" ||
+						name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => ({ data: report }),
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+
+				expect(applyConservativeActionableWarningFixesMock).toHaveBeenCalled();
+				if (foreign) {
+					const verdict = runtime.readGuard.checkEdit(filePath, [2, 2]);
+					expect(verdict.action).toBe("block");
+					expect(verdict.reason).toContain("File modified since your write");
+				} else {
+					// No other writer: the drain's own rewrite keeps the authorship,
+					// so the fix costs no re-read.
+					expect(runtime.readGuard.checkEdit(filePath, [1, 1]).action).toBe(
+						"allow",
+					);
+				}
+			} finally {
+				applyConservativeActionableWarningFixesMock.mockReset();
+				env.cleanup();
+			}
 		}
 	});
 
@@ -1857,22 +2255,24 @@ describe("runtime-agent-end deferred formatting", () => {
 				runtime.projectRoot = env.tmpDir;
 				const toolCallId = "call-origin-mismatch";
 
-				await handleToolCall({
-					event: {
-						toolCallId,
-						toolName: "write",
-						input: { path: "src/app.ts", content: "const x=1" },
-					},
-					ctx: { cwd: worktreeRoot },
-					lensEnabled: true,
-					getFlag: (name: string) => name === "no-lsp",
-					dbg: () => {},
-					runtime,
-					cacheManager: new CacheManager(false),
-					ensureLSPConfigInitialized: async () => {},
-					updateLspStatus: () => {},
-					resetLSPService: () => {},
-				} as any);
+				await runHandlerExpectingNoThrow(() =>
+					handleToolCall({
+						event: {
+							toolCallId,
+							toolName: "write",
+							input: { path: "src/app.ts", content: "const x=1" },
+						},
+						ctx: { cwd: worktreeRoot },
+						lensEnabled: true,
+						getFlag: (name: string) => name === "no-lsp",
+						dbg: () => {},
+						runtime,
+						cacheManager: new CacheManager(false),
+						ensureLSPConfigInitialized: async () => {},
+						updateLspStatus: () => {},
+						resetLSPService: () => {},
+					} as any),
+				);
 
 				await handleToolResult({
 					event: {

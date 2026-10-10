@@ -70,7 +70,9 @@ import { SecurityScanClient } from "./security-scan-client.js";
 import {
 	getSecretsLaneAllowlistPaths,
 	isUnderSecretsLaneScratchTree,
+	nestedWorktreeOffsets,
 } from "./scratch-tree-policy.js";
+import { escapeRegExp } from "./string-utils.js";
 
 // --- Types ---
 
@@ -184,11 +186,25 @@ export const PLACEHOLDER_SECRET_REGEXES = [
 ];
 
 /**
+ * `[allowlist] paths` regex for one linked worktree (#4132). gitleaks matches
+ * it against the path it walked, which is `--source` as given plus the rest,
+ * so the entry is the worktree's whole path in that spelling, anchored at both
+ * ends; either separator is accepted for the same reason as the name entries.
+ */
+function worktreeAllowlistPath(worktree: string): string {
+	const segments = worktree.split(/[/\\]/).map(escapeRegExp);
+	return `^${segments.join("[/\\\\]")}(?:[/\\\\].*)?$`;
+}
+
+/**
  * Build a temp gitleaks config that EXTENDS the project's own config (if any,
  * else gitleaks's built-in defaults) with two additions:
  *   1. `[allowlist] paths` — the NARROW secrets-lane scratch exclusion
  *      (`scratch-tree-policy.ts`'s `getSecretsLaneAllowlistPaths`, NOT the
- *      broader walker-parity `EXCLUDED_DIRS` list — #1562 review-round F1).
+ *      broader walker-parity `EXCLUDED_DIRS` list — #1562 review-round F1),
+ *      plus one anchored entry per linked worktree nested under `cwd`, found
+ *      by discovery rather than by name (#4132). A finding that still comes
+ *      back from one is labelled `nested-repository` below.
  *   2. `[allowlist] regexes` — the placeholder-secret class above.
  *
  * An `[allowlist]` entry is a POST-DETECTION filter (#1562 review-round F4):
@@ -208,7 +224,12 @@ export function writeScopedGitleaksConfig(outDir: string, cwd: string): string {
 	const extendLine = localConfig
 		? `path = ${JSON.stringify(localConfig)}`
 		: "useDefault = true";
-	const pathPatterns = getSecretsLaneAllowlistPaths()
+	const pathPatterns = [
+		...getSecretsLaneAllowlistPaths(),
+		...nestedWorktreeOffsets(cwd).map((offset) =>
+			worktreeAllowlistPath(path.join(cwd, offset)),
+		),
+	]
 		.map((p) => `    ${JSON.stringify(p)},`)
 		.join("\n");
 	const regexPatterns = PLACEHOLDER_SECRET_REGEXES.map(

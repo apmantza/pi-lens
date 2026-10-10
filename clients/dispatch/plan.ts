@@ -1,14 +1,6 @@
 import type { FileKind } from "../file-kinds.js";
 import { getPrimaryDispatchGroup } from "../language-policy.js";
-import type { RunnerGroup, ToolPlan } from "./types.js";
-
-type CapabilityDimension =
-	| "types"
-	| "security"
-	| "smells"
-	| "format"
-	| "lint"
-	| "docs";
+import type { CapabilityDimension, RunnerGroup, ToolPlan } from "./types.js";
 
 interface CapabilityMatrixEntry {
 	name: string;
@@ -293,6 +285,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 function toWritePlan(entry: CapabilityMatrixEntry): ToolPlan {
 	return {
 		name: entry.name,
+		capabilities: entry.capabilities,
 		groups: [...entry.writeGroups],
 	};
 }

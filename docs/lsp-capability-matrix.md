@@ -68,8 +68,10 @@ discriminator either.
 
 `tests/config/lsp-first-publish-census.test.ts` compares this column against the
 `emptyFirstPublish` markers and reds in BOTH directions, which is the expiry
-check: when the nightly re-measures a server into a different class, the docs
-refresh cannot merge until the marker is updated with it.
+check: when two consecutive nights re-measure a server into a different class,
+the docs refresh commits the confirmed class and the marker must move with it.
+A single-night flip remains in the refresh-state JSON below and does not change
+the census's confirmed population.
 
 ## The strategies
 
@@ -156,6 +158,7 @@ carries the named admission until then.
 | yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci |
 | dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| dockerfile-official | docker-language-server (official) | push-only | publishes-versioned | direct | 2 | dev+ci |
 | toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | terraform | terraform-ls | push-only | publishes-unversioned | empty-first | 2* | dev+ci |
 | prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
@@ -210,6 +213,9 @@ and were characterized `push-only` in the run above).
   `first-publish` measurements on the dev box, 2026-09-23: php `empty-first`,
   typescript / opengrep / ast-grep / marksman `direct` (so the class does not
   extend to them on the measurement, whatever their comments suggest).
+- The official Docker row's clean-gate witness requires the BuildKit-backed
+  `JSONArgsRecommended` rule and skips when `docker buildx` is unavailable;
+  its first-publish class is the nightly's measured `direct`.
 - **#458's learned-deadline target set = the tier-3 rows only.** 2\* rows resolve
   the wait at runtime and must NOT be given learned deadlines.
 - **Tier 3 is budget-bound by necessity**, not laziness: a silent server's silence is
@@ -251,14 +257,14 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-_None observed as of the last probe run._
+- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "typescript7" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
 
 ## Capability matrix refresh state (nightly-generated)
 
-Bookkeeping for the date-based `direct` `first-publish` expiry (#3401), the
-two-run `clean-behavior` hysteresis and the consecutive-night `idle-eviction`
+Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the
+date-based `direct` expiry (#3401) and consecutive-night `idle-eviction`
 counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"docker":{"nights":[{"day":"2026-10-07","rssMb":64,"coldMs":566}]},"json":{"nights":[{"day":"2026-10-07","rssMb":67,"coldMs":1116}]},"powershell":{"nights":[{"day":"2026-10-07","rssMb":155,"coldMs":2601}]},"python-jedi":{"nights":[{"day":"2026-10-07","rssMb":51,"coldMs":1796}]},"zizmor":{"nights":[{"day":"2026-10-07","rssMb":58,"coldMs":608}]}}}
+{"first-publish":{"typescript":{"pendingFirstPublish":"empty-first","runs":1}},"idle-eviction":{"docker-official":{"nights":[{"day":"2026-10-09","rssMb":62,"coldMs":652}]},"kotlin":{"nights":[{"day":"2026-10-09","rssMb":278,"coldMs":2010}]},"powershell":{"nights":[{"day":"2026-10-09","rssMb":161,"coldMs":1883}]},"rust":{"nights":[{"day":"2026-10-09","rssMb":661,"coldMs":2269}]},"svelte":{"nights":[{"day":"2026-10-09","rssMb":221,"coldMs":2311}]},"zizmor":{"nights":[{"day":"2026-10-09","rssMb":56,"coldMs":581}]}}}
 ```

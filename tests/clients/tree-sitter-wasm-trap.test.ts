@@ -20,6 +20,7 @@ import { loadWebTreeSitter } from "../../clients/deps/web-tree-sitter.js";
 import {
 	classifyTreeSitterWasmError,
 	TreeSitterClient,
+	wasmQueryInput,
 	WASM_TRAP_BUDGET,
 } from "../../clients/tree-sitter-client.js";
 import type { TreeSitterQuery } from "../../clients/tree-sitter-query-loader.js";
@@ -170,6 +171,193 @@ describe("TreeSitterClient trap containment and budget (#3605)", () => {
 			(await client.withParsedTree(pythonFile(), "python", undefined, () => 1))
 				.parsed,
 		).toBe(false);
+	});
+
+	// #4010 round 4 (R3-1): retirement counts DISTINCT inputs on their FIRST trap.
+	// Round 3 added a key only on an input's second trap, so four distinct bad
+	// files (each parsed once, as every per-edit surface does) still aborted the
+	// process. Every test below parses fresh bytes through the real
+	// `withParsedTree`; none re-parses a trapped file.
+	async function trapFresh(
+		client: TreeSitterClient,
+		languageId: string,
+		source: string,
+	) {
+		return client.withParsedTree(
+			pythonFile(`${source}\n`),
+			languageId,
+			undefined,
+			() => {
+				throw trap();
+			},
+		);
+	}
+	async function parseClean(
+		client: TreeSitterClient,
+		languageId: string,
+		source: string,
+	) {
+		return (
+			await client.withParsedTree(
+				pythonFile(`${source}\n`),
+				languageId,
+				undefined,
+				() => 1,
+			)
+		).parsed;
+	}
+
+	it("retires a grammar on its second distinct trapping input, before the heap aborts (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		// consecutive: distinct fresh bytes, each trapped once and never retried.
+		expect(await trapFresh(client, "bash", "bad-1")).toEqual({
+			parsed: false,
+			wasmTrap: "retry",
+		});
+		expect(kindCount("grammar-blocked")).toBeUndefined();
+		expect(await trapFresh(client, "bash", "bad-2")).toEqual({
+			parsed: false,
+			wasmTrap: "retry",
+		});
+
+		expect(kindCount("grammar-blocked")).toBe(1);
+		expect(client.getLanguage("bash")).toBeNull();
+		// A third and fourth bad file would have been traps 3 and 4 (the abort);
+		// the retired grammar is unavailable instead.
+		expect(await trapFresh(client, "bash", "bad-3")).toEqual({ parsed: false });
+		expect(await trapFresh(client, "bash", "bad-4")).toEqual({ parsed: false });
+		expect(onAbort).not.toHaveBeenCalled();
+		expect(kindCount("wasm-abort")).toBeUndefined();
+		expect(kindCount("wasm-trap")).toBe(2);
+	});
+
+	it("retires when bad inputs are interleaved with clean parses of other inputs (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		for (let i = 0; i < 6; i++) {
+			await trapFresh(client, "bash", `bad-${i}`);
+			await parseClean(client, "bash", `clean-${i}`);
+		}
+
+		expect(kindCount("grammar-blocked")).toBe(1);
+		expect(onAbort).not.toHaveBeenCalled();
+		expect(kindCount("wasm-abort")).toBeUndefined();
+		expect(await parseClean(client, "bash", "after")).toBe(false);
+	});
+
+	it("counts a grammar's inputs apart from another grammar's earlier trap (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		await trapFresh(client, "python", "py-bad");
+		await trapFresh(client, "bash", "bad-1");
+		expect(kindCount("grammar-blocked")).toBeUndefined();
+		await trapFresh(client, "bash", "bad-2");
+
+		expect(kindCount("grammar-blocked")).toBe(1);
+		expect(onAbort).not.toHaveBeenCalled();
+		expect(kindCount("wasm-abort")).toBeUndefined();
+		expect(client.getLanguage("bash")).toBeNull();
+		// python took one trap of its own and stays available.
+		expect(await parseClean(client, "python", "py-ok")).toBe(true);
+	});
+
+	it("keeps a retired grammar retired across a session reset and re-emits its record once per ledger generation (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		await trapFresh(client, "bash", "bad-1");
+		await trapFresh(client, "bash", "bad-2");
+		expect(kindCount("grammar-blocked")).toBe(1);
+
+		// A parse that passed the gate before the grammar retired can still
+		// report its trap afterwards; the retirement stays one record.
+		client.reportWasmAbort(trap(), {
+			languageId: "bash",
+			source: "in-flight-when-retired",
+		});
+		expect(kindCount("grammar-blocked")).toBe(1);
+		// Same ledger generation: the session hook must not emit a second record.
+		client.resetLoadStateForSession();
+		expect(kindCount("grammar-blocked")).toBe(1);
+		// New ledger generation: the record is re-emitted for the new session.
+		resetDegradationLedger();
+		client.resetLoadStateForSession();
+		expect(kindCount("grammar-blocked")).toBe(1);
+		expect(await parseClean(client, "bash", "after")).toBe(false);
+		expect(client.getLanguage("bash")).toBeNull();
+		expect(await parseClean(client, "python", "py-after")).toBe(true);
+		expect(onAbort).not.toHaveBeenCalled();
+	});
+
+	it("lets an input that healed after its one trap stop counting toward retirement (#4010 decay)", async () => {
+		const { client, onAbort } = await liveClient();
+		// Round 3 N2: one-off traps that heal are not evidence against the grammar.
+		// Retry-heal each input before the next one traps.
+		for (const source of ["healed-a", "healed-b", "healed-c"]) {
+			const file = pythonFile(`print(${JSON.stringify(source)})\n`);
+			expect(
+				(
+					await client.withParsedTree(file, "python", undefined, () => {
+						throw trap();
+					})
+				).parsed,
+			).toBe(false);
+			expect(
+				(await client.withParsedTree(file, "python", undefined, () => 1))
+					.parsed,
+			).toBe(true);
+		}
+
+		expect(kindCount("grammar-blocked")).toBeUndefined();
+		expect(client.getLanguage("python")).not.toBeNull();
+		expect(onAbort).not.toHaveBeenCalled();
+	});
+
+	it("retires on two traps that are live together even when one of them heals later (#4010 decay)", async () => {
+		const { client } = await liveClient();
+		const first = pythonFile("print('live-a')\n");
+		await client.withParsedTree(first, "python", undefined, () => {
+			throw trap();
+		});
+		await trapFresh(client, "python", "live-b");
+		// Both were in the set at the second trap; healing `first` now does not
+		// un-retire the grammar for the process.
+		expect(kindCount("grammar-blocked")).toBe(1);
+		expect(
+			(await client.withParsedTree(first, "python", undefined, () => 1)).parsed,
+		).toBe(false);
+		expect(client.getLanguage("python")).toBeNull();
+	});
+
+	// Recurrence: counting a query compile's input (language "query", which has
+	// no grammar file) would retire a grammar that does not exist and record a
+	// grammar-blocked row for an undefined file.
+	it("does not retire anything when distinct query compiles trap (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		client.reportWasmAbort(
+			trap(),
+			wasmQueryInput("python:rule-a:(identifier)"),
+		);
+		client.reportWasmAbort(trap(), wasmQueryInput("python:rule-b:(string)"));
+
+		expect(kindCount("grammar-blocked")).toBeUndefined();
+		expect(await parseClean(client, "python", "still-available")).toBe(true);
+		expect(onAbort).not.toHaveBeenCalled();
+	});
+
+	it("does not count repeated traps from one input as distinct grammar inputs (#4010)", async () => {
+		const { client, onAbort } = await liveClient();
+		const file = pythonFile("print('persistent')\n");
+		const outcomes = [];
+		for (let i = 0; i < 5; i++) {
+			outcomes.push(
+				await client.withParsedTree(file, "python", undefined, () => {
+					throw trap();
+				}),
+			);
+		}
+
+		expect(outcomes[0]).toEqual({ parsed: false, wasmTrap: "retry" });
+		expect(outcomes[1]).toEqual({ parsed: false, wasmTrap: "charged" });
+		expect(kindCount("grammar-blocked")).toBeUndefined();
+		expect(client.getLanguage("python")).not.toBeNull();
+		expect(onAbort).not.toHaveBeenCalled();
 	});
 
 	it("counts one trap once when two report sites see it", async () => {

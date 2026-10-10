@@ -1277,7 +1277,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:909658e3~e86b200c": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:909658e3~d0b4e5fd": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1440,15 +1440,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(runtime-turn.ts:2882).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:82bbe401~723cb9f3": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`drainPendingRunnerFindings(0)` — a zero-WAIT drain, which " +
-			"bounds how long it waits for new findings but not how long the " +
-			"drain itself takes.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-turn.ts#handleTurnEnd:9167ea7d~7f6889da": {
 		family: "hook-await",
 		site: "turn_end",
@@ -1494,15 +1485,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"would bound a promise that has already settled.",
 		owner: "#3274",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:dfbc3b71~d09e69a7": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"madge dependency-check on turn_end behind a flag: " +
-			"`ensureAvailable` and the batch check are both unbounded above " +
-			"their spawns.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-turn.ts#handleTurnEnd:ebaaaabd~de3a52db": {
 		family: "hook-await",
 		site: "turn_end",
@@ -1510,15 +1492,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"madge dependency-check on turn_end behind a flag: " +
 			"`ensureAvailable` and the batch check are both unbounded above " +
 			"their spawns.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-turn.ts#handleTurnEnd:f02aaccc~a59ea951": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`runtime.settleCascadeRuns` owns its internal 5000ms settle cap; " +
-			"the outer turn_end handler remains bounded by its existing admission " +
-			"seam (#2523 slice 2).",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~c3e1d7c1": {
@@ -2230,6 +2203,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// loop is bounded by the fact's fixed gate list, but like every sibling
 	// here it stays unbounded from the hook's signal until #2523 AC4.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 36,
+	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
+	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
+	// the caller applies the session_shutdown wall bound around the whole drain.
+	"clients/ndjson-logger.ts": 15,
 	// #3541: `withHostFileMutationQueues` awaits the realpath of each path an
 	// LSP workspace edit names, which keys it the way pi keys its queue. It
 	// runs inside `applyWorkspaceEdit`, which the agent_settled actionable fix
@@ -2253,8 +2230,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// statting twice (the stat's identity was blind to a same-size edit inside
 	// one mtime tick), and the wrapper awaits the caller's scan (`afterRun`) but
 	// no longer `finish()`. One await is the per-file queue entry, which a hook
-	// signal cannot reach until #2523 AC4.
-	"clients/fix-run-restore.ts": 10,
+	// signal cannot reach until #2523 AC4. 10 -> 11 (round 2): native call
+	// expectations are carried through the restore decision and add one await.
+	"clients/fix-run-restore.ts": 11,
 	"clients/format-service.ts": 4,
 	// #2767: managed formatter resolution uses the installer's bounded probes;
 	// keep the measured count pinned until the formatter seam carries signals.
@@ -2389,7 +2367,7 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/lsp-budget.ts": 1,
 	"clients/lsp-document-symbols.ts": 2,
 	"clients/lsp/cascade-tier.ts": 2,
-	"clients/lsp/config.ts": 3,
+	"clients/lsp/config.ts": 4,
 	// #2817 round 2 F5: Git recovery now awaits the existing drift scheduler
 	// and its per-server root resolution. This remains an intentionally
 	// unbounded helper count until #2523 AC4 threads hook signals into the LSP
@@ -2688,6 +2666,19 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"wall-clock only. Either way the wall budget is live: the hook's " +
 		"HOOK_WALL_BUDGET_MS.turn_end caps the whole pass and composes with the " +
 		"pass's own internal deadline (3s) and the per-touch floor.",
+	"call:clients/runtime-turn.ts#handleTurnEnd:9256e1fe~67c7ff0d":
+		"`cascadeSettleSignal` is the live turn_end abort signal from " +
+		"`TurnEndDeps.signal`; direct harnesses may omit it, leaving the " +
+		"explicit turn_end wall cap as the remaining bound for parked computes.",
+	"call:clients/runtime-turn.ts#handleTurnEnd:c900b7a9~67c7ff0d":
+		"`runnerDrainSignal` is the live turn_end abort signal from " +
+		"`TurnEndDeps.signal`; it is optional only in direct unit harnesses, " +
+		"where the wall-clock half still bounds the drain. The drain is the " +
+		"session-partitioned runner delivery seam and must not wait indefinitely.",
+	"call:clients/runtime-turn.ts#handleTurnEnd:e5344cbe~67c7ff0d":
+		"`madgeAvailabilitySignal` is the live turn_end abort signal from " +
+		"`TurnEndDeps.signal`; it may be absent only in direct harnesses, while " +
+		"the madge availability probe remains wall-bounded and best effort.",
 	"call:clients/runtime-turn.ts#handleTurnEnd:e953bca9~404f0b0f":
 		"The late auxiliary re-promotion observer receives the live `turn_end` " +
 		"ctx.signal from `deps.signal` when pi supplies one, but that signal is " +
@@ -2709,6 +2700,13 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"standalone MCP adapter and unit harnesses. The turn_end wall budget is " +
 		"always live, and timeout falls back to raw findings so security findings " +
 		"remain blockers.",
+	"call:index.ts#activateExtension:8d9498e9~d5ee5018":
+		"`undefined` is intentional: pi provides no caller abort signal for " +
+		"session_shutdown. The handler returns this promise to pi, which awaits " +
+		"the extension shutdown event before closing stdin or exiting. The " +
+		"quit-only session_shutdown_quit wall bound is 500ms; replacement " +
+		"reasons use the zero session_shutdown budget to preserve successor " +
+		"ordering, and a wedged quit sink records one hook-await-exceeded row.",
 	"call:index.ts#activateExtension:c06d5cf4~b4f8a98d":
 		"The tool_result edit bootstrap receives the live pi ctx.signal and the " +
 		"edit budget; read-only calls use only resident clients.",
@@ -3114,10 +3112,10 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		// `strings: "blank"` erases every specifier, which it did on the first
 		// cut) would make every count below vacuously correct.
 		expect(helpers.length).toBeGreaterThanOrEqual(100);
-		// The three modules the hand-written list missed, each reached in one hop
-		// and each carrying real unbounded awaits.
+		// The facade is now the one-hop LSP boundary; its implementation module
+		// remains behind that adapter and is covered by the LSP population.
 		expect(helpers).toContain("clients/observed-mutation.ts");
-		expect(helpers).toContain("clients/lsp/index.ts");
+		expect(helpers).toContain("clients/lsp/capabilities.ts");
 		expect(helpers).toContain("clients/formatters.ts");
 		// ...and one it WRONGLY included: `clients/dispatch/dispatcher.ts` is
 		// two hops out, through `clients/dispatch/integration.ts`.

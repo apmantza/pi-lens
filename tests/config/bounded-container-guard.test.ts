@@ -27,6 +27,10 @@ const BOUNDED_HELPERS = new Set([
 ]);
 // Content-keyed, so an exemption must be re-confirmed after an edit.
 const FINITE_REASONS: Readonly<Record<string, string>> = {
+	// #2372: one adapter per live LSPService identity; WeakMap keys are the
+	// bounded process-local service population and entries die with the service.
+	"clients/lsp/capabilities.ts#1e3511a9":
+		"adapter cache is keyed by live LSPService objects and reclaimed with them; it cannot retain path or user-key growth",
 	// #3968: the runner-id identity leaf — written once per runner definition
 	// that enters a `RunnerRegistry` through `register` (the dispatch
 	// registry's own population, finite and ~50 today), never per file, per

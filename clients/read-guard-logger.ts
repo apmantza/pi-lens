@@ -295,7 +295,11 @@ export function shouldLogEvent(event: string): boolean {
 		// rising-edge gated once per file per session, so always-on
 		// visibility costs nothing.
 		event === "read_file_evicted" ||
-		event === "edits_cap_trimmed"
+		event === "edits_cap_trimmed" ||
+		// #4131: a file's authorship ended because another writer changed its
+		// bytes. Once per authorship episode: the retired file needs a read or
+		// a known-content write before a writer can author it again.
+		event === "authorship_retired"
 	);
 }
 

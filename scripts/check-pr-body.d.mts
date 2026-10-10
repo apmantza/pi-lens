@@ -50,9 +50,24 @@ export declare function lintLocalPrBody(
 	git?: (args: string[], options?: Record<string, unknown>) => string,
 	options?: { title?: string; ref?: string; headFiles?: Map<string, string> },
 ): { valid: boolean; errors: string[] };
+export declare function parseRuntimeHunks(diff: string): Array<{
+	pre: string;
+	post: string;
+	postBlob: string | null;
+	postLine: number;
+	added: Map<number, string>;
+	deletedAfter: Set<number>;
+	removed: string[];
+}>;
 export declare function lintTlaCoverage(
 	body?: string,
-	options?: { diff?: string; cwd?: string },
+	options?: {
+		diff?: string;
+		cwd?: string;
+		sourceCwd?: string;
+		headFiles?: Map<string, string>;
+		git?: (args: string[], options?: Record<string, unknown>) => string;
+	},
 ): { errors: string[]; advisories: string[] };
 export declare function lintWorkflowRunEvidence(
 	body?: string,

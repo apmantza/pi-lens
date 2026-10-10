@@ -18,7 +18,7 @@ vi.mock("../../clients/shared-checkout-guard.js", () => ({
 	evaluateSharedCheckoutGuard: (...args: unknown[]) => evaluate(...args),
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => makeLspServiceDouble(),
 	resetLSPService: () => {},
 }));
@@ -26,6 +26,7 @@ vi.mock("../../clients/lsp/index.js", () => ({
 import { CacheManager } from "../../clients/cache-manager.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 function deps(
 	command: string,
@@ -52,7 +53,9 @@ describe("shared-checkout guard wiring (#2007)", () => {
 	});
 
 	it("does not consult the guard while the flag is off", async () => {
-		await handleToolCall(deps("git checkout main", () => false));
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(deps("git checkout main", () => false)),
+		);
 		// MUTATION PROOF: drop the `getFlag("lens-checkout-guard")` gate and
 		// this reds — an opt-in experiment would be on for everyone.
 		expect(evaluate).not.toHaveBeenCalled();
@@ -63,8 +66,10 @@ describe("shared-checkout guard wiring (#2007)", () => {
 			block: true,
 			reason: "🔴 WORKING-TREE CHANGE BLOCKED (--lens-checkout-guard): …",
 		});
-		const result = await handleToolCall(
-			deps("git checkout main", (flag) => flag === "lens-checkout-guard"),
+		const result = await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				deps("git checkout main", (flag) => flag === "lens-checkout-guard"),
+			),
 		);
 		// MUTATION PROOF: delete the wiring block in runtime-tool-call.ts and
 		// this reds — the evaluator's verdict would never reach pi.
@@ -80,8 +85,10 @@ describe("shared-checkout guard wiring (#2007)", () => {
 	});
 
 	it("lets an allowed command through without an opinion", async () => {
-		const result = await handleToolCall(
-			deps("git checkout main", (flag) => flag === "lens-checkout-guard"),
+		const result = await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				deps("git checkout main", (flag) => flag === "lens-checkout-guard"),
+			),
 		);
 		expect(evaluate).toHaveBeenCalledTimes(1);
 		expect(result).toBeUndefined();

@@ -3,6 +3,19 @@
 
 export const MAX_SELECTED_TESTS: number;
 
+export const DIST_IMPORTS: readonly [
+	{
+		readonly source: "clients/lsp/server-traits.ts";
+		readonly output: "dist/clients/lsp/server-traits.js";
+	},
+];
+
+export function findStaleDistFiles(root: string): Array<{
+	source: string;
+	output: string;
+	reason: "missing" | "stale" | "unreadable";
+}>;
+
 export const TREE_SCANNING_GOVERNANCE_TESTS: string[];
 
 /** Tests-tree scanners armed on any tests/ change (#3472 recurrence, #3492). */

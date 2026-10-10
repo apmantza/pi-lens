@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	vi.doUnmock("../../clients/lsp/index.js");
+	vi.doUnmock("../../clients/lsp/capabilities.js");
 	vi.doUnmock("../../clients/formatters.js");
 	vi.doUnmock("../../clients/dispatch/integration.js");
 	vi.resetModules();
@@ -32,7 +32,7 @@ afterEach(() => {
 describe("lazy-import seam eviction (#1570)", () => {
 	it("clients/lsp-lazy.ts retries loadLspService after a rejected import", async () => {
 		vi.resetModules();
-		vi.doMock("../../clients/lsp/index.js", async () => {
+		vi.doMock("../../clients/lsp/capabilities.js", async () => {
 			lspAttempts.count += 1;
 			if (lspAttempts.count === 1) {
 				return Promise.reject(new Error("EMFILE: transient fs error"));

@@ -1,0 +1,18 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "codemode",
+			"arguments": {
+				"code": "try { await tools.read({ path: \"a.ts\" }); } catch {}\ntry { await tools.edit({ path: \"a.ts\", oldText: \"export const a = 1;\", newText: \"export const a = 2;\" }); } catch {}\ntext(\"ok\")"
+			},
+			"id": "c1"
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "edit done"
+		}
+	]
+]

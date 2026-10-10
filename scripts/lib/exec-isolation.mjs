@@ -49,9 +49,32 @@
  * but its call site keeps `cwd: root` too, unchanged from before this fix —
  * see scripts/build-dist-tsc.mjs.
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
+/**
+ * #4066: source-build tools use the lockfile's exact resolved versions, even
+ * when devDependencies are omitted. Never infer a pin from installed modules
+ * or a manifest range. This selects the root entry; nested copies are unrelated.
+ *
+ * @param {{ root: string, packageName: string }} args
+ * @returns {string}
+ */
+export function readLockedToolVersion({ root, packageName }) {
+	const lockPath = path.join(root, "package-lock.json");
+	const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+	const version = lock?.packages?.[`node_modules/${packageName}`]?.version;
+	if (
+		typeof version !== "string" ||
+		!/^\d+\.\d+\.\d+(?:-[\da-z.-]+)?(?:\+[\da-z.-]+)?$/i.test(version)
+	) {
+		throw new Error(
+			`${lockPath}: node_modules/${packageName} needs an exact locked version`,
+		);
+	}
+	return version;
+}
 
 /**
  * A freshly created, empty directory for the `npm exec --prefix` flag.

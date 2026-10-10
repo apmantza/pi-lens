@@ -2,7 +2,7 @@
 // tests/clients/write-autofix-attachment-message.test.ts before #2582 round 2.
 import { vi } from "vitest";
 
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => ({
 		supportsLSP: () => false,
 		touchFile: async () => ({ diags: [] }),

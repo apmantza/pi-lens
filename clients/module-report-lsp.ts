@@ -180,7 +180,7 @@ async function enrichModuleReportWithLspNow(
 	let getLSPService: () => LspServiceLike;
 	try {
 		({ getServersForFileWithConfig } = await import("./lsp/config.js"));
-		({ getLSPService } = await import("./lsp/index.js"));
+		({ getLSPService } = await import("./lsp/capabilities.js"));
 	} catch {
 		return NO_LSP;
 	}

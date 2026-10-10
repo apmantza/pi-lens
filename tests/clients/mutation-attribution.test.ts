@@ -29,12 +29,23 @@ import {
 	shouldArmObservationForTool,
 	_mutationAttributionSnapshotForTests,
 } from "../../clients/mutation-attribution.js";
+import { PI_LENS_TOOL_NAMES } from "../../clients/tool-config.js";
 import { classifyMutatingTool } from "../../clients/mutating-tool.js";
 import {
 	_seedProcessSingletonCellForTests,
 	PROCESS_SINGLETON_RESET_KIND,
 } from "../../clients/process-singletons.js";
 import { setupTestEnvironment } from "./test-utils.js";
+
+const OLD_PI_LENS_ATTRIBUTION_FIXTURE = JSON.parse(
+	fs.readFileSync(
+		new URL(
+			"../fixtures/mutation-attribution/observed-mutating-tools-v1-pi-lens.json",
+			import.meta.url,
+		),
+		"utf8",
+	),
+) as { version: number; tools: Array<{ name: string }> };
 
 beforeEach(() => {
 	resetMutationAttribution();
@@ -200,6 +211,44 @@ describe("#2430 item 2 — the arming predicate", () => {
 });
 
 describe("#2430 item 2 — persistence across sessions", () => {
+	it("does not learn a pi-lens registry tool from an old attribution record", () => {
+		const env = setupTestEnvironment("pi-lens-4139-old-record-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const dataDir = getProjectDataDir(env.tmpDir);
+			fs.mkdirSync(dataDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(dataDir, MUTATION_ATTRIBUTION_FILE),
+				JSON.stringify(OLD_PI_LENS_ATTRIBUTION_FIXTURE),
+			);
+			primePersistedMutationAttribution(env.tmpDir);
+
+			expect(lookupLearnedMutatingTool("lsp_navigation")).toBeUndefined();
+			expect(shouldArmObservationForTool("lsp_navigation")).toBe(false);
+			resetMutationAttribution();
+			noteObservedMutation("lsp_navigation", env.tmpDir);
+			expect(shouldArmObservationForTool("lsp_navigation")).toBe(false);
+			expect(
+				classifyMutatingTool({
+					toolName: "lsp_navigation",
+					input: { operation: "hover", path: "/tmp/unread.ts" },
+				}),
+			).toBeUndefined();
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("keeps MCP-only registry names available for third-party learning", () => {
+		expect(shouldArmObservationForTool("rebuild")).toBe(true);
+		noteObservedMutation("rebuild", undefined);
+		expect(lookupLearnedMutatingTool("rebuild")).toBe("session");
+		expect(PI_LENS_TOOL_NAMES).not.toContain("rebuild");
+	});
+
 	it("persists on the SECOND observation and a fresh session classifies from disk", () => {
 		const env = setupTestEnvironment("pi-lens-2430-persist-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;

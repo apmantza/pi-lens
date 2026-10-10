@@ -104,6 +104,22 @@ export function ephemeralStagingRoot(filePath: string): string | undefined {
 }
 
 /**
+ * True for a pi-owned temporary artifact: pi creates either a `pi-*` directory
+ * below the OS temp root or a file directly in that root. A non-pi directory
+ * such as `/tmp/capture` remains an ordinary project location. Resolve the
+ * nearest existing ancestor so output files need not exist yet.
+ */
+export function isPiOwnedTempPath(filePath: string): boolean {
+	const tmpRoot = realPathOfNearestExisting(os.tmpdir());
+	const real = realPathOfNearestExisting(filePath);
+	if (!isUnderDir(real, tmpRoot)) return false;
+	const relative = path.relative(tmpRoot, real);
+	if (relative.length === 0 || path.isAbsolute(relative)) return false;
+	const segments = relative.split(path.sep);
+	return segments.length === 1 || /^pi-/i.test(segments[0] ?? "");
+}
+
+/**
  * True for a directory inside a real git checkout below the host temporary
  * directory: the checkout root itself or any subdirectory of it. Such
  * checkouts are normal within one process and never persisted across

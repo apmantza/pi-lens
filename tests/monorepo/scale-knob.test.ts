@@ -36,13 +36,13 @@ describe("monorepo .pi-lens.json maxProjectFiles scale knob, end-to-end (#775 it
 		clearModuleGraphCache();
 	});
 
-	it("a root .pi-lens.json maxProjectFiles=3 flips the startup-scan verdict at its derived (1x) source-file budget", () => {
-		// startupScan ratio is 1x maxProjectFiles (project-scale.ts), so
-		// maxProjectFiles: 3 derives a startup-scan budget of 3 source files.
+	it("a root .pi-lens.json maxProjectFiles=3 flips the startup-scan verdict at its derived (1.25x) source-file budget", () => {
+		// startupScan ratio is 1.25x maxProjectFiles (project-scale.ts), so
+		// maxProjectFiles: 3 derives a startup-scan budget of 4 source files.
 		const pkg: MonorepoPackageSpec = {
 			name: "@scope/a",
 			dir: "packages/a",
-			files: fileMap(4), // one over the derived budget
+			files: fileMap(5), // one over the derived budget
 		};
 		const repo = makeMonorepo({
 			packages: [pkg],

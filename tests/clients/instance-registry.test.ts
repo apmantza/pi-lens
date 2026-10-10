@@ -607,23 +607,6 @@ describe("instance-registry", () => {
 			expect(parsed.instances).toEqual([]);
 		});
 
-		it("does not resurrect an entry whose last root was deregistered", async () => {
-			const {
-				registerInstance,
-				deregisterInstanceRoot,
-				updateHeartbeat,
-				_settleRegistryMutationsForTests,
-			} = await import("../../clients/instance-registry.js");
-			await registerInstance("/some/project");
-			await deregisterInstanceRoot("/some/project");
-
-			await updateHeartbeat();
-			await _settleRegistryMutationsForTests();
-
-			const parsed = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
-			expect(parsed.instances).toEqual([]);
-		});
-
 		it("does not re-register a root deregistered while its entry was already missing", async () => {
 			const {
 				registerInstance,
@@ -635,7 +618,7 @@ describe("instance-registry", () => {
 			fs.writeFileSync(lock, `${process.ppid} ${Date.now()}\n`);
 			await registerInstance("/some/project");
 			fs.rmSync(lock);
-			await deregisterInstanceRoot("/some/project");
+			await deregisterInstanceRoot("/some/project", "holder-1");
 
 			await updateHeartbeat();
 			await _settleRegistryMutationsForTests();

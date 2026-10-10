@@ -2095,6 +2095,65 @@ describe("release-QA codemode nested guard row (#3805)", () => {
 				fs.rmSync(dir, { recursive: true, force: true });
 			}
 		});
+
+		describe("reads the version from the binary's output, never its path", () => {
+			const probeFakePi = async (
+				dirName: string,
+				script: string,
+			): Promise<{ detail: string; status: string }> => {
+				const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-qa-4176-"));
+				try {
+					const binDir = path.join(dir, dirName);
+					fs.mkdirSync(binDir);
+					const fakePi = path.join(binDir, "fake-pi.mjs");
+					fs.writeFileSync(fakePi, `#!/usr/bin/env node\n${script}\n`);
+					fs.chmodSync(fakePi, 0o755);
+					return await runCodemodeNestedProbe({
+						piBin: fakePi,
+						env: { PATH: process.env.PATH },
+						scratchRoot: dir,
+					});
+				} finally {
+					fs.rmSync(dir, { recursive: true, force: true });
+				}
+			};
+
+			it("skips an old pi installed under a path that embeds a new version", async () => {
+				const probe = await probeFakePi(
+					"tools-9.9.9",
+					"console.log('0.98.9');",
+				);
+				expect(probe.status).toBe("unreachable");
+				expect(probe.detail).toContain("pi 0.98.9 has no built-in codemode");
+			});
+
+			it("does not skip a new pi for age under a path that embeds an old version", async () => {
+				const probe = await probeFakePi(
+					"tools-0.1.0",
+					"console.log('0.99.2');",
+				);
+				expect(probe.status).toBe("unreachable");
+				expect(probe.detail).not.toContain("no built-in codemode");
+				expect(probe.detail).toContain("pi-ai");
+			});
+
+			it("does not skip a new pi for age under a path with no version", async () => {
+				const probe = await probeFakePi("tools", "console.log('0.99.2');");
+				expect(probe.detail).not.toContain("no built-in codemode");
+				expect(probe.detail).toContain("pi-ai");
+			});
+
+			it("reports an unreadable version, not the path's, when --version fails", async () => {
+				const probe = await probeFakePi(
+					"tools-9.9.9",
+					"console.error('boom');process.exit(1);",
+				);
+				expect(probe.status).toBe("unreachable");
+				expect(probe.detail).toContain("could not read a pi version");
+				expect(probe.detail).not.toContain("9.9.9");
+				expect(probe.detail).not.toContain("has no built-in codemode");
+			});
+		});
 	});
 
 	describe("locating the pi binary's own pi-ai", () => {

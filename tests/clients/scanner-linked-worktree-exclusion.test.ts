@@ -67,8 +67,15 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { PythonDeadCodeClient } from "../../clients/dead-code-client.js";
+import {
+	classifyAndFilterFindings,
+	GitleaksClient,
+	type GitleaksFinding,
+} from "../../clients/gitleaks-client.js";
 import { JscpdClient } from "../../clients/jscpd-client.js";
+import { OpengrepClient } from "../../clients/opengrep-client.js";
 import { listNestedLinkedWorktreeRoots } from "../../clients/review-graph/git-identity.js";
+import { TrivyClient, worktreeSkipDirs } from "../../clients/trivy-client.js";
 import { gitExecFileSync } from "../support/git-fixture-env.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -436,5 +443,271 @@ describe("#4117 jscpd excludes every linked worktree under the scanned root", ()
 			false,
 		);
 		expect(exclusionRows()?.count).toBe(2);
+	});
+});
+
+describe("#4132 gitleaks, trivy and opengrep leave every linked worktree under the scanned root out of their scan", () => {
+	const okSpawn = async () => ({
+		error: undefined,
+		status: 0,
+		stdout: "",
+		stderr: "",
+	});
+
+	beforeEach(() => {
+		safeSpawnAsync.mockImplementation(okSpawn);
+	});
+
+	/** The argv of the run that starts with `verb` (`fs`, `scan`, `detect`). */
+	function callWith(verb: string): string[] {
+		const call = safeSpawnAsync.mock.calls.find(
+			(c) => (c[1] as string[] | undefined)?.[0] === verb,
+		);
+		return (call?.[1] as string[] | undefined) ?? [];
+	}
+
+	function flagValues(args: string[], flag: string): string[] {
+		return args.flatMap((a, i) => (a === flag ? [args[i + 1]] : []));
+	}
+
+	function symlinkedMain(): string {
+		const link = path.join(env.tmpDir, "main-link");
+		fs.symlinkSync(main, link, "dir");
+		return link;
+	}
+
+	async function trivyArgs(root = main): Promise<string[]> {
+		const client = new TrivyClient(false) as unknown as {
+			runScan: (cwd: string) => Promise<unknown>;
+		};
+		await client.runScan(root);
+		return callWith("fs");
+	}
+
+	async function opengrepArgs(root = main): Promise<string[]> {
+		const client = new OpengrepClient(false) as unknown as {
+			runScan: (cwd: string) => Promise<unknown>;
+		};
+		await client.runScan(root);
+		return callWith("scan");
+	}
+
+	/** Every `[allowlist] paths` entry of the config gitleaks was started with, and the findings it was given back. */
+	async function gitleaksRun(
+		root: string,
+		report: Array<{ File: string }> = [],
+	): Promise<{ paths: string[]; findings: GitleaksFinding[] }> {
+		let paths: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "detect") {
+				const toml = fs.readFileSync(
+					args[args.indexOf("--config") + 1] as string,
+					"utf-8",
+				);
+				const block = toml.match(/paths = \[\n([\s\S]*?)\n\]/)?.[1] ?? "";
+				paths = block
+					.split("\n")
+					.map((line) => JSON.parse(line.trim().replace(/,$/, "")) as string);
+				fs.writeFileSync(
+					args[args.indexOf("--report-path") + 1] as string,
+					JSON.stringify(
+						report.map((f) => ({
+							RuleID: "generic-api-key",
+							StartLine: 1,
+							...f,
+						})),
+					),
+				);
+			}
+			return okSpawn();
+		});
+		const client = new GitleaksClient(false) as unknown as {
+			runScan: (cwd: string) => Promise<{ findings: GitleaksFinding[] }>;
+		};
+		const result = await client.runScan(root);
+		return { paths, findings: result.findings };
+	}
+
+	function allowlisted(paths: string[], file: string): boolean {
+		return paths.some((p) => new RegExp(p).test(file));
+	}
+
+	describe("trivy fs --skip-dirs", () => {
+		it("skips a worktree under a name no list knows, next to the scratch-tree globs", async () => {
+			addWorktree("trees/alpha");
+			addWorktree("wt-beta");
+
+			const skips = flagValues(await trivyArgs(), "--skip-dirs");
+
+			expect(skips).toContain("trees/alpha");
+			expect(skips).toContain("wt-beta");
+			expect(skips).toContain("**/node_modules/**");
+		});
+
+		it("adds nothing when the root holds no linked worktree", async () => {
+			const skips = flagValues(await trivyArgs(), "--skip-dirs");
+
+			expect(skips.every((s) => s.startsWith("**/"))).toBe(true);
+		});
+
+		it("names the worktree relative to the root through a symlinked spelling of it", async () => {
+			addWorktree("trees/alpha");
+
+			const skips = flagValues(await trivyArgs(symlinkedMain()), "--skip-dirs");
+
+			expect(skips).toContain("trees/alpha");
+			expect(skips.some((s) => s.includes(".."))).toBe(false);
+		});
+
+		it("drops, with a count, a worktree whose path trivy would split or read as a glob", async () => {
+			addWorktree("trees/alpha");
+			addWorktree("a,b");
+			addWorktree("we[ird]");
+			addWorktree('q"x');
+			addWorktree("br{a}ce");
+
+			const skips = flagValues(await trivyArgs(), "--skip-dirs");
+
+			expect(skips).toContain("trees/alpha");
+			expect(skips.some((s) => /[,"[\]{}]/.test(s))).toBe(false);
+			const row = exclusionRows();
+			expect(row?.count).toBe(4);
+			expect(JSON.stringify(row)).toContain("trivy");
+		});
+
+		it("uses Windows separator rules and caps command-line growth", () => {
+			addWorktree("trees/alpha");
+			addWorktree("trees/beta");
+
+			const skips = worktreeSkipDirs(main, "\\", 20);
+
+			expect(skips).toEqual([]);
+			expect(exclusionRows()?.count).toBe(2);
+			expect(JSON.stringify(exclusionRows())).toContain(
+				"windows-command-line-cap",
+			);
+		});
+	});
+
+	describe("opengrep scan --exclude", () => {
+		it("does not add one wcmatch pattern per linked worktree", async () => {
+			addWorktree("trees/alpha");
+
+			const excludes = flagValues(await opengrepArgs(), "--exclude");
+
+			expect(excludes).toContain("node_modules");
+			expect(excludes.some((entry) => entry.includes("trees/alpha"))).toBe(
+				false,
+			);
+		});
+
+		it("adds nothing when the root holds no linked worktree", async () => {
+			const excludes = flagValues(await opengrepArgs(), "--exclude");
+
+			expect(excludes.some((e) => e.includes("/"))).toBe(false);
+		});
+	});
+
+	describe("gitleaks [allowlist] paths and the nested-repository backstop", () => {
+		it("does not let a prunable registration hide a plain directory at its old path", async () => {
+			const stale = addWorktree("trees/stale");
+			fs.rmSync(stale, { recursive: true, force: true });
+			fs.mkdirSync(stale, { recursive: true });
+			write(stale, ".env", "k=1\n");
+
+			const { findings, paths } = await gitleaksRun(main, [
+				{ File: path.join(stale, ".env") },
+			]);
+			// This is a plain directory after pruning, so the existing
+			// `nested-repository` backstop must not suppress its finding.
+			expect(allowlisted(paths, path.join(stale, ".env"))).toBe(false);
+			expect(findings[0]?.pathStatus).toBe("untracked");
+		});
+
+		it("allowlists everything under a worktree under a name no list knows, and nothing beside it", async () => {
+			addWorktree("trees/alpha");
+
+			const { paths } = await gitleaksRun(main);
+
+			expect(allowlisted(paths, path.join(main, "trees/alpha/.env"))).toBe(
+				true,
+			);
+			expect(allowlisted(paths, path.join(main, "trees/alpha"))).toBe(true);
+			expect(allowlisted(paths, path.join(main, "trees/alphabet/.env"))).toBe(
+				false,
+			);
+			expect(allowlisted(paths, path.join(main, "pkg/trees/alpha/.env"))).toBe(
+				false,
+			);
+			expect(allowlisted(paths, path.join(main, "src/.env"))).toBe(false);
+			// Anchored at the start: the same tail under another root is not it.
+			expect(
+				allowlisted(paths, path.join("/elsewhere", main, "trees/alpha/.env")),
+			).toBe(false);
+		});
+
+		it("adds nothing beyond the secrets-lane names when the root holds no linked worktree", async () => {
+			const { paths } = await gitleaksRun(main);
+
+			expect(paths.every((p) => p.startsWith("(?:^|[/\\\\])"))).toBe(true);
+		});
+
+		it("builds the entry from the root's own spelling when the root is a symlink", async () => {
+			addWorktree("trees/alpha");
+			const link = symlinkedMain();
+
+			const { paths } = await gitleaksRun(link);
+
+			expect(allowlisted(paths, path.join(link, "trees/alpha/.env"))).toBe(
+				true,
+			);
+			expect(allowlisted(paths, path.join(link, "trees/alphabet/.env"))).toBe(
+				false,
+			);
+		});
+
+		it("matches a worktree path with regex metacharacters literally", async () => {
+			addWorktree("we[ird]+(x)");
+
+			const { paths } = await gitleaksRun(main);
+
+			expect(allowlisted(paths, path.join(main, "we[ird]+(x)/.env"))).toBe(
+				true,
+			);
+			expect(allowlisted(paths, path.join(main, "weird+(x)/.env"))).toBe(false);
+			expect(allowlisted(paths, path.join(main, "wee/.env"))).toBe(false);
+		});
+
+		it("demotes a finding that still comes back from inside a worktree, with the reason on the record", async () => {
+			// Also pins the pre-existing `nested-repository` backstop.
+			addWorktree("trees/alpha");
+			write(main, "src/.env", "k=1\n");
+
+			const { findings } = await gitleaksRun(main, [
+				{ File: path.join(main, "trees/alpha/.env") },
+				{ File: path.join(main, "src/.env") },
+			]);
+
+			expect(findings.map((f) => f.pathStatus)).toEqual([
+				"nested-repository",
+				"untracked",
+			]);
+		});
+
+		it("classifies a finding in a worktree under a symlinked spelling of the root the same way", async () => {
+			// Also pins the pre-existing `nested-repository` backstop.
+			addWorktree("trees/alpha");
+			const link = symlinkedMain();
+			const finding: GitleaksFinding = {
+				ruleId: "generic-api-key",
+				file: path.join(link, "trees/alpha/.env"),
+				startLine: 1,
+			};
+
+			const [classified] = await classifyAndFilterFindings([finding], link);
+
+			expect(classified?.pathStatus).toBe("nested-repository");
+		});
 	});
 });

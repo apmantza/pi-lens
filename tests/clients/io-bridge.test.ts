@@ -610,6 +610,11 @@ describe("io-bridge v2", () => {
 			kind: "io-bridge-mutate-dropped",
 			subject: "f5:out-of-scope",
 		});
+		// #4185 round 1 F5: the v1 seam's `mutation-bridge-out-of-scope` is for
+		// v1 callers; an io-bridge drop has its own row and never a second one.
+		expect(rows.map((row) => row.kind)).not.toContain(
+			"mutation-bridge-out-of-scope",
+		);
 	});
 
 	it("records stale-lineage and a malformed epoch in the real sink", async () => {

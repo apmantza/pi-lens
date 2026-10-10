@@ -130,6 +130,17 @@ describe("review-graph build contains a web-tree-sitter trap to its file (#3605)
 		// costs one unit of the budget.
 		expect(wasmTrapCount()).toBe(trappedBefore + 1);
 		expect(buildFailedRows()).toEqual([]);
+
+		// #4010: grammar retirement counts DISTINCT inputs that trapped and have
+		// not healed, for the whole process, and this file shares one client. The
+		// trap above must heal before the next test traps another python file,
+		// or that second file retires python for a reason it did not cause. The
+		// trap is gone (mocks restored), so the next build re-extracts b.py and
+		// its own success removes it from the grammar's set.
+		vi.restoreAllMocks();
+		const healed = await buildOrUpdateGraph(tmpDir, [], new FactStore());
+		expect(symbolNames(healed)).toContain("trap_here_fn");
+		expect(getSharedTreeSitterClient()?.getLanguage("python")).not.toBeNull();
 	});
 
 	it("classifies a trap that escapes to the build's catch as wasm-trap, not a build error", async () => {
@@ -178,7 +189,10 @@ describe("review-graph build contains a web-tree-sitter trap to its file (#3605)
  * unchanged, so a one-off trap lost the file's symbols until someone edited
  * it; the cascade then gave its dependents a clean verdict. Every trap below
  * spends one unit of this file's process budget (`WASM_TRAP_BUDGET`, 3), and
- * the first `describe` spends one.
+ * the first `describe` spends one. Python is retired once two distinct python
+ * inputs are trapped and unhealed at the same time (#4010), so the first
+ * `describe` heals its input and the tests here trap one input at a time; the
+ * persistent trap is last because a charged input never heals.
  */
 describe("review graph after a contained trap (#3605 F2, F3)", () => {
 	// Persist only when a test flushes, on the main thread.

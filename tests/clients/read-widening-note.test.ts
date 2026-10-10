@@ -18,8 +18,10 @@ import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: vi.fn(),
 }));
 // The real logger, observed: rows are dropped in test mode after the
@@ -34,8 +36,9 @@ import {
 	getLastLoggedPhase,
 	logLatency,
 } from "../../clients/latency-logger.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 type Content = Array<{ type: string; text?: string }>;
 
@@ -97,19 +100,23 @@ async function readToolCall(
 		treeSitter?: ReturnType<typeof stubTreeSitter>;
 	} = {},
 ) {
-	await handleToolCall({
-		event: { toolName: "read", toolCallId, input },
-		ctx: { cwd: runtime.projectRoot },
-		lensEnabled: true,
-		getFlag: opts.getFlag ?? guardOn,
-		dbg: () => {},
-		runtime,
-		cacheManager: new CacheManager(false),
-		ensureLSPConfigInitialized: async () => {},
-		updateLspStatus: () => {},
-		resetLSPService: () => {},
-		...(opts.treeSitter ? { getTreeSitterClient: () => opts.treeSitter } : {}),
-	} as never);
+	await runHandlerExpectingNoThrow(() =>
+		handleToolCall({
+			event: { toolName: "read", toolCallId, input },
+			ctx: { cwd: runtime.projectRoot },
+			lensEnabled: true,
+			getFlag: opts.getFlag ?? guardOn,
+			dbg: () => {},
+			runtime,
+			cacheManager: new CacheManager(false),
+			ensureLSPConfigInitialized: async () => {},
+			updateLspStatus: () => {},
+			resetLSPService: () => {},
+			...(opts.treeSitter
+				? { getTreeSitterClient: () => opts.treeSitter }
+				: {}),
+		} as never),
+	);
 }
 
 /**

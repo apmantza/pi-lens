@@ -28,6 +28,10 @@ import {
 	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
 } from "../clients/test-utils.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 
 const fakeServer = fileURLToPath(
 	new URL("../fixtures/fake-lsp-server.mjs", import.meta.url),
@@ -121,6 +125,10 @@ describe("#3310 empty first publish from an indexing push server", () => {
 	let service: { shutdown: () => Promise<void> } | undefined;
 
 	beforeAll(async () => {
+		// Host-boundary stub: this fixture intentionally launches the project-local
+		// PHP shim in a project pi has trusted. The #4248 trust gate otherwise
+		// correctly refuses the shim before the #3310 wait-policy witness runs.
+		setProjectTrustState("trusted");
 		const lsp = await import("../../clients/lsp/index.js");
 		service = lsp.getLSPService();
 	});
@@ -134,6 +142,7 @@ describe("#3310 empty first publish from an indexing push server", () => {
 				await service?.shutdown();
 			},
 		});
+		resetProjectTrust();
 	});
 
 	it("reports the finding the indexing server publishes after its empty first push", async () => {

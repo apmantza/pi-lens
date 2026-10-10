@@ -482,6 +482,7 @@ Thanks goes to these wonderful people:
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/pandas9"><img src="https://avatars.githubusercontent.com/u/81386636?v=4" width="100px;" alt=""/><br /><sub><b>pandas9</b></sub></a><br /><a href="#bug-pandas9" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/renzooliveira"><img src="https://avatars.githubusercontent.com/u/10881850?v=4" width="100px;" alt=""/><br /><sub><b>Renzo Oliveira</b></sub></a><br /><a href="#ideas-renzooliveira" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/rastarr"><img src="https://avatars.githubusercontent.com/u/2160922?v=4" width="100px;" alt=""/><br /><sub><b>Martin</b></sub></a><br /><a href="#bug-rastarr" title="Bug reports">🐛</a> <a href="#ideas-rastarr" title="Ideas & Planning">🤔</a></td>
     </tr>
   </tbody>
 </table>

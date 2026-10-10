@@ -51,9 +51,9 @@ import { setupTestEnvironment } from "./test-utils.js";
 const lspFixture = vi.hoisted(() => ({
 	service: undefined as unknown,
 }));
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => {
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => {
 	const actual =
-		await importOriginal<typeof import("../../clients/lsp/index.js")>();
+		await importOriginal<typeof import("../../clients/lsp/capabilities.js")>();
 	return {
 		...actual,
 		getLSPService: () => lspFixture.service ?? actual.getLSPService(),

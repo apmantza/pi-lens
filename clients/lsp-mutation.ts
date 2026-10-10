@@ -96,7 +96,20 @@ interface LspMutationCacheManager {
 
 export interface LspMutationContext {
 	cwd: string;
+	/** Stable session id for the activation issuing the edit. */
+	sessionId?: string;
 	correlationId: string;
+	/**
+	 * #4187 R4-1: the pi tool call this mutation belongs to, when one issued
+	 * it (`tools/lsp-navigation.ts` passes its `_toolCallId`). The read guard
+	 * licenses an authorship advance per call, and an LSP edit writes a set
+	 * wider than the one the call named (a rename's importers), so only a
+	 * licensed path may advance. A caller with no call of its own — a
+	 * server-initiated `workspace/applyEdit` (`clients/lsp/client.ts`) or the
+	 * agent_end quickfix drain — names none, and its write can only end an
+	 * authorship whose bytes it changed.
+	 */
+	toolCallId?: string;
 	tool: string;
 	/**
 	 * `"lsp-edit"` is the generic/legacy value; `"lsp-rename"` and
@@ -108,7 +121,16 @@ export interface LspMutationContext {
 	source: "lsp-edit" | "lsp-rename" | "lsp-execute-command" | "autofix";
 	runtime?: LspMutationRuntime;
 	readGuard?: {
-		recordWritten: (filePath: string, opts: { stampFileTime: false }) => void;
+		recordWritten: (
+			filePath: string,
+			opts: {
+				stampFileTime: false;
+				advanceAuthorship: true;
+				toolCallId?: string;
+				authoredRanges?: Array<[number, number]>;
+				authorship?: "partial" | "unknown";
+			},
+		) => void;
 	};
 	cacheManager?: LspMutationCacheManager;
 	/** Existing autonomous-write publishers. Agent-owned navigation edits do not set these. */
@@ -266,7 +288,10 @@ function uniqueDetails(
 		const key = keyFor(detail.filePath);
 		const previous = byPath.get(key);
 		if (!previous) {
-			byPath.set(key, detail);
+			byPath.set(key, {
+				...detail,
+				ranges: detail.ranges ?? (detail.range ? [detail.range] : undefined),
+			});
 			continue;
 		}
 		byPath.set(key, {
@@ -278,6 +303,13 @@ function uniqueDetails(
 							end: Math.max(previous.range.end, detail.range.end),
 						}
 					: (previous.range ?? detail.range),
+			ranges: [
+				...(previous.ranges ?? (previous.range ? [previous.range] : [])),
+				...(detail.ranges ?? (detail.range ? [detail.range] : [])),
+			],
+			authorshipUnknown:
+				previous.authorshipUnknown === true ||
+				detail.authorshipUnknown === true,
 			importsChanged: previous.importsChanged || detail.importsChanged,
 		});
 	}
@@ -289,6 +321,7 @@ function uniqueDetails(
 				// range is still enough to invalidate the touched-file turn state;
 				// never synchronously re-read the whole file here.
 				range: { start: 1, end: 1 },
+				authorshipUnknown: true,
 				importsChanged: true,
 			},
 	);
@@ -339,8 +372,24 @@ function bookkeepLspMutation(
 		if (sessionLive && context.readGuard) {
 			try {
 				// #3525: the server computed these bytes; the agent never saw
-				// them: authorship, not FileTime.
-				context.readGuard.recordWritten(filePath, { stampFileTime: false });
+				// them: authorship, not FileTime. Nor an unconditional advance of
+				// an existing authorship: the call's own `tool_call` retire is
+				// what licenses it, for the paths that call checked (#4187 R4-1).
+				context.readGuard.recordWritten(filePath, {
+					stampFileTime: false,
+					advanceAuthorship: true,
+					...(detail.authorshipUnknown !== true &&
+						detail.ranges !== undefined && {
+							authorship: "partial",
+							authoredRanges: detail.ranges.map(
+								({ start, end }) => [start, end] as [number, number],
+							),
+						}),
+					...(detail.authorshipUnknown === true && { authorship: "unknown" }),
+					...(context.toolCallId !== undefined && {
+						toolCallId: context.toolCallId,
+					}),
+				});
 			} catch (err) {
 				context.dbg?.(
 					`lsp mutation read-guard stamp failed for ${filePath}: ${err}`,
@@ -380,13 +429,32 @@ function bookkeepLspMutation(
 				}
 			} else {
 				try {
+					const editRanges =
+						detail.ranges && detail.authorshipUnknown !== true
+							? detail.ranges.map(
+									({ start, end }) => [start, end] as [number, number],
+								)
+							: detail.range && detail.authorshipUnknown !== true
+								? [[detail.range.start, detail.range.end] as [number, number]]
+								: undefined;
 					const recorded = bridge.recordMutation({
 						filePath,
 						kind: "edit",
-						editRanges: detail.range
-							? [[detail.range.start, detail.range.end]]
-							: undefined,
+						...(detail.range !== undefined && {
+							touchedLines: [detail.range.start, detail.range.end] as [
+								number,
+								number,
+							],
+						}),
+						...(detail.authorshipUnknown === true && {
+							authorshipUnknown: true,
+						}),
+						...(editRanges !== undefined ? { editRanges } : {}),
+						...(context.sessionId !== undefined && {
+							sessionId: context.sessionId,
+						}),
 						consumer: context.tool,
+						provenance: "observed",
 						// Real value threaded through, not the bridge's own
 						// historical `false` default (#2450 review round 2, F1) —
 						// the tsserver organize-imports/add-import case is exactly
@@ -397,6 +465,11 @@ function bookkeepLspMutation(
 						// edit (#2450 review round 2, F3).
 						deferAutofix: false,
 						...(context.session && { lineage: context.session }),
+						// #4187 R4-1: the same license the direct branch threads, so
+						// the two branches stay equivalent for the same write.
+						...(context.toolCallId !== undefined && {
+							toolCallId: context.toolCallId,
+						}),
 					});
 					if (!recorded) {
 						context.dbg?.(
@@ -433,7 +506,7 @@ function bookkeepLspMutation(
 						detail.range ?? { start: 1, end: 1 },
 						detail.importsChanged ?? true,
 						context.cwd,
-						runtime?.telemetrySessionId,
+						context.sessionId ?? runtime?.telemetrySessionId,
 						undefined,
 						// #2504 review round 2 (F1). #2504 added a containment
 						// filter to `addModifiedRange` and gave it `cwd` as the

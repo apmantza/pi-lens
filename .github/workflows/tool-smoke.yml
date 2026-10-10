@@ -339,6 +339,28 @@ jobs:
       - name: Build dist
         run: npm run build:dist
 
+      # #3939: the official Docker server has no installer-registry entry. Keep
+      # this release pinned to the GitHub asset digest, install it under the
+      # runner's disposable TMPDIR, and add only that directory to PATH so the
+      # real LSP client can measure it in the fixture/capability/idle lanes.
+      - name: Install official Docker language server v0.20.1
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) asset="docker-language-server-linux-amd64-v0.20.1"; digest="01907aa5b0eae11e44cffea0a993d08aa155542a9af570295dd1dff39e67692a" ;;
+            aarch64|arm64) asset="docker-language-server-linux-arm64-v0.20.1"; digest="bd56c7815e0a22cfb708669f3d5e817de91d9b54039ff7e52867142a132ad8d7" ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          dest="$RUNNER_TEMP/pi-lens-docker-language-server"
+          mkdir -p "$dest/bin"
+          curl --fail --location --proto '=https' --proto-redir '=https' --silent --show-error \
+            "https://github.com/docker/docker-language-server/releases/download/v0.20.1/$asset" \
+            --output "$dest/bin/docker-language-server"
+          printf '%s  %s\n' "$digest" "$dest/bin/docker-language-server" | sha256sum --check --status
+          chmod +x "$dest/bin/docker-language-server"
+          echo "$dest/bin" >> "$GITHUB_PATH"
+          "$dest/bin/docker-language-server" --version
+
       # `id:` + a captured log (#2723): this is one of the six steps whose
       # outcome can actually turn the job red (no continue-on-error), so the
       # final notify step below needs both this step's `outcome` and its raw

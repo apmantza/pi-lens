@@ -11,8 +11,8 @@
  * "unmeasured"` line to `"transparent"` in clients/lsp/server.ts and adds its
  * reason row to tests/config/lsp-idle-eviction-reasons.json, in the working
  * tree. The workflow's second create-pull-request step commits those edits and
- * the generated changelog to `bot/lsp-idle-evict-promote` as a DRAFT PR; it is
- * never merged here.
+ * the generated user-facing changelog fragment to `bot/lsp-idle-evict-promote`
+ * as a DRAFT PR; it is never merged here.
  * It also emits one user-facing changelog fragment naming the promoted servers.
  *
  *   node scripts/promote-lsp-idle-eviction.mjs --summary <path> [--body <path>]
@@ -113,7 +113,7 @@ export function promoteFromSummary(opts) {
 			];
 			fs.writeFileSync(
 				opts.changelogPath,
-				`---\nsection: Changed\naudience: user\n---\n\n- Idle eviction is now enabled for ${serverIds.map((serverId) => `\`${serverId}\``).join(", ")} after consecutive safe measurements (refs #3989).\n`,
+				`---\nsection: Changed\naudience: user\n---\n\n- **Idle eviction enabled for measured servers (refs #3989)** — ${serverIds.map((serverId) => `\`${serverId}\``).join(", ")} after consecutive safe measurements.\n`,
 			);
 		}
 		return plan.promoted.map((p) => p.serverId);

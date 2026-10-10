@@ -11,8 +11,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	_resetStartupScanMaxEntriesForTests,
 	_resetStartupScanVerdictTtlForTests,
 	countSourceFilesWithinLimit,
+	getStartupScanMaxEntries,
 	getStartupScanVerdictTtlMs,
 	isStartupScanVerdictFresh,
 	type StartupScanContext,
@@ -20,6 +22,11 @@ import {
 	resolveStartupScanContextAsync,
 	__testing,
 } from "../../clients/startup-scan.js";
+import { _resetProjectScaleBaseForTests } from "../../clients/project-scale.js";
+import {
+	getProjectSnapshotPath,
+	loadProjectSnapshot,
+} from "../../clients/project-snapshot.js";
 import { setupTestEnvironment } from "./test-utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -27,6 +34,8 @@ import * as path from "node:path";
 afterEach(() => {
 	delete process.env.PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS;
 	_resetStartupScanVerdictTtlForTests();
+	delete process.env.PI_LENS_STARTUP_SCAN_MAX_ENTRIES;
+	_resetStartupScanMaxEntriesForTests();
 });
 
 function makeVerdict(
@@ -39,10 +48,23 @@ function makeVerdict(
 		canWarmCaches: false,
 		reason: "too-many-source-files",
 		sourceFileCount: 5000,
+		maxProjectFiles: 2500,
+		maxScanEntries: getStartupScanMaxEntries(),
 		computedAt: Date.now(),
 		...overrides,
 	};
 }
+
+/**
+ * Persisted verdicts written by the released 4.4.0 writer (`clients/
+ * startup-scan.ts` and `clients/project-snapshot.ts` at origin/master
+ * 551e04e39, byte-identical to v4.4.0), the last writer that stored no bound
+ * on a size verdict. Provenance: `generate-released-writer.mjs` beside them.
+ */
+const RELEASED_CORPUS = path.join(
+	import.meta.dirname,
+	"../fixtures/startup-scan/released-4.4.0",
+);
 
 describe("getStartupScanVerdictTtlMs", () => {
 	it("uses one cache identity for equivalent Windows root spellings", () => {
@@ -103,6 +125,92 @@ describe("isStartupScanVerdictFresh", () => {
 		const verdict = makeVerdict();
 		delete verdict.computedAt;
 		expect(isStartupScanVerdictFresh(verdict)).toBe(false);
+	});
+
+	it("fails closed for a persisted verdict written before maxProjectFiles was stored (#4126 F2)", () => {
+		const verdict = makeVerdict();
+		delete verdict.maxProjectFiles;
+		expect(isStartupScanVerdictFresh(verdict)).toBe(false);
+	});
+
+	it("fails closed for a persisted verdict written before maxScanEntries was stored (#4126 N2)", () => {
+		const verdict = makeVerdict({ reason: "too-many-entries" });
+		delete verdict.maxScanEntries;
+		expect(isStartupScanVerdictFresh(verdict)).toBe(false);
+	});
+
+	// #4126 N2: the user followed the `too-many-entries` hint and raised
+	// PI_LENS_STARTUP_SCAN_MAX_ENTRIES, and the next session still reused the
+	// stored verdict (the entry cap was never compared). Both reasons: a verdict
+	// is fresh only while every bound that produced it still holds, because the
+	// two bounds share one walk and a change in either can flip the reason.
+	it.each(["too-many-entries", "too-many-source-files"] as const)(
+		"treats a changed PI_LENS_STARTUP_SCAN_MAX_ENTRIES as stale before the TTL expires for a %s verdict (#4126 N2)",
+		(reason) => {
+			const verdict = makeVerdict({ reason, maxScanEntries: 100 });
+			process.env.PI_LENS_STARTUP_SCAN_MAX_ENTRIES = "100000";
+			_resetStartupScanMaxEntriesForTests();
+			expect(isStartupScanVerdictFresh(verdict)).toBe(false);
+		},
+	);
+
+	// #4126 N2: the record a user upgrading from any release through v4.4.0
+	// already has on disk. It must load (not a parse error) and count stale
+	// inside its TTL, so the first session after the upgrade re-walks once and
+	// writes a record that carries both bounds.
+	it.each(["too-many-source-files", "too-many-entries"] as const)(
+		"loads a released 4.4.0 %s verdict (no bound stored) and counts it stale within its TTL (#4126 N2)",
+		(reason) => {
+			const env = setupTestEnvironment("pi-lens-scan-released-verdict-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const cwd = path.join(env.tmpDir, "project");
+				const cacheDir = path.dirname(getProjectSnapshotPath(cwd));
+				fs.mkdirSync(cacheDir, { recursive: true });
+				for (const name of [
+					"project-snapshot.json.gz",
+					"project-snapshot.meta.json",
+				]) {
+					fs.copyFileSync(
+						path.join(RELEASED_CORPUS, reason, name),
+						path.join(cacheDir, name),
+					);
+				}
+				const verdict = loadProjectSnapshot(cwd)?.startupScan;
+				expect(verdict?.reason).toBe(reason);
+				expect(verdict).not.toHaveProperty("maxProjectFiles");
+				expect(verdict).not.toHaveProperty("maxScanEntries");
+				expect(typeof verdict?.computedAt).toBe("number");
+				expect(
+					isStartupScanVerdictFresh(verdict!, (verdict!.computedAt ?? 0) + 1),
+				).toBe(false);
+			} finally {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+				env.cleanup();
+			}
+		},
+	);
+
+	it("treats a changed maxProjectFiles as stale before the TTL expires (#4126 F2)", () => {
+		const env = setupTestEnvironment("pi-lens-scan-bound-change-");
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".pi-lens.json"),
+				JSON.stringify({ maxProjectFiles: 5000 }),
+			);
+			const verdict = makeVerdict({
+				cwd: env.tmpDir,
+				scanRoot: env.tmpDir,
+				projectRoot: env.tmpDir,
+				sourceFileCount: 6000,
+			});
+			expect(isStartupScanVerdictFresh(verdict)).toBe(false);
+		} finally {
+			env.cleanup();
+			_resetProjectScaleBaseForTests();
+		}
 	});
 
 	it("never TTLs a home-dir verdict, however old", () => {

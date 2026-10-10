@@ -196,6 +196,7 @@ export interface MutatingToolClassification {
 	kind: MutationKind;
 	touchedLines?: [number, number];
 	editRanges?: [number, number][];
+	authorshipUnknown?: boolean;
 	preflightError?: string;
 	editBatchSummary?: ReadGuardEditBatchSummary;
 	/** Set when an adapter recognized the shape but could not name the lines. */
@@ -892,8 +893,11 @@ export function classifyMutatingTool(
 export interface BridgeMutationEntry {
 	filePath: string;
 	kind: MutationKind;
+	/** Stable activation identity for durable turn-state attribution. */
+	sessionId?: string;
 	touchedLines?: [number, number];
 	editRanges?: [number, number][];
+	authorshipUnknown?: boolean;
 	/** Producer identity, surfaced as the tool name on the classification. */
 	consumer?: string;
 	/**
@@ -929,6 +933,16 @@ export interface BridgeMutationEntry {
 	 */
 	provenance?: "observed" | "settled-sweep";
 	/**
+	 * #4187 R4-1: the pi tool call this write belongs to, when one exists. The
+	 * read guard licenses an authorship advance per call
+	 * (`ReadGuard.noteCheckedPaths`), and a bytes-less record advances only a
+	 * path its OWN call checked: a producer with no call of its own (a
+	 * server-initiated `workspace/applyEdit`, a drain, a co-process extension)
+	 * names none, so its write can only end an authorship. The guard sanitizes
+	 * it, so a producer passes the host's raw id.
+	 */
+	toolCallId?: string;
+	/**
 	 * #3521: the read guard's branch epoch the producer captured before it
 	 * awaited (the agent_settled sweep). A `/tree` in between means the write
 	 * is not credited to the new branch. Absent: the write is current.
@@ -961,6 +975,7 @@ export function classifyBridgeMutation(
 		kind: entry.kind,
 		touchedLines: entry.touchedLines,
 		editRanges: entry.editRanges,
+		authorshipUnknown: entry.authorshipUnknown,
 		provenance,
 		source: provenance === "bridge" ? "mutation-bridge" : "observed-mutation",
 	};

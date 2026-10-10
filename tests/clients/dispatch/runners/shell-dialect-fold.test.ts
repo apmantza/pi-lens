@@ -32,7 +32,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawn = vi.fn((..._args: unknown[]) => ({
@@ -68,14 +68,23 @@ const PLAIN_SH = "F=1\necho $F\n";
 const SHEBANG_SH = "#!/bin/sh\nF=1\necho $F\n";
 
 describe("#3968 fold arms — dispatch-level delivery", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
 		vi.resetModules();
+		// Host-boundary stub: the custom-covers arms intentionally exercise a
+		// project custom LSP in a project pi has trusted. Import after the module
+		// reset so the config seam and this stub share one trust singleton.
+		const trust = await import("../../../../clients/project-trust.js");
+		trust.setProjectTrustState("trusted");
 		safeSpawn.mockReset();
 		safeSpawnAsync.mockReset();
 		logLatency.mockReset();
 		safeSpawnAsync.mockImplementation((...args: Parameters<typeof safeSpawn>) =>
 			Promise.resolve(safeSpawn(...args)),
 		);
+	});
+
+	afterEach(async () => {
+		(await import("../../../../clients/project-trust.js")).resetProjectTrust();
 	});
 
 	/** The fold seam: real registry + real runner + real covers selection. */

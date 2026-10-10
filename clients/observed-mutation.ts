@@ -256,6 +256,13 @@ export interface ObservedReplayEntry {
 	editRanges?: [number, number][];
 	consumer?: string;
 	provenance?: "observed" | "settled-sweep";
+	/**
+	 * #4187 R4-1: the call whose `tool_call` licensed these paths
+	 * (`ReadGuard.noteCheckedPaths`), so the replay's authorship advance is
+	 * judged against the set that call actually checked. The settled sweep
+	 * replays with no call of its own and names none.
+	 */
+	toolCallId?: string;
 	/** #3521: see `BridgeMutationEntry.readGuardBranchEpoch`. */
 	readGuardBranchEpoch?: number;
 	/** #3620: see `BridgeMutationEntry.lineage`. */
@@ -775,6 +782,12 @@ export interface ArmObservationArgs {
 	 * parked turn counts as dead.
 	 */
 	isLiveTurn?: (turnIndex: number) => boolean;
+	/**
+	 * #4131 (#4187 R2-3): handed every file the observation will replay, before
+	 * the tool runs. A directory target replays its entries, not the path the
+	 * input named, so the caller's pre-write check must see them.
+	 */
+	onUniverse?: (paths: readonly string[]) => void;
 	signal?: AbortSignal;
 	dbg?: (msg: string) => void;
 }
@@ -833,6 +846,7 @@ export async function armObservedMutation(
 	const outcome = await withBounds(
 		async () => {
 			const universe = await collectObservationUniverse(args.targetPath);
+			args.onUniverse?.(universe.paths);
 			const captured = await captureFileStatsForPaths(universe.paths, {
 				withHashes: true,
 				hashBudgetBytes: OBSERVED_HASH_BUDGET_BYTES,
@@ -1182,6 +1196,9 @@ export async function settleObservedMutation(
 			editRanges: editRanges && editRanges.length > 1 ? editRanges : undefined,
 			consumer: args.toolName,
 			provenance: "observed",
+			// #4187 R4-1: the armed call licensed the universe it collected, so
+			// its replay may advance exactly those paths and no other.
+			...(args.toolCallId !== undefined && { toolCallId: args.toolCallId }),
 		});
 		if (accepted) {
 			replayed += 1;

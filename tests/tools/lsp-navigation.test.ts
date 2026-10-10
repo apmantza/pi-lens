@@ -15,7 +15,7 @@ const mocked = vi.hoisted(() => ({
 	service: null as unknown,
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => mocked.service,
 }));
 

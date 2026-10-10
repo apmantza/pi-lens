@@ -10,11 +10,19 @@
 
 import type { CacheManager } from "./cache-manager.js";
 import { emitBounded } from "./bounded-telemetry.js";
+import {
+	boundDeferredTargets,
+	mergeDeferredTargets,
+	TEST_RUNNER_MAX_PERSISTED_TARGETS,
+} from "./deferred-test-targets.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { consumeTestFindings, peekTestFindings } from "./runtime-context.js";
-import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
+import type {
+	DeferredTestTarget,
+	TestRunnerFindingsCache,
+} from "./project-diagnostics/runner-adapters/runner-findings.js";
 import type { TestRunnerFileSequence } from "./project-diagnostics/runner-adapters/runner-findings.js";
 
 const MAX_PENDING_DELIVERIES = 32;
@@ -33,20 +41,57 @@ interface PendingDelivery {
 
 const pending = new Map<string, PendingDelivery>();
 
-function logDeliveredVerdicts(
+interface StaleVerdict {
+	file: string;
+	sourceFile: string;
+	/** The runner that produced the verdict, or `undefined` on a record written before it was carried. */
+	runner: string | undefined;
+	gap: number;
+}
+
+/**
+ * One line per stale verdict, naming the file whose newer state invalidated the
+ * run and the re-queue action taken for it. The `known`/`unknown` distinction
+ * is already settled by the caller: an `unknown` sequence is never "current"
+ * and never reaches here as stale.
+ */
+function staleVerdictNotice(stale: readonly StaleVerdict[]): string {
+	return stale
+		.map(
+			(entry) =>
+				`verdict for an older version of ${entry.sourceFile} (${entry.gap} edit${
+					entry.gap === 1 ? "" : "s"
+				} ago); ${entry.runner ? "re-running" : "re-run manually"}`,
+		)
+		.join("\n");
+}
+
+/**
+ * #2542 ask 3: a stale async verdict is delivered with its gap stated, and a
+ * run is queued for the current file sequence. Delivery stays information-
+ * preserving (#2523 deliver-never-drop); only the gap is added and a re-run
+ * requested. An `unknown` sequence keeps its own state and queues nothing.
+ *
+ * The re-queue goes through the deferred-target set the turn-end selection
+ * already dispatches first next turn (#2522), so the run for the current bytes
+ * is the same mechanism as an unfinished batch, bounded and session-stamped.
+ * The re-queue is skipped for a stale verdict with no carried runner (a cache
+ * written between #2973 and this change); its gap is still stated.
+ */
+function settleDeliveredVerdicts(
 	cacheManager: CacheManager,
 	cwd: string,
 	runtime: RuntimeCoordinator,
 	delivery: PendingDelivery,
 ): void {
-	const verdicts = cacheManager.readCache<TestRunnerFindingsCache>(
+	const data = cacheManager.readCache<TestRunnerFindingsCache>(
 		"test-runner-findings",
 		cwd,
-	)?.data?.verdicts;
+	)?.data;
 	let knownCount = 0;
-	let staleCount = 0;
 	let unknownCount = 0;
-	for (const verdict of verdicts ?? []) {
+	const stale: StaleVerdict[] = [];
+	for (const verdict of data?.verdicts ?? []) {
 		const evidence: TestRunnerFileSequence = verdict.fileSeq ?? {
 			state: "unknown",
 			reason: "legacy-cache-record",
@@ -62,9 +107,44 @@ function logDeliveredVerdicts(
 		}
 		knownCount += 1;
 		const currentFileSeq = runtime.getFileSeq(verdict.sourceFile);
-		if (currentFileSeq > evidence.value) staleCount += 1;
+		if (currentFileSeq <= evidence.value) continue;
+		stale.push({
+			file: verdict.file,
+			sourceFile: verdict.sourceFile,
+			runner: verdict.runner,
+			gap: currentFileSeq - evidence.value,
+		});
 	}
 	if (knownCount === 0 && unknownCount === 0) return;
+
+	const rerunEntries: DeferredTestTarget[] = [];
+	for (const entry of stale) {
+		if (!entry.runner) continue;
+		rerunEntries.push({
+			testFile: entry.file,
+			sourceFile: entry.sourceFile,
+			runner: entry.runner,
+			attempts: 0,
+			sessionId: delivery.sessionId,
+		});
+	}
+
+	if (data && stale.length > 0) {
+		cacheManager.writeCache(
+			"test-runner-findings",
+			{
+				...data,
+				content: `${staleVerdictNotice(stale)}\n${data.content}`,
+				deferredTargets: boundDeferredTargets(
+					mergeDeferredTargets(data.deferredTargets ?? [], rerunEntries),
+					TEST_RUNNER_MAX_PERSISTED_TARGETS,
+					(entry) => entry.sessionId === delivery.sessionId,
+				),
+			},
+			cwd,
+		);
+	}
+
 	logLatency({
 		type: "phase",
 		phase: "test_runner_verdict_delivery",
@@ -74,8 +154,12 @@ function logDeliveredVerdicts(
 			sessionId: delivery.sessionId,
 			generation: delivery.generation,
 			verdictCount: knownCount,
-			staleCount,
+			staleCount: stale.length,
 			unknownCount,
+			// Bounded so one pathological session cannot grow the row without
+			// limit; the full count is `staleCount` beside it.
+			staleGaps: stale.map((entry) => entry.gap).slice(0, 32),
+			rerunQueued: rerunEntries.length,
 		},
 	});
 }
@@ -366,7 +450,7 @@ export function consumeStagedTestRunnerFindings(args: {
 		record(deliveryKey, "superseded", delivery, { currentGeneration });
 		return undefined;
 	}
-	logDeliveredVerdicts(args.cacheManager, args.cwd, args.runtime, delivery);
+	settleDeliveredVerdicts(args.cacheManager, args.cwd, args.runtime, delivery);
 	const findings = consumeTestFindings(
 		args.cacheManager,
 		args.cwd,

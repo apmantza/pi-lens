@@ -39,8 +39,10 @@ const fakeService = makeLspServiceDouble({
 	getLastKnownDiagnostics,
 });
 
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: () => fakeService,
 }));
 

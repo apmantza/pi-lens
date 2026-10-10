@@ -1,0 +1,565 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "lens": {
+      "x-stability": "stable"
+    },
+    "lsp": {
+      "type": "object",
+      "additionalProperties": true,
+      "x-stability": "stable",
+      "properties": {
+        "enabled": {
+          "x-stability": "stable"
+        },
+        "servers": {
+          "type": "object",
+          "x-stability": "experimental",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true,
+            "x-stability": "experimental",
+            "properties": {
+              "covers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-stability": "experimental"
+                },
+                "x-merge-strategy": "replace",
+                "x-stability": "experimental"
+              },
+              "name": {
+                "type": "string",
+                "x-stability": "experimental"
+              },
+              "enabled": {
+                "type": "boolean",
+                "x-stability": "experimental"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "language",
+                  "auxiliary"
+                ],
+                "x-stability": "experimental"
+              },
+              "command": {
+                "x-stability": "experimental"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-stability": "experimental"
+                },
+                "x-stability": "experimental"
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-stability": "experimental"
+                },
+                "x-stability": "experimental"
+              },
+              "rootMarkers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "x-stability": "experimental"
+                },
+                "x-stability": "experimental"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "x-stability": "experimental"
+                },
+                "x-stability": "experimental"
+              },
+              "initializationOptions": {
+                "type": "object",
+                "additionalProperties": true,
+                "x-stability": "experimental"
+              }
+            }
+          }
+        },
+        "serverOverrides": {
+          "type": "object",
+          "x-stability": "experimental",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": true,
+            "x-stability": "experimental",
+            "properties": {
+              "command": { "x-stability": "experimental" },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string", "x-stability": "experimental" },
+                "x-stability": "experimental"
+              },
+              "initializationOptions": {
+                "type": "object",
+                "additionalProperties": true,
+                "x-stability": "experimental"
+              }
+            }
+          }
+        },
+        "disabledServers": {
+          "type": "array",
+          "x-stability": "experimental",
+          "x-deny": "array-union"
+        },
+        "warmFiles": {
+          "type": "array",
+          "x-stability": "experimental"
+        }
+      }
+    },
+    "format": {
+      "x-stability": "stable"
+    },
+    "autofix": {
+      "x-stability": "stable"
+    },
+    "tests": {
+      "x-stability": "stable"
+    },
+    "delta": {
+      "x-stability": "stable"
+    },
+    "guard": {
+      "x-stability": "stable"
+    },
+    "opengrep": {
+      "x-stability": "stable"
+    },
+    "readGuard": {
+      "x-stability": "stable"
+    },
+    "contextInjection": {
+      "x-stability": "stable"
+    },
+    "turnSummary": {
+      "x-stability": "stable"
+    },
+    "actionableWarnings": {
+      "x-stability": "stable"
+    },
+    "ui": {
+      "x-stability": "stable"
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "ast_grep_search": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "ast_grep_replace": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "ast_grep_outline": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "lsp_navigation": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "lens_diagnostics": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "lens_diagnostic_mark": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "symbol_search": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "module_report": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "project_report": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "read_symbol": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "read_enclosing": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "effective_config": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "pi_lens_activate_tools": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "analyze": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "health": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "latency": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "project_scan": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "rebuild": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "session_start": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "turn_end": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        },
+        "session_end": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "turnEnd": {
+      "x-stability": "stable"
+    },
+    "knip": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "jscpd": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "madge": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "gitleaks": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "govulncheck": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "deadCode": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "complexity": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "ignore": {
+      "x-stability": "stable"
+    },
+    "dispatch": {
+      "x-stability": "stable"
+    },
+    "widget": {
+      "x-stability": "stable"
+    },
+    "startup": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "quick",
+            "full",
+            "minimal"
+          ],
+          "x-stability": "experimental"
+        },
+        "scans": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "x-stability": "experimental"
+            }
+          },
+          "x-stability": "experimental"
+        }
+      },
+      "x-stability": "stable"
+    },
+    "$schema": {
+      "type": "string",
+      "description": "Identity anchor naming the schema version this config was written against.",
+      "x-stability": "stable"
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "threshold": { "type": "number", "x-stability": "experimental" },
+          "disable": { "x-stability": "experimental" },
+          "select": { "x-stability": "experimental" },
+          "ignorePaths": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1, "x-stability": "experimental" },
+            "x-merge-strategy": "append",
+            "x-deny": "array-union",
+            "x-stability": "experimental"
+          }
+        },
+        "x-stability": "experimental"
+      },
+      "x-stability": "experimental"
+    },
+    "maxProjectFiles": {
+      "x-stability": "stable"
+    },
+    "reviewGraph": {
+      "x-stability": "stable"
+    },
+    "trivy": {
+      "x-stability": "stable"
+    },
+    "helm": {
+      "x-stability": "stable"
+    },
+    "servers": {
+      "x-stability": "experimental"
+    },
+    "serverOverrides": {
+      "x-stability": "experimental"
+    },
+    "disabledServers": {
+      "x-stability": "experimental"
+    },
+    "warmFiles": {
+      "x-stability": "experimental"
+    }
+  }
+}

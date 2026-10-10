@@ -4,11 +4,21 @@ valid:
   - "if x is not None:"
   - "if x is y:"  # both are variables
   - "if obj is SingletonClass.instance:"  # pattern
+  - "if getattr(position, \"closed\", None) is True:"
+  - "if getattr(self.profit_take, \"last_close_was_race_drop\", False) is True:"
+  - "if result is not True:"
+  - "if result is not False:"
 invalid:
   - "if 1 is '1':"
   - "if x is 'literal':"
   - "if 'foo' is x:"
   - "if x is not 42:"
-  - "if x is True:"
-  - "if x is not False:"
+  - "if x is 1:"
+  - "if x is not 1.5:"
+  - "if x is -1:"
+  - "if -1 is x:"
+  - "if x is not -2:"
+  - "if x is -1.5:"
+  - "if -1.5 is x:"
+  - "if x is not -2.0:"
   - "if x is []:"  # list literal

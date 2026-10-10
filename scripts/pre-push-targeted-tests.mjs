@@ -61,6 +61,32 @@ import { loadHistorySelection } from "./lib/test-history-selection.mjs";
 import { isEntryPoint, quoteForWindowsCmd } from "./with-test-lock.mjs";
 
 export const MAX_SELECTED_TESTS = 25;
+// The only scripts/ import of dist/ used by governance currently resolves to
+// this bundled client module (clean-signal and idle-eviction probe).
+export const DIST_IMPORTS = [
+	{
+		source: "clients/lsp/server-traits.ts",
+		output: "dist/clients/lsp/server-traits.js",
+	},
+];
+
+/** Return bundled files that are missing or older than their source. */
+export function findStaleDistFiles(root) {
+	return DIST_IMPORTS.flatMap(({ source, output }) => {
+		const sourcePath = path.join(root, source);
+		const outputPath = path.join(root, output);
+		// Minimal selector fixtures do not carry this production source.
+		if (!existsSync(sourcePath)) return [];
+		if (!existsSync(outputPath)) return [{ source, output, reason: "missing" }];
+		try {
+			return statSync(sourcePath).mtimeMs > statSync(outputPath).mtimeMs
+				? [{ source, output, reason: "stale" }]
+				: [];
+		} catch {
+			return [{ source, output, reason: "unreadable" }];
+		}
+	});
+}
 const PREPUSH_RECORD_DIR = "pi-lens-prepush";
 const PREPUSH_RECORD_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 let recordWriteWarningEmitted = false;
@@ -124,6 +150,12 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/clients/bounded-telemetry-sweep.test.ts",
 	"tests/clients/single-flight-ratchet.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
+	// #4239: walks scripts/lib for static dist/ imports and checks each is in
+	// DIST_IMPORTS, so a new governance import of dist/ cannot dodge the rebuild.
+	"tests/scripts/dist-freshness.test.ts",
+	// #3613 R2: walks clients/ for direct turn-state `sessions[` access outside
+	// CacheManager, so a production change must arm it.
+	"tests/config/turn-state-partition-owner-sweep.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
@@ -134,6 +166,22 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 // tests. Measured locally at ~17-23 s alone, inside the 120 s budget.
 export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/clients/flake-shape-ratchet.test.ts",
+	// #2891: real-pi harness suites own their child-process and timeout census;
+	// keep every admitted real-harness file armed when the tests tree changes.
+	"tests/real-harness/bridge-reload-ts.test.ts",
+	"tests/real-harness/bridge-reload.test.ts",
+	"tests/real-harness/child-exit.test.ts",
+	"tests/real-harness/diagnostic-provenance.test.ts",
+	"tests/real-harness/lifecycle.test.ts",
+	"tests/real-harness/negative.test.ts",
+	"tests/real-harness/provider-compatibility.test.ts",
+	"tests/real-harness/read-guard-moves.test.ts",
+	"tests/real-harness/scenario-1.test.ts",
+	"tests/real-harness/scenario-2.test.ts",
+	"tests/real-harness/scenario-3.test.ts",
+	"tests/real-harness/tools-enabled.test.ts",
+	// #3518: walks tests/ for unchecked `handleToolCall` calls (recurrence #4182).
+	"tests/config/handler-verdict-sweep.test.ts",
 	// #3472: the tests-tree scanners the census finds through tests/support.
 	"tests/config/module-instance-coverage.test.ts",
 	"tests/config/tmp-fixture-hygiene.test.ts",
@@ -739,6 +787,24 @@ export async function main() {
 			runInherit("npm", ["run", "build"], { needsShimShell: true });
 		} catch (error) {
 			preparationFailure = { outcome: "build-failed", error };
+		}
+		if (!preparationFailure) {
+			const staleDist = findStaleDistFiles(process.cwd());
+			if (staleDist.length > 0) {
+				try {
+					console.log(
+						`[pre-push] dist/ missing or stale (${staleDist.map(({ output }) => output).join(", ")}); running npm run build:dist...`,
+					);
+					runInherit("npm", ["run", "build:dist"], {
+						needsShimShell: true,
+					});
+				} catch (error) {
+					console.error(
+						"[pre-push] dist build failed; run `npm run build:dist` to rebuild dist/.",
+					);
+					preparationFailure = { outcome: "build-failed", error };
+				}
+			}
 		}
 		if (!preparationFailure) {
 			try {

@@ -41,10 +41,10 @@ vi.mock("../../clients/lsp/config.js", () => ({
 // Real `groupFilesByPrimaryServer`/`runPerServerGroups` — only `getLSPService`
 // is faked. Using the real scheduling primitives is the whole point: a fake
 // scheduler would trivially satisfy the property under test either way.
-vi.mock("../../clients/lsp/index.js", async () => {
+vi.mock("../../clients/lsp/capabilities.js", async () => {
 	const actual = await vi.importActual<
-		typeof import("../../clients/lsp/index.js")
-	>("../../clients/lsp/index.js");
+		typeof import("../../clients/lsp/capabilities.js")
+	>("../../clients/lsp/capabilities.js");
 	return {
 		...actual,
 		getLSPService: () => mocked.service,

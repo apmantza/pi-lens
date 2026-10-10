@@ -22,6 +22,8 @@ npm test
 
 Pull requests must pass `npm run lint`. Run targeted test files for touched seams locally after `npm run build`; the full `npm test` suite is CI's job. CI also runs `npm run check:lockfile` and a production `--omit=dev` build (`npm run build:dist`), so keep `package-lock.json` in sync with `package.json`.
 
+Source builds read the exact esbuild and TypeScript versions from the root entries in `package-lock.json`. Both esbuild bundles and the TypeScript fallback retain an isolated npm exec prefix and approve only the exact package spec they install. Keep the source lockfile available when running `build:dist`; missing or invalid tool versions fail the build rather than falling back to independent pins.
+
 ## Local git hooks
 
 `npm install` wires Husky-managed hooks:

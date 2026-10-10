@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the generator's fragment is checked through the real Git diff/untracked-file seam; a double cannot prove PR admission.
 /**
  * #3989: the nightly's idle-eviction promotion rule, the source edit it makes,
  * and the bookkeeping it keeps in the capability matrix's refresh state.
@@ -22,6 +23,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import {
 	COLD_START_MAX_MS,
 	IDLE_EVICTION_MIN_RSS_BYTES,
@@ -45,6 +47,7 @@ import {
 	setIdleEvictionState,
 } from "../../scripts/lib/md-matrix.mjs";
 import { promoteFromSummary } from "../../scripts/promote-lsp-idle-eviction.mjs";
+import { checkChangelogFragments } from "../../scripts/check-changelog-fragments.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -579,11 +582,15 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 	function workspace() {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-idle-promote-"));
 		dirs.push(dir);
+		gitExecFileSync(["init", "-q", "-b", "fixture-master"], {
+			cwd: dir,
+		});
 		const file = (name: string, text: string) => {
 			fs.writeFileSync(path.join(dir, name), text);
 			return path.join(dir, name);
 		};
-		return {
+		fs.mkdirSync(path.join(dir, ".changelog"));
+		const ws = {
 			dir,
 			matrixPath: file(
 				"matrix.md",
@@ -593,10 +600,28 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 			reasonsPath: file("reasons.json", `{\n\t"typescript": "x"\n}\n`),
 			registryPath: file("registry.test.ts", FIXTURE_REGISTRY_TS),
 			bodyPath: path.join(dir, "body.md"),
-			changelogPath: path.join(dir, "3989-lsp-idle-eviction-promote.md"),
+			changelogPath: path.join(
+				dir,
+				".changelog",
+				"3989-lsp-idle-eviction-promote.md",
+			),
 			summary: (rows: object[]) =>
 				file("summary.json", JSON.stringify({ rows })),
 		};
+		gitExecFileSync(["add", "."], { cwd: dir });
+		gitExecFileSync(
+			[
+				"-c",
+				"user.email=pi-lens-test@example.com",
+				"-c",
+				"user.name=pi-lens-test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: dir },
+		);
+		return ws;
 	}
 
 	it("holds night one, promotes on night two, and leaves a vetoed night alone", () => {
@@ -630,11 +655,14 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 			JSON.parse(fs.readFileSync(ws.reasonsPath, "utf8")).json,
 		).toBeTruthy();
 		expect(fs.readFileSync(ws.bodyPath, "utf8")).toContain("| json |");
-		const changelog = fs.readFileSync(ws.changelogPath, "utf8");
-		expect(changelog).toContain("section: Changed");
-		expect(changelog).toContain("audience: user");
-		expect(changelog).toContain("`json`");
-		expect(changelog).toContain("refs #3989");
+		const changelog = checkChangelogFragments({
+			base: "HEAD",
+			cwd: ws.dir,
+		});
+		expect(changelog.valid).toBe(true);
+		expect(fs.readFileSync(ws.changelogPath, "utf8")).toContain(
+			"**Idle eviction enabled for measured servers (refs #3989)**",
+		);
 	});
 
 	it("retains earlier promoted servers until the release consumes the fragment", () => {

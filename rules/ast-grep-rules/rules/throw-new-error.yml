@@ -1,9 +1,9 @@
 id: throw-new-error
 language: TypeScript
-severity: error
+severity: warning
 message: "Use new Error() not Error() — explicit construction is clearer"
 note: |
-  throw Error() works by accident. throw new Error() is the correct pattern.
+  This is a consistency/style rule: Error() is spec-equivalent to new Error().
 rule:
   any:
     - pattern: "throw Error($$$ARGS)"

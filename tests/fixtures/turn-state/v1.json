@@ -1,0 +1,13 @@
+{
+  "files": {
+    "legacy.ts": {
+      "modifiedRanges": [{ "start": 1, "end": 2 }],
+      "importsChanged": false,
+      "lastEdit": "2026-10-09T10:00:00.000Z"
+    }
+  },
+  "turnCycles": 0,
+  "maxCycles": 3,
+  "lastUpdated": "2026-10-09T10:00:00.000Z",
+  "sessionId": "legacy-session"
+}

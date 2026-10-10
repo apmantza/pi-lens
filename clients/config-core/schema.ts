@@ -214,6 +214,8 @@ export function propertySchema(
 			if (matcher.test(name)) return child;
 		}
 	}
+	const additional = node.additionalProperties;
+	if (isSchemaNode(additional)) return additional;
 	return undefined;
 }
 

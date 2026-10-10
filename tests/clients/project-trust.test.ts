@@ -79,7 +79,7 @@ describe("project-trust policy gates", () => {
 		).toHaveLength(2);
 	});
 
-	it("defaults to fail-open when nothing has been adopted", () => {
+	it("keeps installs and legacy raw LSP spawns fail-open when nothing has been adopted", () => {
 		expect(getProjectTrustState()).toBe("unknown");
 		expect(isToolInstallAllowedByTrust()).toBe(true);
 		expect(isLspSpawnAllowedByTrust()).toBe(true);
@@ -113,5 +113,6 @@ describe("project-trust policy gates", () => {
 		// …and an older host re-reads as "unknown", not as a sticky denial.
 		expect(adoptProjectTrustFromContext({})).toBe("unknown");
 		expect(isToolInstallAllowedByTrust()).toBe(true);
+		expect(isLspSpawnAllowedByTrust()).toBe(true);
 	});
 });

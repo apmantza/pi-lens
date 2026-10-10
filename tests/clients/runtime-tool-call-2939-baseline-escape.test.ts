@@ -55,9 +55,9 @@ const LOADED_CLIENTS = {
 // Partial mock (#2281 sweep): every real export stays, only the two accessors
 // `handleToolCall` reaches for are replaced, so nothing here spins up a real
 // LSP client for an auto-touch this case does not measure.
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => {
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => {
 	const actual =
-		await importOriginal<typeof import("../../clients/lsp/index.js")>();
+		await importOriginal<typeof import("../../clients/lsp/capabilities.js")>();
 	const { makeLspServiceDouble } =
 		await import("../support/lsp-service-double.js");
 	return {
@@ -81,6 +81,7 @@ import { CacheManager } from "../../clients/cache-manager.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 let env: ReturnType<typeof setupTestEnvironment>;
 let runtime: RuntimeCoordinator;
@@ -127,7 +128,9 @@ describe("#2939 M7 — Escape releases the complexity-baseline demand", () => {
 		vi.useFakeTimers();
 
 		let settled = false;
-		const call = handleToolCall(deps(controller.signal)).then(() => {
+		const call = runHandlerExpectingNoThrow(() =>
+			handleToolCall(deps(controller.signal)),
+		).then(() => {
 			settled = true;
 		});
 		await vi.advanceTimersByTimeAsync(0);
@@ -148,7 +151,9 @@ describe("#2939 M7 — Escape releases the complexity-baseline demand", () => {
 	it("still takes the baseline when the hook signal is live", async () => {
 		// The inverse direction: a live signal must not short-circuit the demand.
 		vi.useFakeTimers();
-		const call = handleToolCall(deps(new AbortController().signal));
+		const call = runHandlerExpectingNoThrow(() =>
+			handleToolCall(deps(new AbortController().signal)),
+		);
 		await vi.advanceTimersByTimeAsync(0);
 		pendingLoad.resolve?.(LOADED_CLIENTS);
 		await call;

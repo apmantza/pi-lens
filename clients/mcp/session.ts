@@ -33,7 +33,7 @@ import {
 } from "../cache-manager.js";
 import { resetDispatchBaselines } from "../dispatch/integration.js";
 import { resetFormatService } from "../format-service.js";
-import { getLSPService, resetLSPService } from "../lsp/index.js";
+import { getLSPService, resetLSPService } from "../lsp/capabilities.js";
 import {
 	acknowledgeTestFindings,
 	acknowledgeTurnEndFindings,

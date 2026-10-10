@@ -74,6 +74,8 @@ interface DeleteFileOp {
 interface AppliedWorkspaceFileDetail {
 	filePath: string;
 	range?: { start: number; end: number };
+	ranges?: Array<{ start: number; end: number }>;
+	authorshipUnknown?: boolean;
 	importsChanged?: boolean;
 }
 
@@ -1505,15 +1507,40 @@ export async function applyWorkspaceEdit(
 					}
 					const content = await fs.readFile(diskPath, "utf-8");
 					const updated = applyTextEditsToString(content, edits, "utf-16");
+					const changesLineCount = edits.some((edit) => {
+						const removedLines = edit.range.end.line - edit.range.start.line;
+						const insertedLines = (edit.newText.match(/\r\n|\r|\n/g) ?? [])
+							.length;
+						return removedLines !== insertedLines;
+					});
 					await fs.writeFile(diskPath, updated, "utf-8");
 					const start = Math.min(
 						...edits.map((item) => item.range.start.line + 1),
 					);
-					const end = Math.max(...edits.map((item) => item.range.end.line + 1));
+					const end = Math.max(
+						...edits.map(
+							(item) =>
+								item.range.end.line +
+								(item.range.end.character === 0 &&
+								item.range.end.line > item.range.start.line
+									? 0
+									: 1),
+						),
+					);
 					touchedFiles.add(filePath);
 					fileDetails.push({
 						filePath,
 						range: { start, end },
+						ranges: edits.map((item) => ({
+							start: item.range.start.line + 1,
+							end:
+								item.range.end.line +
+								(item.range.end.character === 0 &&
+								item.range.end.line > item.range.start.line
+									? 0
+									: 1),
+						})),
+						authorshipUnknown: changesLineCount,
 						importsChanged:
 							importsSignature(content) !== importsSignature(updated),
 					});
@@ -1533,6 +1560,7 @@ export async function applyWorkspaceEdit(
 					fileDetails.push({
 						filePath,
 						range: { start: 1, end: 1 },
+						authorshipUnknown: true,
 						importsChanged: false,
 					});
 					markApplied(op);
@@ -1554,11 +1582,13 @@ export async function applyWorkspaceEdit(
 						{
 							filePath: oldPath,
 							range: { start: 1, end: 1 },
+							authorshipUnknown: true,
 							importsChanged: true,
 						},
 						{
 							filePath: newPath,
 							range: { start: 1, end: 1 },
+							authorshipUnknown: true,
 							importsChanged: true,
 						},
 					);
@@ -1577,6 +1607,7 @@ export async function applyWorkspaceEdit(
 					fileDetails.push({
 						filePath,
 						range: { start: 1, end: 1 },
+						authorshipUnknown: true,
 						importsChanged: true,
 					});
 					markApplied(op);

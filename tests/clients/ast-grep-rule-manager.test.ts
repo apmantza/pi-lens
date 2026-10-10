@@ -20,6 +20,15 @@ import {
 	AstGrepRuleManager,
 	checkAstGrepRulesHealth,
 } from "../../clients/ast-grep-rule-manager.js";
+import {
+	_resetRuleCorpusCycleFingerprintsForTests,
+	getUserRuleRoot,
+} from "../../clients/custom-rule-locations.js";
+import { getAstGrepRuleFingerprint } from "../../clients/sgconfig.js";
+import {
+	beginTurnContext,
+	runWithTurnContext,
+} from "../../clients/turn-context.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 /**
@@ -31,10 +40,27 @@ import { removeTempDirSync } from "./test-utils.js";
 
 let tmpDirs: string[] = [];
 
+/**
+ * Run `fn` inside a FRESH dispatch cycle, entered the way the pi host enters
+ * one (`beginTurnContext` from `RuntimeCoordinator.beginTurn`, wrapped by
+ * `session-event-guard`'s `runWithTurnContext`). The ast-grep rule fingerprint
+ * is memoized per cycle through the same seam the tree-sitter loader uses
+ * (#4212 round 4), so a case that must observe a rule edit has to cross that
+ * boundary — production crosses it at every turn.
+ */
+let cycleSessions = 0;
+function inNextCycle<T>(fn: () => T): T {
+	cycleSessions += 1;
+	const session = `ast-grep-cycle-${cycleSessions}`;
+	beginTurnContext(session);
+	return runWithTurnContext(session, fn);
+}
+
 beforeEach(() => {
 	tmpDirs = [];
 	vi.mocked(fs.readdirSync).mockClear();
 	vi.mocked(fs.existsSync).mockClear();
+	_resetRuleCorpusCycleFingerprintsForTests();
 });
 
 afterEach(() => {
@@ -59,6 +85,57 @@ function writeYaml(dir: string, relPath: string, id = "fake"): void {
 }
 
 describe("checkAstGrepRulesHealth", () => {
+	it("refreshes descriptions at the next dispatch cycle after an edit or a removal", () => {
+		const machine = freshRuleDir();
+		const previous = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = machine;
+		try {
+			const rel = path.join(
+				"rules",
+				"ast-grep-rules",
+				"rules",
+				"live-description.yml",
+			);
+			writeYaml(machine, rel, "live-description");
+			const file = path.join(machine, rel);
+			fsSync.writeFileSync(file, "id: live-description\nmessage: OLD\n");
+			const manager = new AstGrepRuleManager(
+				[process.cwd(), getUserRuleRoot()],
+				() => {},
+				() => getAstGrepRuleFingerprint(process.cwd()),
+			);
+			expect(
+				manager.loadRuleDescriptions().get("live-description")?.message,
+			).toBe("OLD");
+
+			fsSync.writeFileSync(file, "id: live-description\nmessage: NEW\n");
+			// Same cycle: the fingerprint is memoized, so the description is
+			// still the cycle's. Declared state-table row 17 — the ast-grep
+			// twin of the loader's row 8.
+			expect(
+				manager.loadRuleDescriptions().get("live-description")?.message,
+			).toBe("OLD");
+			// Next cycle: the shared fingerprint is recomputed and the manager
+			// re-reads. A same-size rewrite is caught here too, because the
+			// ast-grep fingerprint has always hashed content, not stat.
+			expect(
+				inNextCycle(
+					() => manager.loadRuleDescriptions().get("live-description")?.message,
+				),
+			).toBe("NEW");
+
+			fsSync.rmSync(file);
+			expect(
+				inNextCycle(() =>
+					manager.loadRuleDescriptions().has("live-description"),
+				),
+			).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previous;
+		}
+	});
+
 	it("reports absent when ruleDir itself does not exist", () => {
 		const ruleDir = path.join(freshRuleDir(), "does-not-exist");
 		expect(checkAstGrepRulesHealth(ruleDir)).toEqual({ status: "absent" });

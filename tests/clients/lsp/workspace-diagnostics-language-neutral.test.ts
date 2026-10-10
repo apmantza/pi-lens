@@ -18,6 +18,10 @@ import {
 import { CacheManager } from "../../../clients/cache-manager.js";
 import { importFactsApplyTo } from "../../../clients/dispatch/facts/import-facts.js";
 import { LANGUAGES } from "../../../clients/language-registry.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../../clients/project-trust.js";
 
 const probe = setupTestEnvironment("pi-lens-lsp-language-");
 const root = probe.tmpDir;
@@ -57,6 +61,9 @@ describe("language-neutral workspace resync (#2817)", () => {
 	);
 
 	beforeAll(async () => {
+		// Host-boundary stub: this fixture intentionally uses a trusted project
+		// custom server to exercise workspace resynchronization.
+		setProjectTrustState("trusted");
 		originalPiLensHome = process.env.PI_LENS_HOME;
 		fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
 		for (const [file, content] of [
@@ -120,6 +127,7 @@ describe("language-neutral workspace resync (#2817)", () => {
 	});
 
 	afterAll(async () => {
+		resetProjectTrust();
 		const { resetLSPService } = await import("../../../clients/lsp/index.js");
 		resetLSPService({ reason: "test" });
 		delete process.env.FAKE_LSP_TRACE_FILE;

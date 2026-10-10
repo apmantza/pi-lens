@@ -30,7 +30,7 @@ describe("changelog entry guard", () => {
 // counted the PR diff's additions.
 describe("one changelog fragment per PR (#3795)", () => {
 	const fragment = (bullet: string) =>
-		`---\nsection: Fixed\naudience: user\n---\n\n- ${bullet}\n`;
+		`---\nsection: Fixed\naudience: user\n---\n\n- **${bullet}** — details.\n`;
 	let dirs: string[] = [];
 	afterEach(() => {
 		for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
@@ -55,7 +55,9 @@ describe("one changelog fragment per PR (#3795)", () => {
 			path.join(process.cwd(), ".tmp-changelog-frag-"),
 		);
 		dirs.push(dir);
-		gitExecFileSync(["init", "-q", "-b", "fixture-master"], { cwd: dir });
+		gitExecFileSync(["init", "-q", "-b", "fixture-master"], {
+			cwd: dir,
+		});
 		fs.mkdirSync(path.join(dir, ".changelog"), { recursive: true });
 		fs.writeFileSync(
 			path.join(dir, ".changelog", "old.md"),
@@ -90,6 +92,93 @@ describe("one changelog fragment per PR (#3795)", () => {
 	it("accepts a PR diff that adds exactly one fragment", () => {
 		const dir = makeRepo();
 		addFragment(dir, "pr-a.md", "the only change");
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(true);
+	});
+
+	it("rejects a new user fragment whose plain opening is short", () => {
+		const dir = makeRepo();
+		fs.writeFileSync(
+			path.join(dir, ".changelog", "pr-a.md"),
+			`---\nsection: Fixed\naudience: user\n---\n\n- ${"x".repeat(12)}\n`,
+		);
+		gitExecFileSync(["add", "."], { cwd: dir });
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(false);
+		expect(result.message).toContain(".changelog/pr-a.md");
+		expect(result.message).toContain("plain lead length 12");
+	});
+
+	it("rejects a new user fragment whose bold lead is 101 characters", () => {
+		const dir = makeRepo();
+		addFragment(dir, "pr-a.md", "x".repeat(101));
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(false);
+		expect(result.message).toContain("bold lead length 101");
+	});
+
+	it("accepts a valid bold entry under an explicit section heading", () => {
+		const dir = makeRepo();
+		fs.writeFileSync(
+			path.join(dir, ".changelog", "pr-a.md"),
+			`---\nsection: Fixed\naudience: user\n---\n\n### Fixed\n\n- **short** — details.\n`,
+		);
+		gitExecFileSync(["add", "."], { cwd: dir });
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(true);
+	});
+
+	it("accepts a new user fragment with a short bold lead", () => {
+		const dir = makeRepo();
+		addFragment(dir, "pr-a.md", "x".repeat(100));
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(true);
+	});
+
+	it("excludes issue references from the bold lead length", () => {
+		const dir = makeRepo();
+		addFragment(dir, "pr-a.md", `${"x".repeat(100)} (#2608)`);
+		commit(dir, "head");
+		const result = checkChangelogFragments({
+			base: "HEAD~1",
+			cwd: dir,
+			git: gitFor(dir),
+		});
+		expect(result.valid).toBe(true);
+	});
+
+	it("does not require a lead for a new internal fragment", () => {
+		const dir = makeRepo();
+		fs.writeFileSync(
+			path.join(dir, ".changelog", "pr-a.md"),
+			`---\nsection: Fixed\naudience: internal\n---\n\n- ${"x".repeat(150)}\n`,
+		);
+		gitExecFileSync(["add", "."], { cwd: dir });
 		commit(dir, "head");
 		const result = checkChangelogFragments({
 			base: "HEAD~1",
@@ -398,6 +487,7 @@ describe("one changelog fragment per PR (#3795)", () => {
 				}).toEqual({ depth, status, stdout, stderr });
 			}
 		},
+		30_000,
 	);
 
 	it("prints one line for an invalid fragment in a merged checkout", () => {

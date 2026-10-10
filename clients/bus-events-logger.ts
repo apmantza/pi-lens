@@ -2,9 +2,9 @@
  * Persistent NDJSON trace of `pi.events` bus publish attempts
  * (`pilens:files:touched` #482 / `pilens:diagnostics` #502 /
  * `pilens:diagnostic:disposition` / `pilens:format:queued` +
- * `pilens:format:start` + `pilens:autofix:start` #673/#684 /
+ * `pilens:format:start` + `pilens:format:done` + `pilens:autofix:start` #673/#684 /
  * `pi-lens/analysis-complete` + `pi-lens/findings` + `pi-lens/turn-findings`
- * #1415) — nine event names across five producers.
+ * #1415) — ten event names across five producers.
  *
  * All five producers (clients/bus-publish.ts, clients/diagnostics-publish.ts,
  * clients/disposition-publish.ts, clients/format-events-publish.ts,
@@ -64,6 +64,7 @@ type BusEventName =
 	| "pilens:diagnostic:disposition"
 	| "pilens:format:queued"
 	| "pilens:format:start"
+	| "pilens:format:done"
 	| "pilens:autofix:start"
 	| "pi-lens/analysis-complete"
 	| "pi-lens/findings"

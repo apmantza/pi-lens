@@ -38,6 +38,7 @@ import type { PathSetLike } from "./runtime-coordinator.js";
 import { logLatency } from "./latency-logger.js";
 import { getProcessSingleton } from "./process-singletons.js";
 import { PI_LENS_EVALUATION_ORDINAL } from "./startup-timing.js";
+import { SUCCESSOR_HANDOFF_TTL_MS } from "./session-lifecycle.js";
 
 export type ScopeRole = "primary" | "secondary";
 
@@ -132,6 +133,35 @@ function registry(): RegistryCounters {
 			};
 		},
 	);
+}
+
+const SESSION_START_ADMISSION_FAMILY = "session-scope.start-admission";
+const SESSION_START_ADMISSION_VERSION = 1;
+
+interface SessionStartAdmission {
+	/** Host event objects already delivered to a pi-lens handler. */
+	readonly deliveredEvents: WeakSet<object>;
+}
+
+function sessionStartAdmission(): SessionStartAdmission {
+	return getProcessSingleton(
+		SESSION_START_ADMISSION_FAMILY,
+		SESSION_START_ADMISSION_VERSION,
+		() => ({ deliveredEvents: new WeakSet<object>() }),
+	);
+}
+
+/**
+ * Reserve one host session_start event across extension factory re-runs.
+ * pi re-delivers the same event object to a replacement handler; every genuine
+ * start is a fresh object. WeakSet keeps the process-lifetime identity without
+ * retaining completed test fixtures or retired sessions.
+ */
+export function reserveSessionStart(event: Record<string, unknown>): boolean {
+	const state = sessionStartAdmission();
+	if (state.deliveredEvents.has(event)) return false;
+	state.deliveredEvents.add(event);
+	return true;
 }
 
 /**
@@ -406,8 +436,9 @@ export interface SessionStoreSpec<P> {
 	name: string;
 	policy: Readonly<Record<StartReason, StartAction>>;
 	/**
-	 * Sync and bounded: it runs in `session_shutdown`, whose budget is 0 ms
-	 * (#2523). `undefined` hands nothing off.
+	 * Synchronous: it runs in the synchronous portion of `session_shutdown`;
+	 * the hook's separate returned drain promise does not cover this snapshot.
+	 * `undefined` hands nothing off.
 	 */
 	snapshot(scope: SessionScope): P | undefined;
 	/**
@@ -524,6 +555,7 @@ function handoffSlot(): HandoffCell {
 type SlotOp =
 	| "stashed"
 	| "replaced"
+	| "expired"
 	| "taken"
 	| "key-mismatch-left"
 	| "forwarded"
@@ -569,6 +601,35 @@ function logSlotOp(
 	});
 }
 
+function activationCount(stores: Record<string, unknown>): number {
+	const remembered = stores["lazy-tool-memory"];
+	if (!Array.isArray(remembered)) return 0;
+	let count = 0;
+	for (const name of remembered) {
+		if (typeof name === "string") count += 1;
+	}
+	return count;
+}
+
+/** Retire an old slot before any operation can observe or replace it. */
+function retireExpiredHandoff(cell: HandoffCell): void {
+	const handoff = cell.handoff;
+	if (
+		handoff?.at === undefined ||
+		Date.now() - handoff.at < SUCCESSOR_HANDOFF_TTL_MS
+	)
+		return;
+	cell.handoff = undefined;
+	const droppedActivations = activationCount(handoff.stores);
+	logSlotOp("expired", handoff, { droppedActivations });
+	recordDegradationOnce({
+		kind: "session-scope-handoff-expired",
+		subject: handoff.reason,
+		reason: `a ${handoff.reason} hand-off exceeded ${SUCCESSOR_HANDOFF_TTL_MS}ms and was retired; dropped ${droppedActivations} activation(s)`,
+		metadata: { droppedActivations },
+	});
+}
+
 /**
  * At a primary `session_shutdown` (sync): leave the scope's snapshot for a
  * successor that continues its conversation. pi sends `targetSessionFile`
@@ -588,6 +649,7 @@ export function stashHandoff(
 	// `quit` and a missing reason have no successor: they read as `startup`.
 	const reason = toStartReason(args.reason);
 	const cell = handoffSlot();
+	retireExpiredHandoff(cell);
 	if (!SOURCES[reason].includes("slot")) {
 		// #3873 O1: the process ends with a slot nobody took.
 		if (cell.handoff && (args.reason === undefined || args.reason === "quit"))
@@ -627,6 +689,7 @@ function takeSlot(
 	by: SlotTaker,
 ): Handoff | undefined {
 	const slot = handoffSlot();
+	retireExpiredHandoff(slot);
 	const handoff = slot.handoff;
 	if (!handoff) return undefined;
 	if (handoff.reason !== reason || handoff.key !== key) {

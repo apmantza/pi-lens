@@ -32,7 +32,7 @@ import {
 	createGenerationSource,
 	type GenerationHandle,
 } from "./generation-guard.js";
-import { isAtOrAboveHomeDir, walkUpDirs } from "./path-utils.js";
+import { isAtOrAboveHomeDir, isUnderDir, walkUpDirs } from "./path-utils.js";
 
 export type NodePackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
@@ -549,6 +549,30 @@ export const VENV_BIN_DIRS: readonly string[] = [
 	path.join(".venv", "Scripts"),
 	path.join("venv", "Scripts"),
 ];
+
+/** Every project-local bin layout supported by the canonical resolver above. */
+export const PROJECT_LOCAL_BIN_DIRS: readonly string[] = [
+	...NODE_MODULES_BIN_DIRS,
+	...VENDOR_BIN_DIRS,
+	...VENV_BIN_DIRS,
+];
+
+/** Keep trust classification beside the resolver's canonical directory set. */
+export function isProjectLocalBinPath(
+	resolvedCommand: string,
+	cwd: string,
+): boolean {
+	for (const ancestor of walkUpDirs(cwd)) {
+		if (isAtOrAboveHomeDir(ancestor, os.homedir())) break;
+		if (
+			PROJECT_LOCAL_BIN_DIRS.some((binDir) =>
+				isUnderDir(resolvedCommand, path.join(ancestor, binDir)),
+			)
+		)
+			return true;
+	}
+	return false;
+}
 
 /** Tuning for {@link findLocalBinUpwards}. */
 export interface LocalBinWalkOptions {

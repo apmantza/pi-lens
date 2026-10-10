@@ -52,6 +52,8 @@ const REPO_ROOT = path.resolve(
 const UNWRAPPED_HANDLER_REASONS: Readonly<Record<string, string>> = {
 	resources_discover:
 		"The handler takes `_event, _ctx` and reads neither, so there is no accessor for the SDK to invalidate.",
+	tool_execution_end:
+		"The handler takes only the event and reads no ctx property: it releases a read capture by the event's own call id (#4185 round 4), so there is no accessor for the SDK to invalidate.",
 	tool_call:
 		"Delegates straight to handleToolCall, which already owns a total guard recording `tool-call-handler-throw` (clients/runtime-tool-call.ts); the registration body itself reads no ctx property.",
 	session_shutdown:

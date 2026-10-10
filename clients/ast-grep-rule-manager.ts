@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RuleDescription } from "./ast-grep-types.js";
 import type { BundledResourceHealth } from "./bundled-resource-health.js";
+import { getAstGrepRuleFingerprint } from "./sgconfig.js";
 
 /**
  * The candidate sub-paths under `ruleDir` that hold ast-grep rule
@@ -66,37 +67,60 @@ export function checkAstGrepRulesHealth(
 
 export class AstGrepRuleManager {
 	private ruleDescriptions: Map<string, RuleDescription> | null = null;
+	private ruleFingerprint: string | null = null;
 
 	constructor(
-		private ruleDir: string,
+		private ruleDir: string | string[],
 		private log: (msg: string) => void,
+		private fingerprint: () => string = () => getAstGrepRuleFingerprint(),
 	) {}
 
 	loadRuleDescriptions(): Map<string, RuleDescription> {
-		if (this.ruleDescriptions !== null) return this.ruleDescriptions;
+		const fingerprint = this.fingerprint();
+		if (this.ruleDescriptions !== null && this.ruleFingerprint === fingerprint)
+			return this.ruleDescriptions;
 
 		const descriptions = new Map<string, RuleDescription>();
-		const possiblePaths = candidateAstGrepRulesPaths(this.ruleDir);
+		const roots = Array.isArray(this.ruleDir) ? this.ruleDir : [this.ruleDir];
+		const possiblePaths = roots.flatMap(candidateAstGrepRulesPaths);
+		const rulesPaths: string[] = [];
+		if (Array.isArray(this.ruleDir)) {
+			for (const candidate of possiblePaths) {
+				if (fs.existsSync(candidate)) rulesPaths.push(candidate);
+			}
+		} else {
+			for (const candidate of possiblePaths) {
+				if (!fs.existsSync(candidate)) continue;
+				rulesPaths.push(candidate);
+				break;
+			}
+		}
 
-		const rulesPath = possiblePaths.find((p) => fs.existsSync(p));
+		const rulesPath = rulesPaths[0];
 
 		if (!rulesPath) {
 			this.log(
 				`Rule descriptions: no rules directory found in ${possiblePaths.join(", ")}`,
 			);
 			this.ruleDescriptions = descriptions;
+			this.ruleFingerprint = fingerprint;
 			return descriptions;
 		}
 
 		try {
-			const files = fs.readdirSync(rulesPath).filter((f) => f.endsWith(".yml"));
-			this.log(`Loaded ${files.length} rule descriptions from ${rulesPath}`);
-			for (const file of files) {
-				const filePath = path.join(rulesPath, file);
-				const content = fs.readFileSync(filePath, "utf-8");
-				const rule = this.parseRuleYaml(content);
-				if (rule) {
-					descriptions.set(rule.id, rule);
+			for (const resolvedPath of rulesPaths) {
+				const files = fs
+					.readdirSync(resolvedPath)
+					.filter((f) => f.endsWith(".yml"));
+				this.log(
+					`Loaded ${files.length} rule descriptions from ${resolvedPath}`,
+				);
+				for (const file of files) {
+					const filePath = path.join(resolvedPath, file);
+					const content = fs.readFileSync(filePath, "utf-8");
+					const rule = this.parseRuleYaml(content);
+					if (rule && !descriptions.has(rule.id))
+						descriptions.set(rule.id, rule);
 				}
 			}
 		} catch (err: any) {
@@ -104,6 +128,7 @@ export class AstGrepRuleManager {
 		}
 
 		this.ruleDescriptions = descriptions;
+		this.ruleFingerprint = fingerprint;
 		return descriptions;
 	}
 

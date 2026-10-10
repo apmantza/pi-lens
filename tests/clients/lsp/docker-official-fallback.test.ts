@@ -308,4 +308,12 @@ describe("docker official config selection intent (#3939)", () => {
 			.map((entry) => entry.server.id);
 		expect(ids).toEqual(["local-docker-official"]);
 	});
+
+	it("does not count a fallback family as a second workspace server", async () => {
+		const { groupFilesByPrimaryServer } =
+			await import("../../../clients/lsp/index.js");
+		expect(groupFilesByPrimaryServer([FILE])).toEqual([
+			{ files: [FILE], multiServer: false },
+		]);
+	});
 });

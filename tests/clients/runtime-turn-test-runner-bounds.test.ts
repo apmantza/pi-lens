@@ -32,7 +32,10 @@ const logHome = await vi.hoisted(async () => {
 	return home;
 });
 
-import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	CacheManager,
+	MCP_TURN_STATE_OWNER_ID,
+} from "../../clients/cache-manager.js";
 import { DependencyChecker } from "../../clients/dependency-checker.js";
 import { KnipClient } from "../../clients/knip-client.js";
 import { mergeGitGuardTestFailure } from "../../clients/git-guard.js";
@@ -1217,6 +1220,7 @@ describe("#2522 R2/R3 — a target that never fits the budget is retired, not ca
 		cacheManager: CacheManager,
 		runtime: RuntimeCoordinator,
 		sources: string[],
+		ownerKind: "pi" | "mcp" = "pi",
 	): void {
 		for (const source of sources) {
 			cacheManager.addModifiedRange(
@@ -1224,7 +1228,10 @@ describe("#2522 R2/R3 — a target that never fits the budget is retired, not ca
 				{ start: 1, end: 1 },
 				false,
 				env.tmpDir,
-				runtime.telemetrySessionId,
+				ownerKind === "mcp"
+					? MCP_TURN_STATE_OWNER_ID
+					: runtime.telemetrySessionId,
+				ownerKind,
 			);
 		}
 	}
@@ -1889,6 +1896,7 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 		cacheManager: CacheManager,
 		runtime: RuntimeCoordinator,
 		sources: string[],
+		ownerKind: "pi" | "mcp" = "pi",
 	): void {
 		for (const source of sources) {
 			cacheManager.addModifiedRange(
@@ -1896,7 +1904,10 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 				{ start: 1, end: 1 },
 				false,
 				env.tmpDir,
-				runtime.telemetrySessionId,
+				ownerKind === "mcp"
+					? MCP_TURN_STATE_OWNER_ID
+					: runtime.telemetrySessionId,
+				ownerKind,
 			);
 		}
 	}
@@ -1956,7 +1967,11 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 		client: TestRunnerClient;
 		dbg?: (msg: string) => void;
 		sessionId?: string;
+		mcp?: boolean;
 	}): Promise<void> {
+		const effectiveSessionId = args.mcp
+			? undefined
+			: (args.sessionId ?? args.runtime.telemetrySessionId);
 		await handleTurnEnd({
 			ctxCwd: env.tmpDir,
 			getFlag: () => false,
@@ -1972,7 +1987,17 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 			testRunnerClient: args.client,
 			resetLSPService: () => {},
 			resetFormatService: () => {},
-			...(args.sessionId ? { sessionId: args.sessionId } : {}),
+			...(effectiveSessionId ? { sessionId: effectiveSessionId } : {}),
+			...(args.mcp
+				? {
+						owner: {
+							kind: "mcp" as const,
+							id: MCP_TURN_STATE_OWNER_ID,
+							pid: process.pid,
+							lastSeen: new Date().toISOString(),
+						},
+					}
+				: {}),
 			// biome-ignore lint/suspicious/noExplicitAny: minimal turn_end deps
 		} as any);
 	}
@@ -2019,7 +2044,11 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 		setAmbientAbortSignal(controller.signal);
 		const ran: string[] = [];
 		try {
-			await runTurn({ ...args, client: killableClient(ran) });
+			await runTurn({
+				...args,
+				client: killableClient(ran),
+				dbg: args.dbg,
+			});
 			const deadline = Date.now() + 5000;
 			while (Date.now() < deadline && ran.length < 1) await delay(20);
 			controller.abort();
@@ -2057,11 +2086,12 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 		// Turn 2, through the MCP route: no sessionId, so `telemetrySessionId`.
 		const ran: string[] = [];
 		const dbgLines: string[] = [];
-		markEdited(cacheManager, runtime, [p.fresh]);
+		markEdited(cacheManager, runtime, [p.fresh], "mcp");
 		await runTurn({
 			cacheManager,
 			runtime,
 			client: completingClient(ran),
+			mcp: true,
 			dbg: (m) => dbgLines.push(m),
 		});
 		const deadline = Date.now() + 5000;
@@ -2111,11 +2141,12 @@ describe("#2522 R4 — the deferral record across sessions, generations and caps
 
 		// A turn on the MCP route (different identity) runs in between.
 		const mcpRan: string[] = [];
-		markEdited(cacheManager, runtime, [p.fresh, p.forever]);
+		markEdited(cacheManager, runtime, [p.fresh, p.forever], "mcp");
 		await runTurn({
 			cacheManager,
 			runtime,
 			client: completingClient(mcpRan),
+			mcp: true,
 		});
 		let deadline = Date.now() + 5000;
 		while (Date.now() < deadline && mcpRan.length < 1) await delay(20);

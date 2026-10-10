@@ -80,6 +80,8 @@ function sweepShapeFiles(): Array<{ file: string; source: string }> {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	"tests/clients/ast-grep-rule-regex-budget.test.ts":
+		"rule YAML corpus enumeration, not a production population sweep",
 	"tests/config/lsp-idle-eviction-registry.test.ts":
 		"LSP registry policy census; its registry-specific boundary tests are not a sweep-kit floor",
 	"tests/config/github-token-write-gates.test.ts":

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	classifyLspGateResult,
+	classifyOfficialDockerGateResult,
 	runLspGate,
 } from "../../scripts/smoke-tools.mjs";
 
@@ -34,9 +35,18 @@ afterEach(() => {
 	else process.env.PI_LENS_HOME = originalHome;
 });
 
-function gateDeps(execute: () => Promise<unknown>) {
+function gateDeps(
+	execute: () => Promise<unknown>,
+	fixtureOverrides: Record<string, unknown> = {},
+	hasDockerBuildx = true,
+) {
+	const selectedFixture = { ...gateFixture, ...fixtureOverrides };
 	return {
-		population: { eligible: [gateFixture], gated: [gateFixture], exempt: [] },
+		population: {
+			eligible: [selectedFixture],
+			gated: [selectedFixture],
+			exempt: [],
+		},
 		ensureTool: vi.fn(async () => "/mock/tool"),
 		getInstallAttempt: vi.fn(),
 		initLSPConfig: vi.fn(async () => undefined),
@@ -46,12 +56,16 @@ function gateDeps(execute: () => Promise<unknown>) {
 			cleanup: vi.fn(),
 		})),
 		createLspDiagnosticsTool: () => ({ execute }),
+		adoptProjectTrustFromContext: vi.fn(),
+		hasDockerBuildx: vi.fn(() => hasDockerBuildx),
 	};
 }
 
 async function runGateWithCensus(
 	state: string,
 	execute: () => Promise<unknown>,
+	fixtureOverrides?: Record<string, unknown>,
+	hasDockerBuildx = true,
 ) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-gate-census-"));
 	tempHomes.push(home);
@@ -64,16 +78,50 @@ async function runGateWithCensus(
 	vi.spyOn(console, "log").mockImplementation((...args) =>
 		output.push(args.join(" ")),
 	);
+	const deps = gateDeps(execute, fixtureOverrides, hasDockerBuildx);
 	await runLspGate({
 		langs: ["typescript"],
 		install: false,
 		verbose: false,
-		deps: gateDeps(execute),
+		deps,
 	});
-	return output.join("\n");
+	return { output: output.join("\n"), deps };
 }
 
 describe("LSP diagnostics clean-gate classification (#2780/#2776)", () => {
+	it("requires the official Docker BuildKit rule, or discloses unavailable buildx", () => {
+		// #3939 recurrence: the official server's old fixture produced an empty
+		// list, and allowEmptyBaseline turned that unsupported rule set into green.
+		const finding = {
+			details: {
+				totalDiagnostics: 1,
+				primaryDiagnosticsCount: 1,
+				diagnostics: [{ code: "JSONArgsRecommended" }],
+			},
+		};
+		expect(classifyOfficialDockerGateResult(finding, true)).toMatchObject({
+			state: "pass",
+		});
+		expect(
+			classifyOfficialDockerGateResult(
+				{ details: { totalDiagnostics: 0, diagnostics: [] } },
+				true,
+			),
+		).toMatchObject({ state: "fail" });
+		expect(
+			classifyOfficialDockerGateResult(
+				{ details: { totalDiagnostics: 0, diagnostics: [] } },
+				false,
+			),
+		).toMatchObject({ state: "skip", detail: "buildx unavailable" });
+		expect(
+			classifyOfficialDockerGateResult(
+				{ details: { unavailable: "official server unavailable" } },
+				true,
+			),
+		).toMatchObject({ state: "skip", detail: "official server unavailable" });
+	});
+
 	it("passes only when the real handler reports a primary finding", () => {
 		expect(
 			classifyLspGateResult(
@@ -133,7 +181,7 @@ describe("smoke-tools --lsp-gate census admission (#3309)", () => {
 		const execute = vi.fn(async () => ({
 			details: { totalDiagnostics: 1, primaryDiagnosticsCount: 1 },
 		}));
-		const output = await runGateWithCensus("skip", execute);
+		const { output } = await runGateWithCensus("skip", execute);
 
 		expect(output).toContain("⚠  typescript");
 		expect(output).toContain(
@@ -150,7 +198,12 @@ describe("smoke-tools --lsp-gate census admission (#3309)", () => {
 			await safeSpawnAsync("probe-language-server", []);
 			return { details: { unavailable: "probe server unavailable" } };
 		});
-		const output = await runGateWithCensus("pass", execute);
+		const { output } = await runGateWithCensus(
+			"pass",
+			execute,
+			{ expectDiagnosticCode: "AnyDeclaredRule" },
+			true,
+		);
 
 		expect(output).toContain("⚠  typescript");
 		expect(output).toContain(
@@ -158,5 +211,40 @@ describe("smoke-tools --lsp-gate census admission (#3309)", () => {
 		);
 		expect(execute).toHaveBeenCalledOnce();
 		expect(safeSpawnAsync).toHaveBeenCalledOnce();
+	});
+
+	it("routes a declared diagnostic code through the gated classifier", async () => {
+		const execute = vi.fn(async () => ({
+			details: {
+				totalDiagnostics: 1,
+				primaryDiagnosticsCount: 1,
+				diagnostics: [{ code: "DifferentRule" }],
+			},
+		}));
+		const { output } = await runGateWithCensus(
+			"pass",
+			execute,
+			{ expectDiagnosticCode: "AnyDeclaredRule" },
+			true,
+		);
+
+		// #3939 recurrence: removing the declared-code routing would let the
+		// generic primary-finding classifier accept the wrong rule.
+		expect(output).toContain("✗  typescript");
+		expect(output).toContain(
+			"official Docker server did not return AnyDeclaredRule",
+		);
+	});
+
+	it("adopts the host trust result before driving diagnostics", async () => {
+		const execute = vi.fn(async () => ({
+			details: { totalDiagnostics: 1, primaryDiagnosticsCount: 1 },
+		}));
+		const { deps } = await runGateWithCensus("pass", execute);
+
+		expect(deps.adoptProjectTrustFromContext).toHaveBeenCalledOnce();
+		const context = deps.adoptProjectTrustFromContext.mock.calls[0][0];
+		expect(context).toEqual({ isProjectTrusted: expect.any(Function) });
+		expect(context.isProjectTrusted()).toBe(true);
 	});
 });

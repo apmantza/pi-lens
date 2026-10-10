@@ -5,7 +5,6 @@
  * automatic invalidation based on rule file modification times.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { reportBundledResourceDirHealth } from "../bundled-resource-health.js";
@@ -13,10 +12,10 @@ import { getProjectDataDir } from "../file-utils.js";
 import { readJsonCache } from "../json-cache-read.js";
 import {
 	BUNDLED_QUERIES_ROOT,
+	computeRuleFilesFingerprint,
 	getBundledQueriesRootHealth,
 } from "../tree-sitter-query-loader.js";
 import { writeFileAtomic } from "../atomic-write.js";
-import { compareOrdinal } from "../string-utils.js";
 
 // v4: cache skip_test_files + fix_action — v3 entries silently dropped them,
 // and ruleHash (rule-file mtimes) never invalidates on a code-only fix.
@@ -63,13 +62,6 @@ export const CACHE_VERSION = "v7";
  * `resolvePackagePath`-resolved strings that happen to match.
  */
 export { BUNDLED_QUERIES_ROOT as BUNDLED_RULES_ROOT } from "../tree-sitter-query-loader.js";
-
-function isBundledRuleFile(resolvedFile: string): boolean {
-	return (
-		resolvedFile === BUNDLED_QUERIES_ROOT ||
-		resolvedFile.startsWith(BUNDLED_QUERIES_ROOT + path.sep)
-	);
-}
 
 /**
  * #2636 (the #2626 class sweep's tree-sitter leg): the bundled
@@ -141,23 +133,8 @@ export class RuleCache {
 	}
 
 	private computeRuleHash(ruleFiles: string[]): string {
-		const hash = crypto.createHash("sha256");
-		for (const file of ruleFiles.sort(compareOrdinal)) {
-			const resolved = path.resolve(file);
-			if (!fs.existsSync(resolved)) continue;
-			const stat = fs.statSync(resolved);
-			hash.update(`${file}:${stat.mtimeMs}:${stat.size}`);
-			// Content-CONFIRM only the project-local, mutable subset (a handful of
-			// files) — mtime+size alone is a first filter, not proof of freshness,
-			// and a preserved-mtime+size edit here would otherwise replay (and
-			// re-persist) a stale compiled set. Bundled files (~705, immutable
-			// within a process) skip this: the metadata fingerprint stays their
-			// whole story, keeping the common no-project-rules case as cheap as v6.
-			if (!isBundledRuleFile(resolved)) {
-				hash.update(fs.readFileSync(resolved));
-			}
-		}
-		return hash.digest("hex").slice(0, 16);
+		/* shared with the in-process loader so both caches observe one identity */
+		return computeRuleFilesFingerprint(ruleFiles);
 	}
 
 	get(ruleFiles: string[]): QueryCacheEntry | null {

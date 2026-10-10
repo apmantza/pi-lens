@@ -510,7 +510,9 @@ export async function effectiveConfig(
 							// `{ absolute, lspConfig }` struct (#2520): `absolute` is already
 							// this branch's narrowed local, so the struct's own field was
 							// carrying the same fact twice.
-							registerLSPConfig(lspConfigOf(resolution.value)),
+							registerLSPConfig(
+								lspConfigOf(resolution.value, undefined, resolution.provenance),
+							),
 						),
 					}),
 	};

@@ -49,8 +49,10 @@ vi.mock("../../clients/dispatch/integration.js", async (importOriginal) => ({
 	dispatchLintWithResult: vi.fn(),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: vi.fn(),
 	resyncGitChangedFiles: vi.fn().mockResolvedValue(undefined),
 }));
@@ -84,12 +86,13 @@ import {
 	formatFile as runFormatter,
 	getFormattersForFile,
 } from "../../clients/formatters.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { pathToFileURL } from "node:url";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { setHostFileMutationQueueLoader } from "../../clients/file-mutation-queue.js";
 import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 const CLEAN_DISPATCH = {
 	diagnostics: [],
@@ -208,8 +211,10 @@ async function piRead(
 	const toolCallId = `read-${++seq}`;
 	const args = { path: file, ...input };
 	if (!opts.skipToolCall) {
-		await handleToolCall(
-			callDeps(runtime, { toolName: "read", toolCallId, input: args }),
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				callDeps(runtime, { toolName: "read", toolCallId, input: args }),
+			),
 		);
 		opts.afterToolCall?.();
 	}
@@ -257,8 +262,8 @@ async function positionalEdit(
 			newText,
 		})),
 	};
-	const verdict = (await handleToolCall(
-		callDeps(runtime, { toolName: "edit", toolCallId, input }),
+	const verdict = (await runHandlerExpectingNoThrow(() =>
+		handleToolCall(callDeps(runtime, { toolName: "edit", toolCallId, input })),
 	)) as { block?: boolean; reason?: string } | undefined;
 	return {
 		toolCallId,
@@ -320,8 +325,8 @@ async function piWrite(
 ): Promise<void> {
 	const toolCallId = `write-${++seq}`;
 	const input = { path: file, content };
-	await handleToolCall(
-		callDeps(runtime, { toolName: "write", toolCallId, input }),
+	await runHandlerExpectingNoThrow(() =>
+		handleToolCall(callDeps(runtime, { toolName: "write", toolCallId, input })),
 	);
 	writeNow(file, content);
 	gate?.();
@@ -339,8 +344,8 @@ async function textEdit(
 ): Promise<{ blocked: boolean; reason?: string }> {
 	const toolCallId = `text-edit-${++seq}`;
 	const input = { path: file, edits: [{ oldText, newText }] };
-	const verdict = (await handleToolCall(
-		callDeps(runtime, { toolName: "edit", toolCallId, input }),
+	const verdict = (await runHandlerExpectingNoThrow(() =>
+		handleToolCall(callDeps(runtime, { toolName: "edit", toolCallId, input })),
 	)) as { block?: boolean; reason?: string } | undefined;
 	if (verdict?.block === true) return { blocked: true, reason: verdict.reason };
 	writeNow(file, fs.readFileSync(file, "utf8").replace(oldText, newText));
@@ -382,8 +387,10 @@ async function writeWithAutofix(
 		},
 	} as unknown as BiomeClient;
 	const input = { path: file, content };
-	await handleToolCall(
-		callDeps(runtime, { toolName: "write", toolCallId: "w1", input }),
+	await runHandlerExpectingNoThrow(() =>
+		handleToolCall(
+			callDeps(runtime, { toolName: "write", toolCallId: "w1", input }),
+		),
 	);
 	writeNow(file, content);
 	const res = (await handleToolResult(
@@ -894,8 +901,10 @@ describe("#3523: the agent's own positional edit is a read", () => {
 					path: file,
 					oldRange: { start: { line: 2 }, end: { line: 2 } },
 				};
-				const verdict = (await handleToolCall(
-					callDeps(runtime, { toolName: "edit", toolCallId, input }),
+				const verdict = (await runHandlerExpectingNoThrow(() =>
+					handleToolCall(
+						callDeps(runtime, { toolName: "edit", toolCallId, input }),
+					),
 				)) as { block?: boolean; reason?: string } | undefined;
 				return { input, verdict };
 			};
@@ -933,8 +942,10 @@ describe("#3523: the agent's own positional edit is a read", () => {
 					remove_to: anchors?.[1],
 					replacement_lines: ["agent2"],
 				};
-				const verdict = (await handleToolCall(
-					callDeps(runtime, { toolName: "replace", toolCallId, input }),
+				const verdict = (await runHandlerExpectingNoThrow(() =>
+					handleToolCall(
+						callDeps(runtime, { toolName: "replace", toolCallId, input }),
+					),
 				)) as { block?: boolean; reason?: string } | undefined;
 				return { input, verdict };
 			};
@@ -1172,23 +1183,27 @@ describe("#3524: a native read's evidence is the delivered text", () => {
 			const runtime = newRuntime(env.tmpDir);
 			const args = { path: file, offset: 1, limit: 12 };
 			// A tool_call whose result never came (another extension blocked it).
-			await handleToolCall(
-				callDeps(runtime, {
-					toolName: "read",
-					toolCallId: "call_9",
-					input: args,
-				}),
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					callDeps(runtime, {
+						toolName: "read",
+						toolCallId: "call_9",
+						input: args,
+					}),
+				),
 			);
 			await piRead(runtime, file, { offset: 1, limit: 12 });
 			const own = await positionalEdit(runtime, file, [[5, 5, "own5"]]);
 			await applyEdit(runtime, file, own);
 			// The id comes back: decorated, and raced on line 11.
-			await handleToolCall(
-				callDeps(runtime, {
-					toolName: "read",
-					toolCallId: "call_9",
-					input: args,
-				}),
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					callDeps(runtime, {
+						toolName: "read",
+						toolCallId: "call_9",
+						input: args,
+					}),
+				),
 			);
 			const tool = createReadToolDefinition(runtime.projectRoot);
 			const result = await tool.execute("call_9", args, undefined, undefined, {
@@ -1993,6 +2008,7 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 		v[n - 1] = text;
 		writeNow(file, v.join("\n"));
 	};
+
 	/**
 	 * The deferred agent_end format through the real `FormatService`, built
 	 * the way `index.ts` builds it for the drain (the guard's session id).
@@ -2034,6 +2050,194 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 		expect(ran).toBe(true);
 	};
 
+	/**
+	 * #4131 (maintainer decision F5 on #4187): authorship follows content
+	 * identity. A recognized bash write credits authorship without a read
+	 * and without the bytes it wrote; it holds while the disk holds the bytes
+	 * the conversation last wrote, and ends when another writer changes them.
+	 * `stat` only pre-filters, so a metadata-only change keeps it (the #3520
+	 * no-drop direction). Recurrences: the zero-read arm injected a creation
+	 * read over the other writer's bytes (#4131, R1); round 1 of #4187 ended
+	 * authorship on any stat change (R2); an own bash write or the agent_end
+	 * drain re-baselined it over the other writer's bytes (F6, R3, R4).
+	 */
+	const bashSed = async (
+		runtime: RuntimeCoordinator,
+		file: string,
+		from: string,
+		to: string,
+	) => {
+		const toolCallId = `bash-${++seq}`;
+		const input = { command: `sed -i 's/^${from}$/${to}/' ${file}` };
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				callDeps(runtime, { toolName: "bash", toolCallId, input }),
+			),
+		);
+		writeNow(
+			file,
+			fs.readFileSync(file, "utf8").replace(`${from}\n`, `${to}\n`),
+		);
+		await handleToolResult(
+			resultDeps(runtime, {
+				toolName: "bash",
+				toolCallId,
+				input,
+				content: [{ type: "text", text: "" }],
+			}),
+		);
+	};
+	const AUTHORSHIP_RETIRED = "File modified since your write";
+
+	it("ends bash authorship when another writer changes the bytes (#4131 R1)", async () => {
+		const env = setupTestEnvironment("rg-4131-r1-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			foreignWrite(file, 11, "EXTERNAL11");
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.blocked).toBe(true);
+			expect(edit.reason).toContain(AUTHORSHIP_RETIRED);
+			// The retirement holds: the next edit still needs a read.
+			const again = await positionalEdit(runtime, file, [[3, 3, "agent3b"]]);
+			expect(again.blocked).toBe(true);
+			expect(again.reason).toContain(AUTHORSHIP_RETIRED);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("unions a native edit's own line with distinct existing authorship (#4210 R3-2)", async () => {
+		const env = setupTestEnvironment("rg-4210-native-own-range-");
+		try {
+			const file = fixture(
+				env.tmpDir,
+				"native.ts",
+				`${lines(12).join("\n")}\n`,
+			);
+			const runtime = newRuntime(env.tmpDir);
+			runtime.readGuard.recordWritten(file, {
+				stampFileTime: false,
+				authorship: "partial",
+				authoredRanges: [[8, 8]],
+				allowFirstAuthorship: true,
+			});
+			await piRead(runtime, file, { offset: 10, limit: 1 });
+			const edit = await positionalEdit(runtime, file, [[10, 10, "native10"]]);
+			await applyEdit(runtime, file, edit);
+			const guard = runtime.readGuard;
+			if (!guard) throw new Error("read guard unavailable");
+			const entry = guard
+				.exportAuthorship()
+				.entries?.find((candidate) => candidate.filePath === file);
+			expect(entry?.authoredRanges).toEqual([
+				[8, 8],
+				[10, 10],
+			]);
+			const resumed = newRuntime(env.tmpDir);
+			resumed.readGuard.importAuthorship(
+				guard.exportAuthorship(),
+				new Set(entry?.toolCallId ? [entry.toolCallId] : []),
+			);
+			expect(resumed.readGuard.checkEdit(file, [10, 10]).action).toBe("allow");
+			expect(resumed.readGuard.checkEdit(file, [9, 9]).action).toBe("block");
+			expect(resumed.readGuard.checkEdit(file, [8, 8]).action).toBe("allow");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps bash authorship over a metadata-only change and an identical rewrite (#4131 R2, #3520 no-drop)", async () => {
+		const env = setupTestEnvironment("rg-4131-r2-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			// touch: a new mtime, the same bytes.
+			const later = (nextMtimeMs += 10_000) / 1000;
+			fs.utimesSync(file, later, later);
+			expect(
+				(await positionalEdit(runtime, file, [[11, 11, "agent11"]])).blocked,
+			).toBe(false);
+			// A checkout of identical bytes: rewritten, new stat, same content.
+			const other = fixture(env.tmpDir, "other.ts", BIG);
+			await bashSed(runtime, other, "line5", "agent5");
+			writeNow(other, fs.readFileSync(other, "utf8"));
+			const edit = await positionalEdit(runtime, other, [[12, 12, "agent12"]]);
+			expect(edit.reason).toBeUndefined();
+			expect(edit.blocked).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not let an own bash write re-author bytes another writer changed (#4131 F6 P2)", async () => {
+		const env = setupTestEnvironment("rg-4131-r3-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			foreignWrite(file, 11, "EXTERNAL11");
+			await bashSed(runtime, file, "line4", "agent4");
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.blocked).toBe(true);
+			expect(edit.reason).toContain(AUTHORSHIP_RETIRED);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lets an own bash write advance its own authorship when no other writer intervened (F6 no-drop)", async () => {
+		const env = setupTestEnvironment("rg-4131-r3-nodrop-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			await bashSed(runtime, file, "line4", "agent4");
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.reason).toBeUndefined();
+			expect(edit.blocked).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not let the agent_end format re-author bytes another writer changed (#4131 F6 P3)", async () => {
+		const env = setupTestEnvironment("rg-4131-r4-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			foreignWrite(file, 11, "EXTERNAL11");
+			await drainFormat(runtime, file, (text) =>
+				text.replace("line2\n", "line2 \n"),
+			);
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.blocked).toBe(true);
+			expect(edit.reason).toContain(AUTHORSHIP_RETIRED);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("carries bash authorship through the agent_end format when no other writer intervened (F6 no-drop)", async () => {
+		const env = setupTestEnvironment("rg-4131-r4-nodrop-");
+		try {
+			const file = fixture(env.tmpDir, "big.ts", BIG);
+			const runtime = newRuntime(env.tmpDir);
+			await bashSed(runtime, file, "line3", "agent3");
+			await drainFormat(runtime, file, (text) =>
+				text.replace("line2\n", "line2 \n"),
+			);
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.reason).toBeUndefined();
+			expect(edit.blocked).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("keeps another writer's change stale after an oldText edit passed it (R4)", async () => {
 		const env = setupTestEnvironment("rg-3525-r4-");
 		try {
@@ -2068,8 +2272,10 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 				path: file,
 				edits: [{ oldText: "line3\n", newText: "agent3\n" }],
 			};
-			await handleToolCall(
-				callDeps(runtime, { toolName: "edit", toolCallId, input }),
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					callDeps(runtime, { toolName: "edit", toolCallId, input }),
+				),
 			);
 			writeNow(
 				file,
@@ -2210,8 +2416,10 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 				{ oldText: "NOPE\n", newText: "x\n" },
 			],
 		};
-		const verdict = (await handleToolCall(
-			callDeps(runtime, { toolName: "edit", toolCallId, input }),
+		const verdict = (await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				callDeps(runtime, { toolName: "edit", toolCallId, input }),
+			),
 		)) as { block?: boolean; reason?: string } | undefined;
 		expect(verdict?.reason).toContain("PARTIAL APPLY — 1 edit committed");
 		expect(verdict?.reason).not.toContain("Post-edit analysis failed");
@@ -2262,8 +2470,10 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 			foreignWrite(file, 11, "EXTERNAL11");
 			const toolCallId = `bash-${++seq}`;
 			const input = { command: `sed -i 's/^line3$/agent3/' ${file}` };
-			await handleToolCall(
-				callDeps(runtime, { toolName: "bash", toolCallId, input }),
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					callDeps(runtime, { toolName: "bash", toolCallId, input }),
+				),
 			);
 			writeNow(
 				file,
@@ -2475,6 +2685,87 @@ describe("#3962: a native re-read supersedes a stale bridge binding", () => {
 			]);
 			expect(edit.reason).toBeUndefined();
 			expect(edit.blocked).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #3865 member 3 (#4187 F3, P4): a v1 bridge read reports a range, not
+	// bytes the conversation holds whole, so it must not re-stamp the
+	// whole-file FileTime. Recurrence: a bridge read of lines 1-10 re-stamped
+	// it, and an edit of line 11, which another writer changed and whose
+	// newest view carries no hash (a read past READ_HASH_MAX_LINES), passed.
+	it("does not let a bridge read of other lines re-stamp FileTime over another writer's change (#3865)", async () => {
+		const env = setupTestEnvironment("rg-3865-bridge-read-");
+		try {
+			const big = lines(3100);
+			const file = fixture(env.tmpDir, "big.ts", `${big.join("\n")}\n`);
+			const runtime = newRuntime(env.tmpDir);
+			_bridgeRuntime = runtime;
+			// The agent's whole-file read, past READ_HASH_MAX_LINES: no hashes.
+			runtime.readGuard.recordRead({
+				filePath: file,
+				requestedOffset: 1,
+				requestedLimit: 3101,
+				effectiveOffset: 1,
+				effectiveLimit: 3101,
+				expandedByLsp: false,
+				turnIndex: 0,
+				writeIndex: 0,
+				timestamp: Date.now(),
+			});
+			big[10] = "EXTERNAL11";
+			writeNow(file, `${big.join("\n")}\n`);
+			const bridge = (globalThis as Record<symbol, ReadBridge>)[
+				READ_BRIDGE_KEY
+			];
+			bridge.recordRead({
+				filePath: file,
+				requestedOffset: 1,
+				requestedLimit: 10,
+			});
+			const edit = await positionalEdit(runtime, file, [[11, 11, "agent11"]]);
+			expect(edit.blocked).toBe(true);
+			expect(edit.reason).toContain("File modified since read");
+			// No-drop: the bridge read still judges the lines it covered.
+			expect(
+				(await positionalEdit(runtime, file, [[2, 2, "agent2"]])).blocked,
+			).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #3865 member 3: a bridge read moves the whole-file FileTime only when it
+	// read every line. Recurrence: a small file's range read carries a
+	// whole-file content binding, and stamping on that alone vouched for a
+	// line the agent last saw, unhashed, in an older whole-file bridge read.
+	it("does not let a bridge range read of a small file re-stamp FileTime (#3865)", async () => {
+		const env = setupTestEnvironment("rg-3865-bridge-range-small-");
+		try {
+			const file = fixture(env.tmpDir, "s.ts", `${lines(6).join("\n")}\n`);
+			const runtime = newRuntime(env.tmpDir);
+			_bridgeRuntime = runtime;
+			const bridge = (globalThis as Record<symbol, ReadBridge>)[
+				READ_BRIDGE_KEY
+			];
+			// A whole-file v1 read: a whole-file binding, no line hashes.
+			bridge.recordRead({
+				filePath: file,
+				requestedOffset: 1,
+				requestedLimit: undefined,
+			});
+			const v = diskLines(file);
+			v[4] = "EXTERNAL5";
+			writeNow(file, v.join("\n"));
+			bridge.recordRead({
+				filePath: file,
+				requestedOffset: 1,
+				requestedLimit: 2,
+			});
+			const edit = await positionalEdit(runtime, file, [[5, 5, "agent5"]]);
+			expect(edit.blocked).toBe(true);
+			expect(edit.reason).toContain("File modified since read");
 		} finally {
 			env.cleanup();
 		}

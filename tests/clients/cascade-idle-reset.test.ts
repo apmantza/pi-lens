@@ -47,9 +47,9 @@ vi.mock("../../clients/lsp/client.js", async (importOriginal) => ({
 	createLSPClient: mocks.createLSPClient,
 }));
 
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => {
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => {
 	const actual =
-		await importOriginal<typeof import("../../clients/lsp/index.js")>();
+		await importOriginal<typeof import("../../clients/lsp/capabilities.js")>();
 	mocks.actualGetLSPService = actual.getLSPService;
 	return {
 		...actual,

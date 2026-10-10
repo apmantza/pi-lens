@@ -297,6 +297,7 @@ describe("resolveToolCwd (#2777)", () => {
 			name: "Markerless test server",
 			extensions: [".ts"],
 			idleEviction: "unmeasured",
+			role: "language",
 			root: async () => computedRoot,
 			spawn: vi.fn(),
 		};
@@ -320,6 +321,7 @@ describe("resolveToolCwd (#2777)", () => {
 			name: "Failing root test server",
 			extensions: [".ts"],
 			idleEviction: "unmeasured",
+			role: "language",
 			root: async () => {
 				calls++;
 				if (calls === 1) throw new Error("root probe failed");
@@ -356,6 +358,7 @@ describe("resolveToolCwd (#2777)", () => {
 			name: "Fallback callback test server",
 			extensions: [".ts"],
 			idleEviction: "unmeasured",
+			role: "language",
 			root: failing,
 			rootMarkers: ["missing.marker"],
 			requiresProjectRoot: true,
@@ -392,6 +395,7 @@ describe("resolveToolCwd (#2777)", () => {
 			name: "Flag test server",
 			extensions: [".rs"],
 			idleEviction: "unmeasured",
+			role: "language",
 			root: async () => undefined,
 			rootMarkers: ["Cargo.toml"],
 			...(requires === undefined ? {} : { requiresProjectRoot: requires }),
@@ -524,6 +528,7 @@ describe("resolveToolCwd (#2777)", () => {
 			name: "Resolved root test server",
 			extensions: [".ts"],
 			idleEviction: "unmeasured",
+			role: "language",
 			root: async () => project,
 			rootMarkers: ["missing.marker"],
 			spawn: vi.fn(),

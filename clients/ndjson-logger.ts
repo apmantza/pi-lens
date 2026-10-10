@@ -289,6 +289,14 @@ export function getRegisteredLogFiles(): ReadonlySet<string> {
 	return registeredLogFiles;
 }
 
+/** Resolve every registered NDJSON writer before a graceful lifecycle boundary. */
+export function flushAllNdjsonWriters(): Promise<void> {
+	if (!ndjsonGlobalState) return Promise.resolve();
+	return Promise.all(
+		[...ndjsonGlobalState.writers.values()].map((state) => drain(state)),
+	).then(() => undefined);
+}
+
 export interface SinkWriteFailureSummary {
 	/** Canonicalized absolute path of the sink that lost writes. */
 	file: string;

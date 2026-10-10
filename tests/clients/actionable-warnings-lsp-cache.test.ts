@@ -31,7 +31,7 @@ const getLastKnownDiagnostics = vi.fn(
 	},
 );
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	// Factory-seeded, with the five methods this suite asserts call counts on
 	// overridden (#2592). The cache-hit assertions below count `openFile` /
 	// `getDiagnostics` calls, so the defaults must not shadow them.

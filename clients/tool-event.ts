@@ -111,3 +111,20 @@ export function resolveToolCallCorrelationId(
 	}
 	return undefined;
 }
+
+/**
+ * Resolve the identity that owns read evidence. Nested codemode calls are
+ * visible in the live event stream with their own ids, but their tool result
+ * is carried by the parent codemode result on a conversation branch. Using
+ * the parent when present keeps the same branch-retention rule for top-level
+ * and nested reads (#3831).
+ */
+export function resolveReadEvidenceCorrelationId(
+	event: unknown,
+): string | undefined {
+	const parent = resolveToolCallCorrelationId({
+		toolCallId: (event as { parentToolCallId?: unknown } | undefined)
+			?.parentToolCallId,
+	});
+	return parent ?? resolveToolCallCorrelationId(event);
+}

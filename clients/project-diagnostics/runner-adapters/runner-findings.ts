@@ -125,6 +125,15 @@ export interface TestRunnerFindingsCache {
 export interface TestRunnerVerdict {
 	file: string;
 	sourceFile: string;
+	/**
+	 * #2542 ask 3: the `RUNNERS` key that produced this verdict, carried so the
+	 * delivery seam can re-queue a run for the current file sequence without
+	 * re-deriving the runner from the test file spelling (AGENTS.md
+	 * "Known identity carried forward"). Absent on a record written before the
+	 * re-queue existed; such a stale verdict is still delivered with its gap but
+	 * no run is queued.
+	 */
+	runner?: string;
 	fileSeq?: TestRunnerFileSequence;
 }
 

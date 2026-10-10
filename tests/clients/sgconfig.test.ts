@@ -4,9 +4,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	_resetBaselineSgconfigForTests,
+	getAstGrepRuleSources,
 	resolveBaselineSgconfig,
 } from "../../clients/sgconfig.js";
 import { removeTempDirSync } from "./test-utils.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 
 /** Read the single `ruleDirs` entry out of a generated sgconfig.yml. */
 function soleRuleDir(configPath: string): string {
@@ -32,6 +37,66 @@ function idsInMergedDir(mergedDir: string): string[] {
 }
 
 describe("ast-grep baseline sgconfig", () => {
+	it("loads user rules between project and bundled rules", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgconfig-user-project-"),
+		);
+		const userHome = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgconfig-user-home-"),
+		);
+		const previous = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = userHome;
+		try {
+			const userDir = path.join(userHome, "rules", "ast-grep-rules", "rules");
+			fs.mkdirSync(userDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(userDir, "user-rule.yml"),
+				"id: user-rule\nlanguage: TypeScript\nmessage: USER\nrule:\n  pattern: user($$$)\n",
+			);
+			_resetBaselineSgconfigForTests();
+			expect(
+				getAstGrepRuleSources(root).map(
+					({ origin, tier }) => `${origin}:${tier}`,
+				),
+			).toContain("user:primary");
+			const config = resolveBaselineSgconfig(root);
+			expect(config).toBeDefined();
+			const merged = soleRuleDir(config as string);
+			expect(idsInMergedDir(merged)).toContain("user-rule");
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previous;
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(userHome, { recursive: true, force: true });
+			_resetBaselineSgconfigForTests();
+		}
+	});
+
+	it("records an invalid user rule instead of presenting it as clean", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgconfig-invalid-project-"),
+		);
+		const userHome = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgconfig-invalid-home-"),
+		);
+		const previous = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = userHome;
+		resetDegradationLedger();
+		try {
+			const userDir = path.join(userHome, "rules", "ast-grep-rules", "rules");
+			fs.mkdirSync(userDir, { recursive: true });
+			fs.writeFileSync(path.join(userDir, "broken.yml"), "rule: [broken\n");
+			resolveBaselineSgconfig(root);
+			expect(
+				getDegradationSummary().find((g) => g.kind === "ast-grep-rule-invalid"),
+			).toBeDefined();
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previous;
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(userHome, { recursive: true, force: true });
+		}
+	});
 	afterEach(() => {
 		_resetBaselineSgconfigForTests();
 	});

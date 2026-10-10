@@ -77,8 +77,10 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 // Partial override, not a whole-module replacement: only the two entry points
 // that would start a language server are doubled, so the module's other
 // exports stay real (#2281's vi.mock export ratchet).
-vi.mock("../../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../clients/lsp/index.js")>()),
+vi.mock("../../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: () => makeLspServiceDouble({ getAliveClientCount: () => 0 }),
 	resetLSPService: vi.fn(),
 }));

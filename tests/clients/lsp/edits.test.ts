@@ -30,6 +30,54 @@ function isCaseInsensitiveFs(dir: string): boolean {
 }
 
 describe("LSP workspace edits", () => {
+	it("does not credit the untouched line after a column-zero range end (#4210 R3-1)", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-r3-1-"));
+		try {
+			const filePath = path.join(tmpDir, "target.ts");
+			fs.writeFileSync(
+				filePath,
+				["line1", "line2", "line3", "line4", "line5", "line6"].join("\n"),
+				"utf-8",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = tmpDir;
+			const applied = await applyWorkspaceEdit(
+				{
+					changes: {
+						[pathToFileURL(filePath).href]: [
+							{
+								range: {
+									start: { line: 2, character: 0 },
+									end: { line: 4, character: 0 },
+								},
+								newText: "A3\nA4\n",
+							},
+						],
+					},
+				},
+				tmpDir,
+			);
+			const detail = applied.fileDetails[0];
+			if (!detail?.ranges)
+				throw new Error("LSP edit did not report file ranges");
+			const authoredRanges = detail.ranges.map(
+				(range) => [range.start, range.end] as [number, number],
+			);
+			runtime.readGuard.recordWritten(filePath, {
+				stampFileTime: false,
+				authorship: "partial",
+				authoredRanges,
+				allowFirstAuthorship: true,
+			});
+			expect(authoredRanges).toEqual([[3, 4]]);
+			expect(runtime.readGuard.checkEdit(filePath, [5, 5]).action).toBe(
+				"block",
+			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
 	it("preserves original array order for inserts at the same position", () => {
 		expect(
 			applyTextEditsToString("ab", [

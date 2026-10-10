@@ -1,3 +1,8 @@
+export declare function readLockedToolVersion(args: {
+	root: string;
+	packageName: string;
+}): string;
+
 export declare function createIsolatedExecPrefix(): string;
 
 export declare function buildIsolatedExecInvocation(args: {

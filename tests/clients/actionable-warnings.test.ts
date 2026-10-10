@@ -47,7 +47,7 @@ function legacyActionableWarningIdForTest(args: {
 	return `aw:${createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 10)}`;
 }
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	// `supportsLSP: false` short-circuits `buildActionableWarningsReport` before
 	// it reaches any other service method; the rest of the surface comes from the
 	// factory so a method added to the production path cannot TypeError into this

@@ -64,6 +64,95 @@ afterEach(() => {
 });
 
 describe("dispatcher filter — rules.<id>.disable", () => {
+	it("keeps a rule off its configured path through the real dispatch seam", async () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				rules: { "no-eval": { ignorePaths: ["vendorish/**"] } },
+			}),
+		);
+		const diagnostics: Diagnostic[] = [
+			{
+				id: "a",
+				message: "a",
+				filePath: path.join(tmpDir, "a.ts"),
+				severity: "warning",
+				semantic: "warning",
+				tool: "ast-grep",
+				rule: "no-eval",
+				line: 1,
+			},
+			{
+				id: "b",
+				message: "b",
+				filePath: path.join(tmpDir, "vendorish/b.ts"),
+				severity: "warning",
+				semantic: "warning",
+				tool: "ast-grep",
+				rule: "no-eval",
+				line: 1,
+			},
+		];
+		const registry = new RunnerRegistry();
+		registry.register(mockRunner("ast-grep", diagnostics));
+		const result = await dispatchForFile(
+			makeContext(tmpDir, new FactStore()),
+			[{ mode: "all", runnerIds: ["ast-grep"] }],
+			registry,
+		);
+		expect(result.diagnostics.map((d) => d.filePath)).toEqual([
+			path.join(tmpDir, "a.ts"),
+		]);
+	});
+
+	it("cannot widen a global path denial from a project config", async () => {
+		const previous = process.env.PI_LENS_HOME;
+		const previousConfigPath = process.env.PI_LENS_CONFIG_PATH;
+		const globalDir = path.join(tmpDir, "global", ".pi-lens");
+		fs.mkdirSync(globalDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(globalDir, "config.json"),
+			JSON.stringify({
+				rules: { "no-eval": { ignorePaths: ["vendorish/**"] } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ rules: { "no-eval": { ignorePaths: [] } } }),
+		);
+		process.env.PI_LENS_HOME = path.join(tmpDir, "global");
+		process.env.PI_LENS_CONFIG_PATH = path.join(globalDir, "config.json");
+		try {
+			const registry = new RunnerRegistry();
+			registry.register(
+				mockRunner("ast-grep", [
+					{
+						id: "b",
+						message: "b",
+						filePath: path.join(tmpDir, "vendorish/b.ts"),
+						severity: "warning",
+						semantic: "warning",
+						tool: "ast-grep",
+						rule: "no-eval",
+						line: 1,
+					},
+				]),
+			);
+			const result = await dispatchForFile(
+				makeContext(tmpDir, new FactStore()),
+				[{ mode: "all", runnerIds: ["ast-grep"] }],
+				registry,
+			);
+			expect(result.diagnostics).toHaveLength(0);
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = previous;
+			if (previousConfigPath === undefined)
+				delete process.env.PI_LENS_CONFIG_PATH;
+			else process.env.PI_LENS_CONFIG_PATH = previousConfigPath;
+		}
+	});
+
 	it("drops a matching diagnostic from the rendered output", async () => {
 		fs.writeFileSync(
 			path.join(tmpDir, ".pi-lens.json"),

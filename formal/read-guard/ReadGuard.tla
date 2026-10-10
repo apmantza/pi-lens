@@ -20,6 +20,10 @@
 (*               handleToolResult)                                         *)
 (*               that supersedes it (from the delivered bytes when the     *)
 (*               file moved after the tool_call's stamp, #3524);           *)
+(*               both records carry one evidence identity: the top-level    *)
+(*               toolCallId, or the parent codemode toolCallId for a nested *)
+(*               read, because the parent result is the branch-visible     *)
+(*               transcript entry (#4138/#3831).                            *)
 (*      edit   : positional edit of 1 or 2 lines; checkEdit at tool_call   *)
 (*               (runtime-tool-call.ts handleToolCall), optional           *)
 (*               relocation                                                *)
@@ -39,6 +43,16 @@
 (*               post-fix                                                  *)
 (*               bytes are attached as "authoritative" and                 *)
 (*               recorded as a whole-file read (#3519).                    *)
+(*      own    : an owned in-process write (#4187 R4-1): a pi-lens tool    *)
+(*               that writes bytes of its own (ast_grep_replace with       *)
+(*               apply: true, an lsp_navigation rename,                    *)
+(*               lens_diagnostic_mark's suppress). Its tool_call retires a *)
+(*               broken authorship for the paths it named and licenses an  *)
+(*               advance for exactly those (read-guard.ts                  *)
+(*               noteCheckedPaths); the write then re-baselines a licensed *)
+(*               path and ends every other one. Two steps (OwnCall,        *)
+(*               OwnWrite), so another writer may land inside the tool's   *)
+(*               run, after the check that licensed it (R4-6).             *)
 (*  - another writer (external editor, second pi-lens instance, git):      *)
 (*    changes F between any two steps.                                     *)
 (*  - pi-lens' deferred agent_end format drain (runtime-agent-end.ts       *)
@@ -61,7 +75,16 @@ CONSTANTS
     N0,             \* initial line count
     MaxLen,         \* longest file
     AgentOps,       \* bound on agent tool calls
-    Ops,            \* agent tool kinds: subset of {"read","rread","edit","write","bash"}
+    Ops,            \* agent tool kinds: subset of {"read","rread","fread","bread","edit","oedit","write","bash",
+                    \*  "pbash","bridge","own","ownwrite"}
+                    \* ("fread": a read whose host call errors, offset past EOF;
+                    \*  "bread": a read a later extension blocks after pi-lens's tool_call captured it;
+                    \*  "oedit": an oldText edit, gated by the zero-read check alone;
+                    \*  "pbash": a recognized bash write of one line;
+                    \*  "settle": unattributed settled-sweep drift;
+                    \*  "bridge": a mutation-bridge write of one line, with no pre-write check of its own;
+                    \*  "own": an owned in-process call+write pair, the call licensing the write's advance;
+                    \*  "ownwrite": the same write with no call, the round-4 mutant)
     Spans,          \* edit spans: subset of {1,2}
     ExtWrites,      \* bound on other-writer writes
     ExtKinds,       \* subset of {"replace","delete","insert"}
@@ -81,6 +104,20 @@ CONSTANTS
     SuppressByNewerContext, \* TRUE (code before #3522): a newer context-only candidate cancels a snapshot mismatch; read only when SpanSnapshot = FALSE
     FormatStamp,    \* TRUE (code before #3525): the agent_end format drain's recordWritten also stamps FileTime
                     \* (FALSE: it credits authorship, `written`, only)
+    ProvisionalCredit, \* TRUE (#4185 round 1, head 2ce73f165): the tool_call provisional record carries the
+                       \* transcript identity (toolCallId), so a /fork or /tree keeps it like a delivered
+                       \* record; FALSE (code before #4185 and since its round 2): it has none and every
+                       \* move drops it. Only a read that errored leaves one behind (FailedRead).
+    RevokeFailedRead,  \* TRUE (code since #4185 round 2): the end of a read call that errored drops the
+                       \* tool_call capture (at tool_result in rounds 2-3, at tool_execution_end since round 4,
+                       \* ReadGuard.dropProvisionalReadByCall); FALSE (code before): the capture stays, and
+                       \* alone it satisfies the zero-read check (FailedReadLive)
+    BlockRelease,      \* where the capture of a read blocked after its tool_call ("bread") is released:
+                       \* "none" (code before #4185 round 3): never, and no run-boundary backstop;
+                       \* "run" (#4185 round 3, head aa4f1f125): only at the run boundary (agent_settled,
+                       \*   Turn here), which drops every capture still held;
+                       \* "end" (code since round 4): at the call's tool_execution_end, with the
+                       \*   run-boundary drop kept as a backstop
     \* ---- candidate fixes ----
     RecordAuthoritative, \* record the attached post-autofix bytes as a full read (code since #3519)
     RecordOwnEdit,       \* record the lines an allowed positional edit wrote as read (code since #3523)
@@ -97,9 +134,24 @@ CONSTANTS
                          \* "fenced": the refusal is against the epoch the work was queued with, which a
                          \*   Requeue keeps (code since #3521 round 3)
     \* ---- existing guards (FALSE = mutant with the guard removed) ----
-    FileTimeCheck, CoverageCheck, SnapshotCheck
+    FileTimeCheck, CoverageCheck, SnapshotCheck,
+    \* ---- authorship (#4131, #4187) ----
+    AuthorIdentity, \* TRUE (code since #4187): authorship holds the bytes the conversation last wrote and
+                    \*   ends when the disk differs (content identity; stat is only the code's pre-filter);
+                    \*   FALSE (code before): any recordWritten authors the file until a branch move
+    RetireAtWrite,  \* TRUE (code since #4187): a write that carries no bytes of its own (a bash write's
+                    \*   tool_call, the agent_end drain) first ends an authorship whose bytes changed, and
+                    \*   no later write resumes it; FALSE: it re-baselines over the other writer's bytes
+    AuthorBranch,   \* TRUE (code since #4187, #3603): /tree and /fork keep the authorship whose write is
+                    \*   on the kept branch; FALSE (code before): they clear every authorship
+    BridgeNoAdvance \* TRUE (code since #4187 round 3, R2-4): a mutation-bridge write, which no pre-write
+                    \*   check guarded, ends an existing authorship whose bytes it changed instead of
+                    \*   advancing it; FALSE (round 2): it re-baselines like an own write
 
 Lines == 1..MaxLen
+\* The license switch reuses the existing boolean in the focused configs;
+\* configs without an own-repeat action are unchanged by this abstraction.
+SpendLicense == BridgeNoAdvance
 NoH == [l \in Lines |-> 0]
 Min(a, b) == IF a < b THEN a ELSE b
 
@@ -111,19 +163,23 @@ MkH(c, lo, hi) ==
 Replace(s, l, t) == [s EXCEPT ![l] = t]
 Delete(s, l) == SubSeq(s, 1, l - 1) \o SubSeq(s, l + 1, Len(s))
 Insert(s, l, t) == SubSeq(s, 1, l - 1) \o <<t>> \o SubSeq(s, l, Len(s))
+\* "ws" (a formatter's whitespace-only rewrite, #4187): new mtime, same tokens.
 Mod(kind, s, l, t) ==
     CASE kind = "replace" -> Replace(s, l, t)
       [] kind = "delete"  -> Delete(s, l)
       [] kind = "insert"  -> Insert(s, l, t)
+      [] kind = "ws"      -> s
 ModOk(kind, s, l) ==
     CASE kind = "replace" -> l <= Len(s)
       [] kind = "delete"  -> l <= Len(s) /\ Len(s) >= 2
       [] kind = "insert"  -> l <= Len(s) + 1 /\ Len(s) < MaxLen
+      [] kind = "ws"      -> l <= Len(s)
 
 VARIABLES
     disk, rev, tok,             \* file content, write counter (= mtime clock), fresh-token source
     know, kTurn,                \* agent knowledge; knowledge before the current prompt
     reads, ft, written, pendCreate, lastEditOk, born, turnNo,  \* guard state
+                                \* (written: the authorship record, see NoAuth/Auth)
     pc, pend, ops, ext, nb, fixedTurn, mutatedTurn,
     dr,                         \* settle drain: queued (q), branch epoch it carries (ep), current epoch (cur),
                                 \* work put back by an aborted or failed drain (rq)
@@ -138,10 +194,35 @@ guardVars == <<reads, ft, written, pendCreate, lastEditOk, born, turnNo, dr>>
 \* g = turn the record was made in (ReadRecord.turnIndex); whole = whole-file view.
 Rec(lo, hi, h, prov) == [lo |-> lo, hi |-> hi, h |-> h, prov |-> prov, g |-> turnNo, whole |-> FALSE]
 
+\* The authorship record (writtenThisSession, AuthoredBytes): on = an
+\* entry exists; c = the bytes it was credited over (its content identity);
+\* g = the turn of the write that named it, id = whether one did (a pi-lens
+\* writer names none and keeps the id of the bytes it rewrote); ret = it was
+\* retired because another writer changed the bytes (#4131). A retired record
+\* stays (no write resumes it) and moves with its write like a live one.
+NoAuth == [on |-> FALSE, c |-> <<>>, g |-> 0, id |-> FALSE, ret |-> FALSE, lic |-> FALSE]
+\* recordWritten by a write that names its transcript entry.
+Auth(c) == IF written.ret THEN written
+           ELSE [on |-> TRUE, c |-> c, g |-> turnNo, id |-> TRUE, ret |-> FALSE, lic |-> FALSE]
+\* recordWritten by a pi-lens writer: carries the id of the write it rewrote.
+Carry(c) == IF written.ret THEN written
+            ELSE IF written.on THEN [written EXCEPT !.c = c]
+            ELSE [on |-> TRUE, c |-> c, g |-> turnNo, id |-> FALSE, ret |-> FALSE, lic |-> FALSE]
+\* The zero-read arm's authorship question (ReadGuard.checkEdit).
+Authored == written.on /\ ~written.ret /\ (AuthorIdentity => written.c = disk)
+\* retireChangedAuthorship at the start of a write that carries no bytes of its own.
+Broken == RetireAtWrite /\ written.on /\ (written.ret \/ written.c # disk)
+Retired == [written EXCEPT !.ret = TRUE]
+\* retainBranch / importAuthorship (#3603): the authorship, retired or not,
+\* stays iff the write that named it is on the kept branch (made before the
+\* prompt the move returns to, as BeforePrompt asks of a read).
+KeptAuth == IF AuthorBranch /\ written.on /\ written.id /\ written.g < turnNo
+              THEN written ELSE NoAuth
+
 Init ==
     /\ disk = [l \in 1..N0 |-> l] /\ rev = 0 /\ tok = N0 + 1
     /\ know = [l \in Lines |-> 0] /\ kTurn = know
-    /\ reads = <<>> /\ ft = -1 /\ written = FALSE /\ pendCreate = FALSE
+    /\ reads = <<>> /\ ft = -1 /\ written = NoAuth /\ pendCreate = FALSE
     /\ lastEditOk = FALSE /\ born = 0 /\ turnNo = 0
     /\ pc = "idle" /\ pend = [k |-> "none"] /\ ops = 0 /\ ext = 0 /\ nb = 0
     /\ fixedTurn = FALSE /\ mutatedTurn = FALSE
@@ -232,9 +313,10 @@ Reloc(lo, hi) ==
 \* Returns [act |-> "allow"|"block"|"reloc", to |-> start, inject |-> BOOLEAN].
 Verdict(lo, hi) ==
     IF Len(reads) = 0
-    THEN IF written \/ (MtimeAuthored /\ rev > born)            \* the zero-read authorship check (writtenThisSession)
+    THEN IF Authored \/ (MtimeAuthored /\ rev > born)           \* the zero-read authorship check (writtenThisSession)
            THEN [act |-> "allow", to |-> lo, inject |-> TRUE, why |-> "session_authored"]
-           ELSE [act |-> "block", to |-> lo, inject |-> FALSE, why |-> "zero_read"]
+           ELSE [act |-> "block", to |-> lo, inject |-> FALSE,
+                 why |-> IF written.on THEN "authorship_retired" ELSE "zero_read"]
     ELSE IF FileTimeCheck /\ ft # rev
              /\ ~(OwnEditRescue /\ lastEditOk)
              /\ ~HashRescue(lo, hi)
@@ -246,6 +328,17 @@ Verdict(lo, hi) ==
            THEN [act |-> "reloc", to |-> Reloc(lo, hi), inject |-> FALSE, why |-> "range_stale_relocated"]
            ELSE [act |-> "block", to |-> lo, inject |-> FALSE, why |-> "range_stale"]
     ELSE [act |-> "allow", to |-> lo, inject |-> FALSE, why |-> "range_coverage"]
+
+\* checkEdit for an oldText edit (runtime-tool-call.ts skipSnapshotCheck /
+\* oldTextResolved): the host validates the text, so FileTime and the snapshot
+\* are skipped and out-of-range is a warning; the zero-read check alone gates
+\* it, and a provisional record satisfies it (`fileReads.length === 0`).
+VerdictOldText(lo, hi) ==
+    IF Len(reads) = 0
+    THEN IF Authored \/ (MtimeAuthored /\ rev > born)
+           THEN [act |-> "allow", to |-> lo, inject |-> TRUE, why |-> "session_authored"]
+           ELSE [act |-> "block", to |-> lo, inject |-> FALSE, why |-> "zero_read"]
+    ELSE [act |-> "allow", to |-> lo, inject |-> FALSE, why |-> "old_text"]
 
 ----------------------------------------------------------------------------
 Idle == pc = "idle"
@@ -303,14 +396,71 @@ ReadResult ==
     /\ UNCHANGED <<disk, rev, tok, kTurn, written, pendCreate, born, turnNo,
                    ops, ext, nb, fixedTurn, mutatedTurn, dr, staleAllow, blindAllow, falseBlock>>
 
-\* ---- positional edit of lo..lo+span-1 (checkEdit at tool_call, host apply) ----
-Edit(lo, span) ==
-    /\ CanOp("edit") /\ span \in Spans
+\* ---- a read that errors (offset past EOF): "fread" ----
+\* tool_call records the capture (runtime-tool-call.ts handleToolCall) and
+\* stamps FileTime; the host returns an error; tool_result delivers nothing
+\* (runtime-tool-result.ts handleToolResult keeps the native-read block behind
+\* `isError !== true`) and, since #4185 round 2, the call's end drops the
+\* capture (RevokeFailedRead; tool_execution_end since round 4, which pi emits
+\* right after the tool_result handlers). Before it the capture stayed: the one
+\* record that could be provisional at a boundary (#4185 round 1, F1) and,
+\* live, the one record the zero-read check of an oldText edit counted
+\* (FailedReadLive). One step: no other tool_call of the run can land between
+\* the tool_call and tool_execution_end of a call the host executed.
+FailedRead ==
+    /\ CanOp("fread")
+    /\ reads' = IF RevokeFailedRead THEN reads
+                ELSE Append(reads, Rec(Len(disk) + 1, Len(disk) + 1, NoH, TRUE))
+    /\ ft' = rev
+    /\ lastEditOk' = FALSE
+    /\ ops' = ops + 1
+    /\ UNCHANGED <<disk, rev, tok, know, kTurn, written, pendCreate, born, turnNo, pc, pend,
+                   ext, nb, fixedTurn, mutatedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* ---- a read a later extension blocks: "bread" (#4185 round 3 R3-2) ----
+\* pi-lens's tool_call handler records the capture and stamps FileTime; then
+\* an extension loaded after pi-lens blocks the call. pi emits no tool_result
+\* and the agent sees no bytes (know is unchanged), but it does emit
+\* tool_execution_end for the call (agent-loop.js, the "immediate" result),
+\* before the next tool_call of the run. Two steps, because the capture lives
+\* from the block to whichever action releases it, and an edit later in the
+\* same run (the next LLM turn, the same message, the same codemode script)
+\* can run in between when the release is the run boundary.
+BlockedReadCall ==
+    /\ CanOp("bread")
+    /\ reads' = Append(reads, Rec(1, 1, MkH(disk, 1, 1), TRUE))
+    /\ ft' = rev
+    /\ lastEditOk' = FALSE
+    /\ pc' = "blocked"
+    /\ ops' = ops + 1
+    /\ UNCHANGED <<disk, rev, tok, know, kTurn, written, pendCreate, born, turnNo, pend,
+                   ext, nb, fixedTurn, mutatedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* tool_execution_end of the blocked call (index.ts -> handleToolExecutionEnd):
+\* "end" releases this call's capture, the newest record (one tool at a time,
+\* and nothing else writes `reads` while the call is open).
+BlockedReadEnd ==
+    /\ pc = "blocked"
+    /\ reads' = IF BlockRelease = "end" THEN SubSeq(reads, 1, Len(reads) - 1) ELSE reads
+    /\ pc' = "idle"
+    /\ UNCHANGED <<disk, rev, tok, know, kTurn, ft, written, pendCreate, lastEditOk, born, turnNo,
+                   pend, ops, ext, nb, fixedTurn, mutatedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* ---- edit of lo..lo+span-1 (checkEdit at tool_call, host apply) ----
+\* Positional ("edit"): the guard fully enforces it. oldText ("oedit"): the
+\* host validates the text, so the guard runs the zero-read check alone
+\* (VerdictOldText), the host applies only when the agent's text matches the
+\* disk, and no own-edit read is recorded (#3760: only a single edits[].range
+\* replacement is). A blind oldText edit is the agent guessing text it was
+\* never shown; the guess that happens to match lands, and any allow of it is
+\* the false allow the zero-read check exists to refuse.
+Edit(lo, span, oldText) ==
+    /\ CanOp(IF oldText THEN "oedit" ELSE "edit") /\ span \in Spans
     /\ lo + span - 1 <= MaxLen
     \* know[l] = 0 is a blind edit (line numbers the agent never saw): any
     \* allow of it is a false allow.
     /\ LET hi == lo + span - 1
-           v == Verdict(lo, hi)
+           v == IF oldText THEN VerdictOldText(lo, hi) ELSE Verdict(lo, hi)
            tg == v.to
            inDisk == tg + span - 1 <= Len(disk)
            ok == inDisk /\ \A d \in 0..(span - 1) : disk[tg + d] = know[lo + d]
@@ -322,11 +472,13 @@ Edit(lo, span) ==
                           THEN Append(injected, Rec(tg, tg + span - 1, MkH(disk, tg, tg + span - 1), FALSE))
                           ELSE injected
            blind == \E l \in lo..hi : know[l] = 0
-       \* An allowed edit past EOF fails in the host, so only edits that land count.
-       IN /\ staleAllow' = (staleAllow \/ (v.act # "block" /\ inDisk /\ ~blind /\ ~ok))
+           \* An allowed edit past EOF fails in the host, so only edits that land
+           \* count; the host also refuses an oldText that no longer matches.
+           lands == inDisk /\ (~oldText \/ ok \/ blind)
+       IN /\ staleAllow' = (staleAllow \/ (~oldText /\ v.act # "block" /\ inDisk /\ ~blind /\ ~ok))
           /\ blindAllow' = (blindAllow \/ (v.act # "block" /\ inDisk /\ blind))
           /\ falseBlock' = (falseBlock \/ (v.act = "block" /\ exact))
-          /\ IF v.act # "block" /\ inDisk
+          /\ IF v.act # "block" /\ lands
                THEN /\ disk' = [l \in 1..Len(disk) |->
                                    IF tg <= l /\ l <= tg + span - 1 THEN new[l - tg] ELSE disk[l]]
                     /\ rev' = rev + 1 /\ tok' = tok + span
@@ -335,6 +487,7 @@ Edit(lo, span) ==
                     /\ lastEditOk' = TRUE
                     /\ pc' = "editRW"
                     /\ pend' = [k |-> "edit", lo |-> tg, hi |-> tg + span - 1, reloc |-> (v.act = "reloc"),
+                                own |-> ~oldText,
                                 toks |-> [l \in Lines |-> IF tg <= l /\ l <= tg + span - 1
                                                           THEN new[l - tg] ELSE 0]]
                     /\ mutatedTurn' = TRUE
@@ -348,11 +501,11 @@ Edit(lo, span) ==
 \* tool_result of the edit: recordWritten (FileTime from disk now).
 EditRW ==
     /\ pc = "editRW"
-    /\ ft' = rev /\ written' = TRUE /\ pendCreate' = FALSE
+    /\ ft' = rev /\ written' = Auth(disk) /\ pendCreate' = FALSE
     /\ reads' = LET r0 == IF pendCreate
                             THEN AddRec(reads, Rec(1, Len(disk), MkH(disk, 1, Len(disk)), FALSE), TRUE)
                             ELSE reads
-                IN IF RecordOwnEdit /\ (~pend.reloc \/ ~OwnEditSkipsReloc)
+                IN IF RecordOwnEdit /\ pend.own /\ (~pend.reloc \/ ~OwnEditSkipsReloc)
                      THEN Append(r0, Rec(pend.lo, pend.hi,
                                          [l \in Lines |-> IF Hashes THEN pend.toks[l] ELSE 0], FALSE))
                      ELSE r0
@@ -375,7 +528,7 @@ Write ==
 \* recordWritten before the pipeline: stamps FileTime, injects the creation read.
 WriteRW1 ==
     /\ pc = "writeRW1"
-    /\ ft' = rev /\ written' = TRUE /\ pendCreate' = FALSE
+    /\ ft' = rev /\ written' = Auth(disk) /\ pendCreate' = FALSE
     /\ reads' = IF pendCreate
                   THEN AddRec(reads, Rec(1, IF CreationHandlerEvidence THEN Len(disk) ELSE pend.n,
                                          IF CreationHandlerEvidence THEN MkH(disk, 1, Len(disk))
@@ -401,7 +554,7 @@ Fix ==
 \* recordWritten after the pipeline; the tool result attaches the post-fix bytes.
 WriteRW2 ==
     /\ pc = "writeRW2"
-    /\ ft' = rev /\ written' = TRUE
+    /\ ft' = rev /\ written' = Carry(disk)
     /\ know' = pend.c
     /\ reads' = IF RecordAuthoritative
                   THEN AddRec(reads, Rec(1, pend.n, MkH(pend.c, 1, pend.n), FALSE), TRUE)
@@ -420,11 +573,123 @@ BashWrite ==
     /\ CanOp("bash")
     /\ LET c == [l \in 1..N0 |-> tok + l - 1]
        IN /\ disk' = c /\ know' = KnowAll(c)
+          /\ written' = IF Broken THEN Retired ELSE Auth(c)
     /\ rev' = rev + 1 /\ tok' = tok + N0
-    /\ written' = TRUE
     /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
     /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend, ext, nb,
                    fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* ---- a recognized bash write of one line ("pbash": sed -i on line 1) ----
+\* The agent knows the line it wrote, not the rest. Scoped to a file this
+\* conversation already authored (the #4187 F6 shape: an own write after
+\* another writer's); a first partial write of a never-read file is the
+\* whole-file BashWrite abstraction above (#3520), not modelled here.
+PartialBashWrite ==
+    /\ CanOp("pbash") /\ written.on
+    /\ disk' = Replace(disk, 1, tok) /\ know' = [know EXCEPT ![1] = tok]
+    /\ written' = IF Broken THEN Retired ELSE Auth(Replace(disk, 1, tok))
+    /\ rev' = rev + 1 /\ tok' = tok + 1
+    /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend, ext, nb,
+                   fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* ---- a mutation-bridge write of one line ("bridge") ----
+\* The write with NO pre-write check of its own: a co-process producer's
+\* recordMutation after the fact (stampLiveMutation's
+\* recordWritten(advanceAuthorship: false, stampFileTime: false)), a
+\* server-initiated workspace/applyEdit, and a drain record that reaches the
+\* guard unlicensed (an advanceAuthorship: true write whose tool_call checked
+\* no path, so wasCheckedAtCall refuses it). Nothing ran before the write, so
+\* the authorship it lands on cannot be checked against the bytes it wrote
+\* around: it may create a first authorship and otherwise ends one. The agent
+\* is told what was written (know), so the only hazard left is the other
+\* writer's bytes. Scoped to an authored file like PartialBashWrite: a first
+\* record is the #3865 credit. The owned in-process writers that used to be
+\* listed here (ast_grep_replace, an LSP edit, the observed replay) carry a
+\* tool_call since #4187 round 5 and are OwnCall/OwnWrite below; the settled
+\* sweep's replay stays here, unlicensed.
+BridgeWrite ==
+    /\ CanOp("bridge") /\ written.on
+    /\ LET c == Replace(disk, 1, tok)
+       IN /\ disk' = c /\ know' = [know EXCEPT ![1] = tok]
+          /\ written' = IF ~BridgeNoAdvance THEN Auth(c)
+                        ELSE IF written.c = c THEN written ELSE Retired
+    /\ rev' = rev + 1 /\ tok' = tok + 1
+    /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend, ext, nb,
+                   fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* #4210 Q4: settled-sweep drift has no conversation-owned bytes. The fixed
+\* bridge therefore leaves a first credit absent; the mutant re-baselines the
+\* whole file and lets the later positional edit pass.
+SettledWrite ==
+    /\ CanOp("settle") /\ ~written.on
+    /\ disk' = Replace(disk, 1, tok) /\ know' = [know EXCEPT ![1] = tok]
+    /\ written' = IF BridgeNoAdvance THEN NoAuth ELSE Auth(disk')
+    /\ rev' = rev + 1 /\ tok' = tok + 1 /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend, ext, nb,
+                   fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* ---- an owned in-process write ("own"): retire at tool_call, advance at the write ----
+\* #4187 R4-1/R4-2: a pi-lens-owned in-process tool (ast_grep_replace over the
+\* file it named, an lsp_navigation rename, lens_diagnostic_mark's suppress) has
+\* a tool_call seam before its write, and the guard licenses an advance per
+\* call for the paths that call checked (ReadGuard.noteCheckedPaths). Two
+\* actions, because the license is checked at the call and spent at the write,
+\* and External may land in between (ExtPhases "inflight"): that window is the
+\* code's own (R4-6, a foreign write while the tool runs) and AuthorOwnToctou.cfg
+\* states it. Scoped to an authored file like BridgeWrite: a first credit is the
+\* #3865 credit and is not modelled here.
+OwnCall ==
+    /\ CanOp("own") /\ written.on
+    /\ written' = IF Broken THEN Retired ELSE [written EXCEPT !.lic = TRUE]
+    /\ pc' = "ownpending" /\ ops' = ops + 1
+    /\ UNCHANGED <<disk, rev, tok, know, kTurn, reads, ft, pendCreate, lastEditOk,
+                   born, turnNo, pend, ext, nb, fixedTurn, mutatedTurn, dr,
+                   staleAllow, blindAllow, falseBlock>>
+
+\* The write and its licensed advance: recordWritten(advanceAuthorship: true,
+\* toolCallId) for a path the call licensed. No op is consumed: this is the
+\* second half of the one call OwnCall counted.
+OwnWrite ==
+    /\ pc = "ownpending"
+    /\ LET c == Replace(disk, 1, tok)
+       IN /\ disk' = c /\ know' = [know EXCEPT ![1] = tok]
+          /\ written' = [Auth(c) EXCEPT !.lic = ~SpendLicense]
+    /\ rev' = rev + 1 /\ tok' = tok + 1 /\ mutatedTurn' = TRUE /\ pc' = "idle"
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pend, ops, ext,
+                   nb, fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
+
+\* A second record under the settled call id. It must not advance after the
+\* first OwnWrite consumed the license; SpendLicense = FALSE is the
+\* compile-valid reusable-license mutant.
+OwnWriteAgain ==
+    /\ CanOp("ownagain") /\ written.on
+    /\ LET c == Replace(disk, 1, tok)
+       IN /\ disk' = c /\ know' = [know EXCEPT ![1] = tok]
+          /\ written' = IF written.lic
+                         THEN IF SpendLicense
+                              THEN [Auth(c) EXCEPT !.lic = FALSE]
+                              ELSE Auth(c)
+                         ELSE Retired
+    /\ rev' = rev + 1 /\ tok' = tok + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born,
+                   turnNo, pc, pend, ops, ext, nb, fixedTurn, dr,
+                   staleAllow, blindAllow, falseBlock>>
+
+\* Round 4's code, the R4-1 mutant: the record advanced EVERY path the write
+\* changed, licensed or not, so a rename's importers, an ast-grep folder and a
+\* server-initiated applyEdit all re-baselined an authorship over bytes nothing
+\* checked. In this single-file model that is an own write no call checked, so
+\* it is its own op kind: a config selects "ownwrite" instead of the "own" pair.
+OwnWriteUnchecked ==
+    /\ CanOp("ownwrite") /\ written.on
+    /\ LET c == Replace(disk, 1, tok)
+       IN /\ disk' = c /\ know' = [know EXCEPT ![1] = tok]
+          /\ written' = Auth(c)
+    /\ rev' = rev + 1 /\ tok' = tok + 1 /\ ops' = ops + 1 /\ mutatedTurn' = TRUE
+    /\ UNCHANGED <<kTurn, reads, ft, pendCreate, lastEditOk, born, turnNo, pc, pend,
+                   ext, nb, fixedTurn, dr, staleAllow, blindAllow, falseBlock>>
 
 ----------------------------------------------------------------------------
 \* Another writer (external editor, second pi-lens instance, git checkout).
@@ -438,22 +703,28 @@ External ==
     /\ UNCHANGED <<know, kTurn, guardVars, pc, pend, ops, nb, fixedTurn, mutatedTurn,
                    staleAllow, blindAllow, falseBlock>>
 
+Delivered(r) == ~r.prov
+
 \* A settle drain is due: the run wrote, and agent_settled has not queued it yet.
 SettleDue == DrainMode # "atomic" /\ FormatDrain # "none" /\ mutatedTurn
 
 \* A user turn boundary: agent_end's deferred format drain, then the next prompt.
+\* Since #4185 round 3 (BlockRelease # "none") it also drops every capture
+\* still held (handleAgentEnd, ReadGuard.dropProvisionalReads).
 \* With DrainMode # "atomic" the drain is queued at Settle instead and lands
 \* in Drain, which the conversation can have moved past.
 Turn ==
     /\ Idle /\ "turn" \in Bounds /\ nb < MaxBounds /\ ~SettleDue
     /\ IF DrainMode = "atomic" /\ FormatDrain # "none" /\ mutatedTurn /\ ModOk(FormatDrain, disk, 1)
          THEN /\ disk' = Mod(FormatDrain, disk, 1, tok) /\ rev' = rev + 1 /\ tok' = tok + 1
-              /\ written' = TRUE                              \* recordWritten after the format
+              /\ written' = IF Broken THEN Retired              \* recordWritten after the format
+                             ELSE Carry(Mod(FormatDrain, disk, 1, tok))
               /\ ft' = IF FormatStamp THEN rev + 1 ELSE ft
          ELSE UNCHANGED <<disk, rev, tok, ft, written>>
+    /\ reads' = IF BlockRelease # "none" THEN SelectSeq(reads, Delivered) ELSE reads
     /\ kTurn' = know /\ turnNo' = turnNo + 1
     /\ fixedTurn' = FALSE /\ mutatedTurn' = FALSE /\ nb' = nb + 1
-    /\ UNCHANGED <<know, reads, pendCreate, lastEditOk, born, pc, pend, ops, ext, dr,
+    /\ UNCHANGED <<know, pendCreate, lastEditOk, born, pc, pend, ops, ext, dr,
                    staleAllow, blindAllow, falseBlock>>
 
 \* agent_settled (#3521 review F1): the run is over but the next prompt has not
@@ -483,7 +754,8 @@ Drain ==
     /\ IF ModOk(FormatDrain, disk, 1)
          THEN /\ disk' = Mod(FormatDrain, disk, 1, tok) /\ rev' = rev + 1 /\ tok' = tok + 1
               /\ IF DrainMode = "unfenced" \/ dr.ep = dr.cur
-                   THEN /\ written' = TRUE
+                   THEN /\ written' = IF Broken THEN Retired
+                                      ELSE Carry(Mod(FormatDrain, disk, 1, tok))
                         /\ ft' = IF FormatStamp THEN rev + 1 ELSE ft
                    ELSE UNCHANGED <<ft, written>>
          ELSE UNCHANGED <<disk, rev, tok, ft, written>>
@@ -502,7 +774,7 @@ Requeue ==
                    staleAllow, blindAllow, falseBlock>>
 
 FreshGuard ==
-    /\ ft' = -1 /\ written' = FALSE /\ pendCreate' = FALSE /\ lastEditOk' = FALSE
+    /\ ft' = -1 /\ written' = NoAuth /\ pendCreate' = FALSE /\ lastEditOk' = FALSE
     /\ born' = rev
 
 \* /new: fresh guard, empty conversation.
@@ -521,17 +793,21 @@ New ==
 \* (ForkImport), or nothing (the code before #3521).
 Kept(S) == SelectSeq(S, AllHashesMatch)
 BeforePrompt(r) == r.g < turnNo
+\* retainBranch / importBranch keep a record iff its toolCallId is a toolResult
+\* on the new branch. A delivered record's is; a provisional record has none
+\* (it showed the agent nothing), unless ProvisionalCredit (#4185 round 1).
+OnBranch(r) == BeforePrompt(r) /\ (~r.prov \/ ProvisionalCredit)
 Fork ==
     /\ Idle /\ "fork" \in Bounds /\ nb < MaxBounds /\ ~SettleDue
     /\ IF BranchFilter
-         THEN /\ reads' = SelectSeq(reads, BeforePrompt)
+         THEN /\ reads' = SelectSeq(reads, OnBranch)
               /\ ft' = -1
          ELSE LET src == IF ForkAtBoundary THEN SelectSeq(reads, BeforePrompt) ELSE reads
                   imp == IF ForkImport THEN Kept(src) ELSE <<>>
               IN /\ reads' = imp
                  /\ ft' = IF Len(imp) > 0 THEN rev ELSE -1      \* recordRead stamps FileTime
     /\ UNCHANGED turnNo
-    /\ written' = FALSE /\ pendCreate' = FALSE /\ lastEditOk' = FALSE /\ born' = rev
+    /\ written' = KeptAuth /\ pendCreate' = FALSE /\ lastEditOk' = FALSE /\ born' = rev
     /\ know' = kTurn
     /\ nb' = nb + 1 /\ fixedTurn' = FALSE /\ mutatedTurn' = FALSE
     /\ dr' = [dr EXCEPT !.q = FALSE, !.rq = FALSE]   \* the session generation drops the old drain (#3528)
@@ -547,12 +823,12 @@ Tree ==
     /\ Idle /\ "tree" \in Bounds /\ nb < MaxBounds /\ ~SettleDue
     /\ know' = kTurn
     /\ IF BranchFilter
-         THEN /\ reads' = SelectSeq(reads, BeforePrompt)
-              /\ ft' = -1 /\ written' = FALSE /\ pendCreate' = FALSE
+         THEN /\ reads' = SelectSeq(reads, OnBranch)
+              /\ ft' = -1 /\ written' = KeptAuth /\ pendCreate' = FALSE
               /\ lastEditOk' = FALSE /\ born' = rev
               /\ dr' = [dr EXCEPT !.cur = dr.cur + 1]      \* the branch epoch
          ELSE /\ reads' = IF ForkAtBoundary THEN SelectSeq(reads, BeforePrompt) ELSE reads
-              /\ written' = IF ForkAtBoundary THEN FALSE ELSE written   \* writtenThisSession
+              /\ written' = IF ForkAtBoundary THEN NoAuth ELSE written   \* writtenThisSession
               /\ UNCHANGED <<ft, pendCreate, lastEditOk, born, dr>>
     /\ UNCHANGED turnNo
     /\ nb' = nb + 1
@@ -563,10 +839,11 @@ Tree ==
 Next ==
     \/ \E lo \in 1..MaxLen, hi \in 1..MaxLen : ReadCall(FALSE, lo, hi)
     \/ ReadCall(TRUE, 1, MaxLen)
-    \/ ReadExec \/ ReadResult
-    \/ \E lo \in 1..MaxLen, s \in Spans : Edit(lo, s)
+    \/ ReadExec \/ ReadResult \/ FailedRead \/ BlockedReadCall \/ BlockedReadEnd
+    \/ \E lo \in 1..MaxLen, s \in Spans, o \in BOOLEAN : Edit(lo, s, o)
     \/ EditRW
-    \/ Write \/ WriteRW1 \/ Fix \/ WriteRW2 \/ BashWrite
+    \/ Write \/ WriteRW1 \/ Fix \/ WriteRW2 \/ BashWrite \/ PartialBashWrite \/ BridgeWrite \/ SettledWrite
+    \/ OwnCall \/ OwnWrite \/ OwnWriteAgain \/ OwnWriteUnchecked
     \/ External \/ Turn \/ Settle \/ Requeue \/ Drain \/ New \/ Fork \/ Tree
 
 Spec == Init /\ [][Next]_vars

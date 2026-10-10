@@ -251,6 +251,13 @@ export type DeliverySurfaceEntry =
 	| GatedDeliverySurface
 	| LabeledDeliverySurface;
 
+/** Project-wide scanner output belongs to the primary session's turn_end. */
+export function admitsProjectWideFindings(
+	sessionRole: "primary" | "secondary",
+): boolean {
+	return sessionRole === "primary";
+}
+
 /**
  * The enumeration (#1634 criterion 1): every surface that renders findings to
  * the agent. Two DIFFERENT seam shapes, each derived structurally rather than

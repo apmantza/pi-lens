@@ -8,6 +8,7 @@
 import * as path from "node:path";
 import { RuleCache } from "../../cache/rule-cache.js";
 import { isRuleIgnoredForPath } from "../rule-ignores.js";
+import { ruleIgnoredForPath } from "../rule-policy.js";
 import { isTestFile } from "../../file-utils.js";
 import {
 	buildOrUpdateGraph,
@@ -520,7 +521,8 @@ const treeSitterRunner: RunnerDefinition = {
 		).filter(
 			(q) =>
 				!(fileIsTest && q.skip_test_files) &&
-				!isRuleIgnoredForPath(filePath, ignoreRoot, q.ignore_paths),
+				!isRuleIgnoredForPath(filePath, ignoreRoot, q.ignore_paths) &&
+				!ruleIgnoredForPath(q.id, filePath, ignoreRoot, ctx.rulePolicy),
 		);
 
 		logTreeSitter({
@@ -532,6 +534,9 @@ const treeSitterRunner: RunnerDefinition = {
 			cacheHit,
 			metadata: { blockingOnly: !!ctx.blockingOnly },
 		});
+		if (effectiveQueries.length === 0) {
+			return { status: "succeeded", diagnostics: [], semantic: "none" };
+		}
 
 		const contentFromFacts = ctx.facts.getFileFact<string | null>(
 			filePath,

@@ -73,10 +73,10 @@ vi.mock("../../clients/widget-state.js", async () => {
 });
 
 let service: unknown;
-vi.mock("../../clients/lsp/index.js", async () => {
+vi.mock("../../clients/lsp/capabilities.js", async () => {
 	const actual = await vi.importActual<
-		typeof import("../../clients/lsp/index.js")
-	>("../../clients/lsp/index.js");
+		typeof import("../../clients/lsp/capabilities.js")
+	>("../../clients/lsp/capabilities.js");
 	return { ...actual, getLSPService: () => service };
 });
 

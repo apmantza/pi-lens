@@ -218,31 +218,32 @@ defineSessionStore<PersistedReadGuardState>({
 });
 
 /**
- * The files the session authored (D5): carried across `/reload`, which keeps
- * the conversation; reset by every other start, as `/tree` resets it
- * (`retainBranch`).
+ * The files the session authored (D5), each with the content identity and
+ * transcript id of its write. Every start that keeps a conversation adopts
+ * them through the branch filter (`importAuthorship`, #3603), as the
+ * read-set store does: an entry crosses iff its write's tool result is on the
+ * starting branch, and its bytes must still match at the next check (#4131).
+ * `/new` starts an empty conversation and resets them.
  */
 defineSessionStore({
 	name: "read-guard-authorship",
 	policy: {
-		startup: "reset",
+		startup: "adopt",
 		new: "reset",
-		resume: "reset",
-		fork: "reset",
+		resume: "adopt",
+		fork: "adopt",
 		reload: "adopt",
 	},
 	snapshot: (scope) => guardOf(scope)?.exportAuthorship(),
-	restore: (scope, payload) => {
+	restore: (scope, payload, ctx: AdoptContext) => {
 		const guard = guardOf(scope) as ReadGuard;
-		const before = guard.exportAuthorship().written.length;
-		guard.importAuthorship(payload);
-		const written = (payload as { written?: unknown } | null | undefined)
-			?.written;
+		const branch = branchToolResultIds(ctx.sessionManager);
+		const imported = guard.importAuthorship(payload, branch.ids);
 		return {
-			itemsIn: Array.isArray(written) ? written.length : 0,
-			itemsKept: guard.exportAuthorship().written.length - before,
+			itemsIn: imported.imported + imported.dropped,
+			itemsKept: imported.imported,
 		};
 	},
 	reason:
-		"the files this session wrote; a reload keeps the conversation, so they stay authored",
+		"the files this session wrote, with the bytes it wrote; a move keeps exactly those whose write's tool result is on the new branch",
 });

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isToolCallEventType } from "../../clients/tool-event.js";
+import {
+	isToolCallEventType,
+	resolveReadEvidenceCorrelationId,
+} from "../../clients/tool-event.js";
 
 describe("isToolCallEventType", () => {
 	it("matches when toolName equals the tag", () => {
@@ -22,5 +25,22 @@ describe("isToolCallEventType", () => {
 	it("is false when toolName is missing", () => {
 		expect(isToolCallEventType("edit", { input: {} })).toBe(false);
 		expect(isToolCallEventType("edit", {})).toBe(false);
+	});
+});
+
+describe("resolveReadEvidenceCorrelationId", () => {
+	it("uses the parent transcript identity for nested codemode reads", () => {
+		expect(
+			resolveReadEvidenceCorrelationId({
+				toolCallId: "nested/1",
+				parentToolCallId: "parent",
+			}),
+		).toBe("parent");
+	});
+
+	it("keeps the normal call identity for top-level reads", () => {
+		expect(resolveReadEvidenceCorrelationId({ toolCallId: "read-1" })).toBe(
+			"read-1",
+		);
 	});
 });

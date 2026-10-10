@@ -231,7 +231,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `prefer-structured-clone-js` | warning | no | pi-lens | Use structuredClone() instead of JSON.parse(JSON.stringify()) for deep cloning |
 | `strict-equality-js` | warning | yes | pi-lens | Use === instead of == |
 | `strict-inequality-js` | warning | yes | pi-lens | Use !== instead of != |
-| `throw-new-error-js` | error | no | pi-lens | Use new Error() not Error() — explicit construction is clearer |
+| `throw-new-error-js` | warning | no | pi-lens | Use new Error() not Error() — explicit construction is clearer |
 | `unchecked-throwing-call-js` | error | no | pi-lens | $CALL without try/catch — throws on invalid input |
 | `weak-rsa-key-js` | error | no | pi-lens | Weak RSA key size — use at least 2048 bits |
 
@@ -547,7 +547,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `strict-equality` | warning | yes | pi-lens | Use === instead of == |
 | `strict-inequality` | warning | yes | pi-lens | Use !== instead of != |
 | `switch-without-default` | warning | no | pi-lens | switch has no default clause — values matching no case are silently ignored; add a default (even one that throws) |
-| `throw-new-error` | error | no | pi-lens | Use new Error() not Error() — explicit construction is clearer |
+| `throw-new-error` | warning | no | pi-lens | Use new Error() not Error() — explicit construction is clearer |
 | `ts-array-concat-spread` | warning | no | pi-lens | arr.concat([...items]) - use arr.push(...items) or [...arr, ...items] |
 | `ts-array-every-some` | warning | no | pi-lens | arr.map(x => x.prop).every(Boolean) - use arr.every(x => !!x.prop) |
 | `ts-boolean-return-if-else` | warning | no | pi-lens | if/else returning true/false - simplify to return the condition directly |

@@ -89,9 +89,9 @@ describe("deriveBudget / ratio table reproduces today's five defaults", () => {
 		expect(getReviewGraphMaxFilesDerived()).toBe(1000);
 	});
 
-	it("startup scan: 1x2000 = 2000", () => {
-		expect(deriveBudget(PROJECT_SCALE_RATIOS.startupScan)).toBe(2000);
-		expect(getStartupScanMaxSourceFilesDerived()).toBe(2000);
+	it("startup scan: 1.25x2000 = 2500", () => {
+		expect(deriveBudget(PROJECT_SCALE_RATIOS.startupScan)).toBe(2500);
+		expect(getStartupScanMaxSourceFilesDerived()).toBe(2500);
 	});
 
 	it("jscpd: 3x2000 = 6000", () => {
@@ -116,7 +116,7 @@ describe("a .pi-lens.json maxProjectFiles override scales all five derived budge
 	it("scales every subsystem's derived budget proportionally", () => {
 		expect(getProjectDiagnosticsScannerMaxFiles(tmpDir)).toBe(1000);
 		expect(getReviewGraphMaxFilesDerived(tmpDir)).toBe(2000);
-		expect(getStartupScanMaxSourceFilesDerived(tmpDir)).toBe(4000);
+		expect(getStartupScanMaxSourceFilesDerived(tmpDir)).toBe(5000);
 		expect(getJscpdMaxEntriesDerived(tmpDir)).toBe(12000);
 		expect(getWordIndexMaxFilesDerived(tmpDir)).toBe(12000);
 	});

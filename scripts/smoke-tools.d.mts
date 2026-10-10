@@ -57,6 +57,7 @@ export interface LspFixture {
 	/** Why this gate-eligible fixture cannot opt in (#3217). Mutually exclusive
 	 *  with `lspGate`; the reason is asserted, not just the key's presence. */
 	lspGateExempt?: string;
+	expectDiagnosticCode?: string;
 	/** The one fixture the nightly `lens_diagnostics mode=full` row drives
 	 *  (#2780), mirroring `lspGate`. */
 	lensFull?: boolean;
@@ -152,6 +153,12 @@ export function classifyLspGateResult(
 	result: unknown,
 	fixture: Pick<LspFixture, "serverHint">,
 	unavailable?: boolean,
+): { state: "pass" | "skip" | "fail"; detail: string; diags: number };
+/** Classify the official Docker BuildKit-rule witness (#3939). */
+export function classifyOfficialDockerGateResult(
+	result: unknown,
+	buildxAvailable: boolean,
+	expectedCode?: string,
 ): { state: "pass" | "skip" | "fail"; detail: string; diags: number };
 /** Run the production LSP clean-gate layer, optionally with test seams. */
 export function runLspGate(options?: {

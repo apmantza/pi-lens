@@ -73,6 +73,7 @@ function markerServer(id: string): LSPServerInfo {
 		name: id,
 		extensions: [".md"],
 		idleEviction: "unmeasured",
+		role: "language",
 		root: async (file) => path.dirname(file),
 		spawn: async () => undefined,
 	};

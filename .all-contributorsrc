@@ -1879,6 +1879,16 @@
       "contributions": [
         "ideas"
       ]
+    },
+    {
+      "login": "rastarr",
+      "name": "Martin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2160922?v=4",
+      "profile": "https://github.com/rastarr",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
     }
   ]
 }

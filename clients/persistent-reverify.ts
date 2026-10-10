@@ -52,7 +52,7 @@ import {
 	touchCompletedConfirmationPolicy,
 	type TouchFileResult,
 } from "./lsp/diagnostic-binding.js";
-import { type getLSPService } from "./lsp/index.js";
+import { type getLSPService } from "./lsp/capabilities.js";
 import { findAuxiliaryProfileForSource } from "./dispatch/auxiliary-lsp.js";
 
 /** At most this many files are re-observed per turn_end (the drift backstop's

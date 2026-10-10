@@ -82,11 +82,11 @@ import {
 } from "../../clients/dispatch/integration.js";
 
 // Mock LSP service
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: vi.fn(),
 }));
 
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 
 describe("Pipeline", () => {
 	let tmpDir: string;

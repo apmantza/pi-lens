@@ -29,7 +29,9 @@ memory growth:
   process.externalNonBufferBytes; no tree-count estimate is emitted.
 - subsystems.wordIndex.wireBytes is the UTF-8 length of the word index's JSON,
   taken natively while the snapshot persist encodes the body, and is null
-  until that index's current serialized form is persisted.
+  until that index's current serialized form is persisted, and again once the
+  serialized form is released at `agent_settled` (the `word_index_memo_released`
+  row in latency.log records the release and its trigger).
 - samplerDurationMs measures the sampler's own record-assembly wall time,
   excluding the surrounding turn.
 

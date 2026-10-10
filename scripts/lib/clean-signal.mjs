@@ -33,6 +33,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { isAuxiliary } from "../../dist/clients/lsp/server-traits.js";
 
 // #594: the fixed path probe-clean-signal.mjs (writer) and
 // notify-clean-signal-drift.mjs (reader) agree on for the machine-readable
@@ -126,7 +127,7 @@ export function classifyCleanBehavior(obs) {
 export function resolveProbeServerId(fx, servers) {
 	const auxId = fx.auxiliaryServerIds?.[0];
 	if (auxId) return auxId;
-	return servers.find((server) => server.role !== "auxiliary")?.id;
+	return servers.find((server) => !isAuxiliary(server))?.id;
 }
 
 /**

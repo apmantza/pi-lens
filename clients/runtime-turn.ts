@@ -28,7 +28,14 @@ import {
 import { cascadeSettleWaitMs } from "./cascade-budget.js";
 import { logCascade } from "./cascade-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
+import {
+	boundDeferredTargets,
+	mergeDeferredTargets,
+	TEST_RUNNER_MAX_PERSISTED_TARGETS,
+} from "./deferred-test-targets.js";
 import { compareOrdinal } from "./string-utils.js";
+
+export { TEST_RUNNER_MAX_PERSISTED_TARGETS };
 import type {
 	DependencyChecker,
 	MadgeBatchStats,
@@ -38,7 +45,10 @@ import {
 	toRunnerDisplayPath,
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
-import { formatCacheAgeLabel } from "./finding-delivery-gate.js";
+import {
+	admitsProjectWideFindings,
+	formatCacheAgeLabel,
+} from "./finding-delivery-gate.js";
 import {
 	getFullScanWallClockMs,
 	isWorkspaceSweepActive,
@@ -121,7 +131,7 @@ import {
 } from "./blocker-freshness.js";
 import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
 // #2001/#2002: collect-later delivery for slow auxiliary LSP servers.
-import { getLSPService } from "./lsp/index.js";
+import { getLSPService } from "./lsp/capabilities.js";
 import {
 	drainPendingAuxCapEvictedCount,
 	drainPendingAuxiliaryCoverage,
@@ -259,51 +269,6 @@ export const TEST_RUNNER_BATCH_BUDGET_MS = 20_000;
  * occurrence and dropped, so the turn stops paying 20 s for it.
  */
 export const TEST_RUNNER_MAX_DEFERRALS = 2;
-
-/**
- * Ceiling on how many entries either persisted target list may carry.
- *
- * #2522 review round 4, I1: a write may no longer destroy another session's
- * entries, so nothing in the write path prunes them any more — each session
- * that ever cut or retired a target in this project leaves its rows behind, on
- * a record read at every single turn_end. The bound is applied at the one
- * writer, on the whole list, and sheds FOREIGN rows first (the writer orders
- * this session's entries last), so it can never evict the entries this turn
- * depends on. Generous on purpose: it is a backstop against unbounded growth,
- * not a scheduling policy.
- */
-export const TEST_RUNNER_MAX_PERSISTED_TARGETS = 64;
-
-/**
- * Union two deferral sets by target identity, keeping the HIGHER attempt count
- * (#2522 review round 3, F3). Two overlapping batches can both be cut on the
- * same target; taking the lower count would let a target trade an attempt for
- * every overlap and never converge on `TEST_RUNNER_MAX_DEFERRALS`.
- *
- * Identity is (session, path), not path alone (#2522 review round 4, I1): two
- * sessions can each owe a run of the same file, and collapsing those into one
- * row makes the surviving row's `sessionId` decide whose deferral is honoured
- * and whose is silently dropped. The path half is keyed through
- * `normalizeMapKey` so `/`- and `\`-separated spellings are one entry
- * (AGENTS.md cross-form-path screen).
- */
-function deferralEntryKey(entry: DeferredTestTarget): string {
-	return `${entry.sessionId ?? ""}\u0000${normalizeMapKey(path.resolve(entry.testFile))}`;
-}
-
-function mergeDeferredTargets(
-	existing: readonly DeferredTestTarget[],
-	incoming: readonly DeferredTestTarget[],
-): DeferredTestTarget[] {
-	const byKey = new Map<string, DeferredTestTarget>();
-	for (const entry of [...existing, ...incoming]) {
-		const key = deferralEntryKey(entry);
-		const prior = byKey.get(key);
-		if (prior && (prior.attempts ?? 0) >= (entry.attempts ?? 0)) continue;
-		byKey.set(key, entry);
-	}
-	return [...byKey.values()];
-}
 
 export interface BoundedTestBatchOutcome<R, T> {
 	/** One entry per target that was dispatched AND settled before the close. */
@@ -1017,7 +982,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			);
 			return;
 		}
-		cacheManager.clearTurnState(cwd, currentOwner);
+		cacheManager.clearTurnState(
+			cwd,
+			currentOwner,
+			isSecondarySession ? sessionId : undefined,
+		);
 	};
 
 	// #449 slice 1: piggyback the instance-registry heartbeat on this existing
@@ -1039,7 +1008,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	});
 
 	const cwd = ctxCwd ?? process.cwd();
-	let turnState = cacheManager.readTurnState(cwd);
+	const isSecondarySession = deps.sessionScope?.role === "secondary";
+	const sessionRole = isSecondarySession ? "secondary" : "primary";
+	const allowProjectWideFindings = admitsProjectWideFindings(sessionRole);
+	// Only a positively classified secondary gets an id-scoped durable
+	// partition; ordinary primary callers read the legacy top-level envelope.
+	const turnStateSessionId = isSecondarySession ? sessionId : undefined;
+	let turnState = cacheManager.readTurnState(cwd, turnStateSessionId);
 
 	// A live foreign writer owns this worklist. Do not clear or consume another
 	// pi/MCP session's files; a dead/aged owner is safely evicted instead.
@@ -1049,13 +1024,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const currentOwner: TurnStateOwner = {
 		...(owner ?? {
 			kind: "pi",
-			id: runtime.telemetrySessionId,
+			id: sessionId ?? runtime.telemetrySessionId,
 			pid: process.pid,
 			lastSeen: new Date().toISOString(),
 		}),
 		sessionStartedAt: owner?.sessionStartedAt ?? runtime.sessionStartedAt,
 	};
-	const access = cacheManager.getTurnStateAccess(cwd, currentOwner);
+	const access = isSecondarySession
+		? "owned"
+		: cacheManager.getTurnStateAccess(cwd, currentOwner);
 	// Captured BEFORE the eviction below rewrites the file: the owner the gate
 	// actually judged. This pair is what would have settled #2504 from the
 	// debug log alone.
@@ -1082,10 +1059,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	) {
 		dbg("turn_end: evicting stale turn-state owner");
 		clearOwnedTurnState();
-		turnState = cacheManager.readTurnState(cwd);
+		turnState = cacheManager.readTurnState(cwd, turnStateSessionId);
 	}
 
-	const files = Object.keys(turnState.files);
+	const ownFiles = Object.keys(turnState.files);
+	// A read-only secondary may still render project-wide scanner results cached
+	// for the primary, but it never adopts those paths as its worklist: any
+	// turn-end write/clear remains keyed to the secondary partition.
+	// A secondary with no partition has no turn work. It must not borrow the
+	// legacy primary list merely because both activations share a project.
+	const files = ownFiles;
 
 	/**
 	 * #2275: widget-footer sibling of #1950's inline-blocker cap, for the
@@ -1144,7 +1127,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// the ordinary freshness gate and delivery cache can run. Max-cycle cleanup
 	// below intentionally remains a terminal reset; its pending work stays in
 	// the bounded handoff store for the next eligible turn.
-	if (files.length === 0 && !runtime.hasCascadeRuns()) {
+	if (files.length === 0 && !runtime.hasCascadeRuns() && !isSecondarySession) {
 		// A genuinely clean session must invalidate the persisted guard record.
 		// Blocker records are retained only while the runtime still reports one.
 		if (getFlag("lens-guard") && !runtime.gitGuardHasBlockers) {
@@ -1212,7 +1195,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		`turn_end: ${files.length} file(s) modified, cycles: ${turnState.turnCycles}/${turnState.maxCycles}, access: ${access}, owner: ${gateOwnerLabel}`,
 	);
 
-	if (cacheManager.isMaxCyclesExceeded(cwd)) {
+	if (cacheManager.isMaxCyclesExceeded(cwd, turnStateSessionId)) {
 		dbg("turn_end: max cycles exceeded, clearing state and forcing through");
 		clearOwnedTurnState();
 		runtime.fixedThisTurn.clear();
@@ -1336,11 +1319,26 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// recorded first reached the agent twice in one message, and the persisted
 	// record said no blockers.
 	const runnerFindingsStart = Date.now();
+	const runnerDrainSignal = deps.signal;
+	const deliverySessionId = sessionId ?? runtime.telemetrySessionId;
 	// Turn-end delivery is deliberately non-blocking. Collect already-settled
 	// results and requeue the rest; the edit path already paid the deferral
 	// decision, so another 2s wait would charge every turn while a runner is
 	// still in flight (#2122 F5).
-	const pendingRunnerFindings = await drainPendingRunnerFindings(0);
+	const pendingRunnerFindings =
+		(await bounded(
+			drainPendingRunnerFindings(
+				0,
+				runtime.sessionScope.capture(),
+				deliverySessionId,
+			),
+			{
+				ms: HOOK_WALL_BUDGET_MS.turn_end,
+				signal: runnerDrainSignal,
+				hook: "turn_end",
+				label: "drainPendingRunnerFindings",
+			},
+		)) ?? [];
 	let runnerFindingsDelivered = 0;
 	let runnerFindingsStale = 0;
 	let runnerFindingsFailed = 0;
@@ -1719,10 +1717,19 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// back after its own await; `generation` fences both ends to this turn's
 	// session.
 	const cascadeSettleStart = Date.now();
-	const { settled, timedOut } = await runtime.settleCascadeRuns(
-		cascadeSettleWaitMs(),
-		{ trackTurnEndClock: true, generation: holdScope },
-	);
+	const cascadeSettleSignal = deps.signal;
+	const { settled, timedOut } = (await bounded(
+		runtime.settleCascadeRuns(cascadeSettleWaitMs(), {
+			trackTurnEndClock: true,
+			generation: holdScope,
+		}),
+		{
+			ms: HOOK_WALL_BUDGET_MS.turn_end,
+			signal: cascadeSettleSignal,
+			hook: "turn_end",
+			label: "settleCascadeRuns",
+		},
+	)) ?? { settled: 0, timedOut: 0 };
 	logLatency({
 		type: "phase",
 		toolName: "turn_end",
@@ -3078,10 +3085,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const govGate = scannerGates.govulncheck;
 	const gitleaksGate = scannerGates.gitleaks;
 	const trivySecretsGate = scannerGates["trivy-secrets"];
-	const govDelivery = govulncheckLane.render(
-		govulncheckLane.gate({ govulncheck: govGate }, laneCtx),
-		laneCtx,
-	);
+	const govDelivery = allowProjectWideFindings
+		? govulncheckLane.render(
+				govulncheckLane.gate({ govulncheck: govGate }, laneCtx),
+				laneCtx,
+			)
+		: {};
 	for (const [store, count] of Object.entries(
 		govDelivery.dispositionSuppressed ?? {},
 	)) {
@@ -3105,16 +3114,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// what is not one lane's rule: the gated arms it hands over, the order the
 	// tiers are pushed in, and the per-lane suppression counts that fold into
 	// the one notice below.
-	const secretsDelivery = secretsLane.render(
-		secretsLane.gate(
-			{
-				gitleaks: gitleaksGate,
-				"trivy-secrets": trivySecretsGate,
-			},
-			laneCtx,
-		),
-		laneCtx,
-	);
+	const secretsDelivery = allowProjectWideFindings
+		? secretsLane.render(
+				secretsLane.gate(
+					{
+						gitleaks: gitleaksGate,
+						"trivy-secrets": trivySecretsGate,
+					},
+					laneCtx,
+				),
+				laneCtx,
+			)
+		: {};
 	for (const [store, count] of Object.entries(
 		secretsDelivery.dispositionSuppressed ?? {},
 	)) {
@@ -3223,12 +3234,21 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const t3 = Date.now();
 	let madgeStats: MadgeBatchStats | undefined;
+	const madgeAvailabilitySignal = deps.signal;
 	// Off by default (#766): this pass only writes debug output, and user-facing
 	// madge diagnostics come from the session-start `madge` cache + the
 	// `lens_diagnostics` extractor. Enabled with `--lens-turn-end-madge` /
 	// `turnEnd.madge.enabled=true` for those who want the per-edit circular note.
-	if (getFlag("lens-turn-end-madge") && (await depChecker.ensureAvailable())) {
-		const madgeFiles = cacheManager.getFilesForMadge(cwd);
+	if (
+		getFlag("lens-turn-end-madge") &&
+		(await bounded(depChecker.ensureAvailable(), {
+			ms: HOOK_WALL_BUDGET_MS.turn_end,
+			signal: madgeAvailabilitySignal,
+			hook: "turn_end",
+			label: "madge.ensureAvailable",
+		}))
+	) {
+		const madgeFiles = cacheManager.getFilesForMadge(cwd, turnStateSessionId);
 		if (madgeFiles.length > 0) {
 			dbg(
 				`turn_end: madge checking ${madgeFiles.length} file(s) for circular deps`,
@@ -3410,15 +3430,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			entries: DeferredTestTarget[],
 			label: string,
 		): DeferredTestTarget[] => {
-			const ordered = [
-				...entries.filter((entry) => !isThisSession(entry)),
-				...entries.filter(isThisSession),
-			];
-			if (ordered.length <= TEST_RUNNER_MAX_PERSISTED_TARGETS) return ordered;
-			dbg(
-				`turn_end: ${label} test target list held ${ordered.length} entries, bounded to the newest ${TEST_RUNNER_MAX_PERSISTED_TARGETS} (oldest foreign-session rows dropped)`,
+			const bounded = boundDeferredTargets(
+				entries,
+				TEST_RUNNER_MAX_PERSISTED_TARGETS,
+				isThisSession,
 			);
-			return ordered.slice(-TEST_RUNNER_MAX_PERSISTED_TARGETS);
+			if (bounded.length !== entries.length) {
+				dbg(
+					`turn_end: ${label} test target list held ${entries.length} entries, bounded to the newest ${TEST_RUNNER_MAX_PERSISTED_TARGETS} (oldest foreign-session rows dropped)`,
+				);
+			}
+			return bounded;
 		};
 		const writeTestFindings = (
 			record: TestRunnerFindingsCache,
@@ -3825,6 +3847,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 									{
 										file: result.value.file,
 										sourceFile: target.sourceFile,
+										runner: target.runner,
 										fileSeq:
 											target.fileSeqAtRun === undefined
 												? ({
@@ -4835,7 +4858,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		});
 	}
 
-	cacheManager.incrementTurnCycle(cwd, currentOwner);
+	cacheManager.incrementTurnCycle(cwd, currentOwner, turnStateSessionId);
 
 	// #2001/#2002: collect-later delivery for auxiliary LSP servers whose
 	// aux-grace window expired without a publication (opengrep on Windows:
@@ -4851,27 +4874,32 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// and reset that count here so it folds into this turn's reconciliation
 	// sum instead of the pair vanishing uncounted.
 	// #4161: both belong to the session current now; a replaced one takes none.
-	const { drainedPairs, lateAuxCapEvicted } = holdScope.guardedWrite(
-		"turn-end:late-aux",
-		() => ({
-			drainedPairs: drainPendingAuxiliaryCoverage(),
-			lateAuxCapEvicted: drainPendingAuxCapEvictedCount(),
-		}),
-	) ?? { drainedPairs: [], lateAuxCapEvicted: 0 };
+	const lateAuxDrain = isSecondarySession
+		? {
+				drainedPairs: drainPendingAuxiliaryCoverage(),
+				lateAuxCapEvicted: drainPendingAuxCapEvictedCount(),
+			}
+		: (holdScope.guardedWrite("turn-end:late-aux", () => ({
+				drainedPairs: drainPendingAuxiliaryCoverage(),
+				lateAuxCapEvicted: drainPendingAuxCapEvictedCount(),
+			})) ?? { drainedPairs: [], lateAuxCapEvicted: 0 });
+	const { drainedPairs, lateAuxCapEvicted } = lateAuxDrain;
 	/**
 	 * #4161: a re-arm after the probe's await lands only in this session.
 	 * True when it landed: a dropped one is the stale-write row's, never a
 	 * `rearmed` count (#4168 F2).
 	 */
 	const rearmLateAux = (pair: (typeof drainedPairs)[number]): boolean =>
-		holdScope.guardedWrite(
-			// One subject for the store (#4168 F3): the row's count carries how many.
-			"turn-end:late-aux-rearm",
-			() => {
-				rearmPendingAuxiliaryCoverage(pair);
-				return true;
-			},
-		) === true;
+		isSecondarySession
+			? (rearmPendingAuxiliaryCoverage(pair), true)
+			: holdScope.guardedWrite(
+					// One subject for the store (#4168 F3): the row's count carries how many.
+					"turn-end:late-aux-rearm",
+					() => {
+						rearmPendingAuxiliaryCoverage(pair);
+						return true;
+					},
+				) === true;
 	let lateAuxDelivered = 0;
 	let lateAuxStale = 0;
 	let lateAuxMissing = 0;

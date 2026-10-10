@@ -159,7 +159,7 @@ describe("instance registry across a session replacement (#3498)", () => {
 		) => {
 			if (!removalStarted && args[0] === registryFilePath()) {
 				removalStarted = true;
-				void registry.deregisterInstanceRoot(root);
+				void registry.deregisterInstanceRoot(root, "holder-1");
 			}
 			return readFile(...args);
 		}) as typeof fs.promises.readFile);
@@ -236,12 +236,15 @@ describe("instance registry across a session replacement (#3498)", () => {
 
 	it("does not point the heartbeat's repair at the ended root when a secondary's removal lands after shutdown", async () => {
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
 		// A peer holds the lock. A declined secondary's shutdown is queued, then
 		// session 1 ends: its sync removal cannot take the lock and queues
 		// behind the secondary's removal.
 		peerHolds();
-		const secondaryRemoval = registry.deregisterInstanceRoot(ROOT_SECONDARY);
+		const secondaryRemoval = registry.deregisterInstanceRoot(
+			ROOT_SECONDARY,
+			"holder-1",
+		);
 		registry.deregisterInstance();
 		peerReleases();
 		await secondaryRemoval;
@@ -265,7 +268,7 @@ describe("instance registry across a session replacement (#3498)", () => {
 	// once it is the removal's turn.
 	it("queues a secondary root's removal behind an in-flight heartbeat instead of racing it for the lock", async () => {
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
 		await rootRemovalDuringHeartbeat(ROOT_SECONDARY);
 
 		// Queued behind the heartbeat's own tail slot, not contended for the
@@ -280,8 +283,8 @@ describe("instance registry across a session replacement (#3498)", () => {
 		// one root re-arms the intent on a root the host still serves (#2130),
 		// so a later repair brings back the live root, not the one that left.
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstance(ROOT_B);
-		await registry.deregisterInstanceRoot(ROOT_B);
+		await registry.registerInstanceRoot(ROOT_B, "holder-1");
+		await registry.deregisterInstanceRoot(ROOT_B, "holder-1");
 		fs.writeFileSync(registryFilePath(), JSON.stringify({ instances: [] }));
 
 		await registry.updateHeartbeat();
@@ -356,12 +359,12 @@ describe("instance registry across a session replacement (#3498)", () => {
 
 	it("removes a secondary root after a peer holds the lock past the sync wait and one async wait", async () => {
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
 		// Same shape as the whole-entry case above: the peer's lock ages out of
 		// the 5 s lease about 2 s from now, but inside
 		// `LOCK_WAIT_THROUGH_LEASE_MS`.
 		peerHolds(3_000);
-		const removal = registry.deregisterInstanceRoot(ROOT_SECONDARY);
+		const removal = registry.deregisterInstanceRoot(ROOT_SECONDARY, "holder-1");
 		await removal;
 		await registry._settleRegistryMutationsForTests();
 
@@ -390,14 +393,30 @@ describe("a scoped root removal's decision (#3587)", () => {
 		);
 	}
 
-	it("says it updated this process's entry when a served root was removed", async () => {
+	it("says the last holder freed a served root", async () => {
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
 
-		await registry.deregisterInstanceRoot(ROOT_SECONDARY);
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY, "holder-1");
 
 		expect(landedReasons()).toEqual([
-			expect.stringContaining("updated this process's entry"),
+			expect.stringContaining("last holder left; root freed"),
+		]);
+	});
+
+	it("records a kept root and a final free as distinct root decisions (#3849 F6)", async () => {
+		await registry.registerInstance(ROOT_A);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-2");
+
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY, "holder-1");
+		expect(landedReasons()).toEqual([
+			expect.stringContaining("holder left; another holder keeps the root"),
+		]);
+
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY, "holder-2");
+		expect(landedReasons()).toEqual([
+			expect.stringContaining("last holder left; root freed"),
 		]);
 	});
 
@@ -405,7 +424,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 		await registry.registerInstance(ROOT_A);
 		const before = fs.readFileSync(registryFilePath(), "utf8");
 
-		await registry.deregisterInstanceRoot(ROOT_B);
+		await registry.deregisterInstanceRoot(ROOT_B, "holder-1");
 
 		expect(landedReasons()).toEqual([
 			expect.stringContaining("nothing left to remove"),
@@ -415,7 +434,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 
 	it("leaves a peer's entry alone when it rewrites this process's entry", async () => {
 		await registry.registerInstance(ROOT_A);
-		await registry.registerInstanceRoot(ROOT_SECONDARY);
+		await registry.registerInstanceRoot(ROOT_SECONDARY, "holder-1");
 		const file = JSON.parse(fs.readFileSync(registryFilePath(), "utf8")) as {
 			instances: Array<Record<string, unknown>>;
 		};
@@ -429,7 +448,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 		file.instances.push(peer);
 		fs.writeFileSync(registryFilePath(), JSON.stringify(file));
 
-		await registry.deregisterInstanceRoot(ROOT_SECONDARY);
+		await registry.deregisterInstanceRoot(ROOT_SECONDARY, "holder-1");
 
 		const after = JSON.parse(fs.readFileSync(registryFilePath(), "utf8")) as {
 			instances: Array<{ pid: number; projectRoots: string[] }>;
@@ -447,7 +466,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 		it("stops the heartbeat from re-registering the root that was just removed", async () => {
 			await entryGoneAfterRegistering();
 
-			await registry.deregisterInstanceRoot(ROOT_A);
+			await registry.deregisterInstanceRoot(ROOT_A, "holder-1");
 			await registry.updateHeartbeat();
 			await registry._settleRegistryMutationsForTests();
 
@@ -457,7 +476,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 		it("keeps the heartbeat's repair intent when the removed root is another one", async () => {
 			await entryGoneAfterRegistering();
 
-			await registry.deregisterInstanceRoot(ROOT_B);
+			await registry.deregisterInstanceRoot(ROOT_B, "holder-1");
 			await registry.updateHeartbeat();
 			await registry._settleRegistryMutationsForTests();
 
@@ -468,7 +487,7 @@ describe("a scoped root removal's decision (#3587)", () => {
 			await registry.registerInstance(ROOT_A);
 			registry.deregisterInstance();
 
-			await registry.deregisterInstanceRoot(ROOT_B);
+			await registry.deregisterInstanceRoot(ROOT_B, "holder-1");
 
 			expect(landedReasons()).toEqual([
 				expect.stringContaining("nothing left to remove"),

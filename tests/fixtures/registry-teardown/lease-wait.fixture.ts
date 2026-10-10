@@ -19,13 +19,13 @@ process.env.PI_LENS_HOME = home;
 
 it("queues a root removal behind a peer's lock lease, then the file ends", async () => {
 	await registerInstance(path.join(root, "primary"));
-	await registerInstanceRoot(path.join(root, "secondary"));
+	await registerInstanceRoot(path.join(root, "secondary"), "holder-1");
 	// A live peer (this worker's parent) holds the lock, 3 s into its 5 s
 	// lease: the removal waits about 2 s, then takes the aged-out lock over.
 	const lock = path.join(home, "instances.json.lock");
 	fs.writeFileSync(lock, `${process.ppid} ${Date.now()}\n`);
 	const agedSeconds = (Date.now() - 3_000) / 1000;
 	fs.utimesSync(lock, agedSeconds, agedSeconds);
-	void deregisterInstanceRoot(path.join(root, "secondary"));
+	void deregisterInstanceRoot(path.join(root, "secondary"), "holder-1");
 	expect(fs.existsSync(lock)).toBe(true);
 });

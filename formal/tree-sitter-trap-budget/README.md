@@ -58,6 +58,12 @@ The environment picks trap outcomes:
 The ghosts `hits`, `poisonHit` and `heap` record each trap's true culprit. They
 are the evidence that the budget is allowed to spend.
 
+The model's `ok-build`/`raw-ok` transitions invalidate every cached batch after
+a healed query input. The implementation invalidates only batches whose stored
+input-key mirror contains that healed input. This is a deliberate
+over-approximation in the model: it proves the safety property for a larger
+invalidation set while the code preserves unrelated cached batches.
+
 ## Invariants
 
 - `Contained` (#3605, #3673). A call loses a file's extraction only through
@@ -101,13 +107,44 @@ compared the healer with `by` would restate the code's comparison.
 
 ## Results
 
+### Grammar retirement projection (#4010)
+
+`GrammarRetirement.tla` is a per-language projection of the retirement state
+(`grammarTrapInputs`, `retiredGrammars`, the budget). Each input is one distinct
+set of bytes; the environment decides whether it traps every time (persistent:
+trap, trap again on a retry, then charged) or once (a one-off that parses
+cleanly on its retry). `Trap` adds the input to the grammar's set on every trap
+and retires at `LatchThreshold` inputs; only a first trap spends budget, and
+past `Budget` the process aborts. `Heal` is the trapper's own success and
+removes the input from the set (`Decay`).
+
+Invariants: `SetIsLive` (the set is exactly the inputs that trapped and have not
+healed: decay), `RetiredIffTwoLive` (retired exactly when two inputs were live
+at once: never on healed one-offs, never missed), `NoAbort` (retirement comes
+before the abort: #4010's outcome). `GrammarRetirement.cfg` passes all three;
+`GrammarRetirementNoDecay` (no `delete` on success) violates `SetIsLive`;
+`GrammarRetirementLateLatch` (threshold 3) violates `NoAbort`; the
+`GrammarRetirementReach*` configs violate `NeverRetired`, `NeverHealed` and
+`NeverCharged`, so retirement, decay and the charged path are all reachable in
+the good config's population (it is not vacuous). `NoAbort` holds only while
+the one-offs that spend budget first number at most `Budget - LatchThreshold`;
+the good config has one.
+
+The retirement model is independent of `TreeSitterTrapBudget`: it does not
+model `trappedInputs` identity (caller, keys), only the first-trap/charged
+split the retirement reads.
+
 TLC 2.19 (`tla2tools.jar` v1.7.4), `-workers 1`, on `cf1b548e5`.
 
 | Config | Behaviour | Verdict | Distinct states |
 |---|---|---|---|
+| `GrammarRetirement` | #4010: one one-off and three persistent inputs, T = 2, budget 3, decay on | pass | 39 |
+| `GrammarRetirementNoDecay` | #4010 mutant: no removal on the trapper's success | `SetIsLive` violated (3) | |
+| `GrammarRetirementLateLatch` | #4010 mutant: threshold 3 | `NoAbort` violated (6) | |
+| `GrammarRetirementReach` / `ReachHeal` / `ReachCharged` | non-vacuity for `GrammarRetirement` | `NeverRetired` (3) / `NeverHealed` (3) / `NeverCharged` (3) violated | |
 | `MergedFiles` | master: parse/consume, 2 files, 3 consumers, 4 poison candidates, 2 one-offs | pass | 39,364 |
 | `MergedExtractor` | master: extractor compile at 3 owners | pass | 27 |
-| `MergedBatch` | master **restricted** to one build per rule set in flight (see below) | pass | 1,879 |
+| `MergedBatch` | master plus #3834's two batch defences: one build per rule set in flight (see below) | pass | 1,879 |
 | `MergedBatchRaw` | master: batch compiles plus a concurrent `compileRawQuery`, at most one one-off | pass | 6,183 |
 | `ReachAbort` / `ReachCharged` / `ReachSkipCached` | non-vacuity for the pass configs | `NeverAborted` / `NeverCharged` / `NeverSkipCached` violated | |
 | `Pre3673` | before #3673: a consume trap rejects the whole build | `Contained` violated (2 states) | |
@@ -124,17 +161,55 @@ TLC 2.19 (`tla2tools.jar` v1.7.4), `-workers 1`, on `cf1b548e5`.
 | `Pre3731Budget` | before #3731: unkeyed probe | `BudgetOnEvidence` violated (5) | |
 | `MutNoCacheGuard` | #3731 FL3/FL4: keyed, but a trapped build is cached | `NoCachedTransient` violated (3) | |
 | `MutConstBatchKey` | #3731 FL10: one batch key for every rule set | `NoKeyLeak` violated (5) | |
-| `RaceRawHeal` | **master**, a concurrent `compileRawQuery` | `NoCachedTransient` violated (9): finding 1 | |
-| `RaceBatchHeal` | **master**, two builds of one rule set in flight | `NoCachedTransient` violated (8): finding 1 | |
+| `RaceRawHeal` | #3834 fixed: a concurrent `compileRawQuery` invalidates stale batches | pass | |
+| `RaceBatchHeal` | #3834: `BatchHealDrop` is the only defence (`Coalesce` off, `MaxPend = 2`) | pass | |
+| `RaceBatchCoalesce` | #3834: `Coalesce` is the only defence (`BatchHealDrop` off, same bounds) | pass | |
+| `Mut3834BatchRace` | #3834 with both batch defences off: the two-build race | `NoCachedTransient` violated | |
 
-`MergedBatch` passes only under an assumption the code does not make.
-`compileQueryBatch` has no in-flight dedupe: its cache check and its
-`cacheQueryBatch` are two awaits apart, and in review three concurrent cold
-`runQueriesOnFile` calls on one rule set ran three combined compiles. **Master
-does not satisfy `NoCachedTransient` unrestricted.** `RaceBatchHeal` is the
-same spec with two builds in flight, and `RaceRawHeal` adds a concurrent raw
-compile; both violate it (finding 1). Likewise, `MergedBatchRaw` passes only
-because it allows one one-off, below the two the race needs.
+Two model defences hold `NoCachedTransient` against the two-build race, and
+**either one alone is sufficient**, so no single config can prove both.
+`Coalesce` is `queryBatchBuilds`: one same-key build admitted at a time.
+`BatchHealDrop` is the trapped branch's arm: a build that heals its own charged
+batch key drops the stale null that a concurrent `BatchCheck` cached against it.
+Each defence has a config where it is the only one standing, and flipping either
+switch in a pass row lands on the violation row:
+
+| Config | `Coalesce` | `BatchHealDrop` | Verdict |
+|---|---|---|---|
+| `RaceBatchHeal` | FALSE | TRUE | pass: the heal-drop alone holds |
+| `RaceBatchCoalesce` | TRUE | FALSE | pass: the coalescer alone holds |
+| `Mut3834BatchRace` | FALSE | FALSE | `NoCachedTransient` violated |
+
+Round 5 claimed that deleting the coalescing guard from `RaceBatchHeal` violated
+the invariant. The round-5 verify measured that it does not, because
+`BatchHealDrop` covers the same race, and that claim is retracted here: with one
+defence hidden by the other, the single config proved "at least one of them" and
+no more. `Coalesce` is also vacuous wherever `MaxPend = 1`, which every config
+except these three uses, so those rows keep both switches at the production
+value and mean exactly what they meant before.
+
+**Master does not satisfy `NoCachedTransient` unrestricted**: `Mut3834BatchRace`
+is master's batch behaviour on both switches. `RaceRawHeal` adds a concurrent
+raw compile, which `RawDo`'s invalidation covers. Likewise, `MergedBatchRaw`
+passes only because it allows one one-off, below the two the race needs.
+
+Not modelled, and pinned by runtime tests instead: the publication epoch
+(`queryBatchHealEpoch`) and the consumer lease (`QueryBatch.users`). The model
+has no lease and no native-disposal state, so it says nothing about a build that
+refuses publication after an external heal moved the epoch, and nothing about
+disposing a batch under a scan that still holds it. Those cells are
+`tests/clients/tree-sitter-heal-batch-cache.test.ts`: `does not cache a batch
+after its build heals an input (#4207 F7)`, `leases every coalesced consumer at
+publication, before a heal can dispose (#4207 F9)`, `disposes an epoch-skipped
+build once its coalesced consumers release it (#4207 F10)`, and `records the
+deferred disposal of a trapped build it refuses to publish (#4207 F10)`.
+
+The three #3834 batch rows above are expectations, not measurements from this
+lane: `java` is absent here, so `scripts/check-tla-models.mjs` could not run.
+Each maps onto one row the round-5 verify measured on this same model with the
+defence deleted from the `.tla` instead of switched off (`Coalesce` off is its
+"guard removed" pass, `BatchHealDrop` off is its "clause removed" pass, both off
+is its "both removed" violation). CI's `TLA+ models` shards are the authority.
 
 The number in brackets is the trace length in states. Each pre-fix config sets
 its switches to that code's behaviour, and each mutant flips one switch from
@@ -164,12 +239,17 @@ between `compileQueryBatch`'s batch-key check and its combined compile.
 5. The call from step 2 resumes, compiles r1 cleanly, and `clearWasmInput`
    deletes r1's entry.
 
-Now r1 is healthy and `runQueryOnFile(r1)` matches, but the cached batch still
-omits r1. `queryBatchCache` is a 256-entry `BoundedFifoMap`, so the omission
-lasts until that entry is evicted, possibly for the life of the process.
+Now r1 is healthy and `runQueryOnFile(r1)` matches. Before #3834, the cached
+batch still omitted r1; `queryBatchCache` is a 256-entry `BoundedFifoMap`, so
+the omission could last until that entry was evicted, possibly for the life of
+the process. The fix disposes and clears cached batches when r1 heals, forcing
+the next batch call to rebuild from the healthy rule set.
 `RaceBatchHeal` shows the same shape on the combined compile with three
 one-offs: a null is cached against a batch key that a late build has already
-healed, and every scan then pays the per-rule fallback.
+healed, and every scan then pays the per-rule fallback. `RaceBatchHeal.cfg`
+keeps `MaxPend = 2` and switches `Coalesce` off, so that race stays reachable
+and `BatchHealDrop` is what closes it; `RaceBatchCoalesce.cfg` runs the same
+bounds the other way round, with the coalescer on and the heal-drop off.
 
 The premise was checked through the real `TreeSitterClient` with a real
 python grammar. A scratch probe, not committed, injected the traps at the
@@ -200,8 +280,9 @@ simplest being three calls launched in one tick.
 
 Severity is low. The effect is one rule missing from batched scans (or the
 batch falling back to per-rule walks), never a wrong finding or an abort.
-Tracked as #3834. No code is changed here. The fix belongs
-on the seam, not in this model.
+Tracked as #3834. The committed regression drives the same compiler seam with a
+held `loadLanguage` and a one-off probe trap, then asserts that the healed batch
+contains r1 again.
 
 ## Provenance (master `cf1b548e5`)
 
@@ -214,6 +295,8 @@ on the seam, not in this model.
 | query keys `PKey`, `BKey`, `EKey` | `wasmQueryInput`; `compileQueryBatch`'s `probeInput` (the rule's `raw:<id>:<query>` key, shared with `compileRawQuery`) and `batchInput` (`cacheKey`); the extractor's `wasmQueryInput(`${languageId}:${label}:${src}`)` in `clients/tree-sitter-symbol-extractor.ts` `compileQuery` |
 | charged skip | `wasmInputTraps(input) > 1` in `parseFileAndUse`, `compileQuery`, `compileRawQuery` and `compileQueryBatch`'s `build` |
 | `CacheGuard` | `if (!trapped) this.cacheQueryBatch(cacheKey, batch)` in `compileQueryBatch` |
+| `Coalesce` | `queryBatchBuilds` in `clients/tree-sitter-client.ts`: `compileQueryBatch` registers one build per cache key and a concurrent caller awaits it instead of compiling again |
+| `BatchHealDrop` | `clearWasmInput(batchInput, true)` in the combined compile, which deletes and retires the cached batches whose input mirror holds the healed key |
 | swallowing consumers | `runQueriesOnFile`'s and `runQueryOnFile`'s `reportWasmAbort(err)` catch inside the consume region (`activeWasmInput`) |
 | rethrowing consumer, pre-#3673 build loss | `extractTreeSitterSymbols` in `clients/review-graph/builder.ts`; before #3673 the consume trap rejected `_doBuildGraph` (#3673 Summary) |
 | extractor owners | `getExtractor` memo in `clients/review-graph/builder.ts`, `clients/module-report.ts`, `clients/blocker-freshness.ts` |
@@ -222,13 +305,17 @@ on the seam, not in this model.
 The tests that pin the modelled cells are
 `tests/clients/tree-sitter-wasm-trap.test.ts` (containment, keying, budget,
 session reset), `tests/clients/tree-sitter-trap-decay.test.ts` (F-A, F1, F2,
-F4, F5, F6), `tests/clients/review-graph/wasm-trap-decay.test.ts` and
-`tests/clients/tree-sitter-batch-compile-trap.test.ts` (#3731 FL1 to FL10).
+F4, F5, F6), `tests/clients/tree-sitter-batch-compile-trap.test.ts` (#3731 FL1
+to FL10), `tests/clients/review-graph/wasm-trap-decay.test.ts`, and
+`tests/clients/tree-sitter-heal-batch-cache.test.ts` (#3834: the raw heal, the
+batch heal, the publication epoch and the consumer lease).
 
 ## Scope
 
-The code has no per-language trap count. A language is part of each input's
-key, since the key hashes the `languageId`. Per-language failures that are not
+`TreeSitterTrapBudget` has no per-language trap count; `GrammarRetirement`
+(above) models the per-language set of distinct trapping inputs that retires a
+grammar. A language is part of each input's key, since the key hashes the
+`languageId`. Per-language failures that are not
 traps (`Language.load` failing, which charges the grammar file and allows a
 re-fetch; a batch whose grammar failed to load) sit outside the budget and
 are not modelled. The same goes for the trap classifier, the parser and
@@ -273,9 +360,11 @@ budget costs that one query").
 Bounds: two files, two content values, three consumers, three owners, two
 rules, two rule sets, and `Budget` = 3 (the code's value). The pass configs
 have at most two one-offs and one build per key in flight, and
-`MergedBatchRaw` has at most one. `RaceBatchHeal` needs two builds in flight
-and three one-offs, and `RaceRawHeal` needs one raw compile in flight and two
-one-offs. Those are the smallest bounds at which each finding appears.
+`MergedBatchRaw` has at most one. The three #3834 batch configs
+(`RaceBatchHeal`, `RaceBatchCoalesce`, `Mut3834BatchRace`) share the bounds the
+race needs: two builds in flight and three one-offs. `RaceRawHeal` needs one raw
+compile in flight and two one-offs. Those are the smallest bounds at which each
+finding appears.
 
 ## Heal and skip sites
 

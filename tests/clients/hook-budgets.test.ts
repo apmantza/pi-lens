@@ -38,6 +38,11 @@ describe("#2523 per-hook wall budgets", () => {
 		}
 	});
 
+	it("keeps the quit-only shutdown amendment distinct from replacement shutdown", () => {
+		expect(HOOK_WALL_BUDGET_MS.session_shutdown).toBe(0);
+		expect(HOOK_WALL_BUDGET_MS.session_shutdown_quit).toBeGreaterThan(0);
+	});
+
 	it("lets only the edit path block the host longer than a read-only one", () => {
 		// The contract's one substantive ordering claim: an edit is the only
 		// thing the host may legitimately be made to wait on, so every other

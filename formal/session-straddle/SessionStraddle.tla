@@ -7,12 +7,12 @@
 (*                                                                         *)
 (* Actors:                                                                 *)
 (*  - the host: session 1's agent_settled, session_shutdown, session 2's   *)
-(*    session_start (split at its awaits: the #2890 admission key is set   *)
-(*    first, index.ts (lastSessionStartIdentity); the generation bump and  *)
+(*    session_start (split at its awaits: the #2890 admission key is reserved *)
+(*    first in the process-lifetime session-scope registry; the generation bump and *)
 (*    the clear of _cascadeRuns/_pendingCascadeRuns happen later, in       *)
 (*    handleSessionStart -> runtime.resetForSession, runtime-session.ts,   *)
 (*    runtime-coordinator.ts), a duplicate session_start for the same      *)
-(*    (reason, id) (#2890), and session 2's turn_end, which consumes and   *)
+(*    (session key, reason, previous session file) (#2890), and session 2's *)
 (*    delivers the cascade runs (consumeCascadeRuns, runtime-turn.ts);     *)
 (*  - a session-1 cascade compute admitted by appendCascadePromise         *)
 (*    (runtime-coordinator.ts appendCascadePromise), resolving at any time.*)
@@ -89,6 +89,17 @@ CONSTANTS
                    \*                           ENTRY, before its first await (#3568);
                    \*                           without it, the one current when it
                    \*                           dispatches
+                   \*   "retireAtShutdown"      #3611 (F1 of #3803): session_shutdown retires
+                   \*                           the scope (retireOwnScope), so every handle
+                   \*                           a session-1 writer holds is stale from
+                   \*                           Shutdown1 on, not only from the reset's
+                   \*                           ticket; without it, a handle is current
+                   \*                           until StartReset (the pre-#3611 counter)
+                   \*   "retireSticky"          mutant: the retirement is never lifted, so
+                   \*                           session 2's own handles are stale too
+                   \*   "watchWindow"           instrument, not a mechanism: record the
+                   \*                           origins whose write landed between
+                   \*                           Shutdown1 and StartReset (NoWriteBetween)
 
 VARIABLES
     phase,      \* "s1" | "s1down" | "s2starting" | "s2"
@@ -116,17 +127,37 @@ VARIABLES
     adm2,       \* session 2 has admitted its own compute past the cap
     admDropped, \* origins the admission guard dropped
     disp1,      \* the session-1 handler has dispatched its pipeline (#3568)
-    d1Gen       \* the generation that dispatch holds (#3568)
+    d1Gen,      \* the generation that dispatch holds (#3568)
+    late        \* origins whose write landed between shutdown and reset
+                \* ("watchWindow", F1 of #3803)
 
 vars == <<phase, gen, resets, pending, resolved, runs, touches, settle, snap,
           settleGen, recon, reconGen, drained, dropped, rec2, d2Gen, strayed,
-          dup, delivered, ovf, ovfGen, adm1, adm2, admDropped, disp1, d1Gen>>
+          dup, delivered, ovf, ovfGen, adm1, adm2, admDropped, disp1, d1Gen,
+          late>>
 
 \* The shared UNCHANGED tail of the #3512 variables, for the #3499 actions.
 Rest3512 == <<d2Gen, ovf, ovfGen, adm1, adm2, admDropped, disp1, d1Gen>>
 
 \* The #3568 variables, for the #3512 actions that list theirs explicitly.
 Rest3568 == <<disp1, d1Gen>>
+
+\* F1 of #3803: whether a captured handle g is stale. The reset's ticket
+\* retires it (g # gen); with "retireAtShutdown" so does the shutdown that
+\* precedes the reset (`retireScope`, index.ts `retireOwnScope`), so a handle
+\* of session 1 is stale in the window between them too. The window is
+\* s1down and s2starting; session 2's handles are taken in s2.
+Down == phase \in {"s1down", "s2starting"}
+Stale(g) == \/ g # gen
+            \/ ("retireAtShutdown" \in FixParts /\ Down)
+            \/ ("retireSticky" \in FixParts /\ phase # "s1")
+
+\* A write landed (origins os): with "watchWindow", the window's are recorded.
+\* The window is written out, not read from Down, so a guard that misreads it
+\* is seen by the instrument.
+Landed(os) ==
+    late' = IF "watchWindow" \in FixParts /\ phase \in {"s1down", "s2starting"}
+            THEN late \cup os ELSE late
 
 \* The generation the session-1 handler captured when it dispatched its
 \* pipeline (writeSession, before the pipeline await), in session 1. Both the
@@ -148,6 +179,7 @@ TypeOK ==
     /\ adm1 \in BOOLEAN /\ adm2 \in BOOLEAN
     /\ ovfGen \in [Sess -> 0..4]
     /\ disp1 \in BOOLEAN /\ d1Gen \in 0..4
+    /\ late \subseteq Sess
 
 Init ==
     /\ phase = "s1"
@@ -161,6 +193,7 @@ Init ==
     /\ adm1 = ~LateAdmit /\ adm2 = FALSE /\ admDropped = {}
     \* #3568: a handler abandoned before its dispatch has not dispatched yet
     /\ disp1 = ~EarlyAbandon /\ d1Gen = Dispatch1Gen
+    /\ late = {}
     /\ resolved = FALSE
     /\ runs = {}
     /\ touches = {1}            \* and a session-1 tier-3 touch is outstanding
@@ -175,10 +208,11 @@ Init ==
 \* generation captured at admission.
 OvfAppend(o) ==
     /\ ovf' = ovf \ {o}
-    /\ IF "admission" \in FixParts /\ ovfGen[o] # gen
+    /\ IF "admission" \in FixParts /\ Stale(ovfGen[o])
          THEN /\ admDropped' = admDropped \cup {o}
-              /\ UNCHANGED runs
+              /\ UNCHANGED <<runs, late>>
          ELSE /\ runs' = runs \cup {o}
+              /\ Landed({o})
               /\ UNCHANGED admDropped
 
 \* The session-1 compute resolves. Parked, the settle picks it up; admitted
@@ -186,7 +220,7 @@ OvfAppend(o) ==
 Resolve ==
     /\ disp1 /\ ~resolved
     /\ resolved' = TRUE
-    /\ IF 1 \in ovf THEN OvfAppend(1) ELSE UNCHANGED <<ovf, runs, admDropped>>
+    /\ IF 1 \in ovf THEN OvfAppend(1) ELSE UNCHANGED <<ovf, runs, admDropped, late>>
     /\ UNCHANGED <<phase, gen, resets, pending, touches, settle, snap,
                    settleGen, recon, reconGen, drained, dropped, rec2, d2Gen,
                    strayed, dup, delivered, ovfGen, adm1, adm2>>
@@ -203,15 +237,17 @@ Dispatch1 ==
                    snap, settleGen, recon, reconGen, drained, dropped, rec2,
                    d2Gen, strayed, dup, delivered, ovf, ovfGen, adm1, adm2,
                    admDropped>>
+    /\ UNCHANGED late
 
 \* appendCascadePromise(p, g): under "admission" a stale g drops the
 \* admission on either branch; otherwise the compute is parked or, past the
 \* cap, handed to the detached `.then` with g.
 Admit(o, g) ==
-    IF "admission" \in FixParts /\ g # gen
+    IF "admission" \in FixParts /\ Stale(g)
       THEN /\ admDropped' = admDropped \cup {o}
-           /\ UNCHANGED <<pending, ovf, ovfGen>>
-      ELSE /\ IF Overflow
+           /\ UNCHANGED <<pending, ovf, ovfGen, late>>
+      ELSE /\ Landed({o})
+           /\ IF Overflow
                 THEN /\ ovf' = ovf \cup {o}
                      /\ ovfGen' = [ovfGen EXCEPT ![o] = g]
                      /\ UNCHANGED pending
@@ -266,15 +302,17 @@ Settled ==
     /\ UNCHANGED <<phase, gen, resets, resolved, runs, touches, drained,
                    dropped, rec2, strayed, dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* After the Promise.race: append the settled run, re-park the rest.
 SettleFinish ==
     /\ settle = "waiting"
     /\ settle' = "done"
-    /\ IF "settle" \in FixParts /\ settleGen # gen
-         THEN UNCHANGED <<runs, pending>>
+    /\ IF "settle" \in FixParts /\ Stale(settleGen)
+         THEN UNCHANGED <<runs, pending, late>>
          ELSE /\ runs' = runs \cup (IF resolved THEN snap ELSE {})
               /\ pending' = pending \cup (IF resolved THEN {} ELSE snap)
+              /\ Landed(snap)
     /\ UNCHANGED <<phase, gen, resets, resolved, touches, snap, settleGen,
                    recon, reconGen, drained, dropped, rec2, strayed, dup,
                    delivered>>
@@ -287,7 +325,7 @@ ReconStart ==
     /\ settle = "done" /\ recon = "queued"
     /\ LET g == IF "reconcileTaskCapture" \in FixParts THEN gen ELSE reconGen
        IN /\ reconGen' = g
-          /\ IF "reconcileStart" \in FixParts /\ g # gen
+          /\ IF "reconcileStart" \in FixParts /\ Stale(g)
                THEN /\ recon' = "done"
                     /\ UNCHANGED <<touches, drained>>
                ELSE /\ recon' = "waiting"
@@ -296,15 +334,17 @@ ReconStart ==
     /\ UNCHANGED <<phase, gen, resets, pending, resolved, runs, settle, snap,
                    settleGen, dropped, rec2, strayed, dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* After the per-entry awaits: onResolvedFound -> runtime.appendCascadeRun.
 ReconFinish ==
     /\ recon = "waiting"
     /\ recon' = "done"
-    /\ IF "reconcile" \in FixParts /\ reconGen # gen
+    /\ IF "reconcile" \in FixParts /\ Stale(reconGen)
          THEN /\ dropped' = dropped \cup drained
-              /\ UNCHANGED runs
+              /\ UNCHANGED <<runs, late>>
          ELSE /\ runs' = runs \cup drained
+              /\ Landed(drained)
               /\ UNCHANGED dropped
     /\ drained' = {}
     /\ UNCHANGED <<phase, gen, resets, pending, resolved, touches, settle, snap,
@@ -318,6 +358,7 @@ Shutdown1 ==
                    settleGen, recon, reconGen, drained, dropped, rec2, strayed,
                    dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* Admission, pre-handler resets, then the awaits (configureWarmAttach,
 \* ensureLSPConfigInitialized) before handleSessionStart.
@@ -328,6 +369,7 @@ StartBegin ==
                    settleGen, recon, reconGen, drained, dropped, rec2, strayed,
                    dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* resetCascadeTierSessionState() and runtime.resetForSession(), in one tick
 \* (runtime-session.ts handleSessionStart).
@@ -345,6 +387,7 @@ StartReset ==
     /\ UNCHANGED <<resolved, settle, snap, settleGen, recon, reconGen, drained,
                    dropped, rec2, strayed, dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* pi RPC's second session_start for the same (reason, session id), after
 \* the first has returned (rpc-mode.js awaits rebindSession twice).
@@ -357,6 +400,7 @@ DupStart ==
     /\ UNCHANGED <<phase, resolved, settle, snap, settleGen, recon, reconGen,
                    drained, dropped, rec2, strayed, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* The tier-3 record site (clients/dispatch/integration.ts recordOutstandingCascadeTouch). Under "stray" it drops a
 \* touch whose dispatch-captured generation g is no longer current.
@@ -377,6 +421,7 @@ Dispatch2 ==
                    snap, settleGen, recon, reconGen, drained, dropped, strayed,
                    dup, delivered, ovf, ovfGen, adm1, adm2, admDropped>>
     /\ UNCHANGED Rest3568
+    /\ UNCHANGED late
 
 \* Session 2's compute records its own tier-3 touch.
 Record2 ==
@@ -386,6 +431,7 @@ Record2 ==
     /\ UNCHANGED <<phase, gen, resets, pending, resolved, runs, settle, snap,
                    settleGen, recon, reconGen, drained, strayed, dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* #3512: the still-running session-1 compute records its touch after the
 \* reset. Its generation is the one its dispatch captured, unless the
@@ -398,6 +444,7 @@ Stray ==
     /\ UNCHANGED <<phase, gen, resets, pending, resolved, runs, settle, snap,
                    settleGen, recon, reconGen, drained, rec2, dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* Session 2's own quiet window reconciles, current generation. It cannot
 \* start while session 1's window is still in progress (`_inProgress`).
@@ -409,6 +456,7 @@ Window2 ==
                    settleGen, recon, reconGen, drained, dropped, rec2, strayed,
                    dup, delivered>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 \* Session 2's turn_end: consumeCascadeRuns() and deliver. A run's origin
 \* projectSeq is session 1's, so getFilesChangedSince(originSeq) in session 2
@@ -421,6 +469,7 @@ TurnEnd2 ==
                    settleGen, recon, reconGen, drained, dropped, rec2, strayed,
                    dup>>
     /\ UNCHANGED Rest3512
+    /\ UNCHANGED late
 
 Next ==
     \/ Resolve \/ Settled \/ SettleFinish \/ ReconStart \/ ReconFinish
@@ -446,6 +495,14 @@ NoDropFreshTouch == 2 \notin dropped
 (* Shape 54 for the admission guard: a compute session 2 admits is never
    dropped. *)
 NoDropFreshAdmission == 2 \notin admDropped
+
+(* F1 of #3803, #3611: a session-1 write never lands between its session's
+   shutdown and the replacement's reset. session_shutdown retires the scope
+   (index.ts retireOwnScope), so the guard drops it there; counting only the
+   reset's ticket left it to the reset's clear, which a replacement that is
+   late or never starts (#3668's gap) does not run. Checked with the
+   "watchWindow" instrument. *)
+NoWriteBetween == late = {}
 
 (* One session_start mutation pass per session (#2890). *)
 OneResetPerSession == \A s \in Sess : resets[s] <= 1

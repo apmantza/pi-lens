@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	changedHookAnchors,
 	evaluateTlaCoverage,
+	findHookRanges,
+	hookAnchorsFromRanges,
 	loadCoverageMap,
 	matchGlob,
 	parseChangedFiles,
@@ -12,6 +15,7 @@ import {
 import {
 	lintLocalPrBody,
 	lintTlaCoverage,
+	parseRuntimeHunks,
 } from "../../scripts/check-pr-body.mjs";
 
 // #3802 rule 2: a PR that changes a mapped runtime file must move its model
@@ -95,7 +99,11 @@ describe("TLA+ coverage map (#3802)", () => {
 		// validateCoverageMap case below, run against the real tree.
 		const named = new Set(
 			Object.values(map.map ?? {}).flatMap((value) =>
-				Array.isArray(value) ? value : [],
+				Array.isArray(value)
+					? value
+					: typeof value === "object"
+						? value.families
+						: [],
 			),
 		);
 		// A TLA lane that adds a family adds its map row in the same PR.
@@ -441,15 +449,15 @@ describe("lintTlaCoverage seam (#3802)", () => {
 		try {
 			const git = (args: string[]) =>
 				args.includes("--name-only")
-					? "index.ts\n"
+					? "clients/lsp/client.ts\n"
 					: [
-							"diff --git a/index.ts b/index.ts",
+							"diff --git a/clients/lsp/client.ts b/clients/lsp/client.ts",
 							"@@ -1,0 +1,1 @@",
 							"+// touched",
 						].join("\n");
 			lintLocalPrBody(BASE_BODY, REPO_ROOT, git as never);
 			expect(warn.mock.calls.flat().join("\n")).toContain(
-				"TLA+ note: index.ts",
+				"TLA+ note: clients/lsp/client.ts",
 			);
 		} finally {
 			warn.mockRestore();
@@ -489,5 +497,407 @@ describe("dispatcher seam row (#3906 AC2)", () => {
 		expect(result.advisories.join(" ")).toContain(
 			"clients/dispatch/dispatcher.ts",
 		);
+	});
+});
+
+// #3803 F4 / #3878: index.ts holds every lifecycle hook handler, so its map row
+// is judged per hook, from the handler a changed hunk lands in. `git diff
+// --unified=0` (the lint's diff) carries no hook name for a hunk inside a
+// handler, so the first version of this row matched the hook word in the
+// changed line itself and fired for 0 of the last 25 index.ts commits while 19
+// of them edited a handler; the hub note it replaced was silent for all 19.
+const INDEX_SOURCE = fs.readFileSync(path.join(REPO_ROOT, "index.ts"), "utf8");
+const INDEX_ROW = map.map?.["index.ts"] as {
+	families: string[];
+	anchors: Record<string, string[]>;
+};
+const HOOKS = Object.keys(INDEX_ROW.anchors);
+
+// A U0 diff that rewrites post-image line `line` of index.ts, as git prints it.
+function indexLineDiff(source: string, line: number) {
+	const text = source.split("\n")[line - 1];
+	return [
+		"diff --git a/index.ts b/index.ts",
+		`@@ -${line} +${line} @@`,
+		"-// old",
+		`+${text}`,
+	].join("\n");
+}
+
+function indexErrors(diff: string, source: string, body = "") {
+	return lintTlaCoverage(body, {
+		diff,
+		headFiles: new Map([["index.ts", source]]),
+	});
+}
+
+describe("index.ts hook anchors (#3878)", () => {
+	// Recurrence: a hook list kept both in the map keys and in a regex drifted
+	// (agent_end was in neither), and an anchor key the file never registers
+	// would never fire. The registered hooks are read from the file.
+	it("finds a handler range for every anchored hook and no other lifecycle hook", () => {
+		const ranges = findHookRanges(INDEX_SOURCE);
+		const lines = INDEX_SOURCE.split("\n");
+		for (const hook of HOOKS) expect(ranges.has(hook), hook).toBe(true);
+		expect([...ranges.keys()].sort()).toEqual(
+			[...HOOKS, "resources_discover"].sort(),
+		);
+		// A range starts at the registration or at a named handler the
+		// registration passes by identifier (`wrapSessionEventHandler("turn_end",
+		// onTurnEnd, ...)`), never at anything else: an inline handler's body
+		// arguments are not handlers.
+		const starts = (hook: string) =>
+			(ranges.get(hook) ?? []).map(([start]) =>
+				lines[start - 1]
+					.trim()
+					.replace(/^(\(pi as any\)|pi)\.on\(.*/, "on")
+					.replace(/^const (\w+) =.*/, "$1"),
+			);
+		expect(
+			Object.fromEntries(HOOKS.map((hook) => [hook, starts(hook)])),
+		).toEqual({
+			session_start: ["on"],
+			session_shutdown: ["on"],
+			session_tree: ["on"],
+			turn_start: ["on", "onTurnStart"],
+			turn_end: ["on", "onTurnEnd"],
+			agent_end: ["on", "onAgentEnd"],
+			agent_settled: ["on", "onAgentSettled"],
+			tool_call: ["on"],
+			tool_result: ["on", "onToolResult"],
+			tool_execution_end: ["on"],
+			context: ["on"],
+		});
+	});
+
+	it.each(HOOKS)(
+		"fires %s for an edit to the first body line of its handler",
+		(hook) => {
+			const ranges = findHookRanges(INDEX_SOURCE).get(hook) ?? [];
+			// The widest range is the handler body (or the inline handler).
+			const [start, end] = [...ranges].sort(
+				(a, b) => b[1] - b[0] - (a[1] - a[0]),
+			)[0];
+			const result = indexErrors(
+				indexLineDiff(INDEX_SOURCE, Math.min(start + 2, end)),
+				INDEX_SOURCE,
+			);
+			expect(result.errors).toHaveLength(1);
+			for (const family of INDEX_ROW.anchors[hook])
+				expect(result.errors[0], family).toContain(`formal/${family}/`);
+			expect(result.advisories).toEqual([]);
+		},
+	);
+
+	it("restores format-drain on index.ts through the agent_end anchor", () => {
+		// Recurrence: the first anchor table dropped format-drain's index.ts link
+		// (the old 7-family row named it) and had no agent_end anchor.
+		expect(INDEX_ROW.anchors.agent_end).toContain("format-drain");
+		const ranges = findHookRanges(INDEX_SOURCE).get("agent_end") ?? [];
+		const body = ranges.find(([start, end]) => end - start > 5);
+		expect(body).toBeDefined();
+		const result = indexErrors(
+			indexLineDiff(INDEX_SOURCE, (body as [number, number])[0] + 1),
+			INDEX_SOURCE,
+			"TLA+ unaffected: format-drain — the drain order is unchanged.",
+		);
+		expect(result).toEqual({ errors: [], advisories: [] });
+	});
+
+	it("prints a note, not an error, for an edit outside every handler", () => {
+		const lines = INDEX_SOURCE.split("\n");
+		const importLine =
+			lines.findIndex((line) => line.startsWith("import ")) + 1;
+		const result = indexErrors(
+			indexLineDiff(INDEX_SOURCE, importLine),
+			INDEX_SOURCE,
+		);
+		expect(result.errors).toEqual([]);
+		expect(result.advisories).toEqual([
+			expect.stringContaining("index.ts changed outside its lifecycle hook"),
+		]);
+	});
+
+	it("counts every hook as changed when the post-image cannot place the hunk", () => {
+		// Direction chosen from the user-facing harm: a lint that cannot read the
+		// image asks for one any-of declaration; silence would pass a handler edit.
+		const drifted = INDEX_SOURCE.replace("import ", "import  ");
+		const diff = indexLineDiff(INDEX_SOURCE, 1);
+		const result = lintTlaCoverage("", {
+			diff,
+			headFiles: new Map([["index.ts", drifted]]),
+		});
+		expect(result.errors).toHaveLength(1);
+		expect(result.advisories).toEqual([
+			expect.stringContaining("could not be read against the diff"),
+		]);
+		const unreadable = lintTlaCoverage("", { diff, sourceCwd: "/nonexistent" });
+		expect(unreadable.errors).toHaveLength(1);
+		expect(
+			changedHookAnchors(INDEX_SOURCE, parseRuntimeHunks(diff)[0], HOOKS),
+		).not.toBeNull();
+	});
+
+	it("places a pure deletion by the post-image line it follows", () => {
+		// Recurrence: under --unified=0 a deletion has no added line, so a matcher
+		// that reads only added lines never sees a block removed from a handler.
+		const turnEndRange = findHookRanges(INDEX_SOURCE)
+			.get("turn_end")
+			?.find(([from, to]) => to - from > 5);
+		expect(turnEndRange).toBeDefined();
+		const [start, end] = turnEndRange ?? [0, 0];
+		const deletion = (after: number) =>
+			[
+				"diff --git a/index.ts b/index.ts",
+				`@@ -${after + 1} +${after},0 @@`,
+				"-// removed",
+			].join("\n");
+		const inside = indexErrors(deletion(start + 3), INDEX_SOURCE);
+		expect(inside.errors).toEqual([
+			expect.stringContaining("formal/late-aux-drain/"),
+		]);
+		const importLine = INDEX_SOURCE.split("\n").findIndex((line) =>
+			line.startsWith("import "),
+		);
+		expect(indexErrors(deletion(importLine + 1), INDEX_SOURCE).errors).toEqual(
+			[],
+		);
+		expect(end).toBeGreaterThan(start);
+	});
+
+	it("gates a diff that fires two hooks on the union of their families", () => {
+		// Recurrence: a fired anchored row must never fall into the 4+ family hub
+		// note; session_start + turn_end reach 5 families and still gate.
+		const ranges = findHookRanges(INDEX_SOURCE);
+		const bodyLine = (hook: string) => {
+			const [start] = (ranges.get(hook) ?? []).find(
+				([from, to]) => to - from > 5,
+			) as [number, number];
+			return start + 2;
+		};
+		const diff = [
+			indexLineDiff(INDEX_SOURCE, bodyLine("session_start")),
+			...indexLineDiff(INDEX_SOURCE, bodyLine("turn_end")).split("\n").slice(1),
+		].join("\n");
+		const result = indexErrors(diff, INDEX_SOURCE);
+		expect(result.advisories).toEqual([]);
+		expect(result.errors).toHaveLength(1);
+		for (const family of [
+			"session-registry",
+			"late-aux-drain",
+			"dispatch-pipeline",
+		])
+			expect(result.errors[0]).toContain(`formal/${family}/`);
+	});
+
+	describe("hunk placement", () => {
+		const ranges = new Map([["turn_end", [[10, 20]]]]) as never;
+		const hunk = (
+			added: number[],
+			deletedAfter: number[],
+			removed: string[] = [],
+		) => ({
+			added: new Map(added.map((line) => [line, "x"])),
+			deletedAfter: new Set(deletedAfter),
+			removed,
+		});
+		const fires = (...args: Parameters<typeof hunk>) =>
+			hookAnchorsFromRanges(ranges, hunk(...args), ["turn_end"]).length === 1;
+
+		it("fires on an added line at either end and not one past it", () => {
+			expect([9, 10, 20, 21].map((line) => fires([line], []))).toEqual([
+				false,
+				true,
+				true,
+				false,
+			]);
+		});
+
+		it("fires on a deletion strictly inside the range only", () => {
+			// A deletion after post line N sits between N and N+1.
+			expect([9, 10, 19, 20].map((line) => fires([], [line]))).toEqual([
+				false,
+				true,
+				true,
+				false,
+			]);
+		});
+
+		it("fires on a removed or added registration line", () => {
+			expect(fires([], [3], ['\tpi.on("turn_end", wrap(onTurnEnd));'])).toBe(
+				true,
+			);
+			expect(fires([], [3], ['\t\t"turn_end",'])).toBe(true);
+			expect(
+				fires([], [3], ['\tpi.on("turn_start", wrap(onTurnStart));']),
+			).toBe(false);
+		});
+	});
+
+	describe("replay of the last 25 index.ts commits", () => {
+		const replay = JSON.parse(
+			fs.readFileSync(
+				path.join(
+					REPO_ROOT,
+					"tests/fixtures/tla-hook-anchors/index-ts-replay.json",
+				),
+				"utf8",
+			),
+		) as {
+			commits: {
+				sha: string;
+				diff: string;
+				ranges: Record<string, [number, number][]>;
+				expected: string[];
+			}[];
+		};
+
+		it("fires on the lifecycle-handler commits and notes the rest", () => {
+			const hits = replay.commits.map((commit) =>
+				hookAnchorsFromRanges(
+					new Map(Object.entries(commit.ranges)),
+					parseRuntimeHunks(commit.diff)[0],
+					HOOKS,
+				).sort(),
+			);
+			expect(replay.commits).toHaveLength(25);
+			expect(hits).toEqual(replay.commits.map((commit) => commit.expected));
+			// 0 of 25 on ff1b0ce1f (the word match), 19 here.
+			expect(hits.filter((hook) => hook.length).length).toBe(19);
+		});
+
+		it("gates a real turn_end handler diff end to end, and a declaration clears it", () => {
+			const commit = replay.commits.find((entry) =>
+				entry.sha.startsWith("2e4848dd5"),
+			);
+			const source = fs.readFileSync(
+				path.join(
+					REPO_ROOT,
+					"tests/fixtures/tla-hook-anchors/index-ts-2e4848dd5.txt",
+				),
+				"utf8",
+			);
+			const result = indexErrors(commit?.diff ?? "", source);
+			expect(result.errors).toHaveLength(1);
+			expect(result.errors[0]).toContain("formal/late-aux-drain/");
+			expect(result.errors[0]).not.toContain("formal/session-registry/");
+			expect(
+				indexErrors(
+					commit?.diff ?? "",
+					source,
+					"TLA+ unaffected: late-aux-drain — the cadence is paced per session turn.",
+				).errors,
+			).toEqual([]);
+			const git = (args: string[]) =>
+				args.includes("--name-only") ? "index.ts\n" : (commit?.diff ?? "");
+			const local = lintLocalPrBody(BASE_BODY, REPO_ROOT, git as never, {
+				headFiles: new Map([["index.ts", source]]),
+			});
+			expect(local.errors.join(" ")).toContain("formal/late-aux-drain/");
+		});
+	});
+});
+
+describe("hub rows without anchors stay advisory (#3802 hub threshold)", () => {
+	// Recurrence: dropping the 4-family threshold turned the hub rows of
+	// runtime-tool-result (6 families), runtime-coordinator (4), lsp/index (6) and
+	// lsp/client (5) from a note into a gate for every PR that touches them.
+	const hubs = Object.entries(map.map ?? {}).filter(
+		([, value]) => Array.isArray(value) && value.length >= 4,
+	);
+
+	it.each(hubs.map(([glob]) => [glob]))(
+		"%s prints the hub note and never fails an empty body",
+		(glob) => {
+			const result = evaluateTlaCoverage({
+				map,
+				changedFiles: [glob],
+				body: "",
+			});
+			expect(result.errors).toEqual([]);
+			expect(result.advisories).toEqual([
+				expect.stringContaining(`TLA+ note: ${glob} maps to`),
+			]);
+		},
+	);
+});
+
+describe("validateCoverageMap anchors (#3878 F11)", () => {
+	let root: string | undefined;
+	afterEach(() => {
+		if (root) fs.rmSync(root, { recursive: true, force: true });
+		root = undefined;
+	});
+
+	function anchoredTree() {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-tla-anchors-"));
+		fs.writeFileSync(
+			path.join(root, "host.ts"),
+			'pi.on("turn_end", wrap(handler));\n',
+		);
+		for (const dir of ["fam-a", "fam-b"]) {
+			fs.mkdirSync(path.join(root, "formal", dir), { recursive: true });
+			fs.writeFileSync(path.join(root, "formal", dir, "M.cfg"), "");
+		}
+		return root;
+	}
+
+	const row = (anchors: Record<string, string[]>) => ({
+		families: ["fam-a", "fam-b"],
+		map: { "host.ts": { families: ["fam-a"], anchors } },
+	});
+
+	it("accepts anchors that name a registered hook and a subset of the row's families", () => {
+		expect(
+			validateCoverageMap(row({ turn_end: ["fam-a"] }), anchoredTree()),
+		).toEqual([]);
+	});
+
+	it.each([
+		[
+			"a hook the file never registers",
+			{ session_start: ["fam-a"] },
+			"is not registered",
+		],
+		[
+			"a family outside the row",
+			{ turn_end: ["fam-b"] },
+			"not in the row's families",
+		],
+		[
+			"an empty family list",
+			{ turn_end: [] },
+			"needs a non-empty family array",
+		],
+		[
+			"a key that is not a hook name",
+			{ "turn-end": ["fam-a"] },
+			"is not a hook name",
+		],
+	])("rejects %s", (_label, anchors, message) => {
+		const errors = validateCoverageMap(
+			{ ...row(anchors), families: ["fam-a", "fam-b"] },
+			anchoredTree(),
+		);
+		expect(errors).toEqual([expect.stringContaining(message)]);
+	});
+});
+
+describe("map file hygiene (#3803 F4 F7)", () => {
+	// Recurrence: JSON.parse keeps the last of two equal keys, so `notes."index.ts"`
+	// was written twice and the first note was dead text no test could see.
+	it("has no duplicate key in the map or notes objects", () => {
+		const raw = fs.readFileSync(
+			path.join(REPO_ROOT, "formal/coverage-map.json"),
+			"utf8",
+		);
+		const [head, notes] = raw.split(/^ {2}"notes": \{/m);
+		const keys = (text: string) =>
+			[...text.matchAll(/^ {4},?"([^"]+)": /gm)].map((match) => match[1]);
+		for (const section of [head, notes]) {
+			const found = keys(section);
+			expect(found.length).toBeGreaterThan(10);
+			expect(found.filter((key, at) => found.indexOf(key) !== at)).toEqual([]);
+		}
 	});
 });

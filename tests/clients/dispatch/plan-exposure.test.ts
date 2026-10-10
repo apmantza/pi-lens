@@ -51,6 +51,12 @@ describe("dispatch plan exposure", () => {
 		);
 	});
 
+	it("exposes required capabilities on write plans for coverage admission", () => {
+		expect(TOOL_PLANS.jsts.capabilities).toContain("types");
+		expect(TOOL_PLANS.python.capabilities).toContain("types");
+		expect(TOOL_PLANS.json.capabilities).not.toContain("types");
+	});
+
 	it("go write plan has no duplicate runner ids (go-vet lives only in primary group)", () => {
 		const ids = flattenRunnerIds(TOOL_PLANS.go);
 		const counts = ids.reduce<Record<string, number>>((acc, id) => {

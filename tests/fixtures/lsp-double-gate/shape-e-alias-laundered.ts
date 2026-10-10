@@ -5,7 +5,7 @@ import { vi } from "vitest";
 
 const makeTouchFileMock = vi.fn;
 
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => ({
 		supportsLSP: () => true,
 		touchFile: makeTouchFileMock(),

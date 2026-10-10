@@ -42,22 +42,46 @@
 (*    not held: the code before #3830.                                     *)
 (*                                                                         *)
 (* A content is the set of agent edits it holds plus a "fixed" bit, so a   *)
-(* stale write by the tool shows as a missing edit. Identity is a version  *)
-(* counter bumped by every write: a perfect identity. The code compares    *)
-(* bytes before the write (the stat identity it replaced, mtime + size +   *)
-(* inode, was blind to a same-size edit inside one mtime tick); the model  *)
-(* does not see that difference. The report is one set for the file.       *)
+(* stale write by the tool shows as a missing edit. An edit can also name  *)
+(* another edit's text as replaced (SReplacer), so two of the agent's own  *)
+(* edits can touch one region, as the calls of a parallel batch do         *)
+(* (#4205 round 4). Identity is a version counter bumped by every write: a *)
+(* perfect identity. The code compares bytes before the write (the stat    *)
+(* identity it replaced, mtime + size + inode, was blind to a same-size    *)
+(* edit inside one mtime tick); the model does not see that difference.    *)
+(* The report is one set for the file.                                     *)
+(*                                                                         *)
+(* The report has three rules, the same three the code applies             *)
+(* (fix-run-restore.ts module header; one rule per column of the PR's      *)
+(* state table). SUPERSEDE (SANote): a capture replaced is named when it   *)
+(* was overwritten (even when the new bytes are identical), or when it was *)
+(* not verified or was displaced and the bytes differ; overwritten is      *)
+(* "lost", the others "possibly". DISPLACED (SACall): a call that begins   *)
+(* while the latest verified capture's own edits are missing from the disk *)
+(* marks that capture displaced, UNLESS another in-flight own call         *)
+(* accounts for the gap (Accounted, #4205 round 4 R3-2): it has landed,    *)
+(* and its stated write names every missing edit as one it replaced. The   *)
+(* agent's own later write then superseded that region, so the file stays  *)
+(* quiet, exactly as the sequential spelling of the same edits always      *)
+(* did. IN-FLIGHT (RRead): a file with a call in flight is named           *)
+(* "possibly" unless no capture exists or the capture equals the disk,     *)
+(* AND every in-flight call's edit is on the disk.                         *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
     SEdits,         \* agent edits of S; 0 leaves the sibling out
+    SReplacer,      \* the edit whose stated write names another edit's text as replaced, so its own write removes it from the disk; 0 is the pre-#4205 model, where an edit only ever adds. One pair per config, because the code's rule is per region and holds for any number of them. A whole-file `write` names every edit it replaced, an `edit` only the ones its `oldText` holds; the model does not tell the two apart, because its content is the edit set
+    SReplaced,      \* the edit SReplacer's stated write names as replaced; read only when SReplacer # 0
     SConcurrent,    \* TRUE: an agent edit of S can run while the fixer run is open (pi's parallel tools, or a handler its 10 s bound abandoned: the run's own timeout is 30 s)
+    SInOrderNotes,  \* TRUE: pi-lens sees a batch's tool_results in call order, so no note arrives for an edit while an older edit's note is still missing. FALSE: a handler its 10 s bound abandoned delivers late, out of order (#4205 round 4, state table rows 28 and 29)
     SAtomic,        \* TRUE: an agent edit of S is never between its tool_call and its tool_result while a tool or restore step runs (the result reaches pi-lens at once); FALSE: it can be
     SCallInRun,     \* TRUE: the tool_call of every agent edit of S reaches pi-lens while the run is open (none is called before beginFixRun)
     SRestore,       \* FALSE: the code before #3598 (no capture, no restore)
     SettleCapture,  \* candidate fix: the run stays registered (captures and in-flight calls tracked) until its restore has settled
     RestoreNoCapInFlight, \* candidate fix for finding B: a file with no capture and a call in flight is named possibly lost
+    KeepCaptureHistory, \* retain evidence when a later capture replaces an earlier one (window C)
+    CarryPreRunCalls, \* calls started before registration remain in flight for the run (window D)
     RestoreInFlight,\* TRUE: settle leaves a file with a call in flight alone (#3741 round 2)
     RestoreRecheck, \* TRUE: the re-stat before the write (#3741 round 2)
     RestoreQueue,   \* the restore's read, decision, re-check and write run inside pi's queue entry for S (a per-sibling entry taken only for the restore, #3830)
@@ -67,7 +91,15 @@ CONSTANTS
 
 SIds == 1..SEdits
 C0 == [e |-> {}, f |-> FALSE]
-NoCap == [has |-> FALSE, b |-> C0, v |-> "verified"]
+\* The edits whose text edit i's stated write names as replaced, so applying i
+\* removes them from the disk (#4205 round 4: two of the agent's own edits can
+\* touch one region, and pi sends a batch's tool_calls before its results).
+SReplaces(i) == IF i = SReplacer THEN {SReplaced} ELSE {}
+\* A capture: the bytes, the verdict, `d` ("displaced": a call began while the
+\* disk no longer held the edits the capture was verified against), and `i`, the
+\* edit it was taken for (0 for none), which the keep rule below reads to learn
+\* which region that edit's stated write named as replaced.
+NoCap == [has |-> FALSE, b |-> C0, v |-> "verified", d |-> FALSE, i |-> 0]
 
 VARIABLES
     sdisk, sver, sq, sapplied, sa, sabuf,
@@ -104,6 +136,35 @@ Registered ==
 \* copy and the live set coincide. Under SettleCapture the run stays active.
 InFl == infl
 
+\* The edits the latest capture holds that the disk no longer does: the gap the
+\* displaced rule reads as the fixer's erasure.
+Missing == cap.b.e \ sdisk.e
+
+\* An in-flight own call OTHER than `i` accounts for a set of missing edits when
+\* it has landed (its own edit is on the disk) and its stated write names every
+\* one of them as replaced. The agent's own later write then superseded that
+\* region, and the fixer is not the explanation (#4205 round 4, verify r3 R3-2,
+\* state table rows 18 to 21). The code's byte-level rule has the same shape: a
+\* landed whole-file `write` covers every contradiction, an `edit` only the
+\* texts its own `oldText`/`newText` name (`accountedByOwnCall`,
+\* `coversContradiction`). `i` is excluded because the code registers the call
+\* before the check, and a call that has not run yet vouches for no byte
+\* (row 25).
+AccountedBy(j, missing) == j \in sdisk.e /\ missing \subseteq SReplaces(j)
+
+\* SACall's form: the gap is the latest capture's.
+Accounted(i) == \E j \in InFl \ {i} : AccountedBy(j, Missing)
+
+\* SANote's form: the gap is the edit being captured, whose own result is the
+\* one arriving. pi delivers a batch's results after its writes, so a later own
+\* edit can have replaced this one's region before this one's result arrives,
+\* and the capture is then taken from bytes that contradict its own stated
+\* write (state table row 27). The code needs no exclusion here: the delivered
+\* call is out of the in-flight set (`noteAgentCallEnd` precedes
+\* `noteAgentMutation`), and a write that fails to verify cannot vouch for
+\* itself.
+NoteAccounted(i) == \E j \in InFl \ {i} : AccountedBy(j, {i})
+
 ----------------------------------------------------------------------------
 \* tool_call: pi-lens notes the call in flight (only while the run is active).
 SACall(i) ==
@@ -112,8 +173,20 @@ SACall(i) ==
     /\ SConcurrent \/ rpc \in {"idle", "done"}
     /\ SCallInRun => rpc \in {"run", "rread", "rlock", "rrecheck", "rwrite"}
     /\ sa' = [sa EXCEPT ![i] = "called"]
-    /\ infl' = IF Registered THEN infl \cup {i} ELSE infl
-    /\ UNCHANGED <<sdisk, sver, sq, sapplied, sabuf, cap, tpc, tbuf,
+    /\ infl' = IF Registered \/ CarryPreRunCalls THEN infl \cup {i} ELSE infl
+    \* The displaced rule (noteAgentCallStart): a call begins on a file whose
+    \* latest capture the disk contradicts, and no in-flight own call accounts
+    \* for the gap (Accounted). The code tests no verdict here, and neither does
+    \* the model: the mark is load-bearing for a `verified` capture only, since
+    \* SANote names an `overwritten` one whatever the mark says, and an
+    \* `accounted` one holds no gap right after its own note (cap.b = sdisk).
+    \* Verify r3 K11 measured the code's `verdict != "verified"` guard as an
+    \* equivalent mutant, so round 4 deleted it.
+    /\ cap' = IF Registered /\ KeepCaptureHistory /\ cap.has
+                 /\ Missing # {} /\ ~Accounted(i)
+                THEN [cap EXCEPT !.d = TRUE]
+                ELSE cap
+    /\ UNCHANGED <<sdisk, sver, sq, sapplied, sabuf, tpc, tbuf,
                    rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
 \* pi's edit: read S inside S's queue ...
@@ -125,10 +198,11 @@ SARead(i) ==
     /\ UNCHANGED <<sdisk, sver, sapplied, infl, cap, tpc, tbuf,
                    rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
 
-\* ... and write it back with edit i applied.
+\* ... and write it back with edit i applied, over the region its stated write
+\* names as replaced (SReplaces(i), empty by default: an edit that only adds).
 SAWrite(i) ==
     /\ sa[i] = "read"
-    /\ sdisk' = [e |-> sabuf.e \cup {i}, f |-> sabuf.f]
+    /\ sdisk' = [e |-> (sabuf.e \ SReplaces(i)) \cup {i}, f |-> sabuf.f]
     /\ sver' = sver + 1
     /\ sapplied' = sapplied \cup {i}
     /\ sq' = "none"
@@ -138,17 +212,44 @@ SAWrite(i) ==
 
 \* tool_result: noteAgentCallEnd, then noteAgentMutation reads S now. The
 \* verdict checks the agent's own stated write (verdictFor): edit i's text is
-\* in the bytes, or the tool's write already erased it.
+\* in the bytes, or something already erased it -- and when an in-flight own
+\* call accounts for that (NoteAccounted), the verdict is "accounted", not
+\* "overwritten", so the report does not blame the tool for the agent's own
+\* later write (state table row 27).
 SANote(i) ==
     /\ sa[i] = "written"
+    /\ SInOrderNotes => \A j \in 1..(i - 1) : sa[j] = "done"
     /\ infl' = IF Registered THEN infl \ {i} ELSE infl
-    /\ cap' = IF Registered
-                THEN [has |-> TRUE, b |-> sdisk,
-                      v |-> IF i \in sdisk.e THEN "verified" ELSE "overwritten"]
-                ELSE cap
+    \* keepsNewerCapture: a late result for an older write does not downgrade the
+    \* evidence. The bytes are still, to the byte, a verified capture's, this
+    \* result's own edit is not in them, and that capture's own write names it as
+    \* replaced -- so the newer capture stays (state table row 28). The code also
+    \* requires the newer capture to be an `edit`, which states the region it took
+    \* over; every model edit names its regions, so that arm has no model side.
+    \* Keeping the newer capture is what lets a LATER tool write still be
+    \* attributed: the displaced rule reads the capture's own edit.
+    /\ cap' = IF ~Registered THEN cap
+              ELSE IF cap.has /\ cap.v = "verified" /\ cap.b = sdisk
+                      /\ i \notin sdisk.e /\ i \in SReplaces(cap.i)
+                     THEN cap
+                     ELSE [has |-> TRUE, b |-> sdisk,
+                           v |-> IF i \in sdisk.e THEN "verified"
+                                 ELSE IF NoteAccounted(i) THEN "accounted"
+                                 ELSE "overwritten",
+                           d |-> FALSE, i |-> i]
+    \* The supersede rule (noteAgentMutation): a replaced capture is named when it
+    \* is overwritten (even if the new bytes are identical: the edit it stated
+    \* is not in them), or was unverifiable or displaced and the bytes differ.
+    \* An "accounted" capture names nothing, exactly as the code's two equality
+    \* tests leave it out.
+    /\ rep' = IF Registered /\ KeepCaptureHistory /\ cap.has
+                  /\ (cap.v = "overwritten"
+                       \/ (cap.b # sdisk /\ (cap.v = "unverifiable" \/ cap.d)))
+                THEN rep \cup {IF cap.v = "overwritten" THEN "lost" ELSE "possibly"}
+                ELSE rep
     /\ sa' = [sa EXCEPT ![i] = "done"]
     /\ UNCHANGED <<sdisk, sver, sq, sapplied, sabuf, tpc, tbuf,
-                   rpc, rbuf, rv, rcap, rc, rep, wk, fq, lpc>>
+                   rpc, rbuf, rv, rcap, rc, wk, fq, lpc>>
 
 ----------------------------------------------------------------------------
 \* beginFixRun: hash the files, register the run. Under pi's sequential tool
@@ -230,10 +331,15 @@ RRead ==
              ELSE IF RestoreInFlight /\ InFl # {} THEN "done"
              ELSE IF sdisk = cap.b THEN "done"
              ELSE "rrecheck"
+           \* The in-flight rule (unverifiedInFlight): some call still in flight
+           \* has its edit missing from the disk. EVERY call must verify.
+           InFlMissing == \E i \in InFl : i \notin sdisk.e
            named ==
-             IF ~cap.has /\ RestoreNoCapInFlight /\ InFl # {} THEN {"possibly"}
+             IF ~cap.has /\ RestoreNoCapInFlight /\ InFl # {} /\ InFlMissing
+               THEN {"possibly"}
              ELSE IF cap.has /\ cap.v = "overwritten" THEN {"lost"}
-             ELSE IF cap.has /\ RestoreInFlight /\ InFl # {} /\ sdisk # cap.b THEN {"possibly"}
+             ELSE IF cap.has /\ RestoreInFlight /\ InFl # {}
+                     /\ (sdisk # cap.b \/ InFlMissing) THEN {"possibly"}
              ELSE {}
        IN /\ rpc' = next
           /\ rep' = rep \cup named
@@ -314,15 +420,26 @@ Spec == Init /\ [][Next]_vars
 ----------------------------------------------------------------------------
 SQuiescent == rpc = "done" /\ \A i \in SIds : sa[i] = "done"
 
-\* Every agent edit of S is on disk at the end, or the report names the file
-\* as lost or possibly lost, so the agent can re-apply it (NoLostEdit's
-\* analogue: here the eraser is the tool, and the capture, the restore and the
-\* report are the defence).
+\* The edits an applied later edit of the agent's own replaced: their text is
+\* legitimately gone, so no rule owes a report for them (#4205 round 4). With
+\* the default SReplacer = 0 this set is empty, and every invariant below
+\* reads exactly as it did before that round.
+Superseded == {i \in SIds : \E j \in sapplied : i \in SReplaces(j)}
+
+\* The edits a loss rule owes a report for.
+OwedEdits == sapplied \ Superseded
+
+\* Every agent edit of S that is owed is on disk at the end, or the report names
+\* the file as lost or possibly lost, so the agent can re-apply it
+\* (NoLostEdit's analogue: here the eraser is the tool, and the capture, the
+\* restore and the report are the defence).
 NoSilentLoss ==
-    SQuiescent => \/ \A i \in sapplied : i \in sdisk.e
+    SQuiescent => \/ \A i \in OwedEdits : i \in sdisk.e
                   \/ rep \cap {"lost", "possibly"} # {}
 
-\* Stronger: every agent edit of S is on disk at the end (no loss at all).
+\* Stronger: every agent edit of S is on disk at the end (no loss at all). This
+\* one is literal, so it is false for any config with a real SReplacer: an
+\* edit the agent itself replaced does not survive, and that is not a loss.
 EveryEditSurvives == SQuiescent => \A i \in sapplied : i \in sdisk.e
 
 \* The restore never writes over content newer than its capture (the module
@@ -339,4 +456,32 @@ NoRestoreOverGapEdit == "gap" \notin wk
 \* identical bytes, reports `restored` for a file the tool never erased, and
 \* opens the gap window for nothing.
 NoNoopRestore == "noop" \notin wk
+
+\* Quiet when intact: when every agent edit of S is on disk at the end, nothing
+\* is named lost or possibly lost. The false-alarm direction of the report
+\* (#3830 round 1 F3/F4: a fixer that never touched the file, or rewrote it
+\* around the agent's edit, is not a loss), which NoSilentLoss cannot see. The
+\* antecedent is literal, so an own replacement (SReplacer) makes it false and
+\* NoFalseAlarmUntouched below carries that case.
+NoFalseAlarm ==
+    SQuiescent /\ (\A i \in sapplied : i \in sdisk.e)
+        => rep \cap {"lost", "possibly"} = {}
+
+\* Quiet when the tool never wrote S and every owed edit is there. This is the
+\* false alarm #4205 round 4 fixes (verify r3 R3-2, probe Q4): an edit the
+\* agent's own later write replaced is not a loss, so naming it is wrong -- and
+\* with a tool write behind it a name IS honest, which is why the antecedent
+\* reads the tool's own trace (`tpc`) and not the disk. State table rows 18, 21,
+\* 27 and 28.
+NoFalseAlarmUntouched ==
+    SQuiescent /\ tpc # "wrote" /\ (\A i \in OwedEdits : i \in sdisk.e)
+        => rep \cap {"lost", "possibly"} = {}
+
+\* NoSilentLoss restricted to a file the run holds no capture for at the end:
+\* the in-flight rule's own claim (state table rows 6 to 9), checked without
+\* window C (a replaced capture) in the way.
+NoSilentLossUncaptured ==
+    SQuiescent /\ ~cap.has
+        => \/ \A i \in OwedEdits : i \in sdisk.e
+           \/ rep \cap {"lost", "possibly"} # {}
 =============================================================================

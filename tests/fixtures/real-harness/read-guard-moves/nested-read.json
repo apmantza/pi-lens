@@ -1,0 +1,36 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "codemode",
+			"arguments": {
+				"code": "await tools.read({ path: \"a.ts\" }); text(\"ok\")"
+			},
+			"id": "c1"
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "read done"
+		}
+	],
+	[
+		{
+			"type": "toolCall",
+			"name": "edit",
+			"arguments": {
+				"path": "a.ts",
+				"oldText": "export const a = 1;",
+				"newText": "export const a = 2;"
+			},
+			"id": "e1"
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "edit done"
+		}
+	]
+]

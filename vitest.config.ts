@@ -45,6 +45,11 @@ const sharedExclude = [
 	"**/.stryker-tmp/**",
 	"**/.stryker/**",
 	"**/.claude/**",
+	// Probe homes (.probe-home/) can hold a whole worktree when a probe ran a
+	// worktree-creating script under HOME=.probe-home; a path-filtered run (the
+	// pre-push selection) collected a merged PR's stale copy (2026-10-08: 24
+	// phantom reds blocked a push).
+	"**/.probe-home/**",
 	// Fixture projects carry *.test.ts files that belong to the FIXTURE's own
 	// toolchain (e.g. the native-TS7/Vitest fixture the live integration suite
 	// copies out and type-checks) — they are inputs, not repo tests, and fail
@@ -324,6 +329,9 @@ const lspSpawnHeavyInclude = [
 	"tests/clients/lsp/did-save-notification.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	"tests/clients/lsp/integration.test.ts",
+	// #4248: the unknown-trust project-local binary witness resolves a real
+	// PATH entry through launchLSP; keep that child-spawn boundary phased here.
+	"tests/clients/lsp/service-project-trust.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a
@@ -386,8 +394,13 @@ export const realHarnessInclude = [
 	"tests/real-harness/child-exit.test.ts",
 	"tests/real-harness/tools-enabled.test.ts",
 	"tests/real-harness/bridge-reload.test.ts",
+	"tests/real-harness/bridge-reload-ts.test.ts",
 	"tests/real-harness/diagnostic-provenance.test.ts",
 	"tests/real-harness/provider-compatibility.test.ts",
+	"tests/real-harness/read-guard-moves.test.ts",
+	"tests/real-harness/lifecycle.test.ts",
+	"tests/real-harness/outside-root.test.ts",
+	"tests/real-harness/scenario-2.test.ts",
 ];
 
 // #1920: files that assert REAL wall-clock elapsed-time budgets (Date.now()
@@ -403,6 +416,9 @@ export const realHarnessInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 export const wallClockBudgetInclude = [
+	// #4148: a 199K-blank-line rule is a real event-loop occupancy witness for
+	// validateRule's synchronous language extraction, so it runs serialized.
+	"tests/clients/ast-grep-rule-regex-budget.test.ts",
 	"tests/clients/biome-config-decorator-metadata.test.ts",
 	"tests/clients/build-identity.test.ts",
 	// #4046: the impact-cascade and reverse-dependency cases assert a t(4N)/t(N)
@@ -462,12 +478,19 @@ export const wallClockBudgetInclude = [
 	// #3510: a real sibling node process with its own pid shares the project
 	// snapshot cache dir (flake-shape admission).
 	"tests/clients/project-snapshot-cross-process.test.ts",
+	// #4148: pytest traceback and go.mod regex budgets (100K blank lines, a
+	// 100K-character rule); a real event-loop occupancy witness, so it runs
+	// serialized.
+	"tests/clients/pytest-gomod-regex-budget.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	// #2622: adjacent read-guard stars previously produced exponential regex
 	// backtracking against a long non-matching path; the test measures the real
 	// synchronous matcher cost and belongs in the quiet serialized phase.
 	"tests/clients/read-guard-glob-nonbacktracking.test.ts",
 	"tests/clients/runtime-session-scan-cache.test.ts",
+	// #4126: the first-session warmup has no awaitable completion signal; keep
+	// its real deferred-notification ordering in the serialized phase.
+	"tests/clients/runtime-session-warm-skip-notify.test.ts",
 	// #3872: real `git worktree add` children are the fixture (flake-shape admission).
 	"tests/clients/runtime-turn-knip-checkout-root.test.ts",
 	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).
@@ -511,12 +534,16 @@ export const wallClockBudgetInclude = [
 	// their wall-clock completion; keep its 120s budget in the quiet phase.
 	"tests/config/strictness-ratchet.test.ts",
 	"tests/config/tracked-control-bytes.test.ts",
+	"tests/config/workflow-writers-governance.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
 	// #4133: the real pi child environment is the subject of this boundary test;
 	// keep it in the serialized real-harness lane.
 	"tests/real-harness/fixture-shape.test.ts",
+	// #4218/#4230: the real pi host must deliver the out-of-root advisory and
+	// ledger record, including the second edit and the pi-owned path exemptions.
+	"tests/real-harness/outside-root.test.ts",
 	// #3870: every detector test drives the analyzer's real CLI entry point
 	// (a real node subprocess) over redacted fixture logs (flake-shape admission).
 	"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
@@ -577,6 +604,7 @@ export const wallClockBudgetInclude = [
 	// admission).
 	"tests/scripts/lint-js.test.ts",
 	"tests/scripts/lockfile-completeness.test.ts",
+	"tests/scripts/lsp-idle-eviction-promote.test.ts",
 	// #4048: the mutation helper's real child and SIGINT restoration witness
 	// require a quiet serialized phase; its bounded timer and never-settling
 	// fixture are the process boundary under test (flake-shape admission).

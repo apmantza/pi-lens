@@ -7,7 +7,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
 import {
 	captureReadContentBinding,
@@ -49,6 +52,41 @@ describe("ReadGuard", () => {
 	beforeEach(() => {
 		fileTimeState.hasChanged = false;
 		vi.mocked(logReadGuardEvent).mockClear();
+	});
+	it("revokes an unseen blocked read without dropping delivered evidence", () => {
+		const filePath = "/tmp/blocked-read-release.ts";
+		const guard = createReadGuard("blocked-read-release-session");
+		// Recurrence: a later extension can block after the read tool_call, so no
+		// tool_result arrives; that unseen capture must not license an edit.
+		guard.recordRead(
+			createReadRecord(filePath, {
+				provisional: true,
+				source: "native-read:blocked-call:provisional",
+			}),
+		);
+		guard.recordRead(
+			createReadRecord(filePath, { toolCallId: "delivered-result" }),
+		);
+
+		expect(guard.dropProvisionalReadByCall("blocked-call")).toBe(true);
+		expect(guard.getReadHistory(filePath)).toEqual([
+			expect.objectContaining({ toolCallId: "delivered-result" }),
+		]);
+	});
+
+	it("releases every provisional capture at the turn boundary", () => {
+		const guard = createReadGuard("blocked-read-turn-end-session");
+		for (const [filePath, source] of [
+			["/tmp/a.ts", "native-read:a:provisional"],
+			["/tmp/b.ts", "native-read:b:provisional"],
+		] as const)
+			guard.recordRead(
+				createReadRecord(filePath, { provisional: true, source }),
+			);
+
+		expect(guard.dropProvisionalReads()).toBe(2);
+		expect(guard.getReadHistory("/tmp/a.ts")).toEqual([]);
+		expect(guard.getReadHistory("/tmp/b.ts")).toEqual([]);
 	});
 	it("supersedes only the correlated provisional native read", () => {
 		const filePath = "/tmp/native-read-identity.ts";
@@ -105,6 +143,25 @@ describe("ReadGuard", () => {
 		expect(guard.checkEdit(filePath, [2500, 2500]).action).toBe("block");
 	});
 	describe("content-binding supersession (#3962)", () => {
+		it("reports whether the newest full-file read still matches the file", () => {
+			const env = setupTestEnvironment("read-guard-last-content-");
+			try {
+				const filePath = path.join(env.tmpDir, "file.ts");
+				fs.writeFileSync(filePath, "const value = 1;\n");
+				const guard = createReadGuard("last-content-session");
+				const binding = captureReadContentBinding(filePath, 1, 100);
+				expect(binding?.fullFile).toBe(true);
+				guard.recordRead(
+					createReadRecord(filePath, { contentBinding: binding }),
+				);
+				expect(guard.contentMatchesLastRead(filePath)).toBe(true);
+				fs.writeFileSync(filePath, "const value = 2;\n");
+				expect(guard.contentMatchesLastRead(filePath)).toBe(false);
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		const before = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
 		const after = "const a = 99;\nconst b = 2;\nconst c = 3;\n";
 		const span20 = `${Array.from({ length: 20 }, (_, i) => `line${i + 1}`).join("\n")}\n`;
@@ -522,6 +579,103 @@ describe("ReadGuard", () => {
 						}),
 					}),
 				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// #4131, #4187 F10: the retirement is its own decision. Recurrence:
+		// round 1 logged it as `file_modified`, indistinguishable in
+		// read-guard.log from a FileTime block on a file the agent had read.
+		it("records an authorship another writer ended as authorship_retired, once", () => {
+			const env = setupTestEnvironment("read-guard-authorship-retired-");
+			resetDegradationLedger();
+			try {
+				const filePath = path.join(env.tmpDir, "authored.ts");
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				const guard = createReadGuard("test-session");
+				guard.recordWritten(filePath, { toolCallId: "call_bash" });
+				// Another writer: different bytes (and size, so no same-tick stat tie).
+				fs.writeFileSync(filePath, "export const x = 22;\n");
+
+				expect(guard.checkEdit(filePath, [1, 1]).action).toBe("block");
+				expect(guard.checkEdit(filePath, [1, 1]).action).toBe("block");
+
+				const calls = vi
+					.mocked(logReadGuardEvent)
+					.mock.calls.map(([entry]) => entry);
+				expect(
+					calls.filter((entry) => entry.event === "authorship_retired"),
+				).toEqual([
+					expect.objectContaining({
+						filePath: normalizeFilePath(filePath),
+						metadata: expect.objectContaining({
+							hashed: true,
+							toolCallId: "call_bash",
+						}),
+					}),
+				]);
+				expect(
+					calls
+						.filter((entry) => entry.event === "edit_blocked")
+						.map((entry) => entry.metadata?.reasonKind),
+				).toEqual(["authorship_retired", "authorship_retired"]);
+				// The pilens_health ledger row, counted once per retirement.
+				expect(
+					getDegradationSummary().find(
+						(group) => group.kind === "read-guard-authorship-retired",
+					),
+				).toMatchObject({
+					count: 1,
+					latestReasons: [
+						expect.objectContaining({
+							subject: normalizeFilePath(filePath),
+						}),
+					],
+				});
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// #4187 R2-4: a bridge write ends the authorship after the fact, so its
+		// row names the writer. Recurrence: without it, read-guard.log cannot
+		// tell a retirement a bridge write caused from one an edit check found.
+		it("records an authorship a bridge write ended as authorship_retired with its writer, once", () => {
+			const env = setupTestEnvironment("read-guard-authorship-bridge-");
+			resetDegradationLedger();
+			try {
+				const filePath = path.join(env.tmpDir, "authored.ts");
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				const guard = createReadGuard("test-session");
+				guard.recordWritten(filePath, { toolCallId: "call_bash" });
+				fs.writeFileSync(filePath, "export const x = 22;\n");
+				for (let call = 0; call < 2; call++)
+					guard.recordWritten(filePath, {
+						stampFileTime: false,
+						advanceAuthorship: false,
+					});
+
+				expect(
+					vi
+						.mocked(logReadGuardEvent)
+						.mock.calls.map(([entry]) => entry)
+						.filter((entry) => entry.event === "authorship_retired"),
+				).toEqual([
+					expect.objectContaining({
+						filePath: normalizeFilePath(filePath),
+						metadata: expect.objectContaining({
+							writer: "bridge",
+							toolCallId: "call_bash",
+						}),
+					}),
+				]);
+				expect(
+					getDegradationSummary().find(
+						(group) => group.kind === "read-guard-authorship-retired",
+					)?.count,
+				).toBe(1);
+				expect(guard.checkEdit(filePath, [1, 1]).action).toBe("block");
 			} finally {
 				env.cleanup();
 			}
@@ -2171,6 +2325,205 @@ describe("ReadGuard Tier-2 idle decay and bounds (#1389)", () => {
 		}
 	});
 
+	// #4210 F-4210-1: successive own credits must compose their produced
+	// ranges instead of dropping the first range and vouching for the file.
+	it("unions disjoint and overlapping successive own-credit ranges (#4210)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-union-");
+		try {
+			const filePath = path.join(env.tmpDir, "union.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-union");
+
+			fs.writeFileSync(filePath, "one\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[3, 3]],
+				allowFirstAuthorship: true,
+			});
+			fs.writeFileSync(filePath, "own\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				toolCallId: "call-own",
+				authoredRanges: [[1, 1]],
+			});
+			expect(guard.checkEdit(filePath, [2, 2]).action).toBe("block");
+			expect(guard.checkEdit(filePath, [3, 3]).action).toBe("allow");
+			expect(guard.checkEdit(filePath, [1, 1]).action).toBe("allow");
+
+			const overlapPath = path.join(env.tmpDir, "overlap.ts");
+			fs.writeFileSync(overlapPath, "one\ntwo\nthree\nfour\n");
+			const overlapGuard = createReadGuard("authorship-overlap");
+			fs.writeFileSync(overlapPath, "one\nowned\nbridge\nfour\n");
+			overlapGuard.recordWritten(overlapPath, {
+				stampFileTime: false,
+				authoredRanges: [[2, 3]],
+				allowFirstAuthorship: true,
+			});
+			fs.writeFileSync(overlapPath, "own\nowned-again\nbridge\nfour\n");
+			overlapGuard.recordWritten(overlapPath, {
+				stampFileTime: false,
+				toolCallId: "call-overlap",
+				authoredRanges: [[3, 3]],
+			});
+			expect(overlapGuard.checkEdit(overlapPath, [2, 2]).action).toBe("allow");
+
+			const wholePath = path.join(env.tmpDir, "whole.ts");
+			fs.writeFileSync(wholePath, "one\ntwo\nthree\nfour\n");
+			const wholeGuard = createReadGuard("authorship-whole");
+			fs.writeFileSync(wholePath, "one\nbridge\nthree\nfour\n");
+			wholeGuard.recordWritten(wholePath, {
+				stampFileTime: false,
+				authoredRanges: [[2, 2]],
+				allowFirstAuthorship: true,
+			});
+			fs.writeFileSync(wholePath, "own\nbridge\nthree\nfour\n");
+			wholeGuard.recordWritten(wholePath, {
+				stampFileTime: false,
+				toolCallId: "call-whole",
+				authorship: "partial",
+				authoredRanges: [[1, 1]],
+			});
+			expect(wholeGuard.checkEdit(wholePath, [4, 4]).action).toBe("block");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #4210 F-4210-2: a partial credit is a license only for the lines its
+	// writer produced. Recurrence: injectCreationRead widened the first
+	// allowed inside edit into a whole-file license.
+	it("keeps partial authorship narrow after an allowed inside edit (#4210)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-narrow-");
+		try {
+			const filePath = path.join(env.tmpDir, "narrow.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-narrow");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[2, 2]],
+				allowFirstAuthorship: true,
+			});
+
+			expect(guard.checkEdit(filePath, [4, 4]).action).toBe("block");
+			expect(guard.checkEdit(filePath, [2, 2]).action).toBe("allow");
+			expect(guard.checkEdit(filePath, [4, 4]).action).toBe("block");
+
+			const reverse = createReadGuard("authorship-narrow-reverse");
+			reverse.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[2, 2]],
+				allowFirstAuthorship: true,
+			});
+			expect(reverse.checkEdit(filePath, [2, 2]).action).toBe("allow");
+			expect(reverse.checkEdit(filePath, [4, 4]).action).toBe("block");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #4210 N3 recurrence: an observed licensed partial replay must not narrow
+	// an existing whole-file authorship to the replay's reported range.
+	it("keeps whole-file authorship when a licensed partial credit follows it (#4210 N3)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-whole-union-");
+		try {
+			const filePath = path.join(env.tmpDir, "whole-union.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-whole-union");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authorship: "whole-file",
+				allowFirstAuthorship: true,
+			});
+			fs.writeFileSync(filePath, "one\nobserved\nthree\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authorship: "partial",
+				authoredRanges: [[2, 2]],
+			});
+			expect(guard.checkEdit(filePath, [4, 4]).action).toBe("allow");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records unknown authored-range retirement distinctly", () => {
+		const env = setupTestEnvironment("read-guard-authorship-unknown-");
+		resetDegradationLedger();
+		try {
+			const filePath = path.join(env.tmpDir, "unknown.ts");
+			fs.writeFileSync(filePath, "one\ntwo\n");
+			const guard = createReadGuard("authorship-unknown");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[1, 1]],
+				allowFirstAuthorship: true,
+			});
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authorship: "unknown",
+			});
+			expect(guard.checkEdit(filePath, [1, 1]).action).toBe("block");
+			expect(
+				getDegradationSummary().find(
+					(group) => group.kind === "read-guard-authorship-retired",
+				)?.latestReasons[0]?.reason,
+			).toContain("authored range was unknown");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("drops malformed persisted authored ranges without throwing", () => {
+		const guard = createReadGuard("authorship-import-validation");
+		expect(() =>
+			guard.importAuthorship(
+				{
+					entries: [
+						{
+							filePath: "/tmp/malformed-authored-range.ts",
+							size: 1,
+							mtimeMs: 1,
+							ctimeMs: 1,
+							toolCallId: "call-import",
+							authoredRanges: [null],
+						},
+					],
+				},
+				new Set(["call-import"]),
+			),
+		).not.toThrow();
+	});
+
+	// #4210 F-4210-1: when a later own write changes line positions, the
+	// existing range cannot be remapped from AuthoredBytes, so retire that
+	// shifted scope rather than silently licensing the wrong line.
+	it("retires an authored range when a later own write shifts lines above it (#4210)", () => {
+		const env = setupTestEnvironment("read-guard-authorship-shift-");
+		try {
+			const filePath = path.join(env.tmpDir, "shift.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\n");
+			const guard = createReadGuard("authorship-shift");
+
+			fs.writeFileSync(filePath, "one\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				authoredRanges: [[3, 3]],
+				allowFirstAuthorship: true,
+			});
+			fs.writeFileSync(filePath, "inserted\none\ntwo\nbridge\nfour\n");
+			guard.recordWritten(filePath, {
+				stampFileTime: false,
+				toolCallId: "call-shift",
+				authoredRanges: [[1, 1]],
+			});
+
+			expect(guard.checkEdit(filePath, [3, 3]).action).toBe("block");
+			expect(guard.checkEdit(filePath, [1, 1]).action).toBe("allow");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("forgets the authorship of an idle-evicted file, so it needs a read again (#3520)", () => {
 		const env = setupTestEnvironment("read-guard-idle-authorship-");
 		vi.useFakeTimers();
@@ -2466,6 +2819,34 @@ describe("ReadGuard eviction-path telemetry (#1918)", () => {
 		expect(evictions.map(([entry]) => entry.filePath).sort()).toEqual(
 			[normalizeFilePath(firstPath), normalizeFilePath(secondPath)].sort(),
 		);
+	});
+
+	// #4187 R3-3: authorship-cap pressure is counted for every eviction, but
+	// read-guard.log gets only the rising-edge witness. Recurrence: one log row
+	// per over-cap file flooded the sink during a steady-state credit stream.
+	// #4187 R4-3 (T9b): one eviction proves nothing about the gate — a single
+	// row is also what an ungated `if (true)` emits — so this credits 104 files
+	// past the cap and pins 104 counted against ONE row.
+	it("counts authorship-cap evictions and logs only its rising edge", () => {
+		resetDegradationLedger();
+		const guard = createReadGuard("4187-authorship-cap-observability");
+		const overCap = 104;
+		for (let i = 0; i < 4096 + overCap; i += 1) {
+			const filePath = `/tmp/4187-authorship-cap-${i}.ts`;
+			guard.recordWritten(filePath);
+		}
+		const evictions = evictionEvents("read_file_evicted").filter(
+			([entry]) => entry.metadata?.reason === "authorship-cap",
+		);
+		expect(evictions).toHaveLength(1);
+		expect(evictions[0][0]).toMatchObject({
+			metadata: { reason: "authorship-cap", authorshipDropped: true },
+		});
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "read-guard-authorship-cap",
+			)?.count,
+		).toBe(overCap);
 	});
 
 	// #1918 review F3: pin session re-arm — the SAME file evicted twice within

@@ -43,6 +43,7 @@ function makeServer(id: string, ext = ".ts"): TestServer {
 		name: id,
 		extensions: [ext],
 		idleEviction: "transparent",
+		role: "language",
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({
 			process: {

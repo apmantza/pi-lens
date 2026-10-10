@@ -50,8 +50,10 @@ import {
 	type Disposition,
 } from "../clients/diagnostic-dispositions.js";
 import { insertSuppressComment } from "../clients/dispatch/suppress-writer.js";
+import { getMutationBridge } from "../clients/mutation-bridge.js";
 import { normalizeMapKey } from "../clients/path-utils.js";
 import { resolveLensToolName } from "../clients/tool-config.js";
+import type { LineageHandle } from "../clients/session-scope.js";
 import {
 	getFileDiagnostics,
 	type WidgetDiagnostic,
@@ -229,6 +231,7 @@ export function createLensDiagnosticMarkTool(
 	/** Runtime telemetry identity, when known (#1448 class sweep) — attributed
 	 * onto the disposition log alongside the mark. */
 	getIdentity?: () => { model?: string; provider?: string },
+	captureLineage?: () => LineageHandle,
 ) {
 	return {
 		name: "lens_diagnostic_mark" as const,
@@ -282,6 +285,7 @@ export function createLensDiagnosticMarkTool(
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
 		) {
+			const lineage = captureLineage?.();
 			const cwd = ctx.cwd ?? getCwd();
 			const filePathArg = params.filePath;
 			const line = params.line;
@@ -416,6 +420,19 @@ export function createLensDiagnosticMarkTool(
 					};
 				}
 				await fs.writeFile(absPath, updated, "utf-8");
+				getMutationBridge()?.recordMutation({
+					filePath: absPath,
+					kind: "edit",
+					editRanges: [[Math.max(1, verifiedLine - 1), verifiedLine]],
+					consumer: "lens_diagnostic_mark",
+					provenance: "observed",
+					...(lineage && { lineage }),
+					// #4187 R4-1: this suppress wrote the file its own `tool_call`
+					// checked, so it may advance that file's authorship. Without
+					// the id the guard cannot tell it from a write no call
+					// produced, and ends the authorship instead.
+					toolCallId: _toolCallId,
+				});
 			}
 
 			const anchor = markDisposition(

@@ -18,6 +18,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach } from "vitest";
 import { withTimeout } from "../../clients/deadline-utils.js";
+import { runHandlerExpectingNoThrow } from "./handler-verdict.js";
 
 /**
  * #3855: the session manager is pi's, not the ctx's. pi 1.0.4 hands a /reload
@@ -219,8 +220,10 @@ export interface PiMock {
 	 * each construct a FRESH session that way before the event is emitted. The
 	 * active tool set is never persisted per session, so every registered tool
 	 * is active again by the time pi-lens's handler runs. The mock preserves the
-	 * extension closure for every rebuild and does not re-run the factory. Real
-	 * pi re-runs the factory on reload, resume, fork, and new; the real-pi
+	 * extension closure for every rebuild and does not re-run the factory. Bound:
+	 * this mock does not re-run the extension factory and does not reproduce pi's
+	 * lifecycle ordering. Real pi re-runs the factory on reload, resume, fork,
+	 * and new; the real-pi
 	 * integration tests cover that boundary.
 	 * Call this to reproduce pi's `session_shutdown` then `session_start` order.
 	 */
@@ -300,11 +303,19 @@ export function createPiMock(
 			activeTools.add(tool.name);
 		},
 		on(event, handler) {
+			// `tool_call` is the one hook whose handler swallows a throw into a
+			// verdict (`handleToolCall`'s total guard), so every route to it
+			// (`emit`, `getHandlers`, `getHandlerOrThrow`, `handlers`) runs
+			// through the checker: a swallowed throw fails the awaiting test
+			// instead of reading as "no opinion" (#3518, recurrence #4182).
 			const boundedHandler: Hook =
 				event === "session_start"
 					? (payload, ctx) =>
 							runSessionStartWithBudget(() => handler(payload, ctx))
-					: handler;
+					: event === "tool_call"
+						? (payload, ctx) =>
+								runHandlerExpectingNoThrow(() => handler(payload, ctx))
+						: handler;
 			const list = handlers.get(event) ?? [];
 			list.push(boundedHandler);
 			handlers.set(event, list);
@@ -500,7 +511,8 @@ export function makeCtx(
 	};
 
 	// Only present when the test asked for it — an absent accessor is the
-	// "older host, no trust surface" case pi-lens must fail open on (#1334 S5).
+	// "older host, no trust surface" case; repository-owned LSP executables
+	// must fail closed without an explicit host grant (#1334 S5).
 	if (overrides.isProjectTrusted !== undefined) {
 		(ctx as Record<string, unknown>).isProjectTrusted = () =>
 			overrides.isProjectTrusted;

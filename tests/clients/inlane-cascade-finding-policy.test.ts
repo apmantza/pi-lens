@@ -86,8 +86,10 @@ vi.mock("../../clients/review-graph/service.js", async (importOriginal) => ({
 	formatImpactCascade: mocks.formatImpactCascade,
 }));
 
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: mocks.getLSPService,
 }));
 

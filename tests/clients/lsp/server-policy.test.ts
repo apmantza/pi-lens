@@ -1363,6 +1363,8 @@ describe("lsp server policy", () => {
 	it("keeps custom LSP config scoped per workspace", async () => {
 		const { getServersForFileWithConfig, initLSPConfig } =
 			await import("../../../clients/lsp/config.js");
+		const trust = await import("../../../clients/project-trust.js");
+		trust.setProjectTrustState("trusted");
 
 		const workspaceA = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-lsp-config-a-"),

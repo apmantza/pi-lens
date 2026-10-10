@@ -20,7 +20,7 @@ const { mockAuxiliaryLspPublished, fsSyncOverrides } = vi.hoisted(() => ({
 	},
 }));
 
-vi.mock("../../../../clients/lsp/index.js", () => ({
+vi.mock("../../../../clients/lsp/capabilities.js", () => ({
 	hasAuxiliaryLspPublishedForRoot: mockAuxiliaryLspPublished,
 }));
 
@@ -103,6 +103,7 @@ function mockWorkingSgLoad(): void {
 // the mock registry, so drop it after each case (#2883).
 afterEach(() => {
 	vi.doUnmock("@ast-grep/napi");
+	vi.doUnmock("../../../../clients/dispatch/ast-grep-catalog.js");
 });
 
 describe("ast-grep-napi runner — LSP supersede gate (#239 Phase 2)", () => {
@@ -363,6 +364,41 @@ describe("ast-grep-napi runner — skip paths", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+});
+
+describe("ast-grep-napi rule-policy scan admission", () => {
+	it("does not evaluate a rule on an ignored path", async () => {
+		vi.resetModules();
+		const findAll = vi.fn().mockReturnValue([]);
+		vi.doMock("../../../../clients/dispatch/ast-grep-catalog.js", () => ({
+			buildEffectiveAstGrepCatalog: () => {
+				const rule = {
+					id: "fake-rule",
+					language: "typescript",
+					severity: "warning",
+					rule: { pattern: "$X" },
+				};
+				return {
+					sources: [{ source: "test", rules: [rule] }],
+					effectiveRules: new Map([[rule.id, { rule }]]),
+				};
+			},
+		}));
+		const mod =
+			await import("../../../../clients/dispatch/runners/ast-grep-napi.js");
+		const result = mod.evaluateAstGrepRules(
+			"/fake/vendorish/file.ts",
+			{ findAll } as any,
+			"/fake",
+			"jsts",
+			{
+				projectRoot: "/fake",
+				rulePolicy: { "fake-rule": { ignorePaths: ["vendorish/**"] } },
+			},
+		);
+		expect(result).toEqual([]);
+		expect(findAll).not.toHaveBeenCalled();
 	});
 });
 

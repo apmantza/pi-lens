@@ -100,6 +100,33 @@ function state(): SessionLifecycleState {
  */
 export const SUCCESSOR_PENDING_TTL_MS = 60_000;
 
+/**
+ * How long an expired successor may still authorize forwarding its interrupted
+ * hand-off. A user can plausibly return to a fork/reload successor within a
+ * day; after that, retaining the marker and its slot would make ancient state
+ * look current forever.
+ */
+export const SUCCESSOR_HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The real-pi lifecycle lane cannot install Vitest's clock in its child
+ * process. Keep the production default fixed, while allowing that hermetic
+ * lane to shrink the wait through its explicitly test-only environment knob.
+ * `VITEST` is required because `PI_LENS_TEST_MODE=0` is user-settable.
+ */
+function successorPendingTtlMs(): number {
+	const raw = process.env.PI_LENS_TEST_SUCCESSOR_PENDING_TTL_MS;
+	if (
+		process.env.VITEST &&
+		process.env.PI_LENS_TEST_MODE === "0" &&
+		raw !== undefined
+	) {
+		const value = Number(raw);
+		if (Number.isFinite(value) && value >= 0) return value;
+	}
+	return SUCCESSOR_PENDING_TTL_MS;
+}
+
 /** The stable id of the currently registered primary session, if known. */
 export function getActiveSessionId(): string | undefined {
 	return state().activeSessionId;
@@ -679,6 +706,11 @@ export function decideSessionStart(
 	// and key, is the successor. A start with no reason fails safe to primary
 	// (#3662 F8); a marker without a name keeps #3662's rule.
 	const named = namedSuccessorOf(s);
+	// Observe expiry even when the named successor is the first later start:
+	// it remains primary, but the bounded degradation must disclose that the
+	// marker crossed its TTL before this start arrived.
+	if (!hasPrior && s.successorPendingSince !== undefined)
+		successorStillPending(s);
 	const notTheSuccessor =
 		named === undefined
 			? reason === "startup"
@@ -788,6 +820,29 @@ export function namedSuccessorReason(): string | undefined {
 		: undefined;
 }
 
+/**
+ * The replacement successor named by an expired marker, for the role-less
+ * shutdown of that successor's interrupted start. The marker no longer
+ * declines unrelated starts after expiry, but its identity still authorizes
+ * forwarding the existing activation slot to the successor's reload.
+ */
+export function expiredSuccessorReason(): string | undefined {
+	const s = state();
+	if (s.activeCtx !== undefined || s.activeSessionId !== undefined)
+		return undefined;
+	const named = namedSuccessorOf(s);
+	if (named === undefined || successorStillPending(s)) return undefined;
+	if (
+		s.successorPendingSince !== undefined &&
+		Date.now() - s.successorPendingSince >= SUCCESSOR_HANDOFF_TTL_MS
+	) {
+		s.successorPendingSince = undefined;
+		s.successorNamed = undefined;
+		return undefined;
+	}
+	return named.reason;
+}
+
 /** #3855: the successor the pending replacement named, when this build's
  *  release wrote it with the marker it stands beside. */
 function namedSuccessorOf(
@@ -802,13 +857,14 @@ function namedSuccessorOf(
  *  An expired marker records once and stops declining. */
 function successorStillPending(s: SessionLifecycleState): boolean {
 	if (s.successorPendingSince === undefined) return false;
-	if (Date.now() - s.successorPendingSince < SUCCESSOR_PENDING_TTL_MS) {
+	const ttlMs = successorPendingTtlMs();
+	if (Date.now() - s.successorPendingSince < ttlMs) {
 		return true;
 	}
 	recordDegradationOnce({
 		kind: "session-successor-pending",
 		subject: "expired",
-		reason: `no successor session_start within ${SUCCESSOR_PENDING_TTL_MS}ms of a primary replacement shutdown; a startup start classifies primary again`,
+		reason: `no successor session_start within ${ttlMs}ms of a primary replacement shutdown; a startup start classifies primary again`,
 	});
 	return false;
 }

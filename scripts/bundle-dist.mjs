@@ -69,12 +69,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	buildIsolatedExecInvocation,
 	createIsolatedExecPrefix,
+	readLockedToolVersion,
 } from "./lib/exec-isolation.mjs";
 import { BUNDLE_EXTERNALS } from "./lib/host-provided-deps.mjs";
 
-const ESBUILD_VERSION = "0.28.1";
-
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ESBUILD_VERSION = readLockedToolVersion({ root, packageName: "esbuild" });
 const distEntry = path.join(root, "dist", "index.js");
 const tmpOut = path.join(root, "dist", "index.bundled.mjs");
 const splitOutDir = path.join(root, "dist", ".bundle-split");

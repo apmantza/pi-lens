@@ -81,11 +81,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	buildIsolatedExecInvocation,
 	createIsolatedExecPrefix,
+	readLockedToolVersion,
 } from "./lib/exec-isolation.mjs";
 
-const TSC_VERSION = "7.0.2";
-
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const TSC_VERSION = readLockedToolVersion({ root, packageName: "typescript" });
 
 // npm's own CLI, set by npm when it runs this via `npm run build:dist` — see
 // scripts/bundle-dist.mjs's identical check for the full rationale. Only
@@ -157,13 +157,12 @@ export function resolveLocalTsc({ root: rootDir, version }) {
  * `node node_modules/typescript/bin/tsc --version` prints the pinned
  * version on every platform this runs on today.
  *
- * @param {{ localTscBin: string | null, root: string, version: string, npmCli: string, execPrefix?: string, tsconfigProject: string }} args
+ * @param {{ localTscBin: string | null, root: string, npmCli: string, execPrefix?: string, tsconfigProject: string }} args
  * @returns {{ command: string, argv: string[], options: { cwd: string, stdio: "inherit" } }}
  */
 export function planTscInvocation({
 	localTscBin,
 	root: rootDir,
-	version,
 	npmCli: npmCliPath,
 	execPrefix,
 	tsconfigProject,
@@ -179,7 +178,7 @@ export function planTscInvocation({
 		npmCli: npmCliPath,
 		execPrefix,
 		cwd: rootDir,
-		packageSpec: `typescript@${version}`,
+		packageSpec: `typescript@${TSC_VERSION}`,
 		execArgv: ["tsc", "--project", tsconfigProject, "--noCheck"],
 	});
 }
@@ -227,7 +226,6 @@ export function main() {
 		const { command, argv, options } = planTscInvocation({
 			localTscBin,
 			root,
-			version: TSC_VERSION,
 			npmCli,
 			execPrefix,
 			tsconfigProject,

@@ -76,8 +76,25 @@
 (* PeerStuck lets the other process hold the lock and never release: a     *)
 (* holder the lease cannot clear (a filesystem error, or a stream of       *)
 (* writers that keeps winning the lock, README).                           *)
-(* SharedSec adds a second declined secondary per session on the same     *)
-(* root Sec[s], live until the session ends (#3849: the entry is a set).   *)
+(* SharedSec adds three holders of one more secondary root "T" (#3849),  *)
+(* each a declined secondary activation with its own holder id: holders 1 *)
+(* and 2 queue `registerInstanceRoot(T, h)` and later their shutdown's    *)
+(* `deregisterInstanceRoot(T, h)`; holder 3 is the reload-gap subagent    *)
+(* that never registered T and only shuts down. Holders are not tied to a *)
+(* primary session, so one can outlive the primary's reload (whole-entry  *)
+(* removal, then a new registration). `Evict` is the 32-root cap evicting *)
+(* T inside some other root's registering write. `rec[h]` is holder h's   *)
+(* durable record listing T (projectRootHolders). The fix's parts:        *)
+(*  - "holderSet": a removal ends only its holder's own record, and drops  *)
+(*    T only when that record listed T (otherwise it writes nothing);      *)
+(*  - "holderOthers": ... and only when no other record lists T;           *)
+(*  - "holderEvict": a cap eviction ends every record of the evicted root  *)
+(*    in the same write.                                                   *)
+(* Without "holderSet" (the code before #3849) a removal drops T from the *)
+(* set; `rec` is then the ghost of each landed, not yet ended hold.        *)
+(* The SharedSec configs leave out the heartbeat, the LSP spawn and the    *)
+(* session-tied secondary (T1, T2): none of them writes "T" or a holder    *)
+(* record, and the other configs cover their interleavings.               *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences
 
@@ -85,16 +102,20 @@ CONSTANTS
     Contention,        \* another pi process may hold the registry lock
     HbRepair,          \* the #3447 heartbeat re-registration exists
     ClearIntent,       \* deregisterInstance clears the intent (#3447 guard)
-    FixParts,          \* subset of {"generation","child","rootIntent","retry"}
+    FixParts,          \* subset of {"generation","child","rootIntent","retry",
+                       \*            "holderSet","holderOthers","holderEvict"}
     RootRemoval,       \* "off"|"sync"|"syncQueued"|"syncAlways"|"asyncBounded"|"queued"
     Teardown,          \* "off"|"kill"|"join"|"bounded"
     PeerStuck,         \* the other process may hold the lock and never release
     Reaper,            \* the reaper may prune dead pids, off the tail, in this process
-    SharedSec          \* a second secondary per session shares Sec[s] and never shuts down (#3849)
+    SharedSec          \* holders 1..3 of the shared secondary root "T" (#3849)
 
 Root == [s \in 1..2 |-> IF s = 1 THEN "A" ELSE "B"]
 Sec == [s \in 1..2 |-> IF s = 1 THEN "T1" ELSE "T2"]
-Roots == {"A", "B", "T1", "T2"}
+Roots == {"A", "B", "T1", "T2", "T"}
+\* The shared secondary root and its holders (#3849); holder 3 never registers.
+Holders == 1..3
+NoRec == [h \in Holders |-> FALSE]
 None == "none"
 
 VARIABLES
@@ -115,20 +136,26 @@ VARIABLES
     stuck,      \* the other process holds the lock and never releases
     td,         \* teardown pc: "run" | "join" | "done"
     rpPc,       \* the reaper's own prune: "idle" | "acq" | "held" | "done"
-    xs          \* per session: second holder of Sec[s]: none | queued | held
+    hs,         \* per holder of "T": "none" | "started" | "stopped"
+    rec         \* per holder of "T": its durable record lists "T" (#3849)
 
 \* The variables the original model had no part in: every pre-existing
-\* action leaves them alone.
-aux == <<secReg, rmLanded, stuck, td, rpPc, xs>>
+\* action leaves them alone, except that a whole-entry removal ends every
+\* holder record with the entry (aux0 leaves `rec` out for those).
+aux0 == <<secReg, rmLanded, stuck, td, rpPc, hs>>
+aux == <<aux0, rec>>
 
 vars == <<sess, live, entry, intent, tail, tpc, lock, hbPc, hbMissing,
-          spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc, xs>>
+          spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc, hs, rec>>
 
 GenGuard == "generation" \in FixParts
 ChildGate == "child" \in FixParts
 RootGate == "rootIntent" \in FixParts
 Retry == "retry" \in FixParts
 GenOn == GenGuard \/ ChildGate \/ RootGate
+HolderSet == "holderSet" \in FixParts
+HolderOthers == "holderOthers" \in FixParts
+HolderEvict == "holderEvict" \in FixParts
 
 SecOn == RootRemoval # "off"
 SyncRoot == RootRemoval \in {"sync", "syncQueued", "syncAlways"}
@@ -141,6 +168,9 @@ DeregOp     == Op("dereg", None, 0)
 \* deregisterInstanceRoot: `root` is the primary it re-arms the intent to,
 \* `sec` the secondary's own root it removes, `s` the session it belongs to.
 RootOp(s, g) == [kind |-> "root", root |-> Root[s], gen |-> g, sec |-> Sec[s], s |-> s]
+\* registerInstanceRoot("T", h) ("hadd") and deregisterInstanceRoot("T", h)
+\* ("hrm") of holder h (#3849).
+HolderOp(k, h, g) == [kind |-> k, root |-> "T", gen |-> g, h |-> h]
 
 TypeOK ==
     /\ sess \in 0..2
@@ -159,7 +189,8 @@ TypeOK ==
     /\ stuck \in BOOLEAN
     /\ td \in {"run", "join", "done"}
     /\ rpPc \in {"idle", "acq", "held", "done"}
-    /\ xs \in [1..2 -> {"none", "queued", "held"}]
+    /\ hs \in [Holders -> {"none", "started", "stopped"}]
+    /\ rec \in [Holders -> BOOLEAN]
 
 Init ==
     /\ sess = 0
@@ -179,7 +210,8 @@ Init ==
     /\ stuck = FALSE
     /\ td = "run"
     /\ rpPc = "idle"
-    /\ xs = [s \in 1..2 |-> "none"]
+    /\ hs = [h \in Holders |-> "none"]
+    /\ rec = NoRec
 
 (* ---------------- host ---------------- *)
 
@@ -197,42 +229,61 @@ Shutdown ==
     /\ intent' = IF ClearIntent THEN None ELSE intent
     /\ gen' = IF GenOn THEN gen + 1 ELSE gen
     /\ \/ /\ lock = "none"                       \* lock free: removed
-          /\ entry' = {}
+          /\ entry' = {} /\ rec' = NoRec
           /\ UNCHANGED tail
        \/ /\ lock = "other" /\ ~stuck            \* the other process released
-          /\ entry' = {}                         \* inside the 500 ms spin
+          /\ entry' = {} /\ rec' = NoRec         \* inside the 500 ms spin
           /\ UNCHANGED tail
        \/ /\ lock # "none"                       \* removal skipped: own hold
                                                  \* (no wait) or timeout
-          /\ UNCHANGED entry
+          /\ UNCHANGED <<entry, rec>>
           /\ tail' = IF Retry THEN Append(tail, DeregOp) ELSE tail
-    /\ UNCHANGED <<sess, tpc, lock, hbPc, hbMissing, spawned, secDone, aux>>
+    /\ UNCHANGED <<sess, tpc, lock, hbPc, hbMissing, spawned, secDone, aux0>>
 
 \* `void recordLspChild({..., sessionIdentity: {projectRoot: cwd}})`.
 LspSpawn(s) ==
-    /\ live /\ sess = s /\ ~spawned[s]
+    /\ ~SharedSec /\ live /\ sess = s /\ ~spawned[s]
     /\ spawned' = [spawned EXCEPT ![s] = TRUE]
     /\ tail' = Append(tail, Op("child", Root[s], gen))
     /\ UNCHANGED <<sess, live, entry, intent, tpc, lock, hbPc, hbMissing, secDone, gen, aux>>
 
 \* A declined secondary's start: `void registerInstanceRoot(cwd)`.
 SecondaryStart(s) ==
-    /\ SecOn /\ live /\ sess = s /\ ~secReg[s]
+    /\ SecOn /\ ~SharedSec /\ live /\ sess = s /\ ~secReg[s]
     /\ secReg' = [secReg EXCEPT ![s] = TRUE]
     /\ tail' = Append(tail, Op("radd", Sec[s], gen))
     /\ UNCHANGED <<sess, live, entry, intent, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, rmLanded, stuck, td, rpPc, xs>>
+                   spawned, secDone, gen, rmLanded, stuck, td, rpPc, hs, rec>>
 
-\* A SECOND declined secondary of session s on the same root Sec[s] (#3849):
-\* it queues its own registerInstanceRoot and lives until the session ends.
-\* The entry holds roots as a set with no count, so the first secondary's
-\* removal drops the root this one still serves.
-SecondaryStart2(s) ==
-    /\ SharedSec /\ live /\ sess = s /\ xs[s] = "none"
-    /\ xs' = [xs EXCEPT ![s] = "queued"]
-    /\ tail' = Append(tail, Op("radx", Sec[s], gen))
+\* A holder of "T" starts (#3849): `void registerInstanceRoot(T, h)`, any
+\* time after the first primary start, including the reload gap. Holder 3
+\* is the reload-gap subagent that never registers.
+HolderStart(h) ==
+    /\ SharedSec /\ h # 3 /\ sess >= 1 /\ hs[h] = "none"
+    /\ hs' = [hs EXCEPT ![h] = "started"]
+    /\ tail' = Append(tail, HolderOp("hadd", h, gen))
     /\ UNCHANGED <<sess, live, entry, intent, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc, rec>>
+
+\* A holder's shutdown: `void deregisterInstanceRoot(T, h)`, queued behind
+\* its own add. Holder 3 shuts down without ever having started an add.
+HolderStop(h) ==
+    /\ SharedSec /\ sess >= 1
+    /\ \/ hs[h] = "started"
+       \/ (h = 3 /\ hs[h] = "none")
+    /\ hs' = [hs EXCEPT ![h] = "stopped"]
+    /\ tail' = Append(tail, HolderOp("hrm", h, gen))
+    /\ UNCHANGED <<sess, live, entry, intent, tpc, lock, hbPc, hbMissing,
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc, rec>>
+
+\* The 32-root cap evicts "T" inside some other root's registering write
+\* (#3849): "holderEvict" ends every record of T in that same write.
+Evict ==
+    /\ SharedSec /\ "T" \in entry
+    /\ entry' = entry \ {"T"}
+    /\ rec' = IF HolderSet /\ ~HolderEvict THEN rec ELSE NoRec
+    /\ UNCHANGED <<sess, live, intent, tail, tpc, lock, hbPc, hbMissing,
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, rpPc, hs>>
 
 \* A declined secondary's `deregisterInstanceRoot(tempRoot)`. Its own start
 \* was queued first (the shutdown follows the start), so the removal lands
@@ -251,7 +302,7 @@ OtherAcquire ==
     /\ lock' = "other"
     /\ stuck' \in (IF PeerStuck THEN BOOLEAN ELSE {FALSE})
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, hbPc, hbMissing, spawned, secDone, gen,
-                   secReg, rmLanded, td, rpPc, xs>>
+                   secReg, rmLanded, td, rpPc, hs, rec>>
 
 OtherRelease ==
     /\ lock = "other" /\ ~stuck
@@ -305,12 +356,12 @@ RootSyncAttempt ==
                THEN /\ tpc' = "acq" /\ UNCHANGED tail
                ELSE /\ tail' = Tail(tail) /\ UNCHANGED tpc
        \/ /\ lock # "none" /\ ~(lock = "other" /\ ~stuck)
-          /\ UNCHANGED <<entry, intent, rmLanded, xs>>
+          /\ UNCHANGED <<entry, intent, rmLanded>>
           /\ IF RootRemoval = "sync"
                THEN /\ tail' = Tail(tail) /\ UNCHANGED tpc
                ELSE /\ tpc' = "acq" /\ UNCHANGED tail
     /\ UNCHANGED <<sess, live, lock, hbPc, hbMissing, spawned, secDone, gen,
-                   secReg, stuck, td, rpPc, xs>>
+                   secReg, stuck, td, rpPc, hs, rec>>
 
 TailAcquire ==
     /\ tpc = "acq" /\ lock = "none"
@@ -323,7 +374,7 @@ TailAcquire ==
 TailTimeout ==
     /\ tpc = "acq" /\ lock \notin {"none", "tail"}
     /\ Op1.kind # "dereg"
-    /\ ~(Op1.kind = "root" /\ RootWaits)
+    /\ ~(Op1.kind \in {"root", "hrm"} /\ RootWaits)
     /\ tail' = Tail(tail) /\ tpc' = "idle"
     /\ UNCHANGED <<sess, live, entry, intent, lock, hbPc, hbMissing, spawned, secDone, gen, aux>>
 
@@ -339,6 +390,16 @@ Stale == Op1.gen # gen
 \*  - "root" drops the secondary's root (RootRemoval # "off") and re-arms the
 \*    intent to the root the entry still holds; fix "rootIntent" skips the
 \*    intent write once stale.
+\*  - "hadd" adds "T" and holder h's record to an existing entry, never
+\*    creating one; "hrm" ends holder h's record and drops "T" per
+\*    HolderDrops. "dereg" ends every record with the entry.
+\* Whether a holder's removal drops "T" (#3849). Before the fix the entry is
+\* a set, so it always does.
+HolderDrops ==
+    IF ~HolderSet THEN TRUE
+    ELSE /\ rec[Op1.h]
+         /\ (~HolderOthers \/ ~\E k \in Holders \ {Op1.h} : rec[k])
+
 TailWrite ==
     /\ tpc = "held"
     /\ entry' = CASE Op1.kind = "dereg" -> {}
@@ -346,22 +407,25 @@ TailWrite ==
                         IF GenGuard /\ Stale THEN entry ELSE entry \cup {Op1.root}
                   [] Op1.kind = "child" ->
                         IF entry # {} \/ (ChildGate /\ Stale) THEN entry ELSE {Op1.root}
-                  [] Op1.kind \in {"radd", "radx"} ->
+                  [] Op1.kind \in {"radd", "hadd"} ->
                         IF entry # {} THEN entry \cup {Op1.root} ELSE entry
                   [] Op1.kind = "root" /\ SecOn -> entry \ {Op1.sec}
+                  [] Op1.kind = "hrm" ->
+                        IF HolderDrops THEN entry \ {"T"} ELSE entry
                   [] OTHER -> entry
+    /\ rec' = CASE Op1.kind = "dereg" -> NoRec
+                [] Op1.kind = "hadd" /\ entry # {} -> [rec EXCEPT ![Op1.h] = TRUE]
+                [] Op1.kind = "hrm" -> [rec EXCEPT ![Op1.h] = FALSE]
+                [] OTHER -> rec
     /\ intent' = IF RootApplies THEN Op1.root ELSE intent
     /\ rmLanded' = IF Op1.kind = "root" THEN RootLanded ELSE rmLanded
-    /\ xs' = IF Op1.kind = "radx" /\ entry # {}
-               THEN [s \in 1..2 |-> IF Sec[s] = Op1.root THEN "held" ELSE xs[s]]
-               ELSE xs
     /\ lock' = "none" /\ tpc' = "idle" /\ tail' = Tail(tail)
-    /\ UNCHANGED <<sess, live, hbPc, hbMissing, spawned, secDone, gen, secReg, stuck, td, rpPc>>
+    /\ UNCHANGED <<sess, live, hbPc, hbMissing, spawned, secDone, gen, secReg, stuck, td, rpPc, hs>>
 
 (* ---------------- heartbeat ---------------- *)
 
 HbStart(s) ==
-    /\ live /\ sess = s /\ hbPc[s] = "idle"
+    /\ ~SharedSec /\ live /\ sess = s /\ hbPc[s] = "idle"
     /\ hbPc' = [hbPc EXCEPT ![s] = "acq"]
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, lock, hbMissing, spawned, secDone, gen, aux>>
 
@@ -404,19 +468,19 @@ ReaperStart ==
     /\ Reaper /\ rpPc = "idle"
     /\ rpPc' = "acq"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, td, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, hs, rec>>
 
 ReaperAcquire ==
     /\ rpPc = "acq" /\ lock = "none"
     /\ lock' = "reaper" /\ rpPc' = "held"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, td, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, hs, rec>>
 
 ReaperWrite ==
     /\ rpPc = "held"
     /\ lock' = "none" /\ rpPc' = "done"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, td, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, td, hs, rec>>
 
 (* ---------------- the test worker's teardown (#3703) ---------------- *)
 
@@ -435,14 +499,14 @@ TdBegin ==
     /\ Teardown # "off" /\ td = "run" /\ ~live /\ sess = 2
     /\ td' = IF Teardown = "kill" THEN "done" ELSE "join"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, hs, rec>>
 
 \* `_settleRegistryMutationsForTests` resolved: the join is over.
 TdJoined ==
     /\ td = "join" /\ Drained
     /\ td' = "done"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, hs, rec>>
 
 \* The real-time bound on the join ran out (the `[registry-settle]` line).
 TdGiveUp ==
@@ -450,7 +514,7 @@ TdGiveUp ==
     /\ lock \notin {"tail", "hb", "reaper"}
     /\ td' = "done"
     /\ UNCHANGED <<sess, live, entry, intent, tail, tpc, lock, hbPc, hbMissing,
-                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, xs>>
+                   spawned, secDone, gen, secReg, rmLanded, stuck, rpPc, hs, rec>>
 
 Step ==
     \/ Start \/ Shutdown
@@ -458,9 +522,11 @@ Step ==
     \/ TailBegin \/ RootSyncAttempt \/ TailAcquire \/ TailTimeout \/ TailWrite
     \/ TdBegin \/ TdJoined \/ TdGiveUp
     \/ ReaperStart \/ ReaperAcquire \/ ReaperWrite
+    \/ Evict
+    \/ \E h \in Holders : HolderStart(h) \/ HolderStop(h)
     \/ \E s \in 1..2 : \/ HbStart(s) \/ HbAcquire(s) \/ HbTimeout(s)
                        \/ HbWrite(s) \/ HbPost(s)
-                       \/ LspSpawn(s) \/ SecondaryStart(s) \/ SecondaryStart2(s)
+                       \/ LspSpawn(s) \/ SecondaryStart(s)
                        \/ SecondaryShutdown(s)
 
 \* The process has exited: nothing runs after it.
@@ -474,10 +540,10 @@ DeregQueued == \E i \in 1..Len(tail) : tail[i].kind = "dereg"
 
 \* A live secondary holds its root until it asks to drop it; once it has, the
 \* removal is queued or in flight (an op stays at the head until it lands).
-\* A second secondary on the same root (SharedSec) holds it until the session
-\* ends.
+\* "T" is held while any holder's record lists it (#3849).
 SecHeld(r) ==
-    \E s \in 1..2 : r = Sec[s] /\ live /\ sess = s /\ (~secDone[s] \/ xs[s] # "none")
+    \/ \E s \in 1..2 : r = Sec[s] /\ live /\ sess = s /\ ~secDone[s]
+    \/ r = "T" /\ \E h \in Holders : rec[h]
 RootOpPending(r) == \E i \in 1..Len(tail) : tail[i].kind = "root" /\ tail[i].sec = r
 
 \* A root the process no longer serves is never in its entry: an ended
@@ -516,9 +582,10 @@ RootRemovedOnce == \A s \in 1..2 : rmLanded[s] <= 1
 \* A join with no bound on a lock that never frees has none.
 TeardownProgress == (Teardown # "off" /\ td # "done") => ENABLED Step
 
-\* A root a landed add put in the entry stays in it while a secondary that
-\* holds it is live. The second secondary of SharedSec never shuts down inside
-\* the model, so its root must be in the entry until the session ends (#3849).
-SharedRootHeld ==
-    \A s \in 1..2 : (live /\ sess = s /\ xs[s] = "held") => Sec[s] \in entry
+\* The ownership rule (#3849): a root stays in the entry while any holder's
+\* record lists it. A record ends only by its holder's own removal, a
+\* whole-entry removal, or the cap evicting its root; so no other holder's
+\* removal, and no removal by a holder whose hold already ended (a reload,
+\* an eviction, an add that found no entry, or one never made), frees it.
+SharedRootHeld == \A h \in Holders : rec[h] => "T" \in entry
 =============================================================================

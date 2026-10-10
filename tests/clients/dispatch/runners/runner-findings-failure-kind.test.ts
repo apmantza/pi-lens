@@ -133,9 +133,9 @@ vi.mock("../../../../clients/go-client.js", async (importOriginal) => ({
 	goClient: { findGoPathAsync: async () => "/usr/local/bin/go" },
 }));
 
-vi.mock("../../../../clients/lsp/index.js", async (importOriginal) => ({
+vi.mock("../../../../clients/lsp/capabilities.js", async (importOriginal) => ({
 	...(await importOriginal<
-		typeof import("../../../../clients/lsp/index.js")
+		typeof import("../../../../clients/lsp/capabilities.js")
 	>()),
 	getLSPService: () =>
 		makeLspServiceDouble({
@@ -145,6 +145,7 @@ vi.mock("../../../../clients/lsp/index.js", async (importOriginal) => ({
 			touchFile: lspTouch,
 			getDiagnostics: async () => [],
 			codeAction: async () => [],
+			hasServerPublishedForFileRoot: async () => false,
 		}),
 }));
 

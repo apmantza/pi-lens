@@ -61,7 +61,11 @@
  * (`recordIOEntry` in `clients/io-bridge.ts`, injected as `deps.forward`), the
  * same body the mounted v2 bridge runs. There is no second v1 body.
  */
-import { registerProcessBridge } from "./process-bridge.js";
+import {
+	type BridgeActivation,
+	rebindableProcessBridgeDeps,
+	registerProcessBridge,
+} from "./process-bridge.js";
 import type {
 	BridgeEntry,
 	LineRange,
@@ -111,6 +115,7 @@ export interface ReadBridge {
 }
 
 interface BridgeDeps {
+	onUnavailable?: () => void;
 	/**
 	 * Return `true` when the entry should be forwarded to the read-guard.
 	 * Called on every `recordRead` invocation so flag / project-root changes
@@ -185,12 +190,33 @@ function delegatedRanges(entry: ReadBridgeEntry): LineRange[] {
 }
 
 /**
+ * Identity for a direct registration that does not name the activation its
+ * deps were built for (unit tests). A real activation passes the live
+ * `RuntimeCoordinator`, so a fresh module graph rebinds the shared deps cell
+ * (`rebindableProcessBridgeDeps`, #4169).
+ */
+const DEFAULT_ACTIVATION = Symbol("pi-lens:read-bridge-activation");
+
+/**
  * Mount the bridge singleton. Call once from inside the extension factory
  * (protected by the `_readBridgeRegistered` module-level flag). Subsequent
  * calls are no-ops (first-wins, `clients/process-bridge.ts` owns the mount
  * body — see that module's header, #2437).
+ *
+ * `activation` is the identity the `deps` were built for. A call carrying a
+ * new one rebinds the shared deps cell, so a `/reload` that re-evaluates the
+ * module graph keeps the mounted bridge pointed at the live runtime (#4169).
  */
-export function registerReadBridge(deps: BridgeDeps): void {
+export function registerReadBridge(
+	deps: BridgeDeps,
+	activation: BridgeActivation = DEFAULT_ACTIVATION,
+): void {
+	const currentDeps = rebindableProcessBridgeDeps(
+		"read-bridge-deps",
+		1,
+		activation,
+		deps,
+	);
 	registerProcessBridge(READ_BRIDGE_KEY, (): ReadBridge => ({
 		version: 1 as const,
 		recordRead(entry: ReadBridgeEntry): void {
@@ -203,11 +229,16 @@ export function registerReadBridge(deps: BridgeDeps): void {
 			// near-match stale error rethrows as v1 did); delegating first would
 			// report "io-bridge" and swallow the rethrow inside the v2
 			// never-throw wrapper.
-			if (!deps.isRecordable(entry.filePath)) return;
+			const liveDeps = currentDeps();
+			if (!liveDeps) {
+				deps.onUnavailable?.();
+				return;
+			}
+			if (!liveDeps.isRecordable(entry.filePath)) return;
 
 			// The v2 body stamps the timestamp (Date.now()), the turn and write
 			// indexes, and the `bridge:<consumer>` provenance read-guard.log shows.
-			deps.forward({
+			liveDeps.forward({
 				filePath: entry.filePath,
 				...(entry.consumer !== undefined && { consumer: entry.consumer }),
 				read: {

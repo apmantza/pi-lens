@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatedPromise, starveBudget } from "../support/fault-injection.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
-vi.mock("../../clients/lsp/index.js", () => ({ getLSPService: vi.fn() }));
+vi.mock("../../clients/lsp/capabilities.js", () => ({
+	getLSPService: vi.fn(),
+}));
 
 const logLatencyMock = vi.fn();
 
@@ -26,7 +28,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { resyncLspFile } from "../../clients/pipeline.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { setAmbientAbortSignal } from "../../clients/safe-spawn.js";
 
 const getFlag = () => undefined;

@@ -18,6 +18,7 @@ import * as path from "node:path";
 import yaml from "../../deps/js-yaml.js";
 import { BoundedLruCache } from "../../bounded-cache.js";
 import { compareOrdinal } from "../../string-utils.js";
+import { recordDegradationOnce } from "../../degradation-ledger.js";
 
 // --- Types ---
 
@@ -183,7 +184,14 @@ function loadYamlRuleFiles(
 		const documents = content.split(/^---\s*$/m).filter((doc) => doc.trim());
 		for (const document of documents) {
 			const rule = parseSimpleYaml(document.trim());
-			if (!rule?.id) continue;
+			if (!rule?.id) {
+				recordDegradationOnce({
+					kind: "ast-grep-rule-invalid",
+					subject: file,
+					reason: "ast-grep rule could not be parsed",
+				});
+				continue;
+			}
 			if (severityFilter && rule.severity !== severityFilter) continue;
 			rules.push(rule);
 		}

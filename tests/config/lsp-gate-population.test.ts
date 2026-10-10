@@ -59,12 +59,6 @@ const FALLBACK_ADMISSIONS: readonly FallbackAdmission[] = [
 		reason: "no smoke fixture yet; lane C (#3311) adds it",
 		until: "#3311 lane C",
 	},
-	{
-		serverId: "docker-official",
-		reason:
-			"official docker-language-server is unmeasured and not installed on CI, so it has no smoke fixture yet (#3939)",
-		until: "#3939 follow-up",
-	},
 ];
 
 function fallbackPopulationIssues(
@@ -329,6 +323,10 @@ describe("LSP clean-gate population (#3217)", () => {
 			expect(fixture.expectServerId, `${fixture.lang} expected server`).toBe(
 				fixture.serverId,
 			);
+			// The preferred Docker fixture deliberately leaves its fallback
+			// enabled now that fallback-family grouping is measured separately;
+			// acquisition still launches only the preferred member when it works.
+			if (fixture.lang === "dockerfile") continue;
 			expect(
 				fixture.disableServers,
 				`${fixture.lang} must disable fallback siblings`,
@@ -353,7 +351,7 @@ describe("LSP clean-gate population (#3217)", () => {
 		).toEqual([
 			"elixir is an unlabelled fallback-family row",
 			"elixir is neither pinned by a fixture nor admitted",
-			"fallback fixture count 7 !== registry members minus admissions 8",
+			"fallback fixture count 8 !== registry members minus admissions 9",
 		]);
 	});
 

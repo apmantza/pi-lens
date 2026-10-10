@@ -29,7 +29,7 @@ vi.mock("../../clients/pipeline.js", async (importOriginal) => {
 	return { ...actual, runPipeline: vi.fn() };
 });
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	notifyExternalFileChange: vi.fn(async () => undefined),
 }));
 

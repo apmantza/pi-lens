@@ -50,7 +50,11 @@ import {
 	type ReadContentBinding,
 	type ReadRecord,
 } from "./read-guard.js";
-import { registerProcessBridge } from "./process-bridge.js";
+import {
+	type BridgeActivation,
+	rebindableProcessBridgeDeps,
+	registerProcessBridge,
+} from "./process-bridge.js";
 
 export {
 	IO_BRIDGE_SYMBOL,
@@ -64,7 +68,10 @@ export { getIOBridge } from "./io-bridge-contract.js";
 
 /** The read-guard surface the bridge drives. */
 export interface ReadGuardBridgeSurface {
-	recordRead(record: ReadRecord, opts?: { captureLineHashes?: boolean }): void;
+	recordRead(
+		record: ReadRecord,
+		opts?: { captureLineHashes?: boolean; stampFileTime?: boolean },
+	): void;
 	forgetPath(filePath: string): void;
 	hasKnownPath(filePath: string): boolean;
 }
@@ -106,12 +113,37 @@ export interface IOBridgeDeps extends MutationBridgeDeps {
 	};
 }
 
+/**
+ * Identity for a direct registration that does not name the activation its
+ * deps were built for (unit tests). A real activation passes the live
+ * `RuntimeCoordinator` (`deps.getRuntime()`), so a fresh module graph rebinds
+ * the shared deps cell (`rebindableProcessBridgeDeps`, #4169).
+ */
+const DEFAULT_ACTIVATION = Symbol("pi-lens:io-bridge-activation");
+
 /** Mount the bridge singleton. First-wins, `clients/process-bridge.ts` owns the body. */
-export function registerIOBridge(deps: IOBridgeDeps): void {
+export function registerIOBridge(
+	deps: IOBridgeDeps,
+	activation: BridgeActivation = DEFAULT_ACTIVATION,
+): void {
+	const currentDeps = rebindableProcessBridgeDeps(
+		"io-bridge-deps",
+		1,
+		activation,
+		deps,
+	);
 	registerProcessBridge(IO_BRIDGE_SYMBOL, (): PiLensIOBridge => ({
 		version: IO_BRIDGE_VERSION,
 		record(entry: BridgeEntry): RecordResult {
-			return recordIOEntry(entry, deps);
+			const liveDeps = currentDeps();
+			if (!liveDeps) {
+				deps.onUnavailable?.();
+				return {
+					read: { accepted: false, reason: "unavailable" },
+					mutate: { accepted: false, reason: "unavailable" },
+				};
+			}
+			return recordIOEntry(entry, liveDeps);
 		},
 	}));
 }
@@ -269,6 +301,14 @@ interface OneRangeRecord {
 	lineHashes?: LineHashMap;
 	contentBinding?: ReadContentBinding;
 	captureLineHashes: boolean;
+	/**
+	 * #3865: whether the read is evidence of every byte of the file: a disk
+	 * read of every line whose content binding covers the whole file, or the
+	 * zero-line read of an empty file. Only such a read moves the whole-file FileTime; a
+	 * range leaves it at its last whole-file stamp, and its hashes (and a
+	 * range binding) judge the lines it covered.
+	 */
+	wholeFile?: boolean;
 }
 
 function recordOneRange(
@@ -292,7 +332,10 @@ function recordOneRange(
 				contentBinding: args.contentBinding,
 			}),
 		},
-		{ captureLineHashes: args.captureLineHashes },
+		{
+			captureLineHashes: args.captureLineHashes,
+			stampFileTime: args.wholeFile === true,
+		},
 	);
 }
 
@@ -332,6 +375,7 @@ function recordZeroLineRead(ctx: ReadRecordContext): string | undefined {
 		turnIndex: ctx.turnIndex,
 		writeIndex: ctx.writeIndex,
 		captureLineHashes: false,
+		wholeFile: true,
 	});
 	return undefined;
 }
@@ -368,6 +412,10 @@ function recordRange(
 		recordOneRange(ctx.guard, {
 			...base,
 			...(binding !== undefined && { contentBinding: binding }),
+			// A whole-file binding hashes every byte, but only a read of every
+			// line delivered them all.
+			wholeFile:
+				binding?.fullFile === true && start === 1 && end >= binding.limit,
 		});
 		return undefined;
 	}

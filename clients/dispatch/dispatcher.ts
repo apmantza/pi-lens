@@ -68,7 +68,11 @@ import {
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 
-import { applyRulePolicy, rulePolicyMapFromConfig } from "./rule-policy.js";
+import {
+	applyRulePolicy,
+	resolvedRulePolicyMap,
+	rulePolicyMapFromConfig,
+} from "./rule-policy.js";
 import { getToolProfile } from "./tool-profile.js";
 import {
 	hasUsableResult,
@@ -341,6 +345,8 @@ export function createDispatchContext(
 	telemetryProvider?: string,
 	/** #3568: the session of a post-write dispatch, for its deferred runners. */
 	sessionGeneration?: GenerationHandle,
+	/** Stable session identity for deferred runner delivery. */
+	sessionId?: string,
 ): DispatchContext {
 	const absoluteFilePath = resolveRunnerPath(cwd, filePath);
 	const normalizedProjectRoot = normalizeMapKey(
@@ -373,6 +379,7 @@ export function createDispatchContext(
 				})
 			: undefined;
 	const projectConfig = loadPiLensProjectConfig(normalizedCwd);
+	const rulePolicy = resolvedRulePolicyMap(normalizedProjectRoot);
 
 	return {
 		filePath: normalizedFilePath,
@@ -387,10 +394,12 @@ export function createDispatchContext(
 		deltaMode: !pi.getFlag("no-delta"),
 		facts,
 		projectConfig,
+		rulePolicy,
 		blockingOnly,
 		modifiedRanges,
 		writeIndex,
 		sessionGeneration,
+		sessionId,
 		telemetryModel,
 		telemetryProvider,
 		toolCwdMemo: {},
@@ -751,13 +760,19 @@ function buildCoverageNotice(
 		"fact-rules",
 		"opengrep",
 	]);
-	const anyLinterHasCoverage = runnerLatencies.some(
+
+	// These fallback runners provide type coverage when the primary group is
+	// unavailable. Keep this explicit until runner metadata owns this capability.
+	const TYPE_CAPABLE_FALLBACK_RUNNERS = new Set(["mypy"]);
+	const anyFallbackHasCoverage = runnerLatencies.some(
 		(r) =>
 			fallbackRunnerIds.has(r.runnerId) &&
 			!STRUCTURAL_RUNNERS.has(r.runnerId) &&
-			hasUsableResult(r),
+			hasUsableResult(r) &&
+			(!plan?.capabilities.includes("types") ||
+				TYPE_CAPABLE_FALLBACK_RUNNERS.has(r.runnerId)),
 	);
-	if (anyLinterHasCoverage) return undefined;
+	if (anyFallbackHasCoverage) return undefined;
 
 	const onceKey = `${ctx.kind}:${ctx.filePath}`;
 	if (dedupe) {
@@ -1063,6 +1078,7 @@ async function runGroup(
 				writeIndex: ctx.writeIndex,
 				promise: deferred,
 				session: ctx.sessionGeneration,
+				sessionId: ctx.sessionId,
 			});
 			// A deferred runner is still an observed runner. Keep it visible in
 			// both the edit latency report and the widget until its turn-end result
@@ -1371,9 +1387,11 @@ export async function dispatchForFile(
 	// the same root here keeps the two surfaces in agreement. `ctx.projectConfig`
 	// itself is untouched — thresholds and mutation flags keep their existing
 	// language-root resolution.
-	const rulePolicy = rulePolicyMapFromConfig(
-		loadPiLensProjectConfig(ctx.projectRoot ?? ctx.cwd).rules,
-	);
+	const rulePolicy =
+		ctx.rulePolicy ??
+		rulePolicyMapFromConfig(
+			loadPiLensProjectConfig(ctx.projectRoot ?? ctx.cwd).rules,
+		);
 	// The output-only filter pipeline: LSP/docker overlap suppression + inline
 	// `pi-lens-ignore` + agent/user dispositions + project rule policy. Applied
 	// AFTER dedupe so the pi renderer, widget, and delta all see one filtered
@@ -1404,7 +1422,10 @@ export async function dispatchForFile(
 			ctx.filePath,
 			fileContent,
 		);
-		return applyRulePolicy(disposition, rulePolicy);
+		return applyRulePolicy(disposition, rulePolicy, {
+			root: ctx.projectRoot ?? ctx.cwd,
+			filePath: ctx.filePath,
+		});
 	};
 	let visibleDiagnostics = applyOutputFilters(dedupedDiagnostics);
 	let resolvedCount = 0;

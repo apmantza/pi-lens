@@ -1,0 +1,14 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "pi_lens_activate_tools",
+			"id": "lifecycle-activate",
+			"arguments": { "tools": ["ast_grep_search"] }
+		}
+	],
+	[{ "type": "text", "text": "reload" }],
+	[{ "type": "text", "text": "new session" }],
+	[{ "type": "text", "text": "resumed session" }],
+	[{ "type": "text", "text": "forked session" }]
+]

@@ -172,6 +172,230 @@ describe("automatic test-runner delivery (#2366)", () => {
 		}
 	});
 
+	it("delivers a stale verdict with its edit gap and re-queues a run for the current file (#2542)", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const sourceFile = path.join(env.tmpDir, "src/app.ts");
+			const testFile = path.join(env.tmpDir, "app.test.ts");
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			cache.writeCache(
+				"test-runner-findings",
+				{
+					content: "FAIL app.test.ts",
+					testRunGeneration: 1,
+					verdicts: [
+						{
+							file: testFile,
+							sourceFile,
+							runner: "vitest",
+							fileSeq: { state: "known", value: 1 },
+						},
+					],
+				},
+				env.tmpDir,
+			);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			// Two later edits: the delivery gap is 2, and the run is for a file
+			// state the agent has moved past.
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			const findings = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+
+			expect(findings?.messages[0]?.content).toContain(
+				`verdict for an older version of ${sourceFile} (2 edits ago); re-running`,
+			);
+			expect(findings?.messages[0]?.content).toContain("FAIL app.test.ts");
+			// The re-queue rides the deferred-target list the next turn_end
+			// dispatches first, stamped to the session that saw the verdict.
+			expect(
+				cache.readCache<{
+					deferredTargets?: Array<Record<string, unknown>>;
+				}>("test-runner-findings", env.tmpDir)?.data.deferredTargets,
+			).toEqual([
+				expect.objectContaining({
+					testFile,
+					sourceFile,
+					runner: "vitest",
+					sessionId: "session-a",
+				}),
+			]);
+			expect(logLatency).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "test_runner_verdict_delivery",
+					metadata: expect.objectContaining({
+						staleCount: 1,
+						staleGaps: [2],
+						rerunQueued: 1,
+					}),
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("delivers a current verdict unchanged and queues nothing (#2542)", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const sourceFile = path.join(env.tmpDir, "src/fresh.ts");
+			const testFile = path.join(env.tmpDir, "fresh.test.ts");
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			cache.writeCache(
+				"test-runner-findings",
+				{
+					content: "FAIL fresh.test.ts",
+					testRunGeneration: 1,
+					verdicts: [
+						{
+							file: testFile,
+							sourceFile,
+							runner: "vitest",
+							fileSeq: { state: "known", value: 1 },
+						},
+					],
+				},
+				env.tmpDir,
+			);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			const findings = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+
+			expect(findings?.messages[0]?.content).not.toContain(
+				"verdict for an older version of",
+			);
+			expect(
+				cache.readCache<{ deferredTargets?: unknown }>(
+					"test-runner-findings",
+					env.tmpDir,
+				)?.data.deferredTargets,
+			).toBeUndefined();
+			expect(logLatency).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "test_runner_verdict_delivery",
+					metadata: expect.objectContaining({
+						staleCount: 0,
+						rerunQueued: 0,
+					}),
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("delivers an unknown-sequence verdict unchanged and queues nothing (#2542)", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const sourceFile = path.join(env.tmpDir, "src/legacy.ts");
+			const testFile = path.join(env.tmpDir, "legacy.test.ts");
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			cache.writeCache(
+				"test-runner-findings",
+				{
+					content: "FAIL legacy.test.ts",
+					testRunGeneration: 1,
+					// A runner is present: the unknown sequence, not a missing runner,
+					// is what must keep this verdict out of the re-queue.
+					verdicts: [{ file: testFile, sourceFile, runner: "vitest" }],
+				} as never,
+				env.tmpDir,
+			);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			runtime.recordProjectMutation({
+				filePath: sourceFile,
+				source: "agent-edit",
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			const findings = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+
+			expect(findings?.messages[0]?.content).not.toContain(
+				"verdict for an older version of",
+			);
+			expect(
+				cache.readCache<{ deferredTargets?: unknown }>(
+					"test-runner-findings",
+					env.tmpDir,
+				)?.data.deferredTargets,
+			).toBeUndefined();
+			expect(logLatency).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "test_runner_verdict_delivery",
+					metadata: expect.objectContaining({
+						staleCount: 0,
+						unknownCount: 1,
+						rerunQueued: 0,
+					}),
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("legacy verdict without file sequence is delivered as unknown through the real idle path", () => {
 		const { env, cache, runtime } = setup();
 		try {

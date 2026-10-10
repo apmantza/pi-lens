@@ -273,6 +273,20 @@ describe("probeServer verdicts (#3645)", () => {
 		expect(log.armCalls).toBe(0);
 	});
 
+	it("measures a fixture whose confirmed protocol result is empty", async () => {
+		const { row } = await run(
+			{
+				touches: () => [],
+			},
+			{ fixture: { allowEmptyBaseline: true } },
+		);
+		expect(row).toMatchObject({
+			result: "eligible",
+			coverage: "preserved",
+			respawn: "ok",
+		});
+	});
+
 	it("retries an empty baseline and uses the first attempt that reports something", async () => {
 		const { row, log } = await run({
 			touches: (n) => (n < 3 ? [] : [at(2, "late")]),

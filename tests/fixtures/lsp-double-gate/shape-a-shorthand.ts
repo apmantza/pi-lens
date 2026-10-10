@@ -8,6 +8,6 @@ const touchFile = vi.fn();
 const openFile = vi.fn();
 const supportsLSP = vi.fn(() => true);
 
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () => ({ supportsLSP, touchFile, openFile }),
 }));

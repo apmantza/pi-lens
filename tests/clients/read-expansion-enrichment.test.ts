@@ -4,6 +4,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 // #951 review finding 2: the read-path enrichment had no positive-path or
 // timeout coverage — every runtime-tool-call test mocked the warm client
@@ -41,7 +42,7 @@ const warmClient = {
 	},
 };
 const getWarmClientForFileMock = vi.fn();
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () =>
 		makeLspServiceDouble({ getWarmClientForFile: getWarmClientForFileMock }),
 	resetLSPService: () => {},
@@ -133,7 +134,9 @@ describe("read-expansion LSP enrichment (#158)", () => {
 				},
 			]);
 			const filePath = createTempFile(env.tmpDir, "src/hier.ts", SOURCE);
-			await handleToolCall(makeDeps(env.tmpDir, filePath));
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(makeDeps(env.tmpDir, filePath)),
+			);
 			const event = lastExpandedEvent();
 			expect(event).toBeDefined();
 			expect(event?.symbol).toBe("ReviewManager.runSynthesis");
@@ -187,7 +190,9 @@ describe("read-expansion LSP enrichment (#158)", () => {
 				},
 			]);
 			const filePath = createTempFile(env.tmpDir, "src/flat.ts", SOURCE);
-			await handleToolCall(makeDeps(env.tmpDir, filePath));
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(makeDeps(env.tmpDir, filePath)),
+			);
 			const event = lastExpandedEvent();
 			expect(event).toBeDefined();
 			// Nested containerName chain fully qualifies the name…
@@ -212,7 +217,9 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			documentSymbolMock.mockReturnValue(new Promise(() => {}));
 			const filePath = createTempFile(env.tmpDir, "src/slow.ts", SOURCE);
 			const startedAt = Date.now();
-			await handleToolCall(makeDeps(env.tmpDir, filePath));
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(makeDeps(env.tmpDir, filePath)),
+			);
 			// The 150ms budget bounds the enrichment; the read must complete
 			// promptly with the un-enriched tree-sitter identity.
 			expect(Date.now() - startedAt).toBeLessThan(5_000);

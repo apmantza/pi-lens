@@ -52,14 +52,14 @@ import {
 	normalizeMapKey,
 	realpathOrResolve,
 } from "../clients/path-utils.js";
-import { getLSPService } from "../clients/lsp/index.js";
+import { getLSPService } from "../clients/lsp/capabilities.js";
 import { retireInlineBlockerAndResyncGuard } from "../clients/git-guard.js";
 import {
 	primaryServerId,
 	resolveLspCwdForFile,
 } from "../clients/lsp/config.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
-import type { LSPWorkspaceUnconfirmedReason } from "../clients/lsp/index.js";
+import type { LSPWorkspaceUnconfirmedReason } from "../clients/lsp/capabilities.js";
 import { getFullScanWallClockMs } from "../clients/lsp/workspace-sweep-hold.js";
 import { demoteInferredProjectSweepResults } from "../clients/lsp/inferred-project.js";
 import {
@@ -960,7 +960,10 @@ function filterDeltaReportDispositions(
 				d.filePath,
 			).length === 1,
 	);
-	const policyKept = applyRulePolicy(kept, policyMap);
+	const policyKept = applyRulePolicy(kept, policyMap, {
+		root: cwd,
+		filePath: cwd,
+	});
 	if (policyKept.length === report.diagnostics.length) return report;
 	return { ...report, diagnostics: policyKept };
 }
@@ -1198,6 +1201,7 @@ function formatDeltaMode(
 				warnings: applyRulePolicy(
 					applyCachedDispositions(file.warnings ?? [], cwd, file.filePath),
 					policyMap,
+					{ root: cwd, filePath: file.filePath },
 				),
 			}))
 			.filter((file) => file.warnings.length > 0);
@@ -1326,6 +1330,7 @@ function formatDeltaMode(
 				diagnostics: applyRulePolicy(
 					applyCachedDispositions(f.diagnostics, cwd, f.filePath),
 					policyMap,
+					{ root: cwd, filePath: f.filePath },
 				),
 			}))
 			.filter((f) => f.diagnostics.length > 0);
@@ -1545,11 +1550,15 @@ function filterProjectDiagnosticsDeltaReport(
 function applyProjectRulePolicy<T extends { diagnostics: ProjectDiagnostic[] }>(
 	value: T | undefined,
 	policyMap: ReturnType<typeof rulePolicyMapFromConfig>,
+	root: string,
 ): T | undefined {
 	if (!value) return undefined;
 	return {
 		...value,
-		diagnostics: applyRulePolicy(value.diagnostics, policyMap),
+		diagnostics: applyRulePolicy(value.diagnostics, policyMap, {
+			root,
+			filePath: value.diagnostics[0]?.filePath ?? root,
+		}),
 	};
 }
 
@@ -2115,7 +2124,10 @@ async function applyInlineSuppressionsToSummaries(
 				// Inline suppression/disposition remains fail-open when the file cannot
 				// be read, but project policy does not depend on content and must still
 				// be applied so a fresh full-mode result cannot bypass `disable`/`select`.
-				const policyKept = applyRulePolicy(summary.diagnostics, policyMap);
+				const policyKept = applyRulePolicy(summary.diagnostics, policyMap, {
+					root: cwd,
+					filePath: summary.filePath,
+				});
 				return policyKept.length === summary.diagnostics.length
 					? summary
 					: summarizeDiagnostics(
@@ -2560,6 +2572,7 @@ async function formatFullMode(
 	const projectSnapshot = applyProjectRulePolicy(
 		foldedProjectSnapshot,
 		policyMap,
+		cwd,
 	);
 	const projectDelta = applyProjectRulePolicy(
 		filterProjectDiagnosticsDeltaReport(
@@ -2567,6 +2580,7 @@ async function formatFullMode(
 			includeFile,
 		),
 		policyMap,
+		cwd,
 	);
 	// #630: only the CONFIRMED LSP results contribute diagnostics to the merge
 	// — an unconfirmed (timed-out/errored) file's placeholder `[]` must not be
@@ -3259,7 +3273,10 @@ async function formatAllMode(
 		: summaries.map((s) => {
 				const diagnostics = s.diagnostics ?? [];
 				const kept = applyCachedDispositions(diagnostics, cwd, s.filePath);
-				const policyKept = applyRulePolicy(kept, policyMap);
+				const policyKept = applyRulePolicy(kept, policyMap, {
+					root: cwd,
+					filePath: s.filePath,
+				});
 				if (
 					policyKept.length === kept.length &&
 					kept.length === diagnostics.length

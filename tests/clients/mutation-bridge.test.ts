@@ -25,7 +25,10 @@ import {
 	_observedMutationStateForTests,
 	resetObservedMutationNet,
 } from "../../clients/observed-mutation.js";
-import { normalizeMapKey } from "../../clients/path-utils.js";
+import {
+	normalizeFilePath,
+	normalizeMapKey,
+} from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -180,6 +183,71 @@ describe("mutation bridge bookkeeping", () => {
 		}
 	});
 
+	it("does not widen authorship when observed bridge range is unavailable (F-4210-2)", () => {
+		// F-4210-2 recurrence: an observed replay with no recoverable baseline
+		// range must not become a whole-file license for an untouched line.
+		const env = setupTestEnvironment("pi-lens-4210-observed-unknown-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "observed.ts");
+			fs.writeFileSync(filePath, "one\ntwo\nthree\nfour\nfive\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "s-4210-observed-unknown" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const deps = makeDeps({ tmpDir: env.tmpDir, runtime, cacheManager });
+
+			fs.writeFileSync(filePath, "one\ntwo\nbridge\nfour\nfive\n");
+			expect(
+				recordMutationThroughSeam(
+					{
+						filePath,
+						kind: "edit",
+						touchedLines: [3, 3],
+						consumer: "bridge-v1",
+					},
+					deps,
+				),
+			).toBe(true);
+
+			// The observed writer checked this path, but its bounded evidence cannot
+			// recover a range; the bridge therefore reaches ReadGuard without one.
+			runtime.readGuard.noteCheckedPaths("call-4210-observed", [filePath]);
+			fs.writeFileSync(filePath, "one\nobserved\nbridge\nfour\nfive\n");
+			expect(
+				recordMutationThroughSeam(
+					{
+						filePath,
+						kind: "edit",
+						consumer: "observed-replay",
+						provenance: "observed",
+						toolCallId: "call-4210-observed",
+					},
+					deps,
+				),
+			).toBe(true);
+
+			expect(runtime.readGuard.checkEdit(filePath, [2, 2]).action).toBe(
+				"block",
+			);
+			// UNKNOWN retires the prior range too; no guessed replacement survives.
+			expect(runtime.readGuard.checkEdit(filePath, [3, 3]).action).toBe(
+				"block",
+			);
+			expect(
+				getDegradationSummary()
+					.find((group) => group.kind === "read-guard-authorship-retired")
+					?.latestReasons.some((row) => row.subject === filePath),
+			).toBe(true);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
 	it("#2465: under no-read-guard, a recordable write still gets turn-state + receipt + the observed-handled mark, but skips only the read-guard stamp", () => {
 		const env = setupTestEnvironment("pi-lens-2465-no-read-guard-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
@@ -251,6 +319,7 @@ describe("mutation bridge bookkeeping", () => {
 	});
 
 	it("drops an out-of-scope path without touching any store", () => {
+		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-2423-bridge-scope-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
@@ -265,7 +334,12 @@ describe("mutation bridge bookkeeping", () => {
 			const cacheManager = new CacheManager(false);
 
 			const accepted = recordMutationThroughSeam(
-				{ filePath, kind: "edit", touchedLines: [1, 2] },
+				{
+					filePath,
+					kind: "edit",
+					touchedLines: [1, 2],
+					consumer: "ast_grep_replace",
+				},
 				makeDeps({
 					tmpDir: env.tmpDir,
 					runtime,
@@ -280,6 +354,21 @@ describe("mutation bridge bookkeeping", () => {
 			).toHaveLength(0);
 			expect(readChangesSince(env.tmpDir, 0)).toEqual([]);
 			expect(runtime.pendingDeferredFormatCount).toBe(0);
+			// #4140: the v1 drop is recorded once per producer, with the path, so a
+			// second producer's drop stays visible (#4185 round 1 F5).
+			expect(getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						kind: "mutation-bridge-out-of-scope",
+						latestReasons: [
+							expect.objectContaining({
+								subject: "ast_grep_replace:out-of-scope",
+								reason: expect.stringContaining(filePath),
+							}),
+						],
+					}),
+				]),
+			);
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;
@@ -837,7 +926,9 @@ describe("#3620/#3709: a retired scope's replay writes no session state", () => 
 				queued: runtime.consumeDeferredFormatFiles().map((r) => [...r.kinds]),
 				turnFiles: turnFiles(cacheManager, tmpDir).length,
 			}).toEqual({
-				verdict: "allow",
+				// A settled sweep records the change and queues follow-up work, but
+				// its unattributed drift is not first-credit authorship (#4210).
+				verdict: "block",
 				queued: [["autofix", "format"]],
 				turnFiles: 1,
 			});
@@ -1100,16 +1191,18 @@ describe("mutation bridge registration", () => {
 });
 
 /**
- * #3525: the settled sweep replays drift no tool_result described, whoever
- * wrote it (an external editor, a second pi-lens instance), and the agent was
- * never shown those bytes. Recurrence: its `recordWritten` re-stamped FileTime,
- * the only staleness check a line without a hash has, so an edit of a line
- * another writer changed passed on a record past READ_HASH_MAX_LINES.
+ * #3525, #3865: a bridge replay reports a mutation, never the bytes the
+ * conversation holds: the settled sweep's drift no tool_result described, an
+ * unclassified tool's observed write, an `ast_grep_replace` rewrite or a
+ * co-process producer's (no provenance). Recurrence: its `recordWritten`
+ * re-stamped FileTime, the only staleness check a line without a hash has,
+ * so an edit of a line another writer changed passed on a record past
+ * READ_HASH_MAX_LINES. Authorship is still credited (#3865 acceptance).
  */
-describe("mutation bridge FileTime credit (#3525)", () => {
+describe("mutation bridge authorship without FileTime credit (#3865)", () => {
 	const LONG_AGO = new Date("2000-01-01T00:00:00Z");
-	for (const provenance of ["settled-sweep", "observed"] as const) {
-		it(`${provenance === "settled-sweep" ? "does not stamp" : "stamps"} FileTime for a ${provenance} replay`, () => {
+	for (const provenance of ["settled-sweep", "observed", undefined] as const) {
+		it(`credits authorship without stamping FileTime for a ${provenance ?? "no-provenance"} replay`, () => {
 			const env = setupTestEnvironment("pi-lens-3525-bridge-");
 			const previousDataDir = process.env.PILENS_DATA_DIR;
 			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
@@ -1137,7 +1230,12 @@ describe("mutation bridge FileTime credit (#3525)", () => {
 				fs.writeFileSync(filePath, big.join("\n"));
 				expect(
 					recordMutationThroughSeam(
-						{ filePath, kind: "edit", touchedLines: [11, 11], provenance },
+						{
+							filePath,
+							kind: "edit",
+							touchedLines: [11, 11],
+							...(provenance !== undefined && { provenance }),
+						},
 						makeDeps({
 							tmpDir: env.tmpDir,
 							runtime,
@@ -1145,8 +1243,11 @@ describe("mutation bridge FileTime credit (#3525)", () => {
 						}),
 					),
 				).toBe(true);
+				expect(runtime.readGuard.exportAuthorship().written).toEqual(
+					provenance === "settled-sweep" ? [] : [normalizeFilePath(filePath)],
+				);
 				expect(runtime.readGuard.checkEdit(filePath, [11, 11]).action).toBe(
-					provenance === "settled-sweep" ? "block" : "allow",
+					"block",
 				);
 			} finally {
 				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
@@ -1155,4 +1256,208 @@ describe("mutation bridge FileTime credit (#3525)", () => {
 			}
 		});
 	}
+
+	it("credits scattered bridge ranges without licensing their gap (#4210)", () => {
+		const env = setupTestEnvironment("pi-lens-4210-scattered-bridge-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "scattered.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 60 }, (_, i) => `line${i + 1}`).join("\n"),
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			expect(
+				recordMutationThroughSeam(
+					{
+						filePath,
+						kind: "edit",
+						touchedLines: [2, 51],
+						editRanges: [
+							[2, 3],
+							[50, 51],
+						],
+					},
+					makeDeps({
+						tmpDir: env.tmpDir,
+						runtime,
+						cacheManager: new CacheManager(false),
+					}),
+				),
+			).toBe(true);
+			expect(runtime.readGuard.checkEdit(filePath, [20, 20]).action).toBe(
+				"block",
+			);
+			expect(runtime.readGuard.checkEdit(filePath, [50, 51]).action).toBe(
+				"allow",
+			);
+
+			const narrowPath = path.join(env.tmpDir, "narrow.ts");
+			fs.writeFileSync(narrowPath, "one\ntwo\nthree\nfour\n");
+			const narrowRuntime = new RuntimeCoordinator();
+			narrowRuntime.projectRoot = env.tmpDir;
+			narrowRuntime.beginTurn();
+			expect(
+				recordMutationThroughSeam(
+					{
+						filePath: narrowPath,
+						kind: "edit",
+						touchedLines: [2, 2],
+					},
+					makeDeps({
+						tmpDir: env.tmpDir,
+						runtime: narrowRuntime,
+						cacheManager: new CacheManager(false),
+					}),
+				),
+			).toBe(true);
+			expect(narrowRuntime.readGuard.checkEdit(narrowPath, [4, 4]).action).toBe(
+				"block",
+			);
+			expect(narrowRuntime.readGuard.checkEdit(narrowPath, [2, 2]).action).toBe(
+				"allow",
+			);
+			expect(narrowRuntime.readGuard.checkEdit(narrowPath, [4, 4]).action).toBe(
+				"block",
+			);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+});
+
+/**
+ * #4131 (#4187 R2-4, probe A1; orchestrator decision 2): a bridge write that
+ * no pre-write check guarded (a co-process producer, `ast_grep_replace`, the
+ * settled sweep's drift) reports a mutation without the bytes, so it may
+ * create a first authorship but never advance one. Recurrence: its
+ * `recordWritten` re-baselined the agent's authorship over another writer's
+ * line 11, and a zero-read edit of that line passed (stale allow).
+ */
+describe("mutation bridge never advances an existing authorship (#4131)", () => {
+	for (const provenance of ["settled-sweep", undefined] as const) {
+		it(`ends the authorship a ${provenance ?? "co-process"} write lands on`, () => {
+			const env = setupTestEnvironment("pi-lens-4131-bridge-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			resetDegradationLedger();
+			try {
+				const filePath = path.join(env.tmpDir, "authored.ts");
+				const lines = Array.from({ length: 12 }, (_, i) => `line${i + 1}`);
+				fs.writeFileSync(filePath, lines.join("\n"));
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.beginTurn();
+				// The agent's bash write authored the file, without a read.
+				runtime.readGuard.recordWritten(filePath, {
+					stampFileTime: false,
+					toolCallId: "call-4131-bash",
+				});
+				// Another writer changes line 11.
+				lines[10] = "EXTERNAL11";
+				fs.writeFileSync(filePath, lines.join("\n"));
+				// The producer writes line 3 and reports it.
+				lines[2] = "bridge3";
+				fs.writeFileSync(filePath, lines.join("\n"));
+				expect(
+					recordMutationThroughSeam(
+						{
+							filePath,
+							kind: "edit",
+							touchedLines: [3, 3],
+							...(provenance !== undefined && { provenance }),
+						},
+						makeDeps({
+							tmpDir: env.tmpDir,
+							runtime,
+							cacheManager: new CacheManager(false),
+						}),
+					),
+				).toBe(true);
+				const verdict = runtime.readGuard.checkEdit(filePath, [11, 11]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("File modified since your write");
+				expect(runtime.readGuard.exportAuthorship()).toMatchObject({
+					written: [],
+					entries: [{ retired: true }],
+				});
+				expect(
+					getDegradationSummary().find(
+						(group) => group.kind === "read-guard-authorship-retired",
+					)?.count,
+				).toBe(1);
+			} finally {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+				env.cleanup();
+			}
+		});
+	}
+});
+
+describe("mutation bridge first-credit scope (#4210)", () => {
+	it("does not let a first partial bridge write vouch for another line (Q3)", () => {
+		const env = setupTestEnvironment("pi-lens-4210-q3-");
+		try {
+			const filePath = path.join(env.tmpDir, "partial.ts");
+			fs.writeFileSync(filePath, ["one", "two", "three"].join("\n"));
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			fs.writeFileSync(filePath, ["one", "bridge", "three"].join("\n"));
+
+			recordMutationThroughSeam(
+				{ filePath, kind: "edit", touchedLines: [2, 2], consumer: "writer" },
+				makeDeps({
+					tmpDir: env.tmpDir,
+					runtime,
+					cacheManager: new CacheManager(false),
+				}),
+			);
+
+			expect(runtime.readGuard.checkEdit(filePath, [3, 3]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not let settled-sweep drift create authorship (Q4)", () => {
+		const env = setupTestEnvironment("pi-lens-4210-q4-");
+		try {
+			const filePath = path.join(env.tmpDir, "drift.ts");
+			fs.writeFileSync(filePath, ["one", "two", "three"].join("\n"));
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+			fs.writeFileSync(filePath, ["one", "foreign", "three"].join("\n"));
+
+			recordMutationThroughSeam(
+				{
+					filePath,
+					kind: "edit",
+					touchedLines: [2, 2],
+					consumer: "settled-sweep",
+					provenance: "settled-sweep",
+				},
+				makeDeps({
+					tmpDir: env.tmpDir,
+					runtime,
+					cacheManager: new CacheManager(false),
+				}),
+			);
+
+			expect(runtime.readGuard.checkEdit(filePath, [2, 2]).action).toBe(
+				"block",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
 });

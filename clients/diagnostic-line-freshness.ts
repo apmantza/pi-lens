@@ -386,13 +386,17 @@ export function demotePastEofDiagnostics<
 export function resyncDocumentOnPastEof(filePath: string): void {
 	void (async () => {
 		try {
-			const [{ getLSPService }, content] = await Promise.all([
-				import("./lsp/index.js"),
+			const [{ getOwnedLspService }, content] = await Promise.all([
+				import("./lsp/service-singleton.js"),
 				fs.promises.readFile(filePath, "utf-8"),
 			]);
-			await getLSPService().openFile(filePath, content, {
-				preserveDiagnostics: false,
-			});
+			await getOwnedLspService<{
+				openFile: (
+					filePath: string,
+					content: string,
+					options: { preserveDiagnostics: boolean },
+				) => Promise<unknown>;
+			}>().openFile(filePath, content, { preserveDiagnostics: false });
 		} catch {
 			// Best-effort heal only.
 		}

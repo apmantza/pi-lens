@@ -10,6 +10,21 @@ There are **two** pi-lens config files:
 Both files have the same shape, with one exception noted below the example:
 everything LSP-related lives under an `lsp` namespace inside them.
 
+Executable LSP fields from a project config are admitted only when pi has
+marked the project trusted. This includes custom `command` values, command
+overrides, `env`, and `initializationOptions`; an untrusted or older host is
+fail-closed and emits one bounded notice telling you to mark the project
+trusted in pi or upgrade pi. Global config remains trusted, and a project can
+always disable a server. pi-lens does not maintain a second trust setting.
+
+The editor-facing JSON Schema is published at
+[`docs/schema/pi-lens-config-v1.json`](schema/pi-lens-config-v1.json). LSP
+server entries also accept canonical argv arrays, optional `name` (defaulting
+to the map id), `enabled`, `role` (`language` or `auxiliary`), `args`, and
+`rootMarkers`. These new fields are experimental; reserved role, root-policy,
+and timing semantics are inert until their planned catalog slices land, so this
+schema slice does not change server launch behavior.
+
 ```jsonc
 {
   "$schema": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
@@ -23,8 +38,7 @@ everything LSP-related lives under an `lsp` namespace inside them.
       "my-server": {
         "name": "My Custom LSP",
         "extensions": [".myext"],
-        "command": "my-lsp-server",
-        "args": ["--stdio"],
+        "command": ["my-lsp-server", "--stdio"],
         "covers": ["shellcheck"]
       }
     },
@@ -36,6 +50,10 @@ everything LSP-related lives under an `lsp` namespace inside them.
   }
 }
 ```
+
+An override may also provide an experimental launcher `command` and `env`.
+The built-in server ID and strategy remain in force; only the launcher is
+replaced, and project-sourced launcher fields follow the same pi trust gate.
 
 Each model-facing tool accepts `tools.<name>.enabled` in the config file. Valid
 names include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,

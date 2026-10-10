@@ -6,7 +6,6 @@ export declare function resolveLocalTsc(args: {
 export declare function planTscInvocation(args: {
 	localTscBin: string | null;
 	root: string;
-	version: string;
 	npmCli: string;
 	execPrefix?: string;
 	tsconfigProject: string;

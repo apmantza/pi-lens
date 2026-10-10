@@ -1362,6 +1362,16 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	// config-ignored row while the config was still being ignored.
 	"config-warn.ts":
 		"ignored-config warn-once NOTIFICATION latch, tied to the config file it warned about; the per-session ledger row is bounded by the degradation ledger, not by this Set",
+	// #4212 round 4: turn-scoped working state, so a session_start reset would
+	// be redundant rather than missing. This is the per-dispatch-cycle
+	// rule-corpus fingerprint memo shared by the tree-sitter loader and the
+	// ast-grep source fingerprint. Every key begins with `getTurnId()`, and
+	// `resetTurnContext` moves that identity at session_start, so any entry a
+	// previous session could have written is already unreachable and is
+	// FIFO-evicted; the turn boundary is a strictly shorter lifetime than the
+	// session, and the map is bounded at 16 entries on top of that.
+	"custom-rule-locations.ts":
+		"the per-dispatch-cycle rule-corpus fingerprint memo, keyed on the turn identity and FIFO-bounded, so the turn boundary invalidates it rather than a session reset",
 	"diagnostic-line-freshness.ts":
 		"the #1641 past-EOF line-count memo, keyed on mtime AND size and re-stat'd on every read — a mismatch always recomputes, so it is invalidated by its own freshness check per file, not by the session boundary, same as git-tracked-ignore.ts",
 	"diagnostics-publish.ts":
@@ -1404,6 +1414,8 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	// the session. Re-deriving per session would just re-pay a spawn. ---
 	"lsp/jvm-runtime.ts":
 		"resolved JVM location; a session boundary cannot move it",
+	"lsp/service-singleton.ts":
+		"the owner stores the process-wide singleton identity and pending teardown handoff; session-scoped resets are delegated to the registered implementation hooks, while the owner itself has no independent session verdict to re-arm",
 	"lsp/spawn-history.ts":
 		"successful spawn duration history intentionally spans session boundaries within the host process so later sessions can avoid waits that prior evidence proves cannot succeed",
 	"lsp/workspace-diagnostics-cache.ts":
@@ -1510,6 +1522,12 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// never written after module evaluation, so resetting it would be
 	// meaningless; the file's one real latch is still the warn-once Set above.
 	"config-warn.ts": 2,
+	// #4212 round 4: one bounded container — the per-dispatch-cycle rule-corpus
+	// fingerprint map (cap 16, FIFO eviction). The single-slot read-through in
+	// front of it and `_resetRuleCorpusCycleFingerprintsForTests` are the same
+	// state, not extra containers. See this file's EXEMPT_SESSION_STATE_FILES
+	// entry for why the turn boundary, not session_start, invalidates it.
+	"custom-rule-locations.ts": 1,
 	// #2505: 3 -> 4. The fourth symbol is `INFORMATIONAL_DEGRADATION_KINDS`,
 	// an import-time `ReadonlySet` of kind names the health renderer prints
 	// without the warning marker — a lookup table, not session state
@@ -1641,6 +1659,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// `resetPendingAuxiliaryCoverage`.
 	"lsp/pending-aux-coverage.ts": 2,
 	"lsp/server.ts": 6,
+	"lsp/service-singleton.ts": 0,
 	"lsp/session-roots.ts": 1,
 	"lsp/spawn-history.ts": 1,
 	"lsp/workspace-diagnostics-cache.ts": 1,

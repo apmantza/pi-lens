@@ -16,6 +16,101 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.4.1] - 2026-10-09
+
+### Added
+
+- **Public LSP config schema and compatibility normalization** (closes #2416): canonical argv-shaped server entries and legacy string-command files now share a validated, provenance-aware model without changing runtime launch behavior.
+
+- **Shared custom rules are now loaded from a user-level directory.** Thanks to @Antrakos; project rules take precedence over user rules, which take precedence over bundled rules.
+
+- **The official Docker Language Server is now verified in nightly LSP smoke tests.** Its pinned v0.20.1 binary is measured through the real pi-lens client, with the preferred legacy server retained as the fallback. Thanks @qiyangfan for reporting #3939.
+
+- **Deferred formatting now announces settled completion with ownership identity** (refs #673; thanks @marioSoftmedic), including an empty path list when no bytes changed; late formatter writes delay completion until resync.
+
+### Changed
+
+- Idle eviction is now enabled for `docker`, `json`, and `python-jedi` after consecutive safe measurements (refs #3989).
+
+### Fixed
+
+- **Report fixer restore loss.** Agent edits that a whole-package fixer erased are now reported when their calls overlap the restore, or when a later edit landed on the fixer's bytes; newer bytes are retained when the restore can prove they are newer. One case stays unreported and is named as a residual: a fixer write that lands between an edit's tool call and the host applying that edit (#3830).
+
+- **Batched scans keep their compiled query across a heal.** A rule healed during an in-flight compile no longer stays missing from later batched scans, scans sharing that compile no longer report zero findings when a heal races its publication, and a compile that is refused publication frees its native query instead of leaking it. (#3834)
+
+- **A grammar that traps on two distinct files is retired, not retried until the heap aborts.** The runner reports the language unavailable instead of clean and other languages keep the remaining trap budget; a file that traps once and then parses cleanly does not count (refs #4010, #3996).
+
+- **The word index no longer holds its serialized copy while idle.** It is released when the agent run settles (once per run), kept while a run edits so per-edit saves stay incremental, and released after 10 minutes without a save for a stalled run (`PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS`).
+
+- **Startup warm caches now cover up to 2,500 measured source files safely.** Larger projects still see the once-per-session reason and the bound to raise.
+
+- **The read guard keeps authorship through pi-lens-owned rewrites.** A file the agent wrote stays editable without a re-read when `ast_grep_replace`, `lens_diagnostic_mark`, or an LSP operation rewrites the file that call named and no foreign writer intervened. A file the tool wrote without naming it (a rename's importers, a folder-wide or project-wide apply), a server-initiated `workspace/applyEdit`, or a foreign byte change ends authorship instead, so the next edit asks for one read, and third-party bridge records remain fail-closed (#4131). Authorship survives `/tree`, `/fork` and resume when the branch still shows the write (#3603). Process-bridge writes, observed tool writes and partial bridge reads no longer mark the whole file as freshly read (#3865).
+
+- **`throw Error(x)` style findings are now warnings, not blockers.** The `throw-new-error` rules still encourage explicit construction while recognizing that `Error(x)` is spec-equivalent to `new Error(x)`.
+
+- **Shared secondary worktree roots now remain visible until every session holding them leaves.** Each session's registry record lists only the roots it registered, so a session ending after a primary reload or a cap eviction can no longer drop a root another live session still serves (#3849).
+
+- **Lint fallback no longer hides missing type coverage.** Type-bearing files keep the existing incomplete-coverage notice when their primary analysis was skipped, unavailable, or failed; type-capable fallbacks such as mypy can still complete coverage.
+
+- **Keep source-build tools aligned with the lockfile (#4066).** Both esbuild bundles and the TypeScript fallback use the exact locked versions while retaining isolated npm exec resolution and exact lifecycle-script approval.
+
+- **Scanners now avoid linked worktree duplicates.** Gitleaks, trivy and opengrep discover linked checkouts nested under the project root instead of relying only on known directory names; paths that a scanner cannot represent safely are reported as bounded scan degradations (fixes #4132).
+
+- Prevented pi-lens's read-only registry-tool operations from being mistaken for learned edits after another operation mutates a file.
+
+- **Ast-grep rule validation no longer stalls on blank-heavy YAML (#4148)** — A rule with tens of thousands of blank lines no longer blocks the host while its language is detected.
+
+- **Pytest and go.mod parsing no longer stall on blank-heavy input (#4148)** — Reading a pytest failure traceback and the `module` line of a `go.mod` now takes linear time, so a run with tens of thousands of blank lines or one very long `_` rule no longer blocks the host for seconds (13 s and 4 s at 100K lines before).
+
+- **Refresh TypeScript clients across package roots (closes #4156)** — Changed files are announced to live sibling-root language-server clients, preventing stale importer diagnostics. Credit: Don-Yin.
+
+- **A project's data directory stays stable for the whole process** (#4199): it is settled when the process first resolves the root, so an ephemeral checkout no longer moves its data when a `.pi-lens` directory appears mid-process, and a `.pi-lens` created by hand in a real project takes effect at the next process start.
+
+- **Read-guard authorship now stays within bytes each writer actually changed.**
+
+- **Outside-root edits now explain skipped analysis** (#4218) — pi-lens tells you to start pi in the file's directory or add it to the workspace.
+
+- **Answered LSP findings are preserved when another server times out** — typos diagnostics now remain visible when Marksman is inconclusive for the same edit. (closes [#4219](https://github.com/apmantza/pi-lens/issues/4219))
+
+- **Identity checks against `True`/`False` are no longer flagged** — the rule now preserves correct Python singleton checks while continuing to catch non-singleton literal comparisons. Thanks @rastarr for the report. (closes [#4225](https://github.com/apmantza/pi-lens/issues/4225))
+
+- **Release summaries keep wrapped changelog entries intact** — release notes now join an entry's wrapped lines before shortening it, so plain entries no longer end mid-sentence and bold gist text keeps continuation-line issue references.
+
+- **Read evidence now survives relative paths, nested codemode calls and conversation moves**: relative-path reads, nested reads and pi-lens rewrites (including the structural `ast_grep_replace` apply) keep their read-guard and mutation bookkeeping across `/clone`, `/fork`, `/tree` and `/reload`; a read that errored (even if another extension rewrites its result to success), or that another extension blocked, no longer licenses an edit later in the same run, and a read never blocks a whole-package fixer's restore of an agent edit.
+
+### Internal
+
+<details>
+<summary>13 internal changes: tests, CI, tooling, and refactors</summary>
+
+- The TLA+ hook-anchor scan escapes every regex metacharacter in a handler name, not only `$`.
+
+- Changelog fragment validation now constrains new user-facing leads.
+
+- **Idle-eviction measurements cover temporary checkouts (refs #3989)** — The nightly probe now arms the short idle window used by ephemeral LSP roots as well as the generic window, so eligible servers are measured instead of reported as not evicted.
+
+- **release-qa reads the pi version from `pi --version` only (closes #4176)** — The codemode row no longer takes an x.y.z from the pi binary's install path, so a version-shaped directory cannot make it run or skip on the wrong pi.
+
+- Keep config-declared LSP roles reserved and inert in the loader; the catalog remains the owner of auxiliary selection.
+
+- Make the workflow Git-push detector regex linear for quoted options.
+
+- One LSP server-role vocabulary and a declared trait table (refs #1488, refs #1756): `LSPServerInfo.role` is now non-optional, 44 inlined `role === "auxiliary"` / `role !== "auxiliary"` predicates fold onto `isAuxiliary()`, `PromiseDescriptor.role` retires its duplicate `"primary"` spelling, the auxiliary wait policy moves to `clients/lsp/auxiliary-lifecycle.ts`, and the `notifyInflightLimit` / `replyOrdering` traits are declared on the server definition. No behaviour change.
+
+- **Merge-policy mistake table: 2026-10-07 and 2026-10-08 retrospective** — new internal rows on delivery wording, shared records, worker handoffs, CI and advisory classification, release producers, probe witnesses, test doubles, and round routing.
+
+- Failed handler-verdict tests when `handleToolCall` threw and production swallowed it: `runHandlerExpectingNoThrow` (`tests/support/handler-verdict.ts`) wraps every direct call and the pi mock's `tool_call` hooks, and a governance sweep rejects an unchecked call (#3518, recurrence #4182).
+
+- **TLA+ session models cover marker expiry, the per-evaluation LSP generation, the widget token and the late coordinator stores (refs #3803)**: #3668's successor-pending marker expires (`MarkerExpire`, no clock), #3755's per-evaluation generation is caught by an owner-live invariant the generation clause could not see, the widget's `>=` tie and fork carry are pinned in both directions (`SessionLifecycleF1`), the receipt, `fixedThisTurn`, analysed-state latch and runner writers are fenced by their captured scope (#3824), and `session-straddle` retires the generation at shutdown (#3611), each with a violating pre-fix or mutant config and a passing merged one.
+
+- **TLA+ session-lifecycle models the S3 writers and the subagent turn_end (refs #3803)**: the deferral queue's two-hop credit (#3705), the turn-state, turn-summary and git-guard late writers with the debounce re-entry (#3759), the mutation bridge's producer with and without a lineage (#3763), the park map of cut advisories (#4112), and a turn_end composer on a shared coordinator, each with a violating pre-fix or mutant config and a passing merged one; the coverage map names the bridge producers and the turn summary.
+
+- Map the unmapped lifecycle files in `formal/coverage-map.json` and gate `index.ts` per lifecycle hook handler instead of per file (refs #3803).
+
+- Vitest no longer collects test files from a stray worktree inside `.probe-home/` on a path-filtered run.
+
+</details>
+
 ## [4.4.0] - 2026-10-08
 
 ### Added

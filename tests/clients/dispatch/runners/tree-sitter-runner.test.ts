@@ -349,6 +349,18 @@ describe("tree-sitter runner — batched per-edit queries (#888)", () => {
 		expect(runQueryOnFile).not.toHaveBeenCalled();
 	});
 
+	it("skips a configured rule before the tree walk on an ignored path", async () => {
+		const { runner, runQueriesOnFile } = await loadRunnerWithQueries([
+			fakeQuery,
+		]);
+		const result = await runner.run({
+			...createCtx("/fake/vendorish/file.ts", "/fake"),
+			rulePolicy: { "fake-rule": { ignorePaths: ["vendorish/**"] } },
+		} as any);
+		expect(result.status).toBe("succeeded");
+		expect(runQueriesOnFile).not.toHaveBeenCalled();
+	});
+
 	it("interpolates double-brace capture placeholders in diagnostic messages", async () => {
 		const query = {
 			...fakeQuery,

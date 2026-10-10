@@ -20,7 +20,7 @@
  * entry, the attributed change-log receipt and the deferred format at
  * `agent_settled` are the SAME code path a `write` takes.
  */
-import { getLSPService } from "./lsp/index.js";
+import { getLSPService } from "./lsp/capabilities.js";
 import { getMutationBridge } from "./mutation-bridge.js";
 import type { ObservedReplayEntry } from "./observed-mutation.js";
 import { getFileDiagnosticSummaries } from "./widget-state.js";

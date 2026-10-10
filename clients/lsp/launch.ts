@@ -20,13 +20,20 @@ import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { getGlobalPiLensLogDir } from "../probe-home-state.js";
 import { isFullyQualified } from "../path-utils.js";
-import { findGlobalBinary } from "../package-manager.js";
+import { findGlobalBinary, isProjectLocalBinPath } from "../package-manager.js";
+import {
+	getDegradationLedgerGeneration,
+	recordDegradationOnce,
+} from "../degradation-ledger.js";
+import { getProjectTrustState } from "../project-trust.js";
+import { logExtension } from "../extension-log.js";
 import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,
 	holdOwnChildPid,
 	isOwnLiveChild,
+	resolveWindowsCommandForEnvironment,
 	SpawnFailureError,
 } from "../safe-spawn.js";
 import { getRubyVersionDirNamesAsync } from "./ruby-drive-dirs.js";
@@ -289,6 +296,29 @@ export function isCmdShimValid(cmdPath: string): boolean {
 }
 
 /**
+ * Windows' shell-backed missing commands report exit code 1 instead of ENOENT.
+ * Only classify that startup shape as repairable when the shared Windows
+ * resolver cannot find the command, or an npm shim's target is absent. A
+ * present executable that exits 1 remains a runtime failure (#4263, #1199).
+ */
+function isMissingWindowsStartupCommand(
+	command: string,
+	spawnCommand: string,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+): boolean {
+	if (!isWindows) return false;
+	if (/\.(cmd|bat)$/i.test(spawnCommand) && !isCmdShimValid(spawnCommand)) {
+		return true;
+	}
+	// `findBinaryOnPath`/the global-bin fallback already proved a bare command
+	// resolves to this path. Do not re-resolve the original spelling against a
+	// possibly different PATH representation and misclassify a real binary.
+	if (spawnCommand !== command) return false;
+	return resolveWindowsCommandForEnvironment(command, cwd, env) === null;
+}
+
+/**
  * On Windows, npm creates .ps1 wrappers that hang indefinitely when PowerShell
  * execution policy is Restricted or AllSigned. Bypass by preferring the .cmd
  * sibling (runs under cmd.exe, no execution policy) or falling back to direct
@@ -364,6 +394,49 @@ function findBinaryOnPath(
 	return undefined;
 }
 
+let unknownProjectLocalNoticeGeneration = -1;
+
+/**
+ * Whether the resolved executable is a project-local installed binary.
+ * `launchLSP` is the one seam that has both the final resolved command and its
+ * spawn cwd; keep the project-local classifier here so PATH, venv, and shim
+ * resolution cannot grow separate trust predicates (#4248).
+ */
+export function isProjectLocalLspBinary(
+	resolvedCommand: string,
+	cwd: string,
+): boolean {
+	return isProjectLocalBinPath(resolvedCommand, cwd);
+}
+
+function refuseUnknownProjectLocalBinary(
+	command: string,
+	resolvedCommand: string,
+	cwd: string,
+): void {
+	const generation = getDegradationLedgerGeneration();
+	const subject = `project-local-binary:g${generation}:${path.basename(command)}`;
+	recordDegradationOnce({
+		kind: "lsp-registry-decision",
+		subject,
+		reason: "project-local LSP binary refused: pi project trust is unknown",
+		metadata: {
+			field: "project-local-binary",
+			resolved: isProjectLocalLspBinary(resolvedCommand, cwd),
+			trust: "unknown",
+		},
+	});
+	if (unknownProjectLocalNoticeGeneration === generation) return;
+	unknownProjectLocalNoticeGeneration = generation;
+	logExtension({
+		subsystem: "lsp-registry",
+		level: "warn",
+		message:
+			"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+		metadata: { field: "project-local-binary" },
+	});
+}
+
 /**
  * Try to spawn a process, throwing immediately if it fails
  */
@@ -414,14 +487,6 @@ function trySpawn(
 
 	if (!proc.stdin || !proc.stdout || !proc.stderr) {
 		throw new Error(`Failed to spawn LSP server: ${command}`);
-	}
-
-	// Check if process exited immediately (spawn failure - synchronous check)
-	if (proc.exitCode !== null || proc.killed) {
-		throw new Error(
-			`LSP server ${command} exited immediately (code: ${proc.exitCode}). ` +
-				`The binary may be missing or corrupted.`,
-		);
 	}
 
 	// #3091 F1-r2: take ownership HERE, while the child is provably alive. LSP
@@ -622,8 +687,24 @@ export async function launchLSP(
 		}
 	}
 
-	// Pre-validate .cmd shims: if the underlying script is missing the shim will
-	// exit with code 1 after a 500ms wait. Catching this early avoids the delay.
+	// Built-in server commands have no config provenance to carry into the
+	// registry. Once PATH resolution selects a project-local installed binary,
+	// unknown host trust must still fail closed (#4248 R2-1). Global and managed
+	// fallbacks remain compatible because they resolve outside the project root.
+	if (
+		getProjectTrustState() === "unknown" &&
+		isProjectLocalLspBinary(spawnCommand, cwd)
+	) {
+		refuseUnknownProjectLocalBinary(command, spawnCommand, cwd);
+		const message =
+			"LSP project-local binary refused: project trust is unknown";
+		throw new SpawnFailureError("spawn-failed", message, new Error(message));
+	}
+
+	// Pre-validate .cmd shims only after trust has admitted the candidate: if the
+	// underlying script is missing the shim will exit with code 1 after a 500ms
+	// wait. Catching this early avoids the delay without probing an untrusted
+	// project-local executable.
 	if (
 		isWindows &&
 		/\.(cmd|bat)$/i.test(spawnCommand) &&
@@ -687,10 +768,17 @@ export async function launchLSP(
 
 	// Check if process exited immediately (spawn failure - synchronous check)
 	if (proc.exitCode !== null || proc.killed) {
-		throw new Error(
+		const message =
 			`LSP server ${command} exited immediately (code: ${proc.exitCode}). ` +
-				`The binary may be missing or corrupted.`,
-		);
+			`The binary may be missing or corrupted.`;
+		const failure = new Error(message);
+		if (
+			proc.exitCode === 1 &&
+			isMissingWindowsStartupCommand(command, spawnCommand, cwd, env)
+		) {
+			throw new SpawnFailureError("tool-not-found", message, failure);
+		}
+		throw failure;
 	}
 
 	logSessionStart(
@@ -746,11 +834,16 @@ export async function launchLSP(
 						isWindowsCmd && code === 1
 							? `npm .cmd shim failed (underlying binary not installed). Run 'npm install' in this project or use a global installation.`
 							: `The binary may be missing or corrupted.`;
-					reject(
-						new Error(
-							`LSP server ${command} exited immediately with code ${code}. ${errorMsg}${formatStartupStderr(startupStderr)}`,
-						),
-					);
+					const message = `LSP server ${command} exited immediately with code ${code}. ${errorMsg}${formatStartupStderr(startupStderr)}`;
+					const failure = new Error(message);
+					if (
+						code === 1 &&
+						isMissingWindowsStartupCommand(command, spawnCommand, cwd, env)
+					) {
+						reject(new SpawnFailureError("tool-not-found", message, failure));
+						return;
+					}
+					reject(failure);
 				}
 			});
 

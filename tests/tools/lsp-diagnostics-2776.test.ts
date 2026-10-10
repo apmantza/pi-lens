@@ -17,6 +17,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 
 const fixture = fileURLToPath(
 	new URL("../fixtures/fake-lsp-server.mjs", import.meta.url),
@@ -55,6 +59,9 @@ describe("#2776 custom primary diagnostic provenance", () => {
 	let service: { shutdown: () => Promise<void> } | undefined;
 
 	beforeAll(async () => {
+		// Host-boundary stub: this fixture intentionally tests a project custom
+		// server in a project pi has trusted.
+		setProjectTrustState("trusted");
 		fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
 		fs.writeFileSync(file, "syntax error\n");
 		fs.writeFileSync(
@@ -79,6 +86,7 @@ describe("#2776 custom primary diagnostic provenance", () => {
 	});
 
 	afterAll(async () => {
+		resetProjectTrust();
 		for (const [key, value] of Object.entries(previousEnv)) {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;

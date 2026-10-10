@@ -1223,6 +1223,7 @@ describe("index.ts extension wiring", () => {
 				);
 				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
 
+				// pi-mock bound: this lifecycle assertion does not re-run the factory or reproduce host ordering.
 				await pi.simulateSessionShutdownAndRebuild("new", ctx);
 
 				expect(pi.activeTools.has("ast_grep_search")).toBe(false);
@@ -1267,6 +1268,7 @@ describe("index.ts extension wiring", () => {
 				expect(pi.activeTools.has("ast_grep_search")).toBe(true);
 				await endTurnAndPersist(pi, ctx, tmp, "cache-quit");
 
+				// pi-mock bound: this lifecycle assertion does not re-run the factory or reproduce host ordering.
 				await pi.simulateSessionShutdownAndRebuild("quit", ctx);
 
 				// The host rebuilds all-active, as on every replacement; the
@@ -1939,6 +1941,7 @@ describe("hook handler crash surfacing (#2884)", () => {
 			ctx,
 		);
 
+		// pi-mock bound: this lifecycle assertion does not re-run the factory or reproduce host ordering.
 		await pi.simulateSessionShutdownAndRebuild("reload", ctx);
 
 		expect(pi.activeTools.has("ast_grep_search")).toBe(true);

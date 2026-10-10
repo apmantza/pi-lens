@@ -16,7 +16,7 @@ describe("LSP session warm/first-use liveness (#1394)", () => {
 			touchFile,
 			supportsLSP: () => true,
 		});
-		vi.doMock("../../clients/lsp/index.js", () => ({
+		vi.doMock("../../clients/lsp/capabilities.js", () => ({
 			getLSPService: () => service,
 			resetLSPService: () => {},
 		}));

@@ -44,8 +44,9 @@
  *
  * Scope note (#1562 class fix): the CLI scan is handed `--exclude` per shared
  * scratch/cache tree (`scratch-tree-policy.ts`) so a directory that isn't
- * gitignored (opengrep's own default exclusion) still doesn't reach the
- * agent as a finding — same `EXCLUDED_DIRS`-derived list gitleaks/trivy use.
+ * gitignored still doesn't reach the agent as a finding. Linked worktrees are
+ * deliberately not added to that argv list: opengrep's git-mode walk already
+ * skips nested checkouts, avoiding one expensive wcmatch pattern per checkout.
  *
  * Refs: #584, #111 (opengrep adoption), #387 (workspace-sweep serialization), #1562
  */
@@ -187,7 +188,13 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 					// pattern matches that directory name anywhere in the tree,
 					// independent of gitignore. Same `EXCLUDED_DIRS`-derived list
 					// gitleaks/trivy use, so the three scanners can't drift apart.
-					...getScratchTreeDirNames().flatMap((name) => ["--exclude", name]),
+					// Opengrep's git-mode walk already omits nested linked checkouts.
+					// Do not turn each registration into a wcmatch pattern: hundreds of
+					// patterns make the matcher quadratic and can hit its pattern limit.
+					...getScratchTreeDirNames().flatMap((pattern) => [
+						"--exclude",
+						pattern,
+					]),
 					cwd,
 				],
 				{ cwd, timeout: SCAN_TIMEOUT_MS },

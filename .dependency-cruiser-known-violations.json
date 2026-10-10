@@ -1,4 +1,5 @@
 // Follow-up reduction tracked in issue #2125; 12 entries, some traverse a dynamic-import edge. #2516 round 2 took this file from 33 entries to 12 without pinning a single NEW violation: moving getGlobalPiLensLogDir() and the probe-home redirect from clients/file-utils.js onto the cycle-free clients/probe-home-state.js leaf removed the last file-utils.js import from extension-log.js and from eighteen other log-family modules, which broke the file-utils -> safe-spawn -> degradation-ledger -> extension-log -> file-utils cycle this repo had been routing around since #2506. 21 entries dropped, 0 added, 12 kept; the two errors CI first reported were the surviving file-utils -> safe-spawn and git-tracked-ignore -> safe-spawn edges reporting a DIFFERENT representative cycle path (through resource-sampler -> instance-reaper) now that the shorter path through extension-log is gone, not new coupling. Regenerated with depcruise --config .dependency-cruiser.cjs --output-type baseline index.ts "clients/**/*.ts".
+
 [
   {
     "type": "cycle",

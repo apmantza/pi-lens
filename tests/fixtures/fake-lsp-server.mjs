@@ -173,6 +173,16 @@ const PULL_PUSH_VERSION = Number.parseInt(
 );
 const PULL_RESPONSE = process.env.FAKE_LSP_RESPOND_PULL_WITH;
 const PULL_COMPLETION_SIGNAL = process.env.FAKE_LSP_PULL_COMPLETION === "1";
+const PULL_DIAGNOSTIC_MESSAGE =
+	process.env.FAKE_LSP_DIAGNOSTIC_MESSAGE ??
+	"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs";
+const PULL_DIAGNOSTIC_SOURCE =
+	process.env.FAKE_LSP_DIAGNOSTIC_SOURCE ?? "fake-lsp";
+const DELAY_AFTER_FIRST_PULL_MS = Number.parseInt(
+	process.env.FAKE_LSP_DELAY_AFTER_FIRST_PULL_MS ?? "0",
+	10,
+);
+let pullCount = 0;
 
 function sendPullPush(uri) {
 	send({
@@ -858,9 +868,8 @@ function handle(raw) {
 							{
 								severity: 1,
 								code: "FAKE1001",
-								source: "fake-lsp",
-								message:
-									"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs",
+								source: PULL_DIAGNOSTIC_SOURCE,
+								message: PULL_DIAGNOSTIC_MESSAGE,
 								range: {
 									start: { line: 0, character: 0 },
 									end: { line: 0, character: 5 },
@@ -873,6 +882,11 @@ function handle(raw) {
 				result: { kind: "full", items },
 			});
 		};
+		pullCount += 1;
+		if (pullCount > 1 && DELAY_AFTER_FIRST_PULL_MS > 0) {
+			setTimeout(sendPullResponse, DELAY_AFTER_FIRST_PULL_MS).unref?.();
+			return;
+		}
 		if (PULL_PUSH_BEFORE_RESPONSE) sendPullPush(uri);
 		sendPullResponse();
 		if (PULL_PUSH_AFTER_RESPONSE) sendPullPush(uri);

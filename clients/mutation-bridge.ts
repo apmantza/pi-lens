@@ -60,7 +60,12 @@ import {
 import { noteAgentMutation } from "./fix-run-restore.js";
 import { noteMutationHandled } from "./observed-mutation.js";
 import type { ProjectChangeSource } from "./project-changes.js";
-import { getProcessBridge, registerProcessBridge } from "./process-bridge.js";
+import {
+	type BridgeActivation,
+	getProcessBridge,
+	rebindableProcessBridgeDeps,
+	registerProcessBridge,
+} from "./process-bridge.js";
 import { recordDroppedRead } from "./session-scope.js";
 import { publishFormatQueued } from "./format-events-publish.js";
 
@@ -85,6 +90,7 @@ export interface MutationBridge {
 
 /** The bookkeeping surfaces the bridge drives. Every one is optional-tolerant. */
 export interface MutationBridgeDeps {
+	onUnavailable?: () => void;
 	getRuntime(): {
 		turnIndex: number;
 		telemetrySessionId?: string;
@@ -98,7 +104,15 @@ export interface MutationBridgeDeps {
 			currentBranchEpoch: number;
 			recordWritten?: (
 				filePath: string,
-				opts?: { branchEpoch?: number; stampFileTime?: boolean },
+				opts?: {
+					branchEpoch?: number;
+					stampFileTime?: boolean;
+					advanceAuthorship?: boolean;
+					toolCallId?: string;
+					authoredRanges?: Array<[number, number]>;
+					authorship?: "partial" | "whole-file" | "unknown";
+					allowFirstAuthorship?: boolean;
+				},
 			) => void;
 		};
 		recordProjectMutation?: (args: {
@@ -234,6 +248,12 @@ function mutationEntryProblem(entry: unknown): string | undefined {
 	)
 		return 'provenance must be "observed" or "settled-sweep"';
 
+	// #4187 R4-1: the call id licenses an authorship advance, so a producer that
+	// invents a non-string one must be told rather than silently downgraded to
+	// "no call" (which would end an authorship the call did license).
+	if (e["toolCallId"] !== undefined && typeof e["toolCallId"] !== "string")
+		return "toolCallId must be a string";
+
 	return undefined;
 }
 
@@ -311,6 +331,16 @@ function resolveChangedRange(
 	// the producer could not name is treated the same way: the safe
 	// over-approximation is the entire file, never an empty set.
 	return { start: 1, end: Math.max(1, deps.countFileLines(filePath)) };
+}
+
+function resolveAuthorshipRanges(
+	classification: MutatingToolClassification,
+): Array<[number, number]> | undefined {
+	if (classification.authorshipUnknown === true) return undefined;
+	if (classification.editRanges && classification.editRanges.length > 0)
+		return classification.editRanges;
+	if (classification.touchedLines) return [classification.touchedLines];
+	return undefined;
 }
 
 /** Why a mutation record was not credited to live session state (#3654). */
@@ -397,11 +427,34 @@ function stampLiveMutation(
 	// 1. Staleness stamp: the file changed under pi-lens, so a later edit is
 	//    judged by read coverage rather than by this write.
 	if (sessionLive && stampReadGuard) {
+		const authoredRanges = resolveAuthorshipRanges(classification);
 		runtime.readGuard.recordWritten?.(filePath, {
 			...(stamp !== undefined && { branchEpoch: stamp }),
-			// #3525: settled-sweep drift is unattributed, and the agent never
-			// saw it: authorship, not FileTime.
-			...(entry.provenance === "settled-sweep" && { stampFileTime: false }),
+			// A process bridge reports a mutation, not the bytes delivered to the
+			// conversation. Credit authorship, but leave FileTime at its last
+			// conversation-backed observation (#3865).
+			stampFileTime: false,
+			// Nor may it re-baseline an existing authorship over bytes it wrote
+			// around (#4131, #4187 R2-4): only the observed replay had a
+			// pre-write check, its tool_call's retire. The rest (a co-process
+			// producer, ast_grep_replace or an LSP edit) may create a first
+			// authorship; settled-sweep drift never does (#4210).
+			advanceAuthorship: entry.provenance === "observed",
+			// A first bridge credit is limited to the producer's reported range;
+			// settled-sweep drift has no producer evidence and may not create one.
+			...(authoredRanges !== undefined && { authoredRanges }),
+			authorship:
+				authoredRanges !== undefined
+					? "partial"
+					: entry.kind === "write"
+						? "whole-file"
+						: "unknown",
+			allowFirstAuthorship: entry.provenance !== "settled-sweep",
+			// #4187 R4-1: and an observed replay advances only a path its OWN
+			// call licensed at tool_call (`ReadGuard.noteCheckedPaths`), since a
+			// tool writes a set wider than the one it named. An entry with no
+			// call (a co-process producer, a server-initiated edit) names none.
+			...(entry.toolCallId !== undefined && { toolCallId: entry.toolCallId }),
 		});
 	}
 	return { sessionLive, stamp };
@@ -422,7 +475,7 @@ function applyTurnAndChangeLog(
 				changedRange,
 				entry.importsChanged ?? false,
 				projectRoot,
-				runtime.telemetrySessionId,
+				entry.sessionId ?? runtime.telemetrySessionId,
 			);
 	}
 	runtime.recordProjectMutation?.({
@@ -585,21 +638,58 @@ function runAdmittedMutation(
 		: { recorded: true, accepted: false, reason: "stale-lineage", queued };
 }
 
-/** The v1 `recordMutation()` boolean answer, over the same one body. */
+/**
+ * The v1 `recordMutation()` boolean answer, over the same one body. A v1
+ * caller sees only that boolean, so an out-of-scope drop is recorded here,
+ * once per producer, with the path (#4140); the v2 io-bridge records its own
+ * `io-bridge-mutate-dropped` for the same outcome and must not get a second
+ * row (#4185 round 1, F5).
+ */
 export function recordMutationThroughSeam(
 	entry: unknown,
 	deps: MutationBridgeDeps,
 ): boolean {
-	return recordMutationOutcome(entry, deps).recorded;
+	const outcome = recordMutationOutcome(entry, deps);
+	if (outcome.reason === "out-of-scope") {
+		// The entry's producer name, read the way the validator above reads it.
+		const producer = (entry as Record<string, unknown> | null)?.["consumer"];
+		recordDegradationOnce({
+			kind: "mutation-bridge-out-of-scope",
+			subject: `${typeof producer === "string" ? producer : "unknown"}:out-of-scope`,
+			reason: `${outcome.detail ?? "<unknown path>"}: the producer's path is outside the project or unresolvable; bridge bookkeeping was not admitted`,
+		});
+	}
+	return outcome.recorded;
 }
+
+/**
+ * Identity for a direct registration that does not name the activation its
+ * deps were built for (unit tests). A real activation passes the live
+ * `RuntimeCoordinator` (`deps.getRuntime()`), so a fresh module graph rebinds
+ * the shared deps cell (`rebindableProcessBridgeDeps`, #4169).
+ */
+const DEFAULT_ACTIVATION = Symbol("pi-lens:mutation-bridge-activation");
 
 /**
  * Mount the bridge singleton. Call once from inside the extension factory,
  * protected by the caller's module-level flag. Subsequent calls are no-ops
  * (first-wins, `clients/process-bridge.ts` owns the mount body — see that
  * module's header, #2437).
+ *
+ * `activation` is the identity the `deps` were built for. A call carrying a
+ * new one rebinds the shared deps cell, so a `/reload` that re-evaluates the
+ * module graph keeps the mounted bridge pointed at the live runtime (#4169).
  */
-export function registerMutationBridge(deps: MutationBridgeDeps): void {
+export function registerMutationBridge(
+	deps: MutationBridgeDeps,
+	activation: BridgeActivation = DEFAULT_ACTIVATION,
+): void {
+	const currentDeps = rebindableProcessBridgeDeps(
+		"mutation-bridge-deps",
+		1,
+		activation,
+		deps,
+	);
 	registerProcessBridge(MUTATION_BRIDGE_KEY, (): MutationBridge => ({
 		version: 1 as const,
 		recordMutation(entry: MutationBridgeEntry): boolean {
@@ -607,7 +697,12 @@ export function registerMutationBridge(deps: MutationBridgeDeps): void {
 			// also calls, so it gains the `pilens:format:queued` publish with no
 			// translation through v2. A retired lineage keeps the v1 answer
 			// (`true`: the receipt was taken).
-			return recordMutationThroughSeam(entry, deps);
+			const liveDeps = currentDeps();
+			if (!liveDeps) {
+				deps.onUnavailable?.();
+				return false;
+			}
+			return recordMutationThroughSeam(entry, liveDeps);
 		},
 	}));
 }

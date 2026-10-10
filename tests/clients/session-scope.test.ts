@@ -50,6 +50,7 @@ import {
 	successorStartKey,
 	takeHandoff,
 } from "../../clients/session-scope.js";
+import { SUCCESSOR_HANDOFF_TTL_MS } from "../../clients/session-lifecycle.js";
 import {
 	getRememberedLazyTools,
 	rememberLazyTools,
@@ -87,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	clearWidgetState();
 	// The hand-off slot is a process singleton; leave none behind. A
 	// file-less slot is keyed by a ticket, so replace it with a known one.
@@ -316,6 +318,57 @@ function scopeWith(tools: string[]) {
  * witness either direction (mutations c05 and c06 survive there).
  */
 describe("#3612 the hand-off slot (F2)", () => {
+	it("adopts a stashed hand-off just inside the fixed retention window", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		stashHandoff(scopeWith(["ast_grep_search"]), {
+			reason: "fork",
+			sessionFile: "/s/parent.jsonl",
+			targetSessionFile: "/s/child.jsonl",
+		});
+		vi.advanceTimersByTime(SUCCESSOR_HANDOFF_TTL_MS - 1);
+		expect(takeHandoff("fork", "/s/child.jsonl")).toEqual(
+			expect.objectContaining({ "lazy-tool-memory": ["ast_grep_search"] }),
+		);
+	});
+
+	it("retires a hand-off just beyond the window and records dropped activations", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		stashHandoff(scopeWith(["ast_grep_search"]), {
+			reason: "fork",
+			sessionFile: "/s/parent.jsonl",
+			targetSessionFile: "/s/child.jsonl",
+		});
+		vi.advanceTimersByTime(SUCCESSOR_HANDOFF_TTL_MS + 1);
+		expect(takeHandoff("fork", "/s/child.jsonl")).toBeUndefined();
+		const expired = getDegradationSummary().find(
+			(group) => group.kind === "session-scope-handoff-expired",
+		);
+		expect(expired?.count).toBe(1);
+		expect(expired?.latestReasons[0]?.reason).toContain(
+			"dropped 1 activation(s)",
+		);
+	});
+
+	it("superseding a slot retires the old activation stash", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		stashHandoff(scopeWith(["ast_grep_search"]), {
+			reason: "fork",
+			sessionFile: "/s/parent.jsonl",
+			targetSessionFile: "/s/old.jsonl",
+		});
+		stashHandoff(scopeWith(["ast_grep_replace"]), {
+			reason: "fork",
+			sessionFile: "/s/parent.jsonl",
+			targetSessionFile: "/s/new.jsonl",
+		});
+		expect(takeHandoff("fork", "/s/old.jsonl")).toBeUndefined();
+		expect(takeHandoff("fork", "/s/new.jsonl")).toEqual(
+			expect.objectContaining({ "lazy-tool-memory": ["ast_grep_replace"] }),
+		);
+	});
 	it("is taken by the start whose reason and session file equal its key, once", () => {
 		stashHandoff(scopeWith(["ast_grep_search"]), {
 			reason: "fork",

@@ -42,8 +42,10 @@ import { matchingCloseIndex } from "../support/sweep-kit.js";
 // dominant-language auto-warm (#203) must not spawn a real language server
 // against a throwaway temp dir.
 const mockTouchFile = vi.fn(async () => undefined);
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: vi.fn(() =>
 		makeLspServiceDouble({
 			supportsLSP: () => false,

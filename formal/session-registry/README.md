@@ -85,8 +85,21 @@ Three more constants cover the secondary's root and the test worker's exit
   that keeps winning the lock).
 - `Reaper`: the reaper's `pruneDeadInstances` may take the lock directly, off
   the tail, in this process.
-- `SharedSec`: a second declined secondary per session on the same root as the
-  first, which never shuts down inside the model (#3849).
+- `SharedSec`: three holders of one more secondary root `T` (#3849). Holders
+  1 and 2 queue `registerInstanceRoot(T, h)` and later
+  `deregisterInstanceRoot(T, h)`; holder 3 is a reload-gap subagent that never
+  registered `T` and only shuts down. Holders are not tied to a primary
+  session, so one outlives the primary's reload (whole-entry removal, then a
+  new registration). `Evict` is the 32-root cap evicting `T` inside another
+  root's registering write. `rec[h]` is holder `h`'s record in
+  `projectRootHolders`. Three `FixParts` switch the ownership rule on:
+  `holderSet` (a removal ends only its own record and writes nothing when it
+  has none), `holderOthers` (it drops `T` only when no other record lists
+  it) and `holderEvict` (an eviction ends every record of `T` in the same
+  write). Without them a removal drops `T` from the set, and `rec` is the
+  ghost of each landed hold. The `SharedSec` configs leave out the heartbeat,
+  the LSP spawn and the session-tied secondary: none of them writes `T` or a
+  record, and the other configs cover their interleavings.
 
 ## Invariants
 
@@ -101,7 +114,8 @@ Three more constants cover the secondary's root and the test worker's exit
   So a live session is never dropped for good.
 - `NoGhostRoot` also covers a secondary's own root: a root of a secondary
   whose shutdown ran is in the entry only while its removal is still queued or
-  in flight, or a second secondary on the same root still holds it. A removal that gave up leaves the root behind for the rest of the
+  in flight; the shared root `T` only while a holder's record lists it. A
+  removal that gave up leaves the root behind for the rest of the
   session (#3587).
 - `NoExitWhileHeld`: the worker never exits while this process holds the
   registry lock. A killed holder leaves a lock generation of a dead pid behind
@@ -113,11 +127,13 @@ Three more constants cover the secondary's root and the test worker's exit
 - `RootRemovedOnce`: a secondary's root removal runs under a lock at most
   once. The second run is a no-op on the file (the root is gone), but each
   run records `instance-registry-deregister-landed`.
-- `SharedRootHeld`: a root a landed add put in the entry stays in it while a
-  secondary that holds it is live. With `SharedSec`, the second secondary
-  never shuts down, so its root must be in the entry until the session ends.
-  The entry has no holder count, so on the merged behaviour it is violated
-  (#3849).
+- `SharedRootHeld`: the ownership rule (#3849). `T` stays in the entry while
+  any holder's record lists it. A record ends only by its holder's own
+  removal, a whole-entry removal, or a cap eviction of its root, so neither
+  another holder's removal nor a removal by a holder whose hold already ended
+  (a reload, an eviction, an add that found no entry, or none made) frees
+  `T`. `NoGhostRoot` admits `T` only while a record lists it, so the fix
+  cannot pass by never dropping `T`.
 
 ## Results
 
@@ -141,7 +157,10 @@ Three more constants cover the secondary's root and the test worker's exit
 | `TeardownKill` | violated `NoExitWhileHeld` | the worker before #3703 |
 | `TeardownUnbounded` | violated `TeardownProgress` | #3703 round 1 |
 | `ReaperPruneResidue` (stated residual) | violated `NoExitWhileHeld` | |
-| `SecRootSharedTwo` (open defect #3849) | violated `SharedRootHeld` | |
+| `SecRootSharedTwo` (#3849 fix) | pass | |
+| `SecRootSharedTwoLegacy` | violated `SharedRootHeld` | the code before #3849 |
+| `SecRootHolderNoOthers` (fix mutant) | violated `SharedRootHeld` | |
+| `SecRootHolderNoEvict` (fix mutant) | violated `SharedRootHeld` | |
 
 The counterexamples before the fix:
 
@@ -187,12 +206,18 @@ The secondary root and the worker's exit (`SecRoot*`, `Teardown*`,
 - **Unbounded join (`TeardownUnbounded`):** the other process holds the lock
   forever, session 1's queued deregistration waits behind it, and the join
   never ends.
-- **Two secondaries on one root (`SecRootSharedTwo`, #3849):** `reg A` lands,
-  a secondary's `radd T1` lands, a second secondary's `radx T1` lands (the
-  entry is a set, so it is a no-op), the first secondary's removal lands, and
-  the entry drops `T1` while the second still serves it, for the rest of the
-  session. The config is red on the merged behaviour and flips to `pass` when
-  the fix for #3849 adds a holder count.
+- **Shared secondary root (`SecRootSharedTwoLegacy`, #3849):** `reg A`
+  lands, holder 1's `hadd T` lands, the reload-gap holder 3 (which never
+  registered `T`) shuts down, and its removal drops `T` while holder 1's
+  record still lists it. With the fix (`SecRootSharedTwo`) every removal ends
+  only its own record. A scratch probe on the fixed config confirms it
+  reaches both shapes the round-2 review named: holder 1's removal landing
+  in session 2 after the reload while holder 2 holds `T` (R2-2), and the
+  reload-gap shutdown landing while holder 1 holds `T`.
+- **Fix mutants:** `SecRootHolderNoOthers` drops `T` whenever the leaving
+  holder's record listed it, so the first of two holders frees it.
+  `SecRootHolderNoEvict` evicts `T` but keeps the records, so a record
+  outlives its root.
 - **The reaper's hold (`ReaperPruneResidue`):** `pruneDeadInstances` takes the
   lock off the tail and the tail is empty, so the join ends and the worker
   exits holding it. #3703's own body states this: #3617 is only partly
@@ -241,9 +266,12 @@ The secondary root and the worker's exit (`SecRoot*`, `Teardown*`,
 
 Not modelled:
 
-- more than two secondaries on one root, and a second secondary that shuts
-  down. One extra secondary per session (`SharedSec`) is enough to show the
-  missing holder count of #3849 (`SecRootSharedTwo`);
+- more than three holders of one root, and more than one shared root. Two
+  registering holders and one that never registers cover every pairing of
+  the rule (#3849);
+- the intent re-arm of a holder's removal (`deregisterInstanceRoot` re-arms
+  it to the entry's primary, as the session-tied secondary's removal does);
+  the `SharedSec` configs have no heartbeat to read it;
 - `removeLspChild`, which never creates an entry or writes the intent;
 - the reaper and dead-pid pruning, except as the off-tail lock holder of
   `Reaper`. A process that exits after the ghost write is pruned by readers,

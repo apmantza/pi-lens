@@ -42,6 +42,7 @@ import {
 	WordIndexFileTable,
 	WordPostingList,
 } from "./word-index-store.js";
+import { logLatency } from "./latency-logger.js";
 import { logWordIndex } from "./word-index-logger.js";
 
 /**
@@ -123,6 +124,11 @@ export interface WordIndex {
 	replacementStats?: { count: number; totalMs: number; maxMs: number };
 	/** Files whose wire contribution changed since the last serialized snapshot. */
 	dirtyFiles?: Set<string>;
+	/**
+	 * `agent_settled` released this index's serialized memo (#4124); the next
+	 * persist, which the debounce delayed past the settle, releases it again.
+	 */
+	releaseMemoAfterPersist?: boolean;
 	/**
 	 * Running over-estimate of distinct posting backing stores since the last
 	 * compaction (#2117). Incremental edits bump it by one per fresh private
@@ -1901,6 +1907,8 @@ interface SerializedWordIndexCache {
 	slotByFileId: Map<number, number>;
 	tokensByFile: Map<string, Set<string>>;
 	wireBytes: number | null;
+	/** Stalled-run backstop; see {@link retainSerializedWordIndex}. */
+	backstopTimer?: ReturnType<typeof setTimeout>;
 }
 
 const serializedWordIndexCaches = new WeakMap<
@@ -1940,6 +1948,85 @@ export function recordPersistedWordIndexWireBytes(
 	const index = serializedWordIndexSources.get(serialized);
 	const cache = index && serializedWordIndexCaches.get(index);
 	if (cache?.serialized === serialized) cache.wireBytes = wireBytes;
+}
+
+// The serialized memo is also what makes a persist incremental (#2068, #2202):
+// an edit burst's per-edit persists stay O(dirty tokens) only while it is held
+// (measured on this repo, ~3,800 files: 27-34 ms / 12 MB incremental against
+// 432-527 ms / ~200 MB for a full re-serialize). So it is kept while a run
+// edits and released once per run at `agent_settled`
+// ({@link releaseWordIndexMemoAtSettle}), the idle point #4124 is about.
+//
+// The backstop covers a host that never emits `agent_settled` and a stalled
+// run. The maintainer's latency.log holds only n=2 intra-run gaps between
+// project_snapshot_persist records (5.8 s), too few to set a percentile, so
+// the default is a deliberately conservative 10 minutes, re-armed by every
+// serialize. `PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS` overrides it. Node clamps a
+// delay above 2^31-1 ms to 1 ms (and warns), which would release the memo at
+// once on every serialize, so a larger value is clamped to the maximum delay.
+// 0 and anything non-numeric or negative mean "use the default": a backstop
+// that fires immediately is the memo switched off, which is not what 0 asks.
+const DEFAULT_WORD_INDEX_MEMO_BACKSTOP_MS = 10 * 60_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function wordIndexMemoBackstopMs(): number {
+	const raw = Number(process.env.PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS);
+	return Number.isFinite(raw) && raw > 0
+		? Math.min(raw, MAX_TIMER_DELAY_MS)
+		: DEFAULT_WORD_INDEX_MEMO_BACKSTOP_MS;
+}
+
+/**
+ * Hold `entry` as `index`'s memo and (re)arm the backstop. The timer closure
+ * holds the index only weakly: a strong reference would keep a replaced
+ * session's index and its wire form alive for the whole delay.
+ */
+function retainSerializedWordIndex(
+	index: WordIndex,
+	entry: SerializedWordIndexCache,
+): void {
+	const prior = serializedWordIndexCaches.get(index);
+	if (prior) clearTimeout(prior.backstopTimer);
+	serializedWordIndexCaches.set(index, entry);
+	const ref = new WeakRef(index);
+	const timer = setTimeout(() => {
+		const target = ref.deref();
+		if (target) releaseWordIndexMemo(target, "backstop");
+	}, wordIndexMemoBackstopMs());
+	timer.unref?.();
+	entry.backstopTimer = timer;
+}
+
+/**
+ * Drop the incremental-serialize memo of `index`; the decoded index is
+ * untouched. One latency.log row per release of a held memo (a release of
+ * nothing is silent), so the settle and the backstop can each be observed.
+ */
+function releaseWordIndexMemo(
+	index: WordIndex,
+	trigger: "settle" | "post_settle_persist" | "backstop",
+): void {
+	const memo = serializedWordIndexCaches.get(index);
+	if (!memo) return;
+	clearTimeout(memo.backstopTimer);
+	serializedWordIndexCaches.delete(index);
+	logLatency({
+		type: "phase",
+		phase: "word_index_memo_released",
+		filePath: "<pi-lens>",
+		durationMs: 0,
+		metadata: { trigger, files: memo.serialized.files.length },
+	});
+}
+
+/** `agent_settled`: the run is over, so release the memo (now and after a pending persist). */
+export function releaseWordIndexMemoAtSettle(index: WordIndex): void {
+	releaseWordIndexMemo(index, "settle");
+	// A per-edit persist is debounced (1.5 s), so the run's last edit can persist
+	// after this settle; that persist would re-create the memo and hold it until
+	// the backstop. The mark makes that one persist release it again; any later
+	// edit's schedule clears it, so a new run keeps its memo.
+	index.releaseMemoAfterPersist = true;
 }
 
 let _lastSerializeWork: WordIndexSerializeWork | undefined;
@@ -2147,7 +2234,7 @@ export function serializeWordIndex(index: WordIndex): SerializedWordIndex {
 	const cache = prior
 		? serializeWordIndexIncrementally(index, prior)
 		: serializeWordIndexFull(index);
-	serializedWordIndexCaches.set(index, cache);
+	retainSerializedWordIndex(index, cache);
 	serializedWordIndexSources.set(cache.serialized, index);
 	index.dirtyFiles?.clear();
 	return cache.serialized;
@@ -2459,7 +2546,7 @@ export function deserializeWordIndex(
 		}
 	}
 	if (canonical) {
-		serializedWordIndexCaches.set(index, {
+		retainSerializedWordIndex(index, {
 			serialized: data,
 			slotByFileId,
 			tokensByFile,
@@ -2667,6 +2754,10 @@ async function writeWordIndexSnapshot(
 		snapshot.wordIndex = serializeWordIndex(index);
 		const serializeMs = performance.now() - serializeStartedAt;
 		saveProjectSnapshot(cwd, snapshot);
+		if (index.releaseMemoAfterPersist) {
+			index.releaseMemoAfterPersist = false;
+			releaseWordIndexMemo(index, "post_settle_persist");
+		}
 		const writeMs = performance.now() - serializeStartedAt - serializeMs;
 		dbg?.(
 			`word-index persist: ${index.docCount} files, ${index.postings.size} tokens`,
@@ -2721,6 +2812,7 @@ export function scheduleWordIndexPersist(
 	dbg?: (msg: string) => void,
 ): void {
 	const key = path.resolve(cwd);
+	index.releaseMemoAfterPersist = false;
 	getWordIndexPersistScheduler().schedule(key, { cwd: key, index, dbg });
 }
 

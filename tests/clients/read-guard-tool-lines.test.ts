@@ -1557,6 +1557,95 @@ describe("getTouchedLinesForGuard — confusable Unicode hyphen normalization (#
 	});
 });
 
+describe("getTouchedLinesForGuard — normalized raw-span mapping (#4265)", () => {
+	function resolve(fileContent: string, oldText: string, unchanged?: boolean) {
+		const env = setupTestEnvironment("rg-normalized-raw-span-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, fileContent);
+			return getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [{ oldText, newText: "replacement" }],
+					},
+				},
+				filePath,
+				undefined,
+				undefined,
+				undefined,
+				unchanged,
+			);
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	it("maps the issue's full-width punctuation to the exact raw span", () => {
+		const env = setupTestEnvironment("rg-4265-production-span-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			const raw = "const spinner（避免 `innerHTML`） = true;\n";
+			fs.writeFileSync(filePath, raw);
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{
+								oldText: "const spinner(避免 `innerHTML`) = true;",
+								newText: "replacement",
+							},
+							{ oldText: "missing second edit", newText: "replacement" },
+						],
+					},
+				},
+				filePath,
+			);
+			expect(result.preflightError).toMatch(/RETRYABLE/);
+			expect(result.partiallyApplicable?.[0]).toMatchObject({
+				appliedSpanText: raw.trimEnd(),
+				spanStart: 0,
+				spanEnd: raw.trimEnd().length,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("maps the reverse normalized direction and preserves trimEnd-only edits", () => {
+		const reverse = resolve(
+			"const spinner(避免 `innerHTML`) = true;\n",
+			"const spinner（避免 `innerHTML`） = true;",
+		);
+		expect(reverse.preflightError).toBeUndefined();
+		expect(
+			resolve("const value = 1;\n", "const value = 1;   ").preflightError,
+		).toBeUndefined();
+	});
+
+	it("rejects absent text and length-expanding NFKC folds", () => {
+		expect(
+			resolve("const value = 1;\n", "const missing = 2;").touchedLines,
+		).toBeUndefined();
+		expect(
+			resolve("const office = ﬁ;\n", "const office = fi;").touchedLines,
+		).toBeUndefined();
+	});
+
+	it("uses the unchanged-read wording only when the file hash is unchanged", () => {
+		const unchanged = resolve("const current = 1;\n", "const stale = 1;", true);
+		expect(unchanged.preflightError).toContain(
+			"file is unchanged since your last read",
+		);
+		expect(unchanged.preflightError).toContain("oldText was not found");
+		const changed = resolve("const current = 2;\n", "const stale = 1;", false);
+		expect(changed.preflightError).toContain("file has likely changed");
+	});
+});
+
 // ── #1053/#2402: preflight carries spans + snapshot identity; exact retries ──
 describe("getTouchedLinesForGuard — preflight spans and exact-retry recognition (#2402)", () => {
 	it("carries spans resolved in the snapshot's LF view on a CRLF file", () => {

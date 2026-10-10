@@ -23,7 +23,7 @@ import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 
 const readCachedDiagnosticsForServers = vi.hoisted(() => vi.fn());
 const observeLateAuxiliaryAnswer = vi.hoisted(() => vi.fn());
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	// Only `getLSPService` crosses this seam in handleTurnEnd's import graph;
 	// the double still carries the full surface so a method this path grows
 	// later cannot throw into a swallow-all catch (#2582).

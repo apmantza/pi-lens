@@ -442,6 +442,8 @@ const TREE_SCANNER_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"walks the unpacked `npm pack` tarball (the published file set, #3219), not a tracked-source population; its real pack runs in the Unit tests lane",
 	"tests/real-harness/fixture-shape.test.ts":
 		"enumerates a production path for behavior/fixture assertions, not a production population scan",
+	"tests/real-harness/outside-root.test.ts":
+		"enumerates a production path for behavior/fixture assertions, not a production population scan",
 	"tests/scripts/pre-push-targeted-tests.test.ts":
 		"pins the pre-push selector's production-versus-tests scanner arming against the live collectTestFiles inventory; it checks hook selection classes, not a tests-tree defect population",
 	"tests/support/tests-tree-write-guard-race.test.ts":
@@ -515,6 +517,8 @@ const REVIEWED_EXEMPTION_REASON_SHA256: Readonly<Record<string, string>> = {
 	"tests/packaging-pack-manifest.test.ts":
 		"a23d57340227888c7a1cdef6804380a521059657a230689a9f04cc1f14b36823",
 	"tests/real-harness/fixture-shape.test.ts":
+		"d7b3f6416a0c3322ccacd55c509f742554dda016cb99a2ff0f383ef33578ae13",
+	"tests/real-harness/outside-root.test.ts":
 		"d7b3f6416a0c3322ccacd55c509f742554dda016cb99a2ff0f383ef33578ae13",
 	"tests/scripts/pre-push-targeted-tests.test.ts":
 		"16cca8c9c3dc8ab143a20b9464160dc66889beff2afa1e442a5a2bf6e4ef0a59",

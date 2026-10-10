@@ -8,3 +8,5 @@ invalid:
   - 'throw TypeError("x")'
   - 'throw RangeError("x")'
   - 'throw SyntaxError("x")'
+  - 'throw URIError("x")'
+  - 'throw EvalError("x")'

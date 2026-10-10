@@ -76,9 +76,11 @@ describe("covers-class sweep — identity-valued config fields (#3968)", () => {
 			"name",
 			"extensions",
 			"command",
+			"role",
 			"args",
 			"rootMarkers",
 			"env",
+			"initializationOptions",
 		]);
 		const identityValued = new Set([
 			// Members are dispatch runner ids (another registry's identity) —

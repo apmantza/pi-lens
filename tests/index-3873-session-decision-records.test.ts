@@ -1134,7 +1134,7 @@ describe("#3873 F1: a formatter give-up leaves a per-file row at chain time", ()
 			});
 			const late = `${which}_format_late_resync`;
 
-			chainLateFormatResync(
+			void chainLateFormatResync(
 				settled,
 				which,
 				{ toolName: "write", filePath: "/repo/f.ts", startedAt: Date.now() },
@@ -1151,4 +1151,24 @@ describe("#3873 F1: a formatter give-up leaves a per-file row at chain time", ()
 			expect(await rows(late)).toHaveLength(1);
 		});
 	}
+
+	it("swallows a rejected late resync without an unhandled rejection", async () => {
+		// Recurrence (#3858): the abandoned formatter's detached continuation must
+		// not turn a late formatter/LSP failure into a host-level unhandled rejection.
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			void chainLateFormatResync(
+				Promise.reject(new Error("late formatter failed")),
+				"inband",
+				{ toolName: "write", filePath: "/repo/f.ts", startedAt: Date.now() },
+				() => {},
+			);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
 });

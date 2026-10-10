@@ -10,7 +10,7 @@ import {
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	// `supportsLSP: false` is the only method this suite's path reads; the rest
 	// of the surface comes from the factory (#2592).
 	getLSPService: () => makeLspServiceDouble({ supportsLSP: () => false }),

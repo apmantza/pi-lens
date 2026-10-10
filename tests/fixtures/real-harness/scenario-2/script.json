@@ -1,0 +1,1 @@
+[[{"type":"toolCall","name":"pi_lens_activate_tools","id":"scenario-2-activate","arguments":{"tools":["ast_grep_search"]}}],[{"type":"text","text":"fork"}]]

@@ -1,4 +1,6 @@
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FIXTURE_ROOT = path.join(process.cwd(), "project-trust-fixture");
@@ -40,7 +42,7 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function setup() {
+	async function setup(admitted = false) {
 		const trust = await import("../../../clients/project-trust.js");
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const spawn = vi.fn(async () => ({
@@ -60,6 +62,7 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 				id: "python",
 				name: "Python",
 				extensions: [".py"],
+				...(admitted ? { trustAllowed: true } : {}),
 				root: async () => FIXTURE_ROOT,
 				spawn,
 			},
@@ -67,7 +70,7 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		return { trust, service: new LSPService(), spawn };
 	}
 
-	it("refuses to spawn a server when the host denied project trust", async () => {
+	it("keeps the service backstop for a raw built-in server when trust is denied", async () => {
 		const { trust, service, spawn } = await setup();
 		trust.setProjectTrustState("untrusted");
 
@@ -76,13 +79,6 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		expect(spawn).not.toHaveBeenCalled();
 		expect(createLSPClient).not.toHaveBeenCalled();
 		expect(client).toBeUndefined();
-		expect(logExtension).toHaveBeenCalledWith(
-			expect.objectContaining({
-				level: "warn",
-				message: "install/materialization blocked: lsp install: python",
-				metadata: expect.objectContaining({ context: "lsp install: python" }),
-			}),
-		);
 		trust.resetProjectTrust();
 	});
 
@@ -107,6 +103,56 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(client?.client).toBeTruthy();
+	});
+
+	it("refuses an unknown-trust project-local built-in binary through launchLSP", async () => {
+		const project = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-project-local-lsp-"),
+		);
+		const binDir = path.join(project, "node_modules", ".bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		const binary = path.join(binDir, "python");
+		fs.writeFileSync(binary, "#!/bin/sh\n");
+		fs.chmodSync(binary, 0o755);
+		const { trust, service, spawn } = await setup();
+		const { launchLSP } = await import("../../../clients/lsp/launch.js");
+		getServersForFileWithConfig.mockReturnValue([
+			{
+				id: "python",
+				name: "Python",
+				extensions: [".py"],
+				root: async () => project,
+				spawn: async (root: string) => {
+					await launchLSP("python", [], {
+						cwd: root,
+						env: {
+							PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+						},
+					});
+					return undefined;
+				},
+			},
+		]);
+		const client = await service.getClientForFile(
+			path.join(project, "main.py"),
+		);
+		expect(client).toBeUndefined();
+		expect(spawn).not.toHaveBeenCalled();
+		expect(
+			logExtension.mock.calls.filter(
+				([entry]) =>
+					entry.message ===
+					"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+			),
+		).toHaveLength(1);
+		expect(logExtension).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message:
+					"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+			}),
+		);
+		trust.resetProjectTrust();
+		fs.rmSync(project, { recursive: true, force: true });
 	});
 
 	it("forces allowInstall=false for the spawn options under denial", async () => {

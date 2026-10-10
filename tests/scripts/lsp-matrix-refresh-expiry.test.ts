@@ -635,22 +635,52 @@ describe("#3401 refresh entry edges", () => {
 		expect(cellOf(out, "svelte", "src")).toBe("ci");
 	});
 
-	it("writes an observed first-publish class at once, in either direction", () => {
-		const toEmptyFirst = nightly(FIXTURE, 0, [
+	it("keeps a single-night first-publish flip pending", () => {
+		// Recurrence (#3310): one noisy nightly flipped a direct server to
+		// empty-first and made the census demand a live hold marker.
+		const result = nightly(FIXTURE, 0, [
 			observation("vue", { firstPublish: "empty-first" }),
 		]);
-		expect(cellOf(toEmptyFirst.text, "vue", "first-publish")).toBe(
-			"empty-first",
-		);
-		const again = nightly(
-			nightly(FIXTURE, 0).text,
-			FIRST_PUBLISH_EXPIRY_DAYS + 5,
-		).text;
-		expect(cellOf(again, "vue", "first-publish")).toBe("unknown");
-		const back = nightly(again, FIRST_PUBLISH_EXPIRY_DAYS + 6, [
+		expect(cellOf(result.text, "vue", "first-publish")).toBe("direct");
+		expect(result.pendingLangs).toEqual(["vue"]);
+		expect(parseRefreshState(result.text)["first-publish"]?.vue).toEqual({
+			pendingFirstPublish: "empty-first",
+			runs: 1,
+		});
+	});
+
+	it("commits a first-publish flip after two agreeing nights", () => {
+		const first = nightly(FIXTURE, 0, [
+			observation("vue", { firstPublish: "empty-first" }),
+		]);
+		const second = nightly(first.text, 1, [
+			observation("vue", { firstPublish: "empty-first" }),
+		]);
+		expect(cellOf(second.text, "vue", "first-publish")).toBe("empty-first");
+		expect(second.committedLangs).toEqual(["vue"]);
+		expect(
+			parseRefreshState(second.text)["first-publish"]?.vue,
+		).toBeUndefined();
+	});
+
+	it("clears a pending first-publish flip when the observation reverts", () => {
+		const first = nightly(FIXTURE, 0, [
+			observation("vue", { firstPublish: "empty-first" }),
+		]);
+		const reverted = nightly(first.text, 1, [
 			observation("vue", { firstPublish: "direct" }),
 		]);
-		expect(cellOf(back.text, "vue", "first-publish")).toBe("direct");
+		expect(cellOf(reverted.text, "vue", "first-publish")).toBe("direct");
+		expect(reverted.pendingLangs).toEqual([]);
+		expect(
+			parseRefreshState(reverted.text)["first-publish"]?.vue,
+		).toBeUndefined();
+
+		const newFlip = nightly(reverted.text, 2, [
+			observation("vue", { firstPublish: "empty-first" }),
+		]);
+		expect(cellOf(newFlip.text, "vue", "first-publish")).toBe("direct");
+		expect(newFlip.committed).toBe(0);
 	});
 
 	it("merges src for an observed lang only, and defaults the source to ci", () => {
@@ -682,7 +712,11 @@ describe("#3401 refresh entry edges", () => {
 		const out = nightly(doc, 0, [
 			observation("vue", { firstPublish: "empty-first" }),
 		]).text;
-		expect(cellOf(out, "vue", "first-publish")).toBe("empty-first");
+		expect(cellOf(out, "vue", "first-publish")).toBe("direct");
+		expect(parseRefreshState(out)["first-publish"]?.vue).toEqual({
+			pendingFirstPublish: "empty-first",
+			runs: 1,
+		});
 		expect(out).toContain("| 1 | 2 |");
 	});
 

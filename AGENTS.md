@@ -85,8 +85,10 @@ The principles govern building, testing, and closes-versus-refs. pi-lens adds:
   model in step with the code. `formal/coverage-map.json` maps source globs to
   model families; the PR-body lint requires a `.tla`/`.cfg` change under any one
   of a mapped row's families, or a `TLA+ unaffected: <family> — <reason>` line
-  for one of them. `unmodelled` rows and rows of 4+ families stay advisory. A
-  TLA lane that adds a family adds its map row (#3802).
+  for one of them. `unmodelled` rows and rows of 4+ families stay advisory,
+  except the `index.ts` row, which gates per lifecycle hook handler a changed
+  hunk lands in (an edit outside every handler prints a note). A TLA lane that
+  adds a family adds its map row (#3802, #3878).
 
 <important if="delegating work or coordinating a lane">
 
@@ -191,6 +193,29 @@ the surface they bite; each block loads only when its trigger applies.
 39. **Walk-up result used as eligibility:** return ownership and start-directory
     identity separately; enumerate root-position by ambient-input cells.
 
+64. **Named path vs written set:** a guard keyed on the path a tool NAMES must
+    hold for every path the tool WRITES; enumerate the written set (a rename's
+    importers, an `ast_grep_replace` folder or its project default, a
+    server-initiated `workspace/applyEdit` with no call at all) and key the
+    permission per call, never per path. Three rounds on the read guard's
+    authorship seam (#4187 R2-3, R4-1, R5): the pre-write retire covered the
+    named path while the post-write advance covered every recorded one, so a
+    file nothing checked was re-baselined over another writer's bytes. The
+    screen: for each writer, table named-at-call against actually-written, and
+    ask which rule answers for a path in the second column only.
+    A first credit from a bridge is range-scoped to the bytes it reports, and
+    settled-sweep drift never creates authorship (#4210); screen the next
+    positional edit both inside and outside the reported range. This is the
+    bridge/LSP/native-edit rule only: recognized bash (#4131 R2), pipeline
+    sibling files, and agent_end are pinned whole-file exceptions.
+
+65. **Unknown authorship range:** a producer that cannot recover a truthful
+    range must carry UNKNOWN to `ReadGuard.creditAuthorship`; UNKNOWN retires
+    the existing scoped license and creates none. Only an explicit
+    `whole-file` signal may widen authorship. Enforced at
+    `clients/mutation-bridge.ts` and `clients/read-guard.ts`, with the
+    F-4210-2 production bridge witness.
+
 </important>
 
 <important if="adding or reading a cache, durable record, or project-intelligence state">
@@ -252,6 +277,15 @@ the surface they bite; each block loads only when its trigger applies.
 
 ### a delivery surface or lane
 
+Project-wide scanner delivery has one owner per live worklist. The primary
+session owns turn-end delivery; a concurrent secondary owns only its own
+file-scoped worklist and receives no project-wide scanner output.
+
+| Producer population | Primary turn_end | Secondary turn_end |
+|---|---|---|
+| Project-wide scanners (gitleaks, knip, jscpd, and equivalent shared stores) | admit and deliver | suppress at the delivery gate |
+| Session-owned file or runner findings | admit its own session | admit its own session |
+
 5. **Dropped side channel:** trace flags, bindings, and provenance through
    spreads, maps, filters, and JSON serialization.
 
@@ -260,6 +294,10 @@ the surface they bite; each block loads only when its trigger applies.
     path discloses its truncation on the rendered surface; a count recorded
     only in `latency.log` is not disclosure (#3166 r2: an 80-finding input
     bound zeroed a neighbour's genuine errors, counted only in the log).
+    An out-of-session-root project edit records one bounded degradation and
+    uses the existing advisory notice seam; intended vendor skips and pi-owned
+    OS-temp artifacts stay silent (`clients/runtime-tool-result.ts`,
+    `clients/ephemeral-root.ts`).
 
 26. **Old-role filter on a substitute:** compare fallback output with the
     substituted surface's contract, including non-blocking findings.
@@ -416,7 +454,12 @@ the surface they bite; each block loads only when its trigger applies.
 ### a test double, ratchet or sweep
 
 7. **Vacuous test:** prove the real entry point and real fixture arm. A skip is
-   visible, a mock has the required fields, and the test fails pre-fix.
+   visible, a mock has the required fields, and the test fails pre-fix. A hook
+   handler that swallows its own throw (`handleToolCall` returns `undefined`
+   and records `tool-call-handler-throw`) reads a crash as the verdict under
+   test: call it through `runHandlerExpectingNoThrow`
+   (`tests/support/handler-verdict.ts`; the pi mock does it for `tool_call`
+   hooks), enforced by `tests/config/handler-verdict-sweep.test.ts` (#4182).
 
 8. **Name heuristic:** a filename skip has an observable count and a content
    escape hatch; never silently drop a real file.
@@ -477,6 +520,10 @@ the surface they bite; each block loads only when its trigger applies.
 
 17. **Process latch for session state:** every once-latch has a session reset;
     session dedupe belongs in the degradation ledger where possible.
+    Host `session_start` admission survives extension factory re-runs through
+    the process-lifetime `WeakSet<object>` in `clients/session-scope.ts`:
+    pi's RPC re-delivery reuses one event object, while each genuine start
+    allocates another, and weak identity needs no `session_shutdown` release.
 
 19. **Re-derived identity:** carry resolved identity or correlation across
     asynchronous stages; do not reconstruct it from ambiguous later inputs.
@@ -516,6 +563,15 @@ the surface they bite; each block loads only when its trigger applies.
 58. **Known identity carried forward:** when a producer knows an identity,
     carry it through asynchronous stages instead of re-deriving it downstream
     (#3643 F3).
+
+**Expired successor hand-off:** an expired successor marker may authorize
+    its named interrupted successor only for the fixed retention window in
+    `clients/session-lifecycle.ts`; the shared slot retires at that boundary
+    and records its dropped activation count before releasing the payload.
+    Its test-only pending-window override is accepted only in a Vitest process;
+    production keeps the fixed 60-second pending window.
+    The window and supersession paths are pinned by the session lifecycle and
+    session-scope tests.
 
 </important>
 
@@ -558,6 +614,10 @@ the surface they bite; each block loads only when its trigger applies.
   legacy migrations, and namespaces live in the config-location/schema modules.
   A new config key or environment flag needs a forcing function, stability tier,
   diagnostic code, tests, and docs.
+- `rules.<id>.ignorePaths` is an experimental, project-relative path denial
+  resolved by config-core with array-union semantics: global entries cannot be
+  cleared by project config. Ast-grep and tree-sitter apply it before scanning;
+  other runner output uses the shared rule-policy filter.
 - `lens_diagnostics` has one model-facing diagnostic surface. `source` is
   `session` or `lsp`; `scope` is `paths` or `workspace`; explicit paths always
   win. Severity is a threshold. Retired compatibility names must not widen a
@@ -613,12 +673,21 @@ the surface they bite; each block loads only when its trigger applies.
   process-tree cleanup, output caps, typed failure kinds, and bounded timeouts.
   Installs pass `ignoreAmbientSignal: true` and remain trust-gated.
 - Project trust is consumed through `isProjectTrusted`; pi-lens never registers
-  the host's trust-answer handler. Missing trust APIs are unknown/fail-open for
-  compatibility; a throwing accessor is fail-closed.
+  the host's trust-answer handler. `compileLspRegistry` is the one admission
+  seam for LSP executable fields: global config and built-ins remain allowed,
+  while project `command`, command overrides, `env`, and
+  `initializationOptions` require pi's `trusted` answer. Missing trust APIs are
+  fail-closed for those project fields with one bounded notice; installs keep
+  their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
+  and the LSP config/service suites pin the boundary.
 - LSP service generations, workspace-sweep holds, and repair latches use
   versioned process singletons. Reset tears down the old generation before a
   replacement can spawn. Idle eviction is lease-guarded and clears ownership
   timers on every removal path.
+- Production callers use the grouped experimental `LspCapabilities` adapter in
+  `clients/lsp/capabilities.ts`; direct `LSPService` module imports are limited
+  to that adapter and are enforced by
+  `tests/config/lsp-capabilities-import-sweep.test.ts` (#2372/#277).
 - Idle-eviction policy is the registry's `idleEviction` field, declared per
   server. The nightly (`scripts/measure-lsp-idle-eviction.mjs`) measures every
   registry server's eviction cost and respawn safety into
@@ -632,6 +701,22 @@ the surface they bite; each block loads only when its trigger applies.
   refresh-state block; never auto-merged, never demotes). `tests/config/lsp-idle-eviction-measurement.test.ts`
   fails when a registry server can go unmeasured without an admission or when
   the committed measurement vetoes a server declared `transparent`.
+- The server-role vocabulary and the declared trait table have one owner,
+  `clients/lsp/server-traits.ts` (#1488, #1756 stage 1). Ask `isAuxiliary`,
+  never a comparison against the role literal, and read `notifyInflightLimit`
+  or `replyOrdering` through `serverTraits`, never by re-deriving a default;
+  `LspServerRole` is declared there and nowhere else, so a second
+  `"primary" | "auxiliary"` is a re-fork. `LSPServerInfo.role` is
+  non-optional: a row declares it, or the factory and custom-server builders
+  apply `DEFAULT_LSP_SERVER_ROLE`. Measured-behaviour markers (`silentOnClean`
+  and the census siblings named by `STRATEGY_TABLE_TRAITS`) stay on
+  `wait-policy/strategies.ts`, which their probes and expiry tests own; the two
+  tables stay disjoint. The auxiliary lifecycle and wait policy lives in
+  `clients/lsp/auxiliary-lifecycle.ts`, the diagnostic policy in
+  `clients/dispatch/auxiliary-lsp.ts`. Enforced by
+  `tests/config/lsp-role-predicate-sweep.test.ts` (production and `scripts/`
+  trees at zero inlined predicates) and
+  `tests/config/lsp-server-trait-table.test.ts` (registered-or-fail).
 - LSP roots never exceed the session-cwd ceiling. Root/config discovery uses
   shared marker seams. Child cwd resolution uses `resolveToolCwd` and its
   caller-specific markers.
@@ -647,6 +732,10 @@ the surface they bite; each block loads only when its trigger applies.
 - Per-path LSP notifications serialize read/build/send/record work. Pull
   cancellation blocks a same-path replacement until settlement. Waits are
   deadline- and abort-bounded, and silence is never clean.
+- `touchFile` fires a type-2 watched-file announcement at entry for the first
+  seen content hash of a path, before the owner's didChange; it reaches every
+  other live client of the same server across package roots through the client
+  watch queue. Content hashes are session-scoped and bounded (#4156).
 - A capability the client advertises has a sender, or the advertisement states
   why it has none. `textDocument/didSave` follows a landed didOpen/didChange
   only when the server declared `textDocumentSync.save` and the caller declared
@@ -654,7 +743,11 @@ the surface they bite; each block loads only when its trigger applies.
   query, never a warm-up, cascade or sweep touch.
 - `touchFile` freezes content-bound auxiliary coverage at merge time. A later
   publication cannot undo a finding drop. Auxiliary gaps narrow coverage and
-  never turn a primary answer inconclusive.
+  never turn a primary answer inconclusive. When a primary touch is
+  inconclusive but the merged result contains answered diagnostics, dispatch
+  preserves only diagnostics from content-confirmed contributors and carries
+  the named primary gap as unconfirmed; only an empty inconclusive result is
+  skipped (#4219, #4231).
 - The explicit `lsp_diagnostics` read checks `exceedsLspSyncLimits` once before
   warm attachment or `touchFile`; an over-bound file returns a `too_large`
   result with its byte/line measurement and records
@@ -662,6 +755,11 @@ the surface they bite; each block loads only when its trigger applies.
 - Every new LSP server has a smoke fixture or a documented alternate/toolchain
   exemption. Real LSP-spawn tests belong in the serialized `lsp-spawn-heavy`
   lane.
+- A `fallbackFor` family is one primary for workspace grouping: a selected
+  preferred server and its sequential alternate do not disable the workspace-
+  pull fast path merely because both registry members match the file. Measure
+  the alternate independently; do not attribute the preferred server's
+  capabilities or diagnostics to it (#3939).
 
 </important>
 <important if="touching dispatch, runners, formatters, and installers rules">
@@ -687,6 +785,10 @@ the surface they bite; each block loads only when its trigger applies.
 - Managed tools resolve through the registry and sanctioned availability seams.
   Do not hand-roll install, PATH, or package-manager discovery. Use typed
   `SpawnFailure.kind`; repair only `tool-not-found`.
+- Windows LSP startup exit-code-1 failures are repairable only when the shared
+  command resolver finds no command or an npm shim target is absent; present
+  binaries that exit 1 remain runtime failures (#4263, #1199). The launch and
+  repair gate are pinned by `tests/clients/lsp/windows-startup-repair.test.ts`.
 - Expected skips remain distinct from clean success and failure. Extend the
   closed `RUNNER_SKIP_REASONS` taxonomy when policy intentionally defers work.
   Preserve the skip reason through runner latency and model-facing delivery.
@@ -740,6 +842,9 @@ the surface they bite; each block loads only when its trigger applies.
 - Every cache states its freshness axes, bound, eviction axis, and invalidation
   source. A bounded entry count does not excuse unbounded bytes, timers, WASM
   objects, or persisted evidence.
+- Tree-sitter's `queryBatchCache` is invalidated by `clearWasmInput` when a
+  trapped query heals, because an in-flight batch may have cached a result that
+  omitted the healed rule (#3834).
 - Async publication carries a generation or epoch and checks it before and
   after awaited work. Graph snapshots are immutable by replacement.
 - Review-graph, snapshot, reverse-dependency, word-index, and call-graph data
@@ -757,9 +862,19 @@ the surface they bite; each block loads only when its trigger applies.
 
 ### Session, telemetry, and delivery
 
+- Registry root ownership (#3849): each holder's record in a pid entry's
+  `projectRootHolders` lists exactly the roots THAT holder registered (`host`
+  for `registerInstance`, a per-activation id for a declined secondary). Only
+  its own `deregisterInstanceRoot`, whole-entry removal, or cap eviction ends
+  a record; a root stays while any record lists it. No anonymous counts; one
+  settle (`settleRootHolders`) for every writer; `getInstanceRoots` reads.
 - Session state is owned by the stable session identity and activation owner.
   Detached callbacks resolve live emitters at delivery time and pair them with
   their own activation context. Never use a process-global latest session.
+- Process-global bridge dependencies and the quiet-window turn-summary holder
+  bind only from a live primary `SessionScope`; `clients/process-bridge.ts`
+  accepts only a strictly newer scope ticket, so a concurrent secondary or
+  stale activation cannot rebind a held bridge/task to its runtime (#4258).
 - Session degradation uses the ledger's bounded once/count APIs and resets at
   the correct primary session boundary. `SessionStartClassification`
   (`clients/session-lifecycle.ts`): `primary` and `sequential-replacement`
@@ -909,10 +1024,30 @@ The four primary host hooks are:
 Do not pair `bumpFileSeq` and change-log writes at a new call site. The mutation
 bridge and opaque-write recovery feed this seam for non-native producers.
 
+Tier-4 mutation attribution is only for third-party tool names. Names in
+`clients/tool-config.ts`'s `PI_LENS_TOOL_NAMES` projection are never learned or
+observed as generic edits, because one pi-lens tool may mix write and read-only
+operations (for example `lsp_navigation`). MCP-only registry names remain
+third-party names on pi and retain the bounded observation path.
+
 The read guard keys all path state through its normalizer. It accepts Read,
 search, LSP, bridge, bash-view, and authored-write evidence, but name-only
 `ls`/`find` output is not file content. Partial edits consume preflight-approved
-spans and never re-search stale bytes.
+spans and never re-search stale bytes. Normalized oldText matches map back to
+one raw span only when the normalized span has no length-expanding fold (for
+example `ﬁ`→`fi`); the existing end validation remains the final guard. When
+oldText is absent, the preflight wording distinguishes an unchanged full-file
+read binding from actual content drift (#4265). Authorship (`writtenThisSession`)
+follows content identity (#4131): it holds the bytes the conversation last
+wrote, `stat` only pre-filters the hash, and another writer's byte change ends
+it at the next zero-read edit, bash write or drain on the file
+(`retireChangedAuthorship`); no later write resumes it. A mutation-bridge
+write (no pre-write check) may create a first authorship but ends an
+existing one; the observed replay alone advances it, its tool_call having
+retired every file it may replay. The store holds at most 4096 files. A branch move keeps it
+iff its write's tool result is on the branch (#3603). FileTime moves only over
+bytes the conversation holds whole: process bridges, observed replays and
+range bridge reads leave it (#3865).
 
 </important>
 ## Commands and gates
@@ -977,7 +1112,10 @@ for a workflow with no `workflow_dispatch` trigger or an edit of comments and
 blank lines, verified against the merge base (#3085). The run id is quoted
 evidence, not verified provenance.
 
-The stale-build guard rejects a missing or older compiled twin. Pre-push fails
+The stale-build guard rejects a missing or older compiled twin. Pre-push and
+`lane:check` also rebuild the bounded `dist/` dependency population before
+governance suites when a bundled file is missing or older than its source.
+Pre-push fails
 when its bounded test-lock wait times out (#3717); `PI_LENS_PREPUSH_LOCK_SKIP=1`
 is the only lock opt-out and is logged to `pre-push.log`. CI stays the gate.
 
@@ -1007,7 +1145,8 @@ uses `getGlobalPiLensLogDir()`. `PILENS_DATA_DIR` relocates project state and
 `displayProjectDataPath`; do not spell a project-data path in agent text.
 
 All loggers use `createNdjsonLogger`. Flush the specific logger before reading
-its file. Relevant logs are `latency.log`, `sessionstart.log`, `cascade.log`,
+its file; graceful `session_shutdown` returns the shared bounded drain before
+pi closes stdin or exits. Relevant logs are `latency.log`, `sessionstart.log`, `cascade.log`,
 `review-graph.log`, `read-guard.log`, `actionable-warnings.log`,
 `extension.log`, `tree-sitter.log`, and `dispositions.log`.
 
@@ -1028,6 +1167,8 @@ peer/dev dependency and must be imported type-only. Lockfiles use the pinned
 npm version. Release notes use one `.changelog/<slug>.md` fragment per PR
 (`audience: user` or `internal`; the release body lists only `user`); never
 edit `CHANGELOG.md` for ordinary PR notes.
+New user-facing fragments begin with a bold lead of at most 100 characters
+(issue references are excluded from the count); internal fragments are exempt.
 
 </important>
 ## Test requirements
@@ -1038,6 +1179,13 @@ processes. Real elapsed-time assertions belong in the serialized
 `wallClockBudgetInclude` lane. Real LSP child tests belong in
 `lsp-spawn-heavy`. Any admitted real spawn or timer carries the flake-shape
 header, baseline row, and lane membership.
+
+The real-pi harness defaults to `--no-session`; a persisted-session witness
+opts into `withRealPi({ persistedSession: true })`, which pins `--session-dir`
+under the probe home and uses pi's documented `--continue` flag for a second
+process. Read lifecycle order from the real `session_scope_transition` rows
+and dead-weight rows, not from the pi mock; the mock does not re-run the
+extension factory or reproduce pi lifecycle ordering.
 
 When the defect is an ordering of awaits on one seam (a coalescing queue, a
 per-key serializer), or the seam has regressed before, write a scheduler
@@ -1082,11 +1230,28 @@ and durable fields must update their registered-or-fail coverage tests.
 ## Rule and analyzer contracts
 
 Ast-grep rules live under `rules/ast-grep-rules/` and tree-sitter rules under
-`rules/tree-sitter-queries/`. Use AST patterns over regex where possible. A
-rule with an unknown post-filter fails closed. Every shipped rule has a real
-behavioral fixture; Java/Kotlin rules use the real CLI path because NAPI lacks
-their grammars. The bundled ast-grep source census is recursive and respects
-project-over-bundled precedence.
+`rules/tree-sitter-queries/`; shared user rules use the same layout under
+`<PI_LENS_HOME>/rules/`. Precedence is project > user > bundled, and a
+shadowed rule is excluded from execution. Use AST patterns over regex where
+possible. A rule with an unknown post-filter fails closed. Every shipped rule
+has a real behavioral fixture; Java/Kotlin rules use the real CLI path because
+NAPI lacks their grammars. The bundled ast-grep source census is recursive and
+respects the same precedence.
+
+The mutable rule corpus (project + user roots; bundled stays immutable per
+process) has ONE identity seam, `ruleCorpusFingerprintForCycle` in
+`clients/custom-rule-locations.ts`: a content fingerprint computed at most once
+per dispatch cycle, keyed on `getTurnId()`, and shared by the tree-sitter
+loader memo and the ast-grep source fingerprint, so both families refresh on
+the same boundary. A per-call walk of that corpus is a measured regression
+(#4212, 1000 warm loader calls over 170 rule files: ~1000x master for a
+per-call content hash, ~220x for a per-call stat signature, ~1.1x for the
+per-cycle memo), and a per-cycle memo that omits the turn identity never
+invalidates. A path that must see an edit inside its own
+cycle passes `force`, which recomputes and republishes into the cycle; the
+dispatch runner does, and its RuleCache key is the content fingerprint
+recomputed per dispatched file. `resolveBaselineSgconfig` forces because #497
+point 7 pins mid-session freshness for a spawned ast-grep LSP.
 
 Tree-sitter queries compile against the grammar of the file, not the rule's
 language label. Alternative capture groups share capture names. An unsupported or

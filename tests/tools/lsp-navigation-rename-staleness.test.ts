@@ -24,8 +24,10 @@ import {
 } from "../../clients/degradation-ledger.js";
 
 const lsp = vi.hoisted(() => ({ service: undefined as unknown }));
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: () => lsp.service,
 }));
 

@@ -82,8 +82,8 @@ describe("instance-registry root lifecycle (#2130 round 2)", () => {
 			await registerInstance(realRoot);
 
 			// Deliberately NOT awaited, matching the production call site.
-			void registerInstanceRoot(tempRoot);
-			await deregisterInstanceRoot(tempRoot);
+			void registerInstanceRoot(tempRoot, "holder-1");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
 			await _settleRegistryMutationsForTests();
 
 			const entry = readEntry();
@@ -100,10 +100,10 @@ describe("instance-registry root lifecycle (#2130 round 2)", () => {
 			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 			expect(readEntry().projectRoots).toHaveLength(2);
 
-			await deregisterInstanceRoot(tempRoot);
+			await deregisterInstanceRoot(tempRoot, "holder-1");
 			expect(readEntry().projectRoots).toHaveLength(1);
 		});
 	});
@@ -158,7 +158,7 @@ describe("instance-registry root lifecycle (#2130 round 2)", () => {
 				serverId: "fake-ts",
 				command: "fake-tsserver",
 			});
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 			// Precondition: the guess still holds the pin and still says it is a
 			// guess, so the real root really is sitting behind it.
 			const before = readEntry();

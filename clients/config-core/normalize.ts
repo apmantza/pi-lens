@@ -443,6 +443,20 @@ function walkScalar(
 		});
 		return DROPPED;
 	}
+	const minLength = schema?.minLength;
+	if (
+		declared === "string" &&
+		typeof minLength === "number" &&
+		typeof value === "string" &&
+		value.length < minLength
+	) {
+		record(context, {
+			code: "PILENS_CFG_0005",
+			key: pointerOf(context.path),
+			reason: `string must contain at least ${minLength} character${minLength === 1 ? "" : "s"}; ignored`,
+		});
+		return DROPPED;
+	}
 	return checkEnum(value, schema, context) ? value : DROPPED;
 }
 

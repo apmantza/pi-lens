@@ -148,6 +148,37 @@ afterEach(() => {
 });
 
 describe("lens_diagnostics rule policy — delta mode", () => {
+	it("does not replay an ignored cached finding", async () => {
+		const filePath = path.join(tmpDir, "vendor", "cached.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ rules: { "no-eval": { ignorePaths: ["vendor/**"] } } }),
+		);
+		const tool = makeTool(tmpDir, {
+			"actionable-warnings": {
+				files: [
+					{
+						filePath,
+						warnings: [
+							{
+								line: 1,
+								rule: "no-eval",
+								tool: "ast-grep",
+								message: "IGNORED-CACHED-FINDING",
+							},
+						],
+					},
+				],
+			},
+		});
+
+		const result = await run(tool, { mode: "delta" }, tmpDir);
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("IGNORED-CACHED-FINDING");
+		expect(result.details).toMatchObject({ warnings: 0 });
+	});
+
 	it("drops a disabled rule from the actionable warnings cache", async () => {
 		fs.writeFileSync(
 			path.join(tmpDir, ".pi-lens.json"),

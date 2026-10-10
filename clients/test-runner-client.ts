@@ -2392,7 +2392,10 @@ export class TestRunnerClient {
 		}
 
 		// Also look for assertion errors with traceback
-		const tracebackRegex = /_{10,}\s*\n\s*(\w+Error:\s*.+?)(?:\n|$)/gs;
+		// #4148: `\s*\n\s*` was ambiguous over a blank run and `_{10,}` rescanned
+		// its run from every offset; same matches, linear time.
+		const tracebackRegex =
+			/(?<!_)_{10,}[^\S\n]*\n\s*(\w+Error:\s*.+?)(?:\n|$)/gs;
 		while ((match = tracebackRegex.exec(output)) !== null) {
 			// Add to last failure if exists, or create generic
 			if (failures.length > 0 && !failures[failures.length - 1].stack) {

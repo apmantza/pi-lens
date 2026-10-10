@@ -7,6 +7,7 @@
  */
 
 import { getServersForFileWithConfig } from "../config.js";
+import { isAuxiliary } from "../server-traits.js";
 import type { LSPService } from "../index.js";
 import { getStrategy } from "./strategies.js";
 import type { LSPCapabilitySnapshot } from "./capability-snapshot.js";
@@ -80,7 +81,7 @@ export function resolvePrimaryServerForWaitPolicy(
 	| { serverId: string; snapshot: LSPCapabilitySnapshot | undefined }
 	| undefined {
 	const servers = getServersForFileWithConfig(filePath).filter(
-		(s) => s.role !== "auxiliary",
+		(s) => !isAuxiliary(s),
 	);
 	const primary = servers[0];
 	if (!primary) return undefined;

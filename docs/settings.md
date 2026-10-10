@@ -145,8 +145,9 @@ field docs.
 | `actionableWarnings.autoFix.maxFixes` | global | `5` | Cap on quickfixes applied per turn (`0` = report only) |
 | `rules.high-complexity.threshold` | project | `15` | Cyclomatic-complexity threshold |
 | `rules.high-fan-out.threshold` | project | `20` | Distinct-function-call threshold |
-| `rules.<id>.disable` | project | absent | Disable diagnostics for a rule (output-only filter, project-wide; same normalization as `pi-lens-ignore`) |
+| `rules.<id>.disable` | global + project | absent | Disable diagnostics for a rule (output-only filter, project-wide; same normalization as `pi-lens-ignore`) |
 | `rules.<id>.select` | project | absent | Allowlist of rule ids (output-only filter, project-wide across every key; disable wins over select) |
+| `rules.<id>.ignorePaths` | global + project | `[]` | Experimental rule-scoped globs relative to the project root; matching files skip that rule's scan and output. Entries are monotonic across tiers. |
 | `maxProjectFiles` | project | `2000` | Base scale knob; derives five subsystem size budgets |
 | `reviewGraph.maxFiles` | project | derived (clamped `100`–`20000`) | Explicit review-graph file budget |
 | `trivy.enabled` / `trivy.minSeverity` | project | off | Opt-in Trivy vulnerability scanning |

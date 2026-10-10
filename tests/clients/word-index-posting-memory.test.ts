@@ -25,7 +25,9 @@ import {
 	countWordIndexPostingEntries,
 	estimateWordIndexResidentBytes,
 	removeWordIndexDocument,
+	releaseWordIndexMemoAtSettle,
 	searchWordIndex,
+	serializeWordIndex,
 	updateWordIndexDocument,
 	wordIndexKey,
 	wordIndexPostingHits,
@@ -323,5 +325,38 @@ describe("word-index posting footprint (#2069)", () => {
 			{ file: "src/widget.ts", hits: 6, lines: [1, 2] },
 			{ file: "src/other.ts", hits: 3, lines: [1] },
 		]);
+	});
+});
+
+describe("word-index serialized memo footprint (#4124)", () => {
+	it("frees the wire form's heap when the settle releases it, with the decoded index kept", () => {
+		const index = buildWordIndex(makeCorpus(240, 220));
+		const baseline = retainedBytes();
+		serializeWordIndex(index);
+		const held = retainedBytes();
+		releaseWordIndexMemoAtSettle(index);
+		const released = retainedBytes();
+
+		// Recurrence: the memo is a second copy of the index's postings and sat on
+		// the heap for the whole idle life of a session.
+		expect(held - baseline).toBeGreaterThan(1_000_000);
+		expect(held - released).toBeGreaterThan((held - baseline) * 0.8);
+		expect(index.docCount).toBe(240);
+	});
+
+	it("neither the memo nor its armed backstop keeps a dropped index alive", async () => {
+		// Recurrence guard for the backstop timer: a closure holding the index
+		// strongly would pin a replaced session's index and wire form for the
+		// whole delay (10 minutes by default).
+		let ref: WeakRef<WordIndex> | undefined;
+		(() => {
+			const index = buildWordIndex(makeCorpus(20, 40));
+			serializeWordIndex(index);
+			ref = new WeakRef(index);
+		})();
+		// A WeakRef target is only cleared after the job that created it ends.
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		forceCollection();
+		expect(ref?.deref()).toBeUndefined();
 	});
 });

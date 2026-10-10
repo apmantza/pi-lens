@@ -196,6 +196,42 @@ describe("go resolver", () => {
 		expect(resolveRel("go", "cmd/main.go", "fmt")).toEqual([]);
 		expect(resolveRel("go", "cmd/main.go", "github.com/x/y")).toEqual([]);
 	});
+
+	// #4148: the leading `^\s*` became horizontal-only. Same answers as before
+	// for every spelling that put `module` at the start of a line.
+	it.each([
+		["blank and comment lines first", "\n\n// c\nmodule example.com/m\n"],
+		["indented module line", "  \tmodule example.com/m\n"],
+		["CRLF line endings", "go 1.21\r\nmodule example.com/m\r\n"],
+		[
+			"carriage return before the keyword",
+			"go 1.21\r\r\nmodule example.com/m\n",
+		],
+		["tab after the keyword", "module\texample.com/m\n"],
+		["CR-only line endings", "go 1.21\rmodule example.com/m\r"],
+		[
+			"line separator before the line",
+			`go 1.21${String.fromCharCode(0x2028)}module example.com/m\n`,
+		],
+	])("reads the module path with %s", (_name, goMod) => {
+		write("go.mod", goMod);
+		expect(resolveRel("go", "cmd/main.go", "example.com/m/pkg")).toEqual([
+			"pkg/a.go",
+			"pkg/b.go",
+		]);
+	});
+
+	it.each([
+		["keyword inside a longer word", "xmodule example.com/m\n"],
+		["keyword after a comment marker", "// module example.com/m\n"],
+		["keyword mid-line", "go 1.21 module example.com/m\n"],
+	])(
+		"reads no module path when the keyword is not at a line start: %s",
+		(_name, goMod) => {
+			write("go.mod", goMod);
+			expect(resolveRel("go", "cmd/main.go", "example.com/m/pkg")).toEqual([]);
+		},
+	);
 });
 
 describe("java resolver", () => {

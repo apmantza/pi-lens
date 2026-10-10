@@ -20,7 +20,7 @@ describe("formatter session warm/first-use liveness (#1394)", () => {
 				return { success: true, changed: true };
 			},
 		}));
-		vi.doMock("../../clients/lsp/index.js", () => ({
+		vi.doMock("../../clients/lsp/capabilities.js", () => ({
 			getLSPService: () =>
 				makeLspServiceDouble({
 					touchFile: async () => [],

@@ -21,12 +21,15 @@
  * Policy:
  *   - `untrusted` — the host said no or its accessor failed. Block every
  *     install/materialization path (including npx and grammar WASM downloads)
- *     and LSP child process spawn. Discovery and cached/in-process analysis
- *     continue; a missing grammar follows its unavailable path.
- *   - `trusted` / `unknown` — current behavior, unchanged. Fail-open is
- *     deliberate ONLY for `unknown`: a host that never exposed the accessor
- *     never had a trust decision to honor, and degrading it would break every
- *     older pi.
+ *     and pi-lens-managed materialization. LSP project executables are gated
+ *     earlier by `compileLspRegistry`; built-ins and global config remain
+ *     available. Discovery and cached/in-process analysis continue; a missing
+ *     grammar follows its unavailable path.
+ *   - `trusted` — project executable fields may be admitted by the LSP
+ *     registry compiler.
+ *   - `unknown` — install policy remains compatible for pi-lens-owned tools,
+ *     but project-sourced LSP executable fields fail closed at the compiler;
+ *     an older host must not silently run repository commands.
  *
  * Process-wide singleton on purpose: `ensureTool()` and the LSP service sit
  * many layers below any `ctx`, and threading trust through every call site
@@ -179,8 +182,9 @@ export function assertInstallAllowed(context: string): boolean {
 }
 
 /**
- * False only when the host actively denied trust. Gates LSP server child
- * process spawns.
+ * False only when the host actively denied trust. The registry compiler gates
+ * repository-owned LSP fields when the host signal is absent; this downstream
+ * helper preserves the legacy raw-server behavior for older hosts.
  */
 export function isLspSpawnAllowedByTrust(): boolean {
 	return trustState !== "untrusted";

@@ -15,7 +15,7 @@ import {
 	getLSPService,
 	groupFilesByPrimaryServer,
 	runPerServerGroups,
-} from "../clients/lsp/index.js";
+} from "../clients/lsp/capabilities.js";
 import {
 	buildScopeKey,
 	createWorkspaceDiagnosticsCacheContext,
@@ -30,6 +30,7 @@ import {
 	describeRootFallback,
 	type LspRootFallback,
 } from "../clients/lsp/server.js";
+import { isAuxiliary } from "../clients/lsp/server-traits.js";
 import { mapWithConcurrency } from "../clients/map-with-concurrency.js";
 import {
 	combineAbortSignals,
@@ -1022,7 +1023,7 @@ function coveredSourcesForCheck(
 		return [];
 	}
 	for (const server of servers) {
-		const auxiliary = server.role === "auxiliary";
+		const auxiliary = isAuxiliary(server);
 		if (auxiliary && serverScope === "primary") continue;
 		if (unconfirmed.has(server.id)) continue;
 		// The dispatch runner tags the primary language server's findings `lsp`;

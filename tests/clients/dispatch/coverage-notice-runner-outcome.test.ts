@@ -35,6 +35,7 @@ import {
 } from "../../../clients/dispatch/types.js";
 
 const COVERAGE_NOTICE = "Pi-lens jsts analysis unavailable";
+const PYTHON_COVERAGE_NOTICE = "Pi-lens python analysis unavailable";
 
 describe("coverage notice keys on the primary runner's usable result (#3867)", () => {
 	let registry: RunnerRegistry;
@@ -57,8 +58,12 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 		});
 
 	function context() {
+		return contextFor("test.ts");
+	}
+
+	function contextFor(filePath: string) {
 		return createDispatchContext(
-			"test.ts",
+			filePath,
 			"/project",
 			{ getFlag: () => false },
 			new FactStore(),
@@ -249,9 +254,9 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 		expect(result.output).toContain(COVERAGE_NOTICE);
 	});
 
-	it("does not carry the notice when a fallback linter's findings failed it", async () => {
-		// The mirror of the cell above: a fallback run whose own findings failed
-		// it (`blocking_diagnostics`) did cover the file.
+	it("keeps the notice when a type-bearing file's fallback linter finds an issue", async () => {
+		// A fallback run whose own findings failed it (`blocking_diagnostics`) still
+		// covered lint, but not the type capability required by this plan.
 		registry.register({
 			id: "lsp",
 			appliesTo: ["jsts"],
@@ -285,7 +290,137 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 			{ mode: "all", runnerIds: ["lsp", "eslint"] },
 		]);
 
-		expect(result.output).not.toContain(COVERAGE_NOTICE);
+		expect(result.output).toContain(COVERAGE_NOTICE);
+	});
+
+	it("keeps the type-coverage notice for any type-bearing file when lint fallback finds an issue (#3928)", async () => {
+		// #3928: an unavailable primary plus a successful lint-only fallback was
+		// rendered clean. The fallback finding is real,
+		// but it cannot stand in for the missing type-checking verdict.
+		registry.register({
+			id: "lsp",
+			appliesTo: ["jsts"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				throw new Error("spawn typescript-language-server ENOENT");
+			},
+		});
+		registry.register({
+			id: "oxlint",
+			appliesTo: ["jsts"],
+			priority: 10,
+			async run(): Promise<RunnerResult> {
+				return {
+					status: "succeeded",
+					diagnostics: [
+						{
+							id: "oxlint-github-finding",
+							message: "lint issue in hidden project directory",
+							filePath: ".github/bad.ts",
+							severity: "warning",
+							semantic: "warning",
+							tool: "oxlint",
+						},
+					],
+					semantic: "warning",
+				};
+			},
+		});
+
+		const result = await pullWith(contextFor(".github/bad.ts"), [
+			{ mode: "all", runnerIds: ["lsp", "oxlint"] },
+		]);
+
+		expect(result.diagnostics.map((d) => d.id)).toContain(
+			"oxlint-github-finding",
+		);
+		expect(result.output).toContain(COVERAGE_NOTICE);
+	});
+
+	it("applies the same type-coverage rule to Python fallback lint", async () => {
+		registry.register({
+			id: "lsp",
+			appliesTo: ["python"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				throw new Error("spawn pyright-langserver ENOENT");
+			},
+		});
+		registry.register({
+			id: "ruff-lint",
+			appliesTo: ["python"],
+			priority: 10,
+			async run(): Promise<RunnerResult> {
+				return { status: "succeeded", diagnostics: [], semantic: "none" };
+			},
+		});
+
+		const result = await pullWith(contextFor(".config/bad.py"), [
+			{ mode: "all", runnerIds: ["lsp", "ruff-lint"] },
+		]);
+
+		expect(result.output).toContain(PYTHON_COVERAGE_NOTICE);
+	});
+
+	it("lets a non-type-bearing file stay clean when its fallback succeeds", async () => {
+		// #3928 F1: the type-capability guard must not turn ordinary lint
+		// coverage into an incomplete result for JSON and similar file kinds.
+		registry.register({
+			id: "lsp",
+			appliesTo: ["json"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				throw new Error("lsp skipped: server is not ready");
+			},
+		});
+		registry.register({
+			id: "trivy-config",
+			appliesTo: ["json"],
+			priority: 10,
+			async run(): Promise<RunnerResult> {
+				return { status: "succeeded", diagnostics: [], semantic: "none" };
+			},
+		});
+
+		const result = await pullWith(contextFor(".github/workflow.json"), [
+			{ mode: "all", runnerIds: ["lsp", "trivy-config"] },
+		]);
+
+		expect(result.output).not.toContain("analysis unavailable");
+	});
+
+	it("accepts a successful type-capable fallback for Python", async () => {
+		registry.register({
+			id: "lsp",
+			appliesTo: ["python"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				throw new Error("spawn pyright-langserver ENOENT");
+			},
+		});
+		registry.register({
+			id: "pyright",
+			appliesTo: ["python"],
+			priority: 5,
+			async run(): Promise<RunnerResult> {
+				throw new Error("spawn pyright ENOENT");
+			},
+		});
+		registry.register({
+			id: "mypy",
+			appliesTo: ["python"],
+			priority: 10,
+			async run(): Promise<RunnerResult> {
+				return { status: "succeeded", diagnostics: [], semantic: "none" };
+			},
+		});
+
+		const result = await pullWith(contextFor("src/typed.py"), [
+			{ mode: "all", runnerIds: ["lsp", "pyright"] },
+			{ mode: "fallback", runnerIds: ["mypy"] },
+		]);
+
+		expect(result.output).not.toContain(PYTHON_COVERAGE_NOTICE);
 	});
 
 	it("carries the notice when a failed primary has a diagnostic but no failureKind", async () => {

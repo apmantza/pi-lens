@@ -14,7 +14,7 @@ import {
 	StaleWorkspaceEditContentError,
 	workspaceEditDiskPaths,
 } from "./lsp/edits.js";
-import { getLSPService } from "./lsp/index.js";
+import { getLSPService } from "./lsp/capabilities.js";
 import { isUnderDir, normalizeMapKey } from "./path-utils.js";
 import {
 	bounded,

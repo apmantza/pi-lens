@@ -138,7 +138,7 @@ describe("raceToCompletion — auxiliary budgetMs (#1458 S2)", () => {
 				timeoutMs: 10000,
 				graceMs: 0,
 				descriptors: [
-					{ role: "primary" },
+					{ role: "language" },
 					{ role: "auxiliary", budgetMs: 300 },
 				],
 				auxGraceMs: 2000,
@@ -171,7 +171,7 @@ describe("raceToCompletion — auxiliary budgetMs (#1458 S2)", () => {
 				timeoutMs: 10000,
 				graceMs: 0,
 				descriptors: [
-					{ role: "primary" },
+					{ role: "language" },
 					{ role: "auxiliary", budgetMs: 3500 },
 				],
 				auxGraceMs: 2000,
@@ -204,7 +204,7 @@ describe("raceToCompletion — auxiliary budgetMs (#1458 S2)", () => {
 				timeoutMs: 10000,
 				graceMs: 0,
 				descriptors: [
-					{ role: "primary" },
+					{ role: "language" },
 					{ role: "auxiliary", budgetMs: 1800 },
 				],
 				auxGraceMs: 2000,
@@ -236,7 +236,7 @@ describe("raceToCompletion — auxiliary budgetMs (#1458 S2)", () => {
 				timeoutMs: 10000,
 				graceMs: 0,
 				// No budgetMs on the auxiliary descriptor — flat 500ms applies.
-				descriptors: [{ role: "primary" }, { role: "auxiliary" }],
+				descriptors: [{ role: "language" }, { role: "auxiliary" }],
 				auxGraceMs: 500,
 			},
 		);

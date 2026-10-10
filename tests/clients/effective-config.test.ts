@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Statically imported, NOT `await import()` inside the first test body. Both
 // spellings work — each of these reads `PI_LENS_HOME` lazily, per call — but a
 // dynamic import pays for the whole module graph (config resolution, the LSP
@@ -43,6 +43,10 @@ import {
 // agree with a wrong implementation on one platform.
 import { homeRelativePath } from "../../clients/path-utils.js";
 import { removeTempDirSync } from "./test-utils.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 
 // The extension log is an ndjson sink, not the terminal; a fixture that
 // deliberately carries a legacy location would otherwise spray test output.
@@ -63,7 +67,14 @@ vi.mock("../../clients/extension-log.js", async (importOriginal) => {
 
 const tempRoots: string[] = [];
 
+beforeEach(() => {
+	// Host-boundary stub: these introspection fixtures intentionally exercise
+	// project custom servers in a project pi has trusted.
+	setProjectTrustState("trusted");
+});
+
 afterEach(() => {
+	resetProjectTrust();
 	while (tempRoots.length > 0) {
 		const root = tempRoots.pop();
 		if (root) removeTempDirSync(root);
@@ -179,6 +190,42 @@ function denyDoc(...ids: string[]): Record<string, unknown> {
 }
 
 describe("effectiveConfig — provenance of the resolution", () => {
+	it("shows a rule ignorePaths leaf and its global provenance", async () => {
+		const { view } = await viewFor({
+			files: {
+				".pi-lens/config.json": {
+					rules: { "no-eval": { ignorePaths: ["vendorish/**"] } },
+				},
+				"proj/.pi-lens.json": { rules: { "no-eval": { ignorePaths: [] } } },
+			},
+			startDir: "proj",
+		});
+		const entry = view.provenance.find(
+			(item) => item.key === "/rules/no-eval/ignorePaths/0",
+		);
+		expect(entry?.tier).toBe("global");
+		expect(entry?.file).toContain(".pi-lens/config.json");
+	});
+
+	it("records one stable schema diagnostic for each invalid ignorePaths shape", async () => {
+		const cases: Array<[string, unknown]> = [
+			["empty member", [""]],
+			["non-string member", [42, null]],
+			["non-array field", "vendor/**"],
+		];
+		for (const [label, value] of cases) {
+			const { view } = await viewFor({
+				files: {
+					"proj/.pi-lens.json": {
+						rules: { "no-eval": { ignorePaths: value } },
+					},
+				},
+				startDir: "proj",
+			});
+			expect(view.recordCounts.PILENS_CFG_0005, label).toBeGreaterThan(0);
+		}
+	});
+
 	it("names the file and tier every resolved leaf came from, without carrying values", async () => {
 		const { view } = await viewFor({
 			files: {

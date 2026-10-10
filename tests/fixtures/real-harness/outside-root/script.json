@@ -1,0 +1,8 @@
+[
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_TMPDIR}/direct.ts","content":"export const direct = true;\n"}}],
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_OUTSIDE_PROJECT}/target.ts","content":"export const value = 2;\n"}}],
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_OUTSIDE_PROJECT}/target.ts","content":"export const value = 3;\n"}}],
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_OUTSIDE_PROJECT}/node_modules/vendor.ts","content":"export const vendor = true;\n"}}],
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_HOME}/pi-lens-data.ts","content":"export const data = true;\n"}}],
+	[{"type":"toolCall","name":"write","arguments":{"path":"${REAL_PI_HARNESS_PI_TEMP}/target.ts","content":"export const temp = true;\n"}}]
+]

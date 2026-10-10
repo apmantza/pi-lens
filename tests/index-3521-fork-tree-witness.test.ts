@@ -71,7 +71,10 @@ import {
 	hasPendingObservation,
 	OBSERVED_TURN_BUDGET_MS,
 } from "../clients/observed-mutation.js";
-import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import {
+	_resetSessionLifecycleForTests,
+	SUCCESSOR_PENDING_TTL_MS,
+} from "../clients/session-lifecycle.js";
 import {
 	cleanupTestEnvironmentsDrained,
 	drainBackgroundWritesForTests,
@@ -90,9 +93,9 @@ import {
  * this file sees the real service.
  */
 const lspDouble = vi.hoisted(() => ({ service: undefined as unknown }));
-vi.mock("../clients/lsp/index.js", async (importOriginal) => {
+vi.mock("../clients/lsp/capabilities.js", async (importOriginal) => {
 	const original =
-		await importOriginal<typeof import("../clients/lsp/index.js")>();
+		await importOriginal<typeof import("../clients/lsp/capabilities.js")>();
 	return {
 		...original,
 		getLSPService: () =>
@@ -524,11 +527,13 @@ describe("#3521 /tree keeps only the reads on the new branch", () => {
 		expect(await c.editLine("post_c", file, 2, "Y", false)).toBe("ALLOW");
 	});
 
-	it("needs a re-read of a brand-new file created on the kept branch (writtenThisSession is cleared)", async () => {
-		// A write that CREATES a file returns from tool_call before
-		// noteCreatedFile (`targetMissing`), so no creation read carries its
-		// tool call; only `writtenThisSession` vouched for it, and a move clears
-		// that. The safe direction: one re-read, never an allow.
+	// #3603: a write that CREATES a file returns from tool_call before
+	// noteCreatedFile (`targetMissing`), so no creation read carries its tool
+	// call; only its authorship vouches for it. Recurrence: a move cleared
+	// every authorship, so the agent re-read its own file although the branch
+	// still showed the write. Authorship now follows the read-set's rule: it
+	// stays iff the write's tool result is on the branch.
+	it("keeps the authorship of a brand-new file whose write is on the kept branch (#3603)", async () => {
 		const c = conversation(await startRuntime(SessionManager.inMemory(cwd)));
 		const file = path.join(cwd, "new.conf");
 		c.user("prompt 1");
@@ -538,6 +543,18 @@ describe("#3521 /tree keeps only the reads on the new branch", () => {
 		c.done();
 
 		await c.S().navigateTree(u2);
+
+		expect(await c.editLine("post_new", file, 2, "Y", false)).toBe("ALLOW");
+	});
+
+	it("drops the authorship of a brand-new file whose write the kept branch does not show (#3603)", async () => {
+		const c = conversation(await startRuntime(SessionManager.inMemory(cwd)));
+		const file = path.join(cwd, "new.conf");
+		const u1 = c.user("prompt 1");
+		await c.write("call_write_new", file, "n1\nn2\nn3");
+		c.done();
+
+		await c.S().navigateTree(u1);
 
 		expect(await c.editLine("post_new", file, 2, "Y", false)).toEqual(
 			ZERO_READ,
@@ -1454,7 +1471,10 @@ describe("#3612 /reload hands the read guard to the reloaded activation", () => 
 		);
 	});
 
-	it("does not carry the parent's authorship into a /fork", async () => {
+	// #3603: the same rule as /tree. Recurrence: the authorship store reset
+	// on /fork, so a file the agent created needed a re-read in the fork
+	// although the fork's branch shows the write.
+	it("carries the authorship of a write the fork's branch shows into a /fork (#3603)", async () => {
 		const runtime = await startRuntime(SessionManager.create(cwd, sessionsDir));
 		const c = conversation(runtime);
 		const file = path.join(cwd, "new.conf");
@@ -1465,8 +1485,21 @@ describe("#3612 /reload hands the read guard to the reloaded activation", () => 
 
 		await runtime.fork(u2);
 
-		// The same rule as /tree (G10): the write's creation read carried no
-		// tool call, so only the parent's authorship vouched for it.
+		expect(await c.editLine("post_new", file, 2, "Y", false)).toBe("ALLOW");
+	});
+
+	it("does not carry the authorship of a write the fork's branch does not show (#3603)", async () => {
+		const runtime = await startRuntime(SessionManager.create(cwd, sessionsDir));
+		const c = conversation(runtime);
+		const file = path.join(cwd, "new.conf");
+		const u1 = c.user("prompt 1");
+		expect(await c.write("call_write_new", file, "n1\nn2\nn3")).toBe("ALLOW");
+		c.done();
+		c.user("prompt 2");
+		c.done();
+
+		await runtime.fork(u1);
+
 		expect(await c.editLine("post_new", file, 2, "Y", false)).toEqual(
 			ZERO_READ,
 		);
@@ -1842,12 +1875,13 @@ describe("#3612 a queued agent advisory follows /reload", () => {
 				expect(inner).toBeDefined();
 				await inner;
 
-				// As on a clean /fork: the activation crosses; the parent's
-				// authorship and its queued advisory do not.
+				// As on a clean /fork: the activation crosses, and so does the
+				// authorship of a write the fork's branch shows (#3603); the
+				// parent's queued advisory does not.
 				expect.soft(activeSituational(runtime)).toEqual(["ast_grep_search"]);
 				expect
 					.soft(await c.editLine("post_written", written, 2, "Y", false))
-					.toEqual(ZERO_READ);
+					.toBe("ALLOW");
 				expect
 					.soft(await contextText(runtime))
 					.not.toContain("lost edit in a.rs");
@@ -1951,13 +1985,14 @@ describe("#3612 a queued agent advisory follows /reload", () => {
 				// pinned so S4 flips it: a secondary's edits are judged by the
 				// primary's read guard, so the primary's read of a.conf allows the
 				// subagent's edit, and the primary's own authorship policy decides
-				// its written file (carried on /reload, reset on /fork, D5). These
-				// read ZERO_READ before #3855 only because the subagent's own start
-				// wrongly took the primary slot and reset the guard.
+				// its written file (carried on /reload and, since #3603, on a
+				// /fork whose branch shows the write). These read ZERO_READ before
+				// #3855 only because the subagent's own start wrongly took the
+				// primary slot and reset the guard.
 				const s = conversation(subagent);
 				expect
 					.soft(await s.editLine("sub_written", written, 2, "Y", false))
-					.toEqual(kind === "reload" ? "ALLOW" : ZERO_READ);
+					.toBe("ALLOW");
 				expect.soft(await s.editLine("sub_a", a, 2, "Y", false)).toBe("ALLOW");
 			});
 		}
@@ -2592,6 +2627,7 @@ describe("#3758 pending runner findings and session scope", () => {
 	function deferFailedRunner(
 		session: ReturnType<RuntimeCoordinator["captureSessionGeneration"]>,
 		runnerId: string,
+		sessionId?: string,
 	): void {
 		deferRunnerFindings({
 			filePath: path.join(cwd, "a.ts"),
@@ -2607,6 +2643,7 @@ describe("#3758 pending runner findings and session scope", () => {
 				failureMessage: `${runnerId} crashed`,
 			}),
 			session,
+			sessionId,
 		});
 	}
 
@@ -2679,29 +2716,44 @@ describe("#3758 pending runner findings and session scope", () => {
 		});
 	});
 
-	it("lets a secondary that ends its turn first take a live primary's result (accepted residual until S4, #3758)", async () => {
-		// Pinned so S4 (#3613) flips it deliberately. A secondary's own tool
-		// results capture the coordinator's scope, which is the primary's
-		// (S1, #3611), so the store cannot tell the primary's result from the
-		// secondary's own. Draining by the activation's scope would move every
-		// secondary result to the primary instead.
+	it("keeps live primary and secondary runner results on their own turn ends", async () => {
 		const seen = coordinators();
 		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const primaryScope = seen[0]!.captureSessionGeneration();
 		const subagent = await startSubagent();
-		deferFailedRunner(seen[0]!.captureSessionGeneration(), "probe-3758-live");
+		const secondaryScope = seen[0]!.captureSessionGeneration();
+		deferFailedRunner(
+			primaryScope,
+			"probe-3758-primary",
+			primary.session.sessionManager.getSessionId(),
+		);
 
 		await endTurn(subagent);
-		const subagentSees = (await contextText(subagent)).includes(
-			"probe-3758-live crashed",
+		const secondaryBeforeOwn = (await contextText(subagent)).includes(
+			"probe-3758-primary crashed",
+		);
+		deferFailedRunner(
+			secondaryScope,
+			"probe-3758-secondary",
+			subagent.session.sessionManager.getSessionId(),
+		);
+		await endTurn(subagent);
+		const secondarySeesOwn = (await contextText(subagent)).includes(
+			"probe-3758-secondary crashed",
 		);
 		await endTurn(primary);
 
 		expect({
-			subagentSees,
+			secondaryBeforeOwn,
+			secondarySeesOwn,
 			primarySees: (await contextText(primary)).includes(
-				"probe-3758-live crashed",
+				"probe-3758-primary crashed",
 			),
-		}).toEqual({ subagentSees: true, primarySees: false });
+		}).toEqual({
+			secondaryBeforeOwn: false,
+			secondarySeesOwn: true,
+			primarySees: true,
+		});
 	});
 });
 
@@ -2948,6 +3000,47 @@ describe("#3881 an interrupted session_start hands on the slot left for it", () 
 			});
 		}
 	}
+
+	it("stashes activations when an unstarted fork is interrupted after the successor marker expires (#4236)", async () => {
+		let runtime: AgentSessionRuntime | undefined;
+		let inner: Promise<void> | undefined;
+		let armed = false;
+		const reloadAfterExpiry = (pi: ExtensionAPI) => {
+			pi.on("session_start", (event) => {
+				if (!armed || (event as { reason?: string }).reason !== "fork" || inner)
+					return;
+				// The real fork successor has not entered pi-lens's handler yet.
+				// Let its named marker expire, then interrupt this start at W0.
+				vi.advanceTimersByTime(SUCCESSOR_PENDING_TTL_MS);
+				inner = new Promise<void>((resolve, reject) =>
+					queueMicrotask(() => runtime!.session.reload().then(resolve, reject)),
+				);
+			});
+		};
+		vi.useFakeTimers();
+		try {
+			runtime = await startRuntime(
+				SessionManager.create(cwd, sessionsDir),
+				[],
+				[reloadAfterExpiry],
+			);
+			const c = conversation(runtime);
+			c.user("prompt 1");
+			c.done();
+			await activateTools(runtime, "act", ["ast_grep_search"]);
+			const u2 = c.user("prompt 2");
+			c.done();
+			armed = true;
+
+			await runtime.fork(u2);
+			expect(inner).toBeDefined();
+			await inner;
+
+			expect(activeSituational(runtime)).toEqual(["ast_grep_search"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	/**
 	 * #4113 verify X1 (R2, the reviewer's PR20): a gap subagent resumes the
@@ -3598,6 +3691,9 @@ describe("#3613 a concurrent secondary's turn leaves the primary's turn state al
 		expect({
 			subagent: shown(subagentSees),
 			primary: shown(primarySees),
+			// The old expectation encoded the bug: it expected the primary to lose its
+			// own warnings merely because a secondary turn ended first. The primary's
+			// delivery is legitimate and must remain session-local.
 		}).toEqual({ subagent: SUBAGENT, primary: PRIMARY });
 	});
 
@@ -3640,7 +3736,39 @@ describe("#3613 a concurrent secondary's turn leaves the primary's turn state al
 		}).toEqual({ subagentSees: [], primaryKeeps: PRIMARY });
 	});
 
-	it("enriches only the primary's secret report with the primary's ast-grep match", async () => {
+	it("scopes the durable turn-state worklist to the session that wrote it", async () => {
+		// #3613 R2: the recurrence is a secondary turn_end reading and clearing
+		// the primary's project worklist, so its cascade sees the primary's file
+		// while the primary later sees an empty worklist. The real two-session
+		// runtime must retain each partition and analyze the secondary's own edit.
+		const primary = await startRuntime(SessionManager.inMemory(cwd));
+		const subagent = await startSubagent();
+		const primaryFile = path.join(cwd, "primary.ts");
+		const secondaryFile = path.join(cwd, "secondary.ts");
+		await startTurn(primary);
+		await edit(primary, primaryFile);
+		await startTurn(subagent);
+		await edit(subagent, secondaryFile);
+		const cache = new CacheManager(false);
+
+		const primaryId = sessionIdOf(primary);
+		const secondaryId = sessionIdOf(subagent);
+		expect(Object.keys(cache.readTurnState(cwd, primaryId).files)).toEqual([
+			"primary.ts",
+		]);
+		expect(Object.keys(cache.readTurnState(cwd, secondaryId).files)).toEqual([
+			"secondary.ts",
+		]);
+
+		await endTurn(subagent);
+		expect(Object.keys(cache.readTurnState(cwd, primaryId).files)).toEqual([
+			"primary.ts",
+		]);
+		await endTurn(primary);
+		expect(cache.readTurnState(cwd, primaryId).files).toEqual({});
+	});
+
+	it("keeps primary turn findings out of a secondary's delivery", async () => {
 		const primary = await startRuntime(SessionManager.inMemory(cwd));
 		const subagent = await startSubagent();
 		const key = path.join(cwd, "key.ts");
@@ -3669,7 +3797,7 @@ describe("#3613 a concurrent secondary's turn leaves the primary's turn state al
 		expect({
 			subagent: provenance(subagentSees),
 			primary: provenance(primarySees),
-		}).toEqual({ subagent: "gitleaks", primary: "gitleaks + ast-grep" });
+		}).toEqual({ subagent: undefined, primary: "gitleaks + ast-grep" });
 	});
 
 	it("starts a subagent's turn without the warnings its previous turn left undelivered", async () => {

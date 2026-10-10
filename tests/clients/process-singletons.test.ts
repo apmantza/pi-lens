@@ -173,8 +173,8 @@ describe("#2146 — the registry mutation tail is one per process", () => {
 		// earlier one — the torn read-modify-write that lost two project roots
 		// and one live instance from `instances.json` in the dogfood run.
 		await Promise.all([
-			first.registerInstanceRoot(rootA),
-			second.registerInstanceRoot(rootB),
+			first.registerInstanceRoot(rootA, "holder-a"),
+			second.registerInstanceRoot(rootB, "holder-b"),
 		]);
 		await first._settleRegistryMutationsForTests();
 		await second._settleRegistryMutationsForTests();
@@ -208,7 +208,7 @@ describe("#2146 — the registry mutation tail is one per process", () => {
 
 		// Queue on `second`, settle through `first`. One tail means this waits;
 		// two tails mean it returns before the write lands.
-		void second.registerInstanceRoot(lateRoot);
+		void second.registerInstanceRoot(lateRoot, "holder-late");
 		await first._settleRegistryMutationsForTests();
 
 		const file = JSON.parse(

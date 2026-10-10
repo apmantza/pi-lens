@@ -36,7 +36,11 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import { createPiMock, makeCtx } from "../support/pi-mock.js";
 import { removeTempDirSync } from "./test-utils.js";
+
+// flake-shape: never-settling-wait — the timeout witness must hold a real
+// appendFile promise forever to prove shutdown proceeds at the bound.
 
 let tmpDir: string;
 let logFile: string;
@@ -118,6 +122,60 @@ describe("createNdjsonLogger", () => {
 		logger.log({ c: 3 });
 		await logger.flush();
 		expect(readLines(logFile)).toHaveLength(3);
+	});
+
+	it("real session_shutdown drains an in-flight writer before exit flushSync", async () => {
+		const { default: registerExtension } = await import("../../index.js");
+		const mock = createPiMock({ "lens-lsp": false });
+		registerExtension(mock.asExtensionAPI());
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const realAppendFile = fs.promises.appendFile.bind(fs.promises);
+		const appendFile = vi
+			.spyOn(fs.promises, "appendFile")
+			.mockImplementation(async (...args) => {
+				await held;
+				return realAppendFile(...args);
+			});
+		const logger = createNdjsonLogger({ filePath: logFile });
+		logger.log({ kind: "shutdown-witness" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const shutdown = mock.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			makeCtx({ cwd: tmpDir, sessionId: "shutdown-witness" }),
+		);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		release();
+		await shutdown;
+		logger.flushSync();
+		expect(appendFile).toHaveBeenCalled();
+		expect(readLines(logFile)).toHaveLength(1);
+	});
+
+	it("bounds a wedged shutdown drain and records one degradation", async () => {
+		const { default: registerExtension } = await import("../../index.js");
+		const mock = createPiMock({ "lens-lsp": false });
+		registerExtension(mock.asExtensionAPI());
+		vi.spyOn(fs.promises, "appendFile").mockImplementation(
+			() => new Promise<never>(() => {}),
+		);
+		const logger = createNdjsonLogger({ filePath: logFile });
+		logger.log({ kind: "shutdown-timeout-witness" });
+		await mock.emit(
+			"session_shutdown",
+			{ type: "session_shutdown", reason: "quit" },
+			makeCtx({ cwd: tmpDir, sessionId: "shutdown-timeout-witness" }),
+		);
+		const rows = getDegradationSummary().filter(
+			(row) => row.kind === "hook-await-exceeded",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.latestReasons[0]?.subject).toBe(
+			"session_shutdown:ndjson-writers",
+		);
 	});
 
 	it("lazily creates the parent directory", async () => {
@@ -304,6 +362,40 @@ describe("createNdjsonLogger", () => {
 			{ async: 1 },
 			{ sync: 2 },
 		]);
+	});
+
+	it("the real-pi harness waits out the accepted exit-flush duplicate", async () => {
+		const realAppendFile = fs.promises.appendFile.bind(fs.promises);
+		const releases: Array<() => void> = [];
+		const appendFile = vi
+			.spyOn(fs.promises, "appendFile")
+			.mockImplementation(async (file, data, options) => {
+				await realAppendFile(file, data, options);
+				await new Promise<void>((resolve) => releases.push(resolve));
+			});
+		const logger = createNdjsonLogger({ filePath: logFile });
+		logger.log({ immediate: true });
+		await vi.waitFor(() => {
+			expect(appendFile).toHaveBeenCalledTimes(1);
+			expect(readLines(logFile)).toHaveLength(1);
+		});
+		logger.flushSync();
+		expect(readLines(logFile)).toHaveLength(2);
+		releases.shift()?.();
+		await logger.flush();
+
+		const settledFile = path.join(tmpDir, "settled.log");
+		const settledLogger = createNdjsonLogger({ filePath: settledFile });
+		settledLogger.log({ immediate: false });
+		await vi.waitFor(() => {
+			expect(appendFile).toHaveBeenCalledTimes(2);
+			expect(readLines(settledFile)).toHaveLength(1);
+		});
+		settledLogger.flushSync();
+		expect(readLines(settledFile)).toHaveLength(2);
+		releases.shift()?.();
+		await settledLogger.flush();
+		expect(readLines(settledFile)).toHaveLength(2);
 	});
 
 	it("registers one canonical per-file flusher", () => {

@@ -54,8 +54,25 @@
  *     fully in scope.
  */
 
+import { relative } from "node:path";
 import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
+import {
+	canonicalDirectory,
+	listNestedLinkedWorktreeRoots,
+} from "./review-graph/git-identity.js";
 import { escapeRegExp } from "./string-utils.js";
+
+/**
+ * The linked worktrees nested under `cwd`, whatever they are called (#4132),
+ * as paths relative to `cwd`. The scanners above walk `cwd` themselves and see
+ * a worktree as project files; a name list cannot know where one was put. The
+ * discovery returns real paths, so the offset is taken from the real `cwd` and
+ * the caller joins it back onto its own spelling of `cwd`.
+ */
+export function nestedWorktreeOffsets(cwd: string): string[] {
+	const base = canonicalDirectory(cwd);
+	return listNestedLinkedWorktreeRoots(cwd).map((root) => relative(base, root));
+}
 
 /** Directory-name entries only — drops glob entries (e.g. `*.dSYM`) that a
  * bare directory-name/regex exclude can't express. */

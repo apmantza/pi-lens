@@ -17,6 +17,7 @@ import type { FileKind } from "../file-kinds.js";
 import type { FileRole } from "../file-role.js";
 import type { GeneratedArtifactEvidence } from "../generated-artifacts.js";
 import type { PiLensProjectConfig } from "../project-lens-config.js";
+import type { RulePolicyMap } from "./rule-policy.js";
 import type { DispatchLatencyReport } from "./dispatcher.js";
 
 export type DefectClass =
@@ -346,6 +347,8 @@ export interface DispatchContext {
 	readonly facts: import("./fact-store.js").FactStore;
 	/** Project-local .pi-lens.json config captured for this dispatch. */
 	readonly projectConfig?: PiLensProjectConfig;
+	/** Shared global+project rule policy, including path-scoped denials. */
+	readonly rulePolicy?: RulePolicyMap;
 	/** Only run blocking rules (severity: error) - used for fast feedback on file write */
 	readonly blockingOnly?: boolean;
 	readonly modifiedRanges?: ModifiedRange[];
@@ -357,6 +360,8 @@ export interface DispatchContext {
 	 * next session's turn end.
 	 */
 	readonly sessionGeneration?: GenerationHandle;
+	/** Stable session identity for per-session turn-end runner delivery. */
+	readonly sessionId?: string;
 	/** Model/provider active for this dispatch, when the runtime knows it
 	 * (#1448) — threaded to the worklog append so repair history can be
 	 * attributed. Blank/absent outside a live agent turn (e.g. project scans). */
@@ -372,8 +377,18 @@ export interface DispatchContext {
 
 // --- Tool Plan ---
 
+export type CapabilityDimension =
+	| "types"
+	| "security"
+	| "smells"
+	| "format"
+	| "lint"
+	| "docs";
+
 export interface ToolPlan {
 	name: string;
+	/** Capabilities required for a complete verdict on this file kind. */
+	capabilities: readonly CapabilityDimension[];
 	groups: RunnerGroup[];
 }
 

@@ -97,6 +97,13 @@ const FLAKE_SHAPE_BASELINE: Baseline = JSON.parse(
 const ADMITTED_AFTER_BASELINE: Readonly<
 	Record<string, { detector: DetectorName; reason: string }>
 > = {
+	// 2026-10-08 (#4148): blank-heavy YAML language extraction is a synchronous
+	// event-loop path, so only a real-clock assertion sees its quadratic stall.
+	"elapsed-time-assertion:clients/ast-grep-rule-regex-budget.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"the defect is wall-clock only (super-linear ast-grep rule YAML language extraction); a fake clock measures nothing",
+	},
 	// 2026-09-11 (#2886 round 2): the /lens-perf occupancy row keeps one
 	// real-clock sampler assertion alongside its deterministic yield count —
 	// event-loop occupancy has no deterministic proxy; the yield count is
@@ -105,6 +112,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "elapsed-time-assertion",
 		reason:
 			"event-loop occupancy has no deterministic proxy; the sampler row guards per-chunk block size the yield count cannot see",
+	},
+	// 2026-10-08 (#4148): 100K blank lines expose the real event-loop stall in
+	// pytest traceback and go.mod regex parsing; a fake clock cannot measure it.
+	"elapsed-time-assertion:clients/pytest-gomod-regex-budget.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"the defect is wall-clock only (quadratic pytest traceback and go.mod regex backtracking); a fake clock measures nothing",
 	},
 	// 2026-09-08 (#2622): the defect is wall-clock only — 2^N regex
 	// backtracking in both glob compilers; a fake clock measures nothing.
@@ -367,6 +381,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack), and unpacks that real tarball to check what ships (#3219); no in-process double is faithful",
 	},
+	// #4169: the TypeScript-source entry (`pi -e index.ts`) is transpiled by the
+	// real host's jiti loader rather than native-imported, so /reload re-evaluates
+	// the pi-lens graph and only a real child reaches the orphaned module-scope
+	// runtime; no in-process double produces a fresh module instance.
+	"real-process-spawn:real-harness/bridge-reload-ts.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pi host must transpile the TypeScript-source pi-lens entry, re-evaluate its module graph on /reload, and keep a third-party v1 bridge read connected to the live runtime (#4169)",
+	},
 	"real-process-spawn:real-harness/bridge-reload.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -403,15 +426,39 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real pi must surface provider exhaustion and malformed tool arguments across the process boundary",
 	},
+	"real-process-spawn:real-harness/outside-root.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real pi host must deliver the out-of-root advisory and degradation record through the process boundary, including the second edit and owned-path exemptions",
+	},
 	"real-process-spawn:real-harness/provider-compatibility.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"the installed pi host must load the built extension and expose its provider roster across the process boundary",
 	},
+	// 2026-10-08 (#4138, #3831, #4185 round 2): the branch a read record is
+	// admitted to is pi's own session branch after a real RPC clone rebinds the
+	// extension, and the nested ids (`c1/1`, parent `c1`) and the toolResult pi
+	// persists for a codemode call exist only in the real host. Round 4 adds
+	// four: pi's own agent loop decides that a call a later extension blocked
+	// gets tool_execution_end and no tool_result, in what order, top-level,
+	// parallel and nested. Round 5 adds one: a later extension's tool_result
+	// hook rewrites a failed read's isError after pi-lens saw it, which only
+	// pi's own hook chain produces.
+	"real-process-spawn:real-harness/read-guard-moves.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the read guard's branch admission after a real RPC clone, the nested-call ids pi mints, and the tool_execution_end pi's agent loop emits for a call a later extension blocked cannot be produced by an in-process double",
+	},
 	"real-process-spawn:real-harness/scenario-1.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"the real pi RPC host and extension lifecycle cannot be certified by an in-process double",
+	},
+	"real-process-spawn:real-harness/scenario-2.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the expired successor hand-off and activation roster must cross the real pi process boundary",
 	},
 	"real-process-spawn:real-harness/scenario-3.test.ts": {
 		detector: "real-process-spawn",

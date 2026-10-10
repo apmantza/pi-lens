@@ -16,6 +16,10 @@ audience: user
 - **Short title (closes #1321)** — Explain the user-visible change.
 ```
 
+New `audience: user` fragments must open with a bold lead (`**...**`) of at
+most 100 characters; issue references such as `(#1321)` do not count. Internal
+fragments are exempt. This keeps release-summary lines readable.
+
 `section` must be `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or
 `Security`. `audience` is required: `user` for anything a pi-lens user or an
 agent using pi-lens can observe (tools, diagnostics, messages, config, install,

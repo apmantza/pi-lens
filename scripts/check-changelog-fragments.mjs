@@ -16,10 +16,11 @@
 // is absent the count rule is skipped and only the shape check runs.
 // Usage: node scripts/check-changelog-fragments.mjs [--base <ref> [--head <ref>]]
 
-import { dirname, resolve } from "node:path";
+import fs from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
-import { validateChangelogEntries } from "./rollup-changelog.mjs";
+import { parseEntry, validateChangelogEntries } from "./rollup-changelog.mjs";
 
 const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,6 +30,34 @@ const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // tests/config/git-fixture-governance.test.ts); tests inject a fixture-scoped
 // runner with the same shape.
 const runGit = (args, options) => gitExecFileSync(args, options);
+
+const ISSUE_REFERENCE =
+	/\s*(?:\((?:refs?|closes?|fixes?|fixed)?\s*#\d+\)|(?:refs?|closes?|fixes?|fixed)\s+#\d+|#\d+)/gi;
+
+function userLeadError(file, { lead, length }) {
+	if (!lead)
+		return `Invalid changelog entry .changelog/${file}: user-facing fragments must open with a bold lead; plain lead length ${length}`;
+	return `Invalid changelog entry .changelog/${file}: bold lead must be at most 100 characters (refs excluded from the count); bold lead length ${length}`;
+}
+
+function validateAddedUserLeads({ fragments, cwd }) {
+	for (const fragment of fragments) {
+		const file = fragment.slice(".changelog/".length);
+		const text = fs.readFileSync(join(cwd, fragment), "utf8");
+		const entry = parseEntry(text, file);
+		if (entry.audience !== "user") continue;
+		const firstLine = entry.entry
+			.split(/\r?\n/)
+			.find((line) => /^[-*]\s+\S/.test(line));
+		const lead = firstLine?.match(/^[-*]\s+\*\*(.*?)\*\*/)?.[1];
+		const leadLength = lead
+			? lead.replace(ISSUE_REFERENCE, "").length
+			: (firstLine ?? "").replace(/^[-*]\s+/, "").replace(ISSUE_REFERENCE, "")
+					.length;
+		if (!lead || leadLength > 100)
+			throw new Error(userLeadError(file, { lead, length: leadLength }));
+	}
+}
 
 /**
  * The `.changelog/*.md` files the range adds between its start and the
@@ -118,6 +147,7 @@ export function checkChangelogFragments({
 	let entries;
 	try {
 		entries = validateChangelogEntries({ rootDir: cwd });
+		if (fragments) validateAddedUserLeads({ fragments, cwd });
 	} catch (error) {
 		return {
 			valid: false,

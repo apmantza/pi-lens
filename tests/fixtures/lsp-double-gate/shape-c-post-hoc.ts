@@ -5,7 +5,7 @@
 // post-hoc-assignment rule load-bearing: a mutation probe that deletes that
 // rule turns THIS case red and nothing else.
 import { vi } from "vitest";
-import { getLSPService } from "../../../clients/lsp/index.js";
+import { getLSPService } from "../../../clients/lsp/capabilities.js";
 import { createHostServiceStub } from "./external-stub-factory.js";
 
 const service = createHostServiceStub();

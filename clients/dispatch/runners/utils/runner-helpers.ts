@@ -37,6 +37,9 @@ import { getServersForFileWithConfig } from "../../../lsp/config.js";
 // here closes a dependency cycle through the installer's graph
 // (`no-client-cycles`, dependency-cruiser #2125).
 import { BUILTIN_SERVER_RUNNER_COVERS } from "../../../lsp/server-covers.js";
+// Also a leaf: the role vocabulary imports nothing, so the ONE auxiliary
+// predicate (#1488) costs this file no edge into the registry graph.
+import { isAuxiliary } from "../../../lsp/server-traits.js";
 import {
 	findGlobalBinary,
 	findLocalBinAt,
@@ -148,7 +151,7 @@ export function lspPrimaryCoversFile(
 ): PrimaryRunnerCoverage | undefined {
 	if (ctx.pi?.getFlag?.("no-lsp")) return undefined;
 	const primary = getServersForFileWithConfig(ctx.filePath).find(
-		(s) => s.role !== "auxiliary",
+		(s) => !isAuxiliary(s),
 	);
 	if (!primary) return undefined;
 	// Claim provenance is resolved by ROW provenance, never by id lookup

@@ -59,8 +59,10 @@ function findDeadPid(): number {
 // afterEach cleanup would then race). supportsLSP:false short-circuits the warm
 // before it opens any file.
 const mockTouchFile = vi.fn(async () => undefined);
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: vi.fn(() =>
 		makeLspServiceDouble({
 			supportsLSP: () => false,

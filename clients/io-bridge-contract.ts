@@ -141,7 +141,8 @@ export type RecordReason =
 	| "ignored"
 	| "no-read-guard"
 	| "stale-lineage"
-	| "bookkeeping-error";
+	| "bookkeeping-error"
+	| "unavailable";
 
 export type RecordOutcome =
 	| { accepted: true }

@@ -34,10 +34,11 @@ mechanics"; a brief supplies only `lane=<name>`, scope, and the grant.
   preserves or tightens, and show the violating config red on the pre-fix model
   and green after, or carry `TLA+ unaffected: <family> — <reason>` in the PR
   body. A row is any-of (one listed family's model move or declaration
-  satisfies it); a row of 4+ families only prints a note until hunk-level
-  matching exists (#3878). The map owner is the lane that adds a
-  `formal/<family>/`: it adds the family and its map row in the same PR, and
-  `validateCoverageMap` reds the Unit tests lane otherwise.
+  satisfies it); a row of 4+ families only prints a note, except `index.ts`,
+  whose row gates on the lifecycle hook handler a hunk lands in (#3878). The
+  map owner is the lane that adds a `formal/<family>/`: it adds the family and
+  its map row in the same PR, and `validateCoverageMap` reds the Unit tests lane
+  otherwise.
 - Seams are named in the brief before the round. A fixer that needs an
   unconfirmed seam stops and reports it as a finding, not as a test.
 
@@ -158,7 +159,10 @@ rigor (#2599).
   must pass, and the hand-back quotes them. A red `PR body (advisory)` check is
   a fix-before-review item. A changelog fragment is `---` /
   `section: <Added|Changed|Deprecated|Removed|Fixed|Security>` /
-  `audience: <user|internal>` / `---` / blank / one `- ` bullet. `audience` is
+  `audience: <user|internal>` / `---` / blank / one `- ` bullet. New
+  `audience: user` fragments must begin with a bold lead of at most 100
+  characters, excluding issue references; internal fragments are exempt.
+  `audience` is
   required: `user` is anything a pi-lens user or agent can observe (tools,
   diagnostics, messages, config, install, performance, a fixed bug they could
   hit); `internal` is CI, tests, `formal/`, contributor docs, orchestration, and

@@ -46,20 +46,32 @@ afterEach(() => {
 	while (cleanups.length) cleanups.pop()?.();
 });
 
-/** A trap is charged to its input, so each test gives b.py its own content. */
-function pythonProject(tag: number): { tmpDir: string; files: string[] } {
+/**
+ * A trap is charged to its input, so each test gives b.py its own content.
+ * `restartRoot` below is a Go project: grammar retirement (#4010)
+ * counts distinct trapped inputs per language, so two trapped python files
+ * alive at once would retire python and nothing could be re-extracted. A
+ * second language keeps the "other workspace's trapped file is not pulled
+ * in" assertion without a second live python trap.
+ */
+function project(
+	tag: number,
+	lang: "py" | "go" = "py",
+): { tmpDir: string; files: string[] } {
 	const env = setupTestEnvironment("pi-lens-wasm-reextract-");
 	cleanups.push(env.cleanup);
 	const files = [
-		createTempFile(env.tmpDir, "a.py", "def alpha_fn():\n    return 1\n"),
-		createTempFile(
-			env.tmpDir,
-			"b.py",
-			`def trap_here_fn():\n    return ${tag}\n`,
-		),
-		createTempFile(env.tmpDir, "c.py", "def gamma_fn():\n    return 3\n"),
+		createTempFile(env.tmpDir, `a.${lang}`, source(lang, "alpha_fn", 1)),
+		createTempFile(env.tmpDir, `b.${lang}`, source(lang, "trap_here_fn", tag)),
+		createTempFile(env.tmpDir, `c.${lang}`, source(lang, "gamma_fn", 3)),
 	];
 	return { tmpDir: env.tmpDir, files };
+}
+
+function source(lang: "py" | "go", name: string, n: number): string {
+	return lang === "py"
+		? `def ${name}():\n    return ${n}\n`
+		: `package main\n\nfunc ${name}() int {\n\treturn ${n}\n}\n`;
 }
 
 /** Trap a b.py symbol query at the production throw site while `shouldTrap()`. */
@@ -87,19 +99,21 @@ describe("a file a one-off trap cost is re-extracted (#3605 F2)", () => {
 	it("re-extracts it on a seq fast-path build that names no change, and after a restart", async () => {
 		// Two workspaces, each with a one-off trapped file: `seqRoot` is built
 		// with a seq hint, `restartRoot` is retried after a restart.
-		const seqRoot = pythonProject(22);
-		const restartRoot = pythonProject(21);
+		const seqRoot = project(22);
+		const restartRoot = project(21, "go");
 		const seqHint = {
 			projectSeq: () => 0,
 			getFilesChangedSince: (): string[] => [],
 		};
 		let traps = 2;
 		await trapWhile(() => traps-- > 0);
-		await buildOrUpdateGraph(
+		const trappedFirst = await buildOrUpdateGraph(
 			restartRoot.tmpDir,
 			restartRoot.files,
 			new FactStore(),
 		);
+		// The go file really trapped, so the restart check below is not vacuous.
+		expect(symbolNames(trappedFirst)).not.toContain("trap_here_fn");
 		await buildOrUpdateGraph(
 			seqRoot.tmpDir,
 			seqRoot.files,
@@ -130,7 +144,7 @@ describe("a file a one-off trap cost is re-extracted (#3605 F2)", () => {
 	});
 
 	it("re-extracts it when a killed build resumes from its checkpoint", async () => {
-		const { tmpDir, files } = pythonProject(23);
+		const { tmpDir, files } = project(23);
 		let traps = 1;
 		await trapWhile(() => traps-- > 0);
 		process.env.PI_LENS_GRAPH_CHECKPOINT_TEST_STOP_AFTER = String(files.length);

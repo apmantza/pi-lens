@@ -11,6 +11,7 @@
  * than on a missing module.
  */
 import { describe, expect, it, vi } from "vitest";
+import * as path from "node:path";
 import { AstGrepClient } from "../../clients/ast-grep-client.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import type { LineageHandle } from "../../clients/session-scope.js";
@@ -23,6 +24,8 @@ type Recorded = {
 	kind: string;
 	editRanges?: [number, number][];
 	consumer?: string;
+	provenance?: string;
+	toolCallId?: string;
 	lineage?: LineageHandle;
 };
 
@@ -93,7 +96,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 		expect(result.applied).toBe(true);
 		expect(recorded).toHaveLength(2);
 		expect(recorded[0]).toMatchObject({
-			filePath: "src/a.ts",
+			filePath: path.resolve(process.cwd(), "src/a.ts"),
 			kind: "edit",
 			consumer: "ast_grep_replace",
 			editRanges: [
@@ -102,7 +105,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			],
 		});
 		expect(recorded[1]).toMatchObject({
-			filePath: "src/b.ts",
+			filePath: path.resolve(process.cwd(), "src/b.ts"),
 			kind: "edit",
 			editRanges: [[1, 1]],
 		});
@@ -126,6 +129,68 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			true,
 		);
 		expect(result.stalePreview).toBe(true);
+		expect(recorded).toHaveLength(0);
+	});
+});
+
+/**
+ * #4140 (F9 of #4185 round 1): the structural apply (`replaceWithRule`, the
+ * `insideKind`/`hasKind`/`follows` options) rewrites files with `--update-all`
+ * through `tempScanWithFixAsync` and never reached the bridge: no stamp, no
+ * turn state, no deferred format, whatever the path spelling. The runner is
+ * the ast-grep process boundary; the matches it reports before the write are
+ * the ones recorded, as in the pattern apply.
+ */
+describe("#4140 the structural ast_grep_replace apply records through the bridge", () => {
+	const RULE =
+		"id: agent-rule\nlanguage: typescript\nrule:\n  pattern: var $X\nfix: let $X\n";
+	function clientWithRunner(matches: typeof MATCHES): {
+		client: AstGrepClient;
+		runner: { tempScanWithFixAsync: ReturnType<typeof vi.fn> };
+	} {
+		const runner = {
+			tempScanDetailedAsync: vi.fn(async () => ({ matches, status: 0 })),
+			tempScanWithFixAsync: vi.fn(async () => ({ matches })),
+		};
+		const client = new AstGrepClient();
+		(client as unknown as { runner: unknown }).runner = runner;
+		return { client, runner };
+	}
+
+	it("records one mutation per rewritten file with 1-based ranges, like the pattern apply", async () => {
+		recorded.length = 0;
+		const { client, runner } = clientWithRunner(MATCHES);
+		const result = await client.replaceWithRule(RULE, ["src"], true);
+		expect(result.applied).toBe(true);
+		expect(runner.tempScanWithFixAsync).toHaveBeenCalledWith(
+			"src",
+			"agent-rule",
+			RULE,
+			true,
+		);
+		expect(recorded).toEqual([
+			expect.objectContaining({
+				filePath: path.resolve(process.cwd(), "src/a.ts"),
+				kind: "edit",
+				consumer: "ast_grep_replace",
+				editRanges: [
+					[5, 5],
+					[21, 21],
+				],
+			}),
+			expect.objectContaining({
+				filePath: path.resolve(process.cwd(), "src/b.ts"),
+				kind: "edit",
+				editRanges: [[1, 1]],
+			}),
+		]);
+	});
+
+	it("records nothing for a structural dry run", async () => {
+		recorded.length = 0;
+		const { client } = clientWithRunner(MATCHES);
+		const result = await client.replaceWithRule(RULE, ["src"], false);
+		expect(result.applied).toBe(false);
 		expect(recorded).toHaveLength(0);
 	});
 });
@@ -171,5 +236,48 @@ describe("#3763 ast_grep_replace records under the session it was called in", ()
 			{ scopeId: entered.scopeId, current: false },
 			{ scopeId: entered.scopeId, current: false },
 		]);
+	});
+});
+
+// #4187 R4-1, R4-3 (T5): `--update-all` rewrites files no `tool_result`
+// describes, so this record is the write's only evidence. The read guard
+// advances the authorship of a file the call NAMED only when the entry says it
+// was observed and names that call: without `provenance` the record can only
+// end an authorship (the file the agent wrote costs a re-read), and without
+// `toolCallId` it cannot be licensed at all. The guard half of the rule, and
+// the folder/project-wide applies that must advance nothing, are pinned by
+// tests/clients/runtime-tool-call.test.ts.
+describe("#4187 R4-1 ast_grep_replace's apply record names its call", () => {
+	it("sends provenance observed and the tool call id it ran under", async () => {
+		recorded.length = 0;
+		const runtime = new RuntimeCoordinator();
+		const client = clientWithExec(execFor(MATCHES));
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+		vi.spyOn(client, "formatMatches").mockReturnValue("");
+		const tool = createAstGrepReplaceTool(client, () =>
+			runtime.captureSessionGeneration(),
+		);
+
+		await tool.execute(
+			"call-4187-ast-grep",
+			{
+				pattern: "var $X",
+				rewrite: "let $X",
+				lang: "typescript",
+				paths: ["src"],
+				apply: true,
+			},
+			new AbortController().signal,
+			undefined,
+			{ cwd: "." },
+		);
+
+		expect(recorded.length).toBeGreaterThan(0);
+		for (const entry of recorded)
+			expect(entry).toMatchObject({
+				consumer: "ast_grep_replace",
+				provenance: "observed",
+				toolCallId: "call-4187-ast-grep",
+			});
 	});
 });

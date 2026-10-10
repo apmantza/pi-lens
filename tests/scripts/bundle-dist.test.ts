@@ -89,43 +89,29 @@ describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 		}
 	});
 
-	it("still passes --package esbuild@<version> and the esbuild binary name", () => {
-		const execPrefix = createIsolatedExecPrefix();
-		try {
-			const { argv } = buildEsbuildExecInvocation({
+	// #4066: both production spawns used 0.28.1 while the source lock resolved
+	// 0.28.2. Read the expected version independently of the production resolver.
+	it.each([
+		["index", buildEsbuildExecInvocation],
+		["split", buildSplitEsbuildExecInvocation],
+	])(
+		"installs and approves the lockfile esbuild version for the %s bundle",
+		(_kind, build) => {
+			const lock = JSON.parse(
+				fs.readFileSync(path.join(root, "package-lock.json"), "utf8"),
+			);
+			const spec = `esbuild@${lock.packages["node_modules/esbuild"].version}`;
+			const { argv } = build({
 				npmCli: "/fake/npm-cli.js",
-				execPrefix,
+				execPrefix: "/fake/empty-prefix",
 			});
-			const packageIndex = argv.indexOf("--package");
-			expect(packageIndex).toBeGreaterThanOrEqual(0);
-			expect(argv[packageIndex + 1]).toMatch(/^esbuild@\d+\.\d+\.\d+$/);
+			expect(argv[argv.indexOf("--package") + 1]).toBe(spec);
+			expect(argv.filter((arg) => arg.startsWith("--allow-scripts"))).toEqual([
+				`--allow-scripts=${spec}`,
+			]);
 			expect(argv).toContain("esbuild");
-		} finally {
-			fs.rmSync(execPrefix, { recursive: true, force: true });
-		}
-	});
-
-	// Recurrence: master red at b9eda404c (#4028): the nested esbuild install
-	// inherits `--strict-allow-scripts` from the outer `npm install` (via
-	// `prepare`) and has no package.json to find an approval in. Both esbuild
-	// spawns (index bundle and #3219 split bundle) approve the exact spec they
-	// install, so a bump of ESBUILD_VERSION moves the approval with it.
-	it("approves the exact esbuild spec it installs, for the index and the split bundle", () => {
-		const execPrefix = createIsolatedExecPrefix();
-		try {
-			for (const build of [
-				buildEsbuildExecInvocation,
-				buildSplitEsbuildExecInvocation,
-			]) {
-				const { argv } = build({ npmCli: "/fake/npm-cli.js", execPrefix });
-				const spec = argv[argv.indexOf("--package") + 1];
-				expect(spec).toMatch(/^esbuild@\d+\.\d+\.\d+$/);
-				expect(argv).toContain(`--allow-scripts=${spec}`);
-			}
-		} finally {
-			fs.rmSync(execPrefix, { recursive: true, force: true });
-		}
-	});
+		},
+	);
 });
 
 describe("buildSplitEsbuildExecInvocation (#3219)", () => {

@@ -443,7 +443,7 @@ function findGoModule(
 	while (true) {
 		try {
 			const content = fs.readFileSync(path.join(dir, "go.mod"), "utf-8");
-			const m = content.match(/^\s*module\s+(\S+)/m);
+			const m = content.match(/^[^\S\n\r\u2028\u2029]*module\s+(\S+)/m);
 			if (m) return { moduleDir: dir, modulePath: m[1] };
 		} catch {
 			// no go.mod here — keep climbing

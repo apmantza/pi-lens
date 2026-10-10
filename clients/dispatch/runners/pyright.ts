@@ -8,7 +8,7 @@
  */
 
 import { logExtension } from "../../extension-log.js";
-import { getLSPService } from "../../lsp/index.js";
+import { getLSPService } from "../../lsp/capabilities.js";
 import {
 	augmentPythonEnvironment,
 	detectPythonEnvironment,

@@ -62,6 +62,17 @@ export interface StartupScanContext {
 		| "too-many-entries";
 	sourceFileCount?: number;
 	/**
+	 * The two bounds that can produce a size skip, as they were in effect when
+	 * this verdict was computed (#4126). Both are set on every
+	 * `too-many-source-files` / `too-many-entries` verdict. A persisted size
+	 * verdict missing either, or carrying a value that differs from the bound
+	 * now in effect, is stale — see `isStartupScanVerdictFresh`. Records
+	 * written before #4126 (every release through v4.4.0) carry neither; the
+	 * corpus is `tests/fixtures/startup-scan/released-4.4.0/`.
+	 */
+	maxProjectFiles?: number;
+	maxScanEntries?: number;
+	/**
 	 * Wall-clock time (`Date.now()`) this verdict was computed. Stamped by
 	 * `resolveStartupScanContext`/`Async` right before it's cached, and carried
 	 * through when the verdict is persisted to `project-snapshot.json`'s
@@ -146,9 +157,16 @@ export const _resetStartupScanMaxEntriesForTests = _maxEntries._resetForTests;
  * function either; a fresh snapshot's `seq` match already implies the
  * project state hasn't moved since it warmed successfully.
  *
- * Fails closed on a verdict with no `computedAt` (e.g. hand-written test
- * fixture, or a pre-#699 snapshot) — treated as stale so it gets refreshed
- * rather than trusted indefinitely.
+ * A size verdict is fresh only while every bound that produced it equals the
+ * bound now in effect (#4126): both `maxProjectFiles` (derived for the
+ * verdict's `cwd`, as the writer derived it) and `maxScanEntries`, whatever
+ * the reason. Both bounds apply during one walk (`count > maxSourceFiles` or
+ * `visited >= maxScanEntries`), so a changed bound can change the outcome or
+ * flip the reason; the re-walk decides, this function never predicts it.
+ * Fails closed on a verdict with no `computedAt`, and on one with a missing
+ * bound (a hand-written fixture, or a record from a release through v4.4.0):
+ * an absent bound never equals the bound in effect, so the same compares
+ * treat it as stale and it gets refreshed rather than trusted indefinitely.
  */
 export function isStartupScanVerdictFresh(
 	verdict: StartupScanContext,
@@ -160,6 +178,11 @@ export function isStartupScanVerdictFresh(
 	)
 		return true;
 	if (typeof verdict.computedAt !== "number") return false;
+	if (
+		verdict.maxProjectFiles !== getStartupScanMaxSourceFilesDerived(verdict.cwd)
+	)
+		return false;
+	if (verdict.maxScanEntries !== getStartupScanMaxEntries()) return false;
 	return now - verdict.computedAt < getStartupScanVerdictTtlMs();
 }
 
@@ -401,6 +424,8 @@ function computeStartupScanContext(
 				? "too-many-entries"
 				: "too-many-source-files",
 			sourceFileCount,
+			maxProjectFiles: maxSourceFiles,
+			maxScanEntries,
 		};
 	}
 
@@ -528,6 +553,8 @@ export async function resolveStartupScanContextAsync(
 					? "too-many-entries"
 					: "too-many-source-files",
 				sourceFileCount,
+				maxProjectFiles: maxSourceFiles,
+				maxScanEntries,
 			};
 		} else {
 			result = {

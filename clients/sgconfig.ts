@@ -6,6 +6,11 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { load as loadYaml } from "./deps/js-yaml.js";
 import { resolvePackagePath } from "./package-root.js";
 import { findLocalToolConfig } from "./path-utils.js";
+import {
+	getUserRuleRoot,
+	ruleCorpusFingerprintForCycle,
+	_resetRuleCorpusCycleFingerprintsForTests,
+} from "./custom-rule-locations.js";
 
 // ast-grep's root config marker. The `ast-grep lsp` server is workspace-gated:
 // it only operates in a project that has an `sgconfig.y[a]ml` at (or above) the
@@ -14,7 +19,7 @@ const SGCONFIG_NAMES = ["sgconfig.yml", "sgconfig.yaml"] as const;
 
 export interface AstGrepRuleSource {
 	dir: string;
-	origin: "project" | "bundled";
+	origin: "project" | "user" | "bundled";
 	tier: "primary" | "secondary";
 }
 
@@ -60,7 +65,8 @@ function canonicalDir(dir: string): string {
 
 /**
  * Rule sources in the precedence order shared by raw ast-grep/LSP and NAPI:
- * project primary, project secondary, bundled primary, bundled secondary.
+ * project primary, project secondary, user primary, user secondary, bundled
+ * primary, bundled secondary.
  */
 export function getAstGrepRuleSources(
 	projectRoot = process.cwd(),
@@ -79,6 +85,21 @@ export function getAstGrepRuleSources(
 			{
 				dir: path.join(root, "rules", "ast-grep-rules", "coderabbit", "rules"),
 				origin: "project",
+				tier: "secondary",
+			},
+		);
+	}
+	const userRoot = getUserRuleRoot();
+	if (canonicalDir(userRoot) !== canonicalDir(root)) {
+		candidates.push(
+			{
+				dir: path.join(userRoot, "ast-grep-rules", "rules"),
+				origin: "user",
+				tier: "primary",
+			},
+			{
+				dir: path.join(userRoot, "ast-grep-rules", "coderabbit", "rules"),
+				origin: "user",
 				tier: "secondary",
 			},
 		);
@@ -195,7 +216,18 @@ function snapshotRuleSource(source: AstGrepRuleSource): RuleSourceSnapshot {
 		}
 		hash.update(content);
 		hash.update("\0");
-		files.push({ file, relativePath, documents: parseRuleDocuments(content) });
+		const documents = parseRuleDocuments(content);
+		if (
+			source.origin === "user" &&
+			documents.some((document) => !document.id)
+		) {
+			recordDegradationOnce({
+				kind: "ast-grep-rule-invalid",
+				subject: file,
+				reason: "user ast-grep rule has no valid rule id",
+			});
+		}
+		files.push({ file, relativePath, documents });
 	}
 	const snapshot = { ...source, files, digest: hash.digest("hex") };
 	if (source.origin === "bundled") bundledSnapshots.set(cacheKey, snapshot);
@@ -215,6 +247,36 @@ function sourceFingerprint(sources: RuleSourceSnapshot[]): string {
 		hash.update("\0");
 	}
 	return hash.digest("hex");
+}
+
+/**
+ * Fingerprint shared by ast-grep execution and description metadata.
+ *
+ * Computed at most once per dispatch cycle and reused by every later call in
+ * it (#4212 round 4), through the same seam the tree-sitter loader memo uses so
+ * both rule families agree on when a corpus is re-read. Without it, every
+ * `AstGrepRuleManager.loadRuleDescriptions()` re-walked and re-content-hashed
+ * the project and user rule trees — the per-call cost the round-2 verify
+ * measured on the tree-sitter side of the same class.
+ *
+ * `force` recomputes and republishes into the current cycle. Only
+ * `resolveBaselineSgconfig` passes it; see there for why that path opts out of
+ * the cycle memo.
+ */
+export function getAstGrepRuleFingerprint(
+	projectRoot = process.cwd(),
+	options: { force?: boolean } = {},
+): string {
+	const root = path.resolve(projectRoot || process.cwd());
+	return ruleCorpusFingerprintForCycle(
+		"ast-grep",
+		root,
+		(fingerprintRoot) =>
+			sourceFingerprint(
+				getAstGrepRuleSources(fingerprintRoot).map(snapshotRuleSource),
+			),
+		options.force,
+	);
 }
 
 function materializeMergedRuleDir(
@@ -271,9 +333,17 @@ export function resolveBaselineSgconfig(
 	projectRoot = process.cwd(),
 ): string | undefined {
 	const root = canonicalDir(path.resolve(projectRoot || process.cwd()));
-	const sources = getAstGrepRuleSources(root).map(snapshotRuleSource);
-	if (sources.length === 0) return undefined;
-	const fingerprint = sourceFingerprint(sources);
+	// FORCED, so this path opts out of the cycle memo. It runs once per
+	// ast-grep LSP spawn (`clients/lsp/server.ts`, `spawn(root, options)`),
+	// never on a per-file or per-call path, and #497's point-7 contract —
+	// pinned by `tests/clients/sgconfig.test.ts` — is that a project rule added
+	// mid-session wins on the very next resolve, inside the same cycle. Serving
+	// a cycle-memoized fingerprint here would hand the spawned server a merged
+	// rule directory built before that rule existed. Forcing also republishes
+	// the fresh value into the cycle, so a later description read agrees with
+	// the config this just materialized. The snapshot below stays on the miss
+	// path: a hit returns before any rule file is read.
+	const fingerprint = getAstGrepRuleFingerprint(root, { force: true });
 	const cached = cachedBaselines.get(root);
 	if (
 		cached?.fingerprint === fingerprint &&
@@ -282,6 +352,9 @@ export function resolveBaselineSgconfig(
 	) {
 		return cached.path;
 	}
+
+	const sources = getAstGrepRuleSources(root).map(snapshotRuleSource);
+	if (sources.length === 0) return undefined;
 
 	const dir = path.join(os.tmpdir(), "pi-lens-ast-grep");
 	fs.mkdirSync(dir, { recursive: true });
@@ -413,4 +486,8 @@ function cleanupStaleBaselines(dir: string, keep: Set<string>): void {
 export function _resetBaselineSgconfigForTests(): void {
 	cachedBaselines.clear();
 	bundledSnapshots.clear();
+	// The baseline cache is keyed on a fingerprint this module no longer
+	// recomputes per call, so a test that clears one must clear the other or
+	// the next resolve in the same cycle reuses a stale corpus identity.
+	_resetRuleCorpusCycleFingerprintsForTests();
 }

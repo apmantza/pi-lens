@@ -39,7 +39,7 @@ vi.mock("../../clients/review-graph/service.js", () => ({
 	formatImpactCascade: mocks.formatImpactCascade,
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: mocks.getLSPService,
 }));
 

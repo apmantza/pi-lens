@@ -16,7 +16,6 @@ import * as fs from "node:fs";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { relative } from "node:path";
 import {
 	getExcludedDirGlobs,
 	getProjectIgnoreGlobs,
@@ -30,10 +29,7 @@ import {
 	findManagedNodeToolBinary,
 	resolveAvailableOrInstall,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
@@ -131,10 +127,9 @@ function readProjectJscpdConfig(
  * would split or a glob character would misread is counted, not passed.
  */
 function worktreeIgnoreGlobs(cwd: string): string[] {
-	const base = canonicalDirectory(cwd);
 	const globs: string[] = [];
-	for (const worktree of listNestedLinkedWorktreeRoots(cwd)) {
-		const inside = toPosix(relative(base, worktree));
+	for (const offset of nestedWorktreeOffsets(cwd)) {
+		const inside = toPosix(offset);
 		const unsafe = inside.includes(",")
 			? "comma-in-path"
 			: /[*?[\]{}()!\\]/.test(inside)

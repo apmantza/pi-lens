@@ -121,6 +121,12 @@ rebuild:
   via `PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS`), reusing the same
   `createDebounceScheduler` primitive the review graph's persist path uses
   (`scheduleWordIndexPersist`, `clients/word-index.ts`).
+- The serialized form (`serializeWordIndex`'s memo) doubles as the incremental
+  cache: it is kept while a run edits, so each persist re-flattens only the
+  edited files' tokens, and released once per run at `agent_settled` for the
+  session that settled (`releaseWordIndexMemoAtSettle`), plus a stalled-run
+  backstop (`PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS`, default 10 minutes). The
+  first persist after a release is a full re-serialize.
 
 ## Surfaces
 

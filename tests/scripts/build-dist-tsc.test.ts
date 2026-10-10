@@ -99,7 +99,6 @@ describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F
 		const { command, argv, options } = planTscInvocation({
 			localTscBin,
 			root,
-			version: "7.0.2",
 			npmCli: "/fake/npm-cli.js",
 			execPrefix: undefined,
 			tsconfigProject: "tsconfig.dist.json",
@@ -138,7 +137,6 @@ describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F
 			const { options, argv } = planTscInvocation({
 				localTscBin: null,
 				root,
-				version: "7.0.2",
 				npmCli: "/fake/npm-cli.js",
 				execPrefix,
 				tsconfigProject: "tsconfig.dist.json",
@@ -155,9 +153,16 @@ describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F
 			expect(prefixArg).not.toBe(root);
 			expect(path.relative(root, prefixArg ?? "").startsWith("..")).toBe(true);
 
+			// #4066: the fallback uses the resolved lock version, never a caller pin.
+			const lock = JSON.parse(
+				fs.readFileSync(path.join(root, "package-lock.json"), "utf8"),
+			);
+			const spec = `typescript@${lock.packages["node_modules/typescript"].version}`;
+			expect(argv[argv.indexOf("--package") + 1]).toBe(spec);
+			expect(argv).toContain(`--allow-scripts=${spec}`);
+
 			const packageIndex = argv.indexOf("--package");
 			expect(packageIndex).toBeGreaterThanOrEqual(0);
-			expect(argv[packageIndex + 1]).toMatch(/^typescript@\d+\.\d+\.\d+$/);
 
 			const tscIndex = argv.indexOf("tsc");
 			expect(tscIndex).toBeGreaterThanOrEqual(0);

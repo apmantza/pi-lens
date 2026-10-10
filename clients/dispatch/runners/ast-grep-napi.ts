@@ -22,8 +22,9 @@ import {
 } from "../../deps/ast-grep-napi.js";
 import { buildEffectiveAstGrepCatalog } from "../ast-grep-catalog.js";
 import { isRuleIgnoredForPath } from "../rule-ignores.js";
+import { ruleIgnoredForPath, type RulePolicyMap } from "../rule-policy.js";
 import { logLatency } from "../../latency-logger.js";
-import { hasAuxiliaryLspPublishedForRoot } from "../../lsp/index.js";
+import { hasAuxiliaryLspPublishedForRoot } from "../../lsp/capabilities.js";
 import {
 	clearPendingAuxiliaryCoverage,
 	hasPendingAuxiliaryCoverage,
@@ -535,6 +536,8 @@ export interface AstGrepEvaluateOptions {
 	maxTotalDiagnostics?: number;
 	/** Workspace root that owns project-local rules; defaults to `cwd`. */
 	projectRoot?: string;
+	/** Shared config rule policy for scan-time path admission. */
+	rulePolicy?: RulePolicyMap;
 	/**
 	 * Optional sink for a rule that napi's native engine rejected outright
 	 * (malformed shape, unresolved `matches: <name>` reference, invalid kind,
@@ -1070,6 +1073,8 @@ export function evaluateAstGrepRules(
 			// same object instance the catalog recorded, since both read the
 			// identical `rules` arrays off `catalog.sources`.
 			if (catalog.effectiveRules.get(rule.id)?.rule !== rule) continue;
+			if (ruleIgnoredForPath(rule.id, filePath, ignoreRoot, options.rulePolicy))
+				continue;
 			if (blockingOnly && rule.severity !== "error") continue;
 			// Per-rule path carve-out (#965): a rule that's noise on CLI scripts or
 			// a project's own logging sink (e.g. no-console-except-error firing
@@ -1456,6 +1461,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 			{
 				blockingOnly: runningAsLspSubstitute ? false : ctx.blockingOnly,
 				projectRoot: ctx.projectRoot,
+				rulePolicy: ctx.rulePolicy,
 				log: (message: string) => ctx.log(message),
 				content,
 				sgModule,

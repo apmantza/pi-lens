@@ -28,10 +28,13 @@ import {
 import type { FileRole } from "../file-role.js";
 import type { LSPDiagnostic } from "../lsp/client.js";
 import type { ProjectDiagnostic } from "../project-diagnostics/types.js";
-import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { retagAuxiliaryDiagnostics } from "./auxiliary-lsp.js";
 import { applyInlineSuppressions } from "./inline-suppressions.js";
-import { applyRulePolicy, rulePolicyMapFromConfig } from "./rule-policy.js";
+import {
+	applyRulePolicy,
+	resolvedRulePolicyMap,
+	rulePolicyMapFromConfig,
+} from "./rule-policy.js";
 import type { Diagnostic } from "./types.js";
 import { convertLspDiagnostics } from "./utils/lsp-diagnostics.js";
 
@@ -90,7 +93,13 @@ export function applyFindingPolicy<
 >(diagnostics: T[], options: FindingPolicyOptions<T>): FindingPolicyResult<T> {
 	const inlineKept = applyInlineSuppressions(diagnostics, options.content);
 	const disposed = filterDisposed(inlineKept, options);
-	return { kept: applyRulePolicy(disposed, options.policyMap), inlineKept };
+	return {
+		kept: applyRulePolicy(disposed, options.policyMap, {
+			root: options.cwd,
+			filePath: options.filePath,
+		}),
+		inlineKept,
+	};
 }
 
 /** The project's `.pi-lens.json` `rules.<id>.disable`/`select` policy map.
@@ -99,7 +108,7 @@ export function applyFindingPolicy<
 export function loadProjectRulePolicyMap(
 	cwd: string,
 ): ReturnType<typeof rulePolicyMapFromConfig> {
-	return rulePolicyMapFromConfig(loadPiLensProjectConfig(cwd).rules);
+	return resolvedRulePolicyMap(cwd);
 }
 
 /**

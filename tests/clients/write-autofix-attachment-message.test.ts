@@ -38,8 +38,10 @@ vi.mock("../../clients/dispatch/integration.js", () => ({
 	dispatchLintWithResult: vi.fn(),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
+vi.mock("../../clients/lsp/capabilities.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/lsp/capabilities.js")
+	>()),
 	getLSPService: vi.fn(),
 	resyncGitChangedFiles: vi.fn().mockResolvedValue(undefined),
 }));
@@ -48,8 +50,9 @@ vi.mock("../../clients/recent-touches.js", () => ({
 }));
 
 import { dispatchLintWithResult } from "../../clients/dispatch/integration.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 const ATTACHMENT_PREFIX = "pi-lens applied autofix to ";
 const ATTACHED_CLAIM = "is authoritative after autofix";
@@ -261,7 +264,9 @@ describe("#1590 post-autofix instruction has one author", () => {
 				fixingBiome(() => "const shouldNotRun = true;\n"),
 			);
 			expect(
-				await handleToolCall(bashCallDeps(runtime, command)),
+				await runHandlerExpectingNoThrow(() =>
+					handleToolCall(bashCallDeps(runtime, command)),
+				),
 			).toBeUndefined();
 			fs.writeFileSync(fileA, "const a = 2;\n");
 			fs.writeFileSync(fileB, "export const created = true;\n");
@@ -330,7 +335,9 @@ describe("#1590 post-autofix instruction has one author", () => {
 				runtime,
 				fixingBiome(() => "const direct = 1;\n"),
 			);
-			await handleToolCall(bashCallDeps(runtime, command));
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(bashCallDeps(runtime, command)),
+			);
 			fs.writeFileSync(filePath, "const direct=2;\n");
 
 			const returned = await handleToolResult({

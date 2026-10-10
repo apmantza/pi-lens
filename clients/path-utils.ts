@@ -891,13 +891,31 @@ export function isUnderDir(child: string, parent: string): boolean {
 	return normChild === normParent || normChild.startsWith(parentPrefix);
 }
 
+/** True when a path is outside the session's project root. */
+export function isOutsideProjectRoot(
+	filePath: string,
+	projectRoot: string,
+): boolean {
+	return !isUnderDir(filePath, projectRoot);
+}
+
 const VENDOR_DIR_NAMES = new Set([
 	"node_modules",
 	"vendor",
 	"vendors",
 	"third_party",
 	"third-party",
+	".venv",
+	"site-packages",
+	"bower_components",
 ]);
+
+/** True when any path segment names an installed or vendored dependency tree. */
+export function isVendorPath(filePath: string): boolean {
+	return normalizeFilePath(filePath)
+		.split("/")
+		.some((segment) => VENDOR_DIR_NAMES.has(segment.toLowerCase()));
+}
 
 /**
  * Returns true when a file should be treated as external/vendor and excluded
@@ -911,13 +929,8 @@ export function isExternalOrVendorFile(
 	filePath: string,
 	projectRoot: string,
 ): boolean {
-	if (!isUnderDir(filePath, projectRoot)) return true;
-	const normalized = normalizeFilePath(filePath);
-	const rootNorm = normalizeFilePath(projectRoot);
-	const rel = normalized.startsWith(rootNorm + "/")
-		? normalized.slice(rootNorm.length + 1)
-		: normalized;
-	return rel.split("/").some((seg) => VENDOR_DIR_NAMES.has(seg));
+	if (isOutsideProjectRoot(filePath, projectRoot)) return true;
+	return isVendorPath(filePath);
 }
 
 /**

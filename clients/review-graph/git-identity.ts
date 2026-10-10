@@ -208,8 +208,12 @@ export function listLinkedWorktreeRoots(commonDir: string): string[] {
 		try {
 			const entryDir = join(commonDir, "worktrees", name);
 			const gitFile = fs.readFileSync(join(entryDir, "gitdir"), "utf-8").trim();
-			if (gitFile)
-				roots.push(canonicalDirectory(dirname(resolve(entryDir, gitFile))));
+			if (gitFile) {
+				const root = canonicalDirectory(dirname(resolve(entryDir, gitFile)));
+				// A prunable registration can outlive its checkout. Do not let that
+				// stale identity hide a later plain directory from scanners (#4132).
+				if (fs.existsSync(join(root, ".git"))) roots.push(root);
+			}
 		} catch {
 			/* a worktree whose registration is unreadable is not listed */
 		}

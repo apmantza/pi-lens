@@ -20,7 +20,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: vi.fn(() =>
 		makeLspServiceDouble({
 			touchFile: mockTouchFile,
@@ -30,7 +30,7 @@ vi.mock("../../clients/lsp/index.js", () => ({
 }));
 
 import { initLSPConfig, loadLSPConfig } from "../../clients/lsp/config.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 function setStartupMode(mode: "full" | "quick"): () => void {

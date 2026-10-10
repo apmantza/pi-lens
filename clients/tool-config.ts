@@ -151,6 +151,11 @@ export const LENS_TOOL_NAMES = TOOL_REGISTRY.map(
 	(tool) => tool.name,
 ) as readonly string[];
 
+/** Tool names registered on pi, excluding MCP-only registry entries. */
+export const PI_LENS_TOOL_NAMES = TOOL_REGISTRY.flatMap((tool) =>
+	tool.piName === undefined ? [] : [tool.piName],
+) as readonly string[];
+
 export type ToolRegistryEntry = (typeof TOOL_REGISTRY)[number];
 
 export type LensToolHost = "pi" | "mcp";

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { LSPService } from "../../clients/lsp/index.js";
+import type { LSPService } from "../../clients/lsp/capabilities.js";
 
 /**
  * Shared `LSPService` test double — #2582.

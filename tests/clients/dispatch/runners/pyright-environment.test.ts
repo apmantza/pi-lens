@@ -13,7 +13,7 @@ const resolveAvailableOrInstall = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
-vi.mock("../../../../clients/lsp/index.js", () => ({
+vi.mock("../../../../clients/lsp/capabilities.js", () => ({
 	// The runner's warm-up (`clients/dispatch/runners/pyright.ts`) awaits
 	// `getClientForFile` inside a swallow-all catch, so a partial double here
 	// fails silently — factory-seeded, with only that method asserted (#2592).

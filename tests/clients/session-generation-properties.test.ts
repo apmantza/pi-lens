@@ -63,7 +63,7 @@ import {
 } from "../../clients/dispatch/pending-runner-findings.js";
 import type { RunnerResult } from "../../clients/dispatch/types.js";
 import { recordLspMutation } from "../../clients/lsp-mutation.js";
-import { resetLSPService } from "../../clients/lsp/index.js";
+import { resetLSPService } from "../../clients/lsp/capabilities.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {

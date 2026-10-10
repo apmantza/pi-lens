@@ -18,6 +18,9 @@ import { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 
 interface QueryDouble {
 	query: { delete: () => void };
+	users: number;
+	retired: boolean;
+	disposed: boolean;
 }
 
 interface Harness {
@@ -37,7 +40,13 @@ function harnessOf(client: TreeSitterClient): Harness {
 
 function queryDouble(): QueryDouble & { deleted: () => number } {
 	const del = vi.fn();
-	return { query: { delete: del }, deleted: () => del.mock.calls.length };
+	return {
+		query: { delete: del },
+		users: 0,
+		retired: false,
+		disposed: false,
+		deleted: () => del.mock.calls.length,
+	};
 }
 
 afterEach(() => {

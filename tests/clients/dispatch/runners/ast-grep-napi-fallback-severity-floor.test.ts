@@ -48,9 +48,9 @@ const { mockAuxiliaryLspPublished, recordEntitySnapshotDiffMock } = vi.hoisted(
 // Environment only: whether the ast-grep LSP has published for this root is LSP
 // state, not the behavior under test. Everything else in `clients/lsp/index.js`
 // stays real so the dispatch module graph still resolves.
-vi.mock("../../../../clients/lsp/index.js", async (importOriginal) => ({
+vi.mock("../../../../clients/lsp/capabilities.js", async (importOriginal) => ({
 	...(await importOriginal<
-		typeof import("../../../../clients/lsp/index.js")
+		typeof import("../../../../clients/lsp/capabilities.js")
 	>()),
 	hasAuxiliaryLspPublishedForRoot: mockAuxiliaryLspPublished,
 }));

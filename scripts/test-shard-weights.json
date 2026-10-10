@@ -1129,6 +1129,7 @@
 		"tests/real-harness/negative.test.ts": 2.29,
 		"tests/real-harness/provider-compatibility.test.ts": 3.45,
 		"tests/real-harness/scenario-1.test.ts": 1.61,
+		"tests/real-harness/scenario-2.test.ts": 1.61,
 		"tests/real-harness/scenario-3.test.ts": 4.01,
 		"tests/real-harness/tools-enabled.test.ts": 3.23,
 		"tests/scripts/analyze-config-resolution-smell.test.ts": 0.74,

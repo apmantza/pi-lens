@@ -9,6 +9,10 @@ import { absorbSettledRunnerBlockers } from "./deferred-runner-blockers.js";
 import { logLatency } from "./latency-logger.js";
 import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import {
+	canWriteAnalysisRoot,
+	type AnalysisRootMode,
+} from "./analysis-root.js";
+import {
 	advisoryFileHash,
 	advisoryPathKey,
 	MAX_ADVISORY_AFFECTED_FILES,
@@ -1042,7 +1046,9 @@ export function syncGitGuardRecord(
 	cacheManager: CacheManager,
 	cwd: string,
 	editedFilePath?: string,
+	analysisRootMode: AnalysisRootMode = "session",
 ): void {
+	if (!canWriteAnalysisRoot(analysisRootMode)) return;
 	// #3248: a record the turn-end policy fully suppressed is not a blocker the
 	// commit gate may persist — the agent was shown nothing for it. The entry
 	// stays in the map so the next turn re-derives the verdict from current

@@ -27,6 +27,8 @@ const { getProjectDataDir } = fileUtils;
 const PREFIX = "pi-lens-1129-";
 const previousEnv = {
 	dataDir: process.env.PILENS_DATA_DIR,
+	piLensHome: process.env.PI_LENS_HOME,
+	home: process.env.HOME,
 	tmpdir: process.env.TMPDIR,
 	generic: process.env.PI_LENS_LSP_IDLE_EVICT_MS,
 	ephemeral: process.env.PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS,
@@ -61,6 +63,8 @@ useTrackedTempDirs(PREFIX);
 
 afterEach(() => {
 	restore("PILENS_DATA_DIR", previousEnv.dataDir);
+	restore("PI_LENS_HOME", previousEnv.piLensHome);
+	restore("HOME", previousEnv.home);
 	restore("TMPDIR", previousEnv.tmpdir);
 	restore("PI_LENS_LSP_IDLE_EVICT_MS", previousEnv.generic);
 	restore("PI_LENS_EPHEMERAL_LSP_IDLE_EVICT_MS", previousEnv.ephemeral);
@@ -108,6 +112,22 @@ describe("temporary checkout policy (#1129)", () => {
 		expect(new Set([dirA, dirB, dirSub]).size).toBe(3);
 		expect(getProjectDataDir(a)).toBe(dirA);
 		expect(path.dirname(getProjectDataDir(plain))).toBe(dataRoot);
+	});
+
+	// Recurrence (#4199): an ephemeral root was re-answered by the legacy
+	// `.pi-lens` probe after that directory appeared, orphaning earlier state.
+	it("keeps an ephemeral root's data dir after a legacy .pi-lens directory appears", () => {
+		const home = fixtureRoot("home");
+		const checkout = makeCheckout(fixtureRoot("settled-legacy"));
+		delete process.env.PILENS_DATA_DIR;
+		process.env.PI_LENS_HOME = home;
+		process.env.HOME = home;
+
+		const settled = getProjectDataDir(checkout);
+		fs.mkdirSync(path.join(checkout, ".pi-lens"), { recursive: true });
+
+		expect(getProjectDataDir(checkout)).toBe(settled);
+		expect(settled).not.toBe(path.join(checkout, ".pi-lens"));
 	});
 
 	// Recurrence (F1, review probe p2): a worklog row written for checkout A

@@ -16,6 +16,7 @@ import {
 	getLatencyReports,
 } from "../../clients/dispatch/integration.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
 
 const SOURCE = "const value = 1;\n";
 
@@ -146,8 +147,8 @@ describe("#2499 analysed-state latch with the real pipeline", () => {
 			liveRoot = env.tmpDir;
 			const firstEvent = event(filePath);
 
-			await handleToolCall(
-				callDeps(firstEvent, env.tmpDir, runtime, cacheManager),
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(firstEvent, env.tmpDir, runtime, cacheManager)),
 			);
 			fs.writeFileSync(filePath, `${SOURCE}# analysed-state\n`);
 

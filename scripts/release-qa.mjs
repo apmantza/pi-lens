@@ -1332,7 +1332,10 @@ function driveCodemodeRpc({ piBin, cwd, env, providerPath, capMs }) {
  * @param {any} ctx
  */
 export async function runCodemodeNestedProbe(ctx) {
-	const piVersionText = describePi(ctx.piBin, ctx.env);
+	const { display: piDisplay, versionText: piVersionText } = describePi(
+		ctx.piBin,
+		ctx.env,
+	);
 	const piAiIndex = locatePiAiIndex(ctx.piBin, ctx.env);
 	const plan = planCodemodeRow({ piVersionText, piAiIndex });
 	if (!plan.reachable) {
@@ -1429,7 +1432,7 @@ export async function runCodemodeNestedProbe(ctx) {
 		ext: "json",
 		content: JSON.stringify(
 			{
-				pi: piVersionText,
+				pi: piDisplay,
 				settings: read(settingsPath),
 				runOk: run.ok,
 				runReason: run.reason ?? null,
@@ -3137,7 +3140,7 @@ async function main() {
 			"QA target": exportedCommit
 				? `${installSource} (packed from exported ${exportedCommit})`
 				: installSource,
-			pi: describePi(opts.pi, env),
+			pi: describePi(opts.pi, env).display,
 			baseline: path.relative(REPO_ROOT, opts.baseline).replaceAll("\\", "/"),
 			"scratch root": scratchRoot,
 			"polling cap": `${opts.pollCapMs}ms`,
@@ -3179,14 +3182,25 @@ function listInstalledFiles(root) {
 	return out;
 }
 
+/**
+ * `display` is the human-readable line (binary path first); `versionText` is
+ * only what `piBin --version` printed, empty when it could not be read. Version
+ * checks use `versionText`, never `display`, whose path can embed an x.y.z.
+ *
+ * @returns {{ display: string, versionText: string }}
+ */
 function describePi(piBin, env) {
 	try {
-		return `${piBin} ${execFileSync(piBin, ["--version"], {
+		const versionText = execFileSync(piBin, ["--version"], {
 			encoding: "utf8",
 			env,
-		}).trim()}`;
+		}).trim();
+		return { display: `${piBin} ${versionText}`, versionText };
 	} catch (err) {
-		return `${piBin} (version unreadable: ${err?.message || err})`;
+		return {
+			display: `${piBin} (version unreadable: ${err?.message || err})`,
+			versionText: "",
+		};
 	}
 }
 

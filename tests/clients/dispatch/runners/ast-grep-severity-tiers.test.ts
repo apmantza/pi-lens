@@ -10,6 +10,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	dispatchForFile,
+	RunnerRegistry,
+} from "../../../../clients/dispatch/dispatcher.js";
 import astGrepNapiRunner from "../../../../clients/dispatch/runners/ast-grep-napi.js";
 import type { Diagnostic } from "../../../../clients/dispatch/types.js";
 import {
@@ -104,6 +108,36 @@ describe("ast-grep-napi preserves all four rule severity tiers (#1777)", () => {
 		const byRule = await runTiers();
 		for (const rule of TIER_RULES.filter((r) => r.severity !== "error")) {
 			expect(byRule.get(rule.id)?.fixSuggestion).toBeUndefined();
+		}
+	});
+
+	it("keeps throw Error style findings non-blocking through dispatch (#4240)", async () => {
+		const registry = new RunnerRegistry();
+		registry.register(astGrepNapiRunner);
+		const projectRoot = path.resolve(process.cwd());
+
+		for (const [extension, rule] of [
+			["ts", "throw-new-error"],
+			["js", "throw-new-error-js"],
+		] as const) {
+			const { ctx } = env.addFile(
+				`throw-error.${extension}`,
+				'export function a() { throw Error("x"); }\n',
+				{ projectRoot },
+			);
+			const result = await dispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: [astGrepNapiRunner.id] }],
+				registry,
+			);
+			const finding = result.diagnostics.find(
+				(diagnostic) => diagnostic.rule === rule,
+			);
+			expect(finding).toMatchObject({
+				rule,
+				severity: "warning",
+				semantic: "warning",
+			});
 		}
 	});
 });

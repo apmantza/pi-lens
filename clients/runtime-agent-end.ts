@@ -12,6 +12,7 @@ import type { BiomeClient } from "./biome-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import {
 	publishAutofixStart,
+	publishFormatDone,
 	publishFormatStart,
 } from "./format-events-publish.js";
 import type { FormatService } from "./format-service.js";
@@ -45,6 +46,7 @@ import { getAmbientAbortSignal } from "./safe-spawn.js";
 import { type ProjectChangeSource } from "./project-changes.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import {
+	type LineageHandle,
 	recordDroppedRead,
 	sessionFencedFixedThisTurn,
 } from "./session-scope.js";
@@ -146,6 +148,26 @@ function recordProjectChange(args: {
 	});
 }
 
+/**
+ * #4131: the drain's `recordWritten` credits authorship over bytes the agent
+ * never saw, so it may only carry forward an authorship whose bytes still
+ * hold. One another writer broke since the agent's write ends before the
+ * drain rewrites the file, and the drain cannot resume it. The live
+ * session's guard only (#3528).
+ */
+function retireChangedAuthorshipBeforeDrain(
+	runtime: RuntimeCoordinator,
+	session: LineageHandle,
+	filePath: string,
+	getFlag: (name: string, filePath?: string) => boolean | string | undefined,
+): void {
+	if (getFlag("no-read-guard")) return;
+	// Optional, as the guard's other per-write members are to a host double.
+	session.guardedWrite(filePath, () =>
+		runtime.readGuard.retireChangedAuthorship?.(filePath),
+	);
+}
+
 export async function handleAgentEnd({
 	signal,
 	ctxCwd,
@@ -162,6 +184,13 @@ export async function handleAgentEnd({
 	currentSessionId,
 	staleAfterMs = DEFERRED_FORMAT_STALE_AFTER_MS,
 }: AgentEndDeps): Promise<AgentEndFormatSummary | undefined> {
+	// Backstop for read captures (#4185 R2-3, round 4). A call's capture is
+	// released when the call ends (`handleToolExecutionEnd`); only a run that
+	// dies between a read's tool_call and its tool_execution_end (a throw in
+	// pi's agent loop takes `handleRunFailure`, which emits agent_end and no
+	// tool_execution_end) leaves one, and it must not license an edit in the
+	// next run.
+	runtime.readGuard.dropProvisionalReads();
 	// #791: ownership-filtered drain — records queued by a DIFFERENT known
 	// session (e.g. a concurrent in-process secondary/subagent) stay queued
 	// for their owner's own agent_end, unless they've been stale long enough
@@ -411,6 +440,10 @@ export async function handleAgentEnd({
 		kind: "autofix";
 	}> = [];
 	const deferredAutofixChanged = new Set<string>();
+	// A formatter that outlives the hook budget owns a later disk write. The
+	// terminal format event waits for these contained continuations, so a
+	// listener never treats pre-late-write bytes as settled (#4213).
+	const lateFormatCompletions: Promise<void>[] = [];
 	// #3576: runAutofix marks a file fixed after its fixer awaits; a replaced
 	// session's mark would skip the next session's own autofix of that file.
 	const fixedThisTurn = sessionFencedFixedThisTurn(
@@ -504,6 +537,9 @@ export async function handleAgentEnd({
 				: `${policy?.defaultTool ?? "unknown"}:${filePath}`;
 		if (executedAutofixScopes.has(scopeKey)) continue;
 		executedAutofixScopes.add(scopeKey);
+		// #4131: the fixer's recordWritten below credits authorship without
+		// bytes the agent saw, so it may only advance one whose bytes still hold.
+		retireChangedAuthorshipBeforeDrain(runtime, session, filePath, getFlag);
 		// #3506: the fixer rewrites the file in place, inside pi's queue, which
 		// runAutofix enters only once the fixer is resolved.
 		const fixHold = holdFileMutationQueue(filePath);
@@ -545,6 +581,7 @@ export async function handleAgentEnd({
 					// #3525: bytes the agent never saw; authorship, not FileTime.
 					if (!getFlag("no-read-guard"))
 						runtime.readGuard.recordWritten(changedPath, {
+							authorship: "whole-file",
 							branchEpoch: queuedBranchEpoch,
 							stampFileTime: false,
 						});
@@ -629,11 +666,17 @@ export async function handleAgentEnd({
 	// (e.g. a review/snapshot controller) can use this to know the deferred-
 	// format phase is starting and these specific paths may still be mutated.
 	if (records.length > 0) {
+		const batch = records[0]!;
 		publishFormatStart({
 			cwd: ctxCwd ?? runtime.projectRoot,
 			paths: records.map((r) => r.filePath),
 			dbg,
 			kinds: [...new Set(records.flatMap((record) => [...record.kinds]))],
+			...(batch.ownerSessionId === undefined
+				? {}
+				: { ownerSessionId: batch.ownerSessionId }),
+			turnIndex: batch.queuedTurnIndex,
+			batchId: batch.queuedTurnId,
 		});
 	}
 
@@ -669,6 +712,32 @@ export async function handleAgentEnd({
 		const work: (FormatWork | undefined)[] = [];
 		work.length = formatRecords.length;
 		const started = new Set<number>();
+		const unsettledFormatPaths = new Set<string>();
+		let terminalFormatEventPublished = false;
+		const batchIdentity = records[0]!;
+		const publishUnsettled = () => {
+			if (terminalFormatEventPublished || unsettledFormatPaths.size === 0)
+				return;
+			terminalFormatEventPublished = true;
+			recordDegradationOnce({
+				kind: "deferred-format-unsettled",
+				subject: batchIdentity.queuedTurnId,
+				reason:
+					"a deferred formatter remained unsettled after the bounded drain; the done event names the pending files and settled=false",
+			});
+			publishFormatDone({
+				cwd: ctxCwd ?? runtime.projectRoot,
+				paths: [...unsettledFormatPaths],
+				kinds: ["format"],
+				...(batchIdentity.ownerSessionId === undefined
+					? {}
+					: { ownerSessionId: batchIdentity.ownerSessionId }),
+				turnIndex: batchIdentity.queuedTurnIndex,
+				batchId: batchIdentity.queuedTurnId,
+				settled: false,
+				dbg,
+			});
+		};
 		let nextIndex = 0;
 		const worker = async (): Promise<void> => {
 			while (nextIndex < formatRecords.length) {
@@ -693,6 +762,8 @@ export async function handleAgentEnd({
 					};
 					continue;
 				}
+				// #4131: as in the autofix loop, before the formatter rewrites it.
+				retireChangedAuthorshipBeforeDrain(runtime, session, filePath, getFlag);
 				// #3506: the formatter rewrites the file in place, and its read-back
 				// belongs to the same hold. The release follows the phase itself,
 				// not this bound, and an abandoned formatter keeps it until its
@@ -719,11 +790,26 @@ export async function handleAgentEnd({
 							label: "deferred-format",
 						}),
 					};
+					const abandoned = work[index]?.result?.abandoned;
+					if (abandoned) {
+						lateFormatCompletions.push(
+							chainLateFormatResync(
+								abandoned,
+								"deferred",
+								{ toolName: "agent_end", filePath, startedAt: fileStart },
+								dbg,
+							),
+						);
+					}
 					// #3529: the bound gave up on the phase, not on its formatter
 					// child, which writes F later. Once the phase and every formatter
 					// it gave up on have settled, sync a fresh stamped read of F, or
 					// the LSP keeps the bytes from before the format.
-					if (!work[index]?.result)
+					if (!work[index]?.result) {
+						if (!ambientSignal?.aborted) {
+							unsettledFormatPaths.add(filePath);
+							publishUnsettled();
+						}
 						void (async () => {
 							let outcome: LspResyncOutcome | "stale-session" | "read-failed" =
 								"stale-session";
@@ -753,11 +839,13 @@ export async function handleAgentEnd({
 									// Held-only in every case (#3828): the install can outlive
 									// the client (idle eviction), and this must never open a
 									// file or spawn for it.
-									chainLateFormatResync(
-										formatterSettling,
-										"deferred",
-										{ toolName: "agent_end", filePath, startedAt: fileStart },
-										dbg,
+									lateFormatCompletions.push(
+										chainLateFormatResync(
+											formatterSettling,
+											"deferred",
+											{ toolName: "agent_end", filePath, startedAt: fileStart },
+											dbg,
+										),
 									);
 								} else {
 									// #3528 r1 F1, #3576: a replaced session or a retired LSP
@@ -786,6 +874,7 @@ export async function handleAgentEnd({
 								metadata: { outcome },
 							});
 						})();
+					}
 				} catch (err) {
 					work[index] = {
 						record,
@@ -919,6 +1008,7 @@ export async function handleAgentEnd({
 					// #3525: bytes the agent never saw; authorship, not FileTime.
 					if (!getFlag("no-read-guard")) {
 						runtime.readGuard.recordWritten(filePath, {
+							authorship: "whole-file",
 							branchEpoch: queuedBranchEpoch,
 							stampFileTime: false,
 						});
@@ -995,6 +1085,26 @@ export async function handleAgentEnd({
 				dbg,
 				fixes: deferredFormatFixes,
 			});
+		}
+		const publishDone = () =>
+			publishFormatDone({
+				cwd: ctxCwd ?? runtime.projectRoot,
+				paths: summary.changed,
+				kinds: ["format"],
+				...(records[0]!.ownerSessionId === undefined
+					? {}
+					: { ownerSessionId: records[0]!.ownerSessionId }),
+				turnIndex: records[0]!.queuedTurnIndex,
+				batchId: records[0]!.queuedTurnId,
+				settled: true,
+				dbg,
+			});
+		if (!terminalFormatEventPublished) {
+			if (lateFormatCompletions.length === 0) publishDone();
+			else
+				void Promise.all(lateFormatCompletions).then(() => {
+					if (!terminalFormatEventPublished) publishDone();
+				});
 		}
 	}
 
@@ -1156,9 +1266,27 @@ export async function handleAgentEnd({
 							"an actionable-warnings entry the quick fix acts on was built under another read guard, or carries no valid branch stamp; its fixes are applied and credited to no branch",
 					});
 				}
+				// #4131, #4187 R4-4: the quickfix's `recordWritten` below credits
+				// authorship over bytes the agent never saw, so it may only carry
+				// forward an authorship whose bytes still hold. One other writer
+				// broke since the agent's write ends here, before the fix rewrites
+				// around it — the pre-write check the format and autofix drains
+				// already run, and the third drain writer it was missing on.
+				for (const file of fixableFiles)
+					retireChangedAuthorshipBeforeDrain(
+						runtime,
+						session,
+						file.filePath,
+						getFlag,
+					);
 				const mutationContext: LspMutationContext = {
 					cwd: fixCwd,
 					correlationId: newLspMutationCorrelationId(),
+					// #4187 R4-1: no `toolCallId` — a drain has no tool call, so
+					// `bookkeepLspMutation`'s `advanceAuthorship: true` reaches the
+					// guard unlicensed and cannot re-baseline an authorship. The
+					// retire below is this drain's pre-write check instead, the one
+					// the format and autofix drains already run.
 					tool: "lsp-quickfix",
 					source: "autofix",
 					runtime,
@@ -1168,8 +1296,14 @@ export async function handleAgentEnd({
 							? undefined
 							: {
 									// #3525: bytes the agent never saw; authorship, not FileTime.
+									// #4187 R4-4: the wrapper deliberately records a DRAIN write,
+									// not the LSP bookkeeping's licensed tool write: it drops
+									// `advanceAuthorship: true`, so the credit is the drain's own
+									// (retire before, advance over its rewrite) and not an
+									// unlicensed advance over a byte nothing checked.
 									recordWritten: (filePath: string) =>
 										runtime.readGuard.recordWritten(filePath, {
+											authorship: "whole-file",
 											branchEpoch: credit,
 											stampFileTime: false,
 										}),

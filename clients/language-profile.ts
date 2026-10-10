@@ -329,8 +329,8 @@ const WARMUP_CODE_EXTS: ReadonlySet<string> = new Set(
 // warmup walk is hard-capped. Without this, a walk rooted at a too-broad directory
 // (e.g. $HOME, if startup-scan's canWarmCaches guard is bypassed) traverses the
 // entire tree — #250's multi-hour home-dir scans. Generous enough to detect every
-// language present in any real project (mirrors startup-scan's 2000 limit).
-const MAX_WARMUP_SOURCE_FILES = 2000;
+// language present in any real project (mirrors startup-scan's 2500 limit).
+const MAX_WARMUP_SOURCE_FILES = 2500;
 
 // Total matched-file ceiling for the warmup walk, as a multiple of `maxFiles`
 // (#894 review): with per-category budgets the walk no longer stops at the

@@ -54,6 +54,7 @@ function makeTurnEndDeps(
 		dbg: () => {},
 		runtime,
 		cacheManager,
+		sessionId: TURN_STATE_SESSION_ID,
 		knipClient: {
 			ensureAvailable: async () => false,
 			analyze: async () => EMPTY_KNIP_RESULT,

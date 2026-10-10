@@ -1,0 +1,2400 @@
+{
+ "$comment": "The last 25 commits touching index.ts at origin/master 4e1cfbfd0 (git log -25 --format=%H -- index.ts): each one's `git diff -U0 <sha>^ <sha> -- index.ts`, the handler ranges findHookRanges reads from that commit's post-image, and the hooks that fire. README.md in this directory says how it was produced and why ranges are stored instead of 25 post-images.",
+ "commits": [
+  {
+   "sha": "60c02f38fe1eee87a6d9688b705c8ec593c6d4f5",
+   "subject": "fix(read-guard): preserve suppress edit identity",
+   "diff": "diff --git a/index.ts b/index.ts\nindex f4cd34029..56af2c766 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -1880,0 +1881 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t() => runtime.captureSessionGeneration(),\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3231,
+      3231
+     ],
+     [
+      3199,
+      3230
+     ]
+    ],
+    "agent_settled": [
+     [
+      3765,
+      3768
+     ],
+     [
+      3659,
+      3758
+     ]
+    ],
+    "context": [
+     [
+      4126,
+      4309
+     ]
+    ],
+    "resources_discover": [
+     [
+      2087,
+      2089
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3791,
+      4012
+     ]
+    ],
+    "session_start": [
+     [
+      2168,
+      2724
+     ]
+    ],
+    "session_tree": [
+     [
+      2733,
+      2767
+     ]
+    ],
+    "tool_call": [
+     [
+      2769,
+      2789
+     ]
+    ],
+    "tool_result": [
+     [
+      2903,
+      2923
+     ],
+     [
+      2793,
+      2901
+     ]
+    ],
+    "turn_end": [
+     [
+      3497,
+      3497
+     ],
+     [
+      3234,
+      3496
+     ]
+    ],
+    "turn_start": [
+     [
+      2990,
+      2993
+     ],
+     [
+      2928,
+      2989
+     ]
+    ]
+   },
+   "expected": []
+  },
+  {
+   "sha": "7698efa4082133b36934fb5f9bda4d4ba4dccab8",
+   "subject": "Merge pull request #4165 from apmantza/fix/4154-late-scan-fences",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1327e2625..f4cd34029 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3433,0 +3434,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t// #4154: this activation's own scope, so a concurrent secondary's\n+\t\t\t\t// late dead-code scan never lands in the primary's cell.\n+\t\t\t\t...(scope === undefined ? {} : { sessionScope: scope }),\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3230,
+      3230
+     ],
+     [
+      3198,
+      3229
+     ]
+    ],
+    "agent_settled": [
+     [
+      3764,
+      3767
+     ],
+     [
+      3658,
+      3757
+     ]
+    ],
+    "context": [
+     [
+      4125,
+      4308
+     ]
+    ],
+    "resources_discover": [
+     [
+      2086,
+      2088
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3790,
+      4011
+     ]
+    ],
+    "session_start": [
+     [
+      2167,
+      2723
+     ]
+    ],
+    "session_tree": [
+     [
+      2732,
+      2766
+     ]
+    ],
+    "tool_call": [
+     [
+      2768,
+      2788
+     ]
+    ],
+    "tool_result": [
+     [
+      2902,
+      2922
+     ],
+     [
+      2792,
+      2900
+     ]
+    ],
+    "turn_end": [
+     [
+      3496,
+      3496
+     ],
+     [
+      3233,
+      3495
+     ]
+    ],
+    "turn_start": [
+     [
+      2989,
+      2992
+     ],
+     [
+      2927,
+      2988
+     ]
+    ]
+   },
+   "expected": [
+    "turn_end"
+   ]
+  },
+  {
+   "sha": "75c426d0aaa64ac13b61963b5bc90ffeeae596d5",
+   "subject": "fix(io-bridge): fold the shims onto one body",
+   "diff": "diff --git a/index.ts b/index.ts\nindex eff6b1f4e..1327e2625 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -107 +107,5 @@ import { registerReadBridge } from \"./clients/read-bridge.js\";\n-import { registerIOBridge } from \"./clients/io-bridge.js\";\n+import {\n+\ttype IOBridgeDeps,\n+\trecordIOEntry,\n+\tregisterIOBridge,\n+} from \"./clients/io-bridge.js\";\n@@ -1060 +1064 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t// Read-bridge: refresh the flag getter on every factory activation so the\n+\t// Bridges: refresh the flag getter on every factory activation so the\n@@ -1062 +1066 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t// Register the singleton once — subsequent activations only refresh the getter.\n+\t// Each singleton is registered once; later activations only refresh the getter.\n@@ -1064,15 +1067,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\tif (!_readBridgeRegistered) {\n-\t\t_readBridgeRegistered = true;\n-\t\tregisterReadBridge({\n-\t\t\tgetReadGuard: () => runtime.readGuard,\n-\t\t\tgetTurnIndex: () => runtime.turnIndex,\n-\t\t\tpeekWriteIndex: () => runtime.peekWriteIndex(),\n-\t\t\tisRecordable(filePath: string): boolean {\n-\t\t\t\t// Unknown during a replacement/reload records the read. The guard is\n-\t\t\t\t// the obstruction here, so failure must fall toward not blocking the\n-\t\t\t\t// user's later edit; recording while disabled is harmless.\n-\t\t\t\tif (getBridgeFlag(_bridgeGetFlag, \"read\")) return false;\n-\t\t\t\treturn isRecordableProjectPath(filePath, runtime.projectRoot);\n-\t\t\t},\n-\t\t});\n-\t}\n@@ -1093 +1082 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t// #2465: unlike the read bridge above (whose whole purpose IS the\n+\t\t// #2465: unlike the read bridge below (whose whole purpose IS the\n@@ -1109,0 +1099,41 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t// Unified File I/O bridge (#3654): the v2 surface. It composes the mutation\n+\t// seam with the read guard and the confirmed-delete lifecycle. The v1 read\n+\t// shim below runs this same body with these same deps, and the v1 mutation\n+\t// shim calls the bookkeeping owner the v2 mutate facet also calls, so a v1\n+\t// producer gets the unified behavior (disk-evidence reads, the\n+\t// `pilens:format:queued` publish) without changing its own call.\n+\tconst ioBridgeDeps: IOBridgeDeps = {\n+\t\t...mutationBridgeDeps,\n+\t\tgetReadGuard: () => runtime.readGuard,\n+\t\tgetTurnIndex: () => runtime.turnIndex,\n+\t\tpeekWriteIndex: () => runtime.peekWriteIndex(),\n+\t\tgetFlag: (name: string, bridge?: \"read\" | \"mutation\" | \"io\") =>\n+\t\t\tgetBridgeFlag(_bridgeGetFlag, bridge ?? \"io\", name),\n+\t\tisExternalOrVendorFile: (filePath: string) =>\n+\t\t\tisExternalOrVendorFile(filePath, runtime.projectRoot),\n+\t\tisPathIgnoredByProject: (filePath: string) =>\n+\t\t\tisPathIgnoredByProject(filePath, runtime.projectRoot, false),\n+\t\t// #3654: resolved lazily through the live LSP client seam, so a test mock\n+\t\t// of `clients/lsp/index.js` that predates this bridge (and so omits the\n+\t\t// named export) cannot break the delete path. This is exactly what the\n+\t\t// module-level `notifyExternalFileChange` does\n+\t\t// (`getLSPService().notifyExternalFileChange(...)`), so the real path is\n+\t\t// unchanged.\n+\t\tnotifyExternalFileChange: (filePath: string, type: number) =>\n+\t\t\tgetLSPService().notifyExternalFileChange(filePath, type),\n+\t\tnodeFs: { existsSync: nodeFs.existsSync, statSync: nodeFs.statSync },\n+\t};\n+\n+\tif (!_readBridgeRegistered) {\n+\t\t_readBridgeRegistered = true;\n+\t\tregisterReadBridge({\n+\t\t\tisRecordable(filePath: string): boolean {\n+\t\t\t\t// Unknown during a replacement/reload records the read. The guard is\n+\t\t\t\t// the obstruction here, so failure must fall toward not blocking the\n+\t\t\t\t// user's later edit; recording while disabled is harmless.\n+\t\t\t\tif (getBridgeFlag(_bridgeGetFlag, \"read\")) return false;\n+\t\t\t\treturn isRecordableProjectPath(filePath, runtime.projectRoot);\n+\t\t\t},\n+\t\t\tforward: (entry) => recordIOEntry(entry, ioBridgeDeps),\n+\t\t});\n+\t}\n@@ -1114,7 +1143,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\n-\t// Unified File I/O bridge (#3654): the v2 surface, in the same first-wins\n-\t// pass as the two v1 shims above. Composing the mutation seam with the read\n-\t// guard and the confirmed-delete lifecycle here is what lets a v1 producer\n-\t// that still calls `read-bridge` / `mutation-bridge` gain the unified\n-\t// behavior (atomic edit+preview, coverage-only reads, the\n-\t// `pilens:format:queued` publish) without changing its own call.\n@@ -1123,21 +1146 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\tregisterIOBridge({\n-\t\t\t...mutationBridgeDeps,\n-\t\t\tgetReadGuard: () => runtime.readGuard,\n-\t\t\tgetTurnIndex: () => runtime.turnIndex,\n-\t\t\tpeekWriteIndex: () => runtime.peekWriteIndex(),\n-\t\t\tgetFlag: (name: string, bridge?: \"read\" | \"mutation\" | \"io\") =>\n-\t\t\t\tgetBridgeFlag(_bridgeGetFlag, bridge ?? \"io\", name),\n-\t\t\tisExternalOrVendorFile: (filePath: string) =>\n-\t\t\t\tisExternalOrVendorFile(filePath, runtime.projectRoot),\n-\t\t\tisPathIgnoredByProject: (filePath: string) =>\n-\t\t\t\tisPathIgnoredByProject(filePath, runtime.projectRoot, false),\n-\t\t\t// #3654: resolved lazily through the live LSP client seam, so a test mock\n-\t\t\t// of `clients/lsp/index.js` that predates this bridge (and so omits the\n-\t\t\t// named export) cannot break the delete path. This is exactly what the\n-\t\t\t// module-level `notifyExternalFileChange` does\n-\t\t\t// (`getLSPService().notifyExternalFileChange(...)`), so the real path is\n-\t\t\t// unchanged.\n-\t\t\tnotifyExternalFileChange: (filePath: string, type: number) =>\n-\t\t\t\tgetLSPService().notifyExternalFileChange(filePath, type),\n-\t\t\tnodeFs: { existsSync: nodeFs.existsSync, statSync: nodeFs.statSync },\n-\t\t});\n+\t\tregisterIOBridge(ioBridgeDeps);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3230,
+      3230
+     ],
+     [
+      3198,
+      3229
+     ]
+    ],
+    "agent_settled": [
+     [
+      3761,
+      3764
+     ],
+     [
+      3655,
+      3754
+     ]
+    ],
+    "context": [
+     [
+      4122,
+      4305
+     ]
+    ],
+    "resources_discover": [
+     [
+      2086,
+      2088
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3787,
+      4008
+     ]
+    ],
+    "session_start": [
+     [
+      2167,
+      2723
+     ]
+    ],
+    "session_tree": [
+     [
+      2732,
+      2766
+     ]
+    ],
+    "tool_call": [
+     [
+      2768,
+      2788
+     ]
+    ],
+    "tool_result": [
+     [
+      2902,
+      2922
+     ],
+     [
+      2792,
+      2900
+     ]
+    ],
+    "turn_end": [
+     [
+      3493,
+      3493
+     ],
+     [
+      3233,
+      3492
+     ]
+    ],
+    "turn_start": [
+     [
+      2989,
+      2992
+     ],
+     [
+      2927,
+      2988
+     ]
+    ]
+   },
+   "expected": []
+  },
+  {
+   "sha": "cdfd06fa6e7b7262f4f2061a7dc888d3c6434217",
+   "subject": "fix(turn-end): fence late dead-code scans (#4154)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex f143d02cc..406fc21da 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3383,0 +3384,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t// #4154: this activation's own scope, so a concurrent secondary's\n+\t\t\t\t// late dead-code scan never lands in the primary's cell.\n+\t\t\t\t...(scope === undefined ? {} : { sessionScope: scope }),\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3180,
+      3180
+     ],
+     [
+      3148,
+      3179
+     ]
+    ],
+    "agent_settled": [
+     [
+      3714,
+      3717
+     ],
+     [
+      3608,
+      3707
+     ]
+    ],
+    "context": [
+     [
+      4075,
+      4258
+     ]
+    ],
+    "resources_discover": [
+     [
+      2036,
+      2038
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3740,
+      3961
+     ]
+    ],
+    "session_start": [
+     [
+      2117,
+      2673
+     ]
+    ],
+    "session_tree": [
+     [
+      2682,
+      2716
+     ]
+    ],
+    "tool_call": [
+     [
+      2718,
+      2738
+     ]
+    ],
+    "tool_result": [
+     [
+      2852,
+      2872
+     ],
+     [
+      2742,
+      2850
+     ]
+    ],
+    "turn_end": [
+     [
+      3446,
+      3446
+     ],
+     [
+      3183,
+      3445
+     ]
+    ],
+    "turn_start": [
+     [
+      2939,
+      2942
+     ],
+     [
+      2877,
+      2938
+     ]
+    ]
+   },
+   "expected": [
+    "turn_end"
+   ]
+  },
+  {
+   "sha": "8cbcdaf7f7a5cf470fae6e8f77941d23e44518ff",
+   "subject": "fix(io-bridge): preserve v1 shim behavior and lazy LSP notify (refs #3654)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex c99911f3a..eff6b1f4e 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -170,5 +170 @@ import { initLSPConfig } from \"./clients/lsp/config.js\";\n-import {\n-\tgetLSPService,\n-\tnotifyExternalFileChange,\n-\tresetLSPService,\n-} from \"./clients/lsp/index.js\";\n+import { getLSPService, resetLSPService } from \"./clients/lsp/index.js\";\n@@ -1132 +1128,2 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tgetFlag: (name: string) => getBridgeFlag(_bridgeGetFlag, \"io\", name),\n+\t\t\tgetFlag: (name: string, bridge?: \"read\" | \"mutation\" | \"io\") =>\n+\t\t\t\tgetBridgeFlag(_bridgeGetFlag, bridge ?? \"io\", name),\n@@ -1137 +1134,8 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tnotifyExternalFileChange,\n+\t\t\t// #3654: resolved lazily through the live LSP client seam, so a test mock\n+\t\t\t// of `clients/lsp/index.js` that predates this bridge (and so omits the\n+\t\t\t// named export) cannot break the delete path. This is exactly what the\n+\t\t\t// module-level `notifyExternalFileChange` does\n+\t\t\t// (`getLSPService().notifyExternalFileChange(...)`), so the real path is\n+\t\t\t// unchanged.\n+\t\t\tnotifyExternalFileChange: (filePath: string, type: number) =>\n+\t\t\t\tgetLSPService().notifyExternalFileChange(filePath, type),\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3227,
+      3227
+     ],
+     [
+      3195,
+      3226
+     ]
+    ],
+    "agent_settled": [
+     [
+      3758,
+      3761
+     ],
+     [
+      3652,
+      3751
+     ]
+    ],
+    "context": [
+     [
+      4119,
+      4302
+     ]
+    ],
+    "resources_discover": [
+     [
+      2083,
+      2085
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3784,
+      4005
+     ]
+    ],
+    "session_start": [
+     [
+      2164,
+      2720
+     ]
+    ],
+    "session_tree": [
+     [
+      2729,
+      2763
+     ]
+    ],
+    "tool_call": [
+     [
+      2765,
+      2785
+     ]
+    ],
+    "tool_result": [
+     [
+      2899,
+      2919
+     ],
+     [
+      2789,
+      2897
+     ]
+    ],
+    "turn_end": [
+     [
+      3490,
+      3490
+     ],
+     [
+      3230,
+      3489
+     ]
+    ],
+    "turn_start": [
+     [
+      2986,
+      2989
+     ],
+     [
+      2924,
+      2985
+     ]
+    ]
+   },
+   "expected": []
+  },
+  {
+   "sha": "c6e91f789fcb40bed193f35206c6d8e77861a374",
+   "subject": "feat(io-bridge): unify the file I/O lifecycle bridge (refs #3654)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex f143d02cc..c99911f3a 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -88 +88,4 @@ import { sanitizeCorrelationId } from \"./clients/read-guard-logger.js\";\n-import { registerMutationBridge } from \"./clients/mutation-bridge.js\";\n+import {\n+\ttype MutationBridgeDeps,\n+\tregisterMutationBridge,\n+} from \"./clients/mutation-bridge.js\";\n@@ -104,2 +107,9 @@ import { registerReadBridge } from \"./clients/read-bridge.js\";\n-import { normalizeFilePath } from \"./clients/path-utils.js\";\n-import { isRecordableProjectPath } from \"./clients/file-utils.js\";\n+import { registerIOBridge } from \"./clients/io-bridge.js\";\n+import {\n+\tisExternalOrVendorFile,\n+\tnormalizeFilePath,\n+} from \"./clients/path-utils.js\";\n+import {\n+\tisPathIgnoredByProject,\n+\tisRecordableProjectPath,\n+} from \"./clients/file-utils.js\";\n@@ -160 +170,5 @@ import { initLSPConfig } from \"./clients/lsp/config.js\";\n-import { getLSPService, resetLSPService } from \"./clients/lsp/index.js\";\n+import {\n+\tgetLSPService,\n+\tnotifyExternalFileChange,\n+\tresetLSPService,\n+} from \"./clients/lsp/index.js\";\n@@ -608,0 +623,4 @@ let _mutationBridgeRegistered = false;\n+// #3654: the unified I/O bridge composes the read-guard and the mutation\n+// seam; it follows the same once-per-process discipline and is mounted in the\n+// same first-wins pass as the two v1 shims it supersedes.\n+let _ioBridgeRegistered = false;\n@@ -620 +638,2 @@ function getBridgeFlag(\n-\tbridge: \"read\" | \"mutation\",\n+\tbridge: \"read\" | \"mutation\" | \"io\",\n+\tname = \"no-read-guard\",\n@@ -623 +642 @@ function getBridgeFlag(\n-\t\treturn getter?.(\"no-read-guard\");\n+\t\treturn getter?.(name);\n@@ -1067,0 +1087,27 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\tconst mutationBridgeDeps: MutationBridgeDeps = {\n+\t\tgetRuntime: () => runtime,\n+\t\tgetCacheManager: () => cacheManager,\n+\t\tgetProjectRoot: () => runtime.projectRoot || process.cwd(),\n+\t\tgetDispatchCwd: (filePath: string) =>\n+\t\t\tresolveLanguageRootForFile(\n+\t\t\t\tfilePath,\n+\t\t\t\truntime.projectRoot || process.cwd(),\n+\t\t\t),\n+\t\tcountFileLines,\n+\t\t// #2465: unlike the read bridge above (whose whole purpose IS the\n+\t\t// read-guard stamp, so `no-read-guard` correctly disables it\n+\t\t// entirely), this bridge also drives turn-state and the change-log\n+\t\t// receipt. `no-read-guard` gates ONLY the read-guard stamp — the same\n+\t\t// canonical split `clients/runtime-tool-result.ts` applies at\n+\t\t// `recordWritten` (:1859) — so it must not appear in the recordability\n+\t\t// gate `recordMutationThroughSeam` early-returns on. That gate stays\n+\t\t// path-scope only (ignored/vendor); the flag is threaded separately\n+\t\t// below via `shouldStampReadGuard`.\n+\t\tisRecordable(filePath: string): boolean {\n+\t\t\treturn isRecordableProjectPath(filePath, runtime.projectRoot);\n+\t\t},\n+\t\tshouldStampReadGuard(): boolean {\n+\t\t\treturn !getBridgeFlag(_bridgeGetFlag, \"mutation\");\n+\t\t},\n+\t\tdbg,\n+\t};\n@@ -1070,26 +1116,23 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\tregisterMutationBridge({\n-\t\t\tgetRuntime: () => runtime,\n-\t\t\tgetCacheManager: () => cacheManager,\n-\t\t\tgetProjectRoot: () => runtime.projectRoot || process.cwd(),\n-\t\t\tgetDispatchCwd: (filePath: string) =>\n-\t\t\t\tresolveLanguageRootForFile(\n-\t\t\t\t\tfilePath,\n-\t\t\t\t\truntime.projectRoot || process.cwd(),\n-\t\t\t\t),\n-\t\t\tcountFileLines,\n-\t\t\t// #2465: unlike the read bridge above (whose whole purpose IS the\n-\t\t\t// read-guard stamp, so `no-read-guard` correctly disables it\n-\t\t\t// entirely), this bridge also drives turn-state and the change-log\n-\t\t\t// receipt. `no-read-guard` gates ONLY the read-guard stamp — the same\n-\t\t\t// canonical split `clients/runtime-tool-result.ts` applies at\n-\t\t\t// `recordWritten` (:1859) — so it must not appear in the recordability\n-\t\t\t// gate `recordMutationThroughSeam` early-returns on. That gate stays\n-\t\t\t// path-scope only (ignored/vendor); the flag is threaded separately\n-\t\t\t// below via `shouldStampReadGuard`.\n-\t\t\tisRecordable(filePath: string): boolean {\n-\t\t\t\treturn isRecordableProjectPath(filePath, runtime.projectRoot);\n-\t\t\t},\n-\t\t\tshouldStampReadGuard(): boolean {\n-\t\t\t\treturn !getBridgeFlag(_bridgeGetFlag, \"mutation\");\n-\t\t\t},\n-\t\t\tdbg,\n+\t\tregisterMutationBridge(mutationBridgeDeps);\n+\t}\n+\n+\t// Unified File I/O bridge (#3654): the v2 surface, in the same first-wins\n+\t// pass as the two v1 shims above. Composing the mutation seam with the read\n+\t// guard and the confirmed-delete lifecycle here is what lets a v1 producer\n+\t// that still calls `read-bridge` / `mutation-bridge` gain the unified\n+\t// behavior (atomic edit+preview, coverage-only reads, the\n+\t// `pilens:format:queued` publish) without changing its own call.\n+\tif (!_ioBridgeRegistered) {\n+\t\t_ioBridgeRegistered = true;\n+\t\tregisterIOBridge({\n+\t\t\t...mutationBridgeDeps,\n+\t\t\tgetReadGuard: () => runtime.readGuard,\n+\t\t\tgetTurnIndex: () => runtime.turnIndex,\n+\t\t\tpeekWriteIndex: () => runtime.peekWriteIndex(),\n+\t\t\tgetFlag: (name: string) => getBridgeFlag(_bridgeGetFlag, \"io\", name),\n+\t\t\tisExternalOrVendorFile: (filePath: string) =>\n+\t\t\t\tisExternalOrVendorFile(filePath, runtime.projectRoot),\n+\t\t\tisPathIgnoredByProject: (filePath: string) =>\n+\t\t\t\tisPathIgnoredByProject(filePath, runtime.projectRoot, false),\n+\t\t\tnotifyExternalFileChange,\n+\t\t\tnodeFs: { existsSync: nodeFs.existsSync, statSync: nodeFs.statSync },\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3223,
+      3223
+     ],
+     [
+      3191,
+      3222
+     ]
+    ],
+    "agent_settled": [
+     [
+      3754,
+      3757
+     ],
+     [
+      3648,
+      3747
+     ]
+    ],
+    "context": [
+     [
+      4115,
+      4298
+     ]
+    ],
+    "resources_discover": [
+     [
+      2079,
+      2081
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3780,
+      4001
+     ]
+    ],
+    "session_start": [
+     [
+      2160,
+      2716
+     ]
+    ],
+    "session_tree": [
+     [
+      2725,
+      2759
+     ]
+    ],
+    "tool_call": [
+     [
+      2761,
+      2781
+     ]
+    ],
+    "tool_result": [
+     [
+      2895,
+      2915
+     ],
+     [
+      2785,
+      2893
+     ]
+    ],
+    "turn_end": [
+     [
+      3486,
+      3486
+     ],
+     [
+      3226,
+      3485
+     ]
+    ],
+    "turn_start": [
+     [
+      2982,
+      2985
+     ],
+     [
+      2920,
+      2981
+     ]
+    ]
+   },
+   "expected": []
+  },
+  {
+   "sha": "9fef33318398e7da610de0c7229faebae6b988fb",
+   "subject": "Merge remote-tracking branch 'origin/master' into fix/3613-secondary-turn-start",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 6926ef6b5..f143d02cc 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -142,0 +143 @@ import { emitBusEventRollupAtSessionEnd } from \"./clients/bus-events-logger.js\";\n+import { emitFenceRollupAtSessionEnd } from \"./clients/generation-guard.js\";\n@@ -2343 +2344 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\t\tdiscardHandoff({\n+\t\t\t\t\t\tconst discardedSlot = discardHandoff({\n@@ -2356,0 +2358,17 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\t// #3873 O4: a start the replacement gap declined because it is\n+\t\t\t\t\t\t// not the successor the shutdown named (#3855) is a demotion; a\n+\t\t\t\t\t\t// plain concurrent subagent is not, and writes only its `start`.\n+\t\t\t\t\t\tif (sessionStartDecision.basis === \"successor-pending\")\n+\t\t\t\t\t\t\tlogScopeTransition(scope, {\n+\t\t\t\t\t\t\t\ttransition: \"demote\",\n+\t\t\t\t\t\t\t\treason: sessionReason,\n+\t\t\t\t\t\t\t\tsessionId: stableSessionId,\n+\t\t\t\t\t\t\t\tcwd: sessionStartCwd ?? runtime.projectRoot,\n+\t\t\t\t\t\t\t\tdetail: {\n+\t\t\t\t\t\t\t\t\tclassification: sessionStartDecision.classification,\n+\t\t\t\t\t\t\t\t\tbasis: sessionStartDecision.basis,\n+\t\t\t\t\t\t\t\t\tgapMs: sessionStartDecision.gapMs,\n+\t\t\t\t\t\t\t\t\tlineageMatch: sessionStartDecision.lineageMatch,\n+\t\t\t\t\t\t\t\t\tdiscardedSlot,\n+\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t});\n@@ -2478 +2496,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\t\t\t\tentries.map((e) => ({ path: e.path, reason: e.reason })),\n+\t\t\t\t\t\t\t\tentries.map((e) => ({\n+\t\t\t\t\t\t\t\t\tpath: e.path,\n+\t\t\t\t\t\t\t\t\treason: e.reason,\n+\t\t\t\t\t\t\t\t\tsessionId: e.sessionId,\n+\t\t\t\t\t\t\t\t})),\n@@ -2526,0 +2549,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\tsessionStartBasis: sessionStartDecision.basis,\n+\t\t\t\t\t\tsessionStartGapMs: sessionStartDecision.gapMs,\n+\t\t\t\t\t\tsessionStartLineageMatch: sessionStartDecision.lineageMatch,\n@@ -2580,0 +2606 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\tdbg,\n@@ -2899 +2925,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tentries.map((e) => ({ path: e.path, reason: e.reason })),\n+\t\t\t\t\tentries.map((e) => ({\n+\t\t\t\t\t\tpath: e.path,\n+\t\t\t\t\t\treason: e.reason,\n+\t\t\t\t\t\tsessionId: e.sessionId,\n+\t\t\t\t\t})),\n@@ -3907,0 +3938,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t// #3873 O5: the fence side of the same rollup. The bus row proves\n+\t\t\t// `skipped_stale_session`; this one gives each generation fence its\n+\t\t\t// guarded and dropped counts, so zero drops is distinguishable from\n+\t\t\t// a fence nothing exercised.\n+\t\t\temitFenceRollupAtSessionEnd(runtime.projectRoot);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3180,
+      3180
+     ],
+     [
+      3148,
+      3179
+     ]
+    ],
+    "agent_settled": [
+     [
+      3711,
+      3714
+     ],
+     [
+      3605,
+      3704
+     ]
+    ],
+    "context": [
+     [
+      4072,
+      4255
+     ]
+    ],
+    "resources_discover": [
+     [
+      2036,
+      2038
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3737,
+      3958
+     ]
+    ],
+    "session_start": [
+     [
+      2117,
+      2673
+     ]
+    ],
+    "session_tree": [
+     [
+      2682,
+      2716
+     ]
+    ],
+    "tool_call": [
+     [
+      2718,
+      2738
+     ]
+    ],
+    "tool_result": [
+     [
+      2852,
+      2872
+     ],
+     [
+      2742,
+      2850
+     ]
+    ],
+    "turn_end": [
+     [
+      3443,
+      3443
+     ],
+     [
+      3183,
+      3442
+     ]
+    ],
+    "turn_start": [
+     [
+      2939,
+      2942
+     ],
+     [
+      2877,
+      2938
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown",
+    "session_start",
+    "turn_start"
+   ]
+  },
+  {
+   "sha": "f48b9995cf98ff901bdef9d98094c66f24f7c8d9",
+   "subject": "fix(session): pace cadences on all turn starts (#3613 G1)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex f3c7868b0..6926ef6b5 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3284,4 +3284,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t// #3613 F2: the cadence of this session's own turns. A subagent's\n-\t\t\t// turns run inside one primary turn, so the primary's index would\n-\t\t\t// fire the cadence at every subagent turn end.\n-\t\t\tconst cadenceTurn = runtime.turnKey(getStableSessionId(ctx));\n+\t\t\t// #3613 G1: process-level cadences pace on every session's turn\n+\t\t\t// starts. The primary's index stands still through a subagent's run\n+\t\t\t// (it would fire at every subagent turn end while on a sampling\n+\t\t\t// turn), and a subagent's fractional turn key never meets `% N`.\n+\t\t\tconst cadenceTurn = runtime.turnStartCount;\n@@ -3310,4 +3311 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\trecordMemorySampleOutcome(\n-\t\t\t\t\t\tsample.process.heapUsedBytes,\n-\t\t\t\t\t\truntime.turnIndex,\n-\t\t\t\t\t);\n+\t\t\t\t\trecordMemorySampleOutcome(sample.process.heapUsedBytes, cadenceTurn);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3150,
+      3150
+     ],
+     [
+      3118,
+      3149
+     ]
+    ],
+    "agent_settled": [
+     [
+      3681,
+      3684
+     ],
+     [
+      3575,
+      3674
+     ]
+    ],
+    "context": [
+     [
+      4037,
+      4220
+     ]
+    ],
+    "resources_discover": [
+     [
+      2035,
+      2037
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3707,
+      3923
+     ]
+    ],
+    "session_start": [
+     [
+      2116,
+      2647
+     ]
+    ],
+    "session_tree": [
+     [
+      2656,
+      2690
+     ]
+    ],
+    "tool_call": [
+     [
+      2692,
+      2712
+     ]
+    ],
+    "tool_result": [
+     [
+      2826,
+      2846
+     ],
+     [
+      2716,
+      2824
+     ]
+    ],
+    "turn_end": [
+     [
+      3413,
+      3413
+     ],
+     [
+      3153,
+      3412
+     ]
+    ],
+    "turn_start": [
+     [
+      2909,
+      2912
+     ],
+     [
+      2851,
+      2908
+     ]
+    ]
+   },
+   "expected": [
+    "turn_end"
+   ]
+  },
+  {
+   "sha": "a585e88deefe232ad845864918042a7e131912f1",
+   "subject": "Merge remote-tracking branch 'origin/master' into fix/3613-secondary-turn-start",
+   "diff": "diff --git a/index.ts b/index.ts\nindex e2423f6e5..f3c7868b0 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -221,0 +222 @@ import {\n+\tnamedSuccessorReason,\n@@ -3803,2 +3804,11 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tif (startInFlight) {\n-\t\t\t\tstartInFlight.shutDown = true;\n+\t\t\t// #4113: a start interrupted before pi-lens's handler ran has no mark\n+\t\t\t// and no scope. Its shutdown is primary only with the gap's named key\n+\t\t\t// (#4106), so the gap's name is the start reason it never saw. A\n+\t\t\t// started activation holds its scope and stashes it, even in a gap\n+\t\t\t// it does not own (a same-file second primary, R2: verify X1).\n+\t\t\tconst unstartedReason =\n+\t\t\t\tstartInFlight || scope !== undefined\n+\t\t\t\t\t? undefined\n+\t\t\t\t\t: namedSuccessorReason();\n+\t\t\tif (startInFlight || unstartedReason !== undefined) {\n+\t\t\t\tif (startInFlight) startInFlight.shutDown = true;\n@@ -3806 +3816 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tstartReason: startInFlight.reason,\n+\t\t\t\t\tstartReason: startInFlight ? startInFlight.reason : unstartedReason,\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3150,
+      3150
+     ],
+     [
+      3118,
+      3149
+     ]
+    ],
+    "agent_settled": [
+     [
+      3683,
+      3686
+     ],
+     [
+      3577,
+      3676
+     ]
+    ],
+    "context": [
+     [
+      4039,
+      4222
+     ]
+    ],
+    "resources_discover": [
+     [
+      2035,
+      2037
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3709,
+      3925
+     ]
+    ],
+    "session_start": [
+     [
+      2116,
+      2647
+     ]
+    ],
+    "session_tree": [
+     [
+      2656,
+      2690
+     ]
+    ],
+    "tool_call": [
+     [
+      2692,
+      2712
+     ]
+    ],
+    "tool_result": [
+     [
+      2826,
+      2846
+     ],
+     [
+      2716,
+      2824
+     ]
+    ],
+    "turn_end": [
+     [
+      3415,
+      3415
+     ],
+     [
+      3153,
+      3414
+     ]
+    ],
+    "turn_start": [
+     [
+      2909,
+      2912
+     ],
+     [
+      2851,
+      2908
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "f05722e6a3e8d7ab4c8455ac69decae304fd3e87",
+   "subject": "Merge remote-tracking branch 'origin/master' into fix/3873-session-decision-records",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1c2aff740..4c59c9cc0 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -222,0 +223 @@ import {\n+\tnamedSuccessorReason,\n@@ -3818,2 +3819,11 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tif (startInFlight) {\n-\t\t\t\tstartInFlight.shutDown = true;\n+\t\t\t// #4113: a start interrupted before pi-lens's handler ran has no mark\n+\t\t\t// and no scope. Its shutdown is primary only with the gap's named key\n+\t\t\t// (#4106), so the gap's name is the start reason it never saw. A\n+\t\t\t// started activation holds its scope and stashes it, even in a gap\n+\t\t\t// it does not own (a same-file second primary, R2: verify X1).\n+\t\t\tconst unstartedReason =\n+\t\t\t\tstartInFlight || scope !== undefined\n+\t\t\t\t\t? undefined\n+\t\t\t\t\t: namedSuccessorReason();\n+\t\t\tif (startInFlight || unstartedReason !== undefined) {\n+\t\t\t\tif (startInFlight) startInFlight.shutDown = true;\n@@ -3821 +3831 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tstartReason: startInFlight.reason,\n+\t\t\t\t\tstartReason: startInFlight ? startInFlight.reason : unstartedReason,\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3171,
+      3171
+     ],
+     [
+      3139,
+      3170
+     ]
+    ],
+    "agent_settled": [
+     [
+      3700,
+      3703
+     ],
+     [
+      3594,
+      3693
+     ]
+    ],
+    "context": [
+     [
+      4059,
+      4242
+     ]
+    ],
+    "resources_discover": [
+     [
+      2036,
+      2038
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3726,
+      3945
+     ]
+    ],
+    "session_start": [
+     [
+      2117,
+      2671
+     ]
+    ],
+    "session_tree": [
+     [
+      2680,
+      2714
+     ]
+    ],
+    "tool_call": [
+     [
+      2716,
+      2735
+     ]
+    ],
+    "tool_result": [
+     [
+      2849,
+      2869
+     ],
+     [
+      2739,
+      2847
+     ]
+    ],
+    "turn_end": [
+     [
+      3432,
+      3432
+     ],
+     [
+      3174,
+      3431
+     ]
+    ],
+    "turn_start": [
+     [
+      2930,
+      2933
+     ],
+     [
+      2874,
+      2929
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "2e4848dd595ae191926b4640a894963f242f7570",
+   "subject": "fix(session): pace turn-end cadences by session turn",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 12c7d22ba..e2423f6e5 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3283 +3283,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tif (shouldEmitMemorySampleAdaptive(runtime.turnIndex)) {\n+\t\t\t// #3613 F2: the cadence of this session's own turns. A subagent's\n+\t\t\t// turns run inside one primary turn, so the primary's index would\n+\t\t\t// fire the cadence at every subagent turn end.\n+\t\t\tconst cadenceTurn = runtime.turnKey(getStableSessionId(ctx));\n+\t\t\tif (shouldEmitMemorySampleAdaptive(cadenceTurn)) {\n@@ -3318 +3322 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tif (shouldCheckSmellsThisTurn(runtime.turnIndex)) {\n+\t\t\tif (shouldCheckSmellsThisTurn(cadenceTurn)) {\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3149,
+      3149
+     ],
+     [
+      3117,
+      3148
+     ]
+    ],
+    "agent_settled": [
+     [
+      3682,
+      3685
+     ],
+     [
+      3576,
+      3675
+     ]
+    ],
+    "context": [
+     [
+      4029,
+      4212
+     ]
+    ],
+    "resources_discover": [
+     [
+      2034,
+      2036
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3708,
+      3915
+     ]
+    ],
+    "session_start": [
+     [
+      2115,
+      2646
+     ]
+    ],
+    "session_tree": [
+     [
+      2655,
+      2689
+     ]
+    ],
+    "tool_call": [
+     [
+      2691,
+      2711
+     ]
+    ],
+    "tool_result": [
+     [
+      2825,
+      2845
+     ],
+     [
+      2715,
+      2823
+     ]
+    ],
+    "turn_end": [
+     [
+      3414,
+      3414
+     ],
+     [
+      3152,
+      3413
+     ]
+    ],
+    "turn_start": [
+     [
+      2908,
+      2911
+     ],
+     [
+      2850,
+      2907
+     ]
+    ]
+   },
+   "expected": [
+    "turn_end"
+   ]
+  },
+  {
+   "sha": "357715e077d164c4e8861990e9add7f98cb9fa4c",
+   "subject": "fix(session): pin the stable id before the start await",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 5775469c3..12c7d22ba 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -2543,0 +2544,9 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t// Pin the stable identity + reason over the fresh random id that\n+\t\t\t\t\t// reset drew (#190). #3613 F1: before the await, for the same\n+\t\t\t\t\t// reason as the scope: a throw later in the handler must not leave\n+\t\t\t\t\t// the coordinator on the random id, or every turn of this primary\n+\t\t\t\t\t// would take `beginTurn`'s other-session path.\n+\t\t\t\t\truntime.setSessionLifecycle({\n+\t\t\t\t\t\tsessionId: stableSessionId,\n+\t\t\t\t\t\treason: sessionReason,\n+\t\t\t\t\t});\n@@ -2551,7 +2559,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\n-\t\t\t\t\t// Pin the stable identity + reason AFTER handleSessionStart (which ran\n-\t\t\t\t\t// resetForSession → a fresh random id); the stable id now wins (#190).\n-\t\t\t\t\truntime.setSessionLifecycle({\n-\t\t\t\t\t\tsessionId: stableSessionId,\n-\t\t\t\t\t\treason: sessionReason,\n-\t\t\t\t\t});\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3149,
+      3149
+     ],
+     [
+      3117,
+      3148
+     ]
+    ],
+    "agent_settled": [
+     [
+      3678,
+      3681
+     ],
+     [
+      3572,
+      3671
+     ]
+    ],
+    "context": [
+     [
+      4025,
+      4208
+     ]
+    ],
+    "resources_discover": [
+     [
+      2034,
+      2036
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3704,
+      3911
+     ]
+    ],
+    "session_start": [
+     [
+      2115,
+      2646
+     ]
+    ],
+    "session_tree": [
+     [
+      2655,
+      2689
+     ]
+    ],
+    "tool_call": [
+     [
+      2691,
+      2711
+     ]
+    ],
+    "tool_result": [
+     [
+      2825,
+      2845
+     ],
+     [
+      2715,
+      2823
+     ]
+    ],
+    "turn_end": [
+     [
+      3410,
+      3410
+     ],
+     [
+      3152,
+      3409
+     ]
+    ],
+    "turn_start": [
+     [
+      2908,
+      2911
+     ],
+     [
+      2850,
+      2907
+     ]
+    ]
+   },
+   "expected": [
+    "session_start"
+   ]
+  },
+  {
+   "sha": "e71ac8219dd85ed5ad6700db384958e07c2768f3",
+   "subject": "fix(session): started scope still stashes (#4113)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex efc48020e..3ea20bfcf 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3789,7 +3789,9 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t// #4113: a start interrupted before pi-lens's handler ran has no mark.\n-\t\t\t// Its shutdown is primary only with the gap's named key (#4106), so\n-\t\t\t// the gap's name is the start reason it never saw. A started primary\n-\t\t\t// is registered, so no gap is pending for it.\n-\t\t\tconst unstartedReason = startInFlight\n-\t\t\t\t? undefined\n-\t\t\t\t: namedSuccessorReason();\n+\t\t\t// #4113: a start interrupted before pi-lens's handler ran has no mark\n+\t\t\t// and no scope. Its shutdown is primary only with the gap's named key\n+\t\t\t// (#4106), so the gap's name is the start reason it never saw. A\n+\t\t\t// started activation holds its scope and stashes it, even in a gap\n+\t\t\t// it does not own (a same-file second primary, R2: verify X1).\n+\t\t\tconst unstartedReason =\n+\t\t\t\tstartInFlight || scope !== undefined\n+\t\t\t\t\t? undefined\n+\t\t\t\t\t: namedSuccessorReason();\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3141,
+      3141
+     ],
+     [
+      3109,
+      3140
+     ]
+    ],
+    "agent_settled": [
+     [
+      3670,
+      3673
+     ],
+     [
+      3564,
+      3663
+     ]
+    ],
+    "context": [
+     [
+      4024,
+      4207
+     ]
+    ],
+    "resources_discover": [
+     [
+      2035,
+      2037
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3696,
+      3910
+     ]
+    ],
+    "session_start": [
+     [
+      2116,
+      2645
+     ]
+    ],
+    "session_tree": [
+     [
+      2654,
+      2688
+     ]
+    ],
+    "tool_call": [
+     [
+      2690,
+      2709
+     ]
+    ],
+    "tool_result": [
+     [
+      2823,
+      2843
+     ],
+     [
+      2713,
+      2821
+     ]
+    ],
+    "turn_end": [
+     [
+      3402,
+      3402
+     ],
+     [
+      3144,
+      3401
+     ]
+    ],
+    "turn_start": [
+     [
+      2900,
+      2903
+     ],
+     [
+      2848,
+      2899
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "4c82b69390681d7c569a961b27b008067cf8b609",
+   "subject": "feat(session): record hand-off decisions (#3873)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1c870e3e2..1c2aff740 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -142,0 +143 @@ import { emitBusEventRollupAtSessionEnd } from \"./clients/bus-events-logger.js\";\n+import { emitFenceRollupAtSessionEnd } from \"./clients/generation-guard.js\";\n@@ -2342 +2343 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\t\tdiscardHandoff({\n+\t\t\t\t\t\tconst discardedSlot = discardHandoff({\n@@ -2355,0 +2357,17 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\t// #3873 O4: a start the replacement gap declined because it is\n+\t\t\t\t\t\t// not the successor the shutdown named (#3855) is a demotion; a\n+\t\t\t\t\t\t// plain concurrent subagent is not, and writes only its `start`.\n+\t\t\t\t\t\tif (sessionStartDecision.basis === \"successor-pending\")\n+\t\t\t\t\t\t\tlogScopeTransition(scope, {\n+\t\t\t\t\t\t\t\ttransition: \"demote\",\n+\t\t\t\t\t\t\t\treason: sessionReason,\n+\t\t\t\t\t\t\t\tsessionId: stableSessionId,\n+\t\t\t\t\t\t\t\tcwd: sessionStartCwd ?? runtime.projectRoot,\n+\t\t\t\t\t\t\t\tdetail: {\n+\t\t\t\t\t\t\t\t\tclassification: sessionStartDecision.classification,\n+\t\t\t\t\t\t\t\t\tbasis: sessionStartDecision.basis,\n+\t\t\t\t\t\t\t\t\tgapMs: sessionStartDecision.gapMs,\n+\t\t\t\t\t\t\t\t\tlineageMatch: sessionStartDecision.lineageMatch,\n+\t\t\t\t\t\t\t\t\tdiscardedSlot,\n+\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t});\n@@ -2477 +2495,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\t\t\t\tentries.map((e) => ({ path: e.path, reason: e.reason })),\n+\t\t\t\t\t\t\t\tentries.map((e) => ({\n+\t\t\t\t\t\t\t\t\tpath: e.path,\n+\t\t\t\t\t\t\t\t\treason: e.reason,\n+\t\t\t\t\t\t\t\t\tsessionId: e.sessionId,\n+\t\t\t\t\t\t\t\t})),\n@@ -2525,0 +2548,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\tsessionStartBasis: sessionStartDecision.basis,\n+\t\t\t\t\t\tsessionStartGapMs: sessionStartDecision.gapMs,\n+\t\t\t\t\t\tsessionStartLineageMatch: sessionStartDecision.lineageMatch,\n@@ -2577,0 +2603 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\tdbg,\n@@ -2889 +2915,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tentries.map((e) => ({ path: e.path, reason: e.reason })),\n+\t\t\t\t\tentries.map((e) => ({\n+\t\t\t\t\t\tpath: e.path,\n+\t\t\t\t\t\treason: e.reason,\n+\t\t\t\t\t\tsessionId: e.sessionId,\n+\t\t\t\t\t})),\n@@ -3884,0 +3915,5 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t// #3873 O5: the fence side of the same rollup. The bus row proves\n+\t\t\t// `skipped_stale_session`; this one gives each generation fence its\n+\t\t\t// guarded and dropped counts, so zero drops is distinguishable from\n+\t\t\t// a fence nothing exercised.\n+\t\t\temitFenceRollupAtSessionEnd(runtime.projectRoot);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3170,
+      3170
+     ],
+     [
+      3138,
+      3169
+     ]
+    ],
+    "agent_settled": [
+     [
+      3699,
+      3702
+     ],
+     [
+      3593,
+      3692
+     ]
+    ],
+    "context": [
+     [
+      4049,
+      4232
+     ]
+    ],
+    "resources_discover": [
+     [
+      2035,
+      2037
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3725,
+      3935
+     ]
+    ],
+    "session_start": [
+     [
+      2116,
+      2670
+     ]
+    ],
+    "session_tree": [
+     [
+      2679,
+      2713
+     ]
+    ],
+    "tool_call": [
+     [
+      2715,
+      2734
+     ]
+    ],
+    "tool_result": [
+     [
+      2848,
+      2868
+     ],
+     [
+      2738,
+      2846
+     ]
+    ],
+    "turn_end": [
+     [
+      3431,
+      3431
+     ],
+     [
+      3173,
+      3430
+     ]
+    ],
+    "turn_start": [
+     [
+      2929,
+      2932
+     ],
+     [
+      2873,
+      2928
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown",
+    "session_start",
+    "turn_start"
+   ]
+  },
+  {
+   "sha": "5111ba24ca84d21fd3a7aef3742f2a478cede88e",
+   "subject": "fix(session): unstarted start forwards (#4113)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1c870e3e2..efc48020e 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -221,0 +222 @@ import {\n+\tnamedSuccessorReason,\n@@ -3788,2 +3789,9 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tif (startInFlight) {\n-\t\t\t\tstartInFlight.shutDown = true;\n+\t\t\t// #4113: a start interrupted before pi-lens's handler ran has no mark.\n+\t\t\t// Its shutdown is primary only with the gap's named key (#4106), so\n+\t\t\t// the gap's name is the start reason it never saw. A started primary\n+\t\t\t// is registered, so no gap is pending for it.\n+\t\t\tconst unstartedReason = startInFlight\n+\t\t\t\t? undefined\n+\t\t\t\t: namedSuccessorReason();\n+\t\t\tif (startInFlight || unstartedReason !== undefined) {\n+\t\t\t\tif (startInFlight) startInFlight.shutDown = true;\n@@ -3791 +3799 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tstartReason: startInFlight.reason,\n+\t\t\t\t\tstartReason: startInFlight ? startInFlight.reason : unstartedReason,\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3141,
+      3141
+     ],
+     [
+      3109,
+      3140
+     ]
+    ],
+    "agent_settled": [
+     [
+      3670,
+      3673
+     ],
+     [
+      3564,
+      3663
+     ]
+    ],
+    "context": [
+     [
+      4022,
+      4205
+     ]
+    ],
+    "resources_discover": [
+     [
+      2035,
+      2037
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3696,
+      3908
+     ]
+    ],
+    "session_start": [
+     [
+      2116,
+      2645
+     ]
+    ],
+    "session_tree": [
+     [
+      2654,
+      2688
+     ]
+    ],
+    "tool_call": [
+     [
+      2690,
+      2709
+     ]
+    ],
+    "tool_result": [
+     [
+      2823,
+      2843
+     ],
+     [
+      2713,
+      2821
+     ]
+    ],
+    "turn_end": [
+     [
+      3402,
+      3402
+     ],
+     [
+      3144,
+      3401
+     ]
+    ],
+    "turn_start": [
+     [
+      2900,
+      2903
+     ],
+     [
+      2848,
+      2899
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "a1dd6a9b464cafcdf624da69377872d71d5bce0b",
+   "subject": "fix(session): carry the turn session into a partial apply",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 6f82a83c4..5775469c3 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -2706,0 +2707 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\tsessionId: getStableSessionId(ctx),\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3147,
+      3147
+     ],
+     [
+      3115,
+      3146
+     ]
+    ],
+    "agent_settled": [
+     [
+      3676,
+      3679
+     ],
+     [
+      3570,
+      3669
+     ]
+    ],
+    "context": [
+     [
+      4023,
+      4206
+     ]
+    ],
+    "resources_discover": [
+     [
+      2034,
+      2036
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3702,
+      3909
+     ]
+    ],
+    "session_start": [
+     [
+      2115,
+      2644
+     ]
+    ],
+    "session_tree": [
+     [
+      2653,
+      2687
+     ]
+    ],
+    "tool_call": [
+     [
+      2689,
+      2709
+     ]
+    ],
+    "tool_result": [
+     [
+      2823,
+      2843
+     ],
+     [
+      2713,
+      2821
+     ]
+    ],
+    "turn_end": [
+     [
+      3408,
+      3408
+     ],
+     [
+      3150,
+      3407
+     ]
+    ],
+    "turn_start": [
+     [
+      2906,
+      2909
+     ],
+     [
+      2848,
+      2905
+     ]
+    ]
+   },
+   "expected": [
+    "tool_call"
+   ]
+  },
+  {
+   "sha": "a364d3eec56b1ab851cab26ca643787574666045",
+   "subject": "fix(session): keep a subagent turn off the primary (#3613)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1c870e3e2..6f82a83c4 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -2859 +2859,7 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\truntime.beginTurn();\n+\t\t// #3613 (S4, N2): the turn's own session. A concurrent secondary's turn\n+\t\t// advances only its own turn identity and per-turn records; the\n+\t\t// coordinator's turn state is the primary's.\n+\t\truntime.beginTurn(getStableSessionId(ctx));\n+\t\t// Every turn, a secondary's too: clearing only re-runs a duplicate\n+\t\t// same-state analysis, while keeping it would skip a secondary's next\n+\t\t// turn (the dedupe keys on the primary's turn index).\n@@ -3732,0 +3739,2 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t// #3613: its per-turn records end with it.\n+\t\t\truntime.forgetTurnSession(stableSessionId);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3146,
+      3146
+     ],
+     [
+      3114,
+      3145
+     ]
+    ],
+    "agent_settled": [
+     [
+      3675,
+      3678
+     ],
+     [
+      3569,
+      3668
+     ]
+    ],
+    "context": [
+     [
+      4022,
+      4205
+     ]
+    ],
+    "resources_discover": [
+     [
+      2034,
+      2036
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3701,
+      3908
+     ]
+    ],
+    "session_start": [
+     [
+      2115,
+      2644
+     ]
+    ],
+    "session_tree": [
+     [
+      2653,
+      2687
+     ]
+    ],
+    "tool_call": [
+     [
+      2689,
+      2708
+     ]
+    ],
+    "tool_result": [
+     [
+      2822,
+      2842
+     ],
+     [
+      2712,
+      2820
+     ]
+    ],
+    "turn_end": [
+     [
+      3407,
+      3407
+     ],
+     [
+      3149,
+      3406
+     ]
+    ],
+    "turn_start": [
+     [
+      2905,
+      2908
+     ],
+     [
+      2847,
+      2904
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown",
+    "turn_start"
+   ]
+  },
+  {
+   "sha": "b4e729e8a784813ae580654b00bcbf79fbcfde90",
+   "subject": "fix(session): role-less shutdown keeps its gap (#4106)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 60fb35de5..1c870e3e2 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -795 +795,8 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t: noteSessionShutdown(ctx, sessionId, root);\n+\t\t\t\t: noteSessionShutdown(\n+\t\t\t\t\t\tctx,\n+\t\t\t\t\t\tsessionId,\n+\t\t\t\t\t\troot,\n+\t\t\t\t\t\t// #4106: a role-less shutdown in a named gap is told\n+\t\t\t\t\t\t// apart by this session's key.\n+\t\t\t\t\t\tstartKey(getSessionFile(ctx), getSessionManager(ctx)),\n+\t\t\t\t\t);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3140,
+      3140
+     ],
+     [
+      3108,
+      3139
+     ]
+    ],
+    "agent_settled": [
+     [
+      3669,
+      3672
+     ],
+     [
+      3563,
+      3662
+     ]
+    ],
+    "context": [
+     [
+      4014,
+      4197
+     ]
+    ],
+    "resources_discover": [
+     [
+      2034,
+      2036
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3695,
+      3900
+     ]
+    ],
+    "session_start": [
+     [
+      2115,
+      2644
+     ]
+    ],
+    "session_tree": [
+     [
+      2653,
+      2687
+     ]
+    ],
+    "tool_call": [
+     [
+      2689,
+      2708
+     ]
+    ],
+    "tool_result": [
+     [
+      2822,
+      2842
+     ],
+     [
+      2712,
+      2820
+     ]
+    ],
+    "turn_end": [
+     [
+      3401,
+      3401
+     ],
+     [
+      3143,
+      3400
+     ]
+    ],
+    "turn_start": [
+     [
+      2899,
+      2902
+     ],
+     [
+      2847,
+      2898
+     ]
+    ]
+   },
+   "expected": []
+  },
+  {
+   "sha": "3db3e1419027e5ceecf22d1340f81f83fde5b50d",
+   "subject": "fix(session): name a file-less gap at its shutdown (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex ad140a5c4..60fb35de5 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3789 +3788,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\tscope,\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3133,
+      3133
+     ],
+     [
+      3101,
+      3132
+     ]
+    ],
+    "agent_settled": [
+     [
+      3662,
+      3665
+     ],
+     [
+      3556,
+      3655
+     ]
+    ],
+    "context": [
+     [
+      4007,
+      4190
+     ]
+    ],
+    "resources_discover": [
+     [
+      2027,
+      2029
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3688,
+      3893
+     ]
+    ],
+    "session_start": [
+     [
+      2108,
+      2637
+     ]
+    ],
+    "session_tree": [
+     [
+      2646,
+      2680
+     ]
+    ],
+    "tool_call": [
+     [
+      2682,
+      2701
+     ]
+    ],
+    "tool_result": [
+     [
+      2815,
+      2835
+     ],
+     [
+      2705,
+      2813
+     ]
+    ],
+    "turn_end": [
+     [
+      3394,
+      3394
+     ],
+     [
+      3136,
+      3393
+     ]
+    ],
+    "turn_start": [
+     [
+      2892,
+      2895
+     ],
+     [
+      2840,
+      2891
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "0c7635d39beedb815b15f90ec0da69d95c5d6a8f",
+   "subject": "fix(session): bind the interrupted start's ticket (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 60fb35de5..ad140a5c4 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -3788,0 +3789 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\tscope,\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3133,
+      3133
+     ],
+     [
+      3101,
+      3132
+     ]
+    ],
+    "agent_settled": [
+     [
+      3662,
+      3665
+     ],
+     [
+      3556,
+      3655
+     ]
+    ],
+    "context": [
+     [
+      4008,
+      4191
+     ]
+    ],
+    "resources_discover": [
+     [
+      2027,
+      2029
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3688,
+      3894
+     ]
+    ],
+    "session_start": [
+     [
+      2108,
+      2637
+     ]
+    ],
+    "session_tree": [
+     [
+      2646,
+      2680
+     ]
+    ],
+    "tool_call": [
+     [
+      2682,
+      2701
+     ]
+    ],
+    "tool_result": [
+     [
+      2815,
+      2835
+     ],
+     [
+      2705,
+      2813
+     ]
+    ],
+    "turn_end": [
+     [
+      3394,
+      3394
+     ],
+     [
+      3136,
+      3393
+     ]
+    ],
+    "turn_start": [
+     [
+      2892,
+      2895
+     ],
+     [
+      2840,
+      2891
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "53ef0614713a6ec5043b443bf1bd0e206b1ef064",
+   "subject": "fix(session): drop the key-less fail-safe (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 522ff9618..60fb35de5 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -82 +81,0 @@ import {\n-\tleaveTicket,\n@@ -3758,3 +3756,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t// #3855: bind this secondary's ticket to its manager, so its own\n-\t\t\t// file-less successor never passes for a primary's.\n-\t\t\tif (scope) leaveTicket(scope, getSessionManager(ctx));\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3133,
+      3133
+     ],
+     [
+      3101,
+      3132
+     ]
+    ],
+    "agent_settled": [
+     [
+      3662,
+      3665
+     ],
+     [
+      3556,
+      3655
+     ]
+    ],
+    "context": [
+     [
+      4007,
+      4190
+     ]
+    ],
+    "resources_discover": [
+     [
+      2027,
+      2029
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3688,
+      3893
+     ]
+    ],
+    "session_start": [
+     [
+      2108,
+      2637
+     ]
+    ],
+    "session_tree": [
+     [
+      2646,
+      2680
+     ]
+    ],
+    "tool_call": [
+     [
+      2682,
+      2701
+     ]
+    ],
+    "tool_result": [
+     [
+      2815,
+      2835
+     ],
+     [
+      2705,
+      2813
+     ]
+    ],
+    "turn_end": [
+     [
+      3394,
+      3394
+     ],
+     [
+      3136,
+      3393
+     ]
+    ],
+    "turn_start": [
+     [
+      2892,
+      2895
+     ],
+     [
+      2840,
+      2891
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "c5e1a455349078be558359ebe87460df9a64f26e",
+   "subject": "fix(session): fail safe for a key-less successor (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 60fb35de5..522ff9618 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -81,0 +82 @@ import {\n+\tleaveTicket,\n@@ -3756,0 +3758,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t// #3855: bind this secondary's ticket to its manager, so its own\n+\t\t\t// file-less successor never passes for a primary's.\n+\t\t\tif (scope) leaveTicket(scope, getSessionManager(ctx));\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3134,
+      3134
+     ],
+     [
+      3102,
+      3133
+     ]
+    ],
+    "agent_settled": [
+     [
+      3663,
+      3666
+     ],
+     [
+      3557,
+      3656
+     ]
+    ],
+    "context": [
+     [
+      4011,
+      4194
+     ]
+    ],
+    "resources_discover": [
+     [
+      2028,
+      2030
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3689,
+      3897
+     ]
+    ],
+    "session_start": [
+     [
+      2109,
+      2638
+     ]
+    ],
+    "session_tree": [
+     [
+      2647,
+      2681
+     ]
+    ],
+    "tool_call": [
+     [
+      2683,
+      2702
+     ]
+    ],
+    "tool_result": [
+     [
+      2816,
+      2836
+     ],
+     [
+      2706,
+      2814
+     ]
+    ],
+    "turn_end": [
+     [
+      3395,
+      3395
+     ],
+     [
+      3137,
+      3394
+     ]
+    ],
+    "turn_start": [
+     [
+      2893,
+      2896
+     ],
+     [
+      2841,
+      2892
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown"
+   ]
+  },
+  {
+   "sha": "fed828bff4e0bebad918703d9be80975247713d1",
+   "subject": "fix(session): admit only the named successor (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 3650e641d..60fb35de5 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -76 +75,0 @@ import {\n-\tcontinuesSecondary,\n@@ -81 +79,0 @@ import {\n-\tnoteSecondaryReplacement,\n@@ -84,0 +83 @@ import {\n+\tstartKey,\n@@ -85,0 +85 @@ import {\n+\tsuccessorStartKey,\n@@ -2287,6 +2287,3 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\t\t\t\t// #3855: nor is a start that continues a secondary's own\n-\t\t\t\t\t\t// replacement. Read (and consumed) on every start.\n-\t\t\t\t\t\tcontinuesSecondary({\n-\t\t\t\t\t\t\tsessionFile: getSessionFile(ctx),\n-\t\t\t\t\t\t\tsessionManager: getSessionManager(ctx),\n-\t\t\t\t\t\t}),\n+\t\t\t\t\t\t// #3855: nor is any start whose reason and key differ from\n+\t\t\t\t\t\t// the successor the primary's shutdown named.\n+\t\t\t\t\t\tstartKey(getSessionFile(ctx), getSessionManager(ctx)),\n@@ -3760,13 +3756,0 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tconst secondaryShutdown = event as\n-\t\t\t\t| { reason?: string; targetSessionFile?: string }\n-\t\t\t\t| undefined;\n-\t\t\t// #3855: a secondary's own replacement leaves its successor's key, so\n-\t\t\t// that start keeps the secondary role even in a primary's gap.\n-\t\t\tif (scope) {\n-\t\t\t\tnoteSecondaryReplacement(scope, {\n-\t\t\t\t\treason: secondaryShutdown?.reason,\n-\t\t\t\t\tsessionFile: getSessionFile(ctx),\n-\t\t\t\t\ttargetSessionFile: secondaryShutdown?.targetSessionFile,\n-\t\t\t\t\tsessionManager: getSessionManager(ctx),\n-\t\t\t\t});\n-\t\t\t}\n@@ -3774 +3758,4 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tretireOwnScope(secondaryShutdown?.reason, stableSessionId);\n+\t\t\tretireOwnScope(\n+\t\t\t\t(event as { reason?: string } | undefined)?.reason,\n+\t\t\t\tstableSessionId,\n+\t\t\t);\n@@ -3855 +3842,11 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\treleasePrimarySession(shutdownReason);\n+\t\t\t// #3855: and names it by the key its start will compute. Read after the\n+\t\t\t// stash or forward above, which bind a file-less successor's ticket.\n+\t\t\treleasePrimarySession(\n+\t\t\t\tshutdownReason,\n+\t\t\t\tsuccessorStartKey({\n+\t\t\t\t\treason: shutdownReason,\n+\t\t\t\t\tsessionFile: getSessionFile(ctx),\n+\t\t\t\t\ttargetSessionFile: shutdownEvent?.targetSessionFile,\n+\t\t\t\t\tsessionManager: getSessionManager(ctx),\n+\t\t\t\t}),\n+\t\t\t);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3133,
+      3133
+     ],
+     [
+      3101,
+      3132
+     ]
+    ],
+    "agent_settled": [
+     [
+      3662,
+      3665
+     ],
+     [
+      3556,
+      3655
+     ]
+    ],
+    "context": [
+     [
+      4007,
+      4190
+     ]
+    ],
+    "resources_discover": [
+     [
+      2027,
+      2029
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3688,
+      3893
+     ]
+    ],
+    "session_start": [
+     [
+      2108,
+      2637
+     ]
+    ],
+    "session_tree": [
+     [
+      2646,
+      2680
+     ]
+    ],
+    "tool_call": [
+     [
+      2682,
+      2701
+     ]
+    ],
+    "tool_result": [
+     [
+      2815,
+      2835
+     ],
+     [
+      2705,
+      2813
+     ]
+    ],
+    "turn_end": [
+     [
+      3394,
+      3394
+     ],
+     [
+      3136,
+      3393
+     ]
+    ],
+    "turn_start": [
+     [
+      2892,
+      2895
+     ],
+     [
+      2840,
+      2891
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown",
+    "session_start"
+   ]
+  },
+  {
+   "sha": "1a39587bb3bd4edf54934106dd1d8563d9512435",
+   "subject": "fix(session): keep gap subagents secondary (#3855)",
+   "diff": "diff --git a/index.ts b/index.ts\nindex 1c3d78e49..3650e641d 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -75,0 +76 @@ import {\n+\tcontinuesSecondary,\n@@ -79,0 +81 @@ import {\n+\tnoteSecondaryReplacement,\n@@ -2284,0 +2287,6 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\t\t\t\t// #3855: nor is a start that continues a secondary's own\n+\t\t\t\t\t\t// replacement. Read (and consumed) on every start.\n+\t\t\t\t\t\tcontinuesSecondary({\n+\t\t\t\t\t\t\tsessionFile: getSessionFile(ctx),\n+\t\t\t\t\t\t\tsessionManager: getSessionManager(ctx),\n+\t\t\t\t\t\t}),\n@@ -3751,0 +3760,13 @@ function activateExtension(hostPi: ExtensionAPI) {\n+\t\t\tconst secondaryShutdown = event as\n+\t\t\t\t| { reason?: string; targetSessionFile?: string }\n+\t\t\t\t| undefined;\n+\t\t\t// #3855: a secondary's own replacement leaves its successor's key, so\n+\t\t\t// that start keeps the secondary role even in a primary's gap.\n+\t\t\tif (scope) {\n+\t\t\t\tnoteSecondaryReplacement(scope, {\n+\t\t\t\t\treason: secondaryShutdown?.reason,\n+\t\t\t\t\tsessionFile: getSessionFile(ctx),\n+\t\t\t\t\ttargetSessionFile: secondaryShutdown?.targetSessionFile,\n+\t\t\t\t\tsessionManager: getSessionManager(ctx),\n+\t\t\t\t});\n+\t\t\t}\n@@ -3753,4 +3774 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t\tretireOwnScope(\n-\t\t\t\t(event as { reason?: string } | undefined)?.reason,\n-\t\t\t\tstableSessionId,\n-\t\t\t);\n+\t\t\tretireOwnScope(secondaryShutdown?.reason, stableSessionId);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3136,
+      3136
+     ],
+     [
+      3104,
+      3135
+     ]
+    ],
+    "agent_settled": [
+     [
+      3665,
+      3668
+     ],
+     [
+      3559,
+      3658
+     ]
+    ],
+    "context": [
+     [
+      4010,
+      4193
+     ]
+    ],
+    "resources_discover": [
+     [
+      2027,
+      2029
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3691,
+      3896
+     ]
+    ],
+    "session_start": [
+     [
+      2108,
+      2640
+     ]
+    ],
+    "session_tree": [
+     [
+      2649,
+      2683
+     ]
+    ],
+    "tool_call": [
+     [
+      2685,
+      2704
+     ]
+    ],
+    "tool_result": [
+     [
+      2818,
+      2838
+     ],
+     [
+      2708,
+      2816
+     ]
+    ],
+    "turn_end": [
+     [
+      3397,
+      3397
+     ],
+     [
+      3139,
+      3396
+     ]
+    ],
+    "turn_start": [
+     [
+      2895,
+      2898
+     ],
+     [
+      2843,
+      2894
+     ]
+    ]
+   },
+   "expected": [
+    "session_shutdown",
+    "session_start"
+   ]
+  },
+  {
+   "sha": "8934c1f7a1bce255dc8814a06df4e6c6e099e4e1",
+   "subject": "Merge branch 'master' into feat/3959-compact-widget",
+   "diff": "diff --git a/index.ts b/index.ts\nindex f7c0430cd..1c3d78e49 100644\n--- a/index.ts\n+++ b/index.ts\n@@ -2005 +2005,20 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t// --- Register skills with pi ---\n+\t// --- Skills ---\n+\t// The four shipped skills are declared by the `pi.skills` manifest\n+\t// (`./skills`), which pi loads for every package install and filters with\n+\t// the settings package filters (`packages[].skills`: `[]`, `!pattern`,\n+\t// `-path`) — those filters narrow manifest resources only.\n+\t//\n+\t// This handler used to contribute `skillPaths: [<packageRoot>/skills]`. pi\n+\t// merges extension-contributed paths raw (`ResourceLoader.extendResources`\n+\t// -> `loadSkills`, which loads a directory wholesale), bypassing the\n+\t// `enabled` flag the package filter sets, so it re-added every skill the\n+\t// user excluded (#1416, observed on 4.3.0 against pi 0.99.2 and 1.0.0).\n+\t// It contributes nothing now; a direct `extensions`/`-e` load never reads\n+\t// the manifest and so delivers no skills, but that is not a documented\n+\t// install (`pi install npm:` / `git:` / `./path`, README \"Install\").\n+\t//\n+\t// The call is kept for #2626: `resolveSkillPaths` records ONE bounded\n+\t// `skills-dir-missing` degradation and one `skills_resolved` latency row\n+\t// when pi's own discovery rule would load nothing there, so a missing\n+\t// manifest skills dir stays visible. Its path result is deliberately not\n+\t// contributed (#1416).\n@@ -2007,14 +2026 @@ function activateExtension(hostPi: ExtensionAPI) {\n-\t\t// Resolve skills relative to the package root (nearest package.json), not the\n-\t\t// module's own directory — under the compiled dist/ layout (#182) the module\n-\t\t// lives in dist/ but skills/ stays at the package root, so a module-relative\n-\t\t// join lands on the non-existent dist/skills/ and skills silently fail to load\n-\t\t// (#205). resolveSkillPaths walks up to package.json (same as\n-\t\t// resolvePackagePath) and ALWAYS returns that path — pi handles an absent\n-\t\t// directory gracefully and the manifest may register the same dir — while\n-\t\t// separately recording a bounded skills-dir-missing degradation when pi's\n-\t\t// own discovery rule (root SKILL.md, nested SKILL.md, loose root .md) would\n-\t\t// load nothing there (#2626). Never turn the health check into a [] return:\n-\t\t// that inversion dropped real skills on four pi layouts in #2637 round 1.\n-\t\treturn {\n-\t\t\tskillPaths: resolveSkillPaths(import.meta.url),\n-\t\t};\n+\t\tvoid resolveSkillPaths(import.meta.url);\n",
+   "ranges": {
+    "agent_end": [
+     [
+      3128,
+      3128
+     ],
+     [
+      3096,
+      3127
+     ]
+    ],
+    "agent_settled": [
+     [
+      3657,
+      3660
+     ],
+     [
+      3551,
+      3650
+     ]
+    ],
+    "context": [
+     [
+      3992,
+      4175
+     ]
+    ],
+    "resources_discover": [
+     [
+      2025,
+      2027
+     ]
+    ],
+    "session_shutdown": [
+     [
+      3683,
+      3878
+     ]
+    ],
+    "session_start": [
+     [
+      2106,
+      2632
+     ]
+    ],
+    "session_tree": [
+     [
+      2641,
+      2675
+     ]
+    ],
+    "tool_call": [
+     [
+      2677,
+      2696
+     ]
+    ],
+    "tool_result": [
+     [
+      2810,
+      2830
+     ],
+     [
+      2700,
+      2808
+     ]
+    ],
+    "turn_end": [
+     [
+      3389,
+      3389
+     ],
+     [
+      3131,
+      3388
+     ]
+    ],
+    "turn_start": [
+     [
+      2887,
+      2890
+     ],
+     [
+      2835,
+      2886
+     ]
+    ]
+   },
+   "expected": []
+  }
+ ]
+}

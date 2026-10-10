@@ -29,6 +29,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import extension from "../../index.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { withEnv } from "../support/with-env.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const REPO_SKILLS = path.join(REPO_ROOT, "skills");
@@ -43,12 +44,30 @@ const SHIPPED = [
 const EXCLUDED = "pi-lens-ast-grep";
 
 let env: ReturnType<typeof setupTestEnvironment>;
+let restoreHome: (() => void) | undefined;
 
 beforeEach(() => {
 	env = setupTestEnvironment("pi-lens-1416-");
+	// #4244: pi's resource loader also scans ~/.agents/skills, so a host's
+	// installed third-party skill must not change this package-filter witness.
+	const ambientHome = path.join(env.tmpDir, "ambient-home");
+	const foreignSkill = path.join(
+		ambientHome,
+		".agents",
+		"skills",
+		"foreign-skill",
+	);
+	fs.mkdirSync(foreignSkill, { recursive: true });
+	fs.writeFileSync(
+		path.join(foreignSkill, "SKILL.md"),
+		"---\nname: foreign-skill\ndescription: host skill witness\n---\n",
+	);
+	restoreHome = withEnv({ HOME: ambientHome, USERPROFILE: ambientHome });
 });
 
 afterEach(() => {
+	restoreHome?.();
+	restoreHome = undefined;
 	env.cleanup();
 });
 
@@ -116,33 +135,43 @@ async function boundSkills(options: {
 	afterBindSources: Array<string | undefined>;
 	inPrompt: string[];
 }> {
-	const loader = new DefaultResourceLoader({
-		cwd: options.projectDir,
-		agentDir: options.agentDir,
-		...(options.manifestExtension === true
-			? {}
-			: options.extensionFactories === false
-				? { additionalExtensionPaths: [ENTRY] }
-				: { extensionFactories: [extension] }),
-	});
-	await loader.reload();
-	const afterReload = skillNames(loader);
-	const { session } = await createAgentSession({
-		cwd: options.projectDir,
-		agentDir: options.agentDir,
-		resourceLoader: loader,
-		sessionManager: SessionManager.inMemory(),
+	const pinnedHome = path.join(env.tmpDir, "pinned-home");
+	fs.mkdirSync(pinnedHome, { recursive: true });
+	const restoreHome = withEnv({
+		HOME: pinnedHome,
+		USERPROFILE: pinnedHome,
 	});
 	try {
-		await session.bindExtensions({});
-		return {
-			afterReload,
-			afterBind: skillNames(loader),
-			afterBindSources: skillSources(loader),
-			inPrompt: SHIPPED.filter((name) => session.systemPrompt.includes(name)),
-		};
+		const loader = new DefaultResourceLoader({
+			cwd: options.projectDir,
+			agentDir: options.agentDir,
+			...(options.manifestExtension === true
+				? {}
+				: options.extensionFactories === false
+					? { additionalExtensionPaths: [ENTRY] }
+					: { extensionFactories: [extension] }),
+		});
+		await loader.reload();
+		const afterReload = skillNames(loader);
+		const { session } = await createAgentSession({
+			cwd: options.projectDir,
+			agentDir: options.agentDir,
+			resourceLoader: loader,
+			sessionManager: SessionManager.inMemory(),
+		});
+		try {
+			await session.bindExtensions({});
+			return {
+				afterReload,
+				afterBind: skillNames(loader),
+				afterBindSources: skillSources(loader),
+				inPrompt: SHIPPED.filter((name) => session.systemPrompt.includes(name)),
+			};
+		} finally {
+			session.dispose();
+		}
 	} finally {
-		session.dispose();
+		restoreHome();
 	}
 }
 

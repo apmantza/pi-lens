@@ -51,6 +51,7 @@ if (!fs.existsSync(distLsp)) {
 const { getLSPService, resetLSPService } = await imp(
 	"dist/clients/lsp/index.js",
 );
+const { isAuxiliary } = await imp("dist/clients/lsp/server-traits.js");
 const {
 	initLSPConfig,
 	getServersForFileWithConfig,
@@ -113,7 +114,7 @@ for (const fx of fixtures) {
 			} else {
 				const explicitlyDisabled = new Set(fx.disableServers ?? []);
 				const primaries = matching.filter(
-					(s) => s.role !== "auxiliary" && !explicitlyDisabled.has(s.id),
+					(s) => !isAuxiliary(s) && !explicitlyDisabled.has(s.id),
 				);
 				targetIds = new Set(primaries.length ? [primaries[0].id] : []);
 			}
@@ -212,8 +213,8 @@ for (const r of ok) {
 	);
 }
 if (ok.length) {
-	const prim = ok.filter((r) => r.role !== "auxiliary");
-	const aux = ok.filter((r) => r.role === "auxiliary");
+	const prim = ok.filter((r) => !isAuxiliary(r));
+	const aux = ok.filter((r) => isAuxiliary(r));
 	const warmAvg = (xs) => xs.reduce((s, x) => s + x.warmMs, 0) / xs.length;
 	console.log("");
 	if (prim.length)

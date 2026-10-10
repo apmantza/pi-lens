@@ -7,6 +7,7 @@
 
 import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import * as path from "node:path";
 import {
 	type BundledResourceHealth,
@@ -19,6 +20,11 @@ import {
 } from "./degradation-ledger.js";
 import yaml from "./deps/js-yaml.js";
 import { resolvePackagePath } from "./package-root.js";
+import {
+	getUserRuleRoot,
+	ruleCorpusFingerprintForCycle,
+} from "./custom-rule-locations.js";
+import { compareOrdinal } from "./string-utils.js";
 
 /**
  * The bundled `rules/tree-sitter-queries` root — the ONE spelling of this
@@ -131,6 +137,7 @@ export function ruleFilesForLanguage(
 	for (const lang of ruleSourceLanguages(languageId)) {
 		for (const dir of [
 			path.join(resolvedRoot, "rules", "tree-sitter-queries", lang),
+			path.join(getUserRuleRoot(), "tree-sitter-queries", lang),
 			path.join(BUNDLED_QUERIES_ROOT, lang),
 		]) {
 			if (!fs.existsSync(dir)) continue;
@@ -181,6 +188,113 @@ export function ruleFilesForLanguage(
 		}
 	}
 	return [...files];
+}
+
+/**
+ * Content fingerprint for the effective tree-sitter rule set. This is the
+ * DISK RuleCache identity (cross-process): it content-hashes the mutable
+ * rule files (project + user roots), because a rule edit that preserves both
+ * mtime and size (a same-length tweak, a checkout that restores timestamps)
+ * must not replay a stale compiled set from disk under the still-matching
+ * fingerprint (#1118, the v7 bump). Bundled files are immutable within a
+ * process, so mtime+size is sufficient for them (#2636-era invariant, same
+ * standing as `bundledSnapshots` in `clients/sgconfig.ts`).
+ *
+ * The in-process loader memo does NOT call this on its warm path. #4212 round
+ * 2 did exactly that and re-walked and re-hashed the whole corpus on EVERY warm
+ * call (100 warm `loadQueries` calls measured 134.98 ms vs master's 18.03).
+ * The loader gates its memo on `computeMutableRuleFingerprint` instead — the
+ * same content-hash strength over a smaller population (the two mutable roots,
+ * never the bundled one), computed at most once per dispatch cycle by
+ * `ruleCorpusFingerprintForCycle`. This helper stays the DISK identity: it is
+ * what `RuleCache` re-derives per dispatched file, so a miss there forces a
+ * reload no in-process memo can suppress.
+ */
+export function computeRuleFilesFingerprint(ruleFiles: string[]): string {
+	const hash = crypto.createHash("sha256");
+	for (const file of [...ruleFiles].sort(compareOrdinal)) {
+		const resolved = path.resolve(file);
+		if (!fs.existsSync(resolved)) continue;
+		const stat = fs.statSync(resolved);
+		hash.update(`${file}:${stat.mtimeMs}:${stat.size}`);
+		if (
+			resolved !== BUNDLED_QUERIES_ROOT &&
+			!resolved.startsWith(BUNDLED_QUERIES_ROOT + path.sep)
+		) {
+			hash.update(fs.readFileSync(resolved));
+		}
+	}
+	return hash.digest("hex").slice(0, 16);
+}
+
+/**
+ * Content fingerprint of the MUTABLE tree-sitter rule corpus — the project
+ * root's `rules/tree-sitter-queries/` and the user-level root — used to gate
+ * the in-process loader memo. It walks those two roots and content-hashes each
+ * `.yml` file's path and bytes; it never touches the bundled root (immutable
+ * per process; the dispatch-side RuleCache v7 fingerprint above still observes
+ * bundled-file metadata on every dispatched file, and the bundled health seam
+ * reports relocation per session).
+ *
+ * Content rather than stat, because #4212 round 3's stat-only signature
+ * (path + mtime + size) demonstrably missed an in-place same-length rewrite
+ * whose mtime was restored with `touch`: the round-3 verify wrote `AAAA` →
+ * `BBBB`, restored the nanosecond mtime, and the next no-`force` load still
+ * returned `AAAA`. Bytes cannot be forged that way.
+ *
+ * It runs at most once per dispatch cycle — `ruleCorpusFingerprintForCycle`
+ * memoizes it on the turn identity — because per-call is what rounds 2 and 3
+ * each measured as a regression. The consequence, stated plainly: a rule edit
+ * made DURING a cycle is seen by the next cycle, or earlier by any dispatch
+ * (whose `force: true` recomputes and republishes into this cycle).
+ */
+function computeMutableRuleFingerprint(rootDir: string): string {
+	const files: string[] = [];
+	for (const queriesDir of [
+		path.join(path.resolve(rootDir), "rules", "tree-sitter-queries"),
+		path.join(getUserRuleRoot(), "tree-sitter-queries"),
+	]) {
+		if (!fs.existsSync(queriesDir)) continue;
+		let languages: fs.Dirent[];
+		try {
+			languages = fs.readdirSync(queriesDir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const language of languages) {
+			if (!language.isDirectory()) continue;
+			let names: string[];
+			try {
+				names = fs.readdirSync(path.join(queriesDir, language.name));
+			} catch {
+				continue;
+			}
+			for (const name of names) {
+				if (name.endsWith(".yml")) {
+					files.push(path.join(queriesDir, language.name, name));
+				}
+			}
+		}
+	}
+	const hash = crypto.createHash("sha256");
+	for (const filePath of files.sort(compareOrdinal)) {
+		hash.update(filePath);
+		hash.update("\0");
+		let content: string;
+		try {
+			content = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			// Vanished between the listing and the read (editor churn): the
+			// sentinel still perturbs the fingerprint, so this cycle reloads
+			// instead of serving a memo built from a different corpus.
+			hash.update("missing");
+			hash.update("\0");
+			continue;
+		}
+		hash.update(content);
+		hash.update("\0");
+	}
+	return hash.digest("hex").slice(0, 16);
 }
 
 /**
@@ -286,6 +400,7 @@ export class TreeSitterQueryLoader {
 	private queries: Map<string, TreeSitterQuery[]> = new Map();
 	private loaded = false;
 	private loadedRoot: string | null = null;
+	private loadedRuleFingerprint: string | null = null;
 	private verbose: boolean;
 	/**
 	 * This root's per-file parse failures, remembered across the memoized
@@ -368,11 +483,18 @@ export class TreeSitterQueryLoader {
 	/**
 	 * Load all queries from the rules/tree-sitter-queries directory.
 	 *
-	 * Returns the in-memory memo when the same root was already loaded.
-	 * `force: true` re-reads from disk even then — the memo has no notion of
-	 * rule-file mtimes, so a caller that KNOWS the files changed (the dispatch
-	 * runner's RuleCache-miss path: a miss means the rule-file fingerprint
-	 * moved) must force, or it gets the pre-edit rules back and persists them
+	 * Returns the in-memory memo when the same root is already loaded and the
+	 * mutable corpus's content fingerprint is unchanged. That fingerprint is
+	 * computed at most once per dispatch cycle and reused by every later call
+	 * in the cycle (`ruleCorpusFingerprintForCycle`), so routine re-scans and
+	 * structural searches do no filesystem work at all on the warm path
+	 * (#4212 round 4; rounds 2 and 3 each paid for per-call detection). An edit
+	 * made during a cycle is therefore seen by the NEXT cycle — or earlier, by
+	 * any `force: true` call, which republishes the fresh value into the cycle.
+	 *
+	 * `force: true` re-reads from disk regardless — the dispatch runner's
+	 * RuleCache-miss path: a miss means the content fingerprint moved, so
+	 * without `force` the memo could hand back pre-edit rules to be persisted
 	 * under the fresh fingerprint (#878).
 	 */
 	async loadQueries(
@@ -380,7 +502,24 @@ export class TreeSitterQueryLoader {
 		options: { force?: boolean } = {},
 	): Promise<Map<string, TreeSitterQuery[]>> {
 		const resolvedRoot = path.resolve(rootDir);
-		if (!options.force && this.loaded && this.loadedRoot === resolvedRoot) {
+		// Captured synchronously, before any await, so the identity is this
+		// call's cycle and not whatever cycle resumes it (AGENTS.md shape 22).
+		// `computeMutableRuleFingerprint` is passed by reference rather than
+		// wrapped, and `force` is positional: this is the hot path, and the
+		// per-call closure plus options object were measurable against a warm
+		// call whose whole budget is ~0.9 us.
+		const ruleFingerprint = ruleCorpusFingerprintForCycle(
+			"tree-sitter",
+			resolvedRoot,
+			computeMutableRuleFingerprint,
+			options.force,
+		);
+		if (
+			!options.force &&
+			this.loaded &&
+			this.loadedRoot === resolvedRoot &&
+			this.loadedRuleFingerprint === ruleFingerprint
+		) {
 			this.replayQueryParseFailures();
 			return this.queries;
 		}
@@ -393,6 +532,7 @@ export class TreeSitterQueryLoader {
 		const queryDirs = [
 			...new Set([
 				path.join(resolvedRoot, "rules", "tree-sitter-queries"),
+				path.join(getUserRuleRoot(), "tree-sitter-queries"),
 				resolvePackagePath(import.meta.url, "rules", "tree-sitter-queries"),
 			]),
 		];
@@ -421,7 +561,9 @@ export class TreeSitterQueryLoader {
 					const filePath = path.join(langDir, file);
 					const query = this.parseQueryFile(filePath, languageKey);
 					if (query) {
-						langQueries.push(query);
+						if (!langQueries.some((existing) => existing.id === query.id)) {
+							langQueries.push(query);
+						}
 					}
 				}
 
@@ -434,6 +576,9 @@ export class TreeSitterQueryLoader {
 
 		this.loaded = true;
 		this.loadedRoot = resolvedRoot;
+		// The reload above is synchronous end to end, so the corpus observed
+		// here is the corpus the fingerprint was computed from — reuse it.
+		this.loadedRuleFingerprint = ruleFingerprint;
 		// Every failure hit above was recorded into THIS generation's ledger
 		// directly (via recordQueryParseFailure); mark it replayed so a
 		// same-generation memoized call right after this one doesn't redo the

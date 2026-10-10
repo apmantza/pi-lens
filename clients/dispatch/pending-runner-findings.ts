@@ -19,6 +19,8 @@ export interface PendingRunnerFindings {
 	 * site stays assignable under `exactOptionalPropertyTypes`.
 	 */
 	session?: GenerationHandle | undefined;
+	/** Stable activation identity; generation is only a late-write fence. */
+	sessionId?: string;
 }
 
 interface PendingRunnerPromise extends Omit<PendingRunnerFindings, "result"> {
@@ -27,6 +29,7 @@ interface PendingRunnerPromise extends Omit<PendingRunnerFindings, "result"> {
 	result?: RunnerResult;
 	/** #3758: the dispatch's session; a drain after it retired drops the result. */
 	session: GenerationHandle | undefined;
+	sessionId?: string;
 }
 
 const pending: PendingRunnerPromise[] = [];
@@ -43,6 +46,7 @@ function settledSnapshot(entry: PendingRunnerPromise): PendingRunnerFindings {
 		// #3758/#3813: carry the producer's handle so a requeued snapshot keeps
 		// the scope that owned it, and the gate's peek can fence with it.
 		session: entry.session,
+		sessionId: entry.sessionId,
 		result: entry.result,
 	};
 }
@@ -77,9 +81,10 @@ export function deferRunnerFindings(
 		 * one the next session's turn end must not drain.
 		 */
 		session?: GenerationHandle;
+		sessionId?: string;
 	},
 ): void {
-	const { session, ...owned } = entry;
+	const { session, sessionId, ...owned } = entry;
 	if (
 		session !== undefined &&
 		session.guardedWrite(`${entry.runnerId}:${entry.filePath}`, () => true) ===
@@ -88,7 +93,12 @@ export function deferRunnerFindings(
 		void entry.promise.catch(() => undefined);
 		return;
 	}
-	const tracked: PendingRunnerPromise = { ...owned, session, settled: false };
+	const tracked: PendingRunnerPromise = {
+		...owned,
+		session,
+		sessionId,
+		settled: false,
+	};
 	// Attach exactly once at ownership time. Re-attaching at every turn end
 	// accumulates handlers on a promise that may never settle (#2122 F8).
 	void tracked.promise.then(
@@ -126,6 +136,7 @@ export function requeueRunnerFindings(
 	track({
 		...owned,
 		session: entry.session,
+		sessionId: entry.sessionId,
 		promise: Promise.resolve(result),
 		settled: true,
 		result,
@@ -152,6 +163,8 @@ function track(tracked: PendingRunnerPromise): void {
  */
 export async function drainPendingRunnerFindings(
 	maxWaitMs = 2_000,
+	currentSession?: GenerationHandle,
+	currentSessionId?: string,
 ): Promise<PendingRunnerFindings[]> {
 	if (pending.length === 0) return [];
 	const current = pending.splice(0, pending.length);
@@ -171,6 +184,22 @@ export async function drainPendingRunnerFindings(
 		// the gap before the next session_start clears this store) must not
 		// deliver a retired session's result; the drop leaves the handle's row.
 		if (!ownedByLiveSession(entry, "turn-end")) continue;
+		if (
+			currentSessionId !== undefined &&
+			entry.sessionId !== undefined &&
+			entry.sessionId !== currentSessionId
+		) {
+			pending.push(entry);
+			continue;
+		}
+		if (
+			currentSession !== undefined &&
+			entry.session !== undefined &&
+			entry.session.generation !== currentSession.generation
+		) {
+			pending.push(entry);
+			continue;
+		}
 		if (entry.settled && entry.result) {
 			results.push(settledSnapshot(entry));
 		} else {

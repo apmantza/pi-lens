@@ -198,7 +198,10 @@ describe("rule-policy.project-wide matching", () => {
 			{ rule: "rule-c" },
 		];
 		const policyMap = { "my-rule-set": { select: ["rule-a"] } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result).toEqual([{ rule: "rule-a" }, { id: "eslint:unknown:12" }]);
 	});
 
@@ -225,7 +228,10 @@ describe("rule-policy.applyRulePolicy", () => {
 			{ rule: "ast-grep:no-eval" },
 		];
 		const policyMap = { "no-eval": { disable: ["no-eval"] } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result.map((d) => d.rule)).toEqual(["no-debugger"]);
 	});
 
@@ -236,7 +242,10 @@ describe("rule-policy.applyRulePolicy", () => {
 			{}, // no rule or code at all — kept untouched
 		];
 		const policyMap = { "no-eval": { disable: ["no-eval"] } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result).toHaveLength(2);
 		// The first element should be the id-only diagnostic (no rule or code).
 		expect(result[0]).toEqual({ id: "anonymous" });
@@ -246,7 +255,10 @@ describe("rule-policy.applyRulePolicy", () => {
 	it("uses a code-only diagnostic as its policy key", () => {
 		const diagnostics = [{ code: "no-eval" }, { code: "no-debugger" }];
 		const policyMap = { "no-eval": { disable: ["no-eval"] } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result).toEqual([{ code: "no-debugger" }]);
 	});
 
@@ -254,13 +266,19 @@ describe("rule-policy.applyRulePolicy", () => {
 		// Fast-path: no entries with disable/select → no-op identity.
 		const diagnostics = [{ rule: "no-eval" }, { rule: "no-debugger" }];
 		const policyMap = { "high-complexity": { threshold: 25 } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result).toBe(diagnostics);
 	});
 
 	it("returns the same array when policyMap is undefined", () => {
 		const diagnostics = [{ rule: "no-eval" }];
-		const result = applyRulePolicy(diagnostics, undefined);
+		const result = applyRulePolicy(diagnostics, undefined, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result).toBe(diagnostics);
 	});
 
@@ -274,7 +292,10 @@ describe("rule-policy.applyRulePolicy", () => {
 			"high-complexity": { threshold: 25 },
 			"no-eval": { disable: ["no-eval"] },
 		};
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result.map((d) => d.rule)).toEqual(["no-debugger"]);
 	});
 
@@ -284,7 +305,10 @@ describe("rule-policy.applyRulePolicy", () => {
 			"no-eval": { disable: ["no-eval"] },
 			"high-complexity": { threshold: 25 },
 		};
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result.map((d) => d.rule)).toEqual(["no-debugger"]);
 	});
 
@@ -295,7 +319,10 @@ describe("rule-policy.applyRulePolicy", () => {
 			{ rule: "no-alert" },
 		];
 		const policyMap = { "no-eval": { disable: ["no-eval"] } };
-		const result = applyRulePolicy(diagnostics, policyMap);
+		const result = applyRulePolicy(diagnostics, policyMap, {
+			root: "/project",
+			filePath: "/project/a.ts",
+		});
 		expect(result.map((d) => d.rule)).toEqual(["no-debugger", "no-alert"]);
 	});
 });

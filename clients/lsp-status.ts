@@ -18,17 +18,14 @@
  */
 
 import { getFileKindsForExtension } from "./file-kinds.js";
-import { LSP_SERVERS } from "./lsp/server.js";
+import { getServerById, LSP_SERVERS } from "./lsp/server.js";
+import { isAuxiliary } from "./lsp/server-traits.js";
 
 export interface LspStatusSelection {
 	/** Alive servers, as-is (#267 ordering; includes auxiliaries). */
 	activeIds: string[];
 	/** Language servers that failed with no live sibling and a still-in-use kind. */
 	failedIds: string[];
-}
-
-function serverById(id: string) {
-	return LSP_SERVERS.find((s) => s.id === id);
 }
 
 export function selectLspStatus(
@@ -41,7 +38,7 @@ export function selectLspStatus(
 	const aliveSet = new Set(aliveServerIds);
 	const aliveLangExts = new Set<string>();
 	for (const s of LSP_SERVERS) {
-		if (s.role === "auxiliary" || !aliveSet.has(s.id)) continue;
+		if (isAuxiliary(s) || !aliveSet.has(s.id)) continue;
 		for (const ext of s.extensions) aliveLangExts.add(ext.toLowerCase());
 	}
 
@@ -51,8 +48,8 @@ export function selectLspStatus(
 	for (const id of failedServerIds) {
 		if (seen.has(id)) continue;
 		seen.add(id);
-		const server = serverById(id);
-		if (!server || server.role === "auxiliary") continue; // language servers only
+		const server = getServerById(id);
+		if (!server || isAuxiliary(server)) continue; // language servers only
 		const exts = server.extensions.map((e) => e.toLowerCase());
 		// (a) a live language sibling already covers this language → not a failure.
 		if (exts.some((e) => aliveLangExts.has(e))) continue;

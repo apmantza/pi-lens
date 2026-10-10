@@ -32,6 +32,7 @@ import {
 	suppressesUserNotify,
 	supportsTuiWidget,
 } from "./clients/extension-mode.js";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -78,6 +79,7 @@ import {
 	type LineageHandle,
 	logScopeTransition,
 	retireScope,
+	reserveSessionStart,
 	type SessionScope,
 	scopeCell,
 	startKey,
@@ -110,9 +112,10 @@ import {
 	registerIOBridge,
 } from "./clients/io-bridge.js";
 import {
-	isExternalOrVendorFile,
-	normalizeFilePath,
-} from "./clients/path-utils.js";
+	rebindableProcessBridgeDeps,
+	type BridgeActivation,
+} from "./clients/process-bridge.js";
+import { isExternalOrVendorFile } from "./clients/path-utils.js";
 import {
 	isPathIgnoredByProject,
 	isRecordableProjectPath,
@@ -142,6 +145,7 @@ import {
 	resolveLensToolEnabled,
 } from "./clients/tool-config.js";
 import { recordDegradationOnce } from "./clients/degradation-ledger.js";
+import { flushAllNdjsonWriters } from "./clients/ndjson-logger.js";
 import { wrapToolsForCompactLine } from "./clients/tool-render.js";
 import {
 	finalizeToolResultWithDelivery,
@@ -171,7 +175,7 @@ import {
 import { registerCascadeTierReconcileTask } from "./clients/lsp/cascade-tier.js";
 import { buildResolvedFoundCascadeRun } from "./clients/cascade-format.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
-import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
+import { getLSPService, resetLSPService } from "./clients/lsp/capabilities.js";
 import { shouldInitializeSessionRoot } from "./clients/lsp/session-roots.js";
 import { warmLspService } from "./clients/lsp-lazy.js";
 import {
@@ -235,6 +239,7 @@ import {
 	decrementSecondarySessionCount,
 	getActivePrimaryRoot,
 	namedSuccessorReason,
+	expiredSuccessorReason,
 	noteSessionShutdown,
 	releasePrimarySession,
 	probeCtxActive,
@@ -242,6 +247,7 @@ import {
 import {
 	clearLastAnalyzedStateCache,
 	flushDebouncedToolResults,
+	handleToolExecutionEnd,
 	handleToolResult,
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
@@ -612,18 +618,15 @@ const cacheManager = new CacheManager();
 // ONCE (flag below, same pattern as registerCascadeTierReconcileTask) and
 // have it read the CURRENT activation's pi/flag closures through this
 // holder, refreshed on every activation — never a stale captured `pi`.
-let _readBridgeRegistered = false;
 let _bridgeGetFlag:
 	| ((name: string) => boolean | string | undefined)
 	| undefined;
 // #2423: the mutation bridge is the write-side sibling of the read bridge and
 // follows its registration discipline exactly — mount once per process, refresh
 // the flag getter on every activation.
-let _mutationBridgeRegistered = false;
 // #3654: the unified I/O bridge composes the read-guard and the mutation
 // seam; it follows the same once-per-process discipline and is mounted in the
 // same first-wins pass as the two v1 shims it supersedes.
-let _ioBridgeRegistered = false;
 
 /**
  * Read a bridge flag without letting a session replacement obstruct the
@@ -651,12 +654,14 @@ function getBridgeFlag(
 	}
 }
 let _turnSummaryEmitRegistered = false;
-let _turnSummaryEmitCtx:
-	| {
-			pi: ExtensionAPI;
-			getLensFlag: (name: string) => boolean | string | undefined;
-			isLensEnabled: () => boolean;
-	  }
+type TurnSummaryEmitCtx = {
+	runtime: RuntimeCoordinator;
+	pi: ExtensionAPI;
+	getLensFlag: (name: string) => boolean | string | undefined;
+	isLensEnabled: () => boolean;
+};
+let _turnSummaryEmitCtxGetter:
+	| (() => TurnSummaryEmitCtx | undefined)
 	| undefined;
 let _testRunnerDeliveryRegistered = false;
 let _nextTestRunnerDeliveryOwnerId = 0;
@@ -786,10 +791,21 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// misclassify its context/message_end/shutdown as primary. Closure ownership
 	// avoids a shared mutable "last session" race between sibling activations.
 	let ownedSessionRole: "primary" | "concurrent-secondary" | undefined;
+	// #3849: this activation's own holder id in the registry entry, and the
+	// root it asked to hold as a declined secondary. Its shutdown ends only
+	// this holder's record, so a hold already ended by a primary reload, a cap
+	// eviction or an add that found no entry cannot free another holder's root.
+	const secondaryRootHolder = `secondary:${randomUUID()}`;
+	let ownedSecondaryRoot: string | undefined;
 	// #3611: the session scope THIS activation serves, set once at its
 	// session_start and retired at its session_shutdown. Activation equals
 	// session (pi re-runs this factory on every transition except /tree).
 	let scope: SessionScope | undefined;
+	// #3613: turn_end can deliver after another in-process activation has
+	// started its next session and changed the live coordinator scope. Keep the
+	// identity that owned this turn, rather than resolving ownership at delivery
+	// time after the secondary's scope has been overwritten.
+	let turnStartScope: SessionScope | undefined;
 	// #3881: this activation's primary session_start is still in flight
 	// (before its hand-off adoption ran), with its start reason. pi does not
 	// stop a concurrent reload while it awaits the start's emit.
@@ -1114,7 +1130,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		isPathIgnoredByProject: (filePath: string) =>
 			isPathIgnoredByProject(filePath, runtime.projectRoot, false),
 		// #3654: resolved lazily through the live LSP client seam, so a test mock
-		// of `clients/lsp/index.js` that predates this bridge (and so omits the
+		// of `clients/lsp/capabilities.js` that predates this bridge (and so omits the
 		// named export) cannot break the delete path. This is exactly what the
 		// module-level `notifyExternalFileChange` does
 		// (`getLSPService().notifyExternalFileChange(...)`), so the real path is
@@ -1124,27 +1140,54 @@ function activateExtension(hostPi: ExtensionAPI) {
 		nodeFs: { existsSync: nodeFs.existsSync, statSync: nodeFs.statSync },
 	};
 
-	if (!_readBridgeRegistered) {
-		_readBridgeRegistered = true;
-		registerReadBridge({
-			isRecordable(filePath: string): boolean {
-				// Unknown during a replacement/reload records the read. The guard is
-				// the obstruction here, so failure must fall toward not blocking the
-				// user's later edit; recording while disabled is harmless.
-				if (getBridgeFlag(_bridgeGetFlag, "read")) return false;
-				return isRecordableProjectPath(filePath, runtime.projectRoot);
-			},
-			forward: (entry) => recordIOEntry(entry, ioBridgeDeps),
+	const recordBridgeUnavailable = (): void => {
+		recordDegradationOnce({
+			kind: "process-bridge-unavailable",
+			subject: "primary-session-gap",
+			reason:
+				"bridge call refused while no live primary session owns its dependencies",
 		});
-	}
-	if (!_mutationBridgeRegistered) {
-		_mutationBridgeRegistered = true;
-		registerMutationBridge(mutationBridgeDeps);
-	}
-	if (!_ioBridgeRegistered) {
-		_ioBridgeRegistered = true;
-		registerIOBridge(ioBridgeDeps);
-	}
+	};
+	const preSessionActivation = { role: "pre-session" as const };
+	const registerPrimaryBridges = (activation?: BridgeActivation): void => {
+		const scopedActivation =
+			activation &&
+			typeof activation === "object" &&
+			"role" in activation &&
+			(activation.role === "primary" || activation.role === "secondary")
+				? (activation as SessionScope)
+				: undefined;
+		if (
+			scopedActivation &&
+			(scopedActivation.role !== "primary" || !scopedActivation.isLive())
+		)
+			return;
+		registerReadBridge(
+			{
+				onUnavailable: recordBridgeUnavailable,
+				isRecordable(filePath: string): boolean {
+					// Unknown during a replacement/reload records the read. The guard is
+					// the obstruction here, so failure must fall toward not blocking the
+					// user's later edit; recording while disabled is harmless.
+					if (getBridgeFlag(_bridgeGetFlag, "read")) return false;
+					return isRecordableProjectPath(filePath, runtime.projectRoot);
+				},
+				forward: (entry) => recordIOEntry(entry, ioBridgeDeps),
+			},
+			activation,
+		);
+		registerMutationBridge(
+			{ ...mutationBridgeDeps, onUnavailable: recordBridgeUnavailable },
+			activation,
+		);
+		registerIOBridge(
+			{ ...ioBridgeDeps, onUnavailable: recordBridgeUnavailable },
+			activation,
+		);
+	};
+	// Mount at factory activation so third-party producers can call the bridge
+	// before the first session_start. A primary scope rebinds the cell later.
+	registerPrimaryBridges(preSessionActivation);
 	// Automatic context injection (the `context` hook). Independent of lensEnabled
 	// so tools/LSP/read-guard/formatting keep running when it is off. Precedence:
 	// env override → CLI flag → global config, all resolved inside getLensFlag
@@ -1878,6 +1921,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				model: runtime.telemetryModelId,
 				provider: runtime.telemetryProviderId,
 			}),
+			() => runtime.captureSessionGeneration(),
 		),
 	];
 	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = TOOL_REGISTRY.filter(
@@ -1921,13 +1965,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			return undefined;
 		}
 	};
-	// pi RPC can announce the same replacement twice. Keep one admission key for
-	// the complete session_start mutation pass so every downstream reset observes
-	// the same (reason, session file) identity. A different file remains a real
-	// replacement and must run the normal primary path.
-	// The key is cleared per factory instance because pi re-runs the factory on
-	// every replacement; if that ever changes, clear the key in session_shutdown.
-	let lastSessionStartIdentity: string | undefined;
 	const activateToolsTool = createActivateToolsTool(
 		pi as unknown as {
 			getActiveTools?: () => string[];
@@ -2169,7 +2206,17 @@ function activateExtension(hostPi: ExtensionAPI) {
 		wrapSessionEventHandler(
 			"session_start",
 			async (event, ctx) => {
-				const sessionStartReason = (event as { reason?: string }).reason;
+				const sessionStartEvent = event as {
+					reason?: string;
+					previousSessionFile?: string;
+				};
+				// pi's RPC double may deliver the same event object to a replacement
+				// extension factory. Genuine starts are newly allocated objects, even
+				// when their fields match an earlier start (#2891).
+				const isNewSessionStartEvent = reserveSessionStart(
+					sessionStartEvent as Record<string, unknown>,
+				);
+				const sessionStartReason = sessionStartEvent.reason;
 				const sessionIdentityParts = (() => {
 					try {
 						const sessionManager = (
@@ -2190,49 +2237,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 						return { sessionId: undefined, sessionFile: undefined };
 					}
 				})();
-				const sessionStartKey =
-					sessionIdentityParts.sessionId ?? sessionIdentityParts.sessionFile;
-				const sessionStartIdentity =
-					sessionStartKey === undefined
-						? undefined
-						: `${sessionStartReason ?? ""}\u0000${sessionStartKey}`;
-				// With neither a stable session ID nor a session file, fail open: the
-				// event cannot be safely identified for duplicate suppression.
-				const liveToolPlan = (() => {
-					if (
-						getLensFlag("no-lazy-tools") === true ||
-						typeof (pi as unknown as { getActiveTools?: unknown })
-							.getActiveTools !== "function"
-					) {
-						return undefined;
-					}
-					try {
-						const piWithActiveTools = pi as unknown as {
-							getActiveTools: () => string[];
-						};
-						const lazyNames = new Set(
-							LAZY_TOOL_CATALOG.map((tool) => tool.name),
-						);
-						return planToolSet(
-							piWithActiveTools.getActiveTools(),
-							lazyNames,
-							getRememberedLazyTools(scope),
-						);
-					} catch {
-						return undefined;
-					}
-				})();
-				if (
-					sessionStartIdentity !== undefined &&
-					lastSessionStartIdentity === sessionStartIdentity &&
-					liveToolPlan?.changed !== true
-				) {
+				if (!isNewSessionStartEvent) {
+					const duplicateSubject =
+						sessionIdentityParts.sessionId ??
+						sessionIdentityParts.sessionFile ??
+						"session_start";
 					emitBounded(
 						"session_start_duplicate_suppressed",
-						sessionStartIdentity,
+						duplicateSubject,
 						{
 							durationMs: 0,
-							metadata: { reason: "duplicate start suppressed" },
+							metadata: {
+								reason: "duplicate start suppressed",
+								eventIdentity: "same-event-object",
+							},
 						},
 						{
 							ledgerKind: "session-start-duplicate",
@@ -2242,7 +2260,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 					);
 					return;
 				}
-				lastSessionStartIdentity = sessionStartIdentity;
 				const sessionStartMonotonicAt = performance.now();
 				warmDispatchAtSessionStart();
 				void warmLspService().catch((err) =>
@@ -2384,7 +2401,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 							sessionStartDecision.sameRoot === false &&
 							typeof sessionStartCwd === "string"
 						) {
-							void registerInstanceRoot(sessionStartCwd).catch(() => {
+							ownedSecondaryRoot = sessionStartCwd;
+							void registerInstanceRoot(
+								sessionStartCwd,
+								secondaryRootHolder,
+							).catch(() => {
 								// best-effort observability — never fail session_start
 							});
 						}
@@ -2617,6 +2638,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// scope before its first await. Take it now (#3612): a throw later
 					// in the handler must not leave this activation without its scope.
 					scope = runtime.sessionScope;
+					registerPrimaryBridges(scope);
+					_turnSummaryEmitCtxGetter = rebindableProcessBridgeDeps(
+						"turn-summary-emit-context",
+						1,
+						scope,
+						{
+							runtime,
+							pi,
+							getLensFlag: (name: string) => getLensFlag(name),
+							isLensEnabled: () => lensEnabled,
+						},
+					);
 					// Pin the stable identity + reason over the fresh random id that
 					// reset drew (#190). #3613 F1: before the await, for the same
 					// reason as the scope: a throw later in the handler must not leave
@@ -2884,6 +2917,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// later agent_end can tell its own queued work apart from a
 					// concurrent in-process secondary session's.
 					sessionId: getStableSessionId(ctx),
+					sessionRole:
+						ownedSessionRole === "concurrent-secondary"
+							? "secondary"
+							: "primary",
 				}),
 				{
 					ms: editClass
@@ -2921,6 +2958,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 		}),
 	);
 
+	// #4185 round 4: the call is over. A read that ended in error, failed by
+	// the host or blocked by a later extension after pi-lens captured it (pi
+	// then emits no tool_result), releases its capture here, before the next
+	// tool_call of the run can count it.
+	pi.on("tool_execution_end", (event) => {
+		handleToolExecutionEnd(event, runtime.readGuard);
+	});
+
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
 	// Clear cascade snapshot at start of each new turn so stale data never leaks
 	// biome-ignore lint/suspicious/noExplicitAny: heterogeneous pi event ctx shapes
@@ -2940,6 +2985,17 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// advances only its own turn identity and per-turn records; the
 		// coordinator's turn state is the primary's.
 		runtime.beginTurn(getStableSessionId(ctx));
+		// Capture before any awaited turn-end work can let a sibling session start.
+		turnStartScope = scope ?? runtime.sessionScope;
+		if (
+			ownedSessionRole === "concurrent-secondary" &&
+			getStableSessionId(ctx) !== undefined
+		) {
+			cacheManager.ensureSecondaryTurnStatePartition(
+				(ctx as { cwd?: string })?.cwd ?? process.cwd(),
+				getStableSessionId(ctx)!,
+			);
+		}
 		// Every turn, a secondary's too: clearing only re-runs a duplicate
 		// same-state analysis, while keeping it would skip a secondary's next
 		// turn (the dedupe keys on the primary's turn index).
@@ -3433,7 +3489,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 				sessionId: getStableSessionId(ctx),
 				// #4154: this activation's own scope, so a concurrent secondary's
 				// late dead-code scan never lands in the primary's cell.
-				...(scope === undefined ? {} : { sessionScope: scope }),
+				// Test/MCP hosts may emit turn_end without turn_start. Real pi turns
+				// use the captured snapshot; this fallback preserves that host contract.
+				sessionScope: turnStartScope ?? scope ?? runtime.sessionScope,
 				signal: ctx.signal,
 				onTestRunnerComplete: (delivery) =>
 					stageTestRunnerDelivery({
@@ -3569,15 +3627,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// feature-detected + guarded so an older host degrades to a dbg line).
 	// Registration is once-per-process (the quiet-window registry outlives
 	// factory re-activation); the ctx holder keeps the closure current.
-	_turnSummaryEmitCtx = {
-		pi,
-		getLensFlag: (name: string) => getLensFlag(name),
-		isLensEnabled: () => lensEnabled,
-	};
 	if (!_turnSummaryEmitRegistered) {
 		_turnSummaryEmitRegistered = true;
 		registerQuietWindowTask("turn_summary_emit", () => {
-			const emitCtx = _turnSummaryEmitCtx;
+			const emitCtx = _turnSummaryEmitCtxGetter?.();
 			if (!emitCtx || !emitCtx.isLensEnabled()) return;
 			// The captured `pi` can go STALE between the activation that set this
 			// holder and this fire-and-forget quiet-window run: an interim
@@ -3604,11 +3657,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 				throw err;
 			}
 			if (!turnSummaryEnabled) return;
-			if (runtime.turnSummary.isEmpty()) return;
+			if (emitCtx.runtime.turnSummary.isEmpty()) return;
 			const summaryStart = Date.now();
-			const cwd = runtime.projectRoot || process.cwd();
-			const details = runtime.turnSummary.consume(runtime.turnIndex, (fp) =>
-				toRunnerDisplayPath(cwd, fp),
+			const cwd = emitCtx.runtime.projectRoot || process.cwd();
+			const details = emitCtx.runtime.turnSummary.consume(
+				emitCtx.runtime.turnIndex,
+				(fp) => toRunnerDisplayPath(cwd, fp),
 			);
 			const line = formatTurnSummaryLine(details);
 			const sendMessage = (
@@ -3623,7 +3677,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						details,
 					});
 					recordTurnEndAdvisoryBytes(
-						runtime.telemetrySessionId,
+						emitCtx.runtime.telemetrySessionId,
 						Buffer.byteLength(line, "utf8"),
 					);
 				} catch (sendErr) {
@@ -3730,6 +3784,33 @@ function activateExtension(hostPi: ExtensionAPI) {
 				});
 			} finally {
 				setAmbientAbortSignal(undefined);
+				// #4124: the run is over, so the word index's incremental-serialize
+				// memo (a second copy of its postings) is released once per run. After
+				// the drain, whose formatted writes can still schedule a persist. This
+				// session's index only: a concurrent secondary's settle must not drop
+				// the primary's mid-run memo, and a session replaced while the drain
+				// awaited owns a different index. Lazy and unawaited: a session that
+				// never built an index never loads the module (the eager allowlist
+				// stays as is), and a settle handler must not wait on an import. The
+				// index is captured here, under the guards.
+				const settledIndex = runtime.wordIndex;
+				if (
+					settledIndex &&
+					settleSession.isCurrent() &&
+					classifyOwnedSessionEmission(ctx, getStableSessionId(ctx)) ===
+						"primary"
+				) {
+					void import("./clients/word-index.js")
+						.then(({ releaseWordIndexMemoAtSettle }) =>
+							releaseWordIndexMemoAtSettle(settledIndex),
+						)
+						.catch((err) =>
+							surfaceHandlerCrash("word_index_memo_release", err, {
+								dbg,
+								rethrow: false,
+							}),
+						);
+				}
 			}
 			const cwd = ctx?.cwd;
 			void runQuietWindow({
@@ -3820,6 +3901,16 @@ function activateExtension(hostPi: ExtensionAPI) {
 			shutdownCwd,
 		);
 		if (shutdownClassification === "secondary") {
+			if (stableSessionId !== undefined && shutdownCwd !== undefined) {
+				cacheManager.clearTurnState(
+					shutdownCwd,
+					{
+						kind: "pi",
+						id: stableSessionId,
+					},
+					stableSessionId,
+				);
+			}
 			emitCacheUsageSummaryAtSessionEnd(
 				stableSessionId,
 				"concurrent-secondary",
@@ -3830,33 +3921,25 @@ function activateExtension(hostPi: ExtensionAPI) {
 			decrementSecondarySessionCount();
 			// #2130: scoped deregistration. A secondary's shutdown must never run
 			// `deregisterInstance()` — the process lives on and the primary still
-			// owns the entry. Drop only THIS session's own root, and only when it
-			// is positively a different root than the primary's, so a secondary
-			// that shares the primary's directory cannot deregister the root the
-			// host is still working in. A root this session never registered is a
-			// documented no-op inside `deregisterInstanceRoot`.
+			// owns the entry. End only THIS activation's own hold (#3849): the
+			// root leaves the entry only when no other holder, the host's
+			// primary record included, still lists it. A secondary in the
+			// primary's own directory added nothing and removes nothing, and a
+			// hold the registry already ended is a documented no-op inside
+			// `deregisterInstanceRoot`.
 			//
 			// #2130 round 2: the call is now QUEUED, so it lands behind this
 			// session's own `void registerInstanceRoot(cwd)` from the declined
 			// start above rather than racing ahead of it and leaving the temp
 			// root behind. Fire and forget is still correct — the tail owns the
 			// ordering, and teardown must not block on a registry write.
-			try {
-				const secondaryRoot = shutdownCwd;
-				const primaryRoot = getActivePrimaryRoot();
-				if (
-					typeof secondaryRoot === "string" &&
-					secondaryRoot.length > 0 &&
-					primaryRoot !== undefined &&
-					normalizeFilePath(secondaryRoot) !== primaryRoot
-				) {
-					void deregisterInstanceRoot(secondaryRoot).catch(() => {
-						// best-effort bookkeeping — never fail teardown
-					});
-				}
-			} catch {
-				// Best-effort observability bookkeeping — a stale ctx or an
-				// unresolvable path must never break teardown.
+			if (ownedSecondaryRoot !== undefined) {
+				void deregisterInstanceRoot(
+					ownedSecondaryRoot,
+					secondaryRootHolder,
+				).catch(() => {
+					// best-effort bookkeeping — never fail teardown
+				});
 			}
 			// #3611: only this secondary's own scope retires.
 			retireOwnScope(
@@ -3872,13 +3955,29 @@ function activateExtension(hostPi: ExtensionAPI) {
 			| { reason?: string; targetSessionFile?: string }
 			| undefined;
 		const shutdownReason = shutdownEvent?.reason;
+		const shutdownBudgetKey =
+			shutdownReason === "quit" ? "session_shutdown_quit" : "session_shutdown";
+		// Start this before synchronous teardown so writes emitted by the teardown
+		// itself join the same serialized writer drain. Returning the promise keeps
+		// pi's awaited shutdown boundary without delaying synchronous lifecycle work
+		// for existing embedders that call handlers directly.
+		const ndjsonDrain = bounded(flushAllNdjsonWriters(), {
+			ms: HOOK_WALL_BUDGET_MS[shutdownBudgetKey],
+			signal: undefined,
+			hook: "session_shutdown",
+			label: "ndjson-writers",
+		});
 		// #3611 r2: the retire runs in `finally`. After a /reload that
 		// re-evaluated the entry nothing else ever ends this scope, so a throw
 		// from a teardown step below must not skip it.
 		try {
+			// Graceful quit or replacement is awaited by pi before it closes the
+			// process/stdin. The returned drain promise keeps the at-exit replay from
+			// seeing an in-flight batch (#935). Hard exits skip this hook.
 			// #3612 (D3): hand this scope's stores to the successor that
 			// continues its conversation (`/reload`, `/fork`, `/clone`), before
-			// any teardown below. Sync: this hook may not await (#2523). The
+			// any teardown below. This portion stays synchronous; the hook returns
+			// its bounded writer-drain promise after teardown. The
 			// slot's sidecar save is its fallback (a fork's parent sidecar).
 			// #3881: a start still in flight never adopted; the slot left for it
 			// is the conversation's state, so hand that on instead.
@@ -3890,7 +3989,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			const unstartedReason =
 				startInFlight || scope !== undefined
 					? undefined
-					: namedSuccessorReason();
+					: (namedSuccessorReason() ?? expiredSuccessorReason());
 			if (startInFlight || unstartedReason !== undefined) {
 				if (startInFlight) startInFlight.shutDown = true;
 				forwardHandoff({
@@ -3928,11 +4027,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			) {
 				endSituationalToolTelemetry();
 			}
-
-			// #1654: no drain runs here — see the module comment above
-			// `runDeferredMutationDrain` (review round 1, F2/F3/F4/F5) for why a
-			// session_shutdown-based safety net was deliberately dropped rather
-			// than kept.
 
 			// #1018/#1996: emit the bounded primary cache summary, then drop this
 			// session's prefix/attribution state. The secondary path did the same for
@@ -4008,6 +4102,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// handle this session issued stops being current (design §3.4).
 			retireOwnScope(shutdownReason, stableSessionId);
 		}
+		return ndjsonDrain;
 	});
 
 	// --- Prompt-cache response-side usage observability (#1018) ---

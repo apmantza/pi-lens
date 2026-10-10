@@ -51,6 +51,7 @@ describe("instance-registry multi-root (#2130)", () => {
 	function readEntry(): {
 		projectRoot: string;
 		projectRoots?: string[];
+		projectRootHolders?: Record<string, string[]>;
 	} {
 		const raw = fs.readFileSync(path.join(dir, "instances.json"), "utf-8");
 		return JSON.parse(raw).instances[0];
@@ -136,7 +137,7 @@ describe("instance-registry multi-root (#2130)", () => {
 			const { registerInstance, registerInstanceRoot } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 
 			const entry = readEntry();
 			expect(entry.projectRoots).toHaveLength(2);
@@ -149,7 +150,7 @@ describe("instance-registry multi-root (#2130)", () => {
 			// reproducing the exact clobber #2130 is about.
 			const { registerInstanceRoot, readInstanceRegistry } =
 				await import("../../clients/instance-registry.js");
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 			expect(await readInstanceRegistry()).toEqual([]);
 		});
 
@@ -158,7 +159,7 @@ describe("instance-registry multi-root (#2130)", () => {
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
 			const before = readEntry() as unknown as Record<string, unknown>;
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 			const after = readEntry() as unknown as Record<string, unknown>;
 			// No RSS resample, no startedAt reseed, no heartbeat bump.
 			expect(after.startedAt).toBe(before.startedAt);
@@ -173,7 +174,7 @@ describe("instance-registry multi-root (#2130)", () => {
 			const registryFile = path.join(dir, "instances.json");
 			const before = fs.statSync(registryFile, { bigint: true }).mtimeNs;
 			await new Promise((resolve) => setTimeout(resolve, 25));
-			await registerInstanceRoot(realRoot);
+			await registerInstanceRoot(realRoot, "holder-1");
 			expect(fs.statSync(registryFile, { bigint: true }).mtimeNs).toBe(before);
 		});
 	});
@@ -207,33 +208,185 @@ describe("instance-registry multi-root (#2130)", () => {
 	});
 
 	describe("scoped deregistration", () => {
-		it("removes one root and leaves the rest of the entry alive", async () => {
-			const { registerInstance, deregisterInstanceRoot } =
+		it("keeps a shared secondary root until its last holder leaves (#3849)", async () => {
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
+			await registerInstanceRoot(tempRoot, "holder-2");
+
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
+
+			await deregisterInstanceRoot(tempRoot, "holder-2");
+			expect(readEntry().projectRoots).toEqual([readEntry().projectRoot]);
+			expect(readEntry().projectRootHolders).toEqual({
+				host: [readEntry().projectRoot],
+			});
+		});
+
+		it("a holder's second removal of the same root frees nothing (#3849)", async () => {
+			// One holder, one hold: a repeated shutdown of S1 must not end S2's.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
+			await registerInstanceRoot(tempRoot, "holder-2");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
+		});
+
+		it("cap eviction ends every hold on the evicted root in the same write (#3849 F1)", async () => {
+			const { registerInstance, registerInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
+			for (let i = 0; i < 31; i++) {
+				await registerInstanceRoot(
+					path.join(dir, `filler-${i}`),
+					`filler-${i}`,
+				);
+			}
+			const evicted = readEntry();
+			expect(evicted.projectRoots).not.toContain(path.resolve(tempRoot));
+			expect(evicted.projectRootHolders).not.toHaveProperty("holder-1");
+			expect(
+				Object.values(evicted.projectRootHolders ?? {}).flat(),
+			).not.toContain(path.resolve(tempRoot));
+		});
+
+		it("a holder whose root the cap evicted cannot free a re-added root (#3849)", async () => {
+			// Round-2 verify R2-2, cap variant: S1's hold ends when the 32-root
+			// cap evicts T; S3 re-adds T; S1's late shutdown must leave S3's T.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
+			for (let i = 0; i < 32; i++) {
+				await registerInstanceRoot(
+					path.join(dir, `filler-${i}`),
+					`filler-${i}`,
+				);
+			}
+			expect(readEntry().projectRoots).not.toContain(path.resolve(tempRoot));
+
+			await registerInstanceRoot(tempRoot, "holder-3");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
+
+			await deregisterInstanceRoot(tempRoot, "holder-3");
+			expect(readEntry().projectRoots).not.toContain(path.resolve(tempRoot));
+		});
+
+		it("a full registration that evicts a root ends its holders' records in the same write (#3849)", async () => {
+			// Round-2 verify R2-3: `registerInstanceNow` kept an evicted root's
+			// holder state until the next root write, so a re-add counted it and
+			// the re-adder's own shutdown left T behind as a ghost.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
+			for (let i = 0; i < 30; i++) {
+				await registerInstanceRoot(
+					path.join(dir, `filler-${i}`),
+					`filler-${i}`,
+				);
+			}
+			await registerInstance(path.join(dir, "full-start-root"));
+			expect(readEntry().projectRoots).not.toContain(path.resolve(tempRoot));
+
+			await registerInstanceRoot(tempRoot, "holder-2");
+			await deregisterInstanceRoot(tempRoot, "holder-2");
+			expect(readEntry().projectRoots).not.toContain(path.resolve(tempRoot));
+		});
+
+		it("caps the secondary holder records and evicts the oldest first (#3849)", async () => {
+			// Shape 9 (one-axis bound): a holder that never reaches its shutdown
+			// keeps its record, so the records need a bound of their own beside
+			// the 32-root cap. 65 holders on one root: the first one's record goes.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			for (let i = 0; i <= 64; i++) {
+				await registerInstanceRoot(tempRoot, `holder-${i}`);
+			}
+			const holders = readEntry().projectRootHolders ?? {};
+			expect(Object.keys(holders)).toHaveLength(65);
+			expect(holders).not.toHaveProperty("holder-0");
+			expect(holders).toHaveProperty("host");
+
+			for (let i = 1; i <= 64; i++) {
+				await deregisterInstanceRoot(tempRoot, `holder-${i}`);
+			}
+			expect(readEntry().projectRoots).toEqual([readEntry().projectRoot]);
+		});
+
+		it("a holder's shutdown keeps a root the host registered itself (#3849)", async () => {
+			// Two full starts in one process (root lifecycle, "two concurrent
+			// sessions") make T a host root; a declined secondary on T leaving
+			// must not take it from the host.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
 			await registerInstance(tempRoot);
-			await deregisterInstanceRoot(tempRoot);
-
-			const entry = readEntry();
-			expect(entry.projectRoots).toHaveLength(1);
-			expect(entry.projectRoots?.[0]).toContain(path.basename(realRoot));
+			await registerInstanceRoot(tempRoot, "holder-1");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
 		});
 
-		it("promotes the next root when the primary is the one removed", async () => {
-			const { registerInstance, deregisterInstanceRoot } =
+		it("strips a removed root's hold before it can be re-added (#3849 F4)", async () => {
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
-			await registerInstance(tempRoot);
-			await deregisterInstanceRoot(realRoot);
-			expect(readEntry().projectRoot).toContain(path.basename(tempRoot));
+			await registerInstanceRoot(tempRoot, "holder-1");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			await registerInstanceRoot(tempRoot, "holder-2");
+			await deregisterInstanceRoot(tempRoot, "holder-2");
+			expect(readEntry().projectRoots).toEqual([readEntry().projectRoot]);
 		});
 
-		it("removing the LAST root removes the whole entry", async () => {
-			const { registerInstance, deregisterInstanceRoot, readInstanceRegistry } =
+		it("reads a pre-#3849 entry as the host holding every root (#3849)", async () => {
+			// Fixture in the shape master wrote before #3849: roots, no holder
+			// records. Who held T is unknown, so no secondary's shutdown may free
+			// it; only the entry's own removal does.
+			const { registerInstance, registerInstanceRoot, deregisterInstanceRoot } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
-			await deregisterInstanceRoot(realRoot);
-			expect(await readInstanceRegistry()).toEqual([]);
+			const registryFile = path.join(dir, "instances.json");
+			const legacy = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+			delete legacy.instances[0].projectRootHolders;
+			legacy.instances[0].projectRoots = [
+				legacy.instances[0].projectRoot,
+				path.resolve(tempRoot),
+			];
+			fs.writeFileSync(registryFile, JSON.stringify(legacy));
+
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
+			await registerInstanceRoot(tempRoot, "holder-1");
+			await deregisterInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoots).toContain(path.resolve(tempRoot));
+		});
+
+		it("a torn holder field never drops the primary root (#3849)", async () => {
+			// A hand-edited or torn `projectRootHolders` that lost the host's
+			// record must not let the settle drop the pinned primary, which
+			// every peer reader and the shared-checkout guard key on.
+			const { registerInstance, registerInstanceRoot } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance(realRoot);
+			const registryFile = path.join(dir, "instances.json");
+			const torn = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+			torn.instances[0].projectRootHolders = {};
+			fs.writeFileSync(registryFile, JSON.stringify(torn));
+
+			await registerInstanceRoot(tempRoot, "holder-1");
+			expect(readEntry().projectRoot).toBe(path.resolve(realRoot));
+			expect(readEntry().projectRoots).toEqual([
+				path.resolve(realRoot),
+				path.resolve(tempRoot),
+			]);
 		});
 
 		it("deregistering an unknown root does not rewrite the file", async () => {
@@ -251,7 +404,7 @@ describe("instance-registry multi-root (#2130)", () => {
 			// Rename-based writes stamp a fresh mtime; wait past the filesystem's
 			// timestamp granularity so "unchanged" cannot be an artifact of speed.
 			await new Promise((resolve) => setTimeout(resolve, 25));
-			await deregisterInstanceRoot(tempRoot);
+			await deregisterInstanceRoot(tempRoot, "holder-1");
 			expect(fs.statSync(registryFile, { bigint: true }).mtimeNs).toBe(before);
 			// And the entry is untouched.
 			expect(readEntry().projectRoots).toHaveLength(1);
@@ -316,7 +469,7 @@ describe("instance-registry multi-root (#2130)", () => {
 			const { registerInstance, registerInstanceRoot, getResourceFootprint } =
 				await import("../../clients/instance-registry.js");
 			await registerInstance(realRoot);
-			await registerInstanceRoot(tempRoot);
+			await registerInstanceRoot(tempRoot, "holder-1");
 
 			const footprint = await getResourceFootprint(() => true);
 			const mine = footprint.perInstance.find((i) => i.pid === process.pid);

@@ -48,6 +48,7 @@ import {
 	runObservedSettledSweep,
 } from "../../clients/observed-mutation.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
+import { readChangesSince } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -211,6 +212,45 @@ function names(paths: string[]): string[] {
 }
 
 describe("#2465 — the settled sweep does not report an LSP-applied write as drift", () => {
+	it("marks a net-zero multi-edit batch authorship unknown (#4210 N4)", async () => {
+		const env = setupTestEnvironment("pi-lens-4210-lsp-net-zero-");
+		try {
+			const filePath = path.join(env.tmpDir, "net-zero.ts");
+			fs.writeFileSync(
+				filePath,
+				Array.from({ length: 60 }, (_, index) => `line${index + 1}`).join(
+					"\n",
+				) + "\n",
+			);
+			const applied = await applyWorkspaceEdit(
+				{
+					changes: {
+						[pathToFileURL(filePath).href]: [
+							{
+								range: {
+									start: { line: 2, character: 0 },
+									end: { line: 2, character: 0 },
+								},
+								newText: "inserted\n",
+							},
+							{
+								range: {
+									start: { line: 50, character: 0 },
+									end: { line: 51, character: 0 },
+								},
+								newText: "",
+							},
+						],
+					},
+				},
+				env.tmpDir,
+			);
+			expect(applied.fileDetails[0].authorshipUnknown).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("reports ZERO drift for a DIRECT-path rename (runtime/cacheManager threaded), while still reporting the untouched control", async () => {
 		const env = setupTestEnvironment("pi-lens-2465-direct-");
 		try {
@@ -241,6 +281,22 @@ describe("#2465 — the settled sweep does not report an LSP-applied write as dr
 			// compare on the basename — the same reason `names()` exists.
 			expect(names(applied.files)).toEqual(["renamed.ts"]);
 			expect(fs.readFileSync(scenario.lspFile, "utf-8")).toContain(NEW_NAME);
+			const turnState = scenario.cacheManager.readTurnState(scenario.root);
+			const renamedEntry = Object.entries(turnState.files ?? {}).find(([key]) =>
+				key.endsWith("renamed.ts"),
+			)?.[1];
+			expect(renamedEntry?.modifiedRanges).toEqual([
+				{ start: EDIT_LINE_0BASED + 1, end: EDIT_LINE_0BASED + 1 },
+			]);
+			expect(readChangesSince(scenario.root, 0)).toMatchObject([
+				{
+					filePath: scenario.lspFile,
+					changedRange: {
+						start: EDIT_LINE_0BASED + 1,
+						end: EDIT_LINE_0BASED + 1,
+					},
+				},
+			]);
 
 			// Something else moved the control file — nothing recorded it, so the
 			// sweep SHOULD report it. This is what makes the zero above mean
@@ -255,6 +311,57 @@ describe("#2465 — the settled sweep does not report an LSP-applied write as dr
 			expect(names(seen.drifted)).toEqual(["control.ts"]);
 			expect(names(seen.unverifiable)).toEqual([]);
 			expect(seen.replayed).toBe(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps the resource-rename bookkeeping sentinel while authorship stays unknown (#4210 LSP receipt)", async () => {
+		const env = setupTestEnvironment("pi-lens-4210-lsp-resource-rename-");
+		try {
+			const source = path.join(env.tmpDir, "source.ts");
+			const destination = path.join(env.tmpDir, "destination.ts");
+			fs.writeFileSync(source, "export const source = 1;\n", "utf-8");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "s-4210-resource-rename" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			await applyWorkspaceEdit(
+				{
+					documentChanges: [
+						{
+							kind: "rename",
+							oldUri: pathToFileURL(source).href,
+							newUri: pathToFileURL(destination).href,
+						},
+					],
+				},
+				env.tmpDir,
+				{
+					mutationContext: {
+						cwd: env.tmpDir,
+						correlationId: "resource-rename",
+						tool: "lsp_navigation:rename",
+						source: "lsp-rename",
+						runtime: runtime as never,
+						cacheManager,
+						readGuard: runtime.readGuard,
+						emitSummary: false,
+					},
+				},
+			);
+			const entry = Object.entries(
+				cacheManager.readTurnState(env.tmpDir).files ?? {},
+			).find(([key]) => key.endsWith("destination.ts"))?.[1];
+			expect(entry?.modifiedRanges).toEqual([{ start: 1, end: 1 }]);
+			expect(
+				readChangesSince(env.tmpDir, 0).filter(
+					(change) => change.filePath === destination,
+				),
+			).toMatchObject([
+				{ filePath: destination, changedRange: { start: 1, end: 1 } },
+			]);
 		} finally {
 			env.cleanup();
 		}

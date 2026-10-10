@@ -13,11 +13,13 @@ note: |
   literal-kind check. This ensures we ONLY flag literal-vs-X
   comparisons (not `x == "literal"` which is the correct form).
 
-  Two regex variants cover `is True/False` (where `True`/`False`
-  parse as identifiers, not a `true`/`false` AST kind). Two more
-  cover `is not True/False`. The remaining variants use
+  Identity against the bool singletons is deliberately excluded:
+  `is True`, `is False`, `is not True`, and `is not False` are
+  correct singleton checks in Python, including tri-state and mock-
+  robustness checks. The remaining variants use
   `has: kind: <literal>` as direct children of the
-  comparison_operator.
+  comparison_operator. Negative numeric literals are unary_operator
+  children, so their nested integer/float kinds are covered explicitly.
 
   Direct children only — no `stopBy: end` — so string subscripts
   like `summary["verified"] is True` don't fire (the string is
@@ -29,14 +31,6 @@ metadata:
   sonar: S3403
 rule:
   any:
-    - kind: comparison_operator
-      regex: 'is\s+(True|False|true|false)\b'
-    - kind: comparison_operator
-      regex: '\b(True|False|true|false)\s+is\b'
-    - kind: comparison_operator
-      regex: 'is\s+not\s+(True|False|true|false)\b'
-    - kind: comparison_operator
-      regex: '\b(True|False|true|false)\s+is\s+not\b'
     - all:
         - kind: comparison_operator
           regex: '\bis\b'
@@ -51,7 +45,21 @@ rule:
         - kind: comparison_operator
           regex: '\bis\b'
         - has:
+            kind: unary_operator
+            has:
+              kind: float
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
             kind: float
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: unary_operator
+            has:
+              kind: integer
     - all:
         - kind: comparison_operator
           regex: '\bis\b'

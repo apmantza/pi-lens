@@ -4,10 +4,10 @@ import {
 	getOpenDocumentSymbols,
 	qualifiedLspSymbolName,
 } from "../../clients/lsp-document-symbols.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { getLSPService } from "../../clients/lsp/capabilities.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../clients/lsp/capabilities.js", () => ({
 	getLSPService: vi.fn(),
 }));
 

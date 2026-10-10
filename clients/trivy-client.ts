@@ -47,7 +47,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { loadPiLensProjectConfig } from "./project-lens-config.js";
-import { getScratchTreeGlobPatterns } from "./scratch-tree-policy.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
+import { toPosix } from "./path-utils.js";
+import {
+	getScratchTreeGlobPatterns,
+	nestedWorktreeOffsets,
+} from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import type { TrivySecretFinding } from "./secret-findings.js";
@@ -224,6 +229,47 @@ export function resolveSeverityFloor(cwd: string): TrivySeverity[] {
 	);
 }
 
+/**
+ * `--skip-dirs` values for the linked worktrees under `cwd` (#4132): the path
+ * relative to `cwd`, which trivy matches against each directory's path relative
+ * to the scan root (v0.75.0 `BuildSkipPaths`, an absolute path is re-based
+ * onto the unresolved root and misses through a symlinked `cwd`). The flag is
+ * a comma-split slice and the value a doublestar glob, so a path holding a
+ * comma, a quote or a glob character is counted, not passed.
+ */
+export function worktreeSkipDirs(
+	cwd: string,
+	separator = path.sep,
+	maxArgumentChars = separator === "\\" ? 30_000 : Number.POSITIVE_INFINITY,
+): string[] {
+	const unsafe = separator === "\\" ? /[,"*?[\]{}]/ : /[,"*?[\]{}\\]/;
+	const skips: string[] = [];
+	let argumentChars = 0;
+	for (const offset of nestedWorktreeOffsets(cwd)) {
+		if (unsafe.test(offset)) {
+			incrementDegradationCount({
+				kind: "scan-worktree-exclusion-skipped",
+				subject: "trivy",
+				reason: `csv-or-glob-char-in-path: ${offset} not skipped under ${cwd}`,
+			});
+			continue;
+		}
+		const value = toPosix(offset);
+		const addedChars = "--skip-dirs".length + value.length + 2;
+		if (argumentChars + addedChars > maxArgumentChars) {
+			incrementDegradationCount({
+				kind: "scan-worktree-exclusion-skipped",
+				subject: "trivy",
+				reason: `windows-command-line-cap: ${offset} not skipped under ${cwd}`,
+			});
+			continue;
+		}
+		skips.push(value);
+		argumentChars += addedChars;
+	}
+	return skips;
+}
+
 // --- Client ---
 
 export class TrivyClient extends SecurityScanClient<TrivyResult> {
@@ -311,10 +357,10 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 					reportPath,
 					"--quiet",
 					"--no-progress",
-					...getScratchTreeGlobPatterns().flatMap((glob) => [
-						"--skip-dirs",
-						glob,
-					]),
+					...[
+						...getScratchTreeGlobPatterns(),
+						...worktreeSkipDirs(cwd),
+					].flatMap((glob) => ["--skip-dirs", glob]),
 					cwd,
 				],
 				{ cwd, timeout: SCAN_TIMEOUT_MS },

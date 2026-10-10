@@ -150,6 +150,8 @@ interface PiLensProjectRuleConfig {
 	 * explicit exclusion trumps explicit inclusion).
 	 */
 	select?: string[];
+	/** Project rule paths excluded from the rule's scan and output. */
+	ignorePaths?: string[];
 }
 
 interface PiLensProjectMutationConfig {
@@ -746,6 +748,28 @@ function parseRulePolicyList(
 	return { list, invalid: false };
 }
 
+function parseRulePathList(
+	note: NoteIgnored,
+	ruleId: string,
+	value: unknown,
+): string[] | undefined {
+	if (!Array.isArray(value)) {
+		note(`rules.${ruleId}.ignorePaths must be an array of strings`);
+		return undefined;
+	}
+	const paths = value
+		.filter(
+			(entry): entry is string =>
+				typeof entry === "string" && entry.trim().length > 0,
+		)
+		.map((entry) => entry.trim());
+	if (value.length > 0 && paths.length === 0) {
+		note(`rules.${ruleId}.ignorePaths must contain a non-empty string`);
+		return undefined;
+	}
+	return paths;
+}
+
 /** A parsed config plus the two classes of record it produced. */
 interface ParsedConfigFile {
 	config: PiLensProjectConfig;
@@ -821,7 +845,15 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 	// after the first silently lost the `config-deprecated` ledger row despite
 	// the file still being the exact deprecated one on disk.
 	const raw: unknown = resolved.value;
-	const obj = resolved.value;
+	// The legacy project projection owns the field-specific `rules.*` parser
+	// contract. Keep the shared validation for every other section, but let this
+	// parser see malformed rule entries so it can retain its established notices
+	// instead of replacing them with a generic config-core record.
+	const rawProject = outcome.value as Record<string, unknown>;
+	const obj: Record<string, unknown> = {
+		...resolved.value,
+		...(rawProject.rules !== undefined ? { rules: rawProject.rules } : {}),
+	};
 
 	const ignore = Array.isArray(obj.ignore)
 		? obj.ignore.filter((p): p is string => typeof p === "string")
@@ -868,14 +900,28 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 				if (!parsed.invalid && parsed.list.length > 0)
 					entry.select = parsed.list;
 			}
+			if ("ignorePaths" in r) {
+				const paths = parseRulePathList(note, ruleId, r.ignorePaths);
+				if (paths && paths.length > 0) entry.ignorePaths = paths;
+			}
 			// Honor both threshold-only and policy-only entries; only drop if
 			// the entry had no recognized fields at all (e.g. { unrelated: true }).
 			// A recognized-but-malformed field already warned above, so only warn
 			// here when nothing recognized was spelled at all — #444 proposed
 			// `only` rather than `select`, and that typo must not fail silent.
-			if (entry.threshold !== undefined || entry.disable || entry.select) {
+			if (
+				entry.threshold !== undefined ||
+				entry.disable ||
+				entry.select ||
+				entry.ignorePaths
+			) {
 				rules[ruleId] = entry;
-			} else if (!("threshold" in r) && !("disable" in r) && !("select" in r)) {
+			} else if (
+				!("threshold" in r) &&
+				!("disable" in r) &&
+				!("select" in r) &&
+				!("ignorePaths" in r)
+			) {
 				note(
 					`rules.${ruleId} has no recognized setting (threshold, disable, select); ignored`,
 				);
@@ -1105,7 +1151,9 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 			raw,
 			configPath,
 		},
-		records: resolved.records,
+		records: resolved.records.filter(
+			(record) => !record.key.startsWith("/rules/"),
+		),
 		ignored: ignoredRecords(),
 	};
 }

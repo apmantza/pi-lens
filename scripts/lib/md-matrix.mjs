@@ -549,6 +549,33 @@ export const TIER_CHANGE_AGREE_RUNS = 2;
 /** The one first-publish class the expiry may retire (see the block above). */
 const EXPIRABLE_FIRST_PUBLISH = "direct";
 
+/**
+ * Advance one confirmed class through the shared consecutive-observation
+ * hysteresis. The callers translate the generic pending record back to their
+ * axis-specific persisted shape after this seam decides whether to hold or
+ * commit the observation.
+ *
+ * @param {string} confirmed
+ * @param {{ value: string, runs: number } | undefined} pending
+ * @param {string} observed
+ * @param {number} agreeRuns
+ * @returns {{ confirmed: string, pending?: { value: string, runs: number }, committed: boolean }}
+ */
+export function advancePendingClass(confirmed, pending, observed, agreeRuns) {
+	if (!observed || observed === confirmed)
+		return { confirmed, pending: undefined, committed: false };
+	const samePending = pending?.value === observed;
+	const runs = samePending ? Number(pending.runs ?? 1) + 1 : 1;
+	const requiredRuns = Math.max(2, Number(agreeRuns));
+	if (samePending && runs >= requiredRuns)
+		return { confirmed: observed, pending: undefined, committed: true };
+	return {
+		confirmed,
+		pending: { value: observed, runs },
+		committed: false,
+	};
+}
+
 /** @param {Date | number | string} now @returns {string} UTC `YYYY-MM-DD` */
 function utcDay(now) {
 	if (isUtcDay(now)) return now;
@@ -583,7 +610,7 @@ const REFRESH_STATE_FENCE_END = "```";
  * to "no memory this run", never a crash.
  *
  * @param {string} text
- * @returns {{ "first-publish"?: Record<string, { firstMissed: string }>, "clean-behavior"?: Record<string, { pendingBehavior: string, pendingTier: string, runs: number }> }}
+ * @returns {{ "first-publish"?: Record<string, { firstMissed?: string, pendingFirstPublish?: string, runs?: number }>, "clean-behavior"?: Record<string, { pendingBehavior: string, pendingTier: string, runs: number }> }}
  */
 export function parseRefreshState(text) {
 	const lines = String(text ?? "").split("\n");
@@ -659,8 +686,21 @@ function renderRefreshStateSection(state) {
 	for (const lang of Object.keys(state?.["first-publish"] ?? {}).sort(
 		compareStableStrings,
 	)) {
-		const firstMissed = state["first-publish"][lang]?.firstMissed;
+		const entry = state["first-publish"][lang];
+		const firstMissed = entry?.firstMissed;
+		const pendingFirstPublish = entry?.pendingFirstPublish;
+		const runs = Number(entry?.runs ?? 1);
 		if (isUtcDay(firstMissed)) firstPublish[lang] = { firstMissed };
+		if (
+			pendingFirstPublish === "direct" ||
+			pendingFirstPublish === "empty-first"
+		) {
+			firstPublish[lang] = {
+				...firstPublish[lang],
+				pendingFirstPublish,
+				runs: Number.isFinite(runs) && runs > 0 ? runs : 1,
+			};
+		}
 	}
 	const cleanBehavior = {};
 	for (const lang of Object.keys(state?.["clean-behavior"] ?? {}).sort(
@@ -686,8 +726,8 @@ function renderRefreshStateSection(state) {
 	return [
 		REFRESH_STATE_HEADING,
 		"",
-		"Bookkeeping for the date-based `direct` `first-publish` expiry (#3401), the",
-		"two-run `clean-behavior` hysteresis and the consecutive-night `idle-eviction`",
+		"Bookkeeping for the two-run `first-publish`/`clean-behavior` hysteresis, the",
+		"date-based `direct` expiry (#3401) and consecutive-night `idle-eviction`",
 		"counts (#3989). Regenerated every run; never a measurement.",
 		"",
 		REFRESH_STATE_FENCE,
@@ -800,13 +840,32 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 		}
 		if (observed)
 			cell.src = mergeSrc(srcIdx >= 0 ? (cells[srcIdx] ?? "") : "", src);
-		// first-publish: an observation writes immediately; a `direct` cell the
-		// probe no longer observes is stamped with its first miss and, once
-		// `expireDays` have elapsed, expired.
+		// first-publish: hold a changed comparable class until two consecutive
+		// observations agree, just like clean-behavior. A `direct` cell the probe
+		// no longer observes is stamped with its first miss and, once `expireDays`
+		// have elapsed, expired.
 		const observedFp = observed?.firstPublish ?? null;
 		const currentFp = fpIdx >= 0 ? cells[fpIdx] : "";
-		if (observedFp) {
-			cell["first-publish"] = observedFp;
+		if (observedFp === "direct" || observedFp === "empty-first") {
+			const held = priorFp[lang];
+			const advanced = advancePendingClass(
+				currentFp,
+				held?.pendingFirstPublish
+					? { value: held.pendingFirstPublish, runs: Number(held.runs ?? 1) }
+					: undefined,
+				observedFp,
+				agreeRuns,
+			);
+			if (advanced.committed) {
+				cell["first-publish"] = advanced.confirmed;
+				committedLangs.push(lang);
+			} else if (advanced.pending) {
+				nextState["first-publish"][lang] = {
+					pendingFirstPublish: advanced.pending.value,
+					runs: advanced.pending.runs,
+				};
+				pendingLangs.push(lang);
+			}
 		} else if (currentFp === EXPIRABLE_FIRST_PUBLISH) {
 			// A missing, garbage or future stamp restarts the clock today.
 			const elapsed = elapsedDays(priorFp[lang]?.firstMissed, today);
@@ -829,19 +888,26 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 			const currentTier = tierIdx >= 0 ? cells[tierIdx] : "";
 			if (observedCb !== currentCb || observedTier !== currentTier) {
 				const held = priorCb[lang];
-				const sameHeld =
-					held?.pendingBehavior === observedCb &&
-					held?.pendingTier === observedTier;
-				const runs = sameHeld ? Number(held.runs ?? 1) + 1 : 1;
-				if (sameHeld && runs >= agreeRuns) {
+				const advanced = advancePendingClass(
+					`${currentCb}\u0000${currentTier}`,
+					held?.pendingBehavior && held?.pendingTier
+						? {
+								value: `${held.pendingBehavior}\u0000${held.pendingTier}`,
+								runs: Number(held.runs ?? 1),
+							}
+						: undefined,
+					`${observedCb}\u0000${observedTier}`,
+					agreeRuns,
+				);
+				if (advanced.committed) {
 					cell["clean-behavior"] = observedCb;
 					cell.tier = observedTier;
 					committedLangs.push(lang);
-				} else {
+				} else if (advanced.pending) {
 					nextState["clean-behavior"][lang] = {
 						pendingBehavior: observedCb,
 						pendingTier: observedTier,
-						runs,
+						runs: advanced.pending.runs,
 					};
 					pendingLangs.push(lang);
 				}

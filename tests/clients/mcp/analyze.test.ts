@@ -38,7 +38,7 @@ vi.mock("../../../clients/dispatch/fact-runner.js", async (importOriginal) => {
 // Warm-up must never spawn a real LSP server in unit tests.
 const mockTouchFile = vi.hoisted(() => vi.fn(async () => undefined));
 const mockSupportsLSP = vi.hoisted(() => vi.fn((_file: string) => false));
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: () =>
 		makeLspServiceDouble({
 			supportsLSP: mockSupportsLSP,

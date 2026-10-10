@@ -72,6 +72,11 @@ const CUSTOM_SERVER = {
 
 const tempRoots: string[] = [];
 
+beforeEach(async () => {
+	const trust = await import("../../clients/project-trust.js");
+	trust.setProjectTrustState("trusted");
+});
+
 afterEach(() => {
 	while (tempRoots.length > 0) {
 		const root = tempRoots.pop();

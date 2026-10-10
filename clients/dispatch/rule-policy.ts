@@ -20,10 +20,15 @@
  * the three surfaces from drifting.
  */
 import { normalizeRuleId } from "./rule-id-normalize.js";
+import { resolvePiLensConfig } from "../config-resolve.js";
+import { getPiLensGlobalConfigPath } from "../lens-config.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
+import { isRuleIgnoredForPath } from "./rule-ignores.js";
 
 interface RulePolicyEntry {
 	disable?: string[];
 	select?: string[];
+	ignorePaths?: string[];
 }
 
 /**
@@ -36,6 +41,36 @@ interface RulePolicyEntry {
  * at filter time.
  */
 export type RulePolicyMap = Record<string, RulePolicyEntry | undefined>;
+
+export function resolvedRulePolicyMap(root: string): RulePolicyMap | undefined {
+	const resolved = resolvePiLensConfig({
+		cwd: root,
+		globalDir: getGlobalPiLensDir(),
+		globalConfigPath: getPiLensGlobalConfigPath(),
+	});
+	return rulePolicyMapFromConfig(
+		resolved.value.rules as Record<string, unknown> | undefined,
+	);
+}
+
+export function ruleIgnoredForPath(
+	ruleId: string,
+	filePath: string,
+	root: string,
+	policyMap: RulePolicyMap | undefined,
+): boolean {
+	const normalized = normalizeRuleId(ruleId);
+	const patterns: string[] = [];
+	for (const [configuredId, entry] of Object.entries(policyMap ?? {})) {
+		if (normalizeRuleId(configuredId) !== normalized || !entry?.ignorePaths)
+			continue;
+		patterns.push(...entry.ignorePaths);
+	}
+	// The policy is intentionally project-wide like disable/select: a global
+	// denial cannot be removed by a nearer project entry.
+	if (patterns.length === 0) return false;
+	return isRuleIgnoredForPath(filePath, root, patterns);
+}
 
 /**
  * Decide whether a rule id (in the form it's emitted on a diagnostic — e.g.
@@ -107,6 +142,7 @@ function matchesRule(entry: string, raw: string, normalized: string): boolean {
 export function applyRulePolicy<T extends { rule?: string; code?: string }>(
 	diagnostics: T[],
 	policyMap: Record<string, unknown> | undefined,
+	options: { root: string; filePath: string },
 ): T[] {
 	if (!policyMap) return diagnostics;
 	// Fast-path: if every entry has neither disable nor select, there is no
@@ -117,8 +153,16 @@ export function applyRulePolicy<T extends { rule?: string; code?: string }>(
 		if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
 			continue;
 		}
-		const entry = rawEntry as { disable?: string[]; select?: string[] };
-		if ((entry.disable?.length ?? 0) > 0 || (entry.select?.length ?? 0) > 0) {
+		const entry = rawEntry as {
+			disable?: string[];
+			select?: string[];
+			ignorePaths?: string[];
+		};
+		if (
+			(entry.disable?.length ?? 0) > 0 ||
+			(entry.select?.length ?? 0) > 0 ||
+			(entry.ignorePaths?.length ?? 0) > 0
+		) {
 			hasFilter = true;
 			break;
 		}
@@ -128,6 +172,18 @@ export function applyRulePolicy<T extends { rule?: string; code?: string }>(
 	return diagnostics.filter((d) => {
 		const ruleId = d.rule ?? d.code;
 		if (!ruleId) return true;
+		const filePath =
+			(d as T & { filePath?: string }).filePath ?? options.filePath;
+		if (
+			filePath &&
+			ruleIgnoredForPath(
+				ruleId,
+				filePath,
+				options.root,
+				policyMap as RulePolicyMap,
+			)
+		)
+			return false;
 		const { dropped } = evaluateRulePolicy(ruleId, policyMap as RulePolicyMap);
 		return !dropped;
 	});
@@ -149,14 +205,20 @@ export function rulePolicyMapFromConfig(
 		if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
 			continue;
 		}
-		const entry = rawEntry as { disable?: string[]; select?: string[] };
+		const entry = rawEntry as {
+			disable?: string[];
+			select?: string[];
+			ignorePaths?: string[];
+		};
 		const hasDisable = (entry.disable?.length ?? 0) > 0;
 		const hasSelect = (entry.select?.length ?? 0) > 0;
-		if (!hasDisable && !hasSelect) continue;
+		const hasIgnorePaths = (entry.ignorePaths?.length ?? 0) > 0;
+		if (!hasDisable && !hasSelect && !hasIgnorePaths) continue;
 		built ??= {};
 		built[key] = {
 			...(hasDisable ? { disable: entry.disable } : {}),
 			...(hasSelect ? { select: entry.select } : {}),
+			...(hasIgnorePaths ? { ignorePaths: entry.ignorePaths } : {}),
 		};
 	}
 	return built;

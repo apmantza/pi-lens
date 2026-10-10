@@ -24,7 +24,7 @@ import {
 	SWEEP_IDLE_SAFETY_MARGIN_MS,
 	_resetWorkspaceSweepHoldForTests,
 } from "../../../clients/lsp/workspace-sweep-hold.js";
-import { resetLSPService } from "../../../clients/lsp/index.js";
+import { resetLSPService } from "../../../clients/lsp/capabilities.js";
 import { _resetSubagentModeForTests } from "../../../clients/subagent-mode.js";
 import { setupTestEnvironment } from "../test-utils.js";
 

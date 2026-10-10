@@ -42,13 +42,14 @@ type LaneSpec = {
 	detach?: boolean;
 };
 
-const packageJson = (buildExit = 0) =>
+const packageJson = (buildExit = 0, distBuildExit = 0) =>
 	JSON.stringify({
 		name: "lane-fixture",
 		private: true,
 		scripts: {
 			// BUILD_LOG counts builds: lane-check builds once, not once more in the selector.
 			build: `node -e "process.env.BUILD_LOG && require('fs').appendFileSync(process.env.BUILD_LOG, 'b\\n'); process.exit(${buildExit})"`,
+			"build:dist": `node -e "process.env.BUILD_LOG && require('fs').appendFileSync(process.env.BUILD_LOG, 'd\\n'); if (${distBuildExit}) process.exit(${distBuildExit}); require('fs').mkdirSync('dist/clients/lsp', {recursive:true}); require('fs').writeFileSync('dist/clients/lsp/server-traits.js', '')"`,
 			"test:targeted": "node scripts/with-test-lock.mjs --shared -- vitest run",
 			"astgrep:self-scan": 'node -e ""',
 		},
@@ -203,6 +204,35 @@ const TIMEOUT = 170_000;
 
 describe("lane-check verdict table (#4047 round 2)", () => {
 	it(
+		"rebuilds a missing dist dependency before governance suites (#4239)",
+		() => {
+			const lane = makeLane({
+				base: {
+					...BASE_FILES,
+					"clients/lsp/server-traits.ts":
+						"export const isAuxiliary = () => false;\\n",
+				},
+				head: { "tests/config/added.test.ts": GREEN },
+			});
+			const run = runLane(lane);
+			expect(run.status).toBe(0);
+			expect(run.record.verdict).toBe("clean");
+			expect(run.out).toContain(
+				"[lane-check] dist/ missing or stale (dist/clients/lsp/server-traits.js); running npm run build:dist...",
+			);
+			expect(
+				fs.existsSync(
+					path.join(lane.root, "dist/clients/lsp/server-traits.js"),
+				),
+			).toBe(true);
+			expect(fs.readFileSync(path.join(lane.home, "builds.log"), "utf8")).toBe(
+				"b\nd\n",
+			);
+		},
+		TIMEOUT,
+	);
+
+	it(
 		"all green: clean, exit 0, the summary names the real branch",
 		() => {
 			const lane = makeLane({
@@ -345,6 +375,39 @@ describe("lane-check verdict table (#4047 round 2)", () => {
 				},
 			]);
 			expect(run.out).toContain("verdict: unproven (exit 3)");
+		},
+		TIMEOUT,
+	);
+
+	it(
+		"dist build failure: unproven, exit 3, and no test step runs",
+		() => {
+			const lane = makeLane({
+				base: {
+					...BASE_FILES,
+					"clients/lsp/server-traits.ts":
+						"export const isAuxiliary = () => false;\\n",
+				},
+				head: {
+					"package.json": packageJson(0, 1),
+					"tests/config/added.test.ts": GREEN,
+				},
+			});
+			const run = runLane(lane);
+			expect(run.status).toBe(3);
+			expect(run.record.verdict).toBe("unproven");
+			expect(run.record.checks.build).toBe(0);
+			expect(run.record.checks.distBuild).toBe(1);
+			expect(run.record.checks.targeted).toBeUndefined();
+			expect(run.record.findings).toEqual([
+				{
+					kind: "unproven",
+					reason: "dist build failed (exit 1); no test step ran",
+				},
+			]);
+			expect(run.out).toContain(
+				"[lane-check] dist build failed; run `npm run build:dist` to rebuild dist/.",
+			);
 		},
 		TIMEOUT,
 	);

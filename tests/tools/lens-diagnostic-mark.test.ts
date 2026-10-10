@@ -51,6 +51,32 @@ async function run(params: Record<string, unknown>) {
 	return tool.execute("call-1", params, undefined, () => {}, { cwd: tmpDir });
 }
 
+/**
+ * #4187 R4-1: a capture bridge mounted the way a co-process extension reads it,
+ * so the assertions below see the entry the tool really sends.
+ */
+const MUTATION_BRIDGE_KEY = Symbol.for("pi-lens:mutation-bridge");
+type RecordedEntry = {
+	filePath: string;
+	kind: string;
+	consumer?: string;
+	provenance?: string;
+	toolCallId?: string;
+};
+const recordedEntries: RecordedEntry[] = [];
+Object.defineProperty(globalThis, MUTATION_BRIDGE_KEY, {
+	value: Object.freeze({
+		version: 1 as const,
+		recordMutation(entry: RecordedEntry): boolean {
+			recordedEntries.push(entry);
+			return true;
+		},
+	}),
+	writable: false,
+	configurable: false,
+	enumerable: false,
+});
+
 describe("lens_diagnostic_mark tool (#690)", () => {
 	it("disposition=suppress writes the inline comment into the real file AND records a store entry", async () => {
 		writeFile("a.ts", "const a = 1;\nconst target = bad();\n");
@@ -419,5 +445,67 @@ describe("lens_diagnostic_mark tool — line verification/reanchoring (#802)", (
 		// Comment for finding two directly above "const second = bad2();"
 		const secondIdx = finalLines.findIndex((l) => l.includes("const second"));
 		expect(finalLines[secondIdx - 1]).toContain("pi-lens-ignore: no-bad");
+	});
+});
+
+// #4187 R4-1, R4-3 (T7): a suppress write carries no bytes of its own, so the
+// read guard advances the file's authorship only when the entry says it was
+// observed AND names the call whose `tool_call` checked that file. Recurrence:
+// without `provenance` the record never advances (a file the agent authored
+// costs a re-read), and without `toolCallId` the guard cannot license it, so it
+// ends the authorship it should have kept. The guard half of the rule is pinned
+// by tests/clients/runtime-tool-call.test.ts.
+describe("lens_diagnostic_mark's suppress record names its call (#4187 R4-1)", () => {
+	it("sends provenance observed and the suppress call's own id", async () => {
+		recordedEntries.length = 0;
+		const absPath = writeFile(
+			"marked.ts",
+			"const a = 1;\nconst target = bad();\n",
+		);
+		const result = await tool.execute(
+			"call-4187-suppress",
+			{
+				filePath: "marked.ts",
+				line: 2,
+				message: "bad call",
+				rule: "no-bad",
+				tool: "eslint",
+				disposition: "suppress",
+			},
+			undefined,
+			() => {},
+			{ cwd: tmpDir },
+		);
+		expect(result.isError).toBeFalsy();
+		expect(recordedEntries).toEqual([
+			expect.objectContaining({
+				filePath: absPath,
+				kind: "edit",
+				consumer: "lens_diagnostic_mark",
+				provenance: "observed",
+				toolCallId: "call-4187-suppress",
+			}),
+		]);
+	});
+
+	it("records no mutation for a disposition that writes nothing", async () => {
+		recordedEntries.length = 0;
+		writeFile("deferred.ts", "const a = 1;\nconst target = bad();\n");
+		const result = await tool.execute(
+			"call-4187-defer",
+			{
+				filePath: "deferred.ts",
+				line: 2,
+				message: "bad call",
+				rule: "no-bad",
+				tool: "eslint",
+				disposition: "defer",
+			},
+			undefined,
+			() => {},
+			{ cwd: tmpDir },
+		);
+		expect(result.isError).toBeFalsy();
+		expect(recordedEntries).toEqual([]);
 	});
 });

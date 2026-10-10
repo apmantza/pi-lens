@@ -815,6 +815,47 @@ describe("#3528: a drain that outlives its session writes nothing into the next"
 	});
 });
 
+/**
+ * #4131 (#4187 F6 P3): the deferred autofix credits authorship over bytes the
+ * agent never saw, so it may only carry forward an authorship whose bytes
+ * still hold. Recurrence: its recordWritten re-baselined the authorship over
+ * another writer's change, so the zero-read edit after it passed.
+ */
+describe("#4131: the agent_end autofix does not re-author another writer's bytes", () => {
+	it("ends the authorship before the autofix rewrites the file", async () => {
+		const { fixer, resume } = gatedBiome();
+		resume.open();
+		writeBiomeAgreement();
+		// The agent's bash write authored the file, without a read.
+		runtime.readGuard.recordWritten(filePath, {
+			stampFileTime: false,
+			toolCallId: "call_bash",
+		});
+		// Another writer changes it before the drain.
+		fs.writeFileSync(filePath, "const x=22\n");
+		runtime.deferMutation(filePath, env.tmpDir, "edit", env.tmpDir, "autofix");
+		flags.add("no-autoformat");
+		await handleAgentEnd(drainDeps({ biomeClient: fixer, ruffClient: noRuff }));
+		expect(fs.readFileSync(filePath, "utf8")).toBe("let x=22\n");
+		expect(blindEditVerdict()).toBe("block");
+	});
+
+	it("carries the authorship through the autofix when no other writer intervened (no-drop)", async () => {
+		const { fixer, resume } = gatedBiome();
+		resume.open();
+		writeBiomeAgreement();
+		runtime.readGuard.recordWritten(filePath, {
+			stampFileTime: false,
+			toolCallId: "call_bash",
+		});
+		runtime.deferMutation(filePath, env.tmpDir, "edit", env.tmpDir, "autofix");
+		flags.add("no-autoformat");
+		await handleAgentEnd(drainDeps({ biomeClient: fixer, ruffClient: noRuff }));
+		expect(fs.readFileSync(filePath, "utf8")).toBe("let x=1\n");
+		expect(blindEditVerdict()).toBe("allow");
+	});
+});
+
 /** The Biome agreement evidence the autofix gate needs, and a biome.json. */
 function writeBiomeAgreement(root = env.tmpDir): void {
 	fs.writeFileSync(

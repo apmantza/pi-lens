@@ -45,6 +45,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { getProcessSingleton } from "./process-singletons.js";
+import { PI_LENS_TOOL_NAMES } from "./tool-config.js";
 
 /** Persisted-file schema version. A file of any other version is ignored. */
 const MUTATION_ATTRIBUTION_FILE_VERSION = 1;
@@ -133,6 +134,15 @@ interface AttributionState {
 }
 
 const ATTRIBUTION_FAMILY = "mutation-attribution";
+
+/**
+ * pi-lens owns these tool names, so their mixed read/write operations must
+ * never be promoted by the open-ended third-party learning mechanism (#4139).
+ */
+function isPiLensToolName(toolName: string): boolean {
+	return PI_LENS_TOOL_NAMES.includes(toolName);
+}
+
 /**
  * Bumped to 2 (#2449 review round 5, F3): `session` changed shape from a
  * plain `Map` to a `BoundedFifoMap` without a version bump at the time, so a
@@ -250,6 +260,7 @@ export function primePersistedMutationAttribution(
 export function lookupLearnedMutatingTool(
 	toolName: string,
 ): LearnedMutationSource | undefined {
+	if (isPiLensToolName(toolName)) return undefined;
 	const current = state();
 	if ((current.session.get(toolName)?.mutating ?? 0) > 0) return "session";
 	return current.fromDisk?.has(toolName) === true ? "persisted" : undefined;
@@ -294,6 +305,7 @@ export function isProvisionalLearnedAttribution(toolName: string): boolean {
  *    re-proving that on every call is the hot-path cost this latch removes).
  */
 export function shouldArmObservationForTool(toolName: string): boolean {
+	if (isPiLensToolName(toolName)) return false;
 	const observation = state().session.get(toolName);
 	if ((observation?.mutating ?? 0) > 0)
 		return isProvisionalLearnedAttribution(toolName);

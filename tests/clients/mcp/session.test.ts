@@ -51,7 +51,7 @@ vi.mock("../../../clients/bootstrap.js", async () => {
 vi.mock("../../../clients/ast-grep-client.js", () => ({
 	AstGrepClient: class {},
 }));
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	// `getMcpSessionContext` reads only `getAliveClientCount`; the rest of the
 	// surface comes from the factory (#2592).
 	getLSPService: () => makeLspServiceDouble({ getAliveClientCount: () => 2 }),

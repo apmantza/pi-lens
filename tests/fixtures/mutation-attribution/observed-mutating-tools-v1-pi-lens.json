@@ -1,0 +1,10 @@
+{
+	"version": 1,
+	"tools": [
+		{
+			"name": "lsp_navigation",
+			"observations": 2,
+			"lastSeen": 1760000000000
+		}
+	]
+}

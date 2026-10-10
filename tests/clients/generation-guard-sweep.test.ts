@@ -61,11 +61,17 @@ import {
  * Removing one is what a migration does. Both directions are enforced below.
  */
 const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
+	"lsp/service-singleton.ts":
+		"the generation handoff compares PROMISE IDENTITY to decide whether the singleton owner is clearing its own pending teardown; this is an ownership identity, not a stale guarded write, so a GenerationSource would add a second identity without changing the lifecycle contract",
 	// --- Migration backlog: these ARE the capture-before-await/check-before-
 	// write shape the primitive models. Each is a real candidate, deferred for
 	// a stated reason, not exempted on principle. ---
 	"lsp/client.ts":
 		"#1682's per-(path, identifier) pull sequences: claimed at request time, re-checked at write time. A GenerationMap candidate, deferred because client.ts is the highest-traffic file in the repo and a behavior-identical proof there needs its own round",
+	"lsp/config.ts":
+		"the unknown-trust notice compares the degradation ledger's session generation only to re-arm a bounded log latch; the ledger owns the counter and reset, so replacing this scalar comparison with a second GenerationSource would duplicate session identity rather than guard a stale write",
+	"lsp/launch.ts":
+		"the unknown-trust project-local binary notice compares the degradation ledger's session generation only to re-arm a bounded launch warning; the ledger owns the counter and reset, so a second GenerationSource would duplicate the same session identity",
 	"review-graph/builder.ts":
 		"the workspace-cache epoch this primitive was modelled on, plus checkpoint and persist generations that gate post-await promotions (see the `_persistGenerations.get(key) !== result.generation` guard). A GenerationMap candidate; migrating a file this size is real work, not a rider on #1754's proof-of-two",
 	"project-snapshot.ts":
@@ -78,7 +84,6 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 		"the persisted test-runner-findings cache owns the generation high-water mark across asynchronous runner completion and session restarts. The delivery map compares that durable generation before appending, so an in-process GenerationSource cannot replace the persisted ordering contract; the provenance and generation integration tests cover the drop-before-append path",
 	"mcp/analyze.ts":
 		"the warm word-index idle eviction captures a per-entry generation before its timer fires and re-checks it in the callback, alongside an entry-identity compare. The eviction direction again, on a per-entry counter rather than a keyed map; a migration candidate once GenerationMap gains an entry-scoped form",
-
 	"observed-mutation.ts":
 		"the settle rejects a baseline whose sessionGeneration no longer matches the one the tool_result carries. This IS the capture-before/check-after shape, but the counter is RuntimeCoordinator.sessionGeneration — captured at tool_call, handed back at tool_result, and owned by runtime-coordinator.ts, whose own migration is deferred above. Declaring a GenerationSource here would mint a SECOND counter mirroring the session's, which is the single-source-of-truth defect the ratchet exists to prevent. Since #3499 that counter IS a GenerationSource (RuntimeCoordinator.captureSessionGeneration), but this file carries the captured value as a plain number on the pending baseline across tool_call -> tool_result and compares it there; moving that record to a handle is its own migration, not yet filed",
 
@@ -99,6 +104,8 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 		"#2636 review round 2, F3: getBundledQueriesRootHealth compares the CURRENT degradation-ledger generation against the one its memo was computed under, to decide whether to re-probe the bundled root's health (clear-on-transition, same shape as ast-grep-client.ts's ensureRulesHealthReported and tree-sitter-client.ts's trust-notification set above) — not a write racing an await. The compare only decides whether to recompute a READ-side memo; nothing downstream is a pending write that could land stale.",
 	"dispatch/integration.ts":
 		"reverse-dependency reuse eligibility compares a PERSISTED graph build generation read off disk against a cached index's, to decide whether a one-step import delta is contiguous. A read-side eligibility test, and the primitive has no persisted form — see workspace-diagnostics-cache.ts's #1669 review R2 note on why an inert persisted generation was reverted there",
+	"dispatch/pending-runner-findings.ts":
+		"the deferred runner store compares the producer's existing GenerationHandle before admitting a settled result; the new session id is an orthogonal delivery partition, not a second generation source. Migrating this persisted/in-flight handoff to a new primitive would duplicate the producer scope already owned by the handle",
 	"session-scope.ts":
 		"#3611 r2 F1: recordDroppedRead compares a dropped write's queue-time branch epoch with the epoch its drop's lineage captured, to decide whether the drop is COUNTED as a false block (session-scope-read-dropped). The write itself was already dropped by the handle's own GenerationSource; this compare only chooses between two records, so no write hangs on it. The scope's liveness and branch fences themselves go through createGenerationSource",
 	"review-graph-logger.ts":

@@ -4,9 +4,9 @@
 // laundering identifiers.
 import { vi } from "vitest";
 import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
-import { getLSPService } from "../../../clients/lsp/index.js";
+import { getLSPService } from "../../../clients/lsp/capabilities.js";
 
-vi.mock("../../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/capabilities.js", () => ({
 	getLSPService: vi.fn(() =>
 		makeLspServiceDouble({ touchFile: vi.fn(), supportsLSP: () => true }),
 	),

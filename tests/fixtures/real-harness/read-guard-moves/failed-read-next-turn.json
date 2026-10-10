@@ -1,0 +1,31 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "read",
+			"arguments": {
+				"path": "a.ts",
+				"offset": 999
+			},
+			"id": "r1"
+		}
+	],
+	[
+		{
+			"type": "toolCall",
+			"name": "edit",
+			"arguments": {
+				"path": "a.ts",
+				"oldText": "export const a = 1;",
+				"newText": "export const a = 2;"
+			},
+			"id": "e1"
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "edit done"
+		}
+	]
+]
