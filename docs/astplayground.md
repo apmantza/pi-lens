@@ -17,7 +17,7 @@ The shipped rule set runs in two engines:
 
 | Path | Engine | Source |
 |------|--------|--------|
-| ast-grep LSP (the live path) | upstream binary, auto-installed by `ensureTool` | the binary's `ast-grep` version may be ahead of `npx ast-grep@x` |
+| ast-grep LSP (the live path) | upstream binary, auto-installed by `ensureTool` | the binary's `ast-grep` version may be ahead of the npm `@ast-grep/cli` version |
 | ast-grep napi runner (fallback) | `@ast-grep/napi` npm package, version-pinned in `package.json` | can lag the binary by a release |
 
 The CLI test in `tests/clients/dispatch/runners/ast-grep-catalog-rules.test.ts`

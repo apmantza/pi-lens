@@ -2205,11 +2205,14 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 37 → 35 (#2660): evidence now reuses the resolver's rung instead of
 	// awaiting a second managed-binary lookup, removing the resolver's two
 	// unbounded awaits (the lookup and its caller-side reconstruction).
+	// 36 -> 37 (#4193): the isolated npx fallback now awaits the probe with
+	// its owned spawn options; this is still bounded by the probe's 5s timeout,
+	// but no hook signal reaches this helper until #2523 AC4 threads it through.
 	// #3968: +1 — `coveringLaneAvailable` awaits each covering gate command
 	// (`ctx.hasTool`), whose probe carries the dispatcher's own 5s budget; the
 	// loop is bounded by the fact's fixed gate list, but like every sibling
 	// here it stays unbounded from the hook's signal until #2523 AC4.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 36,
+	"clients/dispatch/runners/utils/runner-helpers.ts": 37,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.

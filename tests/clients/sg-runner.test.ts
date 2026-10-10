@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { capKilledSpawnResult } from "../support/spawn-shapes.js";
 import { removeTempDirSync } from "./test-utils.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 
 // All hoisted: importing `spawn-shapes.js` below reaches the mocked safe-spawn
 // module, so every mock factory here runs during the import phase — a plain
@@ -53,6 +57,15 @@ vi.mock("../../clients/installer/index.js", () => ({
 	// tell an attempt that failed from one that never ran.
 	getInstallAttempt: vi.fn(() => undefined),
 }));
+// The untrusted-candidate witnesses below must not answer from a machine-global
+// npm/pnpm/bun install; the test environment has no ast-grep there, but pinning
+// it makes the verdict depend on the code under test rather than the box.
+vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/package-manager.js")
+	>()),
+	findGlobalBinary: vi.fn(async () => undefined),
+}));
 vi.mock(
 	"../../clients/dispatch/runners/utils/runner-helpers.js",
 	async (importOriginal) => ({
@@ -71,9 +84,22 @@ vi.mock(
 	}),
 );
 
+/** The `@ast-grep/cli` platform suffix for the host, or `undefined` off the six supported targets. */
+function astGrepPlatformSuffix(): string | undefined {
+	const { platform, arch } = process;
+	if (platform === "linux" && arch === "x64") return "linux-x64-gnu";
+	if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu";
+	if (platform === "darwin" && arch === "arm64") return "darwin-arm64";
+	if (platform === "darwin" && arch === "x64") return "darwin-x64";
+	if (platform === "win32" && arch === "x64") return "win32-x64-msvc";
+	if (platform === "win32" && arch === "arm64") return "win32-arm64-msvc";
+	return undefined;
+}
+
 describe("SgRunner", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
+		setProjectTrustState("trusted");
 		safeSpawnAsync.mockResolvedValue({
 			status: 1,
 			error: new Error("not found"),
@@ -114,6 +140,273 @@ describe("SgRunner", () => {
 	});
 
 	describe("ensureAvailable()", () => {
+		// #4193: prove the runner's own fallback selects the package and reaches execRaw.
+		it("executes through the scoped cache-only CLI fallback (#4193)", async () => {
+			safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
+				const scoped =
+					cmd === "npx" &&
+					args.includes("--no") &&
+					args[args.indexOf("--package") + 1] === "@ast-grep/cli";
+				if (!scoped) return { status: 1, stdout: "", stderr: "missing" };
+				return {
+					status: 0,
+					stdout: args.includes("--version") ? "ast-grep 0.45.3" : "[]",
+					stderr: "",
+				};
+			});
+			const { SgRunner } = await import("../../clients/sg-runner.js");
+			const runner = new SgRunner();
+			expect(await runner.ensureAvailable()).toBe(true);
+			const result = await runner.execRaw(["run", "--pattern", "x"]);
+			expect(result.failure).toBeUndefined();
+			expect(result.stdout).toBe("[]");
+			expect(safeSpawnAsync.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+				"npx",
+				[
+					"--no",
+					"--package",
+					"@ast-grep/cli",
+					"--",
+					"ast-grep",
+					"run",
+					"--pattern",
+					"x",
+				],
+			]);
+			expect(ensureTool).not.toHaveBeenCalled();
+		});
+
+		it("isolates the fallback from an untrusted project npmrc (#4193)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-trust-"));
+			const project = path.join(env, "project");
+			const piLensHome = path.join(env, "pi-lens-home");
+			fs.mkdirSync(project, { recursive: true });
+			fs.writeFileSync(
+				path.join(project, ".npmrc"),
+				"registry=http://127.0.0.1:9/poison\n",
+			);
+			const previousCwd = process.cwd();
+			setProjectTrustState("untrusted");
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			vi.stubEnv("NPM_CONFIG_USERCONFIG", path.join(project, ".npmrc"));
+			try {
+				process.chdir(project);
+				safeSpawnAsync.mockImplementation(
+					async (
+						cmd: string,
+						args: string[],
+						options?: { cwd?: string; stripNpmConfig?: boolean },
+					) => {
+						if (cmd !== "npx")
+							return { status: 1, stdout: "", stderr: "missing" };
+						// The shared seam strips npm_config_* at the child boundary inside
+						// `getSpawnEnvironment`; the caller's half is the flag.
+						expect(options?.stripNpmConfig).toBe(true);
+						expect(options?.cwd).toBe(path.join(piLensHome, "tools"));
+						expect(options?.cwd).not.toBe(project);
+						expect(
+							fs.readFileSync(path.join(project, ".npmrc"), "utf8"),
+						).toContain("127.0.0.1:9");
+						return {
+							status: 0,
+							stdout: args.includes("--version") ? "ast-grep 0.45.3" : "[]",
+							stderr: "",
+						};
+					},
+				);
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				expect(await runner.ensureAvailable()).toBe(true);
+				expect(
+					(await runner.execRaw(["run", "--pattern", "x"])).failure,
+				).toBeUndefined();
+			} finally {
+				process.chdir(previousCwd);
+				resetProjectTrust();
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
+		// #4233 V3-MED-01: a forced-trust mutation made the untrusted sweep execute a
+		// PATH ast-grep. This is the failing-without-it proof for that guard.
+		it("does not execute a PATH ast-grep on an untrusted project (#4233 V3-MED-01)", async () => {
+			const env = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-untrusted-"),
+			);
+			const project = path.join(env, "project");
+			const piLensHome = path.join(env, "pi-lens-home");
+			fs.mkdirSync(project, { recursive: true });
+			const previousCwd = process.cwd();
+			setProjectTrustState("untrusted");
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			const probed: string[] = [];
+			safeSpawnAsync.mockImplementation(async (cmd: string) => {
+				probed.push(cmd);
+				if (cmd === "npx" || cmd === "ast-grep" || cmd === "sg")
+					return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+				return { status: 1, stdout: "", stderr: "missing" };
+			});
+			try {
+				process.chdir(project);
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				expect(await runner.ensureAvailable()).toBe(true);
+				// The scoped npx fallback wins; a project-derived candidate never runs.
+				expect(probed[0]).toBe("npx");
+				expect(probed).not.toContain("ast-grep");
+				expect(probed).not.toContain("sg");
+			} finally {
+				process.chdir(previousCwd);
+				resetProjectTrust();
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
+		// #4233 V3-MED-01: a forced-platform-package mutation executed a
+		// project-supplied `node_modules/@ast-grep/cli-<os>-<arch>/sg`.
+		// lane: linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64
+		it(
+			"does not execute a project-local platform package on an untrusted project (#4233 V3-MED-01)",
+			{ skip: !astGrepPlatformSuffix() },
+			async () => {
+				const suffix = astGrepPlatformSuffix() as string;
+				const env = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-sg-untrusted-pkg-"),
+				);
+				const project = path.join(env, "project");
+				fs.mkdirSync(project, { recursive: true });
+				const pkgDir = path.join(
+					project,
+					"node_modules",
+					`@ast-grep/cli-${suffix}`,
+				);
+				fs.mkdirSync(pkgDir, { recursive: true });
+				const platformBin = path.join(
+					pkgDir,
+					process.platform === "win32" ? "sg.exe" : "sg",
+				);
+				fs.writeFileSync(platformBin, "#!/bin/sh\nexit 0\n");
+				const previousCwd = process.cwd();
+				setProjectTrustState("untrusted");
+				const probed: string[] = [];
+				safeSpawnAsync.mockImplementation(async (cmd: string) => {
+					probed.push(cmd);
+					if (cmd === platformBin)
+						return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+					return { status: 1, stdout: "", stderr: "missing" };
+				});
+				try {
+					process.chdir(project);
+					const { SgRunner } = await import("../../clients/sg-runner.js");
+					const runner = new SgRunner();
+					// npx is missing, so the sweep reaches (and, if correct, skips) Step 2.
+					expect(await runner.ensureAvailable()).toBe(false);
+					expect(probed).not.toContain(platformBin);
+				} finally {
+					process.chdir(previousCwd);
+					resetProjectTrust();
+					removeTempDirSync(env);
+				}
+			},
+		);
+
+		// #4233 V3-HIGH-02: both temp-scan members must use the same isolated
+		// seam the exec path uses, so a hostile project `.npmrc` never reaches the
+		// scan's npx child.
+		it("runs the temp-scan npx fallback from the isolated seam (#4233 V3-HIGH-02)", async () => {
+			const env = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-tempscan-"),
+			);
+			const project = path.join(env, "project");
+			const piLensHome = path.join(env, "pi-lens-home");
+			fs.mkdirSync(project, { recursive: true });
+			fs.writeFileSync(
+				path.join(project, ".npmrc"),
+				"registry=http://127.0.0.1:9/poison\n",
+			);
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			getSgCommand.mockReturnValue({
+				cmd: "npx",
+				args: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
+			});
+			const scanOptions: Array<{ cwd?: string; stripNpmConfig?: boolean }> = [];
+			safeSpawnAsync.mockImplementation(
+				async (
+					cmd: string,
+					_args: string[],
+					options?: { cwd?: string; stripNpmConfig?: boolean },
+				) => {
+					if (cmd === "npx") scanOptions.push(options ?? {});
+					return { status: 1, error: undefined, stdout: "", stderr: "" };
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				const rule =
+					"id: r\nlanguage: TypeScript\nrule: { kind: function_declaration }\n";
+				await runner.tempScanDetailedAsync(project, "r", rule);
+				await runner.tempScanWithFixAsync(project, "r", rule, false);
+				expect(scanOptions.length).toBeGreaterThanOrEqual(2);
+				for (const options of scanOptions) {
+					expect(options.cwd).toBe(path.join(piLensHome, "tools"));
+					expect(options.cwd).not.toBe(project);
+					expect(options.stripNpmConfig).toBe(true);
+				}
+			} finally {
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
+		// #4233 V3-MED-01: a dropped `...this.sgSpawnOptions` in `exec` survived the
+		// suite because only the `execRaw` half was asserted.
+		it("spreads the isolated options onto exec as well as execRaw (#4233 V3-MED-01)", async () => {
+			const env = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-exec-iso-"),
+			);
+			const piLensHome = path.join(env, "pi-lens-home");
+			vi.stubEnv("PI_LENS_HOME", piLensHome);
+			setProjectTrustState("untrusted");
+			const calls: Array<{
+				args: string[];
+				options?: { cwd?: string; stripNpmConfig?: boolean };
+			}> = [];
+			safeSpawnAsync.mockImplementation(
+				async (
+					cmd: string,
+					args: string[],
+					options?: { cwd?: string; stripNpmConfig?: boolean },
+				) => {
+					calls.push({ args, options });
+					if (cmd === "npx" && args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+					if (args.includes("--version"))
+						return { status: 1, stdout: "", stderr: "missing" };
+					return { status: 0, stdout: "[]", stderr: "" };
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				expect(await runner.ensureAvailable()).toBe(true);
+				await runner.exec(["run", "--pattern", "x"]);
+				const execCall = calls.find((call) => call.args.includes("--pattern"));
+				expect(
+					execCall,
+					"the exec() spawn reached safeSpawnAsync",
+				).toBeDefined();
+				expect(execCall?.options?.cwd).toBe(path.join(piLensHome, "tools"));
+				expect(execCall?.options?.stripNpmConfig).toBe(true);
+			} finally {
+				resetProjectTrust();
+				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
 		it("returns true when ast-grep is in PATH", async () => {
 			safeSpawnAsync.mockResolvedValueOnce({
 				status: 0,

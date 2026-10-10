@@ -1,5 +1,7 @@
+import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
+import { setupTestEnvironment } from "../clients/test-utils.js";
 
 function makeClient(
 	overrides: Partial<Parameters<typeof createAstGrepReplaceTool>[0]> = {},
@@ -16,6 +18,75 @@ function makeClient(
 }
 
 describe("ast_grep_replace tool", () => {
+	describe("relative paths resolve against ctx.cwd (#4233 V3-HIGH-01)", () => {
+		it("passes an absolute target to the pattern replace", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-replace-rel-");
+			try {
+				const replace = vi
+					.fn()
+					.mockResolvedValue({ matches: [], totalMatches: 0, applied: false });
+				const tool = createAstGrepReplaceTool(makeClient({ replace }));
+				await tool.execute(
+					"rel-1",
+					{
+						pattern: "var $X",
+						rewrite: "let $X",
+						lang: "typescript",
+						paths: ["src/a.ts"],
+					},
+					new AbortController().signal,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				// The ast-grep child runs from a pi-lens-owned neutral cwd when its npx
+				// fallback wins (#4193), so every target must be absolute before dispatch.
+				expect(replace).toHaveBeenCalledWith(
+					"var $X",
+					"let $X",
+					"typescript",
+					[path.join(env.tmpDir, "src", "a.ts")],
+					false,
+					expect.anything(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("passes an absolute target to a structural rule replace", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-replace-rule-rel-");
+			try {
+				const replaceWithRule = vi.fn().mockResolvedValue({
+					matches: [],
+					totalMatches: 0,
+					applied: false,
+				});
+				const tool = createAstGrepReplaceTool(makeClient({ replaceWithRule }));
+				await tool.execute(
+					"rel-2",
+					{
+						pattern: "var $X",
+						rewrite: "let $X",
+						lang: "typescript",
+						paths: ["src/a.ts"],
+						insideKind: "function_declaration",
+					},
+					new AbortController().signal,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(replaceWithRule).toHaveBeenCalledWith(
+					expect.any(String),
+					[path.join(env.tmpDir, "src", "a.ts")],
+					false,
+					expect.anything(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
 	describe("schema shape", () => {
 		it("lang uses enum not anyOf/const so LLMs do not double-quote it", () => {
 			const tool = createAstGrepReplaceTool(makeClient());
