@@ -150,6 +150,13 @@ export interface PiLensGlobalConfig {
 		 * messages. Findings are still cached for `lens_diagnostics` / `/lens-health`.
 		 */
 		enabled?: boolean;
+		/**
+		 * #2967: whether the session-start orientation demands pre-existing
+		 * blocking errors be fixed. Defaults true (the shipped wording). Set
+		 * false when the task's scope excludes pre-existing debt, so the
+		 * orientation stops telling the agent it must fix it.
+		 */
+		requirePreExistingFixes?: boolean;
 	};
 	turnSummary?: {
 		/**
@@ -406,6 +413,23 @@ export function loadPiLensGlobalConfig(
 			} else {
 				warnInvalid(
 					"actionableWarnings.autoFix.maxFixes must be a non-negative finite number",
+				);
+			}
+		}
+
+		// #2967: a config-only sibling of `contextInjection.enabled` (no CLI
+		// flag), parsed here the way `actionableWarnings.autoFix.maxFixes` is.
+		// The section is already recognized through the flag registry.
+		const contextInjection = asConfigObject(raw.contextInjection);
+		if (contextInjection && "requirePreExistingFixes" in contextInjection) {
+			if (typeof contextInjection.requirePreExistingFixes === "boolean") {
+				config.contextInjection ??= {};
+				(
+					config.contextInjection as Record<string, unknown>
+				).requirePreExistingFixes = contextInjection.requirePreExistingFixes;
+			} else {
+				warnInvalid(
+					"contextInjection.requirePreExistingFixes must be a boolean",
 				);
 			}
 		}
